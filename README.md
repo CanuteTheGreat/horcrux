@@ -124,7 +124,7 @@ Horcrux is a complete virtualization management platform designed specifically f
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/horcrux.git
+git clone https://github.com/CanuteTheGreat/horcrux.git
 cd horcrux
 
 # Build the project
@@ -357,8 +357,8 @@ Horcrux is licensed under the [GNU General Public License v3.0](LICENSE).
 ## 📞 Support
 
 - 📖 [Documentation](docs/)
-- 🐛 [Issue Tracker](https://github.com/yourusername/horcrux/issues)
-- 💬 [Discussions](https://github.com/yourusername/horcrux/discussions)
+- 🐛 [Issue Tracker](https://github.com/CanuteTheGreat/horcrux/issues)
+- 💬 [Discussions](https://github.com/CanuteTheGreat/horcrux/discussions)
 
 ---
 

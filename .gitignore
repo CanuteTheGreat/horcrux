@@ -1,0 +1,24 @@
+# Rust
+target/
+Cargo.lock
+
+# Trunk (WASM build tool)
+horcrux-ui/dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Gentoo
+*.ebuild~
+Manifest
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/
