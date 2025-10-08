@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person">
+		<email>your-email@example.com</email>
+		<name>Your Name</name>
+	</maintainer>
+	<longdescription>
+		Horcrux is a virtualization management platform built specifically for Gentoo Linux.
+		It provides a modern web-based interface and REST API for managing virtual machines
+		and containers using various backends. Supports QEMU/KVM, LXD, Incus for VMs, and
+		LXC, Docker, Podman for containers. Think of it as a Gentoo-native alternative to
+		Proxmox VE with fine-grained USE flag control.
+	</longdescription>
+	<use>
+		<!-- Virtualization backends -->
+		<flag name="qemu">Enable QEMU/KVM virtual machine support (enabled by default)</flag>
+		<flag name="lxd">Enable LXD support for both VMs and containers</flag>
+		<flag name="incus">Enable Incus support for both VMs and containers (LXD fork)</flag>
+
+		<!-- Container runtimes -->
+		<flag name="lxc">Enable LXC container support (enabled by default)</flag>
+		<flag name="docker">Enable Docker container support (enabled by default)</flag>
+		<flag name="podman">Enable Podman container support (daemonless Docker alternative)</flag>
+
+		<!-- Additional features -->
+		<flag name="backup">Enable backup and restore functionality for VMs and containers</flag>
+		<flag name="cluster">Enable clustering support via Corosync for high availability</flag>
+		<flag name="webui">Build and install the web-based management interface (enabled by default)</flag>
+	</use>
+	<upstream>
+		<remote-id type="github">yourusername/horcrux</remote-id>
+	</upstream>
+</pkgmetadata>

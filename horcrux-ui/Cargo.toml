@@ -1,0 +1,29 @@
+[package]
+name = "horcrux-ui"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.82"
+authors.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+horcrux-common = { path = "../horcrux-common" }
+
+# Leptos framework
+leptos = { version = "0.6", features = ["csr"] }
+leptos_meta = { version = "0.6" }
+leptos_router = { version = "0.6" }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# HTTP client for API calls
+reqwasm = "0.5"
+
+# WASM
+wasm-bindgen = "0.2"
+console_error_panic_hook = "0.1"

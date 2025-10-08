@@ -1,0 +1,13 @@
+[Unit]
+Description=Horcrux API Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/horcrux-api
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

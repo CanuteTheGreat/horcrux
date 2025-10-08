@@ -1,0 +1,61 @@
+[package]
+name = "horcrux-api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "horcrux-api"
+path = "src/main.rs"
+
+[dependencies]
+horcrux-common = { path = "../horcrux-common" }
+
+# Web framework
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["fs", "trace", "cors"] }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Process management
+nix = { version = "0.29", features = ["process", "signal"] }
+
+# Authentication
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = "0.4"
+
+# Monitoring
+hostname = "0.4"
+num_cpus = "1.16"
+
+[features]
+default = ["qemu", "lxc", "docker"]
+
+# Virtualization backends
+qemu = []        # QEMU/KVM support
+lxd = []         # LXD support (VMs and containers)
+incus = []       # Incus support (VMs and containers)
+
+# Container runtimes
+lxc = []         # LXC containers
+docker = []      # Docker containers
+podman = []      # Podman containers
+
+# Additional features
+cluster = []     # Clustering/HA support
+backup = []      # Backup and restore

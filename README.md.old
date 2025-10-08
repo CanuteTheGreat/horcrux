@@ -1,0 +1,211 @@
+# Horcrux
+
+A Gentoo-native virtualization management platform inspired by Proxmox VE.
+
+## Overview
+
+Horcrux provides a modern web-based interface and REST API for managing:
+- QEMU/KVM virtual machines
+- LXC containers
+- Storage (ZFS, LVM, Ceph)
+- Clustering and high availability
+- Backups and snapshots
+
+Built entirely in Rust, Horcrux is designed specifically for Gentoo Linux, taking full advantage of Gentoo's USE flags for fine-grained control over features and dependencies.
+
+## Architecture
+
+- **horcrux-api**: Backend REST API server (Axum framework)
+- **horcrux-ui**: Web-based management interface (Leptos/WASM)
+- **horcrux-common**: Shared types and utilities
+
+## Installation on Gentoo
+
+### Prerequisites
+
+Ensure your kernel has the necessary virtualization support:
+
+```bash
+# Check for KVM support
+lsmod | grep kvm
+
+# Required kernel options:
+# CONFIG_KVM=m
+# CONFIG_KVM_INTEL=m  # or CONFIG_KVM_AMD=m
+# CONFIG_TUN=m
+# CONFIG_BRIDGE=m
+# CONFIG_VHOST_NET=m
+```
+
+### Installing from local overlay
+
+1. Add the Horcrux overlay to your system:
+
+```bash
+# Create local overlay directory if needed
+mkdir -p /var/db/repos/horcrux
+
+# Copy the ebuild
+cp -r gentoo/app-emulation/horcrux /var/db/repos/horcrux/app-emulation/
+
+# Add to repos.conf
+cat >> /etc/portage/repos.conf/horcrux.conf << EOF
+[horcrux]
+location = /var/db/repos/horcrux
+priority = 50
+EOF
+```
+
+2. Generate manifest:
+
+```bash
+cd /var/db/repos/horcrux/app-emulation/horcrux
+ebuild horcrux-0.1.0.ebuild manifest
+```
+
+3. Install with desired USE flags:
+
+```bash
+# Minimal installation (API only, no web UI)
+emerge app-emulation/horcrux
+
+# Full installation with all features
+USE="backup cluster docker incus lxc lxd podman qemu ssl webui zfs" emerge app-emulation/horcrux
+
+# Minimal QEMU-only installation
+USE="qemu" emerge app-emulation/horcrux
+
+# LXD-focused setup (VMs and containers via LXD)
+USE="lxd webui" emerge app-emulation/horcrux
+
+# Container-only setup with Docker and Podman
+USE="docker podman webui" emerge app-emulation/horcrux
+
+# Or add to package.use
+echo "app-emulation/horcrux backup cluster docker lxc qemu ssl webui" >> /etc/portage/package.use/horcrux
+emerge app-emulation/horcrux
+```
+
+## USE Flags
+
+Horcrux provides fine-grained control through USE flags, leveraging Gentoo's global flags where possible.
+
+### Virtualization Backends (at least one required):
+- `qemu` - QEMU/KVM virtual machine support *(enabled by default)*
+- `lxd` - LXD support for VMs and containers
+- `incus` - Incus support for VMs and containers (LXD fork)
+
+### Container Runtimes (at least one required):
+- `lxc` - LXC container support *(enabled by default)*
+- `docker` - Docker container support *(enabled by default)*
+- `podman` - Podman container support (daemonless Docker alternative)
+
+### Global USE flags:
+- `ssl` - Enable HTTPS/TLS support for API and web UI
+- `ipv6` - Enable IPv6 networking support
+- `ldap` - Enable LDAP authentication
+- `zfs` - Enable ZFS storage backend support
+- `systemd` - Install systemd service unit (otherwise uses OpenRC)
+
+### Additional Features:
+- `backup` - Enable backup and restore functionality
+- `cluster` - Enable clustering support via Corosync for high availability
+- `webui` - Build and install web-based management interface *(enabled by default)*
+
+## Configuration
+
+1. Copy the example configuration:
+
+```bash
+cp /etc/horcrux/horcrux.conf.example /etc/horcrux/horcrux.conf
+```
+
+2. Edit `/etc/horcrux/horcrux.conf` to suit your needs
+
+3. Start the service:
+
+**OpenRC:**
+```bash
+rc-update add horcrux-api default
+rc-service horcrux-api start
+```
+
+**systemd:**
+```bash
+systemctl enable --now horcrux-api
+```
+
+## Usage
+
+Access the web UI at: `https://your-server:8006`
+
+Or use the REST API directly:
+
+```bash
+# List VMs
+curl http://localhost:8006/api/vms
+
+# Health check
+curl http://localhost:8006/api/health
+```
+
+## Development
+
+### Building from source
+
+```bash
+# Build API
+cargo build -p horcrux-api
+
+# Build UI (requires trunk)
+cd horcrux-ui
+trunk build
+
+# Run API server
+cargo run -p horcrux-api
+```
+
+### Project Structure
+
+```
+horcrux/
+├── horcrux-api/          # Backend REST API
+├── horcrux-ui/           # Frontend web interface
+├── horcrux-common/       # Shared types and utilities
+└── gentoo/               # Gentoo ebuild and files
+    └── app-emulation/
+        └── horcrux/
+            ├── horcrux-0.1.0.ebuild
+            ├── metadata.xml
+            └── files/
+                ├── horcrux-api.service
+                ├── horcrux-api.initd
+                ├── horcrux-api.confd
+                └── horcrux.conf
+```
+
+## Roadmap
+
+- [x] Project structure and Gentoo packaging
+- [x] Basic web UI framework
+- [x] REST API skeleton
+- [ ] QEMU/KVM VM management
+- [ ] LXC container management
+- [ ] Storage backend integration (ZFS, LVM)
+- [ ] Clustering support (Corosync)
+- [ ] Backup and restore
+- [ ] User authentication and authorization
+- [ ] Network management
+- [ ] Monitoring and metrics
+
+## Why "Horcrux"?
+
+In Harry Potter lore, Horcruxes split a soul across multiple objects for immortality. Similarly, this platform distributes your infrastructure across multiple nodes, making it resilient and highly available.
+
+## License
+
+GPL-3.0
+
+## Contributing
+
+Contributions welcome! This is an early-stage project with lots of opportunity to shape its direction.
