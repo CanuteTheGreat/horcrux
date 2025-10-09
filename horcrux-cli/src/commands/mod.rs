@@ -1,0 +1,10 @@
+pub mod vm;
+pub mod storage;
+pub mod backup;
+pub mod cluster;
+pub mod user;
+pub mod ha;
+pub mod migrate;
+pub mod monitor;
+pub mod audit;
+pub mod auth;

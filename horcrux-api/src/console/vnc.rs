@@ -118,20 +118,17 @@ impl VncManager {
 
     /// Generate VNC command line arguments for QEMU
     pub fn generate_vnc_args(display: u16, websocket: bool, password: Option<&str>) -> Vec<String> {
-        let mut args = vec![
-            "-vnc".to_string(),
-            format!("0.0.0.0:{}", display),
-        ];
+        let mut vnc_spec = format!("0.0.0.0:{}", display);
 
         if websocket {
-            args.push(format!(",websocket={}", 5700 + display));
+            vnc_spec.push_str(&format!(",websocket={}", 5700 + display));
         }
 
         if password.is_some() {
-            args.push(",password=on".to_string());
+            vnc_spec.push_str(",password=on");
         }
 
-        args
+        vec!["-vnc".to_string(), vnc_spec]
     }
 
     /// Check if VNC is available on the system

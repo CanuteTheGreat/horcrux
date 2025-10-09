@@ -15,6 +15,7 @@ pub struct VxlanConfig {
     pub remote_ips: Vec<IpAddr>, // Remote tunnel endpoints (for unicast)
     pub port: u16,         // UDP port (default: 4789)
     pub bridge: String,    // Bridge to attach to
+    pub device: String,    // Physical device to use (e.g., "eth0", "bond0")
 }
 
 pub struct VxlanManager;
@@ -30,15 +31,18 @@ impl VxlanManager {
         let vxlan_iface = format!("vxlan{}", config.vni);
 
         // Build ip command based on unicast or multicast mode
+        let vni_str = config.vni.to_string();
+        let port_str = config.port.to_string();
+        let local_ip_str = config.local_ip.to_string();
+
         let mut args = vec![
             "link", "add",
             &vxlan_iface,
             "type", "vxlan",
-            "id", &config.vni.to_string(),
-            "dstport", &config.port.to_string(),
+            "id", &vni_str,
+            "dstport", &port_str,
         ];
 
-        let local_ip_str = config.local_ip.to_string();
         args.extend(&["local", &local_ip_str]);
 
         // Multicast mode
@@ -49,7 +53,7 @@ impl VxlanManager {
         }
 
         // Add dev parameter (required for multicast)
-        args.extend(&["dev", "eth0"]); // TODO: Make this configurable
+        args.extend(&["dev", &config.device]);
 
         // Create VXLAN interface
         let output = Command::new("ip")

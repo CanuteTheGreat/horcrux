@@ -88,7 +88,7 @@ pub fn VmList() -> impl IntoView {
                                 </thead>
                                 <tbody>
                                     {vm_list.into_iter().map(|vm| {
-                                        let vm_id = vm.id.clone();
+                                        let _vm_id = vm.id.clone();
                                         let vm_id_start = vm.id.clone();
                                         let vm_id_stop = vm.id.clone();
                                         let vm_id_delete = vm.id.clone();

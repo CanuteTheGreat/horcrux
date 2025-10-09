@@ -1,6 +1,8 @@
 ///! Monitoring and metrics collection
 ///! Provides real-time and historical resource metrics for VMs, containers, and system
 
+pub mod advanced_metrics;
+
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -295,22 +297,93 @@ impl MonitoringManager {
     async fn collect_vm_metrics(vm_id: &str) -> Result<ResourceMetrics> {
         let timestamp = chrono::Utc::now().timestamp();
 
-        // Use virsh or qemu monitor to get stats
-        // For now, return placeholder data
+        // Try to get VM PID
+        let pid_result = tokio::process::Command::new("pgrep")
+            .arg("-f")
+            .arg(format!("qemu.*{}", vm_id))
+            .output()
+            .await;
+
+        let (cpu_usage, memory_bytes) = if let Ok(pid_output) = pid_result {
+            if pid_output.status.success() {
+                let pid_str = String::from_utf8_lossy(&pid_output.stdout);
+                if let Some(pid) = pid_str.trim().lines().next() {
+                    // Read process stats from /proc/<pid>/stat
+                    let stat_path = format!("/proc/{}/stat", pid);
+                    let stat_result = tokio::fs::read_to_string(&stat_path).await;
+
+                    let cpu = if let Ok(stat) = stat_result {
+                        let parts: Vec<&str> = stat.split_whitespace().collect();
+                        if parts.len() >= 14 {
+                            let utime: u64 = parts[13].parse().unwrap_or(0);
+                            let stime: u64 = parts[14].parse().unwrap_or(0);
+                            let total_time = utime + stime;
+                            // Convert to percentage (rough estimate)
+                            (total_time as f64 / 100.0).min(100.0)
+                        } else {
+                            0.0
+                        }
+                    } else {
+                        0.0
+                    };
+
+                    // Read memory from /proc/<pid>/status
+                    let status_path = format!("/proc/{}/status", pid);
+                    let mem = if let Ok(status) = tokio::fs::read_to_string(&status_path).await {
+                        let mut mem_kb = 0u64;
+                        for line in status.lines() {
+                            if line.starts_with("VmRSS:") {
+                                if let Some(kb_str) = line.split_whitespace().nth(1) {
+                                    if let Ok(kb) = kb_str.parse::<u64>() {
+                                        mem_kb = kb;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        mem_kb * 1024 // Convert KB to bytes
+                    } else {
+                        0u64
+                    };
+
+                    (cpu, mem)
+                } else {
+                    (0.0, 0u64)
+                }
+            } else {
+                (0.0, 0u64)
+            }
+        } else {
+            (0.0, 0u64)
+        };
+
+        // Estimate total memory (from VM config, would need to query QEMU)
+        let total_memory = if memory_bytes > 0 {
+            memory_bytes * 2 // Rough estimate
+        } else {
+            4 * 1024 * 1024 * 1024 // Default 4GB
+        };
+
+        let usage_percent = if total_memory > 0 {
+            (memory_bytes as f64 / total_memory as f64) * 100.0
+        } else {
+            0.0
+        };
+
         Ok(ResourceMetrics {
             id: vm_id.to_string(),
             name: format!("VM-{}", vm_id),
             timestamp,
             cpu: CpuMetrics {
-                usage_percent: 0.0,
+                usage_percent: cpu_usage,
                 cores: 2,
-                load_average: 0.0,
+                load_average: cpu_usage / 100.0,
             },
             memory: MemoryMetrics {
-                total_bytes: 4 * 1024 * 1024 * 1024,
-                used_bytes: 2 * 1024 * 1024 * 1024,
-                free_bytes: 2 * 1024 * 1024 * 1024,
-                usage_percent: 50.0,
+                total_bytes: total_memory,
+                used_bytes: memory_bytes,
+                free_bytes: total_memory.saturating_sub(memory_bytes),
+                usage_percent,
             },
             disk: DiskMetrics {
                 read_bytes_per_sec: 0,
@@ -332,22 +405,35 @@ impl MonitoringManager {
     async fn collect_container_metrics(ct_id: &str) -> Result<ResourceMetrics> {
         let timestamp = chrono::Utc::now().timestamp();
 
-        // Read from cgroup v2 or docker stats
-        // For now, return placeholder data
+        // Try to read from cgroup v2
+        let cgroup_path = format!("/sys/fs/cgroup/system.slice/{}", ct_id);
+
+        // Read CPU usage from cgroup
+        let cpu_usage = Self::read_cgroup_cpu(&cgroup_path).await.unwrap_or(0.0);
+
+        // Read memory usage from cgroup
+        let (memory_current, memory_max) = Self::read_cgroup_memory(&cgroup_path).await.unwrap_or((0, 1024 * 1024 * 1024));
+
+        let usage_percent = if memory_max > 0 {
+            (memory_current as f64 / memory_max as f64) * 100.0
+        } else {
+            0.0
+        };
+
         Ok(ResourceMetrics {
             id: ct_id.to_string(),
             name: format!("CT-{}", ct_id),
             timestamp,
             cpu: CpuMetrics {
-                usage_percent: 0.0,
+                usage_percent: cpu_usage,
                 cores: 1,
-                load_average: 0.0,
+                load_average: cpu_usage / 100.0,
             },
             memory: MemoryMetrics {
-                total_bytes: 1024 * 1024 * 1024,
-                used_bytes: 512 * 1024 * 1024,
-                free_bytes: 512 * 1024 * 1024,
-                usage_percent: 50.0,
+                total_bytes: memory_max,
+                used_bytes: memory_current,
+                free_bytes: memory_max.saturating_sub(memory_current),
+                usage_percent,
             },
             disk: DiskMetrics {
                 read_bytes_per_sec: 0,
@@ -366,37 +452,287 @@ impl MonitoringManager {
         })
     }
 
+    async fn read_cgroup_cpu(cgroup_path: &str) -> Result<f64> {
+        // Read cpu.stat file
+        let stat_path = format!("{}/cpu.stat", cgroup_path);
+        if let Ok(content) = tokio::fs::read_to_string(&stat_path).await {
+            for line in content.lines() {
+                if line.starts_with("usage_usec ") {
+                    if let Some(usec_str) = line.split_whitespace().nth(1) {
+                        if let Ok(usec) = usec_str.parse::<u64>() {
+                            // Convert microseconds to percentage (simplified)
+                            return Ok((usec as f64 / 1_000_000.0).min(100.0));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(0.0)
+    }
+
+    async fn read_cgroup_memory(cgroup_path: &str) -> Result<(u64, u64)> {
+        // Read memory.current and memory.max
+        let current_path = format!("{}/memory.current", cgroup_path);
+        let max_path = format!("{}/memory.max", cgroup_path);
+
+        let current = if let Ok(content) = tokio::fs::read_to_string(&current_path).await {
+            content.trim().parse::<u64>().unwrap_or(0)
+        } else {
+            0
+        };
+
+        let max = if let Ok(content) = tokio::fs::read_to_string(&max_path).await {
+            if content.trim() == "max" {
+                // No limit set, use system memory as approximation
+                8 * 1024 * 1024 * 1024 // 8GB default
+            } else {
+                content.trim().parse::<u64>().unwrap_or(1024 * 1024 * 1024)
+            }
+        } else {
+            1024 * 1024 * 1024 // 1GB default
+        };
+
+        Ok((current, max))
+    }
+
     async fn collect_storage_metrics(pool_name: &str) -> Result<StorageMetrics> {
-        // Parse zpool list, ceph df, vgs, or df output
-        // For now, return placeholder data
+        // Try ZFS first
+        if let Ok(output) = tokio::process::Command::new("zpool")
+            .arg("list")
+            .arg("-Hp")
+            .arg(pool_name)
+            .output()
+            .await
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let parts: Vec<&str> = stdout.split('\t').collect();
+                if parts.len() >= 4 {
+                    let total: u64 = parts[1].parse().unwrap_or(0);
+                    let used: u64 = parts[2].parse().unwrap_or(0);
+                    let available: u64 = parts[3].parse().unwrap_or(0);
+
+                    let usage_percent = if total > 0 {
+                        (used as f64 / total as f64) * 100.0
+                    } else {
+                        0.0
+                    };
+
+                    return Ok(StorageMetrics {
+                        name: pool_name.to_string(),
+                        storage_type: "zfs".to_string(),
+                        total_bytes: total,
+                        used_bytes: used,
+                        available_bytes: available,
+                        usage_percent,
+                    });
+                }
+            }
+        }
+
+        // Try LVM
+        if let Ok(output) = tokio::process::Command::new("vgs")
+            .arg("--noheadings")
+            .arg("--units")
+            .arg("b")
+            .arg("--nosuffix")
+            .arg("-o")
+            .arg("vg_name,vg_size,vg_free")
+            .arg(pool_name)
+            .output()
+            .await
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let parts: Vec<&str> = stdout.split_whitespace().collect();
+                if parts.len() >= 3 {
+                    let total: u64 = parts[1].parse().unwrap_or(0);
+                    let available: u64 = parts[2].parse().unwrap_or(0);
+                    let used = total.saturating_sub(available);
+
+                    let usage_percent = if total > 0 {
+                        (used as f64 / total as f64) * 100.0
+                    } else {
+                        0.0
+                    };
+
+                    return Ok(StorageMetrics {
+                        name: pool_name.to_string(),
+                        storage_type: "lvm".to_string(),
+                        total_bytes: total,
+                        used_bytes: used,
+                        available_bytes: available,
+                        usage_percent,
+                    });
+                }
+            }
+        }
+
+        // Fallback: assume directory storage, use df
+        if let Ok(output) = tokio::process::Command::new("df")
+            .arg("-B1")
+            .arg(pool_name)
+            .output()
+            .await
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if let Some(line) = stdout.lines().nth(1) {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 4 {
+                        let total: u64 = parts[1].parse().unwrap_or(0);
+                        let used: u64 = parts[2].parse().unwrap_or(0);
+                        let available: u64 = parts[3].parse().unwrap_or(0);
+
+                        let usage_percent = if total > 0 {
+                            (used as f64 / total as f64) * 100.0
+                        } else {
+                            0.0
+                        };
+
+                        return Ok(StorageMetrics {
+                            name: pool_name.to_string(),
+                            storage_type: "directory".to_string(),
+                            total_bytes: total,
+                            used_bytes: used,
+                            available_bytes: available,
+                            usage_percent,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Fallback to placeholder
         Ok(StorageMetrics {
             name: pool_name.to_string(),
-            storage_type: "zfs".to_string(),
-            total_bytes: 1024 * 1024 * 1024 * 1024,
-            used_bytes: 512 * 1024 * 1024 * 1024,
-            available_bytes: 512 * 1024 * 1024 * 1024,
-            usage_percent: 50.0,
+            storage_type: "unknown".to_string(),
+            total_bytes: 0,
+            used_bytes: 0,
+            available_bytes: 0,
+            usage_percent: 0.0,
         })
     }
 
     async fn discover_vms() -> Result<Vec<String>> {
-        // Query running VMs from libvirt/qemu
-        Ok(vec![])
+        // Query running VMs from QEMU processes
+        let output = tokio::process::Command::new("pgrep")
+            .arg("-f")
+            .arg("qemu-system")
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            return Ok(vec![]);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let vm_ids: Vec<String> = stdout
+            .lines()
+            .filter_map(|pid| {
+                // Try to extract VM ID from process command line
+                // This is a simplified approach
+                Some(format!("vm-{}", pid.trim()))
+            })
+            .collect();
+
+        Ok(vm_ids)
     }
 
     async fn discover_containers() -> Result<Vec<String>> {
-        // Query running containers from docker/podman/lxc
+        // Try Docker first
+        if let Ok(output) = tokio::process::Command::new("docker")
+            .arg("ps")
+            .arg("--format")
+            .arg("{{.ID}}")
+            .output()
+            .await
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let ids: Vec<String> = stdout.lines().map(|s| s.trim().to_string()).collect();
+                if !ids.is_empty() {
+                    return Ok(ids);
+                }
+            }
+        }
+
+        // Try LXC
+        if let Ok(output) = tokio::process::Command::new("lxc-ls")
+            .output()
+            .await
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let ids: Vec<String> = stdout.lines().map(|s| s.trim().to_string()).collect();
+                if !ids.is_empty() {
+                    return Ok(ids);
+                }
+            }
+        }
+
         Ok(vec![])
     }
 
     async fn discover_storage_pools() -> Result<Vec<String>> {
-        // Query storage pools
-        Ok(vec![])
+        let mut pools = Vec::new();
+
+        // Discover ZFS pools
+        if let Ok(output) = tokio::process::Command::new("zpool")
+            .arg("list")
+            .arg("-H")
+            .arg("-o")
+            .arg("name")
+            .output()
+            .await
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                pools.extend(stdout.lines().map(|s| s.trim().to_string()));
+            }
+        }
+
+        // Discover LVM volume groups
+        if let Ok(output) = tokio::process::Command::new("vgs")
+            .arg("--noheadings")
+            .arg("-o")
+            .arg("vg_name")
+            .output()
+            .await
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                pools.extend(stdout.lines().map(|s| s.trim().to_string()));
+            }
+        }
+
+        Ok(pools)
     }
 
     async fn read_cpu_usage() -> Result<f64> {
         // Read /proc/stat and calculate CPU usage
-        // Simplified - return 0 for now
+        let stat = tokio::fs::read_to_string("/proc/stat").await?;
+
+        // Parse first line which is aggregate CPU stats
+        if let Some(line) = stat.lines().next() {
+            if line.starts_with("cpu ") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 5 {
+                    let user: u64 = parts[1].parse().unwrap_or(0);
+                    let nice: u64 = parts[2].parse().unwrap_or(0);
+                    let system: u64 = parts[3].parse().unwrap_or(0);
+                    let idle: u64 = parts[4].parse().unwrap_or(0);
+
+                    let total = user + nice + system + idle;
+                    let active = user + nice + system;
+
+                    if total > 0 {
+                        return Ok((active as f64 / total as f64) * 100.0);
+                    }
+                }
+            }
+        }
+
         Ok(0.0)
     }
 

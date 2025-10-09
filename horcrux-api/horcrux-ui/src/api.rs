@@ -1,6 +1,6 @@
 //! API client for communicating with Horcrux backend
 
-use horcrux_common::{VmConfig, VmStatus};
+use horcrux_common::VmConfig;
 use serde::{Deserialize, Serialize};
 
 const API_BASE: &str = "http://localhost:8006/api";

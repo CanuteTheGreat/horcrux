@@ -5,6 +5,7 @@ members = [
     "horcrux-api/horcrux-ui",
     "horcrux-mobile",
     "horcrux-common",
+    "horcrux-cli",
 ]
 
 [workspace.package]

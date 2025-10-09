@@ -11,6 +11,7 @@ use horcrux_common::{ContainerConfig, ContainerRuntime, ContainerStatus, Result}
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use crate::db::Database;
 
 /// Container instance (runtime-agnostic)
 #[derive(Debug, Clone)]
@@ -46,6 +47,7 @@ pub struct ContainerManager {
     incus_manager: incus::IncusContainerManager,
     docker_manager: docker::DockerManager,
     podman_manager: podman::PodmanManager,
+    db: Option<Arc<Database>>,
 }
 
 impl ContainerManager {
@@ -57,6 +59,20 @@ impl ContainerManager {
             incus_manager: incus::IncusContainerManager::new(),
             docker_manager: docker::DockerManager::new(),
             podman_manager: podman::PodmanManager::new(),
+            db: None,
+        }
+    }
+
+    /// Create ContainerManager with database support
+    pub fn with_database(db: Arc<Database>) -> Self {
+        Self {
+            containers: Arc::new(RwLock::new(HashMap::new())),
+            lxc_manager: lxc::LxcManager::new(),
+            lxd_manager: lxd::LxdContainerManager::new(),
+            incus_manager: incus::IncusContainerManager::new(),
+            docker_manager: docker::DockerManager::new(),
+            podman_manager: podman::PodmanManager::new(),
+            db: Some(db),
         }
     }
 

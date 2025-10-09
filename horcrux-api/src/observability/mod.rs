@@ -4,10 +4,12 @@
 //! - Metrics export via OTLP/HTTP
 //! - Distributed tracing
 //! - Integration with Prometheus, Grafana, Jaeger
+//! - Native Prometheus metrics export
 //!
 //! Proxmox VE 9.0 feature parity
 
 pub mod metrics;
+pub mod prometheus;
 pub mod tracing_export;
 pub mod config;
 

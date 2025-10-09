@@ -192,19 +192,27 @@ impl FabricManager {
 
         // Find affected fabric
         let fabric_id = self.find_fabric_for_link(link_id)?;
-        let fabric = self.fabrics.get(&fabric_id)
-            .ok_or_else(|| format!("Fabric {} not found", fabric_id))?;
 
-        if fabric.redundancy.auto_failover {
+        // Check fabric configuration without holding borrow
+        let (auto_failover, needs_routing_update) = {
+            let fabric = self.fabrics.get(&fabric_id)
+                .ok_or_else(|| format!("Fabric {} not found", fabric_id))?;
+
+            let auto_failover = fabric.redundancy.auto_failover;
+            let needs_routing = matches!(
+                fabric.routing_protocol,
+                RoutingProtocol::OpenFabric(_) | RoutingProtocol::Ospf(_)
+            );
+            (auto_failover, needs_routing)
+        };
+
+        if auto_failover {
             // Trigger automatic failover
             self.trigger_failover(&fabric_id, link_id)?;
         }
 
         // Recalculate routing if using dynamic protocols
-        if matches!(
-            fabric.routing_protocol,
-            RoutingProtocol::OpenFabric(_) | RoutingProtocol::Ospf(_)
-        ) {
+        if needs_routing_update {
             self.recalculate_routing(&fabric_id)?;
         }
 
@@ -354,15 +362,97 @@ impl FabricManager {
     }
 
     fn trigger_failover(&mut self, fabric_id: &str, failed_link_id: &str) -> Result<(), String> {
-        // Find alternate paths and reroute traffic
-        // This would integrate with the actual network configuration
+        let fabric = self.fabrics.get(fabric_id)
+            .ok_or_else(|| format!("Fabric {} not found", fabric_id))?;
+
+        let failed_link = self.links.get(failed_link_id)
+            .ok_or_else(|| format!("Link {} not found", failed_link_id))?;
+
+        tracing::warn!(
+            "Triggering failover for link {} in fabric {}",
+            failed_link_id,
+            fabric_id
+        );
+
+        // Mark link as down
+        if let Some(link) = self.links.get_mut(failed_link_id) {
+            link.status = LinkStatus::Down;
+        }
+
+        // Recalculate all affected routing tables
+        self.recalculate_routing(fabric_id)?;
+
+        tracing::info!("Failover complete for fabric {}", fabric_id);
         Ok(())
     }
 
     fn recalculate_routing(&mut self, fabric_id: &str) -> Result<(), String> {
-        // Recalculate routing tables based on current topology
-        // This would trigger routing protocol convergence
+        let fabric = self.fabrics.get(fabric_id)
+            .ok_or_else(|| format!("Fabric {} not found", fabric_id))?;
+
+        tracing::debug!("Recalculating routing for fabric {}", fabric_id);
+
+        // Get all active links
+        let active_links: Vec<_> = self.links.values()
+            .filter(|link| link.status == LinkStatus::Up)
+            .collect();
+
+        // Recalculate routes for each node
+        let all_nodes: Vec<_> = fabric.spine_nodes.iter().chain(fabric.leaf_nodes.iter()).cloned().collect();
+
+        for node in &all_nodes {
+            // Calculate new routes for this node
+            let mut new_routes = Vec::new();
+
+            for target in &all_nodes {
+                if target == node {
+                    continue;
+                }
+
+                // Find paths using Dijkstra-like algorithm
+                if let Ok(paths) = self.calculate_spine_leaf_paths(fabric, node, target) {
+                    // Add routes for all valid paths (ECMP)
+                    for path in paths {
+                        if path.len() >= 2 && Self::path_uses_only_active_links_static(&path, &active_links) {
+                            let next_hop = path.get(1).unwrap().clone();
+
+                            new_routes.push(Route {
+                                destination: target.clone(),
+                                next_hop,
+                                metric: (path.len() - 1) as u32,
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Update routing table with new routes
+            if let Some(routing_table) = self.routing_tables.get_mut(node) {
+                routing_table.routes = new_routes;
+            }
+        }
+
+        tracing::info!("Routing recalculation complete for fabric {}", fabric_id);
         Ok(())
+    }
+
+    /// Check if a path uses only active links (static version)
+    fn path_uses_only_active_links_static(path: &[String], active_links: &[&FabricLink]) -> bool {
+        for i in 0..path.len() - 1 {
+            let source = &path[i];
+            let dest = &path[i + 1];
+
+            // Check if link exists and is active
+            let has_active_link = active_links.iter().any(|link| {
+                (&link.source_node == source && &link.dest_node == dest) ||
+                (&link.source_node == dest && &link.dest_node == source)
+            });
+
+            if !has_active_link {
+                return false;
+            }
+        }
+        true
     }
 
     /// List all fabrics

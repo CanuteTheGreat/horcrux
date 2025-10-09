@@ -64,6 +64,39 @@ impl WebSocketProxy {
         Ok(ws_port)
     }
 
+    /// Start a WebSocket proxy for a Unix socket (e.g., serial console)
+    pub async fn start_unix_proxy(&self, ticket_id: &str, socket_path: &str) -> Result<u16> {
+        // Get next available port
+        let mut next_port = self.next_port.write().await;
+        let ws_port = *next_port;
+        *next_port += 1;
+        drop(next_port);
+
+        let config = ProxyConfig {
+            ticket_id: ticket_id.to_string(),
+            vnc_host: socket_path.to_string(), // Reuse vnc_host field for socket path
+            vnc_port: 0,
+            ws_port,
+        };
+
+        // Store proxy config
+        let mut proxies = self.active_proxies.write().await;
+        proxies.insert(ticket_id.to_string(), config.clone());
+        drop(proxies);
+
+        // Start WebSocket listener for Unix socket
+        let ticket_id = ticket_id.to_string();
+        let socket_path = socket_path.to_string();
+
+        tokio::spawn(async move {
+            if let Err(e) = Self::run_unix_proxy(&ticket_id, &socket_path, ws_port).await {
+                tracing::error!("WebSocket Unix socket proxy error for {}: {}", ticket_id, e);
+            }
+        });
+
+        Ok(ws_port)
+    }
+
     /// Run the WebSocket proxy server
     async fn run_proxy(ticket_id: &str, vnc_host: &str, vnc_port: u16, ws_port: u16) -> Result<()> {
         let listener = TcpListener::bind(format!("0.0.0.0:{}", ws_port))
@@ -121,6 +154,63 @@ impl WebSocketProxy {
         let _ = tokio::join!(ws_to_vnc, vnc_to_ws);
 
         tracing::debug!("WebSocket proxy connection closed");
+        Ok(())
+    }
+
+    /// Run the WebSocket proxy server for Unix socket
+    async fn run_unix_proxy(ticket_id: &str, socket_path: &str, ws_port: u16) -> Result<()> {
+        let listener = TcpListener::bind(format!("0.0.0.0:{}", ws_port))
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to bind WebSocket port {}: {}", ws_port, e)))?;
+
+        tracing::info!("WebSocket Unix socket proxy listening on port {} for ticket {}", ws_port, ticket_id);
+
+        loop {
+            match listener.accept().await {
+                Ok((ws_stream, addr)) => {
+                    tracing::debug!("WebSocket connection from {} for Unix socket", addr);
+                    let socket_path = socket_path.to_string();
+
+                    tokio::spawn(async move {
+                        if let Err(e) = Self::handle_unix_connection(ws_stream, &socket_path).await {
+                            tracing::error!("Unix socket connection error: {}", e);
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to accept connection: {}", e);
+                }
+            }
+        }
+    }
+
+    /// Handle a WebSocket connection to Unix socket
+    async fn handle_unix_connection(ws_stream: TcpStream, socket_path: &str) -> Result<()> {
+        // Connect to Unix socket
+        let unix_stream = tokio::net::UnixStream::connect(socket_path)
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to connect to Unix socket {}: {}", socket_path, e)))?;
+
+        tracing::debug!("Connected to Unix socket at {}", socket_path);
+
+        // Split streams for bidirectional forwarding
+        let (ws_read, ws_write) = ws_stream.into_split();
+        let (unix_read, unix_write) = unix_stream.into_split();
+
+        // Spawn task to forward from WebSocket to Unix socket
+        let ws_to_unix = tokio::spawn(async move {
+            Self::forward_stream(ws_read, unix_write).await;
+        });
+
+        // Forward from Unix socket to WebSocket
+        let unix_to_ws = tokio::spawn(async move {
+            Self::forward_stream(unix_read, ws_write).await;
+        });
+
+        // Wait for both directions to finish
+        let _ = tokio::join!(ws_to_unix, unix_to_ws);
+
+        tracing::debug!("WebSocket Unix socket proxy connection closed");
         Ok(())
     }
 

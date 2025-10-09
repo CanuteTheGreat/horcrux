@@ -16,16 +16,20 @@ impl SessionManager {
     }
 
     /// Create a new session
-    pub async fn create_session(&self, username: &str, realm: &str) -> Session {
+    pub async fn create_session(&self, user_id: &str, username: &str, realm: &str) -> Session {
         let session_id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().timestamp();
+        let now = chrono::Utc::now();
+        let now_timestamp = now.timestamp();
 
         Session {
+            id: session_id.clone(),
+            user_id: user_id.to_string(),
+            expires_at: now + chrono::Duration::seconds(self.session_duration),
             session_id,
             username: username.to_string(),
             realm: realm.to_string(),
-            created: now,
-            expires: now + self.session_duration,
+            created: now_timestamp,
+            expires: now_timestamp + self.session_duration,
         }
     }
 

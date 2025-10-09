@@ -1,0 +1,86 @@
+#!/sbin/openrc-run
+# Copyright 2025 Horcrux Contributors
+# Distributed under the terms of the GNU General Public License v2
+
+description="Horcrux Virtualization Platform"
+
+command="/usr/bin/horcrux-api"
+command_user="root:root"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/horcrux/horcrux.log"
+error_log="/var/log/horcrux/horcrux-error.log"
+
+# Working directory
+directory="/opt/horcrux"
+
+# Resource limits
+RC_ULIMIT="-n 1048576 -u 512"
+
+# Dependencies
+depend() {
+	need net
+	use dns logger
+	after firewall
+}
+
+start_pre() {
+	# Create required directories
+	checkpath --directory --mode 0755 --owner root:root \
+		/var/lib/horcrux \
+		/var/log/horcrux \
+		/run/horcrux
+
+	# Check if KVM is available
+	if [ ! -e /dev/kvm ]; then
+		ewarn "KVM device not found at /dev/kvm"
+		ewarn "VMs will run without hardware acceleration"
+	fi
+
+	# Ensure TUN/TAP is available for networking
+	if [ ! -e /dev/net/tun ]; then
+		einfo "Loading tun module for VM networking"
+		modprobe tun || ewarn "Failed to load tun module"
+	fi
+
+	# Set environment
+	export RUST_LOG="${RUST_LOG:-info}"
+	export HORCRUX_CONFIG="${HORCRUX_CONFIG:-/etc/horcrux/config.toml}"
+}
+
+start_post() {
+	einfo "Horcrux Virtualization Platform started"
+	einfo "Web interface available at https://$(hostname):8006"
+}
+
+stop() {
+	ebegin "Stopping Horcrux Virtualization Platform"
+
+	# Graceful shutdown - give it time to stop VMs cleanly
+	if [ -f "${pidfile}" ]; then
+		kill -TERM "$(cat ${pidfile})" 2>/dev/null
+
+		# Wait up to 30 seconds for graceful shutdown
+		local timeout=30
+		while [ ${timeout} -gt 0 ] && kill -0 "$(cat ${pidfile})" 2>/dev/null; do
+			sleep 1
+			timeout=$((timeout - 1))
+		done
+
+		# Force kill if still running
+		if kill -0 "$(cat ${pidfile})" 2>/dev/null; then
+			ewarn "Graceful shutdown timeout, forcing termination"
+			kill -KILL "$(cat ${pidfile})" 2>/dev/null
+		fi
+	fi
+
+	eend $?
+}
+
+reload() {
+	ebegin "Reloading Horcrux configuration"
+	if [ -f "${pidfile}" ]; then
+		kill -HUP "$(cat ${pidfile})"
+	fi
+	eend $?
+}

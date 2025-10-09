@@ -14,9 +14,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Concrete provider enum to avoid dyn trait issues with async
+#[derive(Clone)]
+pub enum Provider {
+    S3(S3Provider),
+    Http(HttpProvider),
+}
+
 /// External backup provider manager
 pub struct ProviderManager {
-    providers: Arc<RwLock<HashMap<String, Box<dyn BackupProvider + Send + Sync>>>>,
+    providers: Arc<RwLock<HashMap<String, Provider>>>,
 }
 
 impl ProviderManager {
@@ -30,7 +37,7 @@ impl ProviderManager {
     pub async fn register_provider(
         &self,
         name: String,
-        provider: Box<dyn BackupProvider + Send + Sync>,
+        provider: Provider,
     ) -> Result<(), String> {
         let mut providers = self.providers.write().await;
 
@@ -136,6 +143,52 @@ pub trait BackupProvider {
     async fn test_connection(&self) -> Result<(), String>;
 }
 
+/// Implement BackupProvider for Provider enum
+#[async_trait::async_trait]
+impl BackupProvider for Provider {
+    fn get_info(&self) -> ProviderInfo {
+        match self {
+            Provider::S3(p) => p.get_info(),
+            Provider::Http(p) => p.get_info(),
+        }
+    }
+
+    async fn upload(&self, backup_id: &str, data: Vec<u8>) -> Result<String, String> {
+        match self {
+            Provider::S3(p) => p.upload(backup_id, data).await,
+            Provider::Http(p) => p.upload(backup_id, data).await,
+        }
+    }
+
+    async fn download(&self, backup_id: &str) -> Result<Vec<u8>, String> {
+        match self {
+            Provider::S3(p) => p.download(backup_id).await,
+            Provider::Http(p) => p.download(backup_id).await,
+        }
+    }
+
+    async fn delete(&self, backup_id: &str) -> Result<(), String> {
+        match self {
+            Provider::S3(p) => p.delete(backup_id).await,
+            Provider::Http(p) => p.delete(backup_id).await,
+        }
+    }
+
+    async fn list(&self) -> Result<Vec<BackupMetadata>, String> {
+        match self {
+            Provider::S3(p) => p.list().await,
+            Provider::Http(p) => p.list().await,
+        }
+    }
+
+    async fn test_connection(&self) -> Result<(), String> {
+        match self {
+            Provider::S3(p) => p.test_connection().await,
+            Provider::Http(p) => p.test_connection().await,
+        }
+    }
+}
+
 /// Provider information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderInfo {
@@ -172,6 +225,7 @@ pub struct BackupMetadata {
 // Built-in provider implementations
 
 /// S3-compatible provider
+#[derive(Clone)]
 pub struct S3Provider {
     config: S3Config,
     client: reqwest::Client,
@@ -317,6 +371,7 @@ impl BackupProvider for S3Provider {
 }
 
 /// HTTP-based custom provider
+#[derive(Clone)]
 pub struct HttpProvider {
     config: HttpConfig,
     client: reqwest::Client,
@@ -486,7 +541,7 @@ mod tests {
             headers: HashMap::new(),
         };
 
-        let provider = Box::new(HttpProvider::new(config));
+        let provider = Provider::Http(HttpProvider::new(config));
 
         manager.register_provider("test".to_string(), provider).await.unwrap();
 

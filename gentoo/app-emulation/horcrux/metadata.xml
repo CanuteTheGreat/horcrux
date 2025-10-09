@@ -2,33 +2,61 @@
 <!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
 <pkgmetadata>
 	<maintainer type="person">
-		<email>your-email@example.com</email>
-		<name>Your Name</name>
+		<email>maintainer@horcrux-project.org</email>
+		<name>Horcrux Development Team</name>
 	</maintainer>
-	<longdescription>
-		Horcrux is a virtualization management platform built specifically for Gentoo Linux.
-		It provides a modern web-based interface and REST API for managing virtual machines
-		and containers using various backends. Supports QEMU/KVM, LXD, Incus for VMs, and
-		LXC, Docker, Podman for containers. Think of it as a Gentoo-native alternative to
-		Proxmox VE with fine-grained USE flag control.
+	<longdescription lang="en">
+		Horcrux is a Proxmox VE alternative built natively for Gentoo Linux.
+
+		It provides enterprise-grade virtualization management with support for
+		QEMU/KVM, LXC containers, Docker, and Podman. Horcrux embraces the Gentoo
+		philosophy of choice by offering extensive USE flags for customization.
+
+		Features:
+		- Multi-hypervisor support (QEMU/KVM, LXD, Incus)
+		- Container runtimes (LXC, Docker, Podman)
+		- Multiple storage backends (ZFS, Ceph, LVM, NFS, CIFS, iSCSI)
+		- Software-defined networking with VXLAN and VLANs
+		- High availability clustering with Corosync/Pacemaker
+		- Automated backups with retention policies
+		- Role-based access control (RBAC)
+		- OpenID Connect (OIDC) authentication
+		- Web-based management interface (Yew/WebAssembly)
+		- RESTful API for automation
+		- Cloud-init integration
+		- VM templates and cloning
+		- Live VM migration
+		- Advanced monitoring with OpenTelemetry
+		- Alert system with multiple notification channels
 	</longdescription>
 	<use>
 		<!-- Virtualization backends -->
-		<flag name="qemu">Enable QEMU/KVM virtual machine support (enabled by default)</flag>
-		<flag name="lxd">Enable LXD support for both VMs and containers</flag>
-		<flag name="incus">Enable Incus support for both VMs and containers (LXD fork)</flag>
+		<flag name="qemu">Enable QEMU/KVM hypervisor support for hardware virtualization</flag>
+		<flag name="lxd">Enable LXD support for system containers and VMs</flag>
+		<flag name="incus">Enable Incus support (LXD fork) for containers and VMs</flag>
 
 		<!-- Container runtimes -->
-		<flag name="lxc">Enable LXC container support (enabled by default)</flag>
-		<flag name="docker">Enable Docker container support (enabled by default)</flag>
-		<flag name="podman">Enable Podman container support (daemonless Docker alternative)</flag>
+		<flag name="lxc">Enable LXC container support</flag>
+		<flag name="docker">Enable Docker container runtime support</flag>
+		<flag name="podman">Enable Podman (daemonless) container runtime support</flag>
 
-		<!-- Additional features -->
-		<flag name="backup">Enable backup and restore functionality for VMs and containers</flag>
-		<flag name="cluster">Enable clustering support via Corosync for high availability</flag>
-		<flag name="webui">Build and install the web-based management interface (enabled by default)</flag>
+		<!-- Storage backends -->
+		<flag name="zfs">Enable ZFS storage backend with native snapshot support</flag>
+		<flag name="ceph">Enable Ceph RBD distributed storage backend</flag>
+		<flag name="lvm">Enable LVM storage backend with snapshot support</flag>
+
+		<!-- Features -->
+		<flag name="backup">Enable automated backup and restore functionality</flag>
+		<flag name="cluster">Enable high availability clustering with Corosync</flag>
+		<flag name="ssl">Enable TLS/SSL support for encrypted connections</flag>
+		<flag name="ldap">Enable LDAP/Active Directory authentication</flag>
+		<flag name="webui">Build and install WebAssembly-based web management interface</flag>
+
+		<!-- Init system (global flag) -->
+		<flag name="systemd">Install systemd service unit (default: OpenRC init script)</flag>
 	</use>
 	<upstream>
-		<remote-id type="github">yourusername/horcrux</remote-id>
+		<remote-id type="github">horcrux-project/horcrux</remote-id>
+		<bugs-to>https://github.com/horcrux-project/horcrux/issues</bugs-to>
 	</upstream>
 </pkgmetadata>

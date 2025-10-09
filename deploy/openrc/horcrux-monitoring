@@ -1,0 +1,59 @@
+#!/sbin/openrc-run
+# Copyright 2025 Horcrux Contributors
+# Distributed under the terms of the GNU General Public License v2
+
+description="Horcrux Monitoring Metrics Collector"
+
+command="/usr/bin/horcrux-monitor"
+command_user="root:root"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/horcrux/monitoring.log"
+error_log="/var/log/horcrux/monitoring-error.log"
+
+# Dependencies
+depend() {
+	need horcrux
+	use net
+}
+
+start_pre() {
+	# Ensure horcrux-api is running
+	if ! rc-service horcrux status >/dev/null 2>&1; then
+		eerror "Horcrux API service must be running first"
+		return 1
+	fi
+
+	# Create log directory if needed
+	checkpath --directory --mode 0755 --owner root:root /var/log/horcrux
+
+	# Set environment
+	export RUST_LOG="${RUST_LOG:-info}"
+	export HORCRUX_CONFIG="${HORCRUX_CONFIG:-/etc/horcrux/config.toml}"
+}
+
+start_post() {
+	einfo "Horcrux Monitoring started - metrics at http://localhost:9000/metrics"
+}
+
+stop() {
+	ebegin "Stopping Horcrux Monitoring"
+
+	if [ -f "${pidfile}" ]; then
+		kill -TERM "$(cat ${pidfile})" 2>/dev/null
+
+		# Wait up to 10 seconds for graceful shutdown
+		local timeout=10
+		while [ ${timeout} -gt 0 ] && kill -0 "$(cat ${pidfile})" 2>/dev/null; do
+			sleep 1
+			timeout=$((timeout - 1))
+		done
+
+		# Force kill if still running
+		if kill -0 "$(cat ${pidfile})" 2>/dev/null; then
+			kill -KILL "$(cat ${pidfile})" 2>/dev/null
+		fi
+	fi
+
+	eend $?
+}

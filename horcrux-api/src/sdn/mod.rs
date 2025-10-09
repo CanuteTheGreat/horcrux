@@ -19,6 +19,8 @@ pub mod ipam;
 pub mod zones;
 pub mod bridge;
 pub mod fabric;
+pub mod cni;
+pub mod policy;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

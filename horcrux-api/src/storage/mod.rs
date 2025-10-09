@@ -1,11 +1,16 @@
 ///! Storage backend management
-///! Supports ZFS, Ceph, LVM, iSCSI, and directory-based storage
+///! Supports ZFS, Ceph, LVM, iSCSI, directory-based, GlusterFS, BtrFS, and S3 storage
 
 pub mod zfs;
 pub mod ceph;
 pub mod lvm;
 pub mod iscsi;
 pub mod directory;
+pub mod cifs;
+pub mod nfs;
+pub mod glusterfs;
+pub mod btrfs;
+pub mod s3;
 
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
@@ -22,6 +27,11 @@ pub enum StorageType {
     Lvm,
     Iscsi,
     Directory,
+    Cifs,
+    Nfs,
+    GlusterFs,
+    BtrFs,
+    S3,
 }
 
 /// Storage pool configuration
@@ -43,6 +53,14 @@ pub struct StorageManager {
     ceph: ceph::CephManager,
     lvm: lvm::LvmManager,
     directory: directory::DirectoryManager,
+    iscsi: iscsi::IscsiManager,
+    cifs: cifs::CifsManager,
+    nfs: nfs::NfsManager,
+    glusterfs: glusterfs::GlusterFsManager,
+    btrfs: btrfs::BtrFsManager,
+    s3: s3::S3Manager,
+    // Track next LUN ID for each iSCSI target
+    iscsi_lun_counters: Arc<RwLock<HashMap<String, u32>>>,
 }
 
 impl StorageManager {
@@ -53,6 +71,13 @@ impl StorageManager {
             ceph: ceph::CephManager::new(),
             lvm: lvm::LvmManager::new(),
             directory: directory::DirectoryManager::new(),
+            iscsi: iscsi::IscsiManager::new(),
+            cifs: cifs::CifsManager::new(),
+            nfs: nfs::NfsManager::new(),
+            glusterfs: glusterfs::GlusterFsManager::new(),
+            btrfs: btrfs::BtrFsManager::new(),
+            s3: s3::S3Manager::new(),
+            iscsi_lun_counters: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -88,6 +113,18 @@ impl StorageManager {
             StorageType::Ceph => self.ceph.validate_pool(&pool).await?,
             StorageType::Lvm => self.lvm.validate_pool(&pool).await?,
             StorageType::Directory => self.directory.validate_pool(&pool).await?,
+            StorageType::Iscsi => self.iscsi.validate_pool(&pool).await?,
+            StorageType::Cifs => self.cifs.validate_pool(&pool).await?,
+            StorageType::Nfs => self.nfs.validate_pool(&pool).await?,
+            StorageType::GlusterFs => self.glusterfs.validate_pool(&pool).await?,
+            StorageType::BtrFs => self.btrfs.validate_pool(&pool).await?,
+            StorageType::S3 => {
+                // S3 validation requires parsing config from pool.path
+                // For now, just verify pool path is valid
+                if pool.path.is_empty() {
+                    return Err(horcrux_common::Error::InvalidConfig("S3 path cannot be empty".to_string()));
+                }
+            }
         }
 
         let pool_clone = pool.clone();
@@ -156,6 +193,42 @@ impl StorageManager {
                     .create_volume(&pool.path, volume_name, size_gb)
                     .await?
             }
+            StorageType::Iscsi => {
+                // For iSCSI, parse target and create volume
+                let target = iscsi::IscsiTarget::parse(&pool.path)?;
+
+                // Get and increment LUN ID for this target
+                let target_key = format!("{}@{}", target.portal, target.iqn);
+                let mut lun_counters = self.iscsi_lun_counters.write().await;
+                let lun_id = lun_counters.entry(target_key).or_insert(0);
+                let current_lun = *lun_id;
+                *lun_id += 1;
+                drop(lun_counters);
+
+                self.iscsi.create_volume(&target, current_lun, size_gb).await?
+            }
+            StorageType::Cifs => {
+                // For CIFS, create file in mounted share
+                self.cifs.create_volume(&pool.path, volume_name, size_gb).await?
+            }
+            StorageType::Nfs => {
+                // For NFS, create file in NFS mount
+                self.nfs.create_volume(&pool.path, volume_name, size_gb).await?
+            }
+            StorageType::GlusterFs => {
+                // For GlusterFS, create file in gluster volume
+                self.glusterfs.create_volume(&pool.path, volume_name, size_gb).await?
+            }
+            StorageType::BtrFs => {
+                // For BtrFS, create subvolume
+                self.btrfs.create_volume(&pool.path, volume_name, size_gb).await?
+            }
+            StorageType::S3 => {
+                // S3 doesn't support block volumes, use for backup storage instead
+                return Err(horcrux_common::Error::InvalidConfig(
+                    "S3 storage is for backups/objects only, not for VM volumes".to_string()
+                ))
+            }
         };
 
         Ok(volume_path)
@@ -173,6 +246,12 @@ impl StorageManager {
             StorageType::Ceph => self.ceph.delete_volume(&pool.path, volume_name).await?,
             StorageType::Lvm => self.lvm.delete_volume(&pool.path, volume_name).await?,
             StorageType::Directory => self.directory.delete_volume(&pool.path, volume_name).await?,
+            StorageType::Iscsi => {},
+            StorageType::Cifs => {},
+            StorageType::Nfs => {},
+            StorageType::GlusterFs => {},
+            StorageType::BtrFs => {},
+            StorageType::S3 => {},
         }
 
         Ok(())
@@ -211,6 +290,36 @@ impl StorageManager {
                     "Directory storage does not support snapshots".to_string(),
                 ))
             }
+            StorageType::Iscsi => {
+                return Err(horcrux_common::Error::InvalidConfig(
+                    "iSCSI storage does not support snapshots".to_string(),
+                ))
+            }
+            StorageType::Cifs => {
+                return Err(horcrux_common::Error::InvalidConfig(
+                    "CIFS storage does not support snapshots".to_string(),
+                ))
+            }
+            StorageType::Nfs => {
+                return Err(horcrux_common::Error::InvalidConfig(
+                    "NFS storage does not support snapshots".to_string(),
+                ))
+            }
+            StorageType::GlusterFs => {
+                // GlusterFS snapshot takes volume_path and snapshot_name
+                let volume_path = format!("{}/{}", pool.path, volume_name);
+                self.glusterfs.create_snapshot(&volume_path, snapshot_name).await?;
+            }
+            StorageType::BtrFs => {
+                // BtrFS snapshot takes source_path, snapshot_name, and readonly flag
+                let source_path = format!("{}/{}", pool.path, volume_name);
+                self.btrfs.create_snapshot(&source_path, snapshot_name, false).await?;
+            }
+            StorageType::S3 => {
+                return Err(horcrux_common::Error::InvalidConfig(
+                    "S3 does not support snapshots".to_string(),
+                ))
+            }
         }
 
         Ok(())
@@ -247,6 +356,37 @@ impl StorageManager {
             StorageType::Directory => {
                 return Err(horcrux_common::Error::InvalidConfig(
                     "Directory storage does not support snapshots".to_string(),
+                ))
+            }
+            StorageType::Iscsi => {
+                return Err(horcrux_common::Error::InvalidConfig(
+                    "iSCSI storage does not support snapshots".to_string(),
+                ))
+            }
+            StorageType::Cifs => {
+                return Err(horcrux_common::Error::InvalidConfig(
+                    "CIFS storage does not support snapshots".to_string(),
+                ))
+            }
+            StorageType::Nfs => {
+                return Err(horcrux_common::Error::InvalidConfig(
+                    "NFS storage does not support snapshots".to_string(),
+                ))
+            }
+            StorageType::GlusterFs => {
+                return Err(horcrux_common::Error::InvalidConfig(
+                    "GlusterFS snapshot restore not yet implemented".to_string(),
+                ))
+            }
+            StorageType::BtrFs => {
+                // BtrFS restore_snapshot takes snapshot_path and target_path
+                let snapshot_path = format!("{}/{}@{}", pool.path, volume_name, snapshot_name);
+                let target_path = format!("{}/{}", pool.path, volume_name);
+                self.btrfs.restore_snapshot(&snapshot_path, &target_path).await?
+            }
+            StorageType::S3 => {
+                return Err(horcrux_common::Error::InvalidConfig(
+                    "S3 does not support snapshots".to_string(),
                 ))
             }
         }

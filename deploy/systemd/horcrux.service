@@ -1,0 +1,32 @@
+[Unit]
+Description=Horcrux Virtualization Platform API Server
+Documentation=https://github.com/CanuteTheGreat/horcrux
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/usr/share/horcrux
+Environment="HORCRUX_CONFIG=/etc/horcrux/config.toml"
+Environment="HORCRUX_DB=/var/lib/horcrux/horcrux.db"
+Environment="RUST_LOG=info"
+ExecStart=/usr/bin/horcrux-api
+Restart=on-failure
+RestartSec=10s
+LimitNOFILE=65536
+
+# Security hardening
+ProtectSystem=strict
+ReadWritePaths=/var/lib/horcrux /var/run/qemu-server /var/log/horcrux
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=false
+
+# Resource limits
+MemoryLimit=2G
+TasksMax=4096
+
+[Install]
+WantedBy=multi-user.target

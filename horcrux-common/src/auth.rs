@@ -5,11 +5,15 @@ use serde::{Deserialize, Serialize};
 /// User account
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
+    pub id: String,
     pub username: String,
+    pub password_hash: String,  // BCrypt hash
+    pub email: String,
+    pub role: String,  // Single primary role
     pub realm: String,  // pam, ldap, ad, etc.
     pub enabled: bool,
-    pub roles: Vec<String>,
-    pub email: Option<String>,
+    #[serde(default)]
+    pub roles: Vec<String>,  // Additional roles for compatibility
     pub comment: Option<String>,
 }
 
@@ -134,10 +138,19 @@ pub struct ApiToken {
 /// Session information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
+    pub id: String,
+    pub user_id: String,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    // Legacy fields for compatibility
+    #[serde(default)]
     pub session_id: String,
+    #[serde(default)]
     pub username: String,
+    #[serde(default)]
     pub realm: String,
+    #[serde(default)]
     pub created: i64,
+    #[serde(default)]
     pub expires: i64,
 }
 

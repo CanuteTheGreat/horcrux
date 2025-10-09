@@ -113,6 +113,12 @@ pub enum Error {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("Authentication failed")]
+    AuthenticationFailed,
+
+    #[error("Invalid session")]
+    InvalidSession,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

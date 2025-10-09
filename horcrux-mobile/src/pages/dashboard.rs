@@ -20,20 +20,20 @@ pub fn dashboard() -> Html {
         let loading = loading.clone();
 
         use_effect_with((), move |_| {
-            let stats = stats.clone();
-            let cluster = cluster.clone();
-            let loading = loading.clone();
+            let stats_initial = stats.clone();
+            let cluster_initial = cluster.clone();
+            let loading_initial = loading.clone();
 
             spawn_local(async move {
                 if let Ok(node_stats) = ApiClient::get_node_stats().await {
-                    stats.set(Some(node_stats));
+                    stats_initial.set(Some(node_stats));
                 }
 
                 if let Ok(cluster_status) = ApiClient::get_cluster_status().await {
-                    cluster.set(Some(cluster_status));
+                    cluster_initial.set(Some(cluster_status));
                 }
 
-                loading.set(false);
+                loading_initial.set(false);
             });
 
             // Refresh every 10 seconds

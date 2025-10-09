@@ -4,6 +4,8 @@ pub mod pam;
 pub mod ldap;
 pub mod session;
 pub mod rbac;
+pub mod oidc;
+pub mod password;
 
 use horcrux_common::auth::*;
 use horcrux_common::Result;
@@ -139,7 +141,7 @@ impl AuthManager {
         }
 
         // Create session
-        let session = self.session_manager.create_session(&user.username, &realm).await;
+        let session = self.session_manager.create_session(&user.id, &user.username, &realm).await;
         let csrf_token = self.session_manager.generate_csrf_token();
 
         let mut sessions = self.sessions.write().await;

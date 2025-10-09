@@ -2,6 +2,8 @@
 ///! Provides VNC and SPICE console access to VMs via WebSocket proxy
 
 mod vnc;
+mod spice;
+mod serial;
 mod websocket;
 
 use horcrux_common::Result;
@@ -45,6 +47,8 @@ pub struct ConsoleTicket {
 pub struct ConsoleManager {
     active_tickets: Arc<RwLock<HashMap<String, ConsoleTicket>>>,
     vnc_manager: vnc::VncManager,
+    spice_manager: spice::SpiceManager,
+    serial_manager: serial::SerialManager,
     ws_proxy: Arc<websocket::WebSocketProxy>,
 }
 
@@ -53,6 +57,8 @@ impl ConsoleManager {
         Self {
             active_tickets: Arc::new(RwLock::new(HashMap::new())),
             vnc_manager: vnc::VncManager::new(),
+            spice_manager: spice::SpiceManager::new(),
+            serial_manager: serial::SerialManager::new(),
             ws_proxy: Arc::new(websocket::WebSocketProxy::new()),
         }
     }
@@ -80,12 +86,37 @@ impl ConsoleManager {
                 })
             }
             ConsoleType::Spice => {
-                // TODO: Implement SPICE support
-                Err(horcrux_common::Error::System("SPICE not yet implemented".to_string()))
+                // Get or start SPICE server for this VM
+                let spice_port = self.spice_manager.get_spice_port(vm_id).await?;
+
+                // Start WebSocket proxy for SPICE
+                let ws_port = self.ws_proxy.start_proxy(&ticket.ticket_id, "127.0.0.1", spice_port).await?;
+
+                Ok(ConsoleInfo {
+                    vm_id: vm_id.to_string(),
+                    console_type: ConsoleType::Spice,
+                    host: "127.0.0.1".to_string(),
+                    port: spice_port,
+                    ticket: ticket.ticket_id.clone(),
+                    ws_port,
+                })
             }
             ConsoleType::Serial => {
-                // TODO: Implement serial console support
-                Err(horcrux_common::Error::System("Serial console not yet implemented".to_string()))
+                // Get or enable serial console for this VM
+                let socket_path = self.serial_manager.get_serial_socket(vm_id).await?;
+
+                // For serial console, we return the socket path directly
+                // Client can connect via WebSocket proxy to the Unix socket
+                let ws_port = self.ws_proxy.start_unix_proxy(&ticket.ticket_id, &socket_path).await?;
+
+                Ok(ConsoleInfo {
+                    vm_id: vm_id.to_string(),
+                    console_type: ConsoleType::Serial,
+                    host: "127.0.0.1".to_string(),
+                    port: 0, // Serial uses socket, not TCP port
+                    ticket: ticket.ticket_id.clone(),
+                    ws_port,
+                })
             }
         }
     }
@@ -112,10 +143,15 @@ impl ConsoleManager {
         let now = chrono::Utc::now().timestamp();
         let expires_at = now + 300; // 5 minutes
 
-        // For VNC, we need to get the port from QEMU
+        // Get the port from QEMU based on console type
         let vnc_port = match console_type {
             ConsoleType::Vnc => self.vnc_manager.ensure_vnc_enabled(vm_id).await?,
-            _ => 0,
+            ConsoleType::Spice => self.spice_manager.ensure_spice_enabled(vm_id).await?,
+            ConsoleType::Serial => {
+                // Ensure serial is enabled and return 0 (serial uses socket, not port)
+                let _ = self.serial_manager.ensure_serial_enabled(vm_id).await?;
+                0
+            }
         };
 
         let ticket = ConsoleTicket {
@@ -144,5 +180,37 @@ impl ConsoleManager {
     pub async fn get_vnc_websocket(&self, vm_id: &str) -> Result<String> {
         let info = self.create_console(vm_id, ConsoleType::Vnc).await?;
         Ok(format!("ws://{}:{}/{}", info.host, info.ws_port, info.ticket))
+    }
+
+    /// Get SPICE websocket URL for a VM
+    pub async fn get_spice_websocket(&self, vm_id: &str) -> Result<String> {
+        let info = self.create_console(vm_id, ConsoleType::Spice).await?;
+        Ok(format!("ws://{}:{}/{}", info.host, info.ws_port, info.ticket))
+    }
+
+    /// Get SPICE connection URI for native SPICE clients
+    pub async fn get_spice_uri(&self, vm_id: &str) -> Result<String> {
+        let config = self.spice_manager.get_spice_config(vm_id).await?;
+        Ok(spice::SpiceManager::generate_spice_uri(
+            &config.addr,
+            config.port,
+            config.password.as_deref(),
+        ))
+    }
+
+    /// Get Serial console WebSocket URL for a VM
+    pub async fn get_serial_websocket(&self, vm_id: &str) -> Result<String> {
+        let info = self.create_console(vm_id, ConsoleType::Serial).await?;
+        Ok(format!("ws://{}:{}/{}", info.host, info.ws_port, info.ticket))
+    }
+
+    /// Send data to serial console
+    pub async fn write_serial(&self, vm_id: &str, data: &str) -> Result<()> {
+        self.serial_manager.write_serial_input(vm_id, data).await
+    }
+
+    /// Read data from serial console
+    pub async fn read_serial(&self, vm_id: &str, lines: usize) -> Result<String> {
+        self.serial_manager.read_serial_output(vm_id, lines).await
     }
 }

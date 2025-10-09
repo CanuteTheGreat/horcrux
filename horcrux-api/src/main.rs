@@ -11,15 +11,30 @@ mod cluster;
 mod alerts;
 mod observability;
 mod sdn;
+mod ha;
+mod migration;
+mod audit;
+mod tls;
+mod secrets;
+mod db;
+mod middleware;
+mod logging;
+mod gpu;
+mod prometheus;
+mod webhooks;
 
 use axum::{
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::StatusCode,
+    middleware as axum_middleware,
     response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
+use serde::Serialize;
+use tower_http::services::{ServeDir, ServeFile};
 use horcrux_common::VmConfig;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::{error, info};
@@ -36,6 +51,9 @@ use console::{ConsoleManager, ConsoleType, ConsoleInfo};
 use cluster::{ClusterManager, Node, ClusterStatus, ArchitectureSummary};
 use alerts::{AlertManager, AlertRule, Alert, NotificationChannel};
 use observability::{OtelManager, OtelConfig};
+use tls::TlsManager;
+use secrets::VaultManager;
+use audit::AuditLogger;
 
 #[derive(Clone)]
 struct AppState {
@@ -50,6 +68,19 @@ struct AppState {
     cluster_manager: Arc<ClusterManager>,
     alert_manager: Arc<AlertManager>,
     otel_manager: Arc<OtelManager>,
+    tls_manager: Arc<TlsManager>,
+    vault_manager: Arc<VaultManager>,
+    audit_logger: Arc<AuditLogger>,
+    database: Arc<db::Database>,
+    rate_limiter: Arc<middleware::rate_limit::RateLimiter>,
+    storage_manager: Arc<storage::StorageManager>,
+    ha_manager: Arc<ha::HaManager>,
+    migration_manager: Arc<migration::MigrationManager>,
+    gpu_manager: Arc<gpu::GpuManager>,
+    prometheus_manager: Arc<prometheus::PrometheusManager>,
+    webhook_manager: Arc<webhooks::WebhookManager>,
+    cni_manager: Arc<tokio::sync::RwLock<sdn::cni::CniManager>>,
+    network_policy_manager: Arc<tokio::sync::RwLock<sdn::policy::NetworkPolicyManager>>,
 }
 
 #[tokio::main]
@@ -70,14 +101,142 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => error!("Failed to get QEMU version: {}", e),
     }
 
+    // Initialize database
+    let database = Arc::new(
+        db::Database::new("sqlite:///var/lib/horcrux/horcrux.db")
+            .await
+            .expect("Failed to connect to database")
+    );
+
+    // Run migrations
+    database.migrate().await.expect("Failed to run migrations");
+    info!("Database initialized");
+
+    // Create default admin user if no users exist
+    match db::users::list_users(database.pool()).await {
+        Ok(users) if users.is_empty() => {
+            use auth::password::hash_password;
+
+            let admin_password = std::env::var("ADMIN_PASSWORD")
+                .unwrap_or_else(|_| "admin".to_string());
+
+            if admin_password == "admin" {
+                tracing::warn!("⚠️  WARNING: Using default admin password 'admin'!");
+                tracing::warn!("⚠️  Please set ADMIN_PASSWORD environment variable for production!");
+            }
+
+            let password_hash = hash_password(&admin_password)
+                .expect("Failed to hash admin password");
+
+            let admin_user = horcrux_common::auth::User {
+                id: uuid::Uuid::new_v4().to_string(),
+                username: "admin".to_string(),
+                password_hash,
+                email: "admin@localhost".to_string(),
+                role: "admin".to_string(),
+                realm: "local".to_string(),
+                enabled: true,
+                roles: vec!["Administrator".to_string()],
+                comment: Some("Default administrator account".to_string()),
+            };
+
+            db::users::create_user(database.pool(), &admin_user)
+                .await
+                .expect("Failed to create admin user");
+
+            info!("✓ Created default admin user (username: admin, password: {})",
+                  if admin_password == "admin" { "admin [CHANGE THIS!]" } else { "[from ADMIN_PASSWORD]" });
+        }
+        Ok(users) => {
+            info!("Found {} existing user(s) in database", users.len());
+        }
+        Err(e) => {
+            tracing::warn!("Failed to check for existing users: {}", e);
+        }
+    }
+
     let monitoring_manager = Arc::new(MonitoringManager::new());
 
     // Start background metrics collection
     monitoring_manager.start_collection().await;
     info!("Monitoring system started");
 
+    // Start session cleanup task
+    let db_clone = database.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600)); // Every hour
+        loop {
+            interval.tick().await;
+            match db::users::cleanup_expired_sessions(db_clone.pool()).await {
+                Ok(_) => tracing::debug!("Session cleanup completed"),
+                Err(e) => tracing::error!("Session cleanup failed: {}", e),
+            }
+        }
+    });
+    info!("Session cleanup task started");
+
+    // Initialize rate limiter with custom config
+    let rate_limit_config = middleware::rate_limit::RateLimitConfig {
+        max_requests: 100,
+        window: std::time::Duration::from_secs(60),
+        per_user: true,
+    };
+    let rate_limiter = middleware::rate_limit::create_limiter(rate_limit_config.clone());
+    middleware::rate_limit::start_cleanup_task(rate_limiter.clone());
+    info!("Rate limiter initialized: {} requests per {} seconds",
+          rate_limit_config.max_requests, rate_limit_config.window.as_secs());
+
+    // Initialize strict rate limiter for auth endpoints
+    let auth_rate_limit_config = middleware::rate_limit::RateLimitConfig {
+        max_requests: 5,  // Only 5 login attempts per minute
+        window: std::time::Duration::from_secs(60),
+        per_user: false,  // Per IP address
+    };
+    let auth_rate_limiter = middleware::rate_limit::create_limiter(auth_rate_limit_config.clone());
+    middleware::rate_limit::start_cleanup_task(auth_rate_limiter.clone());
+    info!("Auth rate limiter initialized: {} requests per {} seconds",
+          auth_rate_limit_config.max_requests, auth_rate_limit_config.window.as_secs());
+
+    // Initialize CORS config
+    let cors_config = middleware::cors::CorsConfig::default();
+
+    // Initialize GPU manager and scan for devices
+    let gpu_manager = Arc::new(gpu::GpuManager::new());
+    match gpu_manager.scan_devices().await {
+        Ok(devices) => info!("Found {} GPU device(s)", devices.len()),
+        Err(e) => tracing::warn!("Failed to scan GPU devices: {}", e),
+    }
+
+    // Initialize Prometheus metrics
+    let prometheus_manager = Arc::new(prometheus::PrometheusManager::new());
+    prometheus_manager.init_default_metrics().await;
+    info!("Prometheus metrics initialized");
+
+    // Initialize webhook manager
+    let webhook_manager = Arc::new(webhooks::WebhookManager::new());
+    info!("Webhook manager initialized");
+
+    // Initialize CNI manager
+    let cni_bin_dir = std::path::PathBuf::from("/opt/cni/bin");
+    let cni_conf_dir = std::path::PathBuf::from("/etc/cni/net.d");
+    let cni_manager = Arc::new(tokio::sync::RwLock::new(sdn::cni::CniManager::new(cni_bin_dir, cni_conf_dir)));
+
+    // Create default CNI network if CNI directories exist
+    if std::path::Path::new("/opt/cni/bin").exists() {
+        match cni_manager.write().await.create_default_network().await {
+            Ok(_) => info!("CNI default network created"),
+            Err(e) => tracing::warn!("Failed to create default CNI network: {}", e),
+        }
+    } else {
+        tracing::warn!("CNI binary directory not found at /opt/cni/bin - CNI features disabled");
+    }
+
+    // Initialize Network Policy manager
+    let network_policy_manager = Arc::new(tokio::sync::RwLock::new(sdn::policy::NetworkPolicyManager::new()));
+    info!("Network policy manager initialized");
+
     let state = Arc::new(AppState {
-        vm_manager: Arc::new(VmManager::new()),
+        vm_manager: Arc::new(VmManager::with_database(database.clone())),
         backup_manager: Arc::new(BackupManager::new()),
         cloudinit_manager: Arc::new(CloudInitManager::new(
             std::path::PathBuf::from("/var/lib/horcrux/cloudinit")
@@ -90,11 +249,36 @@ async fn main() -> anyhow::Result<()> {
         cluster_manager: Arc::new(ClusterManager::new()),
         alert_manager: Arc::new(AlertManager::new()),
         otel_manager: Arc::new(OtelManager::new()),
+        tls_manager: Arc::new(TlsManager::new()),
+        vault_manager: Arc::new(VaultManager::new()),
+        audit_logger: Arc::new(AuditLogger::new(Some(std::path::PathBuf::from("/var/log/horcrux/audit.log")))),
+        database,
+        rate_limiter: rate_limiter.clone(),
+        storage_manager: Arc::new(storage::StorageManager::new()),
+        ha_manager: Arc::new(ha::HaManager::new()),
+        migration_manager: Arc::new(migration::MigrationManager::new()),
+        gpu_manager,
+        prometheus_manager,
+        webhook_manager,
+        cni_manager,
+        network_policy_manager,
     });
 
-    // Build router
-    let app = Router::new()
-        .route("/api/health", get(health_check))
+    // Static files serving for the frontend
+    let serve_dir = ServeDir::new("horcrux-ui/dist")
+        .not_found_service(ServeFile::new("horcrux-ui/dist/index.html"));
+
+    // Build auth router with strict rate limiting
+    let auth_router = Router::new()
+        .route("/api/auth/login", post(login))
+        .route("/api/auth/register", post(register_user))
+        .with_state(state.clone())
+        .layer(axum_middleware::from_fn(move |conn_info, req, next| {
+            middleware::rate_limit::rate_limit_middleware(auth_rate_limiter.clone(), conn_info, req, next)
+        }));
+
+    // Build protected routes (require authentication)
+    let protected_routes = Router::new()
         // VM endpoints
         .route("/api/vms", get(list_vms))
         .route("/api/vms", post(create_vm))
@@ -123,16 +307,25 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/templates/:id", get(get_template))
         .route("/api/templates/:id", delete(delete_template))
         .route("/api/templates/:id/clone", post(clone_template))
-        // Auth endpoints
-        .route("/api/auth/login", post(login))
+        // Auth endpoints (login and register are in auth_router with stricter rate limiting)
         .route("/api/auth/logout", post(logout))
         .route("/api/auth/verify", get(verify_session))
+        .route("/api/auth/password", post(change_password))
         .route("/api/users", get(list_users))
         .route("/api/users", post(create_user))
         .route("/api/users/:id", delete(delete_user))
+        .route("/api/users/:username/api-keys", get(list_api_keys))
+        .route("/api/users/:username/api-keys", post(create_api_key))
+        .route("/api/users/:username/api-keys/:key_id", delete(revoke_api_key))
         .route("/api/roles", get(list_roles))
         .route("/api/permissions/:user_id", get(get_user_permissions))
         .route("/api/permissions/:user_id", post(add_permission))
+        // Storage endpoints
+        .route("/api/storage/pools", get(list_storage_pools))
+        .route("/api/storage/pools/:id", get(get_storage_pool))
+        .route("/api/storage/pools", post(add_storage_pool))
+        .route("/api/storage/pools/:id", delete(remove_storage_pool))
+        .route("/api/storage/pools/:pool_id/volumes", post(create_volume))
         // Firewall endpoints
         .route("/api/firewall/rules", get(list_firewall_rules))
         .route("/api/firewall/rules", post(add_firewall_rule))
@@ -171,37 +364,132 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/observability/config", get(get_otel_config))
         .route("/api/observability/config", post(update_otel_config))
         .route("/api/observability/export/metrics", post(export_metrics_now))
-        .with_state(state);
+        // TLS/SSL endpoints
+        .route("/api/tls/config", get(get_tls_config))
+        .route("/api/tls/config", post(update_tls_config))
+        .route("/api/tls/certificates", get(list_certificates))
+        .route("/api/tls/certificate/generate", post(generate_self_signed_cert))
+        .route("/api/tls/certificate/info/:path", get(get_certificate_info_endpoint))
+        // Vault endpoints
+        .route("/api/vault/config", get(get_vault_config))
+        .route("/api/vault/config", post(update_vault_config))
+        .route("/api/vault/secret/:path", get(read_vault_secret))
+        .route("/api/vault/secret/:path", post(write_vault_secret))
+        .route("/api/vault/secret/:path", delete(delete_vault_secret))
+        // GPU passthrough endpoints
+        .route("/api/gpu/devices", get(list_gpu_devices))
+        .route("/api/gpu/devices/scan", post(scan_gpu_devices))
+        .route("/api/gpu/devices/:pci_address", get(get_gpu_device))
+        .route("/api/gpu/devices/:pci_address/bind-vfio", post(bind_gpu_to_vfio))
+        .route("/api/gpu/devices/:pci_address/unbind-vfio", post(unbind_gpu_from_vfio))
+        .route("/api/gpu/devices/:pci_address/iommu-group", get(get_gpu_iommu_group))
+        .route("/api/gpu/iommu-status", get(check_iommu_status))
+        // Prometheus metrics endpoint
+        .route("/metrics", get(prometheus_metrics))
+        // Webhook endpoints
+        .route("/api/webhooks", get(list_webhooks))
+        .route("/api/webhooks", post(create_webhook))
+        .route("/api/webhooks/:id", get(get_webhook))
+        .route("/api/webhooks/:id", post(update_webhook))
+        .route("/api/webhooks/:id", delete(delete_webhook))
+        .route("/api/webhooks/:id/test", post(test_webhook))
+        .route("/api/webhooks/:id/deliveries", get(get_webhook_deliveries))
+        .route("/api/vault/secrets/:path", get(list_vault_secrets))
+        // Audit log endpoints
+        .route("/api/audit/events", get(query_audit_events))
+        .route("/api/audit/failed-logins", get(get_failed_logins_endpoint))
+        .route("/api/audit/security-events", get(get_security_events_endpoint))
+        .route("/api/audit/export", post(export_audit_logs))
+        // HA (High Availability) endpoints
+        .route("/api/ha/resources", get(list_ha_resources))
+        .route("/api/ha/resources", post(add_ha_resource))
+        .route("/api/ha/resources/:vm_id", delete(remove_ha_resource))
+        .route("/api/ha/status", get(get_ha_status))
+        .route("/api/ha/groups", post(create_ha_group))
+        .route("/api/ha/groups", get(list_ha_groups))
+        // Migration endpoints
+        .route("/api/migrate/:vm_id", post(migrate_vm))
+        .route("/api/migrate/:vm_id/status", get(get_migration_status))
+        // CNI (Container Network Interface) endpoints
+        .route("/api/cni/networks", get(list_cni_networks))
+        .route("/api/cni/networks", post(create_cni_network))
+        .route("/api/cni/networks/:name", get(get_cni_network))
+        .route("/api/cni/networks/:name", delete(delete_cni_network))
+        .route("/api/cni/attach", post(attach_container_to_network))
+        .route("/api/cni/detach", post(detach_container_from_network))
+        .route("/api/cni/check", post(check_container_network))
+        .route("/api/cni/attachments/:container_id", get(list_container_attachments))
+        .route("/api/cni/capabilities/:plugin_type", get(get_cni_plugin_capabilities))
+        // Network Policy endpoints
+        .route("/api/network-policies", get(list_network_policies))
+        .route("/api/network-policies", post(create_network_policy))
+        .route("/api/network-policies/:id", get(get_network_policy))
+        .route("/api/network-policies/:id", delete(delete_network_policy))
+        .route("/api/network-policies/namespace/:namespace", get(list_policies_in_namespace))
+        .route("/api/network-policies/:id/iptables", get(get_policy_iptables_rules))
+        .route("/api/network-policies/:id/nftables", get(get_policy_nftables_rules))
+        .with_state(state.clone())
+        // Add authentication middleware to protected routes
+        .layer(axum_middleware::from_fn_with_state(
+            state.clone(),
+            middleware::auth::auth_middleware,
+        ));
+
+    // Build main app with public and protected routes
+    let app = Router::new()
+        .route("/api/health", get(health_check))
+        // Merge protected routes (with auth middleware)
+        .merge(protected_routes)
+        // Merge auth router with strict rate limiting (public routes)
+        .merge(auth_router)
+        // Add middleware layers (in reverse order of execution)
+        .layer(axum_middleware::from_fn(move |req, next| {
+            middleware::cors::cors_middleware(cors_config.clone(), req, next)
+        }))
+        .layer(axum_middleware::from_fn(move |conn_info, req, next| {
+            middleware::rate_limit::rate_limit_middleware(rate_limiter.clone(), conn_info, req, next)
+        }))
+        // Note: Auth middleware will be added per-route or per-group later
+        // Serve static files (frontend) - must be last to act as fallback
+        .fallback_service(serve_dir);
 
     // Start server
     let addr = "0.0.0.0:8006"; // Using Proxmox's default port
     info!("Horcrux API listening on {}", addr);
 
     let listener = TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
 
 // API error handling
 enum ApiError {
-    Internal(horcrux_common::Error),
+    Internal(String),
+    NotFound(String),
+    AuthenticationFailed,
+    BadRequest(String),
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
-            ApiError::Internal(e) => {
-                error!("API error: {}", e);
-                match e {
-                    horcrux_common::Error::VmNotFound(id) => {
-                        (StatusCode::NOT_FOUND, format!("VM not found: {}", id))
-                    }
-                    horcrux_common::Error::InvalidConfig(msg) => {
-                        (StatusCode::BAD_REQUEST, msg)
-                    }
-                    _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-                }
+            ApiError::Internal(msg) => {
+                error!("API error: {}", msg);
+                (StatusCode::INTERNAL_SERVER_ERROR, msg)
+            }
+            ApiError::NotFound(msg) => {
+                (StatusCode::NOT_FOUND, msg)
+            }
+            ApiError::AuthenticationFailed => {
+                (StatusCode::UNAUTHORIZED, "Authentication failed".to_string())
+            }
+            ApiError::BadRequest(msg) => {
+                (StatusCode::BAD_REQUEST, msg)
             }
         };
 
@@ -211,7 +499,18 @@ impl IntoResponse for ApiError {
 
 impl From<horcrux_common::Error> for ApiError {
     fn from(err: horcrux_common::Error) -> Self {
-        ApiError::Internal(err)
+        match err {
+            horcrux_common::Error::VmNotFound(id) => {
+                ApiError::NotFound(format!("VM not found: {}", id))
+            }
+            horcrux_common::Error::ContainerNotFound(id) => {
+                ApiError::NotFound(format!("Container not found: {}", id))
+            }
+            horcrux_common::Error::AuthenticationFailed => {
+                ApiError::AuthenticationFailed
+            }
+            _ => ApiError::Internal(err.to_string()),
+        }
     }
 }
 
@@ -328,11 +627,49 @@ async fn create_backup_job(
 }
 
 async fn run_backup_job_now(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    // TODO: Trigger job execution immediately
-    info!("Manual backup job trigger: {}", id);
+    // Get the job
+    let jobs = state.backup_manager.list_jobs().await;
+    let job = jobs.iter()
+        .find(|j| j.id == id)
+        .ok_or_else(|| ApiError::NotFound(format!("Backup job not found: {}", id)))?;
+
+    if !job.enabled {
+        return Err(ApiError::Internal("Backup job is disabled".to_string()));
+    }
+
+    // Execute backup for each target in the job
+    for target_id in &job.targets {
+        let backup_config = BackupConfig {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: format!("Manual backup from job {} for {}", job.id, target_id),
+            target_type: backup::TargetType::Vm, // Default to VM, could parse from target_id
+            target_id: target_id.clone(),
+            storage: job.storage.clone(),
+            mode: job.mode.clone(),
+            compression: job.compression.clone(),
+            notes: Some(format!("Manually triggered from job {}", job.id)),
+        };
+
+        info!("Executing backup for target {} from job {}", target_id, id);
+
+        // Execute backup asynchronously
+        let backup_manager = state.backup_manager.clone();
+        tokio::spawn(async move {
+            match backup_manager.create_backup(backup_config).await {
+                Ok(backup) => {
+                    info!("Backup completed successfully: {}", backup.id);
+                }
+                Err(e) => {
+                    error!("Backup failed: {}", e);
+                }
+            }
+        });
+    }
+
+    info!("Manual backup job triggered: {}", id);
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -445,8 +782,51 @@ async fn login(
     State(state): State<Arc<AppState>>,
     Json(request): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, ApiError> {
-    let response = state.auth_manager.login(request).await?;
-    Ok(Json(response))
+    use crate::auth::password::verify_password;
+    use crate::middleware::auth::generate_jwt_token;
+
+    // Try database authentication first
+    match db::users::get_user_by_username(state.database.pool(), &request.username).await {
+        Ok(user) => {
+            // Verify password
+            if !verify_password(&request.password, &user.password_hash)? {
+                return Err(ApiError::AuthenticationFailed);
+            }
+
+            // Create session in database
+            let session_id = uuid::Uuid::new_v4().to_string();
+            let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
+
+            let session = horcrux_common::auth::Session {
+                id: session_id.clone(),
+                user_id: user.id.clone(),
+                expires_at,
+                session_id: session_id.clone(),
+                username: user.username.clone(),
+                realm: user.realm.clone(),
+                created: chrono::Utc::now().timestamp(),
+                expires: expires_at.timestamp(),
+            };
+
+            db::users::create_session(state.database.pool(), &session).await?;
+
+            // Generate JWT token
+            let token = generate_jwt_token(&user.id, &user.username, &user.role)
+                .map_err(|e| ApiError::Internal(format!("Failed to generate token: {}", e.to_string())))?;
+
+            Ok(Json(LoginResponse {
+                ticket: token,
+                csrf_token: session_id,
+                username: user.username,
+                roles: vec![user.role],
+            }))
+        }
+        Err(_) => {
+            // Fall back to auth manager (PAM/LDAP) if database user not found
+            let response = state.auth_manager.login(request).await?;
+            Ok(Json(response))
+        }
+    }
 }
 
 async fn logout(
@@ -487,6 +867,61 @@ async fn list_users(
     Json(users)
 }
 
+// User registration endpoint (publicly accessible)
+#[derive(serde::Deserialize)]
+struct RegisterUserRequest {
+    username: String,
+    password: String,
+    email: String,
+}
+
+async fn register_user(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RegisterUserRequest>,
+) -> Result<StatusCode, ApiError> {
+    use crate::auth::password::hash_password;
+
+    // Validate email format
+    if !req.email.contains('@') {
+        return Err(ApiError::Internal("Invalid email format".to_string()));
+    }
+
+    // Validate username (alphanumeric and underscores only)
+    if !req.username.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return Err(ApiError::Internal("Username must be alphanumeric".to_string()));
+    }
+
+    // Validate password strength (at least 8 characters)
+    if req.password.len() < 8 {
+        return Err(ApiError::Internal("Password must be at least 8 characters".to_string()));
+    }
+
+    // Check if user already exists
+    if let Ok(_) = db::users::get_user_by_username(state.database.pool(), &req.username).await {
+        return Err(ApiError::Internal("Username already exists".to_string()));
+    }
+
+    // Hash password
+    let password_hash = hash_password(&req.password)?;
+
+    // Create user
+    let user = horcrux_common::auth::User {
+        id: uuid::Uuid::new_v4().to_string(),
+        username: req.username,
+        password_hash,
+        email: req.email,
+        role: "user".to_string(), // Default role
+        realm: "local".to_string(),
+        enabled: true,
+        roles: vec!["PVEVMUser".to_string()],
+        comment: None,
+    };
+
+    db::users::create_user(state.database.pool(), &user).await?;
+
+    Ok(StatusCode::CREATED)
+}
+
 async fn create_user(
     State(state): State<Arc<AppState>>,
     Json(user): Json<horcrux_common::auth::User>,
@@ -525,6 +960,174 @@ async fn add_permission(
 ) -> Result<StatusCode, ApiError> {
     state.auth_manager.add_permission(&user_id, permission).await?;
     Ok(StatusCode::CREATED)
+}
+
+// Password change endpoint
+#[derive(serde::Deserialize)]
+struct ChangePasswordRequest {
+    username: String,
+    old_password: String,
+    new_password: String,
+}
+
+async fn change_password(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ChangePasswordRequest>,
+) -> Result<StatusCode, ApiError> {
+    use crate::auth::password::{hash_password, verify_password};
+
+    // Get user from database
+    let user = db::users::get_user_by_username(state.database.pool(), &req.username)
+        .await
+        .map_err(|_| ApiError::AuthenticationFailed)?;
+
+    // Verify old password
+    if !verify_password(&req.old_password, &user.password_hash)? {
+        return Err(ApiError::AuthenticationFailed);
+    }
+
+    // Hash new password
+    let new_hash = hash_password(&req.new_password)?;
+
+    // Update password in database
+    sqlx::query("UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?")
+        .bind(&new_hash)
+        .bind(&req.username)
+        .execute(state.database.pool())
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to update password: {}", e.to_string())))?;
+
+    Ok(StatusCode::OK)
+}
+
+// API key management endpoints
+#[derive(serde::Deserialize)]
+struct CreateApiKeyRequest {
+    name: String,
+    expires_days: Option<i64>,
+}
+
+#[derive(serde::Serialize)]
+struct CreateApiKeyResponse {
+    id: String,
+    key: String,
+    name: String,
+    expires_at: Option<i64>,
+}
+
+async fn create_api_key(
+    State(state): State<Arc<AppState>>,
+    Path(username): Path<String>,
+    Json(req): Json<CreateApiKeyRequest>,
+) -> Result<Json<CreateApiKeyResponse>, ApiError> {
+    use crate::auth::password::{generate_api_key, hash_password};
+
+    // Get user
+    let user = db::users::get_user_by_username(state.database.pool(), &username)
+        .await
+        .map_err(|_| ApiError::NotFound(format!("User {} not found", username)))?;
+
+    // Generate API key
+    let api_key = generate_api_key();
+    let key_hash = hash_password(&api_key)?;
+
+    // Calculate expiration
+    let expires_at = req.expires_days.map(|days| {
+        chrono::Utc::now().timestamp() + (days * 86400)
+    });
+
+    // Create ID
+    let key_id = uuid::Uuid::new_v4().to_string();
+
+    // Insert into database
+    sqlx::query(
+        "INSERT INTO api_keys (id, user_id, key_hash, name, expires_at, enabled)
+         VALUES (?, ?, ?, ?, ?, 1)"
+    )
+    .bind(&key_id)
+    .bind(&user.id)
+    .bind(&key_hash)
+    .bind(&req.name)
+    .bind(expires_at)
+    .execute(state.database.pool())
+    .await
+    .map_err(|e| ApiError::Internal(format!("Failed to create API key: {}", e.to_string())))?;
+
+    Ok(Json(CreateApiKeyResponse {
+        id: key_id,
+        key: api_key, // Only return the key once!
+        name: req.name,
+        expires_at,
+    }))
+}
+
+#[derive(serde::Serialize)]
+struct ApiKeyInfo {
+    id: String,
+    name: String,
+    enabled: bool,
+    expires_at: Option<i64>,
+    created_at: String,
+    last_used_at: Option<String>,
+}
+
+async fn list_api_keys(
+    State(state): State<Arc<AppState>>,
+    Path(username): Path<String>,
+) -> Result<Json<Vec<ApiKeyInfo>>, ApiError> {
+    // Get user
+    let user = db::users::get_user_by_username(state.database.pool(), &username)
+        .await
+        .map_err(|_| ApiError::NotFound(format!("User {} not found", username)))?;
+
+    // Query API keys
+    let rows = sqlx::query(
+        "SELECT id, name, enabled, expires_at, created_at, last_used_at
+         FROM api_keys WHERE user_id = ? ORDER BY created_at DESC"
+    )
+    .bind(&user.id)
+    .fetch_all(state.database.pool())
+    .await
+    .map_err(|e| ApiError::Internal(format!("Failed to list API keys: {}", e.to_string())))?;
+
+    let mut keys = Vec::new();
+    for row in rows {
+        use sqlx::Row;
+        keys.push(ApiKeyInfo {
+            id: row.get("id"),
+            name: row.get("name"),
+            enabled: row.get("enabled"),
+            expires_at: row.get("expires_at"),
+            created_at: row.get("created_at"),
+            last_used_at: row.get("last_used_at"),
+        });
+    }
+
+    Ok(Json(keys))
+}
+
+async fn revoke_api_key(
+    State(state): State<Arc<AppState>>,
+    Path((username, key_id)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    // Get user
+    let user = db::users::get_user_by_username(state.database.pool(), &username)
+        .await
+        .map_err(|_| ApiError::NotFound(format!("User {} not found", username)))?;
+
+    // Delete API key (verify it belongs to the user)
+    let result = sqlx::query("DELETE FROM api_keys WHERE id = ? AND user_id = ?")
+        .bind(&key_id)
+        .bind(&user.id)
+        .execute(state.database.pool())
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to revoke API key: {}", e.to_string())))?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiError::NotFound("API key not found".to_string()));
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // Firewall API handlers
@@ -587,9 +1190,9 @@ fn parse_firewall_scope(scope: &str) -> Result<FirewallScope, ApiError> {
     } else if let Some(container_id) = scope.strip_prefix("container-") {
         Ok(FirewallScope::Container(container_id.to_string()))
     } else {
-        Err(ApiError::Internal(horcrux_common::Error::InvalidConfig(
+        Err(ApiError::Internal(
             format!("Invalid firewall scope: {}", scope)
-        )))
+        ))
     }
 }
 
@@ -732,9 +1335,9 @@ async fn find_best_node_for_vm(
         "aarch64" => cluster::node::Architecture::Aarch64,
         "riscv64" => cluster::node::Architecture::Riscv64,
         "ppc64le" => cluster::node::Architecture::Ppc64le,
-        _ => return Err(ApiError::Internal(horcrux_common::Error::InvalidConfig(
+        _ => return Err(ApiError::Internal(
             format!("Unknown architecture: {}", request.architecture)
-        ))),
+        )),
     };
 
     let node_name = state.cluster_manager
@@ -832,7 +1435,7 @@ async fn update_otel_config(
     Json(config): Json<OtelConfig>,
 ) -> Result<StatusCode, ApiError> {
     state.otel_manager.update_config(config).await
-        .map_err(|e| ApiError::Internal(horcrux_common::Error::System(e)))?;
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(StatusCode::OK)
 }
 
@@ -844,7 +1447,943 @@ async fn export_metrics_now(
 
     // Export to configured endpoint
     state.otel_manager.export_metrics(metrics).await
-        .map_err(|e| ApiError::Internal(horcrux_common::Error::System(e)))?;
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     Ok(StatusCode::OK)
+}
+
+// TLS/SSL handlers
+
+async fn get_tls_config(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<tls::TlsConfig>, ApiError> {
+    let config = state.tls_manager.get_config().await;
+    Ok(Json(config))
+}
+
+async fn update_tls_config(
+    State(state): State<Arc<AppState>>,
+    Json(config): Json<tls::TlsConfig>,
+) -> Result<StatusCode, ApiError> {
+    state.tls_manager.load_config(config).await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(StatusCode::OK)
+}
+
+async fn list_certificates(
+    State(state): State<Arc<AppState>>,
+) -> Json<Vec<tls::CertificateInfo>> {
+    let certs = state.tls_manager.list_certificates().await;
+    Json(certs)
+}
+
+#[derive(serde::Deserialize)]
+struct GenerateCertRequest {
+    common_name: String,
+    organization: String,
+    validity_days: u32,
+}
+
+async fn generate_self_signed_cert(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<GenerateCertRequest>,
+) -> Result<Json<tls::CertificateInfo>, ApiError> {
+    let cert = state.tls_manager.generate_self_signed_cert(
+        &req.common_name,
+        &req.organization,
+        req.validity_days,
+        "/etc/horcrux/ssl/cert.pem",
+        "/etc/horcrux/ssl/key.pem",
+    ).await.map_err(|e| ApiError::Internal(e.to_string()))?;
+    
+    Ok(Json(cert))
+}
+
+async fn get_certificate_info_endpoint(
+    State(state): State<Arc<AppState>>,
+    Path(path): Path<String>,
+) -> Result<Json<tls::CertificateInfo>, ApiError> {
+    let info = state.tls_manager.get_certificate_info(&path).await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(info))
+}
+
+// Vault handlers
+
+async fn get_vault_config(
+    State(state): State<Arc<AppState>>,
+) -> Json<secrets::VaultConfig> {
+    let config = state.vault_manager.get_config().await;
+    Json(config)
+}
+
+async fn update_vault_config(
+    State(state): State<Arc<AppState>>,
+    Json(config): Json<secrets::VaultConfig>,
+) -> Result<StatusCode, ApiError> {
+    state.vault_manager.initialize(config).await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(StatusCode::OK)
+}
+
+async fn read_vault_secret(
+    State(state): State<Arc<AppState>>,
+    Path(path): Path<String>,
+) -> Result<Json<secrets::Secret>, ApiError> {
+    let secret = state.vault_manager.read_secret(&path).await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(secret))
+}
+
+#[derive(serde::Deserialize)]
+struct WriteSecretRequest {
+    data: std::collections::HashMap<String, String>,
+}
+
+async fn write_vault_secret(
+    State(state): State<Arc<AppState>>,
+    Path(path): Path<String>,
+    Json(req): Json<WriteSecretRequest>,
+) -> Result<StatusCode, ApiError> {
+    state.vault_manager.write_secret(&path, req.data).await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(StatusCode::OK)
+}
+
+async fn delete_vault_secret(
+    State(state): State<Arc<AppState>>,
+    Path(path): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.vault_manager.delete_secret(&path).await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_vault_secrets(
+    State(state): State<Arc<AppState>>,
+    Path(path): Path<String>,
+) -> Result<Json<Vec<String>>, ApiError> {
+    let secrets = state.vault_manager.list_secrets(&path).await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(secrets))
+}
+
+// Audit log handlers
+
+#[derive(serde::Deserialize)]
+struct AuditQueryParams {
+    event_type: Option<String>,
+    user: Option<String>,
+    severity: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn query_audit_events(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<AuditQueryParams>,
+) -> Json<Vec<audit::AuditEvent>> {
+    // Parse event type
+    let event_type = params.event_type.as_ref().and_then(|s| {
+        match s.as_str() {
+            "Login" => Some(audit::AuditEventType::Login),
+            "Logout" => Some(audit::AuditEventType::Logout),
+            "LoginFailed" => Some(audit::AuditEventType::LoginFailed),
+            _ => None,
+        }
+    });
+
+    // Parse severity
+    let severity = params.severity.as_ref().and_then(|s| {
+        match s.as_str() {
+            "Info" => Some(audit::AuditSeverity::Info),
+            "Warning" => Some(audit::AuditSeverity::Warning),
+            "Error" => Some(audit::AuditSeverity::Error),
+            "Critical" => Some(audit::AuditSeverity::Critical),
+            _ => None,
+        }
+    });
+
+    let events = state.audit_logger.query(
+        event_type,
+        params.user,
+        severity,
+        None,
+        None,
+        params.limit,
+    ).await;
+
+    Json(events)
+}
+
+async fn get_failed_logins_endpoint(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<FailedLoginsParams>,
+) -> Json<Vec<audit::AuditEvent>> {
+    let events = state.audit_logger.get_failed_logins(
+        params.user,
+        params.limit.unwrap_or(20),
+    ).await;
+    Json(events)
+}
+
+#[derive(serde::Deserialize)]
+struct FailedLoginsParams {
+    user: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn get_security_events_endpoint(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<SecurityEventsParams>,
+) -> Json<Vec<audit::AuditEvent>> {
+    let events = state.audit_logger.get_security_events(
+        params.limit.unwrap_or(20),
+    ).await;
+    Json(events)
+}
+
+#[derive(serde::Deserialize)]
+struct SecurityEventsParams {
+    limit: Option<usize>,
+}
+
+#[derive(serde::Deserialize)]
+struct ExportRequest {
+    path: String,
+}
+
+async fn export_audit_logs(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ExportRequest>,
+) -> Result<StatusCode, ApiError> {
+    state.audit_logger.export(&req.path).await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(StatusCode::OK)
+}
+
+// Storage handlers
+
+async fn list_storage_pools(
+    State(state): State<Arc<AppState>>,
+) -> Json<Vec<storage::StoragePool>> {
+    let pools = state.storage_manager.list_pools().await;
+    Json(pools)
+}
+
+async fn get_storage_pool(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<storage::StoragePool>, ApiError> {
+    let pool = state.storage_manager.get_pool(&id).await
+        .map_err(|e| ApiError::from(e))?;
+    Ok(Json(pool))
+}
+
+#[derive(serde::Deserialize)]
+struct AddStoragePoolRequest {
+    name: String,
+    storage_type: String,
+    path: String,
+}
+
+async fn add_storage_pool(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<AddStoragePoolRequest>,
+) -> Result<Json<storage::StoragePool>, ApiError> {
+    // Parse storage type
+    let storage_type = match req.storage_type.to_lowercase().as_str() {
+        "zfs" => storage::StorageType::Zfs,
+        "ceph" => storage::StorageType::Ceph,
+        "lvm" => storage::StorageType::Lvm,
+        "iscsi" => storage::StorageType::Iscsi,
+        "directory" | "dir" => storage::StorageType::Directory,
+        "cifs" => storage::StorageType::Cifs,
+        "nfs" => storage::StorageType::Nfs,
+        "glusterfs" => storage::StorageType::GlusterFs,
+        "btrfs" => storage::StorageType::BtrFs,
+        "s3" => storage::StorageType::S3,
+        _ => return Err(ApiError::Internal(
+            format!("Unknown storage type: {}", req.storage_type)
+        )),
+    };
+
+    let pool = storage::StoragePool {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: req.name,
+        storage_type,
+        path: req.path,
+        available: 0,  // Will be updated by backend
+        total: 0,      // Will be updated by backend
+        enabled: true,
+    };
+
+    let pool = state.storage_manager.add_pool(pool).await
+        .map_err(|e| ApiError::from(e))?;
+    Ok(Json(pool))
+}
+
+async fn remove_storage_pool(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.storage_manager.remove_pool(&id).await
+        .map_err(|e| ApiError::from(e))?;
+    Ok(StatusCode::OK)
+}
+
+#[derive(serde::Deserialize)]
+struct CreateVolumeRequest {
+    name: String,
+    size: u64,  // Size in GB
+}
+
+async fn create_volume(
+    State(state): State<Arc<AppState>>,
+    Path(pool_id): Path<String>,
+    Json(req): Json<CreateVolumeRequest>,
+) -> Result<StatusCode, ApiError> {
+    state.storage_manager.create_volume(&pool_id, &req.name, req.size).await
+        .map_err(|e| ApiError::from(e))?;
+    Ok(StatusCode::OK)
+}
+
+// HA (High Availability) handlers
+
+#[derive(serde::Serialize)]
+struct HaResourceResponse {
+    vm_id: String,
+    vm_name: String,
+    group: String,
+    priority: u32,
+    state: String,
+}
+
+async fn list_ha_resources(
+    State(state): State<Arc<AppState>>,
+) -> Json<Vec<HaResourceResponse>> {
+    let resources = state.ha_manager.list_resources().await;
+
+    let mut responses = Vec::new();
+    for r in resources.iter() {
+        // Try to get actual VM name from database
+        let vm_name = state.database.get_vm(&r.vm_id.to_string())
+            .await
+            .ok()
+            .map(|vm| vm.name)
+            .unwrap_or_else(|| format!("vm-{}", r.vm_id));
+
+        responses.push(HaResourceResponse {
+            vm_id: r.vm_id.to_string(),
+            vm_name,
+            group: r.group.clone(),
+            priority: r.max_restart, // Using max_restart as priority for now
+            state: format!("{:?}", r.state),
+        });
+    }
+
+    Json(responses)
+}
+
+#[derive(serde::Deserialize)]
+struct AddHaResourceRequest {
+    vm_id: u32,
+    group: String,
+    priority: u32,
+}
+
+async fn add_ha_resource(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<AddHaResourceRequest>,
+) -> Result<StatusCode, ApiError> {
+    let config = ha::HaConfig {
+        vm_id: req.vm_id,
+        group: req.group,
+        max_restart: req.priority.min(10), // Use priority as max_restart, cap at 10
+        max_relocate: 3, // Default max relocations
+        state: ha::HaState::Started,
+    };
+
+    state.ha_manager.add_resource(config).await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(StatusCode::CREATED)
+}
+
+async fn remove_ha_resource(
+    State(state): State<Arc<AppState>>,
+    Path(vm_id): Path<u32>,
+) -> Result<StatusCode, ApiError> {
+    state.ha_manager.remove_resource(vm_id).await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(StatusCode::OK)
+}
+
+#[derive(serde::Serialize)]
+struct HaStatusResponse {
+    total_resources: usize,
+    running: usize,
+    stopped: usize,
+    migrating: usize,
+}
+
+async fn get_ha_status(
+    State(state): State<Arc<AppState>>,
+) -> Json<HaStatusResponse> {
+    let resources = state.ha_manager.list_resources().await;
+
+    let mut running = 0;
+    let mut stopped = 0;
+    let mut migrating = 0;
+
+    for resource in &resources {
+        match resource.state {
+            ha::HaState::Started => running += 1,
+            ha::HaState::Stopped | ha::HaState::Disabled => stopped += 1,
+            ha::HaState::Migrating => migrating += 1,
+            _ => {}
+        }
+    }
+
+    Json(HaStatusResponse {
+        total_resources: resources.len(),
+        running,
+        stopped,
+        migrating,
+    })
+}
+
+#[derive(serde::Deserialize)]
+struct CreateHaGroupRequest {
+    name: String,
+    nodes: Vec<String>,
+}
+
+async fn create_ha_group(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateHaGroupRequest>,
+) -> Result<StatusCode, ApiError> {
+    let group = ha::HaGroup {
+        name: req.name,
+        nodes: req.nodes,
+        restricted: false,
+        no_failback: false,
+    };
+
+    state.ha_manager.add_group(group).await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(StatusCode::CREATED)
+}
+
+async fn list_ha_groups(
+    State(state): State<Arc<AppState>>,
+) -> Json<Vec<ha::HaGroup>> {
+    let groups = state.ha_manager.list_groups().await;
+    Json(groups)
+}
+
+// Migration handlers
+
+#[derive(serde::Deserialize)]
+struct MigrateVmRequest {
+    target_node: String,
+    migration_type: Option<String>, // "live", "offline", "online"
+    online: Option<bool>,
+}
+
+async fn migrate_vm(
+    State(state): State<Arc<AppState>>,
+    Path(vm_id): Path<String>,
+    Json(req): Json<MigrateVmRequest>,
+) -> Result<Json<String>, ApiError> {
+    // Determine migration type
+    let online = req.online.unwrap_or(true);
+    let migration_type_str = req.migration_type.unwrap_or_else(|| {
+        if online { "live".to_string() } else { "offline".to_string() }
+    });
+
+    let migration_type = match migration_type_str.as_str() {
+        "live" => migration::MigrationType::Live,
+        "offline" => migration::MigrationType::Offline,
+        "online" => migration::MigrationType::Online,
+        _ => return Err(ApiError::Internal(format!("Invalid migration type: {}", migration_type_str))),
+    };
+
+    // Parse VM ID
+    let vm_id_u32: u32 = vm_id.parse()
+        .map_err(|_| ApiError::Internal(format!("Invalid VM ID: {}", vm_id)))?;
+
+    // Create migration config
+    let config = migration::MigrationConfig {
+        vm_id: vm_id_u32,
+        target_node: req.target_node.clone(),
+        migration_type,
+        bandwidth_limit: None,
+        force: false,
+        with_local_disks: false,
+    };
+
+    // Get the actual source node (local node)
+    let source_node = state.cluster_manager.get_local_node_name()
+        .await
+        .unwrap_or_else(|_| "localhost".to_string());
+
+    // Start migration
+    let job_id = state.migration_manager
+        .start_migration(config, source_node)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    info!("Started migration of VM {} to node {}, job ID: {}", vm_id, req.target_node, job_id);
+
+    Ok(Json(job_id))
+}
+
+async fn get_migration_status(
+    State(state): State<Arc<AppState>>,
+    Path(vm_id): Path<String>,
+) -> Result<Json<migration::MigrationJob>, ApiError> {
+    // Find migration job for this VM
+    let job = state.migration_manager
+        .get_job(&vm_id)
+        .await
+        .ok_or_else(|| ApiError::NotFound(format!("No migration found for VM {}", vm_id)))?;
+
+    Ok(Json(job))
+}
+
+// GPU Passthrough Endpoints
+
+async fn list_gpu_devices(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<gpu::GpuDevice>>, ApiError> {
+    let devices = state.gpu_manager.list_devices().await;
+    Ok(Json(devices))
+}
+
+async fn scan_gpu_devices(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<gpu::GpuDevice>>, ApiError> {
+    let devices = state.gpu_manager
+        .scan_devices()
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(devices))
+}
+
+async fn get_gpu_device(
+    State(state): State<Arc<AppState>>,
+    Path(pci_address): Path<String>,
+) -> Result<Json<gpu::GpuDevice>, ApiError> {
+    let device = state.gpu_manager
+        .get_device(&pci_address)
+        .await
+        .map_err(|e| ApiError::NotFound(e.to_string()))?;
+    Ok(Json(device))
+}
+
+async fn bind_gpu_to_vfio(
+    State(state): State<Arc<AppState>>,
+    Path(pci_address): Path<String>,
+) -> Result<Json<&'static str>, ApiError> {
+    state.gpu_manager
+        .bind_to_vfio(&pci_address)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    info!("Bound GPU {} to vfio-pci", pci_address);
+    Ok(Json("GPU bound to vfio-pci driver"))
+}
+
+async fn unbind_gpu_from_vfio(
+    State(state): State<Arc<AppState>>,
+    Path(pci_address): Path<String>,
+) -> Result<Json<&'static str>, ApiError> {
+    state.gpu_manager
+        .unbind_from_vfio(&pci_address)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    info!("Unbound GPU {} from vfio-pci", pci_address);
+    Ok(Json("GPU unbound from vfio-pci driver"))
+}
+
+async fn get_gpu_iommu_group(
+    State(state): State<Arc<AppState>>,
+    Path(pci_address): Path<String>,
+) -> Result<Json<Vec<gpu::GpuDevice>>, ApiError> {
+    let devices = state.gpu_manager
+        .get_iommu_group_devices(&pci_address)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(devices))
+}
+
+#[derive(Serialize)]
+struct IommuStatus {
+    enabled: bool,
+    message: String,
+}
+
+async fn check_iommu_status(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<IommuStatus>, ApiError> {
+    let enabled = state.gpu_manager.check_iommu_enabled().await;
+
+    let message = if enabled {
+        "IOMMU is enabled and ready for GPU passthrough".to_string()
+    } else {
+        "IOMMU is not enabled. Add intel_iommu=on or amd_iommu=on to kernel parameters".to_string()
+    };
+
+    Ok(Json(IommuStatus { enabled, message }))
+}
+
+// Prometheus Metrics Endpoint
+
+async fn prometheus_metrics(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    // Export metrics in Prometheus format
+    let metrics = state.prometheus_manager.export_metrics().await;
+
+    // Return as plain text with Prometheus content type
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        metrics,
+    )
+}
+
+// Webhook Endpoints
+
+async fn list_webhooks(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<webhooks::WebhookConfig>>, ApiError> {
+    let webhooks = state.webhook_manager.list_webhooks().await;
+    Ok(Json(webhooks))
+}
+
+async fn create_webhook(
+    State(state): State<Arc<AppState>>,
+    Json(config): Json<webhooks::WebhookConfig>,
+) -> Result<Json<webhooks::WebhookConfig>, ApiError> {
+    let webhook = state.webhook_manager
+        .add_webhook(config)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    info!("Created webhook: {} ({})", webhook.name, webhook.id);
+    Ok(Json(webhook))
+}
+
+async fn get_webhook(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<webhooks::WebhookConfig>, ApiError> {
+    let webhook = state.webhook_manager
+        .get_webhook(&id)
+        .await
+        .ok_or_else(|| ApiError::NotFound(format!("Webhook {} not found", id)))?;
+
+    Ok(Json(webhook))
+}
+
+async fn update_webhook(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(config): Json<webhooks::WebhookConfig>,
+) -> Result<Json<&'static str>, ApiError> {
+    state.webhook_manager
+        .update_webhook(&id, config)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    info!("Updated webhook: {}", id);
+    Ok(Json("Webhook updated successfully"))
+}
+
+async fn delete_webhook(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<&'static str>, ApiError> {
+    state.webhook_manager
+        .remove_webhook(&id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    info!("Deleted webhook: {}", id);
+    Ok(Json("Webhook deleted successfully"))
+}
+
+async fn test_webhook(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<&'static str>, ApiError> {
+    // Send a test event
+    let test_data = serde_json::json!({
+        "message": "This is a test webhook event",
+        "webhook_id": id,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    });
+
+    state.webhook_manager
+        .trigger_event(webhooks::WebhookEventType::Custom("test".to_string()), test_data)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(Json("Test webhook sent"))
+}
+
+async fn get_webhook_deliveries(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<webhooks::WebhookDelivery>>, ApiError> {
+    let deliveries = state.webhook_manager.get_deliveries(Some(&id), 50).await;
+    Ok(Json(deliveries))
+}
+
+// CNI (Container Network Interface) handlers
+
+async fn list_cni_networks(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<sdn::cni::CniConfig>>, ApiError> {
+    let manager = state.cni_manager.read().await;
+    let networks = manager.list_networks();
+    Ok(Json(networks))
+}
+
+#[derive(serde::Deserialize)]
+struct CreateCniNetworkRequest {
+    name: String,
+    plugin_type: sdn::cni::CniPluginType,
+    bridge: Option<String>,
+    subnet: Option<String>,
+    gateway: Option<std::net::IpAddr>,
+}
+
+async fn create_cni_network(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateCniNetworkRequest>,
+) -> Result<Json<sdn::cni::CniConfig>, ApiError> {
+    let config = sdn::cni::CniConfig {
+        cni_version: "1.0.0".to_string(),
+        name: req.name,
+        plugin_type: req.plugin_type,
+        bridge: req.bridge,
+        ipam: sdn::cni::IpamConfig {
+            ipam_type: "host-local".to_string(),
+            subnet: req.subnet,
+            range_start: None,
+            range_end: None,
+            gateway: req.gateway,
+            routes: vec![
+                sdn::cni::RouteConfig {
+                    dst: "0.0.0.0/0".to_string(),
+                    gw: None,
+                }
+            ],
+        },
+        dns: None,
+        capabilities: std::collections::HashMap::new(),
+    };
+
+    let mut manager = state.cni_manager.write().await;
+    manager.create_network(config.clone())
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(Json(config))
+}
+
+async fn get_cni_network(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Result<Json<sdn::cni::CniConfig>, ApiError> {
+    let manager = state.cni_manager.read().await;
+    manager.get_network(&name)
+        .cloned()
+        .ok_or_else(|| ApiError::NotFound(format!("Network {} not found", name)))
+        .map(Json)
+}
+
+async fn delete_cni_network(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Result<Json<&'static str>, ApiError> {
+    let mut manager = state.cni_manager.write().await;
+    manager.delete_network(&name)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(Json("Network deleted"))
+}
+
+#[derive(serde::Deserialize)]
+struct AttachContainerRequest {
+    container_id: String,
+    network_name: String,
+    interface_name: String,
+    netns_path: String,
+}
+
+async fn attach_container_to_network(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<AttachContainerRequest>,
+) -> Result<Json<sdn::cni::CniResult>, ApiError> {
+    let mut manager = state.cni_manager.write().await;
+    let result = manager.add_container(
+        &req.container_id,
+        &req.network_name,
+        &req.interface_name,
+        &req.netns_path,
+    )
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(Json(result))
+}
+
+#[derive(serde::Deserialize)]
+struct DetachContainerRequest {
+    container_id: String,
+    network_name: String,
+    interface_name: String,
+    netns_path: String,
+}
+
+async fn detach_container_from_network(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<DetachContainerRequest>,
+) -> Result<Json<&'static str>, ApiError> {
+    let mut manager = state.cni_manager.write().await;
+    manager.del_container(
+        &req.container_id,
+        &req.network_name,
+        &req.interface_name,
+        &req.netns_path,
+    )
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(Json("Container detached from network"))
+}
+
+#[derive(serde::Deserialize)]
+struct CheckContainerRequest {
+    container_id: String,
+    network_name: String,
+    interface_name: String,
+    netns_path: String,
+}
+
+async fn check_container_network(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CheckContainerRequest>,
+) -> Result<Json<&'static str>, ApiError> {
+    let manager = state.cni_manager.read().await;
+    manager.check_container(
+        &req.container_id,
+        &req.network_name,
+        &req.interface_name,
+        &req.netns_path,
+    )
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(Json("Container network is healthy"))
+}
+
+async fn list_container_attachments(
+    State(state): State<Arc<AppState>>,
+    Path(container_id): Path<String>,
+) -> Result<Json<Vec<sdn::cni::CniAttachment>>, ApiError> {
+    let manager = state.cni_manager.read().await;
+    let attachments = manager.list_attachments(&container_id);
+    Ok(Json(attachments))
+}
+
+async fn get_cni_plugin_capabilities(
+    State(state): State<Arc<AppState>>,
+    Path(plugin_type): Path<String>,
+) -> Result<Json<Vec<String>>, ApiError> {
+    let plugin_type: sdn::cni::CniPluginType = serde_json::from_str(&format!("\"{}\"", plugin_type))
+        .map_err(|e| ApiError::BadRequest(format!("Invalid plugin type: {}", e)))?;
+
+    let manager = state.cni_manager.read().await;
+    let capabilities = manager.get_capabilities(&plugin_type)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(Json(capabilities))
+}
+
+// Network Policy handlers
+
+async fn list_network_policies(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<sdn::policy::NetworkPolicy>>, ApiError> {
+    let manager = state.network_policy_manager.read().await;
+    let policies = manager.list_policies();
+    Ok(Json(policies))
+}
+
+async fn create_network_policy(
+    State(state): State<Arc<AppState>>,
+    Json(policy): Json<sdn::policy::NetworkPolicy>,
+) -> Result<Json<&'static str>, ApiError> {
+    let mut manager = state.network_policy_manager.write().await;
+    manager.create_policy(policy)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(Json("Network policy created"))
+}
+
+async fn get_network_policy(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<sdn::policy::NetworkPolicy>, ApiError> {
+    let manager = state.network_policy_manager.read().await;
+    manager.get_policy(&id)
+        .cloned()
+        .ok_or_else(|| ApiError::NotFound(format!("Network policy {} not found", id)))
+        .map(Json)
+}
+
+async fn delete_network_policy(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<&'static str>, ApiError> {
+    let mut manager = state.network_policy_manager.write().await;
+    manager.delete_policy(&id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(Json("Network policy deleted"))
+}
+
+async fn list_policies_in_namespace(
+    State(state): State<Arc<AppState>>,
+    Path(namespace): Path<String>,
+) -> Result<Json<Vec<sdn::policy::NetworkPolicy>>, ApiError> {
+    let manager = state.network_policy_manager.read().await;
+    let policies = manager.list_policies_in_namespace(&namespace);
+    Ok(Json(policies))
+}
+
+async fn get_policy_iptables_rules(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<String>>, ApiError> {
+    let manager = state.network_policy_manager.read().await;
+    let rules = manager.generate_iptables_rules(&id);
+    Ok(Json(rules))
+}
+
+async fn get_policy_nftables_rules(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<String>>, ApiError> {
+    let manager = state.network_policy_manager.read().await;
+    let rules = manager.generate_nftables_rules(&id);
+    Ok(Json(rules))
 }

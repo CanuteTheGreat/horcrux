@@ -111,7 +111,7 @@ impl ApiClient {
 
     /// Start VM
     pub async fn start_vm(id: &str) -> Result<(), String> {
-        #[derive(Serialize)]
+        #[derive(Serialize, Deserialize)]
         struct Empty {}
 
         let _: Empty = Self::post(&format!("/vms/{}/start", id), &Empty {}).await?;
@@ -120,7 +120,7 @@ impl ApiClient {
 
     /// Stop VM
     pub async fn stop_vm(id: &str) -> Result<(), String> {
-        #[derive(Serialize)]
+        #[derive(Serialize, Deserialize)]
         struct Empty {}
 
         let _: Empty = Self::post(&format!("/vms/{}/stop", id), &Empty {}).await?;
@@ -150,7 +150,7 @@ pub struct ClusterStatus {
     pub online: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct NodeInfo {
     pub id: String,
     pub name: String,
@@ -159,7 +159,7 @@ pub struct NodeInfo {
     pub architecture: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct VmInfo {
     pub id: String,
     pub name: String,

@@ -4,6 +4,7 @@
 pub mod corosync;
 pub mod node;
 pub mod affinity;
+pub mod balancer;
 
 use horcrux_common::Result;
 pub use node::{Node, NodeStatus};
@@ -24,6 +25,7 @@ pub struct ClusterManager {
     config: Arc<RwLock<Option<ClusterConfig>>>,
     nodes: Arc<RwLock<HashMap<String, Node>>>,
     corosync: corosync::CorosyncManager,
+    local_node_name: Arc<RwLock<Option<String>>>,
 }
 
 impl ClusterManager {
@@ -32,7 +34,29 @@ impl ClusterManager {
             config: Arc::new(RwLock::new(None)),
             nodes: Arc::new(RwLock::new(HashMap::new())),
             corosync: corosync::CorosyncManager::new(),
+            local_node_name: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Get the local node name
+    pub async fn get_local_node_name(&self) -> Result<String> {
+        let local_name = self.local_node_name.read().await;
+        if let Some(name) = local_name.as_ref() {
+            return Ok(name.clone());
+        }
+        drop(local_name);
+
+        // Try to get from hostname
+        let hostname = hostname::get()
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to get hostname: {}", e)))?
+            .to_string_lossy()
+            .to_string();
+
+        // Cache it
+        let mut local_name = self.local_node_name.write().await;
+        *local_name = Some(hostname.clone());
+
+        Ok(hostname)
     }
 
     /// Initialize a new cluster

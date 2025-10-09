@@ -37,11 +37,24 @@ nix = { version = "0.29", features = ["process", "signal"] }
 
 # Authentication
 uuid = { version = "1.0", features = ["v4", "serde"] }
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+jsonwebtoken = "9.3"
+argon2 = { version = "0.5", features = ["std"] }
 
 # Monitoring
 hostname = "0.4"
 num_cpus = "1.16"
+
+# HTTP client (using rustls to avoid OpenSSL dependency)
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+base64 = "0.22"
+urlencoding = "2.1"
+async-trait = "0.1"
+rand = "0.8"
+tempfile = "3.8"
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono", "uuid"] }
 
 [features]
 default = ["qemu", "lxc", "docker"]
