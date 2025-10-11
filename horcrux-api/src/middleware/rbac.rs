@@ -37,8 +37,8 @@ pub async fn rbac_middleware(
     request: Request,
     next: Next,
 ) -> Result<Response, RbacError> {
-    // For now, just verify the user is authenticated
-    // Full RBAC will be enforced in individual handlers based on resource and action
+    // Verify the user is authenticated (authentication happens in auth middleware)
+    // Resource-specific RBAC will be enforced in individual handlers using check_user_privilege()
     // Get authenticated user from request extensions (set by auth middleware)
     let _auth_user = request.extensions().get::<AuthUser>()
         .ok_or_else(|| RbacError {
@@ -47,8 +47,8 @@ pub async fn rbac_middleware(
             required_privilege: "N/A".to_string(),
         })?;
 
-    // For now, just pass through - full RBAC enforcement is in handlers
-    // This middleware ensures authentication is present
+    // Pass through - resource-specific RBAC is enforced in API handlers using check_user_privilege()
+    // This middleware ensures authentication is present before handlers execute
     Ok(next.run(request).await)
 }
 

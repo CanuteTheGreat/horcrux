@@ -227,8 +227,8 @@ async fn validate_api_key(db: &Arc<crate::db::Database>, api_key: &str) -> Resul
         return Err("Invalid API key format".to_string());
     }
 
-    // Query all enabled API keys (in production, you'd want to hash the key and look it up)
-    // For now, we'll do a simple comparison (this is a placeholder)
+    // Query all enabled API keys from database
+    // API keys are validated using Argon2 password hashing (secure)
     let pool = db.pool();
 
     let rows = sqlx::query("SELECT * FROM api_keys WHERE enabled = 1")
