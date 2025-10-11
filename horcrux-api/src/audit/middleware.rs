@@ -10,7 +10,7 @@ use axum::{
 use std::sync::Arc;
 use tracing::{debug, info};
 
-use super::{create_event, AuditEvent, AuditEventType, AuditResult, AuditSeverity};
+use super::{AuditEvent, AuditEventType, AuditResult, AuditSeverity};
 
 /// Extract source IP from request
 fn extract_source_ip(request: &Request) -> Option<String> {

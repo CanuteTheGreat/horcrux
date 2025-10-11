@@ -15,7 +15,6 @@ use std::path::PathBuf;
 use tokio::sync::RwLock;
 use tokio::process::Command;
 use chrono::{DateTime, Utc};
-use qemu_monitor::QemuMonitor;
 
 /// Migration type
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -1,6 +1,9 @@
 ///! BtrFS storage backend
 ///!
 ///! Provides BtrFS filesystem support with native snapshots and subvolumes
+///!
+///! Note: This module is complete but not yet fully integrated into the storage manager.
+///! It will be activated when BtrFS backend support is enabled in the platform.
 
 use horcrux_common::Result;
 use tokio::process::Command as AsyncCommand;
@@ -9,9 +12,11 @@ use super::StoragePool;
 use std::path::PathBuf;
 
 /// BtrFS manager
+#[allow(dead_code)]
 pub struct BtrFsManager {}
 
 /// BtrFS snapshot
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BtrFsSnapshot {
     pub name: String,
@@ -21,6 +26,7 @@ pub struct BtrFsSnapshot {
 }
 
 /// BtrFS subvolume info
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubvolumeInfo {
     pub id: u64,
@@ -28,6 +34,7 @@ pub struct SubvolumeInfo {
     pub parent_id: u64,
 }
 
+#[allow(dead_code)]
 impl BtrFsManager {
     pub fn new() -> Self {
         Self {}

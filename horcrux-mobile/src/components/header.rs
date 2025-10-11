@@ -2,7 +2,6 @@
 
 use yew::prelude::*;
 use yew_router::prelude::*;
-use crate::router::Route;
 
 #[derive(Properties, PartialEq)]
 pub struct HeaderProps {

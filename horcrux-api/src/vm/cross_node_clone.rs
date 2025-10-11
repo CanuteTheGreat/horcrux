@@ -7,9 +7,9 @@ use horcrux_common::{Result, VmConfig};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::process::Command;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
-use super::clone::{CloneMode, CloneOptions};
+use super::clone::CloneOptions;
 
 /// Cross-node clone configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -603,6 +603,7 @@ impl CrossNodeCloneManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::clone::CloneMode;
 
     #[test]
     fn test_cross_node_clone_manager_new() {

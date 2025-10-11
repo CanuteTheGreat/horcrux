@@ -218,7 +218,7 @@ pub mod users {
     use super::*;
     use horcrux_common::auth::{User, Session};
     use sqlx::Row;
-    use uuid::Uuid;
+    
 
     pub async fn create_user(pool: &SqlitePool, user: &User) -> Result<()> {
         sqlx::query(

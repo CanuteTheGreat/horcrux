@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-pub use rules::{AlertRule, AlertCondition, ComparisonOperator, MetricType};
-pub use notifications::{NotificationChannel, EmailConfig, WebhookConfig};
+pub use rules::{AlertRule, MetricType};
+pub use notifications::NotificationChannel;
 
 /// Alert severity level
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

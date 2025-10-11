@@ -4,7 +4,6 @@
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::IpAddr;
 
 /// Network policy specification
 #[derive(Debug, Clone, Serialize, Deserialize)]

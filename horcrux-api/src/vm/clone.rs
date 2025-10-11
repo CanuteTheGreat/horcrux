@@ -1063,6 +1063,7 @@ enum StorageType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::CloneMode;
     use horcrux_common::VmArchitecture;
 
     fn create_test_vm_config() -> VmConfig {

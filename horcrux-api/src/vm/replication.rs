@@ -262,7 +262,7 @@ impl ReplicationManager {
         send_cmd.arg("send").arg(&source_path);
 
         // Build SSH receive command with bandwidth limit
-        let mut recv_args = vec!["zfs", "receive", "-F", &target_path];
+        let recv_args = vec!["zfs", "receive", "-F", &target_path];
 
         let bandwidth_limit = if let Some(limit) = job.bandwidth_limit_mbps {
             format!("{}m", limit)

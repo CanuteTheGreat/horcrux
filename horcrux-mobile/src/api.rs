@@ -3,7 +3,6 @@
 use gloo_net::http::Request;
 use gloo_storage::{LocalStorage, Storage};
 use serde::{Deserialize, Serialize};
-use wasm_bindgen_futures::spawn_local;
 
 const API_BASE: &str = "/api";
 const TOKEN_KEY: &str = "horcrux_token";

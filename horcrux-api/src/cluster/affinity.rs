@@ -5,7 +5,7 @@
 //! (keep resources together or spread them apart).
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Affinity rule for HA resource placement
 #[derive(Debug, Clone, Serialize, Deserialize)]

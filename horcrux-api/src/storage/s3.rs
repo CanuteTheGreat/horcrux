@@ -44,7 +44,7 @@ impl S3Manager {
 
     /// Validate S3 storage pool
     pub async fn validate_pool(&self, pool: &super::StoragePool) -> Result<()> {
-        use super::StoragePool;
+        
 
         // Parse s3:// path to extract bucket info
         // Expected format: "s3://bucket-name" or "s3://endpoint/bucket-name"

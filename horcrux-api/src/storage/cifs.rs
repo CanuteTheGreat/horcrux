@@ -8,7 +8,7 @@ use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 use tokio::process::Command as AsyncCommand;
-use tracing::{error, info};
+use tracing::info;
 
 /// CIFS/SMB storage manager
 pub struct CifsManager {}

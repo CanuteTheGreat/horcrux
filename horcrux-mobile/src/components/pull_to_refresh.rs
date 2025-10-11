@@ -2,7 +2,6 @@
 
 use yew::prelude::*;
 use web_sys::TouchEvent;
-use wasm_bindgen::JsCast;
 
 #[derive(Properties, PartialEq)]
 pub struct PullToRefreshProps {

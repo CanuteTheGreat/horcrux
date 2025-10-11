@@ -52,7 +52,7 @@ use firewall::{FirewallManager, FirewallRule, SecurityGroup, FirewallScope};
 use horcrux_common::auth::{LoginRequest, LoginResponse};
 use monitoring::{MonitoringManager, ResourceMetrics, StorageMetrics, NodeMetrics};
 use console::{ConsoleManager, ConsoleType, ConsoleInfo};
-use cluster::{ClusterManager, Node, ClusterStatus, ArchitectureSummary};
+use cluster::{ClusterManager, Node, ArchitectureSummary};
 use alerts::{AlertManager, AlertRule, Alert, NotificationChannel};
 use observability::{OtelManager, OtelConfig};
 use tls::TlsManager;

@@ -6,7 +6,7 @@ use axum::{
     body::Body,
     http::{header, HeaderValue, Method, Request},
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::Response,
 };
 
 /// CORS configuration

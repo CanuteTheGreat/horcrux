@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 /// QMP command request
 #[derive(Debug, Serialize)]

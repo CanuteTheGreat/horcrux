@@ -3,11 +3,9 @@
 //! Provides Pressure Stall Information (PSI), ZFS ARC stats,
 //! and other advanced performance metrics
 
-use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::fs;
-use tracing::{error, warn};
 
 /// Pressure Stall Information (PSI) metrics
 /// Available on Linux 4.20+ with CONFIG_PSI=y

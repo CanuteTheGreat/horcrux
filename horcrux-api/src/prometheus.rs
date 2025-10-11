@@ -1,7 +1,3 @@
-///! Prometheus metrics exporter
-///! Exposes system, VM, and cluster metrics in Prometheus format
-
-use horcrux_common::Result;
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::sync::Arc;
@@ -160,28 +156,28 @@ impl PrometheusManager {
     /// Initialize standard Horcrux metrics
     pub async fn init_default_metrics(&self) {
         // VM metrics
-        let mut vm_count = Metric::new(
+        let vm_count = Metric::new(
             "horcrux_vms_total".to_string(),
             MetricType::Gauge,
             "Total number of VMs".to_string(),
         );
         self.registry.register(vm_count.clone()).await;
 
-        let mut vm_running = Metric::new(
+        let vm_running = Metric::new(
             "horcrux_vms_running".to_string(),
             MetricType::Gauge,
             "Number of running VMs".to_string(),
         );
         self.registry.register(vm_running.clone()).await;
 
-        let mut vm_cpu_usage = Metric::new(
+        let vm_cpu_usage = Metric::new(
             "horcrux_vm_cpu_usage_percent".to_string(),
             MetricType::Gauge,
             "VM CPU usage percentage".to_string(),
         );
         self.registry.register(vm_cpu_usage.clone()).await;
 
-        let mut vm_memory_usage = Metric::new(
+        let vm_memory_usage = Metric::new(
             "horcrux_vm_memory_usage_bytes".to_string(),
             MetricType::Gauge,
             "VM memory usage in bytes".to_string(),
@@ -189,21 +185,21 @@ impl PrometheusManager {
         self.registry.register(vm_memory_usage.clone()).await;
 
         // Node metrics
-        let mut node_cpu = Metric::new(
+        let node_cpu = Metric::new(
             "horcrux_node_cpu_usage_percent".to_string(),
             MetricType::Gauge,
             "Node CPU usage percentage".to_string(),
         );
         self.registry.register(node_cpu.clone()).await;
 
-        let mut node_memory = Metric::new(
+        let node_memory = Metric::new(
             "horcrux_node_memory_usage_bytes".to_string(),
             MetricType::Gauge,
             "Node memory usage in bytes".to_string(),
         );
         self.registry.register(node_memory.clone()).await;
 
-        let mut node_uptime = Metric::new(
+        let node_uptime = Metric::new(
             "horcrux_node_uptime_seconds".to_string(),
             MetricType::Counter,
             "Node uptime in seconds".to_string(),
@@ -211,14 +207,14 @@ impl PrometheusManager {
         self.registry.register(node_uptime.clone()).await;
 
         // Storage metrics
-        let mut storage_total = Metric::new(
+        let storage_total = Metric::new(
             "horcrux_storage_total_bytes".to_string(),
             MetricType::Gauge,
             "Total storage capacity in bytes".to_string(),
         );
         self.registry.register(storage_total.clone()).await;
 
-        let mut storage_used = Metric::new(
+        let storage_used = Metric::new(
             "horcrux_storage_used_bytes".to_string(),
             MetricType::Gauge,
             "Used storage in bytes".to_string(),
@@ -226,14 +222,14 @@ impl PrometheusManager {
         self.registry.register(storage_used.clone()).await;
 
         // API metrics
-        let mut http_requests = Metric::new(
+        let http_requests = Metric::new(
             "horcrux_http_requests_total".to_string(),
             MetricType::Counter,
             "Total HTTP requests".to_string(),
         );
         self.registry.register(http_requests.clone()).await;
 
-        let mut http_request_duration = Metric::new(
+        let http_request_duration = Metric::new(
             "horcrux_http_request_duration_seconds".to_string(),
             MetricType::Histogram,
             "HTTP request duration in seconds".to_string(),
@@ -241,14 +237,14 @@ impl PrometheusManager {
         self.registry.register(http_request_duration.clone()).await;
 
         // Backup metrics
-        let mut backup_count = Metric::new(
+        let backup_count = Metric::new(
             "horcrux_backups_total".to_string(),
             MetricType::Gauge,
             "Total number of backups".to_string(),
         );
         self.registry.register(backup_count.clone()).await;
 
-        let mut backup_size = Metric::new(
+        let backup_size = Metric::new(
             "horcrux_backup_size_bytes".to_string(),
             MetricType::Gauge,
             "Backup size in bytes".to_string(),
@@ -256,14 +252,14 @@ impl PrometheusManager {
         self.registry.register(backup_size.clone()).await;
 
         // Cluster metrics
-        let mut cluster_nodes = Metric::new(
+        let cluster_nodes = Metric::new(
             "horcrux_cluster_nodes_total".to_string(),
             MetricType::Gauge,
             "Total number of cluster nodes".to_string(),
         );
         self.registry.register(cluster_nodes.clone()).await;
 
-        let mut cluster_nodes_online = Metric::new(
+        let cluster_nodes_online = Metric::new(
             "horcrux_cluster_nodes_online".to_string(),
             MetricType::Gauge,
             "Number of online cluster nodes".to_string(),

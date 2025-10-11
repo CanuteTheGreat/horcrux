@@ -190,8 +190,8 @@ impl GlusterFsManager {
         let mut volume_type = VolumeType::Distribute;
         let mut status = String::new();
         let mut brick_count = 0;
-        let mut replica_count = None;
-        let mut disperse_count = None;
+        let replica_count = None;
+        let disperse_count = None;
         let mut bricks = Vec::new();
 
         for line in output.lines() {

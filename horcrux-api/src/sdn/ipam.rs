@@ -129,7 +129,7 @@ impl IpamManager {
         let (_, prefix_len) = Self::parse_cidr(&subnet.subnet_cidr)?;
         let total_ips = if prefix_len >= 31 {
             // /31 and /32 special cases
-            (1u64 << (32 - prefix_len))
+            1u64 << (32 - prefix_len)
         } else {
             // Subtract network and broadcast addresses
             (1u64 << (32 - prefix_len)) - 2

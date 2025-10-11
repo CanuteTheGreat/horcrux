@@ -2,15 +2,17 @@
 //!
 //! Provides NVIDIA vGPU, AMD MxGPU, and Intel GVT-g support
 //! with live migration capabilities (Proxmox VE 9.0 feature)
+//!
+//! Note: This module is future-ready but not yet integrated into the main API.
+//! It will be activated in Phase 3 of the roadmap (GPU Support).
 
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::process::Command;
 use tokio::process::Command as AsyncCommand;
-use tracing::{error, info, warn};
+use tracing::info;
 
 /// vGPU type
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum VGpuType {
@@ -25,6 +27,7 @@ pub enum VGpuType {
 }
 
 /// vGPU profile (NVIDIA vGPU profiles)
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VGpuProfile {
     pub name: String,
@@ -35,6 +38,7 @@ pub struct VGpuProfile {
 }
 
 /// vGPU configuration for a VM
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VGpuConfig {
     pub enabled: bool,
@@ -45,6 +49,7 @@ pub struct VGpuConfig {
 }
 
 /// vGPU device information
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VGpuDevice {
     pub pci_id: String,
@@ -56,8 +61,10 @@ pub struct VGpuDevice {
 }
 
 /// vGPU manager
+#[allow(dead_code)]
 pub struct VGpuManager {}
 
+#[allow(dead_code)]
 impl VGpuManager {
     pub fn new() -> Self {
         Self {}
@@ -152,7 +159,7 @@ impl VGpuManager {
 
     /// Parse NVIDIA vGPU profiles from nvidia-smi output
     fn parse_nvidia_vgpu_profiles(&self, output: &str) -> Result<Vec<VGpuProfile>> {
-        let mut profiles = Vec::new();
+        let profiles = Vec::new();
 
         // Simple parsing (in production, use proper parsing)
         for line in output.lines() {

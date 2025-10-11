@@ -1,13 +1,17 @@
 ///! LXD integration for virtual machines
 ///! LXD can manage both VMs and containers - this module handles VMs
+///!
+///! Note: This module is future-ready but not yet integrated into the main API.
+///! It will be activated when LXD VM management is added to the platform.
 
 use super::QemuVm;
-use horcrux_common::{Result, VmConfig, VmHypervisor, VmStatus};
+use horcrux_common::{Result, VmConfig, VmStatus};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 use tracing::{error, info};
 
 /// LXD VM representation
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LxdInstance {
     name: String,
@@ -17,8 +21,10 @@ struct LxdInstance {
 }
 
 /// LXD manager for virtual machines
+#[allow(dead_code)]
 pub struct LxdManager {}
 
+#[allow(dead_code)]
 impl LxdManager {
     pub fn new() -> Self {
         Self {}
