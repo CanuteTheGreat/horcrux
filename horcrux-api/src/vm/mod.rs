@@ -5,6 +5,13 @@ pub mod qemu;
 pub mod lxd;
 pub mod incus;
 pub mod vgpu;
+pub mod snapshot;
+pub mod snapshot_scheduler;
+pub mod snapshot_quota;
+pub mod clone;
+pub mod clone_progress;
+pub mod cross_node_clone;
+pub mod replication;
 
 pub use qemu::{QemuManager, QemuVm};
 
@@ -128,6 +135,92 @@ impl VmManager {
             Ok(())
         } else {
             Err(horcrux_common::Error::VmNotFound(id.to_string()))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horcrux_common::{VmConfig, VmStatus, VmArchitecture, VmHypervisor};
+
+    fn create_test_vm_config(id: &str, name: &str) -> VmConfig {
+        VmConfig {
+            id: id.to_string(),
+            name: name.to_string(),
+            hypervisor: VmHypervisor::Qemu,
+            memory: 2048,
+            cpus: 2,
+            disk_size: 20 * 1024 * 1024 * 1024, // 20GB
+            status: VmStatus::Stopped,
+            architecture: VmArchitecture::X86_64,
+            disks: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_vm_manager_new() {
+        let manager = VmManager::new();
+        let vms = manager.list_vms().await;
+        assert_eq!(vms.len(), 0, "New manager should have no VMs");
+    }
+
+    #[tokio::test]
+    async fn test_list_vms_empty() {
+        let manager = VmManager::new();
+        let vms = manager.list_vms().await;
+        assert_eq!(vms.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_vm_not_found() {
+        let manager = VmManager::new();
+        let result = manager.get_vm("non-existent").await;
+        assert!(result.is_err(), "Getting non-existent VM should fail");
+        match result {
+            Err(horcrux_common::Error::VmNotFound(id)) => {
+                assert_eq!(id, "non-existent");
+            }
+            _ => panic!("Expected VmNotFound error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delete_vm_not_found() {
+        let manager = VmManager::new();
+        let result = manager.delete_vm("non-existent").await;
+        assert!(result.is_err(), "Deleting non-existent VM should fail");
+        match result {
+            Err(horcrux_common::Error::VmNotFound(id)) => {
+                assert_eq!(id, "non-existent");
+            }
+            _ => panic!("Expected VmNotFound error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_start_vm_not_found() {
+        let manager = VmManager::new();
+        let result = manager.start_vm("non-existent").await;
+        assert!(result.is_err(), "Starting non-existent VM should fail");
+        match result {
+            Err(horcrux_common::Error::VmNotFound(id)) => {
+                assert_eq!(id, "non-existent");
+            }
+            _ => panic!("Expected VmNotFound error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_stop_vm_not_found() {
+        let manager = VmManager::new();
+        let result = manager.stop_vm("non-existent").await;
+        assert!(result.is_err(), "Stopping non-existent VM should fail");
+        match result {
+            Err(horcrux_common::Error::VmNotFound(id)) => {
+                assert_eq!(id, "non-existent");
+            }
+            _ => panic!("Expected VmNotFound error"),
         }
     }
 }

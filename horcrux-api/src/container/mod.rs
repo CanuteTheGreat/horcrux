@@ -170,4 +170,115 @@ impl ContainerManager {
             Err(horcrux_common::Error::ContainerNotFound(id.to_string()))
         }
     }
+
+    /// Pause a container
+    pub async fn pause_container(&self, id: &str) -> Result<ContainerConfig> {
+        let containers = self.containers.read().await;
+        let container = containers
+            .get(id)
+            .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?;
+
+        match container.runtime {
+            ContainerRuntime::Lxc => self.lxc_manager.pause_container(container).await?,
+            ContainerRuntime::Lxd => self.lxd_manager.pause_container(container).await?,
+            ContainerRuntime::Incus => self.incus_manager.pause_container(container).await?,
+            ContainerRuntime::Docker => self.docker_manager.pause_container(container).await?,
+            ContainerRuntime::Podman => self.podman_manager.pause_container(container).await?,
+        }
+
+        Ok(container.to_config())
+    }
+
+    /// Resume a container
+    pub async fn resume_container(&self, id: &str) -> Result<ContainerConfig> {
+        let containers = self.containers.read().await;
+        let container = containers
+            .get(id)
+            .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?;
+
+        match container.runtime {
+            ContainerRuntime::Lxc => self.lxc_manager.resume_container(container).await?,
+            ContainerRuntime::Lxd => self.lxd_manager.resume_container(container).await?,
+            ContainerRuntime::Incus => self.incus_manager.resume_container(container).await?,
+            ContainerRuntime::Docker => self.docker_manager.resume_container(container).await?,
+            ContainerRuntime::Podman => self.podman_manager.resume_container(container).await?,
+        }
+
+        Ok(container.to_config())
+    }
+
+    /// Get container status
+    pub async fn get_container_status(&self, id: &str) -> Result<ContainerStatus> {
+        let containers = self.containers.read().await;
+        let container = containers
+            .get(id)
+            .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?;
+
+        let status = match container.runtime {
+            ContainerRuntime::Lxc => self.lxc_manager.get_container_status(&container.name).await?,
+            ContainerRuntime::Lxd => self.lxd_manager.get_container_status(&container.name).await?,
+            ContainerRuntime::Incus => self.incus_manager.get_container_status(&container.name).await?,
+            ContainerRuntime::Docker => self.docker_manager.get_container_status(&container.name).await?,
+            ContainerRuntime::Podman => self.podman_manager.get_container_status(&container.name).await?,
+        };
+
+        Ok(status)
+    }
+
+    /// Execute command in container
+    pub async fn exec_command(&self, id: &str, command: Vec<String>) -> Result<String> {
+        let containers = self.containers.read().await;
+        let container = containers
+            .get(id)
+            .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?;
+
+        let output = match container.runtime {
+            ContainerRuntime::Lxc => self.lxc_manager.exec_command(&container.name, &command).await?,
+            ContainerRuntime::Lxd => self.lxd_manager.exec_command(&container.name, &command).await?,
+            ContainerRuntime::Incus => self.incus_manager.exec_command(&container.name, &command).await?,
+            ContainerRuntime::Docker => self.docker_manager.exec_command(&container.name, &command).await?,
+            ContainerRuntime::Podman => self.podman_manager.exec_command(&container.name, &command).await?,
+        };
+
+        Ok(output)
+    }
+
+    /// Clone a container
+    pub async fn clone_container(&self, source_id: &str, target_id: &str, target_name: &str, snapshot: bool) -> Result<ContainerConfig> {
+        let containers = self.containers.read().await;
+        let source_container = containers
+            .get(source_id)
+            .ok_or_else(|| horcrux_common::Error::ContainerNotFound(source_id.to_string()))?;
+
+        match source_container.runtime {
+            ContainerRuntime::Lxc => {
+                self.lxc_manager.clone_container(&source_container.name, target_name, snapshot).await?;
+            }
+            ContainerRuntime::Lxd => {
+                self.lxd_manager.clone_container(&source_container.name, target_name, snapshot).await?;
+            }
+            ContainerRuntime::Incus => {
+                self.incus_manager.clone_container(&source_container.name, target_name, snapshot).await?;
+            }
+            ContainerRuntime::Docker => {
+                self.docker_manager.clone_container(&source_container.name, target_name, snapshot).await?;
+            }
+            ContainerRuntime::Podman => {
+                self.podman_manager.clone_container(&source_container.name, target_name, snapshot).await?;
+            }
+        }
+
+        // Create a new container config for the clone
+        let cloned_config = ContainerConfig {
+            id: target_id.to_string(),
+            name: target_name.to_string(),
+            runtime: source_container.runtime.clone(),
+            memory: source_container.memory,
+            cpus: source_container.cpus,
+            rootfs: format!("{}/{}", source_container.rootfs.rsplit('/').nth(1).unwrap_or("/var/lib"), target_name),
+            status: ContainerStatus::Stopped,
+        };
+
+        Ok(cloned_config)
+    }
 }

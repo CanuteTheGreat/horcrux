@@ -4,6 +4,8 @@ use leptos_router::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub mod error;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VmConfig {
     pub id: String,

@@ -30,6 +30,12 @@ impl QemuVm {
             disk_size: self.disk_size,
             status: self.status.clone(),
             architecture: horcrux_common::VmArchitecture::default(),
+            disks: vec![horcrux_common::VmDisk {
+                path: self.disk_path.to_string_lossy().to_string(),
+                size_gb: self.disk_size,
+                disk_type: "virtio".to_string(),
+                cache: "writethrough".to_string(),
+            }],
         }
     }
 }

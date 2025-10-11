@@ -31,6 +31,7 @@ pub fn VmCreate() -> impl IntoView {
             disk_size: disk_size.get(),
             status: VmStatus::Stopped,
             architecture: architecture.get(),
+            disks: Vec::new(),
         };
 
         let navigate = navigate.clone();

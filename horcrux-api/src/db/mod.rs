@@ -123,7 +123,8 @@ pub mod vms {
             .await
             .map_err(|e| horcrux_common::Error::System(format!("Failed to list VMs: {}", e)))?;
 
-        let mut vms = Vec::new();
+        // Pre-allocate vector with exact capacity for better performance
+        let mut vms = Vec::with_capacity(rows.len());
         for row in rows {
             vms.push(row_to_vm(&row)?);
         }
@@ -207,6 +208,7 @@ pub mod vms {
             disk_size: row.get::<i64, _>("disk_size") as u64,
             status,
             architecture,
+            disks: Vec::new(), // TODO: Load disks from database or separate table
         })
     }
 }
@@ -346,6 +348,207 @@ pub mod users {
             enabled: row.get("enabled"),
             roles: Vec::new(),
             comment: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horcrux_common::{VmConfig, VmStatus, VmArchitecture, VmHypervisor};
+
+    async fn create_test_db() -> Database {
+        // Use in-memory database for tests
+        let db_url = "sqlite::memory:";
+
+        let db = Database::new(&db_url).await.expect("Failed to create database");
+        db.migrate().await.expect("Failed to run migrations");
+        db
+    }
+
+    fn create_test_vm_config(id: &str, name: &str) -> VmConfig {
+        VmConfig {
+            id: id.to_string(),
+            name: name.to_string(),
+            hypervisor: VmHypervisor::Qemu,
+            memory: 2048,
+            cpus: 2,
+            disk_size: 20 * 1024 * 1024 * 1024,
+            status: VmStatus::Stopped,
+            architecture: VmArchitecture::X86_64,
+            disks: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_database_connection() {
+        let _db = create_test_db().await;
+        // If we get here, connection was successful
+    }
+
+    #[tokio::test]
+    async fn test_vm_crud_operations() {
+        let db = create_test_db().await;
+
+        // Create VM
+        let vm_config = create_test_vm_config("test-vm-1", "Test VM 1");
+        db.create_vm(&vm_config).await.expect("Failed to create VM");
+
+        // Get VM
+        let retrieved = db.get_vm("test-vm-1").await.expect("Failed to get VM");
+        assert_eq!(retrieved.id, "test-vm-1");
+        assert_eq!(retrieved.name, "Test VM 1");
+        assert_eq!(retrieved.memory, 2048);
+        assert_eq!(retrieved.cpus, 2);
+
+        // List VMs
+        let vms = db.list_vms().await.expect("Failed to list VMs");
+        assert_eq!(vms.len(), 1);
+        assert_eq!(vms[0].id, "test-vm-1");
+
+        // Update VM
+        let mut updated_config = retrieved.clone();
+        updated_config.name = "Updated Test VM 1".to_string();
+        updated_config.memory = 4096;
+        db.update_vm(&updated_config).await.expect("Failed to update VM");
+
+        let updated = db.get_vm("test-vm-1").await.expect("Failed to get updated VM");
+        assert_eq!(updated.name, "Updated Test VM 1");
+        assert_eq!(updated.memory, 4096);
+
+        // Delete VM
+        db.delete_vm("test-vm-1").await.expect("Failed to delete VM");
+
+        let result = db.get_vm("test-vm-1").await;
+        assert!(result.is_err(), "VM should not exist after deletion");
+    }
+
+    #[tokio::test]
+    async fn test_list_multiple_vms() {
+        let db = create_test_db().await;
+
+        // Create multiple VMs
+        for i in 1..=5 {
+            let vm_config = create_test_vm_config(
+                &format!("test-vm-{}", i),
+                &format!("Test VM {}", i),
+            );
+            db.create_vm(&vm_config).await.expect("Failed to create VM");
+        }
+
+        // List all VMs
+        let vms = db.list_vms().await.expect("Failed to list VMs");
+        assert_eq!(vms.len(), 5);
+
+        // VMs should be sorted by name
+        for (i, vm) in vms.iter().enumerate() {
+            assert_eq!(vm.name, format!("Test VM {}", i + 1));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_nonexistent_vm() {
+        let db = create_test_db().await;
+
+        let result = db.get_vm("nonexistent").await;
+        assert!(result.is_err());
+        match result {
+            Err(horcrux_common::Error::VmNotFound(id)) => {
+                assert_eq!(id, "nonexistent");
+            }
+            _ => panic!("Expected VmNotFound error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delete_nonexistent_vm() {
+        let db = create_test_db().await;
+
+        let result = db.delete_vm("nonexistent").await;
+        assert!(result.is_err());
+        match result {
+            Err(horcrux_common::Error::VmNotFound(id)) => {
+                assert_eq!(id, "nonexistent");
+            }
+            _ => panic!("Expected VmNotFound error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_vm_status_persistence() {
+        let db = create_test_db().await;
+
+        // Test all VM statuses
+        let statuses = vec![
+            VmStatus::Running,
+            VmStatus::Stopped,
+            VmStatus::Paused,
+            VmStatus::Unknown,
+        ];
+
+        for (i, status) in statuses.iter().enumerate() {
+            let mut vm_config = create_test_vm_config(
+                &format!("test-vm-status-{}", i),
+                &format!("Status Test {}", i),
+            );
+            vm_config.status = status.clone();
+            db.create_vm(&vm_config).await.expect("Failed to create VM");
+
+            let retrieved = db.get_vm(&format!("test-vm-status-{}", i))
+                .await
+                .expect("Failed to get VM");
+            assert_eq!(retrieved.status, *status);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_vm_architecture_persistence() {
+        let db = create_test_db().await;
+
+        let architectures = vec![
+            VmArchitecture::X86_64,
+            VmArchitecture::Aarch64,
+            VmArchitecture::Riscv64,
+            VmArchitecture::Ppc64le,
+        ];
+
+        for (i, arch) in architectures.iter().enumerate() {
+            let mut vm_config = create_test_vm_config(
+                &format!("test-vm-arch-{}", i),
+                &format!("Arch Test {}", i),
+            );
+            vm_config.architecture = arch.clone();
+            db.create_vm(&vm_config).await.expect("Failed to create VM");
+
+            let retrieved = db.get_vm(&format!("test-vm-arch-{}", i))
+                .await
+                .expect("Failed to get VM");
+            assert_eq!(retrieved.architecture, *arch);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_vm_hypervisor_persistence() {
+        let db = create_test_db().await;
+
+        let hypervisors = vec![
+            VmHypervisor::Qemu,
+            VmHypervisor::Lxd,
+            VmHypervisor::Incus,
+        ];
+
+        for (i, hypervisor) in hypervisors.iter().enumerate() {
+            let mut vm_config = create_test_vm_config(
+                &format!("test-vm-hyp-{}", i),
+                &format!("Hypervisor Test {}", i),
+            );
+            vm_config.hypervisor = hypervisor.clone();
+            db.create_vm(&vm_config).await.expect("Failed to create VM");
+
+            let retrieved = db.get_vm(&format!("test-vm-hyp-{}", i))
+                .await
+                .expect("Failed to get VM");
+            assert_eq!(retrieved.hypervisor, *hypervisor);
         }
     }
 }

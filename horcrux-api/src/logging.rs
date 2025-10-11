@@ -1,8 +1,9 @@
 ///! Logging configuration module
-///! Provides structured logging configuration
+///! Provides structured logging configuration with multiple outputs
 
-use tracing_subscriber::fmt;
-use std::path::Path;
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
+use tracing_appender::{non_blocking, rolling};
+use std::io;
 
 /// Logging configuration
 #[derive(Debug, Clone)]
@@ -37,13 +38,50 @@ impl Default for LoggingConfig {
 impl LoggingConfig {
     /// Initialize logging based on configuration
     pub fn init(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // Simple implementation using built-in fmt subscriber
-        let _ = fmt()
+        // Create environment filter
+        let env_filter = EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new(&self.level));
+
+        // Console layer with colors
+        let console_layer = fmt::layer()
             .with_target(true)
             .with_level(true)
             .with_thread_ids(false)
             .with_ansi(true)
-            .try_init();
+            .with_writer(io::stdout);
+
+        // File layer if configured
+        if let Some(ref path) = self.file_path {
+            // Create file appender with rotation
+            let file_appender = match self.rotation {
+                LogRotation::Hourly => rolling::hourly(path, "horcrux.log"),
+                LogRotation::Daily => rolling::daily(path, "horcrux.log"),
+                LogRotation::Never => rolling::never(path, "horcrux.log"),
+            };
+
+            let (non_blocking, _guard) = non_blocking(file_appender);
+
+            let file_layer = fmt::layer()
+                .with_target(true)
+                .with_level(true)
+                .with_thread_ids(true)
+                .with_ansi(false)
+                .json()
+                .with_writer(non_blocking);
+
+            // Initialize with both console and file layers
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(console_layer)
+                .with(file_layer)
+                .init();
+        } else {
+            // Console only
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(console_layer)
+                .init();
+        }
 
         tracing::info!("Logging initialized - level: {}", self.level);
 
@@ -81,6 +119,78 @@ macro_rules! log_context {
                 ),*
             )
         }
+    };
+}
+
+/// Log VM operation with context
+#[macro_export]
+macro_rules! log_vm_operation {
+    ($op:expr, $vm_id:expr) => {
+        tracing::info!(
+            operation = $op,
+            vm_id = $vm_id,
+            "VM operation"
+        )
+    };
+    ($op:expr, $vm_id:expr, $($key:ident = $value:expr),+) => {
+        tracing::info!(
+            operation = $op,
+            vm_id = $vm_id,
+            $($key = $value),+,
+            "VM operation"
+        )
+    };
+}
+
+/// Log API request
+#[macro_export]
+macro_rules! log_api_request {
+    ($method:expr, $path:expr) => {
+        tracing::debug!(
+            method = $method,
+            path = $path,
+            "API request"
+        )
+    };
+    ($method:expr, $path:expr, $user:expr) => {
+        tracing::debug!(
+            method = $method,
+            path = $path,
+            user = $user,
+            "API request"
+        )
+    };
+}
+
+/// Log database operation
+#[macro_export]
+macro_rules! log_db_operation {
+    ($op:expr, $table:expr) => {
+        tracing::debug!(
+            operation = $op,
+            table = $table,
+            "Database operation"
+        )
+    };
+    ($op:expr, $table:expr, $id:expr) => {
+        tracing::debug!(
+            operation = $op,
+            table = $table,
+            record_id = $id,
+            "Database operation"
+        )
+    };
+}
+
+/// Log performance metric
+#[macro_export]
+macro_rules! log_performance {
+    ($operation:expr, $duration_ms:expr) => {
+        tracing::info!(
+            operation = $operation,
+            duration_ms = $duration_ms,
+            "Performance metric"
+        )
     };
 }
 

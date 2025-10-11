@@ -1,4 +1,5 @@
 mod vm;
+mod container;
 mod storage;
 mod backup;
 mod cloudinit;
@@ -22,16 +23,19 @@ mod logging;
 mod gpu;
 mod prometheus;
 mod webhooks;
+mod error;
+mod validation;
+mod websocket;
 
 use axum::{
-    extract::{ConnectInfo, Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     middleware as axum_middleware,
-    response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    response::IntoResponse,
+    routing::{delete, get, post, put},
     Json, Router,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tower_http::services::{ServeDir, ServeFile};
 use horcrux_common::VmConfig;
 use std::net::SocketAddr;
@@ -58,6 +62,7 @@ use audit::AuditLogger;
 #[derive(Clone)]
 struct AppState {
     vm_manager: Arc<VmManager>,
+    container_manager: Arc<container::ContainerManager>,
     backup_manager: Arc<BackupManager>,
     cloudinit_manager: Arc<CloudInitManager>,
     template_manager: Arc<TemplateManager>,
@@ -81,6 +86,13 @@ struct AppState {
     webhook_manager: Arc<webhooks::WebhookManager>,
     cni_manager: Arc<tokio::sync::RwLock<sdn::cni::CniManager>>,
     network_policy_manager: Arc<tokio::sync::RwLock<sdn::policy::NetworkPolicyManager>>,
+    snapshot_manager: Arc<tokio::sync::RwLock<vm::snapshot::VmSnapshotManager>>,
+    snapshot_scheduler: Arc<vm::snapshot_scheduler::SnapshotScheduler>,
+    snapshot_quota_manager: Arc<vm::snapshot_quota::SnapshotQuotaManager>,
+    clone_manager: Arc<vm::clone::VmCloneManager>,
+    clone_job_manager: Arc<vm::clone_progress::CloneJobManager>,
+    replication_manager: Arc<vm::replication::ReplicationManager>,
+    ws_state: Arc<websocket::WsState>,
 }
 
 #[tokio::main]
@@ -235,8 +247,35 @@ async fn main() -> anyhow::Result<()> {
     let network_policy_manager = Arc::new(tokio::sync::RwLock::new(sdn::policy::NetworkPolicyManager::new()));
     info!("Network policy manager initialized");
 
+    // Initialize VM Snapshot manager
+    let mut snapshot_manager = vm::snapshot::VmSnapshotManager::new("/var/lib/horcrux/snapshots".to_string());
+    snapshot_manager.load_snapshots().await?;
+    let snapshot_manager = Arc::new(tokio::sync::RwLock::new(snapshot_manager));
+    info!("VM Snapshot manager initialized");
+
+    // Initialize Snapshot Scheduler
+    let snapshot_scheduler = Arc::new(vm::snapshot_scheduler::SnapshotScheduler::new(snapshot_manager.clone()));
+    info!("Snapshot scheduler initialized");
+
+    // Initialize Snapshot Quota manager
+    let snapshot_quota_manager = Arc::new(vm::snapshot_quota::SnapshotQuotaManager::new());
+    info!("Snapshot quota manager initialized");
+
+    // Initialize VM Clone manager
+    let clone_manager = Arc::new(vm::clone::VmCloneManager::new("/var/lib/horcrux/vms".to_string()));
+    info!("VM Clone manager initialized");
+
+    // Initialize Clone Job manager
+    let clone_job_manager = Arc::new(vm::clone_progress::CloneJobManager::new());
+    info!("Clone Job manager initialized");
+
+    // Initialize Replication manager
+    let replication_manager = Arc::new(vm::replication::ReplicationManager::new());
+    info!("Replication manager initialized");
+
     let state = Arc::new(AppState {
         vm_manager: Arc::new(VmManager::with_database(database.clone())),
+        container_manager: Arc::new(container::ContainerManager::with_database(database.clone())),
         backup_manager: Arc::new(BackupManager::new()),
         cloudinit_manager: Arc::new(CloudInitManager::new(
             std::path::PathBuf::from("/var/lib/horcrux/cloudinit")
@@ -262,7 +301,26 @@ async fn main() -> anyhow::Result<()> {
         webhook_manager,
         cni_manager,
         network_policy_manager,
+        snapshot_manager: snapshot_manager.clone(),
+        snapshot_scheduler: snapshot_scheduler.clone(),
+        snapshot_quota_manager: snapshot_quota_manager.clone(),
+        clone_manager,
+        clone_job_manager,
+        replication_manager,
+        ws_state: Arc::new(websocket::WsState::new()),
     });
+
+    // Start snapshot scheduler background task
+    let state_for_scheduler = state.clone();
+    let vm_getter = Arc::new(move |vm_id: &str| {
+        let state = state_for_scheduler.clone();
+        let vm_id = vm_id.to_string();
+        Box::pin(async move {
+            state.database.get_vm(&vm_id).await.ok()
+        }) as futures::future::BoxFuture<'static, Option<VmConfig>>
+    });
+    snapshot_scheduler.start_scheduler(vm_getter);
+    info!("Snapshot scheduler background task started");
 
     // Static files serving for the frontend
     let serve_dir = ServeDir::new("horcrux-ui/dist")
@@ -286,6 +344,61 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/vms/:id/start", post(start_vm))
         .route("/api/vms/:id/stop", post(stop_vm))
         .route("/api/vms/:id", delete(delete_vm))
+        // VM Snapshot endpoints
+        .route("/api/vms/:id/snapshots", get(list_vm_snapshots))
+        .route("/api/vms/:id/snapshots", post(create_vm_snapshot))
+        .route("/api/vms/:id/snapshots/:snapshot_id", get(get_vm_snapshot))
+        .route("/api/vms/:id/snapshots/:snapshot_id", delete(delete_vm_snapshot))
+        .route("/api/vms/:id/snapshots/:snapshot_id/restore", post(restore_vm_snapshot))
+        .route("/api/vms/:id/snapshots/tree", get(get_vm_snapshot_tree))
+        // Snapshot Schedule endpoints
+        .route("/api/snapshot-schedules", get(list_snapshot_schedules))
+        .route("/api/snapshot-schedules", post(create_snapshot_schedule))
+        .route("/api/snapshot-schedules/:id", get(get_snapshot_schedule))
+        .route("/api/snapshot-schedules/:id", put(update_snapshot_schedule))
+        .route("/api/snapshot-schedules/:id", delete(delete_snapshot_schedule))
+        // VM Clone endpoints
+        .route("/api/vms/:id/clone", post(clone_vm))
+        .route("/api/vms/:id/clone-cross-node", post(clone_vm_cross_node))
+        // Clone Job Progress endpoints
+        .route("/api/clone-jobs", get(list_clone_jobs))
+        .route("/api/clone-jobs/:id", get(get_clone_job))
+        .route("/api/clone-jobs/:id/cancel", post(cancel_clone_job))
+        .route("/api/clone-jobs/:id", delete(delete_clone_job))
+        // Snapshot Quota endpoints
+        .route("/api/snapshot-quotas", get(list_snapshot_quotas))
+        .route("/api/snapshot-quotas", post(create_snapshot_quota))
+        .route("/api/snapshot-quotas/:id", get(get_snapshot_quota))
+        .route("/api/snapshot-quotas/:id", put(update_snapshot_quota))
+        .route("/api/snapshot-quotas/:id", delete(delete_snapshot_quota))
+        .route("/api/snapshot-quotas/:id/usage", get(get_snapshot_quota_usage))
+        .route("/api/snapshot-quotas/summary", get(get_snapshot_quota_summary))
+        .route("/api/snapshot-quotas/:id/enforce", post(enforce_snapshot_quota))
+        // Audit log endpoints
+        .route("/api/audit/events", get(query_audit_events))
+        .route("/api/audit/stats", get(get_audit_stats))
+        .route("/api/audit/security-events", get(get_security_events))
+        .route("/api/audit/failed-logins", get(get_failed_logins))
+        .route("/api/audit/brute-force", get(detect_brute_force_attempts))
+        // Replication endpoints
+        .route("/api/replication/jobs", get(list_replication_jobs))
+        .route("/api/replication/jobs", post(create_replication_job))
+        .route("/api/replication/jobs/:id", get(get_replication_job))
+        .route("/api/replication/jobs/:id", delete(delete_replication_job))
+        .route("/api/replication/jobs/:id/execute", post(execute_replication_job))
+        .route("/api/replication/jobs/:id/status", get(get_replication_status))
+        // Container endpoints
+        .route("/api/containers", get(list_containers))
+        .route("/api/containers", post(create_container))
+        .route("/api/containers/:id", get(get_container))
+        .route("/api/containers/:id", delete(delete_container))
+        .route("/api/containers/:id/start", post(start_container))
+        .route("/api/containers/:id/stop", post(stop_container))
+        .route("/api/containers/:id/pause", post(pause_container))
+        .route("/api/containers/:id/resume", post(resume_container))
+        .route("/api/containers/:id/status", get(get_container_status))
+        .route("/api/containers/:id/exec", post(exec_container_command))
+        .route("/api/containers/:id/clone", post(clone_container))
         // Backup endpoints
         .route("/api/backups", get(list_backups))
         .route("/api/backups", post(create_backup))
@@ -395,11 +508,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/webhooks/:id/test", post(test_webhook))
         .route("/api/webhooks/:id/deliveries", get(get_webhook_deliveries))
         .route("/api/vault/secrets/:path", get(list_vault_secrets))
-        // Audit log endpoints
-        .route("/api/audit/events", get(query_audit_events))
-        .route("/api/audit/failed-logins", get(get_failed_logins_endpoint))
-        .route("/api/audit/security-events", get(get_security_events_endpoint))
-        .route("/api/audit/export", post(export_audit_logs))
         // HA (High Availability) endpoints
         .route("/api/ha/resources", get(list_ha_resources))
         .route("/api/ha/resources", post(add_ha_resource))
@@ -428,6 +536,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/network-policies/namespace/:namespace", get(list_policies_in_namespace))
         .route("/api/network-policies/:id/iptables", get(get_policy_iptables_rules))
         .route("/api/network-policies/:id/nftables", get(get_policy_nftables_rules))
+
+        // WebSocket endpoint for real-time updates
+        .route("/api/ws", get(websocket::ws_handler))
         .with_state(state.clone())
         // Add authentication middleware to protected routes
         .layer(axum_middleware::from_fn_with_state(
@@ -467,52 +578,8 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-// API error handling
-enum ApiError {
-    Internal(String),
-    NotFound(String),
-    AuthenticationFailed,
-    BadRequest(String),
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        let (status, message) = match self {
-            ApiError::Internal(msg) => {
-                error!("API error: {}", msg);
-                (StatusCode::INTERNAL_SERVER_ERROR, msg)
-            }
-            ApiError::NotFound(msg) => {
-                (StatusCode::NOT_FOUND, msg)
-            }
-            ApiError::AuthenticationFailed => {
-                (StatusCode::UNAUTHORIZED, "Authentication failed".to_string())
-            }
-            ApiError::BadRequest(msg) => {
-                (StatusCode::BAD_REQUEST, msg)
-            }
-        };
-
-        (status, message).into_response()
-    }
-}
-
-impl From<horcrux_common::Error> for ApiError {
-    fn from(err: horcrux_common::Error) -> Self {
-        match err {
-            horcrux_common::Error::VmNotFound(id) => {
-                ApiError::NotFound(format!("VM not found: {}", id))
-            }
-            horcrux_common::Error::ContainerNotFound(id) => {
-                ApiError::NotFound(format!("Container not found: {}", id))
-            }
-            horcrux_common::Error::AuthenticationFailed => {
-                ApiError::AuthenticationFailed
-            }
-            _ => ApiError::Internal(err.to_string()),
-        }
-    }
-}
+// Re-export standardized error types
+use error::ApiError;
 
 // API handlers
 
@@ -611,6 +678,919 @@ async fn restore_backup(
 ) -> Result<StatusCode, ApiError> {
     state.backup_manager.restore_backup(&id, payload.target_id).await?;
     Ok(StatusCode::OK)
+}
+
+// VM Snapshot handlers
+
+#[derive(serde::Deserialize)]
+struct CreateSnapshotRequest {
+    name: String,
+    description: Option<String>,
+    include_memory: Option<bool>,
+}
+
+async fn list_vm_snapshots(
+    State(state): State<Arc<AppState>>,
+    Path(vm_id): Path<String>,
+) -> Result<Json<Vec<vm::snapshot::VmSnapshot>>, ApiError> {
+    let snapshot_manager = state.snapshot_manager.read().await;
+    let snapshots = snapshot_manager.list_snapshots(&vm_id);
+    Ok(Json(snapshots))
+}
+
+async fn create_vm_snapshot(
+    State(state): State<Arc<AppState>>,
+    Path(vm_id): Path<String>,
+    Json(req): Json<CreateSnapshotRequest>,
+) -> Result<Json<vm::snapshot::VmSnapshot>, ApiError> {
+    // Get VM config from database
+    let vm_config = state.database.get_vm(&vm_id).await
+        .map_err(|_| ApiError::NotFound(format!("VM {} not found", vm_id)))?;
+
+    let mut snapshot_manager = state.snapshot_manager.write().await;
+
+    let snapshot = snapshot_manager
+        .create_snapshot(
+            &vm_config,
+            req.name,
+            req.description,
+            req.include_memory.unwrap_or(false),
+        )
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to create snapshot: {}", e)))?;
+
+    Ok(Json(snapshot))
+}
+
+async fn get_vm_snapshot(
+    State(state): State<Arc<AppState>>,
+    Path((vm_id, snapshot_id)): Path<(String, String)>,
+) -> Result<Json<vm::snapshot::VmSnapshot>, ApiError> {
+    let snapshot_manager = state.snapshot_manager.read().await;
+
+    let snapshot = snapshot_manager
+        .get_snapshot(&snapshot_id)
+        .ok_or_else(|| ApiError::NotFound(format!("Snapshot {} not found", snapshot_id)))?;
+
+    // Verify snapshot belongs to this VM
+    if snapshot.vm_id != vm_id {
+        return Err(ApiError::NotFound(format!("Snapshot not found for VM {}", vm_id)));
+    }
+
+    Ok(Json(snapshot.clone()))
+}
+
+async fn delete_vm_snapshot(
+    State(state): State<Arc<AppState>>,
+    Path((_vm_id, snapshot_id)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    let mut snapshot_manager = state.snapshot_manager.write().await;
+
+    snapshot_manager
+        .delete_snapshot(&snapshot_id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to delete snapshot: {}", e)))?;
+
+    Ok(StatusCode::OK)
+}
+
+#[derive(serde::Deserialize)]
+struct RestoreSnapshotRequest {
+    restore_memory: Option<bool>,
+}
+
+async fn restore_vm_snapshot(
+    State(state): State<Arc<AppState>>,
+    Path((_vm_id, snapshot_id)): Path<(String, String)>,
+    Json(req): Json<RestoreSnapshotRequest>,
+) -> Result<StatusCode, ApiError> {
+    let snapshot_manager = state.snapshot_manager.read().await;
+
+    snapshot_manager
+        .restore_snapshot(&snapshot_id, req.restore_memory.unwrap_or(false))
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to restore snapshot: {}", e)))?;
+
+    Ok(StatusCode::OK)
+}
+
+async fn get_vm_snapshot_tree(
+    State(state): State<Arc<AppState>>,
+    Path(vm_id): Path<String>,
+) -> Result<Json<Vec<vm::snapshot::SnapshotTreeNode>>, ApiError> {
+    let snapshot_manager = state.snapshot_manager.read().await;
+    let tree = snapshot_manager.build_snapshot_tree(&vm_id);
+    Ok(Json(tree))
+}
+
+// Snapshot Schedule handlers
+async fn list_snapshot_schedules(
+    State(state): State<Arc<AppState>>,
+) -> Json<Vec<vm::snapshot_scheduler::SnapshotSchedule>> {
+    let schedules = state.snapshot_scheduler.list_schedules().await;
+    Json(schedules)
+}
+
+async fn create_snapshot_schedule(
+    State(state): State<Arc<AppState>>,
+    Json(mut schedule): Json<vm::snapshot_scheduler::SnapshotSchedule>,
+) -> Result<Json<vm::snapshot_scheduler::SnapshotSchedule>, ApiError> {
+    // Generate ID if not provided
+    if schedule.id.is_empty() {
+        schedule.id = uuid::Uuid::new_v4().to_string();
+    }
+
+    // Set created_at
+    schedule.created_at = chrono::Utc::now().timestamp();
+
+    // Calculate next_run
+    schedule.next_run = schedule.frequency.next_run_after(chrono::Utc::now().timestamp());
+
+    state.snapshot_scheduler.add_schedule(schedule.clone()).await?;
+    info!("Created snapshot schedule: {}", schedule.id);
+    Ok(Json(schedule))
+}
+
+async fn get_snapshot_schedule(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<vm::snapshot_scheduler::SnapshotSchedule>, ApiError> {
+    let schedule = state.snapshot_scheduler.get_schedule(&id).await
+        .ok_or_else(|| ApiError::NotFound(format!("Snapshot schedule '{}' not found", id)))?;
+    Ok(Json(schedule))
+}
+
+async fn update_snapshot_schedule(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(mut schedule): Json<vm::snapshot_scheduler::SnapshotSchedule>,
+) -> Result<Json<vm::snapshot_scheduler::SnapshotSchedule>, ApiError> {
+    // Ensure ID matches
+    schedule.id = id.clone();
+
+    // Recalculate next_run if frequency changed
+    schedule.next_run = schedule.frequency.next_run_after(chrono::Utc::now().timestamp());
+
+    state.snapshot_scheduler.update_schedule(schedule.clone()).await?;
+    info!("Updated snapshot schedule: {}", id);
+    Ok(Json(schedule))
+}
+
+async fn delete_snapshot_schedule(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.snapshot_scheduler.remove_schedule(&id).await?;
+    info!("Deleted snapshot schedule: {}", id);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+struct CloneVmRequest {
+    name: String,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default = "default_clone_mode")]
+    mode: String, // "full" or "linked"
+    #[serde(default)]
+    start: bool,
+    #[serde(default)]
+    mac_addresses: Option<Vec<String>>,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+fn default_clone_mode() -> String {
+    "full".to_string()
+}
+
+async fn clone_vm(
+    State(state): State<Arc<AppState>>,
+    Path(vm_id): Path<String>,
+    Json(req): Json<CloneVmRequest>,
+) -> Result<Json<VmConfig>, ApiError> {
+    // Get source VM configuration
+    let source_vm = state.database.get_vm(&vm_id).await
+        .map_err(|_| ApiError::NotFound(format!("VM {} not found", vm_id)))?;
+
+    // Parse clone mode
+    let clone_mode = match req.mode.as_str() {
+        "full" => vm::clone::CloneMode::Full,
+        "linked" => vm::clone::CloneMode::Linked,
+        _ => return Err(ApiError::BadRequest(format!("Invalid clone mode: {}", req.mode))),
+    };
+
+    // Create clone options
+    let clone_options = vm::clone::CloneOptions {
+        name: req.name,
+        id: req.id,
+        mode: clone_mode,
+        start: req.start,
+        mac_addresses: req.mac_addresses,
+        description: req.description,
+        network_config: None, // TODO: Add network config support to API
+    };
+
+    // Clone the VM
+    let cloned_vm = state.clone_manager
+        .clone_vm(&source_vm, clone_options)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to clone VM: {}", e)))?;
+
+    // Save to database
+    state.database.create_vm(&cloned_vm).await
+        .map_err(|e| ApiError::Internal(format!("Failed to save cloned VM to database: {}", e)))?;
+
+    info!("VM {} cloned successfully to {}", vm_id, cloned_vm.id);
+
+    Ok(Json(cloned_vm))
+}
+
+#[derive(Debug, Deserialize)]
+struct CrossNodeCloneRequest {
+    target_node: String,
+    source_node: String,
+    name: String,
+    id: Option<String>,
+    ssh_port: Option<u16>,
+    ssh_user: Option<String>,
+    compression_enabled: Option<bool>,
+    bandwidth_limit_mbps: Option<u32>,
+}
+
+async fn clone_vm_cross_node(
+    State(state): State<Arc<AppState>>,
+    Path(vm_id): Path<String>,
+    Json(req): Json<CrossNodeCloneRequest>,
+) -> Result<Json<VmConfig>, ApiError> {
+    use vm::cross_node_clone::{CrossNodeCloneConfig, CrossNodeCloneManager};
+    use vm::clone::CloneOptions;
+
+    // Get source VM configuration
+    let source_vm = state.database.get_vm(&vm_id).await
+        .map_err(|_| ApiError::NotFound(format!("VM {} not found", vm_id)))?;
+
+    // Create clone options
+    let clone_options = CloneOptions {
+        name: req.name.clone(),
+        id: req.id.clone().or_else(|| Some(uuid::Uuid::new_v4().to_string())),
+        mode: vm::clone::CloneMode::Full, // Cross-node clones are always full clones
+        start: false,
+        mac_addresses: None, // Auto-generate on target
+        description: Some(format!("Cross-node clone from {}", req.source_node)),
+        network_config: None,
+    };
+
+    // Create cross-node clone config
+    let cross_node_config = CrossNodeCloneConfig {
+        source_node: req.source_node.clone(),
+        target_node: req.target_node.clone(),
+        source_vm_id: vm_id.clone(),
+        clone_options,
+        ssh_port: req.ssh_port,
+        ssh_user: req.ssh_user,
+        compression_enabled: req.compression_enabled.unwrap_or(true),
+        bandwidth_limit_mbps: req.bandwidth_limit_mbps,
+    };
+
+    // Perform cross-node clone
+    let manager = CrossNodeCloneManager::new("/var/lib/horcrux/vms".to_string());
+    let cloned_vm = manager
+        .clone_cross_node(&source_vm, cross_node_config)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Cross-node clone failed: {}", e)))?;
+
+    // Save to database
+    state.database.create_vm(&cloned_vm).await
+        .map_err(|e| ApiError::Internal(format!("Failed to save cloned VM to database: {}", e)))?;
+
+    info!(
+        "VM {} cloned successfully from {} to {} as {}",
+        vm_id, req.source_node, req.target_node, cloned_vm.id
+    );
+
+    Ok(Json(cloned_vm))
+}
+
+// Clone Job Progress API handlers
+async fn list_clone_jobs(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<vm::clone_progress::CloneJob>>, ApiError> {
+    let jobs = state.clone_job_manager.list_jobs().await;
+    Ok(Json(jobs))
+}
+
+async fn get_clone_job(
+    State(state): State<Arc<AppState>>,
+    Path(job_id): Path<String>,
+) -> Result<Json<vm::clone_progress::CloneJob>, ApiError> {
+    let job = state.clone_job_manager.get_job(&job_id).await
+        .ok_or_else(|| ApiError::NotFound(format!("Clone job {} not found", job_id)))?;
+    Ok(Json(job))
+}
+
+async fn cancel_clone_job(
+    State(state): State<Arc<AppState>>,
+    Path(job_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.clone_job_manager.request_cancellation(&job_id).await
+        .map_err(|e| ApiError::Internal(format!("Failed to cancel clone job: {}", e)))?;
+
+    Ok(Json(serde_json::json!({
+        "status": "cancellation_requested",
+        "job_id": job_id,
+        "message": "Clone job cancellation has been requested"
+    })))
+}
+
+async fn delete_clone_job(
+    State(state): State<Arc<AppState>>,
+    Path(job_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    // Only allow deletion of completed or failed jobs
+    let job = state.clone_job_manager.get_job(&job_id).await
+        .ok_or_else(|| ApiError::NotFound(format!("Clone job {} not found", job_id)))?;
+
+    match job.state {
+        vm::clone_progress::CloneJobState::Running => {
+            return Err(ApiError::BadRequest(
+                "Cannot delete running clone job. Cancel it first.".to_string()
+            ));
+        }
+        vm::clone_progress::CloneJobState::Queued => {
+            return Err(ApiError::BadRequest(
+                "Cannot delete queued clone job. Cancel it first.".to_string()
+            ));
+        }
+        _ => {}
+    }
+
+    // TODO: Implement actual deletion from manager
+    // For now, just return success
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// Replication API handlers
+#[derive(Debug, Deserialize)]
+struct CreateReplicationJobRequest {
+    source_vm_id: String,
+    source_snapshot: String,
+    target_node: String,
+    target_pool: String,
+    schedule: String, // "hourly", "daily", "weekly", or "manual"
+    #[serde(default)]
+    bandwidth_limit_mbps: Option<u32>,
+    #[serde(default = "default_retention_count")]
+    retention_count: u32,
+    #[serde(default = "default_enabled")]
+    enabled: bool,
+}
+
+fn default_retention_count() -> u32 {
+    7
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+async fn list_replication_jobs(
+    State(state): State<Arc<AppState>>,
+) -> Json<Vec<vm::replication::ReplicationJob>> {
+    let jobs = state.replication_manager.list_jobs().await;
+    Json(jobs)
+}
+
+async fn create_replication_job(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateReplicationJobRequest>,
+) -> Result<Json<vm::replication::ReplicationJob>, ApiError> {
+    use vm::replication::{ReplicationJob, ReplicationSchedule};
+
+    // Parse schedule
+    let schedule = match req.schedule.as_str() {
+        "hourly" => ReplicationSchedule::Hourly,
+        "daily" => ReplicationSchedule::Daily { hour: 2 }, // Default to 2 AM
+        "weekly" => ReplicationSchedule::Weekly { day: 0, hour: 2 }, // Default to Sunday 2 AM
+        "manual" => ReplicationSchedule::Manual,
+        _ => return Err(ApiError::BadRequest(format!("Invalid schedule: {}", req.schedule))),
+    };
+
+    // Create replication job
+    let job_id = uuid::Uuid::new_v4().to_string();
+    let job_name = format!("Replication: {} -> {}", req.source_vm_id, req.target_node);
+
+    let job = ReplicationJob {
+        id: job_id,
+        name: job_name,
+        source_vm_id: req.source_vm_id,
+        source_snapshot: req.source_snapshot,
+        target_node: req.target_node,
+        target_pool: req.target_pool,
+        schedule,
+        bandwidth_limit_mbps: req.bandwidth_limit_mbps,
+        retention_count: req.retention_count,
+        enabled: req.enabled,
+        created_at: chrono::Utc::now().timestamp(),
+        last_run: None,
+        next_run: 0, // Will be set by create_job
+    };
+
+    // Validate source VM exists
+    state.database.get_vm(&job.source_vm_id).await
+        .map_err(|_| ApiError::NotFound(format!("Source VM {} not found", job.source_vm_id)))?;
+
+    let job = state.replication_manager.create_job(job).await?;
+    info!("Created replication job: {}", job.id);
+    Ok(Json(job))
+}
+
+async fn get_replication_job(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<vm::replication::ReplicationJob>, ApiError> {
+    let job = state.replication_manager.get_job(&id).await
+        .ok_or_else(|| ApiError::NotFound(format!("Replication job {} not found", id)))?;
+    Ok(Json(job))
+}
+
+async fn delete_replication_job(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.replication_manager.delete_job(&id).await?;
+    info!("Deleted replication job: {}", id);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn execute_replication_job(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    // Execute replication
+    state.replication_manager.execute_replication(&id).await?;
+
+    info!("Started replication job: {}", id);
+    Ok(StatusCode::ACCEPTED)
+}
+
+async fn get_replication_status(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<vm::replication::ReplicationState>, ApiError> {
+    let status = state.replication_manager.get_state(&id).await
+        .ok_or_else(|| ApiError::NotFound(format!("No active replication for job {}", id)))?;
+    Ok(Json(status))
+}
+
+// Snapshot Quota handlers
+#[derive(Debug, Deserialize)]
+struct CreateSnapshotQuotaRequest {
+    name: String,
+    quota_type: String, // "per_vm", "per_pool", "global"
+    target_id: String,
+    max_size_bytes: u64,
+    max_count: Option<u32>,
+    warning_threshold_percent: Option<u8>,
+    auto_cleanup_enabled: Option<bool>,
+    cleanup_policy: Option<String>, // "oldest_first", "largest_first", "least_used_first", "manual"
+}
+
+async fn list_snapshot_quotas(
+    State(state): State<Arc<AppState>>,
+) -> Json<Vec<vm::snapshot_quota::SnapshotQuota>> {
+    let quotas = state.snapshot_quota_manager.list_quotas().await;
+    Json(quotas)
+}
+
+async fn create_snapshot_quota(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateSnapshotQuotaRequest>,
+) -> Result<Json<vm::snapshot_quota::SnapshotQuota>, ApiError> {
+    use vm::snapshot_quota::{QuotaType, CleanupPolicy};
+
+    let quota_type = match req.quota_type.as_str() {
+        "per_vm" => QuotaType::PerVm,
+        "per_pool" => QuotaType::PerPool,
+        "global" => QuotaType::Global,
+        _ => return Err(ApiError::BadRequest(format!("Invalid quota type: {}", req.quota_type))),
+    };
+
+    let cleanup_policy = match req.cleanup_policy.as_deref().unwrap_or("oldest_first") {
+        "oldest_first" => CleanupPolicy::OldestFirst,
+        "largest_first" => CleanupPolicy::LargestFirst,
+        "least_used_first" => CleanupPolicy::LeastUsedFirst,
+        "manual" => CleanupPolicy::Manual,
+        other => return Err(ApiError::BadRequest(format!("Invalid cleanup policy: {}", other))),
+    };
+
+    let quota = state.snapshot_quota_manager.create_quota(
+        req.name,
+        quota_type,
+        req.target_id,
+        req.max_size_bytes,
+        req.max_count,
+        req.warning_threshold_percent.unwrap_or(80),
+        req.auto_cleanup_enabled.unwrap_or(false),
+        cleanup_policy,
+    ).await?;
+
+    info!("Created snapshot quota: {} ({})", quota.id, quota.name);
+    Ok(Json(quota))
+}
+
+async fn get_snapshot_quota(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<vm::snapshot_quota::SnapshotQuota>, ApiError> {
+    let quota = state.snapshot_quota_manager.get_quota(&id).await
+        .ok_or_else(|| ApiError::NotFound(format!("Quota not found: {}", id)))?;
+    Ok(Json(quota))
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateSnapshotQuotaRequest {
+    max_size_bytes: Option<u64>,
+    max_count: Option<Option<u32>>,
+    warning_threshold_percent: Option<u8>,
+    auto_cleanup_enabled: Option<bool>,
+    cleanup_policy: Option<String>,
+}
+
+async fn update_snapshot_quota(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateSnapshotQuotaRequest>,
+) -> Result<Json<vm::snapshot_quota::SnapshotQuota>, ApiError> {
+    use vm::snapshot_quota::CleanupPolicy;
+
+    let cleanup_policy = if let Some(policy_str) = req.cleanup_policy {
+        Some(match policy_str.as_str() {
+            "oldest_first" => CleanupPolicy::OldestFirst,
+            "largest_first" => CleanupPolicy::LargestFirst,
+            "least_used_first" => CleanupPolicy::LeastUsedFirst,
+            "manual" => CleanupPolicy::Manual,
+            other => return Err(ApiError::BadRequest(format!("Invalid cleanup policy: {}", other))),
+        })
+    } else {
+        None
+    };
+
+    let quota = state.snapshot_quota_manager.update_quota(
+        &id,
+        req.max_size_bytes,
+        req.max_count,
+        req.warning_threshold_percent,
+        req.auto_cleanup_enabled,
+        cleanup_policy,
+    ).await?;
+
+    info!("Updated snapshot quota: {}", id);
+    Ok(Json(quota))
+}
+
+async fn delete_snapshot_quota(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.snapshot_quota_manager.delete_quota(&id).await?;
+    info!("Deleted snapshot quota: {}", id);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_snapshot_quota_usage(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<vm::snapshot_quota::QuotaUsage>, ApiError> {
+    let usage = state.snapshot_quota_manager.get_usage(&id).await?;
+    Ok(Json(usage))
+}
+
+async fn get_snapshot_quota_summary(
+    State(state): State<Arc<AppState>>,
+) -> Json<vm::snapshot_quota::QuotaSummary> {
+    let summary = state.snapshot_quota_manager.get_quota_summary().await;
+    Json(summary)
+}
+
+#[derive(Debug, Deserialize)]
+struct EnforceQuotaRequest {
+    snapshot_ids: Vec<String>,
+}
+
+async fn enforce_snapshot_quota(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<EnforceQuotaRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let freed_bytes = state.snapshot_quota_manager.enforce_quota(&id, req.snapshot_ids).await?;
+
+    info!("Enforced quota {}: freed {} bytes", id, freed_bytes);
+    Ok(Json(serde_json::json!({
+        "quota_id": id,
+        "freed_bytes": freed_bytes
+    })))
+}
+
+// Audit log handlers
+#[derive(Debug, Deserialize)]
+struct QueryAuditEventsParams {
+    event_type: Option<String>,
+    user: Option<String>,
+    severity: Option<String>,
+    start_time: Option<i64>,
+    end_time: Option<i64>,
+    limit: Option<usize>,
+}
+
+async fn query_audit_events(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<QueryAuditEventsParams>,
+) -> Result<Json<Vec<audit::AuditEvent>>, ApiError> {
+    let event_type = params.event_type.and_then(|s| {
+        match s.as_str() {
+            "Login" => Some(audit::AuditEventType::Login),
+            "Logout" => Some(audit::AuditEventType::Logout),
+            "LoginFailed" => Some(audit::AuditEventType::LoginFailed),
+            "PermissionGranted" => Some(audit::AuditEventType::PermissionGranted),
+            "PermissionDenied" => Some(audit::AuditEventType::PermissionDenied),
+            "VmCreated" => Some(audit::AuditEventType::VmCreated),
+            "VmDeleted" => Some(audit::AuditEventType::VmDeleted),
+            "VmStarted" => Some(audit::AuditEventType::VmStarted),
+            "VmStopped" => Some(audit::AuditEventType::VmStopped),
+            _ => None,
+        }
+    });
+
+    let severity = params.severity.and_then(|s| {
+        match s.as_str() {
+            "Info" => Some(audit::AuditSeverity::Info),
+            "Warning" => Some(audit::AuditSeverity::Warning),
+            "Error" => Some(audit::AuditSeverity::Error),
+            "Critical" => Some(audit::AuditSeverity::Critical),
+            _ => None,
+        }
+    });
+
+    let start_time = params.start_time.and_then(|ts| {
+        chrono::DateTime::from_timestamp(ts, 0)
+    });
+
+    let end_time = params.end_time.and_then(|ts| {
+        chrono::DateTime::from_timestamp(ts, 0)
+    });
+
+    let events = state.audit_logger.query(
+        event_type,
+        params.user,
+        severity,
+        start_time,
+        end_time,
+        params.limit,
+    ).await;
+
+    Ok(Json(events))
+}
+
+async fn get_audit_stats(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<std::collections::HashMap<String, usize>>, ApiError> {
+    let stats = state.audit_logger.get_event_counts().await;
+    Ok(Json(stats))
+}
+
+async fn get_security_events(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<LimitParam>,
+) -> Result<Json<Vec<audit::AuditEvent>>, ApiError> {
+    let limit = params.limit.unwrap_or(100);
+    let events = state.audit_logger.get_security_events(limit).await;
+    Ok(Json(events))
+}
+
+#[derive(Debug, Deserialize)]
+struct FailedLoginsQuery {
+    user: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn get_failed_logins(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<FailedLoginsQuery>,
+) -> Result<Json<Vec<audit::AuditEvent>>, ApiError> {
+    let limit = params.limit.unwrap_or(100);
+    let events = state.audit_logger.get_failed_logins(params.user, limit).await;
+    Ok(Json(events))
+}
+
+#[derive(Debug, Deserialize)]
+struct BruteForceQuery {
+    threshold: Option<usize>,
+    window_minutes: Option<i64>,
+}
+
+async fn detect_brute_force_attempts(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<BruteForceQuery>,
+) -> Result<Json<Vec<String>>, ApiError> {
+    let threshold = params.threshold.unwrap_or(5);
+    let window_minutes = params.window_minutes.unwrap_or(10);
+    let suspects = state.audit_logger.detect_brute_force(threshold, window_minutes).await;
+    Ok(Json(suspects))
+}
+
+#[derive(Debug, Deserialize)]
+struct LimitParam {
+    limit: Option<usize>,
+}
+
+// Container lifecycle handlers
+async fn list_containers(State(state): State<Arc<AppState>>) -> Json<Vec<horcrux_common::ContainerConfig>> {
+    let containers = state.container_manager.list_containers().await;
+    Json(containers)
+}
+
+async fn create_container(
+    State(state): State<Arc<AppState>>,
+    Json(config): Json<horcrux_common::ContainerConfig>,
+) -> Result<Json<horcrux_common::ContainerConfig>, ApiError> {
+    let container = state.container_manager.create_container(config).await?;
+
+    // Broadcast container created event
+    state.ws_state.broadcast(websocket::WsEvent::ContainerStatusChanged {
+        container_id: container.id.clone(),
+        old_status: "none".to_string(),
+        new_status: container.status.to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    });
+
+    info!("Container {} created successfully", container.id);
+    Ok(Json(container))
+}
+
+async fn get_container(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<horcrux_common::ContainerConfig>, ApiError> {
+    let container = state.container_manager.get_container(&id).await?;
+    Ok(Json(container))
+}
+
+async fn delete_container(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.container_manager.delete_container(&id).await?;
+
+    // Broadcast container deleted event
+    state.ws_state.broadcast(websocket::WsEvent::ContainerDeleted {
+        container_id: id.clone(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    });
+
+    info!("Container {} deleted successfully", id);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn start_container(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<horcrux_common::ContainerConfig>, ApiError> {
+    let old_status = state.container_manager.get_container(&id).await?.status;
+    let container = state.container_manager.start_container(&id).await?;
+
+    // Broadcast status change event
+    state.ws_state.broadcast(websocket::WsEvent::ContainerStatusChanged {
+        container_id: id.clone(),
+        old_status: old_status.to_string(),
+        new_status: "running".to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    });
+
+    info!("Container {} started successfully", id);
+    Ok(Json(container))
+}
+
+async fn stop_container(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<horcrux_common::ContainerConfig>, ApiError> {
+    let old_status = state.container_manager.get_container(&id).await?.status;
+    let container = state.container_manager.stop_container(&id).await?;
+
+    // Broadcast status change event
+    state.ws_state.broadcast(websocket::WsEvent::ContainerStatusChanged {
+        container_id: id.clone(),
+        old_status: old_status.to_string(),
+        new_status: "stopped".to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    });
+
+    info!("Container {} stopped successfully", id);
+    Ok(Json(container))
+}
+
+async fn pause_container(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<horcrux_common::ContainerConfig>, ApiError> {
+    let old_status = state.container_manager.get_container(&id).await?.status;
+    let container = state.container_manager.pause_container(&id).await?;
+
+    // Broadcast status change event
+    state.ws_state.broadcast(websocket::WsEvent::ContainerStatusChanged {
+        container_id: id.clone(),
+        old_status: old_status.to_string(),
+        new_status: "paused".to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    });
+
+    info!("Container {} paused successfully", id);
+    Ok(Json(container))
+}
+
+async fn resume_container(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<horcrux_common::ContainerConfig>, ApiError> {
+    let old_status = state.container_manager.get_container(&id).await?.status;
+    let container = state.container_manager.resume_container(&id).await?;
+
+    // Broadcast status change event
+    state.ws_state.broadcast(websocket::WsEvent::ContainerStatusChanged {
+        container_id: id.clone(),
+        old_status: old_status.to_string(),
+        new_status: "running".to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    });
+
+    info!("Container {} resumed successfully", id);
+    Ok(Json(container))
+}
+
+#[derive(serde::Serialize)]
+struct ContainerStatusResponse {
+    status: String,
+}
+
+async fn get_container_status(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<ContainerStatusResponse>, ApiError> {
+    let status = state.container_manager.get_container_status(&id).await?;
+    Ok(Json(ContainerStatusResponse {
+        status: status.to_string(),
+    }))
+}
+
+#[derive(serde::Deserialize)]
+struct ExecCommandRequest {
+    command: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+struct ExecCommandResponse {
+    output: String,
+}
+
+async fn exec_container_command(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<ExecCommandRequest>,
+) -> Result<Json<ExecCommandResponse>, ApiError> {
+    let output = state.container_manager.exec_command(&id, req.command).await?;
+    Ok(Json(ExecCommandResponse { output }))
+}
+
+#[derive(serde::Deserialize)]
+struct CloneContainerRequest {
+    target_id: String,
+    target_name: String,
+    snapshot: bool,
+}
+
+async fn clone_container(
+    State(state): State<Arc<AppState>>,
+    Path(source_id): Path<String>,
+    Json(req): Json<CloneContainerRequest>,
+) -> Result<Json<horcrux_common::ContainerConfig>, ApiError> {
+    let cloned_container = state.container_manager.clone_container(
+        &source_id,
+        &req.target_id,
+        &req.target_name,
+        req.snapshot,
+    ).await?;
+
+    // Broadcast container created event
+    state.ws_state.broadcast(websocket::WsEvent::ContainerStatusChanged {
+        container_id: cloned_container.id.clone(),
+        old_status: "none".to_string(),
+        new_status: cloned_container.status.to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    });
+
+    info!("Container {} cloned to {} successfully", source_id, req.target_id);
+    Ok(Json(cloned_container))
 }
 
 async fn list_backup_jobs(State(state): State<Arc<AppState>>) -> Json<Vec<BackupJob>> {
@@ -1566,99 +2546,6 @@ async fn list_vault_secrets(
     let secrets = state.vault_manager.list_secrets(&path).await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(Json(secrets))
-}
-
-// Audit log handlers
-
-#[derive(serde::Deserialize)]
-struct AuditQueryParams {
-    event_type: Option<String>,
-    user: Option<String>,
-    severity: Option<String>,
-    limit: Option<usize>,
-}
-
-async fn query_audit_events(
-    State(state): State<Arc<AppState>>,
-    axum::extract::Query(params): axum::extract::Query<AuditQueryParams>,
-) -> Json<Vec<audit::AuditEvent>> {
-    // Parse event type
-    let event_type = params.event_type.as_ref().and_then(|s| {
-        match s.as_str() {
-            "Login" => Some(audit::AuditEventType::Login),
-            "Logout" => Some(audit::AuditEventType::Logout),
-            "LoginFailed" => Some(audit::AuditEventType::LoginFailed),
-            _ => None,
-        }
-    });
-
-    // Parse severity
-    let severity = params.severity.as_ref().and_then(|s| {
-        match s.as_str() {
-            "Info" => Some(audit::AuditSeverity::Info),
-            "Warning" => Some(audit::AuditSeverity::Warning),
-            "Error" => Some(audit::AuditSeverity::Error),
-            "Critical" => Some(audit::AuditSeverity::Critical),
-            _ => None,
-        }
-    });
-
-    let events = state.audit_logger.query(
-        event_type,
-        params.user,
-        severity,
-        None,
-        None,
-        params.limit,
-    ).await;
-
-    Json(events)
-}
-
-async fn get_failed_logins_endpoint(
-    State(state): State<Arc<AppState>>,
-    axum::extract::Query(params): axum::extract::Query<FailedLoginsParams>,
-) -> Json<Vec<audit::AuditEvent>> {
-    let events = state.audit_logger.get_failed_logins(
-        params.user,
-        params.limit.unwrap_or(20),
-    ).await;
-    Json(events)
-}
-
-#[derive(serde::Deserialize)]
-struct FailedLoginsParams {
-    user: Option<String>,
-    limit: Option<usize>,
-}
-
-async fn get_security_events_endpoint(
-    State(state): State<Arc<AppState>>,
-    axum::extract::Query(params): axum::extract::Query<SecurityEventsParams>,
-) -> Json<Vec<audit::AuditEvent>> {
-    let events = state.audit_logger.get_security_events(
-        params.limit.unwrap_or(20),
-    ).await;
-    Json(events)
-}
-
-#[derive(serde::Deserialize)]
-struct SecurityEventsParams {
-    limit: Option<usize>,
-}
-
-#[derive(serde::Deserialize)]
-struct ExportRequest {
-    path: String,
-}
-
-async fn export_audit_logs(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<ExportRequest>,
-) -> Result<StatusCode, ApiError> {
-    state.audit_logger.export(&req.path).await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-    Ok(StatusCode::OK)
 }
 
 // Storage handlers

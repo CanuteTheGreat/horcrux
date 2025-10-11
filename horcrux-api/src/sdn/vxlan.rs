@@ -244,6 +244,7 @@ mod tests {
             remote_ips: vec![],
             port: 4789,
             bridge: "vmbr0".to_string(),
+            device: "eth0".to_string(),
         };
 
         assert!(VxlanManager::create_vxlan(&config).is_err());

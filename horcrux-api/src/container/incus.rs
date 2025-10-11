@@ -145,4 +145,117 @@ impl IncusContainerManager {
         info!("Incus container {} deleted successfully", container.id);
         Ok(())
     }
+
+    /// Pause/freeze a container
+    pub async fn pause_container(&self, container: &Container) -> Result<()> {
+        let output = Command::new("incus")
+            .arg("pause")
+            .arg(&container.name)
+            .output()
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to run incus pause: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(horcrux_common::Error::System(format!(
+                "Failed to pause container: {}",
+                stderr
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Resume/unfreeze a container
+    pub async fn resume_container(&self, container: &Container) -> Result<()> {
+        let output = Command::new("incus")
+            .arg("start")
+            .arg(&container.name)
+            .output()
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to run incus start: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(horcrux_common::Error::System(format!(
+                "Failed to resume container: {}",
+                stderr
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Get container status
+    pub async fn get_container_status(&self, name: &str) -> Result<ContainerStatus> {
+        let output = Command::new("incus")
+            .arg("info")
+            .arg(name)
+            .output()
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to run incus info: {}", e)))?;
+
+        if !output.status.success() {
+            return Err(horcrux_common::Error::ContainerNotFound(name.to_string()));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if stdout.contains("Status: Running") || stdout.contains("Status: RUNNING") {
+            Ok(ContainerStatus::Running)
+        } else if stdout.contains("Status: Stopped") || stdout.contains("Status: STOPPED") {
+            Ok(ContainerStatus::Stopped)
+        } else if stdout.contains("Status: Frozen") || stdout.contains("Status: FROZEN") {
+            Ok(ContainerStatus::Paused)
+        } else {
+            Ok(ContainerStatus::Unknown)
+        }
+    }
+
+    /// Execute command in container
+    pub async fn exec_command(&self, name: &str, command: &[String]) -> Result<String> {
+        let mut cmd = Command::new("incus");
+        cmd.arg("exec").arg(name).arg("--");
+
+        for arg in command {
+            cmd.arg(arg);
+        }
+
+        let output = cmd.output().await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to run incus exec: {}", e))
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(horcrux_common::Error::System(format!(
+                "Command failed: {}",
+                stderr
+            )));
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    /// Clone a container
+    pub async fn clone_container(&self, source: &str, target: &str, snapshot: bool) -> Result<()> {
+        let mut cmd = Command::new("incus");
+        cmd.arg("copy").arg(source).arg(target);
+
+        if snapshot {
+            cmd.arg("--instance-only");
+        }
+
+        let output = cmd.output().await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to run incus copy: {}", e))
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(horcrux_common::Error::System(format!(
+                "Failed to clone container: {}",
+                stderr
+            )));
+        }
+
+        Ok(())
+    }
 }

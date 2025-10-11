@@ -182,4 +182,124 @@ impl PodmanManager {
         let version = String::from_utf8_lossy(&output.stdout);
         Ok(version.trim().to_string())
     }
+
+    /// Pause a container
+    pub async fn pause_container(&self, container: &Container) -> Result<()> {
+        let output = Command::new("podman")
+            .arg("pause")
+            .arg(&container.name)
+            .output()
+            .await
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run podman pause: {}", e))
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(horcrux_common::Error::System(format!(
+                "Failed to pause container: {}",
+                stderr
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Resume a container
+    pub async fn resume_container(&self, container: &Container) -> Result<()> {
+        let output = Command::new("podman")
+            .arg("unpause")
+            .arg(&container.name)
+            .output()
+            .await
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run podman unpause: {}", e))
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(horcrux_common::Error::System(format!(
+                "Failed to resume container: {}",
+                stderr
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Get container status
+    pub async fn get_container_status(&self, name: &str) -> Result<ContainerStatus> {
+        let output = Command::new("podman")
+            .arg("inspect")
+            .arg("--format")
+            .arg("{{.State.Status}}")
+            .arg(name)
+            .output()
+            .await
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run podman inspect: {}", e))
+            })?;
+
+        if !output.status.success() {
+            return Err(horcrux_common::Error::ContainerNotFound(name.to_string()));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let status = stdout.trim();
+
+        match status {
+            "running" => Ok(ContainerStatus::Running),
+            "paused" => Ok(ContainerStatus::Paused),
+            "exited" | "stopped" => Ok(ContainerStatus::Stopped),
+            _ => Ok(ContainerStatus::Unknown),
+        }
+    }
+
+    /// Execute command in container
+    pub async fn exec_command(&self, name: &str, command: &[String]) -> Result<String> {
+        let mut cmd = Command::new("podman");
+        cmd.arg("exec").arg(name);
+
+        for arg in command {
+            cmd.arg(arg);
+        }
+
+        let output = cmd.output().await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to run podman exec: {}", e))
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(horcrux_common::Error::System(format!(
+                "Command failed: {}",
+                stderr
+            )));
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    /// Clone a container
+    pub async fn clone_container(&self, source: &str, target: &str, _snapshot: bool) -> Result<()> {
+        // Podman doesn't have native clone, so we commit and create new container
+        let output = Command::new("podman")
+            .arg("commit")
+            .arg(source)
+            .arg(format!("{}-image", target))
+            .output()
+            .await
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to commit container: {}", e))
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(horcrux_common::Error::System(format!(
+                "Failed to commit container: {}",
+                stderr
+            )));
+        }
+
+        Ok(())
+    }
 }

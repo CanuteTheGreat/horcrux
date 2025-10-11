@@ -40,6 +40,15 @@ impl Default for VmArchitecture {
     }
 }
 
+/// Virtual machine disk configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VmDisk {
+    pub path: String,
+    pub size_gb: u64,
+    pub disk_type: String, // "virtio", "scsi", "ide", "sata"
+    pub cache: String,     // "none", "writethrough", "writeback"
+}
+
 /// Virtual machine configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VmConfig {
@@ -48,10 +57,12 @@ pub struct VmConfig {
     pub hypervisor: VmHypervisor,
     pub memory: u64,      // Memory in MB
     pub cpus: u32,
-    pub disk_size: u64,   // Disk size in GB
+    pub disk_size: u64,   // Disk size in GB (legacy, kept for compatibility)
     pub status: VmStatus,
     #[serde(default)]
     pub architecture: VmArchitecture, // CPU architecture
+    #[serde(default)]
+    pub disks: Vec<VmDisk>, // Disk configurations
 }
 
 /// Virtual machine status
@@ -88,12 +99,25 @@ pub struct ContainerConfig {
 }
 
 /// Container status
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ContainerStatus {
     Running,
     Stopped,
+    Paused,
+    #[default]
     Unknown,
+}
+
+impl std::fmt::Display for ContainerStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Running => write!(f, "running"),
+            Self::Stopped => write!(f, "stopped"),
+            Self::Paused => write!(f, "paused"),
+            Self::Unknown => write!(f, "unknown"),
+        }
+    }
 }
 
 /// API error types
@@ -107,6 +131,9 @@ pub enum Error {
 
     #[error("Invalid configuration: {0}")]
     InvalidConfig(String),
+
+    #[error("Validation error: {0}")]
+    Validation(String),
 
     #[error("System error: {0}")]
     System(String),

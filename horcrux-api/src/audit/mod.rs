@@ -2,6 +2,9 @@
 ///!
 ///! Provides comprehensive security audit logs for compliance and security monitoring
 
+pub mod database;
+pub mod middleware;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
