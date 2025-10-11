@@ -292,7 +292,7 @@ async fn main() -> anyhow::Result<()> {
         vault_manager: Arc::new(VaultManager::new()),
         audit_logger: Arc::new(AuditLogger::new(Some(std::path::PathBuf::from("/var/log/horcrux/audit.log")))),
         database,
-        rate_limiter: rate_limiter.clone(),
+        _rate_limiter: rate_limiter.clone(),
         storage_manager: Arc::new(storage::StorageManager::new()),
         ha_manager: Arc::new(ha::HaManager::new()),
         migration_manager: Arc::new(migration::MigrationManager::new()),

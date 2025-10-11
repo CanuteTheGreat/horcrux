@@ -53,7 +53,7 @@ impl IncusManager {
             disk_path: std::path::PathBuf::from(format!("/var/lib/incus/virtual-machines/{}", config.name)),
             disk_size: config.disk_size,
             status: VmStatus::Stopped,
-            pid: None,
+            _pid: None,
         })
     }
 

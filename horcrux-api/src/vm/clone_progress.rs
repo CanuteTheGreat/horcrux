@@ -442,12 +442,12 @@ impl CloneJobManager {
             .cloned()
             .collect();
 
-        if completed_jobs.len() > self.max_completed_jobs {
+        if completed_jobs.len() > self._max_completed_jobs {
             // Sort by completion time (oldest first)
             completed_jobs.sort_by_key(|job| job.completed_at);
 
             // Remove oldest jobs
-            let to_remove = completed_jobs.len() - self.max_completed_jobs;
+            let to_remove = completed_jobs.len() - self._max_completed_jobs;
             for job in completed_jobs.iter().take(to_remove) {
                 jobs.remove(&job.id);
                 debug!("Cleaned up old clone job: {}", job.id);
@@ -658,7 +658,7 @@ mod tests {
     #[tokio::test]
     async fn test_cleanup_old_jobs() {
         let mut manager = CloneJobManager::new();
-        manager.max_completed_jobs = 2; // Only keep 2 completed jobs
+        manager._max_completed_jobs = 2; // Only keep 2 completed jobs
 
         // Create and complete 5 jobs
         for i in 0..5 {
