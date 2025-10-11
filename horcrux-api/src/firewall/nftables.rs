@@ -227,7 +227,7 @@ impl NftablesManager {
 
     /// Ensure chain exists
     async fn ensure_chain(&self, chain_name: &str) -> Result<()> {
-        let output = Command::new("nft")
+        let _output = Command::new("nft")
             .arg("add")
             .arg("chain")
             .arg("inet")

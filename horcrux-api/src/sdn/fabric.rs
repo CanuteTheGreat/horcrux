@@ -287,8 +287,8 @@ impl FabricManager {
 
     fn initialize_routing(&mut self, fabric: &Fabric) -> Result<(), String> {
         match &fabric.routing_protocol {
-            RoutingProtocol::OpenFabric(config) => {
-                // Initialize OpenFabric (IS-IS based) routing
+            RoutingProtocol::OpenFabric(_config) => {
+                // Initialize OpenFabric (IS-IS based) routing (config will be used for area/tier settings)
                 for node in fabric.spine_nodes.iter().chain(fabric.leaf_nodes.iter()) {
                     let rt = RoutingTable {
                         node_id: node.clone(),
@@ -298,8 +298,8 @@ impl FabricManager {
                     self.routing_tables.insert(node.clone(), rt);
                 }
             }
-            RoutingProtocol::Ospf(config) => {
-                // Initialize OSPF routing
+            RoutingProtocol::Ospf(_config) => {
+                // Initialize OSPF routing (config will be used for area ID and timers)
                 for node in fabric.spine_nodes.iter().chain(fabric.leaf_nodes.iter()) {
                     let rt = RoutingTable {
                         node_id: node.clone(),
@@ -362,10 +362,10 @@ impl FabricManager {
     }
 
     fn trigger_failover(&mut self, fabric_id: &str, failed_link_id: &str) -> Result<(), String> {
-        let fabric = self.fabrics.get(fabric_id)
+        let _fabric = self.fabrics.get(fabric_id)
             .ok_or_else(|| format!("Fabric {} not found", fabric_id))?;
 
-        let failed_link = self.links.get(failed_link_id)
+        let _failed_link = self.links.get(failed_link_id)
             .ok_or_else(|| format!("Link {} not found", failed_link_id))?;
 
         tracing::warn!(

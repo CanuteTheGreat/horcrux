@@ -33,7 +33,7 @@ impl IntoResponse for RbacError {
 /// RBAC middleware - checks if user has required privilege for the resource
 /// This is a simple check based on user role from the authenticated session
 pub async fn rbac_middleware(
-    State(state): State<Arc<crate::AppState>>,
+    State(_state): State<Arc<crate::AppState>>,
     request: Request,
     next: Next,
 ) -> Result<Response, RbacError> {

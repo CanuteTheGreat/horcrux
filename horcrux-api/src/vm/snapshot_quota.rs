@@ -372,8 +372,8 @@ impl SnapshotQuotaManager {
     async fn calculate_usage(
         &self,
         quota_id: &str,
-        vm_id: Option<&str>,
-        pool_id: Option<&str>,
+        _vm_id: Option<&str>,
+        _pool_id: Option<&str>,
     ) -> Result<QuotaUsage> {
         // In a real implementation, this would query the snapshot manager
         // and storage backend to get actual usage data

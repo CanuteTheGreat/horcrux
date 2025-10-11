@@ -756,7 +756,7 @@ impl VmCloneManager {
         }
 
         for part in parts {
-            if let Ok(num) = part.parse::<u8>() {
+            if let Ok(_num) = part.parse::<u8>() {
                 // Valid octet (0-255)
                 if part.len() > 1 && part.starts_with('0') {
                     // No leading zeros except for "0" itself
@@ -899,7 +899,7 @@ impl VmCloneManager {
     pub fn generate_cloud_init_user_data(
         &self,
         network_config: &NetworkConfig,
-        mac_addresses: &[String],
+        _mac_addresses: &[String],
     ) -> String {
         let mut yaml = String::from("#cloud-config\n");
 

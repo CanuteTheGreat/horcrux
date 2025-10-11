@@ -185,7 +185,7 @@ impl NetworkPolicyManager {
     /// Check if a connection is allowed by network policies
     pub fn is_connection_allowed(
         &self,
-        src_pod: &str,
+        _src_pod: &str,
         dst_pod: &str,
         protocol: &Protocol,
         port: u16,

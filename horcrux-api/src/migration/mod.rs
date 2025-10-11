@@ -366,7 +366,7 @@ impl MigrationManager {
         tracing::info!("Live migration initiated for VM {}", config.vm_id);
 
         // Monitor migration progress via QMP
-        let qmp_socket = PathBuf::from(format!("/var/run/qemu/vm-{}.qmp", config.vm_id));
+        let _qmp_socket = PathBuf::from(format!("/var/run/qemu/vm-{}.qmp", config.vm_id));
 
         // Poll migration status every 500ms
         let mut last_progress = 10.0;
@@ -605,7 +605,7 @@ impl MigrationManager {
         tracing::info!("Importing VM {} configuration on target node", config.vm_id);
 
         // Define VM on target node using the exported XML
-        let define_output = Command::new("ssh")
+        let _define_output = Command::new("ssh")
             .args([
                 "-o", "StrictHostKeyChecking=no",
                 "-o", "UserKnownHostsFile=/dev/null",
@@ -618,7 +618,7 @@ impl MigrationManager {
 
         // TODO: Pipe vm_xml to stdin - for now, write to temp file
         let temp_xml_path = format!("/tmp/vm-{}.xml", config.vm_id);
-        let write_xml = Command::new("ssh")
+        let _write_xml = Command::new("ssh")
             .args([
                 "-o", "StrictHostKeyChecking=no",
                 "-o", "UserKnownHostsFile=/dev/null",
@@ -872,7 +872,7 @@ impl MigrationManager {
     }
 
     /// Pre-migration checks
-    async fn pre_migration_checks(&self, config: &MigrationConfig, source_node: &str) -> Result<()> {
+    async fn pre_migration_checks(&self, config: &MigrationConfig, _source_node: &str) -> Result<()> {
         // Check 1: Target node is reachable
         tracing::info!("Checking connectivity to target node {}", config.target_node);
 

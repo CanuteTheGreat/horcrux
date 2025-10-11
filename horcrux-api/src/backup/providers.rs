@@ -54,7 +54,7 @@ impl ProviderManager {
         let providers = self.providers.read().await;
         providers
             .iter()
-            .map(|(name, provider)| provider.get_info())
+            .map(|(_name, provider)| provider.get_info())
             .collect()
     }
 

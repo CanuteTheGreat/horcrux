@@ -439,7 +439,7 @@ async fn handle_socket(socket: WebSocket, ws_state: Arc<WsState>, auth_user: Aut
 
     let sender_clone = sender.clone();
     let subscribed_topics_clone = subscribed_topics.clone();
-    let username_clone = auth_user.username.clone();
+    let _username_clone = auth_user.username.clone();
 
     // Spawn task to send broadcast events to client
     let send_task = tokio::spawn(async move {

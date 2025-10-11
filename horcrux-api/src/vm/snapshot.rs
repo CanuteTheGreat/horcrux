@@ -165,7 +165,7 @@ impl VmSnapshotManager {
     /// Create a snapshot of a single disk
     async fn create_disk_snapshot(
         &self,
-        vm_id: &str,
+        _vm_id: &str,
         disk_path: &str,
         snapshot_name: &str,
         disk_idx: usize,
@@ -581,7 +581,7 @@ impl VmSnapshotManager {
         // In a real implementation, this would check which snapshot
         // the VM is currently running from. For now, check if it's
         // the most recent snapshot without children.
-        if let Some(snapshot) = self.snapshots.get(snapshot_id) {
+        if self.snapshots.get(snapshot_id).is_some() {
             // A snapshot is "current" if no other snapshots have it as parent
             !self.snapshots.values().any(|s| {
                 s.parent_snapshot.as_ref().map(|p| p.as_str()) == Some(snapshot_id)

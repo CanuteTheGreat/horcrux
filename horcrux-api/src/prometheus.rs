@@ -270,7 +270,7 @@ impl PrometheusManager {
     }
 
     /// Update VM metrics
-    pub async fn update_vm_metrics(&self, vm_id: &str, vm_name: &str, cpu_usage: f64, memory_usage: u64, status: &str) {
+    pub async fn update_vm_metrics(&self, vm_id: &str, vm_name: &str, cpu_usage: f64, memory_usage: u64, _status: &str) {
         let mut labels = HashMap::new();
         labels.insert("vm_id".to_string(), vm_id.to_string());
         labels.insert("vm_name".to_string(), vm_name.to_string());

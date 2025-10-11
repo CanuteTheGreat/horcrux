@@ -112,7 +112,7 @@ pub mod vms {
             .bind(id)
             .fetch_one(pool)
             .await
-            .map_err(|e| horcrux_common::Error::VmNotFound(id.to_string()))?;
+            .map_err(|_e| horcrux_common::Error::VmNotFound(id.to_string()))?;
 
         Ok(row_to_vm(&row)?)
     }

@@ -558,8 +558,8 @@ impl ReplicationManager {
                 }
                 chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(next, chrono::Utc).timestamp()
             }
-            ReplicationSchedule::Weekly { day, hour } => {
-                // Similar to daily but weekly
+            ReplicationSchedule::Weekly { day: _day, hour: _hour } => {
+                // Similar to daily but weekly (day and hour will be used in proper scheduling implementation)
                 from + (7 * 24 * 3600)
             }
             ReplicationSchedule::Manual => i64::MAX, // Never auto-run

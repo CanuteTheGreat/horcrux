@@ -279,7 +279,7 @@ impl VGpuManager {
     }
 
     /// Attach NVIDIA vGPU
-    async fn attach_nvidia_vgpu(&self, vm_id: u32, config: &VGpuConfig) -> Result<()> {
+    async fn attach_nvidia_vgpu(&self, _vm_id: u32, config: &VGpuConfig) -> Result<()> {
         // Create vGPU instance
         let vgpu_uuid = uuid::Uuid::new_v4();
         let profile = config.profile.as_ref().ok_or_else(|| {
@@ -409,7 +409,7 @@ impl VGpuManager {
         &self,
         vm_id: u32,
         config: &VGpuConfig,
-        state_data: Vec<u8>,
+        _state_data: Vec<u8>,
     ) -> Result<()> {
         info!("Completing vGPU migration for VM {}", vm_id);
 

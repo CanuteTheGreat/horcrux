@@ -407,10 +407,10 @@ impl TlsManager {
 
     /// Check if certificate is expiring soon
     pub async fn check_certificate_expiry(&self, cert_path: &str, days_threshold: u32) -> Result<bool> {
-        let cert_info = self.get_certificate_info(cert_path).await?;
+        let _cert_info = self.get_certificate_info(cert_path).await?;
 
         // Get current time
-        let now = chrono::Utc::now();
+        let _now = chrono::Utc::now();
 
         // Parse expiry date (simplified - real implementation should use proper date parsing)
         // For now, we'll use openssl to check

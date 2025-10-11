@@ -63,7 +63,7 @@ impl CorosyncManager {
     pub async fn join_cluster(
         &self,
         cluster_name: &str,
-        node_name: &str,
+        _node_name: &str,
         master_ip: &str,
     ) -> Result<()> {
         info!("Joining cluster {} via {}", cluster_name, master_ip);

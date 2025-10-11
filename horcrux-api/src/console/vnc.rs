@@ -55,7 +55,7 @@ impl VncManager {
         let port = 5900 + display;
 
         // Check if VM is running and get its PID
-        let pid = self.get_vm_pid(vm_id).await?;
+        let _pid = self.get_vm_pid(vm_id).await?;
 
         // Use QEMU monitor to enable VNC
         // For now, we'll assume VNC is started with the VM

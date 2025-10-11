@@ -412,9 +412,9 @@ impl OidcProvider {
                 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
                 use base64::Engine;
 
-                let n_bytes = URL_SAFE_NO_PAD.decode(n)
+                let _n_bytes = URL_SAFE_NO_PAD.decode(n)
                     .map_err(|e| horcrux_common::Error::System(format!("Failed to decode RSA modulus: {}", e)))?;
-                let e_bytes = URL_SAFE_NO_PAD.decode(e)
+                let _e_bytes = URL_SAFE_NO_PAD.decode(e)
                     .map_err(|e| horcrux_common::Error::System(format!("Failed to decode RSA exponent: {}", e)))?;
 
                 DecodingKey::from_rsa_components(n, e)
