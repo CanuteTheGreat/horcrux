@@ -81,7 +81,6 @@ impl Database {
 pub mod vms {
     use super::*;
     use horcrux_common::{VmConfig, VmStatus, VmArchitecture, VmHypervisor};
-    use sqlx::Row;
 
     pub async fn create_vm(pool: &SqlitePool, vm: &VmConfig) -> Result<()> {
         let status_str = format!("{:?}", vm.status).to_lowercase();
