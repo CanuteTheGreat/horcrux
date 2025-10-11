@@ -4,11 +4,12 @@
 //! Keycloak, Auth0, Okta, Google, Microsoft Azure AD
 
 use horcrux_common::Result;
+use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// OpenID Connect configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +53,34 @@ pub struct OidcDiscovery {
     pub scopes_supported: Vec<String>,
     pub response_types_supported: Vec<String>,
     pub grant_types_supported: Vec<String>,
+}
+
+/// JSON Web Key Set (JWKS)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Jwks {
+    pub keys: Vec<Jwk>,
+}
+
+/// JSON Web Key
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Jwk {
+    pub kty: String,           // Key type (RSA, EC, etc.)
+    pub kid: Option<String>,   // Key ID
+    pub alg: Option<String>,   // Algorithm
+    #[serde(rename = "use")]
+    pub use_: Option<String>,  // Public key use (sig, enc)
+    pub n: Option<String>,     // RSA modulus
+    pub e: Option<String>,     // RSA exponent
+    pub x: Option<String>,     // EC x coordinate
+    pub y: Option<String>,     // EC y coordinate
+    pub crv: Option<String>,   // EC curve
+}
+
+/// Cached JWKS with timestamp
+#[derive(Debug, Clone)]
+struct JwksCache {
+    jwks: Jwks,
+    fetched_at: std::time::SystemTime,
 }
 
 /// OAuth2 token response
@@ -98,6 +127,7 @@ pub struct IdTokenClaims {
 pub struct OidcProvider {
     config: Arc<RwLock<OidcConfig>>,
     discovery: Arc<RwLock<Option<OidcDiscovery>>>,
+    jwks_cache: Arc<RwLock<Option<JwksCache>>>,
     client: reqwest::Client,
 }
 
@@ -106,6 +136,7 @@ impl OidcProvider {
         Self {
             config: Arc::new(RwLock::new(config)),
             discovery: Arc::new(RwLock::new(None)),
+            jwks_cache: Arc::new(RwLock::new(None)),
             client: reqwest::Client::new(),
         }
     }
@@ -292,45 +323,190 @@ impl OidcProvider {
         Ok(user_info)
     }
 
-    /// Verify and decode ID token (basic validation)
+    /// Fetch JWKS from the OIDC provider
+    async fn fetch_jwks(&self) -> Result<Jwks> {
+        // Ensure discovery is loaded
+        let discovery = {
+            let disc = self.discovery.read().await;
+            if disc.is_none() {
+                drop(disc);
+                self.load_discovery().await?
+            } else {
+                disc.clone().unwrap()
+            }
+        };
+
+        info!("Fetching JWKS from {}", discovery.jwks_uri);
+
+        let response = self.client
+            .get(&discovery.jwks_uri)
+            .send()
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to fetch JWKS: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(horcrux_common::Error::System(format!(
+                "JWKS fetch failed with status: {}",
+                response.status()
+            )));
+        }
+
+        let jwks: Jwks = response
+            .json()
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to parse JWKS: {}", e)))?;
+
+        info!("JWKS fetched successfully, {} keys available", jwks.keys.len());
+
+        Ok(jwks)
+    }
+
+    /// Get JWKS from cache or fetch if expired (cache TTL: 1 hour)
+    async fn get_jwks(&self) -> Result<Jwks> {
+        let cache = self.jwks_cache.read().await;
+
+        if let Some(cached) = cache.as_ref() {
+            let age = std::time::SystemTime::now()
+                .duration_since(cached.fetched_at)
+                .unwrap_or_default();
+
+            // Cache valid for 1 hour
+            if age.as_secs() < 3600 {
+                return Ok(cached.jwks.clone());
+            }
+        }
+
+        drop(cache); // Release read lock
+
+        // Fetch fresh JWKS
+        let jwks = self.fetch_jwks().await?;
+
+        // Update cache
+        let mut cache = self.jwks_cache.write().await;
+        *cache = Some(JwksCache {
+            jwks: jwks.clone(),
+            fetched_at: std::time::SystemTime::now(),
+        });
+
+        Ok(jwks)
+    }
+
+    /// Find a JWK by key ID (kid)
+    fn find_jwk<'a>(&self, jwks: &'a Jwks, kid: &str) -> Option<&'a Jwk> {
+        jwks.keys.iter().find(|key| {
+            key.kid.as_ref().map(|k| k == kid).unwrap_or(false)
+        })
+    }
+
+    /// Convert JWK to DecodingKey
+    fn jwk_to_decoding_key(&self, jwk: &Jwk) -> Result<DecodingKey> {
+        match jwk.kty.as_str() {
+            "RSA" => {
+                // RSA key
+                let n = jwk.n.as_ref()
+                    .ok_or_else(|| horcrux_common::Error::System("Missing RSA modulus (n)".to_string()))?;
+                let e = jwk.e.as_ref()
+                    .ok_or_else(|| horcrux_common::Error::System("Missing RSA exponent (e)".to_string()))?;
+
+                // Decode base64url encoded modulus and exponent
+                use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+                use base64::Engine;
+
+                let n_bytes = URL_SAFE_NO_PAD.decode(n)
+                    .map_err(|e| horcrux_common::Error::System(format!("Failed to decode RSA modulus: {}", e)))?;
+                let e_bytes = URL_SAFE_NO_PAD.decode(e)
+                    .map_err(|e| horcrux_common::Error::System(format!("Failed to decode RSA exponent: {}", e)))?;
+
+                DecodingKey::from_rsa_components(n, e)
+                    .map_err(|e| horcrux_common::Error::System(format!("Failed to create RSA key: {}", e)))
+            }
+            "EC" => {
+                // Elliptic Curve key
+                let x = jwk.x.as_ref()
+                    .ok_or_else(|| horcrux_common::Error::System("Missing EC x coordinate".to_string()))?;
+                let y = jwk.y.as_ref()
+                    .ok_or_else(|| horcrux_common::Error::System("Missing EC y coordinate".to_string()))?;
+
+                DecodingKey::from_ec_components(x, y)
+                    .map_err(|e| horcrux_common::Error::System(format!("Failed to create EC key: {}", e)))
+            }
+            kty => {
+                Err(horcrux_common::Error::System(format!("Unsupported key type: {}", kty)))
+            }
+        }
+    }
+
+    /// Verify and decode ID token with full signature validation
     pub async fn verify_id_token(&self, id_token: &str) -> Result<IdTokenClaims> {
-        // In production, this should:
-        // 1. Fetch JWKS from jwks_uri
-        // 2. Verify signature using public key
-        // 3. Verify issuer, audience, expiration
-        // 4. Verify nonce (if provided)
+        // Step 1: Decode JWT header to get kid (key ID)
+        let header = decode_header(id_token)
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to decode JWT header: {}", e)))?;
 
-        // For now, decode without verification (UNSAFE for production)
-        let parts: Vec<&str> = id_token.split('.').collect();
-        if parts.len() != 3 {
-            return Err(horcrux_common::Error::System("Invalid JWT format".to_string()));
-        }
+        let kid = header.kid
+            .ok_or_else(|| horcrux_common::Error::System("JWT header missing kid (key ID)".to_string()))?;
 
-        let payload = parts[1];
-        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-        use base64::Engine;
-        let decoded = URL_SAFE_NO_PAD.decode(payload)
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to decode JWT: {}", e)))?;
+        info!("Verifying ID token with kid: {}", kid);
 
-        let claims: IdTokenClaims = serde_json::from_slice(&decoded)
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to parse JWT claims: {}", e)))?;
+        // Step 2: Fetch JWKS (from cache or provider)
+        let jwks = self.get_jwks().await?;
 
-        // Basic validation
+        // Step 3: Find matching public key
+        let jwk = self.find_jwk(&jwks, &kid)
+            .ok_or_else(|| horcrux_common::Error::System(format!("No matching key found for kid: {}", kid)))?;
+
+        // Step 4: Convert JWK to DecodingKey
+        let decoding_key = self.jwk_to_decoding_key(jwk)?;
+
+        // Step 5: Determine algorithm
+        let algorithm = match jwk.alg.as_deref() {
+            Some("RS256") => Algorithm::RS256,
+            Some("RS384") => Algorithm::RS384,
+            Some("RS512") => Algorithm::RS512,
+            Some("ES256") => Algorithm::ES256,
+            Some("ES384") => Algorithm::ES384,
+            Some(alg) => {
+                warn!("Unknown algorithm '{}', defaulting to RS256", alg);
+                Algorithm::RS256
+            }
+            None => {
+                warn!("No algorithm specified in JWK, defaulting to RS256");
+                Algorithm::RS256
+            }
+        };
+
+        // Step 6: Set up validation
         let config = self.config.read().await;
-        if claims.aud != config.client_id {
-            return Err(horcrux_common::Error::System("Invalid audience".to_string()));
+        let mut validation = Validation::new(algorithm);
+        validation.set_audience(&[&config.client_id]);
+        validation.set_issuer(&[&config.issuer_url]);
+
+        // Note: Nonce validation would happen at the application level
+        // where the nonce from the session can be compared
+        validation.validate_nbf = true; // Validate "not before" claim
+
+        // Step 7: Verify signature and decode claims
+        let token_data = decode::<IdTokenClaims>(id_token, &decoding_key, &validation)
+            .map_err(|e| horcrux_common::Error::System(format!("JWT verification failed: {}", e)))?;
+
+        info!("ID token verified successfully for subject: {}", token_data.claims.sub);
+
+        Ok(token_data.claims)
+    }
+
+    /// Verify ID token with nonce validation
+    pub async fn verify_id_token_with_nonce(&self, id_token: &str, expected_nonce: &str) -> Result<IdTokenClaims> {
+        let claims = self.verify_id_token(id_token).await?;
+
+        // Verify nonce matches
+        match &claims.nonce {
+            Some(nonce) if nonce == expected_nonce => Ok(claims),
+            Some(nonce) => Err(horcrux_common::Error::System(
+                format!("Nonce mismatch: expected '{}', got '{}'", expected_nonce, nonce)
+            )),
+            None => Err(horcrux_common::Error::System(
+                "ID token missing nonce claim".to_string()
+            )),
         }
-
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        if claims.exp < now {
-            return Err(horcrux_common::Error::System("Token expired".to_string()));
-        }
-
-        Ok(claims)
     }
 
     /// Refresh access token using refresh token
