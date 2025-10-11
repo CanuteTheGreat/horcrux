@@ -1,5 +1,10 @@
-///! Input validation and sanitization module
-///! Provides comprehensive validation for all user inputs
+//! Input validation and sanitization module
+//! Provides comprehensive validation for all user inputs
+//!
+//! Note: This module provides validation utilities for future API endpoints.
+//! Functions are not yet integrated but ready for use when needed.
+
+#![allow(dead_code)]
 
 use horcrux_common::Error;
 use regex::Regex;
