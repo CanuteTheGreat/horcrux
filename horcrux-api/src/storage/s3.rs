@@ -42,6 +42,35 @@ impl S3Manager {
         }
     }
 
+    /// Validate S3 storage pool
+    pub async fn validate_pool(&self, pool: &super::StoragePool) -> Result<()> {
+        use super::StoragePool;
+
+        // Parse s3:// path to extract bucket info
+        // Expected format: "s3://bucket-name" or "s3://endpoint/bucket-name"
+        let path = &pool.path;
+
+        if !path.starts_with("s3://") {
+            return Err(horcrux_common::Error::InvalidConfig(
+                "S3 pool path must start with 's3://'".to_string()
+            ));
+        }
+
+        let bucket_part = path.strip_prefix("s3://").unwrap();
+        if bucket_part.is_empty() {
+            return Err(horcrux_common::Error::InvalidConfig(
+                "S3 pool path must specify bucket name".to_string()
+            ));
+        }
+
+        // Basic bucket name validation completed in mod.rs
+        // For now, we can't validate the actual connection without credentials
+        // which are stored separately from the pool configuration
+        tracing::info!("S3 storage pool validation passed (offline check): {}", pool.path);
+
+        Ok(())
+    }
+
     /// Validate S3 configuration
     pub async fn validate_config(&self, config: &S3Config) -> Result<()> {
         // Test connection by listing bucket

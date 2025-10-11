@@ -546,15 +546,49 @@ impl VmSnapshotManager {
     pub fn build_snapshot_tree(&self, vm_id: &str) -> Vec<SnapshotTreeNode> {
         let snapshots = self.list_snapshots(vm_id);
 
-        // For now, return flat list (TODO: build actual tree based on parent relationships)
-        snapshots
-            .into_iter()
-            .map(|snapshot| SnapshotTreeNode {
-                snapshot,
-                children: Vec::new(),
-                is_current: false, // TODO: Track current snapshot
+        if snapshots.is_empty() {
+            return Vec::new();
+        }
+
+        // Build tree structure from parent relationships
+        self.build_tree_recursive(&snapshots, None)
+    }
+
+    /// Recursively build snapshot tree from parent-child relationships
+    fn build_tree_recursive(
+        &self,
+        all_snapshots: &[VmSnapshot],
+        parent_id: Option<&str>,
+    ) -> Vec<SnapshotTreeNode> {
+        all_snapshots
+            .iter()
+            .filter(|s| s.parent_snapshot.as_deref() == parent_id)
+            .map(|snapshot| {
+                // Recursively build children
+                let children = self.build_tree_recursive(all_snapshots, Some(&snapshot.id));
+
+                SnapshotTreeNode {
+                    snapshot: snapshot.clone(),
+                    children,
+                    is_current: self.is_current_snapshot(&snapshot.id),
+                }
             })
             .collect()
+    }
+
+    /// Check if a snapshot is the currently active one
+    fn is_current_snapshot(&self, snapshot_id: &str) -> bool {
+        // In a real implementation, this would check which snapshot
+        // the VM is currently running from. For now, check if it's
+        // the most recent snapshot without children.
+        if let Some(snapshot) = self.snapshots.get(snapshot_id) {
+            // A snapshot is "current" if no other snapshots have it as parent
+            !self.snapshots.values().any(|s| {
+                s.parent_snapshot.as_ref().map(|p| p.as_str()) == Some(snapshot_id)
+            })
+        } else {
+            false
+        }
     }
 
     // Helper methods
