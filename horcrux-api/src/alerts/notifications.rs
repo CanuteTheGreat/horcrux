@@ -2,8 +2,11 @@
 
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
 use super::{Alert, AlertSeverity};
+use lettre::{Message, SmtpTransport, Transport};
+use lettre::message::header::ContentType;
+use lettre::transport::smtp::authentication::Credentials;
+use tokio::process::Command;
 
 /// Email notification configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,7 +67,7 @@ pub async fn send_notification(channel: &NotificationChannel, alert: &Alert) -> 
     }
 }
 
-/// Send email notification
+/// Send email notification using SMTP
 async fn send_email(config: &EmailConfig, alert: &Alert) -> Result<()> {
     let subject = format!("[{}] {} - {}",
         match alert.severity {
@@ -103,30 +106,76 @@ Horcrux Alert System
             .unwrap_or_else(|| "Unknown".to_string())
     );
 
-    // In a real implementation, we'd use a proper email library
-    // For now, use system's mail command if available
+    // Build email for each recipient
     for to_address in &config.to_addresses {
-        let output = Command::new("mail")
-            .arg("-s")
-            .arg(&subject)
-            .arg(to_address)
-            .stdin(std::process::Stdio::piped())
-            .spawn();
+        // Create email message
+        let email = Message::builder()
+            .from(config.from_address.parse().map_err(|e| {
+                horcrux_common::Error::InvalidConfig(format!("Invalid from address: {}", e))
+            })?)
+            .to(to_address.parse().map_err(|e| {
+                horcrux_common::Error::InvalidConfig(format!("Invalid to address '{}': {}", to_address, e))
+            })?)
+            .subject(&subject)
+            .header(ContentType::TEXT_PLAIN)
+            .body(body.clone())
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to build email: {}", e))
+            })?;
 
-        if let Ok(mut child) = output {
-            if let Some(mut stdin) = child.stdin.take() {
-                use tokio::io::AsyncWriteExt;
-                let _ = stdin.write_all(body.as_bytes()).await;
+        // Create SMTP transport
+        let mailer = if config.use_tls {
+            // Use TLS connection
+            let mut transport = SmtpTransport::relay(&config.smtp_server)
+                .map_err(|e| {
+                    horcrux_common::Error::System(format!("Failed to connect to SMTP server: {}", e))
+                })?
+                .port(config.smtp_port);
+
+            // Add authentication if provided
+            if let (Some(username), Some(password)) = (&config.username, &config.password) {
+                transport = transport.credentials(Credentials::new(
+                    username.clone(),
+                    password.clone(),
+                ));
             }
-            let _ = child.wait().await;
-        }
+
+            transport.build()
+        } else {
+            // Use plain SMTP (no TLS)
+            let mut transport = SmtpTransport::builder_dangerous(&config.smtp_server)
+                .port(config.smtp_port);
+
+            // Add authentication if provided
+            if let (Some(username), Some(password)) = (&config.username, &config.password) {
+                transport = transport.credentials(Credentials::new(
+                    username.clone(),
+                    password.clone(),
+                ));
+            }
+
+            transport.build()
+        };
+
+        // Send email
+        tokio::task::spawn_blocking(move || {
+            mailer.send(&email)
+        })
+        .await
+        .map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to spawn blocking task: {}", e))
+        })?
+        .map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to send email to {}: {}", to_address, e))
+        })?;
+
+        tracing::info!("Sent email notification to {} for alert: {}", to_address, alert.id);
     }
 
-    tracing::info!("Sent email notification for alert: {}", alert.id);
     Ok(())
 }
 
-/// Send webhook notification
+/// Send webhook notification using HTTP client
 async fn send_webhook(config: &WebhookConfig, alert: &Alert) -> Result<()> {
     // Build JSON payload
     let payload = serde_json::json!({
@@ -142,36 +191,55 @@ async fn send_webhook(config: &WebhookConfig, alert: &Alert) -> Result<()> {
         "fired_at": alert.fired_at,
     });
 
-    // In a real implementation, we'd use reqwest or similar
-    // For now, use curl
-    let mut cmd = Command::new("curl");
-    cmd.arg("-X")
-        .arg(&config.method)
-        .arg(&config.url)
-        .arg("-H")
-        .arg("Content-Type: application/json");
+    // Create HTTP client
+    let client = reqwest::Client::new();
 
+    // Build request based on method
+    let mut request = match config.method.to_uppercase().as_str() {
+        "GET" => client.get(&config.url),
+        "POST" => client.post(&config.url),
+        "PUT" => client.put(&config.url),
+        "PATCH" => client.patch(&config.url),
+        "DELETE" => client.delete(&config.url),
+        _ => {
+            return Err(horcrux_common::Error::InvalidConfig(
+                format!("Unsupported HTTP method: {}", config.method)
+            ));
+        }
+    };
+
+    // Add default Content-Type header
+    request = request.header("Content-Type", "application/json");
+
+    // Add custom headers
     for (key, value) in &config.headers {
-        cmd.arg("-H").arg(format!("{}: {}", key, value));
+        request = request.header(key, value);
     }
 
+    // Add authentication token if provided
     if let Some(token) = &config.auth_token {
-        cmd.arg("-H").arg(format!("Authorization: Bearer {}", token));
+        request = request.header("Authorization", format!("Bearer {}", token));
     }
 
-    cmd.arg("-d").arg(payload.to_string());
+    // Add JSON payload
+    request = request.json(&payload);
 
-    let output = cmd.output().await
-        .map_err(|e| horcrux_common::Error::System(format!("Failed to send webhook: {}", e)))?;
+    // Send request
+    let response = request.send().await
+        .map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to send webhook: {}", e))
+        })?;
 
-    if !output.status.success() {
-        let error = String::from_utf8_lossy(&output.stderr);
+    // Check response status
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_text = response.text().await.unwrap_or_default();
         return Err(horcrux_common::Error::System(
-            format!("Webhook request failed: {}", error)
+            format!("Webhook request failed with status {}: {}", status, error_text)
         ));
     }
 
-    tracing::info!("Sent webhook notification for alert: {}", alert.id);
+    tracing::info!("Sent webhook notification for alert: {} to {}", alert.id, config.url);
     Ok(())
 }
 
