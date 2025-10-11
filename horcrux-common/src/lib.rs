@@ -312,6 +312,7 @@ mod tests {
             memory: 2048,
             disk_size: 20,
             status: VmStatus::Running,
+            disks: Vec::new(),
         };
 
         let json = serde_json::to_string(&vm).unwrap();
