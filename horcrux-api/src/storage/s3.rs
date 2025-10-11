@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 /// S3 storage manager
 pub struct S3Manager {
-    client: Client,
+    _client: Client,  // Reserved for future async S3 operations
 }
 
 /// S3 configuration
@@ -38,7 +38,7 @@ pub struct S3Object {
 impl S3Manager {
     pub fn new() -> Self {
         Self {
-            client: Client::new(),
+            _client: Client::new(),
         }
     }
 
@@ -99,7 +99,7 @@ impl S3Manager {
         let auth_header = format!("AWS {}:{}", config.access_key, config.secret_key);
 
         // Upload
-        let response = self.client
+        let response = self._client
             .put(&url)
             .header("Authorization", auth_header)
             .header("Content-Type", "application/octet-stream")
@@ -140,7 +140,7 @@ impl S3Manager {
         let url = self.build_url(config, s3_key);
         let auth_header = format!("AWS {}:{}", config.access_key, config.secret_key);
 
-        let response = self.client
+        let response = self._client
             .get(&url)
             .header("Authorization", auth_header)
             .send()
@@ -185,7 +185,7 @@ impl S3Manager {
         let url = self.build_url(config, s3_key);
         let auth_header = format!("AWS {}:{}", config.access_key, config.secret_key);
 
-        let response = self.client
+        let response = self._client
             .delete(&url)
             .header("Authorization", auth_header)
             .send()
@@ -224,7 +224,7 @@ impl S3Manager {
 
         let auth_header = format!("AWS {}:{}", config.access_key, config.secret_key);
 
-        let response = self.client
+        let response = self._client
             .get(&url)
             .header("Authorization", auth_header)
             .send()
@@ -257,7 +257,7 @@ impl S3Manager {
         let url = self.build_url(config, s3_key);
         let auth_header = format!("AWS {}:{}", config.access_key, config.secret_key);
 
-        let response = self.client
+        let response = self._client
             .head(&url)
             .header("Authorization", auth_header)
             .send()
@@ -309,7 +309,7 @@ impl S3Manager {
         let url = format!("{}?uploads", self.build_url(config, s3_key));
         let auth_header = format!("AWS {}:{}", config.access_key, config.secret_key);
 
-        let response = self.client
+        let response = self._client
             .post(&url)
             .header("Authorization", auth_header)
             .send()

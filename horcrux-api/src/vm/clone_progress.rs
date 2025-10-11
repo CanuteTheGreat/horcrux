@@ -178,7 +178,7 @@ impl CloneJob {
 /// Clone job manager
 pub struct CloneJobManager {
     jobs: Arc<RwLock<HashMap<String, CloneJob>>>,
-    max_completed_jobs: usize,
+    _max_completed_jobs: usize,  // Reserved for configurable job history limit
 }
 
 impl CloneJobManager {
@@ -186,7 +186,7 @@ impl CloneJobManager {
     pub fn new() -> Self {
         Self {
             jobs: Arc::new(RwLock::new(HashMap::new())),
-            max_completed_jobs: 100, // Keep last 100 completed jobs
+            _max_completed_jobs: 100, // Keep last 100 completed jobs
         }
     }
 

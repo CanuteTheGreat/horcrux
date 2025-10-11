@@ -77,7 +77,7 @@ struct AppState {
     vault_manager: Arc<VaultManager>,
     audit_logger: Arc<AuditLogger>,
     database: Arc<db::Database>,
-    rate_limiter: Arc<middleware::rate_limit::RateLimiter>,
+    _rate_limiter: Arc<middleware::rate_limit::RateLimiter>,  // Reserved for future rate limiting middleware
     storage_manager: Arc<storage::StorageManager>,
     ha_manager: Arc<ha::HaManager>,
     migration_manager: Arc<migration::MigrationManager>,

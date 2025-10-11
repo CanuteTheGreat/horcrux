@@ -16,7 +16,7 @@ pub struct QemuVm {
     pub disk_path: PathBuf,
     pub disk_size: u64,
     pub status: VmStatus,
-    pub pid: Option<u32>,
+    pub _pid: Option<u32>,  // Reserved for future process monitoring
 }
 
 impl QemuVm {
@@ -92,7 +92,7 @@ impl QemuManager {
             disk_path,
             disk_size: config.disk_size,
             status: VmStatus::Stopped,
-            pid: None,
+            _pid: None,
         })
     }
 

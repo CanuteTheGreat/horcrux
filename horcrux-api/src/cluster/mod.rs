@@ -22,7 +22,7 @@ pub struct ClusterConfig {
 
 /// Cluster manager
 pub struct ClusterManager {
-    config: Arc<RwLock<Option<ClusterConfig>>>,
+    _config: Arc<RwLock<Option<ClusterConfig>>>,  // Reserved for runtime cluster config updates
     nodes: Arc<RwLock<HashMap<String, Node>>>,
     corosync: corosync::CorosyncManager,
     local_node_name: Arc<RwLock<Option<String>>>,
@@ -31,7 +31,7 @@ pub struct ClusterManager {
 impl ClusterManager {
     pub fn new() -> Self {
         Self {
-            config: Arc::new(RwLock::new(None)),
+            _config: Arc::new(RwLock::new(None)),
             nodes: Arc::new(RwLock::new(HashMap::new())),
             corosync: corosync::CorosyncManager::new(),
             local_node_name: Arc::new(RwLock::new(None)),
@@ -61,7 +61,7 @@ impl ClusterManager {
 
     /// Initialize a new cluster
     pub async fn create_cluster(&self, cluster_name: String, node_name: String) -> Result<()> {
-        let mut config = self.config.write().await;
+        let mut config = self._config.write().await;
 
         if config.is_some() {
             return Err(horcrux_common::Error::InvalidConfig(
@@ -97,7 +97,7 @@ impl ClusterManager {
         node_name: String,
         master_ip: String,
     ) -> Result<()> {
-        let config = self.config.read().await;
+        let config = self._config.read().await;
 
         if config.is_some() {
             return Err(horcrux_common::Error::InvalidConfig(
@@ -114,7 +114,7 @@ impl ClusterManager {
 
         // Fetch cluster configuration from master
         // (In a real implementation, this would be an API call to the master node)
-        let mut config = self.config.write().await;
+        let mut config = self._config.write().await;
         *config = Some(ClusterConfig {
             name: cluster_name,
             nodes: vec![],
@@ -173,7 +173,7 @@ impl ClusterManager {
 
     /// Get cluster status
     pub async fn get_cluster_status(&self) -> Result<ClusterStatus> {
-        let config = self.config.read().await;
+        let config = self._config.read().await;
 
         let config = config
             .as_ref()

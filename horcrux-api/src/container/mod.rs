@@ -47,7 +47,7 @@ pub struct ContainerManager {
     incus_manager: incus::IncusContainerManager,
     docker_manager: docker::DockerManager,
     podman_manager: podman::PodmanManager,
-    db: Option<Arc<Database>>,
+    _db: Option<Arc<Database>>,  // Reserved for future persistent container storage
 }
 
 impl ContainerManager {
@@ -59,7 +59,7 @@ impl ContainerManager {
             incus_manager: incus::IncusContainerManager::new(),
             docker_manager: docker::DockerManager::new(),
             podman_manager: podman::PodmanManager::new(),
-            db: None,
+            _db: None,
         }
     }
 
@@ -72,7 +72,7 @@ impl ContainerManager {
             incus_manager: incus::IncusContainerManager::new(),
             docker_manager: docker::DockerManager::new(),
             podman_manager: podman::PodmanManager::new(),
-            db: Some(db),
+            _db: Some(db),
         }
     }
 

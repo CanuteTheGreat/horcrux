@@ -11,7 +11,7 @@ use tracing::{error, info, warn};
 /// Rule handle tracking
 #[derive(Debug, Clone)]
 struct RuleHandle {
-    rule_id: String,
+    _rule_id: String,  // Reserved for future rule queries
     chain_name: String,
     handle: u64,
 }
@@ -98,7 +98,7 @@ impl NftablesManager {
         drop(next_handle);
 
         let rule_handle = RuleHandle {
-            rule_id: rule.id.clone(),
+            _rule_id: rule.id.clone(),
             chain_name: chain_name.clone(),
             handle,
         };
@@ -144,7 +144,7 @@ impl NftablesManager {
         drop(next_handle);
 
         let rule_handle = RuleHandle {
-            rule_id: rule.id.clone(),
+            _rule_id: rule.id.clone(),
             chain_name: chain_name.clone(),
             handle,
         };
