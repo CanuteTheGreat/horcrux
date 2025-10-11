@@ -119,11 +119,35 @@ impl StorageManager {
             StorageType::GlusterFs => self.glusterfs.validate_pool(&pool).await?,
             StorageType::BtrFs => self.btrfs.validate_pool(&pool).await?,
             StorageType::S3 => {
-                // S3 validation requires parsing config from pool.path
-                // For now, just verify pool path is valid
+                // S3 validation: verify path contains valid bucket configuration
+                // Format expected: "s3://bucket-name" or "s3://endpoint/bucket-name"
                 if pool.path.is_empty() {
                     return Err(horcrux_common::Error::InvalidConfig("S3 path cannot be empty".to_string()));
                 }
+
+                if !pool.path.starts_with("s3://") {
+                    return Err(horcrux_common::Error::InvalidConfig(
+                        format!("S3 path must start with 's3://', got: {}", pool.path)
+                    ));
+                }
+
+                let bucket_part = pool.path.strip_prefix("s3://").unwrap();
+                if bucket_part.is_empty() {
+                    return Err(horcrux_common::Error::InvalidConfig(
+                        "S3 path must specify bucket name after 's3://'".to_string()
+                    ));
+                }
+
+                // Validate bucket name format (basic check)
+                let bucket_name = bucket_part.split('/').next().unwrap_or("");
+                if bucket_name.len() < 3 || bucket_name.len() > 63 {
+                    return Err(horcrux_common::Error::InvalidConfig(
+                        "S3 bucket name must be between 3 and 63 characters".to_string()
+                    ));
+                }
+
+                // Delegate detailed validation to S3 manager
+                self.s3.validate_pool(&pool).await?;
             }
         }
 
