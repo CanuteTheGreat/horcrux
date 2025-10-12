@@ -65,15 +65,7 @@ fn determine_event_type(method: &str, path: &str) -> Option<AuditEventType> {
         return Some(AuditEventType::PasswordChanged);
     }
 
-    // VM operations
-    if path_lower.contains("/vms") {
-        if method == "POST" {
-            return Some(AuditEventType::VmCreated);
-        } else if method == "DELETE" {
-            return Some(AuditEventType::VmDeleted);
-        }
-    }
-
+    // VM operations - check specific operations first before general create/delete
     if path_lower.contains("/vms/") && path_lower.contains("/start") {
         return Some(AuditEventType::VmStarted);
     }
@@ -88,6 +80,15 @@ fn determine_event_type(method: &str, path: &str) -> Option<AuditEventType> {
 
     if path_lower.contains("/vms/") && path_lower.contains("/migrate") {
         return Some(AuditEventType::VmMigrated);
+    }
+
+    // General VM create/delete (check after specific operations)
+    if path_lower.contains("/vms") {
+        if method == "POST" {
+            return Some(AuditEventType::VmCreated);
+        } else if method == "DELETE" {
+            return Some(AuditEventType::VmDeleted);
+        }
     }
 
     // Storage operations
