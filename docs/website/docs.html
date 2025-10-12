@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Horcrux Documentation - Complete guides for virtualization on Gentoo Linux">
+    <title>Documentation - Horcrux</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="container">
+            <div class="nav-brand">
+                <a href="index.html"><h1>⚡ Horcrux</h1></a>
+            </div>
+            <ul class="nav-menu">
+                <li><a href="index.html#features">Features</a></li>
+                <li><a href="index.html#quickstart">Quick Start</a></li>
+                <li><a href="index.html#comparison">vs Proxmox</a></li>
+                <li><a href="docs.html" class="active">Docs</a></li>
+                <li><a href="https://github.com/CanuteTheGreat/horcrux" target="_blank" class="btn-primary">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Documentation Hero -->
+    <section class="docs-hero">
+        <div class="container">
+            <h1>Documentation</h1>
+            <p>Everything you need to deploy and manage Horcrux</p>
+        </div>
+    </section>
+
+    <!-- Documentation Content -->
+    <section class="docs-content">
+        <div class="container">
+            <div class="docs-grid">
+                <!-- Getting Started -->
+                <div class="docs-section">
+                    <h2>🚀 Getting Started</h2>
+                    <div class="docs-cards">
+                        <a href="../QUICKSTART.md" class="doc-card">
+                            <h3>Quick Start Guide</h3>
+                            <p>Get Horcrux running in 5 minutes with Docker or from source</p>
+                            <span class="doc-meta">5 min read</span>
+                        </a>
+                        <a href="../DOCKER.md" class="doc-card">
+                            <h3>Docker Deployment</h3>
+                            <p>Complete guide for running Horcrux in containers</p>
+                            <span class="doc-meta">10 min read</span>
+                        </a>
+                        <a href="https://github.com/CanuteTheGreat/horcrux#installation" class="doc-card">
+                            <h3>Installation</h3>
+                            <p>Install Horcrux on Gentoo Linux with USE flags</p>
+                            <span class="doc-meta">15 min read</span>
+                        </a>
+                    </div>
+                </div>
+
+                <!-- Deployment -->
+                <div class="docs-section">
+                    <h2>🏗️ Deployment</h2>
+                    <div class="docs-cards">
+                        <a href="../DEPLOYMENT.md" class="doc-card">
+                            <h3>Production Deployment</h3>
+                            <p>Best practices for production environments</p>
+                            <span class="doc-meta">20 min read</span>
+                        </a>
+                        <a href="../DEPLOYMENT.md#clustering" class="doc-card">
+                            <h3>Cluster Setup</h3>
+                            <p>Configure multi-node clusters with Corosync/Pacemaker</p>
+                            <span class="doc-meta">30 min read</span>
+                        </a>
+                        <a href="../DEPLOYMENT.md#high-availability" class="doc-card">
+                            <h3>High Availability</h3>
+                            <p>Enable HA for automatic failover and redundancy</p>
+                            <span class="doc-meta">25 min read</span>
+                        </a>
+                    </div>
+                </div>
+
+                <!-- Configuration -->
+                <div class="docs-section">
+                    <h2>⚙️ Configuration</h2>
+                    <div class="docs-cards">
+                        <a href="../examples/README.md" class="doc-card">
+                            <h3>Configuration Examples</h3>
+                            <p>Production-ready configuration templates</p>
+                            <span class="doc-meta">Examples</span>
+                        </a>
+                        <a href="../examples/storage/zfs-storage.toml" class="doc-card">
+                            <h3>Storage Configuration</h3>
+                            <p>Configure ZFS, Ceph, LVM, and other storage backends</p>
+                            <span class="doc-meta">Guide</span>
+                        </a>
+                        <a href="../examples/cluster/three-node-cluster.toml" class="doc-card">
+                            <h3>Cluster Configuration</h3>
+                            <p>Multi-node cluster configuration templates</p>
+                            <span class="doc-meta">Example</span>
+                        </a>
+                    </div>
+                </div>
+
+                <!-- API Reference -->
+                <div class="docs-section">
+                    <h2>📚 API Reference</h2>
+                    <div class="docs-cards">
+                        <a href="../API.md#vm-management" class="doc-card">
+                            <h3>VM Management</h3>
+                            <p>Create, start, stop, and manage virtual machines</p>
+                            <span class="doc-meta">API Reference</span>
+                        </a>
+                        <a href="../API.md#container-management" class="doc-card">
+                            <h3>Container Management</h3>
+                            <p>Manage LXC, Docker, and Podman containers</p>
+                            <span class="doc-meta">API Reference</span>
+                        </a>
+                        <a href="../API.md#cluster-operations" class="doc-card">
+                            <h3>Cluster Operations</h3>
+                            <p>Join nodes, migrate VMs, and manage clusters</p>
+                            <span class="doc-meta">API Reference</span>
+                        </a>
+                        <a href="../API.md#storage-operations" class="doc-card">
+                            <h3>Storage Operations</h3>
+                            <p>Manage storage pools and volumes</p>
+                            <span class="doc-meta">API Reference</span>
+                        </a>
+                        <a href="../API.md#backup-restore" class="doc-card">
+                            <h3>Backup & Restore</h3>
+                            <p>Automated backups and restoration</p>
+                            <span class="doc-meta">API Reference</span>
+                        </a>
+                        <a href="../API.md#monitoring" class="doc-card">
+                            <h3>Monitoring</h3>
+                            <p>Collect metrics and set up alerting</p>
+                            <span class="doc-meta">API Reference</span>
+                        </a>
+                    </div>
+                </div>
+
+                <!-- Operations -->
+                <div class="docs-section">
+                    <h2>🔧 Operations</h2>
+                    <div class="docs-cards">
+                        <a href="../examples/backup/automated-backup.sh" class="doc-card">
+                            <h3>Backup & Restore</h3>
+                            <p>Configure automated backups and disaster recovery</p>
+                            <span class="doc-meta">Guide</span>
+                        </a>
+                        <a href="../DEPLOYMENT.md#monitoring" class="doc-card">
+                            <h3>Monitoring & Alerting</h3>
+                            <p>Set up Prometheus and Grafana for monitoring</p>
+                            <span class="doc-meta">15 min read</span>
+                        </a>
+                        <a href="../TROUBLESHOOTING.md" class="doc-card">
+                            <h3>Troubleshooting</h3>
+                            <p>Common issues and their solutions</p>
+                            <span class="doc-meta">Reference</span>
+                        </a>
+                    </div>
+                </div>
+
+                <!-- Security -->
+                <div class="docs-section">
+                    <h2>🔒 Security</h2>
+                    <div class="docs-cards">
+                        <a href="../DEPLOYMENT.md#security" class="doc-card">
+                            <h3>Security Best Practices</h3>
+                            <p>Harden your Horcrux deployment</p>
+                            <span class="doc-meta">Guide</span>
+                        </a>
+                        <a href="../API.md#authentication" class="doc-card">
+                            <h3>Authentication</h3>
+                            <p>Configure PAM, LDAP, and Active Directory</p>
+                            <span class="doc-meta">Guide</span>
+                        </a>
+                        <a href="../API.md#rbac" class="doc-card">
+                            <h3>RBAC Configuration</h3>
+                            <p>Set up role-based access control</p>
+                            <span class="doc-meta">Guide</span>
+                        </a>
+                        <a href="../API.md#firewall" class="doc-card">
+                            <h3>Firewall Rules</h3>
+                            <p>Configure distributed firewall with nftables</p>
+                            <span class="doc-meta">Guide</span>
+                        </a>
+                    </div>
+                </div>
+
+                <!-- Advanced Topics -->
+                <div class="docs-section">
+                    <h2>🎓 Advanced Topics</h2>
+                    <div class="docs-cards">
+                        <a href="../examples/ha/high-availability-setup.sh" class="doc-card">
+                            <h3>High Availability Setup</h3>
+                            <p>Configure automatic failover and resource fencing</p>
+                            <span class="doc-meta">Advanced</span>
+                        </a>
+                        <a href="../DEPLOYMENT.md#mixed-architecture" class="doc-card">
+                            <h3>Mixed-Architecture Clusters</h3>
+                            <p>Build clusters with x86_64, ARM64, and RISC-V</p>
+                            <span class="doc-meta">Advanced</span>
+                        </a>
+                        <a href="../API.md#live-migration" class="doc-card">
+                            <h3>Live Migration</h3>
+                            <p>Migrate running VMs between nodes</p>
+                            <span class="doc-meta">Advanced</span>
+                        </a>
+                        <a href="../examples/storage/ceph-storage.toml" class="doc-card">
+                            <h3>Ceph Integration</h3>
+                            <p>Set up distributed storage with Ceph RBD</p>
+                            <span class="doc-meta">Advanced</span>
+                        </a>
+                    </div>
+                </div>
+
+                <!-- Development -->
+                <div class="docs-section">
+                    <h2>💻 Development</h2>
+                    <div class="docs-cards">
+                        <a href="../CONTRIBUTING.md" class="doc-card">
+                            <h3>Contributing Guide</h3>
+                            <p>How to contribute to Horcrux development</p>
+                            <span class="doc-meta">Guide</span>
+                        </a>
+                        <a href="../CONTRIBUTING.md#development-setup" class="doc-card">
+                            <h3>Development Setup</h3>
+                            <p>Set up your development environment</p>
+                            <span class="doc-meta">10 min read</span>
+                        </a>
+                        <a href="../CONTRIBUTING.md#testing" class="doc-card">
+                            <h3>Testing</h3>
+                            <p>Run tests and add new test cases</p>
+                            <span class="doc-meta">Guide</span>
+                        </a>
+                        <a href="https://github.com/CanuteTheGreat/horcrux/tree/main/horcrux-api/src" class="doc-card">
+                            <h3>Code Architecture</h3>
+                            <p>Understand the codebase structure</p>
+                            <span class="doc-meta">Reference</span>
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Links -->
+            <div class="quick-links">
+                <h2>Quick Links</h2>
+                <div class="links-grid">
+                    <div class="link-category">
+                        <h3>Community</h3>
+                        <ul>
+                            <li><a href="https://github.com/CanuteTheGreat/horcrux/discussions">Discussions</a></li>
+                            <li><a href="https://github.com/CanuteTheGreat/horcrux/issues">Report Issues</a></li>
+                            <li><a href="https://github.com/CanuteTheGreat/horcrux/pulls">Pull Requests</a></li>
+                        </ul>
+                    </div>
+                    <div class="link-category">
+                        <h3>Resources</h3>
+                        <ul>
+                            <li><a href="https://github.com/CanuteTheGreat/horcrux">GitHub Repository</a></li>
+                            <li><a href="https://github.com/CanuteTheGreat/horcrux/releases">Releases</a></li>
+                            <li><a href="https://github.com/CanuteTheGreat/horcrux/blob/main/LICENSE">License</a></li>
+                        </ul>
+                    </div>
+                    <div class="link-category">
+                        <h3>External Docs</h3>
+                        <ul>
+                            <li><a href="https://www.rust-lang.org/learn">Rust Documentation</a></li>
+                            <li><a href="https://www.gentoo.org/">Gentoo Linux</a></li>
+                            <li><a href="https://www.qemu.org/documentation/">QEMU Documentation</a></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h3>Horcrux</h3>
+                    <p>A Proxmox VE alternative for Gentoo Linux</p>
+                    <p>Made with ❤️ for the Gentoo community</p>
+                </div>
+                <div class="footer-section">
+                    <h4>Resources</h4>
+                    <ul>
+                        <li><a href="docs.html">Documentation</a></li>
+                        <li><a href="https://github.com/CanuteTheGreat/horcrux">GitHub</a></li>
+                        <li><a href="https://github.com/CanuteTheGreat/horcrux/issues">Issue Tracker</a></li>
+                        <li><a href="https://github.com/CanuteTheGreat/horcrux/discussions">Discussions</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Community</h4>
+                    <ul>
+                        <li><a href="https://github.com/CanuteTheGreat/horcrux/blob/main/CONTRIBUTING.md">Contributing</a></li>
+                        <li><a href="https://github.com/CanuteTheGreat/horcrux/blob/main/LICENSE">License (GPL v3)</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2025 Horcrux Project. Licensed under GPL v3.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="js/main.js"></script>
+</body>
+</html>

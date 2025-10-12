@@ -8,6 +8,8 @@
 [![Built with Rust](https://img.shields.io/badge/Built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![Platform: Gentoo](https://img.shields.io/badge/Platform-Gentoo-purple.svg)](https://www.gentoo.org/)
 
+**[🌐 Visit the Website](https://canutethegreat.github.io/horcrux/)** | **[📚 Documentation](docs/)** | **[🐳 Docker Guide](docs/DOCKER.md)**
+
 ## 🎯 What is Horcrux?
 
 Horcrux is a complete virtualization management platform designed specifically for Gentoo Linux. It provides Proxmox VE-compatible functionality while offering **more choice**, **better customization**, and **memory-safe code** through Rust.
@@ -374,6 +376,7 @@ Horcrux is licensed under the [GNU General Public License v3.0](LICENSE).
 
 ## 📞 Support
 
+- 🌐 [Website](https://canutethegreat.github.io/horcrux/)
 - 📖 [Documentation](docs/)
 - 🐛 [Issue Tracker](https://github.com/CanuteTheGreat/horcrux/issues)
 - 💬 [Discussions](https://github.com/CanuteTheGreat/horcrux/discussions)

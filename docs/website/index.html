@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Horcrux - A powerful Proxmox VE alternative for Gentoo Linux with more choice, better customization, and memory-safe code">
+    <meta name="keywords" content="virtualization, proxmox, gentoo, rust, kvm, lxd, containers, hypervisor">
+    <title>Horcrux - Proxmox VE Alternative for Gentoo Linux</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="container">
+            <div class="nav-brand">
+                <h1>⚡ Horcrux</h1>
+            </div>
+            <ul class="nav-menu">
+                <li><a href="#features">Features</a></li>
+                <li><a href="#quickstart">Quick Start</a></li>
+                <li><a href="#comparison">vs Proxmox</a></li>
+                <li><a href="docs.html">Docs</a></li>
+                <li><a href="https://github.com/CanuteTheGreat/horcrux" target="_blank" class="btn-primary">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="container">
+            <div class="hero-content">
+                <h1 class="hero-title">A Proxmox VE Alternative</h1>
+                <h2 class="hero-subtitle">For Gentoo Linux</h2>
+                <p class="hero-description">
+                    Production-ready virtualization platform with <strong>more choice</strong>,
+                    <strong>better customization</strong>, and <strong>memory-safe code</strong> through Rust.
+                </p>
+                <div class="hero-badges">
+                    <img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License">
+                    <img src="https://img.shields.io/badge/Built%20with-Rust-orange.svg" alt="Built with Rust">
+                    <img src="https://img.shields.io/badge/Platform-Gentoo-purple.svg" alt="Platform: Gentoo">
+                </div>
+                <div class="hero-cta">
+                    <a href="#quickstart" class="btn-large btn-primary">Get Started</a>
+                    <a href="#features" class="btn-large btn-secondary">Learn More</a>
+                </div>
+            </div>
+            <div class="hero-terminal">
+                <div class="terminal-header">
+                    <span class="terminal-dot red"></span>
+                    <span class="terminal-dot yellow"></span>
+                    <span class="terminal-dot green"></span>
+                </div>
+                <div class="terminal-body">
+                    <div class="terminal-line"><span class="prompt">$</span> docker-compose up -d</div>
+                    <div class="terminal-line">Creating horcrux-api... <span class="success">done</span></div>
+                    <div class="terminal-line"><span class="prompt">$</span> curl http://localhost:8006/api/health</div>
+                    <div class="terminal-line">{"status": "healthy"}</div>
+                    <div class="terminal-line"><span class="prompt">$</span> horcrux vm create --name my-vm --cpus 2 --memory 2048</div>
+                    <div class="terminal-line">VM created successfully! <span class="cursor">▊</span></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Key Differentiators -->
+    <section class="differentiators">
+        <div class="container">
+            <h2 class="section-title">Why Choose Horcrux?</h2>
+            <div class="diff-grid">
+                <div class="diff-card">
+                    <div class="diff-icon">🖥️</div>
+                    <h3>More Hypervisors</h3>
+                    <p>QEMU/KVM, LXD, Incus</p>
+                    <span class="vs">vs Proxmox's QEMU only</span>
+                </div>
+                <div class="diff-card">
+                    <div class="diff-icon">📦</div>
+                    <h3>More Container Runtimes</h3>
+                    <p>LXC, LXD, Incus, Docker, Podman</p>
+                    <span class="vs">vs Proxmox's LXC only</span>
+                </div>
+                <div class="diff-card">
+                    <div class="diff-icon">🌐</div>
+                    <h3>Mixed-Architecture Clusters</h3>
+                    <p>x86_64, ARM64, RISC-V, ppc64le</p>
+                    <span class="vs">⭐ Unique to Horcrux!</span>
+                </div>
+                <div class="diff-card">
+                    <div class="diff-icon">🦀</div>
+                    <h3>Modern Language</h3>
+                    <p>Rust for safety & performance</p>
+                    <span class="vs">vs Perl in Proxmox</span>
+                </div>
+                <div class="diff-card">
+                    <div class="diff-icon">🎯</div>
+                    <h3>Gentoo Integration</h3>
+                    <p>USE flags for fine control</p>
+                    <span class="vs">Source-based optimization</span>
+                </div>
+                <div class="diff-card">
+                    <div class="diff-icon">⚡</div>
+                    <h3>Full Rust UI</h3>
+                    <p>Leptos/WASM frontend</p>
+                    <span class="vs">No JavaScript required!</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section id="features" class="features">
+        <div class="container">
+            <h2 class="section-title">Comprehensive Features</h2>
+
+            <div class="feature-category">
+                <h3>Virtualization & Containers</h3>
+                <div class="feature-grid">
+                    <div class="feature-item">
+                        <h4>3 Hypervisors</h4>
+                        <ul>
+                            <li>QEMU/KVM - Industry standard</li>
+                            <li>LXD - Lightweight VMs</li>
+                            <li>Incus - Enhanced LXD fork</li>
+                        </ul>
+                    </div>
+                    <div class="feature-item">
+                        <h4>5 Container Runtimes</h4>
+                        <ul>
+                            <li>LXC - System containers</li>
+                            <li>LXD Containers</li>
+                            <li>Incus Containers</li>
+                            <li>Docker - OCI containers</li>
+                            <li>Podman - Daemonless</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="feature-category">
+                <h3>Storage Backends</h3>
+                <div class="feature-grid">
+                    <div class="feature-item">
+                        <h4>ZFS</h4>
+                        <p>Snapshots, clones, zvols</p>
+                    </div>
+                    <div class="feature-item">
+                        <h4>Ceph RBD</h4>
+                        <p>Distributed storage with HA</p>
+                    </div>
+                    <div class="feature-item">
+                        <h4>LVM</h4>
+                        <p>Logical volumes with snapshots</p>
+                    </div>
+                    <div class="feature-item">
+                        <h4>Directory</h4>
+                        <p>File-based storage (qcow2)</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="feature-category">
+                <h3>Clustering & HA</h3>
+                <div class="feature-grid">
+                    <div class="feature-item">
+                        <h4>Enterprise Clustering</h4>
+                        <ul>
+                            <li>Corosync/Pacemaker</li>
+                            <li>Multi-node support</li>
+                            <li>Quorum & split-brain prevention</li>
+                            <li>Live migration</li>
+                        </ul>
+                    </div>
+                    <div class="feature-item">
+                        <h4>High Availability</h4>
+                        <ul>
+                            <li>Automatic failover</li>
+                            <li>Resource fencing</li>
+                            <li>Service monitoring</li>
+                            <li>Multi-arch clusters ⭐</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="feature-category">
+                <h3>Security</h3>
+                <div class="feature-grid">
+                    <div class="feature-item">
+                        <h4>Authentication</h4>
+                        <ul>
+                            <li>PAM (Linux system auth)</li>
+                            <li>LDAP directory services</li>
+                            <li>Active Directory support</li>
+                            <li>API tokens for automation</li>
+                        </ul>
+                    </div>
+                    <div class="feature-item">
+                        <h4>RBAC</h4>
+                        <ul>
+                            <li>Role-based access control</li>
+                            <li>Path-based permissions</li>
+                            <li>User & group management</li>
+                            <li>Fine-grained control</li>
+                        </ul>
+                    </div>
+                    <div class="feature-item">
+                        <h4>Distributed Firewall</h4>
+                        <ul>
+                            <li>nftables-based</li>
+                            <li>Per-VM/container rules</li>
+                            <li>Security groups</li>
+                            <li>IPv4 & IPv6 support</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="feature-category">
+                <h3>Operations</h3>
+                <div class="feature-grid">
+                    <div class="feature-item">
+                        <h4>Backup & Restore</h4>
+                        <ul>
+                            <li>Full & incremental backups</li>
+                            <li>vzdump-compatible format</li>
+                            <li>Scheduled backup jobs</li>
+                            <li>Multiple compression formats</li>
+                        </ul>
+                    </div>
+                    <div class="feature-item">
+                        <h4>Monitoring & Alerting</h4>
+                        <ul>
+                            <li>Real-time metrics</li>
+                            <li>Time-series data storage</li>
+                            <li>Threshold-based alerts</li>
+                            <li>Multiple notification channels</li>
+                        </ul>
+                    </div>
+                    <div class="feature-item">
+                        <h4>Console Access</h4>
+                        <ul>
+                            <li>VNC with noVNC client</li>
+                            <li>WebSocket proxy</li>
+                            <li>Ticket-based auth</li>
+                            <li>Serial console support</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Quick Start Section -->
+    <section id="quickstart" class="quickstart">
+        <div class="container">
+            <h2 class="section-title">Get Started in 30 Seconds</h2>
+            <div class="quickstart-tabs">
+                <button class="tab-btn active" data-tab="docker">Docker (Easiest!)</button>
+                <button class="tab-btn" data-tab="source">From Source</button>
+                <button class="tab-btn" data-tab="gentoo">Gentoo Package</button>
+            </div>
+
+            <div class="tab-content active" id="docker">
+                <pre><code># Clone and run with Docker
+git clone https://github.com/CanuteTheGreat/horcrux.git
+cd horcrux
+docker-compose up -d
+
+# API running at http://localhost:8006
+curl http://localhost:8006/api/health
+
+# Create your first VM
+docker-compose --profile cli run horcrux-cli vm create \
+  --name my-vm --cpus 2 --memory 2048 --disk-size 20</code></pre>
+            </div>
+
+            <div class="tab-content" id="source">
+                <pre><code># Clone the repository
+git clone https://github.com/CanuteTheGreat/horcrux.git
+cd horcrux
+
+# Build the project
+cargo build --release
+
+# Run the API server
+./target/release/horcrux-api
+
+# In another terminal, build the Web UI
+cd horcrux-api/horcrux-ui
+trunk serve --release</code></pre>
+            </div>
+
+            <div class="tab-content" id="gentoo">
+                <pre><code># Copy ebuild to local overlay
+mkdir -p /usr/local/portage/app-emulation/horcrux
+cp -r gentoo/app-emulation/horcrux/* /usr/local/portage/app-emulation/horcrux/
+
+# Generate manifest
+cd /usr/local/portage/app-emulation/horcrux
+ebuild horcrux-0.1.0.ebuild manifest
+
+# Install with USE flags
+echo "app-emulation/horcrux qemu lxd docker" >> /etc/portage/package.use/horcrux
+emerge -av app-emulation/horcrux
+
+# Start the service
+rc-service horcrux start</code></pre>
+            </div>
+        </div>
+    </section>
+
+    <!-- Comparison Section -->
+    <section id="comparison" class="comparison">
+        <div class="container">
+            <h2 class="section-title">Horcrux vs Proxmox VE</h2>
+            <div class="comparison-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Feature</th>
+                            <th>Horcrux</th>
+                            <th>Proxmox VE</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Hypervisors</td>
+                            <td class="check">QEMU/KVM, LXD, Incus</td>
+                            <td>QEMU/KVM only</td>
+                        </tr>
+                        <tr>
+                            <td>Container Runtimes</td>
+                            <td class="check">LXC, LXD, Incus, Docker, Podman</td>
+                            <td>LXC only</td>
+                        </tr>
+                        <tr>
+                            <td>Mixed-Architecture Clusters</td>
+                            <td class="check">✅ x86_64, ARM64, RISC-V, ppc64le</td>
+                            <td>❌ x86_64 only</td>
+                        </tr>
+                        <tr>
+                            <td>Programming Language</td>
+                            <td class="check">Rust (memory-safe)</td>
+                            <td>Perl</td>
+                        </tr>
+                        <tr>
+                            <td>Web UI</td>
+                            <td class="check">Rust/WASM (no JavaScript!)</td>
+                            <td>JavaScript</td>
+                        </tr>
+                        <tr>
+                            <td>Platform</td>
+                            <td>Gentoo Linux</td>
+                            <td class="check">Debian-based</td>
+                        </tr>
+                        <tr>
+                            <td>Customization</td>
+                            <td class="check">USE flags, source-based</td>
+                            <td>Binary packages</td>
+                        </tr>
+                        <tr>
+                            <td>Clustering</td>
+                            <td class="check">Corosync/Pacemaker</td>
+                            <td class="check">Corosync</td>
+                        </tr>
+                        <tr>
+                            <td>Storage Backends</td>
+                            <td class="check">ZFS, Ceph, LVM, Directory</td>
+                            <td class="check">ZFS, Ceph, LVM, Directory</td>
+                        </tr>
+                        <tr>
+                            <td>High Availability</td>
+                            <td class="check">✅</td>
+                            <td class="check">✅</td>
+                        </tr>
+                        <tr>
+                            <td>Live Migration</td>
+                            <td class="check">✅</td>
+                            <td class="check">✅</td>
+                        </tr>
+                        <tr>
+                            <td>Backup & Restore</td>
+                            <td class="check">✅ (vzdump-compatible)</td>
+                            <td class="check">✅</td>
+                        </tr>
+                        <tr>
+                            <td>License</td>
+                            <td class="check">GPL v3</td>
+                            <td class="check">AGPL v3</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <!-- Performance Section -->
+    <section class="performance">
+        <div class="container">
+            <h2 class="section-title">Built for Performance</h2>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number">~44,000</div>
+                    <div class="stat-label">Lines of Rust Code</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">78+</div>
+                    <div class="stat-label">REST API Endpoints</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">100%</div>
+                    <div class="stat-label">Async/Await</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">0</div>
+                    <div class="stat-label">JavaScript Required</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA Section -->
+    <section class="cta">
+        <div class="container">
+            <h2>Ready to Get Started?</h2>
+            <p>Join the next generation of virtualization on Gentoo Linux</p>
+            <div class="cta-buttons">
+                <a href="https://github.com/CanuteTheGreat/horcrux" class="btn-large btn-primary">View on GitHub</a>
+                <a href="docs.html" class="btn-large btn-secondary">Read Documentation</a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h3>Horcrux</h3>
+                    <p>A Proxmox VE alternative for Gentoo Linux</p>
+                    <p>Made with ❤️ for the Gentoo community</p>
+                </div>
+                <div class="footer-section">
+                    <h4>Resources</h4>
+                    <ul>
+                        <li><a href="docs.html">Documentation</a></li>
+                        <li><a href="https://github.com/CanuteTheGreat/horcrux">GitHub</a></li>
+                        <li><a href="https://github.com/CanuteTheGreat/horcrux/issues">Issue Tracker</a></li>
+                        <li><a href="https://github.com/CanuteTheGreat/horcrux/discussions">Discussions</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Community</h4>
+                    <ul>
+                        <li><a href="https://github.com/CanuteTheGreat/horcrux/blob/main/CONTRIBUTING.md">Contributing</a></li>
+                        <li><a href="https://github.com/CanuteTheGreat/horcrux/blob/main/LICENSE">License (GPL v3)</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2025 Horcrux Project. Licensed under GPL v3.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="js/main.js"></script>
+</body>
+</html>
