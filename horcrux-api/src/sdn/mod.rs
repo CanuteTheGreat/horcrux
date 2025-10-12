@@ -13,6 +13,8 @@
 //! - Subnets: IP address ranges within VNets
 //! - IPAM: Track IP allocation and assignment
 
+#![allow(dead_code)]
+
 pub mod vlan;
 pub mod vxlan;
 pub mod ipam;

@@ -1,7 +1,9 @@
-///! S3-compatible object storage backend
-///!
-///! Provides S3-compatible storage for VM backups and ISO images
-///! Works with AWS S3, MinIO, Ceph RGW, and other S3-compatible services
+//! S3-compatible object storage backend
+//!
+//! Provides S3-compatible storage for VM backups and ISO images
+//! Works with AWS S3, MinIO, Ceph RGW, and other S3-compatible services
+
+#![allow(dead_code)]
 
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};

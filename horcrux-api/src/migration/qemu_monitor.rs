@@ -1,7 +1,9 @@
-///! QEMU Monitor Protocol (QMP) Integration
-///!
-///! Provides real-time monitoring and control of QEMU VMs via QMP
-///! Used for tracking migration progress, memory transfer, and VM state
+//! QEMU Monitor Protocol (QMP) Integration
+//!
+//! Provides real-time monitoring and control of QEMU VMs via QMP
+//! Used for tracking migration progress, memory transfer, and VM state
+
+#![allow(dead_code)]
 
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};

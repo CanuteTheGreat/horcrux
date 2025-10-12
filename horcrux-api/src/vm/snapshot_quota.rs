@@ -1,12 +1,14 @@
-///! Snapshot Disk Quota Management
-///!
-///! Provides quota enforcement for VM snapshots to prevent excessive disk usage:
-///! - Per-VM snapshot quotas
-///! - Per-storage-pool quotas
-///! - Global snapshot quotas
-///! - Automatic quota enforcement on snapshot creation
-///! - Quota warning and violation alerts
-///! - Automatic cleanup of oldest snapshots when quota exceeded
+//! Snapshot Disk Quota Management
+//!
+//! Provides quota enforcement for VM snapshots to prevent excessive disk usage:
+//! - Per-VM snapshot quotas
+//! - Per-storage-pool quotas
+//! - Global snapshot quotas
+//! - Automatic quota enforcement on snapshot creation
+//! - Quota warning and violation alerts
+//! - Automatic cleanup of oldest snapshots when quota exceeded
+
+#![allow(dead_code)]
 
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};

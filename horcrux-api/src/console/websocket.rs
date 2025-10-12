@@ -1,5 +1,7 @@
-///! WebSocket proxy for VNC connections
-///! Bridges WebSocket connections from browsers to VNC servers
+//! WebSocket proxy for VNC connections
+//! Bridges WebSocket connections from browsers to VNC servers
+
+#![allow(dead_code)]
 
 use horcrux_common::Result;
 use std::collections::HashMap;

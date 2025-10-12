@@ -5,6 +5,8 @@
 //!
 //! Proxmox VE 9.0 Feature: SDN Fabrics for scalable network architectures
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

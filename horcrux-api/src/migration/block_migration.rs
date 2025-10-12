@@ -1,7 +1,9 @@
-///! Live Block Migration
-///!
-///! Enables live migration of VMs with local disks (non-shared storage)
-///! Uses QEMU's block migration feature to copy disk data during live migration
+//! Live Block Migration
+//!
+//! Enables live migration of VMs with local disks (non-shared storage)
+//! Uses QEMU's block migration feature to copy disk data during live migration
+
+#![allow(dead_code)]
 
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};

@@ -1,7 +1,9 @@
-///! Cross-Node VM Cloning
-///!
-///! Provides functionality to clone VMs from one node to another in a cluster.
-///! Uses SSH for secure disk transfer and supports all major storage backends.
+//! Cross-Node VM Cloning
+//!
+//! Provides functionality to clone VMs from one node to another in a cluster.
+//! Uses SSH for secure disk transfer and supports all major storage backends.
+
+#![allow(dead_code)]
 
 use horcrux_common::{Result, VmConfig};
 use serde::{Deserialize, Serialize};

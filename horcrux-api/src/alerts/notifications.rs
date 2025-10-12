@@ -1,4 +1,6 @@
-///! Notification channels for alerts
+//! Notification channels for alerts
+
+#![allow(dead_code)]
 
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};

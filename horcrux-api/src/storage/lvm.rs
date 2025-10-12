@@ -1,5 +1,7 @@
-///! LVM storage backend
-///! Provides LVM volume group and logical volume management
+//! LVM storage backend
+//! Provides LVM volume group and logical volume management
+
+#![allow(dead_code)]
 
 use super::StoragePool;
 use horcrux_common::Result;

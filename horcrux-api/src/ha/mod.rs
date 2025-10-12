@@ -1,6 +1,8 @@
-///! High Availability (HA) Manager for Horcrux
-///!
-///! Provides automatic failover and resource management for VMs across cluster nodes
+//! High Availability (HA) Manager for Horcrux
+//!
+//! Provides automatic failover and resource management for VMs across cluster nodes
+
+#![allow(dead_code)]
 
 use horcrux_common::Result;
 use std::collections::HashMap;

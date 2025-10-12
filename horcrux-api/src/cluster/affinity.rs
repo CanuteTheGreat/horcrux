@@ -4,6 +4,8 @@
 //! Supports both node affinity (pin to specific nodes) and resource affinity
 //! (keep resources together or spread them apart).
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

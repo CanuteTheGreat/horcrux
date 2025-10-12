@@ -1,5 +1,7 @@
-///! Serial console management for VMs
-///! Provides serial port access via PTY (pseudo-terminal) devices
+//! Serial console management for VMs
+//! Provides serial port access via PTY (pseudo-terminal) devices
+
+#![allow(dead_code)]
 
 use horcrux_common::Result;
 use std::collections::HashMap;

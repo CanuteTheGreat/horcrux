@@ -1,7 +1,9 @@
-///! Clone Progress Tracking and Cancellation
-///!
-///! Provides real-time progress tracking for VM cloning operations
-///! with support for cancellation of in-progress clones
+//! Clone Progress Tracking and Cancellation
+//!
+//! Provides real-time progress tracking for VM cloning operations
+//! with support for cancellation of in-progress clones
+
+#![allow(dead_code)]
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

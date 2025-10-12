@@ -1,5 +1,7 @@
-///! Incus integration for virtual machines
-///! Incus (LXD fork) can manage both VMs and containers - this module handles VMs
+//! Incus integration for virtual machines
+//! Incus (LXD fork) can manage both VMs and containers - this module handles VMs
+
+#![allow(dead_code)]
 
 use super::QemuVm;
 use horcrux_common::{Result, VmConfig, VmStatus};

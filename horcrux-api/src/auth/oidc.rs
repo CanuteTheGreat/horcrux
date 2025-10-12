@@ -3,6 +3,8 @@
 //! Provides SSO integration with identity providers like
 //! Keycloak, Auth0, Okta, Google, Microsoft Azure AD
 
+#![allow(dead_code)]
+
 use horcrux_common::Result;
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};

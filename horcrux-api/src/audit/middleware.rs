@@ -1,6 +1,8 @@
-///! Audit middleware for automatic logging of HTTP requests and RBAC checks
-///!
-///! Automatically captures and logs security-relevant HTTP operations
+//! Audit middleware for automatic logging of HTTP requests and RBAC checks
+//!
+//! Automatically captures and logs security-relevant HTTP operations
+
+#![allow(dead_code)]
 
 use axum::{
     extract::{Request, State},

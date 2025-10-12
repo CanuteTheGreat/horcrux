@@ -1,5 +1,7 @@
-///! Console access module
-///! Provides VNC and SPICE console access to VMs via WebSocket proxy
+//! Console access module
+//! Provides VNC and SPICE console access to VMs via WebSocket proxy
+
+#![allow(dead_code)]
 
 mod vnc;
 mod spice;

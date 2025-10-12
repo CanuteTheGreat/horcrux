@@ -1,4 +1,6 @@
-///! Alert rule definitions and evaluation
+//! Alert rule definitions and evaluation
+
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use super::AlertSeverity;

@@ -1,6 +1,8 @@
-///! Database-backed audit logging
-///!
-///! Provides persistent audit trail storage using SQLite with advanced querying capabilities
+//! Database-backed audit logging
+//!
+//! Provides persistent audit trail storage using SQLite with advanced querying capabilities
+
+#![allow(dead_code)]
 
 use super::{AuditEvent, AuditEventType, AuditResult, AuditSeverity};
 use chrono::{DateTime, Utc};

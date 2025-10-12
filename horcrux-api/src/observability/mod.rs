@@ -8,6 +8,8 @@
 //!
 //! Proxmox VE 9.0 feature parity
 
+#![allow(dead_code)]
+
 pub mod metrics;
 pub mod prometheus;
 pub mod tracing_export;

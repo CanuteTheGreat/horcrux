@@ -9,6 +9,8 @@
 //!
 //! Proxmox VE 9.0 feature parity
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;

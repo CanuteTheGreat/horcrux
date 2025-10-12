@@ -1,5 +1,7 @@
-///! GPU passthrough management
-///! Supports PCI passthrough for GPUs (NVIDIA, AMD, Intel)
+//! GPU passthrough management
+//! Supports PCI passthrough for GPUs (NVIDIA, AMD, Intel)
+
+#![allow(dead_code)]
 
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};

@@ -1,6 +1,8 @@
-///! CORS (Cross-Origin Resource Sharing) middleware
-///!
-///! Configures CORS headers for API access from web applications
+//! CORS (Cross-Origin Resource Sharing) middleware
+//!
+//! Configures CORS headers for API access from web applications
+
+#![allow(dead_code)]
 
 use axum::{
     body::Body,

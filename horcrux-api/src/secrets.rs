@@ -1,6 +1,8 @@
-///! Secrets management with HashiCorp Vault integration
-///!
-///! Securely stores and retrieves sensitive data like passwords, API keys, certificates
+//! Secrets management with HashiCorp Vault integration
+//!
+//! Securely stores and retrieves sensitive data like passwords, API keys, certificates
+
+#![allow(dead_code)]
 
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};

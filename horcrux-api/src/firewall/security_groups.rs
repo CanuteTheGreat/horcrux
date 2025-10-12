@@ -1,4 +1,6 @@
-///! Predefined security groups (like AWS/Azure security groups)
+//! Predefined security groups (like AWS/Azure security groups)
+
+#![allow(dead_code)]
 
 use super::{Direction, FirewallAction, FirewallRule, Protocol, SecurityGroup};
 use uuid::Uuid;

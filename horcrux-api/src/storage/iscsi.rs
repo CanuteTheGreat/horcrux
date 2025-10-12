@@ -3,6 +3,8 @@
 //! Provides iSCSI target and initiator management for SAN storage.
 //! Supports enterprise storage arrays and iSCSI-based shared storage.
 
+#![allow(dead_code)]
+
 use super::StoragePool;
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};

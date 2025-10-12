@@ -1,4 +1,6 @@
-///! VNC server management for QEMU VMs
+//! VNC server management for QEMU VMs
+
+#![allow(dead_code)]
 
 use horcrux_common::Result;
 use std::collections::HashMap;

@@ -3,6 +3,8 @@
 //! Provides Pressure Stall Information (PSI), ZFS ARC stats,
 //! and other advanced performance metrics
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::fs;

@@ -1,6 +1,8 @@
-///! GlusterFS distributed storage backend
-///!
-///! Provides GlusterFS volume support with native replication and distribution
+//! GlusterFS distributed storage backend
+//!
+//! Provides GlusterFS volume support with native replication and distribution
+
+#![allow(dead_code)]
 
 use horcrux_common::Result;
 use tokio::process::Command as AsyncCommand;

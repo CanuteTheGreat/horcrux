@@ -1,10 +1,12 @@
-///! User Groups and Permission Inheritance
-///!
-///! Provides group-based permission management with inheritance:
-///! - User groups for easier permission assignment
-///! - Permission inheritance from groups to users
-///! - Nested groups with hierarchical permissions
-///! - Resource pools with delegated access
+//! User Groups and Permission Inheritance
+//!
+//! Provides group-based permission management with inheritance:
+//! - User groups for easier permission assignment
+//! - Permission inheritance from groups to users
+//! - Nested groups with hierarchical permissions
+//! - Resource pools with delegated access
+
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

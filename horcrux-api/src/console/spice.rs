@@ -1,7 +1,9 @@
-///! SPICE server management for QEMU VMs
-///! SPICE (Simple Protocol for Independent Computing Environments)
-///! provides enhanced remote desktop capabilities including USB redirection,
-///! audio, and better performance than VNC.
+//! SPICE server management for QEMU VMs
+//! SPICE (Simple Protocol for Independent Computing Environments)
+//! provides enhanced remote desktop capabilities including USB redirection,
+//! audio, and better performance than VNC.
+
+#![allow(dead_code)]
 
 use horcrux_common::Result;
 use std::collections::HashMap;
