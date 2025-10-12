@@ -8,7 +8,7 @@
 [![Built with Rust](https://img.shields.io/badge/Built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![Platform: Gentoo](https://img.shields.io/badge/Platform-Gentoo-purple.svg)](https://www.gentoo.org/)
 
-**[🌐 Visit the Website](https://canutethegreat.github.io/horcrux/)** | **[📚 Documentation](docs/)** | **[🐳 Docker Guide](docs/DOCKER.md)**
+**[🌐 Visit the Website](https://canutethegreat.github.io/horcrux/)** | **[📚 Documentation](docs/)** | **[📖 API Docs](http://localhost:8006/api/docs)** | **[🐳 Docker Guide](docs/DOCKER.md)**
 
 ## 🎯 What is Horcrux?
 
@@ -229,9 +229,49 @@ curl -X POST http://localhost:8006/api/firewall/rules \
 curl -X POST http://localhost:8006/api/firewall/apply
 ```
 
-## 📚 API Documentation
+## 📚 Documentation
 
-### VM Management
+### Interactive API Documentation
+
+Horcrux provides **interactive API documentation** powered by Swagger UI:
+
+- 🌐 **Swagger UI**: http://localhost:8006/api/docs
+- 📄 **OpenAPI Spec**: http://localhost:8006/api/openapi.yaml
+- 📖 **API Guide**: [docs/API_DOCS.md](docs/API_DOCS.md)
+
+Test all 150+ API endpoints directly in your browser with authentication and example payloads!
+
+### Command-Line Interface
+
+The `horcrux` CLI provides comprehensive management capabilities:
+
+```bash
+# VM management
+horcrux vm list
+horcrux vm create --name myvm --memory 2048 --cpus 2 --disk 20
+horcrux vm start vm-100
+
+# Container management
+horcrux container create --name web --runtime docker --image nginx
+horcrux container exec web-1 bash
+
+# Snapshot management
+horcrux snapshot create vm-100 --name "before-upgrade" --include-memory
+horcrux snapshot tree vm-100
+
+# Cloning
+horcrux clone create vm-100 --name clone1 --full --start
+
+# Replication
+horcrux replication create vm-100 --target-node node2 --schedule daily
+
+# Shell completion support
+horcrux completions bash > /etc/bash_completion.d/horcrux
+```
+
+See [docs/CLI.md](docs/CLI.md) for complete CLI documentation.
+
+### REST API Examples
 
 ```bash
 # Create VM
@@ -249,46 +289,12 @@ POST /api/vms
 # Start VM
 POST /api/vms/vm-100/start
 
-# Stop VM
-POST /api/vms/vm-100/stop
-
-# Delete VM
-DELETE /api/vms/vm-100
-```
-
-### Cluster Operations
-
-```bash
-# Get cluster status
-GET /api/cluster/status
-
-# Join node to cluster
-POST /api/cluster/join
+# Create snapshot
+POST /api/vms/vm-100/snapshots
 {
-  "node_id": "node2",
-  "hostname": "node2.example.com",
-  "ip_address": "192.168.1.102"
+  "name": "backup-2025-10-11",
+  "include_memory": true
 }
-
-# Migrate VM
-POST /api/cluster/migrate
-{
-  "vm_id": "vm-100",
-  "target_node": "node2"
-}
-```
-
-### Monitoring
-
-```bash
-# Get node metrics
-GET /api/monitoring/node/metrics
-
-# Get VM metrics
-GET /api/monitoring/vms/vm-100/metrics
-
-# Get historical data
-GET /api/monitoring/history?metric=cpu_usage&from=1234567890&to=1234567999
 ```
 
 For complete API documentation, see [docs/API.md](docs/API.md).
@@ -362,6 +368,9 @@ cargo test test_vm_lifecycle
 
 ### Documentation Coverage
 
+- ✅ **Interactive API Docs**: Swagger UI at `/api/docs` with 150+ endpoints
+- ✅ **OpenAPI Specification**: Complete OpenAPI 3.0 spec (1,700+ lines)
+- ✅ **CLI Documentation**: Comprehensive guide for all commands
 - ✅ **API Reference**: 3,000+ lines (100+ endpoints documented)
 - ✅ **Quick Start Guide**: 500+ lines
 - ✅ **Docker Guide**: 400+ lines

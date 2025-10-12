@@ -83,6 +83,32 @@ enum Commands {
         #[command(subcommand)]
         command: AuthCommands,
     },
+    /// Manage containers
+    Container {
+        #[command(subcommand)]
+        command: ContainerCommands,
+    },
+    /// Manage VM snapshots
+    Snapshot {
+        #[command(subcommand)]
+        command: SnapshotCommands,
+    },
+    /// VM cloning operations
+    Clone {
+        #[command(subcommand)]
+        command: CloneCommands,
+    },
+    /// Manage replication jobs
+    Replication {
+        #[command(subcommand)]
+        command: ReplicationCommands,
+    },
+    /// Generate shell completions
+    Completions {
+        /// Shell type
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
 }
 
 #[derive(Subcommand)]
@@ -340,6 +366,149 @@ enum AuditCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum ContainerCommands {
+    /// List all containers
+    List,
+    /// Show container details
+    Show { id: String },
+    /// Create a new container
+    Create {
+        /// Container name
+        #[arg(short, long)]
+        name: String,
+        /// Container runtime (lxc, docker, podman, lxd, incus)
+        #[arg(short, long, default_value = "docker")]
+        runtime: String,
+        /// Container image
+        #[arg(short, long)]
+        image: String,
+        /// Memory in MB
+        #[arg(short, long)]
+        memory: Option<u64>,
+        /// Number of CPUs
+        #[arg(short, long)]
+        cpus: Option<u32>,
+    },
+    /// Start a container
+    Start { id: String },
+    /// Stop a container
+    Stop { id: String },
+    /// Delete a container
+    Delete { id: String },
+    /// Execute command in container
+    Exec {
+        /// Container ID
+        id: String,
+        /// Command to execute
+        command: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum SnapshotCommands {
+    /// List snapshots for a VM
+    List {
+        /// VM ID
+        vm_id: String,
+    },
+    /// Show snapshot details
+    Show {
+        /// VM ID
+        vm_id: String,
+        /// Snapshot ID
+        snapshot_id: String,
+    },
+    /// Create a snapshot
+    Create {
+        /// VM ID
+        vm_id: String,
+        /// Snapshot name
+        #[arg(short, long)]
+        name: String,
+        /// Description
+        #[arg(short, long)]
+        description: Option<String>,
+        /// Include memory (for running VMs)
+        #[arg(short = 'm', long)]
+        include_memory: bool,
+    },
+    /// Restore a snapshot
+    Restore {
+        /// VM ID
+        vm_id: String,
+        /// Snapshot ID
+        snapshot_id: String,
+    },
+    /// Delete a snapshot
+    Delete {
+        /// VM ID
+        vm_id: String,
+        /// Snapshot ID
+        snapshot_id: String,
+    },
+    /// Show snapshot tree
+    Tree {
+        /// VM ID
+        vm_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum CloneCommands {
+    /// Clone a VM
+    Create {
+        /// Source VM ID
+        vm_id: String,
+        /// New VM name
+        #[arg(short, long)]
+        name: String,
+        /// Full clone (vs linked clone)
+        #[arg(short, long)]
+        full: bool,
+        /// Start after clone
+        #[arg(short, long)]
+        start: bool,
+    },
+    /// List clone jobs
+    List,
+    /// Show clone job status
+    Status {
+        /// Job ID
+        job_id: String,
+    },
+    /// Cancel a clone job
+    Cancel {
+        /// Job ID
+        job_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ReplicationCommands {
+    /// List replication jobs
+    List,
+    /// Show replication job details
+    Show { id: String },
+    /// Create replication job
+    Create {
+        /// Source VM ID
+        vm_id: String,
+        /// Target node
+        #[arg(short, long)]
+        target_node: String,
+        /// Schedule (hourly, daily, weekly, manual)
+        #[arg(short, long, default_value = "daily")]
+        schedule: String,
+    },
+    /// Execute replication job now
+    Execute { id: String },
+    /// Delete replication job
+    Delete { id: String },
+    /// Show replication status
+    Status { id: String },
+}
+
 use commands::auth::AuthCommands;
 
 #[tokio::main]
@@ -399,7 +568,34 @@ async fn main() -> Result<()> {
         Commands::Auth { command } => {
             commands::auth::handle_auth_command(command, &api_client, &mut config).await?
         }
+        Commands::Container { command } => {
+            commands::container::handle_container_command(command, &api_client, &cli.output).await?
+        }
+        Commands::Snapshot { command } => {
+            commands::snapshot::handle_snapshot_command(command, &api_client, &cli.output).await?
+        }
+        Commands::Clone { command } => {
+            commands::clone::handle_clone_command(command, &api_client, &cli.output).await?
+        }
+        Commands::Replication { command } => {
+            commands::replication::handle_replication_command(command, &api_client, &cli.output).await?
+        }
+        Commands::Completions { shell } => {
+            generate_completions(shell);
+        }
     }
 
     Ok(())
+}
+
+/// Generate shell completions
+fn generate_completions(shell: clap_complete::Shell) {
+    use clap::CommandFactory;
+    use clap_complete::generate;
+    use std::io;
+
+    let mut cmd = Cli::command();
+    let name = cmd.get_name().to_string();
+
+    generate(shell, &mut cmd, name, &mut io::stdout());
 }

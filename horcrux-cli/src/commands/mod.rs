@@ -8,3 +8,7 @@ pub mod migrate;
 pub mod monitor;
 pub mod audit;
 pub mod auth;
+pub mod container;
+pub mod snapshot;
+pub mod clone;
+pub mod replication;
