@@ -63,7 +63,18 @@ impl ScheduleFrequency {
                 chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(next, chrono::Utc)
             }
             ScheduleFrequency::Weekly { day, hour } => {
-                let target_weekday = chrono::Weekday::try_from(*day as u8 % 7).unwrap();
+                // day: 0=Sunday, 1=Monday, ..., 6=Saturday (Sunday-based numbering)
+                // Convert to chrono::Weekday which uses Monday-based numbering (0=Mon, 6=Sun)
+                let target_weekday = match *day {
+                    0 => chrono::Weekday::Sun,
+                    1 => chrono::Weekday::Mon,
+                    2 => chrono::Weekday::Tue,
+                    3 => chrono::Weekday::Wed,
+                    4 => chrono::Weekday::Thu,
+                    5 => chrono::Weekday::Fri,
+                    6 => chrono::Weekday::Sat,
+                    _ => chrono::Weekday::Mon, // Default to Monday for invalid values
+                };
                 let naive_dt = dt.naive_utc();
                 let current_weekday = naive_dt.weekday();
                 let days_until = ((target_weekday.number_from_sunday() + 7
@@ -328,16 +339,24 @@ mod tests {
 
     #[test]
     fn test_weekly_frequency() {
+        // Test with a specific known timestamp: Tuesday, 2024-01-02 15:00:00 UTC
+        let tuesday_ts = chrono::NaiveDate::from_ymd_opt(2024, 1, 2)
+            .unwrap()
+            .and_hms_opt(15, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+
         let freq = ScheduleFrequency::Weekly { day: 1, hour: 10 }; // Monday 10 AM
-        let now = chrono::Utc::now().timestamp();
-        let next = freq.next_run_after(now);
+        let next = freq.next_run_after(tuesday_ts);
 
         // Should be in the future
-        assert!(next > now);
+        assert!(next > tuesday_ts);
 
-        // Next run should be on Monday at 10:00
+        // Next run should be on next Monday (2024-01-08) at 10:00 UTC
         let next_dt = chrono::DateTime::<chrono::Utc>::from_timestamp(next, 0).unwrap();
-        assert_eq!(next_dt.naive_utc().weekday().number_from_sunday(), 1);
+        assert_eq!(next_dt.naive_utc().weekday(), chrono::Weekday::Mon);
         assert_eq!(next_dt.hour(), 10);
+        assert_eq!(next_dt.minute(), 0);
     }
 }
