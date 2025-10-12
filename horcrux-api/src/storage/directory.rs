@@ -1,5 +1,5 @@
-///! Directory-based storage backend
-///! Simple file-based storage using qcow2 or raw files
+//! Directory-based storage backend
+//! Simple file-based storage using qcow2 or raw files
 
 #![allow(dead_code)]
 

@@ -1,5 +1,5 @@
-///! Ceph RBD storage backend
-///! Provides Ceph RADOS Block Device (RBD) management for distributed storage
+//! Ceph RBD storage backend
+//! Provides Ceph RADOS Block Device (RBD) management for distributed storage
 
 #![allow(dead_code)]
 
