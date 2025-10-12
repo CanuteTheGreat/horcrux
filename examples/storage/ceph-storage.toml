@@ -1,0 +1,41 @@
+# Ceph RBD Storage Configuration Example
+#
+# This example shows how to configure Ceph storage for clusters
+
+# Prerequisites:
+# 1. Ceph cluster is installed and running
+# 2. ceph-common package installed on all Horcrux nodes
+# 3. /etc/ceph/ceph.conf is properly configured
+
+# Create Ceph pool:
+# sudo ceph osd pool create horcrux 128 128
+# sudo ceph osd pool application enable horcrux rbd
+
+# Create RBD user (optional, for access control):
+# sudo ceph auth get-or-create client.horcrux \
+#   mon 'allow r' \
+#   osd 'allow class-read object_prefix rbd_children, allow rwx pool=horcrux'
+
+# Copy keyring to Horcrux nodes:
+# sudo ceph auth get client.horcrux -o /etc/ceph/ceph.client.horcrux.keyring
+
+# Add to Horcrux:
+# horcrux-cli storage create \
+#   --name ceph-prod \
+#   --type ceph \
+#   --path horcrux
+
+# Recommended Ceph pool settings for VM workloads:
+# sudo ceph osd pool set horcrux size 3          # 3 replicas
+# sudo ceph osd pool set horcrux min_size 2      # Minimum 2 for writes
+# sudo ceph osd pool set horcrux pg_num 128
+# sudo ceph osd pool set horcrux pgp_num 128
+# sudo ceph osd pool set horcrux crush_rule replicated_rule
+
+# Enable RBD features:
+# sudo ceph osd pool set horcrux rbd_default_features 61
+# # Features: layering, exclusive-lock, object-map, fast-diff, deep-flatten
+
+# For better performance:
+# sudo ceph tell osd.* injectargs '--osd_op_threads=8'
+# sudo ceph tell osd.* injectargs '--osd_disk_threads=4'

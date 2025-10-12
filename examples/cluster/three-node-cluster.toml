@@ -1,0 +1,90 @@
+# Three-Node Cluster Configuration Example
+#
+# This example shows a production three-node cluster setup with:
+# - High availability
+# - Shared Ceph storage
+# - Dedicated storage network
+# - Automatic failover
+
+# Node 1 Configuration
+# Save as: /etc/horcrux/config.toml on node1
+
+[server]
+bind_address = "0.0.0.0:8006"
+workers = 16
+tls_enabled = true
+tls_cert = "/etc/horcrux/certs/server.crt"
+tls_key = "/etc/horcrux/certs/server.key"
+
+[database]
+path = "/var/lib/horcrux/horcrux.db"
+pool_size = 20
+
+[cluster]
+enabled = true
+node_id = "node1"
+node_name = "primary"
+bind_address = "192.168.1.101"  # Management network
+cluster_name = "production"
+
+[cluster.corosync]
+bindnetaddr = "192.168.1.0"
+mcastaddr = "239.255.1.1"
+mcastport = 5405
+
+[storage]
+default_pool = "ceph-prod"
+
+# Storage network interface
+storage_interface = "eth1"
+storage_network = "10.0.0.0/24"
+
+[vm]
+default_hypervisor = "qemu"
+default_disk_format = "qcow2"
+default_cpus = 2
+default_memory = 2048
+migration_network = "192.168.1.0/24"
+
+[auth]
+session_timeout = 7200
+max_failed_attempts = 3
+lockout_duration = 900
+require_2fa = false
+
+[logging]
+level = "info"
+path = "/var/log/horcrux"
+max_file_size = "100M"
+max_files = 10
+
+[monitoring]
+prometheus_enabled = true
+prometheus_port = 9090
+metrics_interval = 30
+
+[backup]
+default_compression = "zstd"
+default_retention = 7
+
+# ==============================================
+# Node 2 Configuration
+# Save as: /etc/horcrux/config.toml on node2
+# ==============================================
+
+# Same as Node 1, but change:
+# [cluster]
+# node_id = "node2"
+# node_name = "secondary-1"
+# bind_address = "192.168.1.102"
+
+# ==============================================
+# Node 3 Configuration
+# Save as: /etc/horcrux/config.toml on node3
+# ==============================================
+
+# Same as Node 1, but change:
+# [cluster]
+# node_id = "node3"
+# node_name = "secondary-2"
+# bind_address = "192.168.1.103"

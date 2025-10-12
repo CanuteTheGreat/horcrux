@@ -1,0 +1,42 @@
+# ZFS Storage Configuration Example
+#
+# This example shows how to configure ZFS storage with:
+# - Compression enabled
+# - Snapshots
+# - Optimal settings for VMs
+
+# Create ZFS pool first:
+# sudo zpool create -o ashift=12 tank /dev/sdb
+# sudo zfs create tank/horcrux
+# sudo zfs set compression=lz4 tank/horcrux
+# sudo zfs set atime=off tank/horcrux
+# sudo zfs set recordsize=64K tank/horcrux
+
+# Then add to Horcrux via CLI:
+# horcrux-cli storage create \
+#   --name tank \
+#   --type zfs \
+#   --path tank/horcrux
+
+# Or via API:
+# curl -X POST http://localhost:8006/api/storage/pools \
+#   -H "Content-Type: application/json" \
+#   -d '{
+#     "name": "tank",
+#     "storage_type": "zfs",
+#     "path": "tank/horcrux"
+#   }'
+
+# Recommended ZFS settings for VM workloads:
+# sudo zfs set compression=lz4 tank/horcrux
+# sudo zfs set atime=off tank/horcrux
+# sudo zfs set recordsize=64K tank/horcrux
+# sudo zfs set logbias=throughput tank/horcrux
+# sudo zfs set primarycache=all tank/horcrux
+# sudo zfs set secondarycache=all tank/horcrux
+
+# For SSD cache (L2ARC):
+# sudo zpool add tank cache /dev/sdc
+
+# For ZIL (SLOG) on SSD:
+# sudo zpool add tank log /dev/sdd
