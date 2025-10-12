@@ -259,6 +259,7 @@ impl StorageManager {
     }
 
     /// Delete a volume from a storage pool
+    #[allow(dead_code)]
     pub async fn delete_volume(&self, pool_id: &str, volume_name: &str) -> Result<()> {
         let pools = self.pools.read().await;
         let pool = pools

@@ -1,6 +1,8 @@
 ///! Ceph RBD storage backend
 ///! Provides Ceph RADOS Block Device (RBD) management for distributed storage
 
+#![allow(dead_code)]
+
 use super::StoragePool;
 use horcrux_common::Result;
 use tokio::process::Command;

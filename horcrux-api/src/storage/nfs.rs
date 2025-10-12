@@ -3,6 +3,8 @@
 //! Provides Network File System (NFS) storage support.
 //! Compatible with NFSv3 and NFSv4.
 
+#![allow(dead_code)]
+
 use super::StoragePool;
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};

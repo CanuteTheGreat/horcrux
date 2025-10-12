@@ -1,6 +1,8 @@
 ///! ZFS storage backend
 ///! Provides ZFS pool and volume management with snapshots and clones
 
+#![allow(dead_code)]
+
 use super::StoragePool;
 use horcrux_common::Result;
 use tokio::process::Command;

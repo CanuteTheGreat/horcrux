@@ -3,6 +3,8 @@
 //! Provides Windows file share (SMB/CIFS) storage support.
 //! Compatible with Windows Server, Samba, and Azure Files.
 
+#![allow(dead_code)]
+
 use super::StoragePool;
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
