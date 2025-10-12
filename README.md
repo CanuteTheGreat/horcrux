@@ -120,7 +120,25 @@ Horcrux is a complete virtualization management platform designed specifically f
 - Rust 1.82+ (for building from source)
 - Kernel with KVM support (for QEMU VMs)
 
-### Quick Start
+### Docker Quick Start (Easiest!) 🐳
+
+```bash
+# Clone and run with Docker
+git clone https://github.com/CanuteTheGreat/horcrux.git
+cd horcrux
+docker-compose up -d
+
+# API running at http://localhost:8006
+curl http://localhost:8006/api/health
+
+# Create your first VM
+docker-compose --profile cli run horcrux-cli vm create \
+  --name my-vm --cpus 2 --memory 2048 --disk-size 20
+```
+
+See [docs/DOCKER.md](docs/DOCKER.md) for complete Docker documentation.
+
+### Quick Start (From Source)
 
 ```bash
 # Clone the repository

@@ -1,0 +1,18 @@
+# Prometheus configuration for Horcrux monitoring
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'horcrux-monitor'
+
+scrape_configs:
+  - job_name: 'horcrux-api'
+    static_configs:
+      - targets: ['horcrux-api:9090']
+        labels:
+          service: 'api'
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

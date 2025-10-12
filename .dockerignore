@@ -1,0 +1,77 @@
+# Build artifacts
+target/
+**/target/
+**/*.rs.bk
+
+# Git
+.git/
+.gitignore
+.github/
+
+# Documentation
+*.md
+docs/
+examples/
+!README.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Test files
+tests/
+**/tests/
+
+# Benchmarks
+benches/
+**/benches/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Environment
+.env
+.env.*
+
+# Package manager
+Cargo.lock
+!Cargo.toml
+
+# Backup files
+*.bak
+*.backup
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Deployment files (except config example)
+deploy/*
+!deploy/config.toml.example
+!deploy/prometheus.yml
+
+# Gentoo-specific
+gentoo/
+
+# Mobile app (not needed for server)
+horcrux-mobile/
+
+# UI build artifacts (build separately if needed)
+horcrux-ui/dist/
+horcrux-ui/target/
+horcrux-api/horcrux-ui/dist/
+horcrux-api/horcrux-ui/target/
