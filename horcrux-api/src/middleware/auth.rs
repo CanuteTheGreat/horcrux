@@ -33,6 +33,7 @@ impl IntoResponse for AuthError {
 pub struct AuthUser {
     pub user_id: String,
     pub username: String,
+    #[allow(dead_code)]
     pub role: String,
 }
 
@@ -159,6 +160,7 @@ pub async fn auth_middleware(
 }
 
 /// Optional authentication middleware (doesn't fail on missing auth)
+#[allow(dead_code)]
 pub async fn optional_auth_middleware(
     headers: HeaderMap,
     mut request: Request,
@@ -288,6 +290,7 @@ async fn validate_api_key(db: &Arc<crate::db::Database>, api_key: &str) -> Resul
 }
 
 /// Role-based access control middleware
+#[allow(dead_code)]
 pub fn require_role(required_role: &'static str) -> impl Fn(Request, Next) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response, StatusCode>> + Send>> + Clone {
     move |request: Request, next: Next| {
         Box::pin(async move {

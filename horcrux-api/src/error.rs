@@ -51,6 +51,7 @@ impl ErrorResponse {
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_request_id(mut self, request_id: impl Into<String>) -> Self {
         self.request_id = Some(request_id.into());
         self
@@ -59,6 +60,7 @@ impl ErrorResponse {
 
 /// API error types with standardized responses
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum ApiError {
     /// 500 Internal Server Error
     Internal(String),
@@ -195,26 +197,32 @@ impl From<sqlx::Error> for ApiError {
 
 /// Helper functions for creating common errors
 impl ApiError {
+    #[allow(dead_code)]
     pub fn vm_not_found(id: impl Into<String>) -> Self {
         ApiError::NotFound(format!("Virtual machine '{}' not found", id.into()))
     }
 
+    #[allow(dead_code)]
     pub fn container_not_found(id: impl Into<String>) -> Self {
         ApiError::NotFound(format!("Container '{}' not found", id.into()))
     }
 
+    #[allow(dead_code)]
     pub fn permission_denied(resource: impl Into<String>) -> Self {
         ApiError::Forbidden(format!("Permission denied for resource: {}", resource.into()))
     }
 
+    #[allow(dead_code)]
     pub fn invalid_input(field: impl Into<String>, reason: impl Into<String>) -> Self {
         ApiError::ValidationError(format!("{}: {}", field.into(), reason.into()))
     }
 
+    #[allow(dead_code)]
     pub fn already_exists(resource: impl Into<String>) -> Self {
         ApiError::Conflict(format!("{} already exists", resource.into()))
     }
 
+    #[allow(dead_code)]
     pub fn service_error(service: impl Into<String>, reason: impl Into<String>) -> Self {
         ApiError::ServiceUnavailable(format!("{} is unavailable: {}", service.into(), reason.into()))
     }

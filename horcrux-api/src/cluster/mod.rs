@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Cluster configuration
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ClusterConfig {
     pub name: String,
@@ -28,6 +29,7 @@ pub struct ClusterManager {
     local_node_name: Arc<RwLock<Option<String>>>,
 }
 
+#[allow(dead_code)]
 impl ClusterManager {
     pub fn new() -> Self {
         Self {
@@ -60,6 +62,7 @@ impl ClusterManager {
     }
 
     /// Initialize a new cluster
+    #[allow(dead_code)]
     pub async fn create_cluster(&self, cluster_name: String, node_name: String) -> Result<()> {
         let mut config = self._config.write().await;
 
@@ -91,6 +94,7 @@ impl ClusterManager {
     }
 
     /// Join an existing cluster
+    #[allow(dead_code)]
     pub async fn join_cluster(
         &self,
         cluster_name: String,
@@ -354,6 +358,7 @@ impl ClusterManager {
 }
 
 /// Cluster status information
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ClusterStatus {
     pub name: String,

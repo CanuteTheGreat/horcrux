@@ -62,6 +62,7 @@ impl Database {
         vms::create_vm(&self.pool, vm).await
     }
 
+    #[allow(dead_code)]
     pub async fn update_vm(&self, vm: &horcrux_common::VmConfig) -> Result<()> {
         vms::update_vm(&self.pool, vm).await
     }
@@ -71,6 +72,7 @@ impl Database {
     }
 
     /// Close the database connection
+    #[allow(dead_code)]
     pub async fn close(self) {
         self.pool.close().await;
         tracing::info!("Database connection closed");
@@ -131,6 +133,7 @@ pub mod vms {
         Ok(vms)
     }
 
+    #[allow(dead_code)]
     pub async fn update_vm(pool: &SqlitePool, vm: &VmConfig) -> Result<()> {
         let status_str = format!("{:?}", vm.status).to_lowercase();
         let arch_str = format!("{:?}", vm.architecture).to_lowercase();
@@ -257,6 +260,7 @@ pub mod users {
         Ok(rows.iter().map(row_to_user).collect())
     }
 
+    #[allow(dead_code)]
     pub async fn delete_user(pool: &SqlitePool, id: &str) -> Result<()> {
         sqlx::query("DELETE FROM users WHERE id = ?")
             .bind(id)
@@ -314,6 +318,7 @@ pub mod users {
         })
     }
 
+    #[allow(dead_code)]
     pub async fn delete_session(pool: &SqlitePool, session_id: &str) -> Result<()> {
         sqlx::query("DELETE FROM sessions WHERE id = ?")
             .bind(session_id)
@@ -558,6 +563,7 @@ pub mod audit {
     use crate::audit::{AuditEvent, AuditEventType, AuditSeverity, AuditResult};
     use sqlx::Row;
 
+    #[allow(dead_code)]
     pub async fn log_event(pool: &SqlitePool, event: &AuditEvent) -> Result<()> {
         let event_type = format!("{:?}", event.event_type);
         let severity = format!("{:?}", event.severity);
@@ -585,6 +591,7 @@ pub mod audit {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn query_events(
         pool: &SqlitePool,
         event_type: Option<&str>,
@@ -634,6 +641,7 @@ pub mod audit {
         Ok(events)
     }
 
+    #[allow(dead_code)]
     fn row_to_event(row: &sqlx::sqlite::SqliteRow) -> Result<AuditEvent> {
         let timestamp: i64 = row.get("timestamp");
         let event_type_str: String = row.get("event_type");

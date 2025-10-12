@@ -16,6 +16,7 @@ use std::sync::Arc;
 use crate::middleware::auth::AuthUser;
 
 /// RBAC error response
+#[allow(dead_code)]
 #[derive(Serialize)]
 pub struct RbacError {
     pub error: String,
@@ -32,6 +33,7 @@ impl IntoResponse for RbacError {
 
 /// RBAC middleware - checks if user has required privilege for the resource
 /// This is a simple check based on user role from the authenticated session
+#[allow(dead_code)]
 pub async fn rbac_middleware(
     State(_state): State<Arc<crate::AppState>>,
     request: Request,
@@ -54,6 +56,7 @@ pub async fn rbac_middleware(
 
 /// Check if user has a specific privilege for a resource
 /// This function is called from individual API handlers
+#[allow(dead_code)]
 pub async fn check_user_privilege(
     state: &Arc<crate::AppState>,
     auth_user: &AuthUser,
@@ -87,6 +90,7 @@ pub async fn check_user_privilege(
 
 /// Get default role definitions
 /// In production, these should be loaded from database or config
+#[allow(dead_code)]
 fn get_default_roles() -> std::collections::HashMap<String, horcrux_common::auth::Role> {
     use horcrux_common::auth::{Permission, Privilege, Role};
     use std::collections::HashMap;

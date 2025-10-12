@@ -6,6 +6,7 @@ use tracing_appender::{non_blocking, rolling};
 use std::io;
 
 /// Logging configuration
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct LoggingConfig {
     pub level: String,          // log level (trace, debug, info, warn, error)
@@ -16,6 +17,7 @@ pub struct LoggingConfig {
 }
 
 /// Log rotation policy
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum LogRotation {
     Hourly,
@@ -37,6 +39,7 @@ impl Default for LoggingConfig {
 
 impl LoggingConfig {
     /// Initialize logging based on configuration
+    #[allow(dead_code)]
     pub fn init(&self) -> Result<(), Box<dyn std::error::Error>> {
         // Create environment filter
         let env_filter = EnvFilter::try_from_default_env()
@@ -89,11 +92,13 @@ impl LoggingConfig {
     }
 
     /// Initialize with default settings
+    #[allow(dead_code)]
     pub fn init_default() -> Result<(), Box<dyn std::error::Error>> {
         Self::default().init()
     }
 
     /// Initialize with environment variables
+    #[allow(dead_code)]
     pub fn init_from_env() -> Result<(), Box<dyn std::error::Error>> {
         let level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
         let file_path = std::env::var("HORCRUX_LOG_PATH").ok();
