@@ -101,7 +101,7 @@ impl PrometheusExporter {
                     if labels_str.is_empty() {
                         output.push_str(&format!("{} {}\n", name, metric.value));
                     } else {
-                        output.push_str(&format!("{}{{{}}}{}\n",
+                        output.push_str(&format!("{}{{{}}} {}\n",
                             name, labels_str, metric.value));
                     }
                 }
