@@ -1,0 +1,1382 @@
+openapi: 3.0.3
+info:
+  title: Horcrux Virtualization Platform API
+  version: 0.2.0
+  description: |
+    A complete virtualization management platform for Gentoo Linux.
+    Horcrux provides Proxmox VE-compatible functionality with enhanced
+    flexibility through multi-hypervisor support, mixed-architecture
+    clustering, and modern Rust architecture.
+
+    ## Features
+    - **Multi-hypervisor**: QEMU/KVM, LXD, Incus
+    - **Multi-container**: LXC, LXD, Incus, Docker, Podman
+    - **Mixed-architecture clusters**: x86_64, ARM64, RISC-V, ppc64le
+    - **Real-time WebSocket events**: VM status, metrics, alerts
+    - **Comprehensive monitoring**: 50+ metrics per VM/node
+    - **High availability**: Automatic failover with Corosync
+    - **Live migration**: With auto-rollback and health checks
+
+    ## Authentication
+    All endpoints (except `/api/health` and `/api/auth/login`) require authentication.
+
+    ### JWT Token
+    ```bash
+    # Login to get token
+    curl -X POST http://localhost:8006/api/auth/login \
+      -H "Content-Type: application/json" \
+      -d '{"username":"admin","password":"admin","realm":"local"}'
+
+    # Use token in requests
+    curl http://localhost:8006/api/vms \
+      -H "Authorization: Bearer <token>"
+    ```
+
+    ### API Key
+    ```bash
+    # Use API key directly
+    curl http://localhost:8006/api/vms \
+      -H "X-API-Key: <api-key>"
+    ```
+  contact:
+    name: Horcrux Project
+    url: https://canutethegreat.github.io/horcrux/
+  license:
+    name: GPL v3
+    url: https://www.gnu.org/licenses/gpl-3.0.html
+
+servers:
+  - url: http://localhost:8006
+    description: Local development server
+  - url: https://horcrux.example.com
+    description: Production server
+
+tags:
+  - name: Health
+    description: API health check
+  - name: Authentication
+    description: User authentication and session management
+  - name: VMs
+    description: Virtual machine management
+  - name: VM Snapshots
+    description: VM snapshot operations
+  - name: VM Cloning
+    description: VM cloning and templating
+  - name: Containers
+    description: Container management (LXC, Docker, Podman, LXD, Incus)
+  - name: Storage
+    description: Storage pool and volume management
+  - name: Backup & Restore
+    description: Backup, restore, and retention policies
+  - name: Replication
+    description: ZFS snapshot replication
+  - name: Monitoring
+    description: Metrics and performance monitoring
+  - name: Alerts
+    description: Alert rules and notifications
+  - name: Firewall
+    description: Firewall rules and security groups
+  - name: Networking
+    description: SDN, CNI, and network policies
+  - name: Clustering
+    description: Multi-node cluster management
+  - name: High Availability
+    description: HA resource management
+  - name: Migration
+    description: Live VM migration
+  - name: Console
+    description: VNC/SPICE console access
+  - name: GPU
+    description: GPU passthrough and vGPU
+  - name: Templates
+    description: VM templates
+  - name: Cloud-Init
+    description: Cloud-init integration
+  - name: Users
+    description: User and role management
+  - name: TLS
+    description: Certificate management
+  - name: Secrets
+    description: HashiCorp Vault integration
+  - name: Webhooks
+    description: Webhook management
+  - name: Audit
+    description: Audit logging
+  - name: Observability
+    description: OpenTelemetry configuration
+
+security:
+  - bearerAuth: []
+  - apiKeyAuth: []
+
+paths:
+  /api/health:
+    get:
+      tags: [Health]
+      summary: Health check
+      description: Check if the API server is running
+      security: []
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "healthy"
+                  version:
+                    type: string
+                    example: "0.2.0"
+                  uptime:
+                    type: integer
+                    description: Server uptime in seconds
+                    example: 3600
+
+  /api/auth/login:
+    post:
+      tags: [Authentication]
+      summary: User login
+      description: Authenticate user and get JWT token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/auth/register:
+    post:
+      tags: [Authentication]
+      summary: Register new user
+      description: Create a new user account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/auth/logout:
+    post:
+      tags: [Authentication]
+      summary: Logout user
+      description: Invalidate current session token
+      responses:
+        '200':
+          description: Logout successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Logged out successfully"
+
+  /api/auth/verify:
+    get:
+      tags: [Authentication]
+      summary: Verify session
+      description: Check if current session token is valid
+      responses:
+        '200':
+          description: Session is valid
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                    example: true
+                  user:
+                    $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/auth/password:
+    post:
+      tags: [Authentication]
+      summary: Change password
+      description: Change password for current user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [old_password, new_password]
+              properties:
+                old_password:
+                  type: string
+                  format: password
+                new_password:
+                  type: string
+                  format: password
+                  minLength: 8
+      responses:
+        '200':
+          description: Password changed successfully
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/vms:
+    get:
+      tags: [VMs]
+      summary: List all VMs
+      description: Get a list of all virtual machines
+      parameters:
+        - name: status
+          in: query
+          description: Filter by VM status
+          schema:
+            type: string
+            enum: [running, stopped, paused]
+        - name: node
+          in: query
+          description: Filter by node name
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of VMs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/VmConfig'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    post:
+      tags: [VMs]
+      summary: Create new VM
+      description: Create a new virtual machine
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateVmRequest'
+      responses:
+        '201':
+          description: VM created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VmConfig'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/vms/{id}:
+    parameters:
+      - $ref: '#/components/parameters/VmId'
+
+    get:
+      tags: [VMs]
+      summary: Get VM details
+      description: Get detailed information about a specific VM
+      responses:
+        '200':
+          description: VM details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VmConfig'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags: [VMs]
+      summary: Delete VM
+      description: Delete a virtual machine
+      parameters:
+        - name: purge
+          in: query
+          description: Delete all associated data
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: VM deleted successfully
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/vms/{id}/start:
+    post:
+      tags: [VMs]
+      summary: Start VM
+      description: Start a stopped virtual machine
+      parameters:
+        - $ref: '#/components/parameters/VmId'
+      responses:
+        '200':
+          description: VM started successfully
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/vms/{id}/stop:
+    post:
+      tags: [VMs]
+      summary: Stop VM
+      description: Stop a running virtual machine
+      parameters:
+        - $ref: '#/components/parameters/VmId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force:
+                  type: boolean
+                  description: Force stop (kill) instead of graceful shutdown
+                  default: false
+                timeout:
+                  type: integer
+                  description: Timeout in seconds for graceful shutdown
+                  default: 60
+      responses:
+        '200':
+          description: VM stopped successfully
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/vms/{id}/snapshots:
+    parameters:
+      - $ref: '#/components/parameters/VmId'
+
+    get:
+      tags: [VM Snapshots]
+      summary: List VM snapshots
+      description: Get all snapshots for a VM
+      responses:
+        '200':
+          description: List of snapshots
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/VmSnapshot'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    post:
+      tags: [VM Snapshots]
+      summary: Create VM snapshot
+      description: Create a new snapshot of the VM
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  example: "before-upgrade"
+                description:
+                  type: string
+                  example: "Snapshot before OS upgrade"
+                include_memory:
+                  type: boolean
+                  description: Include VM memory in snapshot (for running VMs)
+                  default: false
+      responses:
+        '201':
+          description: Snapshot created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VmSnapshot'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/vms/{id}/snapshots/{snapshot_id}:
+    parameters:
+      - $ref: '#/components/parameters/VmId'
+      - $ref: '#/components/parameters/SnapshotId'
+
+    get:
+      tags: [VM Snapshots]
+      summary: Get snapshot details
+      responses:
+        '200':
+          description: Snapshot details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VmSnapshot'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags: [VM Snapshots]
+      summary: Delete snapshot
+      responses:
+        '200':
+          description: Snapshot deleted successfully
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/vms/{id}/snapshots/{snapshot_id}/restore:
+    post:
+      tags: [VM Snapshots]
+      summary: Restore snapshot
+      description: Restore VM to a previous snapshot state
+      parameters:
+        - $ref: '#/components/parameters/VmId'
+        - $ref: '#/components/parameters/SnapshotId'
+      responses:
+        '200':
+          description: Snapshot restored successfully
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/vms/{id}/clone:
+    post:
+      tags: [VM Cloning]
+      summary: Clone VM
+      description: Create a clone of the VM
+      parameters:
+        - $ref: '#/components/parameters/VmId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloneVmRequest'
+      responses:
+        '202':
+          description: Clone job started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CloneJob'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/containers:
+    get:
+      tags: [Containers]
+      summary: List all containers
+      description: Get a list of all containers (LXC, Docker, Podman, LXD, Incus)
+      parameters:
+        - name: runtime
+          in: query
+          description: Filter by container runtime
+          schema:
+            type: string
+            enum: [lxc, docker, podman, lxd, incus]
+        - name: status
+          in: query
+          description: Filter by container status
+          schema:
+            type: string
+            enum: [running, stopped, paused]
+      responses:
+        '200':
+          description: List of containers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Container'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    post:
+      tags: [Containers]
+      summary: Create new container
+      description: Create a new container
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateContainerRequest'
+      responses:
+        '201':
+          description: Container created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Container'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/storage/pools:
+    get:
+      tags: [Storage]
+      summary: List storage pools
+      description: Get all configured storage pools
+      responses:
+        '200':
+          description: List of storage pools
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StoragePool'
+
+    post:
+      tags: [Storage]
+      summary: Add storage pool
+      description: Add a new storage pool
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateStoragePoolRequest'
+      responses:
+        '201':
+          description: Storage pool added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoragePool'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/monitoring/node:
+    get:
+      tags: [Monitoring]
+      summary: Get node metrics
+      description: Get current node performance metrics
+      responses:
+        '200':
+          description: Node metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeMetrics'
+
+  /api/monitoring/vms/{id}:
+    get:
+      tags: [Monitoring]
+      summary: Get VM metrics
+      description: Get performance metrics for a specific VM
+      parameters:
+        - $ref: '#/components/parameters/VmId'
+      responses:
+        '200':
+          description: VM metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VmMetrics'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/cluster/nodes:
+    get:
+      tags: [Clustering]
+      summary: List cluster nodes
+      description: Get all nodes in the cluster
+      responses:
+        '200':
+          description: List of cluster nodes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ClusterNode'
+
+  /api/cluster/architecture:
+    get:
+      tags: [Clustering]
+      summary: Get cluster architecture
+      description: Get architecture summary for the cluster
+      responses:
+        '200':
+          description: Architecture summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArchitectureSummary'
+
+  /api/migrate/{vm_id}:
+    post:
+      tags: [Migration]
+      summary: Migrate VM
+      description: Live migrate VM to another node
+      parameters:
+        - name: vm_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_node]
+              properties:
+                target_node:
+                  type: string
+                  description: Target node name
+                  example: "node2"
+                online:
+                  type: boolean
+                  description: Live migration (true) or offline (false)
+                  default: true
+                bandwidth_limit:
+                  type: integer
+                  description: Bandwidth limit in Mbps
+                  example: 1000
+      responses:
+        '202':
+          description: Migration started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MigrationJob'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/ws:
+    get:
+      tags: [Monitoring]
+      summary: WebSocket connection
+      description: |
+        Establish WebSocket connection for real-time events.
+
+        ## Subscription Topics
+        Send a subscription message after connecting:
+        ```json
+        {
+          "topics": ["vm:status", "vm:metrics", "alerts"]
+        }
+        ```
+
+        Available topics:
+        - `vm:status` - VM state changes
+        - `vm:metrics` - Real-time resource usage
+        - `vm:events` - VM lifecycle events
+        - `node:metrics` - Node-level statistics
+        - `backups` - Backup progress
+        - `migrations` - Migration status
+        - `alerts` - Alert notifications
+        - `notifications` - General system notifications
+
+        ## Events
+        You'll receive JSON messages like:
+        ```json
+        {
+          "type": "VmStatusChanged",
+          "data": {
+            "vm_id": "vm-100",
+            "old_status": "stopped",
+            "new_status": "running",
+            "timestamp": "2025-10-11T10:30:00Z"
+          }
+        }
+        ```
+      responses:
+        '101':
+          description: Switching Protocols (WebSocket)
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token obtained from /api/auth/login
+
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key for programmatic access
+
+  parameters:
+    VmId:
+      name: id
+      in: path
+      required: true
+      description: VM identifier
+      schema:
+        type: string
+        example: "vm-100"
+
+    SnapshotId:
+      name: snapshot_id
+      in: path
+      required: true
+      description: Snapshot identifier
+      schema:
+        type: string
+        example: "snap-123456"
+
+  schemas:
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          example: "admin"
+        password:
+          type: string
+          format: password
+          example: "admin"
+        realm:
+          type: string
+          enum: [local, ldap, pam, oidc]
+          default: local
+          example: "local"
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: JWT authentication token
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        expires_at:
+          type: string
+          format: date-time
+          description: Token expiration timestamp
+          example: "2025-10-11T12:00:00Z"
+        user:
+          $ref: '#/components/schemas/User'
+
+    RegisterRequest:
+      type: object
+      required: [username, password, email]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 64
+          example: "john_doe"
+        password:
+          type: string
+          format: password
+          minLength: 8
+          example: "SecurePass123"
+        email:
+          type: string
+          format: email
+          example: "john@example.com"
+        role:
+          type: string
+          default: "VmUser"
+          example: "VmUser"
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        username:
+          type: string
+          example: "admin"
+        email:
+          type: string
+          format: email
+          example: "admin@localhost"
+        role:
+          type: string
+          example: "Administrator"
+        realm:
+          type: string
+          example: "local"
+        enabled:
+          type: boolean
+          example: true
+        created_at:
+          type: string
+          format: date-time
+
+    VmConfig:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "vm-100"
+        name:
+          type: string
+          example: "web-server"
+        hypervisor:
+          type: string
+          enum: [Qemu, Lxd, Incus]
+          example: "Qemu"
+        architecture:
+          type: string
+          enum: [X86_64, Aarch64, Riscv64, Ppc64le]
+          example: "X86_64"
+        cpus:
+          type: integer
+          minimum: 1
+          maximum: 256
+          example: 4
+        memory:
+          type: integer
+          description: Memory in MB
+          minimum: 128
+          example: 8192
+        disk_size:
+          type: integer
+          description: Disk size in GB
+          example: 50
+        status:
+          type: string
+          enum: [running, stopped, paused, error]
+          example: "running"
+        node:
+          type: string
+          description: Node where VM is running
+          example: "node1"
+        created_at:
+          type: string
+          format: date-time
+
+    CreateVmRequest:
+      type: object
+      required: [name, cpus, memory, disk_size]
+      properties:
+        id:
+          type: string
+          description: VM ID (auto-generated if not provided)
+          example: "vm-100"
+        name:
+          type: string
+          pattern: "^[a-zA-Z0-9_-]+$"
+          example: "web-server"
+        hypervisor:
+          type: string
+          enum: [Qemu, Lxd, Incus]
+          default: Qemu
+          example: "Qemu"
+        architecture:
+          type: string
+          enum: [X86_64, Aarch64, Riscv64, Ppc64le]
+          default: X86_64
+          example: "X86_64"
+        cpus:
+          type: integer
+          minimum: 1
+          maximum: 256
+          example: 4
+        memory:
+          type: integer
+          description: Memory in MB
+          minimum: 128
+          maximum: 1048576
+          example: 8192
+        disk_size:
+          type: integer
+          description: Disk size in GB
+          minimum: 1
+          maximum: 10240
+          example: 50
+        iso:
+          type: string
+          description: ISO image path for installation
+          example: "/var/lib/horcrux/isos/debian-12.iso"
+        network:
+          type: string
+          description: Network bridge or interface
+          example: "vmbr0"
+
+    VmSnapshot:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "snap-123456"
+        vm_id:
+          type: string
+          example: "vm-100"
+        name:
+          type: string
+          example: "before-upgrade"
+        description:
+          type: string
+          example: "Snapshot before OS upgrade"
+        state:
+          type: string
+          enum: [Stopped, Running]
+          example: "Running"
+        created_at:
+          type: string
+          format: date-time
+        size_bytes:
+          type: integer
+          description: Snapshot size in bytes
+          example: 10737418240
+        parent_id:
+          type: string
+          nullable: true
+          description: Parent snapshot ID for snapshot trees
+          example: "snap-123455"
+
+    CloneVmRequest:
+      type: object
+      required: [new_name]
+      properties:
+        new_name:
+          type: string
+          example: "web-server-clone"
+        new_id:
+          type: string
+          description: New VM ID (auto-generated if not provided)
+          example: "vm-101"
+        full_clone:
+          type: boolean
+          description: Full clone (true) or linked clone (false)
+          default: true
+          example: true
+        start_after_clone:
+          type: boolean
+          description: Start VM after cloning completes
+          default: false
+        cloud_init:
+          type: object
+          description: Cloud-init configuration for the clone
+          properties:
+            hostname:
+              type: string
+            ip_addresses:
+              type: array
+              items:
+                type: string
+            ssh_keys:
+              type: array
+              items:
+                type: string
+
+    CloneJob:
+      type: object
+      properties:
+        job_id:
+          type: string
+          format: uuid
+          example: "job-789abc"
+        source_vm_id:
+          type: string
+          example: "vm-100"
+        target_vm_id:
+          type: string
+          example: "vm-101"
+        status:
+          type: string
+          enum: [pending, running, completed, failed, cancelled]
+          example: "running"
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          example: 45
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    Container:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "ct-200"
+        name:
+          type: string
+          example: "nginx-container"
+        runtime:
+          type: string
+          enum: [lxc, docker, podman, lxd, incus]
+          example: "docker"
+        status:
+          type: string
+          enum: [running, stopped, paused]
+          example: "running"
+        image:
+          type: string
+          example: "nginx:latest"
+        created_at:
+          type: string
+          format: date-time
+
+    CreateContainerRequest:
+      type: object
+      required: [name, runtime]
+      properties:
+        id:
+          type: string
+          example: "ct-200"
+        name:
+          type: string
+          example: "nginx-container"
+        runtime:
+          type: string
+          enum: [lxc, docker, podman, lxd, incus]
+          example: "docker"
+        image:
+          type: string
+          example: "nginx:latest"
+        cpus:
+          type: integer
+          example: 2
+        memory:
+          type: integer
+          description: Memory in MB
+          example: 2048
+
+    StoragePool:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "local"
+        name:
+          type: string
+          example: "local"
+        type:
+          type: string
+          enum: [zfs, btrfs, lvm, ceph, nfs, directory, s3]
+          example: "zfs"
+        path:
+          type: string
+          example: "/var/lib/horcrux/storage"
+        total_bytes:
+          type: integer
+          example: 107374182400
+        used_bytes:
+          type: integer
+          example: 53687091200
+        available_bytes:
+          type: integer
+          example: 53687091200
+
+    CreateStoragePoolRequest:
+      type: object
+      required: [name, type, path]
+      properties:
+        name:
+          type: string
+          example: "backup-pool"
+        type:
+          type: string
+          enum: [zfs, btrfs, lvm, ceph, nfs, directory, s3]
+          example: "zfs"
+        path:
+          type: string
+          example: "/mnt/backup"
+        options:
+          type: object
+          additionalProperties: true
+
+    NodeMetrics:
+      type: object
+      properties:
+        hostname:
+          type: string
+          example: "node1"
+        cpu_usage:
+          type: number
+          format: float
+          description: CPU usage percentage
+          example: 45.2
+        memory_total:
+          type: integer
+          description: Total memory in bytes
+          example: 34359738368
+        memory_used:
+          type: integer
+          description: Used memory in bytes
+          example: 17179869184
+        memory_usage:
+          type: number
+          format: float
+          description: Memory usage percentage
+          example: 50.0
+        disk_usage:
+          type: number
+          format: float
+          description: Disk usage percentage
+          example: 65.5
+        load_average:
+          type: array
+          items:
+            type: number
+            format: float
+          minItems: 3
+          maxItems: 3
+          example: [1.5, 1.8, 2.0]
+        timestamp:
+          type: string
+          format: date-time
+
+    VmMetrics:
+      type: object
+      properties:
+        vm_id:
+          type: string
+          example: "vm-100"
+        cpu_usage:
+          type: number
+          format: float
+          example: 32.5
+        memory_usage:
+          type: number
+          format: float
+          example: 68.3
+        disk_read_bytes:
+          type: integer
+          example: 1048576000
+        disk_write_bytes:
+          type: integer
+          example: 524288000
+        network_rx_bytes:
+          type: integer
+          example: 2097152000
+        network_tx_bytes:
+          type: integer
+          example: 1048576000
+        timestamp:
+          type: string
+          format: date-time
+
+    ClusterNode:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "node1"
+        name:
+          type: string
+          example: "node1"
+        ip_address:
+          type: string
+          example: "192.168.1.10"
+        architecture:
+          type: string
+          enum: [X86_64, Aarch64, Riscv64, Ppc64le]
+          example: "X86_64"
+        status:
+          type: string
+          enum: [online, offline, unknown]
+          example: "online"
+        vms_running:
+          type: integer
+          example: 15
+        cpu_cores:
+          type: integer
+          example: 32
+        memory_total:
+          type: integer
+          description: Total memory in bytes
+          example: 137438953472
+
+    ArchitectureSummary:
+      type: object
+      properties:
+        x86_64_nodes:
+          type: integer
+          example: 2
+        aarch64_nodes:
+          type: integer
+          example: 1
+        riscv64_nodes:
+          type: integer
+          example: 0
+        ppc64le_nodes:
+          type: integer
+          example: 0
+        mixed_architecture:
+          type: boolean
+          example: true
+
+    MigrationJob:
+      type: object
+      properties:
+        job_id:
+          type: string
+          format: uuid
+          example: "mig-456def"
+        vm_id:
+          type: string
+          example: "vm-100"
+        source_node:
+          type: string
+          example: "node1"
+        target_node:
+          type: string
+          example: "node2"
+        status:
+          type: string
+          enum: [preparing, active, completed, failed, cancelled]
+          example: "active"
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          example: 75
+        transferred_bytes:
+          type: integer
+          example: 8589934592
+        total_bytes:
+          type: integer
+          example: 10737418240
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    Error:
+      type: object
+      properties:
+        status:
+          type: integer
+          example: 400
+        error:
+          type: string
+          example: "BAD_REQUEST"
+        message:
+          type: string
+          example: "Invalid VM configuration"
+        details:
+          type: string
+          nullable: true
+          example: "Memory must be at least 128 MB"
+        request_id:
+          type: string
+          nullable: true
+          example: "req-123456"
+        timestamp:
+          type: string
+          format: date-time
+
+  responses:
+    BadRequest:
+      description: Bad Request - Invalid input
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            status: 400
+            error: "BAD_REQUEST"
+            message: "Invalid input parameters"
+            timestamp: "2025-10-11T10:30:00Z"
+
+    Unauthorized:
+      description: Unauthorized - Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            status: 401
+            error: "AUTHENTICATION_FAILED"
+            message: "Authentication credentials are invalid or missing"
+            timestamp: "2025-10-11T10:30:00Z"
+
+    Forbidden:
+      description: Forbidden - Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            status: 403
+            error: "FORBIDDEN"
+            message: "You do not have permission to access this resource"
+            timestamp: "2025-10-11T10:30:00Z"
+
+    NotFound:
+      description: Not Found - Resource does not exist
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            status: 404
+            error: "NOT_FOUND"
+            message: "Virtual machine 'vm-100' not found"
+            timestamp: "2025-10-11T10:30:00Z"
+
+    Conflict:
+      description: Conflict - Resource already exists
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            status: 409
+            error: "CONFLICT"
+            message: "VM with this name already exists"
+            timestamp: "2025-10-11T10:30:00Z"
+
+    InternalServerError:
+      description: Internal Server Error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            status: 500
+            error: "INTERNAL_ERROR"
+            message: "An internal server error occurred"
+            timestamp: "2025-10-11T10:30:00Z"

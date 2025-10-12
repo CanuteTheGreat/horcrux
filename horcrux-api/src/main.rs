@@ -26,6 +26,7 @@ mod webhooks;
 mod error;
 mod validation;
 mod websocket;
+mod openapi;
 
 use axum::{
     extract::{Path, Query, State},
@@ -549,6 +550,8 @@ async fn main() -> anyhow::Result<()> {
     // Build main app with public and protected routes
     let app = Router::new()
         .route("/api/health", get(health_check))
+        // Merge OpenAPI / Swagger UI routes (public, for documentation)
+        .merge(openapi::openapi_routes())
         // Merge protected routes (with auth middleware)
         .merge(protected_routes)
         // Merge auth router with strict rate limiting (public routes)
