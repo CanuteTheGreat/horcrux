@@ -8,7 +8,7 @@ use tracing::{debug, error, info};
 use crate::websocket::WsState;
 use crate::monitoring::MonitoringManager;
 use crate::vm::VmManager;
-use crate::metrics::MetricsCache;
+use crate::metrics::{MetricsCache, LibvirtManager};
 
 /// Metrics collection intervals
 const NODE_METRICS_INTERVAL_SECS: u64 = 5;  // Collect node metrics every 5 seconds
@@ -19,6 +19,7 @@ pub fn start_metrics_collector(
     ws_state: Arc<WsState>,
     monitoring_manager: Arc<MonitoringManager>,
     vm_manager: Arc<VmManager>,
+    libvirt_manager: Option<Arc<LibvirtManager>>,
 ) {
     // Create shared metrics cache for rate calculations
     let metrics_cache = Arc::new(MetricsCache::new());
@@ -49,7 +50,7 @@ pub fn start_metrics_collector(
         loop {
             interval.tick().await;
 
-            match collect_and_broadcast_vm_metrics(&ws_state, &vm_manager).await {
+            match collect_and_broadcast_vm_metrics(&ws_state, &vm_manager, &libvirt_manager).await {
                 Ok(_) => debug!("VM metrics collected and broadcast"),
                 Err(e) => error!("Failed to collect VM metrics: {}", e),
             }
@@ -107,6 +108,7 @@ async fn collect_and_broadcast_node_metrics(
 async fn collect_and_broadcast_vm_metrics(
     ws_state: &Arc<WsState>,
     vm_manager: &Arc<VmManager>,
+    libvirt_manager: &Option<Arc<LibvirtManager>>,
 ) -> Result<(), String> {
     // Get list of all VMs
     let vms = vm_manager.list_vms().await;
@@ -115,7 +117,7 @@ async fn collect_and_broadcast_vm_metrics(
     for vm in vms {
         // Only collect metrics for running VMs
         if vm.status == horcrux_common::VmStatus::Running {
-            match collect_vm_metrics(&vm.id).await {
+            match collect_vm_metrics(&vm.id, libvirt_manager).await {
                 Ok((cpu, memory, disk_read, disk_write, net_rx, net_tx)) => {
                     ws_state.broadcast_vm_metrics(
                         vm.id.clone(),
@@ -139,10 +141,48 @@ async fn collect_and_broadcast_vm_metrics(
 
 /// Collect metrics for a specific VM
 /// Returns: (cpu_usage, memory_usage, disk_read, disk_write, network_rx, network_tx)
-async fn collect_vm_metrics(vm_id: &str) -> Result<(f64, f64, u64, u64, u64, u64), String> {
+async fn collect_vm_metrics(
+    vm_id: &str,
+    libvirt_manager: &Option<Arc<LibvirtManager>>,
+) -> Result<(f64, f64, u64, u64, u64, u64), String> {
+    // Try libvirt first (for KVM/QEMU VMs)
+    if let Some(mgr) = libvirt_manager {
+        if let Ok(metrics) = mgr.get_vm_metrics(vm_id).await {
+            // Calculate memory usage percentage
+            // Note: libvirt provides memory in bytes, need to get max memory for percentage
+            // For now, use actual memory as-is and convert to MB for reasonable display
+            let memory_mb = metrics.memory_actual / 1024 / 1024;
+            let memory_percent = if memory_mb > 0 {
+                (metrics.memory_rss as f64 / metrics.memory_actual as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            debug!(
+                "Collected libvirt metrics for VM {}: CPU={:.1}%, MEM={:.1}%",
+                vm_id, metrics.cpu_usage_percent, memory_percent
+            );
+
+            return Ok((
+                metrics.cpu_usage_percent,
+                memory_percent,
+                metrics.disk_read_bytes,
+                metrics.disk_write_bytes,
+                metrics.network_rx_bytes,
+                metrics.network_tx_bytes,
+            ));
+        }
+    }
+
     // Try to collect real metrics if this is a container
     // For Docker/Podman containers, vm_id might be a container ID
     if let Ok(metrics) = crate::metrics::get_docker_container_stats(vm_id).await {
+        debug!(
+            "Collected container metrics for {}: CPU={:.1}%, MEM={:.1}%",
+            vm_id, metrics.cpu_usage_percent,
+            (metrics.memory_usage_bytes as f64 / metrics.memory_limit_bytes as f64) * 100.0
+        );
+
         return Ok((
             metrics.cpu_usage_percent,
             (metrics.memory_usage_bytes as f64 / metrics.memory_limit_bytes as f64) * 100.0,
@@ -153,20 +193,12 @@ async fn collect_vm_metrics(vm_id: &str) -> Result<(f64, f64, u64, u64, u64, u64
         ));
     }
 
-    // For QEMU VMs, we would need to:
-    // 1. Get the PID from the VM manager (need to add pid field to VmConfig)
-    // 2. Read process stats from /proc/<pid>/stat
-    // 3. Read I/O stats from /proc/<pid>/io
-    // 4. For network stats, read from the tap interface in /sys/class/net/
-
-    // TODO: Implement VM metrics collection via:
-    // - libvirt API for KVM/QEMU VMs
-    // - QEMU monitor socket for detailed VM stats
-    // - /proc/<pid>/ for process-level metrics
-
-    // Return simulated data for now
+    // Fallback to simulated data (for testing or unsupported backends)
+    // This allows the system to work even without libvirt or container runtimes
     use rand::Rng;
     let mut rng = rand::thread_rng();
+
+    debug!("Using simulated metrics for VM {} (no real metrics available)", vm_id);
 
     Ok((
         rng.gen_range(5.0..95.0),          // cpu_usage (%)

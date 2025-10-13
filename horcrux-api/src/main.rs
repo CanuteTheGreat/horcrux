@@ -325,11 +325,30 @@ async fn main() -> anyhow::Result<()> {
     snapshot_scheduler.start_scheduler(vm_getter);
     info!("Snapshot scheduler background task started");
 
+    // Initialize libvirt manager for VM metrics collection (optional)
+    #[cfg(feature = "qemu")]
+    let libvirt_manager = {
+        let mgr = Arc::new(metrics::LibvirtManager::new());
+        match mgr.connect(None).await {
+            Ok(_) => {
+                info!("Connected to libvirt (qemu:///system) for VM metrics");
+                Some(mgr)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to connect to libvirt: {} - VM metrics will use fallback", e);
+                None
+            }
+        }
+    };
+    #[cfg(not(feature = "qemu"))]
+    let libvirt_manager = None;
+
     // Start metrics collection background task
     metrics_collector::start_metrics_collector(
         state.ws_state.clone(),
         state.monitoring_manager.clone(),
         state.vm_manager.clone(),
+        libvirt_manager,
     );
 
     // Static files serving for the frontend

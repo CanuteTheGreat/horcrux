@@ -5,13 +5,15 @@
 use virt::connect::Connect;
 #[cfg(feature = "qemu")]
 use virt::domain::Domain;
-#[cfg(feature = "qemu")]
-use virt::sys;
 
 use std::io;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, error, warn};
+
+#[cfg(feature = "qemu")]
+use tracing::{debug, error};
+#[cfg(not(feature = "qemu"))]
+use tracing::warn;
 
 /// VM metrics from libvirt
 #[derive(Debug, Clone)]
