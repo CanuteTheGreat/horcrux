@@ -7,6 +7,7 @@ mod vnc;
 mod spice;
 mod serial;
 mod websocket;
+pub mod novnc;
 
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};

@@ -468,7 +468,9 @@ async fn main() -> anyhow::Result<()> {
         // Console access
         .route("/api/console/:vm_id/vnc", post(create_vnc_console))
         .route("/api/console/:vm_id/websocket", get(get_vnc_websocket))
+        .route("/api/console/:vm_id/novnc", get(get_novnc_page))
         .route("/api/console/ticket/:ticket_id", get(verify_console_ticket))
+        .route("/api/console/ws/:ticket_id", get(vnc_websocket_handler))
         // Cluster management
         .route("/api/cluster/nodes", get(list_cluster_nodes))
         .route("/api/cluster/nodes/:name", post(add_cluster_node))
@@ -2284,6 +2286,30 @@ async fn verify_console_ticket(
 ) -> Result<StatusCode, ApiError> {
     state.console_manager.verify_ticket(&ticket_id).await?;
     Ok(StatusCode::OK)
+}
+
+async fn get_novnc_page(
+    State(state): State<Arc<AppState>>,
+    Path(vm_id): Path<String>,
+) -> Result<axum::response::Html<String>, ApiError> {
+    // Create a console session and get the ticket
+    let info = state.console_manager.create_console(&vm_id, ConsoleType::Vnc).await?;
+
+    // Generate the WebSocket URL
+    let ws_url = format!("ws://localhost:8006/api/console/ws/{}", info.ticket);
+
+    // Get the noVNC HTML page
+    let html = console::novnc::get_novnc_html(&info.ticket, &ws_url);
+
+    Ok(axum::response::Html(html))
+}
+
+async fn vnc_websocket_handler(
+    ws: axum::extract::ws::WebSocketUpgrade,
+    Path(ticket_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> axum::response::Response {
+    console::novnc::handle_vnc_websocket(ws, Path(ticket_id), State(state.console_manager.clone())).await
 }
 
 // Cluster API handlers
