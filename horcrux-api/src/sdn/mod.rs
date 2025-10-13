@@ -17,6 +17,8 @@
 
 pub mod vlan;
 pub mod vxlan;
+pub mod ovs;
+pub mod templates;
 pub mod ipam;
 pub mod zones;
 pub mod bridge;
