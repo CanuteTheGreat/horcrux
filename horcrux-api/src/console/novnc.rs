@@ -146,123 +146,227 @@ pub fn get_novnc_html(_ticket_id: &str, ws_url: &str) -> String {
         body {{
             margin: 0;
             padding: 0;
-            background-color: #000;
+            background-color: #1a1a1a;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             overflow: hidden;
-            font-family: Arial, sans-serif;
         }}
-        #console {{
+
+        #screen {{
             width: 100vw;
             height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }}
+
         #status {{
             position: absolute;
-            top: 10px;
-            right: 10px;
-            padding: 10px;
-            background: rgba(0, 0, 0, 0.7);
+            top: 15px;
+            right: 15px;
+            padding: 12px 20px;
+            background: rgba(0, 0, 0, 0.85);
             color: #fff;
-            border-radius: 5px;
+            border-radius: 8px;
             font-size: 14px;
+            font-weight: 500;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            z-index: 1000;
+            transition: all 0.3s ease;
         }}
-        .connecting {{ color: #ff9800; }}
-        .connected {{ color: #4caf50; }}
-        .disconnected {{ color: #f44336; }}
+
+        .connecting {{
+            color: #ff9800;
+            border-left: 3px solid #ff9800;
+        }}
+        .connected {{
+            color: #4caf50;
+            border-left: 3px solid #4caf50;
+        }}
+        .disconnected {{
+            color: #f44336;
+            border-left: 3px solid #f44336;
+        }}
+
+        #controls {{
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            display: flex;
+            gap: 10px;
+            z-index: 1000;
+        }}
+
+        .control-btn {{
+            padding: 8px 16px;
+            background: rgba(0, 0, 0, 0.85);
+            color: #fff;
+            border: 1px solid #444;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s ease;
+        }}
+
+        .control-btn:hover {{
+            background: rgba(30, 30, 30, 0.95);
+            border-color: #666;
+        }}
+
+        .control-btn:active {{
+            transform: scale(0.95);
+        }}
+
+        #loading {{
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: #fff;
+        }}
+
+        .spinner {{
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            border-top: 4px solid #4caf50;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }}
+
+        @keyframes spin {{
+            0% {{ transform: rotate(0deg); }}
+            100% {{ transform: rotate(360deg); }}
+        }}
+
+        .hidden {{
+            display: none !important;
+        }}
     </style>
 </head>
 <body>
     <div id="status" class="connecting">Connecting...</div>
-    <canvas id="console"></canvas>
 
-    <script>
-        // Simple VNC client implementation
-        // In production, you'd use noVNC library: https://github.com/novnc/noVNC
+    <div id="controls">
+        <button class="control-btn" onclick="sendCtrlAltDel()" title="Send Ctrl+Alt+Del">
+            Ctrl+Alt+Del
+        </button>
+        <button class="control-btn" onclick="toggleFullscreen()" title="Toggle Fullscreen">
+            Fullscreen
+        </button>
+        <button class="control-btn" onclick="rfb && rfb.clipboardPasteFrom(prompt('Paste text:'))" title="Send Clipboard">
+            Paste
+        </button>
+    </div>
 
-        const canvas = document.getElementById('console');
-        const ctx = canvas.getContext('2d');
+    <div id="loading">
+        <div class="spinner"></div>
+        <div>Connecting to console...</div>
+    </div>
+
+    <div id="screen"></div>
+
+    <!-- noVNC library from CDN -->
+    <script type="module">
+        // Import noVNC
+        import RFB from 'https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js';
+
         const status = document.getElementById('status');
+        const loading = document.getElementById('loading');
+        const screen = document.getElementById('screen');
 
-        // Set canvas to full screen
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
+        let rfb;
 
-        window.addEventListener('resize', () => {{
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
-        }});
-
-        // Connect to VNC WebSocket proxy
-        const ws = new WebSocket('{ws_url}');
-        ws.binaryType = 'arraybuffer';
-
-        ws.onopen = () => {{
+        // Connection handling
+        function connectedToServer(e) {{
             status.textContent = 'Connected';
             status.className = 'connected';
-            console.log('WebSocket connected to VNC server');
+            loading.classList.add('hidden');
+            console.log('Connected to VNC server');
+        }}
 
-            // TODO: Implement RFB (Remote Framebuffer) protocol
-            // For now, this is a placeholder
-            // Full implementation would include:
-            // 1. RFB handshake
-            // 2. VNC authentication (if required)
-            // 3. FramebufferUpdate handling
-            // 4. Keyboard/mouse event encoding
-        }};
-
-        ws.onmessage = (event) => {{
-            // Handle VNC protocol messages
-            console.log('Received VNC data:', event.data.byteLength, 'bytes');
-            // TODO: Parse and render VNC framebuffer updates
-        }};
-
-        ws.onerror = (error) => {{
-            status.textContent = 'Connection Error';
+        function disconnectedFromServer(e) {{
+            if (e.detail.clean) {{
+                status.textContent = 'Disconnected';
+            }} else {{
+                status.textContent = 'Connection Failed';
+            }}
             status.className = 'disconnected';
-            console.error('WebSocket error:', error);
+            loading.classList.remove('hidden');
+            console.log('Disconnected from VNC server:', e.detail);
+        }}
+
+        function credentialsRequired(e) {{
+            const password = prompt('VNC Password:');
+            if (password) {{
+                rfb.sendCredentials({{ password: password }});
+            }}
+        }}
+
+        // Control functions
+        window.sendCtrlAltDel = function() {{
+            if (rfb) {{
+                rfb.sendCtrlAltDel();
+            }}
         }};
 
-        ws.onclose = () => {{
-            status.textContent = 'Disconnected';
+        window.toggleFullscreen = function() {{
+            if (!document.fullscreenElement) {{
+                document.documentElement.requestFullscreen();
+            }} else {{
+                document.exitFullscreen();
+            }}
+        }};
+
+        // Initialize noVNC
+        try {{
+            rfb = new RFB(screen, '{ws_url}', {{
+                credentials: {{}}  // No credentials by default
+            }});
+
+            // Configure noVNC settings
+            rfb.viewOnly = false;
+            rfb.scaleViewport = true;
+            rfb.resizeSession = false;
+            rfb.showDotCursor = true;
+            rfb.background = '#1a1a1a';
+
+            // Event handlers
+            rfb.addEventListener('connect', connectedToServer);
+            rfb.addEventListener('disconnect', disconnectedFromServer);
+            rfb.addEventListener('credentialsrequired', credentialsRequired);
+
+            // Clipboard handling
+            rfb.addEventListener('clipboard', (e) => {{
+                console.log('Clipboard data received from VM');
+            }});
+
+            // Make rfb global for control buttons
+            window.rfb = rfb;
+
+        }} catch (err) {{
+            status.textContent = 'Error: ' + err.message;
             status.className = 'disconnected';
-            console.log('WebSocket connection closed');
-        }};
+            console.error('Failed to create RFB client:', err);
+        }}
 
-        // Handle keyboard input
-        window.addEventListener('keydown', (e) => {{
-            if (ws.readyState === WebSocket.OPEN) {{
-                // TODO: Encode keyboard event to VNC protocol
-                // e.preventDefault();
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {{
+            // Prevent browser shortcuts when focused on VNC
+            if (e.ctrlKey && e.altKey) {{
+                e.preventDefault();
             }}
         }});
 
-        // Handle mouse input
-        canvas.addEventListener('mousemove', (e) => {{
-            if (ws.readyState === WebSocket.OPEN) {{
-                // TODO: Encode mouse move to VNC protocol
+        // Handle window resize
+        window.addEventListener('resize', () => {{
+            if (rfb) {{
+                // noVNC handles resizing automatically with scaleViewport
             }}
         }});
 
-        canvas.addEventListener('mousedown', (e) => {{
-            if (ws.readyState === WebSocket.OPEN) {{
-                // TODO: Encode mouse button press to VNC protocol
-            }}
-        }});
-
-        canvas.addEventListener('mouseup', (e) => {{
-            if (ws.readyState === WebSocket.OPEN) {{
-                // TODO: Encode mouse button release to VNC protocol
-            }}
-        }});
     </script>
-
-    <!-- Production implementation would use noVNC library -->
-    <!--
-    <script src="https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js"></script>
-    <script>
-        const rfb = new NoVNC.RFB(canvas, '{ws_url}');
-        rfb.scaleViewport = true;
-        rfb.resizeSession = true;
-    </script>
-    -->
 </body>
 </html>"#,
         ws_url = ws_url
