@@ -28,6 +28,7 @@ mod validation;
 mod websocket;
 mod openapi;
 mod metrics_collector;
+mod metrics;
 
 use axum::{
     extract::{Path, Query, State},

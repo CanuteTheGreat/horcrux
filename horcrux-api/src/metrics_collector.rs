@@ -8,6 +8,7 @@ use tracing::{debug, error, info};
 use crate::websocket::WsState;
 use crate::monitoring::MonitoringManager;
 use crate::vm::VmManager;
+use crate::metrics::MetricsCache;
 
 /// Metrics collection intervals
 const NODE_METRICS_INTERVAL_SECS: u64 = 5;  // Collect node metrics every 5 seconds
@@ -19,9 +20,13 @@ pub fn start_metrics_collector(
     monitoring_manager: Arc<MonitoringManager>,
     vm_manager: Arc<VmManager>,
 ) {
+    // Create shared metrics cache for rate calculations
+    let metrics_cache = Arc::new(MetricsCache::new());
+
     // Spawn node metrics collection task
     let ws_state_clone = ws_state.clone();
     let monitoring_manager_clone = monitoring_manager.clone();
+    let metrics_cache_clone = metrics_cache.clone();
     tokio::spawn(async move {
         let mut interval = interval(Duration::from_secs(NODE_METRICS_INTERVAL_SECS));
         info!("Starting node metrics collector (interval: {}s)", NODE_METRICS_INTERVAL_SECS);
@@ -29,7 +34,7 @@ pub fn start_metrics_collector(
         loop {
             interval.tick().await;
 
-            match collect_and_broadcast_node_metrics(&ws_state_clone, &monitoring_manager_clone).await {
+            match collect_and_broadcast_node_metrics(&ws_state_clone, &monitoring_manager_clone, &metrics_cache_clone).await {
                 Ok(_) => debug!("Node metrics collected and broadcast"),
                 Err(e) => error!("Failed to collect node metrics: {}", e),
             }
@@ -57,13 +62,20 @@ pub fn start_metrics_collector(
 /// Collect and broadcast node metrics
 async fn collect_and_broadcast_node_metrics(
     ws_state: &Arc<WsState>,
-    monitoring_manager: &Arc<MonitoringManager>,
+    _monitoring_manager: &Arc<MonitoringManager>,
+    metrics_cache: &Arc<MetricsCache>,
 ) -> Result<(), String> {
-    // Get node metrics from monitoring manager
-    let metrics = match monitoring_manager.get_node_metrics().await {
-        Some(m) => m,
-        None => return Err("No node metrics available".to_string()),
-    };
+    // Use real CPU usage from metrics cache
+    let cpu_usage = metrics_cache.get_cpu_usage().await;
+
+    // Use real memory stats
+    let memory = crate::metrics::system::read_memory_stats()
+        .map_err(|e| format!("Failed to read memory: {}", e))?;
+    let memory_usage = memory.usage_percent();
+
+    // Use real load average
+    let load = crate::metrics::system::read_load_average()
+        .map_err(|e| format!("Failed to read load average: {}", e))?;
 
     // Get hostname
     let hostname = hostname::get()
@@ -72,20 +84,19 @@ async fn collect_and_broadcast_node_metrics(
         .to_string();
 
     // Calculate disk usage percentage
-    // For simplicity, we'll assume a fixed disk size and usage
-    // In production, this should come from actual filesystem stats
-    let disk_usage_percent = 65.0; // TODO: Calculate from actual disk usage
+    // TODO: Calculate from actual filesystem stats using statfs
+    let disk_usage_percent = 65.0;
 
     // Broadcast metrics via WebSocket
     ws_state.broadcast_node_metrics(
         hostname,
-        metrics.cpu.usage_percent,
-        metrics.memory.usage_percent,
+        cpu_usage,
+        memory_usage,
         disk_usage_percent,
         [
-            metrics.load_average_1m,
-            metrics.load_average_5m,
-            metrics.load_average_15m,
+            load.one_min,
+            load.five_min,
+            load.fifteen_min,
         ],
     );
 
@@ -128,22 +139,38 @@ async fn collect_and_broadcast_vm_metrics(
 
 /// Collect metrics for a specific VM
 /// Returns: (cpu_usage, memory_usage, disk_read, disk_write, network_rx, network_tx)
-async fn collect_vm_metrics(_vm_id: &str) -> Result<(f64, f64, u64, u64, u64, u64), String> {
-    // In a real implementation, this would read from:
-    // - /proc/<pid>/stat for CPU
-    // - /proc/<pid>/status for memory
-    // - /proc/<pid>/io for disk I/O
-    // - /sys/class/net/<interface>/statistics/ for network
+async fn collect_vm_metrics(vm_id: &str) -> Result<(f64, f64, u64, u64, u64, u64), String> {
+    // Try to collect real metrics if this is a container
+    // For Docker/Podman containers, vm_id might be a container ID
+    if let Ok(metrics) = crate::metrics::get_docker_container_stats(vm_id).await {
+        return Ok((
+            metrics.cpu_usage_percent,
+            (metrics.memory_usage_bytes as f64 / metrics.memory_limit_bytes as f64) * 100.0,
+            metrics.block_read_bytes,
+            metrics.block_write_bytes,
+            metrics.network_rx_bytes,
+            metrics.network_tx_bytes,
+        ));
+    }
 
-    // For now, we'll use simulated data
-    // TODO: Replace with actual metric collection using libvirt or QEMU monitor
+    // For QEMU VMs, we would need to:
+    // 1. Get the PID from the VM manager (need to add pid field to VmConfig)
+    // 2. Read process stats from /proc/<pid>/stat
+    // 3. Read I/O stats from /proc/<pid>/io
+    // 4. For network stats, read from the tap interface in /sys/class/net/
 
+    // TODO: Implement VM metrics collection via:
+    // - libvirt API for KVM/QEMU VMs
+    // - QEMU monitor socket for detailed VM stats
+    // - /proc/<pid>/ for process-level metrics
+
+    // Return simulated data for now
     use rand::Rng;
     let mut rng = rand::thread_rng();
 
     Ok((
-        rng.gen_range(5.0..95.0),    // cpu_usage (%)
-        rng.gen_range(20.0..80.0),   // memory_usage (%)
+        rng.gen_range(5.0..95.0),          // cpu_usage (%)
+        rng.gen_range(20.0..80.0),         // memory_usage (%)
         rng.gen_range(0..100_000_000),     // disk_read (bytes)
         rng.gen_range(0..50_000_000),      // disk_write (bytes)
         rng.gen_range(0..500_000_000),     // network_rx (bytes)

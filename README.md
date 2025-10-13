@@ -88,8 +88,10 @@ Horcrux is a complete virtualization management platform designed specifically f
   - ISO generation for user-data
 
 - **Monitoring:**
-  - Real-time metrics collection
-  - CPU, memory, disk, network stats
+  - **Real-time metrics** via /proc filesystem and cgroups
+  - **Node metrics**: CPU usage, memory, load averages
+  - **Container metrics**: cgroups v1/v2 support (Docker/Podman)
+  - WebSocket-based live dashboard updates
   - Time-series data storage
   - Historical analysis
 
