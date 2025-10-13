@@ -3,9 +3,11 @@
 
 pub mod system;
 pub mod container;
+pub mod libvirt;
 
 // Re-export commonly used functions
 pub use container::get_docker_container_stats;
+pub use libvirt::LibvirtManager;
 
 use std::sync::Arc;
 use tokio::sync::RwLock;

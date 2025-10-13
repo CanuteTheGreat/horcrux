@@ -47,6 +47,9 @@ argon2 = { version = "0.5", features = ["std"] }
 hostname = "0.4"
 num_cpus = "1.16"
 
+# Virtualization - libvirt bindings
+virt = { version = "0.4", optional = true }
+
 # HTTP client (using rustls to avoid OpenSSL dependency)
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 base64 = "0.22"
@@ -72,7 +75,7 @@ subtle = "2.5"
 default = ["qemu", "lxc", "docker"]
 
 # Virtualization backends
-qemu = []        # QEMU/KVM support
+qemu = ["virt"]  # QEMU/KVM support with libvirt
 lxd = []         # LXD support (VMs and containers)
 incus = []       # Incus support (VMs and containers)
 
