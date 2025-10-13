@@ -118,11 +118,39 @@ Horcrux is a complete virtualization management platform designed specifically f
 
 ### Prerequisites
 
-- Gentoo Linux (tested on amd64, arm64)
-- Rust 1.82+ (for building from source)
-- Kernel with KVM support (for QEMU VMs)
+- **OS**: Gentoo Linux (recommended) or any modern Linux distribution
+- **CPU**: 4+ cores with VT-x/AMD-V support (for KVM)
+- **RAM**: 8+ GB
+- **Disk**: 50+ GB free space
+- **Rust**: 1.82.0 or later
 
-### Docker Quick Start (Easiest!) 🐳
+### Quick Install (Automated) ⚡ RECOMMENDED
+
+The easiest way to install Horcrux on Gentoo:
+
+```bash
+# Clone the repository
+git clone https://github.com/CanuteTheGreat/horcrux.git
+cd horcrux
+
+# Run the automated installation script
+sudo ./deploy/install.sh
+```
+
+This will:
+- ✅ Check system requirements
+- ✅ Create horcrux user and groups
+- ✅ Build from source (5-10 minutes)
+- ✅ Install binaries and Web UI
+- ✅ Configure systemd services
+- ✅ Initialize database
+- ✅ Generate shell completions
+
+**Access the Web UI**: http://localhost:8006
+
+See **[docs/INSTALLATION.md](docs/INSTALLATION.md)** for complete installation guide.
+
+### Docker Quick Start (Development) 🐳
 
 ```bash
 # Clone and run with Docker
@@ -140,54 +168,40 @@ docker-compose --profile cli run horcrux-cli vm create \
 
 See [docs/DOCKER.md](docs/DOCKER.md) for complete Docker documentation.
 
-### Quick Start (From Source)
+### Gentoo Ebuild Installation
 
 ```bash
-# Clone the repository
-git clone https://github.com/CanuteTheGreat/horcrux.git
-cd horcrux
-
-# Build the project
-cargo build --release
-
-# Run the API server
-./target/release/horcrux-api
-
-# In another terminal, build the Web UI
-cd horcrux-api/horcrux-ui
-trunk serve --release
-```
-
-### Gentoo Installation
-
-```bash
-# Copy ebuild to local overlay
-mkdir -p /usr/local/portage/app-emulation/horcrux
-cp -r gentoo/app-emulation/horcrux/* /usr/local/portage/app-emulation/horcrux/
+# Add to local overlay
+sudo mkdir -p /var/db/repos/local/app-emulation/horcrux
+sudo cp deploy/gentoo/horcrux-0.1.0.ebuild /var/db/repos/local/app-emulation/horcrux/
 
 # Generate manifest
-cd /usr/local/portage/app-emulation/horcrux
-ebuild horcrux-0.1.0.ebuild manifest
+cd /var/db/repos/local/app-emulation/horcrux
+sudo ebuild horcrux-0.1.0.ebuild manifest
 
 # Install with USE flags
-echo "app-emulation/horcrux qemu lxd docker" >> /etc/portage/package.use/horcrux
-emerge -av app-emulation/horcrux
+sudo USE="qemu lxc docker" emerge -av app-emulation/horcrux
 
-# Start the service
-rc-service horcrux start
-# or for systemd:
-systemctl start horcrux
+# Enable and start services
+sudo systemctl enable horcrux-api
+sudo systemctl start horcrux-api
 ```
 
 ### USE Flags
 
-- `qemu` - Enable QEMU/KVM support
-- `lxd` - Enable LXD support
-- `incus` - Enable Incus support
-- `docker` - Enable Docker support
-- `podman` - Enable Podman support
-- `zfs` - Enable ZFS storage backend
-- `ceph` - Enable Ceph storage backend
+| Flag | Description | Default |
+|------|-------------|---------|
+| `qemu` | QEMU/KVM virtualization support | ✓ |
+| `lxc` | LXC container support | ✓ |
+| `docker` | Docker integration | ✗ |
+| `podman` | Podman integration | ✗ |
+| `cluster` | Clustering and HA features | ✗ |
+| `backup` | Backup compression | ✗ |
+| `gpu` | GPU passthrough support | ✗ |
+
+### Manual Installation
+
+See **[docs/INSTALLATION.md](docs/INSTALLATION.md)** for detailed manual installation steps.
 
 ## 🔧 Configuration
 

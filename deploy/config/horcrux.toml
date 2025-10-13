@@ -1,0 +1,192 @@
+# Horcrux Configuration File
+# Location: /etc/horcrux/horcrux.toml
+
+[server]
+# API server bind address and port
+bind_address = "0.0.0.0"
+bind_port = 8006
+
+# TLS configuration (optional)
+# tls_cert = "/etc/horcrux/tls/cert.pem"
+# tls_key = "/etc/horcrux/tls/key.pem"
+
+# Worker threads (defaults to number of CPU cores)
+# worker_threads = 4
+
+[database]
+# SQLite database path
+path = "/var/lib/horcrux/horcrux.db"
+
+# Connection pool settings
+max_connections = 10
+min_connections = 1
+
+[storage]
+# Default storage paths
+vm_dir = "/var/lib/horcrux/vms"
+snapshot_dir = "/var/lib/horcrux/snapshots"
+backup_dir = "/var/lib/horcrux/backups"
+template_dir = "/var/lib/horcrux/templates"
+cloudinit_dir = "/var/lib/horcrux/cloudinit"
+
+[logging]
+# Log level: trace, debug, info, warn, error
+level = "info"
+
+# Log file path
+file = "/var/log/horcrux/horcrux.log"
+
+# Audit log
+audit_log = "/var/log/horcrux/audit.log"
+
+# Log rotation
+max_size_mb = 100
+max_files = 10
+
+[monitoring]
+# Metrics collection intervals (seconds)
+node_metrics_interval = 5
+vm_metrics_interval = 10
+
+# Enable Prometheus metrics endpoint
+prometheus_enabled = true
+prometheus_port = 9090
+
+[websocket]
+# WebSocket settings
+heartbeat_interval = 30  # seconds
+subscription_timeout = 10  # seconds
+max_connections = 1000
+
+[authentication]
+# Session timeout (seconds)
+session_timeout = 3600  # 1 hour
+
+# JWT secret (CHANGE THIS IN PRODUCTION!)
+jwt_secret = "CHANGE_ME_TO_A_RANDOM_SECRET_KEY"
+
+# Default realm
+default_realm = "pam"
+
+# Enable LDAP authentication
+# ldap_enabled = false
+# ldap_server = "ldap://localhost:389"
+# ldap_base_dn = "dc=example,dc=com"
+
+# Enable OIDC authentication
+# oidc_enabled = false
+# oidc_issuer = "https://auth.example.com"
+# oidc_client_id = "horcrux"
+# oidc_client_secret = "secret"
+
+[rbac]
+# Enable Role-Based Access Control
+enabled = true
+
+# Default role for new users
+default_role = "VmUser"
+
+[rate_limiting]
+# Rate limiting for API endpoints
+enabled = true
+max_requests = 100
+window_seconds = 60
+
+# Stricter limits for auth endpoints
+auth_max_requests = 5
+auth_window_seconds = 60
+
+[network]
+# Default network bridge
+default_bridge = "vmbr0"
+
+# Enable SDN features
+sdn_enabled = true
+
+# CNI plugin directory
+cni_bin_dir = "/opt/cni/bin"
+cni_conf_dir = "/etc/cni/net.d"
+
+# OVS settings
+ovs_enabled = false
+ovs_bridge = "ovsbr0"
+
+[vm]
+# Default VM settings
+default_memory = 2048  # MB
+default_cpus = 2
+default_disk_size = 32  # GB
+
+# VM limits
+max_memory = 65536  # MB
+max_cpus = 32
+max_disk_size = 2048  # GB
+
+# QEMU/KVM settings
+qemu_path = "/usr/bin/qemu-system-x86_64"
+qemu_img_path = "/usr/bin/qemu-img"
+
+[container]
+# Default container runtime
+default_runtime = "lxc"
+
+# Enable container runtimes
+lxc_enabled = true
+docker_enabled = true
+podman_enabled = true
+lxd_enabled = false
+incus_enabled = false
+
+[backup]
+# Backup settings
+compression_enabled = true
+compression_level = 6  # 1-9 (9=best)
+encryption_enabled = false
+
+# Retention policy
+keep_daily = 7
+keep_weekly = 4
+keep_monthly = 6
+keep_yearly = 3
+
+[alerting]
+# Alert settings
+enabled = true
+
+# Email notifications
+# email_enabled = false
+# smtp_server = "localhost:25"
+# smtp_from = "horcrux@example.com"
+# smtp_to = "admin@example.com"
+
+# Webhook notifications
+# webhook_enabled = false
+# webhook_url = "https://hooks.example.com/horcrux"
+
+[gpu]
+# GPU passthrough settings
+passthrough_enabled = false
+
+# NVIDIA vGPU
+nvidia_vgpu_enabled = false
+
+# AMD MxGPU
+amd_mxgpu_enabled = false
+
+[cluster]
+# Cluster settings
+enabled = false
+
+# Cluster name
+name = "horcrux-cluster"
+
+# Node name (auto-detected if not set)
+# node_name = "node1"
+
+# Cluster communication
+# cluster_address = "0.0.0.0"
+# cluster_port = 8007
+
+# Shared storage
+# shared_storage_enabled = false
+# shared_storage_path = "/mnt/shared"
