@@ -27,6 +27,7 @@ mod error;
 mod validation;
 mod websocket;
 mod openapi;
+mod metrics_collector;
 
 use axum::{
     extract::{Path, Query, State},
@@ -322,6 +323,13 @@ async fn main() -> anyhow::Result<()> {
     });
     snapshot_scheduler.start_scheduler(vm_getter);
     info!("Snapshot scheduler background task started");
+
+    // Start metrics collection background task
+    metrics_collector::start_metrics_collector(
+        state.ws_state.clone(),
+        state.monitoring_manager.clone(),
+        state.vm_manager.clone(),
+    );
 
     // Static files serving for the frontend
     let serve_dir = ServeDir::new("horcrux-ui/dist")

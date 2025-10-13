@@ -7,6 +7,7 @@ mod container_list;
 mod snapshot_list;
 mod clone_list;
 mod replication_list;
+mod monitoring;
 
 pub use dashboard::Dashboard;
 pub use vm_list::VmList;
@@ -17,3 +18,4 @@ pub use container_list::ContainerList;
 pub use snapshot_list::SnapshotList;
 pub use clone_list::CloneList;
 pub use replication_list::ReplicationList;
+pub use monitoring::Monitoring;

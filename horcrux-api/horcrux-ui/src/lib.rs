@@ -5,8 +5,9 @@ use leptos_router::*;
 mod api;
 mod components;
 mod pages;
+mod websocket;
 
-use pages::{Dashboard, VmList, VmCreate, Alerts, Login, ContainerList, SnapshotList, CloneList, ReplicationList};
+use pages::{Dashboard, VmList, VmCreate, Alerts, Login, ContainerList, SnapshotList, CloneList, ReplicationList, Monitoring};
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -30,6 +31,7 @@ pub fn App() -> impl IntoView {
                     <A href="/snapshots" class="navbar-item">"Snapshots"</A>
                     <A href="/clones" class="navbar-item">"Clones"</A>
                     <A href="/replication" class="navbar-item">"Replication"</A>
+                    <A href="/monitoring" class="navbar-item">"Monitoring"</A>
                     <A href="/alerts" class="navbar-item">"Alerts"</A>
                 </div>
             </nav>
@@ -43,6 +45,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/snapshots" view=SnapshotList/>
                     <Route path="/clones" view=CloneList/>
                     <Route path="/replication" view=ReplicationList/>
+                    <Route path="/monitoring" view=Monitoring/>
                     <Route path="/alerts" view=Alerts/>
                     <Route path="/login" view=Login/>
                 </Routes>
