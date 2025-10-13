@@ -154,3 +154,238 @@ pub async fn get_cluster_nodes() -> Result<Vec<ClusterNode>, ApiError> {
         Err(ApiError { message: format!("HTTP {}", response.status()) })
     }
 }
+
+// Container Management APIs
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Container {
+    pub id: String,
+    pub name: String,
+    pub runtime: String,
+    pub image: String,
+    pub status: String,
+    pub created_at: Option<String>,
+}
+
+/// Get all containers
+pub async fn get_containers() -> Result<Vec<Container>, ApiError> {
+    let response = reqwasm::http::Request::get(&format!("{}/containers", API_BASE))
+        .send()
+        .await
+        .map_err(|e| ApiError { message: e.to_string() })?;
+
+    if response.ok() {
+        response.json().await.map_err(|e| ApiError { message: e.to_string() })
+    } else {
+        Err(ApiError { message: format!("HTTP {}", response.status()) })
+    }
+}
+
+/// Start a container
+pub async fn start_container(container_id: &str) -> Result<(), ApiError> {
+    let response = reqwasm::http::Request::post(&format!("{}/containers/{}/start", API_BASE, container_id))
+        .send()
+        .await
+        .map_err(|e| ApiError { message: e.to_string() })?;
+
+    if response.ok() {
+        Ok(())
+    } else {
+        Err(ApiError { message: format!("HTTP {}", response.status()) })
+    }
+}
+
+/// Stop a container
+pub async fn stop_container(container_id: &str) -> Result<(), ApiError> {
+    let response = reqwasm::http::Request::post(&format!("{}/containers/{}/stop", API_BASE, container_id))
+        .send()
+        .await
+        .map_err(|e| ApiError { message: e.to_string() })?;
+
+    if response.ok() {
+        Ok(())
+    } else {
+        Err(ApiError { message: format!("HTTP {}", response.status()) })
+    }
+}
+
+/// Delete a container
+pub async fn delete_container(container_id: &str) -> Result<(), ApiError> {
+    let response = reqwasm::http::Request::delete(&format!("{}/containers/{}", API_BASE, container_id))
+        .send()
+        .await
+        .map_err(|e| ApiError { message: e.to_string() })?;
+
+    if response.ok() {
+        Ok(())
+    } else {
+        Err(ApiError { message: format!("HTTP {}", response.status()) })
+    }
+}
+
+// Snapshot Management APIs
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Snapshot {
+    pub id: String,
+    pub vm_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub created_at: String,
+    pub size_bytes: u64,
+    pub include_memory: bool,
+}
+
+/// Get snapshots for a VM
+pub async fn get_vm_snapshots(vm_id: &str) -> Result<Vec<Snapshot>, ApiError> {
+    let response = reqwasm::http::Request::get(&format!("{}/vms/{}/snapshots", API_BASE, vm_id))
+        .send()
+        .await
+        .map_err(|e| ApiError { message: e.to_string() })?;
+
+    if response.ok() {
+        response.json().await.map_err(|e| ApiError { message: e.to_string() })
+    } else {
+        Err(ApiError { message: format!("HTTP {}", response.status()) })
+    }
+}
+
+/// Create a snapshot
+pub async fn create_snapshot(vm_id: &str, name: &str, description: Option<String>, include_memory: bool) -> Result<Snapshot, ApiError> {
+    #[derive(Serialize)]
+    struct CreateRequest {
+        name: String,
+        description: Option<String>,
+        include_memory: bool,
+    }
+
+    let request = CreateRequest {
+        name: name.to_string(),
+        description,
+        include_memory,
+    };
+
+    let response = reqwasm::http::Request::post(&format!("{}/vms/{}/snapshots", API_BASE, vm_id))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&request).unwrap())
+        .send()
+        .await
+        .map_err(|e| ApiError { message: e.to_string() })?;
+
+    if response.ok() {
+        response.json().await.map_err(|e| ApiError { message: e.to_string() })
+    } else {
+        Err(ApiError { message: format!("HTTP {}", response.status()) })
+    }
+}
+
+/// Restore a snapshot
+pub async fn restore_snapshot(vm_id: &str, snapshot_id: &str) -> Result<(), ApiError> {
+    let response = reqwasm::http::Request::post(&format!("{}/vms/{}/snapshots/{}/restore", API_BASE, vm_id, snapshot_id))
+        .send()
+        .await
+        .map_err(|e| ApiError { message: e.to_string() })?;
+
+    if response.ok() {
+        Ok(())
+    } else {
+        Err(ApiError { message: format!("HTTP {}", response.status()) })
+    }
+}
+
+/// Delete a snapshot
+pub async fn delete_snapshot(vm_id: &str, snapshot_id: &str) -> Result<(), ApiError> {
+    let response = reqwasm::http::Request::delete(&format!("{}/vms/{}/snapshots/{}", API_BASE, vm_id, snapshot_id))
+        .send()
+        .await
+        .map_err(|e| ApiError { message: e.to_string() })?;
+
+    if response.ok() {
+        Ok(())
+    } else {
+        Err(ApiError { message: format!("HTTP {}", response.status()) })
+    }
+}
+
+// Clone Management APIs
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CloneJob {
+    pub job_id: String,
+    pub source_vm_id: String,
+    pub target_vm_name: String,
+    pub clone_type: String,
+    pub status: String,
+    pub progress: f64,
+    pub created_at: String,
+}
+
+/// Get all clone jobs
+pub async fn get_clone_jobs() -> Result<Vec<CloneJob>, ApiError> {
+    let response = reqwasm::http::Request::get(&format!("{}/vms/clone/jobs", API_BASE))
+        .send()
+        .await
+        .map_err(|e| ApiError { message: e.to_string() })?;
+
+    if response.ok() {
+        response.json().await.map_err(|e| ApiError { message: e.to_string() })
+    } else {
+        Err(ApiError { message: format!("HTTP {}", response.status()) })
+    }
+}
+
+// Replication Management APIs
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReplicationJob {
+    pub id: String,
+    pub vm_id: String,
+    pub source_node: String,
+    pub target_node: String,
+    pub schedule: String,
+    pub enabled: bool,
+    pub last_sync: Option<String>,
+    pub status: String,
+}
+
+/// Get all replication jobs
+pub async fn get_replication_jobs() -> Result<Vec<ReplicationJob>, ApiError> {
+    let response = reqwasm::http::Request::get(&format!("{}/replication/jobs", API_BASE))
+        .send()
+        .await
+        .map_err(|e| ApiError { message: e.to_string() })?;
+
+    if response.ok() {
+        response.json().await.map_err(|e| ApiError { message: e.to_string() })
+    } else {
+        Err(ApiError { message: format!("HTTP {}", response.status()) })
+    }
+}
+
+/// Execute a replication job
+pub async fn execute_replication(job_id: &str) -> Result<(), ApiError> {
+    let response = reqwasm::http::Request::post(&format!("{}/replication/jobs/{}/execute", API_BASE, job_id))
+        .send()
+        .await
+        .map_err(|e| ApiError { message: e.to_string() })?;
+
+    if response.ok() {
+        Ok(())
+    } else {
+        Err(ApiError { message: format!("HTTP {}", response.status()) })
+    }
+}
+
+/// Delete a replication job
+pub async fn delete_replication(job_id: &str) -> Result<(), ApiError> {
+    let response = reqwasm::http::Request::delete(&format!("{}/replication/jobs/{}", API_BASE, job_id))
+        .send()
+        .await
+        .map_err(|e| ApiError { message: e.to_string() })?;
+
+    if response.ok() {
+        Ok(())
+    } else {
+        Err(ApiError { message: format!("HTTP {}", response.status()) })
+    }
+}

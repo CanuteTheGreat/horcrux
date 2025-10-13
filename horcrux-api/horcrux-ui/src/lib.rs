@@ -6,7 +6,7 @@ mod api;
 mod components;
 mod pages;
 
-use pages::{Dashboard, VmList, VmCreate, Alerts, Login};
+use pages::{Dashboard, VmList, VmCreate, Alerts, Login, ContainerList, SnapshotList, CloneList, ReplicationList};
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -27,8 +27,9 @@ pub fn App() -> impl IntoView {
                     <A href="/" class="navbar-item">"Dashboard"</A>
                     <A href="/vms" class="navbar-item">"Virtual Machines"</A>
                     <A href="/containers" class="navbar-item">"Containers"</A>
-                    <A href="/storage" class="navbar-item">"Storage"</A>
-                    <A href="/cluster" class="navbar-item">"Cluster"</A>
+                    <A href="/snapshots" class="navbar-item">"Snapshots"</A>
+                    <A href="/clones" class="navbar-item">"Clones"</A>
+                    <A href="/replication" class="navbar-item">"Replication"</A>
                     <A href="/alerts" class="navbar-item">"Alerts"</A>
                 </div>
             </nav>
@@ -38,6 +39,10 @@ pub fn App() -> impl IntoView {
                     <Route path="/" view=Dashboard/>
                     <Route path="/vms" view=VmList/>
                     <Route path="/vms/create" view=VmCreate/>
+                    <Route path="/containers" view=ContainerList/>
+                    <Route path="/snapshots" view=SnapshotList/>
+                    <Route path="/clones" view=CloneList/>
+                    <Route path="/replication" view=ReplicationList/>
                     <Route path="/alerts" view=Alerts/>
                     <Route path="/login" view=Login/>
                 </Routes>

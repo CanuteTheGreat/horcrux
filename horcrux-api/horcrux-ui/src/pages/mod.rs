@@ -3,9 +3,17 @@ mod vm_list;
 mod vm_create;
 mod alerts;
 mod login;
+mod container_list;
+mod snapshot_list;
+mod clone_list;
+mod replication_list;
 
 pub use dashboard::Dashboard;
 pub use vm_list::VmList;
 pub use vm_create::VmCreate;
 pub use alerts::Alerts;
 pub use login::Login;
+pub use container_list::ContainerList;
+pub use snapshot_list::SnapshotList;
+pub use clone_list::CloneList;
+pub use replication_list::ReplicationList;
