@@ -71,6 +71,9 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono", "uuid
 # Security - constant-time comparison
 subtle = "2.5"
 
+# Docker API client
+bollard = "0.17"
+
 [features]
 default = ["qemu", "lxc", "docker"]
 

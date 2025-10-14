@@ -193,8 +193,12 @@ pub fn read_container_blkio_stats(container_id: &str) -> io::Result<(u64, u64)> 
 
 /// Get container metrics via Docker API (alternative method)
 pub async fn get_docker_container_stats(container_id: &str) -> io::Result<ContainerMetrics> {
-    // For now, fall back to cgroups
-    // In production, you could use bollard (Docker API client)
+    // Try Docker API first (requires bollard and Docker daemon)
+    if let Ok(stats) = get_docker_container_stats_via_api(container_id).await {
+        return Ok(stats);
+    }
+
+    // Fall back to cgroups if Docker API unavailable
     let (memory_usage, memory_limit) = read_container_memory_usage(container_id)?;
     let _cpu_usage_ns = read_container_cpu_usage(container_id)?;
     let (block_read, block_write) = read_container_blkio_stats(container_id)?;
@@ -213,10 +217,96 @@ pub async fn get_docker_container_stats(container_id: &str) -> io::Result<Contai
     })
 }
 
+/// Get container stats via Docker API using bollard
+async fn get_docker_container_stats_via_api(container_id: &str) -> io::Result<ContainerMetrics> {
+    use bollard::Docker;
+    use bollard::container::StatsOptions;
+    use futures::StreamExt;
+
+    // Connect to Docker API
+    let docker = Docker::connect_with_local_defaults()
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Docker API unavailable: {}", e)))?;
+
+    let stats_options = StatsOptions {
+        stream: false,
+        one_shot: true,
+    };
+
+    let mut stats_stream = docker.stats(container_id, Some(stats_options));
+
+    if let Some(stats_result) = stats_stream.next().await {
+        let stats = stats_result
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to get stats: {}", e)))?;
+
+        // Parse CPU stats
+        let cpu_delta = stats.cpu_stats.cpu_usage.total_usage
+            - stats.precpu_stats.cpu_usage.total_usage;
+        let system_delta = stats.cpu_stats.system_cpu_usage.unwrap_or(0)
+            - stats.precpu_stats.system_cpu_usage.unwrap_or(0);
+        let num_cpus = stats.cpu_stats.online_cpus.unwrap_or(1) as f64;
+
+        let cpu_percent = if system_delta > 0 {
+            (cpu_delta as f64 / system_delta as f64) * num_cpus * 100.0
+        } else {
+            0.0
+        };
+
+        // Parse memory stats
+        let memory_usage = stats.memory_stats.usage.unwrap_or(0);
+        let memory_limit = stats.memory_stats.limit.unwrap_or(0);
+
+        // Parse network stats
+        let mut network_rx_bytes = 0u64;
+        let mut network_tx_bytes = 0u64;
+
+        if let Some(networks) = stats.networks {
+            for (_interface, net_stats) in networks {
+                network_rx_bytes += net_stats.rx_bytes;
+                network_tx_bytes += net_stats.tx_bytes;
+            }
+        }
+
+        // Parse block I/O stats
+        let mut block_read_bytes = 0u64;
+        let mut block_write_bytes = 0u64;
+
+        if let Some(blkio_stats) = stats.blkio_stats.io_service_bytes_recursive {
+            for entry in blkio_stats {
+                match entry.op.as_str() {
+                    "Read" => block_read_bytes += entry.value,
+                    "Write" => block_write_bytes += entry.value,
+                    _ => {}
+                }
+            }
+        }
+
+        return Ok(ContainerMetrics {
+            cpu_usage_percent: cpu_percent,
+            memory_usage_bytes: memory_usage,
+            memory_limit_bytes: memory_limit,
+            network_rx_bytes,
+            network_tx_bytes,
+            block_read_bytes,
+            block_write_bytes,
+        });
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("No stats available for container {}", container_id),
+    ))
+}
+
 /// Get all containers from Docker
 pub fn list_running_containers() -> io::Result<Vec<String>> {
-    // This would use Docker API in production
-    // For now, scan cgroups
+    // Try Docker API first
+    if let Ok(containers) = tokio::runtime::Handle::try_current() {
+        if let Ok(result) = containers.block_on(list_containers_via_docker_api()) {
+            return Ok(result);
+        }
+    }
+
+    // Fall back to scanning cgroups
     let mut containers = Vec::new();
 
     if let Ok(entries) = fs::read_dir("/sys/fs/cgroup/system.slice") {
@@ -236,6 +326,32 @@ pub fn list_running_containers() -> io::Result<Vec<String>> {
     }
 
     Ok(containers)
+}
+
+/// List containers via Docker API
+async fn list_containers_via_docker_api() -> io::Result<Vec<String>> {
+    use bollard::Docker;
+    use bollard::container::ListContainersOptions;
+
+    let docker = Docker::connect_with_local_defaults()
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Docker API unavailable: {}", e)))?;
+
+    let options = Some(ListContainersOptions::<String> {
+        all: false, // Only running containers
+        ..Default::default()
+    });
+
+    let containers = docker
+        .list_containers(options)
+        .await
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to list containers: {}", e)))?;
+
+    let ids: Vec<String> = containers
+        .into_iter()
+        .filter_map(|c| c.id)
+        .collect();
+
+    Ok(ids)
 }
 
 #[cfg(test)]
