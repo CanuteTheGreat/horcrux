@@ -303,6 +303,13 @@ impl SnapshotScheduler {
             }
         });
     }
+
+    /// Stop the scheduler (for graceful shutdown)
+    pub async fn stop(&self) {
+        // Clear all schedules
+        self.schedules.write().await.clear();
+        info!("Snapshot scheduler stopped");
+    }
 }
 
 #[cfg(test)]

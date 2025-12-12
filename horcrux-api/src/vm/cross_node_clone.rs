@@ -646,6 +646,7 @@ mod tests {
             ssh_user: Some("root".to_string()),
             compression_enabled: true,
             bandwidth_limit_mbps: Some(100),
+            target_volume_group: Some("vg0".to_string()),
         };
 
         assert_eq!(config.source_node, "node1.example.com");
@@ -676,6 +677,7 @@ mod tests {
             ssh_user: None,
             compression_enabled: false,
             bandwidth_limit_mbps: None,
+            target_volume_group: None,
         };
 
         let job = CrossNodeCloneJob {

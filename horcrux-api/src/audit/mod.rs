@@ -4,6 +4,7 @@
 
 pub mod database;
 pub mod middleware;
+pub mod rotation;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

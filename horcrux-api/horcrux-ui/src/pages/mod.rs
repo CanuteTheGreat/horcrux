@@ -12,6 +12,7 @@ mod gpu;
 mod kubernetes;
 mod storage;
 mod network;
+mod console;
 
 pub use dashboard::Dashboard;
 pub use vm_list::VmList;
@@ -27,3 +28,4 @@ pub use gpu::GpuManagement;
 pub use kubernetes::KubernetesManagement;
 pub use storage::StorageManagement;
 pub use network::NetworkManagement;
+pub use console::{ConsolePage, VmConsole};

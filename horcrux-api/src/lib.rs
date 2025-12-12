@@ -86,3 +86,9 @@ pub mod openapi;
 
 // Logging configuration
 pub mod logging;
+
+// Health checks and readiness probes
+pub mod health;
+
+// Graceful shutdown handling
+pub mod shutdown;

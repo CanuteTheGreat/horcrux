@@ -4,6 +4,8 @@
 
 #![allow(dead_code)]
 
+pub mod fencing;
+
 use horcrux_common::Result;
 use std::collections::HashMap;
 use std::sync::Arc;

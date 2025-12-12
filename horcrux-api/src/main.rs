@@ -31,6 +31,8 @@ mod openapi;
 mod metrics_collector;
 mod metrics;
 mod encryption;
+mod health;
+mod shutdown;
 
 #[cfg(feature = "kubernetes")]
 mod kubernetes;
@@ -435,6 +437,10 @@ async fn main() -> anyhow::Result<()> {
     // Build main app with public and protected routes
     let app = Router::new()
         .route("/api/health", get(health_check))
+        .route("/api/health/detailed", get(health_detailed))
+        .route("/api/health/live", get(liveness_probe))
+        .route("/api/health/ready", get(readiness_probe))
+        .with_state(state.clone())
         // Merge OpenAPI / Swagger UI routes (public, for documentation)
         .merge(openapi::openapi_routes())
         // Merge protected routes (with auth middleware)
@@ -452,16 +458,52 @@ async fn main() -> anyhow::Result<()> {
         // Serve static files (frontend) - must be last to act as fallback
         .fallback_service(serve_dir);
 
+    // Set up graceful shutdown
+    let shutdown_coordinator = shutdown::ShutdownCoordinator::new();
+    let graceful = shutdown::GracefulShutdown::new(shutdown_coordinator.clone());
+
+    // Clone managers for cleanup from state
+    let db_for_cleanup = state.database.clone();
+    let ws_for_cleanup = state.ws_state.clone();
+    let monitoring_for_cleanup = state.monitoring_manager.clone();
+    let scheduler_for_cleanup = state.snapshot_scheduler.clone();
+
     // Start server
-    let addr = "0.0.0.0:8006"; // Using Proxmox's default port
+    let addr = format!(
+        "{}:{}",
+        horcrux_config.server.host,
+        horcrux_config.server.port
+    );
     info!("Horcrux API listening on {}", addr);
 
-    let listener = TcpListener::bind(addr).await?;
+    let listener = TcpListener::bind(&addr).await?;
+
+    // Spawn signal handler
+    let shutdown_signal = graceful.signal();
+
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown_signal)
     .await?;
+
+    // Run cleanup after server stops
+    info!("Server stopped, running cleanup...");
+
+    // Stop scheduler
+    scheduler_for_cleanup.stop().await;
+
+    // Stop monitoring
+    monitoring_for_cleanup.stop_collection().await;
+
+    // Close WebSocket connections
+    ws_for_cleanup.close_all().await;
+
+    // Close database
+    db_for_cleanup.close().await;
+
+    info!("Cleanup complete, exiting");
 
     Ok(())
 }
@@ -815,8 +857,63 @@ use error::ApiError;
 
 // API handlers
 
+/// Simple liveness check
 async fn health_check() -> &'static str {
     "OK"
+}
+
+/// Detailed health check with component status
+async fn health_detailed(
+    State(state): State<Arc<AppState>>,
+) -> Json<health::HealthResponse> {
+    let checker = health::HealthChecker::new(env!("CARGO_PKG_VERSION"));
+
+    let mut components = Vec::new();
+
+    // Check database
+    components.push(checker.check_database(&state.database).await);
+
+    // Check monitoring
+    components.push(checker.check_monitoring(&state.monitoring_manager).await);
+
+    // Check storage
+    components.push(checker.check_storage(&state.storage_manager).await);
+
+    // Check VM manager
+    components.push(checker.check_vm_manager(&state.vm_manager).await);
+
+    // Check cluster
+    components.push(checker.check_cluster(&state.cluster_manager).await);
+
+    // Check WebSocket
+    components.push(checker.check_websocket(&state.ws_state));
+
+    Json(checker.build_response(components))
+}
+
+/// Liveness probe for container orchestration
+async fn liveness_probe() -> Json<health::LivenessResponse> {
+    let checker = health::HealthChecker::new(env!("CARGO_PKG_VERSION"));
+    Json(checker.liveness())
+}
+
+/// Readiness probe for container orchestration
+async fn readiness_probe(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<health::ReadinessResponse>, StatusCode> {
+    let checker = health::HealthChecker::new(env!("CARGO_PKG_VERSION"));
+
+    // Check critical components
+    let db_health = checker.check_database(&state.database).await;
+
+    let components = vec![db_health];
+    let response = checker.readiness(&components);
+
+    if response.ready {
+        Ok(Json(response))
+    } else {
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
 }
 
 async fn list_vms(State(state): State<Arc<AppState>>) -> Json<Vec<VmConfig>> {

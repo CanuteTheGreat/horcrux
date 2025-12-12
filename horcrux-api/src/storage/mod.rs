@@ -11,6 +11,8 @@ pub mod nfs;
 pub mod glusterfs;
 pub mod btrfs;
 pub mod s3;
+pub mod migration;
+pub mod thin_provision;
 
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};

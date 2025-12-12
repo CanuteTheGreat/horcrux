@@ -72,10 +72,18 @@ impl Database {
     }
 
     /// Close the database connection
-    #[allow(dead_code)]
-    pub async fn close(self) {
+    pub async fn close(&self) {
         self.pool.close().await;
         tracing::info!("Database connection closed");
+    }
+
+    /// Health check - verify database connectivity
+    pub async fn health_check(&self) -> Result<()> {
+        sqlx::query("SELECT 1")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Database health check failed: {}", e)))?;
+        Ok(())
     }
 }
 

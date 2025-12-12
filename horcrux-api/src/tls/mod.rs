@@ -2,6 +2,8 @@
 ///!
 ///! Provides secure HTTPS connections and certificate management
 
+pub mod mtls;
+
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

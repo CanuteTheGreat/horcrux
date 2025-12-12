@@ -479,3 +479,102 @@ pub async fn delete_replication(job_id: &str) -> Result<(), ApiError> {
         Err(ApiError { message: format!("HTTP {}", response.status()) })
     }
 }
+
+// =============================================================================
+// Console APIs
+// =============================================================================
+
+/// VM representation for console page
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Vm {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    pub cpus: u32,
+    pub memory: u64,
+}
+
+/// Get a single VM
+pub async fn get_vm(vm_id: &str) -> Result<Vm, ApiError> {
+    let response = reqwasm::http::Request::get(&format!("{}/vms/{}", API_BASE, vm_id))
+        .send()
+        .await
+        .map_err(|e| ApiError { message: e.to_string() })?;
+
+    if response.ok() {
+        response.json().await.map_err(|e| ApiError { message: e.to_string() })
+    } else {
+        Err(ApiError { message: format!("HTTP {}", response.status()) })
+    }
+}
+
+/// Get console URL for a VM
+pub async fn get_console_url(vm_id: &str, console_type: &str) -> Result<String, ApiError> {
+    let response = reqwasm::http::Request::get(&format!(
+        "{}/vms/{}/console?type={}",
+        API_BASE, vm_id, console_type
+    ))
+    .send()
+    .await
+    .map_err(|e| ApiError { message: e.to_string() })?;
+
+    if response.ok() {
+        #[derive(Deserialize)]
+        struct ConsoleResponse {
+            url: String,
+        }
+        let resp: ConsoleResponse = response.json().await
+            .map_err(|e| ApiError { message: e.to_string() })?;
+        Ok(resp.url)
+    } else {
+        Err(ApiError { message: format!("HTTP {}", response.status()) })
+    }
+}
+
+/// Send keys to console (e.g., Ctrl+Alt+Del)
+pub async fn send_console_keys(vm_id: &str, keys: &[&str]) -> Result<(), ApiError> {
+    #[derive(Serialize)]
+    struct KeysRequest<'a> {
+        keys: &'a [&'a str],
+    }
+
+    let response = reqwasm::http::Request::post(&format!("{}/vms/{}/console/keys", API_BASE, vm_id))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&KeysRequest { keys }).unwrap())
+        .send()
+        .await
+        .map_err(|e| ApiError { message: e.to_string() })?;
+
+    if response.ok() {
+        Ok(())
+    } else {
+        Err(ApiError { message: format!("HTTP {}", response.status()) })
+    }
+}
+
+/// Send input to serial console
+pub async fn send_serial_input(vm_id: &str, input: &str) -> Result<String, ApiError> {
+    #[derive(Serialize)]
+    struct SerialInput<'a> {
+        input: &'a str,
+    }
+
+    let response = reqwasm::http::Request::post(&format!("{}/vms/{}/console/serial", API_BASE, vm_id))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&SerialInput { input }).unwrap())
+        .send()
+        .await
+        .map_err(|e| ApiError { message: e.to_string() })?;
+
+    if response.ok() {
+        #[derive(Deserialize)]
+        struct SerialOutput {
+            output: String,
+        }
+        let resp: SerialOutput = response.json().await
+            .map_err(|e| ApiError { message: e.to_string() })?;
+        Ok(resp.output)
+    } else {
+        Err(ApiError { message: format!("HTTP {}", response.status()) })
+    }
+}

@@ -791,6 +791,21 @@ impl MonitoringManager {
 
         Ok((load1, load5, load15))
     }
+
+    /// Collect resource metrics for health check
+    pub async fn collect_resource_metrics(&self) -> Result<NodeMetrics> {
+        Self::collect_node_metrics().await
+    }
+
+    /// Stop metrics collection (cleanup for graceful shutdown)
+    pub async fn stop_collection(&self) {
+        // Clear all cached metrics
+        self.vm_metrics.write().await.clear();
+        self.container_metrics.write().await.clear();
+        self.storage_metrics.write().await.clear();
+        *self.node_metrics.write().await = None;
+        tracing::info!("Monitoring collection stopped");
+    }
 }
 
 #[cfg(test)]

@@ -280,13 +280,44 @@ pub const TOPIC_HELM: &str = "helm:releases";
 pub struct WsState {
     /// Event broadcaster
     pub tx: broadcast::Sender<WsEvent>,
+    /// Active connection count
+    connection_count: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl WsState {
     /// Create new WebSocket state
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(1000);
-        Self { tx }
+        Self {
+            tx,
+            connection_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }
+    }
+
+    /// Get the number of active connections
+    pub fn connection_count(&self) -> usize {
+        self.connection_count.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Increment connection count
+    pub fn increment_connections(&self) {
+        self.connection_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Decrement connection count
+    pub fn decrement_connections(&self) {
+        self.connection_count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Close all connections by broadcasting shutdown
+    pub async fn close_all(&self) {
+        // Broadcast a shutdown notification
+        self.broadcast(WsEvent::Notification {
+            level: "info".to_string(),
+            title: "Server Shutdown".to_string(),
+            message: "Server is shutting down. Please reconnect shortly.".to_string(),
+            timestamp: Self::timestamp(),
+        });
     }
 
     /// Broadcast an event to all connected clients
