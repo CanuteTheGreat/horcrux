@@ -1,9 +1,12 @@
 ///! Container metrics collection via cgroups
 ///! Supports both cgroups v1 and v2
 
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Container metrics
 #[derive(Debug, Clone)]
@@ -15,6 +18,61 @@ pub struct ContainerMetrics {
     pub network_tx_bytes: u64,
     pub block_read_bytes: u64,
     pub block_write_bytes: u64,
+}
+
+/// Previous CPU measurement for delta calculation
+#[derive(Debug, Clone)]
+struct CpuSample {
+    cpu_usage_ns: u64,
+    timestamp_ns: u64,
+}
+
+/// Cache of previous CPU samples for calculating CPU percentage
+static CPU_SAMPLES: OnceLock<Mutex<HashMap<String, CpuSample>>> = OnceLock::new();
+
+fn get_cpu_samples() -> &'static Mutex<HashMap<String, CpuSample>> {
+    CPU_SAMPLES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Get current timestamp in nanoseconds
+fn current_timestamp_ns() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
+}
+
+/// Calculate CPU percentage using previous sample
+fn calculate_cpu_percent(container_id: &str, current_cpu_ns: u64) -> f64 {
+    let current_time_ns = current_timestamp_ns();
+
+    let mut samples = get_cpu_samples().lock().unwrap();
+
+    let cpu_percent = if let Some(prev) = samples.get(container_id) {
+        let cpu_delta = current_cpu_ns.saturating_sub(prev.cpu_usage_ns) as f64;
+        let time_delta = current_time_ns.saturating_sub(prev.timestamp_ns) as f64;
+
+        if time_delta > 0.0 {
+            // CPU percentage = (CPU time used / elapsed time) * 100
+            // CPU time is in nanoseconds, elapsed time is also in nanoseconds
+            (cpu_delta / time_delta) * 100.0
+        } else {
+            0.0
+        }
+    } else {
+        0.0 // First sample, no delta available
+    };
+
+    // Store current sample for next calculation
+    samples.insert(
+        container_id.to_string(),
+        CpuSample {
+            cpu_usage_ns: current_cpu_ns,
+            timestamp_ns: current_time_ns,
+        },
+    );
+
+    cpu_percent
 }
 
 /// Detect cgroups version
@@ -200,21 +258,107 @@ pub async fn get_docker_container_stats(container_id: &str) -> io::Result<Contai
 
     // Fall back to cgroups if Docker API unavailable
     let (memory_usage, memory_limit) = read_container_memory_usage(container_id)?;
-    let _cpu_usage_ns = read_container_cpu_usage(container_id)?;
+    let cpu_usage_ns = read_container_cpu_usage(container_id)?;
     let (block_read, block_write) = read_container_blkio_stats(container_id)?;
 
-    // Calculate CPU percentage (simplified - would need time delta in production)
-    let cpu_percent = 0.0; // TODO: Calculate from time delta
+    // Calculate CPU percentage using time delta from previous sample
+    let cpu_percent = calculate_cpu_percent(container_id, cpu_usage_ns);
+
+    // Try to get network stats
+    let (network_rx, network_tx) = read_container_network_stats(container_id).unwrap_or((0, 0));
 
     Ok(ContainerMetrics {
         cpu_usage_percent: cpu_percent,
         memory_usage_bytes: memory_usage,
         memory_limit_bytes: memory_limit,
-        network_rx_bytes: 0, // TODO: Get from network namespace
-        network_tx_bytes: 0,
+        network_rx_bytes: network_rx,
+        network_tx_bytes: network_tx,
         block_read_bytes: block_read,
         block_write_bytes: block_write,
     })
+}
+
+/// Read network stats for a container from /proc/net/dev in its network namespace
+fn read_container_network_stats(container_id: &str) -> io::Result<(u64, u64)> {
+    // Try to get PID of the container's init process
+    let pid = get_container_init_pid(container_id)?;
+
+    // Read network stats from container's network namespace
+    let net_dev_path = format!("/proc/{}/net/dev", pid);
+    let content = fs::read_to_string(&net_dev_path)?;
+
+    let mut rx_bytes = 0u64;
+    let mut tx_bytes = 0u64;
+
+    for line in content.lines().skip(2) {
+        // Skip header lines
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        // Parse interface name and stats
+        let parts: Vec<&str> = line.split(':').collect();
+        if parts.len() != 2 {
+            continue;
+        }
+
+        let interface = parts[0].trim();
+        // Skip loopback interface
+        if interface == "lo" {
+            continue;
+        }
+
+        let stats: Vec<&str> = parts[1].split_whitespace().collect();
+        if stats.len() >= 10 {
+            // Fields: rx_bytes, rx_packets, rx_errs, rx_drop, rx_fifo, rx_frame, rx_compressed, rx_multicast
+            //         tx_bytes, tx_packets, tx_errs, tx_drop, tx_fifo, tx_colls, tx_carrier, tx_compressed
+            if let Ok(rx) = stats[0].parse::<u64>() {
+                rx_bytes += rx;
+            }
+            if let Ok(tx) = stats[8].parse::<u64>() {
+                tx_bytes += tx;
+            }
+        }
+    }
+
+    Ok((rx_bytes, tx_bytes))
+}
+
+/// Get the init process PID for a container
+fn get_container_init_pid(container_id: &str) -> io::Result<u32> {
+    // Docker stores PID in a file
+    let docker_pid_file = format!("/var/run/docker/containerd/daemon/io.containerd.runtime.v2.task/moby/{}/init.pid", container_id);
+    if let Ok(content) = fs::read_to_string(&docker_pid_file) {
+        if let Ok(pid) = content.trim().parse::<u32>() {
+            return Ok(pid);
+        }
+    }
+
+    // Try alternative location for older Docker versions
+    let alt_pid_file = format!("/var/run/docker/libcontainerd/{}/init.pid", container_id);
+    if let Ok(content) = fs::read_to_string(&alt_pid_file) {
+        if let Ok(pid) = content.trim().parse::<u32>() {
+            return Ok(pid);
+        }
+    }
+
+    // Try reading from cgroup
+    let cgroup_path = get_container_cgroup_path(container_id, "")?;
+    let cgroup_procs = cgroup_path.join("cgroup.procs");
+    if let Ok(content) = fs::read_to_string(&cgroup_procs) {
+        // First PID in cgroup.procs is typically the init process
+        for line in content.lines() {
+            if let Ok(pid) = line.trim().parse::<u32>() {
+                return Ok(pid);
+            }
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("Cannot find PID for container {}", container_id),
+    ))
 }
 
 /// Get container stats via Docker API using bollard

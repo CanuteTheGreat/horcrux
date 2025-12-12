@@ -6,6 +6,7 @@ members = [
     "horcrux-mobile",
     "horcrux-common",
     "horcrux-cli",
+    "terraform-provider-horcrux",
 ]
 
 [workspace.package]

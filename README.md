@@ -18,6 +18,7 @@ Horcrux is a complete virtualization management platform designed specifically f
 
 - ✅ **More Hypervisors** - QEMU/KVM, LXD, Incus (vs Proxmox's QEMU only)
 - ✅ **More Container Runtimes** - LXC, LXD, Incus, Docker, Podman (vs Proxmox's LXC only)
+- ✅ **Kubernetes Integration** - Full K8s cluster management with Helm support
 - ✅ **Mixed-Architecture Clusters** - x86_64, aarch64, riscv64, ppc64le in same cluster
 - ✅ **Modern Language** - Rust vs Perl for safety and performance
 - ✅ **Gentoo Integration** - USE flags for fine-grained control
@@ -38,6 +39,42 @@ Horcrux is a complete virtualization management platform designed specifically f
   - Incus Containers - Via Incus backend
   - Docker - OCI containers
   - Podman - Daemonless containers
+
+### Kubernetes Integration
+
+- **Cluster Management:**
+  - Connect external clusters via kubeconfig
+  - Provision k3s and kubeadm clusters
+  - Multi-cluster support with health monitoring
+  - Cluster upgrades and node management
+
+- **Workload Management:**
+  - Pods, Deployments, StatefulSets, DaemonSets
+  - Jobs and CronJobs
+  - Scaling and rolling updates
+  - kubectl exec via WebSocket
+
+- **Networking:**
+  - Services (ClusterIP, NodePort, LoadBalancer)
+  - Ingress resources
+  - NetworkPolicies
+
+- **Configuration & Storage:**
+  - ConfigMaps and Secrets
+  - PersistentVolumeClaims
+  - StorageClasses
+
+- **Helm Support:**
+  - Chart installation, upgrade, rollback
+  - Repository management
+  - Release history and values
+
+- **Observability:**
+  - Real-time metrics (nodes, pods)
+  - Event streaming
+  - Container log tailing
+
+See [docs/KUBERNETES.md](docs/KUBERNETES.md) for complete K8s documentation.
 
 ### Storage Backends
 
@@ -356,9 +393,9 @@ cargo test test_vm_lifecycle
 
 ## 📈 Performance & Statistics
 
-- **44,000+ lines** of production Rust code
-- **150+ REST API endpoints** covering all operations
-- **80+ unit tests** (all passing ✓)
+- **50,000+ lines** of production Rust code
+- **230+ REST API endpoints** covering all operations (including 80+ K8s endpoints)
+- **340+ unit tests** (all passing ✓)
 - **Async/await** throughout for maximum concurrency
 - **Zero-copy** where possible for efficiency
 - **Memory-safe** Rust with compile-time checks
@@ -369,9 +406,10 @@ cargo test test_vm_lifecycle
 
 | Component | Status | Lines of Code | Tests |
 |-----------|--------|---------------|-------|
-| **Core API** | ✅ Production Ready | 30,000+ | 80+ passing |
+| **Core API** | ✅ Production Ready | 30,000+ | 340+ passing |
 | **VM Management** | ✅ Complete | 5,000+ | 53 tests |
 | **Container Support** | ✅ Complete | 3,000+ | - |
+| **Kubernetes** | ✅ Complete | 6,000+ | - |
 | **Storage Backends** | ✅ Complete | 3,000+ | - |
 | **Networking (SDN)** | ✅ Complete | 2,000+ | - |
 | **Authentication** | ✅ Complete | 1,500+ | 5 tests |
@@ -379,12 +417,13 @@ cargo test test_vm_lifecycle
 | **High Availability** | ✅ Complete | 900+ | - |
 | **Live Migration** | ✅ Complete | 2,500+ | - |
 | **Web UI** | ✅ Complete | 2,000+ | - |
-| **Documentation** | ✅ Complete | 10,000+ | - |
+| **Documentation** | ✅ Complete | 12,000+ | - |
 | **Client Libraries** | ✅ Complete | 2,500+ | - |
 
 ### Documentation Coverage
 
-- ✅ **Interactive API Docs**: Swagger UI at `/api/docs` with 150+ endpoints
+- ✅ **Interactive API Docs**: Swagger UI at `/api/docs` with 230+ endpoints
+- ✅ **Kubernetes Guide**: Comprehensive K8s integration docs (docs/KUBERNETES.md)
 - ✅ **OpenAPI Specification**: Complete OpenAPI 3.0 spec (1,700+ lines)
 - ✅ **CLI Documentation**: Comprehensive guide for all commands
 - ✅ **API Reference**: 3,000+ lines (100+ endpoints documented)

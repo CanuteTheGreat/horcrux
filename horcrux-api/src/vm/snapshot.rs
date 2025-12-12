@@ -7,9 +7,11 @@
 ///! - Delete snapshots
 ///! - Snapshot trees and rollback
 
+use crate::migration::qemu_monitor::QemuMonitor;
 use horcrux_common::{Result, VmConfig, VmStatus};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use tokio::fs;
 use tokio::process::Command;
 
@@ -67,6 +69,8 @@ pub struct SnapshotTreeNode {
 pub struct VmSnapshotManager {
     snapshots: HashMap<String, VmSnapshot>,
     snapshot_dir: String,
+    /// Pattern for QEMU monitor socket path (e.g., "/var/run/qemu/{vm_id}.qmp")
+    qmp_socket_pattern: String,
 }
 
 impl VmSnapshotManager {
@@ -74,7 +78,27 @@ impl VmSnapshotManager {
         Self {
             snapshots: HashMap::new(),
             snapshot_dir,
+            qmp_socket_pattern: "/var/run/qemu/{vm_id}.qmp".to_string(),
         }
+    }
+
+    /// Create with custom QMP socket pattern
+    pub fn with_qmp_socket_pattern(snapshot_dir: String, qmp_socket_pattern: String) -> Self {
+        Self {
+            snapshots: HashMap::new(),
+            snapshot_dir,
+            qmp_socket_pattern,
+        }
+    }
+
+    /// Get QEMU monitor socket path for a VM
+    fn get_qmp_socket_path(&self, vm_id: &str) -> PathBuf {
+        PathBuf::from(self.qmp_socket_pattern.replace("{vm_id}", vm_id))
+    }
+
+    /// Get QEMU monitor for a VM
+    fn get_qemu_monitor(&self, vm_id: &str) -> QemuMonitor {
+        QemuMonitor::new(self.get_qmp_socket_path(vm_id))
     }
 
     /// Create a VM snapshot
@@ -478,10 +502,52 @@ impl VmSnapshotManager {
         }
 
         // Restore memory if requested and available
-        if restore_memory && snapshot.memory_snapshot.is_some() {
-            // Start VM and restore memory state
-            tracing::info!("Restoring memory state (not yet implemented)");
-            // TODO: Implement memory restoration via QEMU migration
+        if restore_memory {
+            if let Some(ref memory_file) = snapshot.memory_snapshot {
+                tracing::info!("Restoring memory state from: {}", memory_file);
+
+                // Check if memory snapshot file exists
+                if fs::try_exists(memory_file).await.unwrap_or(false) {
+                    let monitor = self.get_qemu_monitor(&snapshot.vm_id);
+
+                    // Start VM with incoming migration (paused state)
+                    // The VM should be started with -incoming defer option
+                    // Then we trigger incoming migration from the memory file
+                    match monitor.migrate_incoming(memory_file).await {
+                        Ok(()) => {
+                            tracing::info!("Memory state restoration initiated for VM {}", snapshot.vm_id);
+
+                            // Wait for migration to complete
+                            let mut attempts = 0;
+                            while attempts < 30 {
+                                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                                if let Ok(status) = monitor.query_migrate().await {
+                                    if crate::migration::qemu_monitor::QemuMonitor::is_migration_complete(&status) {
+                                        if crate::migration::qemu_monitor::QemuMonitor::is_migration_failed(&status) {
+                                            tracing::error!("Memory restoration failed for VM {}", snapshot.vm_id);
+                                            break;
+                                        }
+                                        tracing::info!("Memory state restored for VM {}", snapshot.vm_id);
+                                        break;
+                                    }
+                                }
+                                attempts += 1;
+                            }
+
+                            // Resume VM after memory restoration
+                            let _ = monitor.cont().await;
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to restore memory state: {}", e);
+                            // Continue without memory restoration - VM can still be started fresh
+                        }
+                    }
+                } else {
+                    tracing::warn!("Memory snapshot file not found: {}", memory_file);
+                }
+            } else {
+                tracing::debug!("No memory snapshot available for this snapshot");
+            }
         }
 
         tracing::info!("Snapshot restored: {}", snapshot_id);
@@ -618,20 +684,62 @@ impl VmSnapshotManager {
     }
 
     async fn pause_vm(&self, vm_id: &str) -> Result<()> {
-        // TODO: Implement via QEMU monitor
-        tracing::info!("Pausing VM: {}", vm_id);
+        let qmp_socket = self.get_qmp_socket_path(vm_id);
+
+        // Check if QMP socket exists
+        if !qmp_socket.exists() {
+            tracing::warn!("QMP socket not found for VM {}, cannot pause via QEMU monitor", vm_id);
+            return Ok(());
+        }
+
+        tracing::info!("Pausing VM {} via QEMU monitor", vm_id);
+        let monitor = self.get_qemu_monitor(vm_id);
+        monitor.stop().await?;
+        tracing::info!("VM {} paused successfully", vm_id);
         Ok(())
     }
 
     async fn resume_vm(&self, vm_id: &str) -> Result<()> {
-        // TODO: Implement via QEMU monitor
-        tracing::info!("Resuming VM: {}", vm_id);
+        let qmp_socket = self.get_qmp_socket_path(vm_id);
+
+        // Check if QMP socket exists
+        if !qmp_socket.exists() {
+            tracing::warn!("QMP socket not found for VM {}, cannot resume via QEMU monitor", vm_id);
+            return Ok(());
+        }
+
+        tracing::info!("Resuming VM {} via QEMU monitor", vm_id);
+        let monitor = self.get_qemu_monitor(vm_id);
+        monitor.cont().await?;
+        tracing::info!("VM {} resumed successfully", vm_id);
         Ok(())
     }
 
     async fn stop_vm(&self, vm_id: &str) -> Result<()> {
-        // TODO: Implement via QEMU monitor
-        tracing::info!("Stopping VM: {}", vm_id);
+        let qmp_socket = self.get_qmp_socket_path(vm_id);
+
+        // Check if QMP socket exists
+        if !qmp_socket.exists() {
+            tracing::warn!("QMP socket not found for VM {}, cannot stop via QEMU monitor", vm_id);
+            return Ok(());
+        }
+
+        tracing::info!("Stopping VM {} via QEMU monitor (ACPI shutdown)", vm_id);
+        let monitor = self.get_qemu_monitor(vm_id);
+        monitor.system_powerdown().await?;
+
+        // Wait a bit for graceful shutdown, then force if needed
+        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+
+        // Check if still running, force quit if so
+        if let Ok(status) = monitor.query_status().await {
+            if status.running {
+                tracing::warn!("VM {} did not shut down gracefully, forcing quit", vm_id);
+                let _ = monitor.quit().await;
+            }
+        }
+
+        tracing::info!("VM {} stopped", vm_id);
         Ok(())
     }
 

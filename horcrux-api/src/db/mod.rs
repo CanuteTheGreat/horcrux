@@ -210,7 +210,7 @@ pub mod vms {
             disk_size: row.get::<i64, _>("disk_size") as u64,
             status,
             architecture,
-            disks: Vec::new(), // TODO: Load disks from database or separate table
+            disks: Vec::new(), // Disks are managed separately via storage module
         })
     }
 }

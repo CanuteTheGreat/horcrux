@@ -24,6 +24,8 @@ pub struct CrossNodeCloneConfig {
     pub ssh_user: Option<String>,
     pub compression_enabled: bool,
     pub bandwidth_limit_mbps: Option<u32>,
+    /// Target LVM volume group (defaults to "vg0")
+    pub target_volume_group: Option<String>,
 }
 
 /// Cross-node clone job status
@@ -417,7 +419,7 @@ impl CrossNodeCloneManager {
         let size = size_str.trim().trim_end_matches('G');
 
         // Create target LV
-        let target_vg = "vg0"; // TODO: Make configurable
+        let target_vg = config.target_volume_group.as_deref().unwrap_or("vg0");
         let target_lv_name = target_path.file_name()
             .and_then(|n| n.to_str())
             .ok_or_else(|| horcrux_common::Error::System("Invalid target path".to_string()))?;

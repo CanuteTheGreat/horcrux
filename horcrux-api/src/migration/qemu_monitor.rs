@@ -440,6 +440,186 @@ impl QemuMonitor {
     pub fn is_migration_failed(status: &MigrationStatus) -> bool {
         status.status == MigrationState::Failed
     }
+
+    // ============== VM Control Commands ==============
+
+    /// Stop (pause) the VM
+    pub async fn stop(&self) -> Result<()> {
+        info!("Stopping (pausing) VM");
+        self.execute_command("stop", None).await?;
+        info!("VM stopped successfully");
+        Ok(())
+    }
+
+    /// Continue (resume) the VM
+    pub async fn cont(&self) -> Result<()> {
+        info!("Continuing (resuming) VM");
+        self.execute_command("cont", None).await?;
+        info!("VM resumed successfully");
+        Ok(())
+    }
+
+    /// Quit QEMU (power off)
+    pub async fn quit(&self) -> Result<()> {
+        info!("Quitting QEMU");
+        self.execute_command("quit", None).await?;
+        Ok(())
+    }
+
+    /// System reset (reboot)
+    pub async fn system_reset(&self) -> Result<()> {
+        info!("Resetting VM");
+        self.execute_command("system_reset", None).await?;
+        Ok(())
+    }
+
+    /// System power down (ACPI shutdown)
+    pub async fn system_powerdown(&self) -> Result<()> {
+        info!("Sending ACPI power down to VM");
+        self.execute_command("system_powerdown", None).await?;
+        Ok(())
+    }
+
+    // ============== Snapshot Commands ==============
+
+    /// Save VM state (memory + device state) to file
+    pub async fn savevm(&self, name: &str) -> Result<()> {
+        info!("Saving VM state: {}", name);
+        let mut args = serde_json::Map::new();
+        args.insert("name".to_string(), serde_json::Value::String(name.to_string()));
+
+        self.execute_command("human-monitor-command", Some(serde_json::json!({
+            "command-line": format!("savevm {}", name)
+        }))).await?;
+
+        info!("VM state saved: {}", name);
+        Ok(())
+    }
+
+    /// Load VM state (restore from snapshot)
+    pub async fn loadvm(&self, name: &str) -> Result<()> {
+        info!("Loading VM state: {}", name);
+
+        self.execute_command("human-monitor-command", Some(serde_json::json!({
+            "command-line": format!("loadvm {}", name)
+        }))).await?;
+
+        info!("VM state loaded: {}", name);
+        Ok(())
+    }
+
+    /// Delete a VM snapshot
+    pub async fn delvm(&self, name: &str) -> Result<()> {
+        info!("Deleting VM snapshot: {}", name);
+
+        self.execute_command("human-monitor-command", Some(serde_json::json!({
+            "command-line": format!("delvm {}", name)
+        }))).await?;
+
+        info!("VM snapshot deleted: {}", name);
+        Ok(())
+    }
+
+    /// List VM snapshots
+    pub async fn info_snapshots(&self) -> Result<String> {
+        debug!("Listing VM snapshots");
+
+        let response = self.execute_command("human-monitor-command", Some(serde_json::json!({
+            "command-line": "info snapshots"
+        }))).await?;
+
+        // Response is in "return" field as a string
+        let output = response.as_str().unwrap_or("").to_string();
+        Ok(output)
+    }
+
+    /// Save memory state to file (for live migration/snapshot)
+    pub async fn migrate_to_file(&self, file_path: &str) -> Result<()> {
+        info!("Saving memory state to file: {}", file_path);
+
+        let uri = format!("exec:cat > {}", file_path);
+        self.migrate(&uri, false, false, false).await?;
+
+        info!("Memory state saved to: {}", file_path);
+        Ok(())
+    }
+
+    /// Restore memory state from file
+    pub async fn migrate_incoming(&self, file_path: &str) -> Result<()> {
+        info!("Starting incoming migration from file: {}", file_path);
+
+        let uri = format!("exec:cat {}", file_path);
+        let mut args = serde_json::Map::new();
+        args.insert("uri".to_string(), serde_json::Value::String(uri));
+
+        self.execute_command("migrate-incoming", Some(serde_json::Value::Object(args))).await?;
+
+        info!("Incoming migration started from: {}", file_path);
+        Ok(())
+    }
+
+    // ============== Block Device Commands ==============
+
+    /// Create disk snapshot (internal QCOW2 snapshot)
+    pub async fn blockdev_snapshot(&self, device: &str, snapshot_name: &str) -> Result<()> {
+        info!("Creating block device snapshot: {} -> {}", device, snapshot_name);
+
+        self.execute_command("human-monitor-command", Some(serde_json::json!({
+            "command-line": format!("snapshot_blkdev {} {}", device, snapshot_name)
+        }))).await?;
+
+        info!("Block device snapshot created");
+        Ok(())
+    }
+
+    /// Query block devices
+    pub async fn query_block(&self) -> Result<Vec<BlockInfo>> {
+        debug!("Querying block devices");
+
+        let response = self.execute_command("query-block", None).await?;
+
+        let blocks = response.as_array()
+            .ok_or_else(|| horcrux_common::Error::System(
+                "Expected array in query-block response".to_string()
+            ))?;
+
+        let mut result = Vec::new();
+        for block in blocks {
+            if let Some(device) = block.get("device").and_then(|d| d.as_str()) {
+                let inserted = block.get("inserted");
+                let file = inserted
+                    .and_then(|i| i.get("file"))
+                    .and_then(|f| f.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let ro = inserted
+                    .and_then(|i| i.get("ro"))
+                    .and_then(|r| r.as_bool())
+                    .unwrap_or(false);
+
+                result.push(BlockInfo {
+                    device: device.to_string(),
+                    file,
+                    read_only: ro,
+                    removable: block.get("removable")
+                        .and_then(|r| r.as_bool())
+                        .unwrap_or(false),
+                });
+            }
+        }
+
+        Ok(result)
+    }
+}
+
+/// Block device information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockInfo {
+    pub device: String,
+    pub file: String,
+    pub read_only: bool,
+    pub removable: bool,
 }
 
 #[cfg(test)]

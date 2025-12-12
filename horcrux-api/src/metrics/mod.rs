@@ -1,3 +1,6 @@
+// Allow dead code for library functions that may be used by API consumers
+#![allow(dead_code)]
+
 ///! Real metrics collection module
 ///! Provides actual system, VM, and container metrics
 

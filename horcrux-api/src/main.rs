@@ -1,3 +1,4 @@
+mod config;
 mod vm;
 mod container;
 mod storage;
@@ -29,6 +30,10 @@ mod websocket;
 mod openapi;
 mod metrics_collector;
 mod metrics;
+mod encryption;
+
+#[cfg(feature = "kubernetes")]
+mod kubernetes;
 
 use axum::{
     extract::{Path, Query, State},
@@ -64,6 +69,7 @@ use audit::AuditLogger;
 
 #[derive(Clone)]
 struct AppState {
+    config: Arc<config::HorcruxConfig>,
     vm_manager: Arc<VmManager>,
     container_manager: Arc<container::ContainerManager>,
     backup_manager: Arc<BackupManager>,
@@ -96,12 +102,23 @@ struct AppState {
     clone_job_manager: Arc<vm::clone_progress::CloneJobManager>,
     replication_manager: Arc<vm::replication::ReplicationManager>,
     ws_state: Arc<websocket::WsState>,
+    #[cfg(feature = "kubernetes")]
+    kubernetes_manager: Arc<kubernetes::KubernetesManager>,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Initialize tracing
     tracing_subscriber::fmt::init();
+
+    // Load configuration
+    let horcrux_config = config::HorcruxConfig::load();
+    if let Err(e) = horcrux_config.validate() {
+        error!("Configuration validation failed: {}", e);
+        return Err(anyhow::anyhow!("Invalid configuration: {}", e));
+    }
+    info!("Configuration loaded successfully");
+    let horcrux_config = Arc::new(horcrux_config);
 
     // Check if KVM is available
     if vm::qemu::QemuManager::check_kvm_available() {
@@ -118,7 +135,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize database
     let database = Arc::new(
-        db::Database::new("sqlite:///var/lib/horcrux/horcrux.db")
+        db::Database::new(&horcrux_config.database.url)
             .await
             .expect("Failed to connect to database")
     );
@@ -232,18 +249,19 @@ async fn main() -> anyhow::Result<()> {
     info!("Webhook manager initialized");
 
     // Initialize CNI manager
-    let cni_bin_dir = std::path::PathBuf::from("/opt/cni/bin");
-    let cni_conf_dir = std::path::PathBuf::from("/etc/cni/net.d");
-    let cni_manager = Arc::new(tokio::sync::RwLock::new(sdn::cni::CniManager::new(cni_bin_dir, cni_conf_dir)));
+    let cni_manager = Arc::new(tokio::sync::RwLock::new(sdn::cni::CniManager::new(
+        horcrux_config.cni.bin_dir.clone(),
+        horcrux_config.cni.conf_dir.clone(),
+    )));
 
     // Create default CNI network if CNI directories exist
-    if std::path::Path::new("/opt/cni/bin").exists() {
+    if horcrux_config.cni.enabled && horcrux_config.cni.bin_dir.exists() {
         match cni_manager.write().await.create_default_network().await {
             Ok(_) => info!("CNI default network created"),
             Err(e) => tracing::warn!("Failed to create default CNI network: {}", e),
         }
-    } else {
-        tracing::warn!("CNI binary directory not found at /opt/cni/bin - CNI features disabled");
+    } else if !horcrux_config.cni.bin_dir.exists() {
+        tracing::warn!("CNI binary directory not found at {:?} - CNI features disabled", horcrux_config.cni.bin_dir);
     }
 
     // Initialize Network Policy manager
@@ -251,7 +269,10 @@ async fn main() -> anyhow::Result<()> {
     info!("Network policy manager initialized");
 
     // Initialize VM Snapshot manager
-    let mut snapshot_manager = vm::snapshot::VmSnapshotManager::new("/var/lib/horcrux/snapshots".to_string());
+    let mut snapshot_manager = vm::snapshot::VmSnapshotManager::with_qmp_socket_pattern(
+        horcrux_config.paths.snapshots.to_string_lossy().to_string(),
+        horcrux_config.qemu.qmp_socket_pattern.clone(),
+    );
     snapshot_manager.load_snapshots().await?;
     let snapshot_manager = Arc::new(tokio::sync::RwLock::new(snapshot_manager));
     info!("VM Snapshot manager initialized");
@@ -265,7 +286,9 @@ async fn main() -> anyhow::Result<()> {
     info!("Snapshot quota manager initialized");
 
     // Initialize VM Clone manager
-    let clone_manager = Arc::new(vm::clone::VmCloneManager::new("/var/lib/horcrux/vms".to_string()));
+    let clone_manager = Arc::new(vm::clone::VmCloneManager::new(
+        horcrux_config.paths.vm_storage.to_string_lossy().to_string()
+    ));
     info!("VM Clone manager initialized");
 
     // Initialize Clone Job manager
@@ -276,12 +299,30 @@ async fn main() -> anyhow::Result<()> {
     let replication_manager = Arc::new(vm::replication::ReplicationManager::new());
     info!("Replication manager initialized");
 
+    // Initialize Kubernetes manager (if feature enabled)
+    #[cfg(feature = "kubernetes")]
+    let kubernetes_manager = {
+        let mgr = Arc::new(kubernetes::KubernetesManager::with_database_and_vault(
+            database.clone(),
+            Arc::new(VaultManager::new()),
+        ));
+        if let Err(e) = mgr.initialize().await {
+            tracing::warn!("Failed to initialize Kubernetes manager: {}", e);
+        } else {
+            info!("Kubernetes manager initialized");
+        }
+        mgr
+    };
+
     let state = Arc::new(AppState {
+        config: horcrux_config.clone(),
         vm_manager: Arc::new(VmManager::with_database(database.clone())),
         container_manager: Arc::new(container::ContainerManager::with_database(database.clone())),
-        backup_manager: Arc::new(BackupManager::new()),
+        backup_manager: Arc::new(BackupManager::with_restore_dir(
+            horcrux_config.paths.restore.clone()
+        )),
         cloudinit_manager: Arc::new(CloudInitManager::new(
-            std::path::PathBuf::from("/var/lib/horcrux/cloudinit")
+            horcrux_config.paths.cloudinit.clone()
         )),
         template_manager: Arc::new(TemplateManager::new()),
         auth_manager: Arc::new(AuthManager::new()),
@@ -293,7 +334,7 @@ async fn main() -> anyhow::Result<()> {
         otel_manager: Arc::new(OtelManager::new()),
         tls_manager: Arc::new(TlsManager::new()),
         vault_manager: Arc::new(VaultManager::new()),
-        audit_logger: Arc::new(AuditLogger::new(Some(std::path::PathBuf::from("/var/log/horcrux/audit.log")))),
+        audit_logger: Arc::new(AuditLogger::new(Some(horcrux_config.logging.audit_log.clone()))),
         database,
         _rate_limiter: rate_limiter.clone(),
         storage_manager: Arc::new(storage::StorageManager::new()),
@@ -311,6 +352,8 @@ async fn main() -> anyhow::Result<()> {
         clone_job_manager,
         replication_manager,
         ws_state: Arc::new(websocket::WsState::new()),
+        #[cfg(feature = "kubernetes")]
+        kubernetes_manager,
     });
 
     // Start snapshot scheduler background task
@@ -355,7 +398,7 @@ async fn main() -> anyhow::Result<()> {
     let serve_dir = ServeDir::new("horcrux-ui/dist")
         .not_found_service(ServeFile::new("horcrux-ui/dist/index.html"));
 
-    // Build auth router with strict rate limiting
+    // Build auth router with strict rate limiting (login/register)
     let auth_router = Router::new()
         .route("/api/auth/login", post(login))
         .route("/api/auth/register", post(register_user))
@@ -364,210 +407,22 @@ async fn main() -> anyhow::Result<()> {
             middleware::rate_limit::rate_limit_middleware(auth_rate_limiter.clone(), conn_info, req, next)
         }));
 
-    // Build protected routes (require authentication)
+    // Build protected routes using modular route builders
     let protected_routes = Router::new()
-        // VM endpoints
-        .route("/api/vms", get(list_vms))
-        .route("/api/vms", post(create_vm))
-        .route("/api/vms/:id", get(get_vm))
-        .route("/api/vms/:id/start", post(start_vm))
-        .route("/api/vms/:id/stop", post(stop_vm))
-        .route("/api/vms/:id", delete(delete_vm))
-        // VM Snapshot endpoints
-        .route("/api/vms/:id/snapshots", get(list_vm_snapshots))
-        .route("/api/vms/:id/snapshots", post(create_vm_snapshot))
-        .route("/api/vms/:id/snapshots/:snapshot_id", get(get_vm_snapshot))
-        .route("/api/vms/:id/snapshots/:snapshot_id", delete(delete_vm_snapshot))
-        .route("/api/vms/:id/snapshots/:snapshot_id/restore", post(restore_vm_snapshot))
-        .route("/api/vms/:id/snapshots/tree", get(get_vm_snapshot_tree))
-        // Snapshot Schedule endpoints
-        .route("/api/snapshot-schedules", get(list_snapshot_schedules))
-        .route("/api/snapshot-schedules", post(create_snapshot_schedule))
-        .route("/api/snapshot-schedules/:id", get(get_snapshot_schedule))
-        .route("/api/snapshot-schedules/:id", put(update_snapshot_schedule))
-        .route("/api/snapshot-schedules/:id", delete(delete_snapshot_schedule))
-        // VM Clone endpoints
-        .route("/api/vms/:id/clone", post(clone_vm))
-        .route("/api/vms/:id/clone-cross-node", post(clone_vm_cross_node))
-        // Clone Job Progress endpoints
-        .route("/api/clone-jobs", get(list_clone_jobs))
-        .route("/api/clone-jobs/:id", get(get_clone_job))
-        .route("/api/clone-jobs/:id/cancel", post(cancel_clone_job))
-        .route("/api/clone-jobs/:id", delete(delete_clone_job))
-        // Snapshot Quota endpoints
-        .route("/api/snapshot-quotas", get(list_snapshot_quotas))
-        .route("/api/snapshot-quotas", post(create_snapshot_quota))
-        .route("/api/snapshot-quotas/:id", get(get_snapshot_quota))
-        .route("/api/snapshot-quotas/:id", put(update_snapshot_quota))
-        .route("/api/snapshot-quotas/:id", delete(delete_snapshot_quota))
-        .route("/api/snapshot-quotas/:id/usage", get(get_snapshot_quota_usage))
-        .route("/api/snapshot-quotas/summary", get(get_snapshot_quota_summary))
-        .route("/api/snapshot-quotas/:id/enforce", post(enforce_snapshot_quota))
-        // Audit log endpoints
-        .route("/api/audit/events", get(query_audit_events))
-        .route("/api/audit/stats", get(get_audit_stats))
-        .route("/api/audit/security-events", get(get_security_events))
-        .route("/api/audit/failed-logins", get(get_failed_logins))
-        .route("/api/audit/brute-force", get(detect_brute_force_attempts))
-        // Replication endpoints
-        .route("/api/replication/jobs", get(list_replication_jobs))
-        .route("/api/replication/jobs", post(create_replication_job))
-        .route("/api/replication/jobs/:id", get(get_replication_job))
-        .route("/api/replication/jobs/:id", delete(delete_replication_job))
-        .route("/api/replication/jobs/:id/execute", post(execute_replication_job))
-        .route("/api/replication/jobs/:id/status", get(get_replication_status))
-        // Container endpoints
-        .route("/api/containers", get(list_containers))
-        .route("/api/containers", post(create_container))
-        .route("/api/containers/:id", get(get_container))
-        .route("/api/containers/:id", delete(delete_container))
-        .route("/api/containers/:id/start", post(start_container))
-        .route("/api/containers/:id/stop", post(stop_container))
-        .route("/api/containers/:id/pause", post(pause_container))
-        .route("/api/containers/:id/resume", post(resume_container))
-        .route("/api/containers/:id/status", get(get_container_status))
-        .route("/api/containers/:id/exec", post(exec_container_command))
-        .route("/api/containers/:id/clone", post(clone_container))
-        // Backup endpoints
-        .route("/api/backups", get(list_backups))
-        .route("/api/backups", post(create_backup))
-        .route("/api/backups/:id", get(get_backup))
-        .route("/api/backups/:id", delete(delete_backup))
-        .route("/api/backups/:id/restore", post(restore_backup))
-        // Backup job endpoints
-        .route("/api/backup-jobs", get(list_backup_jobs))
-        .route("/api/backup-jobs", post(create_backup_job))
-        .route("/api/backup-jobs/:id/run", post(run_backup_job_now))
-        // Retention policy endpoint
-        .route("/api/backups/retention/:target_id", post(apply_retention))
-        // Cloud-init endpoints
-        .route("/api/cloudinit/:vm_id", post(generate_cloudinit))
-        .route("/api/cloudinit/:vm_id", delete(delete_cloudinit))
-        // Template endpoints
-        .route("/api/templates", get(list_templates))
-        .route("/api/templates", post(create_template))
-        .route("/api/templates/:id", get(get_template))
-        .route("/api/templates/:id", delete(delete_template))
-        .route("/api/templates/:id/clone", post(clone_template))
-        // Auth endpoints (login and register are in auth_router with stricter rate limiting)
-        .route("/api/auth/logout", post(logout))
-        .route("/api/auth/verify", get(verify_session))
-        .route("/api/auth/password", post(change_password))
-        .route("/api/users", get(list_users))
-        .route("/api/users", post(create_user))
-        .route("/api/users/:id", delete(delete_user))
-        .route("/api/users/:username/api-keys", get(list_api_keys))
-        .route("/api/users/:username/api-keys", post(create_api_key))
-        .route("/api/users/:username/api-keys/:key_id", delete(revoke_api_key))
-        .route("/api/roles", get(list_roles))
-        .route("/api/permissions/:user_id", get(get_user_permissions))
-        .route("/api/permissions/:user_id", post(add_permission))
-        // Storage endpoints
-        .route("/api/storage/pools", get(list_storage_pools))
-        .route("/api/storage/pools/:id", get(get_storage_pool))
-        .route("/api/storage/pools", post(add_storage_pool))
-        .route("/api/storage/pools/:id", delete(remove_storage_pool))
-        .route("/api/storage/pools/:pool_id/volumes", post(create_volume))
-        // Firewall endpoints
-        .route("/api/firewall/rules", get(list_firewall_rules))
-        .route("/api/firewall/rules", post(add_firewall_rule))
-        .route("/api/firewall/rules/:id", delete(delete_firewall_rule))
-        .route("/api/firewall/security-groups", get(list_security_groups))
-        .route("/api/firewall/security-groups/:name", get(get_security_group))
-        .route("/api/firewall/:scope/apply", post(apply_firewall_rules))
-        // Monitoring endpoints
-        .route("/api/monitoring/node", get(get_node_stats))
-        .route("/api/monitoring/vms", get(get_all_vm_stats))
-        .route("/api/monitoring/vms/:id", get(get_vm_stats))
-        .route("/api/monitoring/containers", get(get_all_container_stats))
-        .route("/api/monitoring/containers/:id", get(get_container_stats))
-        .route("/api/monitoring/storage", get(get_all_storage_stats))
-        .route("/api/monitoring/storage/:name", get(get_storage_stats))
-        .route("/api/monitoring/history/:metric", get(get_metric_history))
-        // Console access
-        .route("/api/console/:vm_id/vnc", post(create_vnc_console))
-        .route("/api/console/:vm_id/websocket", get(get_vnc_websocket))
-        .route("/api/console/:vm_id/novnc", get(get_novnc_page))
-        .route("/api/console/ticket/:ticket_id", get(verify_console_ticket))
-        .route("/api/console/ws/:ticket_id", get(vnc_websocket_handler))
-        // Cluster management
-        .route("/api/cluster/nodes", get(list_cluster_nodes))
-        .route("/api/cluster/nodes/:name", post(add_cluster_node))
-        .route("/api/cluster/architecture", get(get_cluster_architecture))
-        .route("/api/cluster/find-node", post(find_best_node_for_vm))
-        // Alert system
-        .route("/api/alerts/rules", get(list_alert_rules))
-        .route("/api/alerts/rules", post(create_alert_rule))
-        .route("/api/alerts/rules/:rule_id", delete(delete_alert_rule))
-        .route("/api/alerts/active", get(list_active_alerts))
-        .route("/api/alerts/history", get(get_alert_history))
-        .route("/api/alerts/:rule_id/:target/acknowledge", post(acknowledge_alert))
-        .route("/api/alerts/notifications", get(list_notification_channels))
-        .route("/api/alerts/notifications", post(add_notification_channel))
-        // OpenTelemetry endpoints
-        .route("/api/observability/config", get(get_otel_config))
-        .route("/api/observability/config", post(update_otel_config))
-        .route("/api/observability/export/metrics", post(export_metrics_now))
-        // TLS/SSL endpoints
-        .route("/api/tls/config", get(get_tls_config))
-        .route("/api/tls/config", post(update_tls_config))
-        .route("/api/tls/certificates", get(list_certificates))
-        .route("/api/tls/certificate/generate", post(generate_self_signed_cert))
-        .route("/api/tls/certificate/info/:path", get(get_certificate_info_endpoint))
-        // Vault endpoints
-        .route("/api/vault/config", get(get_vault_config))
-        .route("/api/vault/config", post(update_vault_config))
-        .route("/api/vault/secret/:path", get(read_vault_secret))
-        .route("/api/vault/secret/:path", post(write_vault_secret))
-        .route("/api/vault/secret/:path", delete(delete_vault_secret))
-        // GPU passthrough endpoints
-        .route("/api/gpu/devices", get(list_gpu_devices))
-        .route("/api/gpu/devices/scan", post(scan_gpu_devices))
-        .route("/api/gpu/devices/:pci_address", get(get_gpu_device))
-        .route("/api/gpu/devices/:pci_address/bind-vfio", post(bind_gpu_to_vfio))
-        .route("/api/gpu/devices/:pci_address/unbind-vfio", post(unbind_gpu_from_vfio))
-        .route("/api/gpu/devices/:pci_address/iommu-group", get(get_gpu_iommu_group))
-        .route("/api/gpu/iommu-status", get(check_iommu_status))
-        // Prometheus metrics endpoint
-        .route("/metrics", get(prometheus_metrics))
-        // Webhook endpoints
-        .route("/api/webhooks", get(list_webhooks))
-        .route("/api/webhooks", post(create_webhook))
-        .route("/api/webhooks/:id", get(get_webhook))
-        .route("/api/webhooks/:id", post(update_webhook))
-        .route("/api/webhooks/:id", delete(delete_webhook))
-        .route("/api/webhooks/:id/test", post(test_webhook))
-        .route("/api/webhooks/:id/deliveries", get(get_webhook_deliveries))
-        .route("/api/vault/secrets/:path", get(list_vault_secrets))
-        // HA (High Availability) endpoints
-        .route("/api/ha/resources", get(list_ha_resources))
-        .route("/api/ha/resources", post(add_ha_resource))
-        .route("/api/ha/resources/:vm_id", delete(remove_ha_resource))
-        .route("/api/ha/status", get(get_ha_status))
-        .route("/api/ha/groups", post(create_ha_group))
-        .route("/api/ha/groups", get(list_ha_groups))
-        // Migration endpoints
-        .route("/api/migrate/:vm_id", post(migrate_vm))
-        .route("/api/migrate/:vm_id/status", get(get_migration_status))
-        // CNI (Container Network Interface) endpoints
-        .route("/api/cni/networks", get(list_cni_networks))
-        .route("/api/cni/networks", post(create_cni_network))
-        .route("/api/cni/networks/:name", get(get_cni_network))
-        .route("/api/cni/networks/:name", delete(delete_cni_network))
-        .route("/api/cni/attach", post(attach_container_to_network))
-        .route("/api/cni/detach", post(detach_container_from_network))
-        .route("/api/cni/check", post(check_container_network))
-        .route("/api/cni/attachments/:container_id", get(list_container_attachments))
-        .route("/api/cni/capabilities/:plugin_type", get(get_cni_plugin_capabilities))
-        // Network Policy endpoints
-        .route("/api/network-policies", get(list_network_policies))
-        .route("/api/network-policies", post(create_network_policy))
-        .route("/api/network-policies/:id", get(get_network_policy))
-        .route("/api/network-policies/:id", delete(delete_network_policy))
-        .route("/api/network-policies/namespace/:namespace", get(list_policies_in_namespace))
-        .route("/api/network-policies/:id/iptables", get(get_policy_iptables_rules))
-        .route("/api/network-policies/:id/nftables", get(get_policy_nftables_rules))
+        .merge(vm_routes())
+        .merge(container_routes())
+        .merge(backup_routes())
+        .merge(auth_protected_routes())
+        .merge(storage_routes())
+        .merge(monitoring_routes())
+        .merge(cluster_routes())
+        .merge(network_routes());
 
+    // Add Kubernetes routes if feature is enabled
+    #[cfg(feature = "kubernetes")]
+    let protected_routes = protected_routes.merge(kubernetes_routes());
+
+    let protected_routes = protected_routes
         // WebSocket endpoint for real-time updates
         .route("/api/ws", get(websocket::ws_handler))
         .with_state(state.clone())
@@ -611,7 +466,351 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+// =============================================================================
+// Route Builder Functions
+// =============================================================================
+
+/// Build VM-related routes (VMs, snapshots, clones, replication)
+fn vm_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        // VM CRUD endpoints
+        .route("/api/vms", get(list_vms))
+        .route("/api/vms", post(create_vm))
+        .route("/api/vms/:id", get(get_vm))
+        .route("/api/vms/:id/start", post(start_vm))
+        .route("/api/vms/:id/stop", post(stop_vm))
+        .route("/api/vms/:id", delete(delete_vm))
+        // VM Snapshot endpoints
+        .route("/api/vms/:id/snapshots", get(list_vm_snapshots))
+        .route("/api/vms/:id/snapshots", post(create_vm_snapshot))
+        .route("/api/vms/:id/snapshots/:snapshot_id", get(get_vm_snapshot))
+        .route("/api/vms/:id/snapshots/:snapshot_id", delete(delete_vm_snapshot))
+        .route("/api/vms/:id/snapshots/:snapshot_id/restore", post(restore_vm_snapshot))
+        .route("/api/vms/:id/snapshots/tree", get(get_vm_snapshot_tree))
+        // Snapshot Schedule endpoints
+        .route("/api/snapshot-schedules", get(list_snapshot_schedules))
+        .route("/api/snapshot-schedules", post(create_snapshot_schedule))
+        .route("/api/snapshot-schedules/:id", get(get_snapshot_schedule))
+        .route("/api/snapshot-schedules/:id", put(update_snapshot_schedule))
+        .route("/api/snapshot-schedules/:id", delete(delete_snapshot_schedule))
+        // VM Clone endpoints
+        .route("/api/vms/:id/clone", post(clone_vm))
+        .route("/api/vms/:id/clone-cross-node", post(clone_vm_cross_node))
+        // Clone Job Progress endpoints
+        .route("/api/clone-jobs", get(list_clone_jobs))
+        .route("/api/clone-jobs/:id", get(get_clone_job))
+        .route("/api/clone-jobs/:id/cancel", post(cancel_clone_job))
+        .route("/api/clone-jobs/:id", delete(delete_clone_job))
+        // Snapshot Quota endpoints
+        .route("/api/snapshot-quotas", get(list_snapshot_quotas))
+        .route("/api/snapshot-quotas", post(create_snapshot_quota))
+        .route("/api/snapshot-quotas/:id", get(get_snapshot_quota))
+        .route("/api/snapshot-quotas/:id", put(update_snapshot_quota))
+        .route("/api/snapshot-quotas/:id", delete(delete_snapshot_quota))
+        .route("/api/snapshot-quotas/:id/usage", get(get_snapshot_quota_usage))
+        .route("/api/snapshot-quotas/summary", get(get_snapshot_quota_summary))
+        .route("/api/snapshot-quotas/:id/enforce", post(enforce_snapshot_quota))
+        // Replication endpoints
+        .route("/api/replication/jobs", get(list_replication_jobs))
+        .route("/api/replication/jobs", post(create_replication_job))
+        .route("/api/replication/jobs/:id", get(get_replication_job))
+        .route("/api/replication/jobs/:id", delete(delete_replication_job))
+        .route("/api/replication/jobs/:id/execute", post(execute_replication_job))
+        .route("/api/replication/jobs/:id/status", get(get_replication_status))
+        // Console access endpoints
+        .route("/api/console/:vm_id/vnc", post(create_vnc_console))
+        .route("/api/console/:vm_id/websocket", get(get_vnc_websocket))
+        .route("/api/console/:vm_id/novnc", get(get_novnc_page))
+        .route("/api/console/ticket/:ticket_id", get(verify_console_ticket))
+        .route("/api/console/ws/:ticket_id", get(vnc_websocket_handler))
+        // Migration endpoints
+        .route("/api/migrate/:vm_id", post(migrate_vm))
+        .route("/api/migrate/:vm_id/status", get(get_migration_status))
+}
+
+/// Build container-related routes
+fn container_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/api/containers", get(list_containers))
+        .route("/api/containers", post(create_container))
+        .route("/api/containers/:id", get(get_container))
+        .route("/api/containers/:id", delete(delete_container))
+        .route("/api/containers/:id/start", post(start_container))
+        .route("/api/containers/:id/stop", post(stop_container))
+        .route("/api/containers/:id/pause", post(pause_container))
+        .route("/api/containers/:id/resume", post(resume_container))
+        .route("/api/containers/:id/status", get(get_container_status))
+        .route("/api/containers/:id/exec", post(exec_container_command))
+        .route("/api/containers/:id/clone", post(clone_container))
+}
+
+/// Build backup-related routes (backups, templates, cloud-init)
+fn backup_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        // Backup endpoints
+        .route("/api/backups", get(list_backups))
+        .route("/api/backups", post(create_backup))
+        .route("/api/backups/:id", get(get_backup))
+        .route("/api/backups/:id", delete(delete_backup))
+        .route("/api/backups/:id/restore", post(restore_backup))
+        // Backup job endpoints
+        .route("/api/backup-jobs", get(list_backup_jobs))
+        .route("/api/backup-jobs", post(create_backup_job))
+        .route("/api/backup-jobs/:id/run", post(run_backup_job_now))
+        // Retention policy endpoint
+        .route("/api/backups/retention/:target_id", post(apply_retention))
+        // Cloud-init endpoints
+        .route("/api/cloudinit/:vm_id", post(generate_cloudinit))
+        .route("/api/cloudinit/:vm_id", delete(delete_cloudinit))
+        // Template endpoints
+        .route("/api/templates", get(list_templates))
+        .route("/api/templates", post(create_template))
+        .route("/api/templates/:id", get(get_template))
+        .route("/api/templates/:id", delete(delete_template))
+        .route("/api/templates/:id/clone", post(clone_template))
+}
+
+/// Build auth-related routes (users, roles, permissions, audit)
+fn auth_protected_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        // Auth endpoints
+        .route("/api/auth/logout", post(logout))
+        .route("/api/auth/verify", get(verify_session))
+        .route("/api/auth/password", post(change_password))
+        // User management
+        .route("/api/users", get(list_users))
+        .route("/api/users", post(create_user))
+        .route("/api/users/:id", delete(delete_user))
+        // API key management
+        .route("/api/users/:username/api-keys", get(list_api_keys))
+        .route("/api/users/:username/api-keys", post(create_api_key))
+        .route("/api/users/:username/api-keys/:key_id", delete(revoke_api_key))
+        // Role and permission management
+        .route("/api/roles", get(list_roles))
+        .route("/api/permissions/:user_id", get(get_user_permissions))
+        .route("/api/permissions/:user_id", post(add_permission))
+        // Audit log endpoints
+        .route("/api/audit/events", get(query_audit_events))
+        .route("/api/audit/stats", get(get_audit_stats))
+        .route("/api/audit/security-events", get(get_security_events))
+        .route("/api/audit/failed-logins", get(get_failed_logins))
+        .route("/api/audit/brute-force", get(detect_brute_force_attempts))
+}
+
+/// Build storage-related routes (pools, GPU, TLS, Vault)
+fn storage_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        // Storage pool endpoints
+        .route("/api/storage/pools", get(list_storage_pools))
+        .route("/api/storage/pools/:id", get(get_storage_pool))
+        .route("/api/storage/pools", post(add_storage_pool))
+        .route("/api/storage/pools/:id", delete(remove_storage_pool))
+        .route("/api/storage/pools/:pool_id/volumes", post(create_volume))
+        // GPU passthrough endpoints
+        .route("/api/gpu/devices", get(list_gpu_devices))
+        .route("/api/gpu/devices/scan", post(scan_gpu_devices))
+        .route("/api/gpu/devices/:pci_address", get(get_gpu_device))
+        .route("/api/gpu/devices/:pci_address/bind-vfio", post(bind_gpu_to_vfio))
+        .route("/api/gpu/devices/:pci_address/unbind-vfio", post(unbind_gpu_from_vfio))
+        .route("/api/gpu/devices/:pci_address/iommu-group", get(get_gpu_iommu_group))
+        .route("/api/gpu/iommu-status", get(check_iommu_status))
+        // TLS/SSL endpoints
+        .route("/api/tls/config", get(get_tls_config))
+        .route("/api/tls/config", post(update_tls_config))
+        .route("/api/tls/certificates", get(list_certificates))
+        .route("/api/tls/certificate/generate", post(generate_self_signed_cert))
+        .route("/api/tls/certificate/info/:path", get(get_certificate_info_endpoint))
+        // Vault endpoints
+        .route("/api/vault/config", get(get_vault_config))
+        .route("/api/vault/config", post(update_vault_config))
+        .route("/api/vault/secret/:path", get(read_vault_secret))
+        .route("/api/vault/secret/:path", post(write_vault_secret))
+        .route("/api/vault/secret/:path", delete(delete_vault_secret))
+        .route("/api/vault/secrets/:path", get(list_vault_secrets))
+}
+
+/// Build monitoring-related routes (metrics, alerts, webhooks, observability)
+fn monitoring_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        // Monitoring endpoints
+        .route("/api/monitoring/node", get(get_node_stats))
+        .route("/api/monitoring/vms", get(get_all_vm_stats))
+        .route("/api/monitoring/vms/:id", get(get_vm_stats))
+        .route("/api/monitoring/containers", get(get_all_container_stats))
+        .route("/api/monitoring/containers/:id", get(get_container_stats))
+        .route("/api/monitoring/storage", get(get_all_storage_stats))
+        .route("/api/monitoring/storage/:name", get(get_storage_stats))
+        .route("/api/monitoring/history/:metric", get(get_metric_history))
+        // Alert system endpoints
+        .route("/api/alerts/rules", get(list_alert_rules))
+        .route("/api/alerts/rules", post(create_alert_rule))
+        .route("/api/alerts/rules/:rule_id", delete(delete_alert_rule))
+        .route("/api/alerts/active", get(list_active_alerts))
+        .route("/api/alerts/history", get(get_alert_history))
+        .route("/api/alerts/:rule_id/:target/acknowledge", post(acknowledge_alert))
+        .route("/api/alerts/notifications", get(list_notification_channels))
+        .route("/api/alerts/notifications", post(add_notification_channel))
+        // OpenTelemetry endpoints
+        .route("/api/observability/config", get(get_otel_config))
+        .route("/api/observability/config", post(update_otel_config))
+        .route("/api/observability/export/metrics", post(export_metrics_now))
+        // Prometheus metrics endpoint
+        .route("/metrics", get(prometheus_metrics))
+        // Webhook endpoints
+        .route("/api/webhooks", get(list_webhooks))
+        .route("/api/webhooks", post(create_webhook))
+        .route("/api/webhooks/:id", get(get_webhook))
+        .route("/api/webhooks/:id", post(update_webhook))
+        .route("/api/webhooks/:id", delete(delete_webhook))
+        .route("/api/webhooks/:id/test", post(test_webhook))
+        .route("/api/webhooks/:id/deliveries", get(get_webhook_deliveries))
+}
+
+/// Build cluster-related routes (nodes, HA)
+fn cluster_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        // Cluster management
+        .route("/api/cluster/nodes", get(list_cluster_nodes))
+        .route("/api/cluster/nodes/:name", post(add_cluster_node))
+        .route("/api/cluster/architecture", get(get_cluster_architecture))
+        .route("/api/cluster/find-node", post(find_best_node_for_vm))
+        // HA (High Availability) endpoints
+        .route("/api/ha/resources", get(list_ha_resources))
+        .route("/api/ha/resources", post(add_ha_resource))
+        .route("/api/ha/resources/:vm_id", delete(remove_ha_resource))
+        .route("/api/ha/status", get(get_ha_status))
+        .route("/api/ha/groups", post(create_ha_group))
+        .route("/api/ha/groups", get(list_ha_groups))
+}
+
+/// Build network-related routes (firewall, CNI, network policies)
+fn network_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        // Firewall endpoints
+        .route("/api/firewall/rules", get(list_firewall_rules))
+        .route("/api/firewall/rules", post(add_firewall_rule))
+        .route("/api/firewall/rules/:id", delete(delete_firewall_rule))
+        .route("/api/firewall/security-groups", get(list_security_groups))
+        .route("/api/firewall/security-groups/:name", get(get_security_group))
+        .route("/api/firewall/:scope/apply", post(apply_firewall_rules))
+        // CNI (Container Network Interface) endpoints
+        .route("/api/cni/networks", get(list_cni_networks))
+        .route("/api/cni/networks", post(create_cni_network))
+        .route("/api/cni/networks/:name", get(get_cni_network))
+        .route("/api/cni/networks/:name", delete(delete_cni_network))
+        .route("/api/cni/attach", post(attach_container_to_network))
+        .route("/api/cni/detach", post(detach_container_from_network))
+        .route("/api/cni/check", post(check_container_network))
+        .route("/api/cni/attachments/:container_id", get(list_container_attachments))
+        .route("/api/cni/capabilities/:plugin_type", get(get_cni_plugin_capabilities))
+        // Network Policy endpoints
+        .route("/api/network-policies", get(list_network_policies))
+        .route("/api/network-policies", post(create_network_policy))
+        .route("/api/network-policies/:id", get(get_network_policy))
+        .route("/api/network-policies/:id", delete(delete_network_policy))
+        .route("/api/network-policies/namespace/:namespace", get(list_policies_in_namespace))
+        .route("/api/network-policies/:id/iptables", get(get_policy_iptables_rules))
+        .route("/api/network-policies/:id/nftables", get(get_policy_nftables_rules))
+}
+
+/// Build Kubernetes-related routes (conditionally compiled)
+#[cfg(feature = "kubernetes")]
+fn kubernetes_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        // Kubernetes cluster management
+        .route("/api/k8s/clusters", get(k8s_list_clusters))
+        .route("/api/k8s/clusters", post(k8s_connect_cluster))
+        .route("/api/k8s/clusters/:cluster_id", get(k8s_get_cluster))
+        .route("/api/k8s/clusters/:cluster_id", delete(k8s_delete_cluster))
+        .route("/api/k8s/clusters/:cluster_id/reconnect", post(k8s_reconnect_cluster))
+        .route("/api/k8s/clusters/:cluster_id/health", get(k8s_get_cluster_health))
+        .route("/api/k8s/clusters/:cluster_id/version", get(k8s_get_cluster_version))
+        // Kubernetes namespaces
+        .route("/api/k8s/clusters/:cluster_id/namespaces", get(k8s_list_namespaces))
+        .route("/api/k8s/clusters/:cluster_id/namespaces", post(k8s_create_namespace))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace", get(k8s_get_namespace))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace", delete(k8s_delete_namespace))
+        // Kubernetes nodes
+        .route("/api/k8s/clusters/:cluster_id/nodes", get(k8s_list_nodes))
+        .route("/api/k8s/clusters/:cluster_id/nodes/:node", get(k8s_get_node))
+        .route("/api/k8s/clusters/:cluster_id/nodes/:node/cordon", post(k8s_cordon_node))
+        .route("/api/k8s/clusters/:cluster_id/nodes/:node/uncordon", post(k8s_uncordon_node))
+        .route("/api/k8s/clusters/:cluster_id/nodes/:node/drain", post(k8s_drain_node))
+        // Kubernetes pods
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/pods", get(k8s_list_pods))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/pods/:pod", get(k8s_get_pod))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/pods/:pod", delete(k8s_delete_pod))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/pods/:pod/logs", get(k8s_get_pod_logs))
+        // Kubernetes deployments
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/deployments", get(k8s_list_deployments))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/deployments/:deployment", get(k8s_get_deployment))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/deployments/:deployment/scale", post(k8s_scale_deployment))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/deployments/:deployment/restart", post(k8s_restart_deployment))
+        // Kubernetes events
+        .route("/api/k8s/clusters/:cluster_id/events", get(k8s_list_events))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/events", get(k8s_list_namespace_events))
+        // Kubernetes services
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/services", get(k8s_list_services))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/services", post(k8s_create_service))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/services/:service", get(k8s_get_service))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/services/:service", delete(k8s_delete_service))
+        // Kubernetes ingresses
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/ingresses", get(k8s_list_ingresses))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/ingresses", post(k8s_create_ingress))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/ingresses/:ingress", get(k8s_get_ingress))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/ingresses/:ingress", delete(k8s_delete_ingress))
+        // Kubernetes configmaps
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/configmaps", get(k8s_list_configmaps))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/configmaps", post(k8s_create_configmap))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/configmaps/:name", get(k8s_get_configmap))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/configmaps/:name", delete(k8s_delete_configmap))
+        // Kubernetes secrets
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/secrets", get(k8s_list_secrets))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/secrets", post(k8s_create_secret))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/secrets/:name", get(k8s_get_secret))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/secrets/:name", delete(k8s_delete_secret))
+        // Kubernetes PVCs
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/pvcs", get(k8s_list_pvcs))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/pvcs", post(k8s_create_pvc))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/pvcs/:name", get(k8s_get_pvc))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/pvcs/:name", delete(k8s_delete_pvc))
+        // Kubernetes statefulsets
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/statefulsets", get(k8s_list_statefulsets))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/statefulsets/:name", get(k8s_get_statefulset))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/statefulsets/:name/scale", post(k8s_scale_statefulset))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/statefulsets/:name", delete(k8s_delete_statefulset))
+        // Kubernetes daemonsets
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/daemonsets", get(k8s_list_daemonsets))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/daemonsets/:name", get(k8s_get_daemonset))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/daemonsets/:name", delete(k8s_delete_daemonset))
+        // Kubernetes jobs
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/jobs", get(k8s_list_jobs))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/jobs/:name", get(k8s_get_job))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/jobs/:name", delete(k8s_delete_job))
+        // Kubernetes cronjobs
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/cronjobs", get(k8s_list_cronjobs))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/cronjobs/:name", get(k8s_get_cronjob))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/cronjobs/:name", delete(k8s_delete_cronjob))
+        // Kubernetes metrics
+        .route("/api/k8s/clusters/:cluster_id/metrics/nodes", get(k8s_get_node_metrics))
+        .route("/api/k8s/clusters/:cluster_id/namespaces/:namespace/metrics/pods", get(k8s_get_pod_metrics))
+        // Helm releases
+        .route("/api/k8s/clusters/:cluster_id/helm/releases", get(k8s_list_helm_releases))
+        .route("/api/k8s/clusters/:cluster_id/helm/releases", post(k8s_install_helm_release))
+        .route("/api/k8s/clusters/:cluster_id/helm/releases/:release_name", put(k8s_upgrade_helm_release))
+        .route("/api/k8s/clusters/:cluster_id/helm/releases/:release_name", delete(k8s_uninstall_helm_release))
+        .route("/api/k8s/clusters/:cluster_id/helm/releases/:release_name/rollback", post(k8s_rollback_helm_release))
+        .route("/api/k8s/clusters/:cluster_id/helm/releases/:release_name/history", get(k8s_get_helm_release_history))
+        // Helm repos (global)
+        .route("/api/k8s/helm/repos", get(k8s_list_helm_repos))
+        .route("/api/k8s/helm/repos", post(k8s_add_helm_repo))
+        .route("/api/k8s/helm/repos/:repo_name", delete(k8s_remove_helm_repo))
+        .route("/api/k8s/helm/charts/search", get(k8s_search_helm_charts))
+}
+
+// =============================================================================
 // Re-export standardized error types
+// =============================================================================
 use error::ApiError;
 
 // API handlers
@@ -635,9 +834,22 @@ async fn get_vm(
 
 async fn create_vm(
     State(state): State<Arc<AppState>>,
+    auth_user: Option<axum::Extension<middleware::auth::AuthUser>>,
     Json(payload): Json<VmConfig>,
 ) -> Result<(StatusCode, Json<VmConfig>), ApiError> {
+    let vm_name = payload.name.clone();
     let vm = state.vm_manager.create_vm(payload).await?;
+
+    // Broadcast VM created event
+    let username = auth_user
+        .map(|u| u.username.clone())
+        .unwrap_or_else(|| "system".to_string());
+    state.ws_state.broadcast_vm_created(
+        vm.id.clone(),
+        vm_name,
+        username,
+    );
+
     Ok((StatusCode::CREATED, Json(vm)))
 }
 
@@ -645,7 +857,19 @@ async fn start_vm(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<VmConfig>, ApiError> {
+    let old_status = state.vm_manager.get_vm(&id).await
+        .map(|vm| format!("{:?}", vm.status))
+        .unwrap_or_else(|_| "unknown".to_string());
+
     let vm = state.vm_manager.start_vm(&id).await?;
+
+    // Broadcast VM status change
+    state.ws_state.broadcast_vm_status(
+        id.clone(),
+        old_status,
+        format!("{:?}", vm.status),
+    );
+
     Ok(Json(vm))
 }
 
@@ -653,15 +877,44 @@ async fn stop_vm(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<VmConfig>, ApiError> {
+    let old_status = state.vm_manager.get_vm(&id).await
+        .map(|vm| format!("{:?}", vm.status))
+        .unwrap_or_else(|_| "unknown".to_string());
+
     let vm = state.vm_manager.stop_vm(&id).await?;
+
+    // Broadcast VM status change
+    state.ws_state.broadcast_vm_status(
+        id.clone(),
+        old_status,
+        format!("{:?}", vm.status),
+    );
+
     Ok(Json(vm))
 }
 
 async fn delete_vm(
     State(state): State<Arc<AppState>>,
+    auth_user: Option<axum::Extension<middleware::auth::AuthUser>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    // Get VM name before deletion
+    let vm_name = state.vm_manager.get_vm(&id).await
+        .map(|vm| vm.name)
+        .unwrap_or_else(|_| id.clone());
+
     state.vm_manager.delete_vm(&id).await?;
+
+    // Broadcast VM deleted event
+    let username = auth_user
+        .map(|u| u.username.clone())
+        .unwrap_or_else(|| "system".to_string());
+    state.ws_state.broadcast_vm_deleted(
+        id,
+        vm_name,
+        username,
+    );
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -687,7 +940,21 @@ async fn create_backup(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<BackupConfig>,
 ) -> Result<(StatusCode, Json<Backup>), ApiError> {
+    let target_id = payload.target_id.clone();
+    let start_time = std::time::Instant::now();
+
     let backup = state.backup_manager.create_backup(payload).await?;
+
+    let duration_secs = start_time.elapsed().as_secs();
+
+    // Broadcast backup completed event
+    state.ws_state.broadcast_backup_completed(
+        target_id,
+        backup.id.clone(),
+        backup.size,
+        duration_secs,
+    );
+
     Ok((StatusCode::CREATED, Json(backup)))
 }
 
@@ -949,6 +1216,7 @@ struct CrossNodeCloneRequest {
     ssh_user: Option<String>,
     compression_enabled: Option<bool>,
     bandwidth_limit_mbps: Option<u32>,
+    target_volume_group: Option<String>,
 }
 
 async fn clone_vm_cross_node(
@@ -984,10 +1252,13 @@ async fn clone_vm_cross_node(
         ssh_user: req.ssh_user,
         compression_enabled: req.compression_enabled.unwrap_or(true),
         bandwidth_limit_mbps: req.bandwidth_limit_mbps,
+        target_volume_group: req.target_volume_group,
     };
 
     // Perform cross-node clone
-    let manager = CrossNodeCloneManager::new("/var/lib/horcrux/vms".to_string());
+    let manager = CrossNodeCloneManager::new(
+        state.config.paths.vm_storage.to_string_lossy().to_string()
+    );
     let cloned_vm = manager
         .clone_cross_node(&source_vm, cross_node_config)
         .await
@@ -2529,10 +2800,10 @@ async fn generate_self_signed_cert(
         &req.common_name,
         &req.organization,
         req.validity_days,
-        "/etc/horcrux/ssl/cert.pem",
-        "/etc/horcrux/ssl/key.pem",
+        &state.config.tls.cert_path.to_string_lossy(),
+        &state.config.tls.key_path.to_string_lossy(),
     ).await.map_err(|e| ApiError::Internal(e.to_string()))?;
-    
+
     Ok(Json(cert))
 }
 
@@ -2875,11 +3146,18 @@ async fn migrate_vm(
 
     // Start migration
     let job_id = state.migration_manager
-        .start_migration(config, source_node)
+        .start_migration(config, source_node.clone())
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     info!("Started migration of VM {} to node {}, job ID: {}", vm_id, req.target_node, job_id);
+
+    // Broadcast migration started event
+    state.ws_state.broadcast_migration_started(
+        vm_id.clone(),
+        source_node,
+        req.target_node.clone(),
+    );
 
     Ok(Json(job_id))
 }
@@ -3331,3 +3609,881 @@ async fn get_policy_nftables_rules(
     let rules = manager.generate_nftables_rules(&id);
     Ok(Json(rules))
 }
+
+// ============================================================================
+// Kubernetes API handlers (conditionally compiled)
+// ============================================================================
+
+#[cfg(feature = "kubernetes")]
+mod k8s_handlers {
+    use super::*;
+    use crate::kubernetes::types::*;
+
+    // Cluster management handlers
+
+    pub async fn list_clusters(
+        State(state): State<Arc<AppState>>,
+    ) -> Json<Vec<K8sCluster>> {
+        let clusters = state.kubernetes_manager.list_clusters().await;
+        Json(clusters)
+    }
+
+    pub async fn connect_cluster(
+        State(state): State<Arc<AppState>>,
+        Json(payload): Json<ClusterConnectRequest>,
+    ) -> Result<(StatusCode, Json<K8sCluster>), ApiError> {
+        let cluster = state.kubernetes_manager.connect_cluster(payload).await?;
+        Ok((StatusCode::CREATED, Json(cluster)))
+    }
+
+    pub async fn get_cluster(
+        State(state): State<Arc<AppState>>,
+        Path(cluster_id): Path<String>,
+    ) -> Result<Json<K8sCluster>, ApiError> {
+        let cluster = state.kubernetes_manager.get_cluster(&cluster_id).await?;
+        Ok(Json(cluster))
+    }
+
+    pub async fn delete_cluster(
+        State(state): State<Arc<AppState>>,
+        Path(cluster_id): Path<String>,
+    ) -> Result<StatusCode, ApiError> {
+        state.kubernetes_manager.delete_cluster(&cluster_id).await?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+
+    pub async fn reconnect_cluster(
+        State(state): State<Arc<AppState>>,
+        Path(cluster_id): Path<String>,
+    ) -> Result<Json<K8sCluster>, ApiError> {
+        let cluster = state.kubernetes_manager.reconnect_cluster(&cluster_id).await?;
+        Ok(Json(cluster))
+    }
+
+    pub async fn get_cluster_health(
+        State(state): State<Arc<AppState>>,
+        Path(cluster_id): Path<String>,
+    ) -> Result<Json<ClusterHealth>, ApiError> {
+        let health = state.kubernetes_manager.check_cluster_health(&cluster_id).await?;
+        Ok(Json(health))
+    }
+
+    pub async fn get_cluster_version(
+        State(state): State<Arc<AppState>>,
+        Path(cluster_id): Path<String>,
+    ) -> Result<Json<K8sVersion>, ApiError> {
+        let version = state.kubernetes_manager.get_cluster_version(&cluster_id).await?;
+        Ok(Json(version))
+    }
+
+    // Namespace handlers
+
+    pub async fn list_namespaces(
+        State(state): State<Arc<AppState>>,
+        Path(cluster_id): Path<String>,
+    ) -> Result<Json<Vec<NamespaceInfo>>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let namespaces = crate::kubernetes::cluster_resources::namespaces::list_namespaces(&client).await?;
+        Ok(Json(namespaces))
+    }
+
+    pub async fn create_namespace(
+        State(state): State<Arc<AppState>>,
+        Path(cluster_id): Path<String>,
+        Json(payload): Json<CreateNamespaceRequest>,
+    ) -> Result<(StatusCode, Json<NamespaceInfo>), ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let ns = crate::kubernetes::cluster_resources::namespaces::create_namespace(&client, &payload).await?;
+        Ok((StatusCode::CREATED, Json(ns)))
+    }
+
+    pub async fn get_namespace(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace)): Path<(String, String)>,
+    ) -> Result<Json<NamespaceInfo>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let ns = crate::kubernetes::cluster_resources::namespaces::get_namespace(&client, &namespace).await?;
+        Ok(Json(ns))
+    }
+
+    pub async fn delete_namespace(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace)): Path<(String, String)>,
+    ) -> Result<StatusCode, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        crate::kubernetes::cluster_resources::namespaces::delete_namespace(&client, &namespace).await?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+
+    // Node handlers
+
+    pub async fn list_nodes(
+        State(state): State<Arc<AppState>>,
+        Path(cluster_id): Path<String>,
+    ) -> Result<Json<Vec<NodeInfo>>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let nodes = crate::kubernetes::cluster_resources::nodes::list_nodes(&client).await?;
+        Ok(Json(nodes))
+    }
+
+    pub async fn get_node(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, node)): Path<(String, String)>,
+    ) -> Result<Json<NodeInfo>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let node_info = crate::kubernetes::cluster_resources::nodes::get_node(&client, &node).await?;
+        Ok(Json(node_info))
+    }
+
+    pub async fn cordon_node(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, node)): Path<(String, String)>,
+    ) -> Result<StatusCode, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        crate::kubernetes::cluster_resources::nodes::cordon_node(&client, &node).await?;
+        Ok(StatusCode::OK)
+    }
+
+    pub async fn uncordon_node(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, node)): Path<(String, String)>,
+    ) -> Result<StatusCode, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        crate::kubernetes::cluster_resources::nodes::uncordon_node(&client, &node).await?;
+        Ok(StatusCode::OK)
+    }
+
+    #[derive(Deserialize)]
+    pub struct DrainNodeRequest {
+        #[serde(default)]
+        pub ignore_daemonsets: bool,
+        #[serde(default)]
+        pub delete_emptydir_data: bool,
+        pub grace_period_seconds: Option<i64>,
+    }
+
+    pub async fn drain_node(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, node)): Path<(String, String)>,
+        Json(payload): Json<DrainNodeRequest>,
+    ) -> Result<StatusCode, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        crate::kubernetes::cluster_resources::nodes::drain_node(
+            &client,
+            &node,
+            payload.ignore_daemonsets,
+            payload.delete_emptydir_data,
+            payload.grace_period_seconds,
+        ).await?;
+        Ok(StatusCode::OK)
+    }
+
+    // Pod handlers
+
+    #[derive(Deserialize)]
+    pub struct PodListQuery {
+        pub label_selector: Option<String>,
+    }
+
+    pub async fn list_pods(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace)): Path<(String, String)>,
+        Query(query): Query<PodListQuery>,
+    ) -> Result<Json<Vec<PodInfo>>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let pods = crate::kubernetes::workloads::pods::list_pods(
+            &client,
+            &namespace,
+            query.label_selector.as_deref(),
+        ).await?;
+        Ok(Json(pods))
+    }
+
+    pub async fn get_pod(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, pod)): Path<(String, String, String)>,
+    ) -> Result<Json<PodInfo>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let pod_info = crate::kubernetes::workloads::pods::get_pod(&client, &namespace, &pod).await?;
+        Ok(Json(pod_info))
+    }
+
+    pub async fn delete_pod(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, pod)): Path<(String, String, String)>,
+    ) -> Result<StatusCode, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        crate::kubernetes::workloads::pods::delete_pod(&client, &namespace, &pod).await?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+
+    #[derive(Deserialize)]
+    pub struct PodLogQuery {
+        pub container: Option<String>,
+        pub tail_lines: Option<i64>,
+        #[serde(default)]
+        pub timestamps: bool,
+    }
+
+    pub async fn get_pod_logs(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, pod)): Path<(String, String, String)>,
+        Query(query): Query<PodLogQuery>,
+    ) -> Result<String, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let logs = crate::kubernetes::workloads::pods::get_pod_logs(
+            &client,
+            &namespace,
+            &pod,
+            query.container.as_deref(),
+            query.tail_lines,
+            query.timestamps,
+        ).await?;
+        Ok(logs)
+    }
+
+    // Deployment handlers
+
+    pub async fn list_deployments(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace)): Path<(String, String)>,
+    ) -> Result<Json<Vec<DeploymentInfo>>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let deployments = crate::kubernetes::workloads::deployments::list_deployments(&client, &namespace).await?;
+        Ok(Json(deployments))
+    }
+
+    pub async fn get_deployment(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, deployment)): Path<(String, String, String)>,
+    ) -> Result<Json<DeploymentInfo>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let deploy = crate::kubernetes::workloads::deployments::get_deployment(&client, &namespace, &deployment).await?;
+        Ok(Json(deploy))
+    }
+
+    pub async fn scale_deployment(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, deployment)): Path<(String, String, String)>,
+        Json(payload): Json<ScaleRequest>,
+    ) -> Result<Json<DeploymentInfo>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let deploy = crate::kubernetes::workloads::deployments::scale_deployment(
+            &client,
+            &namespace,
+            &deployment,
+            payload.replicas,
+        ).await?;
+        Ok(Json(deploy))
+    }
+
+    pub async fn restart_deployment(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, deployment)): Path<(String, String, String)>,
+    ) -> Result<StatusCode, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        crate::kubernetes::workloads::deployments::restart_deployment(&client, &namespace, &deployment).await?;
+        Ok(StatusCode::OK)
+    }
+
+    // Event handlers
+
+    pub async fn list_events(
+        State(state): State<Arc<AppState>>,
+        Path(cluster_id): Path<String>,
+    ) -> Result<Json<Vec<K8sEvent>>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let events = crate::kubernetes::observability::events::list_events(&client, None).await?;
+        Ok(Json(events))
+    }
+
+    pub async fn list_namespace_events(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace)): Path<(String, String)>,
+    ) -> Result<Json<Vec<K8sEvent>>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let events = crate::kubernetes::observability::events::list_events(&client, Some(&namespace)).await?;
+        Ok(Json(events))
+    }
+
+    // =========================================================================
+    // Service handlers
+    // =========================================================================
+
+    pub async fn list_services(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace)): Path<(String, String)>,
+    ) -> Result<Json<Vec<ServiceInfo>>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let services = crate::kubernetes::networking::services::list_services(&client, &namespace).await?;
+        Ok(Json(services))
+    }
+
+    pub async fn get_service(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, service)): Path<(String, String, String)>,
+    ) -> Result<Json<ServiceInfo>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let svc = crate::kubernetes::networking::services::get_service(&client, &namespace, &service).await?;
+        Ok(Json(svc))
+    }
+
+    pub async fn create_service(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, _namespace)): Path<(String, String)>,
+        Json(payload): Json<CreateServiceRequest>,
+    ) -> Result<(StatusCode, Json<ServiceInfo>), ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let svc = crate::kubernetes::networking::services::create_service(&client, &payload).await?;
+        Ok((StatusCode::CREATED, Json(svc)))
+    }
+
+    pub async fn delete_service(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, service)): Path<(String, String, String)>,
+    ) -> Result<StatusCode, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        crate::kubernetes::networking::services::delete_service(&client, &namespace, &service).await?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+
+    // =========================================================================
+    // Ingress handlers
+    // =========================================================================
+
+    pub async fn list_ingresses(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace)): Path<(String, String)>,
+    ) -> Result<Json<Vec<IngressInfo>>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let ingresses = crate::kubernetes::networking::ingress::list_ingresses(&client, &namespace).await?;
+        Ok(Json(ingresses))
+    }
+
+    pub async fn get_ingress(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, ingress)): Path<(String, String, String)>,
+    ) -> Result<Json<IngressInfo>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let ing = crate::kubernetes::networking::ingress::get_ingress(&client, &namespace, &ingress).await?;
+        Ok(Json(ing))
+    }
+
+    pub async fn create_ingress(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, _namespace)): Path<(String, String)>,
+        Json(payload): Json<CreateIngressRequest>,
+    ) -> Result<(StatusCode, Json<IngressInfo>), ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let ing = crate::kubernetes::networking::ingress::create_ingress(&client, &payload).await?;
+        Ok((StatusCode::CREATED, Json(ing)))
+    }
+
+    pub async fn delete_ingress(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, ingress)): Path<(String, String, String)>,
+    ) -> Result<StatusCode, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        crate::kubernetes::networking::ingress::delete_ingress(&client, &namespace, &ingress).await?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+
+    // =========================================================================
+    // ConfigMap handlers
+    // =========================================================================
+
+    pub async fn list_configmaps(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace)): Path<(String, String)>,
+    ) -> Result<Json<Vec<ConfigMapInfo>>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let cms = crate::kubernetes::config_storage::configmaps::list_configmaps(&client, &namespace).await?;
+        Ok(Json(cms))
+    }
+
+    pub async fn get_configmap(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, name)): Path<(String, String, String)>,
+    ) -> Result<Json<ConfigMapInfo>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let cm = crate::kubernetes::config_storage::configmaps::get_configmap(&client, &namespace, &name).await?;
+        Ok(Json(cm))
+    }
+
+    pub async fn create_configmap(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, _namespace)): Path<(String, String)>,
+        Json(payload): Json<CreateConfigMapRequest>,
+    ) -> Result<(StatusCode, Json<ConfigMapInfo>), ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let cm = crate::kubernetes::config_storage::configmaps::create_configmap(&client, &payload).await?;
+        Ok((StatusCode::CREATED, Json(cm)))
+    }
+
+    pub async fn delete_configmap(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, name)): Path<(String, String, String)>,
+    ) -> Result<StatusCode, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        crate::kubernetes::config_storage::configmaps::delete_configmap(&client, &namespace, &name).await?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+
+    // =========================================================================
+    // Secret handlers
+    // =========================================================================
+
+    pub async fn list_secrets(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace)): Path<(String, String)>,
+    ) -> Result<Json<Vec<SecretInfo>>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let secrets = crate::kubernetes::config_storage::secrets::list_secrets(&client, &namespace).await?;
+        Ok(Json(secrets))
+    }
+
+    pub async fn get_secret(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, name)): Path<(String, String, String)>,
+    ) -> Result<Json<SecretInfo>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let secret = crate::kubernetes::config_storage::secrets::get_secret(&client, &namespace, &name).await?;
+        Ok(Json(secret))
+    }
+
+    pub async fn create_secret(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, _namespace)): Path<(String, String)>,
+        Json(payload): Json<CreateSecretRequest>,
+    ) -> Result<(StatusCode, Json<SecretInfo>), ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let secret = crate::kubernetes::config_storage::secrets::create_secret(&client, &payload).await?;
+        Ok((StatusCode::CREATED, Json(secret)))
+    }
+
+    pub async fn delete_secret(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, name)): Path<(String, String, String)>,
+    ) -> Result<StatusCode, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        crate::kubernetes::config_storage::secrets::delete_secret(&client, &namespace, &name).await?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+
+    // =========================================================================
+    // PVC handlers
+    // =========================================================================
+
+    pub async fn list_pvcs(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace)): Path<(String, String)>,
+    ) -> Result<Json<Vec<PvcInfo>>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let pvcs = crate::kubernetes::config_storage::pvcs::list_pvcs(&client, &namespace).await?;
+        Ok(Json(pvcs))
+    }
+
+    pub async fn get_pvc(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, name)): Path<(String, String, String)>,
+    ) -> Result<Json<PvcInfo>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let pvc = crate::kubernetes::config_storage::pvcs::get_pvc(&client, &namespace, &name).await?;
+        Ok(Json(pvc))
+    }
+
+    pub async fn create_pvc(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, _namespace)): Path<(String, String)>,
+        Json(payload): Json<CreatePvcRequest>,
+    ) -> Result<(StatusCode, Json<PvcInfo>), ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let pvc = crate::kubernetes::config_storage::pvcs::create_pvc(&client, &payload).await?;
+        Ok((StatusCode::CREATED, Json(pvc)))
+    }
+
+    pub async fn delete_pvc(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, name)): Path<(String, String, String)>,
+    ) -> Result<StatusCode, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        crate::kubernetes::config_storage::pvcs::delete_pvc(&client, &namespace, &name).await?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+
+    // =========================================================================
+    // StatefulSet handlers
+    // =========================================================================
+
+    pub async fn list_statefulsets(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace)): Path<(String, String)>,
+    ) -> Result<Json<Vec<StatefulSetInfo>>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let sts = crate::kubernetes::workloads::statefulsets::list_statefulsets(&client, &namespace).await?;
+        Ok(Json(sts))
+    }
+
+    pub async fn get_statefulset(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, name)): Path<(String, String, String)>,
+    ) -> Result<Json<StatefulSetInfo>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let sts = crate::kubernetes::workloads::statefulsets::get_statefulset(&client, &namespace, &name).await?;
+        Ok(Json(sts))
+    }
+
+    pub async fn scale_statefulset(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, name)): Path<(String, String, String)>,
+        Json(payload): Json<ScaleRequest>,
+    ) -> Result<Json<StatefulSetInfo>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let sts = crate::kubernetes::workloads::statefulsets::scale_statefulset(
+            &client,
+            &namespace,
+            &name,
+            payload.replicas,
+        ).await?;
+        Ok(Json(sts))
+    }
+
+    pub async fn delete_statefulset(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, name)): Path<(String, String, String)>,
+    ) -> Result<StatusCode, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        crate::kubernetes::workloads::statefulsets::delete_statefulset(&client, &namespace, &name).await?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+
+    // =========================================================================
+    // DaemonSet handlers
+    // =========================================================================
+
+    pub async fn list_daemonsets(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace)): Path<(String, String)>,
+    ) -> Result<Json<Vec<DaemonSetInfo>>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let ds = crate::kubernetes::workloads::daemonsets::list_daemonsets(&client, &namespace).await?;
+        Ok(Json(ds))
+    }
+
+    pub async fn get_daemonset(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, name)): Path<(String, String, String)>,
+    ) -> Result<Json<DaemonSetInfo>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let ds = crate::kubernetes::workloads::daemonsets::get_daemonset(&client, &namespace, &name).await?;
+        Ok(Json(ds))
+    }
+
+    pub async fn delete_daemonset(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, name)): Path<(String, String, String)>,
+    ) -> Result<StatusCode, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        crate::kubernetes::workloads::daemonsets::delete_daemonset(&client, &namespace, &name).await?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+
+    // =========================================================================
+    // Job handlers
+    // =========================================================================
+
+    pub async fn list_jobs(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace)): Path<(String, String)>,
+    ) -> Result<Json<Vec<JobInfo>>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let jobs = crate::kubernetes::workloads::jobs::list_jobs(&client, &namespace).await?;
+        Ok(Json(jobs))
+    }
+
+    pub async fn get_job(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, name)): Path<(String, String, String)>,
+    ) -> Result<Json<JobInfo>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let job = crate::kubernetes::workloads::jobs::get_job(&client, &namespace, &name).await?;
+        Ok(Json(job))
+    }
+
+    pub async fn delete_job(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, name)): Path<(String, String, String)>,
+    ) -> Result<StatusCode, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        crate::kubernetes::workloads::jobs::delete_job(&client, &namespace, &name, None).await?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+
+    pub async fn list_cronjobs(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace)): Path<(String, String)>,
+    ) -> Result<Json<Vec<CronJobInfo>>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let cronjobs = crate::kubernetes::workloads::jobs::list_cronjobs(&client, &namespace).await?;
+        Ok(Json(cronjobs))
+    }
+
+    pub async fn get_cronjob(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, name)): Path<(String, String, String)>,
+    ) -> Result<Json<CronJobInfo>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let cronjob = crate::kubernetes::workloads::jobs::get_cronjob(&client, &namespace, &name).await?;
+        Ok(Json(cronjob))
+    }
+
+    pub async fn delete_cronjob(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace, name)): Path<(String, String, String)>,
+    ) -> Result<StatusCode, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        crate::kubernetes::workloads::jobs::delete_cronjob(&client, &namespace, &name).await?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+
+    // =========================================================================
+    // Metrics handlers
+    // =========================================================================
+
+    pub async fn get_node_metrics(
+        State(state): State<Arc<AppState>>,
+        Path(cluster_id): Path<String>,
+    ) -> Result<Json<Vec<crate::kubernetes::types::NodeMetrics>>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let metrics = crate::kubernetes::observability::metrics::get_node_metrics(&client).await?;
+        Ok(Json(metrics))
+    }
+
+    pub async fn get_pod_metrics(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, namespace)): Path<(String, String)>,
+    ) -> Result<Json<Vec<crate::kubernetes::types::PodMetrics>>, ApiError> {
+        let client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let metrics = crate::kubernetes::observability::metrics::get_pod_metrics(&client, &namespace).await?;
+        Ok(Json(metrics))
+    }
+
+    // =========================================================================
+    // Helm handlers
+    // =========================================================================
+
+    pub async fn list_helm_releases(
+        State(state): State<Arc<AppState>>,
+        Path(cluster_id): Path<String>,
+    ) -> Result<Json<Vec<HelmRelease>>, ApiError> {
+        // Get kubeconfig path for this cluster
+        let _client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let kubeconfig_path = format!("/tmp/kubeconfig-{}", cluster_id);
+        let releases = crate::kubernetes::helm::releases::list_releases(&kubeconfig_path).await?;
+        Ok(Json(releases))
+    }
+
+    pub async fn install_helm_release(
+        State(state): State<Arc<AppState>>,
+        Path(cluster_id): Path<String>,
+        Json(payload): Json<HelmInstallRequest>,
+    ) -> Result<(StatusCode, Json<HelmRelease>), ApiError> {
+        let _client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let kubeconfig_path = format!("/tmp/kubeconfig-{}", cluster_id);
+        let release = crate::kubernetes::helm::releases::install_release(&kubeconfig_path, &payload).await?;
+        Ok((StatusCode::CREATED, Json(release)))
+    }
+
+    pub async fn upgrade_helm_release(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, release_name)): Path<(String, String)>,
+        Json(payload): Json<HelmUpgradeRequest>,
+    ) -> Result<Json<HelmRelease>, ApiError> {
+        let _client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let kubeconfig_path = format!("/tmp/kubeconfig-{}", cluster_id);
+        let release = crate::kubernetes::helm::releases::upgrade_release(&kubeconfig_path, &release_name, &payload).await?;
+        Ok(Json(release))
+    }
+
+    pub async fn uninstall_helm_release(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, release_name)): Path<(String, String)>,
+        Query(query): Query<HelmNamespaceQuery>,
+    ) -> Result<StatusCode, ApiError> {
+        let _client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let kubeconfig_path = format!("/tmp/kubeconfig-{}", cluster_id);
+        let namespace = query.namespace.as_deref().unwrap_or("default");
+        crate::kubernetes::helm::releases::uninstall_release(&kubeconfig_path, &release_name, namespace).await?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+
+    #[derive(Deserialize)]
+    pub struct HelmNamespaceQuery {
+        pub namespace: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    pub struct HelmRollbackRequest {
+        pub revision: Option<i32>,
+    }
+
+    pub async fn rollback_helm_release(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, release_name)): Path<(String, String)>,
+        Query(query): Query<HelmNamespaceQuery>,
+        Json(payload): Json<HelmRollbackRequest>,
+    ) -> Result<StatusCode, ApiError> {
+        let _client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let kubeconfig_path = format!("/tmp/kubeconfig-{}", cluster_id);
+        let namespace = query.namespace.as_deref().unwrap_or("default");
+        crate::kubernetes::helm::releases::rollback_release(&kubeconfig_path, &release_name, namespace, payload.revision).await?;
+        Ok(StatusCode::OK)
+    }
+
+    pub async fn get_helm_release_history(
+        State(state): State<Arc<AppState>>,
+        Path((cluster_id, release_name)): Path<(String, String)>,
+        Query(query): Query<HelmNamespaceQuery>,
+    ) -> Result<Json<Vec<crate::kubernetes::helm::HelmReleaseRevision>>, ApiError> {
+        let _client = state.kubernetes_manager.get_client(&cluster_id).await?;
+        let kubeconfig_path = format!("/tmp/kubeconfig-{}", cluster_id);
+        let namespace = query.namespace.as_deref().unwrap_or("default");
+        let history = crate::kubernetes::helm::releases::get_release_history(&kubeconfig_path, &release_name, namespace).await?;
+        Ok(Json(history))
+    }
+
+    pub async fn list_helm_repos(
+        State(_state): State<Arc<AppState>>,
+    ) -> Result<Json<Vec<HelmRepo>>, ApiError> {
+        let repos = crate::kubernetes::helm::repos::list_repos().await?;
+        Ok(Json(repos))
+    }
+
+    pub async fn add_helm_repo(
+        State(_state): State<Arc<AppState>>,
+        Json(payload): Json<AddHelmRepoRequest>,
+    ) -> Result<StatusCode, ApiError> {
+        crate::kubernetes::helm::repos::add_repo(&payload.name, &payload.url).await?;
+        Ok(StatusCode::CREATED)
+    }
+
+    #[derive(Deserialize)]
+    pub struct AddHelmRepoRequest {
+        pub name: String,
+        pub url: String,
+    }
+
+    pub async fn remove_helm_repo(
+        State(_state): State<Arc<AppState>>,
+        Path(repo_name): Path<String>,
+    ) -> Result<StatusCode, ApiError> {
+        crate::kubernetes::helm::repos::remove_repo(&repo_name).await?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+
+    pub async fn search_helm_charts(
+        State(_state): State<Arc<AppState>>,
+        Query(query): Query<HelmSearchQuery>,
+    ) -> Result<Json<Vec<crate::kubernetes::helm::HelmChart>>, ApiError> {
+        let charts = crate::kubernetes::helm::repos::search_charts(&query.keyword, query.all_versions.unwrap_or(false)).await?;
+        Ok(Json(charts))
+    }
+
+    #[derive(Deserialize)]
+    pub struct HelmSearchQuery {
+        pub keyword: String,
+        pub all_versions: Option<bool>,
+    }
+}
+
+// Re-export handlers for use in routes
+#[cfg(feature = "kubernetes")]
+use k8s_handlers::{
+    // Cluster
+    list_clusters as k8s_list_clusters,
+    connect_cluster as k8s_connect_cluster,
+    get_cluster as k8s_get_cluster,
+    delete_cluster as k8s_delete_cluster,
+    reconnect_cluster as k8s_reconnect_cluster,
+    get_cluster_health as k8s_get_cluster_health,
+    get_cluster_version as k8s_get_cluster_version,
+    // Namespaces
+    list_namespaces as k8s_list_namespaces,
+    create_namespace as k8s_create_namespace,
+    get_namespace as k8s_get_namespace,
+    delete_namespace as k8s_delete_namespace,
+    // Nodes
+    list_nodes as k8s_list_nodes,
+    get_node as k8s_get_node,
+    cordon_node as k8s_cordon_node,
+    uncordon_node as k8s_uncordon_node,
+    drain_node as k8s_drain_node,
+    // Pods
+    list_pods as k8s_list_pods,
+    get_pod as k8s_get_pod,
+    delete_pod as k8s_delete_pod,
+    get_pod_logs as k8s_get_pod_logs,
+    // Deployments
+    list_deployments as k8s_list_deployments,
+    get_deployment as k8s_get_deployment,
+    scale_deployment as k8s_scale_deployment,
+    restart_deployment as k8s_restart_deployment,
+    // Events
+    list_events as k8s_list_events,
+    list_namespace_events as k8s_list_namespace_events,
+    // Services
+    list_services as k8s_list_services,
+    get_service as k8s_get_service,
+    create_service as k8s_create_service,
+    delete_service as k8s_delete_service,
+    // Ingress
+    list_ingresses as k8s_list_ingresses,
+    get_ingress as k8s_get_ingress,
+    create_ingress as k8s_create_ingress,
+    delete_ingress as k8s_delete_ingress,
+    // ConfigMaps
+    list_configmaps as k8s_list_configmaps,
+    get_configmap as k8s_get_configmap,
+    create_configmap as k8s_create_configmap,
+    delete_configmap as k8s_delete_configmap,
+    // Secrets
+    list_secrets as k8s_list_secrets,
+    get_secret as k8s_get_secret,
+    create_secret as k8s_create_secret,
+    delete_secret as k8s_delete_secret,
+    // PVCs
+    list_pvcs as k8s_list_pvcs,
+    get_pvc as k8s_get_pvc,
+    create_pvc as k8s_create_pvc,
+    delete_pvc as k8s_delete_pvc,
+    // StatefulSets
+    list_statefulsets as k8s_list_statefulsets,
+    get_statefulset as k8s_get_statefulset,
+    scale_statefulset as k8s_scale_statefulset,
+    delete_statefulset as k8s_delete_statefulset,
+    // DaemonSets
+    list_daemonsets as k8s_list_daemonsets,
+    get_daemonset as k8s_get_daemonset,
+    delete_daemonset as k8s_delete_daemonset,
+    // Jobs
+    list_jobs as k8s_list_jobs,
+    get_job as k8s_get_job,
+    delete_job as k8s_delete_job,
+    list_cronjobs as k8s_list_cronjobs,
+    get_cronjob as k8s_get_cronjob,
+    delete_cronjob as k8s_delete_cronjob,
+    // Metrics
+    get_node_metrics as k8s_get_node_metrics,
+    get_pod_metrics as k8s_get_pod_metrics,
+    // Helm
+    list_helm_releases as k8s_list_helm_releases,
+    install_helm_release as k8s_install_helm_release,
+    upgrade_helm_release as k8s_upgrade_helm_release,
+    uninstall_helm_release as k8s_uninstall_helm_release,
+    rollback_helm_release as k8s_rollback_helm_release,
+    get_helm_release_history as k8s_get_helm_release_history,
+    list_helm_repos as k8s_list_helm_repos,
+    add_helm_repo as k8s_add_helm_repo,
+    remove_helm_repo as k8s_remove_helm_repo,
+    search_helm_charts as k8s_search_helm_charts,
+};

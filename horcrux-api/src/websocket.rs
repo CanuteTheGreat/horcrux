@@ -157,6 +157,97 @@ pub enum WsEvent {
         message: String,
         timestamp: String,
     },
+
+    // =========================================================================
+    // Kubernetes Events
+    // =========================================================================
+
+    /// K8s Pod status changed
+    K8sPodStatusChanged {
+        cluster_id: String,
+        namespace: String,
+        pod_name: String,
+        old_status: String,
+        new_status: String,
+        timestamp: String,
+    },
+
+    /// K8s Deployment scaled
+    K8sDeploymentScaled {
+        cluster_id: String,
+        namespace: String,
+        name: String,
+        old_replicas: i32,
+        new_replicas: i32,
+        timestamp: String,
+    },
+
+    /// K8s Event (from the cluster)
+    K8sEvent {
+        cluster_id: String,
+        namespace: String,
+        event_type: String,
+        reason: String,
+        message: String,
+        involved_object: String,
+        timestamp: String,
+    },
+
+    /// K8s Pod log line (for streaming)
+    K8sPodLogLine {
+        cluster_id: String,
+        namespace: String,
+        pod_name: String,
+        container: String,
+        line: String,
+        timestamp: String,
+    },
+
+    /// K8s Exec output
+    K8sExecOutput {
+        cluster_id: String,
+        namespace: String,
+        pod_name: String,
+        container: String,
+        output: String,
+        stream: String, // "stdout" or "stderr"
+        timestamp: String,
+    },
+
+    /// K8s Node status changed
+    K8sNodeStatusChanged {
+        cluster_id: String,
+        node_name: String,
+        old_status: String,
+        new_status: String,
+        timestamp: String,
+    },
+
+    /// K8s Cluster connected
+    K8sClusterConnected {
+        cluster_id: String,
+        cluster_name: String,
+        api_server: String,
+        timestamp: String,
+    },
+
+    /// K8s Cluster disconnected
+    K8sClusterDisconnected {
+        cluster_id: String,
+        cluster_name: String,
+        reason: Option<String>,
+        timestamp: String,
+    },
+
+    /// Helm release status changed
+    HelmReleaseStatusChanged {
+        cluster_id: String,
+        namespace: String,
+        release_name: String,
+        old_status: String,
+        new_status: String,
+        timestamp: String,
+    },
 }
 
 /// WebSocket subscription request
@@ -175,6 +266,14 @@ pub const TOPIC_BACKUPS: &str = "backups";
 pub const TOPIC_MIGRATIONS: &str = "migrations";
 pub const TOPIC_ALERTS: &str = "alerts";
 pub const TOPIC_NOTIFICATIONS: &str = "notifications";
+// Kubernetes topics
+pub const TOPIC_K8S_PODS: &str = "k8s:pods";
+pub const TOPIC_K8S_DEPLOYMENTS: &str = "k8s:deployments";
+pub const TOPIC_K8S_EVENTS: &str = "k8s:events";
+pub const TOPIC_K8S_LOGS: &str = "k8s:logs";
+pub const TOPIC_K8S_NODES: &str = "k8s:nodes";
+pub const TOPIC_K8S_CLUSTERS: &str = "k8s:clusters";
+pub const TOPIC_HELM: &str = "helm:releases";
 
 /// WebSocket state
 #[derive(Clone)]
@@ -366,6 +465,175 @@ impl WsState {
             timestamp: Self::timestamp(),
         });
     }
+
+    // =========================================================================
+    // Kubernetes Broadcast Methods
+    // =========================================================================
+
+    /// Broadcast K8s pod status change
+    pub fn broadcast_k8s_pod_status(
+        &self,
+        cluster_id: String,
+        namespace: String,
+        pod_name: String,
+        old_status: String,
+        new_status: String,
+    ) {
+        self.broadcast(WsEvent::K8sPodStatusChanged {
+            cluster_id,
+            namespace,
+            pod_name,
+            old_status,
+            new_status,
+            timestamp: Self::timestamp(),
+        });
+    }
+
+    /// Broadcast K8s deployment scaled
+    pub fn broadcast_k8s_deployment_scaled(
+        &self,
+        cluster_id: String,
+        namespace: String,
+        name: String,
+        old_replicas: i32,
+        new_replicas: i32,
+    ) {
+        self.broadcast(WsEvent::K8sDeploymentScaled {
+            cluster_id,
+            namespace,
+            name,
+            old_replicas,
+            new_replicas,
+            timestamp: Self::timestamp(),
+        });
+    }
+
+    /// Broadcast K8s event
+    pub fn broadcast_k8s_event(
+        &self,
+        cluster_id: String,
+        namespace: String,
+        event_type: String,
+        reason: String,
+        message: String,
+        involved_object: String,
+    ) {
+        self.broadcast(WsEvent::K8sEvent {
+            cluster_id,
+            namespace,
+            event_type,
+            reason,
+            message,
+            involved_object,
+            timestamp: Self::timestamp(),
+        });
+    }
+
+    /// Broadcast K8s pod log line
+    pub fn broadcast_k8s_log_line(
+        &self,
+        cluster_id: String,
+        namespace: String,
+        pod_name: String,
+        container: String,
+        line: String,
+    ) {
+        self.broadcast(WsEvent::K8sPodLogLine {
+            cluster_id,
+            namespace,
+            pod_name,
+            container,
+            line,
+            timestamp: Self::timestamp(),
+        });
+    }
+
+    /// Broadcast K8s exec output
+    pub fn broadcast_k8s_exec_output(
+        &self,
+        cluster_id: String,
+        namespace: String,
+        pod_name: String,
+        container: String,
+        output: String,
+        stream: String,
+    ) {
+        self.broadcast(WsEvent::K8sExecOutput {
+            cluster_id,
+            namespace,
+            pod_name,
+            container,
+            output,
+            stream,
+            timestamp: Self::timestamp(),
+        });
+    }
+
+    /// Broadcast K8s node status change
+    pub fn broadcast_k8s_node_status(
+        &self,
+        cluster_id: String,
+        node_name: String,
+        old_status: String,
+        new_status: String,
+    ) {
+        self.broadcast(WsEvent::K8sNodeStatusChanged {
+            cluster_id,
+            node_name,
+            old_status,
+            new_status,
+            timestamp: Self::timestamp(),
+        });
+    }
+
+    /// Broadcast K8s cluster connected
+    pub fn broadcast_k8s_cluster_connected(
+        &self,
+        cluster_id: String,
+        cluster_name: String,
+        api_server: String,
+    ) {
+        self.broadcast(WsEvent::K8sClusterConnected {
+            cluster_id,
+            cluster_name,
+            api_server,
+            timestamp: Self::timestamp(),
+        });
+    }
+
+    /// Broadcast K8s cluster disconnected
+    pub fn broadcast_k8s_cluster_disconnected(
+        &self,
+        cluster_id: String,
+        cluster_name: String,
+        reason: Option<String>,
+    ) {
+        self.broadcast(WsEvent::K8sClusterDisconnected {
+            cluster_id,
+            cluster_name,
+            reason,
+            timestamp: Self::timestamp(),
+        });
+    }
+
+    /// Broadcast Helm release status change
+    pub fn broadcast_helm_release_status(
+        &self,
+        cluster_id: String,
+        namespace: String,
+        release_name: String,
+        old_status: String,
+        new_status: String,
+    ) {
+        self.broadcast(WsEvent::HelmReleaseStatusChanged {
+            cluster_id,
+            namespace,
+            release_name,
+            old_status,
+            new_status,
+            timestamp: Self::timestamp(),
+        });
+    }
 }
 
 /// WebSocket handler
@@ -491,6 +759,32 @@ async fn handle_socket(socket: WebSocket, ws_state: Arc<WsState>, auth_user: Aut
                                 topics.contains(&TOPIC_VM_STATUS.to_string()) // Reuse VM status topic for containers
                             }
                             WsEvent::Notification { .. } => topics.contains(&TOPIC_NOTIFICATIONS.to_string()),
+                            // Kubernetes events
+                            WsEvent::K8sPodStatusChanged { .. } => {
+                                topics.contains(&TOPIC_K8S_PODS.to_string())
+                            }
+                            WsEvent::K8sDeploymentScaled { .. } => {
+                                topics.contains(&TOPIC_K8S_DEPLOYMENTS.to_string())
+                            }
+                            WsEvent::K8sEvent { .. } => {
+                                topics.contains(&TOPIC_K8S_EVENTS.to_string())
+                            }
+                            WsEvent::K8sPodLogLine { .. } => {
+                                topics.contains(&TOPIC_K8S_LOGS.to_string())
+                            }
+                            WsEvent::K8sExecOutput { .. } => {
+                                topics.contains(&TOPIC_K8S_LOGS.to_string())
+                            }
+                            WsEvent::K8sNodeStatusChanged { .. } => {
+                                topics.contains(&TOPIC_K8S_NODES.to_string())
+                            }
+                            WsEvent::K8sClusterConnected { .. }
+                            | WsEvent::K8sClusterDisconnected { .. } => {
+                                topics.contains(&TOPIC_K8S_CLUSTERS.to_string())
+                            }
+                            WsEvent::HelmReleaseStatusChanged { .. } => {
+                                topics.contains(&TOPIC_HELM.to_string())
+                            }
                             // Always send these
                             WsEvent::Ping { .. }
                             | WsEvent::Subscribed { .. }

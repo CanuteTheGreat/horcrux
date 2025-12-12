@@ -101,6 +101,8 @@ pub struct BackupManager {
     zfs_backend: Option<Arc<crate::storage::zfs::ZfsManager>>,
     ceph_backend: Option<Arc<crate::storage::ceph::CephManager>>,
     lvm_backend: Option<Arc<crate::storage::lvm::LvmManager>>,
+    /// Directory for restore operations
+    restore_dir: PathBuf,
 }
 
 impl BackupManager {
@@ -113,6 +115,21 @@ impl BackupManager {
             zfs_backend: None,
             ceph_backend: None,
             lvm_backend: None,
+            restore_dir: PathBuf::from("/var/lib/horcrux/restore"),
+        }
+    }
+
+    /// Create BackupManager with custom restore directory
+    pub fn with_restore_dir(restore_dir: PathBuf) -> Self {
+        Self {
+            backups: Arc::new(RwLock::new(HashMap::new())),
+            jobs: Arc::new(RwLock::new(HashMap::new())),
+            scheduler: scheduler::BackupScheduler::new(),
+            retention: retention::RetentionManager::new(),
+            zfs_backend: None,
+            ceph_backend: None,
+            lvm_backend: None,
+            restore_dir,
         }
     }
 
@@ -130,6 +147,7 @@ impl BackupManager {
             zfs_backend: zfs,
             ceph_backend: ceph,
             lvm_backend: lvm,
+            restore_dir: PathBuf::from("/var/lib/horcrux/restore"),
         }
     }
 
@@ -597,7 +615,7 @@ impl BackupManager {
         };
 
         // Create restore directory
-        let restore_path = PathBuf::from("/var/lib/horcrux/restore").join(target_id);
+        let restore_path = self.restore_dir.join(target_id);
         tokio::fs::create_dir_all(&restore_path).await?;
 
         // Extract backup
@@ -625,7 +643,7 @@ impl BackupManager {
     }
 
     async fn restore_from_uncompressed_backup(&self, backup: &Backup, target_id: &str) -> Result<()> {
-        let restore_path = PathBuf::from("/var/lib/horcrux/restore").join(target_id);
+        let restore_path = self.restore_dir.join(target_id);
         tokio::fs::create_dir_all(&restore_path).await?;
 
         // Direct tar extraction

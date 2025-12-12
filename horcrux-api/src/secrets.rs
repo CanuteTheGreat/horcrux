@@ -616,6 +616,32 @@ impl VaultManager {
             .ok_or_else(|| horcrux_common::Error::System("Password not found".to_string()))?;
         Ok((username, password))
     }
+
+    /// Store kubeconfig for a Kubernetes cluster
+    pub async fn store_kubeconfig(&self, cluster_id: &str, kubeconfig: &str) -> Result<()> {
+        let mut data = HashMap::new();
+        data.insert("kubeconfig".to_string(), kubeconfig.to_string());
+        self.write_secret(&format!("kubernetes/clusters/{}/kubeconfig", cluster_id), data)
+            .await
+    }
+
+    /// Retrieve kubeconfig for a Kubernetes cluster
+    pub async fn get_kubeconfig(&self, cluster_id: &str) -> Result<String> {
+        let secret = self
+            .read_secret(&format!("kubernetes/clusters/{}/kubeconfig", cluster_id))
+            .await?;
+        secret
+            .data
+            .get("kubeconfig")
+            .cloned()
+            .ok_or_else(|| horcrux_common::Error::System("Kubeconfig not found".to_string()))
+    }
+
+    /// Delete kubeconfig for a Kubernetes cluster
+    pub async fn delete_kubeconfig(&self, cluster_id: &str) -> Result<()> {
+        self.delete_secret(&format!("kubernetes/clusters/{}/kubeconfig", cluster_id))
+            .await
+    }
 }
 
 #[cfg(test)]

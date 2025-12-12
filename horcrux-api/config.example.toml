@@ -1,0 +1,69 @@
+# Horcrux API Configuration File
+# Copy this file to /etc/horcrux/config.toml or ./config.toml and modify as needed.
+# Environment variables override these settings (see documentation for variable names).
+
+[server]
+# Host address to bind to
+host = "0.0.0.0"
+# Port to listen on
+port = 8006
+# Enable TLS (HTTPS)
+tls_enabled = true
+
+[paths]
+# Base directory for Horcrux data
+data_dir = "/var/lib/horcrux"
+# Directory for VM disk images
+vm_storage = "/var/lib/horcrux/vms"
+# Directory for snapshots
+snapshots = "/var/lib/horcrux/snapshots"
+# Directory for templates
+templates = "/var/lib/horcrux/templates"
+# Directory for cloud-init data
+cloudinit = "/var/lib/horcrux/cloudinit"
+# Directory for restore operations
+restore = "/var/lib/horcrux/restore"
+# Directory for backups
+backups = "/var/lib/horcrux/backups"
+
+[database]
+# Database URL (SQLite, PostgreSQL, or MySQL)
+url = "sqlite:///var/lib/horcrux/horcrux.db"
+# Maximum number of connections in the pool
+max_connections = 10
+
+[tls]
+# Path to SSL certificate file
+cert_path = "/etc/horcrux/ssl/cert.pem"
+# Path to SSL private key file
+key_path = "/etc/horcrux/ssl/key.pem"
+# SSL directory for storing certificates
+ssl_dir = "/etc/horcrux/ssl"
+
+[qemu]
+# Pattern for QMP socket path (use {vm_id} as placeholder)
+qmp_socket_pattern = "/var/run/qemu/{vm_id}.qmp"
+# Pattern for monitor socket path (use {vm_id} as placeholder)
+monitor_socket_pattern = "/var/run/qemu-server/{vm_id}.mon"
+# Pattern for serial socket path (use {vm_id} as placeholder)
+serial_socket_pattern = "/var/run/qemu-server/{vm_id}.serial"
+# Directory for QEMU runtime files
+run_dir = "/var/run/qemu-server"
+
+[logging]
+# Log level (trace, debug, info, warn, error)
+level = "info"
+# Directory for log files
+log_dir = "/var/log/horcrux"
+# Path to audit log file
+audit_log = "/var/log/horcrux/audit.log"
+# Enable file logging
+file_logging_enabled = true
+
+[cni]
+# Directory containing CNI binaries
+bin_dir = "/opt/cni/bin"
+# Directory containing CNI configuration files
+conf_dir = "/etc/cni/net.d"
+# Enable CNI features
+enabled = true

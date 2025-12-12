@@ -1,9 +1,99 @@
 //! API client for communicating with Horcrux backend
 
 use horcrux_common::VmConfig;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 const API_BASE: &str = "http://localhost:8006/api";
+
+/// Generic JSON fetch helper
+pub async fn fetch_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> {
+    let url = if path.starts_with("http") {
+        path.to_string()
+    } else if path.starts_with("/api") {
+        format!("http://localhost:8006{}", path)
+    } else {
+        format!("{}{}", API_BASE, path)
+    };
+
+    let response = reqwasm::http::Request::get(&url)
+        .send()
+        .await
+        .map_err(|e| ApiError { message: e.to_string() })?;
+
+    if response.ok() {
+        response.json().await.map_err(|e| ApiError { message: e.to_string() })
+    } else {
+        Err(ApiError { message: format!("HTTP {}", response.status()) })
+    }
+}
+
+/// POST request helper
+pub async fn post_json<T: DeserializeOwned, B: Serialize>(path: &str, body: &B) -> Result<T, ApiError> {
+    let url = if path.starts_with("http") {
+        path.to_string()
+    } else if path.starts_with("/api") {
+        format!("http://localhost:8006{}", path)
+    } else {
+        format!("{}{}", API_BASE, path)
+    };
+
+    let response = reqwasm::http::Request::post(&url)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(body).unwrap())
+        .send()
+        .await
+        .map_err(|e| ApiError { message: e.to_string() })?;
+
+    if response.ok() {
+        response.json().await.map_err(|e| ApiError { message: e.to_string() })
+    } else {
+        Err(ApiError { message: format!("HTTP {}", response.status()) })
+    }
+}
+
+/// DELETE request helper
+pub async fn delete_json(path: &str) -> Result<(), ApiError> {
+    let url = if path.starts_with("http") {
+        path.to_string()
+    } else if path.starts_with("/api") {
+        format!("http://localhost:8006{}", path)
+    } else {
+        format!("{}{}", API_BASE, path)
+    };
+
+    let response = reqwasm::http::Request::delete(&url)
+        .send()
+        .await
+        .map_err(|e| ApiError { message: e.to_string() })?;
+
+    if response.ok() {
+        Ok(())
+    } else {
+        Err(ApiError { message: format!("HTTP {}", response.status()) })
+    }
+}
+
+/// POST without body helper
+pub async fn post_empty(path: &str) -> Result<(), ApiError> {
+    let url = if path.starts_with("http") {
+        path.to_string()
+    } else if path.starts_with("/api") {
+        format!("http://localhost:8006{}", path)
+    } else {
+        format!("{}{}", API_BASE, path)
+    };
+
+    let response = reqwasm::http::Request::post(&url)
+        .send()
+        .await
+        .map_err(|e| ApiError { message: e.to_string() })?;
+
+    if response.ok() {
+        Ok(())
+    } else {
+        Err(ApiError { message: format!("HTTP {}", response.status()) })
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ApiError {

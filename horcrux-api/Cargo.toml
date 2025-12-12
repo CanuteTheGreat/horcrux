@@ -5,6 +5,10 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[lib]
+name = "horcrux_api"
+path = "src/lib.rs"
+
 [[bin]]
 name = "horcrux-api"
 path = "src/main.rs"
@@ -24,6 +28,8 @@ tokio = { workspace = true }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = "0.9"
+toml = "0.8"
 
 # Error handling
 anyhow = { workspace = true }
@@ -71,8 +77,17 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono", "uuid
 # Security - constant-time comparison
 subtle = "2.5"
 
+# Encryption
+aes-gcm = "0.10"
+hex = "0.4"
+
 # Docker API client
 bollard = "0.17"
+
+# Kubernetes client
+kube = { version = "0.98", features = ["runtime", "derive", "ws"], optional = true }
+k8s-openapi = { version = "0.24", features = ["v1_32"], optional = true }
+http = { version = "1.0", optional = true }
 
 [features]
 default = ["qemu", "lxc", "docker"]
@@ -90,6 +105,9 @@ podman = []      # Podman containers
 # Additional features
 cluster = []     # Clustering/HA support
 backup = []      # Backup and restore
+
+# Kubernetes orchestration
+kubernetes = ["kube", "k8s-openapi", "http"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }

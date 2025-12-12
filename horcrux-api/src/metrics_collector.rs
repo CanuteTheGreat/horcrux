@@ -216,7 +216,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_collect_vm_metrics() {
-        let result = collect_vm_metrics("test-vm-100").await;
+        let libvirt_manager: Option<Arc<LibvirtManager>> = None;
+        let result = collect_vm_metrics("test-vm-100", &libvirt_manager).await;
         assert!(result.is_ok());
 
         let (cpu, memory, disk_read, disk_write, net_rx, net_tx) = result.unwrap();

@@ -1,8 +1,8 @@
 ///! Alert system module
 ///! Provides threshold-based monitoring alerts with email and webhook notifications
 
-mod rules;
-mod notifications;
+pub mod rules;
+pub mod notifications;
 
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-pub use rules::{AlertRule, MetricType};
+pub use rules::{AlertRule, MetricType, AlertCondition, ComparisonOperator};
 pub use notifications::NotificationChannel;
 
 /// Alert severity level

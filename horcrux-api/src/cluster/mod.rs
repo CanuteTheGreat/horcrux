@@ -5,6 +5,7 @@ pub mod corosync;
 pub mod node;
 pub mod affinity;
 pub mod balancer;
+pub mod arch;
 
 use horcrux_common::Result;
 pub use node::{Node, NodeStatus};

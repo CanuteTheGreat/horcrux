@@ -8,6 +8,10 @@ mod snapshot_list;
 mod clone_list;
 mod replication_list;
 mod monitoring;
+mod gpu;
+mod kubernetes;
+mod storage;
+mod network;
 
 pub use dashboard::Dashboard;
 pub use vm_list::VmList;
@@ -19,3 +23,7 @@ pub use snapshot_list::SnapshotList;
 pub use clone_list::CloneList;
 pub use replication_list::ReplicationList;
 pub use monitoring::Monitoring;
+pub use gpu::GpuManagement;
+pub use kubernetes::KubernetesManagement;
+pub use storage::StorageManagement;
+pub use network::NetworkManagement;

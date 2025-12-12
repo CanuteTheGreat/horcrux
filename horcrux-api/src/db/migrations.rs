@@ -25,6 +25,8 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     run_migration(pool, "006_create_backups_table", MIGRATION_006_CREATE_BACKUPS).await?;
     run_migration(pool, "007_create_cluster_nodes_table", MIGRATION_007_CREATE_CLUSTER_NODES).await?;
     run_migration(pool, "008_create_api_keys_table", MIGRATION_008_CREATE_API_KEYS).await?;
+    run_migration(pool, "009_create_k8s_clusters_table", MIGRATION_009_CREATE_K8S_CLUSTERS).await?;
+    run_migration(pool, "010_create_k8s_helm_repos_table", MIGRATION_010_CREATE_K8S_HELM_REPOS).await?;
 
     Ok(())
 }
@@ -200,4 +202,38 @@ CREATE TABLE api_keys (
 CREATE INDEX idx_api_keys_user ON api_keys(user_id);
 CREATE INDEX idx_api_keys_hash ON api_keys(key_hash);
 CREATE INDEX idx_api_keys_enabled ON api_keys(enabled);
+";
+
+const MIGRATION_009_CREATE_K8S_CLUSTERS: &str = "
+CREATE TABLE k8s_clusters (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    context TEXT NOT NULL,
+    api_server TEXT NOT NULL,
+    version TEXT,
+    status TEXT NOT NULL DEFAULT 'disconnected',
+    node_count INTEGER DEFAULT 0,
+    provider TEXT NOT NULL DEFAULT 'external',
+    kubeconfig_encrypted TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX idx_k8s_clusters_name ON k8s_clusters(name);
+CREATE INDEX idx_k8s_clusters_status ON k8s_clusters(status);
+CREATE INDEX idx_k8s_clusters_provider ON k8s_clusters(provider);
+";
+
+const MIGRATION_010_CREATE_K8S_HELM_REPOS: &str = "
+CREATE TABLE k8s_helm_repos (
+    id TEXT PRIMARY KEY,
+    cluster_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (cluster_id) REFERENCES k8s_clusters(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_k8s_helm_repos_cluster ON k8s_helm_repos(cluster_id);
+CREATE UNIQUE INDEX idx_k8s_helm_repos_name ON k8s_helm_repos(cluster_id, name);
 ";
