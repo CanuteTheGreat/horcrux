@@ -421,6 +421,7 @@ fn default_enabled() -> bool {
 // API Methods
 // ============================================================================
 
+#[allow(dead_code)]
 impl HorcruxClient {
     // VM operations
     pub async fn list_vms(&self) -> Result<Vec<Vm>> {

@@ -64,6 +64,7 @@ pub enum Msg {
     ToggleUser(String),
     DeleteUser(String),
     DeleteRole(String),
+    #[allow(dead_code)]
     Error(String),
 }
 
@@ -354,6 +355,7 @@ impl Component for UserManagementPage {
     }
 }
 
+#[allow(dead_code)]
 impl UserManagementPage {
     fn view_create_user_form(&self, ctx: &Context<Self>) -> Html {
         if !self.show_create_user {

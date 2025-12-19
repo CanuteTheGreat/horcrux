@@ -5,7 +5,7 @@
 use crate::client::HorcruxClient;
 use crate::resources::{get_all_resources, Resource, ResourceState};
 use crate::schema::{
-    Diagnostic, ProviderSchema, ResourceSchema, RpcRequest, RpcResponse, SchemaAttribute,
+    Diagnostic, ProviderSchema, RpcRequest, RpcResponse, SchemaAttribute,
     SchemaBlock,
 };
 use serde::{Deserialize, Serialize};

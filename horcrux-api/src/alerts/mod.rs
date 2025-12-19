@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+#[allow(unused_imports)]
 pub use rules::{AlertRule, MetricType, AlertCondition, ComparisonOperator};
 pub use notifications::NotificationChannel;
 

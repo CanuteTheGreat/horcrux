@@ -1,0 +1,15 @@
+# Horcrux package USE flags
+
+# Kernel - binary kernel with firmware
+sys-kernel/gentoo-kernel-bin -initramfs
+sys-kernel/linux-firmware linux-fw-redistributable no-source-code
+
+# OpenRC init
+sys-apps/openrc -netifrc
+
+# GRUB bootloader
+sys-boot/grub -fonts -themes
+
+# Minimal packages
+app-editors/vim minimal -python
+net-misc/openssh -pam

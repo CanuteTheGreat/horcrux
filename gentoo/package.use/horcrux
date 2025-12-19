@@ -1,0 +1,210 @@
+# Horcrux Virtualization Platform - Recommended USE flags
+# Copy to /etc/portage/package.use/horcrux
+
+# =============================================================================
+# VIRTUALIZATION STACK
+# =============================================================================
+
+# QEMU - Full virtualization with all important features
+app-emulation/qemu aio alsa bpf bzip2 caps curl fdt filecaps fuse gnutls io-uring
+app-emulation/qemu jpeg lzo ncurses nfs numa opengl pin-upstream-blobs png
+app-emulation/qemu pulseaudio sdl sdl-image seccomp slirp snappy spice ssh
+app-emulation/qemu static-user udev usb usbredir vde vhost-net virgl virtfs vnc
+app-emulation/qemu vte xattr xen zstd
+# CPU targets for cross-architecture emulation
+app-emulation/qemu qemu_softmmu_targets_x86_64 qemu_softmmu_targets_aarch64
+app-emulation/qemu qemu_softmmu_targets_riscv64 qemu_softmmu_targets_arm
+app-emulation/qemu qemu_user_targets_x86_64 qemu_user_targets_aarch64
+app-emulation/qemu qemu_user_targets_riscv64 qemu_user_targets_arm
+
+# Libvirt - Virtualization API
+app-emulation/libvirt apparmor audit caps dbus dtrace fuse glusterfs iscsi
+app-emulation/libvirt iscsi-direct libssh libvirtd lvm lxc nfs numa openvz
+app-emulation/libvirt parted pcap policykit qemu sasl udev vepa virt-network
+app-emulation/libvirt virtualbox wireshark-plugins xen zfs
+
+# Virt-manager - GUI management (optional)
+app-emulation/virt-manager gtk policykit sasl
+
+# SPICE - Remote display protocol
+app-emulation/spice gstreamer lz4 opus sasl smartcard
+app-emulation/spice-gtk gtk3 introspection lz4 mjpeg policykit sasl smartcard
+app-emulation/spice-gtk usbredir vala webdav
+
+# =============================================================================
+# CONTAINER RUNTIMES
+# =============================================================================
+
+# Docker
+app-containers/docker btrfs device-mapper overlay seccomp
+
+# Podman
+app-containers/podman apparmor btrfs fuse rootless seccomp systemd
+
+# LXC
+app-containers/lxc apparmor caps pam seccomp
+
+# LXD
+app-containers/lxd apparmor dqlite ipv6 nls
+
+# containerd
+app-containers/containerd apparmor btrfs device-mapper seccomp
+
+# cri-o
+app-containers/cri-o apparmor btrfs device-mapper seccomp systemd
+
+# =============================================================================
+# STORAGE BACKENDS
+# =============================================================================
+
+# ZFS
+sys-fs/zfs rootfs
+
+# LVM
+sys-fs/lvm2 lvm readline thin udev
+
+# Ceph
+sys-cluster/ceph cephfs fuse lttng mgr mds radosgw rbd-rwl rbd-ssd
+sys-cluster/ceph rgw spdk ssl systemd tcmalloc zfs
+
+# GlusterFS
+sys-cluster/glusterfs bd-xlator fuse georeplication infiniband rsync tiering xml
+
+# iSCSI
+sys-block/open-iscsi infiniband rdma
+
+# NFS
+net-fs/nfs-utils caps ipv6 junction kerberos ldap libmount nfsdcld nfsv4 nfsv41 uuid
+
+# CIFS/Samba
+net-fs/samba acl ads client cluster cups fam ldap pam quota syslog winbind
+
+# BtrFS
+sys-fs/btrfs-progs convert reiserfs zstd
+
+# =============================================================================
+# NETWORKING
+# =============================================================================
+
+# Open vSwitch
+net-misc/openvswitch monitor ssl
+
+# Bridge utilities
+net-misc/bridge-utils
+
+# Firewall - nftables (recommended)
+net-firewall/nftables json modern-kernel python xtables
+
+# Firewall - iptables (legacy)
+net-firewall/iptables conntrack netlink nftables pcap
+
+# WireGuard
+net-vpn/wireguard-tools wg-quick
+
+# =============================================================================
+# KERNEL
+# =============================================================================
+
+# Genkernel for initramfs
+sys-kernel/genkernel cryptsetup firmware
+
+# Linux kernel
+sys-kernel/gentoo-sources symlink
+
+# Linux firmware
+sys-kernel/linux-firmware initramfs savedconfig
+
+# Dracut (alternative initramfs)
+sys-kernel/dracut
+
+# =============================================================================
+# RUST DEVELOPMENT
+# =============================================================================
+
+# Rust compiler
+dev-lang/rust clippy doc miri parallel-compiler profiler rls rust-analyzer
+dev-lang/rust rust-src rustfmt wasm
+
+# Cargo tools
+virtual/rust rustfmt
+
+# =============================================================================
+# DATABASE & CACHE
+# =============================================================================
+
+# SQLite
+dev-db/sqlite fts3 fts4 fts5 secure-delete soundex
+
+# PostgreSQL (optional backend)
+dev-db/postgresql kerberos ldap pam perl python ssl threads uuid xml zlib
+
+# Redis
+dev-db/redis jemalloc ssl systemd tcmalloc
+
+# =============================================================================
+# WEB & API
+# =============================================================================
+
+# OpenSSL
+dev-libs/openssl asm zlib
+
+# curl
+net-misc/curl brotli curl_ssl_openssl http2 idn ipv6 nghttp2 progress-meter
+net-misc/curl ssl zstd
+
+# nginx (reverse proxy)
+www-servers/nginx http2 ipv6 pcre ssl threads vim-syntax
+
+# =============================================================================
+# MONITORING & OBSERVABILITY
+# =============================================================================
+
+# Prometheus
+app-metrics/prometheus
+
+# Grafana
+www-apps/grafana
+
+# Node exporter
+app-metrics/node_exporter
+
+# =============================================================================
+# SECURITY
+# =============================================================================
+
+# AppArmor
+sys-libs/libapparmor python
+
+# PAM
+sys-libs/pam audit cracklib
+
+# OpenLDAP
+net-nds/openldap crypt gnutls ipv6 kerberos overlays sasl ssl syslog
+
+# =============================================================================
+# UTILITIES
+# =============================================================================
+
+# Git
+dev-vcs/git curl gpg iconv nls pcre perl safe-directory webdav
+
+# tmux
+app-misc/tmux utempter vim-syntax
+
+# htop
+sys-process/htop caps delayacct lm-sensors unwind
+
+# jq
+app-misc/jq oniguruma
+
+# vim
+app-editors/vim lua perl python terminal
+
+# =============================================================================
+# GLOBAL USE FLAGS
+# =============================================================================
+# Add to /etc/portage/make.conf:
+#
+# USE="acl audit caps crypt dbus gnutls hardened idn ipv6 kerberos ldap lz4"
+# USE="${USE} nls pam pcre readline sasl ssl systemd threads unicode zlib zstd"
+# USE="${USE} -X -gtk -qt5 -pulseaudio"  # Headless server, remove for GUI

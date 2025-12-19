@@ -126,7 +126,7 @@ pub fn NetworkManagement() -> impl IntoView {
             {move || error.get().map(|e| view! {
                 <div class="alert alert-error">
                     <span>{e}</span>
-                    <button class="btn-close" on:click=move |_| set_error.set(None)>"×"</button>
+                    <button class="btn-close" on:click=move |_| set_error.set(None)>"x"</button>
                 </div>
             })}
 
@@ -305,7 +305,7 @@ pub fn NetworkManagement() -> impl IntoView {
                         <div class="modal-header">
                             <h3>"Create Network"</h3>
                             <button class="btn-close" on:click=move |_| set_show_create_network.set(false)>
-                                "×"
+                                "x"
                             </button>
                         </div>
                         <div class="modal-body">
@@ -348,7 +348,7 @@ pub fn NetworkManagement() -> impl IntoView {
                         <div class="modal-header">
                             <h3>"Add Firewall Rule"</h3>
                             <button class="btn-close" on:click=move |_| set_show_create_rule.set(false)>
-                                "×"
+                                "x"
                             </button>
                         </div>
                         <div class="modal-body">

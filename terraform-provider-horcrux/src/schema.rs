@@ -227,6 +227,7 @@ impl ProviderSchema {
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_data_source(mut self, name: &str, schema: ResourceSchema) -> Self {
         self.data_source_schemas.insert(name.to_string(), schema);
         self
@@ -240,6 +241,7 @@ impl ProviderSchema {
 /// JSON-RPC request
 #[derive(Debug, Deserialize)]
 pub struct RpcRequest {
+    #[allow(dead_code)]
     pub jsonrpc: String,
     pub id: i64,
     pub method: String,
@@ -321,6 +323,7 @@ impl Diagnostic {
         }
     }
 
+    #[allow(dead_code)]
     pub fn warning(summary: &str) -> Self {
         Self {
             severity: DiagnosticSeverity::Warning,
@@ -330,11 +333,13 @@ impl Diagnostic {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_detail(mut self, detail: &str) -> Self {
         self.detail = Some(detail.to_string());
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_attribute(mut self, path: Vec<String>) -> Self {
         self.attribute = Some(path);
         self

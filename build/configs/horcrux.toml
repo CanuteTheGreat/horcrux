@@ -1,0 +1,142 @@
+# Horcrux Default Configuration
+# This file is installed to /etc/horcrux/config.toml
+
+[server]
+# API server bind address
+host = "0.0.0.0"
+# API server port (default: 8006, same as Proxmox for compatibility)
+port = 8006
+# Number of worker threads (0 = auto-detect based on CPU cores)
+workers = 0
+# Enable TLS
+tls_enabled = false
+# TLS certificate path
+tls_cert = "/etc/horcrux/ssl/server.crt"
+# TLS key path
+tls_key = "/etc/horcrux/ssl/server.key"
+
+[database]
+# SQLite database path
+path = "/var/lib/horcrux/horcrux.db"
+# Enable WAL mode for better concurrent access
+wal_mode = true
+# Database connection pool size
+pool_size = 10
+
+[storage]
+# Default storage pool
+default_pool = "local"
+# Storage pools configuration file
+pools_config = "/etc/horcrux/storage.toml"
+# Image storage directory
+images_dir = "/var/lib/horcrux/images"
+# ISO storage directory
+iso_dir = "/var/lib/horcrux/iso"
+# Backup storage directory
+backup_dir = "/var/lib/horcrux/backup"
+
+[auth]
+# Session timeout in seconds (default: 2 hours)
+session_timeout = 7200
+# Maximum sessions per user
+max_sessions_per_user = 10
+# Enable PAM authentication
+pam_enabled = true
+# PAM service name
+pam_service = "horcrux"
+# Enable LDAP authentication
+ldap_enabled = false
+# LDAP server URL
+ldap_url = "ldap://localhost:389"
+# LDAP base DN
+ldap_base_dn = "dc=example,dc=com"
+# Enable OIDC authentication
+oidc_enabled = false
+# OIDC issuer URL
+oidc_issuer = ""
+# OIDC client ID
+oidc_client_id = ""
+
+[cluster]
+# Node name (default: hostname)
+node_name = ""
+# Enable clustering
+enabled = false
+# Cluster join token (for joining existing cluster)
+join_token = ""
+# Corosync configuration path
+corosync_config = "/etc/corosync/corosync.conf"
+# Enable high availability
+ha_enabled = false
+
+[monitoring]
+# Enable metrics collection
+enabled = true
+# Metrics collection interval in seconds
+collection_interval = 30
+# Metrics retention period in days
+retention_days = 30
+# Enable Prometheus metrics endpoint
+prometheus_enabled = true
+# Prometheus metrics path
+prometheus_path = "/metrics"
+
+[alerting]
+# Enable alerting
+enabled = true
+# Alert check interval in seconds
+check_interval = 60
+# Default notification channel
+default_channel = "email"
+
+[logging]
+# Log level: trace, debug, info, warn, error
+level = "info"
+# Log file path
+file = "/var/log/horcrux/horcrux.log"
+# Enable structured JSON logging
+json_format = false
+# Log rotation: daily, weekly, size
+rotation = "daily"
+# Maximum log file size in MB (for size-based rotation)
+max_size_mb = 100
+# Number of rotated files to keep
+keep_files = 7
+
+[console]
+# VNC listen address
+vnc_address = "127.0.0.1"
+# VNC port range start
+vnc_port_start = 5900
+# VNC port range end
+vnc_port_end = 5999
+# Enable noVNC web console
+novnc_enabled = true
+# noVNC static files path
+novnc_path = "/usr/share/novnc"
+
+[backup]
+# Enable scheduled backups
+enabled = true
+# Default backup compression
+compression = "zstd"
+# Default backup mode: full, incremental
+default_mode = "full"
+# Backup retention days
+retention_days = 30
+
+[network]
+# Default bridge interface
+default_bridge = "vmbr0"
+# Enable firewall
+firewall_enabled = true
+# Firewall backend: iptables, nftables
+firewall_backend = "nftables"
+
+[gpu]
+# Enable GPU passthrough support
+enabled = true
+# IOMMU group detection
+detect_iommu = true
+# vGPU support
+vgpu_enabled = false

@@ -4,7 +4,7 @@ use crate::api;
 #[component]
 pub fn SnapshotList() -> impl IntoView {
     let (selected_vm, set_selected_vm) = create_signal(String::new());
-    let (snapshots, set_snapshots) = create_signal(Vec::<api::Snapshot>::new());
+    let (snapshots, set_snapshots) = create_signal(Vec::<api::VmSnapshot>::new());
     let (vms, set_vms) = create_signal(Vec::<horcrux_common::VmConfig>::new());
     let (loading, set_loading) = create_signal(false);
     let (error, set_error) = create_signal(None::<String>);
@@ -151,9 +151,9 @@ pub fn SnapshotList() -> impl IntoView {
                                                     {snapshot.description.as_ref().map(|d| d.to_string()).unwrap_or_else(|| "-".to_string())}
                                                 </td>
                                                 <td>{&snapshot.created_at}</td>
-                                                <td>{format!("{} MB", snapshot.size_bytes / 1024 / 1024)}</td>
+                                                <td>{format!("{} MB", snapshot.size_mb)}</td>
                                                 <td>
-                                                    {if snapshot.include_memory {
+                                                    {if snapshot.memory_included {
                                                         view! { <span class="badge badge-success">"Yes"</span> }.into_view()
                                                     } else {
                                                         view! { <span class="badge badge-secondary">"No"</span> }.into_view()

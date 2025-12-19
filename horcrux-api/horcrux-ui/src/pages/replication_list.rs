@@ -77,7 +77,7 @@ pub fn ReplicationList() -> impl IntoView {
                                     <tr>
                                         <th>"ID"</th>
                                         <th>"VM ID"</th>
-                                        <th>"Source → Target"</th>
+                                        <th>"Source "->" Target"</th>
                                         <th>"Schedule"</th>
                                         <th>"Enabled"</th>
                                         <th>"Last Sync"</th>
@@ -100,7 +100,7 @@ pub fn ReplicationList() -> impl IntoView {
                                             <tr>
                                                 <td><code>{&job.id}</code></td>
                                                 <td>{&job.vm_id}</td>
-                                                <td>{format!("{} → {}", job.source_node, job.target_node)}</td>
+                                                <td>{format!("{} -> {}", job.source_node, job.target_node)}</td>
                                                 <td><span class="schedule-badge">{&job.schedule}</span></td>
                                                 <td>
                                                     {if job.enabled {

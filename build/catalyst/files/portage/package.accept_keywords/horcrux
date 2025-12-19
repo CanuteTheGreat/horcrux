@@ -1,0 +1,3 @@
+# Accept unstable binary kernel if needed
+sys-kernel/gentoo-kernel-bin ~amd64
+virtual/dist-kernel ~amd64

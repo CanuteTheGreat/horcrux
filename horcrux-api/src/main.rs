@@ -1,3 +1,6 @@
+// Allow dead code for modules with prepared functionality for future features
+#![allow(dead_code)]
+
 mod config;
 mod vm;
 mod container;

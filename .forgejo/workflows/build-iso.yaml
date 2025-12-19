@@ -1,0 +1,191 @@
+# Horcrux ISO Build Workflow
+# Builds ISO images for all supported architectures
+
+name: Build ISOs
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      architectures:
+        description: 'Architectures to build (comma-separated: x86_64,aarch64,riscv64)'
+        required: false
+        default: 'x86_64,aarch64,riscv64'
+      build_type:
+        description: 'Build type (minimal, standard, full)'
+        required: false
+        default: 'standard'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Build matrix for all architectures
+  build-iso:
+    name: Build ${{ matrix.arch }} ISO
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64, riscv64]
+        include:
+          - arch: x86_64
+            rust_target: x86_64-unknown-linux-gnu
+            cross: false
+          - arch: aarch64
+            rust_target: aarch64-unknown-linux-gnu
+            cross: true
+          - arch: riscv64
+            rust_target: riscv64gc-unknown-linux-gnu
+            cross: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            squashfs-tools \
+            xorriso \
+            grub-pc-bin \
+            grub-efi-amd64-bin \
+            cpio \
+            mtools \
+            dosfstools
+
+      - name: Install cross-compilation tools (if needed)
+        if: matrix.cross
+        run: |
+          case "${{ matrix.arch }}" in
+            aarch64)
+              sudo apt-get install -y gcc-aarch64-linux-gnu
+              ;;
+            riscv64)
+              sudo apt-get install -y gcc-riscv64-linux-gnu
+              ;;
+          esac
+
+      - name: Build Horcrux binaries
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cargo install cross
+            cross build --release --target ${{ matrix.rust_target }}
+          else
+            cargo build --release --target ${{ matrix.rust_target }}
+          fi
+
+      - name: Build ISO
+        run: |
+          cd build
+          ./scripts/build-iso.sh \
+            -a ${{ matrix.arch }} \
+            -t ${{ github.event.inputs.build_type || 'standard' }} \
+            -o ./iso
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: horcrux-iso-${{ matrix.arch }}
+          path: |
+            build/iso/*.iso
+            build/iso/*.sha256
+            build/iso/*.sha512
+          retention-days: 30
+
+  # Create release with all ISOs
+  create-release:
+    name: Create Release
+    needs: build-iso
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download all ISO artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          find artifacts -name "*.iso" -exec cp {} release/ \;
+          find artifacts -name "*.sha256" -exec cp {} release/ \;
+          find artifacts -name "*.sha512" -exec cp {} release/ \;
+
+          # Create combined checksum file
+          cd release
+          cat *.sha256 > SHA256SUMS
+          cat *.sha512 > SHA512SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            release/*.iso
+            release/SHA256SUMS
+            release/SHA512SUMS
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Optional: Build Docker images
+  build-docker:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/${{ github.repository }}/horcrux-api:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository }}/horcrux-api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push CLI image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.cli
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/${{ github.repository }}/horcrux-cli:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository }}/horcrux-cli:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

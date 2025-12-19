@@ -6,6 +6,8 @@
 //! - Background task cancellation
 //! - State persistence before exit
 
+#![allow(dead_code)]
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;

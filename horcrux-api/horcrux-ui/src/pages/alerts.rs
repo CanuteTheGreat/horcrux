@@ -3,7 +3,7 @@ use crate::api;
 
 #[component]
 pub fn Alerts() -> impl IntoView {
-    let (alerts, set_alerts) = create_signal(Vec::<api::Alert>::new());
+    let (alerts, set_alerts) = create_signal(Vec::<api::ActiveAlert>::new());
     let (loading, set_loading) = create_signal(true);
 
     create_effect(move |_| {
@@ -38,13 +38,11 @@ pub fn Alerts() -> impl IntoView {
                                                 <h3>{&alert.rule_name}</h3>
                                                 <span class="alert-status">{&alert.status}</span>
                                             </div>
-                                            <p class="alert-target"><strong>"Target:"</strong> " " {&alert.target}</p>
+                                            <p class="alert-target"><strong>"Metric:"</strong> " " {&alert.metric}</p>
                                             <p class="alert-message">{&alert.message}</p>
                                             <p class="alert-time">
-                                                "Fired at: "
-                                                {chrono::DateTime::from_timestamp(alert.fired_at, 0)
-                                                    .map(|dt| dt.to_rfc2822())
-                                                    .unwrap_or_else(|| "Unknown".to_string())}
+                                                "Started at: "
+                                                {alert.started_at.to_rfc2822()}
                                             </p>
                                         </div>
                                     }

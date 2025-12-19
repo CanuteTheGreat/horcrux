@@ -258,11 +258,13 @@ impl HealthChecker {
 }
 
 /// Startup health checker for initialization phase
+#[allow(dead_code)]
 pub struct StartupChecker {
     checks_passed: Vec<String>,
     checks_failed: Vec<(String, String)>,
 }
 
+#[allow(dead_code)]
 impl StartupChecker {
     pub fn new() -> Self {
         Self {

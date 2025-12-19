@@ -1,0 +1,2 @@
+# Accept firmware licenses
+sys-kernel/linux-firmware linux-fw-redistributable no-source-code

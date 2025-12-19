@@ -18,6 +18,7 @@ pub struct BackupJob {
 #[derive(Properties, PartialEq)]
 pub struct Props {}
 
+#[allow(dead_code)]
 pub struct BackupSchedulePage {
     jobs: Vec<BackupJob>,
     loading: bool,
@@ -30,6 +31,7 @@ pub struct BackupSchedulePage {
     job_compression: String,
 }
 
+#[allow(dead_code)]
 pub enum Msg {
     LoadJobs,
     JobsLoaded(Vec<BackupJob>),
@@ -153,8 +155,8 @@ impl Component for BackupSchedulePage {
                 let name = self.job_name.clone();
                 let target = self.job_target.clone();
                 let schedule = self.job_schedule.clone();
-                let retention = self.job_retention.clone();
-                let compression = self.job_compression.clone();
+                let _retention = self.job_retention.clone();
+                let _compression = self.job_compression.clone();
 
                 wasm_bindgen_futures::spawn_local(async move {
                     // API call to create job
@@ -232,6 +234,7 @@ impl Component for BackupSchedulePage {
     }
 }
 
+#[allow(dead_code)]
 impl BackupSchedulePage {
     fn view_create_form(&self, ctx: &Context<Self>) -> Html {
         if !self.show_create {

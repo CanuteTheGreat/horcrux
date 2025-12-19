@@ -1,0 +1,109 @@
+# Horcrux Storage Pool Configuration
+# This file is installed to /etc/horcrux/storage.toml
+
+# Local directory storage (always available)
+[[pools]]
+name = "local"
+type = "directory"
+path = "/var/lib/horcrux/images"
+enabled = true
+shared = false
+content = ["images", "rootdir", "vztmpl", "backup", "iso"]
+
+# Example: ZFS storage pool
+# [[pools]]
+# name = "zfs-pool"
+# type = "zfs"
+# pool = "tank/vms"
+# enabled = false
+# shared = false
+# content = ["images", "rootdir"]
+# options = { compression = "lz4", dedup = false }
+
+# Example: LVM storage
+# [[pools]]
+# name = "lvm-pool"
+# type = "lvm"
+# volume_group = "vg-vms"
+# enabled = false
+# shared = false
+# content = ["images"]
+# options = { thin = true }
+
+# Example: Ceph RBD storage
+# [[pools]]
+# name = "ceph-pool"
+# type = "ceph"
+# pool = "rbd"
+# monitors = ["10.0.0.1:6789", "10.0.0.2:6789", "10.0.0.3:6789"]
+# enabled = false
+# shared = true
+# content = ["images"]
+# options = { keyring = "/etc/ceph/ceph.client.admin.keyring" }
+
+# Example: NFS storage
+# [[pools]]
+# name = "nfs-backup"
+# type = "nfs"
+# server = "nas.local"
+# export = "/exports/backups"
+# mount_point = "/mnt/nfs-backup"
+# enabled = false
+# shared = true
+# content = ["backup", "iso"]
+# options = { version = "4.2", mount_options = "rw,sync" }
+
+# Example: iSCSI storage
+# [[pools]]
+# name = "iscsi-pool"
+# type = "iscsi"
+# portal = "10.0.0.10:3260"
+# target = "iqn.2024-01.com.example:storage"
+# enabled = false
+# shared = true
+# content = ["images"]
+# options = { multipath = true }
+
+# Example: GlusterFS storage
+# [[pools]]
+# name = "gluster-pool"
+# type = "glusterfs"
+# volume = "gv0"
+# servers = ["gluster1", "gluster2", "gluster3"]
+# mount_point = "/mnt/gluster"
+# enabled = false
+# shared = true
+# content = ["images", "backup"]
+
+# Example: CIFS/SMB storage
+# [[pools]]
+# name = "cifs-share"
+# type = "cifs"
+# server = "//nas.local/share"
+# mount_point = "/mnt/cifs"
+# enabled = false
+# shared = true
+# content = ["backup", "iso"]
+# options = { username = "user", domain = "WORKGROUP" }
+
+# Example: S3-compatible storage
+# [[pools]]
+# name = "s3-backup"
+# type = "s3"
+# endpoint = "https://s3.amazonaws.com"
+# bucket = "horcrux-backup"
+# region = "us-east-1"
+# enabled = false
+# shared = true
+# content = ["backup"]
+# options = { storage_class = "STANDARD_IA" }
+
+# Example: BtrFS storage
+# [[pools]]
+# name = "btrfs-pool"
+# type = "btrfs"
+# path = "/mnt/btrfs"
+# enabled = false
+# shared = false
+# content = ["images", "rootdir"]
+# options = { compression = "zstd", subvolume = "vms" }

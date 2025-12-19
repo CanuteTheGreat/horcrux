@@ -1,0 +1,192 @@
+# Horcrux Virtualization Platform - make.conf template
+# Optimized for virtualization host systems
+#
+# Copy relevant sections to /etc/portage/make.conf
+# Adjust COMMON_FLAGS for your CPU architecture
+
+# =============================================================================
+# COMPILER FLAGS
+# =============================================================================
+
+# For Intel/AMD 64-bit (adjust -march for your CPU)
+# Use: gcc -march=native -Q --help=target | grep march
+COMMON_FLAGS="-O2 -pipe -march=native"
+
+# For ARM64 (adjust for specific CPU)
+# COMMON_FLAGS="-O2 -pipe -mcpu=native"
+
+# For RISC-V
+# COMMON_FLAGS="-O2 -pipe"
+
+CFLAGS="${COMMON_FLAGS}"
+CXXFLAGS="${COMMON_FLAGS}"
+FCFLAGS="${COMMON_FLAGS}"
+FFLAGS="${COMMON_FLAGS}"
+
+# Rust flags
+RUSTFLAGS="-C target-cpu=native -C opt-level=3"
+
+# Link-time optimization (optional, increases compile time)
+# LDFLAGS="${LDFLAGS} -Wl,-O2 -Wl,--as-needed"
+
+# =============================================================================
+# BUILD OPTIONS
+# =============================================================================
+
+# Parallel compilation - adjust to your CPU cores
+# Use: nproc to find your core count
+MAKEOPTS="-j$(nproc) -l$(nproc)"
+
+# Emerge parallelization
+EMERGE_DEFAULT_OPTS="--jobs=$(nproc) --load-average=$(nproc)"
+EMERGE_DEFAULT_OPTS="${EMERGE_DEFAULT_OPTS} --with-bdeps=y --complete-graph=y"
+
+# Binary packages
+FEATURES="binpkg-request-signature parallel-fetch parallel-install"
+FEATURES="${FEATURES} candy split-elog"
+
+# Ccache for faster rebuilds (optional)
+# FEATURES="${FEATURES} ccache"
+# CCACHE_DIR="/var/cache/ccache"
+# CCACHE_SIZE="10G"
+
+# =============================================================================
+# USE FLAGS - CORE
+# =============================================================================
+
+# Global USE flags for virtualization host
+USE="acl audit caps crypt dbus filecaps gnutls hardened idn ipv6"
+USE="${USE} kerberos ldap lz4 nls numa pam pcre python readline"
+USE="${USE} sasl seccomp ssl syslog threads unicode zlib zstd"
+
+# Network and security
+USE="${USE} curl ftp http2 iconv ipv6 netlink nftables"
+
+# Virtualization specific
+USE="${USE} io-uring qemu kvm libvirt virt-network virgl virtfs"
+USE="${USE} spice usb usbredir vnc"
+
+# Container support
+USE="${USE} btrfs device-mapper overlay"
+
+# Storage
+USE="${USE} fuse lvm nfs thin"
+
+# Disable desktop/GUI components for headless server
+USE="${USE} -X -gtk -gtk2 -gtk3 -qt4 -qt5 -qt6"
+USE="${USE} -pulseaudio -alsa -bluetooth -cups -gnome -kde"
+USE="${USE} -wayland -egl -gles2"
+
+# Disable unnecessary features
+USE="${USE} -bindist -doc -examples -test"
+
+# =============================================================================
+# USE FLAGS - OPTIONAL ADDITIONS
+# =============================================================================
+
+# For GUI management (uncomment if needed)
+# USE="${USE} X gtk3 policykit"
+
+# For SPICE with audio (uncomment if needed)
+# USE="${USE} pulseaudio opus"
+
+# For GPU passthrough development
+# USE="${USE} vulkan opengl"
+
+# =============================================================================
+# LICENSES
+# =============================================================================
+
+# Accept all licenses (required for some firmware)
+ACCEPT_LICENSE="*"
+
+# Or be more restrictive:
+# ACCEPT_LICENSE="-* @FREE @BINARY-REDISTRIBUTABLE"
+
+# =============================================================================
+# KEYWORDS
+# =============================================================================
+
+# For stable only:
+ACCEPT_KEYWORDS="amd64"
+
+# For testing (~amd64):
+# ACCEPT_KEYWORDS="~amd64"
+
+# For ARM64:
+# ACCEPT_KEYWORDS="arm64"
+# ACCEPT_KEYWORDS="~arm64"
+
+# For RISC-V:
+# ACCEPT_KEYWORDS="riscv"
+# ACCEPT_KEYWORDS="~riscv"
+
+# =============================================================================
+# LANGUAGE & LOCALE
+# =============================================================================
+
+L10N="en"
+LINGUAS="en"
+
+# =============================================================================
+# VIDEO/INPUT (minimal for server)
+# =============================================================================
+
+VIDEO_CARDS="dummy fbdev vesa"
+INPUT_DEVICES="libinput"
+
+# For GPU passthrough host with Intel:
+# VIDEO_CARDS="intel i965 iris"
+
+# For GPU passthrough host with AMD:
+# VIDEO_CARDS="amdgpu radeonsi"
+
+# =============================================================================
+# QEMU TARGETS
+# =============================================================================
+
+# Software emulation targets
+QEMU_SOFTMMU_TARGETS="x86_64 aarch64 arm riscv64 riscv32"
+QEMU_USER_TARGETS="x86_64 aarch64 arm riscv64 riscv32"
+
+# =============================================================================
+# PYTHON
+# =============================================================================
+
+PYTHON_TARGETS="python3_11 python3_12"
+PYTHON_SINGLE_TARGET="python3_12"
+
+# =============================================================================
+# GRUB
+# =============================================================================
+
+GRUB_PLATFORMS="efi-64 pc"
+
+# For ARM64:
+# GRUB_PLATFORMS="efi-64"
+
+# =============================================================================
+# MIRRORS
+# =============================================================================
+
+# Gentoo mirrors (add your nearest)
+GENTOO_MIRRORS="https://distfiles.gentoo.org"
+# GENTOO_MIRRORS="https://mirror.leaseweb.com/gentoo/ ${GENTOO_MIRRORS}"
+
+# =============================================================================
+# PORTAGE DIRECTORIES
+# =============================================================================
+
+PORTDIR="/var/db/repos/gentoo"
+DISTDIR="/var/cache/distfiles"
+PKGDIR="/var/cache/binpkgs"
+
+# =============================================================================
+# SECURITY
+# =============================================================================
+
+# Enable security hardening
+# PAX_MARKINGS="XT"
+
+# Sandbox all builds
+FEATURES="${FEATURES} sandbox usersandbox"

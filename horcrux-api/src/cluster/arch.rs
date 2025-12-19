@@ -6,9 +6,8 @@
 //! Horcrux Unique Feature: Support for x86_64, aarch64, riscv64, ppc64le,
 //! and dynamic registration of additional architectures.
 
-use horcrux_common::VmArchitecture;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::process::Command;
 
 /// Architecture manager for multi-arch cluster support

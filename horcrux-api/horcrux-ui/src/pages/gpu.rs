@@ -31,7 +31,7 @@ pub fn GpuManagement() -> impl IntoView {
     let (iommu_status, set_iommu_status) = create_signal(None::<IommuStatus>);
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
-    let (selected_device, set_selected_device) = create_signal(None::<String>);
+    let (_selected_device, set_selected_device) = create_signal(None::<String>);
 
     // Fetch GPU devices on mount
     create_effect(move |_| {
@@ -128,7 +128,7 @@ pub fn GpuManagement() -> impl IntoView {
                 {move || match iommu_status.get() {
                     Some(status) => view! {
                         <div class={format!("iommu-status {}", if status.enabled { "enabled" } else { "disabled" })}>
-                            <span class="icon">{if status.enabled { "✓" } else { "✗" }}</span>
+                            <span class="icon">{if status.enabled { "[OK]" } else { "[X]" }}</span>
                             <span class="message">{status.message}</span>
                         </div>
                     }.into_view(),
@@ -140,7 +140,7 @@ pub fn GpuManagement() -> impl IntoView {
             {move || error.get().map(|e| view! {
                 <div class="alert alert-error">
                     <span>{e}</span>
-                    <button class="btn-close" on:click=move |_| set_error.set(None)>"×"</button>
+                    <button class="btn-close" on:click=move |_| set_error.set(None)>"x"</button>
                 </div>
             })}
 

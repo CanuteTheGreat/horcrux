@@ -1,0 +1,17 @@
+
+  _    _
+ | |  | |
+ | |__| | ___  _ __ ___ _ __ _   ___  __
+ |  __  |/ _ \| '__/ __| '__| | | \ \/ /
+ | |  | | (_) | | | (__| |  | |_| |>  <
+ |_|  |_|\___/|_|  \___|_|   \__,_/_/\_\
+
+ Gentoo Virtualization Platform
+
+ Default credentials:
+   Username: root / horcrux
+   Password: horcrux
+
+ To install: horcrux-installer
+ Web UI: http://localhost:8006
+

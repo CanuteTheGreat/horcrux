@@ -1,0 +1,196 @@
+# Horcrux Virtualization Platform - Package Set
+# Install with: emerge --ask @horcrux
+#
+# Copy to /etc/portage/sets/horcrux
+
+# =============================================================================
+# CORE VIRTUALIZATION
+# =============================================================================
+
+# QEMU/KVM hypervisor
+app-emulation/qemu
+
+# Libvirt management API
+app-emulation/libvirt
+
+# SPICE remote display
+app-emulation/spice
+app-emulation/spice-gtk
+
+# Optional: GUI management
+# app-emulation/virt-manager
+
+# =============================================================================
+# CONTAINER RUNTIMES
+# =============================================================================
+
+# Docker (most common)
+app-containers/docker
+app-containers/docker-cli
+
+# Podman (rootless alternative)
+app-containers/podman
+app-containers/buildah
+app-containers/skopeo
+
+# LXC/LXD containers
+app-containers/lxc
+# app-containers/lxd
+
+# Incus (LXD fork)
+# app-containers/incus
+
+# Container networking
+app-containers/cni-plugins
+
+# =============================================================================
+# STORAGE BACKENDS
+# =============================================================================
+
+# ZFS - Recommended for production
+sys-fs/zfs
+
+# LVM
+sys-fs/lvm2
+
+# Ceph - Distributed storage
+# sys-cluster/ceph
+
+# GlusterFS - Distributed filesystem
+# sys-cluster/glusterfs
+
+# iSCSI
+sys-block/open-iscsi
+
+# NFS
+net-fs/nfs-utils
+
+# CIFS/SMB
+net-fs/cifs-utils
+# net-fs/samba
+
+# BtrFS tools
+sys-fs/btrfs-progs
+
+# =============================================================================
+# NETWORKING
+# =============================================================================
+
+# Bridge utilities
+net-misc/bridge-utils
+
+# Open vSwitch - SDN
+net-misc/openvswitch
+
+# nftables firewall (recommended)
+net-firewall/nftables
+
+# iptables (legacy)
+net-firewall/iptables
+
+# WireGuard VPN
+net-vpn/wireguard-tools
+
+# DNS utilities
+net-dns/bind-tools
+
+# =============================================================================
+# KERNEL & BOOT
+# =============================================================================
+
+# Gentoo kernel sources
+sys-kernel/gentoo-sources
+
+# Linux firmware
+sys-kernel/linux-firmware
+
+# Genkernel for initramfs
+sys-kernel/genkernel
+
+# GRUB bootloader
+sys-boot/grub
+
+# =============================================================================
+# DEVELOPMENT - RUST
+# =============================================================================
+
+# Rust compiler
+dev-lang/rust
+
+# Git
+dev-vcs/git
+
+# =============================================================================
+# SECURITY
+# =============================================================================
+
+# PAM
+sys-libs/pam
+
+# AppArmor (optional)
+# sys-libs/libapparmor
+# sys-apps/apparmor
+
+# OpenSSL
+dev-libs/openssl
+
+# GnuTLS
+net-libs/gnutls
+
+# =============================================================================
+# MONITORING & LOGGING
+# =============================================================================
+
+# Prometheus (optional)
+# app-metrics/prometheus
+# app-metrics/node_exporter
+
+# rsyslog
+app-admin/rsyslog
+
+# logrotate
+app-admin/logrotate
+
+# =============================================================================
+# UTILITIES
+# =============================================================================
+
+# Process management
+sys-process/htop
+sys-process/lsof
+
+# Network utilities
+net-analyzer/netcat
+net-misc/curl
+net-misc/wget
+
+# File utilities
+app-misc/jq
+app-misc/tmux
+app-arch/pigz
+app-arch/zstd
+
+# Editors
+app-editors/vim
+# app-editors/nano
+
+# =============================================================================
+# OPTIONAL: KUBERNETES
+# =============================================================================
+
+# Kubernetes control plane
+# sys-cluster/kubernetes
+# sys-cluster/kubectl
+
+# Helm package manager
+# sys-cluster/helm
+
+# =============================================================================
+# OPTIONAL: GUI TOOLS
+# =============================================================================
+
+# noVNC web console
+# www-apps/novnc
+
+# Cockpit web management
+# app-admin/cockpit

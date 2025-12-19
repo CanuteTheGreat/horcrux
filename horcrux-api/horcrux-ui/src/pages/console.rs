@@ -4,6 +4,7 @@
 
 use leptos::*;
 use crate::api;
+use horcrux_common::{VmConfig, VmStatus};
 
 /// Console access types
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -83,7 +84,7 @@ pub fn VmConsole() -> impl IntoView {
 
     // Send Ctrl+Alt+Del
     let send_cad = move |_| {
-        if let Some(url) = console_url.get() {
+        if let Some(_url) = console_url.get() {
             // Send key sequence via API
             let vm = vm_id();
             spawn_local(async move {
@@ -229,8 +230,9 @@ fn SerialConsole(vm_id: String) -> impl IntoView {
     let (input, set_input) = create_signal(String::new());
 
     // Connect to serial console WebSocket
+    let vm_id_copy = vm_id.clone();
     create_effect(move |_| {
-        let vm = vm_id.clone();
+        let _vm = vm_id_copy.clone();
         spawn_local(async move {
             // In production, this would connect to a WebSocket for serial I/O
             set_output.set("Serial console connected.\r\nPress Enter to activate console.\r\n".to_string());
@@ -286,8 +288,8 @@ fn SerialConsole(vm_id: String) -> impl IntoView {
 /// Console page for multiple VMs
 #[component]
 pub fn ConsolePage() -> impl IntoView {
-    let (vms, set_vms) = create_signal(Vec::<api::Vm>::new());
-    let (selected_vm, set_selected_vm) = create_signal(None::<String>);
+    let (vms, set_vms) = create_signal(Vec::<VmConfig>::new());
+    let (_selected_vm, _set_selected_vm) = create_signal(None::<String>);
 
     // Load VMs
     create_effect(move |_| {
@@ -314,9 +316,9 @@ pub fn ConsolePage() -> impl IntoView {
                             <div class="vm-cards">
                                 {vm_list.into_iter().map(|vm| {
                                     let vm_id = vm.id.clone();
-                                    let status_class = match vm.status.as_str() {
-                                        "running" => "status-running",
-                                        "stopped" => "status-stopped",
+                                    let status_class = match vm.status {
+                                        VmStatus::Running => "status-running",
+                                        VmStatus::Stopped => "status-stopped",
                                         _ => "status-unknown",
                                     };
                                     view! {
@@ -324,7 +326,7 @@ pub fn ConsolePage() -> impl IntoView {
                                             <div class="vm-card-header">
                                                 <h3>{&vm.name}</h3>
                                                 <span class=format!("vm-status {}", status_class)>
-                                                    {&vm.status}
+                                                    {vm.status.to_string()}
                                                 </span>
                                             </div>
                                             <div class="vm-card-body">
@@ -332,7 +334,7 @@ pub fn ConsolePage() -> impl IntoView {
                                                 <p>"CPUs: " {vm.cpus} " | Memory: " {vm.memory / 1024} " GB"</p>
                                             </div>
                                             <div class="vm-card-actions">
-                                                {if vm.status == "running" {
+                                                {if vm.status == VmStatus::Running {
                                                     view! {
                                                         <a href=format!("/console/{}", vm_id) class="btn btn-primary">
                                                             "Open Console"

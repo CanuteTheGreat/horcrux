@@ -1,0 +1,95 @@
+# Horcrux Virtualization Platform - Package Keywords
+# Copy to /etc/portage/package.accept_keywords/horcrux
+#
+# Accept testing (~) versions for packages where stable is too old
+
+# =============================================================================
+# RUST TOOLCHAIN
+# =============================================================================
+# Latest Rust is essential for Horcrux development
+
+dev-lang/rust ~amd64 ~arm64 ~riscv
+virtual/rust ~amd64 ~arm64 ~riscv
+dev-util/rustup ~amd64 ~arm64 ~riscv
+
+# =============================================================================
+# VIRTUALIZATION
+# =============================================================================
+# Latest QEMU/libvirt for best VM support
+
+app-emulation/qemu ~amd64 ~arm64 ~riscv
+app-emulation/libvirt ~amd64 ~arm64 ~riscv
+app-emulation/spice ~amd64 ~arm64 ~riscv
+app-emulation/spice-gtk ~amd64 ~arm64 ~riscv
+app-emulation/spice-protocol ~amd64 ~arm64 ~riscv
+
+# =============================================================================
+# CONTAINERS
+# =============================================================================
+# Container ecosystem moves fast
+
+app-containers/docker ~amd64 ~arm64 ~riscv
+app-containers/docker-cli ~amd64 ~arm64 ~riscv
+app-containers/containerd ~amd64 ~arm64 ~riscv
+app-containers/podman ~amd64 ~arm64 ~riscv
+app-containers/buildah ~amd64 ~arm64 ~riscv
+app-containers/skopeo ~amd64 ~arm64 ~riscv
+app-containers/crun ~amd64 ~arm64 ~riscv
+app-containers/runc ~amd64 ~arm64 ~riscv
+app-containers/cri-o ~amd64 ~arm64 ~riscv
+app-containers/lxc ~amd64 ~arm64 ~riscv
+app-containers/lxd ~amd64 ~arm64 ~riscv
+app-containers/incus ~amd64 ~arm64 ~riscv
+
+# Container networking
+app-containers/cni-plugins ~amd64 ~arm64 ~riscv
+app-containers/netavark ~amd64 ~arm64 ~riscv
+app-containers/aardvark-dns ~amd64 ~arm64 ~riscv
+
+# =============================================================================
+# STORAGE
+# =============================================================================
+# Latest ZFS and storage tools
+
+sys-fs/zfs ~amd64 ~arm64 ~riscv
+sys-fs/zfs-kmod ~amd64 ~arm64 ~riscv
+sys-cluster/ceph ~amd64 ~arm64 ~riscv
+sys-cluster/glusterfs ~amd64 ~arm64 ~riscv
+
+# =============================================================================
+# NETWORKING
+# =============================================================================
+# Modern networking stack
+
+net-misc/openvswitch ~amd64 ~arm64 ~riscv
+net-firewall/nftables ~amd64 ~arm64 ~riscv
+net-vpn/wireguard-tools ~amd64 ~arm64
+
+# =============================================================================
+# KUBERNETES (optional)
+# =============================================================================
+# Full Kubernetes stack if needed
+
+sys-cluster/kubernetes ~amd64 ~arm64
+sys-cluster/kubectl ~amd64 ~arm64
+sys-cluster/kubeadm ~amd64 ~arm64
+sys-cluster/kubelet ~amd64 ~arm64
+sys-cluster/helm ~amd64 ~arm64
+
+# =============================================================================
+# MONITORING
+# =============================================================================
+# Observability tools
+
+app-metrics/prometheus ~amd64 ~arm64
+app-metrics/node_exporter ~amd64 ~arm64
+app-metrics/alertmanager ~amd64 ~arm64
+www-apps/grafana ~amd64 ~arm64
+
+# =============================================================================
+# WEB/TLS
+# =============================================================================
+# Latest security updates
+
+dev-libs/openssl ~amd64 ~arm64 ~riscv
+net-misc/curl ~amd64 ~arm64 ~riscv

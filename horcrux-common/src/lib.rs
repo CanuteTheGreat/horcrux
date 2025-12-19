@@ -75,6 +75,17 @@ pub enum VmStatus {
     Unknown,
 }
 
+impl std::fmt::Display for VmStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Running => write!(f, "running"),
+            Self::Stopped => write!(f, "stopped"),
+            Self::Paused => write!(f, "paused"),
+            Self::Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
 /// Container runtime type
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
