@@ -1,8 +1,9 @@
 use crate::api::ApiClient;
-use crate::output;
+use crate::output::{self, OutputFormat};
 use crate::UserCommands;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use tabled::Tabled;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct User {
@@ -11,6 +12,44 @@ struct User {
     email: Option<String>,
     role: String,
     enabled: bool,
+}
+
+#[derive(Tabled, Serialize)]
+struct UserRow {
+    id: String,
+    username: String,
+    role: String,
+    email: String,
+    status: String,
+}
+
+impl From<User> for UserRow {
+    fn from(u: User) -> Self {
+        Self {
+            id: u.id,
+            username: u.username,
+            role: u.role,
+            email: u.email.unwrap_or_else(|| "-".to_string()),
+            status: if u.enabled { "Enabled" } else { "Disabled" }.to_string(),
+        }
+    }
+}
+
+#[derive(Tabled, Serialize)]
+struct RoleRow {
+    name: String,
+    description: String,
+    permissions: String,
+}
+
+impl From<Role> for RoleRow {
+    fn from(r: Role) -> Self {
+        Self {
+            name: r.name,
+            description: r.description,
+            permissions: r.permissions.join(", "),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -52,22 +91,9 @@ pub async fn handle_user_command(
     match command {
         UserCommands::List => {
             let users: Vec<User> = api.get("/api/users").await?;
-
-            if output_format == "json" {
-                println!("{}", serde_json::to_string_pretty(&users)?);
-            } else if output_format == "yaml" {
-                println!("{}", serde_yaml::to_string(&users)?);
-            } else {
-                println!("{:<36} {:<20} {:<15} {:<30} {}",
-                    "ID", "USERNAME", "ROLE", "EMAIL", "STATUS");
-                println!("{}", "-".repeat(120));
-                for user in users {
-                    let status = if user.enabled { "Enabled" } else { "Disabled" };
-                    let email = user.email.unwrap_or_else(|| "-".to_string());
-                    println!("{:<36} {:<20} {:<15} {:<30} {}",
-                        user.id, user.username, user.role, email, status);
-                }
-            }
+            let format = OutputFormat::from_str(output_format);
+            let rows: Vec<UserRow> = users.into_iter().map(UserRow::from).collect();
+            output::print_output(rows, format)?;
         }
         UserCommands::Create { username, password, role } => {
             let request = CreateUserRequest {
@@ -77,7 +103,7 @@ pub async fn handle_user_command(
             };
 
             let user: User = api.post("/api/users", &request).await?;
-            output::print_success(&format!("User '{}' created successfully (ID: {})", username, user.id));
+            output::print_created("User", &username, &user.id);
         }
         UserCommands::Delete { username } => {
             // Find user by username first
@@ -87,7 +113,7 @@ pub async fn handle_user_command(
                 .ok_or_else(|| anyhow::anyhow!("User '{}' not found", username))?;
 
             api.delete(&format!("/api/users/{}", user.id)).await?;
-            output::print_success(&format!("User '{}' deleted successfully", username));
+            output::print_deleted("User", &username);
         }
         UserCommands::Passwd { username } => {
             // Prompt for new password
@@ -109,21 +135,9 @@ pub async fn handle_user_command(
         }
         UserCommands::Roles => {
             let roles: Vec<Role> = api.get("/api/roles").await?;
-
-            if output_format == "json" {
-                println!("{}", serde_json::to_string_pretty(&roles)?);
-            } else if output_format == "yaml" {
-                println!("{}", serde_yaml::to_string(&roles)?);
-            } else {
-                println!("{:<20} {:<40} {}",
-                    "ROLE", "DESCRIPTION", "PERMISSIONS");
-                println!("{}", "-".repeat(100));
-                for role in roles {
-                    let perms = role.permissions.join(", ");
-                    println!("{:<20} {:<40} {}",
-                        role.name, role.description, perms);
-                }
-            }
+            let format = OutputFormat::from_str(output_format);
+            let rows: Vec<RoleRow> = roles.into_iter().map(RoleRow::from).collect();
+            output::print_output(rows, format)?;
         }
         UserCommands::Grant { username, permission } => {
             // Find user by username
@@ -134,7 +148,7 @@ pub async fn handle_user_command(
 
             let request = GrantPermissionRequest { permission: permission.clone() };
             api.post_empty(&format!("/api/permissions/{}", user.id), &request).await?;
-            output::print_success(&format!("Permission '{}' granted to user '{}'", permission, username));
+            output::print_success(&format!("Permission '{}' granted to '{}'", permission, username));
         }
     }
     Ok(())

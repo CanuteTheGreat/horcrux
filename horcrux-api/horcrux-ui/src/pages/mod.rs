@@ -19,6 +19,7 @@ pub mod ha;
 pub mod system;
 pub mod audit;
 pub mod metrics;
+pub mod nas;
 
 pub use dashboard::Dashboard;
 pub use vm_list::VmList;
@@ -59,3 +60,7 @@ pub use monitoring::{AlertCenterPage, DashboardsPage, MetricsExplorerPage, Notif
 // Re-export metrics components
 
 // Re-export storage components
+
+// Re-export NAS components
+#[allow(unused_imports)]
+pub use nas::{NasDashboard, SharesPage as NasSharesPage, NasUsersPage, GroupsPage as NasGroupsPage, ServicesPage as NasServicesPage, PoolsPage, IscsiPage, S3Page, DirectoryPage, SchedulerPage as NasSchedulerPage};

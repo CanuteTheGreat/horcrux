@@ -1,7 +1,7 @@
 ///! Container management commands
 
 use crate::api::ApiClient;
-use crate::output;
+use crate::output::{self, OutputFormat, truncate};
 use crate::ContainerCommands;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -17,7 +17,7 @@ pub struct Container {
     pub created_at: Option<String>,
 }
 
-#[derive(Tabled)]
+#[derive(Tabled, Serialize)]
 struct ContainerRow {
     id: String,
     name: String,
@@ -30,9 +30,9 @@ impl From<Container> for ContainerRow {
     fn from(c: Container) -> Self {
         Self {
             id: c.id,
-            name: c.name,
+            name: truncate(&c.name, 30),
             runtime: c.runtime,
-            image: c.image,
+            image: truncate(&c.image, 40),
             status: c.status,
         }
     }
@@ -46,31 +46,15 @@ pub async fn handle_container_command(
     match command {
         ContainerCommands::List => {
             let containers: Vec<Container> = api.get("/api/containers").await?;
-
-            if output_format == "json" {
-                output::print_json(&containers)?;
-            } else {
-                let rows: Vec<ContainerRow> = containers.into_iter().map(ContainerRow::from).collect();
-                output::print_table(rows);
-            }
+            let format = OutputFormat::from_str(output_format);
+            let rows: Vec<ContainerRow> = containers.into_iter().map(ContainerRow::from).collect();
+            output::print_output(rows, format)?;
         }
 
         ContainerCommands::Show { id } => {
             let container: Container = api.get(&format!("/api/containers/{}", id)).await?;
-
-            if output_format == "json" {
-                output::print_json(&container)?;
-            } else {
-                println!("Container Details:");
-                println!("  ID: {}", container.id);
-                println!("  Name: {}", container.name);
-                println!("  Runtime: {}", container.runtime);
-                println!("  Image: {}", container.image);
-                println!("  Status: {}", container.status);
-                if let Some(created) = container.created_at {
-                    println!("  Created: {}", created);
-                }
-            }
+            let format = OutputFormat::from_str(output_format);
+            output::print_single(&container, format)?;
         }
 
         ContainerCommands::Create {
@@ -98,21 +82,21 @@ pub async fn handle_container_command(
             };
 
             let container: Container = api.post("/api/containers", &request).await?;
-            output::print_success(&format!("Container created: {} ({})", container.name, container.id));
+            output::print_created("Container", &container.name, &container.id);
         }
 
         ContainerCommands::Start { id } => {
             let container: Container = api
                 .post(&format!("/api/containers/{}/start", id), &serde_json::json!({}))
                 .await?;
-            output::print_success(&format!("Container started: {}", container.name));
+            output::print_started("Container", &container.name);
         }
 
         ContainerCommands::Stop { id } => {
             let container: Container = api
                 .post(&format!("/api/containers/{}/stop", id), &serde_json::json!({}))
                 .await?;
-            output::print_success(&format!("Container stopped: {}", container.name));
+            output::print_stopped("Container", &container.name);
         }
 
         ContainerCommands::Delete { id } => {
@@ -124,7 +108,7 @@ pub async fn handle_container_command(
 
             if confirm {
                 api.delete(&format!("/api/containers/{}", id)).await?;
-                output::print_success(&format!("Container deleted: {}", id));
+                output::print_deleted("Container", &id);
             } else {
                 output::print_info("Deletion cancelled");
             }
@@ -152,7 +136,7 @@ pub async fn handle_container_command(
                 println!("{}", response.stdout);
             }
             if !response.stderr.is_empty() {
-                eprintln!("{}", response.stderr);
+                output::print_error(&response.stderr);
             }
 
             if response.exit_code != 0 {

@@ -109,6 +109,47 @@ backup = []      # Backup and restore
 # Kubernetes orchestration
 kubernetes = ["kube", "k8s-openapi", "http"]
 
+# === NAS Features ===
+# Core NAS functionality
+nas = []                    # Core NAS module (shares, users, groups)
+
+# File sharing protocols
+smb = ["nas"]               # SMB/Samba file sharing (Windows/cross-platform)
+nfs-server = ["nas"]        # NFS server for Unix/Linux exports
+afp = ["nas"]               # AFP/Netatalk for macOS file sharing
+webdav = ["nas"]            # WebDAV file access over HTTP/HTTPS
+ftp = ["nas"]               # FTP and SFTP server support
+
+# NAS Authentication backends
+nas-auth = ["nas"]          # Core NAS authentication module
+ldap = ["nas-auth"]         # LDAP client integration
+ldap-server = ["nas-auth"]  # LDAP server (OpenLDAP slapd)
+kerberos = ["nas-auth"]     # Kerberos (MIT krb5) authentication
+ad = ["nas-auth", "kerberos"]  # Active Directory domain integration
+
+# NAS Services
+timemachine = ["afp"]       # macOS Time Machine backup target
+s3-gateway = ["nas"]        # S3-compatible API gateway (MinIO)
+iscsi-target = ["nas"]      # iSCSI target for block storage
+rsync-server = ["nas"]      # Rsync daemon for efficient backups
+
+# NAS Storage backends (runtime dependencies)
+nas-zfs = ["nas"]           # ZFS pool/dataset optimizations for NAS
+nas-btrfs = ["nas"]         # Btrfs subvolume/RAID support for NAS
+nas-mdraid = ["nas"]        # Linux software RAID (mdadm)
+nas-lvm = ["nas"]           # LVM thin provisioning for NAS
+
+# NAS Feature bundles for convenience
+nas-full = [
+    "smb", "nfs-server", "afp", "webdav", "ftp",
+    "nas-auth", "ldap", "ldap-server", "kerberos", "ad",
+    "timemachine", "s3-gateway", "iscsi-target", "rsync-server",
+    "nas-zfs", "nas-btrfs", "nas-mdraid", "nas-lvm"
+]
+nas-basic = ["smb", "nfs-server", "nas-auth"]
+nas-apple = ["smb", "afp", "timemachine"]
+nas-enterprise = ["smb", "nfs-server", "nas-auth", "ldap", "ad", "iscsi-target"]
+
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 

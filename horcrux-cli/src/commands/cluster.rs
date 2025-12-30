@@ -1,8 +1,9 @@
 use crate::api::ApiClient;
-use crate::output;
+use crate::output::{self, OutputFormat, format_bytes};
 use crate::ClusterCommands;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use tabled::Tabled;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Node {
@@ -12,6 +13,48 @@ struct Node {
     total_memory: u64,
     total_cpus: u32,
     online: bool,
+}
+
+#[derive(Tabled, Serialize)]
+struct NodeRow {
+    name: String,
+    address: String,
+    #[tabled(rename = "arch")]
+    architecture: String,
+    memory: String,
+    cpus: u32,
+    status: String,
+}
+
+impl From<Node> for NodeRow {
+    fn from(node: Node) -> Self {
+        Self {
+            name: node.name,
+            address: node.address,
+            architecture: node.architecture,
+            memory: format_bytes(node.total_memory * 1024 * 1024 * 1024),
+            cpus: node.total_cpus,
+            status: if node.online { "Online" } else { "Offline" }.to_string(),
+        }
+    }
+}
+
+#[derive(Tabled, Serialize)]
+struct ArchRow {
+    #[tabled(rename = "arch")]
+    architecture: String,
+    nodes: usize,
+    vms: usize,
+}
+
+impl From<ArchInfo> for ArchRow {
+    fn from(arch: ArchInfo) -> Self {
+        Self {
+            architecture: arch.architecture,
+            nodes: arch.node_count,
+            vms: arch.vm_count,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -49,38 +92,14 @@ pub async fn handle_cluster_command(
     match command {
         ClusterCommands::List => {
             let nodes: Vec<Node> = api.get("/api/cluster/nodes").await?;
-
-            if output_format == "json" {
-                println!("{}", serde_json::to_string_pretty(&nodes)?);
-            } else if output_format == "yaml" {
-                println!("{}", serde_yaml::to_string(&nodes)?);
-            } else {
-                println!("{:<20} {:<25} {:<12} {:<12} {:<8} {}",
-                    "NAME", "ADDRESS", "ARCH", "MEMORY", "CPUS", "STATUS");
-                println!("{}", "-".repeat(100));
-                for node in nodes {
-                    let status = if node.online { "Online" } else { "Offline" };
-                    println!("{:<20} {:<25} {:<12} {:<12} {:<8} {}",
-                        node.name, node.address, node.architecture,
-                        format!("{} GB", node.total_memory),
-                        node.total_cpus, status);
-                }
-            }
+            let format = OutputFormat::from_str(output_format);
+            let rows: Vec<NodeRow> = nodes.into_iter().map(NodeRow::from).collect();
+            output::print_output(rows, format)?;
         }
         ClusterCommands::Status => {
             let status: ClusterStatus = api.get("/api/cluster/status").await?;
-
-            if output_format == "json" {
-                println!("{}", serde_json::to_string_pretty(&status)?);
-            } else if output_format == "yaml" {
-                println!("{}", serde_yaml::to_string(&status)?);
-            } else {
-                println!("Cluster Status:");
-                println!("  Nodes:  {} online / {} total", status.online_nodes, status.total_nodes);
-                println!("  VMs:    {}", status.total_vms);
-                println!("  Memory: {} GB total", status.total_memory);
-                println!("  CPUs:   {} total", status.total_cpus);
-            }
+            let format = OutputFormat::from_str(output_format);
+            output::print_single(&status, format)?;
         }
         ClusterCommands::Add { name, address } => {
             let request = AddNodeRequest {
@@ -89,28 +108,17 @@ pub async fn handle_cluster_command(
             };
 
             api.post_empty(&format!("/api/cluster/nodes/{}", name), &request).await?;
-            output::print_success(&format!("Node '{}' added to cluster", name));
+            output::print_created("Node", &name, &address);
         }
         ClusterCommands::Remove { name } => {
             api.delete(&format!("/api/cluster/nodes/{}", name)).await?;
-            output::print_success(&format!("Node '{}' removed from cluster", name));
+            output::print_deleted("Node", &name);
         }
         ClusterCommands::Architecture => {
             let summary: ArchitectureSummary = api.get("/api/cluster/architecture").await?;
-
-            if output_format == "json" {
-                println!("{}", serde_json::to_string_pretty(&summary)?);
-            } else if output_format == "yaml" {
-                println!("{}", serde_yaml::to_string(&summary)?);
-            } else {
-                println!("{:<12} {:<12} {:<12}",
-                    "ARCH", "NODES", "VMS");
-                println!("{}", "-".repeat(40));
-                for arch in summary.architectures {
-                    println!("{:<12} {:<12} {:<12}",
-                        arch.architecture, arch.node_count, arch.vm_count);
-                }
-            }
+            let format = OutputFormat::from_str(output_format);
+            let rows: Vec<ArchRow> = summary.architectures.into_iter().map(ArchRow::from).collect();
+            output::print_output(rows, format)?;
         }
     }
     Ok(())

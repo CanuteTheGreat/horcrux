@@ -1,7 +1,7 @@
 ///! VM snapshot management commands
 
 use crate::api::ApiClient;
-use crate::output;
+use crate::output::{self, OutputFormat, format_bytes};
 use crate::SnapshotCommands;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -19,12 +19,12 @@ pub struct Snapshot {
     pub parent_snapshot: Option<String>,
 }
 
-#[derive(Tabled)]
+#[derive(Tabled, Serialize)]
 struct SnapshotRow {
     id: String,
     name: String,
     created_at: String,
-    size_mb: u64,
+    size: String,
     memory: String,
 }
 
@@ -34,7 +34,7 @@ impl From<Snapshot> for SnapshotRow {
             id: s.id,
             name: s.name,
             created_at: s.created_at,
-            size_mb: s.size_bytes / 1024 / 1024,
+            size: format_bytes(s.size_bytes),
             memory: if s.include_memory { "Yes" } else { "No" }.to_string(),
         }
     }
@@ -48,37 +48,17 @@ pub async fn handle_snapshot_command(
     match command {
         SnapshotCommands::List { vm_id } => {
             let snapshots: Vec<Snapshot> = api.get(&format!("/api/vms/{}/snapshots", vm_id)).await?;
-
-            if output_format == "json" {
-                output::print_json(&snapshots)?;
-            } else {
-                let rows: Vec<SnapshotRow> = snapshots.into_iter().map(SnapshotRow::from).collect();
-                output::print_table(rows);
-            }
+            let format = OutputFormat::from_str(output_format);
+            let rows: Vec<SnapshotRow> = snapshots.into_iter().map(SnapshotRow::from).collect();
+            output::print_output(rows, format)?;
         }
 
         SnapshotCommands::Show { vm_id, snapshot_id } => {
             let snapshot: Snapshot = api
                 .get(&format!("/api/vms/{}/snapshots/{}", vm_id, snapshot_id))
                 .await?;
-
-            if output_format == "json" {
-                output::print_json(&snapshot)?;
-            } else {
-                println!("Snapshot Details:");
-                println!("  ID: {}", snapshot.id);
-                println!("  VM ID: {}", snapshot.vm_id);
-                println!("  Name: {}", snapshot.name);
-                if let Some(desc) = snapshot.description {
-                    println!("  Description: {}", desc);
-                }
-                println!("  Created: {}", snapshot.created_at);
-                println!("  Size: {} MB", snapshot.size_bytes / 1024 / 1024);
-                println!("  Include Memory: {}", snapshot.include_memory);
-                if let Some(parent) = snapshot.parent_snapshot {
-                    println!("  Parent: {}", parent);
-                }
-            }
+            let format = OutputFormat::from_str(output_format);
+            output::print_single(&snapshot, format)?;
         }
 
         SnapshotCommands::Create {
@@ -114,8 +94,8 @@ pub async fn handle_snapshot_command(
                 .post(&format!("/api/vms/{}/snapshots", vm_id), &request)
                 .await?;
 
-            spinner.finish_with_message(format!("Snapshot created: {}", snapshot.name));
-            output::print_success(&format!("Snapshot ID: {}", snapshot.id));
+            spinner.finish_and_clear();
+            output::print_created("Snapshot", &snapshot.name, &snapshot.id);
         }
 
         SnapshotCommands::Restore { vm_id, snapshot_id } => {
@@ -165,7 +145,7 @@ pub async fn handle_snapshot_command(
             if confirm {
                 api.delete(&format!("/api/vms/{}/snapshots/{}", vm_id, snapshot_id))
                     .await?;
-                output::print_success(&format!("Snapshot deleted: {}", snapshot_id));
+                output::print_deleted("Snapshot", &snapshot_id);
             } else {
                 output::print_info("Deletion cancelled");
             }

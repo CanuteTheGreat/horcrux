@@ -1,13 +1,14 @@
 ///! VM management commands
 
 use crate::api::ApiClient;
-use crate::output;
+use crate::output::{self, OutputFormat};
 use crate::VmCommands;
 use anyhow::Result;
 use horcrux_common::VmConfig;
+use serde::Serialize;
 use tabled::Tabled;
 
-#[derive(Tabled)]
+#[derive(Tabled, Serialize)]
 struct VmRow {
     id: String,
     name: String,
@@ -38,31 +39,15 @@ pub async fn handle_vm_command(
     match command {
         VmCommands::List => {
             let vms: Vec<VmConfig> = api.get("/api/vms").await?;
-
-            if output_format == "json" {
-                output::print_json(&vms)?;
-            } else {
-                let rows: Vec<VmRow> = vms.into_iter().map(VmRow::from).collect();
-                output::print_table(rows);
-            }
+            let format = OutputFormat::from_str(output_format);
+            let rows: Vec<VmRow> = vms.into_iter().map(VmRow::from).collect();
+            output::print_output(rows, format)?;
         }
 
         VmCommands::Show { id } => {
             let vm: VmConfig = api.get(&format!("/api/vms/{}", id)).await?;
-
-            if output_format == "json" {
-                output::print_json(&vm)?;
-            } else {
-                println!("VM Details:");
-                println!("  ID: {}", vm.id);
-                println!("  Name: {}", vm.name);
-                println!("  Status: {:?}", vm.status);
-                println!("  CPUs: {}", vm.cpus);
-                println!("  Memory: {} MB", vm.memory / 1024 / 1024);
-                println!("  Architecture: {:?}", vm.architecture);
-                println!("  Hypervisor: {:?}", vm.hypervisor);
-                println!("  Disk Size: {} GB", vm.disk_size);
-            }
+            let format = OutputFormat::from_str(output_format);
+            output::print_single(&vm, format)?;
         }
 
         VmCommands::Create {
@@ -86,21 +71,21 @@ pub async fn handle_vm_command(
             };
 
             let vm: VmConfig = api.post("/api/vms", &vm_config).await?;
-            output::print_success(&format!("VM created: {} ({})", vm.name, vm.id));
+            output::print_created("VM", &vm.name, &vm.id);
         }
 
         VmCommands::Start { id } => {
             let vm: VmConfig = api
                 .post(&format!("/api/vms/{}/start", id), &serde_json::json!({}))
                 .await?;
-            output::print_success(&format!("VM started: {}", vm.name));
+            output::print_started("VM", &vm.name);
         }
 
         VmCommands::Stop { id } => {
             let vm: VmConfig = api
                 .post(&format!("/api/vms/{}/stop", id), &serde_json::json!({}))
                 .await?;
-            output::print_success(&format!("VM stopped: {}", vm.name));
+            output::print_stopped("VM", &vm.name);
         }
 
         VmCommands::Restart { id } => {
@@ -117,7 +102,7 @@ pub async fn handle_vm_command(
             let vm: VmConfig = api
                 .post(&format!("/api/vms/{}/start", id), &serde_json::json!({}))
                 .await?;
-            output::print_success(&format!("VM restarted: {}", vm.name));
+            output::print_success(&format!("VM '{}' restarted", vm.name));
         }
 
         VmCommands::Delete { id } => {
@@ -129,7 +114,7 @@ pub async fn handle_vm_command(
 
             if confirm {
                 api.delete(&format!("/api/vms/{}", id)).await?;
-                output::print_success(&format!("VM deleted: {}", id));
+                output::print_deleted("VM", &id);
             } else {
                 output::print_info("Deletion cancelled");
             }

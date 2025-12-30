@@ -26,3 +26,9 @@ thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
+
+# Optimized release profile for WASM
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1

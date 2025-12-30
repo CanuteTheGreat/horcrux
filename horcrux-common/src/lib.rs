@@ -157,6 +157,16 @@ pub enum Error {
 
     #[error("Invalid session")]
     InvalidSession,
+
+    // NAS-related errors
+    #[error("Resource not found: {0}")]
+    NotFound(String),
+
+    #[error("Resource already exists: {0}")]
+    AlreadyExists(String),
+
+    #[error("Internal error: {0}")]
+    Internal(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

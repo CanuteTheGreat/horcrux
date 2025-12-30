@@ -6,26 +6,42 @@
 		<name>Horcrux Development Team</name>
 	</maintainer>
 	<longdescription lang="en">
-		Horcrux is a Proxmox VE alternative built natively for Gentoo Linux.
+		Horcrux is a Proxmox VE alternative built natively for Gentoo Linux,
+		combining enterprise-grade virtualization with full-featured NAS capabilities.
 
-		It provides enterprise-grade virtualization management with support for
-		QEMU/KVM, LXC containers, Docker, and Podman. Horcrux embraces the Gentoo
-		philosophy of choice by offering extensive USE flags for customization.
+		It provides virtualization management with support for QEMU/KVM, LXC containers,
+		Docker, and Podman, plus comprehensive NAS functionality rivaling TrueNAS and
+		FreeNAS. Horcrux embraces the Gentoo philosophy of choice by offering extensive
+		USE flags for customization.
 
-		Features:
+		Virtualization Features:
 		- Multi-hypervisor support (QEMU/KVM, LXD, Incus)
 		- Container runtimes (LXC, Docker, Podman)
 		- Multiple storage backends (ZFS, Ceph, LVM, NFS, CIFS, iSCSI)
 		- Software-defined networking with VXLAN and VLANs
 		- High availability clustering with Corosync/Pacemaker
 		- Automated backups with retention policies
+		- Live VM migration
+		- VM templates and cloning
+		- Cloud-init integration
+
+		NAS Features:
+		- File sharing protocols: SMB/Samba, NFS, AFP/Netatalk, WebDAV, FTP/SFTP
+		- Storage management: ZFS pools/datasets, Btrfs, mdraid, LVM
+		- Snapshot management with periodic scheduling and retention policies
+		- ZFS send/receive and rsync-based replication
+		- User/group management with quota support
+		- POSIX and NFSv4 ACL management
+		- Time Machine backup target for macOS
+		- S3-compatible object storage via MinIO gateway
+		- iSCSI block storage targets
+		- Authentication: Local users, LDAP, Kerberos, Active Directory
+
+		Platform Features:
 		- Role-based access control (RBAC)
 		- OpenID Connect (OIDC) authentication
 		- Web-based management interface (Yew/WebAssembly)
 		- RESTful API for automation
-		- Cloud-init integration
-		- VM templates and cloning
-		- Live VM migration
 		- Advanced monitoring with OpenTelemetry
 		- Alert system with multiple notification channels
 	</longdescription>
@@ -40,12 +56,12 @@
 		<flag name="docker">Enable Docker container runtime support</flag>
 		<flag name="podman">Enable Podman (daemonless) container runtime support</flag>
 
-		<!-- Storage backends -->
+		<!-- Storage backends (virtualization) -->
 		<flag name="zfs">Enable ZFS storage backend with native snapshot support</flag>
 		<flag name="ceph">Enable Ceph RBD distributed storage backend</flag>
 		<flag name="lvm">Enable LVM storage backend with snapshot support</flag>
 
-		<!-- Features -->
+		<!-- Core features -->
 		<flag name="backup">Enable automated backup and restore functionality</flag>
 		<flag name="cluster">Enable high availability clustering with Corosync</flag>
 		<flag name="ssl">Enable TLS/SSL support for encrypted connections</flag>
@@ -54,6 +70,37 @@
 
 		<!-- Init system (global flag) -->
 		<flag name="systemd">Install systemd service unit (default: OpenRC init script)</flag>
+
+		<!-- ════════════════════════════════════════════════════════════════ -->
+		<!-- NAS (Network Attached Storage) Features -->
+		<!-- ════════════════════════════════════════════════════════════════ -->
+
+		<!-- NAS Core -->
+		<flag name="nas">Enable NAS functionality - file sharing, user management, storage pools</flag>
+
+		<!-- NAS File Sharing Protocols -->
+		<flag name="smb">Enable SMB/CIFS file sharing via Samba (Windows/cross-platform)</flag>
+		<flag name="nfs-server">Enable NFS server for Unix/Linux file exports with NFSv4 support</flag>
+		<flag name="afp">Enable AFP file sharing via Netatalk for macOS clients</flag>
+		<flag name="webdav">Enable WebDAV file access over HTTP/HTTPS via nginx</flag>
+		<flag name="ftp">Enable FTP/SFTP server via ProFTPD with SSL support</flag>
+
+		<!-- NAS Authentication -->
+		<flag name="ldap-server">Enable OpenLDAP server for centralized directory services</flag>
+		<flag name="kerberos">Enable MIT Kerberos 5 authentication for secure single sign-on</flag>
+		<flag name="ad">Enable Active Directory domain integration via Samba (requires kerberos)</flag>
+
+		<!-- NAS Services -->
+		<flag name="timemachine">Enable macOS Time Machine backup target support (requires afp)</flag>
+		<flag name="s3-gateway">Enable S3-compatible object storage API via MinIO</flag>
+		<flag name="iscsi-target">Enable iSCSI target for network block storage via tgt</flag>
+		<flag name="rsync-server">Enable rsync daemon for efficient file synchronization and backups</flag>
+
+		<!-- NAS Storage Backends -->
+		<flag name="nas-zfs">Enable ZFS pool/dataset management optimized for NAS workloads</flag>
+		<flag name="nas-btrfs">Enable Btrfs subvolume and RAID support for NAS</flag>
+		<flag name="nas-mdraid">Enable Linux software RAID (mdadm) for NAS storage</flag>
+		<flag name="nas-lvm">Enable LVM thin provisioning for NAS storage</flag>
 	</use>
 	<upstream>
 		<remote-id type="github">horcrux-project/horcrux</remote-id>

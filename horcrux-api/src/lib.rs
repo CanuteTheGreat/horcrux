@@ -57,6 +57,10 @@ pub mod gpu;
 #[cfg(feature = "kubernetes")]
 pub mod kubernetes;
 
+// NAS (Network Attached Storage)
+#[cfg(feature = "nas")]
+pub mod nas;
+
 // Database
 pub mod db;
 

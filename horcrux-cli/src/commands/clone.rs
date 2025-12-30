@@ -1,7 +1,7 @@
 ///! VM cloning commands
 
 use crate::api::ApiClient;
-use crate::output;
+use crate::output::{self, OutputFormat};
 use crate::CloneCommands;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ pub struct CloneJob {
     pub error: Option<String>,
 }
 
-#[derive(Tabled)]
+#[derive(Tabled, Serialize)]
 struct CloneJobRow {
     job_id: String,
     source: String,
@@ -85,52 +85,24 @@ pub async fn handle_clone_command(
                 .post(&format!("/api/vms/{}/clone", vm_id), &request)
                 .await?;
 
-            spinner.finish_with_message(format!("Clone job started: {}", job.job_id));
-
-            if output_format == "json" {
-                output::print_json(&job)?;
-            } else {
-                output::print_success(&format!("Job ID: {}", job.job_id));
-                println!("Clone type: {}", if full { "Full" } else { "Linked" });
-                println!("Track progress with: horcrux clone status {}", job.job_id);
-            }
+            spinner.finish_and_clear();
+            output::print_created("Clone job", &name, &job.job_id);
+            output::print_info(&format!("Clone type: {}", if full { "Full" } else { "Linked" }));
+            output::print_info(&format!("Track progress: horcrux clone status {}", job.job_id));
         }
 
         CloneCommands::List => {
             let jobs: Vec<CloneJob> = api.get("/api/vms/clone/jobs").await?;
-
-            if output_format == "json" {
-                output::print_json(&jobs)?;
-            } else {
-                let rows: Vec<CloneJobRow> = jobs.into_iter().map(CloneJobRow::from).collect();
-                output::print_table(rows);
-            }
+            let format = OutputFormat::from_str(output_format);
+            let rows: Vec<CloneJobRow> = jobs.into_iter().map(CloneJobRow::from).collect();
+            output::print_output(rows, format)?;
         }
 
         CloneCommands::Status { job_id } => {
             let job: CloneJob = api.get(&format!("/api/vms/clone/jobs/{}", job_id)).await?;
+            let format = OutputFormat::from_str(output_format);
 
-            if output_format == "json" {
-                output::print_json(&job)?;
-            } else {
-                println!("Clone Job Status:");
-                println!("  Job ID: {}", job.job_id);
-                println!("  Source VM: {}", job.source_vm_id);
-                println!("  Target VM Name: {}", job.target_vm_name);
-                if let Some(target_id) = job.target_vm_id {
-                    println!("  Target VM ID: {}", target_id);
-                }
-                println!("  Clone Type: {}", job.clone_type);
-                println!("  Status: {}", job.status);
-                println!("  Progress: {:.1}%", job.progress * 100.0);
-                println!("  Created: {}", job.created_at);
-                if let Some(completed) = job.completed_at {
-                    println!("  Completed: {}", completed);
-                }
-                if let Some(error) = job.error {
-                    println!("  Error: {}", error);
-                }
-
+            if format == OutputFormat::Table {
                 // Show progress bar if still in progress
                 if job.status == "running" || job.status == "pending" {
                     use indicatif::{ProgressBar, ProgressStyle};
@@ -146,6 +118,7 @@ pub async fn handle_clone_command(
                     pb.finish();
                 }
             }
+            output::print_single(&job, format)?;
         }
 
         CloneCommands::Cancel { job_id } => {
@@ -161,7 +134,7 @@ pub async fn handle_clone_command(
                     &serde_json::json!({}),
                 )
                 .await?;
-                output::print_success(&format!("Clone job cancelled: {}", job_id));
+                output::print_success(&format!("Clone job '{}' cancelled", job_id));
             } else {
                 output::print_info("Cancellation aborted");
             }

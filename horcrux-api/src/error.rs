@@ -172,6 +172,15 @@ impl From<horcrux_common::Error> for ApiError {
             horcrux_common::Error::Io(e) => {
                 ApiError::Internal(format!("I/O error: {}", e))
             }
+            horcrux_common::Error::NotFound(msg) => {
+                ApiError::NotFound(msg)
+            }
+            horcrux_common::Error::AlreadyExists(msg) => {
+                ApiError::Conflict(msg)
+            }
+            horcrux_common::Error::Internal(msg) => {
+                ApiError::Internal(msg)
+            }
         }
     }
 }

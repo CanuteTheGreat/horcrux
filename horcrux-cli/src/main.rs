@@ -103,6 +103,11 @@ enum Commands {
         #[command(subcommand)]
         command: ReplicationCommands,
     },
+    /// NAS (Network Attached Storage) management
+    Nas {
+        #[command(subcommand)]
+        command: NasCommands,
+    },
     /// Generate shell completions
     Completions {
         /// Shell type
@@ -156,8 +161,8 @@ enum StorageCommands {
     List,
     /// Show storage pool details
     Show { id: String },
-    /// Add a storage pool
-    Add {
+    /// Create a storage pool
+    Create {
         /// Pool name
         #[arg(short, long)]
         name: String,
@@ -168,9 +173,9 @@ enum StorageCommands {
         #[arg(short, long)]
         path: String,
     },
-    /// Remove a storage pool
-    Remove { id: String },
-    /// Create a volume
+    /// Delete a storage pool
+    Delete { id: String },
+    /// Create a volume in a pool
     CreateVolume {
         /// Pool ID
         pool_id: String,
@@ -509,6 +514,353 @@ enum ReplicationCommands {
     Status { id: String },
 }
 
+#[derive(Subcommand)]
+pub enum NasCommands {
+    // Health
+    /// Show NAS health status
+    Health,
+
+    // Shares
+    /// List NAS shares
+    ShareList,
+    /// Create a NAS share
+    ShareCreate {
+        /// Share name
+        #[arg(short, long)]
+        name: String,
+        /// Filesystem path
+        #[arg(short, long)]
+        path: String,
+        /// Enable SMB protocol
+        #[arg(long)]
+        smb: bool,
+        /// Enable NFS protocol
+        #[arg(long)]
+        nfs: bool,
+    },
+    /// Delete a NAS share
+    ShareDelete {
+        /// Share ID
+        id: String,
+    },
+    /// Enable a NAS share
+    ShareEnable {
+        /// Share ID
+        id: String,
+    },
+    /// Disable a NAS share
+    ShareDisable {
+        /// Share ID
+        id: String,
+    },
+
+    // Users
+    /// List NAS users
+    UserList,
+    /// Create a NAS user
+    UserCreate {
+        /// Username
+        #[arg(short, long)]
+        username: String,
+        /// Password
+        #[arg(short, long)]
+        password: String,
+        /// Full name
+        #[arg(short, long)]
+        full_name: Option<String>,
+    },
+    /// Delete a NAS user
+    UserDelete {
+        /// User ID
+        id: String,
+    },
+    /// Set NAS user password
+    UserPassword {
+        /// User ID
+        id: String,
+        /// New password
+        #[arg(short, long)]
+        password: String,
+    },
+
+    // Groups
+    /// List NAS groups
+    GroupList,
+    /// Create a NAS group
+    GroupCreate {
+        /// Group name
+        #[arg(short, long)]
+        name: String,
+        /// Description
+        #[arg(short, long)]
+        description: Option<String>,
+    },
+    /// Delete a NAS group
+    GroupDelete {
+        /// Group ID
+        id: String,
+    },
+
+    // Storage Pools
+    /// List NAS storage pools
+    PoolList,
+    /// Show NAS pool details
+    PoolShow {
+        /// Pool ID
+        id: String,
+    },
+    /// Start pool scrub
+    PoolScrub {
+        /// Pool ID
+        id: String,
+    },
+
+    // Snapshots
+    /// List dataset snapshots
+    SnapshotList {
+        /// Dataset ID
+        dataset_id: String,
+    },
+    /// Create a snapshot
+    SnapshotCreate {
+        /// Dataset ID
+        dataset_id: String,
+        /// Snapshot name
+        #[arg(short, long)]
+        name: String,
+    },
+    /// Delete a snapshot
+    SnapshotDelete {
+        /// Snapshot ID
+        id: String,
+    },
+    /// Rollback to a snapshot
+    SnapshotRollback {
+        /// Snapshot ID
+        id: String,
+    },
+
+    // Services
+    /// List NAS services
+    ServiceList,
+    /// Start a NAS service
+    ServiceStart {
+        /// Service name (smbd, nfsd, netatalk, etc.)
+        name: String,
+    },
+    /// Stop a NAS service
+    ServiceStop {
+        /// Service name
+        name: String,
+    },
+    /// Restart a NAS service
+    ServiceRestart {
+        /// Service name
+        name: String,
+    },
+
+    // SMB
+    /// Show SMB connections
+    SmbStatus,
+
+    // NFS
+    /// List NFS clients
+    NfsClients,
+
+    // iSCSI
+    /// List iSCSI targets
+    IscsiList,
+
+    // S3
+    /// Show S3 gateway status
+    S3Status,
+    /// List S3 buckets
+    S3Buckets,
+
+    // Directory Services - LDAP
+    /// Show LDAP directory status
+    LdapStatus,
+    /// Configure LDAP directory server
+    LdapConfigure {
+        /// LDAP server URI (e.g., ldap://ldap.example.com)
+        #[arg(short, long)]
+        uri: String,
+        /// Base DN (e.g., dc=example,dc=com)
+        #[arg(short, long)]
+        base_dn: String,
+        /// Bind DN for authentication
+        #[arg(long)]
+        bind_dn: Option<String>,
+        /// Bind password
+        #[arg(long)]
+        bind_password: Option<String>,
+    },
+    /// Sync users from LDAP
+    LdapSync,
+    /// Search LDAP users
+    LdapSearchUsers {
+        /// Search filter
+        #[arg(short, long)]
+        filter: String,
+    },
+    /// Search LDAP groups
+    LdapSearchGroups {
+        /// Search filter
+        #[arg(short, long)]
+        filter: String,
+    },
+    /// Test LDAP connection
+    LdapTest,
+
+    // Directory Services - Kerberos
+    /// Show Kerberos status
+    KerberosStatus,
+    /// Configure Kerberos
+    KerberosConfigure {
+        /// Default realm
+        #[arg(short, long)]
+        realm: String,
+        /// KDC server
+        #[arg(short, long)]
+        kdc: String,
+        /// Admin server
+        #[arg(long)]
+        admin_server: Option<String>,
+    },
+    /// Obtain Kerberos ticket
+    KerberosKinit {
+        /// Principal name
+        #[arg(short, long)]
+        principal: String,
+        /// Use keytab instead of password
+        #[arg(long)]
+        keytab: Option<String>,
+    },
+    /// List Kerberos tickets
+    KerberosKlist,
+    /// Destroy Kerberos tickets
+    KerberosKdestroy,
+    /// List keytab entries
+    KerberosKeytabList {
+        /// Keytab file path
+        #[arg(short, long)]
+        keytab: Option<String>,
+    },
+    /// Create keytab entry
+    KerberosKeytabCreate {
+        /// Principal name
+        #[arg(short, long)]
+        principal: String,
+        /// Keytab file path
+        #[arg(short, long)]
+        keytab: Option<String>,
+    },
+
+    // Directory Services - Active Directory
+    /// Show AD join status
+    AdStatus,
+    /// Join Active Directory domain
+    AdJoin {
+        /// AD domain (e.g., CORP.EXAMPLE.COM)
+        #[arg(short, long)]
+        domain: String,
+        /// Admin username
+        #[arg(short, long)]
+        username: String,
+        /// Computer OU path (optional)
+        #[arg(long)]
+        ou: Option<String>,
+        /// Register DNS record
+        #[arg(long)]
+        register_dns: bool,
+    },
+    /// Leave Active Directory domain
+    AdLeave {
+        /// Admin username
+        #[arg(short, long)]
+        username: String,
+    },
+    /// List AD users
+    AdUsers,
+    /// List AD groups
+    AdGroups,
+    /// Show user's AD groups
+    AdUserGroups {
+        /// Username
+        username: String,
+    },
+    /// Test AD trust relationship
+    AdTestTrust,
+    /// Ping domain controller
+    AdPingDc,
+    /// Verify AD join prerequisites
+    AdVerifyPrereqs {
+        /// AD domain
+        #[arg(short, long)]
+        domain: String,
+    },
+
+    // Scheduler Commands
+    /// Show scheduler status
+    SchedulerStatus,
+    /// List scheduled jobs
+    JobList,
+    /// Show scheduled job details
+    JobShow {
+        /// Job ID
+        id: String,
+    },
+    /// Create a scheduled job
+    JobCreate {
+        /// Job name
+        #[arg(short, long)]
+        name: String,
+        /// Job type (snapshot, retention, replication, scrub, health_check, quota_check, smart_check)
+        #[arg(short = 't', long)]
+        job_type: String,
+        /// Cron schedule expression
+        #[arg(short, long)]
+        schedule: String,
+        /// Dataset path (for snapshot/retention jobs)
+        #[arg(long)]
+        dataset: Option<String>,
+        /// Pool name (for scrub jobs)
+        #[arg(long)]
+        pool: Option<String>,
+        /// Task ID (for replication jobs)
+        #[arg(long)]
+        task_id: Option<String>,
+        /// Number of snapshots to keep (for retention jobs)
+        #[arg(long)]
+        keep_count: Option<usize>,
+    },
+    /// Delete a scheduled job
+    JobDelete {
+        /// Job ID
+        id: String,
+    },
+    /// Run a scheduled job immediately
+    JobRun {
+        /// Job ID
+        id: String,
+    },
+    /// Pause a scheduled job
+    JobPause {
+        /// Job ID
+        id: String,
+    },
+    /// Resume a paused scheduled job
+    JobResume {
+        /// Job ID
+        id: String,
+    },
+    /// Show job execution history
+    JobHistory {
+        /// Job ID
+        id: String,
+    },
+}
+
 use commands::auth::AuthCommands;
 
 #[tokio::main]
@@ -579,6 +931,9 @@ async fn main() -> Result<()> {
         }
         Commands::Replication { command } => {
             commands::replication::handle_replication_command(command, &api_client, &cli.output).await?
+        }
+        Commands::Nas { command } => {
+            commands::nas::handle_nas_command(command, &api_client, &cli.output).await?
         }
         Commands::Completions { shell } => {
             generate_completions(shell);

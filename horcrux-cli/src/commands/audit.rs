@@ -1,8 +1,9 @@
 use crate::api::ApiClient;
-use crate::output;
+use crate::output::{self, OutputFormat, format_relative_time};
 use crate::AuditCommands;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use tabled::Tabled;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AuditEvent {
@@ -14,6 +15,71 @@ struct AuditEvent {
     action: String,
     result: String,
     details: Option<String>,
+}
+
+#[derive(Tabled, Serialize)]
+struct AuditEventRow {
+    timestamp: String,
+    #[tabled(rename = "type")]
+    event_type: String,
+    severity: String,
+    user: String,
+    action: String,
+    result: String,
+}
+
+impl From<AuditEvent> for AuditEventRow {
+    fn from(e: AuditEvent) -> Self {
+        Self {
+            timestamp: format_relative_time(e.timestamp),
+            event_type: e.event_type,
+            severity: e.severity,
+            user: e.user.unwrap_or_else(|| "-".to_string()),
+            action: e.action,
+            result: e.result,
+        }
+    }
+}
+
+#[derive(Tabled, Serialize)]
+struct FailedLoginRow {
+    timestamp: String,
+    user: String,
+    source_ip: String,
+    details: String,
+}
+
+impl From<AuditEvent> for FailedLoginRow {
+    fn from(e: AuditEvent) -> Self {
+        Self {
+            timestamp: format_relative_time(e.timestamp),
+            user: e.user.unwrap_or_else(|| "-".to_string()),
+            source_ip: e.source_ip.unwrap_or_else(|| "-".to_string()),
+            details: e.details.unwrap_or_else(|| "-".to_string()),
+        }
+    }
+}
+
+#[derive(Tabled, Serialize)]
+struct SecurityEventRow {
+    timestamp: String,
+    #[tabled(rename = "type")]
+    event_type: String,
+    severity: String,
+    action: String,
+    result: String,
+}
+
+impl From<AuditEvent> for SecurityEventRow {
+    fn from(e: AuditEvent) -> Self {
+        Self {
+            timestamp: format_relative_time(e.timestamp),
+            event_type: e.event_type,
+            severity: e.severity,
+            action: e.action,
+            result: e.result,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -42,24 +108,9 @@ pub async fn handle_audit_command(
             let query = params.join("&");
 
             let events: Vec<AuditEvent> = api.get(&format!("/api/audit/events?{}", query)).await?;
-
-            if output_format == "json" {
-                println!("{}", serde_json::to_string_pretty(&events)?);
-            } else if output_format == "yaml" {
-                println!("{}", serde_yaml::to_string(&events)?);
-            } else {
-                println!("{:<20} {:<15} {:<10} {:<15} {:<20} {}",
-                    "TIMESTAMP", "TYPE", "SEVERITY", "USER", "ACTION", "RESULT");
-                println!("{}", "-".repeat(100));
-                for event in events {
-                    let ts = chrono::DateTime::from_timestamp(event.timestamp, 0)
-                        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                        .unwrap_or_else(|| "Unknown".to_string());
-                    let user = event.user.unwrap_or_else(|| "-".to_string());
-                    println!("{:<20} {:<15} {:<10} {:<15} {:<20} {}",
-                        ts, event.event_type, event.severity, user, event.action, event.result);
-                }
-            }
+            let format = OutputFormat::from_str(output_format);
+            let rows: Vec<AuditEventRow> = events.into_iter().map(AuditEventRow::from).collect();
+            output::print_output(rows, format)?;
         }
         AuditCommands::FailedLogins { user, limit } => {
             let mut params = vec![format!("limit={}", limit)];
@@ -69,48 +120,15 @@ pub async fn handle_audit_command(
             let query = params.join("&");
 
             let events: Vec<AuditEvent> = api.get(&format!("/api/audit/failed-logins?{}", query)).await?;
-
-            if output_format == "json" {
-                println!("{}", serde_json::to_string_pretty(&events)?);
-            } else if output_format == "yaml" {
-                println!("{}", serde_yaml::to_string(&events)?);
-            } else {
-                println!("Failed Login Attempts:");
-                println!("{:<20} {:<20} {:<30} {}",
-                    "TIMESTAMP", "USER", "SOURCE IP", "DETAILS");
-                println!("{}", "-".repeat(90));
-                for event in events {
-                    let ts = chrono::DateTime::from_timestamp(event.timestamp, 0)
-                        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                        .unwrap_or_else(|| "Unknown".to_string());
-                    let user = event.user.unwrap_or_else(|| "-".to_string());
-                    let ip = event.source_ip.unwrap_or_else(|| "-".to_string());
-                    let details = event.details.unwrap_or_else(|| "-".to_string());
-                    println!("{:<20} {:<20} {:<30} {}",
-                        ts, user, ip, details);
-                }
-            }
+            let format = OutputFormat::from_str(output_format);
+            let rows: Vec<FailedLoginRow> = events.into_iter().map(FailedLoginRow::from).collect();
+            output::print_output(rows, format)?;
         }
         AuditCommands::Security { limit } => {
             let events: Vec<AuditEvent> = api.get(&format!("/api/audit/security-events?limit={}", limit)).await?;
-
-            if output_format == "json" {
-                println!("{}", serde_json::to_string_pretty(&events)?);
-            } else if output_format == "yaml" {
-                println!("{}", serde_yaml::to_string(&events)?);
-            } else {
-                println!("Security Events:");
-                println!("{:<20} {:<15} {:<10} {:<20} {}",
-                    "TIMESTAMP", "TYPE", "SEVERITY", "ACTION", "RESULT");
-                println!("{}", "-".repeat(80));
-                for event in events {
-                    let ts = chrono::DateTime::from_timestamp(event.timestamp, 0)
-                        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                        .unwrap_or_else(|| "Unknown".to_string());
-                    println!("{:<20} {:<15} {:<10} {:<20} {}",
-                        ts, event.event_type, event.severity, event.action, event.result);
-                }
-            }
+            let format = OutputFormat::from_str(output_format);
+            let rows: Vec<SecurityEventRow> = events.into_iter().map(SecurityEventRow::from).collect();
+            output::print_output(rows, format)?;
         }
         AuditCommands::Export { output: path } => {
             let request = ExportRequest { path: path.clone() };

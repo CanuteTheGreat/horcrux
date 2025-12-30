@@ -1,8 +1,9 @@
 use crate::api::ApiClient;
-use crate::output;
+use crate::output::{self, OutputFormat, format_bytes};
 use crate::StorageCommands;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use tabled::Tabled;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct StoragePool {
@@ -15,8 +16,40 @@ struct StoragePool {
     enabled: bool,
 }
 
+#[derive(Tabled, Serialize)]
+struct StoragePoolRow {
+    id: String,
+    name: String,
+    #[tabled(rename = "type")]
+    storage_type: String,
+    available: String,
+    total: String,
+    path: String,
+}
+
+impl From<StoragePool> for StoragePoolRow {
+    fn from(pool: StoragePool) -> Self {
+        Self {
+            id: pool.id,
+            name: pool.name,
+            storage_type: pool.storage_type,
+            available: if pool.available > 0 {
+                format_bytes(pool.available * 1024 * 1024 * 1024)
+            } else {
+                "N/A".to_string()
+            },
+            total: if pool.total > 0 {
+                format_bytes(pool.total * 1024 * 1024 * 1024)
+            } else {
+                "N/A".to_string()
+            },
+            path: pool.path,
+        }
+    }
+}
+
 #[derive(Serialize)]
-struct AddPoolRequest {
+struct CreatePoolRequest {
     name: String,
     storage_type: String,
     path: String,
@@ -36,62 +69,28 @@ pub async fn handle_storage_command(
     match command {
         StorageCommands::List => {
             let pools: Vec<StoragePool> = api.get("/api/storage/pools").await?;
-
-            if output_format == "json" {
-                println!("{}", serde_json::to_string_pretty(&pools)?);
-            } else if output_format == "yaml" {
-                println!("{}", serde_yaml::to_string(&pools)?);
-            } else {
-                // Table format
-                println!("{:<36} {:<20} {:<12} {:<12} {:<12} {}",
-                    "ID", "NAME", "TYPE", "AVAILABLE", "TOTAL", "PATH");
-                println!("{}", "-".repeat(120));
-                for pool in pools {
-                    let avail = if pool.available > 0 {
-                        format!("{} GB", pool.available)
-                    } else {
-                        "N/A".to_string()
-                    };
-                    let total = if pool.total > 0 {
-                        format!("{} GB", pool.total)
-                    } else {
-                        "N/A".to_string()
-                    };
-                    println!("{:<36} {:<20} {:<12} {:<12} {:<12} {}",
-                        pool.id, pool.name, pool.storage_type, avail, total, pool.path);
-                }
-            }
+            let format = OutputFormat::from_str(output_format);
+            let rows: Vec<StoragePoolRow> = pools.into_iter().map(StoragePoolRow::from).collect();
+            output::print_output(rows, format)?;
         }
         StorageCommands::Show { id } => {
             let pool: StoragePool = api.get(&format!("/api/storage/pools/{}", id)).await?;
-
-            if output_format == "json" {
-                println!("{}", serde_json::to_string_pretty(&pool)?);
-            } else if output_format == "yaml" {
-                println!("{}", serde_yaml::to_string(&pool)?);
-            } else {
-                println!("Storage Pool: {}", pool.name);
-                println!("  ID:        {}", pool.id);
-                println!("  Type:      {}", pool.storage_type);
-                println!("  Path:      {}", pool.path);
-                println!("  Available: {} GB", pool.available);
-                println!("  Total:     {} GB", pool.total);
-                println!("  Enabled:   {}", pool.enabled);
-            }
+            let format = OutputFormat::from_str(output_format);
+            output::print_single(&pool, format)?;
         }
-        StorageCommands::Add { name, storage_type, path } => {
-            let request = AddPoolRequest {
+        StorageCommands::Create { name, storage_type, path } => {
+            let request = CreatePoolRequest {
                 name: name.clone(),
                 storage_type: storage_type.clone(),
                 path: path.clone(),
             };
 
             let pool: StoragePool = api.post("/api/storage/pools", &request).await?;
-            output::print_success(&format!("Storage pool '{}' added successfully (ID: {})", name, pool.id));
+            output::print_created("Storage pool", &name, &pool.id);
         }
-        StorageCommands::Remove { id } => {
+        StorageCommands::Delete { id } => {
             api.delete(&format!("/api/storage/pools/{}", id)).await?;
-            output::print_success(&format!("Storage pool {} removed successfully", id));
+            output::print_deleted("Storage pool", &id);
         }
         StorageCommands::CreateVolume { pool_id, name, size } => {
             let request = CreateVolumeRequest {
@@ -100,7 +99,7 @@ pub async fn handle_storage_command(
             };
 
             api.post_empty(&format!("/api/storage/pools/{}/volumes", pool_id), &request).await?;
-            output::print_success(&format!("Volume '{}' created successfully ({} GB)", name, size));
+            output::print_created("Volume", &name, &format!("{} GB", size));
         }
     }
     Ok(())

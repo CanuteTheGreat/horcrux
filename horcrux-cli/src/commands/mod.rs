@@ -12,3 +12,4 @@ pub mod container;
 pub mod snapshot;
 pub mod clone;
 pub mod replication;
+pub mod nas;

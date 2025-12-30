@@ -2,6 +2,7 @@
 
 use crate::api::ApiClient;
 use crate::config::Config;
+use crate::output;
 use anyhow::Result;
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
@@ -113,9 +114,9 @@ pub async fn handle_auth_command(
             config.username = Some(response.username.clone());
             config.save()?;
 
-            println!("✓ Login successful");
-            println!("  Username: {}", response.username);
-            println!("  Roles: {}", response.roles.join(", "));
+            output::print_success("Login successful");
+            output::print_info(&format!("Username: {}", response.username));
+            output::print_info(&format!("Roles: {}", response.roles.join(", ")));
         }
 
         AuthCommands::Register {
@@ -142,8 +143,8 @@ pub async fn handle_auth_command(
 
             api.post_empty("/api/auth/register", &request).await?;
 
-            println!("✓ Registration successful");
-            println!("  You can now login with your credentials");
+            output::print_success("Registration successful");
+            output::print_info("You can now login with your credentials");
         }
 
         AuthCommands::Logout => {
@@ -155,20 +156,20 @@ pub async fn handle_auth_command(
             config.username = None;
             config.save()?;
 
-            println!("✓ Logged out successfully");
+            output::print_success("Logged out successfully");
         }
 
         AuthCommands::Status => {
             if let Some(token) = &config.token {
                 if let Some(username) = &config.username {
-                    println!("Authenticated as: {}", username);
-                    println!("Token: {}...", &token[..20.min(token.len())]);
+                    output::print_success(&format!("Authenticated as: {}", username));
+                    output::print_info(&format!("Token: {}...", &token[..20.min(token.len())]));
                 } else {
-                    println!("Token present but no username stored");
+                    output::print_warning("Token present but no username stored");
                 }
             } else {
-                println!("Not authenticated");
-                println!("Use 'horcrux auth login' to authenticate");
+                output::print_warning("Not authenticated");
+                output::print_info("Use 'horcrux auth login' to authenticate");
             }
         }
 
@@ -206,7 +207,7 @@ pub async fn handle_auth_command(
 
             api.post_empty("/api/auth/password", &request).await?;
 
-            println!("✓ Password changed successfully");
+            output::print_success("Password changed successfully");
         }
     }
 

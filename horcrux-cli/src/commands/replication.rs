@@ -1,7 +1,7 @@
 ///! Replication management commands
 
 use crate::api::ApiClient;
-use crate::output;
+use crate::output::{self, OutputFormat, format_bytes};
 use crate::ReplicationCommands;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ pub struct ReplicationJob {
     pub error: Option<String>,
 }
 
-#[derive(Tabled)]
+#[derive(Tabled, Serialize)]
 struct ReplicationJobRow {
     id: String,
     vm_id: String,
@@ -52,39 +52,15 @@ pub async fn handle_replication_command(
     match command {
         ReplicationCommands::List => {
             let jobs: Vec<ReplicationJob> = api.get("/api/replication/jobs").await?;
-
-            if output_format == "json" {
-                output::print_json(&jobs)?;
-            } else {
-                let rows: Vec<ReplicationJobRow> = jobs.into_iter().map(ReplicationJobRow::from).collect();
-                output::print_table(rows);
-            }
+            let format = OutputFormat::from_str(output_format);
+            let rows: Vec<ReplicationJobRow> = jobs.into_iter().map(ReplicationJobRow::from).collect();
+            output::print_output(rows, format)?;
         }
 
         ReplicationCommands::Show { id } => {
             let job: ReplicationJob = api.get(&format!("/api/replication/jobs/{}", id)).await?;
-
-            if output_format == "json" {
-                output::print_json(&job)?;
-            } else {
-                println!("Replication Job Details:");
-                println!("  ID: {}", job.id);
-                println!("  VM ID: {}", job.vm_id);
-                println!("  Source Node: {}", job.source_node);
-                println!("  Target Node: {}", job.target_node);
-                println!("  Schedule: {}", job.schedule);
-                println!("  Enabled: {}", if job.enabled { "Yes" } else { "No" });
-                println!("  Status: {}", job.status);
-                if let Some(last_sync) = job.last_sync {
-                    println!("  Last Sync: {}", last_sync);
-                }
-                if let Some(next_sync) = job.next_sync {
-                    println!("  Next Sync: {}", next_sync);
-                }
-                if let Some(error) = job.error {
-                    println!("  Error: {}", error);
-                }
-            }
+            let format = OutputFormat::from_str(output_format);
+            output::print_single(&job, format)?;
         }
 
         ReplicationCommands::Create {
@@ -108,15 +84,10 @@ pub async fn handle_replication_command(
             };
 
             let job: ReplicationJob = api.post("/api/replication/jobs", &request).await?;
-
-            if output_format == "json" {
-                output::print_json(&job)?;
-            } else {
-                output::print_success(&format!("Replication job created: {}", job.id));
-                println!("VM {} will replicate to node {}", vm_id, target_node);
-                if let Some(next_sync) = job.next_sync {
-                    println!("Next sync scheduled for: {}", next_sync);
-                }
+            output::print_created("Replication job", &vm_id, &job.id);
+            output::print_info(&format!("VM {} will replicate to node {}", vm_id, target_node));
+            if let Some(next_sync) = &job.next_sync {
+                output::print_info(&format!("Next sync: {}", next_sync));
             }
         }
 
@@ -142,18 +113,10 @@ pub async fn handle_replication_command(
                 .post(&format!("/api/replication/jobs/{}/execute", id), &serde_json::json!({}))
                 .await?;
 
-            spinner.finish_with_message("Replication completed");
-
-            if output_format == "json" {
-                output::print_json(&response)?;
-            } else {
-                output::print_success("Replication executed successfully");
-                println!("Status: {}", response.status);
-                println!(
-                    "Transferred: {} MB",
-                    response.bytes_transferred / 1024 / 1024
-                );
-            }
+            spinner.finish_and_clear();
+            output::print_success("Replication executed successfully");
+            output::print_info(&format!("Status: {}", response.status));
+            output::print_info(&format!("Transferred: {}", format_bytes(response.bytes_transferred)));
         }
 
         ReplicationCommands::Delete { id } => {
@@ -165,7 +128,7 @@ pub async fn handle_replication_command(
 
             if confirm {
                 api.delete(&format!("/api/replication/jobs/{}", id)).await?;
-                output::print_success(&format!("Replication job deleted: {}", id));
+                output::print_deleted("Replication job", &id);
             } else {
                 output::print_info("Deletion cancelled");
             }
@@ -185,26 +148,8 @@ pub async fn handle_replication_command(
             let status: ReplicationStatus = api
                 .get(&format!("/api/replication/jobs/{}/status", id))
                 .await?;
-
-            if output_format == "json" {
-                output::print_json(&status)?;
-            } else {
-                println!("Replication Status:");
-                println!("  Job ID: {}", status.job_id);
-                println!("  Status: {}", status.status);
-                if let Some(duration) = status.last_sync_duration_secs {
-                    println!("  Last Sync Duration: {}s", duration);
-                }
-                if let Some(bytes) = status.bytes_transferred {
-                    println!("  Bytes Transferred: {} MB", bytes / 1024 / 1024);
-                }
-                if let Some(snapshots) = status.snapshots_synced {
-                    println!("  Snapshots Synced: {}", snapshots);
-                }
-                if let Some(error) = status.error {
-                    println!("  Error: {}", error);
-                }
-            }
+            let format = OutputFormat::from_str(output_format);
+            output::print_single(&status, format)?;
         }
     }
 

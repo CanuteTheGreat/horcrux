@@ -23,8 +23,3 @@ base64 = "0.22"
 gloo-timers = { version = "0.3", features = ["futures"] }
 uuid = { version = "1.0", features = ["v4", "js"] }
 urlencoding = "2.1"
-
-[profile.release]
-opt-level = "z"
-lto = true
-codegen-units = 1

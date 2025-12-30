@@ -1,7 +1,9 @@
 use crate::api::ApiClient;
+use crate::output::{OutputFormat, format_bytes, format_duration};
 use crate::MonitorCommands;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use tabled::Tabled;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct NodeMetrics {
@@ -24,6 +26,32 @@ struct VmMetrics {
     net_out: u64,
 }
 
+#[derive(Tabled, Serialize)]
+struct VmMetricsRow {
+    vm_id: String,
+    name: String,
+    #[tabled(rename = "cpu %")]
+    cpu_usage: String,
+    memory: String,
+    #[tabled(rename = "disk r/w")]
+    disk_rw: String,
+    #[tabled(rename = "net i/o")]
+    net_io: String,
+}
+
+impl From<VmMetrics> for VmMetricsRow {
+    fn from(m: VmMetrics) -> Self {
+        Self {
+            vm_id: m.vm_id,
+            name: m.vm_name,
+            cpu_usage: format!("{:.1}%", m.cpu_usage),
+            memory: format_bytes(m.memory_usage),
+            disk_rw: format!("{}/{}", format_bytes(m.disk_read), format_bytes(m.disk_write)),
+            net_io: format!("{}/{}", format_bytes(m.net_in), format_bytes(m.net_out)),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct StorageMetrics {
     name: String,
@@ -31,6 +59,28 @@ struct StorageMetrics {
     available: u64,
     total: u64,
     usage_percent: f64,
+}
+
+#[derive(Tabled, Serialize)]
+struct StorageMetricsRow {
+    name: String,
+    used: String,
+    available: String,
+    total: String,
+    #[tabled(rename = "usage %")]
+    usage_percent: String,
+}
+
+impl From<StorageMetrics> for StorageMetricsRow {
+    fn from(m: StorageMetrics) -> Self {
+        Self {
+            name: m.name,
+            used: format_bytes(m.used * 1024 * 1024 * 1024),
+            available: format_bytes(m.available * 1024 * 1024 * 1024),
+            total: format_bytes(m.total * 1024 * 1024 * 1024),
+            usage_percent: format!("{:.1}%", m.usage_percent),
+        }
+    }
 }
 
 pub async fn handle_monitor_command(
@@ -41,18 +91,17 @@ pub async fn handle_monitor_command(
     match command {
         MonitorCommands::Node => {
             let metrics: NodeMetrics = api.get("/api/monitoring/node").await?;
+            let format = OutputFormat::from_str(output_format);
 
-            if output_format == "json" {
-                println!("{}", serde_json::to_string_pretty(&metrics)?);
-            } else if output_format == "yaml" {
-                println!("{}", serde_yaml::to_string(&metrics)?);
-            } else {
+            if format == OutputFormat::Table {
                 println!("Node Metrics:");
                 println!("  CPU Usage:    {:.1}%", metrics.cpu_usage);
                 println!("  Memory Usage: {:.1}%", metrics.memory_usage);
-                println!("  Memory Total: {} GB", metrics.memory_total);
+                println!("  Memory Total: {}", format_bytes(metrics.memory_total * 1024 * 1024 * 1024));
                 println!("  Disk Usage:   {:.1}%", metrics.disk_usage);
-                println!("  Uptime:       {} seconds", metrics.uptime);
+                println!("  Uptime:       {}", format_duration(metrics.uptime));
+            } else {
+                crate::output::print_single(&metrics, format)?;
             }
         }
         MonitorCommands::Vm { id } => {
@@ -61,23 +110,9 @@ pub async fn handle_monitor_command(
             } else {
                 api.get("/api/monitoring/vms").await?
             };
-
-            if output_format == "json" {
-                println!("{}", serde_json::to_string_pretty(&metrics)?);
-            } else if output_format == "yaml" {
-                println!("{}", serde_yaml::to_string(&metrics)?);
-            } else {
-                println!("{:<12} {:<20} {:<10} {:<12} {:<12} {:<12}",
-                    "VM ID", "NAME", "CPU %", "MEMORY", "DISK R/W", "NET I/O");
-                println!("{}", "-".repeat(90));
-                for vm in metrics {
-                    println!("{:<12} {:<20} {:<10.1} {:<12} {:<12} {:<12}",
-                        vm.vm_id, vm.vm_name, vm.cpu_usage,
-                        format!("{} MB", vm.memory_usage / 1024 / 1024),
-                        format!("{}/{}", vm.disk_read, vm.disk_write),
-                        format!("{}/{}", vm.net_in, vm.net_out));
-                }
-            }
+            let format = OutputFormat::from_str(output_format);
+            let rows: Vec<VmMetricsRow> = metrics.into_iter().map(VmMetricsRow::from).collect();
+            crate::output::print_output(rows, format)?;
         }
         MonitorCommands::Storage { name } => {
             let metrics: Vec<StorageMetrics> = if let Some(pool_name) = name {
@@ -85,38 +120,22 @@ pub async fn handle_monitor_command(
             } else {
                 api.get("/api/monitoring/storage").await?
             };
-
-            if output_format == "json" {
-                println!("{}", serde_json::to_string_pretty(&metrics)?);
-            } else if output_format == "yaml" {
-                println!("{}", serde_yaml::to_string(&metrics)?);
-            } else {
-                println!("{:<20} {:<12} {:<12} {:<12} {}",
-                    "NAME", "USED", "AVAILABLE", "TOTAL", "USAGE %");
-                println!("{}", "-".repeat(70));
-                for pool in metrics {
-                    println!("{:<20} {:<12} {:<12} {:<12} {:.1}%",
-                        pool.name,
-                        format!("{} GB", pool.used),
-                        format!("{} GB", pool.available),
-                        format!("{} GB", pool.total),
-                        pool.usage_percent);
-                }
-            }
+            let format = OutputFormat::from_str(output_format);
+            let rows: Vec<StorageMetricsRow> = metrics.into_iter().map(StorageMetricsRow::from).collect();
+            crate::output::print_output(rows, format)?;
         }
         MonitorCommands::Cluster => {
             let metrics: NodeMetrics = api.get("/api/monitoring/cluster").await?;
+            let format = OutputFormat::from_str(output_format);
 
-            if output_format == "json" {
-                println!("{}", serde_json::to_string_pretty(&metrics)?);
-            } else if output_format == "yaml" {
-                println!("{}", serde_yaml::to_string(&metrics)?);
-            } else {
+            if format == OutputFormat::Table {
                 println!("Cluster Metrics:");
                 println!("  CPU Usage:    {:.1}%", metrics.cpu_usage);
                 println!("  Memory Usage: {:.1}%", metrics.memory_usage);
-                println!("  Memory Total: {} GB", metrics.memory_total);
+                println!("  Memory Total: {}", format_bytes(metrics.memory_total * 1024 * 1024 * 1024));
                 println!("  Disk Usage:   {:.1}%", metrics.disk_usage);
+            } else {
+                crate::output::print_single(&metrics, format)?;
             }
         }
         MonitorCommands::Watch { interval } => {
