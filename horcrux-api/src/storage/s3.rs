@@ -349,11 +349,12 @@ impl S3Manager {
             )
         } else {
             // Virtual-hosted-style: https://bucket.s3.endpoint.com/key
+            let key_path = if key.is_empty() { "/".to_string() } else { format!("/{}", key) };
             format!("{}://{}.{}{}",
                 protocol,
                 config.bucket,
                 config.endpoint,
-                if key.is_empty() { "/" } else { &format!("/{}", key) }
+                key_path
             )
         }
     }

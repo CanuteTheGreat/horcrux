@@ -11,6 +11,7 @@ target/
 # Documentation
 *.md
 docs/
+!docs/openapi.yaml
 examples/
 !README.md
 
@@ -33,9 +34,9 @@ logs/
 tests/
 **/tests/
 
-# Benchmarks
-benches/
-**/benches/
+# Benchmarks - need to include for Cargo.toml parsing
+# benches/
+# **/benches/
 
 # Temporary files
 tmp/
@@ -47,7 +48,7 @@ temp/
 .env.*
 
 # Package manager
-Cargo.lock
+!Cargo.lock
 !Cargo.toml
 
 # Backup files
@@ -67,8 +68,10 @@ deploy/*
 # Gentoo-specific
 gentoo/
 
-# Mobile app (not needed for server)
-horcrux-mobile/
+# Mobile app - include Cargo.toml for workspace
+horcrux-mobile/*
+!horcrux-mobile/Cargo.toml
+!horcrux-mobile/src/
 
 # UI build artifacts (build separately if needed)
 horcrux-ui/dist/

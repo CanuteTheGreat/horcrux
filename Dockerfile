@@ -2,13 +2,14 @@
 # Multi-stage build for optimized image size
 
 # Stage 1: Build stage
-FROM rust:1.82-slim AS builder
+FROM rust:1.85-slim AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     libsqlite3-dev \
+    libvirt-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app directory
@@ -17,30 +18,34 @@ WORKDIR /app
 # Copy dependency manifests
 COPY Cargo.toml Cargo.lock ./
 COPY horcrux-api/Cargo.toml ./horcrux-api/
+COPY horcrux-api/horcrux-ui/Cargo.toml ./horcrux-api/horcrux-ui/
 COPY horcrux-cli/Cargo.toml ./horcrux-cli/
 COPY horcrux-common/Cargo.toml ./horcrux-common/
 COPY horcrux-mobile/Cargo.toml ./horcrux-mobile/
-COPY horcrux-ui/Cargo.toml ./horcrux-ui/
+COPY terraform-provider-horcrux/Cargo.toml ./terraform-provider-horcrux/
 
 # Create dummy source files to cache dependencies
-RUN mkdir -p horcrux-api/src horcrux-cli/src horcrux-common/src horcrux-mobile/src horcrux-ui/src && \
+RUN mkdir -p horcrux-api/src horcrux-api/horcrux-ui/src horcrux-cli/src horcrux-common/src horcrux-mobile/src terraform-provider-horcrux/src && \
     echo "fn main() {}" > horcrux-api/src/main.rs && \
+    echo "pub fn dummy() {}" > horcrux-api/src/lib.rs && \
+    echo "pub fn dummy() {}" > horcrux-api/horcrux-ui/src/lib.rs && \
     echo "fn main() {}" > horcrux-cli/src/main.rs && \
     echo "pub fn dummy() {}" > horcrux-common/src/lib.rs && \
     echo "pub fn dummy() {}" > horcrux-mobile/src/lib.rs && \
-    echo "pub fn dummy() {}" > horcrux-ui/src/lib.rs
+    echo "pub fn dummy() {}" > terraform-provider-horcrux/src/lib.rs
 
 # Build dependencies (this layer will be cached)
-RUN cargo build --release -p horcrux-api && \
-    rm -rf target/release/.fingerprint/horcrux-* && \
-    rm -rf horcrux-*/src
+RUN cargo build --release -p horcrux-api || true
+RUN rm -rf target/release/.fingerprint/horcrux-* && \
+    rm -rf horcrux-*/src terraform-provider-horcrux/src
 
 # Copy actual source code
 COPY horcrux-api ./horcrux-api
 COPY horcrux-cli ./horcrux-cli
 COPY horcrux-common ./horcrux-common
 COPY horcrux-mobile ./horcrux-mobile
-COPY horcrux-ui ./horcrux-ui
+COPY terraform-provider-horcrux ./terraform-provider-horcrux
+COPY docs/openapi.yaml ./docs/openapi.yaml
 
 # Build the actual application
 RUN cargo build --release -p horcrux-api
@@ -53,6 +58,7 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
     libsqlite3-0 \
+    libvirt0 \
     qemu-system-x86 \
     qemu-utils \
     curl \

@@ -25,10 +25,17 @@ impl Database {
             }
         }
 
+        // Ensure database URL has create mode for new databases
+        let connect_url = if database_url.contains('?') {
+            database_url.to_string()
+        } else {
+            format!("{}?mode=rwc", database_url)
+        };
+
         // Create connection pool
         let pool = SqlitePoolOptions::new()
             .max_connections(32)
-            .connect(database_url)
+            .connect(&connect_url)
             .await
             .map_err(|e| horcrux_common::Error::System(format!("Database connection failed: {}", e)))?;
 
