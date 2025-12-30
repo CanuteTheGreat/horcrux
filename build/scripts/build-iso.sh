@@ -179,8 +179,15 @@ check_requirements() {
         "rustc"
         "mksquashfs"
         "grub-mkrescue"
+        "grub-mkimage"
         "cpio"
     )
+
+    # Check for mkfs.vfat or mkfs.fat for EFI
+    if ! command -v mkfs.vfat &> /dev/null && ! command -v mkfs.fat &> /dev/null; then
+        log_warn "mkfs.vfat/mkfs.fat not found - EFI boot may not work"
+        log_warn "Install with: emerge -av sys-fs/dosfstools"
+    fi
 
     for tool in "${tools[@]}"; do
         if ! command -v "$tool" &> /dev/null; then
@@ -551,6 +558,171 @@ EOF
     log_success "Initramfs created"
 }
 
+# Find or download kernel
+setup_kernel() {
+    log_info "Setting up kernel..."
+
+    local kernel_found=false
+    local kernel_src=""
+
+    # Try to find existing kernel on the system
+    local kernel_paths=(
+        "/boot/vmlinuz-$(uname -r)"
+        "/boot/vmlinuz"
+        "/boot/kernel-$(uname -r)"
+        "/usr/src/linux/arch/${KERNEL_ARCH}/boot/bzImage"
+        "/usr/src/linux/arch/${KERNEL_ARCH}/boot/Image"
+    )
+
+    for kpath in "${kernel_paths[@]}"; do
+        if [[ -f "$kpath" ]]; then
+            kernel_src="$kpath"
+            kernel_found=true
+            log_info "Found kernel at: $kpath"
+            break
+        fi
+    done
+
+    # Search for any vmlinuz in /boot
+    if [[ "$kernel_found" != "true" ]]; then
+        kernel_src=$(ls -1t /boot/vmlinuz-* 2>/dev/null | head -1)
+        if [[ -n "$kernel_src" && -f "$kernel_src" ]]; then
+            kernel_found=true
+            log_info "Found kernel at: $kernel_src"
+        fi
+    fi
+
+    # Search for kernel in /boot with different naming
+    if [[ "$kernel_found" != "true" ]]; then
+        kernel_src=$(ls -1t /boot/kernel-* 2>/dev/null | head -1)
+        if [[ -n "$kernel_src" && -f "$kernel_src" ]]; then
+            kernel_found=true
+            log_info "Found kernel at: $kernel_src"
+        fi
+    fi
+
+    if [[ "$kernel_found" != "true" ]]; then
+        log_error "No kernel found!"
+        log_error "Please ensure a kernel is installed in /boot or /usr/src/linux"
+        log_error "On Gentoo: emerge -av sys-kernel/gentoo-kernel-bin"
+        log_error "Or compile your own: cd /usr/src/linux && make && make install"
+        exit 1
+    fi
+
+    # Copy kernel to work directory
+    cp "$kernel_src" "$WORK_DIR/vmlinuz"
+    log_success "Kernel ready: $kernel_src"
+}
+
+# Setup GRUB bootloader files
+setup_bootloader() {
+    log_info "Setting up bootloader..."
+
+    mkdir -p "$ISO_DIR/boot/grub/i386-pc"
+    mkdir -p "$ISO_DIR/boot/grub/${GRUB_TARGET}"
+    mkdir -p "$ISO_DIR/EFI/BOOT"
+
+    # Find GRUB modules directory
+    local grub_lib=""
+    local grub_dirs=(
+        "/usr/lib/grub"
+        "/usr/share/grub"
+        "/usr/lib64/grub"
+    )
+
+    for gdir in "${grub_dirs[@]}"; do
+        if [[ -d "$gdir/i386-pc" ]]; then
+            grub_lib="$gdir"
+            break
+        fi
+    done
+
+    if [[ -z "$grub_lib" ]]; then
+        log_warn "GRUB library directory not found, will use grub-mkrescue fallback"
+        return 0
+    fi
+
+    log_info "Using GRUB from: $grub_lib"
+
+    # Copy BIOS boot modules
+    if [[ -d "$grub_lib/i386-pc" ]]; then
+        # Create BIOS boot image
+        local bios_modules="biosdisk iso9660 part_msdos part_gpt fat ext2 normal search configfile linux boot minicmd"
+
+        if command -v grub-mkimage &> /dev/null; then
+            grub-mkimage -O i386-pc -o "$ISO_DIR/boot/grub/i386-pc/core.img" \
+                -p /boot/grub $bios_modules 2>/dev/null || true
+        fi
+
+        # Copy essential GRUB files for BIOS
+        cp "$grub_lib/i386-pc/"*.mod "$ISO_DIR/boot/grub/i386-pc/" 2>/dev/null || true
+        cp "$grub_lib/i386-pc/"*.lst "$ISO_DIR/boot/grub/i386-pc/" 2>/dev/null || true
+
+        # Create eltorito boot image
+        if [[ -f "$grub_lib/i386-pc/cdboot.img" && -f "$ISO_DIR/boot/grub/i386-pc/core.img" ]]; then
+            cat "$grub_lib/i386-pc/cdboot.img" "$ISO_DIR/boot/grub/i386-pc/core.img" \
+                > "$ISO_DIR/boot/grub/i386-pc/eltorito.img"
+            log_info "Created BIOS eltorito boot image"
+        fi
+    fi
+
+    # Copy EFI boot files
+    local efi_arch=""
+    local efi_name=""
+    case "$ARCH" in
+        x86_64)
+            efi_arch="x86_64-efi"
+            efi_name="BOOTX64.EFI"
+            ;;
+        aarch64)
+            efi_arch="arm64-efi"
+            efi_name="BOOTAA64.EFI"
+            ;;
+        riscv64)
+            efi_arch="riscv64-efi"
+            efi_name="BOOTRISCV64.EFI"
+            ;;
+    esac
+
+    if [[ -d "$grub_lib/$efi_arch" ]]; then
+        # Create EFI GRUB image
+        local efi_modules="part_gpt part_msdos fat iso9660 normal search configfile linux boot minicmd"
+
+        if command -v grub-mkimage &> /dev/null; then
+            grub-mkimage -O "$efi_arch" -o "$ISO_DIR/EFI/BOOT/$efi_name" \
+                -p /boot/grub $efi_modules 2>/dev/null || true
+        fi
+
+        # Copy EFI modules
+        cp "$grub_lib/$efi_arch/"*.mod "$ISO_DIR/boot/grub/$efi_arch/" 2>/dev/null || true
+        cp "$grub_lib/$efi_arch/"*.lst "$ISO_DIR/boot/grub/$efi_arch/" 2>/dev/null || true
+
+        # Create EFI boot image (FAT filesystem)
+        if [[ -f "$ISO_DIR/EFI/BOOT/$efi_name" ]]; then
+            local efi_size=4096  # 4MB should be enough
+            dd if=/dev/zero of="$ISO_DIR/EFI/efiboot.img" bs=1K count=$efi_size 2>/dev/null
+            mkfs.vfat "$ISO_DIR/EFI/efiboot.img" 2>/dev/null || mkfs.fat "$ISO_DIR/EFI/efiboot.img" 2>/dev/null || true
+
+            local efi_mount="$WORK_DIR/efi_mount"
+            mkdir -p "$efi_mount"
+
+            if mount -o loop "$ISO_DIR/EFI/efiboot.img" "$efi_mount" 2>/dev/null; then
+                mkdir -p "$efi_mount/EFI/BOOT"
+                cp "$ISO_DIR/EFI/BOOT/$efi_name" "$efi_mount/EFI/BOOT/"
+                cp "$ISO_DIR/boot/grub/grub.cfg" "$efi_mount/EFI/BOOT/" 2>/dev/null || true
+                umount "$efi_mount"
+                log_info "Created EFI boot image"
+            else
+                log_warn "Could not mount EFI image (needs root), skipping EFI boot setup"
+                rm -f "$ISO_DIR/EFI/efiboot.img"
+            fi
+            rmdir "$efi_mount" 2>/dev/null || true
+        fi
+    fi
+
+    log_success "Bootloader setup complete"
+}
+
 # Create ISO structure
 create_iso_structure() {
     log_info "Creating ISO structure..."
@@ -560,6 +732,15 @@ create_iso_structure() {
     # Create squashfs from rootfs
     mksquashfs "$ROOTFS_DIR" "$ISO_DIR/horcrux.squashfs" \
         -comp xz -b 1M -Xdict-size 100%
+
+    # Copy kernel
+    if [[ -f "$WORK_DIR/vmlinuz" ]]; then
+        cp "$WORK_DIR/vmlinuz" "$ISO_DIR/boot/vmlinuz"
+        log_info "Copied kernel to ISO"
+    else
+        log_error "Kernel not found in work directory!"
+        exit 1
+    fi
 
     # Copy initramfs
     cp "$WORK_DIR/initramfs.cpio.gz" "$ISO_DIR/boot/"
@@ -709,12 +890,14 @@ main() {
     check_requirements
     clean_build
     setup_rust_target
+    setup_kernel
     build_binaries
     create_rootfs
     create_configs
     create_initramfs
     create_iso_structure
     create_grub_config
+    setup_bootloader
     build_iso
     print_summary
 }
