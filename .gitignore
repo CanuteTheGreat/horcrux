@@ -22,3 +22,10 @@ Thumbs.db
 
 # Claude
 .claude/
+
+# Build artifacts
+build/work/
+build/iso/
+*.iso
+*.iso.sha256
+*.iso.sha512

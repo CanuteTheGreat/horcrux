@@ -480,18 +480,27 @@ create_initramfs() {
 
     # Create init script
     cat > "$initramfs_dir/init" << 'EOF'
-#!/bin/busybox sh
+#!/bin/sh
 # Horcrux initramfs init
+
+echo "Horcrux Initramfs Starting..."
 
 # Mount essential filesystems
 mount -t proc none /proc
 mount -t sysfs none /sys
-mount -t devtmpfs none /dev
+mount -t devtmpfs none /dev 2>/dev/null || {
+    # Fallback: create basic device nodes
+    mknod /dev/console c 5 1 2>/dev/null
+    mknod /dev/null c 1 3 2>/dev/null
+    mknod /dev/sr0 b 11 0 2>/dev/null
+}
 
 # Parse kernel command line
 cmdline=$(cat /proc/cmdline)
 root=""
 init="/sbin/init"
+
+echo "Kernel cmdline: $cmdline"
 
 for param in $cmdline; do
     case "$param" in
@@ -504,53 +513,127 @@ for param in $cmdline; do
     esac
 done
 
+echo "Root device: $root"
+echo "Init: $init"
+
 # Wait for root device
-echo "Waiting for root device..."
-sleep 2
+echo "Waiting for devices..."
+sleep 3
+
+# Create mount points
+mkdir -p /mnt /newroot
 
 # Mount root filesystem
-if [ -n "$root" ]; then
+if [ -n "$root" ] && [ "$root" != "/dev/sr0" ]; then
+    echo "Mounting root: $root"
     mount -o ro "$root" /newroot
 else
-    # Try to find squashfs
+    # Try to find squashfs on CD-ROM
+    echo "Attempting to mount CD-ROM..."
     if [ -e /dev/sr0 ]; then
         mount -t iso9660 -o ro /dev/sr0 /mnt
-        mount -t squashfs -o loop /mnt/horcrux.squashfs /newroot
+        if [ -f /mnt/horcrux.squashfs ]; then
+            echo "Found squashfs, mounting..."
+            mount -t squashfs -o loop /mnt/horcrux.squashfs /newroot
+        else
+            echo "ERROR: horcrux.squashfs not found on CD-ROM"
+            echo "Contents of /mnt:"
+            ls -la /mnt 2>/dev/null || echo "(cannot list)"
+            echo "Dropping to shell..."
+            exec /bin/sh
+        fi
+    else
+        echo "ERROR: /dev/sr0 not found"
+        echo "Available block devices:"
+        ls -la /dev/sd* /dev/sr* /dev/vd* 2>/dev/null || echo "(none found)"
+        echo "Dropping to shell..."
+        exec /bin/sh
     fi
 fi
 
+# Verify newroot is mounted
+if [ ! -d /newroot/sbin ]; then
+    echo "ERROR: Root filesystem not properly mounted"
+    echo "Contents of /newroot:"
+    ls -la /newroot 2>/dev/null || echo "(cannot list)"
+    echo "Dropping to shell..."
+    exec /bin/sh
+fi
+
+echo "Switching to root filesystem..."
+
 # Switch to real root
-umount /proc
-umount /sys
-umount /dev
+umount /proc 2>/dev/null
+umount /sys 2>/dev/null
+umount /dev 2>/dev/null
 
 exec switch_root /newroot "$init"
 EOF
     chmod +x "$initramfs_dir/init"
 
-    # Copy busybox (static) or individual tools
-    if command -v busybox &> /dev/null; then
+    # Copy busybox (static) or individual tools with libraries
+    if command -v busybox &> /dev/null && file "$(which busybox)" | grep -q "statically linked"; then
+        log_info "Using statically linked busybox"
         cp "$(which busybox)" "$initramfs_dir/bin/"
 
         # Create symlinks for essential commands
-        for cmd in sh mount umount switch_root cat sleep; do
+        for cmd in sh mount umount switch_root cat sleep mknod mkdir; do
             ln -sf /bin/busybox "$initramfs_dir/bin/$cmd"
         done
+        ln -sf /bin/busybox "$initramfs_dir/sbin/switch_root"
     else
-        log_warn "busybox not found, copying individual tools..."
+        log_warn "busybox not found or not static, copying tools with libraries..."
+
+        # Create lib directories
+        mkdir -p "$initramfs_dir/lib64" "$initramfs_dir/lib"
+
         # Copy essential binaries from system
+        local binaries=()
         for cmd in sh bash mount umount cat sleep; do
             if command -v "$cmd" &> /dev/null; then
-                cp "$(which $cmd)" "$initramfs_dir/bin/" 2>/dev/null || true
+                local bin_path="$(which $cmd)"
+                cp "$bin_path" "$initramfs_dir/bin/" 2>/dev/null || true
+                binaries+=("$bin_path")
             fi
         done
+
         # Try to get switch_root from util-linux
         if [[ -f /sbin/switch_root ]]; then
             cp /sbin/switch_root "$initramfs_dir/sbin/"
+            binaries+=("/sbin/switch_root")
         elif [[ -f /usr/sbin/switch_root ]]; then
             cp /usr/sbin/switch_root "$initramfs_dir/sbin/"
+            binaries+=("/usr/sbin/switch_root")
+        fi
+
+        # Copy dynamic linker
+        if [[ -f /lib64/ld-linux-x86-64.so.2 ]]; then
+            cp /lib64/ld-linux-x86-64.so.2 "$initramfs_dir/lib64/"
+        fi
+
+        # Copy required libraries for all binaries
+        for bin in "${binaries[@]}"; do
+            if [[ -f "$bin" ]]; then
+                local libs
+                libs=$(ldd "$bin" 2>/dev/null | grep -o '/[^ ]*' || true)
+                for lib in $libs; do
+                    if [[ -f "$lib" && ! -f "$initramfs_dir$lib" ]]; then
+                        local lib_dir="$initramfs_dir$(dirname "$lib")"
+                        mkdir -p "$lib_dir"
+                        cp "$lib" "$lib_dir/" 2>/dev/null || true
+                    fi
+                done
+            fi
+        done
+
+        # Create sh symlink to bash if needed
+        if [[ -f "$initramfs_dir/bin/bash" && ! -f "$initramfs_dir/bin/sh" ]]; then
+            ln -sf bash "$initramfs_dir/bin/sh"
         fi
     fi
+
+    # Create /mnt for CD-ROM mount
+    mkdir -p "$initramfs_dir/mnt"
 
     # Create initramfs cpio archive
     (cd "$initramfs_dir" && find . | cpio -o -H newc | gzip > "$WORK_DIR/initramfs.cpio.gz")
@@ -561,6 +644,9 @@ EOF
 # Find or download kernel
 setup_kernel() {
     log_info "Setting up kernel..."
+
+    # Ensure work directory exists
+    mkdir -p "$WORK_DIR"
 
     local kernel_found=false
     local kernel_src=""
@@ -783,30 +869,59 @@ build_iso() {
 
     local iso_created=false
 
-    # Try xorriso first (best option for modern bootable ISOs)
-    if command -v xorriso &> /dev/null; then
-        log_info "Using xorriso for ISO creation..."
-        xorriso -as mkisofs \
-            -iso-level 3 \
-            -full-iso9660-filenames \
-            -volid "HORCRUX_${VERSION}" \
-            -eltorito-boot boot/grub/i386-pc/eltorito.img \
-            -no-emul-boot \
-            -boot-load-size 4 \
-            -boot-info-table \
-            --eltorito-catalog boot/grub/boot.cat \
-            --grub2-boot-info \
-            --grub2-mbr /usr/lib/grub/i386-pc/boot_hybrid.img \
-            -eltorito-alt-boot \
-            -e EFI/efiboot.img \
-            -no-emul-boot \
-            -append_partition 2 0xef "$ISO_DIR/EFI/efiboot.img" \
-            -output "$OUTPUT_DIR/$ISO_NAME" \
-            "$ISO_DIR" 2>/dev/null && iso_created=true
+    # Try grub-mkrescue first (best option - handles BIOS and EFI automatically)
+    if command -v grub-mkrescue &> /dev/null; then
+        log_info "Using grub-mkrescue for ISO creation (supports BIOS and EFI)..."
+        if grub-mkrescue -o "$OUTPUT_DIR/$ISO_NAME" "$ISO_DIR" \
+            --product-name="Horcrux" \
+            --product-version="$VERSION" \
+            -- -volid "HORCRUX_${VERSION}" 2>&1 | tee /tmp/grub-mkrescue.log; then
+            iso_created=true
+            log_success "ISO created with grub-mkrescue"
+        else
+            log_warn "grub-mkrescue failed, trying alternatives..."
+            cat /tmp/grub-mkrescue.log || true
+        fi
+    fi
 
-        # Fallback to simpler xorriso command
+    # Try xorriso with proper bootloader files if available
+    if [[ "$iso_created" != "true" ]] && command -v xorriso &> /dev/null; then
+        # Check if we have the required bootloader files
+        if [[ -f "$ISO_DIR/boot/grub/i386-pc/eltorito.img" ]]; then
+            log_info "Using xorriso with BIOS boot..."
+            xorriso -as mkisofs \
+                -iso-level 3 \
+                -full-iso9660-filenames \
+                -volid "HORCRUX_${VERSION}" \
+                -eltorito-boot boot/grub/i386-pc/eltorito.img \
+                -no-emul-boot \
+                -boot-load-size 4 \
+                -boot-info-table \
+                --eltorito-catalog boot/grub/boot.cat \
+                --grub2-boot-info \
+                --grub2-mbr /usr/lib/grub/i386-pc/boot_hybrid.img \
+                -eltorito-alt-boot \
+                -e EFI/efiboot.img \
+                -no-emul-boot \
+                -append_partition 2 0xef "$ISO_DIR/EFI/efiboot.img" \
+                -output "$OUTPUT_DIR/$ISO_NAME" \
+                "$ISO_DIR" 2>/dev/null && iso_created=true
+        elif [[ -f "$ISO_DIR/EFI/efiboot.img" ]]; then
+            log_info "Using xorriso with EFI-only boot..."
+            xorriso -as mkisofs \
+                -iso-level 3 \
+                -full-iso9660-filenames \
+                -volid "HORCRUX_${VERSION}" \
+                -eltorito-alt-boot \
+                -e EFI/efiboot.img \
+                -no-emul-boot \
+                -output "$OUTPUT_DIR/$ISO_NAME" \
+                "$ISO_DIR" 2>/dev/null && iso_created=true
+        fi
+
+        # Fallback to data-only ISO (won't boot but preserves files)
         if [[ "$iso_created" != "true" ]]; then
-            log_warn "Falling back to basic xorriso ISO creation..."
+            log_warn "Creating data-only ISO (may not boot without external bootloader)..."
             xorriso -as mkisofs \
                 -R -J \
                 -volid "HORCRUX_${VERSION}" \
@@ -849,14 +964,9 @@ build_iso() {
         fi
     fi
 
-    # Use grub-mkrescue as last resort
-    if [[ "$iso_created" != "true" ]]; then
-        log_warn "Falling back to grub-mkrescue..."
-        grub-mkrescue -o "$OUTPUT_DIR/$ISO_NAME" "$ISO_DIR" && iso_created=true
-    fi
-
     if [[ "$iso_created" != "true" ]]; then
         log_error "Failed to create ISO image"
+        log_error "Please ensure grub-mkrescue or xorriso is installed"
         exit 1
     fi
 
