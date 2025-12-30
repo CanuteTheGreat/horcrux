@@ -207,8 +207,16 @@ pub fn SchedulerPage() -> impl IntoView {
             // Scheduler Status Dashboard
             {move || {
                 if let Some(st) = status.get() {
+                    let scheduler_status_class = if st.running { "status-active" } else { "status-inactive" };
+                    let scheduler_status_text = if st.running { "Running" } else { "Stopped" };
                     view! {
                         <div class="status-dashboard">
+                            <div class="stat-card">
+                                <div class="stat-value">
+                                    <span class={scheduler_status_class}>{scheduler_status_text}</span>
+                                </div>
+                                <div class="stat-label">"Scheduler"</div>
+                            </div>
                             <div class="stat-card">
                                 <div class="stat-value">{st.total_jobs}</div>
                                 <div class="stat-label">"Total Jobs"</div>
@@ -225,11 +233,21 @@ pub fn SchedulerPage() -> impl IntoView {
                                 <div class="stat-value">{st.recent_failures_24h}</div>
                                 <div class="stat-label">"Failures (24h)"</div>
                             </div>
-                            {st.next_scheduled.as_ref().map(|next| view! {
-                                <div class="stat-card stat-info">
-                                    <div class="stat-value">{&next.job_name}</div>
-                                    <div class="stat-label">"Next Run: " {format_timestamp(next.next_run)}</div>
-                                </div>
+                            {st.next_scheduled.as_ref().map(|next| {
+                                let job_id_for_click = next.job_id.clone();
+                                view! {
+                                    <div
+                                        class="stat-card stat-info clickable"
+                                        on:click=move |_| {
+                                            set_selected_job_id.set(Some(job_id_for_click.clone()));
+                                            set_active_tab.set("history".to_string());
+                                        }
+                                        title={format!("Job ID: {}", next.job_id)}
+                                    >
+                                        <div class="stat-value">{&next.job_name}</div>
+                                        <div class="stat-label">"Next Run: " {format_timestamp(next.next_run)}</div>
+                                    </div>
+                                }
                             })}
                         </div>
                     }.into_view()
@@ -405,11 +423,12 @@ pub fn SchedulerPage() -> impl IntoView {
                                     <table class="data-table">
                                         <thead>
                                             <tr>
+                                                <th>"ID"</th>
                                                 <th>"Started"</th>
                                                 <th>"Completed"</th>
                                                 <th>"Duration"</th>
                                                 <th>"Status"</th>
-                                                <th>"Error"</th>
+                                                <th>"Details"</th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -425,17 +444,23 @@ pub fn SchedulerPage() -> impl IntoView {
                                                     let secs = c - h.started_at;
                                                     format_duration(secs)
                                                 }).unwrap_or_else(|| "-".to_string());
+                                                let short_id = truncate_str(&h.id, 8);
+                                                let full_id = h.id.clone();
                                                 view! {
                                                     <tr>
+                                                        <td><code title={full_id}>{short_id}</code></td>
                                                         <td>{format_timestamp(h.started_at)}</td>
                                                         <td>{h.completed_at.map(format_timestamp).unwrap_or_else(|| "-".to_string())}</td>
                                                         <td>{duration}</td>
                                                         <td>
                                                             <span class={status_class}>{&h.status}</span>
                                                         </td>
-                                                        <td class="error-cell">
+                                                        <td class="details-cell">
                                                             {h.error_message.as_ref().map(|e| view! {
-                                                                <span class="error-text" title={e.clone()}>{truncate_str(e, 50)}</span>
+                                                                <span class="error-text" title={e.clone()}>{truncate_str(e, 40)}</span>
+                                                            })}
+                                                            {h.output.as_ref().map(|o| view! {
+                                                                <span class="output-text" title={o.clone()}>{truncate_str(o, 40)}</span>
                                                             })}
                                                         </td>
                                                     </tr>
