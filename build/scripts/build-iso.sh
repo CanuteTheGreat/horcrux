@@ -839,21 +839,26 @@ create_grub_config() {
     log_info "Creating GRUB configuration..."
 
     cat > "$ISO_DIR/boot/grub/grub.cfg" << EOF
-set timeout=10
+# Serial console configuration
+serial --speed=115200 --unit=0 --word=8 --parity=no --stop=1
+terminal_input serial console
+terminal_output serial console
+
+set timeout=5
 set default=0
 
 menuentry "Horcrux $VERSION ($ARCH)" {
-    linux /boot/vmlinuz root=/dev/sr0 init=/sbin/init quiet
+    linux /boot/vmlinuz root=/dev/sr0 init=/sbin/init console=tty0 console=ttyS0,115200n8
     initrd /boot/initramfs.cpio.gz
 }
 
 menuentry "Horcrux $VERSION ($ARCH) - Debug Mode" {
-    linux /boot/vmlinuz root=/dev/sr0 init=/sbin/init debug
+    linux /boot/vmlinuz root=/dev/sr0 init=/sbin/init console=tty0 console=ttyS0,115200n8 debug
     initrd /boot/initramfs.cpio.gz
 }
 
 menuentry "Horcrux $VERSION ($ARCH) - Rescue Shell" {
-    linux /boot/vmlinuz root=/dev/sr0 init=/bin/sh
+    linux /boot/vmlinuz root=/dev/sr0 init=/bin/sh console=tty0 console=ttyS0,115200n8
     initrd /boot/initramfs.cpio.gz
 }
 EOF
