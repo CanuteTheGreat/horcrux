@@ -316,6 +316,95 @@ create_rootfs() {
     mkdir -p "$ROOTFS_DIR"/var/{lib/horcrux,log,run}
     mkdir -p "$ROOTFS_DIR"/usr/share/horcrux/{web,docs}
 
+    # Create a minimal init script
+    cat > "$ROOTFS_DIR/sbin/init" << 'INITEOF'
+#!/bin/sh
+# Horcrux minimal init
+
+echo "Horcrux Init Starting..."
+
+# Mount essential filesystems
+mount -t proc none /proc 2>/dev/null
+mount -t sysfs none /sys 2>/dev/null
+mount -t devtmpfs none /dev 2>/dev/null || true
+
+# Setup /dev/pts for pseudo-terminals
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts 2>/dev/null || true
+
+# Mount tmpfs for runtime directories
+mount -t tmpfs tmpfs /run 2>/dev/null || true
+mount -t tmpfs tmpfs /tmp 2>/dev/null || true
+
+# Create runtime directories
+mkdir -p /run/lock /var/run
+
+# Set hostname
+hostname horcrux 2>/dev/null || true
+
+# Basic network setup
+ip link set lo up 2>/dev/null || true
+
+echo ""
+echo "========================================"
+echo "  Horcrux Virtualization Platform"
+echo "  Version: 0.1.0"
+echo "========================================"
+echo ""
+echo "Root filesystem is read-only (squashfs)"
+echo "Type 'horcrux --help' for available commands"
+echo ""
+
+# Start a shell on the console
+if [ -x /bin/bash ]; then
+    exec /bin/bash
+elif [ -x /bin/sh ]; then
+    exec /bin/sh
+else
+    echo "ERROR: No shell available!"
+    while true; do sleep 1000; done
+fi
+INITEOF
+    chmod +x "$ROOTFS_DIR/sbin/init"
+
+    # Copy essential system binaries for the rootfs
+    log_info "Copying essential system binaries to rootfs..."
+    local rootfs_binaries=(sh bash mount umount cat ls mkdir hostname ip)
+    for cmd in "${rootfs_binaries[@]}"; do
+        if command -v "$cmd" &> /dev/null; then
+            local bin_path
+            bin_path=$(which "$cmd")
+            if [[ -f "$bin_path" ]]; then
+                cp "$bin_path" "$ROOTFS_DIR/bin/" 2>/dev/null || true
+            fi
+        fi
+    done
+
+    # Create sh symlink if we only have bash
+    if [[ -f "$ROOTFS_DIR/bin/bash" && ! -f "$ROOTFS_DIR/bin/sh" ]]; then
+        ln -sf bash "$ROOTFS_DIR/bin/sh"
+    fi
+
+    # Copy the dynamic linker and required libraries
+    if [[ -f /lib64/ld-linux-x86-64.so.2 ]]; then
+        cp /lib64/ld-linux-x86-64.so.2 "$ROOTFS_DIR/lib64/"
+    fi
+
+    # Copy required libraries for the binaries
+    for bin in "$ROOTFS_DIR/bin"/*; do
+        if [[ -x "$bin" ]]; then
+            local libs
+            libs=$(ldd "$bin" 2>/dev/null | grep -o '/[^ ]*' || true)
+            for lib in $libs; do
+                if [[ -f "$lib" && ! -f "$ROOTFS_DIR$lib" ]]; then
+                    local lib_dir="$ROOTFS_DIR$(dirname "$lib")"
+                    mkdir -p "$lib_dir"
+                    cp "$lib" "$lib_dir/" 2>/dev/null || true
+                fi
+            done
+        fi
+    done
+
     # Copy Horcrux binaries
     local target_dir="$PROJECT_ROOT/target/$RUST_TARGET/release"
 
@@ -516,6 +605,21 @@ done
 echo "Root device: $root"
 echo "Init: $init"
 
+# Load kernel modules for CD-ROM support
+echo "Loading kernel modules..."
+KVER=$(uname -r)
+for mod in cdrom libahci ahci ata_piix ata_generic sr_mod isofs squashfs loop; do
+    # Try to find and load the module
+    for modpath in /lib/modules/$KVER/kernel/drivers/*/${mod}.ko* \
+                   /lib/modules/$KVER/kernel/fs/*/${mod}.ko* \
+                   /lib/modules/$KVER/kernel/block/${mod}.ko*; do
+        if [ -f "$modpath" ]; then
+            insmod "$modpath" 2>/dev/null && echo "  Loaded: $mod" || true
+            break
+        fi
+    done
+done
+
 # Wait for root device
 echo "Waiting for devices..."
 sleep 3
@@ -589,7 +693,7 @@ EOF
 
         # Copy essential binaries from system
         local binaries=()
-        for cmd in sh bash mount umount cat sleep; do
+        for cmd in sh bash mount umount cat sleep mkdir mknod ls insmod uname; do
             if command -v "$cmd" &> /dev/null; then
                 local bin_path="$(which $cmd)"
                 cp "$bin_path" "$initramfs_dir/bin/" 2>/dev/null || true
@@ -634,6 +738,46 @@ EOF
 
     # Create /mnt for CD-ROM mount
     mkdir -p "$initramfs_dir/mnt"
+
+    # Copy kernel modules needed for CD-ROM boot
+    local kver
+    kver=$(uname -r)
+    local mod_dir="/lib/modules/$kver"
+    if [[ -d "$mod_dir" ]]; then
+        log_info "Copying kernel modules for CD-ROM support..."
+        mkdir -p "$initramfs_dir/lib/modules/$kver"
+
+        # Copy modules needed for AHCI/SATA/IDE CD-ROM
+        local modules=(
+            "kernel/drivers/cdrom/cdrom.ko"
+            "kernel/drivers/scsi/sr_mod.ko"
+            "kernel/drivers/ata/libahci.ko"
+            "kernel/drivers/ata/ahci.ko"
+            "kernel/drivers/ata/ata_piix.ko"
+            "kernel/drivers/ata/ata_generic.ko"
+            "kernel/fs/isofs/isofs.ko"
+            "kernel/fs/squashfs/squashfs.ko"
+            "kernel/drivers/block/loop.ko"
+        )
+
+        for mod in "${modules[@]}"; do
+            local mod_path="$mod_dir/$mod"
+            # Also check for compressed modules
+            for ext in "" ".xz" ".gz" ".zst"; do
+                if [[ -f "${mod_path}${ext}" ]]; then
+                    local dest_dir="$initramfs_dir/lib/modules/$kver/$(dirname "$mod")"
+                    mkdir -p "$dest_dir"
+                    cp "${mod_path}${ext}" "$dest_dir/"
+                    break
+                fi
+            done
+        done
+
+        # Copy modules.dep if it exists
+        if [[ -f "$mod_dir/modules.dep" ]]; then
+            cp "$mod_dir/modules.dep" "$initramfs_dir/lib/modules/$kver/"
+        fi
+    fi
 
     # Create initramfs cpio archive
     (cd "$initramfs_dir" && find . | cpio -o -H newc | gzip > "$WORK_DIR/initramfs.cpio.gz")
@@ -815,9 +959,10 @@ create_iso_structure() {
 
     mkdir -p "$ISO_DIR"/{boot/grub,EFI/BOOT,isolinux}
 
-    # Create squashfs from rootfs
+    # Create squashfs from rootfs (remove old one to avoid appending)
+    rm -f "$ISO_DIR/horcrux.squashfs"
     mksquashfs "$ROOTFS_DIR" "$ISO_DIR/horcrux.squashfs" \
-        -comp xz -b 1M -Xdict-size 100%
+        -comp xz -b 1M -Xdict-size 100% -noappend
 
     # Copy kernel
     if [[ -f "$WORK_DIR/vmlinuz" ]]; then
