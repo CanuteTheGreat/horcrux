@@ -433,6 +433,32 @@ INITEOF
         esac
     fi
 
+    # Copy required libraries for Horcrux binaries (use source binaries for ldd)
+    log_info "Copying libraries for Horcrux binaries..."
+    for bin in "$target_dir/horcrux" "$target_dir/horcrux-api"; do
+        if [[ -x "$bin" ]]; then
+            local libs
+            libs=$(ldd "$bin" 2>/dev/null | grep -o '/[^ ]*' || true)
+            for lib in $libs; do
+                if [[ -f "$lib" ]]; then
+                    # Copy to original location if not already there
+                    if [[ ! -f "$ROOTFS_DIR$lib" ]]; then
+                        local lib_dir="$ROOTFS_DIR$(dirname "$lib")"
+                        mkdir -p "$lib_dir"
+                        cp "$lib" "$lib_dir/" 2>/dev/null || true
+                    fi
+
+                    # Copy to /lib64 for non-standard lib paths (like gcc libs) so ld.so can find them
+                    local lib_name
+                    lib_name=$(basename "$lib")
+                    if [[ "$lib" == */gcc/* ]] && [[ ! -f "$ROOTFS_DIR/lib64/$lib_name" ]]; then
+                        cp "$lib" "$ROOTFS_DIR/lib64/$lib_name" 2>/dev/null || true
+                    fi
+                fi
+            done
+        fi
+    done
+
     log_success "Root filesystem created"
 }
 
