@@ -17,7 +17,9 @@ pub fn cluster_view() -> Html {
 
         use_effect_with((), move |_| {
             spawn_local(async move {
-                if let Ok(status) = ApiClient::get_cluster_status().await { cluster.set(Some(status)) }
+                if let Ok(status) = ApiClient::get_cluster_status().await {
+                    cluster.set(Some(status))
+                }
                 loading.set(false);
             });
 

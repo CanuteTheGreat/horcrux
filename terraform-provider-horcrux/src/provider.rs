@@ -118,8 +118,9 @@ impl HorcruxProvider {
         // Set authentication
         if let Some(token) = &config.api_token {
             client = client.with_token(token);
-        } else if let (Some(username), Some(password)) = (config.username.as_ref(), config.password.as_ref()) {
-
+        } else if let (Some(username), Some(password)) =
+            (config.username.as_ref(), config.password.as_ref())
+        {
             // Authenticate
             match self.runtime.block_on(async {
                 let mut auth_client = HorcruxClient::new(&endpoint);

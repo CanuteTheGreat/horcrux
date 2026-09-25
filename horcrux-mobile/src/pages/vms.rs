@@ -21,7 +21,9 @@ pub fn vm_list() -> Html {
 
         use_effect_with((), move |_| {
             spawn_local(async move {
-                if let Ok(vm_list) = ApiClient::list_vms().await { vms.set(vm_list) }
+                if let Ok(vm_list) = ApiClient::list_vms().await {
+                    vms.set(vm_list)
+                }
                 loading.set(false);
             });
 
@@ -133,7 +135,9 @@ pub fn vm_detail(props: &VMDetailProps) -> Html {
 
         use_effect_with((), move |_| {
             spawn_local(async move {
-                if let Ok(vm_info) = ApiClient::get_vm(&vm_id).await { vm.set(Some(vm_info)) }
+                if let Ok(vm_info) = ApiClient::get_vm(&vm_id).await {
+                    vm.set(Some(vm_info))
+                }
                 loading.set(false);
             });
 
