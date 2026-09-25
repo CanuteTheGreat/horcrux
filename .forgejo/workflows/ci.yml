@@ -163,3 +163,16 @@ jobs:
 
       - name: Run security audit
         run: cargo audit
+
+  gentoo-docker-build:
+    name: Gentoo Docker Build
+    runs-on: x86_64
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Gentoo/Portage image
+        run: docker build -t horcrux/api:${{ github.sha }} .
+
+      - name: Smoke-test the built image
+        run: docker run --rm horcrux/api:${{ github.sha }} --version || docker run --rm horcrux/api:${{ github.sha }} --help
