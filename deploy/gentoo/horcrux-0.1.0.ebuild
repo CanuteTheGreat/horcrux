@@ -18,6 +18,7 @@ EGIT_COMMIT="v${PV}"
 # crate tarballs, since the workspace has no separate crates.io publishing
 # step yet.
 
+RESTRICT="network-sandbox"  # webui USE needs cargo install trunk at build time (no ebuild exists)
 LICENSE="GPL-2"
 SLOT="0"
 KEYWORDS="~amd64"  # not yet stabilized; promote to a real amd64 keyword once field-tested
@@ -111,9 +112,7 @@ DEPEND="
 	>=virtual/rust-1.82
 "
 
-BDEPEND="
-	webui? ( dev-util/trunk )
-"
+BDEPEND=""
 
 # Cargo features mapping to USE flags
 src_configure() {
@@ -173,9 +172,18 @@ src_compile() {
 
 	# Build web UI if enabled
 	if use webui; then
+		# trunk (the Leptos WASM bundler) has no Gentoo ebuild anywhere in
+		# the tree; it is a cargo-only tool, same class of dependency as
+		# any other build-time cargo binary. Install it via cargo like any
+		# other niche Rust-ecosystem CLI tool with no ebuild, rather than
+		# declaring an unsatisfiable BDEPEND atom.
+		if ! command -v trunk >/dev/null 2>&1; then
+			einfo "Installing trunk (WASM bundler, no Gentoo ebuild exists)..."
+			cargo install trunk --locked || die "Failed to install trunk"
+		fi
 		einfo "Building web UI with trunk..."
 		cd "${S}/horcrux-api/horcrux-ui" || die
-		trunk build --release || die "Failed to build web UI"
+		"${HOME}/.cargo/bin/trunk" build --release || trunk build --release || die "Failed to build web UI"
 	fi
 }
 
