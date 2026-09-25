@@ -13,7 +13,7 @@ env:
 jobs:
   check:
     name: Check
-    runs-on: ubuntu-latest
+    runs-on: x86_64
     steps:
       - uses: actions/checkout@v4
 
@@ -41,7 +41,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: x86_64
     needs: check
     steps:
       - uses: actions/checkout@v4
@@ -68,7 +68,7 @@ jobs:
 
   build:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: x86_64
     needs: test
     strategy:
       matrix:
@@ -106,7 +106,7 @@ jobs:
 
   build-ui:
     name: Build Web UI
-    runs-on: ubuntu-latest
+    runs-on: x86_64
     needs: check
     steps:
       - uses: actions/checkout@v4
@@ -136,7 +136,7 @@ jobs:
 
   security-audit:
     name: Security Audit
-    runs-on: ubuntu-latest
+    runs-on: x86_64
     steps:
       - uses: actions/checkout@v4
 
