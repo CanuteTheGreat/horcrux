@@ -7,8 +7,8 @@
 
 # QEMU - Full virtualization with all important features
 app-emulation/qemu aio alsa bpf bzip2 caps curl fdt filecaps fuse gnutls io-uring
-app-emulation/qemu jpeg lzo ncurses nfs numa opengl pin-upstream-blobs png
-app-emulation/qemu pulseaudio sdl sdl-image seccomp slirp snappy spice ssh
+app-emulation/qemu jpeg lzo ncurses nfs numa -opengl pin-upstream-blobs png
+app-emulation/qemu -pulseaudio -sdl -sdl-image seccomp slirp snappy spice ssh
 app-emulation/qemu -static-user udev usb usbredir vde vhost-net virgl virtfs vnc
 app-emulation/qemu xattr xen zstd
 # vte requires gtk (REQUIRED_USE: vte? ( gtk )) and neither is needed for a
@@ -31,7 +31,9 @@ app-emulation/virt-manager gtk policykit sasl
 # SPICE - Remote display protocol
 # smartcard requires app-emulation/qemu[smartcard] too (USE propagation),
 # which we don't otherwise need for a headless VM host - leave both off.
-app-emulation/spice gstreamer lz4 opus sasl -smartcard
+# gstreamer pulls in a GL/opengl chain that dead-ends on a masked
+# media-libs/libglvnd - not needed for a headless VM host either.
+app-emulation/spice -gstreamer lz4 opus sasl -smartcard
 app-emulation/spice-gtk gtk3 introspection lz4 mjpeg policykit sasl -smartcard
 app-emulation/spice-gtk usbredir vala webdav
 
