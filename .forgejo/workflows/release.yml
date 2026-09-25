@@ -17,8 +17,19 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             archive: tar.gz
+            cross: false
           - target: x86_64-unknown-linux-musl
             archive: tar.gz
+            cross: false
+          - target: aarch64-unknown-linux-gnu
+            archive: tar.gz
+            cross: true
+          - target: aarch64-unknown-linux-musl
+            archive: tar.gz
+            cross: true
+          - target: riscv64gc-unknown-linux-gnu
+            archive: tar.gz
+            cross: true
     steps:
       - uses: actions/checkout@v4
 
@@ -28,8 +39,12 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install musl tools
-        if: contains(matrix.target, 'musl')
+        if: contains(matrix.target, 'musl') && !matrix.cross
         run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -43,10 +58,20 @@ jobs:
             ${{ runner.os }}-cargo-release-${{ matrix.target }}-
 
       - name: Build CLI
-        run: cargo build --release --target ${{ matrix.target }} -p horcrux-cli
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }} -p horcrux-cli
+          else
+            cargo build --release --target ${{ matrix.target }} -p horcrux-cli
+          fi
 
       - name: Build API server
-        run: cargo build --release --target ${{ matrix.target }} -p horcrux-api --all-features
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }} -p horcrux-api --all-features
+          else
+            cargo build --release --target ${{ matrix.target }} -p horcrux-api --all-features
+          fi
 
       - name: Create archive
         run: |

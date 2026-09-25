@@ -19,7 +19,7 @@ Horcrux is a complete virtualization management platform designed specifically f
 - ✅ **More Hypervisors** - QEMU/KVM, LXD, Incus (vs Proxmox's QEMU only)
 - ✅ **More Container Runtimes** - LXC, LXD, Incus, Docker, Podman (vs Proxmox's LXC only)
 - ✅ **Kubernetes Integration** - Full K8s cluster management with Helm support
-- ✅ **Mixed-Architecture Clusters** - x86_64, aarch64, riscv64, ppc64le in same cluster
+- ✅ **Mixed-Architecture Clusters** - x86_64, aarch64, riscv64 in same cluster
 - ✅ **Modern Language** - Rust vs Perl for safety and performance
 - ✅ **Gentoo Integration** - USE flags for fine-grained control
 - ✅ **Full Rust UI** - Leptos/WASM frontend (no JavaScript!)

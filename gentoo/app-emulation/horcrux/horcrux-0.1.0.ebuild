@@ -21,7 +21,7 @@ EGIT_COMMIT="v${PV}"
 RESTRICT="network-sandbox"  # webui USE needs cargo install trunk at build time (no ebuild exists)
 LICENSE="GPL-2"
 SLOT="0"
-KEYWORDS="~amd64"  # not yet stabilized; promote to a real amd64 keyword once field-tested
+KEYWORDS="~amd64 ~arm64 ~riscv"  # not yet stabilized; promote once field-tested per arch
 
 # USE flags
 # Virtualization backends (have Cargo features): qemu (default), lxd, incus
