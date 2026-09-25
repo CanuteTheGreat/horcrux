@@ -9,7 +9,7 @@
 app-emulation/qemu aio alsa bpf bzip2 caps curl fdt filecaps fuse gnutls io-uring
 app-emulation/qemu jpeg lzo ncurses nfs numa -opengl pin-upstream-blobs png
 app-emulation/qemu -pulseaudio -sdl -sdl-image seccomp slirp snappy spice ssh
-app-emulation/qemu -static-user udev usb usbredir vde vhost-net virgl virtfs vnc
+app-emulation/qemu -static-user udev usb usbredir vde vhost-net -virgl virtfs vnc
 app-emulation/qemu xattr xen zstd
 # vte requires gtk (REQUIRED_USE: vte? ( gtk )) and neither is needed for a
 # headless VM host with no local GUI console widget - left off deliberately.
