@@ -22,6 +22,9 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
@@ -48,6 +51,9 @@ jobs:
 
       - name: Install Rust toolchain
         uses: https://github.com/dtolnay/rust-toolchain@stable
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -85,6 +91,9 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
@@ -116,6 +125,9 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+
       - name: Install trunk
         run: cargo install trunk
 
@@ -142,6 +154,9 @@ jobs:
 
       - name: Install Rust toolchain
         uses: https://github.com/dtolnay/rust-toolchain@stable
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential
 
       - name: Install cargo-audit
         run: cargo install cargo-audit
