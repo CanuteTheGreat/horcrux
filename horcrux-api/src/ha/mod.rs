@@ -786,10 +786,7 @@ mod tests {
             .update_node_resources(make_node_resources("riscv-node", Architecture::Riscv64))
             .await;
         manager
-            .update_node_resources(make_node_resources(
-                "riscv-node-2",
-                Architecture::Riscv64,
-            ))
+            .update_node_resources(make_node_resources("riscv-node-2", Architecture::Riscv64))
             .await;
 
         let config = HaConfig {
