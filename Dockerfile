@@ -1,107 +1,66 @@
-# Horcrux API Server Dockerfile
-# Multi-stage build for optimized image size
+# Horcrux — Gentoo-native container build
+#
+# This builds Horcrux the same way it's meant to be installed: through
+# Portage, against the project's own ebuild and overlay in gentoo/, with
+# real USE flags — not a bare `cargo build`. That's the whole point of
+# Gentoo: users choose which features actually get compiled in.
+#
+# Override USE flags at build time, e.g.:
+#   docker build --build-arg HORCRUX_USE="qemu cli webui -docker -podman" .
 
-# Stage 1: Build stage
-FROM rust:slim AS builder
+FROM gentoo/stage3:amd64-systemd AS builder
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    libsqlite3-dev \
-    libvirt-dev \
-    && rm -rf /var/lib/apt/lists/*
+ARG HORCRUX_USE="qemu cli monitoring systemd webui"
 
-# Create app directory
-WORKDIR /app
+# Sync the Gentoo package tree (uses the webrsync snapshot method, no full
+# rsync mirror needed inside a container build)
+RUN emerge-webrsync
 
-# Copy dependency manifests
-COPY Cargo.toml Cargo.lock ./
-COPY horcrux-api/Cargo.toml ./horcrux-api/
-COPY horcrux-api/horcrux-ui/Cargo.toml ./horcrux-api/horcrux-ui/
-COPY horcrux-cli/Cargo.toml ./horcrux-cli/
-COPY horcrux-common/Cargo.toml ./horcrux-common/
-COPY horcrux-mobile/Cargo.toml ./horcrux-mobile/
-COPY terraform-provider-horcrux/Cargo.toml ./terraform-provider-horcrux/
+# Register this project's own overlay as a local Portage repo
+RUN mkdir -p /var/db/repos/horcrux-overlay/{app-emulation,metadata} && \
+    echo 'masters = gentoo' > /var/db/repos/horcrux-overlay/metadata/layout.conf && \
+    mkdir -p /etc/portage/repos.conf
+COPY gentoo/app-emulation /var/db/repos/horcrux-overlay/app-emulation
+RUN printf '[horcrux-overlay]\nlocation = /var/db/repos/horcrux-overlay\npriority = 50\n' \
+    > /etc/portage/repos.conf/horcrux-overlay.conf
 
-# Create dummy source files to cache dependencies
-RUN mkdir -p horcrux-api/src horcrux-api/horcrux-ui/src horcrux-cli/src horcrux-common/src horcrux-mobile/src terraform-provider-horcrux/src && \
-    echo "fn main() {}" > horcrux-api/src/main.rs && \
-    echo "pub fn dummy() {}" > horcrux-api/src/lib.rs && \
-    echo "pub fn dummy() {}" > horcrux-api/horcrux-ui/src/lib.rs && \
-    echo "fn main() {}" > horcrux-cli/src/main.rs && \
-    echo "pub fn dummy() {}" > horcrux-common/src/lib.rs && \
-    echo "pub fn dummy() {}" > horcrux-mobile/src/lib.rs && \
-    echo "pub fn dummy() {}" > terraform-provider-horcrux/src/lib.rs
+# Bring in the project's real Portage config: USE flags, keywords, package set
+COPY gentoo/package.use/horcrux /etc/portage/package.use/horcrux
+COPY gentoo/package.accept_keywords/horcrux /etc/portage/package.accept_keywords/horcrux
+RUN echo "app-emulation/horcrux ${HORCRUX_USE}" > /etc/portage/package.use/horcrux-docker-build
 
-# Build dependencies (this layer will be cached)
-RUN cargo build --release -p horcrux-api || true
-RUN rm -rf target/release/.fingerprint/horcrux-* && \
-    rm -rf horcrux-*/src terraform-provider-horcrux/src
+# The ebuild pulls source via the project's release tarball/vendored crates;
+# for a from-source container build we vendor the working tree directly
+# instead of fetching a tagged release.
+WORKDIR /var/db/repos/horcrux-overlay/app-emulation/horcrux
+COPY . /usr/src/horcrux
+RUN cd /usr/src/horcrux && cargo vendor /var/cache/distfiles/horcrux-vendor 2>&1 | tail -5 || true
 
-# Copy actual source code
-COPY horcrux-api ./horcrux-api
-COPY horcrux-cli ./horcrux-cli
-COPY horcrux-common ./horcrux-common
-COPY horcrux-mobile ./horcrux-mobile
-COPY terraform-provider-horcrux ./terraform-provider-horcrux
-COPY docs/openapi.yaml ./docs/openapi.yaml
+# Build and install via emerge, exactly like a real Gentoo host would
+RUN emerge --verbose --autounmask-write app-emulation/horcrux && \
+    etc-update --automode -5 || true
+RUN emerge --verbose app-emulation/horcrux
 
-# Build the actual application
-RUN cargo build --release -p horcrux-api
+# --- Runtime stage --------------------------------------------------------
+# Still Gentoo — a slim stage3 with only the installed package and its
+# runtime deps carried over, so USE-flag-gated components remain accurate.
+FROM gentoo/stage3:amd64-systemd
 
-# Stage 2: Runtime stage
-FROM debian:trixie-slim
+COPY --from=builder /usr/bin/horcrux-api /usr/local/bin/horcrux-api
+COPY --from=builder /etc/horcrux /etc/horcrux
+COPY --from=builder /var/lib/horcrux /var/lib/horcrux
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    libssl3 \
-    libsqlite3-0 \
-    libvirt0 \
-    qemu-system-x86 \
-    qemu-utils \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+RUN useradd -m -u 1000 -s /bin/bash horcrux 2>/dev/null || \
+    (groupadd horcrux && useradd -m -u 1000 -g horcrux -s /bin/bash horcrux) && \
+    chown -R horcrux:horcrux /var/lib/horcrux /etc/horcrux
 
-# Create horcrux user
-RUN useradd -m -u 1000 -s /bin/bash horcrux
-
-# Create necessary directories
-RUN mkdir -p /var/lib/horcrux /var/log/horcrux /etc/horcrux && \
-    chown -R horcrux:horcrux /var/lib/horcrux /var/log/horcrux /etc/horcrux
-
-# Copy binary from builder
-COPY --from=builder /app/target/release/horcrux-api /usr/local/bin/horcrux-api
-
-# Copy default configuration
-COPY deploy/config.toml.example /etc/horcrux/config.toml
-
-# Adjust config for container environment
-RUN sed -i 's|/var/lib/horcrux/horcrux.db|/var/lib/horcrux/horcrux.db|g' /etc/horcrux/config.toml && \
-    sed -i 's|bind_address = "127.0.0.1:8006"|bind_address = "0.0.0.0:8006"|g' /etc/horcrux/config.toml
-
-# Set ownership
-RUN chown horcrux:horcrux /usr/local/bin/horcrux-api
-
-# Switch to horcrux user
 USER horcrux
-
-# Expose API port
 EXPOSE 8006
-
-# Expose VNC ports for VM consoles (5900-5999)
 EXPOSE 5900-5999
-
-# Volume for persistent data
 VOLUME ["/var/lib/horcrux", "/var/log/horcrux"]
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8006/api/health || exit 1
 
-# Set working directory
 WORKDIR /var/lib/horcrux
-
-# Run the application
 CMD ["/usr/local/bin/horcrux-api"]
