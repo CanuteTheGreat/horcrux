@@ -14,7 +14,7 @@ pub mod quotas;
 pub mod replication;
 pub mod snapshots;
 
-use horcrux_common::{Error, Result};
+use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::process::Command;
@@ -48,7 +48,7 @@ impl std::fmt::Display for StorageType {
 }
 
 /// RAID level
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RaidLevel {
     /// No redundancy (stripe)
@@ -70,6 +70,7 @@ pub enum RaidLevel {
     /// ZFS mirror
     Mirror,
     /// Single disk
+    #[default]
     Single,
 }
 

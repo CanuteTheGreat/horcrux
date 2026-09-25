@@ -376,6 +376,12 @@ pub struct FtpShareConfig {
     pub chroot: bool,
     /// Passive port range
     pub passive_port_range: Option<(u16, u16)>,
+    /// Read-only share
+    pub read_only: bool,
+    /// Users allowed to access this share (empty = all valid users)
+    pub allowed_users: Vec<String>,
+    /// Glob pattern for files to hide from listings
+    pub hide_pattern: Option<String>,
 }
 
 #[cfg(feature = "ftp")]
@@ -388,6 +394,9 @@ impl Default for FtpShareConfig {
             local_root: None,
             chroot: true,
             passive_port_range: Some((40000, 40100)),
+            read_only: false,
+            allowed_users: Vec::new(),
+            hide_pattern: None,
         }
     }
 }

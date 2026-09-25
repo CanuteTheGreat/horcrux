@@ -1,5 +1,6 @@
-///! VM metrics collection via libvirt
-///! Provides real metrics for KVM/QEMU VMs using libvirt API
+//! VM metrics collection via libvirt
+//!
+//! Provides real metrics for KVM/QEMU VMs using libvirt API
 
 #[cfg(feature = "qemu")]
 use virt::connect::Connect;

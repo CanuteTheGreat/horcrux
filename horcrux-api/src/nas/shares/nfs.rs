@@ -196,11 +196,13 @@ impl NfsServerManager {
         }
 
         // Anonymous UID/GID
-        if let Some(anonuid) = config.anonuid {
-            options.push(&format!("anonuid={}", anonuid));
+        let anonuid_opt = config.anonuid.map(|anonuid| format!("anonuid={}", anonuid));
+        if let Some(ref opt) = anonuid_opt {
+            options.push(opt.as_str());
         }
-        if let Some(anongid) = config.anongid {
-            options.push(&format!("anongid={}", anongid));
+        let anongid_opt = config.anongid.map(|anongid| format!("anongid={}", anongid));
+        if let Some(ref opt) = anongid_opt {
+            options.push(opt.as_str());
         }
 
         // Subtree checking (disabled for better performance)

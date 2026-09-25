@@ -424,7 +424,7 @@ mod tests {
 
         am.add_rule(rule).unwrap();
 
-        let available_nodes = vec!["node1".to_string(), "node2".to_string()];
+        let _available_nodes = vec!["node1".to_string(), "node2".to_string()];
         let mut placements = HashMap::new();
         placements.insert("vm-replica1".to_string(), "node1".to_string());
 

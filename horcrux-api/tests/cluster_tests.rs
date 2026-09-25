@@ -6,13 +6,13 @@ use horcrux_api::cluster::affinity::{
     NodeAffinityRule, ResourceAffinityRule,
 };
 use horcrux_api::cluster::arch::{
-    ArchitectureInfo, ArchitectureManager, ClusterArchStats, EmulationType, Endianness,
-    MigrationCompatibility, PlacementCompatibility,
+    ArchitectureInfo, ArchitectureManager, EmulationType, Endianness,
 };
 use horcrux_api::cluster::balancer::{
-    BalancingPolicy, BalancingStrategy, ClusterBalancer, MigrationPriority,
-    MigrationRecommendation, NodeResources, VmResources,
+    BalancingPolicy, BalancingStrategy, ClusterBalancer, MigrationPriority, NodeResources,
+    VmResources,
 };
+use horcrux_api::cluster::node::Architecture;
 use std::collections::HashMap;
 
 // ============== Cluster Balancer Tests ==============
@@ -28,6 +28,7 @@ fn create_test_node(name: &str, cpu: f32, memory: f32, vm_count: usize) -> NodeR
         total_cpu_cores: 16,
         total_memory_gb: 64,
         total_disk_gb: 1000,
+        architecture: Architecture::X86_64,
     }
 }
 
@@ -39,6 +40,7 @@ fn create_test_vm(id: u32, node: &str) -> VmResources {
         disk_gb: 50,
         current_node: node.to_string(),
         can_migrate: true,
+        architecture: Architecture::X86_64,
     }
 }
 

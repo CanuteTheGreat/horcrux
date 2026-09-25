@@ -234,6 +234,34 @@ pub async fn get_service_status(service: &NasService) -> Result<ServiceStatus> {
     })
 }
 
+/// Check if a service is currently running by its raw process/unit name.
+///
+/// Tries systemd first (if present), then falls back to OpenRC's
+/// `rc-service`, matching Horcrux's Gentoo-first (OpenRC) target while
+/// still working on systemd-based test/dev hosts.
+pub async fn is_service_running(name: &str) -> bool {
+    let systemd = Command::new("systemctl")
+        .args(["is-active", "--quiet", name])
+        .status()
+        .await
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if systemd {
+        return true;
+    }
+
+    Command::new("rc-service")
+        .args([name, "status"])
+        .output()
+        .await
+        .map(|o| {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            stdout.contains("started") || stdout.contains("running")
+        })
+        .unwrap_or(false)
+}
+
 /// Get systemd service status
 async fn get_systemd_status(service: &NasService) -> Result<(bool, bool, Option<u32>)> {
     // Check if running

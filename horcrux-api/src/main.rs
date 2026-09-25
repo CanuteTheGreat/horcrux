@@ -7833,6 +7833,7 @@ async fn add_ha_resource(
         max_restart: req.priority.min(10), // Use priority as max_restart, cap at 10
         max_relocate: 3,                   // Default max relocations
         state: ha::HaState::Started,
+        architecture: Default::default(),
     };
 
     state

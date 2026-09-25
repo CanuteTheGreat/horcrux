@@ -790,7 +790,7 @@ impl FtpManager {
         section.push_str(&format!("<Directory {}>\n", share.path));
 
         // Permissions based on share settings
-        if share.read_only {
+        if config.read_only {
             section.push_str("  <Limit WRITE>\n");
             section.push_str("    DenyAll\n");
             section.push_str("  </Limit>\n");
@@ -801,8 +801,8 @@ impl FtpManager {
         }
 
         // User restrictions
-        if !share.allowed_users.is_empty() {
-            let users = share.allowed_users.join(" ");
+        if !config.allowed_users.is_empty() {
+            let users = config.allowed_users.join(" ");
             section.push_str(&format!("  <Limit ALL>\n"));
             section.push_str(&format!("    AllowUser {}\n", users));
             section.push_str("    DenyAll\n");

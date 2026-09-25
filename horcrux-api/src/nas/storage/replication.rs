@@ -9,7 +9,6 @@ use crate::nas::storage::{
 use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
@@ -1340,16 +1339,14 @@ impl ReplicationManager {
         let stdout = child.stdout.take().unwrap();
         let mut reader = BufReader::new(stdout).lines();
         let mut total_bytes = 0u64;
-        let mut files_transferred = 0u64;
 
         while let Ok(Some(line)) = reader.next_line().await {
             // Parse rsync progress output
             if let Some((bytes, rate, files)) = parse_rsync_output(&line) {
                 total_bytes = bytes;
-                files_transferred = files;
                 self.update_progress(&task_id, bytes, rate, None).await;
                 if let Some(progress) = self.active.write().await.get_mut(&task_id) {
-                    progress.files_transferred = Some(files_transferred);
+                    progress.files_transferred = Some(files);
                 }
             }
         }
@@ -1484,7 +1481,7 @@ impl ReplicationManager {
     /// Cancel a running replication
     pub async fn cancel(&self, task_id: &str) -> Result<()> {
         // Find and kill the process
-        let output = Command::new("pkill")
+        Command::new("pkill")
             .args(["-f", &format!("horcrux.*{}", task_id)])
             .output()
             .await
@@ -1993,7 +1990,8 @@ fn parse_rsync_output(line: &str) -> Option<(u64, u64, u64)> {
     if line.contains("transferred file size:") {
         // Final stats line
         if let Some(size_str) = line.split(':').nth(1) {
-            let size_str = size_str.trim().replace(',', "").split_whitespace().next()?;
+            let cleaned = size_str.trim().replace(',', "");
+            let size_str = cleaned.split_whitespace().next()?;
             let bytes = size_str.parse::<u64>().ok()?;
             return Some((bytes, 0, 0));
         }

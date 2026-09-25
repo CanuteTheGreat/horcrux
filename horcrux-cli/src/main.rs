@@ -1,6 +1,6 @@
-///! Horcrux CLI
-///!
-///! Command-line interface for Horcrux virtualization platform
+//! Horcrux CLI
+//!
+//! Command-line interface for Horcrux virtualization platform
 mod api;
 mod commands;
 mod config;

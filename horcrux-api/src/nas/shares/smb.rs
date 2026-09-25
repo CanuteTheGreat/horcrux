@@ -2,7 +2,7 @@
 //!
 //! Manages Samba configuration and shares for Windows/cross-platform file sharing.
 
-use crate::nas::shares::{NasShare, SmbShareConfig};
+use crate::nas::shares::NasShare;
 use crate::nas::CaseSensitivity;
 use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -581,6 +581,11 @@ impl SmbManager {
                         .and_then(|v| v.as_str())
                         .unwrap_or("RW")
                         .to_string(),
+                    oplock: file
+                        .get("oplock_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("NONE")
+                        .to_string(),
                 });
             }
         }
@@ -600,6 +605,7 @@ impl SmbManager {
                     share: parts.get(2).unwrap_or(&"").to_string(),
                     path: parts.get(3).unwrap_or(&"").to_string(),
                     lock_type: parts.get(4).unwrap_or(&"RW").to_string(),
+                    oplock: "NONE".to_string(),
                 });
             }
         }

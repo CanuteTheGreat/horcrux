@@ -1,4 +1,4 @@
-///! API client for Horcrux server
+//! API client for Horcrux server
 use anyhow::Result;
 use serde::de::DeserializeOwned;
 use std::sync::Arc;

@@ -1,7 +1,7 @@
 //! NAS health check module
 
 use crate::nas::monitoring::HealthStatus;
-use horcrux_common::{Error, Result};
+use horcrux_common::Result;
 
 /// Check SMB health
 #[cfg(feature = "smb")]

@@ -3,6 +3,7 @@
 use web_sys::TouchEvent;
 use yew::prelude::*;
 
+#[allow(dead_code)]
 #[derive(Properties, PartialEq)]
 pub struct SwipeActionProps {
     #[prop_or_default]
@@ -44,7 +45,7 @@ pub fn swipe_action(props: &SwipeActionProps) -> Html {
             if *is_swiping {
                 if let Some(touch) = e.touches().get(0) {
                     let current_x = touch.client_x() as f64;
-                    let offset = (current_x - *start_x).max(-100.0).min(100.0);
+                    let offset = (current_x - *start_x).clamp(-100.0, 100.0);
                     swipe_offset.set(offset);
                 }
             }

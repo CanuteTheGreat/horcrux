@@ -27,7 +27,7 @@ fn benchmark_vm_config_parsing(c: &mut Criterion) {
 
     c.bench_function("vm_config_parse", |b| {
         b.iter(|| {
-            let _: Result<VmConfig, _> = serde_json::from_str(black_box(json_data));
+            let _: std::result::Result<VmConfig, _> = serde_json::from_str(black_box(json_data));
         });
     });
 }
@@ -44,10 +44,6 @@ fn benchmark_vm_status_serialization(c: &mut Criterion) {
         disk_size: 53687091200,
         status: VmStatus::Running,
         disks: vec![],
-        network_interfaces: vec![],
-        vnc_port: Some(5900),
-        created_at: Some(chrono::Utc::now().timestamp()),
-        updated_at: Some(chrono::Utc::now().timestamp()),
     };
 
     c.bench_function("vm_status_serialize", |b| {
@@ -62,13 +58,11 @@ fn benchmark_container_operations(c: &mut Criterion) {
     let container = ContainerConfig {
         id: "container-1".to_string(),
         name: "bench-container".to_string(),
-        container_type: ContainerType::Lxc,
-        image: "ubuntu:22.04".to_string(),
+        runtime: ContainerRuntime::Lxc,
+        rootfs: "ubuntu:22.04".to_string(),
         memory: 1024,
         cpus: 2,
         status: ContainerStatus::Running,
-        ip_address: Some("10.0.0.1".to_string()),
-        created_at: chrono::Utc::now().timestamp(),
     };
 
     c.bench_function("container_serialize", |b| {

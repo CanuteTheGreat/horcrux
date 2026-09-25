@@ -4,6 +4,7 @@
 //! automatic scheduling, retention policies, and lifecycle management.
 
 use crate::nas::storage::NasSnapshot;
+use chrono::Datelike;
 use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -596,8 +597,6 @@ fn parse_zfs_snapshot_list(output: &str) -> Vec<NasSnapshot> {
 /// List Btrfs snapshots in a directory
 #[cfg(feature = "nas-btrfs")]
 pub async fn list_btrfs_snapshots(subvolume: &str) -> Result<Vec<NasSnapshot>> {
-    // Btrfs snapshots are stored in .snapshots directory by convention
-    let snapshot_dir = format!("{}/.snapshots", subvolume);
     let mut snapshots = Vec::new();
 
     // List snapshots using btrfs subvolume list

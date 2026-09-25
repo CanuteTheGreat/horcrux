@@ -1,4 +1,4 @@
-///! Authentication commands
+//! Authentication commands
 use crate::api::ApiClient;
 use crate::config::Config;
 use crate::output;

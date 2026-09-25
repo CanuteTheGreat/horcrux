@@ -11,8 +11,8 @@ use crate::router::Route;
 #[function_component(Login)]
 pub fn login() -> Html {
     let navigator = use_navigator().unwrap();
-    let username = use_state(|| String::new());
-    let password = use_state(|| String::new());
+    let username = use_state(String::new);
+    let password = use_state(String::new);
     let error = use_state(|| None::<String>);
     let loading = use_state(|| false);
 

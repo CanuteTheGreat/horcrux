@@ -3,6 +3,7 @@
 use web_sys::TouchEvent;
 use yew::prelude::*;
 
+#[allow(dead_code)]
 #[derive(Properties, PartialEq)]
 pub struct PullToRefreshProps {
     #[prop_or_default]
@@ -37,7 +38,7 @@ pub fn pull_to_refresh(props: &PullToRefreshProps) -> Html {
             if *is_pulling {
                 if let Some(touch) = e.touches().get(0) {
                     let current_y = touch.client_y() as f64;
-                    let distance = (current_y - *start_y).max(0.0).min(150.0);
+                    let distance = (current_y - *start_y).clamp(0.0, 150.0);
                     pull_distance.set(distance);
                 }
             }

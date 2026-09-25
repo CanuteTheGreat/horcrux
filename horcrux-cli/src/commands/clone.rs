@@ -1,4 +1,4 @@
-///! VM cloning commands
+//! VM cloning commands
 use crate::api::ApiClient;
 use crate::output::{self, OutputFormat};
 use crate::CloneCommands;

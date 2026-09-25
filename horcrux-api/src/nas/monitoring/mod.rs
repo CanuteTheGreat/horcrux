@@ -6,7 +6,7 @@ pub mod health;
 pub mod metrics;
 
 use crate::nas::services::NasService;
-use crate::nas::storage::{NasPool, PoolHealth};
+use crate::nas::storage::PoolHealth;
 use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 

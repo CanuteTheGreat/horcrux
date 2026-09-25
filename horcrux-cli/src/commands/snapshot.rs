@@ -1,4 +1,4 @@
-///! VM snapshot management commands
+//! VM snapshot management commands
 use crate::api::ApiClient;
 use crate::output::{self, format_bytes, OutputFormat};
 use crate::SnapshotCommands;

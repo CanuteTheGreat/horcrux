@@ -2,7 +2,7 @@
 //!
 //! Manages Netatalk configuration for macOS file sharing and Time Machine support.
 
-use crate::nas::shares::{AfpShareConfig, NasShare};
+use crate::nas::shares::NasShare;
 use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -346,7 +346,11 @@ impl AfpManager {
             running,
             config_path: self.config_path.clone(),
             config_exists,
-            hostname: self.global_config.hostname.clone(),
+            hostname: self.global_config.hostname.clone().unwrap_or_else(|| {
+                hostname::get()
+                    .map(|h| h.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| "horcrux".to_string())
+            }),
             spotlight_enabled: self.global_config.spotlight,
         })
     }
@@ -474,7 +478,9 @@ impl AfpManager {
     pub async fn configure_bonjour(&self, enabled: bool, name: Option<&str>) -> Result<()> {
         if enabled {
             // Register with Avahi/mDNSResponder
-            let service_name = name.unwrap_or(&self.global_config.hostname);
+            let default_hostname = self.global_config.hostname.clone();
+            let service_name =
+                name.unwrap_or_else(|| default_hostname.as_deref().unwrap_or("horcrux"));
             let avahi_service = format!(
                 r#"<?xml version="1.0" standalone='no'?>
 <!DOCTYPE service-group SYSTEM "avahi-service.dtd">
@@ -579,7 +585,8 @@ impl AfpManager {
             let bundle_name = std::path::Path::new(&bundle)
                 .file_stem()
                 .and_then(|s| s.to_str())
-                .unwrap_or("");
+                .unwrap_or("")
+                .to_string();
 
             backups.push(TimeMachineBackup {
                 bundle_path: bundle,

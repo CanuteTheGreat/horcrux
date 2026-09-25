@@ -6,7 +6,6 @@
 use crate::nas::shares::{NasShare, WebDavConfig};
 use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::Path;
 use tokio::process::Command;
 
@@ -720,7 +719,7 @@ location /webdav/{} {{
                 ));
             }
             WebDavAuthType::Ldap => {
-                if let Some(ref ldap) = config.ldap {
+                if config.ldap.is_some() {
                     server_block.push_str("        auth_ldap \"WebDAV LDAP Authentication\";\n");
                     server_block
                         .push_str(&format!("        auth_ldap_servers ldap_{};\n\n", share.id));

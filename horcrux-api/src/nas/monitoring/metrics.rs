@@ -1,7 +1,5 @@
 //! NAS metrics collection module
 
-use horcrux_common::{Error, Result};
-
 /// Prometheus metric labels
 pub struct NasMetricLabels {
     pub share_name: String,

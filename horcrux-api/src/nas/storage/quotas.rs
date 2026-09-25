@@ -503,9 +503,11 @@ impl QuotaManager {
         #[cfg(feature = "nas-zfs")]
         if self.use_zfs {
             let limit = QuotaLimit {
-                soft_limit_gb: soft_limit_gb.unwrap_or(hard_limit_gb),
+                soft_limit_gb: Some(soft_limit_gb.unwrap_or(hard_limit_gb)),
                 hard_limit_gb,
-                grace_period_days: 7,
+                inode_soft: None,
+                inode_hard: None,
+                grace_period_days: Some(7),
             };
             return set_zfs_user_quota(path, user, &limit).await;
         }
@@ -524,9 +526,11 @@ impl QuotaManager {
         #[cfg(feature = "nas-zfs")]
         if self.use_zfs {
             let limit = QuotaLimit {
-                soft_limit_gb: soft_limit_gb.unwrap_or(hard_limit_gb),
+                soft_limit_gb: Some(soft_limit_gb.unwrap_or(hard_limit_gb)),
                 hard_limit_gb,
-                grace_period_days: 7,
+                inode_soft: None,
+                inode_hard: None,
+                grace_period_days: Some(7),
             };
             return set_zfs_group_quota(path, group, &limit).await;
         }
@@ -824,6 +828,19 @@ pub struct QuotaReport {
     pub over_quota_groups: Vec<String>,
     /// Groups in warning
     pub warning_groups: Vec<String>,
+}
+
+/// List quota usage across the system (or scoped to a single path/dataset).
+///
+/// Convenience wrapper used by the job scheduler's quota-check task: when
+/// `target` is `Some(path)` it lists user quotas for that path/dataset via
+/// [`QuotaManager`]; when `None` it currently returns an empty list (no
+/// system-wide quota enumeration is implemented yet).
+pub async fn list_quota_usage(target: Option<&str>) -> Result<Vec<QuotaUsage>> {
+    match target {
+        Some(path) => QuotaManager::new().list_user_quotas(path).await,
+        None => Ok(Vec::new()),
+    }
 }
 
 #[cfg(test)]

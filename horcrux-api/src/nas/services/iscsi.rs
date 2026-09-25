@@ -756,7 +756,6 @@ impl IscsiTargetManager {
                 Ok(())
             }
             IscsiBackend::Lio => {
-                let enable_str = if enabled { "1" } else { "0" };
                 let output = Command::new("targetcli")
                     .args([&format!(
                         "/iscsi/{}/tpg1 set attribute demo_mode_write_protect={}",

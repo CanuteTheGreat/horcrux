@@ -11,7 +11,7 @@ use crate::router::Route;
 /// VM list page
 #[function_component(VMList)]
 pub fn vm_list() -> Html {
-    let vms = use_state(|| Vec::<VmInfo>::new());
+    let vms = use_state(Vec::<VmInfo>::new);
     let loading = use_state(|| true);
 
     // Fetch VMs on mount
@@ -21,10 +21,7 @@ pub fn vm_list() -> Html {
 
         use_effect_with((), move |_| {
             spawn_local(async move {
-                match ApiClient::list_vms().await {
-                    Ok(vm_list) => vms.set(vm_list),
-                    Err(_) => {}
-                }
+                if let Ok(vm_list) = ApiClient::list_vms().await { vms.set(vm_list) }
                 loading.set(false);
             });
 
@@ -136,10 +133,7 @@ pub fn vm_detail(props: &VMDetailProps) -> Html {
 
         use_effect_with((), move |_| {
             spawn_local(async move {
-                match ApiClient::get_vm(&vm_id).await {
-                    Ok(vm_info) => vm.set(Some(vm_info)),
-                    Err(_) => {}
-                }
+                if let Ok(vm_info) = ApiClient::get_vm(&vm_id).await { vm.set(Some(vm_info)) }
                 loading.set(false);
             });
 

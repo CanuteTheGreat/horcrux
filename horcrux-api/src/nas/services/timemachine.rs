@@ -79,8 +79,6 @@ pub async fn configure_timemachine(share: &mut NasShare, quota_gb: u64) -> Resul
     // For SMB, we need to configure fruit VFS with Time Machine support
     #[cfg(feature = "smb")]
     {
-        use std::collections::HashMap;
-
         let mut smb_config = share.smb_config.clone().unwrap_or_default();
         smb_config.fruit_enabled = true;
 

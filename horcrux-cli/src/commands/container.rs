@@ -1,4 +1,4 @@
-///! Container management commands
+//! Container management commands
 use crate::api::ApiClient;
 use crate::output::{self, truncate, OutputFormat};
 use crate::ContainerCommands;

@@ -6,7 +6,6 @@
 use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
@@ -882,13 +881,13 @@ impl S3GatewayManager {
         }
 
         // Set quota if specified
-        if let Some(quota) = opts.quota {
-            let _ = self.set_bucket_quota(name, &quota).await;
+        if let Some(ref quota) = opts.quota {
+            let _ = self.set_bucket_quota(name, quota).await;
         }
 
         // Set encryption if specified
-        if let Some(encryption) = opts.encryption {
-            let _ = self.set_bucket_encryption(name, &encryption).await;
+        if let Some(ref encryption) = opts.encryption {
+            let _ = self.set_bucket_encryption(name, encryption).await;
         }
 
         // Set tags if specified
@@ -1012,8 +1011,6 @@ impl S3GatewayManager {
         if !output.status.success() {
             return Err(Error::NotFound(format!("Bucket '{}' not found", name)));
         }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
 
         // Get versioning status
         let versioning = self.get_bucket_versioning(name).await.unwrap_or(false);
@@ -1196,7 +1193,8 @@ impl S3GatewayManager {
             args.push(key_id);
         }
 
-        args.push(&format!("{}/{}", self.mc_alias, bucket));
+        let target = format!("{}/{}", self.mc_alias, bucket);
+        args.push(&target);
 
         let output = Command::new("mc")
             .args(&args)

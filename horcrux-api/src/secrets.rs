@@ -543,7 +543,6 @@ impl VaultManager {
 }
 
 /// Helper functions for common secret operations
-
 impl VaultManager {
     /// Store VM password
     pub async fn store_vm_password(&self, vm_id: &str, password: &str) -> Result<()> {

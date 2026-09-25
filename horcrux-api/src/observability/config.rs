@@ -49,14 +49,13 @@ impl ConfigLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use tempfile::NamedTempFile;
 
     #[test]
     fn test_config_save_and_load() {
         let config = ConfigLoader::create_example_config();
 
-        let mut temp_file = NamedTempFile::new().unwrap();
+        let temp_file = NamedTempFile::new().unwrap();
         let temp_path = temp_file.path().to_path_buf();
 
         // Save

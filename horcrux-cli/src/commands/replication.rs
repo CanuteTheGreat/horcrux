@@ -1,4 +1,4 @@
-///! Replication management commands
+//! Replication management commands
 use crate::api::ApiClient;
 use crate::output::{self, format_bytes, OutputFormat};
 use crate::ReplicationCommands;

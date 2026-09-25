@@ -138,6 +138,8 @@ impl From<horcrux_common::Error> for ApiError {
             horcrux_common::Error::InvalidConfig(msg) => ApiError::ValidationError(msg),
             horcrux_common::Error::Validation(msg) => ApiError::ValidationError(msg),
             horcrux_common::Error::AuthenticationFailed => ApiError::AuthenticationFailed,
+            horcrux_common::Error::Authentication(msg) => ApiError::Forbidden(msg),
+            horcrux_common::Error::Conflict(msg) => ApiError::Conflict(msg),
             horcrux_common::Error::InvalidSession => ApiError::AuthenticationFailed,
             horcrux_common::Error::System(msg) => ApiError::Internal(msg),
             horcrux_common::Error::Io(e) => ApiError::Internal(format!("I/O error: {}", e)),

@@ -1,7 +1,7 @@
-///! Output formatting for CLI
-///!
-///! This module provides unified output formatting across all CLI commands
-///! to ensure consistent user experience.
+//! Output formatting for CLI
+//!
+//! This module provides unified output formatting across all CLI commands
+//! to ensure consistent user experience.
 use colored::Colorize;
 use serde::Serialize;
 use tabled::{Table, Tabled};

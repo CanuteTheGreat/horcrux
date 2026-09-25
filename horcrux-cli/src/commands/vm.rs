@@ -1,4 +1,4 @@
-///! VM management commands
+//! VM management commands
 use crate::api::ApiClient;
 use crate::output::{self, OutputFormat};
 use crate::VmCommands;

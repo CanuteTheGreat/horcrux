@@ -7,7 +7,7 @@
 //! - Quota checks
 //! - Health checks
 
-use chrono::{DateTime, Datelike, Timelike, Utc, Weekday};
+use chrono::{DateTime, Datelike, Timelike, Utc};
 use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -725,19 +725,16 @@ impl NasScheduler {
         );
 
         if recursive {
-            let manager = snapshots::SnapshotManager::new();
-            let result = manager
-                .create_recursive_snapshot(
-                    dataset,
-                    &format!("{}_{}", prefix, Utc::now().format("%Y-%m-%d_%H-%M-%S")),
-                )
-                .await?;
+            let result = snapshots::create_recursive_snapshot(
+                dataset,
+                &format!("{}_{}", prefix, Utc::now().format("%Y-%m-%d_%H-%M-%S")),
+            )
+            .await?;
             Ok(Some(serde_json::json!({
-                "created": result.created,
-                "errors": result.errors
+                "created": result.len()
             })))
         } else {
-            snapshots::create_snapshot(&snapshot_name).await?;
+            snapshots::create_snapshot(dataset, &snapshot_name).await?;
             Ok(Some(serde_json::json!({
                 "snapshot": snapshot_name
             })))
@@ -794,8 +791,8 @@ impl NasScheduler {
             protect_manual: true,
         };
 
-        let manager = snapshots::SnapshotManager::new();
-        let result = manager.apply_retention_policy(dataset, &policy).await?;
+        let manager = snapshots::apply_retention_policy(dataset, &policy, None).await?;
+        let result = manager;
 
         Ok(Some(serde_json::json!({
             "deleted": result.deleted,
@@ -912,13 +909,13 @@ impl NasScheduler {
         // Check pool health (if ZFS)
         #[cfg(feature = "nas-zfs")]
         {
-            if let Ok(pools) = crate::nas::storage::pools::list_pools().await {
+            if let Ok(pools) = crate::nas::storage::pools::list_zfs_pools().await {
                 for pool in pools {
                     results.insert(
                         format!("pool_{}", pool.name),
                         serde_json::json!({
-                            "status": pool.status,
-                            "health": pool.health
+                            "health": pool.health,
+                            "online": pool.online
                         }),
                     );
                 }
@@ -943,8 +940,8 @@ impl NasScheduler {
         let violations: Vec<_> = usages
             .iter()
             .filter(|u| {
-                if let (Some(used), Some(quota)) = (u.space_used, u.quota_bytes) {
-                    let percent = (used as f64 / quota as f64) * 100.0;
+                if let Some(quota) = u.hard_limit_bytes {
+                    let percent = (u.used_bytes as f64 / quota as f64) * 100.0;
                     percent >= threshold_percent as f64
                 } else {
                     false

@@ -151,8 +151,8 @@ impl LdapClient {
 
     /// Search for users
     pub async fn search_users(&self, filter: Option<&str>) -> Result<Vec<LdapUser>> {
-        let user_filter =
-            filter.unwrap_or(&format!("(objectClass={})", self.config.user_object_class));
+        let default_filter = format!("(objectClass={})", self.config.user_object_class);
+        let user_filter = filter.unwrap_or(&default_filter);
         let search_base = format!("{},{}", self.config.user_base, self.config.base_dn);
 
         let output = self
@@ -211,8 +211,8 @@ impl LdapClient {
 
     /// Search for groups
     pub async fn search_groups(&self, filter: Option<&str>) -> Result<Vec<LdapGroup>> {
-        let group_filter =
-            filter.unwrap_or(&format!("(objectClass={})", self.config.group_object_class));
+        let default_filter = format!("(objectClass={})", self.config.group_object_class);
+        let group_filter = filter.unwrap_or(&default_filter);
         let search_base = format!("{},{}", self.config.group_base, self.config.base_dn);
 
         let output = self

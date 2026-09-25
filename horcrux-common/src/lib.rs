@@ -155,6 +155,12 @@ pub enum Error {
     #[error("Authentication failed")]
     AuthenticationFailed,
 
+    #[error("Authentication error: {0}")]
+    Authentication(String),
+
+    #[error("Conflict: {0}")]
+    Conflict(String),
+
     #[error("Invalid session")]
     InvalidSession,
 

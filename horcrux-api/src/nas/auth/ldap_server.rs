@@ -4,7 +4,6 @@
 
 use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use tokio::process::Command;
 
 /// LDAP Server Configuration

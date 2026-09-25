@@ -15,6 +15,7 @@ pub struct BackupJob {
     pub next_run: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Properties, PartialEq)]
 pub struct Props {}
 
