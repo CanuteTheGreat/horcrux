@@ -93,3 +93,9 @@ www-apps/grafana ~amd64 ~arm64
 
 dev-libs/openssl ~amd64 ~arm64 ~riscv
 net-misc/curl ~amd64 ~arm64 ~riscv
+
+# =============================================================================
+# HORCRUX ITSELF
+# =============================================================================
+# Not yet stabilized - accept both the live and versioned ebuilds as unstable
+app-emulation/horcrux ~amd64

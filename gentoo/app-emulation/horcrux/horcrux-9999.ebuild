@@ -11,16 +11,14 @@ DESCRIPTION="Proxmox VE alternative built natively for Gentoo"
 HOMEPAGE="https://git.canutethegreat.com/CanuteTheGreat/horcrux"
 
 EGIT_REPO_URI="https://git.canutethegreat.com/CanuteTheGreat/horcrux.git"
-EGIT_COMMIT="v${PV}"
 
-# CARGO_CRATE_URIS is populated at emerge time via `cargo vendor` in the
-# build container (see repo Dockerfile) rather than pre-pinned per-version
-# crate tarballs, since the workspace has no separate crates.io publishing
-# step yet.
+# CARGO_CRATE_URIS is populated at emerge time for live ebuilds via
+# `cargo vendor` in the build container (see repo Dockerfile) since crate
+# hashes cannot be pinned ahead of time when tracking HEAD.
 
 LICENSE="GPL-2"
 SLOT="0"
-KEYWORDS="~amd64"  # not yet stabilized; promote to a real amd64 keyword once field-tested
+# Live ebuilds are not keyworded (see Gentoo devmanual, live ebuilds section)
 
 # USE flags
 # Virtualization backends (have Cargo features): qemu (default), lxd, incus

@@ -4,7 +4,6 @@ target/
 **/*.rs.bk
 
 # Git
-.git/
 .gitignore
 .github/
 

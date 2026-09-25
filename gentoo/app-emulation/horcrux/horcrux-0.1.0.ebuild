@@ -5,16 +5,22 @@ EAPI=8
 
 CRATES=""
 
-inherit cargo systemd
+inherit cargo git-r3 systemd
 
 DESCRIPTION="Proxmox VE alternative built natively for Gentoo"
-HOMEPAGE="https://github.com/horcrux-project/horcrux"
-SRC_URI="https://github.com/horcrux-project/${PN}/archive/v${PV}.tar.gz -> ${P}.tar.gz
-	${CARGO_CRATE_URIS}"
+HOMEPAGE="https://git.canutethegreat.com/CanuteTheGreat/horcrux"
+
+EGIT_REPO_URI="https://git.canutethegreat.com/CanuteTheGreat/horcrux.git"
+EGIT_COMMIT="v${PV}"
+
+# CARGO_CRATE_URIS is populated at emerge time via `cargo vendor` in the
+# build container (see repo Dockerfile) rather than pre-pinned per-version
+# crate tarballs, since the workspace has no separate crates.io publishing
+# step yet.
 
 LICENSE="GPL-2"
 SLOT="0"
-KEYWORDS="~amd64"
+KEYWORDS="~amd64"  # not yet stabilized; promote to a real amd64 keyword once field-tested
 
 # USE flags
 # Virtualization backends (have Cargo features): qemu (default), lxd, incus

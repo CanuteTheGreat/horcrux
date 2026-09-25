@@ -38,6 +38,13 @@ WORKDIR /var/db/repos/horcrux-overlay/app-emulation/horcrux
 COPY . /usr/src/horcrux
 RUN cd /usr/src/horcrux && cargo vendor /var/cache/distfiles/horcrux-vendor 2>&1 | tail -5 || true
 
+# git-r3 would otherwise re-clone from the remote (EGIT_REPO_URI) even though
+# we just vendored the local checkout above, silently ignoring uncommitted
+# local changes. EGIT_OVERRIDE_REPO_<PN> is git-r3's documented mechanism to
+# point it at a local path instead - this Docker build now genuinely
+# reflects what's in this checkout, not whatever's on the remote's HEAD/tag.
+ENV EGIT_OVERRIDE_REPO_HORCRUX=/usr/src/horcrux
+
 # Generate a real Manifest for the ebuild (thin-manifests only needs
 # Manifest.gz-style DIST entries when SRC_URI points at real distfiles;
 # for this from-source dev build there's nothing to fetch, so an empty/
