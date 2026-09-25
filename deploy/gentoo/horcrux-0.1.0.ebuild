@@ -79,14 +79,12 @@ RDEPEND="
 	net-misc/bridge-utils
 	sys-apps/iproute2
 
-	# NAS File Sharing Protocols
 	smb? ( net-fs/samba[acl,winbind] )
 	nfs-server? ( net-fs/nfs-utils[nfsv4] )
 	afp? ( net-fs/netatalk )
 	webdav? ( www-servers/nginx[dav] )
 	ftp? ( net-ftp/proftpd[ssl] )
 
-	# NAS Authentication
 	ldap-server? ( net-nds/openldap[slapd] )
 	kerberos? ( app-crypt/mit-krb5 )
 	ad? (
@@ -94,19 +92,16 @@ RDEPEND="
 		app-crypt/mit-krb5
 	)
 
-	# NAS Services
 	timemachine? ( net-fs/netatalk )
 	s3-gateway? ( app-misc/minio-bin )
 	iscsi-target? ( sys-block/tgt )
 	rsync-server? ( net-misc/rsync )
 
-	# NAS Storage
 	nas-zfs? ( sys-fs/zfs )
 	nas-btrfs? ( sys-fs/btrfs-progs )
 	nas-mdraid? ( sys-fs/mdadm )
 	nas-lvm? ( sys-fs/lvm2 )
 
-	# NAS always needs ACL tools
 	nas? ( sys-apps/acl )
 "
 
