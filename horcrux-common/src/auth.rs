@@ -1,4 +1,4 @@
-///! Authentication and authorization types
+//! Authentication and authorization types
 use serde::{Deserialize, Serialize};
 
 /// User account
