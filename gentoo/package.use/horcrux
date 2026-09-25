@@ -29,8 +29,10 @@ app-emulation/libvirt virtualbox wireshark-plugins xen zfs
 app-emulation/virt-manager gtk policykit sasl
 
 # SPICE - Remote display protocol
-app-emulation/spice gstreamer lz4 opus sasl smartcard
-app-emulation/spice-gtk gtk3 introspection lz4 mjpeg policykit sasl smartcard
+# smartcard requires app-emulation/qemu[smartcard] too (USE propagation),
+# which we don't otherwise need for a headless VM host - leave both off.
+app-emulation/spice gstreamer lz4 opus sasl -smartcard
+app-emulation/spice-gtk gtk3 introspection lz4 mjpeg policykit sasl -smartcard
 app-emulation/spice-gtk usbredir vala webdav
 
 # =============================================================================
@@ -125,7 +127,7 @@ sys-kernel/dracut
 
 # Rust compiler
 dev-lang/rust clippy doc miri parallel-compiler profiler rls rust-analyzer
-dev-lang/rust rust-src rustfmt wasm
+dev-lang/rust rust-src rustfmt wasm -system-llvm
 
 # Cargo tools
 virtual/rust rustfmt
