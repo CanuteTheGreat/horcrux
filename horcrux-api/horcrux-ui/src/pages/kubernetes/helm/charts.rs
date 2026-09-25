@@ -6,9 +6,9 @@
 //! - Chart installation with custom values
 //! - Release management and history
 
+use crate::api::{self, HelmChart, HelmInstallRequest, HelmRelease};
 use leptos::*;
 use leptos_router::*;
-use crate::api::{self, HelmChart, HelmRelease, HelmInstallRequest};
 
 #[component]
 pub fn HelmChartsPage() -> impl IntoView {
@@ -49,7 +49,11 @@ pub fn HelmChartsPage() -> impl IntoView {
     // Search charts
     let search_charts = move || {
         let query = search_query.get();
-        let repo = if selected_repo.get().is_empty() { None } else { Some(selected_repo.get()) };
+        let repo = if selected_repo.get().is_empty() {
+            None
+        } else {
+            Some(selected_repo.get())
+        };
 
         if query.is_empty() {
             set_charts.set(vec![]);
@@ -126,17 +130,23 @@ pub fn HelmChartsPage() -> impl IntoView {
                     set_chart_versions.set(versions);
                 }
                 Err(e) => {
-                    set_error.set(Some(format!("Failed to load chart versions: {}", e.message)));
+                    set_error.set(Some(format!(
+                        "Failed to load chart versions: {}",
+                        e.message
+                    )));
                 }
             }
         });
 
         // Load default values
         spawn_local(async move {
-            match api::get_helm_chart_values(&chart_repo_2, &chart_name_2, Some(&chart_version_2)).await {
+            match api::get_helm_chart_values(&chart_repo_2, &chart_name_2, Some(&chart_version_2))
+                .await
+            {
                 Ok(values) => {
                     set_chart_values.set(Some(values.clone()));
-                    set_custom_values.set(serde_json::to_string_pretty(&values).unwrap_or_default());
+                    set_custom_values
+                        .set(serde_json::to_string_pretty(&values).unwrap_or_default());
                 }
                 Err(e) => {
                     set_error.set(Some(format!("Failed to load chart values: {}", e.message)));
@@ -159,7 +169,11 @@ pub fn HelmChartsPage() -> impl IntoView {
 
             let name = release_name.get();
             let namespace = target_namespace.get();
-            let version = if selected_version.get().is_empty() { None } else { Some(selected_version.get()) };
+            let version = if selected_version.get().is_empty() {
+                None
+            } else {
+                Some(selected_version.get())
+            };
             let values_text = custom_values.get();
 
             if name.is_empty() {
@@ -191,8 +205,16 @@ pub fn HelmChartsPage() -> impl IntoView {
                     chart: format!("{}/{}", chart.repository, chart.name),
                     version,
                     values,
-                    create_namespace: if create_namespace.get() { Some(true) } else { None },
-                    wait: if wait_for_install.get() { Some(true) } else { None },
+                    create_namespace: if create_namespace.get() {
+                        Some(true)
+                    } else {
+                        None
+                    },
+                    wait: if wait_for_install.get() {
+                        Some(true)
+                    } else {
+                        None
+                    },
                     timeout: Some("300s".to_string()),
                 };
 
@@ -218,7 +240,9 @@ pub fn HelmChartsPage() -> impl IntoView {
         move |release: HelmRelease| {
             let cluster_id = cluster_id();
             spawn_local(async move {
-                match api::uninstall_helm_release(&cluster_id, &release.namespace, &release.name).await {
+                match api::uninstall_helm_release(&cluster_id, &release.namespace, &release.name)
+                    .await
+                {
                     Ok(()) => {
                         load_releases();
                         set_error.set(None);
@@ -245,14 +269,12 @@ pub fn HelmChartsPage() -> impl IntoView {
     };
 
     // Get release status class
-    let release_status_class = |status: &str| {
-        match status {
-            "deployed" => "bg-green-100 text-green-800",
-            "pending-install" | "pending-upgrade" => "bg-yellow-100 text-yellow-800",
-            "failed" => "bg-red-100 text-red-800",
-            "uninstalled" => "bg-gray-100 text-gray-800",
-            _ => "bg-blue-100 text-blue-800",
-        }
+    let release_status_class = |status: &str| match status {
+        "deployed" => "bg-green-100 text-green-800",
+        "pending-install" | "pending-upgrade" => "bg-yellow-100 text-yellow-800",
+        "failed" => "bg-red-100 text-red-800",
+        "uninstalled" => "bg-gray-100 text-gray-800",
+        _ => "bg-blue-100 text-blue-800",
     };
 
     view! {

@@ -42,10 +42,7 @@ pub fn PoolsPage() -> impl IntoView {
             set_loading.set(true);
 
             // Fetch pools
-            match reqwasm::http::Request::get("/api/nas/pools")
-                .send()
-                .await
-            {
+            match reqwasm::http::Request::get("/api/nas/pools").send().await {
                 Ok(resp) => {
                     if resp.ok() {
                         if let Ok(data) = resp.json::<Vec<StoragePool>>().await {
@@ -85,7 +82,10 @@ pub fn PoolsPage() -> impl IntoView {
 
     let delete_pool = move |pool_id: String| {
         if web_sys::window()
-            .and_then(|w| w.confirm_with_message("Delete this pool? All data will be lost!").ok())
+            .and_then(|w| {
+                w.confirm_with_message("Delete this pool? All data will be lost!")
+                    .ok()
+            })
             .unwrap_or(false)
         {
             spawn_local(async move {

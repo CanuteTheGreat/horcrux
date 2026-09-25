@@ -4,40 +4,40 @@
 
 use std::sync::Arc;
 
-use crate::vm::VmManager;
-use crate::container::ContainerManager;
+use crate::alerts::AlertManager;
+use crate::audit::AuditLogger;
+use crate::auth::AuthManager;
 use crate::backup::BackupManager;
 use crate::cloudinit::CloudInitManager;
-use crate::template::TemplateManager;
-use crate::auth::AuthManager;
-use crate::firewall::FirewallManager;
-use crate::monitoring::MonitoringManager;
-use crate::console::ConsoleManager;
 use crate::cluster::ClusterManager;
-use crate::alerts::AlertManager;
-use crate::observability::OtelManager;
-use crate::tls::TlsManager;
-use crate::secrets::VaultManager;
-use crate::audit::AuditLogger;
+use crate::console::ConsoleManager;
+use crate::container::ContainerManager;
 use crate::db::Database;
-use crate::middleware::rate_limit::RateLimiter;
-use crate::storage::StorageManager;
-use crate::ha::HaManager;
-use crate::migration::MigrationManager;
+use crate::firewall::FirewallManager;
 use crate::gpu::GpuManager;
+use crate::ha::HaManager;
+#[cfg(feature = "kubernetes")]
+use crate::kubernetes::KubernetesManager;
+use crate::middleware::rate_limit::RateLimiter;
+use crate::migration::MigrationManager;
+use crate::monitoring::MonitoringManager;
+use crate::observability::OtelManager;
 use crate::prometheus::PrometheusManager;
-use crate::webhooks::WebhookManager;
 use crate::sdn::cni::CniManager;
 use crate::sdn::policy::NetworkPolicyManager;
-use crate::vm::snapshot::VmSnapshotManager;
-use crate::vm::snapshot_scheduler::SnapshotScheduler;
-use crate::vm::snapshot_quota::SnapshotQuotaManager;
+use crate::secrets::VaultManager;
+use crate::storage::StorageManager;
+use crate::template::TemplateManager;
+use crate::tls::TlsManager;
 use crate::vm::clone::VmCloneManager;
 use crate::vm::clone_progress::CloneJobManager;
 use crate::vm::replication::ReplicationManager;
+use crate::vm::snapshot::VmSnapshotManager;
+use crate::vm::snapshot_quota::SnapshotQuotaManager;
+use crate::vm::snapshot_scheduler::SnapshotScheduler;
+use crate::vm::VmManager;
+use crate::webhooks::WebhookManager;
 use crate::websocket::WsState;
-#[cfg(feature = "kubernetes")]
-use crate::kubernetes::KubernetesManager;
 
 /// Shared application state
 #[derive(Clone)]

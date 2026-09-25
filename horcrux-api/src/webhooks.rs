@@ -1,6 +1,5 @@
 ///! Webhook notification system
 ///! Sends HTTP POST requests to configured endpoints when events occur
-
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -167,7 +166,10 @@ impl WebhookManager {
         let mut webhooks = self.webhooks.write().await;
 
         if !webhooks.contains_key(id) {
-            return Err(horcrux_common::Error::System(format!("Webhook {} not found", id)));
+            return Err(horcrux_common::Error::System(format!(
+                "Webhook {} not found",
+                id
+            )));
         }
 
         webhooks.insert(id.to_string(), config);
@@ -228,9 +230,7 @@ impl WebhookManager {
         let max_retries = webhook.retry_count;
 
         loop {
-            let result = self
-                .send_webhook_request(webhook, &event)
-                .await;
+            let result = self.send_webhook_request(webhook, &event).await;
 
             match result {
                 Ok(status_code) => {
@@ -354,7 +354,11 @@ impl WebhookManager {
     }
 
     /// Get recent webhook deliveries
-    pub async fn get_deliveries(&self, webhook_id: Option<&str>, limit: usize) -> Vec<WebhookDelivery> {
+    pub async fn get_deliveries(
+        &self,
+        webhook_id: Option<&str>,
+        limit: usize,
+    ) -> Vec<WebhookDelivery> {
         let deliveries = self.deliveries.read().await;
 
         let filtered: Vec<WebhookDelivery> = if let Some(id) = webhook_id {

@@ -4,12 +4,11 @@
 ///! 1. ldapsearch command-line tool (most compatible)
 ///! 2. Direct LDAP bind verification
 ///! 3. Group membership checking
-
 use horcrux_common::auth::LdapConfig;
 use horcrux_common::Result;
-use tokio::process::Command;
-use tracing::{info, warn, error};
 use std::process::Stdio;
+use tokio::process::Command;
+use tracing::{error, info, warn};
 
 /// LDAP authenticator
 pub struct LdapAuthenticator {}
@@ -26,7 +25,10 @@ impl LdapAuthenticator {
         password: &str,
         config: &LdapConfig,
     ) -> Result<bool> {
-        info!("Authenticating user {} via LDAP server {}", username, config.server);
+        info!(
+            "Authenticating user {} via LDAP server {}",
+            username, config.server
+        );
 
         // Validate input
         if username.is_empty() || password.is_empty() {
@@ -40,12 +42,18 @@ impl LdapAuthenticator {
         }
 
         // Method 1: Try using ldapsearch with bind
-        if let Ok(result) = self.authenticate_with_ldapsearch(username, password, config).await {
+        if let Ok(result) = self
+            .authenticate_with_ldapsearch(username, password, config)
+            .await
+        {
             return Ok(result);
         }
 
         // Method 2: Try using ldapwhoami (simpler, some LDAP servers support this)
-        if let Ok(result) = self.authenticate_with_ldapwhoami(username, password, config).await {
+        if let Ok(result) = self
+            .authenticate_with_ldapwhoami(username, password, config)
+            .await
+        {
             return Ok(result);
         }
 
@@ -109,7 +117,9 @@ impl LdapAuthenticator {
             }
             Err(e) => {
                 error!("ldapsearch command failed: {}", e);
-                Err(horcrux_common::Error::System("ldapsearch not available".to_string()))
+                Err(horcrux_common::Error::System(
+                    "ldapsearch not available".to_string(),
+                ))
             }
         }
     }
@@ -142,17 +152,21 @@ impl LdapAuthenticator {
 
         match output {
             Ok(output) if output.status.success() => {
-                info!("LDAP authentication (ldapwhoami) successful for {}", username);
+                info!(
+                    "LDAP authentication (ldapwhoami) successful for {}",
+                    username
+                );
                 Ok(true)
             }
             Ok(_) => Ok(false),
             Err(e) => {
                 warn!("ldapwhoami not available: {}", e);
-                Err(horcrux_common::Error::System("ldapwhoami not available".to_string()))
+                Err(horcrux_common::Error::System(
+                    "ldapwhoami not available".to_string(),
+                ))
             }
         }
     }
-
 
     /// Test LDAP connection
     pub async fn test_connection(config: &LdapConfig) -> Result<bool> {
@@ -191,10 +205,7 @@ impl LdapAuthenticator {
     }
 
     /// Search for user in LDAP directory
-    pub async fn search_user(
-        username: &str,
-        config: &LdapConfig,
-    ) -> Result<Option<String>> {
+    pub async fn search_user(username: &str, config: &LdapConfig) -> Result<Option<String>> {
         let ldap_uri = if config.port == 636 {
             format!("ldaps://{}", config.server)
         } else {
@@ -234,10 +245,6 @@ impl LdapAuthenticator {
 
     /// Check if LDAP tools are available
     pub async fn check_ldap_available() -> bool {
-        Command::new("ldapsearch")
-            .arg("-VV")
-            .output()
-            .await
-            .is_ok()
+        Command::new("ldapsearch").arg("-VV").output().await.is_ok()
     }
 }

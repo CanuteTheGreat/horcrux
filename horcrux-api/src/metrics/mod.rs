@@ -1,20 +1,19 @@
 // Allow dead code for library functions that may be used by API consumers
 #![allow(dead_code)]
 
-///! Real metrics collection module
-///! Provides actual system, VM, and container metrics
-
-pub mod system;
 pub mod container;
 pub mod libvirt;
+///! Real metrics collection module
+///! Provides actual system, VM, and container metrics
+pub mod system;
 
 // Re-export commonly used functions
 pub use container::get_docker_container_stats;
 pub use libvirt::LibvirtManager;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use std::collections::HashMap;
 
 /// Metrics cache to store previous samples for rate calculations
 #[derive(Clone)]

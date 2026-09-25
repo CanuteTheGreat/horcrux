@@ -33,7 +33,10 @@ impl ResourceState {
     }
 
     pub fn get_string(&self, key: &str) -> Option<String> {
-        self.values.get(key).and_then(|v| v.as_str()).map(String::from)
+        self.values
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(String::from)
     }
 
     pub fn get_i64(&self, key: &str) -> Option<i64> {
@@ -212,8 +215,12 @@ impl Resource for VmResource {
         let request = crate::client::CreateVmRequest {
             id: planned.get_string("id").unwrap_or_default(),
             name: planned.get_string("name").unwrap_or_default(),
-            hypervisor: planned.get_string("hypervisor").unwrap_or_else(|| "Qemu".to_string()),
-            architecture: planned.get_string("architecture").unwrap_or_else(|| "X86_64".to_string()),
+            hypervisor: planned
+                .get_string("hypervisor")
+                .unwrap_or_else(|| "Qemu".to_string()),
+            architecture: planned
+                .get_string("architecture")
+                .unwrap_or_else(|| "X86_64".to_string()),
             cpus: planned.get_u64("cpus").unwrap_or(1) as u32,
             memory: planned.get_u64("memory").unwrap_or(1024),
             disk_size: planned.get_u64("disk_size").unwrap_or(20),
@@ -251,7 +258,10 @@ impl Resource for VmResource {
                 }
                 Ok(state)
             }
-            Err(e) => Err(vec![Diagnostic::error(&format!("Failed to create VM: {}", e))]),
+            Err(e) => Err(vec![Diagnostic::error(&format!(
+                "Failed to create VM: {}",
+                e
+            ))]),
         }
     }
 
@@ -260,9 +270,9 @@ impl Resource for VmResource {
         client: &HorcruxClient,
         current: &ResourceState,
     ) -> ResourceResult<ResourceState> {
-        let id = current.get_string("id").ok_or_else(|| {
-            vec![Diagnostic::error("VM ID is required")]
-        })?;
+        let id = current
+            .get_string("id")
+            .ok_or_else(|| vec![Diagnostic::error("VM ID is required")])?;
 
         match client.get_vm(&id).await {
             Ok(vm) => {
@@ -290,7 +300,10 @@ impl Resource for VmResource {
                 // Resource no longer exists
                 Ok(ResourceState::new())
             }
-            Err(e) => Err(vec![Diagnostic::error(&format!("Failed to read VM: {}", e))]),
+            Err(e) => Err(vec![Diagnostic::error(&format!(
+                "Failed to read VM: {}",
+                e
+            ))]),
         }
     }
 
@@ -300,23 +313,20 @@ impl Resource for VmResource {
         current: &ResourceState,
         planned: &ResourceState,
     ) -> ResourceResult<ResourceState> {
-        let id = current.get_string("id").ok_or_else(|| {
-            vec![Diagnostic::error("VM ID is required")]
-        })?;
+        let id = current
+            .get_string("id")
+            .ok_or_else(|| vec![Diagnostic::error("VM ID is required")])?;
 
         let request = crate::client::UpdateVmRequest {
             name: planned.get_string("name"),
             cpus: planned.get_u64("cpus").map(|v| v as u32),
             memory: planned.get_u64("memory"),
             description: planned.get_string("description"),
-            tags: planned
-                .get("tags")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                }),
+            tags: planned.get("tags").and_then(|v| v.as_array()).map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            }),
         };
 
         match client.update_vm(&id, &request).await {
@@ -341,19 +351,25 @@ impl Resource for VmResource {
                 }
                 Ok(state)
             }
-            Err(e) => Err(vec![Diagnostic::error(&format!("Failed to update VM: {}", e))]),
+            Err(e) => Err(vec![Diagnostic::error(&format!(
+                "Failed to update VM: {}",
+                e
+            ))]),
         }
     }
 
     async fn delete(&self, client: &HorcruxClient, current: &ResourceState) -> ResourceResult<()> {
-        let id = current.get_string("id").ok_or_else(|| {
-            vec![Diagnostic::error("VM ID is required")]
-        })?;
+        let id = current
+            .get_string("id")
+            .ok_or_else(|| vec![Diagnostic::error("VM ID is required")])?;
 
         match client.delete_vm(&id).await {
             Ok(()) => Ok(()),
             Err(crate::client::ClientError::NotFound(_)) => Ok(()), // Already deleted
-            Err(e) => Err(vec![Diagnostic::error(&format!("Failed to delete VM: {}", e))]),
+            Err(e) => Err(vec![Diagnostic::error(&format!(
+                "Failed to delete VM: {}",
+                e
+            ))]),
         }
     }
 }
@@ -481,7 +497,9 @@ impl Resource for ContainerResource {
         let request = crate::client::CreateContainerRequest {
             id: planned.get_string("id").unwrap_or_default(),
             name: planned.get_string("name").unwrap_or_default(),
-            runtime: planned.get_string("runtime").unwrap_or_else(|| "Docker".to_string()),
+            runtime: planned
+                .get_string("runtime")
+                .unwrap_or_else(|| "Docker".to_string()),
             image: planned.get_string("image").unwrap_or_default(),
             cpus: planned.get("cpus").and_then(|v| v.as_f64()),
             memory: planned.get_u64("memory"),
@@ -498,7 +516,11 @@ impl Resource for ContainerResource {
             command: planned
                 .get("command")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()),
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                }),
         };
 
         match client.create_container(&request).await {
@@ -529,9 +551,9 @@ impl Resource for ContainerResource {
         client: &HorcruxClient,
         current: &ResourceState,
     ) -> ResourceResult<ResourceState> {
-        let id = current.get_string("id").ok_or_else(|| {
-            vec![Diagnostic::error("Container ID is required")]
-        })?;
+        let id = current
+            .get_string("id")
+            .ok_or_else(|| vec![Diagnostic::error("Container ID is required")])?;
 
         match client.get_container(&id).await {
             Ok(container) => {
@@ -570,9 +592,9 @@ impl Resource for ContainerResource {
     }
 
     async fn delete(&self, client: &HorcruxClient, current: &ResourceState) -> ResourceResult<()> {
-        let id = current.get_string("id").ok_or_else(|| {
-            vec![Diagnostic::error("Container ID is required")]
-        })?;
+        let id = current
+            .get_string("id")
+            .ok_or_else(|| vec![Diagnostic::error("Container ID is required")])?;
 
         match client.delete_container(&id).await {
             Ok(()) => Ok(()),
@@ -666,7 +688,9 @@ impl Resource for StoragePoolResource {
         let request = crate::client::CreateStoragePoolRequest {
             id: planned.get_string("id").unwrap_or_default(),
             name: planned.get_string("name").unwrap_or_default(),
-            pool_type: planned.get_string("pool_type").unwrap_or_else(|| "Directory".to_string()),
+            pool_type: planned
+                .get_string("pool_type")
+                .unwrap_or_else(|| "Directory".to_string()),
             path: planned.get_string("path"),
             ceph_config: None,
             nfs_config: None,
@@ -698,9 +722,9 @@ impl Resource for StoragePoolResource {
         client: &HorcruxClient,
         current: &ResourceState,
     ) -> ResourceResult<ResourceState> {
-        let id = current.get_string("id").ok_or_else(|| {
-            vec![Diagnostic::error("Storage pool ID is required")]
-        })?;
+        let id = current
+            .get_string("id")
+            .ok_or_else(|| vec![Diagnostic::error("Storage pool ID is required")])?;
 
         match client.get_storage_pool(&id).await {
             Ok(pool) => {
@@ -736,9 +760,9 @@ impl Resource for StoragePoolResource {
     }
 
     async fn delete(&self, client: &HorcruxClient, current: &ResourceState) -> ResourceResult<()> {
-        let id = current.get_string("id").ok_or_else(|| {
-            vec![Diagnostic::error("Storage pool ID is required")]
-        })?;
+        let id = current
+            .get_string("id")
+            .ok_or_else(|| vec![Diagnostic::error("Storage pool ID is required")])?;
 
         match client.delete_storage_pool(&id).await {
             Ok(()) => Ok(()),
@@ -852,8 +876,12 @@ impl Resource for FirewallRuleResource {
     ) -> ResourceResult<ResourceState> {
         let request = crate::client::CreateFirewallRuleRequest {
             name: planned.get_string("name").unwrap_or_default(),
-            action: planned.get_string("action").unwrap_or_else(|| "Drop".to_string()),
-            direction: planned.get_string("direction").unwrap_or_else(|| "in".to_string()),
+            action: planned
+                .get_string("action")
+                .unwrap_or_else(|| "Drop".to_string()),
+            direction: planned
+                .get_string("direction")
+                .unwrap_or_else(|| "in".to_string()),
             protocol: planned.get_string("protocol"),
             port: planned.get_u64("port").map(|v| v as u16),
             source: planned.get_string("source"),
@@ -897,9 +925,9 @@ impl Resource for FirewallRuleResource {
         client: &HorcruxClient,
         current: &ResourceState,
     ) -> ResourceResult<ResourceState> {
-        let id = current.get_string("id").ok_or_else(|| {
-            vec![Diagnostic::error("Firewall rule ID is required")]
-        })?;
+        let id = current
+            .get_string("id")
+            .ok_or_else(|| vec![Diagnostic::error("Firewall rule ID is required")])?;
 
         match client.get_firewall_rule(&id).await {
             Ok(rule) => {
@@ -944,9 +972,9 @@ impl Resource for FirewallRuleResource {
     }
 
     async fn delete(&self, client: &HorcruxClient, current: &ResourceState) -> ResourceResult<()> {
-        let id = current.get_string("id").ok_or_else(|| {
-            vec![Diagnostic::error("Firewall rule ID is required")]
-        })?;
+        let id = current
+            .get_string("id")
+            .ok_or_else(|| vec![Diagnostic::error("Firewall rule ID is required")])?;
 
         match client.delete_firewall_rule(&id).await {
             Ok(()) => {

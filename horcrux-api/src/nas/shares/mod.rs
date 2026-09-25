@@ -3,16 +3,16 @@
 //! Provides abstractions and implementations for NAS file shares
 //! across multiple protocols (SMB, NFS, AFP, WebDAV, FTP).
 
-#[cfg(feature = "smb")]
-pub mod smb;
-#[cfg(feature = "nfs-server")]
-pub mod nfs;
 #[cfg(feature = "afp")]
 pub mod afp;
-#[cfg(feature = "webdav")]
-pub mod webdav;
 #[cfg(feature = "ftp")]
 pub mod ftp;
+#[cfg(feature = "nfs-server")]
+pub mod nfs;
+#[cfg(feature = "smb")]
+pub mod smb;
+#[cfg(feature = "webdav")]
+pub mod webdav;
 
 use crate::nas::{AccessLevel, CaseSensitivity, Protocol, QuotaConfig};
 use serde::{Deserialize, Serialize};

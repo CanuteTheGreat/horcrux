@@ -2,8 +2,8 @@
 //!
 //! Manages POSIX and NFSv4 ACLs on shares.
 
-use horcrux_common::{Error, Result};
 use crate::nas::shares::{AclEntry, AclFlags, AclPermissions, AclType};
+use horcrux_common::{Error, Result};
 use tokio::process::Command;
 
 /// Get POSIX ACLs for a path
@@ -82,10 +82,7 @@ pub async fn set_posix_acl(path: &str, entries: &[AclEntry]) -> Result<()> {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!(
-                "setfacl failed: {}",
-                stderr
-            )));
+            return Err(Error::Internal(format!("setfacl failed: {}", stderr)));
         }
     }
 
@@ -129,10 +126,7 @@ pub async fn remove_posix_acl(path: &str) -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(Error::Internal(format!(
-            "setfacl failed: {}",
-            stderr
-        )));
+        return Err(Error::Internal(format!("setfacl failed: {}", stderr)));
     }
 
     Ok(())
@@ -151,10 +145,7 @@ pub async fn set_default_acl(path: &str, entries: &[AclEntry]) -> Result<()> {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!(
-                "setfacl failed: {}",
-                stderr
-            )));
+            return Err(Error::Internal(format!("setfacl failed: {}", stderr)));
         }
     }
 
@@ -255,10 +246,7 @@ pub async fn set_nfsv4_acl(path: &str, entries: &[AclEntry]) -> Result<()> {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!(
-                "nfs4_setfacl failed: {}",
-                stderr
-            )));
+            return Err(Error::Internal(format!("nfs4_setfacl failed: {}", stderr)));
         }
     }
 
@@ -276,23 +264,53 @@ fn format_nfsv4_acl_spec(entry: &AclEntry) -> String {
     };
 
     let mut flags = String::new();
-    if entry.flags.file_inherit { flags.push('f'); }
-    if entry.flags.directory_inherit { flags.push('d'); }
-    if entry.flags.no_propagate_inherit { flags.push('n'); }
-    if entry.flags.inherit_only { flags.push('i'); }
+    if entry.flags.file_inherit {
+        flags.push('f');
+    }
+    if entry.flags.directory_inherit {
+        flags.push('d');
+    }
+    if entry.flags.no_propagate_inherit {
+        flags.push('n');
+    }
+    if entry.flags.inherit_only {
+        flags.push('i');
+    }
 
     let mut perms = String::new();
-    if entry.permissions.read { perms.push('r'); }
-    if entry.permissions.write { perms.push('w'); }
-    if entry.permissions.execute { perms.push('x'); }
-    if entry.permissions.append { perms.push('a'); }
-    if entry.permissions.delete { perms.push('d'); }
-    if entry.permissions.delete_child { perms.push('D'); }
-    if entry.permissions.read_attributes { perms.push('t'); }
-    if entry.permissions.write_attributes { perms.push('T'); }
-    if entry.permissions.read_acl { perms.push('c'); }
-    if entry.permissions.write_acl { perms.push('C'); }
-    if entry.permissions.take_ownership { perms.push('o'); }
+    if entry.permissions.read {
+        perms.push('r');
+    }
+    if entry.permissions.write {
+        perms.push('w');
+    }
+    if entry.permissions.execute {
+        perms.push('x');
+    }
+    if entry.permissions.append {
+        perms.push('a');
+    }
+    if entry.permissions.delete {
+        perms.push('d');
+    }
+    if entry.permissions.delete_child {
+        perms.push('D');
+    }
+    if entry.permissions.read_attributes {
+        perms.push('t');
+    }
+    if entry.permissions.write_attributes {
+        perms.push('T');
+    }
+    if entry.permissions.read_acl {
+        perms.push('c');
+    }
+    if entry.permissions.write_acl {
+        perms.push('C');
+    }
+    if entry.permissions.take_ownership {
+        perms.push('o');
+    }
 
     format!("{}:{}:{}:{}", type_char, flags, entry.principal, perms)
 }
@@ -308,10 +326,7 @@ pub async fn remove_nfsv4_acl(path: &str) -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(Error::Internal(format!(
-            "nfs4_setfacl failed: {}",
-            stderr
-        )));
+        return Err(Error::Internal(format!("nfs4_setfacl failed: {}", stderr)));
     }
 
     Ok(())
@@ -389,10 +404,7 @@ impl AclManager {
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(Error::Internal(format!(
-                    "setfacl failed: {}",
-                    stderr
-                )));
+                return Err(Error::Internal(format!("setfacl failed: {}", stderr)));
             }
         }
 
@@ -419,11 +431,15 @@ impl AclManager {
 
         if let Some(mut stdin) = setfacl.stdin.take() {
             use tokio::io::AsyncWriteExt;
-            stdin.write_all(&output.stdout).await
+            stdin
+                .write_all(&output.stdout)
+                .await
                 .map_err(|e| Error::Internal(format!("Failed to write ACL: {}", e)))?;
         }
 
-        let status = setfacl.wait().await
+        let status = setfacl
+            .wait()
+            .await
             .map_err(|e| Error::Internal(format!("setfacl failed: {}", e)))?;
 
         if !status.success() {

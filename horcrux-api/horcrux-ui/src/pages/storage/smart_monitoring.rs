@@ -1,5 +1,5 @@
-use leptos::*;
 use crate::api::*;
+use leptos::*;
 
 #[component]
 pub fn SmartMonitoringPage() -> impl IntoView {
@@ -44,23 +44,33 @@ pub fn SmartMonitoringPage() -> impl IntoView {
         if status == "all" {
             disks.get()
         } else {
-            disks.get().into_iter().filter(|d| {
-                d.smart_status.as_str() == status
-            }).collect()
+            disks
+                .get()
+                .into_iter()
+                .filter(|d| d.smart_status.as_str() == status)
+                .collect()
         }
     };
 
     let disk_counts = move || {
         let all = disks.get();
-        let healthy = all.iter().filter(|d| d.smart_status == SmartStatus::Healthy).count();
-        let warning = all.iter().filter(|d| d.smart_status == SmartStatus::Warning).count();
-        let critical = all.iter().filter(|d| d.smart_status == SmartStatus::Critical).count();
+        let healthy = all
+            .iter()
+            .filter(|d| d.smart_status == SmartStatus::Healthy)
+            .count();
+        let warning = all
+            .iter()
+            .filter(|d| d.smart_status == SmartStatus::Warning)
+            .count();
+        let critical = all
+            .iter()
+            .filter(|d| d.smart_status == SmartStatus::Critical)
+            .count();
         (all.len(), healthy, warning, critical)
     };
 
-    let unacknowledged_alerts = move || {
-        alerts.get().into_iter().filter(|a| !a.acknowledged).count()
-    };
+    let unacknowledged_alerts =
+        move || alerts.get().into_iter().filter(|a| !a.acknowledged).count();
 
     let start_test = move |_| {
         if let Some(disk) = selected_disk.get() {

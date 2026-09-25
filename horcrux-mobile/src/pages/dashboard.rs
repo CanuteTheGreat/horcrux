@@ -1,11 +1,11 @@
 //! Dashboard page for mobile UI
 
-use yew::prelude::*;
-use wasm_bindgen_futures::spawn_local;
 use gloo_timers::callback::Interval;
+use wasm_bindgen_futures::spawn_local;
+use yew::prelude::*;
 
-use crate::api::{ApiClient, NodeStats, ClusterStatus};
-use crate::components::{Header, Card, Loading};
+use crate::api::{ApiClient, ClusterStatus, NodeStats};
+use crate::components::{Card, Header, Loading};
 
 #[function_component(Dashboard)]
 pub fn dashboard() -> Html {

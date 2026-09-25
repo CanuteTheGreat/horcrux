@@ -16,32 +16,32 @@ pub mod state;
 pub use state::AppState;
 
 // Authentication & Authorization
+pub mod audit;
 pub mod auth;
 pub mod middleware;
-pub mod audit;
 
 // Virtualization
-pub mod vm;
 pub mod container;
+pub mod vm;
 
 // Storage
-pub mod storage;
 pub mod backup;
+pub mod storage;
 
 // Networking
-pub mod sdn;
 pub mod firewall;
+pub mod sdn;
 
 // Clustering
 pub mod cluster;
-pub mod migration;
 pub mod ha;
+pub mod migration;
 
 // Monitoring
-pub mod monitoring;
 pub mod alerts;
 pub mod metrics;
 pub mod metrics_collector;
+pub mod monitoring;
 pub mod observability;
 
 // Console access

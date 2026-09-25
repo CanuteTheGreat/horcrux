@@ -3,14 +3,16 @@
 //! Handles ZFS send/receive, Btrfs send/receive, and rsync-based replication.
 //! Supports multiple transports, bandwidth limiting, and progress tracking.
 
+use crate::nas::storage::{
+    ReplicationDirection, ReplicationTask, ReplicationTransport, RetentionPolicy, StorageType,
+};
 use horcrux_common::{Error, Result};
-use crate::nas::storage::{ReplicationDirection, ReplicationTask, ReplicationTransport, RetentionPolicy, StorageType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use tokio::process::Command;
-use tokio::io::{AsyncBufReadExt, BufReader};
 use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
 use tokio::sync::RwLock;
 
 /// Extended replication task configuration
@@ -137,10 +139,14 @@ impl SshConfig {
     /// Build SSH command arguments
     pub fn build_args(&self, host: &str) -> Vec<String> {
         let mut args = vec![
-            "-p".to_string(), self.port.to_string(),
-            "-o".to_string(), format!("ConnectTimeout={}", self.connect_timeout),
-            "-o".to_string(), "BatchMode=yes".to_string(),
-            "-o".to_string(), "StrictHostKeyChecking=accept-new".to_string(),
+            "-p".to_string(),
+            self.port.to_string(),
+            "-o".to_string(),
+            format!("ConnectTimeout={}", self.connect_timeout),
+            "-o".to_string(),
+            "BatchMode=yes".to_string(),
+            "-o".to_string(),
+            "StrictHostKeyChecking=accept-new".to_string(),
         ];
 
         if let Some(ref identity) = self.identity_file {
@@ -489,7 +495,11 @@ impl ReplicationManager {
     }
 
     /// Get history for a specific task
-    pub async fn get_task_history(&self, task_id: &str, limit: usize) -> Vec<ReplicationHistoryEntry> {
+    pub async fn get_task_history(
+        &self,
+        task_id: &str,
+        limit: usize,
+    ) -> Vec<ReplicationHistoryEntry> {
         let history = self.history.read().await;
         history
             .iter()
@@ -501,7 +511,10 @@ impl ReplicationManager {
     }
 
     /// Run a replication task
-    pub async fn run_task(&self, task: &ExtendedReplicationTask) -> Result<ReplicationHistoryEntry> {
+    pub async fn run_task(
+        &self,
+        task: &ExtendedReplicationTask,
+    ) -> Result<ReplicationHistoryEntry> {
         let task_id = task.base.id.clone();
         let start_time = chrono::Utc::now().timestamp();
 
@@ -616,7 +629,12 @@ impl ReplicationManager {
         // Send alert if configured
         if task.alert_on_failure {
             if let Some(ref email) = task.alert_email {
-                let _ = send_failure_alert(email, &task.base.name, last_error.as_deref().unwrap_or("Unknown error")).await;
+                let _ = send_failure_alert(
+                    email,
+                    &task.base.name,
+                    last_error.as_deref().unwrap_or("Unknown error"),
+                )
+                .await;
             }
         }
 
@@ -628,23 +646,24 @@ impl ReplicationManager {
     }
 
     /// Execute the actual replication
-    async fn execute_replication(&self, task: &ExtendedReplicationTask, is_retry: bool) -> Result<u64> {
+    async fn execute_replication(
+        &self,
+        task: &ExtendedReplicationTask,
+        is_retry: bool,
+    ) -> Result<u64> {
         let task_id = task.base.id.clone();
 
         // Run pre-script
         if let Some(ref script) = task.pre_script {
-            self.update_state(&task_id, ReplicationState::PreScript).await;
+            self.update_state(&task_id, ReplicationState::PreScript)
+                .await;
             run_script(script, &task.base).await?;
         }
 
         // Execute based on storage type
         let bytes = match task.source_type {
-            StorageType::Zfs => {
-                self.run_zfs_replication(task, is_retry).await?
-            }
-            StorageType::Btrfs => {
-                self.run_btrfs_replication(task).await?
-            }
+            StorageType::Zfs => self.run_zfs_replication(task, is_retry).await?,
+            StorageType::Btrfs => self.run_btrfs_replication(task).await?,
             _ => {
                 // Use rsync for other types
                 self.run_rsync_replication(task).await?
@@ -653,17 +672,20 @@ impl ReplicationManager {
 
         // Run post-script
         if let Some(ref script) = task.post_script {
-            self.update_state(&task_id, ReplicationState::PostScript).await;
+            self.update_state(&task_id, ReplicationState::PostScript)
+                .await;
             run_script(script, &task.base).await?;
         }
 
         // Verify if requested
         if task.verify {
-            self.update_state(&task_id, ReplicationState::Verifying).await;
+            self.update_state(&task_id, ReplicationState::Verifying)
+                .await;
             self.verify_replication(task).await?;
         }
 
-        self.update_state(&task_id, ReplicationState::Completed).await;
+        self.update_state(&task_id, ReplicationState::Completed)
+            .await;
         Ok(bytes)
     }
 
@@ -695,40 +717,49 @@ impl ReplicationManager {
 
     /// Run ZFS send/receive replication
     #[cfg(feature = "nas-zfs")]
-    async fn run_zfs_replication(&self, task: &ExtendedReplicationTask, is_retry: bool) -> Result<u64> {
+    async fn run_zfs_replication(
+        &self,
+        task: &ExtendedReplicationTask,
+        is_retry: bool,
+    ) -> Result<u64> {
         let task_id = task.base.id.clone();
 
         // Get latest snapshot
-        self.update_state(&task_id, ReplicationState::Estimating).await;
+        self.update_state(&task_id, ReplicationState::Estimating)
+            .await;
         let latest_snapshot = get_latest_snapshot(&task.base.source_dataset).await?;
 
         // Get last replicated snapshot on target
         let last_replicated = match task.base.transport {
-            ReplicationTransport::Local => {
-                get_local_last_snapshot(&task.base.target_dataset).await.ok().flatten()
-            }
-            _ => {
-                get_remote_last_snapshot(
-                    &task.base.target_host,
-                    &task.base.target_dataset,
-                    task.ssh_config.as_ref(),
-                ).await.ok().flatten()
-            }
+            ReplicationTransport::Local => get_local_last_snapshot(&task.base.target_dataset)
+                .await
+                .ok()
+                .flatten(),
+            _ => get_remote_last_snapshot(
+                &task.base.target_host,
+                &task.base.target_dataset,
+                task.ssh_config.as_ref(),
+            )
+            .await
+            .ok()
+            .flatten(),
         };
 
         // Check for resume token if retry
         let resume_token = if is_retry && task.resumable {
             match task.base.transport {
-                ReplicationTransport::Local => {
-                    get_local_resume_token(&task.base.target_dataset).await.ok().flatten()
-                }
-                _ => {
-                    get_remote_resume_token(
-                        &task.base.target_host,
-                        &task.base.target_dataset,
-                        task.ssh_config.as_ref(),
-                    ).await.ok().flatten()
-                }
+                ReplicationTransport::Local => get_local_resume_token(&task.base.target_dataset)
+                    .await
+                    .ok()
+                    .flatten(),
+                _ => get_remote_resume_token(
+                    &task.base.target_host,
+                    &task.base.target_dataset,
+                    task.ssh_config.as_ref(),
+                )
+                .await
+                .ok()
+                .flatten(),
             }
         } else {
             None
@@ -740,7 +771,9 @@ impl ReplicationManager {
                 &latest_snapshot,
                 last_replicated.as_deref(),
                 task.base.recursive,
-            ).await.unwrap_or(0)
+            )
+            .await
+            .unwrap_or(0)
         } else {
             0 // Can't estimate resumable
         };
@@ -767,7 +800,13 @@ impl ReplicationManager {
         // Build full pipeline
         let bytes_transferred = match task.base.transport {
             ReplicationTransport::Local => {
-                self.run_local_zfs_pipeline(&task_id, &send_cmd, &recv_cmd, task.base.bandwidth_limit).await?
+                self.run_local_zfs_pipeline(
+                    &task_id,
+                    &send_cmd,
+                    &recv_cmd,
+                    task.base.bandwidth_limit,
+                )
+                .await?
             }
             ReplicationTransport::Ssh => {
                 self.run_ssh_zfs_pipeline(
@@ -777,7 +816,8 @@ impl ReplicationManager {
                     &task.base.target_host,
                     task.ssh_config.as_ref(),
                     task.base.bandwidth_limit,
-                ).await?
+                )
+                .await?
             }
             ReplicationTransport::Netcat => {
                 self.run_netcat_zfs_pipeline(
@@ -787,14 +827,19 @@ impl ReplicationManager {
                     &task.base.target_host,
                     task.ssh_config.as_ref(),
                     task.base.bandwidth_limit,
-                ).await?
+                )
+                .await?
             }
         };
 
         // Create bookmark for next incremental (if enabled)
         if task.use_bookmarks {
-            let bookmark_name = format!("{}#horcrux_repl_{}",
-                latest_snapshot.split('@').next().unwrap_or(&task.base.source_dataset),
+            let bookmark_name = format!(
+                "{}#horcrux_repl_{}",
+                latest_snapshot
+                    .split('@')
+                    .next()
+                    .unwrap_or(&task.base.source_dataset),
                 task.base.id.replace('-', "_")
             );
             let _ = create_zfs_bookmark(&latest_snapshot, &bookmark_name).await;
@@ -804,7 +849,11 @@ impl ReplicationManager {
     }
 
     #[cfg(not(feature = "nas-zfs"))]
-    async fn run_zfs_replication(&self, _task: &ExtendedReplicationTask, _is_retry: bool) -> Result<u64> {
+    async fn run_zfs_replication(
+        &self,
+        _task: &ExtendedReplicationTask,
+        _is_retry: bool,
+    ) -> Result<u64> {
         Err(Error::Internal("ZFS support not enabled".to_string()))
     }
 
@@ -844,7 +893,9 @@ impl ReplicationManager {
             }
         }
 
-        let status = child.wait().await
+        let status = child
+            .wait()
+            .await
             .map_err(|e| Error::Internal(format!("Replication process error: {}", e)))?;
 
         if !status.success() {
@@ -916,7 +967,9 @@ impl ReplicationManager {
             }
         }
 
-        let status = child.wait().await
+        let status = child
+            .wait()
+            .await
             .map_err(|e| Error::Internal(format!("Replication process error: {}", e)))?;
 
         if !status.success() {
@@ -956,10 +1009,7 @@ impl ReplicationManager {
             .unwrap_or_else(|| format!("root@{}", host));
 
         // Start receiver on remote first
-        let recv_start_cmd = format!(
-            "ssh {} 'nc -l -p {} | {} &'",
-            ssh_args, port, recv_cmd
-        );
+        let recv_start_cmd = format!("ssh {} 'nc -l -p {} | {} &'", ssh_args, port, recv_cmd);
 
         let output = Command::new("sh")
             .args(["-c", &recv_start_cmd])
@@ -968,7 +1018,9 @@ impl ReplicationManager {
             .map_err(|e| Error::Internal(format!("Failed to start remote receiver: {}", e)))?;
 
         if !output.status.success() {
-            return Err(Error::Internal("Failed to start remote netcat receiver".to_string()));
+            return Err(Error::Internal(
+                "Failed to start remote netcat receiver".to_string(),
+            ));
         }
 
         // Small delay for receiver to start
@@ -1001,7 +1053,9 @@ impl ReplicationManager {
             }
         }
 
-        let status = child.wait().await
+        let status = child
+            .wait()
+            .await
             .map_err(|e| Error::Internal(format!("Sender process error: {}", e)))?;
 
         if !status.success() {
@@ -1030,7 +1084,8 @@ impl ReplicationManager {
         let task_id = task.base.id.clone();
 
         // Get latest snapshot
-        self.update_state(&task_id, ReplicationState::Estimating).await;
+        self.update_state(&task_id, ReplicationState::Estimating)
+            .await;
 
         // Find latest read-only snapshot in source
         let source_snapshots = list_btrfs_snapshots(&task.base.source_dataset).await?;
@@ -1048,7 +1103,9 @@ impl ReplicationManager {
                 &task.base.target_host,
                 &task.base.target_dataset,
                 task.ssh_config.as_ref(),
-            ).await.ok()
+            )
+            .await
+            .ok()
         };
 
         let parent = target_snapshots
@@ -1073,7 +1130,13 @@ impl ReplicationManager {
         // Execute based on transport
         let bytes_transferred = match task.base.transport {
             ReplicationTransport::Local => {
-                self.run_local_btrfs_pipeline(&task_id, &send_cmd, &recv_cmd, task.base.bandwidth_limit).await?
+                self.run_local_btrfs_pipeline(
+                    &task_id,
+                    &send_cmd,
+                    &recv_cmd,
+                    task.base.bandwidth_limit,
+                )
+                .await?
             }
             ReplicationTransport::Ssh => {
                 self.run_ssh_btrfs_pipeline(
@@ -1083,7 +1146,8 @@ impl ReplicationManager {
                     &task.base.target_host,
                     task.ssh_config.as_ref(),
                     task.base.bandwidth_limit,
-                ).await?
+                )
+                .await?
             }
             ReplicationTransport::Netcat => {
                 // Netcat for btrfs similar to ZFS
@@ -1094,7 +1158,8 @@ impl ReplicationManager {
                     &task.base.target_host,
                     task.ssh_config.as_ref(),
                     task.base.bandwidth_limit,
-                ).await?
+                )
+                .await?
             }
         };
 
@@ -1141,7 +1206,9 @@ impl ReplicationManager {
             }
         }
 
-        let status = child.wait().await
+        let status = child
+            .wait()
+            .await
             .map_err(|e| Error::Internal(format!("Btrfs replication error: {}", e)))?;
 
         if !status.success() {
@@ -1183,14 +1250,19 @@ impl ReplicationManager {
             " | pv -f".to_string()
         };
 
-        let full_cmd = format!("sudo {}{} | ssh {} 'sudo {}'", send_cmd, throttle, ssh_args, recv_cmd);
+        let full_cmd = format!(
+            "sudo {}{} | ssh {} 'sudo {}'",
+            send_cmd, throttle, ssh_args, recv_cmd
+        );
 
         let mut child = Command::new("sh")
             .args(["-c", &full_cmd])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|e| Error::Internal(format!("Failed to spawn btrfs SSH replication: {}", e)))?;
+            .map_err(|e| {
+                Error::Internal(format!("Failed to spawn btrfs SSH replication: {}", e))
+            })?;
 
         let stderr = child.stderr.take().unwrap();
         let mut reader = BufReader::new(stderr).lines();
@@ -1203,7 +1275,9 @@ impl ReplicationManager {
             }
         }
 
-        let status = child.wait().await
+        let status = child
+            .wait()
+            .await
             .map_err(|e| Error::Internal(format!("Btrfs SSH replication error: {}", e)))?;
 
         if !status.success() {
@@ -1243,17 +1317,12 @@ impl ReplicationManager {
             task.base.target_dataset.clone()
         } else {
             let ssh_config = task.ssh_config.clone().unwrap_or_default();
-            let ssh_cmd = format!(
-                "ssh -p {} -o BatchMode=yes",
-                ssh_config.port
-            );
+            let ssh_cmd = format!("ssh -p {} -o BatchMode=yes", ssh_config.port);
             args.insert(0, "-e".to_string());
             args.insert(1, ssh_cmd);
             format!(
                 "{}@{}:{}",
-                ssh_config.username,
-                task.base.target_host,
-                task.base.target_dataset
+                ssh_config.username, task.base.target_host, task.base.target_dataset
             )
         };
         args.push(dest);
@@ -1285,7 +1354,9 @@ impl ReplicationManager {
             }
         }
 
-        let status = child.wait().await
+        let status = child
+            .wait()
+            .await
             .map_err(|e| Error::Internal(format!("Rsync error: {}", e)))?;
 
         if !status.success() {
@@ -1313,7 +1384,10 @@ impl ReplicationManager {
                 35 => "Timeout waiting for daemon connection",
                 _ => "Unknown error",
             };
-            return Err(Error::Internal(format!("Rsync failed (exit {}): {}", code, error)));
+            return Err(Error::Internal(format!(
+                "Rsync failed (exit {}): {}",
+                code, error
+            )));
         }
 
         Ok(total_bytes)
@@ -1338,7 +1412,8 @@ impl ReplicationManager {
                                 &task.base.target_host,
                                 &task.base.target_dataset,
                                 task.ssh_config.as_ref(),
-                            ).await?
+                            )
+                            .await?
                         }
                     };
 
@@ -1351,7 +1426,8 @@ impl ReplicationManager {
                                 &task.base.target_host,
                                 &target_snap,
                                 task.ssh_config.as_ref(),
-                            ).await?
+                            )
+                            .await?
                         }
                     };
 
@@ -1376,7 +1452,10 @@ impl ReplicationManager {
                 let dest = if task.base.transport == ReplicationTransport::Local {
                     task.base.target_dataset.clone()
                 } else {
-                    format!("root@{}:{}", task.base.target_host, task.base.target_dataset)
+                    format!(
+                        "root@{}:{}",
+                        task.base.target_host, task.base.target_dataset
+                    )
                 };
                 args.push(dest);
 
@@ -1388,8 +1467,13 @@ impl ReplicationManager {
 
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 // If dry-run shows changes, verification failed
-                if stdout.lines().any(|l| l.starts_with('>') || l.starts_with('<')) {
-                    return Err(Error::Internal("Verification failed: files differ".to_string()));
+                if stdout
+                    .lines()
+                    .any(|l| l.starts_with('>') || l.starts_with('<'))
+                {
+                    return Err(Error::Internal(
+                        "Verification failed: files differ".to_string(),
+                    ));
                 }
             }
         }
@@ -1504,8 +1588,7 @@ fn build_zfs_receive_command(target: &str, resumable: bool) -> String {
 async fn get_latest_snapshot(dataset: &str) -> Result<String> {
     let output = Command::new("zfs")
         .args([
-            "list", "-H", "-t", "snapshot", "-r", "-s", "creation",
-            "-o", "name", dataset,
+            "list", "-H", "-t", "snapshot", "-r", "-s", "creation", "-o", "name", dataset,
         ])
         .output()
         .await
@@ -1528,8 +1611,7 @@ async fn get_latest_snapshot(dataset: &str) -> Result<String> {
 async fn get_local_last_snapshot(dataset: &str) -> Result<Option<String>> {
     let output = Command::new("zfs")
         .args([
-            "list", "-H", "-t", "snapshot", "-r", "-s", "creation",
-            "-o", "name", dataset,
+            "list", "-H", "-t", "snapshot", "-r", "-s", "creation", "-o", "name", dataset,
         ])
         .output()
         .await
@@ -1559,11 +1641,12 @@ async fn get_remote_last_snapshot(
         cmd.arg(arg);
     }
     cmd.args([
-        "zfs", "list", "-H", "-t", "snapshot", "-r", "-s", "creation",
-        "-o", "name", dataset,
+        "zfs", "list", "-H", "-t", "snapshot", "-r", "-s", "creation", "-o", "name", dataset,
     ]);
 
-    let output = cmd.output().await
+    let output = cmd
+        .output()
+        .await
         .map_err(|e| Error::Internal(format!("Failed to query remote: {}", e)))?;
 
     if !output.status.success() {
@@ -1622,9 +1705,19 @@ async fn get_remote_resume_token(
     for arg in &ssh_args {
         cmd.arg(arg);
     }
-    cmd.args(["zfs", "get", "-H", "-o", "value", "receive_resume_token", dataset]);
+    cmd.args([
+        "zfs",
+        "get",
+        "-H",
+        "-o",
+        "value",
+        "receive_resume_token",
+        dataset,
+    ]);
 
-    let output = cmd.output().await
+    let output = cmd
+        .output()
+        .await
         .map_err(|e| Error::Internal(format!("Failed to get remote resume token: {}", e)))?;
 
     if !output.status.success() {
@@ -1702,7 +1795,10 @@ async fn create_zfs_bookmark(snapshot: &str, bookmark: &str) -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(Error::Internal(format!("Bookmark creation failed: {}", stderr)));
+        return Err(Error::Internal(format!(
+            "Bookmark creation failed: {}",
+            stderr
+        )));
     }
 
     Ok(())
@@ -1718,11 +1814,15 @@ async fn get_zfs_snapshot_written(snapshot: &str) -> Result<u64> {
         .map_err(|e| Error::Internal(format!("Failed to get written: {}", e)))?;
 
     if !output.status.success() {
-        return Err(Error::Internal("Failed to get written property".to_string()));
+        return Err(Error::Internal(
+            "Failed to get written property".to_string(),
+        ));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout.trim().parse::<u64>()
+    stdout
+        .trim()
+        .parse::<u64>()
         .map_err(|_| Error::Internal("Failed to parse written value".to_string()))
 }
 
@@ -1743,7 +1843,9 @@ async fn get_remote_zfs_snapshot_written(
     }
     cmd.args(["zfs", "get", "-H", "-p", "-o", "value", "written", snapshot]);
 
-    let output = cmd.output().await
+    let output = cmd
+        .output()
+        .await
         .map_err(|e| Error::Internal(format!("Failed to get remote written: {}", e)))?;
 
     if !output.status.success() {
@@ -1751,7 +1853,9 @@ async fn get_remote_zfs_snapshot_written(
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout.trim().parse::<u64>()
+    stdout
+        .trim()
+        .parse::<u64>()
         .map_err(|_| Error::Internal("Failed to parse remote written value".to_string()))
 }
 
@@ -1773,7 +1877,9 @@ async fn list_btrfs_snapshots(path: &str) -> Result<Vec<BtrfsSnapshot>> {
         .map_err(|e| Error::Internal(format!("Failed to list btrfs snapshots: {}", e)))?;
 
     if !output.status.success() {
-        return Err(Error::Internal("Failed to list btrfs snapshots".to_string()));
+        return Err(Error::Internal(
+            "Failed to list btrfs snapshots".to_string(),
+        ));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1788,7 +1894,7 @@ async fn list_btrfs_snapshots(path: &str) -> Result<Vec<BtrfsSnapshot>> {
                 snapshots.push(BtrfsSnapshot {
                     path: parts[path_idx..].join("/"),
                     readonly: true, // -s lists only snapshots
-                    created_at: 0, // Would need btrfs subvolume show for this
+                    created_at: 0,  // Would need btrfs subvolume show for this
                 });
             }
         }
@@ -1819,7 +1925,9 @@ async fn list_remote_btrfs_snapshots(
     }
     cmd.args(["btrfs", "subvolume", "list", "-s", path]);
 
-    let output = cmd.output().await
+    let output = cmd
+        .output()
+        .await
         .map_err(|e| Error::Internal(format!("Failed to list remote btrfs snapshots: {}", e)))?;
 
     if !output.status.success() {
@@ -1867,7 +1975,10 @@ fn parse_pv_output(line: &str) -> Option<(u64, u64)> {
 
     // Parse rate
     let rate_str = parts.get(2)?;
-    let rate_str = rate_str.trim_start_matches('[').trim_end_matches(']').trim_end_matches("/s");
+    let rate_str = rate_str
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .trim_end_matches("/s");
     let rate = super::parse_size(rate_str)?;
 
     Some((bytes, rate))
@@ -1944,10 +2055,7 @@ async fn send_failure_alert(email: &str, task_name: &str, error: &str) -> Result
     if let Ok(mut child) = result {
         if let Some(mut stdin) = child.stdin.take() {
             use tokio::io::AsyncWriteExt;
-            let message = format!(
-                "To: {}\nSubject: {}\n\n{}",
-                email, subject, body
-            );
+            let message = format!("To: {}\nSubject: {}\n\n{}", email, subject, body);
             let _ = stdin.write_all(message.as_bytes()).await;
         }
         let _ = child.wait().await;
@@ -1981,7 +2089,9 @@ pub async fn test_ssh_connection(host: &str, ssh_config: Option<&SshConfig>) -> 
     }
     cmd.args(["echo", "ok"]);
 
-    let output = cmd.output().await
+    let output = cmd
+        .output()
+        .await
         .map_err(|e| Error::Internal(format!("SSH connection test failed: {}", e)))?;
 
     Ok(output.status.success())
@@ -2000,7 +2110,9 @@ pub async fn check_remote_zfs(host: &str, ssh_config: Option<&SshConfig>) -> Res
     }
     cmd.args(["which", "zfs"]);
 
-    let output = cmd.output().await
+    let output = cmd
+        .output()
+        .await
         .map_err(|e| Error::Internal(format!("Remote ZFS check failed: {}", e)))?;
 
     Ok(output.status.success())
@@ -2022,7 +2134,9 @@ pub async fn check_remote_space(
     }
     cmd.args(["df", "-B1", path]);
 
-    let output = cmd.output().await
+    let output = cmd
+        .output()
+        .await
         .map_err(|e| Error::Internal(format!("Remote space check failed: {}", e)))?;
 
     if !output.status.success() {
@@ -2079,7 +2193,8 @@ pub async fn apply_retention(dataset: &str, policy: &RetentionPolicy) -> Result<
     snapshots.sort_by_key(|s| s.created_at);
 
     let now = chrono::Utc::now().timestamp();
-    let keep_threshold = policy.keep_days
+    let keep_threshold = policy
+        .keep_days
         .map(|d| now - (d as i64 * 86400))
         .unwrap_or(0);
 
@@ -2103,7 +2218,10 @@ pub async fn apply_retention(dataset: &str, policy: &RetentionPolicy) -> Result<
         };
 
         if !should_keep {
-            if super::snapshots::delete_snapshot(&snapshot.full_name).await.is_ok() {
+            if super::snapshots::delete_snapshot(&snapshot.full_name)
+                .await
+                .is_ok()
+            {
                 deleted += 1;
             }
         }

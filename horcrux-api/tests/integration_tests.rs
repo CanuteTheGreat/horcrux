@@ -58,7 +58,11 @@ async fn test_vm_lifecycle() {
 
     assert!(response.is_ok(), "Failed to create VM");
     let response = response.unwrap();
-    assert_eq!(response.status(), 200, "VM creation returned non-200 status");
+    assert_eq!(
+        response.status(),
+        200,
+        "VM creation returned non-200 status"
+    );
 
     // 2. Get VM details
     let response = client
@@ -128,8 +132,15 @@ async fn test_cluster_operations() {
         .await;
 
     assert!(response.is_ok(), "Failed to get cluster status");
-    let status: ClusterStatus = response.unwrap().json().await.expect("Failed to parse cluster status");
-    assert!(status.nodes.len() > 0, "Cluster should have at least one node");
+    let status: ClusterStatus = response
+        .unwrap()
+        .json()
+        .await
+        .expect("Failed to parse cluster status");
+    assert!(
+        status.nodes.len() > 0,
+        "Cluster should have at least one node"
+    );
 
     // 2. Join node to cluster
     let join_request = json!({
@@ -156,7 +167,11 @@ async fn test_cluster_operations() {
         .await;
 
     assert!(response.is_ok(), "Failed to get node list");
-    let nodes: Vec<ClusterNode> = response.unwrap().json().await.expect("Failed to parse nodes");
+    let nodes: Vec<ClusterNode> = response
+        .unwrap()
+        .json()
+        .await
+        .expect("Failed to parse nodes");
     assert!(nodes.len() > 0, "Should have at least one node");
 
     // 4. Get quorum info
@@ -236,7 +251,11 @@ async fn test_storage_operations() {
     let mut test_pool_id = String::new();
 
     if dir_pool_created {
-        let pool_response: serde_json::Value = response.unwrap().json().await.expect("Failed to parse pool");
+        let pool_response: serde_json::Value = response
+            .unwrap()
+            .json()
+            .await
+            .expect("Failed to parse pool");
         test_pool_id = pool_response["id"].as_str().unwrap().to_string();
         wait_for_operation(500).await;
 
@@ -255,7 +274,10 @@ async fn test_storage_operations() {
         });
 
         let response = client
-            .post(&format!("{}/storage/pools/{}/volumes", API_BASE, test_pool_id))
+            .post(&format!(
+                "{}/storage/pools/{}/volumes",
+                API_BASE, test_pool_id
+            ))
             .json(&volume_request)
             .send()
             .await;
@@ -340,7 +362,11 @@ async fn test_backup_operations() {
         .await;
 
     assert!(response.is_ok(), "Failed to create backup");
-    let backup_id: String = response.unwrap().json().await.expect("Failed to get backup ID");
+    let backup_id: String = response
+        .unwrap()
+        .json()
+        .await
+        .expect("Failed to get backup ID");
 
     wait_for_operation(3000).await;
 
@@ -351,7 +377,11 @@ async fn test_backup_operations() {
         .await;
 
     assert!(response.is_ok(), "Failed to list backups");
-    let backups: Vec<BackupInfo> = response.unwrap().json().await.expect("Failed to parse backups");
+    let backups: Vec<BackupInfo> = response
+        .unwrap()
+        .json()
+        .await
+        .expect("Failed to parse backups");
     assert!(backups.len() > 0, "Should have at least one backup");
 
     // 3. Get backup info
@@ -395,7 +425,11 @@ async fn test_monitoring_and_alerts() {
         .await;
 
     assert!(response.is_ok(), "Failed to get node metrics");
-    let metrics: NodeMetrics = response.unwrap().json().await.expect("Failed to parse metrics");
+    let metrics: NodeMetrics = response
+        .unwrap()
+        .json()
+        .await
+        .expect("Failed to parse metrics");
     assert!(metrics.cpu_usage >= 0.0 && metrics.cpu_usage <= 100.0);
     assert!(metrics.memory_total > 0);
 
@@ -424,7 +458,11 @@ async fn test_monitoring_and_alerts() {
         .await;
 
     assert!(response.is_ok(), "Failed to list alert rules");
-    let rules: Vec<AlertRule> = response.unwrap().json().await.expect("Failed to parse rules");
+    let rules: Vec<AlertRule> = response
+        .unwrap()
+        .json()
+        .await
+        .expect("Failed to parse rules");
     assert!(rules.len() > 0, "Should have at least one alert rule");
 
     // 4. Get active alerts
@@ -434,7 +472,11 @@ async fn test_monitoring_and_alerts() {
         .await;
 
     assert!(response.is_ok(), "Failed to get active alerts");
-    let alerts: Vec<Alert> = response.unwrap().json().await.expect("Failed to parse alerts");
+    let alerts: Vec<Alert> = response
+        .unwrap()
+        .json()
+        .await
+        .expect("Failed to parse alerts");
 
     // 5. Get alert history
     let response = client
@@ -462,8 +504,15 @@ async fn test_authentication() {
         .await;
 
     assert!(response.is_ok(), "Failed to login");
-    let token_response: serde_json::Value = response.unwrap().json().await.expect("Failed to parse token");
-    assert!(token_response.get("token").is_some(), "Should receive auth token");
+    let token_response: serde_json::Value = response
+        .unwrap()
+        .json()
+        .await
+        .expect("Failed to parse token");
+    assert!(
+        token_response.get("token").is_some(),
+        "Should receive auth token"
+    );
 
     // 2. Verify token works
     let token = token_response["token"].as_str().unwrap();
@@ -488,7 +537,11 @@ async fn test_authentication() {
         .await;
 
     if response.is_ok() {
-        assert_eq!(response.unwrap().status(), 401, "Should reject invalid credentials");
+        assert_eq!(
+            response.unwrap().status(),
+            401,
+            "Should reject invalid credentials"
+        );
     }
 }
 
@@ -530,7 +583,11 @@ async fn test_firewall_rules() {
         .await;
 
     if response.is_ok() {
-        let rule: FirewallRule = response.unwrap().json().await.expect("Failed to parse rule");
+        let rule: FirewallRule = response
+            .unwrap()
+            .json()
+            .await
+            .expect("Failed to parse rule");
         assert_eq!(rule.name, "test-http-allow");
         assert_eq!(rule.port, Some(80));
     }
@@ -555,10 +612,7 @@ async fn test_template_operations() {
     let client = create_client();
 
     // 1. List templates
-    let response = client
-        .get(&format!("{}/templates", API_BASE))
-        .send()
-        .await;
+    let response = client.get(&format!("{}/templates", API_BASE)).send().await;
 
     assert!(response.is_ok(), "Failed to list templates");
 
@@ -634,7 +688,11 @@ async fn test_console_access() {
         .await;
 
     assert!(response.is_ok(), "Failed to get VNC console URL");
-    let console_info: serde_json::Value = response.unwrap().json().await.expect("Failed to parse console info");
+    let console_info: serde_json::Value = response
+        .unwrap()
+        .json()
+        .await
+        .expect("Failed to parse console info");
     assert!(console_info.get("url").is_some(), "Should have console URL");
 
     // 2. Get serial console
@@ -667,13 +725,14 @@ async fn test_api_health() {
     let client = create_client();
 
     // Test health endpoint
-    let response = client
-        .get(&format!("{}/health", API_BASE))
-        .send()
-        .await;
+    let response = client.get(&format!("{}/health", API_BASE)).send().await;
 
     assert!(response.is_ok(), "Health check failed");
-    assert_eq!(response.unwrap().status(), 200, "Health check should return 200");
+    assert_eq!(
+        response.unwrap().status(),
+        200,
+        "Health check should return 200"
+    );
 }
 
 #[tokio::test]
@@ -696,7 +755,8 @@ async fn test_session_management() {
     let response = response.unwrap();
 
     // Extract session cookie from Set-Cookie header
-    let set_cookie = response.headers()
+    let set_cookie = response
+        .headers()
         .get("set-cookie")
         .expect("Should receive set-cookie header")
         .to_str()
@@ -738,7 +798,11 @@ async fn test_session_management() {
         .await;
 
     if response.is_ok() {
-        assert_eq!(response.unwrap().status(), 401, "Should reject invalid session");
+        assert_eq!(
+            response.unwrap().status(),
+            401,
+            "Should reject invalid session"
+        );
     }
 }
 
@@ -807,7 +871,11 @@ async fn test_password_change() {
         .await;
 
     if response.is_ok() {
-        assert_eq!(response.unwrap().status(), 401, "Old password should not work");
+        assert_eq!(
+            response.unwrap().status(),
+            401,
+            "Old password should not work"
+        );
     }
 
     // 4. Verify new password works
@@ -871,8 +939,14 @@ async fn test_api_token_generation() {
     assert!(response.is_ok(), "Failed to create API key");
     let api_key_response: serde_json::Value = response.unwrap().json().await.unwrap();
 
-    assert!(api_key_response.get("key").is_some(), "Should receive API key");
-    assert!(api_key_response.get("id").is_some(), "Should receive key ID");
+    assert!(
+        api_key_response.get("key").is_some(),
+        "Should receive API key"
+    );
+    assert!(
+        api_key_response.get("id").is_some(),
+        "Should receive key ID"
+    );
 
     let api_key = api_key_response["key"].as_str().unwrap();
     assert!(api_key.starts_with("hx_"), "API key should have hx_ prefix");
@@ -1107,7 +1181,10 @@ async fn test_network_policy_enforcement() {
 
     // 3. Get iptables rules for policy
     let response = client
-        .get(&format!("{}/network-policies/test-policy-1/iptables", API_BASE))
+        .get(&format!(
+            "{}/network-policies/test-policy-1/iptables",
+            API_BASE
+        ))
         .send()
         .await;
 
@@ -1182,7 +1259,10 @@ async fn test_vm_migration() {
 
         if response.is_ok() {
             let status: serde_json::Value = response.unwrap().json().await.unwrap();
-            assert!(status.get("state").is_some(), "Migration status should include state");
+            assert!(
+                status.get("state").is_some(),
+                "Migration status should include state"
+            );
         }
     }
 
@@ -1543,10 +1623,7 @@ async fn test_high_availability() {
         wait_for_operation(500).await;
 
         // 2. List HA groups
-        let response = client
-            .get(&format!("{}/ha/groups", API_BASE))
-            .send()
-            .await;
+        let response = client.get(&format!("{}/ha/groups", API_BASE)).send().await;
 
         assert!(response.is_ok(), "Failed to list HA groups");
     }
@@ -1577,10 +1654,7 @@ async fn test_high_availability() {
         assert!(response.is_ok(), "Failed to list HA resources");
 
         // 5. Get HA status
-        let response = client
-            .get(&format!("{}/ha/status", API_BASE))
-            .send()
-            .await;
+        let response = client.get(&format!("{}/ha/status", API_BASE)).send().await;
 
         assert!(response.is_ok(), "Failed to get HA status");
 

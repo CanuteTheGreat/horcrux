@@ -8,17 +8,17 @@
 //! - iSCSI Target (tgt)
 //! - Rsync (rsyncd)
 
-#[cfg(feature = "s3-gateway")]
-pub mod s3;
 #[cfg(feature = "iscsi-target")]
 pub mod iscsi;
 #[cfg(feature = "rsync-server")]
 pub mod rsync;
+#[cfg(feature = "s3-gateway")]
+pub mod s3;
 #[cfg(feature = "timemachine")]
 pub mod timemachine;
 
-use horcrux_common::{Error, Result};
 use crate::nas::ServiceStatus;
+use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
@@ -163,9 +163,7 @@ pub async fn manage_service(service: &NasService, action: ServiceAction) -> Resu
                 .args([action.as_str(), service.service_name()])
                 .output()
                 .await
-                .map_err(|e| {
-                    Error::Internal(format!("Failed to run systemctl: {}", e))
-                })?;
+                .map_err(|e| Error::Internal(format!("Failed to run systemctl: {}", e)))?;
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -179,8 +177,12 @@ pub async fn manage_service(service: &NasService, action: ServiceAction) -> Resu
         }
         InitSystem::OpenRC => {
             let (cmd, args) = match action {
-                ServiceAction::Enable => ("rc-update", vec!["add", service.openrc_name(), "default"]),
-                ServiceAction::Disable => ("rc-update", vec!["del", service.openrc_name(), "default"]),
+                ServiceAction::Enable => {
+                    ("rc-update", vec!["add", service.openrc_name(), "default"])
+                }
+                ServiceAction::Disable => {
+                    ("rc-update", vec!["del", service.openrc_name(), "default"])
+                }
                 _ => ("rc-service", vec![service.openrc_name(), action.as_str()]),
             };
 
@@ -188,17 +190,13 @@ pub async fn manage_service(service: &NasService, action: ServiceAction) -> Resu
                 .args(&args)
                 .output()
                 .await
-                .map_err(|e| {
-                    Error::Internal(format!("Failed to run {}: {}", cmd, e))
-                })?;
+                .map_err(|e| Error::Internal(format!("Failed to run {}: {}", cmd, e)))?;
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 return Err(Error::Internal(format!(
                     "{} {:?} failed: {}",
-                    cmd,
-                    args,
-                    stderr
+                    cmd, args, stderr
                 )));
             }
         }
@@ -257,7 +255,12 @@ async fn get_systemd_status(service: &NasService) -> Result<(bool, bool, Option<
     // Get PID
     let pid = if is_active {
         let output = Command::new("systemctl")
-            .args(["show", "--property=MainPID", "--value", service.service_name()])
+            .args([
+                "show",
+                "--property=MainPID",
+                "--value",
+                service.service_name(),
+            ])
             .output()
             .await
             .ok();

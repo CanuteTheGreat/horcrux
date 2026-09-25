@@ -6,25 +6,25 @@
 #![allow(dead_code)]
 
 use horcrux_common::Result;
-use serde::{Deserialize, Serialize};
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// S3 storage manager
 pub struct S3Manager {
-    _client: Client,  // Reserved for future async S3 operations
+    _client: Client, // Reserved for future async S3 operations
 }
 
 /// S3 configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct S3Config {
-    pub endpoint: String,       // S3 endpoint URL
-    pub region: String,          // AWS region or "us-east-1" for MinIO
-    pub bucket: String,          // S3 bucket name
-    pub access_key: String,      // Access key ID
-    pub secret_key: String,      // Secret access key
-    pub use_path_style: bool,    // Use path-style addressing (for MinIO)
-    pub use_ssl: bool,           // Use HTTPS
+    pub endpoint: String,     // S3 endpoint URL
+    pub region: String,       // AWS region or "us-east-1" for MinIO
+    pub bucket: String,       // S3 bucket name
+    pub access_key: String,   // Access key ID
+    pub secret_key: String,   // Secret access key
+    pub use_path_style: bool, // Use path-style addressing (for MinIO)
+    pub use_ssl: bool,        // Use HTTPS
 }
 
 /// S3 object metadata
@@ -46,29 +46,30 @@ impl S3Manager {
 
     /// Validate S3 storage pool
     pub async fn validate_pool(&self, pool: &super::StoragePool) -> Result<()> {
-        
-
         // Parse s3:// path to extract bucket info
         // Expected format: "s3://bucket-name" or "s3://endpoint/bucket-name"
         let path = &pool.path;
 
         if !path.starts_with("s3://") {
             return Err(horcrux_common::Error::InvalidConfig(
-                "S3 pool path must start with 's3://'".to_string()
+                "S3 pool path must start with 's3://'".to_string(),
             ));
         }
 
         let bucket_part = path.strip_prefix("s3://").unwrap();
         if bucket_part.is_empty() {
             return Err(horcrux_common::Error::InvalidConfig(
-                "S3 pool path must specify bucket name".to_string()
+                "S3 pool path must specify bucket name".to_string(),
             ));
         }
 
         // Basic bucket name validation completed in mod.rs
         // For now, we can't validate the actual connection without credentials
         // which are stored separately from the pool configuration
-        tracing::info!("S3 storage pool validation passed (offline check): {}", pool.path);
+        tracing::info!(
+            "S3 storage pool validation passed (offline check): {}",
+            pool.path
+        );
 
         Ok(())
     }
@@ -87,12 +88,17 @@ impl S3Manager {
         local_path: &str,
         s3_key: &str,
     ) -> Result<String> {
-        tracing::info!("Uploading {} to S3 bucket {} as {}", local_path, config.bucket, s3_key);
+        tracing::info!(
+            "Uploading {} to S3 bucket {} as {}",
+            local_path,
+            config.bucket,
+            s3_key
+        );
 
         // Read file
-        let data = tokio::fs::read(local_path).await.map_err(|e| {
-            horcrux_common::Error::System(format!("Failed to read file: {}", e))
-        })?;
+        let data = tokio::fs::read(local_path)
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to read file: {}", e)))?;
 
         // Build URL
         let url = self.build_url(config, s3_key);
@@ -101,7 +107,8 @@ impl S3Manager {
         let auth_header = format!("AWS {}:{}", config.access_key, config.secret_key);
 
         // Upload
-        let response = self._client
+        let response = self
+            ._client
             .put(&url)
             .header("Authorization", auth_header)
             .header("Content-Type", "application/octet-stream")
@@ -113,9 +120,10 @@ impl S3Manager {
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
-            return Err(horcrux_common::Error::System(
-                format!("S3 upload failed ({}): {}", status, error_text)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "S3 upload failed ({}): {}",
+                status, error_text
+            )));
         }
 
         let etag = response
@@ -137,12 +145,18 @@ impl S3Manager {
         s3_key: &str,
         local_path: &str,
     ) -> Result<()> {
-        tracing::info!("Downloading {} from S3 bucket {} to {}", s3_key, config.bucket, local_path);
+        tracing::info!(
+            "Downloading {} from S3 bucket {} to {}",
+            s3_key,
+            config.bucket,
+            local_path
+        );
 
         let url = self.build_url(config, s3_key);
         let auth_header = format!("AWS {}:{}", config.access_key, config.secret_key);
 
-        let response = self._client
+        let response = self
+            ._client
             .get(&url)
             .header("Authorization", auth_header)
             .send()
@@ -151,9 +165,10 @@ impl S3Manager {
 
         if !response.status().is_success() {
             let status = response.status();
-            return Err(horcrux_common::Error::System(
-                format!("S3 download failed: {}", status)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "S3 download failed: {}",
+                status
+            )));
         }
 
         let bytes = response.bytes().await.map_err(|e| {
@@ -167,9 +182,9 @@ impl S3Manager {
             })?;
         }
 
-        tokio::fs::write(local_path, &bytes).await.map_err(|e| {
-            horcrux_common::Error::System(format!("Failed to write file: {}", e))
-        })?;
+        tokio::fs::write(local_path, &bytes)
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to write file: {}", e)))?;
 
         tracing::info!("Successfully downloaded from S3");
 
@@ -177,17 +192,14 @@ impl S3Manager {
     }
 
     /// Delete object from S3
-    pub async fn delete_object(
-        &self,
-        config: &S3Config,
-        s3_key: &str,
-    ) -> Result<()> {
+    pub async fn delete_object(&self, config: &S3Config, s3_key: &str) -> Result<()> {
         tracing::info!("Deleting {} from S3 bucket {}", s3_key, config.bucket);
 
         let url = self.build_url(config, s3_key);
         let auth_header = format!("AWS {}:{}", config.access_key, config.secret_key);
 
-        let response = self._client
+        let response = self
+            ._client
             .delete(&url)
             .header("Authorization", auth_header)
             .send()
@@ -196,9 +208,10 @@ impl S3Manager {
 
         if !response.status().is_success() {
             let status = response.status();
-            return Err(horcrux_common::Error::System(
-                format!("S3 delete failed: {}", status)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "S3 delete failed: {}",
+                status
+            )));
         }
 
         tracing::info!("Successfully deleted from S3");
@@ -226,7 +239,8 @@ impl S3Manager {
 
         let auth_header = format!("AWS {}:{}", config.access_key, config.secret_key);
 
-        let response = self._client
+        let response = self
+            ._client
             .get(&url)
             .header("Authorization", auth_header)
             .send()
@@ -235,9 +249,10 @@ impl S3Manager {
 
         if !response.status().is_success() {
             let status = response.status();
-            return Err(horcrux_common::Error::System(
-                format!("S3 list failed: {}", status)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "S3 list failed: {}",
+                status
+            )));
         }
 
         let body = response.text().await.map_err(|e| {
@@ -251,15 +266,12 @@ impl S3Manager {
     }
 
     /// Get object metadata
-    pub async fn head_object(
-        &self,
-        config: &S3Config,
-        s3_key: &str,
-    ) -> Result<S3Object> {
+    pub async fn head_object(&self, config: &S3Config, s3_key: &str) -> Result<S3Object> {
         let url = self.build_url(config, s3_key);
         let auth_header = format!("AWS {}:{}", config.access_key, config.secret_key);
 
-        let response = self._client
+        let response = self
+            ._client
             .head(&url)
             .header("Authorization", auth_header)
             .send()
@@ -268,9 +280,10 @@ impl S3Manager {
 
         if !response.status().is_success() {
             let status = response.status();
-            return Err(horcrux_common::Error::System(
-                format!("S3 HEAD failed: {}", status)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "S3 HEAD failed: {}",
+                status
+            )));
         }
 
         let headers = response.headers();
@@ -303,23 +316,24 @@ impl S3Manager {
     }
 
     /// Create multipart upload for large files
-    pub async fn create_multipart_upload(
-        &self,
-        config: &S3Config,
-        s3_key: &str,
-    ) -> Result<String> {
+    pub async fn create_multipart_upload(&self, config: &S3Config, s3_key: &str) -> Result<String> {
         let url = format!("{}?uploads", self.build_url(config, s3_key));
         let auth_header = format!("AWS {}:{}", config.access_key, config.secret_key);
 
-        let response = self._client
+        let response = self
+            ._client
             .post(&url)
             .header("Authorization", auth_header)
             .send()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to create multipart upload: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to create multipart upload: {}", e))
+            })?;
 
         if !response.status().is_success() {
-            return Err(horcrux_common::Error::System("Failed to create multipart upload".to_string()));
+            return Err(horcrux_common::Error::System(
+                "Failed to create multipart upload".to_string(),
+            ));
         }
 
         let body = response.text().await.unwrap_or_default();
@@ -329,7 +343,9 @@ impl S3Manager {
             .split("<UploadId>")
             .nth(1)
             .and_then(|s| s.split("</UploadId>").next())
-            .ok_or_else(|| horcrux_common::Error::System("Invalid multipart upload response".to_string()))?
+            .ok_or_else(|| {
+                horcrux_common::Error::System("Invalid multipart upload response".to_string())
+            })?
             .to_string();
 
         Ok(upload_id)
@@ -341,20 +357,20 @@ impl S3Manager {
 
         if config.use_path_style {
             // Path-style: https://s3.endpoint.com/bucket/key
-            format!("{}://{}/{}/{}",
-                protocol,
-                config.endpoint,
-                config.bucket,
-                key
+            format!(
+                "{}://{}/{}/{}",
+                protocol, config.endpoint, config.bucket, key
             )
         } else {
             // Virtual-hosted-style: https://bucket.s3.endpoint.com/key
-            let key_path = if key.is_empty() { "/".to_string() } else { format!("/{}", key) };
-            format!("{}://{}.{}{}",
-                protocol,
-                config.bucket,
-                config.endpoint,
-                key_path
+            let key_path = if key.is_empty() {
+                "/".to_string()
+            } else {
+                format!("/{}", key)
+            };
+            format!(
+                "{}://{}.{}{}",
+                protocol, config.bucket, config.endpoint, key_path
             )
         }
     }
@@ -368,12 +384,19 @@ impl S3Manager {
             if let Some(end) = content.find("</Contents>") {
                 let content_block = &content[..end];
 
-                let key = self.extract_xml_value(content_block, "Key").unwrap_or_default();
-                let size = self.extract_xml_value(content_block, "Size")
+                let key = self
+                    .extract_xml_value(content_block, "Key")
+                    .unwrap_or_default();
+                let size = self
+                    .extract_xml_value(content_block, "Size")
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(0);
-                let etag = self.extract_xml_value(content_block, "ETag").unwrap_or_default();
-                let last_modified = self.extract_xml_value(content_block, "LastModified").unwrap_or_default();
+                let etag = self
+                    .extract_xml_value(content_block, "ETag")
+                    .unwrap_or_default();
+                let last_modified = self
+                    .extract_xml_value(content_block, "LastModified")
+                    .unwrap_or_default();
                 let storage_class = self.extract_xml_value(content_block, "StorageClass");
 
                 objects.push(S3Object {
@@ -448,7 +471,10 @@ mod tests {
         let config = S3Config::aws_s3("us-east-1", "key", "secret", "mybucket");
 
         let url = manager.build_url(&config, "myfile.txt");
-        assert_eq!(url, "https://mybucket.s3.us-east-1.amazonaws.com/myfile.txt");
+        assert_eq!(
+            url,
+            "https://mybucket.s3.us-east-1.amazonaws.com/myfile.txt"
+        );
     }
 
     #[test]

@@ -1,5 +1,5 @@
-use leptos::*;
 use crate::api::*;
+use leptos::*;
 
 #[component]
 pub fn ChartLibraryPage() -> impl IntoView {
@@ -71,7 +71,10 @@ pub fn ChartLibraryPage() -> impl IntoView {
 
         match create_chart_template(request).await {
             Ok(template) => {
-                set_success_message.set(Some(format!("Template '{}' created successfully", template.name)));
+                set_success_message.set(Some(format!(
+                    "Template '{}' created successfully",
+                    template.name
+                )));
                 set_show_create_modal.set(false);
                 clear_form();
                 load_templates.dispatch(());
@@ -90,7 +93,10 @@ pub fn ChartLibraryPage() -> impl IntoView {
             set_error_message.set(None);
 
             // This would typically redirect to dashboard editor with template pre-filled
-            set_success_message.set(Some(format!("Using template '{}' - redirect to dashboard editor", template.name)));
+            set_success_message.set(Some(format!(
+                "Using template '{}' - redirect to dashboard editor",
+                template.name
+            )));
 
             set_loading.set(false);
         }
@@ -139,7 +145,10 @@ pub fn ChartLibraryPage() -> impl IntoView {
                     let url = web_sys::Url::create_object_url_with_blob(&blob).unwrap();
 
                     element.set_href(&url);
-                    element.set_download(&format!("chart-template-{}.json", template.name.replace(" ", "_").to_lowercase()));
+                    element.set_download(&format!(
+                        "chart-template-{}.json",
+                        template.name.replace(" ", "_").to_lowercase()
+                    ));
                     element.click();
 
                     web_sys::Url::revoke_object_url(&url).unwrap();
@@ -158,12 +167,16 @@ pub fn ChartLibraryPage() -> impl IntoView {
         let category = filter_category.get();
         let chart_type = filter_type.get();
 
-        chart_templates.get()
+        chart_templates
+            .get()
             .into_iter()
             .filter(|template| {
-                let matches_search = query.is_empty() ||
-                    template.name.to_lowercase().contains(&query) ||
-                    template.description.as_ref().map_or(false, |d| d.to_lowercase().contains(&query));
+                let matches_search = query.is_empty()
+                    || template.name.to_lowercase().contains(&query)
+                    || template
+                        .description
+                        .as_ref()
+                        .map_or(false, |d| d.to_lowercase().contains(&query));
 
                 let matches_category = category == "all" || template.category == category;
                 let matches_type = chart_type == "all" || template.chart_type == chart_type;
@@ -174,7 +187,8 @@ pub fn ChartLibraryPage() -> impl IntoView {
     };
 
     let get_category_list = move || -> Vec<String> {
-        let mut categories: Vec<String> = chart_templates.get()
+        let mut categories: Vec<String> = chart_templates
+            .get()
             .iter()
             .map(|t| t.category.clone())
             .collect::<std::collections::HashSet<_>>()
@@ -185,7 +199,8 @@ pub fn ChartLibraryPage() -> impl IntoView {
     };
 
     let get_type_list = move || -> Vec<String> {
-        let mut types: Vec<String> = chart_templates.get()
+        let mut types: Vec<String> = chart_templates
+            .get()
             .iter()
             .map(|t| t.chart_type.clone())
             .collect::<std::collections::HashSet<_>>()

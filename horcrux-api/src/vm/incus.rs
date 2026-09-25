@@ -34,7 +34,9 @@ impl IncusManager {
             .arg(format!("root,size={}GB", config.disk_size))
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to run incus init: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run incus init: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -52,7 +54,10 @@ impl IncusManager {
             name: config.name.clone(),
             memory: config.memory,
             cpus: config.cpus,
-            disk_path: std::path::PathBuf::from(format!("/var/lib/incus/virtual-machines/{}", config.name)),
+            disk_path: std::path::PathBuf::from(format!(
+                "/var/lib/incus/virtual-machines/{}",
+                config.name
+            )),
             disk_size: config.disk_size,
             status: VmStatus::Stopped,
             _pid: None,
@@ -75,7 +80,9 @@ impl IncusManager {
             .arg(&vm.name)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to run incus start: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run incus start: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -106,7 +113,9 @@ impl IncusManager {
             .arg(&vm.name)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to run incus stop: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run incus stop: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -137,7 +146,9 @@ impl IncusManager {
             .arg(&vm.name)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to run incus delete: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run incus delete: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

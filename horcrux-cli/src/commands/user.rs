@@ -95,7 +95,11 @@ pub async fn handle_user_command(
             let rows: Vec<UserRow> = users.into_iter().map(UserRow::from).collect();
             output::print_output(rows, format)?;
         }
-        UserCommands::Create { username, password, role } => {
+        UserCommands::Create {
+            username,
+            password,
+            role,
+        } => {
             let request = CreateUserRequest {
                 username: username.clone(),
                 password,
@@ -108,7 +112,8 @@ pub async fn handle_user_command(
         UserCommands::Delete { username } => {
             // Find user by username first
             let users: Vec<User> = api.get("/api/users").await?;
-            let user = users.iter()
+            let user = users
+                .iter()
                 .find(|u| u.username == username)
                 .ok_or_else(|| anyhow::anyhow!("User '{}' not found", username))?;
 
@@ -125,12 +130,14 @@ pub async fn handle_user_command(
 
             // Find user by username
             let users: Vec<User> = api.get("/api/users").await?;
-            let user = users.iter()
+            let user = users
+                .iter()
                 .find(|u| u.username == username)
                 .ok_or_else(|| anyhow::anyhow!("User '{}' not found", username))?;
 
             let request = ChangePasswordRequest { password };
-            api.post_empty(&format!("/api/users/{}/password", user.id), &request).await?;
+            api.post_empty(&format!("/api/users/{}/password", user.id), &request)
+                .await?;
             output::print_success(&format!("Password changed for user '{}'", username));
         }
         UserCommands::Roles => {
@@ -139,16 +146,26 @@ pub async fn handle_user_command(
             let rows: Vec<RoleRow> = roles.into_iter().map(RoleRow::from).collect();
             output::print_output(rows, format)?;
         }
-        UserCommands::Grant { username, permission } => {
+        UserCommands::Grant {
+            username,
+            permission,
+        } => {
             // Find user by username
             let users: Vec<User> = api.get("/api/users").await?;
-            let user = users.iter()
+            let user = users
+                .iter()
                 .find(|u| u.username == username)
                 .ok_or_else(|| anyhow::anyhow!("User '{}' not found", username))?;
 
-            let request = GrantPermissionRequest { permission: permission.clone() };
-            api.post_empty(&format!("/api/permissions/{}", user.id), &request).await?;
-            output::print_success(&format!("Permission '{}' granted to '{}'", permission, username));
+            let request = GrantPermissionRequest {
+                permission: permission.clone(),
+            };
+            api.post_empty(&format!("/api/permissions/{}", user.id), &request)
+                .await?;
+            output::print_success(&format!(
+                "Permission '{}' granted to '{}'",
+                permission, username
+            ));
         }
     }
     Ok(())

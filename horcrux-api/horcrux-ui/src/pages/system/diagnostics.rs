@@ -1,5 +1,5 @@
-use leptos::*;
 use crate::api::*;
+use leptos::*;
 
 #[component]
 pub fn DiagnosticsPage() -> impl IntoView {
@@ -7,9 +7,12 @@ pub fn DiagnosticsPage() -> impl IntoView {
     let (loading, set_loading) = create_signal(false);
     let (error_message, set_error_message) = create_signal(None::<String>);
     let (success_message, set_success_message) = create_signal(None::<String>);
-    let (running_tests, set_running_tests) = create_signal(std::collections::HashSet::<String>::new());
-    let (test_results, set_test_results) = create_signal(std::collections::HashMap::<String, DiagnosticTestResult>::new());
-    let (selected_tests, set_selected_tests) = create_signal(std::collections::HashSet::<String>::new());
+    let (running_tests, set_running_tests) =
+        create_signal(std::collections::HashSet::<String>::new());
+    let (test_results, set_test_results) =
+        create_signal(std::collections::HashMap::<String, DiagnosticTestResult>::new());
+    let (selected_tests, set_selected_tests) =
+        create_signal(std::collections::HashSet::<String>::new());
 
     // Load system diagnostics
     let load_diagnostics = create_action(move |_: &()| async move {
@@ -28,7 +31,9 @@ pub fn DiagnosticsPage() -> impl IntoView {
     let run_test_action = create_action(move |test_name: &String| {
         let test_name = test_name.clone();
         async move {
-            set_running_tests.update(|tests| { tests.insert(test_name.clone()); });
+            set_running_tests.update(|tests| {
+                tests.insert(test_name.clone());
+            });
             set_error_message.set(None);
 
             match run_diagnostic_test(&test_name).await {
@@ -40,10 +45,14 @@ pub fn DiagnosticsPage() -> impl IntoView {
                         set_success_message.set(Some(format!("Test '{}' passed", test_name)));
                     }
                 }
-                Err(e) => set_error_message.set(Some(format!("Test '{}' failed: {}", test_name, e))),
+                Err(e) => {
+                    set_error_message.set(Some(format!("Test '{}' failed: {}", test_name, e)))
+                }
             }
 
-            set_running_tests.update(|tests| { tests.remove(&test_name); });
+            set_running_tests.update(|tests| {
+                tests.remove(&test_name);
+            });
         }
     });
 
@@ -57,8 +66,12 @@ pub fn DiagnosticsPage() -> impl IntoView {
                 set_test_results.set(results.clone());
                 let passed_count = results.values().filter(|r| r.passed).count();
                 let total_count = results.len();
-                set_success_message.set(Some(format!("Completed {} tests: {} passed, {} failed",
-                    total_count, passed_count, total_count - passed_count)));
+                set_success_message.set(Some(format!(
+                    "Completed {} tests: {} passed, {} failed",
+                    total_count,
+                    passed_count,
+                    total_count - passed_count
+                )));
             }
             Err(e) => set_error_message.set(Some(format!("Failed to run diagnostic tests: {}", e))),
         }
@@ -90,16 +103,19 @@ pub fn DiagnosticsPage() -> impl IntoView {
                     let url = web_sys::Url::create_object_url_with_blob(&blob).unwrap();
 
                     element.set_href(&url);
-                    element.set_download(&format!("diagnostics-report.{}",
+                    element.set_download(&format!(
+                        "diagnostics-report.{}",
                         match format.as_str() {
                             "html" => "html",
                             "pdf" => "pdf",
                             _ => "json",
-                        }));
+                        }
+                    ));
                     element.click();
 
                     web_sys::Url::revoke_object_url(&url).unwrap();
-                    set_success_message.set(Some("Diagnostic report generated successfully".to_string()));
+                    set_success_message
+                        .set(Some("Diagnostic report generated successfully".to_string()));
                 }
                 Err(e) => set_error_message.set(Some(format!("Failed to generate report: {}", e))),
             }
@@ -119,7 +135,9 @@ pub fn DiagnosticsPage() -> impl IntoView {
         set_error_message.set(None);
 
         for test_name in tests_to_run {
-            set_running_tests.update(|tests| { tests.insert(test_name.clone()); });
+            set_running_tests.update(|tests| {
+                tests.insert(test_name.clone());
+            });
 
             match run_diagnostic_test(&test_name).await {
                 Ok(result) => {
@@ -133,18 +151,26 @@ pub fn DiagnosticsPage() -> impl IntoView {
                 }
             }
 
-            set_running_tests.update(|tests| { tests.remove(&test_name); });
+            set_running_tests.update(|tests| {
+                tests.remove(&test_name);
+            });
         }
 
         let results_snapshot = test_results.get();
-        let passed_count = selected_tests.get().iter()
+        let passed_count = selected_tests
+            .get()
+            .iter()
             .filter_map(|name| results_snapshot.get(name))
             .filter(|result| result.passed)
             .count();
         let total_count = selected_tests.get().len();
 
-        set_success_message.set(Some(format!("Completed {} selected tests: {} passed, {} failed",
-            total_count, passed_count, total_count - passed_count)));
+        set_success_message.set(Some(format!(
+            "Completed {} selected tests: {} passed, {} failed",
+            total_count,
+            passed_count,
+            total_count - passed_count
+        )));
 
         set_selected_tests.set(std::collections::HashSet::new());
         set_loading.set(false);
@@ -161,7 +187,11 @@ pub fn DiagnosticsPage() -> impl IntoView {
     };
 
     let get_status_color = |passed: bool| {
-        if passed { "text-green-600 bg-green-50" } else { "text-red-600 bg-red-50" }
+        if passed {
+            "text-green-600 bg-green-50"
+        } else {
+            "text-red-600 bg-red-50"
+        }
     };
 
     let format_duration = |duration_ms: u64| -> String {

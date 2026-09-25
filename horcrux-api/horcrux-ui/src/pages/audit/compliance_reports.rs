@@ -1,5 +1,5 @@
-use leptos::*;
 use crate::api::*;
+use leptos::*;
 
 // All types imported from crate::api::* (ComplianceFramework, ComplianceControl, ComplianceEvidence, ManualOverride, ComplianceReport, GenerateReportRequest)
 
@@ -72,11 +72,14 @@ pub fn ComplianceReportsPage() -> impl IntoView {
 
     // Filtered controls
     let filtered_controls = create_memo(move |_| {
-        controls.get()
+        controls
+            .get()
             .into_iter()
             .filter(|control| {
-                let status_match = filter_status.get() == "all" || control.status == filter_status.get();
-                let category_match = filter_category.get() == "all" || control.category == filter_category.get();
+                let status_match =
+                    filter_status.get() == "all" || control.status == filter_status.get();
+                let category_match =
+                    filter_category.get() == "all" || control.category == filter_category.get();
                 status_match && category_match
             })
             .collect::<Vec<_>>()
@@ -84,7 +87,8 @@ pub fn ComplianceReportsPage() -> impl IntoView {
 
     // Get unique categories
     let categories = create_memo(move |_| {
-        let mut cats: Vec<String> = controls.get()
+        let mut cats: Vec<String> = controls
+            .get()
             .iter()
             .map(|c| c.category.clone())
             .collect::<std::collections::HashSet<_>>()
@@ -149,7 +153,11 @@ pub fn ComplianceReportsPage() -> impl IntoView {
                 reason: override_reason.get(),
                 user: "current_user".to_string(), // Would come from auth context
                 timestamp: chrono::Utc::now().to_rfc3339(),
-                expires: if override_expires.get().is_empty() { None } else { Some(override_expires.get()) },
+                expires: if override_expires.get().is_empty() {
+                    None
+                } else {
+                    Some(override_expires.get())
+                },
             };
 
             spawn_local(async move {

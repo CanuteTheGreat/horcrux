@@ -1,5 +1,4 @@
 ///! VM cloning commands
-
 use crate::api::ApiClient;
 use crate::output::{self, OutputFormat};
 use crate::CloneCommands;
@@ -76,7 +75,7 @@ pub async fn handle_clone_command(
             spinner.set_style(
                 ProgressStyle::default_spinner()
                     .template("{spinner:.green} {msg}")
-                    .unwrap()
+                    .unwrap(),
             );
             spinner.set_message(format!("Cloning VM {} as '{}'...", vm_id, name));
             spinner.enable_steady_tick(std::time::Duration::from_millis(100));
@@ -87,8 +86,14 @@ pub async fn handle_clone_command(
 
             spinner.finish_and_clear();
             output::print_created("Clone job", &name, &job.job_id);
-            output::print_info(&format!("Clone type: {}", if full { "Full" } else { "Linked" }));
-            output::print_info(&format!("Track progress: horcrux clone status {}", job.job_id));
+            output::print_info(&format!(
+                "Clone type: {}",
+                if full { "Full" } else { "Linked" }
+            ));
+            output::print_info(&format!(
+                "Track progress: horcrux clone status {}",
+                job.job_id
+            ));
         }
 
         CloneCommands::List => {
@@ -111,7 +116,7 @@ pub async fn handle_clone_command(
                         ProgressStyle::default_bar()
                             .template("{msg} [{bar:40.cyan/blue}] {pos}%")
                             .unwrap()
-                            .progress_chars("=> ")
+                            .progress_chars("=> "),
                     );
                     pb.set_message("Progress");
                     pb.set_position((job.progress * 100.0) as u64);
@@ -125,7 +130,10 @@ pub async fn handle_clone_command(
             use dialoguer::Confirm;
 
             let confirm = Confirm::new()
-                .with_prompt(format!("Are you sure you want to cancel clone job {}?", job_id))
+                .with_prompt(format!(
+                    "Are you sure you want to cancel clone job {}?",
+                    job_id
+                ))
                 .interact()?;
 
             if confirm {

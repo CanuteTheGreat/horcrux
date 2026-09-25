@@ -280,9 +280,9 @@ async fn run_ssh_command(node: &ProvisionNode, command: &str) -> K8sResult<Strin
             K8sError::ProvisioningError(format!("Failed to create temp key file: {}", e))
         })?;
 
-        tokio::fs::write(key_file.path(), key).await.map_err(|e| {
-            K8sError::ProvisioningError(format!("Failed to write key file: {}", e))
-        })?;
+        tokio::fs::write(key_file.path(), key)
+            .await
+            .map_err(|e| K8sError::ProvisioningError(format!("Failed to write key file: {}", e)))?;
 
         ssh_cmd.arg("-i").arg(key_file.path());
     }
@@ -291,9 +291,10 @@ async fn run_ssh_command(node: &ProvisionNode, command: &str) -> K8sResult<Strin
         .arg(format!("{}@{}", node.user, node.address))
         .arg(command);
 
-    let output = ssh_cmd.output().await.map_err(|e| {
-        K8sError::ProvisioningError(format!("SSH command failed: {}", e))
-    })?;
+    let output = ssh_cmd
+        .output()
+        .await
+        .map_err(|e| K8sError::ProvisioningError(format!("SSH command failed: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -341,19 +342,28 @@ fn extract_join_command(output: &str) -> K8sResult<String> {
 fn adjust_kubeconfig_server(kubeconfig: &str, external_ip: &str) -> K8sResult<String> {
     // Replace 127.0.0.1 or localhost with external IP
     let adjusted = kubeconfig
-        .replace("https://127.0.0.1:6443", &format!("https://{}:6443", external_ip))
-        .replace("https://localhost:6443", &format!("https://{}:6443", external_ip))
-        .replace("server: https://127.0.0.1", &format!("server: https://{}", external_ip))
-        .replace("server: https://localhost", &format!("server: https://{}", external_ip));
+        .replace(
+            "https://127.0.0.1:6443",
+            &format!("https://{}:6443", external_ip),
+        )
+        .replace(
+            "https://localhost:6443",
+            &format!("https://{}:6443", external_ip),
+        )
+        .replace(
+            "server: https://127.0.0.1",
+            &format!("server: https://{}", external_ip),
+        )
+        .replace(
+            "server: https://localhost",
+            &format!("server: https://{}", external_ip),
+        );
 
     Ok(adjusted)
 }
 
 /// Destroy a provisioned cluster
-pub async fn destroy_cluster(
-    nodes: &[ProvisionNode],
-    provider: ClusterProvider,
-) -> K8sResult<()> {
+pub async fn destroy_cluster(nodes: &[ProvisionNode], provider: ClusterProvider) -> K8sResult<()> {
     match provider {
         ClusterProvider::K3s => destroy_k3s(nodes).await,
         ClusterProvider::Kubeadm => destroy_kubeadm(nodes).await,
@@ -557,10 +567,7 @@ async fn upgrade_kubeadm(request: &ClusterUpgradeRequest) -> K8sResult<UpgradeSt
         run_ssh_command(first_cp, &update_kubeadm).await?;
 
         // Plan and apply upgrade
-        let upgrade_cmd = format!(
-            "sudo kubeadm upgrade apply v{} -y",
-            full_version
-        );
+        let upgrade_cmd = format!("sudo kubeadm upgrade apply v{} -y", full_version);
         run_ssh_command(first_cp, &upgrade_cmd).await?;
 
         // Upgrade kubelet and kubectl
@@ -737,7 +744,10 @@ async fn add_kubeadm_node(node: &ProvisionNode, join_info: &NodeJoinInfo) -> K8s
         "sudo kubeadm join {} --token {} --discovery-token-ca-cert-hash {}",
         join_info.api_server,
         join_info.token,
-        join_info.ca_cert_hash.as_deref().unwrap_or("sha256:placeholder")
+        join_info
+            .ca_cert_hash
+            .as_deref()
+            .unwrap_or("sha256:placeholder")
     );
 
     if join_info.control_plane {
@@ -791,27 +801,28 @@ pub async fn remove_node(
 /// Generate a new join token (kubeadm)
 pub async fn generate_join_token(cp_node: &ProvisionNode) -> K8sResult<NodeJoinInfo> {
     // Generate token
-    let token_output = run_ssh_command(
-        cp_node,
-        "kubeadm token create --print-join-command",
-    ).await?;
+    let token_output =
+        run_ssh_command(cp_node, "kubeadm token create --print-join-command").await?;
 
     // Parse the join command to extract token and CA hash
     let parts: Vec<&str> = token_output.split_whitespace().collect();
 
-    let api_server = parts.iter()
+    let api_server = parts
+        .iter()
         .position(|&p| p.contains(":6443"))
         .and_then(|i| parts.get(i))
         .map(|s| s.to_string())
         .unwrap_or_default();
 
-    let token = parts.iter()
+    let token = parts
+        .iter()
         .position(|&p| p == "--token")
         .and_then(|i| parts.get(i + 1))
         .map(|s| s.to_string())
         .unwrap_or_default();
 
-    let ca_cert_hash = parts.iter()
+    let ca_cert_hash = parts
+        .iter()
         .position(|&p| p == "--discovery-token-ca-cert-hash")
         .and_then(|i| parts.get(i + 1))
         .map(|s| s.to_string());

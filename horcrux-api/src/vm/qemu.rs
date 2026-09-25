@@ -1,5 +1,4 @@
 ///! QEMU/KVM integration
-
 use horcrux_common::{Result, VmConfig, VmHypervisor, VmStatus};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -16,7 +15,7 @@ pub struct QemuVm {
     pub disk_path: PathBuf,
     pub disk_size: u64,
     pub status: VmStatus,
-    pub _pid: Option<u32>,  // Reserved for future process monitoring
+    pub _pid: Option<u32>, // Reserved for future process monitoring
 }
 
 impl QemuVm {
@@ -59,12 +58,17 @@ impl QemuManager {
         // Create storage directory if it doesn't exist
         tokio::fs::create_dir_all(&self.storage_path)
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to create storage directory: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to create storage directory: {}", e))
+            })?;
 
         // Create disk image
         let disk_path = self.storage_path.join(format!("{}.qcow2", config.id));
 
-        debug!("Creating disk image at {:?} with size {}GB", disk_path, config.disk_size);
+        debug!(
+            "Creating disk image at {:?} with size {}GB",
+            disk_path, config.disk_size
+        );
 
         let output = Command::new("qemu-img")
             .arg("create")
@@ -79,7 +83,10 @@ impl QemuManager {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             error!("qemu-img failed: {}", stderr);
-            return Err(horcrux_common::Error::System(format!("Failed to create disk image: {}", stderr)));
+            return Err(horcrux_common::Error::System(format!(
+                "Failed to create disk image: {}",
+                stderr
+            )));
         }
 
         info!("VM {} created successfully", config.id);
@@ -101,34 +108,43 @@ impl QemuManager {
         info!("Starting VM: {} (ID: {})", vm.name, vm.id);
 
         if vm.status == VmStatus::Running {
-            return Err(horcrux_common::Error::InvalidConfig(
-                format!("VM {} is already running", vm.id)
-            ));
+            return Err(horcrux_common::Error::InvalidConfig(format!(
+                "VM {} is already running",
+                vm.id
+            )));
         }
 
         // Build QEMU command
         let mut cmd = Command::new("qemu-system-x86_64");
 
         cmd.arg("-enable-kvm")
-            .arg("-m").arg(vm.memory.to_string())
-            .arg("-smp").arg(vm.cpus.to_string())
-            .arg("-drive").arg(format!("file={},format=qcow2", vm.disk_path.display()))
+            .arg("-m")
+            .arg(vm.memory.to_string())
+            .arg("-smp")
+            .arg(vm.cpus.to_string())
+            .arg("-drive")
+            .arg(format!("file={},format=qcow2", vm.disk_path.display()))
             .arg("-nographic")
             .arg("-daemonize")
-            .arg("-pidfile").arg(format!("/var/run/horcrux-vm-{}.pid", vm.id))
+            .arg("-pidfile")
+            .arg(format!("/var/run/horcrux-vm-{}.pid", vm.id))
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
         debug!("QEMU command: {:?}", cmd);
 
-        let output = cmd.output()
+        let output = cmd
+            .output()
             .await
             .map_err(|e| horcrux_common::Error::System(format!("Failed to start VM: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             error!("QEMU failed to start: {}", stderr);
-            return Err(horcrux_common::Error::System(format!("Failed to start VM: {}", stderr)));
+            return Err(horcrux_common::Error::System(format!(
+                "Failed to start VM: {}",
+                stderr
+            )));
         }
 
         info!("VM {} started successfully", vm.id);
@@ -140,9 +156,10 @@ impl QemuManager {
         info!("Stopping VM: {} (ID: {})", vm.name, vm.id);
 
         if vm.status == VmStatus::Stopped {
-            return Err(horcrux_common::Error::InvalidConfig(
-                format!("VM {} is already stopped", vm.id)
-            ));
+            return Err(horcrux_common::Error::InvalidConfig(format!(
+                "VM {} is already stopped",
+                vm.id
+            )));
         }
 
         // Read PID from pidfile
@@ -151,7 +168,8 @@ impl QemuManager {
             .await
             .map_err(|e| horcrux_common::Error::System(format!("Failed to read pidfile: {}", e)))?;
 
-        let pid: i32 = pid_str.trim()
+        let pid: i32 = pid_str
+            .trim()
             .parse()
             .map_err(|e| horcrux_common::Error::System(format!("Invalid PID in pidfile: {}", e)))?;
 
@@ -165,9 +183,7 @@ impl QemuManager {
             .map_err(|e| horcrux_common::Error::System(format!("Failed to stop VM: {}", e)))?;
 
         // Remove pidfile
-        tokio::fs::remove_file(&pidfile)
-            .await
-            .ok(); // Ignore errors if file doesn't exist
+        tokio::fs::remove_file(&pidfile).await.ok(); // Ignore errors if file doesn't exist
 
         info!("VM {} stopped successfully", vm.id);
         Ok(())
@@ -179,15 +195,16 @@ impl QemuManager {
 
         // Ensure VM is stopped first
         if vm.status == VmStatus::Running {
-            return Err(horcrux_common::Error::InvalidConfig(
-                format!("Cannot delete running VM {}. Stop it first.", vm.id)
-            ));
+            return Err(horcrux_common::Error::InvalidConfig(format!(
+                "Cannot delete running VM {}. Stop it first.",
+                vm.id
+            )));
         }
 
         // Delete disk image
-        tokio::fs::remove_file(&vm.disk_path)
-            .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to delete disk image: {}", e)))?;
+        tokio::fs::remove_file(&vm.disk_path).await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to delete disk image: {}", e))
+        })?;
 
         info!("VM {} deleted successfully", vm.id);
         Ok(())
@@ -204,10 +221,14 @@ impl QemuManager {
             .arg("--version")
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to run qemu-system-x86_64: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run qemu-system-x86_64: {}", e))
+            })?;
 
         if !output.status.success() {
-            return Err(horcrux_common::Error::System("QEMU not found or not working".to_string()));
+            return Err(horcrux_common::Error::System(
+                "QEMU not found or not working".to_string(),
+            ));
         }
 
         let version = String::from_utf8_lossy(&output.stdout);

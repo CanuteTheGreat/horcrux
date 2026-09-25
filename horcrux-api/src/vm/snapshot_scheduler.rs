@@ -5,7 +5,6 @@
 ///! - Retention policies (keep last N snapshots)
 ///! - Background task execution
 ///! - Failure handling and retry logic
-
 use super::snapshot::{VmSnapshot, VmSnapshotManager};
 use chrono::Datelike;
 use horcrux_common::{Result, VmConfig};
@@ -23,7 +22,7 @@ pub struct SnapshotSchedule {
     pub vm_id: String,
     pub name: String,
     pub frequency: ScheduleFrequency,
-    pub retention_count: u32,  // Number of snapshots to keep
+    pub retention_count: u32, // Number of snapshots to keep
     pub enabled: bool,
     pub include_memory: bool,
     pub last_run: Option<i64>,
@@ -36,10 +35,10 @@ pub struct SnapshotSchedule {
 #[serde(rename_all = "lowercase")]
 pub enum ScheduleFrequency {
     Hourly,
-    Daily { hour: u8 },        // 0-23
-    Weekly { day: u8, hour: u8 }, // day: 0-6 (Sun-Sat), hour: 0-23
+    Daily { hour: u8 },            // 0-23
+    Weekly { day: u8, hour: u8 },  // day: 0-6 (Sun-Sat), hour: 0-23
     Monthly { day: u8, hour: u8 }, // day: 1-31, hour: 0-23
-    Custom { cron: String },    // Custom cron expression
+    Custom { cron: String },       // Custom cron expression
 }
 
 impl ScheduleFrequency {
@@ -49,14 +48,15 @@ impl ScheduleFrequency {
             .unwrap_or_else(|| chrono::Utc::now());
 
         let next = match self {
-            ScheduleFrequency::Hourly => {
-                dt + chrono::Duration::hours(1)
-            }
+            ScheduleFrequency::Hourly => dt + chrono::Duration::hours(1),
             ScheduleFrequency::Daily { hour } => {
-                let mut next = dt.date_naive().and_hms_opt(*hour as u32, 0, 0)
+                let mut next = dt
+                    .date_naive()
+                    .and_hms_opt(*hour as u32, 0, 0)
                     .unwrap_or(dt.naive_utc());
                 if next <= dt.naive_utc() {
-                    next = (dt + chrono::Duration::days(1)).date_naive()
+                    next = (dt + chrono::Duration::days(1))
+                        .date_naive()
                         .and_hms_opt(*hour as u32, 0, 0)
                         .unwrap_or(dt.naive_utc());
                 }
@@ -78,7 +78,8 @@ impl ScheduleFrequency {
                 let naive_dt = dt.naive_utc();
                 let current_weekday = naive_dt.weekday();
                 let days_until = ((target_weekday.number_from_sunday() + 7
-                    - current_weekday.number_from_sunday()) % 7) as i64;
+                    - current_weekday.number_from_sunday())
+                    % 7) as i64;
 
                 let mut next = (dt + chrono::Duration::days(days_until))
                     .date_naive()
@@ -86,7 +87,8 @@ impl ScheduleFrequency {
                     .unwrap_or(naive_dt);
 
                 if next <= naive_dt {
-                    next = (dt + chrono::Duration::days(7)).date_naive()
+                    next = (dt + chrono::Duration::days(7))
+                        .date_naive()
                         .and_hms_opt(*hour as u32, 0, 0)
                         .unwrap_or(naive_dt);
                 }
@@ -145,11 +147,16 @@ impl SnapshotScheduler {
     pub async fn add_schedule(&self, mut schedule: SnapshotSchedule) -> Result<()> {
         // Calculate next run if not set
         if schedule.next_run == 0 {
-            schedule.next_run = schedule.frequency.next_run_after(chrono::Utc::now().timestamp());
+            schedule.next_run = schedule
+                .frequency
+                .next_run_after(chrono::Utc::now().timestamp());
         }
 
         let schedule_id = schedule.id.clone();
-        self.schedules.write().await.insert(schedule_id.clone(), schedule);
+        self.schedules
+            .write()
+            .await
+            .insert(schedule_id.clone(), schedule);
         info!("Added snapshot schedule: {}", schedule_id);
         Ok(())
     }
@@ -194,15 +201,24 @@ impl SnapshotScheduler {
         let snapshot_name = format!("{}_{}", schedule.name, timestamp);
 
         // Create snapshot
-        let snapshot = self.snapshot_manager.write().await.create_snapshot(
-            vm_config,
-            snapshot_name,
-            Some(format!("Automatic snapshot from schedule: {}", schedule.name)),
-            schedule.include_memory,
-        ).await?;
+        let snapshot = self
+            .snapshot_manager
+            .write()
+            .await
+            .create_snapshot(
+                vm_config,
+                snapshot_name,
+                Some(format!(
+                    "Automatic snapshot from schedule: {}",
+                    schedule.name
+                )),
+                schedule.include_memory,
+            )
+            .await?;
 
         // Clean up old snapshots based on retention policy
-        self.cleanup_old_snapshots(&vm_config.id, &schedule.name, schedule.retention_count).await?;
+        self.cleanup_old_snapshots(&vm_config.id, &schedule.name, schedule.retention_count)
+            .await?;
 
         info!("Scheduled snapshot created: {}", snapshot.id);
         Ok(snapshot)
@@ -230,8 +246,17 @@ impl SnapshotScheduler {
             drop(manager); // Release read lock before getting write lock
 
             for snapshot in to_delete {
-                info!("Deleting old snapshot due to retention policy: {}", snapshot.id);
-                match self.snapshot_manager.write().await.delete_snapshot(&snapshot.id).await {
+                info!(
+                    "Deleting old snapshot due to retention policy: {}",
+                    snapshot.id
+                );
+                match self
+                    .snapshot_manager
+                    .write()
+                    .await
+                    .delete_snapshot(&snapshot.id)
+                    .await
+                {
                     Ok(_) => info!("Deleted snapshot: {}", snapshot.id),
                     Err(e) => warn!("Failed to delete snapshot {}: {}", snapshot.id, e),
                 }
@@ -244,7 +269,9 @@ impl SnapshotScheduler {
     /// Start the scheduler background task
     pub fn start_scheduler(
         self: Arc<Self>,
-        vm_getter: Arc<dyn Fn(&str) -> futures::future::BoxFuture<'static, Option<VmConfig>> + Send + Sync>,
+        vm_getter: Arc<
+            dyn Fn(&str) -> futures::future::BoxFuture<'static, Option<VmConfig>> + Send + Sync,
+        >,
     ) {
         tokio::spawn(async move {
             info!("Snapshot scheduler started");
@@ -267,7 +294,10 @@ impl SnapshotScheduler {
                         let vm_config = match vm_getter(&schedule.vm_id).await {
                             Some(config) => config,
                             None => {
-                                error!("VM {} not found for schedule {}", schedule.vm_id, schedule_id);
+                                error!(
+                                    "VM {} not found for schedule {}",
+                                    schedule.vm_id, schedule_id
+                                );
                                 continue;
                             }
                         };
@@ -294,7 +324,10 @@ impl SnapshotScheduler {
                                 // Still update next_run to avoid repeated failures
                                 schedule.next_run = schedule.frequency.next_run_after(now);
                                 if let Err(e) = self.update_schedule(schedule).await {
-                                    error!("Failed to update schedule after error {}: {}", schedule_id, e);
+                                    error!(
+                                        "Failed to update schedule after error {}: {}",
+                                        schedule_id, e
+                                    );
                                 }
                             }
                         }

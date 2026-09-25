@@ -2,9 +2,9 @@
 //!
 //! Manages Samba configuration and shares for Windows/cross-platform file sharing.
 
-use horcrux_common::{Error, Result};
 use crate::nas::shares::{NasShare, SmbShareConfig};
 use crate::nas::CaseSensitivity;
+use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::process::Command;
@@ -189,9 +189,18 @@ impl SmbManager {
         section.push_str(&format!("   server max protocol = {}\n", g.max_protocol));
 
         // Browsing
-        section.push_str(&format!("   local master = {}\n", if g.local_master { "yes" } else { "no" }));
-        section.push_str(&format!("   domain master = {}\n", if g.domain_master { "yes" } else { "no" }));
-        section.push_str(&format!("   wins support = {}\n", if g.wins_support { "yes" } else { "no" }));
+        section.push_str(&format!(
+            "   local master = {}\n",
+            if g.local_master { "yes" } else { "no" }
+        ));
+        section.push_str(&format!(
+            "   domain master = {}\n",
+            if g.domain_master { "yes" } else { "no" }
+        ));
+        section.push_str(&format!(
+            "   wins support = {}\n",
+            if g.wins_support { "yes" } else { "no" }
+        ));
 
         // Disable printing
         section.push_str("   load printers = no\n");
@@ -240,18 +249,32 @@ impl SmbManager {
         // Get SMB-specific config or use defaults
         let smb_config = share.smb_config.as_ref().cloned().unwrap_or_default();
 
-        section.push_str(&format!("   browseable = {}\n", if smb_config.browseable { "yes" } else { "no" }));
-        section.push_str(&format!("   read only = {}\n", if smb_config.read_only { "yes" } else { "no" }));
-        section.push_str(&format!("   guest ok = {}\n", if smb_config.guest_ok { "yes" } else { "no" }));
+        section.push_str(&format!(
+            "   browseable = {}\n",
+            if smb_config.browseable { "yes" } else { "no" }
+        ));
+        section.push_str(&format!(
+            "   read only = {}\n",
+            if smb_config.read_only { "yes" } else { "no" }
+        ));
+        section.push_str(&format!(
+            "   guest ok = {}\n",
+            if smb_config.guest_ok { "yes" } else { "no" }
+        ));
 
         // Valid users
         if !smb_config.valid_users.is_empty() {
-            section.push_str(&format!("   valid users = {}\n", smb_config.valid_users.join(" ")));
+            section.push_str(&format!(
+                "   valid users = {}\n",
+                smb_config.valid_users.join(" ")
+            ));
         }
 
         // Valid groups (prefix with @)
         if !smb_config.valid_groups.is_empty() {
-            let groups: Vec<String> = smb_config.valid_groups.iter()
+            let groups: Vec<String> = smb_config
+                .valid_groups
+                .iter()
                 .map(|g| format!("@{}", g))
                 .collect();
             section.push_str(&format!("   valid users = {}\n", groups.join(" ")));
@@ -259,15 +282,24 @@ impl SmbManager {
 
         // Hosts allow/deny
         if !smb_config.hosts_allow.is_empty() {
-            section.push_str(&format!("   hosts allow = {}\n", smb_config.hosts_allow.join(" ")));
+            section.push_str(&format!(
+                "   hosts allow = {}\n",
+                smb_config.hosts_allow.join(" ")
+            ));
         }
         if !smb_config.hosts_deny.is_empty() {
-            section.push_str(&format!("   hosts deny = {}\n", smb_config.hosts_deny.join(" ")));
+            section.push_str(&format!(
+                "   hosts deny = {}\n",
+                smb_config.hosts_deny.join(" ")
+            ));
         }
 
         // VFS objects
         if !smb_config.vfs_objects.is_empty() {
-            section.push_str(&format!("   vfs objects = {}\n", smb_config.vfs_objects.join(" ")));
+            section.push_str(&format!(
+                "   vfs objects = {}\n",
+                smb_config.vfs_objects.join(" ")
+            ));
         }
 
         // Recycle bin
@@ -289,7 +321,10 @@ impl SmbManager {
         }
 
         // Oplocks
-        section.push_str(&format!("   oplocks = {}\n", if smb_config.oplocks { "yes" } else { "no" }));
+        section.push_str(&format!(
+            "   oplocks = {}\n",
+            if smb_config.oplocks { "yes" } else { "no" }
+        ));
 
         // Case sensitivity
         match smb_config.case_sensitive {
@@ -426,19 +461,27 @@ impl SmbManager {
             for (_session_id, session) in sessions {
                 if let Some(tcons) = session.get("tcons").and_then(|t| t.as_object()) {
                     for (_tcon_id, tcon) in tcons {
-                        let pid = session.get("session_id")
+                        let pid = session
+                            .get("session_id")
                             .and_then(|v| v.as_u64())
                             .unwrap_or(0) as u32;
-                        let username = session.get("username")
+                        let username = session
+                            .get("username")
                             .and_then(|v| v.as_str())
-                            .unwrap_or("").to_string();
-                        let machine = session.get("remote_machine")
+                            .unwrap_or("")
+                            .to_string();
+                        let machine = session
+                            .get("remote_machine")
                             .and_then(|v| v.as_str())
-                            .unwrap_or("").to_string();
-                        let share = tcon.get("service")
+                            .unwrap_or("")
+                            .to_string();
+                        let share = tcon
+                            .get("service")
                             .and_then(|v| v.as_str())
-                            .unwrap_or("").to_string();
-                        let protocol = session.get("signing")
+                            .unwrap_or("")
+                            .to_string();
+                        let protocol = session
+                            .get("signing")
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string())
                             .unwrap_or_else(|| "SMB3".to_string());
@@ -518,10 +561,26 @@ impl SmbManager {
             for file in locked_files {
                 locks.push(SmbLock {
                     pid: file.get("pid").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-                    username: file.get("username").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    share: file.get("service_path").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    path: file.get("filename").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    lock_type: file.get("lock_type").and_then(|v| v.as_str()).unwrap_or("RW").to_string(),
+                    username: file
+                        .get("username")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    share: file
+                        .get("service_path")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    path: file
+                        .get("filename")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    lock_type: file
+                        .get("lock_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("RW")
+                        .to_string(),
                 });
             }
         }
@@ -678,7 +737,11 @@ impl SmbManager {
     }
 
     /// Generate share section with shadow copy support for ZFS
-    pub fn generate_share_with_shadow_copy(&self, share: &NasShare, zfs_dataset: Option<&str>) -> String {
+    pub fn generate_share_with_shadow_copy(
+        &self,
+        share: &NasShare,
+        zfs_dataset: Option<&str>,
+    ) -> String {
         let mut section = self.generate_share_section(share);
 
         // Add ZFS shadow copy support if dataset is provided
@@ -714,21 +777,39 @@ impl SmbManager {
         section.push_str(&format!("   server string = {}\n", g.server_string));
 
         // ID mapping
-        section.push_str(&format!("   idmap config * : backend = {}\n", ad_config.idmap_backend));
-        section.push_str(&format!("   idmap config * : range = {}-{}\n",
-            ad_config.idmap_range_start, ad_config.idmap_range_end));
-        section.push_str(&format!("   idmap config {} : backend = {}\n",
-            ad_config.workgroup, ad_config.idmap_backend));
-        section.push_str(&format!("   idmap config {} : range = {}-{}\n",
-            ad_config.workgroup, ad_config.idmap_range_start, ad_config.idmap_range_end));
+        section.push_str(&format!(
+            "   idmap config * : backend = {}\n",
+            ad_config.idmap_backend
+        ));
+        section.push_str(&format!(
+            "   idmap config * : range = {}-{}\n",
+            ad_config.idmap_range_start, ad_config.idmap_range_end
+        ));
+        section.push_str(&format!(
+            "   idmap config {} : backend = {}\n",
+            ad_config.workgroup, ad_config.idmap_backend
+        ));
+        section.push_str(&format!(
+            "   idmap config {} : range = {}-{}\n",
+            ad_config.workgroup, ad_config.idmap_range_start, ad_config.idmap_range_end
+        ));
 
         if ad_config.use_rfc2307 {
-            section.push_str(&format!("   idmap config {} : schema_mode = rfc2307\n", ad_config.workgroup));
+            section.push_str(&format!(
+                "   idmap config {} : schema_mode = rfc2307\n",
+                ad_config.workgroup
+            ));
         }
 
         // Winbind settings
-        section.push_str(&format!("   template shell = {}\n", ad_config.template_shell));
-        section.push_str(&format!("   template homedir = {}\n", ad_config.template_homedir));
+        section.push_str(&format!(
+            "   template shell = {}\n",
+            ad_config.template_shell
+        ));
+        section.push_str(&format!(
+            "   template homedir = {}\n",
+            ad_config.template_homedir
+        ));
         section.push_str("   winbind use default domain = yes\n");
         section.push_str("   winbind enum users = yes\n");
         section.push_str("   winbind enum groups = yes\n");
@@ -777,7 +858,9 @@ impl SmbManager {
         let winbindd_running = Self::check_process("winbindd").await;
 
         // Get version
-        let version = Self::get_samba_version().await.unwrap_or_else(|_| "unknown".to_string());
+        let version = Self::get_samba_version()
+            .await
+            .unwrap_or_else(|_| "unknown".to_string());
 
         // Count connections
         let connections = self.get_connections().await.unwrap_or_default();
@@ -882,7 +965,7 @@ impl SmbManager {
         for line in config.lines() {
             let trimmed = line.trim();
             if trimmed.starts_with('[') && trimmed.ends_with(']') {
-                let name = &trimmed[1..trimmed.len()-1];
+                let name = &trimmed[1..trimmed.len() - 1];
                 if name != "global" && name != "printers" && name != "print$" {
                     shares.push(name.to_string());
                 }
@@ -1044,7 +1127,11 @@ impl SmbManager {
                 });
             } else if let Some(ref mut user) = current_user {
                 if line.starts_with("Unix user ID:") {
-                    user.uid = line.replace("Unix user ID:", "").trim().parse().unwrap_or(0);
+                    user.uid = line
+                        .replace("Unix user ID:", "")
+                        .trim()
+                        .parse()
+                        .unwrap_or(0);
                 } else if line.starts_with("Full Name:") {
                     let name = line.replace("Full Name:", "").trim().to_string();
                     if !name.is_empty() {
@@ -1052,7 +1139,8 @@ impl SmbManager {
                     }
                 } else if line.starts_with("Account Flags:") {
                     let flags = line.replace("Account Flags:", "").trim().to_string();
-                    user.flags = flags.chars()
+                    user.flags = flags
+                        .chars()
                         .filter(|c| c.is_alphabetic())
                         .map(|c| c.to_string())
                         .collect();
@@ -1123,7 +1211,6 @@ pub struct SmbUser {
     pub flags: Vec<String>,
     pub password_last_set: Option<String>,
 }
-
 
 #[cfg(test)]
 mod tests {

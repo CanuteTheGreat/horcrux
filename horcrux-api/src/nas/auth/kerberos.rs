@@ -4,8 +4,8 @@
 
 use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
 use std::collections::HashMap;
+use tokio::process::Command;
 
 /// Kerberos Configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,11 +119,26 @@ impl KerberosManager {
 
         // [libdefaults]
         config.push_str("[libdefaults]\n");
-        config.push_str(&format!("    default_realm = {}\n", self.config.default_realm));
-        config.push_str(&format!("    dns_lookup_kdc = {}\n", self.config.dns_lookup_kdc));
-        config.push_str(&format!("    dns_lookup_realm = {}\n", self.config.dns_lookup_realm));
-        config.push_str(&format!("    ticket_lifetime = {}\n", self.config.ticket_lifetime));
-        config.push_str(&format!("    renew_lifetime = {}\n", self.config.renew_lifetime));
+        config.push_str(&format!(
+            "    default_realm = {}\n",
+            self.config.default_realm
+        ));
+        config.push_str(&format!(
+            "    dns_lookup_kdc = {}\n",
+            self.config.dns_lookup_kdc
+        ));
+        config.push_str(&format!(
+            "    dns_lookup_realm = {}\n",
+            self.config.dns_lookup_realm
+        ));
+        config.push_str(&format!(
+            "    ticket_lifetime = {}\n",
+            self.config.ticket_lifetime
+        ));
+        config.push_str(&format!(
+            "    renew_lifetime = {}\n",
+            self.config.renew_lifetime
+        ));
         config.push_str(&format!("    forwardable = {}\n", self.config.forwardable));
         config.push_str(&format!("    proxiable = {}\n", self.config.proxiable));
         config.push_str("    default_ccache_name = KEYRING:persistent:%{uid}\n");
@@ -162,7 +177,8 @@ impl KerberosManager {
     /// Write krb5.conf
     pub async fn write_config(&self) -> Result<()> {
         let config = self.generate_config();
-        tokio::fs::write(&self.krb5_conf, config).await
+        tokio::fs::write(&self.krb5_conf, config)
+            .await
             .map_err(|e| Error::Internal(format!("Failed to write krb5.conf: {}", e)))
     }
 
@@ -189,12 +205,16 @@ impl KerberosManager {
 
         if let Some(stdin) = child.stdin.as_mut() {
             use tokio::io::AsyncWriteExt;
-            stdin.write_all(password.as_bytes()).await
+            stdin
+                .write_all(password.as_bytes())
+                .await
                 .map_err(|e| Error::Internal(format!("Failed to write password: {}", e)))?;
             stdin.write_all(b"\n").await.ok();
         }
 
-        let output = child.wait_with_output().await
+        let output = child
+            .wait_with_output()
+            .await
             .map_err(|e| Error::Internal(format!("kinit failed: {}", e)))?;
 
         if !output.status.success() {
@@ -281,15 +301,18 @@ impl KerberosManager {
     }
 
     /// Create a keytab entry
-    pub async fn create_keytab(&self, principal: &str, password: &str, keytab: Option<&str>) -> Result<()> {
+    pub async fn create_keytab(
+        &self,
+        principal: &str,
+        password: &str,
+        keytab: Option<&str>,
+    ) -> Result<()> {
         let keytab_path = keytab.unwrap_or(&self.keytab_path);
 
         // Use ktutil to create keytab
         let ktutil_input = format!(
             "add_entry -password -p {} -k 1 -e aes256-cts-hmac-sha1-96\n{}\nwrite_kt {}\nquit\n",
-            principal,
-            password,
-            keytab_path
+            principal, password, keytab_path
         );
 
         let mut child = Command::new("ktutil")
@@ -301,11 +324,15 @@ impl KerberosManager {
 
         if let Some(stdin) = child.stdin.as_mut() {
             use tokio::io::AsyncWriteExt;
-            stdin.write_all(ktutil_input.as_bytes()).await
+            stdin
+                .write_all(ktutil_input.as_bytes())
+                .await
                 .map_err(|e| Error::Internal(format!("Failed to write to ktutil: {}", e)))?;
         }
 
-        let output = child.wait_with_output().await
+        let output = child
+            .wait_with_output()
+            .await
             .map_err(|e| Error::Internal(format!("ktutil failed: {}", e)))?;
 
         if !output.status.success() {
@@ -341,7 +368,11 @@ impl KerberosManager {
 
         for line in stdout.lines() {
             let line = line.trim();
-            if line.is_empty() || line.starts_with("Keytab") || line.starts_with("KVNO") || line.starts_with("---") {
+            if line.is_empty()
+                || line.starts_with("Keytab")
+                || line.starts_with("KVNO")
+                || line.starts_with("---")
+            {
                 continue;
             }
 
@@ -361,7 +392,7 @@ impl KerberosManager {
                 let _ = self.kdestroy().await;
                 Ok(true)
             }
-            Err(_) => Ok(false)
+            Err(_) => Ok(false),
         }
     }
 
@@ -383,7 +414,8 @@ impl KerberosManager {
     /// Configure PAM for Kerberos authentication
     pub async fn configure_pam(&self) -> Result<()> {
         // Generate pam_krb5.conf
-        let pam_config = format!(r#"# Horcrux Kerberos PAM configuration
+        let pam_config = format!(
+            r#"# Horcrux Kerberos PAM configuration
 [pam]
     krb5_auth = true
     krb5_ccache_type = KEYRING
@@ -391,11 +423,11 @@ impl KerberosManager {
     ticket_lifetime = {}
     renew_lifetime = {}
 "#,
-            self.config.ticket_lifetime,
-            self.config.renew_lifetime,
+            self.config.ticket_lifetime, self.config.renew_lifetime,
         );
 
-        tokio::fs::write("/etc/security/pam_krb5.conf", pam_config).await
+        tokio::fs::write("/etc/security/pam_krb5.conf", pam_config)
+            .await
             .map_err(|e| Error::Internal(format!("Failed to write pam_krb5.conf: {}", e)))?;
 
         Ok(())
@@ -403,11 +435,14 @@ impl KerberosManager {
 
     /// Add a realm to configuration
     pub fn add_realm(&mut self, realm: &str, kdc: Vec<String>, admin_server: Option<String>) {
-        self.config.realms.insert(realm.to_string(), RealmConfig {
-            kdc,
-            admin_server,
-            default_domain: None,
-        });
+        self.config.realms.insert(
+            realm.to_string(),
+            RealmConfig {
+                kdc,
+                admin_server,
+                default_domain: None,
+            },
+        );
     }
 
     /// Remove a realm from configuration
@@ -417,7 +452,9 @@ impl KerberosManager {
 
     /// Add domain to realm mapping
     pub fn add_domain_mapping(&mut self, domain: &str, realm: &str) {
-        self.config.domain_realm.insert(domain.to_string(), realm.to_string());
+        self.config
+            .domain_realm
+            .insert(domain.to_string(), realm.to_string());
     }
 }
 
@@ -448,7 +485,11 @@ impl KerberosManager {
     ) -> Result<()> {
         let keytab_path = keytab.unwrap_or(&self.keytab_path);
         let enctypes = if enctypes.is_empty() {
-            vec!["aes256-cts-hmac-sha1-96", "aes128-cts-hmac-sha1-96", "arcfour-hmac"]
+            vec![
+                "aes256-cts-hmac-sha1-96",
+                "aes128-cts-hmac-sha1-96",
+                "arcfour-hmac",
+            ]
         } else {
             enctypes.to_vec()
         };
@@ -471,11 +512,15 @@ impl KerberosManager {
 
         if let Some(stdin) = child.stdin.as_mut() {
             use tokio::io::AsyncWriteExt;
-            stdin.write_all(ktutil_input.as_bytes()).await
+            stdin
+                .write_all(ktutil_input.as_bytes())
+                .await
                 .map_err(|e| Error::Internal(format!("Failed to write to ktutil: {}", e)))?;
         }
 
-        let output = child.wait_with_output().await
+        let output = child
+            .wait_with_output()
+            .await
             .map_err(|e| Error::Internal(format!("ktutil failed: {}", e)))?;
 
         if !output.status.success() {
@@ -535,10 +580,7 @@ impl KerberosManager {
 
     /// Merge keytabs
     pub async fn merge_keytab(&self, src: &str, dst: &str) -> Result<()> {
-        let ktutil_input = format!(
-            "read_kt {}\nread_kt {}\nwrite_kt {}\nquit\n",
-            dst, src, dst
-        );
+        let ktutil_input = format!("read_kt {}\nread_kt {}\nwrite_kt {}\nquit\n", dst, src, dst);
 
         let mut child = Command::new("ktutil")
             .stdin(std::process::Stdio::piped())
@@ -550,7 +592,9 @@ impl KerberosManager {
             stdin.write_all(ktutil_input.as_bytes()).await.ok();
         }
 
-        child.wait().await
+        child
+            .wait()
+            .await
             .map_err(|e| Error::Internal(format!("ktutil failed: {}", e)))?;
 
         Ok(())
@@ -566,7 +610,8 @@ impl KerberosManager {
         keytab: &str,
     ) -> Result<()> {
         let principal = format!("{}/{}@{}", service, hostname, realm);
-        self.add_keytab_entry(&principal, password, Some(keytab), &[]).await
+        self.add_keytab_entry(&principal, password, Some(keytab), &[])
+            .await
     }
 
     /// Generate random key for keytab (requires kadmin access)
@@ -577,10 +622,7 @@ impl KerberosManager {
         admin_principal: &str,
         admin_password: &str,
     ) -> Result<()> {
-        let kadmin_input = format!(
-            "ktadd -k {} {}\nquit\n",
-            keytab, principal
-        );
+        let kadmin_input = format!("ktadd -k {} {}\nquit\n", keytab, principal);
 
         let mut child = Command::new("kadmin")
             .args(["-p", admin_principal])
@@ -592,10 +634,15 @@ impl KerberosManager {
 
         if let Some(stdin) = child.stdin.as_mut() {
             use tokio::io::AsyncWriteExt;
-            stdin.write_all(format!("{}\n{}", admin_password, kadmin_input).as_bytes()).await.ok();
+            stdin
+                .write_all(format!("{}\n{}", admin_password, kadmin_input).as_bytes())
+                .await
+                .ok();
         }
 
-        let output = child.wait_with_output().await
+        let output = child
+            .wait_with_output()
+            .await
             .map_err(|e| Error::Internal(format!("kadmin failed: {}", e)))?;
 
         if !output.status.success() {
@@ -654,7 +701,8 @@ impl KerberosManager {
                 details.cache_name = line.replace("Ticket cache:", "").trim().to_string();
             } else if line.starts_with("Default principal:") {
                 details.principal = line.replace("Default principal:", "").trim().to_string();
-            } else if line.contains("@") && !line.starts_with("Valid") && !line.starts_with("renew") {
+            } else if line.contains("@") && !line.starts_with("Valid") && !line.starts_with("renew")
+            {
                 if let Some(ticket) = current_ticket.take() {
                     details.tickets.push(ticket);
                 }
@@ -663,8 +711,16 @@ impl KerberosManager {
                 if parts.len() >= 5 {
                     current_ticket = Some(TicketInfo {
                         service_principal: parts.last().unwrap_or(&"").to_string(),
-                        valid_starting: format!("{} {}", parts.get(0).unwrap_or(&""), parts.get(1).unwrap_or(&"")),
-                        expires: format!("{} {}", parts.get(2).unwrap_or(&""), parts.get(3).unwrap_or(&"")),
+                        valid_starting: format!(
+                            "{} {}",
+                            parts.get(0).unwrap_or(&""),
+                            parts.get(1).unwrap_or(&"")
+                        ),
+                        expires: format!(
+                            "{} {}",
+                            parts.get(2).unwrap_or(&""),
+                            parts.get(3).unwrap_or(&"")
+                        ),
                         renew_until: None,
                         flags: Vec::new(),
                         encryption: String::new(),
@@ -680,7 +736,8 @@ impl KerberosManager {
                 }
             } else if line.starts_with("Flags:") {
                 if let Some(ref mut ticket) = current_ticket {
-                    ticket.flags = line.replace("Flags:", "")
+                    ticket.flags = line
+                        .replace("Flags:", "")
                         .split_whitespace()
                         .map(|s| s.to_string())
                         .collect();

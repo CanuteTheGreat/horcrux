@@ -1,7 +1,7 @@
 //! Network page for mobile UI
 
-use yew::prelude::*;
 use crate::components::Header;
+use yew::prelude::*;
 
 #[function_component(NetworkView)]
 pub fn network_view() -> Html {

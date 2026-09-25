@@ -23,11 +23,12 @@ impl DirectoryManager {
         let path = Path::new(&pool.path);
 
         // 1. Verify path exists
-        let metadata = tokio::fs::metadata(&pool.path)
-            .await
-            .map_err(|e| horcrux_common::Error::InvalidConfig(
-                format!("Path does not exist or is not accessible: {} - {}", pool.path, e)
-            ))?;
+        let metadata = tokio::fs::metadata(&pool.path).await.map_err(|e| {
+            horcrux_common::Error::InvalidConfig(format!(
+                "Path does not exist or is not accessible: {} - {}",
+                pool.path, e
+            ))
+        })?;
 
         // 2. Verify it's a directory
         if !metadata.is_dir() {
@@ -39,22 +40,22 @@ impl DirectoryManager {
 
         // 3. Verify write permissions by creating and deleting a test file
         let test_file = path.join(".horcrux_test");
-        tokio::fs::write(&test_file, b"test")
-            .await
-            .map_err(|e| horcrux_common::Error::InvalidConfig(
-                format!("No write permission for directory {}: {}", pool.path, e)
-            ))?;
+        tokio::fs::write(&test_file, b"test").await.map_err(|e| {
+            horcrux_common::Error::InvalidConfig(format!(
+                "No write permission for directory {}: {}",
+                pool.path, e
+            ))
+        })?;
 
-        tokio::fs::remove_file(&test_file)
-            .await
-            .map_err(|e| horcrux_common::Error::InvalidConfig(
-                format!("Failed to clean up test file: {}", e)
-            ))?;
+        tokio::fs::remove_file(&test_file).await.map_err(|e| {
+            horcrux_common::Error::InvalidConfig(format!("Failed to clean up test file: {}", e))
+        })?;
 
         // 4. Verify qemu-img is available (needed for creating volumes)
         if !Self::check_directory_available() {
             return Err(horcrux_common::Error::InvalidConfig(
-                "qemu-img not found. Directory storage requires qemu-img to be installed.".to_string()
+                "qemu-img not found. Directory storage requires qemu-img to be installed."
+                    .to_string(),
             ));
         }
 
@@ -69,7 +70,10 @@ impl DirectoryManager {
         volume_name: &str,
         size_gb: u64,
     ) -> Result<String> {
-        info!("Creating directory volume: {}/{}.qcow2 ({}GB)", dir_path, volume_name, size_gb);
+        info!(
+            "Creating directory volume: {}/{}.qcow2 ({}GB)",
+            dir_path, volume_name, size_gb
+        );
 
         let volume_path = format!("{}/{}.qcow2", dir_path, volume_name);
 
@@ -99,7 +103,10 @@ impl DirectoryManager {
 
     /// Delete a volume file
     pub async fn delete_volume(&self, dir_path: &str, volume_name: &str) -> Result<()> {
-        info!("Deleting directory volume: {}/{}.qcow2", dir_path, volume_name);
+        info!(
+            "Deleting directory volume: {}/{}.qcow2",
+            dir_path, volume_name
+        );
 
         let volume_path = format!("{}/{}.qcow2", dir_path, volume_name);
 

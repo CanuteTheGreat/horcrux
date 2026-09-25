@@ -3,12 +3,12 @@
 //! Provides automatic fencing of failed nodes to prevent split-brain scenarios
 //! and ensure data integrity in HA environments.
 
+use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn, error};
-use horcrux_common::Result;
+use tracing::{error, info, warn};
 
 /// Fencing agent types
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -116,9 +116,10 @@ impl FencingManager {
         let mut devices = self.devices.write().await;
 
         if devices.contains_key(&device.id) {
-            return Err(horcrux_common::Error::System(
-                format!("Fencing device {} already exists", device.id)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Fencing device {} already exists",
+                device.id
+            )));
         }
 
         info!(
@@ -188,7 +189,8 @@ impl FencingManager {
                 action: FencingAction::Off,
                 result: result.clone(),
                 reason: reason.to_string(),
-            }).await;
+            })
+            .await;
 
             match result {
                 FencingResult::Success => {
@@ -266,14 +268,14 @@ impl FencingManager {
         match tokio::time::timeout(
             std::time::Duration::from_secs(self.timeout_secs as u64),
             cmd.output(),
-        ).await {
+        )
+        .await
+        {
             Ok(Ok(output)) => {
                 if output.status.success() {
                     FencingResult::Success
                 } else {
-                    FencingResult::Failed(
-                        String::from_utf8_lossy(&output.stderr).to_string()
-                    )
+                    FencingResult::Failed(String::from_utf8_lossy(&output.stderr).to_string())
                 }
             }
             Ok(Err(e)) => FencingResult::Failed(format!("Command failed: {}", e)),
@@ -284,11 +286,15 @@ impl FencingManager {
     /// SSH fencing implementation
     async fn fence_ssh(&self, device: &FencingDevice, action: &FencingAction) -> FencingResult {
         let cmd = match action {
-            FencingAction::Off => device.options.get("off_cmd")
+            FencingAction::Off => device
+                .options
+                .get("off_cmd")
                 .cloned()
                 .unwrap_or_else(|| "poweroff".to_string()),
             FencingAction::On => return FencingResult::Failed("SSH cannot power on".to_string()),
-            FencingAction::Reboot => device.options.get("reboot_cmd")
+            FencingAction::Reboot => device
+                .options
+                .get("reboot_cmd")
                 .cloned()
                 .unwrap_or_else(|| "reboot".to_string()),
             FencingAction::Status => "uptime".to_string(),
@@ -304,23 +310,28 @@ impl FencingManager {
             ssh_cmd.arg("-p").arg(port.to_string());
         }
 
-        ssh_cmd.arg("-o").arg("StrictHostKeyChecking=no")
-            .arg("-o").arg("ConnectTimeout=10")
+        ssh_cmd
+            .arg("-o")
+            .arg("StrictHostKeyChecking=no")
+            .arg("-o")
+            .arg("ConnectTimeout=10")
             .arg(&device.address)
             .arg(&cmd);
 
         match tokio::time::timeout(
             std::time::Duration::from_secs(self.timeout_secs as u64),
             ssh_cmd.output(),
-        ).await {
+        )
+        .await
+        {
             Ok(Ok(output)) => {
-                if output.status.success() || matches!(action, FencingAction::Off | FencingAction::Reboot) {
+                if output.status.success()
+                    || matches!(action, FencingAction::Off | FencingAction::Reboot)
+                {
                     // For shutdown commands, connection closure is expected
                     FencingResult::Success
                 } else {
-                    FencingResult::Failed(
-                        String::from_utf8_lossy(&output.stderr).to_string()
-                    )
+                    FencingResult::Failed(String::from_utf8_lossy(&output.stderr).to_string())
                 }
             }
             Ok(Err(e)) => FencingResult::Failed(format!("SSH failed: {}", e)),
@@ -330,7 +341,9 @@ impl FencingManager {
 
     /// Libvirt fencing implementation (for testing)
     async fn fence_libvirt(&self, device: &FencingDevice, action: &FencingAction) -> FencingResult {
-        let domain = device.options.get("domain")
+        let domain = device
+            .options
+            .get("domain")
             .cloned()
             .unwrap_or_else(|| device.node.clone());
 
@@ -354,9 +367,7 @@ impl FencingManager {
                 if output.status.success() {
                     FencingResult::Success
                 } else {
-                    FencingResult::Failed(
-                        String::from_utf8_lossy(&output.stderr).to_string()
-                    )
+                    FencingResult::Failed(String::from_utf8_lossy(&output.stderr).to_string())
                 }
             }
             Err(e) => FencingResult::Failed(format!("virsh failed: {}", e)),
@@ -364,7 +375,11 @@ impl FencingManager {
     }
 
     /// Watchdog timer fencing
-    async fn fence_watchdog(&self, _device: &FencingDevice, action: &FencingAction) -> FencingResult {
+    async fn fence_watchdog(
+        &self,
+        _device: &FencingDevice,
+        action: &FencingAction,
+    ) -> FencingResult {
         match action {
             FencingAction::Off | FencingAction::Reboot => {
                 // Trigger watchdog reset by writing to /dev/watchdog

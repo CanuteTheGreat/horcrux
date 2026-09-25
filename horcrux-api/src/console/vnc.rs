@@ -12,9 +12,9 @@ use tokio::sync::RwLock;
 #[derive(Debug, Clone)]
 pub struct VncConfig {
     pub vm_id: String,
-    pub display: u16,      // VNC display number (5900 + display = port)
-    pub port: u16,         // Actual VNC port
-    pub websocket: bool,   // Enable WebSocket support
+    pub display: u16,    // VNC display number (5900 + display = port)
+    pub port: u16,       // Actual VNC port
+    pub websocket: bool, // Enable WebSocket support
     pub password: Option<String>,
 }
 
@@ -80,10 +80,9 @@ impl VncManager {
     /// Get VNC port for a VM
     pub async fn get_vnc_port(&self, vm_id: &str) -> Result<u16> {
         let configs = self.vnc_configs.read().await;
-        configs
-            .get(vm_id)
-            .map(|c| c.port)
-            .ok_or_else(|| horcrux_common::Error::System(format!("VNC not configured for VM {}", vm_id)))
+        configs.get(vm_id).map(|c| c.port).ok_or_else(|| {
+            horcrux_common::Error::System(format!("VNC not configured for VM {}", vm_id))
+        })
     }
 
     /// Disable VNC for a VM
@@ -101,10 +100,15 @@ impl VncManager {
             .arg(format!("qemu.*{}", vm_id))
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to find VM process: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to find VM process: {}", e))
+            })?;
 
         if !output.status.success() {
-            return Err(horcrux_common::Error::System(format!("VM {} is not running", vm_id)));
+            return Err(horcrux_common::Error::System(format!(
+                "VM {} is not running",
+                vm_id
+            )));
         }
 
         let pid_str = String::from_utf8_lossy(&output.stdout);

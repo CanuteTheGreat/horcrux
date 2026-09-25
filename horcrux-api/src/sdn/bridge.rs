@@ -104,8 +104,14 @@ impl BridgeManager {
     pub fn enable_vlan_filtering(bridge: &str) -> Result<(), String> {
         let output = Command::new("ip")
             .args(&[
-                "link", "set", "dev", bridge,
-                "type", "bridge", "vlan_filtering", "1"
+                "link",
+                "set",
+                "dev",
+                bridge,
+                "type",
+                "bridge",
+                "vlan_filtering",
+                "1",
             ])
             .output()
             .map_err(|e| format!("Failed to enable VLAN filtering: {}", e))?;
@@ -139,9 +145,9 @@ impl BridgeManager {
             .lines()
             .filter_map(|line| {
                 if line.contains("bridge") {
-                    line.split(':').nth(1).map(|s| {
-                        s.trim().split('@').next().unwrap().to_string()
-                    })
+                    line.split(':')
+                        .nth(1)
+                        .map(|s| s.trim().split('@').next().unwrap().to_string())
                 } else {
                     None
                 }

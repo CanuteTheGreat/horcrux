@@ -8,11 +8,7 @@ pub struct TraceHelper;
 
 impl TraceHelper {
     /// Create a new trace span
-    pub fn create_span(
-        name: &str,
-        kind: SpanKind,
-        parent_span_id: Option<String>,
-    ) -> SpanBuilder {
+    pub fn create_span(name: &str, kind: SpanKind, parent_span_id: Option<String>) -> SpanBuilder {
         SpanBuilder::new(name, kind, parent_span_id)
     }
 

@@ -1,7 +1,7 @@
+use crate::api;
+use horcrux_common::{VmArchitecture, VmConfig, VmHypervisor, VmStatus};
 use leptos::*;
 use leptos_router::*;
-use horcrux_common::{VmConfig, VmHypervisor, VmStatus, VmArchitecture};
-use crate::api;
 
 #[component]
 pub fn VmCreate() -> impl IntoView {

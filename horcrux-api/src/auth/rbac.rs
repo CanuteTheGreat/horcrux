@@ -1,5 +1,4 @@
 ///! Role-Based Access Control (RBAC)
-
 use horcrux_common::auth::{Privilege, Role, User};
 use horcrux_common::Result;
 use std::collections::HashMap;

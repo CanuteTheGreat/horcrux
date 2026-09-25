@@ -1,6 +1,6 @@
-use yew::prelude::*;
 use serde::{Deserialize, Serialize};
 use web_sys::HtmlInputElement;
+use yew::prelude::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct User {
@@ -155,10 +155,7 @@ impl Component for UserManagementPage {
                         },
                         Role {
                             name: "user".to_string(),
-                            permissions: vec![
-                                "VM.Console".to_string(),
-                                "VM.Monitor".to_string(),
-                            ],
+                            permissions: vec!["VM.Console".to_string(), "VM.Monitor".to_string()],
                             description: "Read-only VM access".to_string(),
                         },
                     ];
@@ -525,9 +522,18 @@ impl UserManagementPage {
         }
 
         let available_perms = vec![
-            "VM.Allocate", "VM.PowerMgmt", "VM.Config.*", "VM.Console",
-            "VM.Backup", "VM.Snapshot", "VM.Migrate", "VM.Monitor",
-            "Storage.*", "Network.*", "User.*", "Cluster.*",
+            "VM.Allocate",
+            "VM.PowerMgmt",
+            "VM.Config.*",
+            "VM.Console",
+            "VM.Backup",
+            "VM.Snapshot",
+            "VM.Migrate",
+            "VM.Monitor",
+            "Storage.*",
+            "Network.*",
+            "User.*",
+            "Cluster.*",
         ];
 
         html! {

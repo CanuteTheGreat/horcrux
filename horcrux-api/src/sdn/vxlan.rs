@@ -3,19 +3,19 @@
 //! Provides overlay networking across physical network boundaries.
 //! VXLAN encapsulates Layer 2 frames in UDP packets for tunneling.
 
-use std::process::Command;
 use std::net::IpAddr;
+use std::process::Command;
 
 /// VXLAN configuration
 #[derive(Debug, Clone)]
 pub struct VxlanConfig {
-    pub vni: u32,          // VXLAN Network Identifier (0-16777215)
-    pub local_ip: IpAddr,  // Local tunnel endpoint
-    pub group: Option<IpAddr>,  // Multicast group (optional)
+    pub vni: u32,                // VXLAN Network Identifier (0-16777215)
+    pub local_ip: IpAddr,        // Local tunnel endpoint
+    pub group: Option<IpAddr>,   // Multicast group (optional)
     pub remote_ips: Vec<IpAddr>, // Remote tunnel endpoints (for unicast)
-    pub port: u16,         // UDP port (default: 4789)
-    pub bridge: String,    // Bridge to attach to
-    pub device: String,    // Physical device to use (e.g., "eth0", "bond0")
+    pub port: u16,               // UDP port (default: 4789)
+    pub bridge: String,          // Bridge to attach to
+    pub device: String,          // Physical device to use (e.g., "eth0", "bond0")
 }
 
 pub struct VxlanManager;
@@ -25,7 +25,10 @@ impl VxlanManager {
     pub fn create_vxlan(config: &VxlanConfig) -> Result<(), String> {
         // Validate VNI
         if config.vni > 16777215 {
-            return Err(format!("Invalid VXLAN VNI: {} (must be 0-16777215)", config.vni));
+            return Err(format!(
+                "Invalid VXLAN VNI: {} (must be 0-16777215)",
+                config.vni
+            ));
         }
 
         let vxlan_iface = format!("vxlan{}", config.vni);
@@ -36,11 +39,15 @@ impl VxlanManager {
         let local_ip_str = config.local_ip.to_string();
 
         let mut args = vec![
-            "link", "add",
+            "link",
+            "add",
             &vxlan_iface,
-            "type", "vxlan",
-            "id", &vni_str,
-            "dstport", &port_str,
+            "type",
+            "vxlan",
+            "id",
+            &vni_str,
+            "dstport",
+            &port_str,
         ];
 
         args.extend(&["local", &local_ip_str]);
@@ -128,10 +135,13 @@ impl VxlanManager {
         // bridge fdb append 00:00:00:00:00:00 dev vxlan100 dst <remote_ip>
         let output = Command::new("bridge")
             .args(&[
-                "fdb", "append",
+                "fdb",
+                "append",
                 "00:00:00:00:00:00",
-                "dev", vxlan_iface,
-                "dst", &remote_str,
+                "dev",
+                vxlan_iface,
+                "dst",
+                &remote_str,
             ])
             .output()
             .map_err(|e| format!("Failed to add remote endpoint: {}", e))?;
@@ -152,10 +162,13 @@ impl VxlanManager {
 
         let output = Command::new("bridge")
             .args(&[
-                "fdb", "delete",
+                "fdb",
+                "delete",
                 "00:00:00:00:00:00",
-                "dev", vxlan_iface,
-                "dst", &remote_str,
+                "dev",
+                vxlan_iface,
+                "dst",
+                &remote_str,
             ])
             .output()
             .map_err(|e| format!("Failed to remove remote endpoint: {}", e))?;
@@ -189,7 +202,9 @@ impl VxlanManager {
             .lines()
             .filter(|line| line.contains("vxlan"))
             .filter_map(|line| {
-                line.split(':').nth(1).map(|s| s.trim().split('@').next().unwrap().to_string())
+                line.split(':')
+                    .nth(1)
+                    .map(|s| s.trim().split('@').next().unwrap().to_string())
             })
             .collect();
 
@@ -218,7 +233,11 @@ impl VxlanManager {
         Ok(VxlanInfo {
             vni,
             interface: vxlan_iface,
-            state: if stdout.contains("UP") { "up".to_string() } else { "down".to_string() },
+            state: if stdout.contains("UP") {
+                "up".to_string()
+            } else {
+                "down".to_string()
+            },
         })
     }
 }

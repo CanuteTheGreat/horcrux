@@ -1,6 +1,9 @@
+use crate::api::{
+    create_kubernetes_configmap, delete_kubernetes_configmap, get_kubernetes_configmaps,
+    update_kubernetes_configmap, CreateConfigMapRequest, KubernetesConfigMap,
+};
 use leptos::*;
 use std::collections::HashMap;
-use crate::api::{KubernetesConfigMap, CreateConfigMapRequest, get_kubernetes_configmaps, create_kubernetes_configmap, update_kubernetes_configmap, delete_kubernetes_configmap};
 
 #[component]
 pub fn ConfigMapsPage() -> impl IntoView {
@@ -28,7 +31,9 @@ pub fn ConfigMapsPage() -> impl IntoView {
         set_error.set(None);
 
         spawn_local(async move {
-            match get_kubernetes_configmaps(&cluster_id.get(), Some(&selected_namespace.get())).await {
+            match get_kubernetes_configmaps(&cluster_id.get(), Some(&selected_namespace.get()))
+                .await
+            {
                 Ok(cms) => {
                     set_configmaps.set(cms);
                     set_error.set(None);
@@ -62,8 +67,8 @@ pub fn ConfigMapsPage() -> impl IntoView {
                 .get()
                 .into_iter()
                 .filter(|cm| {
-                    cm.name.to_lowercase().contains(&query) ||
-                    cm.namespace.to_lowercase().contains(&query)
+                    cm.name.to_lowercase().contains(&query)
+                        || cm.namespace.to_lowercase().contains(&query)
                 })
                 .collect()
         }
@@ -103,8 +108,16 @@ pub fn ConfigMapsPage() -> impl IntoView {
             name: name.get(),
             data: config_data.get(),
             binary_data: None,
-            labels: if labels.get().is_empty() { None } else { Some(labels.get()) },
-            annotations: if annotations.get().is_empty() { None } else { Some(annotations.get()) },
+            labels: if labels.get().is_empty() {
+                None
+            } else {
+                Some(labels.get())
+            },
+            annotations: if annotations.get().is_empty() {
+                None
+            } else {
+                Some(annotations.get())
+            },
         };
 
         let ns = namespace.get();
@@ -136,12 +149,27 @@ pub fn ConfigMapsPage() -> impl IntoView {
                 name: name.get(),
                 data: config_data.get(),
                 binary_data: None,
-                labels: if labels.get().is_empty() { None } else { Some(labels.get()) },
-                annotations: if annotations.get().is_empty() { None } else { Some(annotations.get()) },
+                labels: if labels.get().is_empty() {
+                    None
+                } else {
+                    Some(labels.get())
+                },
+                annotations: if annotations.get().is_empty() {
+                    None
+                } else {
+                    Some(annotations.get())
+                },
             };
 
             spawn_local(async move {
-                match update_kubernetes_configmap(&cluster_id.get(), &cm.namespace, &cm.name, request).await {
+                match update_kubernetes_configmap(
+                    &cluster_id.get(),
+                    &cm.namespace,
+                    &cm.name,
+                    request,
+                )
+                .await
+                {
                     Ok(_) => {
                         set_show_edit_modal.set(false);
                         reset_form();
@@ -156,11 +184,20 @@ pub fn ConfigMapsPage() -> impl IntoView {
     let delete_configmap = move |configmap: KubernetesConfigMap| {
         if web_sys::window()
             .unwrap()
-            .confirm_with_message(&format!("Are you sure you want to delete ConfigMap '{}'?", configmap.name))
+            .confirm_with_message(&format!(
+                "Are you sure you want to delete ConfigMap '{}'?",
+                configmap.name
+            ))
             .unwrap()
         {
             spawn_local(async move {
-                match delete_kubernetes_configmap(&cluster_id.get(), &configmap.namespace, &configmap.name).await {
+                match delete_kubernetes_configmap(
+                    &cluster_id.get(),
+                    &configmap.namespace,
+                    &configmap.name,
+                )
+                .await
+                {
                     Ok(_) => load_configmaps(),
                     Err(e) => set_error.set(Some(format!("Failed to delete ConfigMap: {}", e))),
                 }

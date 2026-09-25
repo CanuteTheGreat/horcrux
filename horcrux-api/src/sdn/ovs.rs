@@ -1,11 +1,10 @@
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 ///! Open vSwitch (OVS) Implementation
 ///!
 ///! Provides advanced software-defined networking with OpenFlow support.
 ///! OVS is a production-grade multilayer virtual switch.
-
 use std::process::Command;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// OVS bridge configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13,24 +12,24 @@ pub struct OvsBridge {
     pub name: String,
     pub datapath_type: DatapathType,
     pub fail_mode: Option<FailMode>,
-    pub protocols: Vec<String>,  // e.g., ["OpenFlow10", "OpenFlow13"]
-    pub controller: Option<String>,  // Controller address (e.g., "tcp:127.0.0.1:6633")
+    pub protocols: Vec<String>,     // e.g., ["OpenFlow10", "OpenFlow13"]
+    pub controller: Option<String>, // Controller address (e.g., "tcp:127.0.0.1:6633")
 }
 
 /// OVS datapath type
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DatapathType {
-    System,    // Kernel datapath
-    Netdev,    // Userspace datapath (DPDK)
+    System, // Kernel datapath
+    Netdev, // Userspace datapath (DPDK)
 }
 
 /// Bridge fail mode
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FailMode {
-    Standalone,  // Act as learning switch
-    Secure,      // Drop all packets without controller
+    Standalone, // Act as learning switch
+    Secure,     // Drop all packets without controller
 }
 
 /// OVS port configuration
@@ -38,21 +37,21 @@ pub enum FailMode {
 pub struct OvsPort {
     pub name: String,
     pub port_type: PortType,
-    pub tag: Option<u16>,  // VLAN tag (1-4095)
-    pub trunks: Vec<u16>,  // Trunk VLANs
-    pub options: HashMap<String, String>,  // Type-specific options
+    pub tag: Option<u16>,                 // VLAN tag (1-4095)
+    pub trunks: Vec<u16>,                 // Trunk VLANs
+    pub options: HashMap<String, String>, // Type-specific options
 }
 
 /// OVS port type
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PortType {
-    Internal,  // Internal port
-    Patch,     // Patch port (connects bridges)
-    Vxlan,     // VXLAN tunnel
-    Gre,       // GRE tunnel
-    Geneve,    // Geneve tunnel
-    System,    // System device (e.g., eth0)
+    Internal, // Internal port
+    Patch,    // Patch port (connects bridges)
+    Vxlan,    // VXLAN tunnel
+    Gre,      // GRE tunnel
+    Geneve,   // Geneve tunnel
+    System,   // System device (e.g., eth0)
 }
 
 /// OVS flow rule
@@ -69,10 +68,7 @@ pub struct OvsManager;
 impl OvsManager {
     /// Check if OVS is installed and running
     pub fn check_ovs_available() -> bool {
-        Command::new("ovs-vsctl")
-            .arg("--version")
-            .output()
-            .is_ok()
+        Command::new("ovs-vsctl").arg("--version").output().is_ok()
     }
 
     /// Get OVS version
@@ -314,12 +310,7 @@ impl OvsManager {
         }
 
         let output = Command::new("ovs-vsctl")
-            .args(&[
-                "set",
-                "port",
-                port_name,
-                &format!("tag={}", vlan),
-            ])
+            .args(&["set", "port", port_name, &format!("tag={}", vlan)])
             .output()
             .map_err(|e| format!("Failed to set VLAN tag: {}", e))?;
 
@@ -334,7 +325,11 @@ impl OvsManager {
     }
 
     /// Set trunk VLANs on a port
-    pub fn set_port_trunks(_bridge_name: &str, port_name: &str, trunks: &[u16]) -> Result<(), String> {
+    pub fn set_port_trunks(
+        _bridge_name: &str,
+        port_name: &str,
+        trunks: &[u16],
+    ) -> Result<(), String> {
         let trunks_str: Vec<String> = trunks.iter().map(|v| v.to_string()).collect();
         let trunks_arg = format!("trunks=[{}]", trunks_str.join(","));
 

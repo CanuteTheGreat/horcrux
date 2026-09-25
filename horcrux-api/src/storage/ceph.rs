@@ -53,7 +53,10 @@ impl CephManager {
         volume_name: &str,
         size_gb: u64,
     ) -> Result<String> {
-        info!("Creating Ceph RBD image: {}/{} ({}GB)", pool_path, volume_name, size_gb);
+        info!(
+            "Creating Ceph RBD image: {}/{} ({}GB)",
+            pool_path, volume_name, size_gb
+        );
 
         // Create RBD image
         let output = Command::new("rbd")
@@ -227,9 +230,7 @@ impl CephManager {
             .arg(format!("{}/{}", pool_path, volume_name))
             .output()
             .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to map Ceph RBD: {}", e))
-            })?;
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to map Ceph RBD: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

@@ -103,7 +103,11 @@ impl BlockMigrationManager {
         source_node: String,
         target_node: String,
     ) -> Result<()> {
-        info!("Starting block migration for VM {} ({} devices)", vm_id, devices.len());
+        info!(
+            "Starting block migration for VM {} ({} devices)",
+            vm_id,
+            devices.len()
+        );
 
         // Create job
         let job = BlockMigrationJob {
@@ -132,13 +136,16 @@ impl BlockMigrationManager {
         let target_clone = target_node.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = manager.execute_block_migration(
-                &job_id_clone,
-                vm_id,
-                devices_clone,
-                source_clone,
-                target_clone,
-            ).await {
+            if let Err(e) = manager
+                .execute_block_migration(
+                    &job_id_clone,
+                    vm_id,
+                    devices_clone,
+                    source_clone,
+                    target_clone,
+                )
+                .await
+            {
                 error!("Block migration failed for VM {}: {}", vm_id, e);
 
                 let mut jobs = manager.jobs.write().await;
@@ -163,33 +170,46 @@ impl BlockMigrationManager {
         target_node: String,
     ) -> Result<()> {
         // Update state: Preparing
-        self.update_job_state(job_id, BlockMigrationState::Preparing, 5.0).await;
+        self.update_job_state(job_id, BlockMigrationState::Preparing, 5.0)
+            .await;
 
         // Pre-migration checks
-        self.pre_migration_checks(&devices, &source_node, &target_node).await?;
+        self.pre_migration_checks(&devices, &source_node, &target_node)
+            .await?;
 
         // Update state: Transferring
-        self.update_job_state(job_id, BlockMigrationState::Transferring, 10.0).await;
+        self.update_job_state(job_id, BlockMigrationState::Transferring, 10.0)
+            .await;
 
         // For each device, initiate block migration
         let total_devices = devices.len();
         for (idx, device) in devices.iter().enumerate() {
-            info!("Migrating block device {} ({}/{})", device.device_id, idx + 1, total_devices);
+            info!(
+                "Migrating block device {} ({}/{})",
+                device.device_id,
+                idx + 1,
+                total_devices
+            );
 
             // Use qemu-img convert for initial copy (can be done while VM is running)
-            self.migrate_block_device(job_id, device, &source_node, &target_node).await?;
+            self.migrate_block_device(job_id, device, &source_node, &target_node)
+                .await?;
 
             // Update progress
             let progress = 10.0 + (70.0 * (idx + 1) as f32 / total_devices as f32);
-            self.update_job_state(job_id, BlockMigrationState::Transferring, progress).await;
+            self.update_job_state(job_id, BlockMigrationState::Transferring, progress)
+                .await;
         }
 
         // Final sync phase (copy remaining dirty blocks)
-        self.update_job_state(job_id, BlockMigrationState::Syncing, 85.0).await;
-        self.sync_remaining_blocks(job_id, &devices, &source_node, &target_node).await?;
+        self.update_job_state(job_id, BlockMigrationState::Syncing, 85.0)
+            .await;
+        self.sync_remaining_blocks(job_id, &devices, &source_node, &target_node)
+            .await?;
 
         // Mark as completed
-        self.update_job_state(job_id, BlockMigrationState::Completed, 100.0).await;
+        self.update_job_state(job_id, BlockMigrationState::Completed, 100.0)
+            .await;
 
         let mut jobs = self.jobs.write().await;
         if let Some(job) = jobs.get_mut(job_id) {
@@ -208,33 +228,46 @@ impl BlockMigrationManager {
         source_node: &str,
         target_node: &str,
     ) -> Result<()> {
-        info!("Migrating device {} from {} to {}", device.device_id, source_node, target_node);
+        info!(
+            "Migrating device {} from {} to {}",
+            device.device_id, source_node, target_node
+        );
 
         // Build qemu-img convert command via SSH
         let mut cmd = Command::new("ssh");
         cmd.arg(source_node)
             .arg("qemu-img")
             .arg("convert")
-            .arg("-p")  // Show progress
+            .arg("-p") // Show progress
             .arg("-O")
             .arg(device.format.to_string())
             .arg(&device.source_path)
-            .arg(format!("ssh://{}{}",target_node, device.target_path.display()));
+            .arg(format!(
+                "ssh://{}{}",
+                target_node,
+                device.target_path.display()
+            ));
 
-        let output = cmd.output().await
-            .map_err(|e| horcrux_common::Error::System(
-                format!("Failed to execute qemu-img convert: {}", e)
-            ))?;
+        let output = cmd.output().await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to execute qemu-img convert: {}", e))
+        })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(
-                format!("Block migration failed for device {}: {}", device.device_id, stderr)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Block migration failed for device {}: {}",
+                device.device_id, stderr
+            )));
         }
 
         // Update device progress
-        self.update_device_progress(job_id, &device.device_id, device.size_bytes, device.size_bytes).await;
+        self.update_device_progress(
+            job_id,
+            &device.device_id,
+            device.size_bytes,
+            device.size_bytes,
+        )
+        .await;
 
         Ok(())
     }
@@ -247,7 +280,10 @@ impl BlockMigrationManager {
         source_node: &str,
         target_node: &str,
     ) -> Result<()> {
-        info!("Syncing remaining dirty blocks for {} devices", devices.len());
+        info!(
+            "Syncing remaining dirty blocks for {} devices",
+            devices.len()
+        );
 
         // Final sync of dirty blocks for each device
         // Uses rsync with --inplace to copy only changed blocks efficiently
@@ -257,28 +293,34 @@ impl BlockMigrationManager {
             // Use rsync with --inplace and --sparse for efficient dirty block sync
             let output = Command::new("ssh")
                 .args([
-                    "-o", "StrictHostKeyChecking=no",
-                    "-o", "UserKnownHostsFile=/dev/null",
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-o",
+                    "UserKnownHostsFile=/dev/null",
                     source_node,
                     "rsync",
                     "-az",
-                    "--inplace",      // Update files in-place
-                    "--sparse",       // Handle sparse files efficiently
-                    "--whole-file",   // Don't use delta transfer for final sync
+                    "--inplace",    // Update files in-place
+                    "--sparse",     // Handle sparse files efficiently
+                    "--whole-file", // Don't use delta transfer for final sync
                     &format!("{}", device.source_path.display()),
                     &format!("{}:{}", target_node, device.target_path.display()),
                 ])
                 .output()
                 .await
-                .map_err(|e| horcrux_common::Error::System(
-                    format!("Failed to sync dirty blocks for device {}: {}", device.device_id, e)
-                ))?;
+                .map_err(|e| {
+                    horcrux_common::Error::System(format!(
+                        "Failed to sync dirty blocks for device {}: {}",
+                        device.device_id, e
+                    ))
+                })?;
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(horcrux_common::Error::System(
-                    format!("Dirty block sync failed for device {}: {}", device.device_id, stderr)
-                ));
+                return Err(horcrux_common::Error::System(format!(
+                    "Dirty block sync failed for device {}: {}",
+                    device.device_id, stderr
+                )));
             }
 
             info!("Dirty block sync completed for device {}", device.device_id);
@@ -307,35 +349,37 @@ impl BlockMigrationManager {
                 .arg("-f")
                 .arg(&device.source_path);
 
-            let status = cmd.status().await
-                .map_err(|e| horcrux_common::Error::System(
-                    format!("Failed to check source device: {}", e)
-                ))?;
+            let status = cmd.status().await.map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to check source device: {}", e))
+            })?;
 
             if !status.success() {
-                return Err(horcrux_common::Error::System(
-                    format!("Source device not found: {}", device.source_path.display())
-                ));
+                return Err(horcrux_common::Error::System(format!(
+                    "Source device not found: {}",
+                    device.source_path.display()
+                )));
             }
         }
 
         // Check 2: Verify target has sufficient space
         let total_size: u64 = devices.iter().map(|d| d.size_bytes).sum();
-        info!("Total disk space required: {} GB", total_size / (1024 * 1024 * 1024));
+        info!(
+            "Total disk space required: {} GB",
+            total_size / (1024 * 1024 * 1024)
+        );
 
         // Check 3: Verify target directories exist
         for device in devices {
             if let Some(parent) = device.target_path.parent() {
                 let mut cmd = Command::new("ssh");
-                cmd.arg(target_node)
-                    .arg("mkdir")
-                    .arg("-p")
-                    .arg(parent);
+                cmd.arg(target_node).arg("mkdir").arg("-p").arg(parent);
 
-                cmd.status().await
-                    .map_err(|e| horcrux_common::Error::System(
-                        format!("Failed to create target directory: {}", e)
-                    ))?;
+                cmd.status().await.map_err(|e| {
+                    horcrux_common::Error::System(format!(
+                        "Failed to create target directory: {}",
+                        e
+                    ))
+                })?;
             }
         }
 
@@ -373,11 +417,12 @@ impl BlockMigrationManager {
                 transferred_bytes: transferred,
                 total_bytes: total,
                 progress_percent,
-                transfer_rate_mbps: 0.0,  // Would be calculated from actual transfer rate
+                transfer_rate_mbps: 0.0, // Would be calculated from actual transfer rate
                 remaining_time_seconds: None,
             };
 
-            job.device_progress.insert(device_id.to_string(), device_progress);
+            job.device_progress
+                .insert(device_id.to_string(), device_progress);
         }
     }
 
@@ -467,24 +512,24 @@ mod tests {
     async fn test_block_migration_job_creation() {
         let manager = BlockMigrationManager::new();
 
-        let devices = vec![
-            BlockDevice {
-                device_id: "vda".to_string(),
-                source_path: PathBuf::from("/var/lib/vms/vm-100/disk0.qcow2"),
-                target_path: PathBuf::from("/var/lib/vms/vm-100/disk0.qcow2"),
-                size_bytes: 10 * 1024 * 1024 * 1024,
-                format: DiskFormat::Qcow2,
-            },
-        ];
+        let devices = vec![BlockDevice {
+            device_id: "vda".to_string(),
+            source_path: PathBuf::from("/var/lib/vms/vm-100/disk0.qcow2"),
+            target_path: PathBuf::from("/var/lib/vms/vm-100/disk0.qcow2"),
+            size_bytes: 10 * 1024 * 1024 * 1024,
+            format: DiskFormat::Qcow2,
+        }];
 
         let job_id = "block-migration-test".to_string();
-        let result = manager.start_block_migration(
-            job_id.clone(),
-            100,
-            devices,
-            "node1".to_string(),
-            "node2".to_string(),
-        ).await;
+        let result = manager
+            .start_block_migration(
+                job_id.clone(),
+                100,
+                devices,
+                "node1".to_string(),
+                "node2".to_string(),
+            )
+            .await;
 
         assert!(result.is_ok());
 

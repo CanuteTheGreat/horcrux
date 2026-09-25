@@ -1,13 +1,14 @@
-use leptos::*;
 use crate::api::{
-    BackupJob, SnapshotSchedule, RetentionPolicy,
-    get_backup_jobs, get_snapshot_schedules, apply_retention_policy
+    apply_retention_policy, get_backup_jobs, get_snapshot_schedules, BackupJob, RetentionPolicy,
+    SnapshotSchedule,
 };
+use leptos::*;
 
 #[component]
 pub fn RetentionPoliciesPage() -> impl IntoView {
     let (backup_jobs, set_backup_jobs) = create_signal(Vec::<BackupJob>::new());
-    let (snapshot_schedules, set_snapshot_schedules) = create_signal(Vec::<SnapshotSchedule>::new());
+    let (snapshot_schedules, set_snapshot_schedules) =
+        create_signal(Vec::<SnapshotSchedule>::new());
     let (loading, set_loading) = create_signal(false);
     let (error, set_error) = create_signal(None::<String>);
     let (success_message, set_success_message) = create_signal(None::<String>);
@@ -46,7 +47,8 @@ pub fn RetentionPoliciesPage() -> impl IntoView {
         spawn_local(async move {
             match apply_retention_policy(&target_id).await {
                 Ok(_) => {
-                    set_success_message.set(Some("Retention policy applied successfully".to_string()));
+                    set_success_message
+                        .set(Some("Retention policy applied successfully".to_string()));
                     // Clear success message after 3 seconds
                     set_timeout(
                         move || set_success_message.set(None),
@@ -105,8 +107,10 @@ pub fn RetentionPoliciesPage() -> impl IntoView {
     };
 
     let get_policy_health = move |policy: &RetentionPolicy| -> (&str, &str) {
-        let has_short_term = policy.keep_hourly.unwrap_or(0) > 0 || policy.keep_daily.unwrap_or(0) > 0;
-        let has_long_term = policy.keep_monthly.unwrap_or(0) > 0 || policy.keep_yearly.unwrap_or(0) > 0;
+        let has_short_term =
+            policy.keep_hourly.unwrap_or(0) > 0 || policy.keep_daily.unwrap_or(0) > 0;
+        let has_long_term =
+            policy.keep_monthly.unwrap_or(0) > 0 || policy.keep_yearly.unwrap_or(0) > 0;
         let has_max_age = policy.max_age_days.is_some();
 
         match (has_short_term, has_long_term, has_max_age) {

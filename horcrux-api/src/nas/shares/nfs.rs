@@ -2,9 +2,9 @@
 //!
 //! Manages NFS exports for Unix/Linux file sharing.
 
-use horcrux_common::{Error, Result};
-use crate::nas::shares::{NasShare, NfsExportConfig, NfsClient, NfsSecurity};
+use crate::nas::shares::{NasShare, NfsClient, NfsExportConfig, NfsSecurity};
 use crate::nas::AccessLevel;
+use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
@@ -214,10 +214,7 @@ impl NfsServerManager {
         match tokio::fs::read_to_string(&self.exports_path).await {
             Ok(content) => Ok(content),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-            Err(e) => Err(Error::Internal(format!(
-                "Failed to read exports: {}",
-                e
-            ))),
+            Err(e) => Err(Error::Internal(format!("Failed to read exports: {}", e))),
         }
     }
 
@@ -238,10 +235,7 @@ impl NfsServerManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!(
-                "exportfs failed: {}",
-                stderr
-            )));
+            return Err(Error::Internal(format!("exportfs failed: {}", stderr)));
         }
 
         Ok(())
@@ -278,7 +272,8 @@ impl NfsServerManager {
                             let mut address = String::new();
                             for line in content.lines() {
                                 if line.starts_with("address:") {
-                                    address = line.split(':').nth(1).unwrap_or("").trim().to_string();
+                                    address =
+                                        line.split(':').nth(1).unwrap_or("").trim().to_string();
                                 }
                             }
                             if !address.is_empty() {
@@ -423,14 +418,15 @@ impl NfsServerManager {
     /// Get service status
     pub async fn get_status(&self) -> Result<NfsServiceStatus> {
         // Check if nfsd is running
-        let nfsd_running = Self::check_process("nfsd").await ||
-                          Self::check_nfs_threads().await;
+        let nfsd_running = Self::check_process("nfsd").await || Self::check_nfs_threads().await;
         let mountd_running = Self::check_process("rpc.mountd").await;
         let statd_running = Self::check_process("rpc.statd").await;
         let idmapd_running = Self::check_process("rpc.idmapd").await;
 
         // Get version
-        let version = Self::get_nfs_version().await.unwrap_or_else(|| "unknown".to_string());
+        let version = Self::get_nfs_version()
+            .await
+            .unwrap_or_else(|| "unknown".to_string());
 
         // Count clients
         let clients = self.get_clients().await.unwrap_or_default();
@@ -465,11 +461,7 @@ impl NfsServerManager {
     }
 
     async fn get_nfs_version() -> Option<String> {
-        let output = Command::new("rpcinfo")
-            .args(["-p"])
-            .output()
-            .await
-            .ok()?;
+        let output = Command::new("rpcinfo").args(["-p"]).output().await.ok()?;
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -559,7 +551,8 @@ impl NfsServerManager {
         let g = &self.global_config;
 
         // Write /etc/nfs.conf (for newer nfs-utils)
-        let nfs_conf = format!(r#"# Horcrux NAS NFS configuration
+        let nfs_conf = format!(
+            r#"# Horcrux NAS NFS configuration
 [nfsd]
 threads = {}
 vers3 = {}
@@ -594,7 +587,8 @@ port = {}
 
         // Write idmapd.conf if NFSv4 domain is set
         if let Some(ref domain) = g.nfsv4_domain {
-            let idmapd_conf = format!(r#"[General]
+            let idmapd_conf = format!(
+                r#"[General]
 Domain = {}
 
 [Mapping]
@@ -603,7 +597,9 @@ Nobody-Group = nogroup
 
 [Translation]
 Method = nsswitch
-"#, domain);
+"#,
+                domain
+            );
             let _ = tokio::fs::write("/etc/idmapd.conf", &idmapd_conf).await;
         }
 
@@ -743,7 +739,11 @@ Method = nsswitch
     }
 
     /// Update export clients
-    pub async fn update_export_clients(&self, path: &str, clients: Vec<ParsedClient>) -> Result<()> {
+    pub async fn update_export_clients(
+        &self,
+        path: &str,
+        clients: Vec<ParsedClient>,
+    ) -> Result<()> {
         let mut exports = self.parse_exports().await?;
 
         // Find and update the export

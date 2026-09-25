@@ -2,7 +2,6 @@
 ///!
 ///! This module provides unified output formatting across all CLI commands
 ///! to ensure consistent user experience.
-
 use colored::Colorize;
 use serde::Serialize;
 use tabled::{Table, Tabled};
@@ -26,7 +25,10 @@ impl OutputFormat {
 }
 
 /// Print data in the specified format (table, JSON, or YAML)
-pub fn print_output<T: Tabled + Serialize>(data: Vec<T>, format: OutputFormat) -> anyhow::Result<()> {
+pub fn print_output<T: Tabled + Serialize>(
+    data: Vec<T>,
+    format: OutputFormat,
+) -> anyhow::Result<()> {
     match format {
         OutputFormat::Table => print_table(data),
         OutputFormat::Json => print_json(&data)?,

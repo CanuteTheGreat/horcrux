@@ -68,8 +68,16 @@ pub async fn handle_ha_command(
             let rows: Vec<HaResourceRow> = resources.into_iter().map(HaResourceRow::from).collect();
             output::print_output(rows, format)?;
         }
-        HaCommands::Add { vm_id, group, priority } => {
-            let request = AddHaRequest { vm_id, group: group.clone(), priority };
+        HaCommands::Add {
+            vm_id,
+            group,
+            priority,
+        } => {
+            let request = AddHaRequest {
+                vm_id,
+                group: group.clone(),
+                priority,
+            };
             api.post_empty("/api/ha/resources", &request).await?;
             output::print_created("HA resource", &format!("VM {}", vm_id), &group);
         }
@@ -84,7 +92,10 @@ pub async fn handle_ha_command(
         }
         HaCommands::CreateGroup { name, nodes } => {
             let node_list: Vec<String> = nodes.split(',').map(|s| s.trim().to_string()).collect();
-            let request = CreateGroupRequest { name: name.clone(), nodes: node_list.clone() };
+            let request = CreateGroupRequest {
+                name: name.clone(),
+                nodes: node_list.clone(),
+            };
             api.post_empty("/api/ha/groups", &request).await?;
             output::print_created("HA group", &name, &node_list.join(","));
         }

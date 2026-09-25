@@ -105,9 +105,12 @@ pub fn SchedulerPage() -> impl IntoView {
     create_effect(move |_| {
         if let Some(job_id) = selected_job_id.get() {
             spawn_local(async move {
-                match reqwasm::http::Request::get(&format!("/api/nas/scheduler/jobs/{}/history", job_id))
-                    .send()
-                    .await
+                match reqwasm::http::Request::get(&format!(
+                    "/api/nas/scheduler/jobs/{}/history",
+                    job_id
+                ))
+                .send()
+                .await
                 {
                     Ok(resp) => {
                         if resp.ok() {
@@ -124,37 +127,44 @@ pub fn SchedulerPage() -> impl IntoView {
 
     let run_job = move |job_id: String| {
         spawn_local(async move {
-            let _ = reqwasm::http::Request::post(&format!("/api/nas/scheduler/jobs/{}/run", job_id))
-                .send()
-                .await;
+            let _ =
+                reqwasm::http::Request::post(&format!("/api/nas/scheduler/jobs/{}/run", job_id))
+                    .send()
+                    .await;
         });
     };
 
     let pause_job = move |job_id: String| {
         spawn_local(async move {
-            let _ = reqwasm::http::Request::post(&format!("/api/nas/scheduler/jobs/{}/pause", job_id))
-                .send()
-                .await;
+            let _ =
+                reqwasm::http::Request::post(&format!("/api/nas/scheduler/jobs/{}/pause", job_id))
+                    .send()
+                    .await;
         });
     };
 
     let resume_job = move |job_id: String| {
         spawn_local(async move {
-            let _ = reqwasm::http::Request::post(&format!("/api/nas/scheduler/jobs/{}/resume", job_id))
-                .send()
-                .await;
+            let _ =
+                reqwasm::http::Request::post(&format!("/api/nas/scheduler/jobs/{}/resume", job_id))
+                    .send()
+                    .await;
         });
     };
 
     let delete_job = move |job_id: String, job_name: String| {
         if web_sys::window()
-            .and_then(|w| w.confirm_with_message(&format!("Delete scheduled job '{}'?", job_name)).ok())
+            .and_then(|w| {
+                w.confirm_with_message(&format!("Delete scheduled job '{}'?", job_name))
+                    .ok()
+            })
             .unwrap_or(false)
         {
             spawn_local(async move {
-                let _ = reqwasm::http::Request::delete(&format!("/api/nas/scheduler/jobs/{}", job_id))
-                    .send()
-                    .await;
+                let _ =
+                    reqwasm::http::Request::delete(&format!("/api/nas/scheduler/jobs/{}", job_id))
+                        .send()
+                        .await;
             });
         }
     };
@@ -654,7 +664,8 @@ fn format_job_type(job_type: &str) -> String {
         "smart_check" => "SMART",
         "custom" | "custom_script" => "Custom",
         _ => job_type,
-    }.to_string()
+    }
+    .to_string()
 }
 
 fn truncate_str(s: &str, max_len: usize) -> String {

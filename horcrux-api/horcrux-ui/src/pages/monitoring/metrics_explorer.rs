@@ -1,5 +1,5 @@
-use leptos::*;
 use crate::api::*;
+use leptos::*;
 use wasm_bindgen::JsCast;
 
 #[component]
@@ -19,7 +19,8 @@ pub fn MetricsExplorerPage() -> impl IntoView {
 
     // Query builder state
     let (selected_metric, set_selected_metric) = create_signal(String::new());
-    let (metric_filters, set_metric_filters) = create_signal(std::collections::HashMap::<String, String>::new());
+    let (metric_filters, set_metric_filters) =
+        create_signal(std::collections::HashMap::<String, String>::new());
     let (aggregation_function, set_aggregation_function) = create_signal("avg".to_string());
     let (group_by_labels, set_group_by_labels) = create_signal(Vec::<String>::new());
 
@@ -39,7 +40,8 @@ pub fn MetricsExplorerPage() -> impl IntoView {
 
         // Add filters
         if !metric_filters.get().is_empty() {
-            let filters: Vec<String> = metric_filters.get()
+            let filters: Vec<String> = metric_filters
+                .get()
                 .iter()
                 .map(|(k, v)| format!("{}=\"{}\"", k, v))
                 .collect();
@@ -51,10 +53,12 @@ pub fn MetricsExplorerPage() -> impl IntoView {
             if group_by_labels.get().is_empty() {
                 query = format!("{}({})", aggregation_function.get(), query);
             } else {
-                query = format!("{}({}) by ({})",
+                query = format!(
+                    "{}({}) by ({})",
                     aggregation_function.get(),
                     query,
-                    group_by_labels.get().join(", "));
+                    group_by_labels.get().join(", ")
+                );
             }
         }
 
@@ -62,23 +66,24 @@ pub fn MetricsExplorerPage() -> impl IntoView {
     };
 
     // Parse time range string to start/end times - defined early for use in actions
-    let parse_time_range = move |range: &str| -> (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>) {
-        let end_time = chrono::Utc::now();
-        let start_time = match range {
-            "5m" => end_time - chrono::Duration::minutes(5),
-            "15m" => end_time - chrono::Duration::minutes(15),
-            "30m" => end_time - chrono::Duration::minutes(30),
-            "1h" => end_time - chrono::Duration::hours(1),
-            "3h" => end_time - chrono::Duration::hours(3),
-            "6h" => end_time - chrono::Duration::hours(6),
-            "12h" => end_time - chrono::Duration::hours(12),
-            "1d" => end_time - chrono::Duration::days(1),
-            "3d" => end_time - chrono::Duration::days(3),
-            "7d" => end_time - chrono::Duration::days(7),
-            _ => end_time - chrono::Duration::hours(1),
+    let parse_time_range =
+        move |range: &str| -> (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>) {
+            let end_time = chrono::Utc::now();
+            let start_time = match range {
+                "5m" => end_time - chrono::Duration::minutes(5),
+                "15m" => end_time - chrono::Duration::minutes(15),
+                "30m" => end_time - chrono::Duration::minutes(30),
+                "1h" => end_time - chrono::Duration::hours(1),
+                "3h" => end_time - chrono::Duration::hours(3),
+                "6h" => end_time - chrono::Duration::hours(6),
+                "12h" => end_time - chrono::Duration::hours(12),
+                "1d" => end_time - chrono::Duration::days(1),
+                "3d" => end_time - chrono::Duration::days(3),
+                "7d" => end_time - chrono::Duration::days(7),
+                _ => end_time - chrono::Duration::hours(1),
+            };
+            (start_time, end_time)
         };
-        (start_time, end_time)
-    };
 
     // Save query to history helper - stub that doesn't actually save for now
     let save_query_to_history = move |_query: String, _time_range: String| {

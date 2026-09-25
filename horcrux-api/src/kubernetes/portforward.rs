@@ -96,13 +96,15 @@ impl PortForwardManager {
         // For each port mapping, create a listener and spawn a forwarder
         for port_map in &request.ports {
             let local_addr = format!("127.0.0.1:{}", port_map.local_port);
-            let listener = TcpListener::bind(&local_addr)
-                .await
-                .map_err(|e| crate::kubernetes::error::K8sError::PortForwardError(
-                    format!("Failed to bind to {}: {}", local_addr, e)
-                ))?;
+            let listener = TcpListener::bind(&local_addr).await.map_err(|e| {
+                crate::kubernetes::error::K8sError::PortForwardError(format!(
+                    "Failed to bind to {}: {}",
+                    local_addr, e
+                ))
+            })?;
 
-            let actual_local_port = listener.local_addr()
+            let actual_local_port = listener
+                .local_addr()
                 .map_err(|e| crate::kubernetes::error::K8sError::PortForwardError(e.to_string()))?
                 .port();
 
@@ -126,12 +128,10 @@ impl PortForwardManager {
                             let pod_name = pod_name.clone();
 
                             tokio::spawn(async move {
-                                if let Err(e) = forward_connection(
-                                    &pods,
-                                    &pod_name,
-                                    pod_port,
-                                    &mut tcp_stream,
-                                ).await {
+                                if let Err(e) =
+                                    forward_connection(&pods, &pod_name, pod_port, &mut tcp_stream)
+                                        .await
+                                {
                                     tracing::error!("Port forward error: {}", e);
                                 }
                             });
@@ -182,9 +182,10 @@ impl PortForwardManager {
                 session.status = PortForwardStatus::Stopped;
                 session.ports.clone()
             } else {
-                return Err(crate::kubernetes::error::K8sError::Internal(
-                    format!("Session not found: {}", session_id)
-                ));
+                return Err(crate::kubernetes::error::K8sError::Internal(format!(
+                    "Session not found: {}",
+                    session_id
+                )));
             }
         };
 
@@ -258,11 +259,11 @@ async fn forward_connection(
     let mut forwarder = pods.portforward(pod_name, &[port]).await?;
 
     // Get the port stream
-    let port_stream = forwarder
-        .take_stream(port)
-        .ok_or_else(|| crate::kubernetes::error::K8sError::PortForwardError(
-            "Failed to get port stream".to_string()
-        ))?;
+    let port_stream = forwarder.take_stream(port).ok_or_else(|| {
+        crate::kubernetes::error::K8sError::PortForwardError(
+            "Failed to get port stream".to_string(),
+        )
+    })?;
 
     // Split both streams
     let (mut tcp_read, mut tcp_write) = tcp_stream.split();
@@ -329,9 +330,9 @@ pub async fn forward_to_service(
         .spec
         .as_ref()
         .and_then(|s| s.selector.as_ref())
-        .ok_or_else(|| crate::kubernetes::error::K8sError::Internal(
-            "Service has no selector".to_string()
-        ))?;
+        .ok_or_else(|| {
+            crate::kubernetes::error::K8sError::Internal("Service has no selector".to_string())
+        })?;
 
     // Build label selector string
     let label_selector: String = selector
@@ -356,9 +357,12 @@ pub async fn forward_to_service(
                 .map(|phase| phase == "Running")
                 .unwrap_or(false)
         })
-        .ok_or_else(|| crate::kubernetes::error::K8sError::Internal(
-            format!("No running pod found for service {}", service_name)
-        ))?;
+        .ok_or_else(|| {
+            crate::kubernetes::error::K8sError::Internal(format!(
+                "No running pod found for service {}",
+                service_name
+            ))
+        })?;
 
     let pod_name = pod.metadata.name.unwrap_or_default();
 
@@ -367,11 +371,7 @@ pub async fn forward_to_service(
         .spec
         .as_ref()
         .and_then(|s| s.ports.as_ref())
-        .and_then(|ports| {
-            ports.iter().find(|p| {
-                p.port == service_port as i32
-            })
-        })
+        .and_then(|ports| ports.iter().find(|p| p.port == service_port as i32))
         .and_then(|p| p.target_port.as_ref())
         .map(|tp| match tp {
             k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(i) => *i as u16,

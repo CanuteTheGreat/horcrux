@@ -85,7 +85,12 @@ impl CrossNodeCloneManager {
 
         // Transfer all disks
         for (idx, disk) in source_vm.disks.iter().enumerate() {
-            info!("Transferring disk {} ({}/{})", disk.path, idx + 1, source_vm.disks.len());
+            info!(
+                "Transferring disk {} ({}/{})",
+                disk.path,
+                idx + 1,
+                source_vm.disks.len()
+            );
             self.transfer_disk(disk, &config, idx).await?;
         }
 
@@ -195,8 +200,11 @@ impl CrossNodeCloneManager {
         let ssh_port = config.ssh_port.unwrap_or(22);
 
         // Generate target disk path
-        let new_vm_id = config.clone_options.id.as_ref()
-            .ok_or_else(|| horcrux_common::Error::System("Clone ID must be provided for cross-node clone".to_string()))?;
+        let new_vm_id = config.clone_options.id.as_ref().ok_or_else(|| {
+            horcrux_common::Error::System(
+                "Clone ID must be provided for cross-node clone".to_string(),
+            )
+        })?;
 
         let extension = std::path::Path::new(&disk.path)
             .extension()
@@ -213,7 +221,10 @@ impl CrossNodeCloneManager {
 
         info!(
             "Transferring {} from {} to {} on {}",
-            disk.path, config.source_node, target_path.display(), config.target_node
+            disk.path,
+            config.source_node,
+            target_path.display(),
+            config.target_node
         );
 
         // Build SSH command with compression and bandwidth limiting
@@ -224,21 +235,29 @@ impl CrossNodeCloneManager {
         }
 
         // Use different transfer methods based on storage type
-        if disk.path.ends_with(".qcow2") || disk.path.ends_with(".raw") || disk.path.ends_with(".img") {
+        if disk.path.ends_with(".qcow2")
+            || disk.path.ends_with(".raw")
+            || disk.path.ends_with(".img")
+        {
             // File-based disk - use rsync or scp
-            self.transfer_file_disk(disk, config, &target_path, ssh_user, ssh_port).await?;
+            self.transfer_file_disk(disk, config, &target_path, ssh_user, ssh_port)
+                .await?;
         } else if disk.path.starts_with("/dev/zvol/") {
             // ZFS volume - use zfs send/receive
-            self.transfer_zfs_disk(disk, config, &target_path, ssh_user, ssh_port).await?;
+            self.transfer_zfs_disk(disk, config, &target_path, ssh_user, ssh_port)
+                .await?;
         } else if disk.path.starts_with("/dev/") && disk.path.contains("/lv") {
             // LVM volume - use dd over SSH
-            self.transfer_lvm_disk(disk, config, &target_path, ssh_user, ssh_port).await?;
+            self.transfer_lvm_disk(disk, config, &target_path, ssh_user, ssh_port)
+                .await?;
         } else if !disk.path.starts_with("/dev/") && disk.path.contains('/') {
             // Ceph RBD - use rbd export/import
-            self.transfer_ceph_disk(disk, config, &target_path, ssh_user, ssh_port).await?;
+            self.transfer_ceph_disk(disk, config, &target_path, ssh_user, ssh_port)
+                .await?;
         } else {
             // Default to file-based transfer
-            self.transfer_file_disk(disk, config, &target_path, ssh_user, ssh_port).await?;
+            self.transfer_file_disk(disk, config, &target_path, ssh_user, ssh_port)
+                .await?;
         }
 
         info!("Disk transfer completed: {}", disk.path);
@@ -306,7 +325,9 @@ impl CrossNodeCloneManager {
         ssh_user: &str,
         ssh_port: u16,
     ) -> Result<()> {
-        let zvol_name = disk.path.strip_prefix("/dev/zvol/")
+        let zvol_name = disk
+            .path
+            .strip_prefix("/dev/zvol/")
             .ok_or_else(|| horcrux_common::Error::System("Invalid ZFS path".to_string()))?;
 
         // Create snapshot on source
@@ -348,8 +369,7 @@ impl CrossNodeCloneManager {
         // Build zfs send | ssh | zfs receive pipeline
         let send_cmd = format!(
             "ssh -p {} {} zfs send {} | ssh -p {} {} zfs receive -F {}",
-            ssh_port, source_ssh, snapshot_name,
-            ssh_port, target_ssh, target_zvol
+            ssh_port, source_ssh, snapshot_name, ssh_port, target_ssh, target_zvol
         );
 
         let output = Command::new("sh")
@@ -405,13 +425,11 @@ impl CrossNodeCloneManager {
             .arg(&size_cmd)
             .output()
             .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to get LV size: {}", e))
-            })?;
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to get LV size: {}", e)))?;
 
         if !size_output.status.success() {
             return Err(horcrux_common::Error::System(
-                "Failed to determine LV size".to_string()
+                "Failed to determine LV size".to_string(),
             ));
         }
 
@@ -420,7 +438,8 @@ impl CrossNodeCloneManager {
 
         // Create target LV
         let target_vg = config.target_volume_group.as_deref().unwrap_or("vg0");
-        let target_lv_name = target_path.file_name()
+        let target_lv_name = target_path
+            .file_name()
             .and_then(|n| n.to_str())
             .ok_or_else(|| horcrux_common::Error::System("Invalid target path".to_string()))?;
 
@@ -429,11 +448,7 @@ impl CrossNodeCloneManager {
             ssh_port, target_ssh, size, target_lv_name, target_vg
         );
 
-        let _ = Command::new("sh")
-            .arg("-c")
-            .arg(&create_cmd)
-            .output()
-            .await;
+        let _ = Command::new("sh").arg("-c").arg(&create_cmd).output().await;
 
         // Transfer using dd with compression
         let dd_cmd = if config.compression_enabled {
@@ -445,8 +460,7 @@ impl CrossNodeCloneManager {
         } else {
             format!(
                 "ssh -p {} {} dd if={} bs=4M status=progress | ssh -p {} {} dd of=/dev/{}/{} bs=4M",
-                ssh_port, source_ssh, disk.path,
-                ssh_port, target_ssh, target_vg, target_lv_name
+                ssh_port, source_ssh, disk.path, ssh_port, target_ssh, target_vg, target_lv_name
             )
         };
 
@@ -494,8 +508,12 @@ impl CrossNodeCloneManager {
         } else {
             format!(
                 "ssh -p {} {} rbd export {} - | ssh -p {} {} rbd import - {}",
-                ssh_port, source_ssh, disk.path,
-                ssh_port, target_ssh, target_path.display()
+                ssh_port,
+                source_ssh,
+                disk.path,
+                ssh_port,
+                target_ssh,
+                target_path.display()
             )
         };
 
@@ -525,7 +543,10 @@ impl CrossNodeCloneManager {
         source_vm: &VmConfig,
         config: &CrossNodeCloneConfig,
     ) -> Result<VmConfig> {
-        let new_vm_id = config.clone_options.id.clone()
+        let new_vm_id = config
+            .clone_options
+            .id
+            .clone()
             .ok_or_else(|| horcrux_common::Error::System("Clone ID required".to_string()))?;
 
         // Build new VM config with updated disk paths
@@ -573,7 +594,9 @@ impl CrossNodeCloneManager {
 
         for disk in &vm.disks {
             // Try to get actual disk size from source node
-            let size = self.get_disk_size(&disk.path, source_node).await
+            let size = self
+                .get_disk_size(&disk.path, source_node)
+                .await
                 .unwrap_or((disk.size_gb as u64) * 1024 * 1024 * 1024);
             total_size += size;
         }
@@ -591,23 +614,28 @@ impl CrossNodeCloneManager {
             .arg(disk_path)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to get disk size: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to get disk size: {}", e))
+            })?;
 
         if output.status.success() {
             let size_str = String::from_utf8_lossy(&output.stdout);
-            let size = size_str.trim().parse::<u64>()
-                .map_err(|e| horcrux_common::Error::System(format!("Failed to parse size: {}", e)))?;
+            let size = size_str.trim().parse::<u64>().map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to parse size: {}", e))
+            })?;
             Ok(size)
         } else {
-            Err(horcrux_common::Error::System("Failed to retrieve disk size".to_string()))
+            Err(horcrux_common::Error::System(
+                "Failed to retrieve disk size".to_string(),
+            ))
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::clone::CloneMode;
+    use super::*;
 
     #[test]
     fn test_cross_node_clone_manager_new() {
@@ -618,7 +646,10 @@ mod tests {
     #[test]
     fn test_clone_job_state_equality() {
         assert_eq!(CloneJobState::Preparing, CloneJobState::Preparing);
-        assert_eq!(CloneJobState::TransferringDisks, CloneJobState::TransferringDisks);
+        assert_eq!(
+            CloneJobState::TransferringDisks,
+            CloneJobState::TransferringDisks
+        );
         assert_eq!(CloneJobState::CreatingVm, CloneJobState::CreatingVm);
         assert_eq!(CloneJobState::Completed, CloneJobState::Completed);
         assert_eq!(CloneJobState::Failed, CloneJobState::Failed);

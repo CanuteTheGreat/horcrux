@@ -1,15 +1,17 @@
+use crate::api::{
+    self, delete_alert_rule, get_alert_rules, get_notification_channels, preview_alert_rule,
+    toggle_alert_rule, AlertPreview, AlertRule, NotificationChannel,
+};
 use leptos::*;
-use crate::api::{self, AlertRule, AlertPreview, NotificationChannel,
-    get_alert_rules, get_notification_channels, preview_alert_rule, delete_alert_rule, toggle_alert_rule};
 
 fn parse_duration_to_seconds(duration: &str) -> u32 {
     let duration = duration.trim();
     if duration.ends_with('s') {
-        duration[..duration.len()-1].parse().unwrap_or(60)
+        duration[..duration.len() - 1].parse().unwrap_or(60)
     } else if duration.ends_with('m') {
-        duration[..duration.len()-1].parse::<u32>().unwrap_or(1) * 60
+        duration[..duration.len() - 1].parse::<u32>().unwrap_or(1) * 60
     } else if duration.ends_with('h') {
-        duration[..duration.len()-1].parse::<u32>().unwrap_or(1) * 3600
+        duration[..duration.len() - 1].parse::<u32>().unwrap_or(1) * 3600
     } else {
         duration.parse().unwrap_or(60)
     }
@@ -18,7 +20,8 @@ fn parse_duration_to_seconds(duration: &str) -> u32 {
 #[component]
 pub fn AlertsFromMetricsPage() -> impl IntoView {
     let (alert_rules, set_alert_rules) = create_signal(Vec::<AlertRule>::new());
-    let (notification_channels, set_notification_channels) = create_signal(Vec::<NotificationChannel>::new());
+    let (notification_channels, set_notification_channels) =
+        create_signal(Vec::<NotificationChannel>::new());
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
 
@@ -68,19 +71,25 @@ pub fn AlertsFromMetricsPage() -> impl IntoView {
 
     // Filtered alert rules
     let filtered_rules = create_memo(move |_| {
-        let mut filtered: Vec<AlertRule> = alert_rules.get()
+        let mut filtered: Vec<AlertRule> = alert_rules
+            .get()
             .into_iter()
             .filter(|rule| {
                 let search_match = if search_term.get().is_empty() {
                     true
                 } else {
                     let term = search_term.get().to_lowercase();
-                    rule.name.to_lowercase().contains(&term) ||
-                    rule.description.as_ref().map(|d| d.to_lowercase().contains(&term)).unwrap_or(false) ||
-                    rule.metric.to_lowercase().contains(&term)
+                    rule.name.to_lowercase().contains(&term)
+                        || rule
+                            .description
+                            .as_ref()
+                            .map(|d| d.to_lowercase().contains(&term))
+                            .unwrap_or(false)
+                        || rule.metric.to_lowercase().contains(&term)
                 };
 
-                let severity_match = filter_severity.get() == "all" || rule.severity == filter_severity.get();
+                let severity_match =
+                    filter_severity.get() == "all" || rule.severity == filter_severity.get();
                 let enabled_match = match filter_enabled.get().as_str() {
                     "enabled" => rule.enabled,
                     "disabled" => !rule.enabled,
@@ -99,7 +108,8 @@ pub fn AlertsFromMetricsPage() -> impl IntoView {
                 "info" => 2,
                 _ => 3,
             };
-            severity_order(&a.severity).cmp(&severity_order(&b.severity))
+            severity_order(&a.severity)
+                .cmp(&severity_order(&b.severity))
                 .then(a.name.cmp(&b.name))
         });
 
@@ -136,7 +146,9 @@ pub fn AlertsFromMetricsPage() -> impl IntoView {
     let save_alert_action = create_action(move |_: &()| async move {
         let duration = alert_duration.get();
         let rule = api::AlertRule {
-            id: edit_rule_id.get().unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            id: edit_rule_id
+                .get()
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
             name: alert_name.get(),
             description: Some(alert_description.get()),
             metric: alert_query.get(),
@@ -180,7 +192,7 @@ pub fn AlertsFromMetricsPage() -> impl IntoView {
                 }
                 true
             }
-            Err(_) => false
+            Err(_) => false,
         }
     });
 

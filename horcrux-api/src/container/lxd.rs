@@ -1,6 +1,5 @@
 ///! LXD container integration
 ///! LXD can manage both VMs and containers - this module handles containers
-
 use super::Container;
 use horcrux_common::{ContainerConfig, ContainerRuntime, ContainerStatus, Result};
 use tokio::process::Command;
@@ -16,7 +15,10 @@ impl LxdContainerManager {
 
     /// Create a new LXD container
     pub async fn create_container(&self, config: &ContainerConfig) -> Result<Container> {
-        info!("Creating LXD container: {} (ID: {})", config.name, config.id);
+        info!(
+            "Creating LXD container: {} (ID: {})",
+            config.name, config.id
+        );
 
         // Launch container instance with LXD
         let output = Command::new("lxc")
@@ -55,7 +57,10 @@ impl LxdContainerManager {
 
     /// Start an LXD container
     pub async fn start_container(&self, container: &Container) -> Result<()> {
-        info!("Starting LXD container: {} (ID: {})", container.name, container.id);
+        info!(
+            "Starting LXD container: {} (ID: {})",
+            container.name, container.id
+        );
 
         if container.status == ContainerStatus::Running {
             return Err(horcrux_common::Error::InvalidConfig(format!(
@@ -69,7 +74,9 @@ impl LxdContainerManager {
             .arg(&container.name)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to run lxc start: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run lxc start: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -86,7 +93,10 @@ impl LxdContainerManager {
 
     /// Stop an LXD container
     pub async fn stop_container(&self, container: &Container) -> Result<()> {
-        info!("Stopping LXD container: {} (ID: {})", container.name, container.id);
+        info!(
+            "Stopping LXD container: {} (ID: {})",
+            container.name, container.id
+        );
 
         if container.status == ContainerStatus::Stopped {
             return Err(horcrux_common::Error::InvalidConfig(format!(
@@ -117,7 +127,10 @@ impl LxdContainerManager {
 
     /// Delete an LXD container
     pub async fn delete_container(&self, container: &Container) -> Result<()> {
-        info!("Deleting LXD container: {} (ID: {})", container.name, container.id);
+        info!(
+            "Deleting LXD container: {} (ID: {})",
+            container.name, container.id
+        );
 
         if container.status == ContainerStatus::Running {
             return Err(horcrux_common::Error::InvalidConfig(format!(
@@ -131,7 +144,9 @@ impl LxdContainerManager {
             .arg(&container.name)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to run lxc delete: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run lxc delete: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -153,7 +168,9 @@ impl LxdContainerManager {
             .arg(&container.name)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to run lxc pause: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run lxc pause: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -173,7 +190,9 @@ impl LxdContainerManager {
             .arg(&container.name)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to run lxc start: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run lxc start: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -220,9 +239,10 @@ impl LxdContainerManager {
             cmd.arg(arg);
         }
 
-        let output = cmd.output().await.map_err(|e| {
-            horcrux_common::Error::System(format!("Failed to run lxc exec: {}", e))
-        })?;
+        let output = cmd
+            .output()
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to run lxc exec: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -244,9 +264,10 @@ impl LxdContainerManager {
             cmd.arg("--instance-only");
         }
 
-        let output = cmd.output().await.map_err(|e| {
-            horcrux_common::Error::System(format!("Failed to run lxc copy: {}", e))
-        })?;
+        let output = cmd
+            .output()
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to run lxc copy: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

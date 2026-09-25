@@ -8,8 +8,7 @@
 ///! - Snapshot creation
 ///! - Database queries
 ///! - Authentication
-
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use horcrux_common::*;
 use std::time::Duration;
 
@@ -149,7 +148,11 @@ fn benchmark_json_parsing_sizes(c: &mut Criterion) {
         "memory": 65536,
         "disks": [{}]
     }}"#,
-        (0..100).map(|i| format!(r#"{{"path":"/dev/sd{}","size":10737418240}}"#, (b'a' + (i % 26)) as char))
+        (0..100)
+            .map(|i| format!(
+                r#"{{"path":"/dev/sd{}","size":10737418240}}"#,
+                (b'a' + (i % 26)) as char
+            ))
             .collect::<Vec<_>>()
             .join(",")
     );

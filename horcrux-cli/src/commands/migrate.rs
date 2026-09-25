@@ -37,7 +37,9 @@ pub async fn handle_migrate_command(
     };
 
     // Call migration API
-    let response: String = api.post(&format!("/api/migrate/{}", vm_id), &request).await?;
+    let response: String = api
+        .post(&format!("/api/migrate/{}", vm_id), &request)
+        .await?;
 
     output::print_success(&format!(
         "Migration started successfully! Job ID: {}",

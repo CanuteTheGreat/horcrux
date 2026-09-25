@@ -3,11 +3,11 @@
 
 #![allow(dead_code)]
 
-mod vnc;
-mod spice;
-mod serial;
-mod websocket;
 pub mod novnc;
+mod serial;
+mod spice;
+mod vnc;
+mod websocket;
 
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
@@ -67,7 +67,11 @@ impl ConsoleManager {
     }
 
     /// Create a console connection for a VM
-    pub async fn create_console(&self, vm_id: &str, console_type: ConsoleType) -> Result<ConsoleInfo> {
+    pub async fn create_console(
+        &self,
+        vm_id: &str,
+        console_type: ConsoleType,
+    ) -> Result<ConsoleInfo> {
         // Generate authentication ticket
         let ticket = self.generate_ticket(vm_id, &console_type).await?;
 
@@ -77,7 +81,10 @@ impl ConsoleManager {
                 let vnc_port = self.vnc_manager.get_vnc_port(vm_id).await?;
 
                 // Start WebSocket proxy
-                let ws_port = self.ws_proxy.start_proxy(&ticket.ticket_id, "127.0.0.1", vnc_port).await?;
+                let ws_port = self
+                    .ws_proxy
+                    .start_proxy(&ticket.ticket_id, "127.0.0.1", vnc_port)
+                    .await?;
 
                 Ok(ConsoleInfo {
                     vm_id: vm_id.to_string(),
@@ -93,7 +100,10 @@ impl ConsoleManager {
                 let spice_port = self.spice_manager.get_spice_port(vm_id).await?;
 
                 // Start WebSocket proxy for SPICE
-                let ws_port = self.ws_proxy.start_proxy(&ticket.ticket_id, "127.0.0.1", spice_port).await?;
+                let ws_port = self
+                    .ws_proxy
+                    .start_proxy(&ticket.ticket_id, "127.0.0.1", spice_port)
+                    .await?;
 
                 Ok(ConsoleInfo {
                     vm_id: vm_id.to_string(),
@@ -110,7 +120,10 @@ impl ConsoleManager {
 
                 // For serial console, we return the socket path directly
                 // Client can connect via WebSocket proxy to the Unix socket
-                let ws_port = self.ws_proxy.start_unix_proxy(&ticket.ticket_id, &socket_path).await?;
+                let ws_port = self
+                    .ws_proxy
+                    .start_unix_proxy(&ticket.ticket_id, &socket_path)
+                    .await?;
 
                 Ok(ConsoleInfo {
                     vm_id: vm_id.to_string(),
@@ -134,14 +147,20 @@ impl ConsoleManager {
         // Check if ticket is expired
         let now = chrono::Utc::now().timestamp();
         if now > ticket.expires_at {
-            return Err(horcrux_common::Error::System("Console ticket expired".to_string()));
+            return Err(horcrux_common::Error::System(
+                "Console ticket expired".to_string(),
+            ));
         }
 
         Ok(ticket.clone())
     }
 
     /// Generate a new console ticket
-    async fn generate_ticket(&self, vm_id: &str, console_type: &ConsoleType) -> Result<ConsoleTicket> {
+    async fn generate_ticket(
+        &self,
+        vm_id: &str,
+        console_type: &ConsoleType,
+    ) -> Result<ConsoleTicket> {
         let ticket_id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp();
         let expires_at = now + 300; // 5 minutes
@@ -182,13 +201,19 @@ impl ConsoleManager {
     /// Get VNC websocket URL for a VM
     pub async fn get_vnc_websocket(&self, vm_id: &str) -> Result<String> {
         let info = self.create_console(vm_id, ConsoleType::Vnc).await?;
-        Ok(format!("ws://{}:{}/{}", info.host, info.ws_port, info.ticket))
+        Ok(format!(
+            "ws://{}:{}/{}",
+            info.host, info.ws_port, info.ticket
+        ))
     }
 
     /// Get SPICE websocket URL for a VM
     pub async fn get_spice_websocket(&self, vm_id: &str) -> Result<String> {
         let info = self.create_console(vm_id, ConsoleType::Spice).await?;
-        Ok(format!("ws://{}:{}/{}", info.host, info.ws_port, info.ticket))
+        Ok(format!(
+            "ws://{}:{}/{}",
+            info.host, info.ws_port, info.ticket
+        ))
     }
 
     /// Get SPICE connection URI for native SPICE clients
@@ -204,7 +229,10 @@ impl ConsoleManager {
     /// Get Serial console WebSocket URL for a VM
     pub async fn get_serial_websocket(&self, vm_id: &str) -> Result<String> {
         let info = self.create_console(vm_id, ConsoleType::Serial).await?;
-        Ok(format!("ws://{}:{}/{}", info.host, info.ws_port, info.ticket))
+        Ok(format!(
+            "ws://{}:{}/{}",
+            info.host, info.ws_port, info.ticket
+        ))
     }
 
     /// Send data to serial console

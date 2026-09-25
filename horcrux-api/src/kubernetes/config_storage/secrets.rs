@@ -11,10 +11,7 @@ use crate::kubernetes::types::{CreateSecretRequest, SecretInfo};
 
 /// List Secrets in a namespace
 #[cfg(feature = "kubernetes")]
-pub async fn list_secrets(
-    client: &K8sClient,
-    namespace: &str,
-) -> K8sResult<Vec<SecretInfo>> {
+pub async fn list_secrets(client: &K8sClient, namespace: &str) -> K8sResult<Vec<SecretInfo>> {
     use k8s_openapi::api::core::v1::Secret;
     use kube::api::{Api, ListParams};
 
@@ -26,11 +23,7 @@ pub async fn list_secrets(
 
 /// Get a specific Secret (metadata only, not values)
 #[cfg(feature = "kubernetes")]
-pub async fn get_secret(
-    client: &K8sClient,
-    namespace: &str,
-    name: &str,
-) -> K8sResult<SecretInfo> {
+pub async fn get_secret(client: &K8sClient, namespace: &str, name: &str) -> K8sResult<SecretInfo> {
     use k8s_openapi::api::core::v1::Secret;
     use kube::api::Api;
 
@@ -105,11 +98,7 @@ pub async fn create_secret(
 
 /// Delete a Secret
 #[cfg(feature = "kubernetes")]
-pub async fn delete_secret(
-    client: &K8sClient,
-    namespace: &str,
-    name: &str,
-) -> K8sResult<()> {
+pub async fn delete_secret(client: &K8sClient, namespace: &str, name: &str) -> K8sResult<()> {
     use k8s_openapi::api::core::v1::Secret;
     use kube::api::{Api, DeleteParams};
 
@@ -145,11 +134,10 @@ fn secret_to_info(secret: k8s_openapi::api::core::v1::Secret) -> SecretInfo {
 
 // Stubs for when kubernetes feature is disabled
 #[cfg(not(feature = "kubernetes"))]
-pub async fn list_secrets(
-    _client: &K8sClient,
-    _namespace: &str,
-) -> K8sResult<Vec<SecretInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+pub async fn list_secrets(_client: &K8sClient, _namespace: &str) -> K8sResult<Vec<SecretInfo>> {
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -158,7 +146,9 @@ pub async fn get_secret(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<SecretInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -166,14 +156,14 @@ pub async fn create_secret(
     _client: &K8sClient,
     _request: &CreateSecretRequest,
 ) -> K8sResult<SecretInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
-pub async fn delete_secret(
-    _client: &K8sClient,
-    _namespace: &str,
-    _name: &str,
-) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+pub async fn delete_secret(_client: &K8sClient, _namespace: &str, _name: &str) -> K8sResult<()> {
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }

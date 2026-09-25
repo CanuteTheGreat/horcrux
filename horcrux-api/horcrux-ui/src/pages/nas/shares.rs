@@ -22,10 +22,7 @@ pub fn SharesPage() -> impl IntoView {
     create_effect(move |_| {
         spawn_local(async move {
             set_loading.set(true);
-            match reqwasm::http::Request::get("/api/nas/shares")
-                .send()
-                .await
-            {
+            match reqwasm::http::Request::get("/api/nas/shares").send().await {
                 Ok(resp) => {
                     if resp.ok() {
                         if let Ok(data) = resp.json::<Vec<Share>>().await {
@@ -46,7 +43,10 @@ pub fn SharesPage() -> impl IntoView {
 
     let delete_share = move |share_id: String| {
         if web_sys::window()
-            .and_then(|w| w.confirm_with_message(&format!("Delete share {}?", share_id)).ok())
+            .and_then(|w| {
+                w.confirm_with_message(&format!("Delete share {}?", share_id))
+                    .ok()
+            })
             .unwrap_or(false)
         {
             spawn_local(async move {
@@ -60,9 +60,10 @@ pub fn SharesPage() -> impl IntoView {
     let toggle_share = move |share_id: String, enable: bool| {
         spawn_local(async move {
             let action = if enable { "enable" } else { "disable" };
-            let _ = reqwasm::http::Request::post(&format!("/api/nas/shares/{}/{}", share_id, action))
-                .send()
-                .await;
+            let _ =
+                reqwasm::http::Request::post(&format!("/api/nas/shares/{}/{}", share_id, action))
+                    .send()
+                    .await;
         });
     };
 

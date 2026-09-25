@@ -7,13 +7,13 @@
 //! - Quota checks
 //! - Health checks
 
+use chrono::{DateTime, Datelike, Timelike, Utc, Weekday};
 use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::{Duration, Instant};
-use chrono::{DateTime, Utc, Datelike, Timelike, Weekday};
 
 /// Job type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -235,9 +235,11 @@ impl CronSchedule {
 
             // Handle step (*/n or x-y/n)
             let (range_part, step) = if let Some((r, s)) = part.split_once('/') {
-                (r, s.parse::<u8>().map_err(|_| {
-                    Error::Validation(format!("Invalid step value: {}", s))
-                })?)
+                (
+                    r,
+                    s.parse::<u8>()
+                        .map_err(|_| Error::Validation(format!("Invalid step value: {}", s)))?,
+                )
             } else {
                 (part, 1)
             };
@@ -246,12 +248,12 @@ impl CronSchedule {
             let range_values: Vec<u8> = if range_part == "*" {
                 (min..=max).collect()
             } else if let Some((start, end)) = range_part.split_once('-') {
-                let start = start.parse::<u8>().map_err(|_| {
-                    Error::Validation(format!("Invalid range start: {}", start))
-                })?;
-                let end = end.parse::<u8>().map_err(|_| {
-                    Error::Validation(format!("Invalid range end: {}", end))
-                })?;
+                let start = start
+                    .parse::<u8>()
+                    .map_err(|_| Error::Validation(format!("Invalid range start: {}", start)))?;
+                let end = end
+                    .parse::<u8>()
+                    .map_err(|_| Error::Validation(format!("Invalid range end: {}", end)))?;
                 if start > end || start < min || end > max {
                     return Err(Error::Validation(format!(
                         "Invalid range: {}-{} (must be {}-{})",
@@ -260,9 +262,9 @@ impl CronSchedule {
                 }
                 (start..=end).collect()
             } else {
-                let val = range_part.parse::<u8>().map_err(|_| {
-                    Error::Validation(format!("Invalid value: {}", range_part))
-                })?;
+                let val = range_part
+                    .parse::<u8>()
+                    .map_err(|_| Error::Validation(format!("Invalid value: {}", range_part)))?;
                 if val < min || val > max {
                     return Err(Error::Validation(format!(
                         "Value {} out of range {}-{}",
@@ -375,7 +377,10 @@ impl NasScheduler {
         let mut state = self.state.write().await;
 
         if state.running.contains_key(job_id) {
-            return Err(Error::Conflict(format!("Job {} is currently running", job_id)));
+            return Err(Error::Conflict(format!(
+                "Job {} is currently running",
+                job_id
+            )));
         }
 
         state.jobs.remove(job_id);
@@ -416,7 +421,9 @@ impl NasScheduler {
 
     /// List jobs by type
     pub async fn list_jobs_by_type(&self, job_type: JobType) -> Vec<ScheduledJob> {
-        self.state.read().await
+        self.state
+            .read()
+            .await
             .jobs
             .values()
             .filter(|j| j.job_type == job_type)
@@ -439,7 +446,10 @@ impl NasScheduler {
 
     /// Run a job immediately (manual trigger)
     pub async fn run_job_now(&self, job_id: &str) -> Result<String> {
-        let job = self.state.read().await
+        let job = self
+            .state
+            .read()
+            .await
             .jobs
             .get(job_id)
             .cloned()
@@ -457,7 +467,8 @@ impl NasScheduler {
     /// Get execution history for a specific job
     pub async fn get_job_history(&self, job_id: &str, limit: usize) -> Vec<JobExecution> {
         let state = self.state.read().await;
-        state.history
+        state
+            .history
             .iter()
             .filter(|e| e.job_id == job_id)
             .rev()
@@ -468,7 +479,9 @@ impl NasScheduler {
 
     /// Get currently running jobs
     pub async fn get_running_jobs(&self) -> Vec<(String, String)> {
-        self.state.read().await
+        self.state
+            .read()
+            .await
             .running
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
@@ -510,7 +523,9 @@ impl NasScheduler {
 
                 // Check for jobs to run
                 let now = Utc::now();
-                let jobs: Vec<ScheduledJob> = state.read().await
+                let jobs: Vec<ScheduledJob> = state
+                    .read()
+                    .await
                     .jobs
                     .values()
                     .filter(|j| j.enabled && j.next_run.is_some())
@@ -529,7 +544,13 @@ impl NasScheduler {
                     let state_clone = state.clone();
                     let job_clone = job.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = Self::execute_job_internal(&state_clone, &job_clone, JobTrigger::Schedule).await {
+                        if let Err(e) = Self::execute_job_internal(
+                            &state_clone,
+                            &job_clone,
+                            JobTrigger::Schedule,
+                        )
+                        .await
+                        {
                             tracing::error!("Job {} failed: {}", job_clone.id, e);
                         }
                     });
@@ -549,7 +570,10 @@ impl NasScheduler {
 
     /// Run startup jobs (for missed executions)
     async fn run_startup_jobs(&self) {
-        let jobs: Vec<ScheduledJob> = self.state.read().await
+        let jobs: Vec<ScheduledJob> = self
+            .state
+            .read()
+            .await
             .jobs
             .values()
             .filter(|j| j.enabled && j.run_on_startup)
@@ -603,7 +627,11 @@ impl NasScheduler {
         };
 
         // Mark as running
-        state.write().await.running.insert(job.id.clone(), execution_id.clone());
+        state
+            .write()
+            .await
+            .running
+            .insert(job.id.clone(), execution_id.clone());
 
         // Execute based on job type
         let start = Instant::now();
@@ -657,30 +685,14 @@ impl NasScheduler {
     /// Run the actual job task
     async fn run_job_task(job: &ScheduledJob) -> Result<Option<serde_json::Value>> {
         match job.job_type {
-            JobType::Snapshot => {
-                Self::run_snapshot_job(job).await
-            }
-            JobType::RetentionCleanup => {
-                Self::run_retention_job(job).await
-            }
-            JobType::Replication => {
-                Self::run_replication_job(job).await
-            }
-            JobType::Scrub => {
-                Self::run_scrub_job(job).await
-            }
-            JobType::HealthCheck => {
-                Self::run_health_check_job(job).await
-            }
-            JobType::QuotaCheck => {
-                Self::run_quota_check_job(job).await
-            }
-            JobType::SmartCheck => {
-                Self::run_smart_check_job(job).await
-            }
-            JobType::Custom => {
-                Self::run_custom_job(job).await
-            }
+            JobType::Snapshot => Self::run_snapshot_job(job).await,
+            JobType::RetentionCleanup => Self::run_retention_job(job).await,
+            JobType::Replication => Self::run_replication_job(job).await,
+            JobType::Scrub => Self::run_scrub_job(job).await,
+            JobType::HealthCheck => Self::run_health_check_job(job).await,
+            JobType::QuotaCheck => Self::run_quota_check_job(job).await,
+            JobType::SmartCheck => Self::run_smart_check_job(job).await,
+            JobType::Custom => Self::run_custom_job(job).await,
             _ => {
                 tracing::warn!("Unsupported job type: {:?}", job.job_type);
                 Ok(None)
@@ -693,11 +705,15 @@ impl NasScheduler {
         use crate::nas::storage::snapshots;
 
         let dataset = &job.target;
-        let prefix = job.params.get("prefix")
+        let prefix = job
+            .params
+            .get("prefix")
             .and_then(|v| v.as_str())
             .unwrap_or("auto");
 
-        let recursive = job.params.get("recursive")
+        let recursive = job
+            .params
+            .get("recursive")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
 
@@ -710,11 +726,12 @@ impl NasScheduler {
 
         if recursive {
             let manager = snapshots::SnapshotManager::new();
-            let result = manager.create_recursive_snapshot(dataset, &format!(
-                "{}_{}",
-                prefix,
-                Utc::now().format("%Y-%m-%d_%H-%M-%S")
-            )).await?;
+            let result = manager
+                .create_recursive_snapshot(
+                    dataset,
+                    &format!("{}_{}", prefix, Utc::now().format("%Y-%m-%d_%H-%M-%S")),
+                )
+                .await?;
             Ok(Some(serde_json::json!({
                 "created": result.created,
                 "errors": result.errors
@@ -734,19 +751,29 @@ impl NasScheduler {
         let dataset = &job.target;
 
         // Get retention policy from params
-        let keep_hourly = job.params.get("keep_hourly")
+        let keep_hourly = job
+            .params
+            .get("keep_hourly")
             .and_then(|v| v.as_u64())
             .map(|v| v as u32);
-        let keep_daily = job.params.get("keep_daily")
+        let keep_daily = job
+            .params
+            .get("keep_daily")
             .and_then(|v| v.as_u64())
             .map(|v| v as u32);
-        let keep_weekly = job.params.get("keep_weekly")
+        let keep_weekly = job
+            .params
+            .get("keep_weekly")
             .and_then(|v| v.as_u64())
             .map(|v| v as u32);
-        let keep_monthly = job.params.get("keep_monthly")
+        let keep_monthly = job
+            .params
+            .get("keep_monthly")
             .and_then(|v| v.as_u64())
             .map(|v| v as u32);
-        let keep_yearly = job.params.get("keep_yearly")
+        let keep_yearly = job
+            .params
+            .get("keep_yearly")
             .and_then(|v| v.as_u64())
             .map(|v| v as u32);
 
@@ -758,7 +785,9 @@ impl NasScheduler {
             keep_monthly,
             keep_yearly,
             min_age_days: None,
-            max_age_days: job.params.get("max_age_days")
+            max_age_days: job
+                .params
+                .get("max_age_days")
                 .and_then(|v| v.as_u64())
                 .map(|v| v as u32),
             protect_holds: true,
@@ -781,13 +810,19 @@ impl NasScheduler {
         let task_id = &job.target;
 
         // Create basic replication task from params
-        let source = job.params.get("source")
+        let source = job
+            .params
+            .get("source")
             .and_then(|v| v.as_str())
             .unwrap_or(&job.target);
-        let target_host = job.params.get("target_host")
+        let target_host = job
+            .params
+            .get("target_host")
             .and_then(|v| v.as_str())
             .unwrap_or("localhost");
-        let target_dataset = job.params.get("target_dataset")
+        let target_dataset = job
+            .params
+            .get("target_dataset")
             .and_then(|v| v.as_str())
             .unwrap_or(source);
 
@@ -800,10 +835,22 @@ impl NasScheduler {
             direction: crate::nas::storage::ReplicationDirection::Push,
             transport: crate::nas::storage::ReplicationTransport::Ssh,
             schedule: job.schedule.clone(),
-            recursive: job.params.get("recursive").and_then(|v| v.as_bool()).unwrap_or(true),
+            recursive: job
+                .params
+                .get("recursive")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
             retention: None,
-            compression: job.params.get("compression").and_then(|v| v.as_bool()).unwrap_or(true),
-            bandwidth_limit: job.params.get("bandwidth_limit").and_then(|v| v.as_u64()).map(|v| v as u32),
+            compression: job
+                .params
+                .get("compression")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            bandwidth_limit: job
+                .params
+                .get("bandwidth_limit")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32),
             enabled: true,
             last_run: None,
             last_status: None,
@@ -856,7 +903,10 @@ impl NasScheduler {
         let services = vec!["smb", "nfs", "ftp", "minio", "tgtd"];
         for service in services {
             let running = crate::nas::services::is_service_running(service).await;
-            results.insert(service.to_string(), serde_json::json!({ "running": running }));
+            results.insert(
+                service.to_string(),
+                serde_json::json!({ "running": running }),
+            );
         }
 
         // Check pool health (if ZFS)
@@ -869,7 +919,7 @@ impl NasScheduler {
                         serde_json::json!({
                             "status": pool.status,
                             "health": pool.health
-                        })
+                        }),
                     );
                 }
             }
@@ -882,13 +932,16 @@ impl NasScheduler {
     async fn run_quota_check_job(job: &ScheduledJob) -> Result<Option<serde_json::Value>> {
         use crate::nas::storage::quotas;
 
-        let threshold_percent = job.params.get("threshold")
+        let threshold_percent = job
+            .params
+            .get("threshold")
             .and_then(|v| v.as_u64())
             .unwrap_or(90);
 
         let usages = quotas::list_quota_usage(Some(&job.target)).await?;
 
-        let violations: Vec<_> = usages.iter()
+        let violations: Vec<_> = usages
+            .iter()
             .filter(|u| {
                 if let (Some(used), Some(quota)) = (u.space_used, u.quota_bytes) {
                     let percent = (used as f64 / quota as f64) * 100.0;
@@ -932,9 +985,13 @@ impl NasScheduler {
     async fn run_custom_job(job: &ScheduledJob) -> Result<Option<serde_json::Value>> {
         use tokio::process::Command;
 
-        let script = job.params.get("script")
+        let script = job
+            .params
+            .get("script")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| Error::Validation("Custom job requires 'script' parameter".to_string()))?;
+            .ok_or_else(|| {
+                Error::Validation("Custom job requires 'script' parameter".to_string())
+            })?;
 
         let output = Command::new("sh")
             .args(["-c", script])

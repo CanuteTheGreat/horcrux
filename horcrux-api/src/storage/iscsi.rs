@@ -73,9 +73,12 @@ impl IscsiManager {
         // Login to target
         let output = Command::new("iscsiadm")
             .args(&[
-                "-m", "node",
-                "-T", &target.iqn,
-                "-p", &target.portal,
+                "-m",
+                "node",
+                "-T",
+                &target.iqn,
+                "-p",
+                &target.portal,
                 "--login",
             ])
             .output()
@@ -104,9 +107,12 @@ impl IscsiManager {
 
         let output = Command::new("iscsiadm")
             .args(&[
-                "-m", "node",
-                "-T", &target.iqn,
-                "-p", &target.portal,
+                "-m",
+                "node",
+                "-T",
+                &target.iqn,
+                "-p",
+                &target.portal,
                 "--logout",
             ])
             .output()
@@ -154,12 +160,9 @@ impl IscsiManager {
     /// Get block devices for an iSCSI target
     pub async fn get_block_devices(&self, target: &IscsiTarget) -> Result<Vec<String>> {
         // After login, find the block devices created
-        let output = Command::new("lsscsi")
-            .output()
-            .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to list SCSI devices: {}", e))
-            })?;
+        let output = Command::new("lsscsi").output().await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to list SCSI devices: {}", e))
+        })?;
 
         if !output.status.success() {
             return Err(horcrux_common::Error::System(
@@ -286,11 +289,15 @@ impl IscsiManager {
 
         let output = Command::new("iscsiadm")
             .args(&[
-                "-m", "node",
-                "-T", &target.iqn,
-                "-p", &target.portal,
+                "-m",
+                "node",
+                "-T",
+                &target.iqn,
+                "-p",
+                &target.portal,
                 "--op=update",
-                "--name", "node.session.auth.authmethod",
+                "--name",
+                "node.session.auth.authmethod",
                 "--value=CHAP",
             ])
             .output()
@@ -308,12 +315,17 @@ impl IscsiManager {
         // Set username
         let output = Command::new("iscsiadm")
             .args(&[
-                "-m", "node",
-                "-T", &target.iqn,
-                "-p", &target.portal,
+                "-m",
+                "node",
+                "-T",
+                &target.iqn,
+                "-p",
+                &target.portal,
                 "--op=update",
-                "--name", "node.session.auth.username",
-                "--value", username,
+                "--name",
+                "node.session.auth.username",
+                "--value",
+                username,
             ])
             .output()
             .await
@@ -330,12 +342,17 @@ impl IscsiManager {
         // Set password
         let output = Command::new("iscsiadm")
             .args(&[
-                "-m", "node",
-                "-T", &target.iqn,
-                "-p", &target.portal,
+                "-m",
+                "node",
+                "-T",
+                &target.iqn,
+                "-p",
+                &target.portal,
                 "--op=update",
-                "--name", "node.session.auth.password",
-                "--value", password,
+                "--name",
+                "node.session.auth.password",
+                "--value",
+                password,
             ])
             .output()
             .await
@@ -354,7 +371,10 @@ impl IscsiManager {
 
     /// Check if iSCSI tools are available
     pub fn check_iscsi_available() -> bool {
-        StdCommand::new("iscsiadm").arg("--version").output().is_ok()
+        StdCommand::new("iscsiadm")
+            .arg("--version")
+            .output()
+            .is_ok()
     }
 }
 

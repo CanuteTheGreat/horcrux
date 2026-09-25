@@ -14,8 +14,8 @@ use tracing::{info, warn};
 #[derive(Debug, Clone)]
 pub struct SerialConfig {
     pub vm_id: String,
-    pub pty_path: String,       // e.g., /dev/pts/5
-    pub socket_path: String,    // e.g., /var/run/qemu-server/vm-100.serial
+    pub pty_path: String,    // e.g., /dev/pts/5
+    pub socket_path: String, // e.g., /var/run/qemu-server/vm-100.serial
 }
 
 /// Serial console manager
@@ -55,7 +55,9 @@ impl SerialManager {
         let socket_path = format!("/var/run/qemu-server/{}.serial", vm_id);
 
         // Try to find existing PTY from QEMU monitor
-        let pty_path = self.get_serial_pty(vm_id).await
+        let pty_path = self
+            .get_serial_pty(vm_id)
+            .await
             .unwrap_or_else(|_| format!("/dev/pts/0")); // Fallback
 
         let config = SerialConfig {
@@ -77,16 +79,20 @@ impl SerialManager {
         configs
             .get(vm_id)
             .map(|c| c.socket_path.clone())
-            .ok_or_else(|| horcrux_common::Error::System(format!("Serial console not configured for VM {}", vm_id)))
+            .ok_or_else(|| {
+                horcrux_common::Error::System(format!(
+                    "Serial console not configured for VM {}",
+                    vm_id
+                ))
+            })
     }
 
     /// Get serial console configuration for a VM
     pub async fn get_serial_config(&self, vm_id: &str) -> Result<SerialConfig> {
         let configs = self.serial_configs.read().await;
-        configs
-            .get(vm_id)
-            .cloned()
-            .ok_or_else(|| horcrux_common::Error::System(format!("Serial console not configured for VM {}", vm_id)))
+        configs.get(vm_id).cloned().ok_or_else(|| {
+            horcrux_common::Error::System(format!("Serial console not configured for VM {}", vm_id))
+        })
     }
 
     /// Disable serial console for a VM
@@ -104,10 +110,15 @@ impl SerialManager {
             .arg(format!("qemu.*{}", vm_id))
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to find VM process: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to find VM process: {}", e))
+            })?;
 
         if !output.status.success() {
-            return Err(horcrux_common::Error::System(format!("VM {} is not running", vm_id)));
+            return Err(horcrux_common::Error::System(format!(
+                "VM {} is not running",
+                vm_id
+            )));
         }
 
         let pid_str = String::from_utf8_lossy(&output.stdout);
@@ -127,16 +138,20 @@ impl SerialManager {
         let monitor_path = format!("/var/run/qemu-server/{}.mon", vm_id);
 
         if !std::path::Path::new(&monitor_path).exists() {
-            return Err(horcrux_common::Error::System(
-                format!("QEMU monitor not found for VM {}", vm_id)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "QEMU monitor not found for VM {}",
+                vm_id
+            )));
         }
 
         // Use socat to query serial info from QEMU monitor
         // Command: info chardev
         let output = Command::new("sh")
             .arg("-c")
-            .arg(format!("echo 'info chardev' | socat - UNIX-CONNECT:{}", monitor_path))
+            .arg(format!(
+                "echo 'info chardev' | socat - UNIX-CONNECT:{}",
+                monitor_path
+            ))
             .output()
             .await;
 
@@ -160,7 +175,9 @@ impl SerialManager {
             }
         }
 
-        Err(horcrux_common::Error::System("Failed to get serial PTY path".to_string()))
+        Err(horcrux_common::Error::System(
+            "Failed to get serial PTY path".to_string(),
+        ))
     }
 
     /// Generate QEMU command line arguments for serial console
@@ -173,10 +190,7 @@ impl SerialManager {
 
     /// Generate alternative serial args using PTY
     pub fn generate_serial_pty_args() -> Vec<String> {
-        vec![
-            "-serial".to_string(),
-            "pty".to_string(),
-        ]
+        vec!["-serial".to_string(), "pty".to_string()]
     }
 
     /// Read serial console output (for testing/debugging)
@@ -186,8 +200,10 @@ impl SerialManager {
         // Try to read from socket
         let output = Command::new("sh")
             .arg("-c")
-            .arg(format!("timeout 1 socat - UNIX-CONNECT:{} 2>/dev/null | tail -n {}",
-                config.socket_path, lines))
+            .arg(format!(
+                "timeout 1 socat - UNIX-CONNECT:{} 2>/dev/null | tail -n {}",
+                config.socket_path, lines
+            ))
             .output()
             .await;
 
@@ -208,7 +224,10 @@ impl SerialManager {
 
         let output = Command::new("sh")
             .arg("-c")
-            .arg(format!("echo '{}' | socat - UNIX-CONNECT:{}", data, config.socket_path))
+            .arg(format!(
+                "echo '{}' | socat - UNIX-CONNECT:{}",
+                data, config.socket_path
+            ))
             .output()
             .await;
 
@@ -219,15 +238,15 @@ impl SerialManager {
             }
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                Err(horcrux_common::Error::System(
-                    format!("Failed to write to serial console: {}", stderr)
-                ))
+                Err(horcrux_common::Error::System(format!(
+                    "Failed to write to serial console: {}",
+                    stderr
+                )))
             }
-            Err(e) => {
-                Err(horcrux_common::Error::System(
-                    format!("Failed to write to serial console: {}", e)
-                ))
-            }
+            Err(e) => Err(horcrux_common::Error::System(format!(
+                "Failed to write to serial console: {}",
+                e
+            ))),
         }
     }
 

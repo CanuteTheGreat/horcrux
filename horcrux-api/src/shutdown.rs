@@ -71,12 +71,12 @@ impl ShutdownCoordinator {
         {
             use tokio::signal::unix::{signal, SignalKind};
 
-            let mut sigterm = signal(SignalKind::terminate())
-                .expect("Failed to register SIGTERM handler");
-            let mut sigint = signal(SignalKind::interrupt())
-                .expect("Failed to register SIGINT handler");
-            let mut sigquit = signal(SignalKind::quit())
-                .expect("Failed to register SIGQUIT handler");
+            let mut sigterm =
+                signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
+            let mut sigint =
+                signal(SignalKind::interrupt()).expect("Failed to register SIGINT handler");
+            let mut sigquit =
+                signal(SignalKind::quit()).expect("Failed to register SIGQUIT handler");
 
             tokio::select! {
                 _ = sigterm.recv() => {
@@ -245,7 +245,12 @@ impl CleanupRunner {
     /// Run all cleanup operations
     pub async fn run_all(&self) {
         for (i, op) in self.operations.iter().enumerate() {
-            info!("Running cleanup operation {}/{}: {}", i + 1, self.operations.len(), op.name());
+            info!(
+                "Running cleanup operation {}/{}: {}",
+                i + 1,
+                self.operations.len(),
+                op.name()
+            );
 
             if let Err(e) = op.cleanup().await {
                 error!("Cleanup operation '{}' failed: {}", op.name(), e);

@@ -1,5 +1,4 @@
 ///! API client for Horcrux server
-
 use anyhow::Result;
 use serde::de::DeserializeOwned;
 use std::sync::Arc;
@@ -52,7 +51,8 @@ impl ApiClient {
     }
 
     pub async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
-        let response = self.build_request(reqwest::Method::GET, path)
+        let response = self
+            .build_request(reqwest::Method::GET, path)
             .await
             .send()
             .await?;
@@ -72,7 +72,8 @@ impl ApiClient {
         path: &str,
         body: &B,
     ) -> Result<T> {
-        let response = self.build_request(reqwest::Method::POST, path)
+        let response = self
+            .build_request(reqwest::Method::POST, path)
             .await
             .json(body)
             .send()
@@ -89,7 +90,8 @@ impl ApiClient {
     }
 
     pub async fn post_empty<B: serde::Serialize>(&self, path: &str, body: &B) -> Result<()> {
-        let response = self.build_request(reqwest::Method::POST, path)
+        let response = self
+            .build_request(reqwest::Method::POST, path)
             .await
             .json(body)
             .send()
@@ -105,7 +107,8 @@ impl ApiClient {
     }
 
     pub async fn delete(&self, path: &str) -> Result<()> {
-        let response = self.build_request(reqwest::Method::DELETE, path)
+        let response = self
+            .build_request(reqwest::Method::DELETE, path)
             .await
             .send()
             .await?;

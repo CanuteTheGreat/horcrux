@@ -139,7 +139,11 @@ impl HelmManager {
     // =========================================================================
 
     /// Search for charts in configured repositories
-    pub async fn search_charts(&self, keyword: &str, all_versions: bool) -> K8sResult<Vec<HelmChart>> {
+    pub async fn search_charts(
+        &self,
+        keyword: &str,
+        all_versions: bool,
+    ) -> K8sResult<Vec<HelmChart>> {
         repos::search_charts(keyword, all_versions).await
     }
 

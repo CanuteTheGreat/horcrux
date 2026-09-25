@@ -104,7 +104,10 @@ impl HealthChecker {
     }
 
     /// Check monitoring subsystem
-    pub async fn check_monitoring(&self, monitoring: &crate::monitoring::MonitoringManager) -> ComponentHealth {
+    pub async fn check_monitoring(
+        &self,
+        monitoring: &crate::monitoring::MonitoringManager,
+    ) -> ComponentHealth {
         let start = Instant::now();
 
         match monitoring.collect_resource_metrics().await {
@@ -236,7 +239,8 @@ impl HealthChecker {
     /// Check readiness (can the service accept traffic?)
     pub fn readiness(&self, components: &[ComponentHealth]) -> ReadinessResponse {
         // We're ready if database is healthy
-        let db_healthy = components.iter()
+        let db_healthy = components
+            .iter()
             .find(|c| c.name == "database")
             .map(|c| c.status == HealthStatus::Healthy)
             .unwrap_or(false);
@@ -278,7 +282,8 @@ impl StartupChecker {
     }
 
     pub fn fail(&mut self, check_name: &str, reason: &str) {
-        self.checks_failed.push((check_name.to_string(), reason.to_string()));
+        self.checks_failed
+            .push((check_name.to_string(), reason.to_string()));
     }
 
     pub fn is_healthy(&self) -> bool {

@@ -46,9 +46,7 @@ impl ArchitectureManager {
             return Err("Failed to detect architecture".to_string());
         }
 
-        let arch = String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .to_string();
+        let arch = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
         // Normalize architecture names
         Ok(Self::normalize_arch_name(&arch))
@@ -70,7 +68,9 @@ impl ArchitectureManager {
         vm_arch: &str,
         node_id: &str,
     ) -> Result<PlacementCompatibility, String> {
-        let node_arch = self.node_architectures.get(node_id)
+        let node_arch = self
+            .node_architectures
+            .get(node_id)
             .ok_or_else(|| format!("Node {} not registered", node_id))?;
 
         // Check if architectures match (native)
@@ -85,7 +85,10 @@ impl ArchitectureManager {
         }
 
         // Check if emulation is available
-        if let Some(emulation) = self.emulation_matrix.get(&(node_arch.clone(), vm_arch.to_string())) {
+        if let Some(emulation) = self
+            .emulation_matrix
+            .get(&(node_arch.clone(), vm_arch.to_string()))
+        {
             return Ok(PlacementCompatibility {
                 compatible: true,
                 native: false,
@@ -118,7 +121,11 @@ impl ArchitectureManager {
                 PlacementCompatibility { native: true, .. } => {
                     native_nodes.push(node_id.clone());
                 }
-                PlacementCompatibility { compatible: true, native: false, .. } => {
+                PlacementCompatibility {
+                    compatible: true,
+                    native: false,
+                    ..
+                } => {
                     emulated_nodes.push(node_id.clone());
                 }
                 _ => {}
@@ -146,7 +153,10 @@ impl ArchitectureManager {
             });
         }
 
-        Err(format!("No compatible nodes found for architecture {}", vm_arch))
+        Err(format!(
+            "No compatible nodes found for architecture {}",
+            vm_arch
+        ))
     }
 
     /// Validate VM migration compatibility
@@ -156,10 +166,14 @@ impl ArchitectureManager {
         source_node: &str,
         target_node: &str,
     ) -> Result<MigrationCompatibility, String> {
-        let source_arch = self.node_architectures.get(source_node)
+        let source_arch = self
+            .node_architectures
+            .get(source_node)
             .ok_or_else(|| format!("Source node {} not registered", source_node))?;
 
-        let target_arch = self.node_architectures.get(target_node)
+        let target_arch = self
+            .node_architectures
+            .get(target_node)
             .ok_or_else(|| format!("Target node {} not registered", target_node))?;
 
         let source_compat = self.can_run_on_node(vm_arch, source_node)?;
@@ -267,11 +281,7 @@ impl ArchitectureManager {
                 word_size: 64,
                 endianness: Endianness::Little,
                 can_emulate: vec!["arm".to_string(), "armv7".to_string()],
-                features: vec![
-                    "neon".to_string(),
-                    "crypto".to_string(),
-                    "kvm".to_string(),
-                ],
+                features: vec!["neon".to_string(), "crypto".to_string(), "kvm".to_string()],
             },
         );
 
@@ -305,11 +315,7 @@ impl ArchitectureManager {
                 word_size: 64,
                 endianness: Endianness::Little,
                 can_emulate: vec![],
-                features: vec![
-                    "altivec".to_string(),
-                    "vsx".to_string(),
-                    "kvm".to_string(),
-                ],
+                features: vec!["altivec".to_string(), "vsx".to_string(), "kvm".to_string()],
             },
         );
 
@@ -323,9 +329,7 @@ impl ArchitectureManager {
                 word_size: 64,
                 endianness: Endianness::Big,
                 can_emulate: vec![],
-                features: vec![
-                    "kvm".to_string(),
-                ],
+                features: vec!["kvm".to_string()],
             },
         );
 
@@ -410,10 +414,10 @@ pub struct ArchitectureInfo {
     pub name: String,
     pub description: String,
     pub aliases: Vec<String>,
-    pub word_size: u8,          // 32 or 64
+    pub word_size: u8, // 32 or 64
     pub endianness: Endianness,
     pub can_emulate: Vec<String>, // Other architectures this can natively emulate
-    pub features: Vec<String>,   // CPU features (e.g., SSE, AVX, NEON)
+    pub features: Vec<String>,    // CPU features (e.g., SSE, AVX, NEON)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -434,10 +438,10 @@ pub struct PlacementCompatibility {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum EmulationType {
-    Native,      // No emulation needed
-    Qemu,        // QEMU TCG emulation
-    Hvf,         // macOS Hypervisor Framework
-    WhpX,        // Windows Hypervisor Platform
+    Native, // No emulation needed
+    Qemu,   // QEMU TCG emulation
+    Hvf,    // macOS Hypervisor Framework
+    WhpX,   // Windows Hypervisor Platform
 }
 
 /// Emulation support information
@@ -498,7 +502,8 @@ mod tests {
     #[test]
     fn test_native_placement() {
         let mut mgr = ArchitectureManager::new();
-        mgr.register_node("node1".to_string(), "x86_64".to_string()).unwrap();
+        mgr.register_node("node1".to_string(), "x86_64".to_string())
+            .unwrap();
 
         let compat = mgr.can_run_on_node("x86_64", "node1").unwrap();
         assert!(compat.compatible);
@@ -509,7 +514,8 @@ mod tests {
     #[test]
     fn test_emulated_placement() {
         let mut mgr = ArchitectureManager::new();
-        mgr.register_node("node1".to_string(), "x86_64".to_string()).unwrap();
+        mgr.register_node("node1".to_string(), "x86_64".to_string())
+            .unwrap();
 
         let compat = mgr.can_run_on_node("aarch64", "node1").unwrap();
         assert!(compat.compatible);
@@ -521,15 +527,18 @@ mod tests {
     #[test]
     fn test_migration_validation() {
         let mut mgr = ArchitectureManager::new();
-        mgr.register_node("node1".to_string(), "x86_64".to_string()).unwrap();
-        mgr.register_node("node2".to_string(), "aarch64".to_string()).unwrap();
+        mgr.register_node("node1".to_string(), "x86_64".to_string())
+            .unwrap();
+        mgr.register_node("node2".to_string(), "aarch64".to_string())
+            .unwrap();
 
         // Migration between different architectures requires shutdown
         let migration = mgr.validate_migration("x86_64", "node1", "node2").unwrap();
         assert!(!migration.compatible); // aarch64 can't run x86_64 natively without emulation
 
         // Same architecture migration
-        mgr.register_node("node3".to_string(), "x86_64".to_string()).unwrap();
+        mgr.register_node("node3".to_string(), "x86_64".to_string())
+            .unwrap();
         let migration = mgr.validate_migration("x86_64", "node1", "node3").unwrap();
         assert!(migration.compatible);
         assert!(!migration.requires_shutdown);
@@ -538,9 +547,12 @@ mod tests {
     #[test]
     fn test_cluster_stats() {
         let mut mgr = ArchitectureManager::new();
-        mgr.register_node("node1".to_string(), "x86_64".to_string()).unwrap();
-        mgr.register_node("node2".to_string(), "aarch64".to_string()).unwrap();
-        mgr.register_node("node3".to_string(), "riscv64".to_string()).unwrap();
+        mgr.register_node("node1".to_string(), "x86_64".to_string())
+            .unwrap();
+        mgr.register_node("node2".to_string(), "aarch64".to_string())
+            .unwrap();
+        mgr.register_node("node3".to_string(), "riscv64".to_string())
+            .unwrap();
 
         let stats = mgr.get_cluster_stats();
         assert_eq!(stats.total_nodes, 3);

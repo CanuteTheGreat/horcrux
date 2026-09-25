@@ -1,8 +1,8 @@
 //! Network Management Page
 
+use crate::api::{delete_json, fetch_json, post_empty};
 use leptos::*;
 use serde::{Deserialize, Serialize};
-use crate::api::{fetch_json, delete_json, post_empty};
 
 /// Network information
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,5 +1,5 @@
 use crate::api::ApiClient;
-use crate::output::{self, OutputFormat, format_bytes, format_relative_time};
+use crate::output::{self, format_bytes, format_relative_time, OutputFormat};
 use crate::BackupCommands;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -84,7 +84,11 @@ pub async fn handle_backup_command(
             let format = OutputFormat::from_str(output_format);
             output::print_single(&backup, format)?;
         }
-        BackupCommands::Create { vm_id, mode, compression } => {
+        BackupCommands::Create {
+            vm_id,
+            mode,
+            compression,
+        } => {
             let request = CreateBackupRequest {
                 vm_id: vm_id.clone(),
                 mode: mode.clone(),
@@ -99,14 +103,19 @@ pub async fn handle_backup_command(
                 target_vm_id: target,
             };
 
-            api.post_empty(&format!("/api/backups/{}/restore", id), &request).await?;
+            api.post_empty(&format!("/api/backups/{}/restore", id), &request)
+                .await?;
             output::print_success(&format!("Backup '{}' restored successfully", id));
         }
         BackupCommands::Delete { id } => {
             api.delete(&format!("/api/backups/{}", id)).await?;
             output::print_deleted("Backup", &id);
         }
-        BackupCommands::Schedule { name, schedule, vms } => {
+        BackupCommands::Schedule {
+            name,
+            schedule,
+            vms,
+        } => {
             let vm_ids: Vec<String> = vms.split(',').map(|s| s.trim().to_string()).collect();
             let request = CreateBackupJobRequest {
                 name: name.clone(),

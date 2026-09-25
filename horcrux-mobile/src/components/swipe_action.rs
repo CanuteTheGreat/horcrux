@@ -1,7 +1,7 @@
 //! Swipe action component for mobile lists
 
-use yew::prelude::*;
 use web_sys::TouchEvent;
+use yew::prelude::*;
 
 #[derive(Properties, PartialEq)]
 pub struct SwipeActionProps {

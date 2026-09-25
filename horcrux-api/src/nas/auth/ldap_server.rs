@@ -4,8 +4,8 @@
 
 use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
 use std::collections::HashMap;
+use tokio::process::Command;
 
 /// LDAP Server Configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,7 +93,8 @@ impl LdapServerManager {
     /// Initialize LDAP server with base configuration
     pub async fn initialize(&self, admin_password: &str) -> Result<()> {
         // Create database directory
-        tokio::fs::create_dir_all(&self.config.database_dir).await
+        tokio::fs::create_dir_all(&self.config.database_dir)
+            .await
             .map_err(|e| Error::Internal(format!("Failed to create database dir: {}", e)))?;
 
         // Generate password hash
@@ -104,7 +105,8 @@ impl LdapServerManager {
 
         // Write temp file
         let temp_path = "/tmp/horcrux_ldap_init.ldif";
-        tokio::fs::write(temp_path, &init_ldif).await
+        tokio::fs::write(temp_path, &init_ldif)
+            .await
             .map_err(|e| Error::Internal(format!("Failed to write init LDIF: {}", e)))?;
 
         // Stop slapd if running
@@ -112,7 +114,8 @@ impl LdapServerManager {
 
         // Remove existing config
         let _ = tokio::fs::remove_dir_all(&self.slapd_conf).await;
-        tokio::fs::create_dir_all(&self.slapd_conf).await
+        tokio::fs::create_dir_all(&self.slapd_conf)
+            .await
             .map_err(|e| Error::Internal(format!("Failed to create slapd.d: {}", e)))?;
 
         // Initialize with slapadd
@@ -150,7 +153,8 @@ impl LdapServerManager {
         let mut ldif = String::new();
 
         // Config database
-        ldif.push_str(&format!(r#"dn: cn=config
+        ldif.push_str(&format!(
+            r#"dn: cn=config
 objectClass: olcGlobal
 cn: config
 olcLogLevel: {}
@@ -159,14 +163,20 @@ dn: cn=schema,cn=config
 objectClass: olcSchemaConfig
 cn: schema
 
-"#, self.config.log_level));
+"#,
+            self.config.log_level
+        ));
 
         // Include schemas
         for schema in &self.config.schemas {
-            ldif.push_str(&format!("include: file:///etc/ldap/schema/{}.ldif\n", schema));
+            ldif.push_str(&format!(
+                "include: file:///etc/ldap/schema/{}.ldif\n",
+                schema
+            ));
         }
 
-        ldif.push_str(&format!(r#"
+        ldif.push_str(&format!(
+            r#"
 dn: olcDatabase={{0}}config,cn=config
 objectClass: olcDatabaseConfig
 olcDatabase: {{0}}config
@@ -201,7 +211,8 @@ olcDbIndex: member eq
 
         // Add memberOf overlay if enabled
         if self.config.memberof_enabled {
-            ldif.push_str(&format!(r#"dn: olcOverlay={{0}}memberof,olcDatabase={{1}}{},cn=config
+            ldif.push_str(&format!(
+                r#"dn: olcOverlay={{0}}memberof,olcDatabase={{1}}{},cn=config
 objectClass: olcOverlayConfig
 objectClass: olcMemberOf
 olcOverlay: {{0}}memberof
@@ -210,7 +221,9 @@ olcMemberOfGroupOC: groupOfNames
 olcMemberOfMemberAD: member
 olcMemberOfMemberOfAD: memberOf
 
-"#, self.config.database_backend));
+"#,
+                self.config.database_backend
+            ));
         }
 
         ldif
@@ -233,7 +246,8 @@ olcMemberOfMemberOfAD: memberOf
 
     /// Create base directory structure
     pub async fn create_base_structure(&self) -> Result<()> {
-        let base_ldif = format!(r#"dn: {}
+        let base_ldif = format!(
+            r#"dn: {}
 objectClass: dcObject
 objectClass: organization
 dc: {}
@@ -253,7 +267,12 @@ ou: services
 
 "#,
             self.config.base_dn,
-            self.config.base_dn.split(',').next().unwrap_or("dc=local").replace("dc=", ""),
+            self.config
+                .base_dn
+                .split(',')
+                .next()
+                .unwrap_or("dc=local")
+                .replace("dc=", ""),
             self.config.organization,
             self.config.base_dn,
             self.config.base_dn,
@@ -265,7 +284,8 @@ ou: services
 
     /// Add a user to LDAP
     pub async fn add_user(&self, user: &LdapUserEntry) -> Result<()> {
-        let ldif = format!(r#"dn: uid={},ou=users,{}
+        let ldif = format!(
+            r#"dn: uid={},ou=users,{}
 objectClass: inetOrgPerson
 objectClass: posixAccount
 objectClass: shadowAccount
@@ -302,14 +322,13 @@ userPassword: {}
     /// Modify user password
     pub async fn set_user_password(&self, uid: &str, password: &str) -> Result<()> {
         let password_hash = self.hash_password(password).await?;
-        let ldif = format!(r#"dn: uid={},ou=users,{}
+        let ldif = format!(
+            r#"dn: uid={},ou=users,{}
 changetype: modify
 replace: userPassword
 userPassword: {}
 "#,
-            uid,
-            self.config.base_dn,
-            password_hash,
+            uid, self.config.base_dn, password_hash,
         );
 
         self.ldap_modify(&ldif).await
@@ -317,15 +336,13 @@ userPassword: {}
 
     /// Add a group to LDAP
     pub async fn add_group(&self, group: &LdapGroupEntry) -> Result<()> {
-        let mut ldif = format!(r#"dn: cn={},ou=groups,{}
+        let mut ldif = format!(
+            r#"dn: cn={},ou=groups,{}
 objectClass: posixGroup
 cn: {}
 gidNumber: {}
 "#,
-            group.cn,
-            self.config.base_dn,
-            group.cn,
-            group.gid_number,
+            group.cn, self.config.base_dn, group.cn, group.gid_number,
         );
 
         for member in &group.members {
@@ -343,14 +360,13 @@ gidNumber: {}
 
     /// Add member to group
     pub async fn add_group_member(&self, group_cn: &str, uid: &str) -> Result<()> {
-        let ldif = format!(r#"dn: cn={},ou=groups,{}
+        let ldif = format!(
+            r#"dn: cn={},ou=groups,{}
 changetype: modify
 add: memberUid
 memberUid: {}
 "#,
-            group_cn,
-            self.config.base_dn,
-            uid,
+            group_cn, self.config.base_dn, uid,
         );
 
         self.ldap_modify(&ldif).await
@@ -358,14 +374,13 @@ memberUid: {}
 
     /// Remove member from group
     pub async fn remove_group_member(&self, group_cn: &str, uid: &str) -> Result<()> {
-        let ldif = format!(r#"dn: cn={},ou=groups,{}
+        let ldif = format!(
+            r#"dn: cn={},ou=groups,{}
 changetype: modify
 delete: memberUid
 memberUid: {}
 "#,
-            group_cn,
-            self.config.base_dn,
-            uid,
+            group_cn, self.config.base_dn, uid,
         );
 
         self.ldap_modify(&ldif).await
@@ -374,16 +389,21 @@ memberUid: {}
     /// Internal ldapadd wrapper
     async fn ldap_add(&self, ldif: &str) -> Result<()> {
         let temp_path = "/tmp/horcrux_ldap_add.ldif";
-        tokio::fs::write(temp_path, ldif).await
+        tokio::fs::write(temp_path, ldif)
+            .await
             .map_err(|e| Error::Internal(format!("Failed to write LDIF: {}", e)))?;
 
         let output = Command::new("ldapadd")
             .args([
                 "-x",
-                "-H", "ldapi:///",
-                "-D", &self.config.admin_dn,
-                "-w", &self.config.admin_password,
-                "-f", temp_path,
+                "-H",
+                "ldapi:///",
+                "-D",
+                &self.config.admin_dn,
+                "-w",
+                &self.config.admin_password,
+                "-f",
+                temp_path,
             ])
             .output()
             .await
@@ -402,16 +422,21 @@ memberUid: {}
     /// Internal ldapmodify wrapper
     async fn ldap_modify(&self, ldif: &str) -> Result<()> {
         let temp_path = "/tmp/horcrux_ldap_modify.ldif";
-        tokio::fs::write(temp_path, ldif).await
+        tokio::fs::write(temp_path, ldif)
+            .await
             .map_err(|e| Error::Internal(format!("Failed to write LDIF: {}", e)))?;
 
         let output = Command::new("ldapmodify")
             .args([
                 "-x",
-                "-H", "ldapi:///",
-                "-D", &self.config.admin_dn,
-                "-w", &self.config.admin_password,
-                "-f", temp_path,
+                "-H",
+                "ldapi:///",
+                "-D",
+                &self.config.admin_dn,
+                "-w",
+                &self.config.admin_password,
+                "-f",
+                temp_path,
             ])
             .output()
             .await
@@ -432,9 +457,12 @@ memberUid: {}
         let output = Command::new("ldapdelete")
             .args([
                 "-x",
-                "-H", "ldapi:///",
-                "-D", &self.config.admin_dn,
-                "-w", &self.config.admin_password,
+                "-H",
+                "ldapi:///",
+                "-D",
+                &self.config.admin_dn,
+                "-w",
+                &self.config.admin_password,
                 dn,
             ])
             .output()
@@ -574,7 +602,8 @@ memberUid: {}
 
         // Clear database
         let _ = tokio::fs::remove_dir_all(&self.config.database_dir).await;
-        tokio::fs::create_dir_all(&self.config.database_dir).await
+        tokio::fs::create_dir_all(&self.config.database_dir)
+            .await
             .map_err(|e| Error::Internal(format!("Failed to create database dir: {}", e)))?;
 
         // Restore

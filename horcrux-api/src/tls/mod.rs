@@ -1,7 +1,6 @@
 ///! TLS/SSL configuration and certificate management
 ///!
 ///! Provides secure HTTPS connections and certificate management
-
 pub mod mtls;
 
 use horcrux_common::Result;
@@ -66,7 +65,7 @@ pub struct CertificateInfo {
     pub valid_until: String,
     pub serial_number: String,
     pub fingerprint_sha256: String,
-    pub san: Vec<String>,  // Subject Alternative Names
+    pub san: Vec<String>, // Subject Alternative Names
 }
 
 /// TLS manager
@@ -154,12 +153,7 @@ impl TlsManager {
 
         // Generate private key
         let key_output = tokio::process::Command::new("openssl")
-            .args(&[
-                "genrsa",
-                "-out",
-                output_key,
-                "4096",
-            ])
+            .args(&["genrsa", "-out", output_key, "4096"])
             .output()
             .await
             .map_err(|e| horcrux_common::Error::System(format!("Failed to generate key: {}", e)))?;
@@ -187,7 +181,9 @@ impl TlsManager {
             ])
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to generate cert: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to generate cert: {}", e))
+            })?;
 
         if !cert_output.status.success() {
             return Err(horcrux_common::Error::System(
@@ -273,7 +269,14 @@ impl TlsManager {
 
         // Get fingerprint
         let fingerprint_output = tokio::process::Command::new("openssl")
-            .args(&["x509", "-in", cert_path, "-noout", "-fingerprint", "-sha256"])
+            .args(&[
+                "x509",
+                "-in",
+                cert_path,
+                "-noout",
+                "-fingerprint",
+                "-sha256",
+            ])
             .output()
             .await?;
 
@@ -293,7 +296,10 @@ impl TlsManager {
         let mut san = Vec::new();
 
         // Parse SAN from text output (simplified)
-        if let Some(san_line) = san_text.lines().find(|line| line.contains("Subject Alternative Name")) {
+        if let Some(san_line) = san_text
+            .lines()
+            .find(|line| line.contains("Subject Alternative Name"))
+        {
             // This is simplified - real parsing would be more robust
             for part in san_line.split(',') {
                 if let Some(dns) = part.trim().strip_prefix("DNS:") {
@@ -359,14 +365,7 @@ impl TlsManager {
         // Generate CSR
         let csr_output = tokio::process::Command::new("openssl")
             .args(&[
-                "req",
-                "-new",
-                "-key",
-                output_key,
-                "-out",
-                output_csr,
-                "-subj",
-                &subject,
+                "req", "-new", "-key", output_key, "-out", output_csr, "-subj", &subject,
             ])
             .output()
             .await
@@ -408,7 +407,11 @@ impl TlsManager {
     }
 
     /// Check if certificate is expiring soon
-    pub async fn check_certificate_expiry(&self, cert_path: &str, days_threshold: u32) -> Result<bool> {
+    pub async fn check_certificate_expiry(
+        &self,
+        cert_path: &str,
+        days_threshold: u32,
+    ) -> Result<bool> {
         let _cert_info = self.get_certificate_info(cert_path).await?;
 
         // Get current time
@@ -450,9 +453,9 @@ impl TlsManager {
         self.validate_config(&config).await?;
 
         // Load certificate info
-        let cert_info = self.get_certificate_info(
-            config.cert_path.to_str().unwrap()
-        ).await?;
+        let cert_info = self
+            .get_certificate_info(config.cert_path.to_str().unwrap())
+            .await?;
 
         let mut certs = self.certificates.write().await;
         certs.clear();
@@ -473,18 +476,21 @@ impl TlsManager {
         let key_path = "/etc/horcrux/ssl/key.pem";
 
         // Create directory if it doesn't exist
-        tokio::fs::create_dir_all("/etc/horcrux/ssl").await.map_err(|e| {
-            horcrux_common::Error::System(format!("Failed to create SSL directory: {}", e))
-        })?;
+        tokio::fs::create_dir_all("/etc/horcrux/ssl")
+            .await
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to create SSL directory: {}", e))
+            })?;
 
         // Generate self-signed certificate
         self.generate_self_signed_cert(
             common_name,
             organization,
-            365,  // 1 year validity
+            365, // 1 year validity
             cert_path,
             key_path,
-        ).await?;
+        )
+        .await?;
 
         // Update configuration
         let mut config = self.config.write().await;

@@ -2,9 +2,9 @@
 //!
 //! Provides browser-based VNC console access to virtual machines
 
-use leptos::*;
 use crate::api;
 use horcrux_common::{VmConfig, VmStatus};
+use leptos::*;
 
 /// Console access types
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -235,7 +235,9 @@ fn SerialConsole(vm_id: String) -> impl IntoView {
         let _vm = vm_id_copy.clone();
         spawn_local(async move {
             // In production, this would connect to a WebSocket for serial I/O
-            set_output.set("Serial console connected.\r\nPress Enter to activate console.\r\n".to_string());
+            set_output.set(
+                "Serial console connected.\r\nPress Enter to activate console.\r\n".to_string(),
+            );
         });
     });
 

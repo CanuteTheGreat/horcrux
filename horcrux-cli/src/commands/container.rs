@@ -1,7 +1,6 @@
 ///! Container management commands
-
 use crate::api::ApiClient;
-use crate::output::{self, OutputFormat, truncate};
+use crate::output::{self, truncate, OutputFormat};
 use crate::ContainerCommands;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -87,14 +86,20 @@ pub async fn handle_container_command(
 
         ContainerCommands::Start { id } => {
             let container: Container = api
-                .post(&format!("/api/containers/{}/start", id), &serde_json::json!({}))
+                .post(
+                    &format!("/api/containers/{}/start", id),
+                    &serde_json::json!({}),
+                )
                 .await?;
             output::print_started("Container", &container.name);
         }
 
         ContainerCommands::Stop { id } => {
             let container: Container = api
-                .post(&format!("/api/containers/{}/stop", id), &serde_json::json!({}))
+                .post(
+                    &format!("/api/containers/{}/stop", id),
+                    &serde_json::json!({}),
+                )
                 .await?;
             output::print_stopped("Container", &container.name);
         }

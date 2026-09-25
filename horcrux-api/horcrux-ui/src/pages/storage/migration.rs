@@ -1,6 +1,6 @@
+use crate::api::*;
 use leptos::*;
 use serde::{Deserialize, Serialize};
-use crate::api::*;
 
 // Local struct for migration plan preview (not in API)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,7 +31,8 @@ pub fn StorageMigrationPage() -> impl IntoView {
     let (source_storage, set_source_storage) = create_signal(String::new());
     let (destination_storage, set_destination_storage) = create_signal(String::new());
     let (selected_resources, set_selected_resources) = create_signal(Vec::<String>::new());
-    let (available_resources, set_available_resources) = create_signal(Vec::<MigratableResource>::new());
+    let (available_resources, set_available_resources) =
+        create_signal(Vec::<MigratableResource>::new());
     let (migration_plan, set_migration_plan) = create_signal(None::<MigrationPlan>);
 
     // Options
@@ -84,7 +85,10 @@ pub fn StorageMigrationPage() -> impl IntoView {
 
     // Plan migration when resources are selected
     let plan_migration = move || {
-        if source_storage.get().is_empty() || destination_storage.get().is_empty() || selected_resources.get().is_empty() {
+        if source_storage.get().is_empty()
+            || destination_storage.get().is_empty()
+            || selected_resources.get().is_empty()
+        {
             return;
         }
 
@@ -112,8 +116,16 @@ pub fn StorageMigrationPage() -> impl IntoView {
                 live_migrate: false,
                 verify_data: verify_checksum.get(),
                 compress_transfer: compress_transfer.get(),
-                bandwidth_limit_mbps: if throttle_enabled.get() { Some(throttle_mbps.get()) } else { None },
-                schedule_time: if schedule_enabled.get() { Some(schedule_time.get()) } else { None },
+                bandwidth_limit_mbps: if throttle_enabled.get() {
+                    Some(throttle_mbps.get())
+                } else {
+                    None
+                },
+                schedule_time: if schedule_enabled.get() {
+                    Some(schedule_time.get())
+                } else {
+                    None
+                },
                 delete_source_after: delete_source.get(),
                 priority: priority.get(),
             },

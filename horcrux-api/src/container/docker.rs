@@ -1,9 +1,8 @@
 ///! Docker container integration
-
 use super::Container;
-use bollard::Docker;
 use bollard::container::{ListContainersOptions, StatsOptions};
 use bollard::models::ContainerStateStatusEnum;
+use bollard::Docker;
 use horcrux_common::{ContainerConfig, ContainerRuntime, ContainerStatus, Result};
 use std::sync::Arc;
 use tokio::process::Command;
@@ -24,7 +23,10 @@ impl DockerManager {
                 Some(Arc::new(docker))
             }
             Err(e) => {
-                warn!("Failed to connect to Docker API: {}. Falling back to CLI.", e);
+                warn!(
+                    "Failed to connect to Docker API: {}. Falling back to CLI.",
+                    e
+                );
                 None
             }
         };
@@ -39,7 +41,10 @@ impl DockerManager {
 
     /// Create a new Docker container
     pub async fn create_container(&self, config: &ContainerConfig) -> Result<Container> {
-        info!("Creating Docker container: {} (ID: {})", config.name, config.id);
+        info!(
+            "Creating Docker container: {} (ID: {})",
+            config.name, config.id
+        );
 
         // Create and configure Docker container
         let mut cmd = Command::new("docker");
@@ -66,7 +71,10 @@ impl DockerManager {
         }
 
         let container_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        info!("Docker container {} created successfully (Docker ID: {})", config.id, container_id);
+        info!(
+            "Docker container {} created successfully (Docker ID: {})",
+            config.id, container_id
+        );
 
         Ok(Container {
             id: config.id.clone(),
@@ -81,7 +89,10 @@ impl DockerManager {
 
     /// Start a Docker container
     pub async fn start_container(&self, container: &Container) -> Result<()> {
-        info!("Starting Docker container: {} (ID: {})", container.name, container.id);
+        info!(
+            "Starting Docker container: {} (ID: {})",
+            container.name, container.id
+        );
 
         if container.status == ContainerStatus::Running {
             return Err(horcrux_common::Error::InvalidConfig(format!(
@@ -114,7 +125,10 @@ impl DockerManager {
 
     /// Stop a Docker container
     pub async fn stop_container(&self, container: &Container) -> Result<()> {
-        info!("Stopping Docker container: {} (ID: {})", container.name, container.id);
+        info!(
+            "Stopping Docker container: {} (ID: {})",
+            container.name, container.id
+        );
 
         if container.status == ContainerStatus::Stopped {
             return Err(horcrux_common::Error::InvalidConfig(format!(
@@ -147,7 +161,10 @@ impl DockerManager {
 
     /// Delete a Docker container
     pub async fn delete_container(&self, container: &Container) -> Result<()> {
-        info!("Deleting Docker container: {} (ID: {})", container.name, container.id);
+        info!(
+            "Deleting Docker container: {} (ID: {})",
+            container.name, container.id
+        );
 
         // Docker allows removing running containers with -f, but we'll enforce stopping first
         if container.status == ContainerStatus::Running {
@@ -193,9 +210,7 @@ impl DockerManager {
             .arg("--version")
             .output()
             .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to run docker: {}", e))
-            })?;
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to run docker: {}", e)))?;
 
         if !output.status.success() {
             return Err(horcrux_common::Error::System(
@@ -329,19 +344,18 @@ impl DockerManager {
 
     /// List all containers using Docker API
     pub async fn list_containers_api(&self) -> Result<Vec<(String, String, ContainerStatus)>> {
-        let docker = self.get_docker_client().ok_or_else(|| {
-            horcrux_common::Error::System("Docker API not available".to_string())
-        })?;
+        let docker = self
+            .get_docker_client()
+            .ok_or_else(|| horcrux_common::Error::System("Docker API not available".to_string()))?;
 
         let options = Some(ListContainersOptions::<String> {
             all: true,
             ..Default::default()
         });
 
-        let containers = docker
-            .list_containers(options)
-            .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to list containers: {}", e)))?;
+        let containers = docker.list_containers(options).await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to list containers: {}", e))
+        })?;
 
         let mut result = Vec::new();
         for container in containers {
@@ -366,10 +380,13 @@ impl DockerManager {
     }
 
     /// Get container statistics using Docker API
-    pub async fn get_container_stats_api(&self, container_id: &str) -> Result<DockerContainerStats> {
-        let docker = self.get_docker_client().ok_or_else(|| {
-            horcrux_common::Error::System("Docker API not available".to_string())
-        })?;
+    pub async fn get_container_stats_api(
+        &self,
+        container_id: &str,
+    ) -> Result<DockerContainerStats> {
+        let docker = self
+            .get_docker_client()
+            .ok_or_else(|| horcrux_common::Error::System("Docker API not available".to_string()))?;
 
         let stats_options = StatsOptions {
             stream: false,
@@ -385,8 +402,8 @@ impl DockerManager {
             })?;
 
             // Parse CPU stats
-            let cpu_delta = stats.cpu_stats.cpu_usage.total_usage
-                - stats.precpu_stats.cpu_usage.total_usage;
+            let cpu_delta =
+                stats.cpu_stats.cpu_usage.total_usage - stats.precpu_stats.cpu_usage.total_usage;
             let system_delta = stats.cpu_stats.system_cpu_usage.unwrap_or(0)
                 - stats.precpu_stats.system_cpu_usage.unwrap_or(0);
             let num_cpus = stats.cpu_stats.online_cpus.unwrap_or(1) as f64;
@@ -450,14 +467,16 @@ impl DockerManager {
 
     /// Get container info using Docker API
     pub async fn inspect_container_api(&self, container_id: &str) -> Result<DockerContainerInfo> {
-        let docker = self.get_docker_client().ok_or_else(|| {
-            horcrux_common::Error::System("Docker API not available".to_string())
-        })?;
+        let docker = self
+            .get_docker_client()
+            .ok_or_else(|| horcrux_common::Error::System("Docker API not available".to_string()))?;
 
         let container = docker
             .inspect_container(container_id, None)
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to inspect container: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to inspect container: {}", e))
+            })?;
 
         let status = match container.state.and_then(|s| s.status) {
             Some(ContainerStateStatusEnum::RUNNING) => ContainerStatus::Running,
@@ -470,7 +489,11 @@ impl DockerManager {
 
         Ok(DockerContainerInfo {
             id: container.id.unwrap_or_default(),
-            name: container.name.unwrap_or_default().trim_start_matches('/').to_string(),
+            name: container
+                .name
+                .unwrap_or_default()
+                .trim_start_matches('/')
+                .to_string(),
             status,
             image: container.config.and_then(|c| c.image).unwrap_or_default(),
         })

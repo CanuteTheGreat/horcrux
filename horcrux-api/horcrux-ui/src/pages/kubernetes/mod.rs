@@ -4,15 +4,15 @@
 //! Provides comprehensive Kubernetes management capabilities including cluster
 //! management, workload operations, and application lifecycle management.
 
-pub mod management;
 pub mod cluster_dashboard;
-pub mod workloads;
-pub mod helm;
 pub mod config;
+pub mod helm;
+pub mod management;
+pub mod workloads;
 
 // Re-export components for easy access
-pub use management::KubernetesManagement;
 pub use cluster_dashboard::ClusterDashboard;
-pub use workloads::{PodsPage, DeploymentsPage, ServicesPage, IngressesPage};
-pub use helm::{HelmRepositoriesPage, HelmChartsPage, HelmReleasesPage};
 pub use config::{ConfigMapsPage, SecretsPage};
+pub use helm::{HelmChartsPage, HelmReleasesPage, HelmRepositoriesPage};
+pub use management::KubernetesManagement;
+pub use workloads::{DeploymentsPage, IngressesPage, PodsPage, ServicesPage};

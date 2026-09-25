@@ -4,10 +4,10 @@
 
 #![allow(dead_code)]
 
-use horcrux_common::Result;
-use tokio::process::Command as AsyncCommand;
-use serde::{Deserialize, Serialize};
 use super::StoragePool;
+use horcrux_common::Result;
+use serde::{Deserialize, Serialize};
+use tokio::process::Command as AsyncCommand;
 
 /// GlusterFS manager
 pub struct GlusterFsManager {}
@@ -15,11 +15,11 @@ pub struct GlusterFsManager {}
 /// GlusterFS configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlusterFsConfig {
-    pub server: String,          // GlusterFS server hostname/IP
-    pub volume: String,          // GlusterFS volume name
-    pub path: String,            // Path within volume
-    pub transport: Transport,    // Transport protocol
-    pub backup_volfile_servers: Vec<String>,  // Backup servers for redundancy
+    pub server: String,                      // GlusterFS server hostname/IP
+    pub volume: String,                      // GlusterFS volume name
+    pub path: String,                        // Path within volume
+    pub transport: Transport,                // Transport protocol
+    pub backup_volfile_servers: Vec<String>, // Backup servers for redundancy
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,10 +42,10 @@ impl Transport {
 /// GlusterFS volume type
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum VolumeType {
-    Distribute,      // Distributed (no redundancy)
-    Replicate,       // Replicated (mirrored)
-    DistributeReplicate,  // Distributed-Replicate
-    Disperse,        // Erasure coded
+    Distribute,          // Distributed (no redundancy)
+    Replicate,           // Replicated (mirrored)
+    DistributeReplicate, // Distributed-Replicate
+    Disperse,            // Erasure coded
 }
 
 /// GlusterFS volume info
@@ -69,7 +69,7 @@ impl GlusterFsManager {
     pub async fn validate_pool(&self, pool: &StoragePool) -> Result<()> {
         if pool.path.is_empty() {
             return Err(horcrux_common::Error::System(
-                "GlusterFS volume path is required".to_string()
+                "GlusterFS volume path is required".to_string(),
             ));
         }
 
@@ -80,7 +80,9 @@ impl GlusterFsManager {
     pub async fn mount_volume(&self, config: &GlusterFsConfig, mount_point: &str) -> Result<()> {
         tracing::info!(
             "Mounting GlusterFS volume {}:{} to {}",
-            config.server, config.volume, mount_point
+            config.server,
+            config.volume,
+            mount_point
         );
 
         // Create mount point if it doesn't exist
@@ -107,8 +109,10 @@ impl GlusterFsManager {
         // Mount using glusterfs FUSE client
         let output = AsyncCommand::new("mount")
             .args(&[
-                "-t", "glusterfs",
-                "-o", &options,
+                "-t",
+                "glusterfs",
+                "-o",
+                &options,
                 &format!("{}:/{}", config.server, config.volume),
                 mount_point,
             ])
@@ -118,9 +122,10 @@ impl GlusterFsManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(
-                format!("Failed to mount GlusterFS: {}", stderr)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Failed to mount GlusterFS: {}",
+                stderr
+            )));
         }
 
         tracing::info!("Successfully mounted GlusterFS volume");
@@ -143,9 +148,10 @@ impl GlusterFsManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(
-                format!("Failed to unmount: {}", stderr)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Failed to unmount: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -174,13 +180,16 @@ impl GlusterFsManager {
             .args(&["--remote-host", server, "volume", "info", volume])
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to get volume info: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to get volume info: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(
-                format!("Volume info failed: {}", stderr)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Volume info failed: {}",
+                stderr
+            )));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -254,19 +263,23 @@ impl GlusterFsManager {
         let output = AsyncCommand::new("qemu-img")
             .args(&[
                 "create",
-                "-f", "qcow2",
+                "-f",
+                "qcow2",
                 volume_path.to_str().unwrap(),
                 &format!("{}G", size_gb),
             ])
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to create volume: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to create volume: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(
-                format!("Volume creation failed: {}", stderr)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Volume creation failed: {}",
+                stderr
+            )));
         }
 
         Ok(volume_path.to_string_lossy().to_string())
@@ -284,29 +297,24 @@ impl GlusterFsManager {
     }
 
     /// Create snapshot
-    pub async fn create_snapshot(
-        &self,
-        volume_path: &str,
-        snapshot_name: &str,
-    ) -> Result<String> {
+    pub async fn create_snapshot(&self, volume_path: &str, snapshot_name: &str) -> Result<String> {
         tracing::info!("Creating snapshot {} of {}", snapshot_name, volume_path);
 
         // Use qcow2 internal snapshots
         let output = AsyncCommand::new("qemu-img")
-            .args(&[
-                "snapshot",
-                "-c", snapshot_name,
-                volume_path,
-            ])
+            .args(&["snapshot", "-c", snapshot_name, volume_path])
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Snapshot creation failed: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Snapshot creation failed: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(
-                format!("Failed to create snapshot: {}", stderr)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Failed to create snapshot: {}",
+                stderr
+            )));
         }
 
         Ok(snapshot_name.to_string())
@@ -322,9 +330,10 @@ impl GlusterFsManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(
-                format!("Volume list failed: {}", stderr)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Volume list failed: {}",
+                stderr
+            )));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -355,15 +364,13 @@ impl GlusterFsManager {
             .map_err(|e| horcrux_common::Error::System(format!("Failed to get version: {}", e)))?;
 
         if !output.status.success() {
-            return Err(horcrux_common::Error::System("Failed to get GlusterFS version".to_string()));
+            return Err(horcrux_common::Error::System(
+                "Failed to get GlusterFS version".to_string(),
+            ));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let version = stdout
-            .lines()
-            .next()
-            .unwrap_or("unknown")
-            .to_string();
+        let version = stdout.lines().next().unwrap_or("unknown").to_string();
 
         Ok(version)
     }
@@ -376,7 +383,7 @@ impl GlusterFsConfig {
 
         if parts.len() != 2 {
             return Err(horcrux_common::Error::System(
-                "Invalid GlusterFS path format. Expected: server:/volume/path".to_string()
+                "Invalid GlusterFS path format. Expected: server:/volume/path".to_string(),
             ));
         }
 

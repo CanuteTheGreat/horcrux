@@ -1,8 +1,8 @@
 //! Kubernetes Cluster Management Page
 
+use crate::api::{delete_json, fetch_json, post_empty};
 use leptos::*;
 use serde::{Deserialize, Serialize};
-use crate::api::{fetch_json, delete_json, post_empty};
 
 /// Kubernetes cluster
 #[derive(Debug, Clone, Serialize, Deserialize)]

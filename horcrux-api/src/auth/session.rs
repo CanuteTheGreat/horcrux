@@ -1,5 +1,4 @@
 ///! Session management
-
 use horcrux_common::auth::Session;
 use uuid::Uuid;
 

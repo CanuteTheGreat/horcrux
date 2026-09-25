@@ -35,8 +35,9 @@ impl CifsManager {
         info!("Mounting CIFS share {} to {}", config.share, mount_point);
 
         // Create mount point
-        tokio::fs::create_dir_all(mount_point).await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to create mount point: {}", e)))?;
+        tokio::fs::create_dir_all(mount_point).await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to create mount point: {}", e))
+        })?;
 
         let mut args = vec![
             "-t".to_string(),
@@ -74,7 +75,9 @@ impl CifsManager {
             .args(&args)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to mount CIFS share: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to mount CIFS share: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -149,7 +152,9 @@ impl CifsManager {
             ])
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to create volume: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to create volume: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -166,8 +171,9 @@ impl CifsManager {
     pub async fn delete_volume(&self, volume_path: &str) -> Result<()> {
         info!("Deleting CIFS volume: {}", volume_path);
 
-        tokio::fs::remove_file(volume_path).await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to delete volume: {}", e)))?;
+        tokio::fs::remove_file(volume_path).await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to delete volume: {}", e))
+        })?;
 
         Ok(())
     }
@@ -181,7 +187,7 @@ impl CifsManager {
 /// CIFS configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CifsConfig {
-    pub share: String,      // //server/share
+    pub share: String, // //server/share
     pub username: Option<String>,
     pub password: Option<String>,
     pub domain: Option<String>,

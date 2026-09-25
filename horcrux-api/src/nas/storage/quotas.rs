@@ -2,8 +2,8 @@
 //!
 //! Handles user and group quotas on NAS shares.
 
-use horcrux_common::{Error, Result};
 use crate::nas::QuotaLimit;
+use horcrux_common::{Error, Result};
 use tokio::process::Command;
 
 /// Quota usage information
@@ -40,10 +40,7 @@ pub async fn set_zfs_user_quota(dataset: &str, user: &str, limit: &QuotaLimit) -
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(Error::Internal(format!(
-            "Failed to set quota: {}",
-            stderr
-        )));
+        return Err(Error::Internal(format!("Failed to set quota: {}", stderr)));
     }
 
     Ok(())
@@ -55,17 +52,18 @@ pub async fn set_zfs_group_quota(dataset: &str, group: &str, limit: &QuotaLimit)
     let quota_str = format!("{}G", limit.hard_limit_gb);
 
     let output = Command::new("zfs")
-        .args(["set", &format!("groupquota@{}={}", group, quota_str), dataset])
+        .args([
+            "set",
+            &format!("groupquota@{}={}", group, quota_str),
+            dataset,
+        ])
         .output()
         .await
         .map_err(|e| Error::Internal(format!("Failed to set quota: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(Error::Internal(format!(
-            "Failed to set quota: {}",
-            stderr
-        )));
+        return Err(Error::Internal(format!("Failed to set quota: {}", stderr)));
     }
 
     Ok(())
@@ -76,7 +74,14 @@ pub async fn set_zfs_group_quota(dataset: &str, group: &str, limit: &QuotaLimit)
 pub async fn get_zfs_user_quota(dataset: &str, user: &str) -> Result<QuotaUsage> {
     // Get used space
     let used_output = Command::new("zfs")
-        .args(["get", "-H", "-o", "value", &format!("userused@{}", user), dataset])
+        .args([
+            "get",
+            "-H",
+            "-o",
+            "value",
+            &format!("userused@{}", user),
+            dataset,
+        ])
         .output()
         .await?;
 
@@ -89,7 +94,14 @@ pub async fn get_zfs_user_quota(dataset: &str, user: &str) -> Result<QuotaUsage>
 
     // Get quota
     let quota_output = Command::new("zfs")
-        .args(["get", "-H", "-o", "value", &format!("userquota@{}", user), dataset])
+        .args([
+            "get",
+            "-H",
+            "-o",
+            "value",
+            &format!("userquota@{}", user),
+            dataset,
+        ])
         .output()
         .await?;
 
@@ -121,7 +133,14 @@ pub async fn get_zfs_user_quota(dataset: &str, user: &str) -> Result<QuotaUsage>
 #[cfg(feature = "nas-zfs")]
 pub async fn get_zfs_group_quota(dataset: &str, group: &str) -> Result<QuotaUsage> {
     let used_output = Command::new("zfs")
-        .args(["get", "-H", "-o", "value", &format!("groupused@{}", group), dataset])
+        .args([
+            "get",
+            "-H",
+            "-o",
+            "value",
+            &format!("groupused@{}", group),
+            dataset,
+        ])
         .output()
         .await?;
 
@@ -133,7 +152,14 @@ pub async fn get_zfs_group_quota(dataset: &str, group: &str) -> Result<QuotaUsag
     };
 
     let quota_output = Command::new("zfs")
-        .args(["get", "-H", "-o", "value", &format!("groupquota@{}", group), dataset])
+        .args([
+            "get",
+            "-H",
+            "-o",
+            "value",
+            &format!("groupquota@{}", group),
+            dataset,
+        ])
         .output()
         .await?;
 
@@ -249,10 +275,7 @@ pub async fn set_linux_user_quota(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(Error::Internal(format!(
-            "setquota failed: {}",
-            stderr
-        )));
+        return Err(Error::Internal(format!("setquota failed: {}", stderr)));
     }
 
     Ok(())
@@ -395,10 +418,7 @@ fn parse_linux_quota_output(output: &str, name: &str) -> Result<QuotaUsage> {
 /// Enable quotas on a filesystem
 pub async fn enable_quotas(path: &str) -> Result<()> {
     // Check if quota is already enabled
-    let output = Command::new("quotaon")
-        .args(["-p", path])
-        .output()
-        .await;
+    let output = Command::new("quotaon").args(["-p", path]).output().await;
 
     if let Ok(o) = output {
         if o.status.success() {
@@ -444,7 +464,10 @@ pub enum QuotaStatus {
     /// Under quota
     Ok,
     /// Over soft limit, in grace period
-    Warning { percent_used: u8, grace_remaining: Option<i64> },
+    Warning {
+        percent_used: u8,
+        grace_remaining: Option<i64>,
+    },
     /// Over hard limit
     Exceeded,
     /// No quota set
@@ -552,7 +575,10 @@ impl QuotaManager {
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(Error::Internal(format!("Failed to remove quota: {}", stderr)));
+                return Err(Error::Internal(format!(
+                    "Failed to remove quota: {}",
+                    stderr
+                )));
             }
             return Ok(());
         }
@@ -593,13 +619,22 @@ impl QuotaManager {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut quotas = Vec::new();
 
-        for line in stdout.lines().skip(5) { // Skip header lines
+        for line in stdout.lines().skip(5) {
+            // Skip header lines
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 7 {
                 let name = parts[0].to_string();
                 let used_bytes = parts[2].parse::<u64>().unwrap_or(0) * 1024;
-                let soft = parts[3].parse::<u64>().ok().filter(|&v| v > 0).map(|v| v * 1024);
-                let hard = parts[4].parse::<u64>().ok().filter(|&v| v > 0).map(|v| v * 1024);
+                let soft = parts[3]
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|&v| v > 0)
+                    .map(|v| v * 1024);
+                let hard = parts[4]
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|&v| v > 0)
+                    .map(|v| v * 1024);
 
                 quotas.push(QuotaUsage {
                     name,
@@ -608,7 +643,10 @@ impl QuotaManager {
                     hard_limit_bytes: hard,
                     used_inodes: parts[5].parse().unwrap_or(0),
                     inode_soft: parts[6].parse::<u64>().ok().filter(|&v| v > 0),
-                    inode_hard: parts.get(7).and_then(|s| s.parse::<u64>().ok()).filter(|&v| v > 0),
+                    inode_hard: parts
+                        .get(7)
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .filter(|&v| v > 0),
                     in_grace: parts[1].contains('+'),
                 });
             }
@@ -676,11 +714,22 @@ impl QuotaManager {
                 quotas.push(QuotaUsage {
                     name: parts[0].to_string(),
                     used_bytes: parts[2].parse::<u64>().unwrap_or(0) * 1024,
-                    soft_limit_bytes: parts[3].parse::<u64>().ok().filter(|&v| v > 0).map(|v| v * 1024),
-                    hard_limit_bytes: parts[4].parse::<u64>().ok().filter(|&v| v > 0).map(|v| v * 1024),
+                    soft_limit_bytes: parts[3]
+                        .parse::<u64>()
+                        .ok()
+                        .filter(|&v| v > 0)
+                        .map(|v| v * 1024),
+                    hard_limit_bytes: parts[4]
+                        .parse::<u64>()
+                        .ok()
+                        .filter(|&v| v > 0)
+                        .map(|v| v * 1024),
                     used_inodes: parts[5].parse().unwrap_or(0),
                     inode_soft: parts[6].parse::<u64>().ok().filter(|&v| v > 0),
-                    inode_hard: parts.get(7).and_then(|s| s.parse::<u64>().ok()).filter(|&v| v > 0),
+                    inode_hard: parts
+                        .get(7)
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .filter(|&v| v > 0),
                     in_grace: parts[1].contains('+'),
                 });
             }

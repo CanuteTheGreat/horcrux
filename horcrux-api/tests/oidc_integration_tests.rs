@@ -51,7 +51,7 @@ fn get_mock_rsa_components() -> (String, String) {
     // These are the base64url-encoded n and e from the test private key above
     // In production, fetch these from /.well-known/jwks.json
     let n = "2MDABsgtF0SLdmBO-Gl-ghGI0Vp3HIz017p6jlbJRgUu9xzJeazbaNeYdGi5okRn7o68AL8moTQfV3pxUq0uBPFIUzfayjSnyJKYZEpRLrALQYmio3Im3MT5X7ZlegftBr00B-Bf2_5DlKSykpC36IKVMOJqxdvUYUBjnJbDa_FHRI4jbuJh2TLvEktJO6AeKsvcVgUWSJxz8OQ3JASStH9OKi73leQC2bDFw3fRC3iek2RjP47LfpFc88lxbXSn15gUgDTiaY133DhTI0dPHzHTLLB6Lyl_a1EvL4JIhyXZY76iX1WmLh72957Koxr1LogiEF182uXOjrlkx3P7dQ";
-    let e = "AQAB";  // 65537 in base64url
+    let e = "AQAB"; // 65537 in base64url
 
     (n.to_string(), e.to_string())
 }
@@ -70,7 +70,10 @@ struct MockIdTokenClaims {
 }
 
 /// Generate a mock JWT ID token signed with the test RSA key
-fn generate_mock_id_token(sub: &str, nonce: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
+fn generate_mock_id_token(
+    sub: &str,
+    nonce: Option<&str>,
+) -> Result<String, Box<dyn std::error::Error>> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
@@ -117,7 +120,8 @@ fn generate_mock_jwks() -> serde_json::Value {
 fn generate_invalid_token() -> String {
     // Create a token with valid structure but invalid signature
     let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256","typ":"JWT","kid":"test-key-1"}"#);
-    let payload = URL_SAFE_NO_PAD.encode(r#"{"iss":"https://evil.com","sub":"hacker","aud":"horcrux-test-client"}"#);
+    let payload = URL_SAFE_NO_PAD
+        .encode(r#"{"iss":"https://evil.com","sub":"hacker","aud":"horcrux-test-client"}"#);
     let fake_signature = URL_SAFE_NO_PAD.encode(b"invalid_signature_data_here");
 
     format!("{}.{}.{}", header, payload, fake_signature)
@@ -159,7 +163,11 @@ mod tests {
             .expect("Failed to generate mock token");
 
         assert!(!token.is_empty());
-        assert_eq!(token.matches('.').count(), 2, "JWT should have 3 parts separated by dots");
+        assert_eq!(
+            token.matches('.').count(),
+            2,
+            "JWT should have 3 parts separated by dots"
+        );
 
         // Verify token starts with valid base64url characters
         let parts: Vec<&str> = token.split('.').collect();
@@ -184,23 +192,26 @@ mod tests {
 
     #[test]
     fn test_token_structure() {
-        let token = generate_mock_id_token("user123", None)
-            .expect("Failed to generate token");
+        let token = generate_mock_id_token("user123", None).expect("Failed to generate token");
 
         let parts: Vec<&str> = token.split('.').collect();
 
         // Decode header
-        let header_json = URL_SAFE_NO_PAD.decode(parts[0]).expect("Failed to decode header");
-        let header: serde_json::Value = serde_json::from_slice(&header_json)
-            .expect("Failed to parse header");
+        let header_json = URL_SAFE_NO_PAD
+            .decode(parts[0])
+            .expect("Failed to decode header");
+        let header: serde_json::Value =
+            serde_json::from_slice(&header_json).expect("Failed to parse header");
 
         assert_eq!(header["alg"], "RS256");
         assert_eq!(header["kid"], "test-key-1");
 
         // Decode payload
-        let payload_json = URL_SAFE_NO_PAD.decode(parts[1]).expect("Failed to decode payload");
-        let payload: MockIdTokenClaims = serde_json::from_slice(&payload_json)
-            .expect("Failed to parse payload");
+        let payload_json = URL_SAFE_NO_PAD
+            .decode(parts[1])
+            .expect("Failed to decode payload");
+        let payload: MockIdTokenClaims =
+            serde_json::from_slice(&payload_json).expect("Failed to parse payload");
 
         assert_eq!(payload.iss, MOCK_ISSUER);
         assert_eq!(payload.sub, "user123");
@@ -209,13 +220,14 @@ mod tests {
 
     #[test]
     fn test_expired_token_generation() {
-        let token = generate_expired_token("testuser")
-            .expect("Failed to generate expired token");
+        let token = generate_expired_token("testuser").expect("Failed to generate expired token");
 
         let parts: Vec<&str> = token.split('.').collect();
-        let payload_json = URL_SAFE_NO_PAD.decode(parts[1]).expect("Failed to decode payload");
-        let payload: MockIdTokenClaims = serde_json::from_slice(&payload_json)
-            .expect("Failed to parse payload");
+        let payload_json = URL_SAFE_NO_PAD
+            .decode(parts[1])
+            .expect("Failed to decode payload");
+        let payload: MockIdTokenClaims =
+            serde_json::from_slice(&payload_json).expect("Failed to parse payload");
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -229,13 +241,14 @@ mod tests {
     #[test]
     fn test_nonce_in_token() {
         let nonce = "unique-nonce-12345";
-        let token = generate_mock_id_token("user", Some(nonce))
-            .expect("Failed to generate token");
+        let token = generate_mock_id_token("user", Some(nonce)).expect("Failed to generate token");
 
         let parts: Vec<&str> = token.split('.').collect();
-        let payload_json = URL_SAFE_NO_PAD.decode(parts[1]).expect("Failed to decode payload");
-        let payload: MockIdTokenClaims = serde_json::from_slice(&payload_json)
-            .expect("Failed to parse payload");
+        let payload_json = URL_SAFE_NO_PAD
+            .decode(parts[1])
+            .expect("Failed to decode payload");
+        let payload: MockIdTokenClaims =
+            serde_json::from_slice(&payload_json).expect("Failed to parse payload");
 
         assert_eq!(payload.nonce, Some(nonce.to_string()));
     }
@@ -266,8 +279,8 @@ mod integration_tests {
     #[test]
     fn test_token_roundtrip() {
         // Generate token
-        let token = generate_mock_id_token("alice", Some("nonce-123"))
-            .expect("Failed to generate token");
+        let token =
+            generate_mock_id_token("alice", Some("nonce-123")).expect("Failed to generate token");
 
         // In a real test, we would:
         // 1. Start mock OIDC provider HTTP server
@@ -296,10 +309,10 @@ mod integration_tests {
     /// Test multiple tokens with same key
     #[test]
     fn test_multiple_tokens_same_key() {
-        let token1 = generate_mock_id_token("user1", Some("nonce1"))
-            .expect("Failed to generate token1");
-        let token2 = generate_mock_id_token("user2", Some("nonce2"))
-            .expect("Failed to generate token2");
+        let token1 =
+            generate_mock_id_token("user1", Some("nonce1")).expect("Failed to generate token1");
+        let token2 =
+            generate_mock_id_token("user2", Some("nonce2")).expect("Failed to generate token2");
 
         // Both should be valid tokens
         assert_ne!(token1, token2);
@@ -327,8 +340,8 @@ mod examples {
     #[test]
     fn example_generate_token_for_test() {
         // Generate a valid token for user "bob" with nonce
-        let token = generate_mock_id_token("bob", Some("test-nonce"))
-            .expect("Token generation failed");
+        let token =
+            generate_mock_id_token("bob", Some("test-nonce")).expect("Token generation failed");
 
         println!("Generated mock ID token:");
         println!("{}", token);
@@ -352,13 +365,13 @@ mod examples {
     #[test]
     fn example_validation_scenarios() {
         // Valid token
-        let valid_token = generate_mock_id_token("user", Some("nonce"))
-            .expect("Failed to generate valid token");
+        let valid_token =
+            generate_mock_id_token("user", Some("nonce")).expect("Failed to generate valid token");
         println!("Valid token: {}", valid_token);
 
         // Expired token
-        let expired_token = generate_expired_token("user")
-            .expect("Failed to generate expired token");
+        let expired_token =
+            generate_expired_token("user").expect("Failed to generate expired token");
         println!("Expired token: {}", expired_token);
 
         // Invalid token

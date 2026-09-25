@@ -1,7 +1,6 @@
 ///! Standardized error handling for API responses
 ///!
 ///! Provides consistent JSON error responses across all API endpoints
-
 use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -96,41 +95,23 @@ impl ApiError {
         match self {
             ApiError::Internal(msg) => {
                 error!("Internal API error: {}", msg);
-                ErrorResponse::new(
-                    500,
-                    "INTERNAL_ERROR",
-                    "An internal server error occurred",
-                )
-                .with_details(msg)
+                ErrorResponse::new(500, "INTERNAL_ERROR", "An internal server error occurred")
+                    .with_details(msg)
             }
-            ApiError::NotFound(msg) => {
-                ErrorResponse::new(404, "NOT_FOUND", msg)
-            }
-            ApiError::AuthenticationFailed => {
-                ErrorResponse::new(
-                    401,
-                    "AUTHENTICATION_FAILED",
-                    "Authentication credentials are invalid or missing",
-                )
-            }
-            ApiError::Forbidden(msg) => {
-                ErrorResponse::new(403, "FORBIDDEN", msg)
-            }
-            ApiError::BadRequest(msg) => {
-                ErrorResponse::new(400, "BAD_REQUEST", msg)
-            }
-            ApiError::Conflict(msg) => {
-                ErrorResponse::new(409, "CONFLICT", msg)
-            }
-            ApiError::ValidationError(msg) => {
-                ErrorResponse::new(422, "VALIDATION_ERROR", msg)
-            }
+            ApiError::NotFound(msg) => ErrorResponse::new(404, "NOT_FOUND", msg),
+            ApiError::AuthenticationFailed => ErrorResponse::new(
+                401,
+                "AUTHENTICATION_FAILED",
+                "Authentication credentials are invalid or missing",
+            ),
+            ApiError::Forbidden(msg) => ErrorResponse::new(403, "FORBIDDEN", msg),
+            ApiError::BadRequest(msg) => ErrorResponse::new(400, "BAD_REQUEST", msg),
+            ApiError::Conflict(msg) => ErrorResponse::new(409, "CONFLICT", msg),
+            ApiError::ValidationError(msg) => ErrorResponse::new(422, "VALIDATION_ERROR", msg),
             ApiError::ServiceUnavailable(msg) => {
                 ErrorResponse::new(503, "SERVICE_UNAVAILABLE", msg)
             }
-            ApiError::RateLimited(msg) => {
-                ErrorResponse::new(429, "RATE_LIMITED", msg)
-            }
+            ApiError::RateLimited(msg) => ErrorResponse::new(429, "RATE_LIMITED", msg),
         }
     }
 }
@@ -154,33 +135,15 @@ impl From<horcrux_common::Error> for ApiError {
             horcrux_common::Error::ContainerNotFound(id) => {
                 ApiError::NotFound(format!("Container '{}' not found", id))
             }
-            horcrux_common::Error::InvalidConfig(msg) => {
-                ApiError::ValidationError(msg)
-            }
-            horcrux_common::Error::Validation(msg) => {
-                ApiError::ValidationError(msg)
-            }
-            horcrux_common::Error::AuthenticationFailed => {
-                ApiError::AuthenticationFailed
-            }
-            horcrux_common::Error::InvalidSession => {
-                ApiError::AuthenticationFailed
-            }
-            horcrux_common::Error::System(msg) => {
-                ApiError::Internal(msg)
-            }
-            horcrux_common::Error::Io(e) => {
-                ApiError::Internal(format!("I/O error: {}", e))
-            }
-            horcrux_common::Error::NotFound(msg) => {
-                ApiError::NotFound(msg)
-            }
-            horcrux_common::Error::AlreadyExists(msg) => {
-                ApiError::Conflict(msg)
-            }
-            horcrux_common::Error::Internal(msg) => {
-                ApiError::Internal(msg)
-            }
+            horcrux_common::Error::InvalidConfig(msg) => ApiError::ValidationError(msg),
+            horcrux_common::Error::Validation(msg) => ApiError::ValidationError(msg),
+            horcrux_common::Error::AuthenticationFailed => ApiError::AuthenticationFailed,
+            horcrux_common::Error::InvalidSession => ApiError::AuthenticationFailed,
+            horcrux_common::Error::System(msg) => ApiError::Internal(msg),
+            horcrux_common::Error::Io(e) => ApiError::Internal(format!("I/O error: {}", e)),
+            horcrux_common::Error::NotFound(msg) => ApiError::NotFound(msg),
+            horcrux_common::Error::AlreadyExists(msg) => ApiError::Conflict(msg),
+            horcrux_common::Error::Internal(msg) => ApiError::Internal(msg),
         }
     }
 }
@@ -218,7 +181,10 @@ impl ApiError {
 
     #[allow(dead_code)]
     pub fn permission_denied(resource: impl Into<String>) -> Self {
-        ApiError::Forbidden(format!("Permission denied for resource: {}", resource.into()))
+        ApiError::Forbidden(format!(
+            "Permission denied for resource: {}",
+            resource.into()
+        ))
     }
 
     #[allow(dead_code)]
@@ -233,7 +199,11 @@ impl ApiError {
 
     #[allow(dead_code)]
     pub fn service_error(service: impl Into<String>, reason: impl Into<String>) -> Self {
-        ApiError::ServiceUnavailable(format!("{} is unavailable: {}", service.into(), reason.into()))
+        ApiError::ServiceUnavailable(format!(
+            "{} is unavailable: {}",
+            service.into(),
+            reason.into()
+        ))
     }
 }
 

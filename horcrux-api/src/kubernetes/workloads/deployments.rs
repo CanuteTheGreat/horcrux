@@ -65,11 +65,7 @@ pub async fn scale_deployment(
 
 /// Restart a deployment by updating its annotation
 #[cfg(feature = "kubernetes")]
-pub async fn restart_deployment(
-    client: &K8sClient,
-    namespace: &str,
-    name: &str,
-) -> K8sResult<()> {
+pub async fn restart_deployment(client: &K8sClient, namespace: &str, name: &str) -> K8sResult<()> {
     use k8s_openapi::api::apps::v1::Deployment;
     use kube::api::{Api, Patch, PatchParams};
 
@@ -97,11 +93,7 @@ pub async fn restart_deployment(
 
 /// Delete a deployment
 #[cfg(feature = "kubernetes")]
-pub async fn delete_deployment(
-    client: &K8sClient,
-    namespace: &str,
-    name: &str,
-) -> K8sResult<()> {
+pub async fn delete_deployment(client: &K8sClient, namespace: &str, name: &str) -> K8sResult<()> {
     use k8s_openapi::api::apps::v1::Deployment;
     use kube::api::{Api, DeleteParams};
 
@@ -170,9 +162,8 @@ pub async fn rollback_deployment(
         rs_with_revision.get(1)
     };
 
-    let (_, target_rs) = target_rs.ok_or_else(|| {
-        K8sError::Internal("No previous revision found for rollback".to_string())
-    })?;
+    let (_, target_rs) = target_rs
+        .ok_or_else(|| K8sError::Internal("No previous revision found for rollback".to_string()))?;
 
     // Get the template from the target replicaset
     let template = target_rs
@@ -202,10 +193,7 @@ fn deployment_to_info(deployment: k8s_openapi::api::apps::v1::Deployment) -> Dep
     let spec = deployment.spec.unwrap_or_default();
     let status = deployment.status.unwrap_or_default();
 
-    let selector = spec
-        .selector
-        .match_labels
-        .unwrap_or_default();
+    let selector = spec.selector.match_labels.unwrap_or_default();
 
     let strategy = spec
         .strategy
@@ -222,9 +210,7 @@ fn deployment_to_info(deployment: k8s_openapi::api::apps::v1::Deployment) -> Dep
         labels: metadata.labels.unwrap_or_default(),
         selector,
         strategy,
-        created_at: metadata
-            .creation_timestamp
-            .map(|t| t.0.to_rfc3339()),
+        created_at: metadata.creation_timestamp.map(|t| t.0.to_rfc3339()),
     }
 }
 
@@ -234,7 +220,9 @@ pub async fn list_deployments(
     _client: &K8sClient,
     _namespace: &str,
 ) -> K8sResult<Vec<DeploymentInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -243,7 +231,9 @@ pub async fn get_deployment(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<DeploymentInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -253,7 +243,9 @@ pub async fn scale_deployment(
     _name: &str,
     _replicas: i32,
 ) -> K8sResult<DeploymentInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -262,7 +254,9 @@ pub async fn restart_deployment(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -271,7 +265,9 @@ pub async fn delete_deployment(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -281,5 +277,7 @@ pub async fn rollback_deployment(
     _name: &str,
     _revision: Option<i64>,
 ) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }

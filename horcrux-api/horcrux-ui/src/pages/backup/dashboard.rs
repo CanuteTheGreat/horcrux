@@ -1,9 +1,8 @@
-use leptos::*;
 use crate::api::{
-    VmBackup, BackupJob, QuotaSummary, VmTemplate,
-    get_backups, get_backup_jobs, get_snapshot_quota_summary,
-    get_templates, BackupStatus
+    get_backup_jobs, get_backups, get_snapshot_quota_summary, get_templates, BackupJob,
+    BackupStatus, QuotaSummary, VmBackup, VmTemplate,
 };
+use leptos::*;
 
 #[component]
 pub fn BackupDashboard() -> impl IntoView {
@@ -69,14 +68,12 @@ pub fn BackupDashboard() -> impl IntoView {
         std::time::Duration::from_secs(30),
     );
 
-    let get_status_color = move |status: &BackupStatus| {
-        match status {
-            BackupStatus::Completed => "bg-green-100 text-green-800",
-            BackupStatus::Running => "bg-blue-100 text-blue-800",
-            BackupStatus::Pending => "bg-yellow-100 text-yellow-800",
-            BackupStatus::Failed => "bg-red-100 text-red-800",
-            BackupStatus::Cancelled => "bg-gray-100 text-gray-800",
-        }
+    let get_status_color = move |status: &BackupStatus| match status {
+        BackupStatus::Completed => "bg-green-100 text-green-800",
+        BackupStatus::Running => "bg-blue-100 text-blue-800",
+        BackupStatus::Pending => "bg-yellow-100 text-yellow-800",
+        BackupStatus::Failed => "bg-red-100 text-red-800",
+        BackupStatus::Cancelled => "bg-gray-100 text-gray-800",
     };
 
     let format_bytes = move |bytes: u64| {

@@ -1,7 +1,6 @@
 ///! Prometheus metrics exporter
 ///!
 ///! Exposes Horcrux metrics in Prometheus format
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -40,7 +39,13 @@ impl PrometheusExporter {
     }
 
     /// Register a counter metric
-    pub async fn counter(&self, name: &str, help: &str, value: f64, labels: HashMap<String, String>) {
+    pub async fn counter(
+        &self,
+        name: &str,
+        help: &str,
+        value: f64,
+        labels: HashMap<String, String>,
+    ) {
         let metric = Metric {
             name: format!("{}_{}", self.prefix, name),
             help: help.to_string(),
@@ -75,7 +80,8 @@ impl PrometheusExporter {
         // Group metrics by name
         let mut grouped: HashMap<String, Vec<&Metric>> = HashMap::new();
         for metric in metrics.iter() {
-            grouped.entry(metric.name.clone())
+            grouped
+                .entry(metric.name.clone())
                 .or_insert_with(Vec::new)
                 .push(metric);
         }
@@ -101,8 +107,7 @@ impl PrometheusExporter {
                     if labels_str.is_empty() {
                         output.push_str(&format!("{} {}\n", name, metric.value));
                     } else {
-                        output.push_str(&format!("{}{{{}}} {}\n",
-                            name, labels_str, metric.value));
+                        output.push_str(&format!("{}{{{}}} {}\n", name, labels_str, metric.value));
                     }
                 }
 
@@ -119,7 +124,8 @@ impl PrometheusExporter {
             return String::new();
         }
 
-        labels.iter()
+        labels
+            .iter()
             .map(|(k, v)| format!("{}=\"{}\"", k, v))
             .collect::<Vec<_>>()
             .join(",")
@@ -136,58 +142,186 @@ impl PrometheusExporter {
         self.clear().await;
 
         // VM metrics
-        self.gauge("vm_count", "Total number of VMs", 10.0, HashMap::new()).await;
-        self.gauge("vm_running", "Number of running VMs", 7.0, HashMap::new()).await;
+        self.gauge("vm_count", "Total number of VMs", 10.0, HashMap::new())
+            .await;
+        self.gauge("vm_running", "Number of running VMs", 7.0, HashMap::new())
+            .await;
 
         // CPU metrics
         let mut cpu_labels = HashMap::new();
         cpu_labels.insert("node".to_string(), "node1".to_string());
-        self.gauge("cpu_usage_percent", "CPU usage percentage", 45.5, cpu_labels.clone()).await;
+        self.gauge(
+            "cpu_usage_percent",
+            "CPU usage percentage",
+            45.5,
+            cpu_labels.clone(),
+        )
+        .await;
 
         // Memory metrics
-        self.gauge("memory_total_bytes", "Total memory in bytes", 64_000_000_000.0, cpu_labels.clone()).await;
-        self.gauge("memory_used_bytes", "Used memory in bytes", 32_000_000_000.0, cpu_labels.clone()).await;
+        self.gauge(
+            "memory_total_bytes",
+            "Total memory in bytes",
+            64_000_000_000.0,
+            cpu_labels.clone(),
+        )
+        .await;
+        self.gauge(
+            "memory_used_bytes",
+            "Used memory in bytes",
+            32_000_000_000.0,
+            cpu_labels.clone(),
+        )
+        .await;
 
         // Storage metrics
         let mut storage_labels = HashMap::new();
         storage_labels.insert("pool".to_string(), "local".to_string());
         storage_labels.insert("type".to_string(), "zfs".to_string());
-        self.gauge("storage_total_bytes", "Total storage in bytes", 1_000_000_000_000.0, storage_labels.clone()).await;
-        self.gauge("storage_used_bytes", "Used storage in bytes", 500_000_000_000.0, storage_labels.clone()).await;
+        self.gauge(
+            "storage_total_bytes",
+            "Total storage in bytes",
+            1_000_000_000_000.0,
+            storage_labels.clone(),
+        )
+        .await;
+        self.gauge(
+            "storage_used_bytes",
+            "Used storage in bytes",
+            500_000_000_000.0,
+            storage_labels.clone(),
+        )
+        .await;
 
         // Network metrics
         let mut net_labels = HashMap::new();
         net_labels.insert("interface".to_string(), "vmbr0".to_string());
-        self.counter("network_rx_bytes_total", "Total received bytes", 1_234_567_890.0, net_labels.clone()).await;
-        self.counter("network_tx_bytes_total", "Total transmitted bytes", 9_876_543_210.0, net_labels.clone()).await;
+        self.counter(
+            "network_rx_bytes_total",
+            "Total received bytes",
+            1_234_567_890.0,
+            net_labels.clone(),
+        )
+        .await;
+        self.counter(
+            "network_tx_bytes_total",
+            "Total transmitted bytes",
+            9_876_543_210.0,
+            net_labels.clone(),
+        )
+        .await;
 
         // Cluster metrics
-        self.gauge("cluster_nodes_total", "Total cluster nodes", 3.0, HashMap::new()).await;
-        self.gauge("cluster_nodes_online", "Online cluster nodes", 3.0, HashMap::new()).await;
-        self.gauge("cluster_quorate", "Cluster has quorum (1=yes, 0=no)", 1.0, HashMap::new()).await;
+        self.gauge(
+            "cluster_nodes_total",
+            "Total cluster nodes",
+            3.0,
+            HashMap::new(),
+        )
+        .await;
+        self.gauge(
+            "cluster_nodes_online",
+            "Online cluster nodes",
+            3.0,
+            HashMap::new(),
+        )
+        .await;
+        self.gauge(
+            "cluster_quorate",
+            "Cluster has quorum (1=yes, 0=no)",
+            1.0,
+            HashMap::new(),
+        )
+        .await;
 
         // Migration metrics
-        self.counter("migrations_total", "Total migrations performed", 25.0, HashMap::new()).await;
-        self.gauge("migrations_active", "Currently active migrations", 0.0, HashMap::new()).await;
+        self.counter(
+            "migrations_total",
+            "Total migrations performed",
+            25.0,
+            HashMap::new(),
+        )
+        .await;
+        self.gauge(
+            "migrations_active",
+            "Currently active migrations",
+            0.0,
+            HashMap::new(),
+        )
+        .await;
 
         // Backup metrics
-        self.counter("backups_total", "Total backups created", 150.0, HashMap::new()).await;
-        self.gauge("backup_jobs_active", "Active backup jobs", 1.0, HashMap::new()).await;
+        self.counter(
+            "backups_total",
+            "Total backups created",
+            150.0,
+            HashMap::new(),
+        )
+        .await;
+        self.gauge(
+            "backup_jobs_active",
+            "Active backup jobs",
+            1.0,
+            HashMap::new(),
+        )
+        .await;
 
         // HA metrics
-        self.gauge("ha_resources_total", "Total HA resources", 5.0, HashMap::new()).await;
-        self.gauge("ha_resources_started", "HA resources in started state", 5.0, HashMap::new()).await;
-        self.gauge("ha_resources_error", "HA resources in error state", 0.0, HashMap::new()).await;
+        self.gauge(
+            "ha_resources_total",
+            "Total HA resources",
+            5.0,
+            HashMap::new(),
+        )
+        .await;
+        self.gauge(
+            "ha_resources_started",
+            "HA resources in started state",
+            5.0,
+            HashMap::new(),
+        )
+        .await;
+        self.gauge(
+            "ha_resources_error",
+            "HA resources in error state",
+            0.0,
+            HashMap::new(),
+        )
+        .await;
     }
 
     /// Export metrics for specific VM
-    pub async fn collect_vm_metrics(&self, vm_id: u32, cpu_percent: f64, memory_bytes: u64, disk_io_bytes: u64) {
+    pub async fn collect_vm_metrics(
+        &self,
+        vm_id: u32,
+        cpu_percent: f64,
+        memory_bytes: u64,
+        disk_io_bytes: u64,
+    ) {
         let mut labels = HashMap::new();
         labels.insert("vm_id".to_string(), vm_id.to_string());
 
-        self.gauge("vm_cpu_usage_percent", "VM CPU usage", cpu_percent, labels.clone()).await;
-        self.gauge("vm_memory_bytes", "VM memory usage", memory_bytes as f64, labels.clone()).await;
-        self.counter("vm_disk_io_bytes_total", "VM disk I/O bytes", disk_io_bytes as f64, labels).await;
+        self.gauge(
+            "vm_cpu_usage_percent",
+            "VM CPU usage",
+            cpu_percent,
+            labels.clone(),
+        )
+        .await;
+        self.gauge(
+            "vm_memory_bytes",
+            "VM memory usage",
+            memory_bytes as f64,
+            labels.clone(),
+        )
+        .await;
+        self.counter(
+            "vm_disk_io_bytes_total",
+            "VM disk I/O bytes",
+            disk_io_bytes as f64,
+            labels,
+        )
+        .await;
     }
 }
 
@@ -215,8 +349,12 @@ mod tests {
         let mut labels = HashMap::new();
         labels.insert("node".to_string(), "node1".to_string());
 
-        exporter.gauge("cpu_usage", "CPU usage percentage", 75.5, labels).await;
-        exporter.counter("requests_total", "Total requests", 12345.0, HashMap::new()).await;
+        exporter
+            .gauge("cpu_usage", "CPU usage percentage", 75.5, labels)
+            .await;
+        exporter
+            .counter("requests_total", "Total requests", 12345.0, HashMap::new())
+            .await;
 
         let output = exporter.export().await;
 
@@ -248,7 +386,9 @@ mod tests {
     async fn test_clear_metrics() {
         let exporter = PrometheusExporter::new("test");
 
-        exporter.gauge("test_metric", "Test", 1.0, HashMap::new()).await;
+        exporter
+            .gauge("test_metric", "Test", 1.0, HashMap::new())
+            .await;
 
         let output1 = exporter.export().await;
         assert!(!output1.is_empty());

@@ -1,12 +1,12 @@
 //! SDN (Software Defined Networking) Module Tests
 //! Tests for zones, VNets, subnets, IPAM, and network policies
 
-use horcrux_api::sdn::{
-    SdnManager, Zone, ZoneType, VNet, VNetType, Subnet, DhcpRange, IpAllocation,
-};
 use horcrux_api::sdn::policy::{
-    NetworkPolicy, NetworkPolicyManager, PolicyType, LabelSelector, LabelExpression,
-    LabelOperator, IngressRule, EgressRule, PeerSelector, NetworkPolicyPort, Protocol,
+    EgressRule, IngressRule, LabelExpression, LabelOperator, LabelSelector, NetworkPolicy,
+    NetworkPolicyManager, NetworkPolicyPort, PeerSelector, PolicyType, Protocol,
+};
+use horcrux_api::sdn::{
+    DhcpRange, IpAllocation, SdnManager, Subnet, VNet, VNetType, Zone, ZoneType,
 };
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -275,7 +275,8 @@ fn test_list_vnets_in_zone() {
         zone_type: ZoneType::Simple,
         description: "".to_string(),
         nodes: vec![],
-    }).unwrap();
+    })
+    .unwrap();
 
     sdn.create_zone(Zone {
         id: "zone2".to_string(),
@@ -283,7 +284,8 @@ fn test_list_vnets_in_zone() {
         zone_type: ZoneType::Simple,
         description: "".to_string(),
         nodes: vec![],
-    }).unwrap();
+    })
+    .unwrap();
 
     // Create VNets in each zone
     sdn.create_vnet(VNet {
@@ -294,7 +296,8 @@ fn test_list_vnets_in_zone() {
         vnet_type: VNetType::Vlan,
         subnets: vec![],
         bridge: "vmbr0".to_string(),
-    }).unwrap();
+    })
+    .unwrap();
 
     sdn.create_vnet(VNet {
         id: "vnet-z1-2".to_string(),
@@ -304,7 +307,8 @@ fn test_list_vnets_in_zone() {
         vnet_type: VNetType::Vlan,
         subnets: vec![],
         bridge: "vmbr0".to_string(),
-    }).unwrap();
+    })
+    .unwrap();
 
     sdn.create_vnet(VNet {
         id: "vnet-z2-1".to_string(),
@@ -314,7 +318,8 @@ fn test_list_vnets_in_zone() {
         vnet_type: VNetType::Vlan,
         subnets: vec![],
         bridge: "vmbr1".to_string(),
-    }).unwrap();
+    })
+    .unwrap();
 
     assert_eq!(sdn.list_vnets().len(), 3);
     assert_eq!(sdn.list_vnets_in_zone("zone1").len(), 2);
@@ -334,7 +339,8 @@ fn test_create_subnet() {
         zone_type: ZoneType::Simple,
         description: "".to_string(),
         nodes: vec![],
-    }).unwrap();
+    })
+    .unwrap();
 
     sdn.create_vnet(VNet {
         id: "vnet1".to_string(),
@@ -344,7 +350,8 @@ fn test_create_subnet() {
         vnet_type: VNetType::Vlan,
         subnets: vec![],
         bridge: "vmbr0".to_string(),
-    }).unwrap();
+    })
+    .unwrap();
 
     let subnet = Subnet {
         id: "subnet1".to_string(),
@@ -388,7 +395,8 @@ fn test_invalid_cidr() {
         zone_type: ZoneType::Simple,
         description: "".to_string(),
         nodes: vec![],
-    }).unwrap();
+    })
+    .unwrap();
 
     sdn.create_vnet(VNet {
         id: "vnet1".to_string(),
@@ -398,7 +406,8 @@ fn test_invalid_cidr() {
         vnet_type: VNetType::Vlan,
         subnets: vec![],
         bridge: "vmbr0".to_string(),
-    }).unwrap();
+    })
+    .unwrap();
 
     // Missing prefix
     let subnet = Subnet {
@@ -426,7 +435,8 @@ fn test_ip_allocation() {
         zone_type: ZoneType::Simple,
         description: "".to_string(),
         nodes: vec![],
-    }).unwrap();
+    })
+    .unwrap();
 
     sdn.create_vnet(VNet {
         id: "vnet1".to_string(),
@@ -436,7 +446,8 @@ fn test_ip_allocation() {
         vnet_type: VNetType::Vlan,
         subnets: vec![],
         bridge: "vmbr0".to_string(),
-    }).unwrap();
+    })
+    .unwrap();
 
     sdn.create_subnet(Subnet {
         id: "subnet1".to_string(),
@@ -445,7 +456,8 @@ fn test_ip_allocation() {
         gateway: Some("10.0.1.1".parse().unwrap()),
         dns_servers: vec![],
         dhcp_range: None,
-    }).unwrap();
+    })
+    .unwrap();
 
     // Allocate IP
     let allocation = sdn.allocate_ip("subnet1", Some("vm-100".to_string()), None);
@@ -467,7 +479,8 @@ fn test_preferred_ip_allocation() {
         zone_type: ZoneType::Simple,
         description: "".to_string(),
         nodes: vec![],
-    }).unwrap();
+    })
+    .unwrap();
 
     sdn.create_vnet(VNet {
         id: "vnet1".to_string(),
@@ -477,7 +490,8 @@ fn test_preferred_ip_allocation() {
         vnet_type: VNetType::Vlan,
         subnets: vec![],
         bridge: "vmbr0".to_string(),
-    }).unwrap();
+    })
+    .unwrap();
 
     sdn.create_subnet(Subnet {
         id: "subnet1".to_string(),
@@ -486,7 +500,8 @@ fn test_preferred_ip_allocation() {
         gateway: None,
         dns_servers: vec![],
         dhcp_range: None,
-    }).unwrap();
+    })
+    .unwrap();
 
     // Allocate specific IP
     let preferred: IpAddr = "10.0.1.50".parse().unwrap();
@@ -508,7 +523,8 @@ fn test_ip_release() {
         zone_type: ZoneType::Simple,
         description: "".to_string(),
         nodes: vec![],
-    }).unwrap();
+    })
+    .unwrap();
 
     sdn.create_vnet(VNet {
         id: "vnet1".to_string(),
@@ -518,7 +534,8 @@ fn test_ip_release() {
         vnet_type: VNetType::Vlan,
         subnets: vec![],
         bridge: "vmbr0".to_string(),
-    }).unwrap();
+    })
+    .unwrap();
 
     sdn.create_subnet(Subnet {
         id: "subnet1".to_string(),
@@ -527,7 +544,8 @@ fn test_ip_release() {
         gateway: None,
         dns_servers: vec![],
         dhcp_range: None,
-    }).unwrap();
+    })
+    .unwrap();
 
     // Allocate and release
     let alloc = sdn.allocate_ip("subnet1", None, None).unwrap();
@@ -549,7 +567,8 @@ fn test_duplicate_ip_allocation() {
         zone_type: ZoneType::Simple,
         description: "".to_string(),
         nodes: vec![],
-    }).unwrap();
+    })
+    .unwrap();
 
     sdn.create_vnet(VNet {
         id: "vnet1".to_string(),
@@ -559,7 +578,8 @@ fn test_duplicate_ip_allocation() {
         vnet_type: VNetType::Vlan,
         subnets: vec![],
         bridge: "vmbr0".to_string(),
-    }).unwrap();
+    })
+    .unwrap();
 
     sdn.create_subnet(Subnet {
         id: "subnet1".to_string(),
@@ -568,7 +588,8 @@ fn test_duplicate_ip_allocation() {
         gateway: None,
         dns_servers: vec![],
         dhcp_range: None,
-    }).unwrap();
+    })
+    .unwrap();
 
     // Allocate IP
     let alloc = sdn.allocate_ip("subnet1", None, None).unwrap();
@@ -664,19 +685,21 @@ fn test_list_policies_in_namespace() {
 
     // Create policies in different namespaces
     for (id, ns) in [("p1", "ns1"), ("p2", "ns1"), ("p3", "ns2")] {
-        manager.create_policy(NetworkPolicy {
-            id: id.to_string(),
-            name: format!("Policy {}", id),
-            namespace: ns.to_string(),
-            pod_selector: LabelSelector {
-                match_labels: HashMap::new(),
-                match_expressions: vec![],
-            },
-            policy_types: vec![],
-            ingress: vec![],
-            egress: vec![],
-            enabled: true,
-        }).unwrap();
+        manager
+            .create_policy(NetworkPolicy {
+                id: id.to_string(),
+                name: format!("Policy {}", id),
+                namespace: ns.to_string(),
+                pod_selector: LabelSelector {
+                    match_labels: HashMap::new(),
+                    match_expressions: vec![],
+                },
+                policy_types: vec![],
+                ingress: vec![],
+                egress: vec![],
+                enabled: true,
+            })
+            .unwrap();
     }
 
     assert_eq!(manager.list_policies_in_namespace("ns1").len(), 2);

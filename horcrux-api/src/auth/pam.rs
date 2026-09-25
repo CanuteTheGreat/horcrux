@@ -4,11 +4,10 @@
 ///! 1. Direct PAM conversation (requires pam-sys crate - not included)
 ///! 2. SSH-based verification (using system's SSH with PAM)
 ///! 3. Shadow file verification (requires root privileges)
-
 use horcrux_common::Result;
-use tokio::process::Command;
-use tracing::{info, warn, error};
 use std::process::Stdio;
+use tokio::process::Command;
+use tracing::{error, info, warn};
 
 /// PAM authenticator
 pub struct PamAuthenticator {
@@ -45,7 +44,10 @@ impl PamAuthenticator {
             }
 
             // Method 2: Try using passwd-based verification (for local users)
-            if let Ok(result) = self.authenticate_with_passwd_check(username, password).await {
+            if let Ok(result) = self
+                .authenticate_with_passwd_check(username, password)
+                .await
+            {
                 return Ok(result);
             }
 
@@ -92,19 +94,26 @@ impl PamAuthenticator {
                 let result = child.wait().await;
                 match result {
                     Ok(status) => {
-                        info!("PAM authentication via pamtester: success={}", status.success());
+                        info!(
+                            "PAM authentication via pamtester: success={}",
+                            status.success()
+                        );
                         Ok(status.success())
                     }
                     Err(e) => {
                         warn!("pamtester execution failed: {}", e);
-                        Err(horcrux_common::Error::System("PAM authentication failed".to_string()))
+                        Err(horcrux_common::Error::System(
+                            "PAM authentication failed".to_string(),
+                        ))
                     }
                 }
             }
             Err(e) => {
                 // pamtester not available
                 warn!("pamtester not available: {}", e);
-                Err(horcrux_common::Error::System("pamtester not available".to_string()))
+                Err(horcrux_common::Error::System(
+                    "pamtester not available".to_string(),
+                ))
             }
         }
     }
@@ -137,7 +146,9 @@ impl PamAuthenticator {
             }
             Ok(_) | Err(_) => {
                 // Python method failed (missing spwd, no permissions, etc.)
-                Err(horcrux_common::Error::System("Shadow password check not available".to_string()))
+                Err(horcrux_common::Error::System(
+                    "Shadow password check not available".to_string(),
+                ))
             }
         }
     }
@@ -154,7 +165,10 @@ impl PamAuthenticator {
 
         match output {
             Ok(output) if output.status.success() => {
-                warn!("User {} exists but password verification not available - denying access", username);
+                warn!(
+                    "User {} exists but password verification not available - denying access",
+                    username
+                );
                 // For security, return false even if user exists
                 // Without proper PAM, we can't verify the password
                 Ok(false)
@@ -169,10 +183,7 @@ impl PamAuthenticator {
     /// Check if PAM authentication is available on this system
     pub async fn check_pam_available() -> bool {
         // Check if pamtester or python with spwd is available
-        let pamtester_check = Command::new("pamtester")
-            .arg("--help")
-            .output()
-            .await;
+        let pamtester_check = Command::new("pamtester").arg("--help").output().await;
 
         if pamtester_check.is_ok() {
             return true;
@@ -211,7 +222,8 @@ session    required     pam_limits.so
             Err(e) => {
                 error!("Failed to create PAM configuration: {}", e);
                 Err(horcrux_common::Error::System(format!(
-                    "Failed to create PAM configuration: {}. Run as root to enable PAM.", e
+                    "Failed to create PAM configuration: {}. Run as root to enable PAM.",
+                    e
                 )))
             }
         }

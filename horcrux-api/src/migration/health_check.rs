@@ -1,12 +1,12 @@
 #![allow(dead_code)]
 
-use serde::{Deserialize, Serialize};
-use std::time::Duration;
-use tracing::{debug, error, info};
-use chrono::{DateTime, Utc};
-use tokio::process::Command;
-use std::path::PathBuf;
 use super::qemu_monitor::QemuMonitor;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::time::Duration;
+use tokio::process::Command;
+use tracing::{debug, error, info};
 
 /// Health check result
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -142,12 +142,22 @@ impl HealthCheckReport {
         self.total_duration_ms = (self.completed - self.started).num_milliseconds() as u64;
 
         // Determine overall result
-        let failed = self.checks.iter().any(|c| c.result == HealthCheckResult::Failed);
-        let timeout = self.checks.iter().any(|c| c.result == HealthCheckResult::Timeout);
+        let failed = self
+            .checks
+            .iter()
+            .any(|c| c.result == HealthCheckResult::Failed);
+        let timeout = self
+            .checks
+            .iter()
+            .any(|c| c.result == HealthCheckResult::Timeout);
 
         self.overall_result = if failed || timeout {
             HealthCheckResult::Failed
-        } else if self.checks.iter().all(|c| c.result == HealthCheckResult::Passed) {
+        } else if self
+            .checks
+            .iter()
+            .all(|c| c.result == HealthCheckResult::Passed)
+        {
             HealthCheckResult::Passed
         } else {
             HealthCheckResult::Skipped
@@ -157,10 +167,26 @@ impl HealthCheckReport {
     /// Get summary statistics
     pub fn get_summary(&self) -> HealthCheckSummary {
         let total = self.checks.len();
-        let passed = self.checks.iter().filter(|c| c.result == HealthCheckResult::Passed).count();
-        let failed = self.checks.iter().filter(|c| c.result == HealthCheckResult::Failed).count();
-        let timeout = self.checks.iter().filter(|c| c.result == HealthCheckResult::Timeout).count();
-        let skipped = self.checks.iter().filter(|c| c.result == HealthCheckResult::Skipped).count();
+        let passed = self
+            .checks
+            .iter()
+            .filter(|c| c.result == HealthCheckResult::Passed)
+            .count();
+        let failed = self
+            .checks
+            .iter()
+            .filter(|c| c.result == HealthCheckResult::Failed)
+            .count();
+        let timeout = self
+            .checks
+            .iter()
+            .filter(|c| c.result == HealthCheckResult::Timeout)
+            .count();
+        let skipped = self
+            .checks
+            .iter()
+            .filter(|c| c.result == HealthCheckResult::Skipped)
+            .count();
 
         HealthCheckSummary {
             vm_id: self.vm_id,
@@ -284,22 +310,29 @@ impl HealthChecker {
                 .await?;
 
             if !output.status.success() {
-                return Err(horcrux_common::Error::System(
-                    format!("Failed to query VM state: {}", String::from_utf8_lossy(&output.stderr))
-                ));
+                return Err(horcrux_common::Error::System(format!(
+                    "Failed to query VM state: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )));
             }
 
             let state = String::from_utf8_lossy(&output.stdout).trim().to_string();
             Ok(state)
-        }).await {
+        })
+        .await
+        {
             Ok(Ok(state)) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
                 if state == "running" {
-                    HealthCheck::new(HealthCheckType::VmRunning)
-                        .passed(format!("VM {} is running (state: {})", vm_id, state), duration_ms)
+                    HealthCheck::new(HealthCheckType::VmRunning).passed(
+                        format!("VM {} is running (state: {})", vm_id, state),
+                        duration_ms,
+                    )
                 } else {
-                    HealthCheck::new(HealthCheckType::VmRunning)
-                        .failed(format!("VM {} is not running (state: {})", vm_id, state), duration_ms)
+                    HealthCheck::new(HealthCheckType::VmRunning).failed(
+                        format!("VM {} is not running (state: {})", vm_id, state),
+                        duration_ms,
+                    )
                 }
             }
             Ok(Err(e)) => {
@@ -309,8 +342,7 @@ impl HealthChecker {
             }
             Err(_) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
-                HealthCheck::new(HealthCheckType::VmRunning)
-                    .timeout(duration_ms)
+                HealthCheck::new(HealthCheckType::VmRunning).timeout(duration_ms)
             }
         }
     }
@@ -325,22 +357,28 @@ impl HealthChecker {
 
         if !qmp_socket.exists() {
             let duration_ms = start.elapsed().as_millis() as u64;
-            return HealthCheck::new(HealthCheckType::QemuResponsive)
-                .failed(format!("QMP socket not found: {:?}", qmp_socket), duration_ms);
+            return HealthCheck::new(HealthCheckType::QemuResponsive).failed(
+                format!("QMP socket not found: {:?}", qmp_socket),
+                duration_ms,
+            );
         }
 
         match tokio::time::timeout(self.timeout, async {
             let monitor = QemuMonitor::new(qmp_socket.clone());
             let status = monitor.query_status().await?;
             Ok::<_, horcrux_common::Error>(status)
-        }).await {
+        })
+        .await
+        {
             Ok(Ok(status)) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
-                HealthCheck::new(HealthCheckType::QemuResponsive)
-                    .passed(
-                        format!("QEMU monitor responsive for VM {} (status: {:?})", vm_id, status),
-                        duration_ms
-                    )
+                HealthCheck::new(HealthCheckType::QemuResponsive).passed(
+                    format!(
+                        "QEMU monitor responsive for VM {} (status: {:?})",
+                        vm_id, status
+                    ),
+                    duration_ms,
+                )
             }
             Ok(Err(e)) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
@@ -349,8 +387,7 @@ impl HealthChecker {
             }
             Err(_) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
-                HealthCheck::new(HealthCheckType::QemuResponsive)
-                    .timeout(duration_ms)
+                HealthCheck::new(HealthCheckType::QemuResponsive).timeout(duration_ms)
             }
         }
     }
@@ -370,9 +407,10 @@ impl HealthChecker {
                 .await?;
 
             if !output.status.success() {
-                return Err(horcrux_common::Error::System(
-                    format!("Failed to query memory stats: {}", String::from_utf8_lossy(&output.stderr))
-                ));
+                return Err(horcrux_common::Error::System(format!(
+                    "Failed to query memory stats: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )));
             }
 
             let stats_output = String::from_utf8_lossy(&output.stdout);
@@ -385,17 +423,23 @@ impl HealthChecker {
                 .and_then(|val| val.parse::<u64>().ok());
 
             Ok(actual_memory)
-        }).await {
+        })
+        .await
+        {
             Ok(Ok(Some(memory_kb))) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
                 let memory_mb = memory_kb / 1024;
-                HealthCheck::new(HealthCheckType::MemoryAllocation)
-                    .passed(format!("Memory allocated for VM {}: {} MB", vm_id, memory_mb), duration_ms)
+                HealthCheck::new(HealthCheckType::MemoryAllocation).passed(
+                    format!("Memory allocated for VM {}: {} MB", vm_id, memory_mb),
+                    duration_ms,
+                )
             }
             Ok(Ok(None)) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
-                HealthCheck::new(HealthCheckType::MemoryAllocation)
-                    .failed(format!("Could not parse memory stats for VM {}", vm_id), duration_ms)
+                HealthCheck::new(HealthCheckType::MemoryAllocation).failed(
+                    format!("Could not parse memory stats for VM {}", vm_id),
+                    duration_ms,
+                )
             }
             Ok(Err(e)) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
@@ -404,8 +448,7 @@ impl HealthChecker {
             }
             Err(_) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
-                HealthCheck::new(HealthCheckType::MemoryAllocation)
-                    .timeout(duration_ms)
+                HealthCheck::new(HealthCheckType::MemoryAllocation).timeout(duration_ms)
             }
         }
     }
@@ -425,31 +468,42 @@ impl HealthChecker {
                 .await?;
 
             if !output.status.success() {
-                return Err(horcrux_common::Error::System(
-                    format!("Failed to query vCPU info: {}", String::from_utf8_lossy(&output.stderr))
-                ));
+                return Err(horcrux_common::Error::System(format!(
+                    "Failed to query vCPU info: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )));
             }
 
             let vcpu_output = String::from_utf8_lossy(&output.stdout);
 
             // Count number of vCPUs (each starts with "VCPU:")
-            let vcpu_count = vcpu_output.lines().filter(|line| line.starts_with("VCPU:")).count();
+            let vcpu_count = vcpu_output
+                .lines()
+                .filter(|line| line.starts_with("VCPU:"))
+                .count();
 
             // Check if all vCPUs are running
-            let running_count = vcpu_output.lines()
+            let running_count = vcpu_output
+                .lines()
                 .filter(|line| line.contains("State:") && line.contains("running"))
                 .count();
 
             Ok((vcpu_count, running_count))
-        }).await {
+        })
+        .await
+        {
             Ok(Ok((total, running))) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
                 if running == total && total > 0 {
-                    HealthCheck::new(HealthCheckType::CpuAvailability)
-                        .passed(format!("All {} vCPUs available and running for VM {}", total, vm_id), duration_ms)
+                    HealthCheck::new(HealthCheckType::CpuAvailability).passed(
+                        format!("All {} vCPUs available and running for VM {}", total, vm_id),
+                        duration_ms,
+                    )
                 } else {
-                    HealthCheck::new(HealthCheckType::CpuAvailability)
-                        .failed(format!("Only {}/{} vCPUs running for VM {}", running, total, vm_id), duration_ms)
+                    HealthCheck::new(HealthCheckType::CpuAvailability).failed(
+                        format!("Only {}/{} vCPUs running for VM {}", running, total, vm_id),
+                        duration_ms,
+                    )
                 }
             }
             Ok(Err(e)) => {
@@ -459,8 +513,7 @@ impl HealthChecker {
             }
             Err(_) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
-                HealthCheck::new(HealthCheckType::CpuAvailability)
-                    .timeout(duration_ms)
+                HealthCheck::new(HealthCheckType::CpuAvailability).timeout(duration_ms)
             }
         }
     }
@@ -480,30 +533,38 @@ impl HealthChecker {
                 .await?;
 
             if !output.status.success() {
-                return Err(horcrux_common::Error::System(
-                    format!("Failed to query disk info: {}", String::from_utf8_lossy(&output.stderr))
-                ));
+                return Err(horcrux_common::Error::System(format!(
+                    "Failed to query disk info: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )));
             }
 
             let disk_output = String::from_utf8_lossy(&output.stdout);
 
             // Count disk devices (skip header lines)
-            let disk_count = disk_output.lines()
+            let disk_count = disk_output
+                .lines()
                 .skip(2) // Skip header and separator
                 .filter(|line| !line.trim().is_empty())
                 .count();
 
             Ok(disk_count)
-        }).await {
+        })
+        .await
+        {
             Ok(Ok(count)) if count > 0 => {
                 let duration_ms = start.elapsed().as_millis() as u64;
-                HealthCheck::new(HealthCheckType::DiskIO)
-                    .passed(format!("{} disk device(s) accessible for VM {}", count, vm_id), duration_ms)
+                HealthCheck::new(HealthCheckType::DiskIO).passed(
+                    format!("{} disk device(s) accessible for VM {}", count, vm_id),
+                    duration_ms,
+                )
             }
             Ok(Ok(_)) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
-                HealthCheck::new(HealthCheckType::DiskIO)
-                    .failed(format!("No disk devices found for VM {}", vm_id), duration_ms)
+                HealthCheck::new(HealthCheckType::DiskIO).failed(
+                    format!("No disk devices found for VM {}", vm_id),
+                    duration_ms,
+                )
             }
             Ok(Err(e)) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
@@ -512,8 +573,7 @@ impl HealthChecker {
             }
             Err(_) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
-                HealthCheck::new(HealthCheckType::DiskIO)
-                    .timeout(duration_ms)
+                HealthCheck::new(HealthCheckType::DiskIO).timeout(duration_ms)
             }
         }
     }
@@ -533,30 +593,38 @@ impl HealthChecker {
                 .await?;
 
             if !output.status.success() {
-                return Err(horcrux_common::Error::System(
-                    format!("Failed to query network interfaces: {}", String::from_utf8_lossy(&output.stderr))
-                ));
+                return Err(horcrux_common::Error::System(format!(
+                    "Failed to query network interfaces: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )));
             }
 
             let if_output = String::from_utf8_lossy(&output.stdout);
 
             // Count network interfaces (skip header lines)
-            let if_count = if_output.lines()
+            let if_count = if_output
+                .lines()
                 .skip(2) // Skip header and separator
                 .filter(|line| !line.trim().is_empty())
                 .count();
 
             Ok(if_count)
-        }).await {
+        })
+        .await
+        {
             Ok(Ok(count)) if count > 0 => {
                 let duration_ms = start.elapsed().as_millis() as u64;
-                HealthCheck::new(HealthCheckType::NetworkConnectivity)
-                    .passed(format!("{} network interface(s) attached to VM {}", count, vm_id), duration_ms)
+                HealthCheck::new(HealthCheckType::NetworkConnectivity).passed(
+                    format!("{} network interface(s) attached to VM {}", count, vm_id),
+                    duration_ms,
+                )
             }
             Ok(Ok(_)) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
-                HealthCheck::new(HealthCheckType::NetworkConnectivity)
-                    .failed(format!("No network interfaces found for VM {}", vm_id), duration_ms)
+                HealthCheck::new(HealthCheckType::NetworkConnectivity).failed(
+                    format!("No network interfaces found for VM {}", vm_id),
+                    duration_ms,
+                )
             }
             Ok(Err(e)) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
@@ -565,8 +633,7 @@ impl HealthChecker {
             }
             Err(_) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
-                HealthCheck::new(HealthCheckType::NetworkConnectivity)
-                    .timeout(duration_ms)
+                HealthCheck::new(HealthCheckType::NetworkConnectivity).timeout(duration_ms)
             }
         }
     }
@@ -581,7 +648,11 @@ impl HealthChecker {
 
         match tokio::time::timeout(self.timeout, async {
             let output = Command::new("virsh")
-                .args(["qemu-agent-command", &vm_name, "{\"execute\":\"guest-ping\"}"])
+                .args([
+                    "qemu-agent-command",
+                    &vm_name,
+                    "{\"execute\":\"guest-ping\"}",
+                ])
                 .output()
                 .await?;
 
@@ -594,33 +665,41 @@ impl HealthChecker {
                 if stderr.contains("not connected") || stderr.contains("not running") {
                     Ok(false) // Agent not available, but that's OK
                 } else {
-                    Err(horcrux_common::Error::System(
-                        format!("Guest agent error: {}", stderr)
-                    ))
+                    Err(horcrux_common::Error::System(format!(
+                        "Guest agent error: {}",
+                        stderr
+                    )))
                 }
             }
-        }).await {
+        })
+        .await
+        {
             Ok(Ok(true)) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
-                HealthCheck::new(HealthCheckType::GuestAgentResponsive)
-                    .passed(format!("Guest agent responsive for VM {}", vm_id), duration_ms)
+                HealthCheck::new(HealthCheckType::GuestAgentResponsive).passed(
+                    format!("Guest agent responsive for VM {}", vm_id),
+                    duration_ms,
+                )
             }
             Ok(Ok(false)) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
                 // Guest agent not available is Skipped, not Failed
-                HealthCheck::new(HealthCheckType::GuestAgentResponsive)
-                    .passed(format!("Guest agent not installed on VM {} (optional)", vm_id), duration_ms)
+                HealthCheck::new(HealthCheckType::GuestAgentResponsive).passed(
+                    format!("Guest agent not installed on VM {} (optional)", vm_id),
+                    duration_ms,
+                )
             }
             Ok(Err(e)) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
                 // Treat as warning, not failure
-                HealthCheck::new(HealthCheckType::GuestAgentResponsive)
-                    .passed(format!("Guest agent check completed with warning: {}", e), duration_ms)
+                HealthCheck::new(HealthCheckType::GuestAgentResponsive).passed(
+                    format!("Guest agent check completed with warning: {}", e),
+                    duration_ms,
+                )
             }
             Err(_) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
-                HealthCheck::new(HealthCheckType::GuestAgentResponsive)
-                    .timeout(duration_ms)
+                HealthCheck::new(HealthCheckType::GuestAgentResponsive).timeout(duration_ms)
             }
         }
     }
@@ -632,7 +711,10 @@ impl HealthChecker {
         health_endpoint: String,
     ) -> HealthCheck {
         let start = std::time::Instant::now();
-        info!("Checking application health for VM {} at {}", vm_id, health_endpoint);
+        info!(
+            "Checking application health for VM {} at {}",
+            vm_id, health_endpoint
+        );
 
         // Make actual HTTP request to health endpoint
         match tokio::time::timeout(self.timeout, async {
@@ -640,30 +722,34 @@ impl HealthChecker {
                 .timeout(Duration::from_secs(10))
                 .build()?;
 
-            let response = client.get(&health_endpoint)
-                .send()
-                .await?;
+            let response = client.get(&health_endpoint).send().await?;
 
             let status = response.status();
             let status_code = status.as_u16();
 
             Ok::<_, reqwest::Error>((status_code, status.is_success()))
-        }).await {
+        })
+        .await
+        {
             Ok(Ok((status_code, true))) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
-                HealthCheck::new(HealthCheckType::ApplicationHealth)
-                    .passed(
-                        format!("Application health check passed for VM {} (HTTP {})", vm_id, status_code),
-                        duration_ms,
-                    )
+                HealthCheck::new(HealthCheckType::ApplicationHealth).passed(
+                    format!(
+                        "Application health check passed for VM {} (HTTP {})",
+                        vm_id, status_code
+                    ),
+                    duration_ms,
+                )
             }
             Ok(Ok((status_code, false))) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
-                HealthCheck::new(HealthCheckType::ApplicationHealth)
-                    .failed(
-                        format!("Application health check failed for VM {} (HTTP {})", vm_id, status_code),
-                        duration_ms,
-                    )
+                HealthCheck::new(HealthCheckType::ApplicationHealth).failed(
+                    format!(
+                        "Application health check failed for VM {} (HTTP {})",
+                        vm_id, status_code
+                    ),
+                    duration_ms,
+                )
             }
             Ok(Err(e)) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
@@ -672,8 +758,7 @@ impl HealthChecker {
             }
             Err(_) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
-                HealthCheck::new(HealthCheckType::ApplicationHealth)
-                    .timeout(duration_ms)
+                HealthCheck::new(HealthCheckType::ApplicationHealth).timeout(duration_ms)
             }
         }
     }
@@ -699,8 +784,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_check_passed() {
-        let check = HealthCheck::new(HealthCheckType::VmRunning)
-            .passed("VM is running".to_string(), 100);
+        let check =
+            HealthCheck::new(HealthCheckType::VmRunning).passed("VM is running".to_string(), 100);
 
         assert_eq!(check.result, HealthCheckResult::Passed);
         assert_eq!(check.duration_ms, 100);
@@ -719,11 +804,9 @@ mod tests {
     #[tokio::test]
     async fn test_health_checker_run() {
         let checker = HealthChecker::new();
-        let report = checker.run_checks(
-            100,
-            "migration-123".to_string(),
-            "node2".to_string(),
-        ).await;
+        let report = checker
+            .run_checks(100, "migration-123".to_string(), "node2".to_string())
+            .await;
 
         assert_eq!(report.vm_id, 100);
         assert!(!report.checks.is_empty());
@@ -734,11 +817,9 @@ mod tests {
     #[tokio::test]
     async fn test_health_check_summary() {
         let checker = HealthChecker::new();
-        let report = checker.run_checks(
-            100,
-            "migration-123".to_string(),
-            "node2".to_string(),
-        ).await;
+        let report = checker
+            .run_checks(100, "migration-123".to_string(), "node2".to_string())
+            .await;
 
         let summary = report.get_summary();
         assert_eq!(summary.vm_id, 100);
@@ -750,19 +831,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_check_report_finalize() {
-        let mut report = HealthCheckReport::new(
-            100,
-            "migration-123".to_string(),
-            "node2".to_string(),
-        );
+        let mut report =
+            HealthCheckReport::new(100, "migration-123".to_string(), "node2".to_string());
 
         report.add_check(
-            HealthCheck::new(HealthCheckType::VmRunning)
-                .passed("VM running".to_string(), 100)
+            HealthCheck::new(HealthCheckType::VmRunning).passed("VM running".to_string(), 100),
         );
         report.add_check(
             HealthCheck::new(HealthCheckType::NetworkConnectivity)
-                .failed("Network down".to_string(), 50)
+                .failed("Network down".to_string(), 50),
         );
 
         report.finalize();
@@ -777,11 +854,9 @@ mod tests {
             .with_timeout(Duration::from_secs(60))
             .with_retry(5, Duration::from_secs(10));
 
-        let report = checker.run_checks(
-            100,
-            "migration-123".to_string(),
-            "node2".to_string(),
-        ).await;
+        let report = checker
+            .run_checks(100, "migration-123".to_string(), "node2".to_string())
+            .await;
 
         assert_eq!(report.overall_result, HealthCheckResult::Passed);
     }

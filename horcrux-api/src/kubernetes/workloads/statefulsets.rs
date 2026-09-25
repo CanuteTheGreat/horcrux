@@ -67,11 +67,7 @@ pub async fn scale_statefulset(
 
 /// Delete a StatefulSet
 #[cfg(feature = "kubernetes")]
-pub async fn delete_statefulset(
-    client: &K8sClient,
-    namespace: &str,
-    name: &str,
-) -> K8sResult<()> {
+pub async fn delete_statefulset(client: &K8sClient, namespace: &str, name: &str) -> K8sResult<()> {
     use k8s_openapi::api::apps::v1::StatefulSet;
     use kube::api::{Api, DeleteParams};
 
@@ -121,10 +117,7 @@ fn statefulset_to_info(sts: k8s_openapi::api::apps::v1::StatefulSet) -> Stateful
     let status = sts.status.unwrap_or_default();
 
     // Get selector labels
-    let selector = spec
-        .selector
-        .match_labels
-        .unwrap_or_default();
+    let selector = spec.selector.match_labels.unwrap_or_default();
 
     // Get update strategy
     let update_strategy = spec
@@ -159,7 +152,9 @@ pub async fn list_statefulsets(
     _client: &K8sClient,
     _namespace: &str,
 ) -> K8sResult<Vec<StatefulSetInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -168,7 +163,9 @@ pub async fn get_statefulset(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<StatefulSetInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -178,7 +175,9 @@ pub async fn scale_statefulset(
     _name: &str,
     _replicas: i32,
 ) -> K8sResult<StatefulSetInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -187,7 +186,9 @@ pub async fn delete_statefulset(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -196,5 +197,7 @@ pub async fn restart_statefulset(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<StatefulSetInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }

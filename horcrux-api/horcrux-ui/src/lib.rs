@@ -11,14 +11,14 @@ pub mod utils;
 mod websocket;
 
 use pages::{
-    Dashboard, VmList, VmCreate, Alerts, Login, ContainerList, SnapshotList,
-    CloneList, ReplicationList, Monitoring, GpuManagement, KubernetesManagement,
-    StorageManagement, NetworkManagement, UsersPage, RolesPage, SessionsPage, ApiKeysPage,
-    PodsPage, DeploymentsPage, ServicesPage, IngressesPage, ClusterDashboard,
-    HelmRepositoriesPage, HelmChartsPage, HelmReleasesPage, ConfigMapsPage, SecretsPage,
-    BackupDashboard, BackupJobsPage, RetentionPoliciesPage, SnapshotManagerPage, TemplateManagerPage,
-    HaDashboard, ClusterManagementPage, HaGroupsPage, MigrationCenterPage,
-    AlertCenterPage, DashboardsPage, MetricsExplorerPage, NotificationsPage, ObservabilityPage
+    AlertCenterPage, Alerts, ApiKeysPage, BackupDashboard, BackupJobsPage, CloneList,
+    ClusterDashboard, ClusterManagementPage, ConfigMapsPage, ContainerList, Dashboard,
+    DashboardsPage, DeploymentsPage, GpuManagement, HaDashboard, HaGroupsPage, HelmChartsPage,
+    HelmReleasesPage, HelmRepositoriesPage, IngressesPage, KubernetesManagement, Login,
+    MetricsExplorerPage, MigrationCenterPage, Monitoring, NetworkManagement, NotificationsPage,
+    ObservabilityPage, PodsPage, ReplicationList, RetentionPoliciesPage, RolesPage, SecretsPage,
+    ServicesPage, SessionsPage, SnapshotList, SnapshotManagerPage, StorageManagement,
+    TemplateManagerPage, UsersPage, VmCreate, VmList,
 };
 
 #[component]

@@ -5,10 +5,10 @@
 //! - Time-based rotation (daily, weekly)
 //! - Maximum number of archived files
 
+use chrono::{DateTime, Datelike, Utc};
 use std::path::{Path, PathBuf};
 use tokio::fs;
-use tracing::{info, error, warn};
-use chrono::{DateTime, Utc, Datelike};
+use tracing::{error, info, warn};
 
 /// Rotation strategy
 #[derive(Debug, Clone)]
@@ -71,18 +71,14 @@ impl AuditRotator {
     /// Check if rotation is needed based on the strategy
     pub async fn needs_rotation(&self) -> bool {
         match &self.config.strategy {
-            RotationStrategy::Size(max_size) => {
-                self.check_size_rotation(*max_size).await
-            }
-            RotationStrategy::Daily { hour } => {
-                self.check_daily_rotation(*hour)
-            }
-            RotationStrategy::Weekly { day, hour } => {
-                self.check_weekly_rotation(*day, *hour)
-            }
-            RotationStrategy::Combined { max_size, max_age_hours } => {
-                self.check_size_rotation(*max_size).await ||
-                self.check_age_rotation(*max_age_hours)
+            RotationStrategy::Size(max_size) => self.check_size_rotation(*max_size).await,
+            RotationStrategy::Daily { hour } => self.check_daily_rotation(*hour),
+            RotationStrategy::Weekly { day, hour } => self.check_weekly_rotation(*day, *hour),
+            RotationStrategy::Combined {
+                max_size,
+                max_age_hours,
+            } => {
+                self.check_size_rotation(*max_size).await || self.check_age_rotation(*max_age_hours)
             }
         }
     }
@@ -130,7 +126,8 @@ impl AuditRotator {
     /// Perform log rotation
     pub async fn rotate(&mut self) -> Result<PathBuf, RotationError> {
         // Ensure archive directory exists
-        fs::create_dir_all(&self.config.archive_dir).await
+        fs::create_dir_all(&self.config.archive_dir)
+            .await
             .map_err(|e| RotationError::IoError(format!("Failed to create archive dir: {}", e)))?;
 
         // Generate archive filename with timestamp
@@ -141,16 +138,18 @@ impl AuditRotator {
         // Check if source file exists
         if !self.config.log_path.exists() {
             return Err(RotationError::FileNotFound(
-                self.config.log_path.to_string_lossy().to_string()
+                self.config.log_path.to_string_lossy().to_string(),
             ));
         }
 
         // Move current log to archive
-        fs::rename(&self.config.log_path, &archive_path).await
+        fs::rename(&self.config.log_path, &archive_path)
+            .await
             .map_err(|e| RotationError::IoError(format!("Failed to move log file: {}", e)))?;
 
         // Create new empty log file
-        fs::write(&self.config.log_path, "").await
+        fs::write(&self.config.log_path, "")
+            .await
             .map_err(|e| RotationError::IoError(format!("Failed to create new log file: {}", e)))?;
 
         // Compress if enabled
@@ -179,7 +178,8 @@ impl AuditRotator {
         let compressed_path = archive_path.with_extension("log.gz");
 
         // Read original file
-        let _content = fs::read(archive_path).await
+        let _content = fs::read(archive_path)
+            .await
             .map_err(|e| RotationError::IoError(format!("Failed to read archive: {}", e)))?;
 
         // Compress using flate2 (if available) or just rename for now
@@ -207,16 +207,20 @@ impl AuditRotator {
         let mut archives = Vec::new();
 
         // List all archive files
-        let mut entries = fs::read_dir(&self.config.archive_dir).await
+        let mut entries = fs::read_dir(&self.config.archive_dir)
+            .await
             .map_err(|e| RotationError::IoError(format!("Failed to read archive dir: {}", e)))?;
 
-        while let Some(entry) = entries.next_entry().await
+        while let Some(entry) = entries
+            .next_entry()
+            .await
             .map_err(|e| RotationError::IoError(format!("Failed to read directory entry: {}", e)))?
         {
             let path = entry.path();
             if path.is_file() {
-                let metadata = fs::metadata(&path).await
-                    .map_err(|e| RotationError::IoError(format!("Failed to get metadata: {}", e)))?;
+                let metadata = fs::metadata(&path).await.map_err(|e| {
+                    RotationError::IoError(format!("Failed to get metadata: {}", e))
+                })?;
 
                 if let Ok(modified) = metadata.modified() {
                     archives.push((path, modified));
@@ -248,22 +252,28 @@ impl AuditRotator {
             return Ok(archives);
         }
 
-        let mut entries = fs::read_dir(&self.config.archive_dir).await
+        let mut entries = fs::read_dir(&self.config.archive_dir)
+            .await
             .map_err(|e| RotationError::IoError(format!("Failed to read archive dir: {}", e)))?;
 
-        while let Some(entry) = entries.next_entry().await
+        while let Some(entry) = entries
+            .next_entry()
+            .await
             .map_err(|e| RotationError::IoError(format!("Failed to read directory entry: {}", e)))?
         {
             let path = entry.path();
             if path.is_file() {
-                let metadata = fs::metadata(&path).await
-                    .map_err(|e| RotationError::IoError(format!("Failed to get metadata: {}", e)))?;
+                let metadata = fs::metadata(&path).await.map_err(|e| {
+                    RotationError::IoError(format!("Failed to get metadata: {}", e))
+                })?;
 
-                let filename = path.file_name()
+                let filename = path
+                    .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
 
-                let created = metadata.created()
+                let created = metadata
+                    .created()
                     .ok()
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|d| d.as_secs() as i64);
@@ -324,13 +334,8 @@ impl std::fmt::Display for RotationError {
 impl std::error::Error for RotationError {}
 
 /// Background task for automatic rotation
-pub async fn start_rotation_task(
-    mut rotator: AuditRotator,
-    check_interval_secs: u64,
-) {
-    let mut interval = tokio::time::interval(
-        tokio::time::Duration::from_secs(check_interval_secs)
-    );
+pub async fn start_rotation_task(mut rotator: AuditRotator, check_interval_secs: u64) {
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(check_interval_secs));
 
     loop {
         interval.tick().await;

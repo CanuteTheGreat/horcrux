@@ -94,12 +94,16 @@ fn namespace_to_info(ns: k8s_openapi::api::core::v1::Namespace) -> NamespaceInfo
 // Stubs
 #[cfg(not(feature = "kubernetes"))]
 pub async fn list_namespaces(_client: &K8sClient) -> K8sResult<Vec<NamespaceInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn get_namespace(_client: &K8sClient, _name: &str) -> K8sResult<NamespaceInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -107,10 +111,14 @@ pub async fn create_namespace(
     _client: &K8sClient,
     _request: &CreateNamespaceRequest,
 ) -> K8sResult<NamespaceInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn delete_namespace(_client: &K8sClient, _name: &str) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }

@@ -7,18 +7,18 @@
 //! - Kerberos authentication
 //! - ACL management
 
+pub mod acl;
+#[cfg(feature = "ad")]
+pub mod active_directory;
+#[cfg(feature = "kerberos")]
+pub mod kerberos;
 #[cfg(feature = "ldap")]
 pub mod ldap;
 #[cfg(feature = "ldap-server")]
 pub mod ldap_server;
-#[cfg(feature = "kerberos")]
-pub mod kerberos;
-#[cfg(feature = "ad")]
-pub mod active_directory;
-pub mod acl;
 
-use horcrux_common::{Error, Result};
 use crate::nas::QuotaLimit;
+use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
@@ -169,18 +169,16 @@ impl AuthManager {
 
         cmd.arg(&user.username);
 
-        let output = cmd.output().await.map_err(|e| {
-            Error::Internal(format!("Failed to create user: {}", e))
-        })?;
+        let output = cmd
+            .output()
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to create user: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             // User might already exist
             if !stderr.contains("already exists") {
-                return Err(Error::Internal(format!(
-                    "useradd failed: {}",
-                    stderr
-                )));
+                return Err(Error::Internal(format!("useradd failed: {}", stderr)));
             }
         }
 
@@ -214,17 +212,12 @@ impl AuthManager {
             .args(["-r", &user.username]) // -r removes home directory
             .output()
             .await
-            .map_err(|e| {
-                Error::Internal(format!("Failed to delete user: {}", e))
-            })?;
+            .map_err(|e| Error::Internal(format!("Failed to delete user: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if !stderr.contains("does not exist") {
-                return Err(Error::Internal(format!(
-                    "userdel failed: {}",
-                    stderr
-                )));
+                return Err(Error::Internal(format!("userdel failed: {}", stderr)));
             }
         }
 
@@ -237,17 +230,12 @@ impl AuthManager {
             .args(["-g", &group.gid.to_string(), &group.name])
             .output()
             .await
-            .map_err(|e| {
-                Error::Internal(format!("Failed to create group: {}", e))
-            })?;
+            .map_err(|e| Error::Internal(format!("Failed to create group: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if !stderr.contains("already exists") {
-                return Err(Error::Internal(format!(
-                    "groupadd failed: {}",
-                    stderr
-                )));
+                return Err(Error::Internal(format!("groupadd failed: {}", stderr)));
             }
         }
 
@@ -268,17 +256,12 @@ impl AuthManager {
             .arg(&group.name)
             .output()
             .await
-            .map_err(|e| {
-                Error::Internal(format!("Failed to delete group: {}", e))
-            })?;
+            .map_err(|e| Error::Internal(format!("Failed to delete group: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if !stderr.contains("does not exist") {
-                return Err(Error::Internal(format!(
-                    "groupdel failed: {}",
-                    stderr
-                )));
+                return Err(Error::Internal(format!("groupdel failed: {}", stderr)));
             }
         }
 
@@ -291,23 +274,20 @@ impl AuthManager {
         let mut child = Command::new("chpasswd")
             .stdin(std::process::Stdio::piped())
             .spawn()
-            .map_err(|e| {
-                Error::Internal(format!("Failed to spawn chpasswd: {}", e))
-            })?;
+            .map_err(|e| Error::Internal(format!("Failed to spawn chpasswd: {}", e)))?;
 
         if let Some(mut stdin) = child.stdin.take() {
             use tokio::io::AsyncWriteExt;
             stdin
                 .write_all(format!("{}:{}\n", user.username, password).as_bytes())
                 .await
-                .map_err(|e| {
-                    Error::Internal(format!("Failed to write to chpasswd: {}", e))
-                })?;
+                .map_err(|e| Error::Internal(format!("Failed to write to chpasswd: {}", e)))?;
         }
 
-        child.wait().await.map_err(|e| {
-            Error::Internal(format!("chpasswd failed: {}", e))
-        })?;
+        child
+            .wait()
+            .await
+            .map_err(|e| Error::Internal(format!("chpasswd failed: {}", e)))?;
 
         // Set SMB password if enabled
         #[cfg(feature = "smb")]
@@ -326,9 +306,7 @@ impl AuthManager {
             .args(["-a", "-n", &user.username])
             .output()
             .await
-            .map_err(|e| {
-                Error::Internal(format!("Failed to add SMB user: {}", e))
-            })?;
+            .map_err(|e| Error::Internal(format!("Failed to add SMB user: {}", e)))?;
 
         if !output.status.success() {
             tracing::warn!(
@@ -348,9 +326,7 @@ impl AuthManager {
             .args(["-a", "-s", &user.username])
             .stdin(std::process::Stdio::piped())
             .spawn()
-            .map_err(|e| {
-                Error::Internal(format!("Failed to spawn smbpasswd: {}", e))
-            })?;
+            .map_err(|e| Error::Internal(format!("Failed to spawn smbpasswd: {}", e)))?;
 
         if let Some(mut stdin) = child.stdin.take() {
             use tokio::io::AsyncWriteExt;
@@ -358,14 +334,13 @@ impl AuthManager {
             stdin
                 .write_all(format!("{}\n{}\n", password, password).as_bytes())
                 .await
-                .map_err(|e| {
-                    Error::Internal(format!("Failed to write to smbpasswd: {}", e))
-                })?;
+                .map_err(|e| Error::Internal(format!("Failed to write to smbpasswd: {}", e)))?;
         }
 
-        child.wait().await.map_err(|e| {
-            Error::Internal(format!("smbpasswd failed: {}", e))
-        })?;
+        child
+            .wait()
+            .await
+            .map_err(|e| Error::Internal(format!("smbpasswd failed: {}", e)))?;
 
         Ok(())
     }
@@ -377,15 +352,15 @@ impl AuthManager {
             let auth_keys = format!("{}/authorized_keys", ssh_dir);
 
             // Create .ssh directory
-            tokio::fs::create_dir_all(&ssh_dir).await.map_err(|e| {
-                Error::Internal(format!("Failed to create .ssh directory: {}", e))
-            })?;
+            tokio::fs::create_dir_all(&ssh_dir)
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to create .ssh directory: {}", e)))?;
 
             // Write authorized_keys
             let keys_content = user.ssh_public_keys.join("\n");
-            tokio::fs::write(&auth_keys, keys_content).await.map_err(|e| {
-                Error::Internal(format!("Failed to write authorized_keys: {}", e))
-            })?;
+            tokio::fs::write(&auth_keys, keys_content)
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to write authorized_keys: {}", e)))?;
 
             // Set permissions
             Command::new("chmod")
@@ -397,7 +372,11 @@ impl AuthManager {
                 .output()
                 .await?;
             Command::new("chown")
-                .args(["-R", &format!("{}:{}", user.username, user.primary_group), &ssh_dir])
+                .args([
+                    "-R",
+                    &format!("{}:{}", user.username, user.primary_group),
+                    &ssh_dir,
+                ])
                 .output()
                 .await?;
         }
@@ -644,9 +623,10 @@ impl AuthManager {
 
         cmd.arg(&user.username);
 
-        let output = cmd.output().await.map_err(|e| {
-            Error::Internal(format!("Failed to update user: {}", e))
-        })?;
+        let output = cmd
+            .output()
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to update user: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

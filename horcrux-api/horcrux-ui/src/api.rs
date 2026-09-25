@@ -51,17 +51,26 @@ pub async fn fetch_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> 
     let response = with_auth(reqwasm::http::Request::get(&url))
         .send()
         .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
 
     if response.ok() {
-        response.json().await.map_err(|e| ApiError { message: e.to_string() })
+        response.json().await.map_err(|e| ApiError {
+            message: e.to_string(),
+        })
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
 /// POST request helper
-pub async fn post_json<T: DeserializeOwned, B: Serialize>(path: &str, body: &B) -> Result<T, ApiError> {
+pub async fn post_json<T: DeserializeOwned, B: Serialize>(
+    path: &str,
+    body: &B,
+) -> Result<T, ApiError> {
     let url = if path.starts_with("http") {
         path.to_string()
     } else if path.starts_with("/api") {
@@ -75,17 +84,26 @@ pub async fn post_json<T: DeserializeOwned, B: Serialize>(path: &str, body: &B) 
         .body(serde_json::to_string(body).unwrap())
         .send()
         .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
 
     if response.ok() {
-        response.json().await.map_err(|e| ApiError { message: e.to_string() })
+        response.json().await.map_err(|e| ApiError {
+            message: e.to_string(),
+        })
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
 /// PUT request helper
-pub async fn put_json<T: DeserializeOwned, B: Serialize>(path: &str, body: &B) -> Result<T, ApiError> {
+pub async fn put_json<T: DeserializeOwned, B: Serialize>(
+    path: &str,
+    body: &B,
+) -> Result<T, ApiError> {
     let url = if path.starts_with("http") {
         path.to_string()
     } else if path.starts_with("/api") {
@@ -99,12 +117,18 @@ pub async fn put_json<T: DeserializeOwned, B: Serialize>(path: &str, body: &B) -
         .body(serde_json::to_string(body).unwrap())
         .send()
         .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
 
     if response.ok() {
-        response.json().await.map_err(|e| ApiError { message: e.to_string() })
+        response.json().await.map_err(|e| ApiError {
+            message: e.to_string(),
+        })
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
@@ -121,12 +145,16 @@ pub async fn delete_json(path: &str) -> Result<(), ApiError> {
     let response = with_auth(reqwasm::http::Request::delete(&url))
         .send()
         .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
 
     if response.ok() {
         Ok(())
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
@@ -143,12 +171,16 @@ pub async fn post_empty(path: &str) -> Result<(), ApiError> {
     let response = with_auth(reqwasm::http::Request::post(&url))
         .send()
         .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
 
     if response.ok() {
         Ok(())
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
@@ -165,12 +197,18 @@ pub async fn fetch_text(path: &str) -> Result<String, ApiError> {
     let response = with_auth(reqwasm::http::Request::get(&url))
         .send()
         .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
 
     if response.ok() {
-        response.text().await.map_err(|e| ApiError { message: e.to_string() })
+        response.text().await.map_err(|e| ApiError {
+            message: e.to_string(),
+        })
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
@@ -192,12 +230,18 @@ pub async fn get_vms() -> Result<Vec<VmConfig>, ApiError> {
     let response = reqwasm::http::Request::get(&format!("{}/vms", API_BASE))
         .send()
         .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
 
     if response.ok() {
-        response.json().await.map_err(|e| ApiError { message: e.to_string() })
+        response.json().await.map_err(|e| ApiError {
+            message: e.to_string(),
+        })
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
@@ -208,12 +252,18 @@ pub async fn create_vm(config: VmConfig) -> Result<VmConfig, ApiError> {
         .body(serde_json::to_string(&config).unwrap())
         .send()
         .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
 
     if response.ok() {
-        response.json().await.map_err(|e| ApiError { message: e.to_string() })
+        response.json().await.map_err(|e| ApiError {
+            message: e.to_string(),
+        })
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
@@ -222,12 +272,16 @@ pub async fn start_vm(vm_id: &str) -> Result<(), ApiError> {
     let response = reqwasm::http::Request::post(&format!("{}/vms/{}/start", API_BASE, vm_id))
         .send()
         .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
 
     if response.ok() {
         Ok(())
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
@@ -236,12 +290,16 @@ pub async fn stop_vm(vm_id: &str) -> Result<(), ApiError> {
     let response = reqwasm::http::Request::post(&format!("{}/vms/{}/stop", API_BASE, vm_id))
         .send()
         .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
 
     if response.ok() {
         Ok(())
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
@@ -250,12 +308,16 @@ pub async fn delete_vm(vm_id: &str) -> Result<(), ApiError> {
     let response = reqwasm::http::Request::delete(&format!("{}/vms/{}", API_BASE, vm_id))
         .send()
         .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
 
     if response.ok() {
         Ok(())
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
@@ -274,12 +336,18 @@ pub async fn get_node_metrics() -> Result<NodeMetrics, ApiError> {
     let response = reqwasm::http::Request::get(&format!("{}/monitoring/node", API_BASE))
         .send()
         .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
 
     if response.ok() {
-        response.json().await.map_err(|e| ApiError { message: e.to_string() })
+        response.json().await.map_err(|e| ApiError {
+            message: e.to_string(),
+        })
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
@@ -354,12 +422,18 @@ pub async fn get_cluster_nodes() -> Result<Vec<ClusterNode>, ApiError> {
     let response = reqwasm::http::Request::get(&format!("{}/cluster/nodes", API_BASE))
         .send()
         .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
 
     if response.ok() {
-        response.json().await.map_err(|e| ApiError { message: e.to_string() })
+        response.json().await.map_err(|e| ApiError {
+            message: e.to_string(),
+        })
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
@@ -390,54 +464,75 @@ pub async fn get_containers() -> Result<Vec<Container>, ApiError> {
     let response = reqwasm::http::Request::get(&format!("{}/containers", API_BASE))
         .send()
         .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
 
     if response.ok() {
-        response.json().await.map_err(|e| ApiError { message: e.to_string() })
+        response.json().await.map_err(|e| ApiError {
+            message: e.to_string(),
+        })
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
 /// Start a container
 pub async fn start_container(container_id: &str) -> Result<(), ApiError> {
-    let response = reqwasm::http::Request::post(&format!("{}/containers/{}/start", API_BASE, container_id))
-        .send()
-        .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+    let response =
+        reqwasm::http::Request::post(&format!("{}/containers/{}/start", API_BASE, container_id))
+            .send()
+            .await
+            .map_err(|e| ApiError {
+                message: e.to_string(),
+            })?;
 
     if response.ok() {
         Ok(())
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
 /// Stop a container
 pub async fn stop_container(container_id: &str) -> Result<(), ApiError> {
-    let response = reqwasm::http::Request::post(&format!("{}/containers/{}/stop", API_BASE, container_id))
-        .send()
-        .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+    let response =
+        reqwasm::http::Request::post(&format!("{}/containers/{}/stop", API_BASE, container_id))
+            .send()
+            .await
+            .map_err(|e| ApiError {
+                message: e.to_string(),
+            })?;
 
     if response.ok() {
         Ok(())
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
 /// Delete a container
 pub async fn delete_container(container_id: &str) -> Result<(), ApiError> {
-    let response = reqwasm::http::Request::delete(&format!("{}/containers/{}", API_BASE, container_id))
-        .send()
-        .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+    let response =
+        reqwasm::http::Request::delete(&format!("{}/containers/{}", API_BASE, container_id))
+            .send()
+            .await
+            .map_err(|e| ApiError {
+                message: e.to_string(),
+            })?;
 
     if response.ok() {
         Ok(())
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
@@ -459,17 +554,28 @@ pub async fn get_vm_snapshots(vm_id: &str) -> Result<Vec<VmSnapshot>, ApiError> 
     let response = reqwasm::http::Request::get(&format!("{}/vms/{}/snapshots", API_BASE, vm_id))
         .send()
         .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
 
     if response.ok() {
-        response.json().await.map_err(|e| ApiError { message: e.to_string() })
+        response.json().await.map_err(|e| ApiError {
+            message: e.to_string(),
+        })
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
 /// Create a snapshot
-pub async fn create_snapshot(vm_id: &str, name: &str, description: Option<String>, include_memory: bool) -> Result<Snapshot, ApiError> {
+pub async fn create_snapshot(
+    vm_id: &str,
+    name: &str,
+    description: Option<String>,
+    include_memory: bool,
+) -> Result<Snapshot, ApiError> {
     #[derive(Serialize)]
     struct CreateRequest {
         name: String,
@@ -488,40 +594,60 @@ pub async fn create_snapshot(vm_id: &str, name: &str, description: Option<String
         .body(serde_json::to_string(&request).unwrap())
         .send()
         .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
 
     if response.ok() {
-        response.json().await.map_err(|e| ApiError { message: e.to_string() })
+        response.json().await.map_err(|e| ApiError {
+            message: e.to_string(),
+        })
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
 /// Restore a snapshot
 pub async fn restore_snapshot(vm_id: &str, snapshot_id: &str) -> Result<(), ApiError> {
-    let response = reqwasm::http::Request::post(&format!("{}/vms/{}/snapshots/{}/restore", API_BASE, vm_id, snapshot_id))
-        .send()
-        .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+    let response = reqwasm::http::Request::post(&format!(
+        "{}/vms/{}/snapshots/{}/restore",
+        API_BASE, vm_id, snapshot_id
+    ))
+    .send()
+    .await
+    .map_err(|e| ApiError {
+        message: e.to_string(),
+    })?;
 
     if response.ok() {
         Ok(())
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
 /// Delete a snapshot
 pub async fn delete_snapshot(vm_id: &str, snapshot_id: &str) -> Result<(), ApiError> {
-    let response = reqwasm::http::Request::delete(&format!("{}/vms/{}/snapshots/{}", API_BASE, vm_id, snapshot_id))
-        .send()
-        .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+    let response = reqwasm::http::Request::delete(&format!(
+        "{}/vms/{}/snapshots/{}",
+        API_BASE, vm_id, snapshot_id
+    ))
+    .send()
+    .await
+    .map_err(|e| ApiError {
+        message: e.to_string(),
+    })?;
 
     if response.ok() {
         Ok(())
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
@@ -543,12 +669,18 @@ pub async fn get_clone_jobs() -> Result<Vec<CloneJob>, ApiError> {
     let response = reqwasm::http::Request::get(&format!("{}/vms/clone/jobs", API_BASE))
         .send()
         .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
 
     if response.ok() {
-        response.json().await.map_err(|e| ApiError { message: e.to_string() })
+        response.json().await.map_err(|e| ApiError {
+            message: e.to_string(),
+        })
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
@@ -571,40 +703,56 @@ pub async fn get_replication_jobs() -> Result<Vec<ReplicationJob>, ApiError> {
     let response = reqwasm::http::Request::get(&format!("{}/replication/jobs", API_BASE))
         .send()
         .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
 
     if response.ok() {
-        response.json().await.map_err(|e| ApiError { message: e.to_string() })
+        response.json().await.map_err(|e| ApiError {
+            message: e.to_string(),
+        })
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
 /// Execute a replication job
 pub async fn execute_replication(job_id: &str) -> Result<(), ApiError> {
-    let response = reqwasm::http::Request::post(&format!("{}/replication/jobs/{}/execute", API_BASE, job_id))
-        .send()
-        .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+    let response =
+        reqwasm::http::Request::post(&format!("{}/replication/jobs/{}/execute", API_BASE, job_id))
+            .send()
+            .await
+            .map_err(|e| ApiError {
+                message: e.to_string(),
+            })?;
 
     if response.ok() {
         Ok(())
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
 /// Delete a replication job
 pub async fn delete_replication(job_id: &str) -> Result<(), ApiError> {
-    let response = reqwasm::http::Request::delete(&format!("{}/replication/jobs/{}", API_BASE, job_id))
-        .send()
-        .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+    let response =
+        reqwasm::http::Request::delete(&format!("{}/replication/jobs/{}", API_BASE, job_id))
+            .send()
+            .await
+            .map_err(|e| ApiError {
+                message: e.to_string(),
+            })?;
 
     if response.ok() {
         Ok(())
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
@@ -670,7 +818,9 @@ pub struct MetricQuery {
     pub step: u64,
 }
 
-fn default_step() -> u64 { 60 }
+fn default_step() -> u64 {
+    60
+}
 
 /// A single data point in a metric result
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -734,12 +884,18 @@ pub async fn get_vm(vm_id: &str) -> Result<Vm, ApiError> {
     let response = reqwasm::http::Request::get(&format!("{}/vms/{}", API_BASE, vm_id))
         .send()
         .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
 
     if response.ok() {
-        response.json().await.map_err(|e| ApiError { message: e.to_string() })
+        response.json().await.map_err(|e| ApiError {
+            message: e.to_string(),
+        })
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
@@ -751,18 +907,23 @@ pub async fn get_console_url(vm_id: &str, console_type: &str) -> Result<String, 
     ))
     .send()
     .await
-    .map_err(|e| ApiError { message: e.to_string() })?;
+    .map_err(|e| ApiError {
+        message: e.to_string(),
+    })?;
 
     if response.ok() {
         #[derive(Deserialize)]
         struct ConsoleResponse {
             url: String,
         }
-        let resp: ConsoleResponse = response.json().await
-            .map_err(|e| ApiError { message: e.to_string() })?;
+        let resp: ConsoleResponse = response.json().await.map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
         Ok(resp.url)
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
@@ -773,17 +934,22 @@ pub async fn send_console_keys(vm_id: &str, keys: &[&str]) -> Result<(), ApiErro
         keys: &'a [&'a str],
     }
 
-    let response = reqwasm::http::Request::post(&format!("{}/vms/{}/console/keys", API_BASE, vm_id))
-        .header("Content-Type", "application/json")
-        .body(serde_json::to_string(&KeysRequest { keys }).unwrap())
-        .send()
-        .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+    let response =
+        reqwasm::http::Request::post(&format!("{}/vms/{}/console/keys", API_BASE, vm_id))
+            .header("Content-Type", "application/json")
+            .body(serde_json::to_string(&KeysRequest { keys }).unwrap())
+            .send()
+            .await
+            .map_err(|e| ApiError {
+                message: e.to_string(),
+            })?;
 
     if response.ok() {
         Ok(())
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
@@ -794,23 +960,29 @@ pub async fn send_serial_input(vm_id: &str, input: &str) -> Result<String, ApiEr
         input: &'a str,
     }
 
-    let response = reqwasm::http::Request::post(&format!("{}/vms/{}/console/serial", API_BASE, vm_id))
-        .header("Content-Type", "application/json")
-        .body(serde_json::to_string(&SerialInput { input }).unwrap())
-        .send()
-        .await
-        .map_err(|e| ApiError { message: e.to_string() })?;
+    let response =
+        reqwasm::http::Request::post(&format!("{}/vms/{}/console/serial", API_BASE, vm_id))
+            .header("Content-Type", "application/json")
+            .body(serde_json::to_string(&SerialInput { input }).unwrap())
+            .send()
+            .await
+            .map_err(|e| ApiError {
+                message: e.to_string(),
+            })?;
 
     if response.ok() {
         #[derive(Deserialize)]
         struct SerialOutput {
             output: String,
         }
-        let resp: SerialOutput = response.json().await
-            .map_err(|e| ApiError { message: e.to_string() })?;
+        let resp: SerialOutput = response.json().await.map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
         Ok(resp.output)
     } else {
-        Err(ApiError { message: format!("HTTP {}", response.status()) })
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
     }
 }
 
@@ -1114,7 +1286,11 @@ pub async fn delete_user(user_id: &str) -> Result<(), ApiError> {
 
 /// Enable/disable a user
 pub async fn toggle_user(user_id: &str, enabled: bool) -> Result<(), ApiError> {
-    post_json(&format!("/users/{}/toggle", user_id), &serde_json::json!({"enabled": enabled})).await
+    post_json(
+        &format!("/users/{}/toggle", user_id),
+        &serde_json::json!({"enabled": enabled}),
+    )
+    .await
 }
 
 /// Get all roles
@@ -1178,13 +1354,24 @@ pub async fn get_user_api_tokens(user_id: &str) -> Result<Vec<ApiToken>, ApiErro
 }
 
 /// Create a new API token for a user
-pub async fn create_api_token(user_id: &str, request: CreateApiTokenRequest) -> Result<ApiToken, ApiError> {
+pub async fn create_api_token(
+    user_id: &str,
+    request: CreateApiTokenRequest,
+) -> Result<ApiToken, ApiError> {
     post_json(&format!("/users/{}/api-keys", user_id), &request).await
 }
 
 /// Update an API token
-pub async fn update_api_token(user_id: &str, token_id: &str, request: CreateApiTokenRequest) -> Result<ApiToken, ApiError> {
-    post_json(&format!("/users/{}/api-keys/{}", user_id, token_id), &request).await
+pub async fn update_api_token(
+    user_id: &str,
+    token_id: &str,
+    request: CreateApiTokenRequest,
+) -> Result<ApiToken, ApiError> {
+    post_json(
+        &format!("/users/{}/api-keys/{}", user_id, token_id),
+        &request,
+    )
+    .await
 }
 
 /// Delete an API token
@@ -1193,12 +1380,23 @@ pub async fn delete_api_token(user_id: &str, token_id: &str) -> Result<(), ApiEr
 }
 
 /// Toggle an API token (enable/disable)
-pub async fn toggle_api_token(user_id: &str, token_id: &str, enabled: bool) -> Result<(), ApiError> {
-    post_json(&format!("/users/{}/api-keys/{}/toggle", user_id, token_id), &serde_json::json!({"enabled": enabled})).await
+pub async fn toggle_api_token(
+    user_id: &str,
+    token_id: &str,
+    enabled: bool,
+) -> Result<(), ApiError> {
+    post_json(
+        &format!("/users/{}/api-keys/{}/toggle", user_id, token_id),
+        &serde_json::json!({"enabled": enabled}),
+    )
+    .await
 }
 
 /// Change user password
-pub async fn change_password(user_id: &str, request: ChangePasswordRequest) -> Result<(), ApiError> {
+pub async fn change_password(
+    user_id: &str,
+    request: ChangePasswordRequest,
+) -> Result<(), ApiError> {
     post_json(&format!("/users/{}/password", user_id), &request).await
 }
 
@@ -1230,22 +1428,46 @@ pub async fn verify_session() -> Result<bool, ApiError> {
 
 /// Get pods in a namespace
 pub async fn get_pods(cluster_id: &str, namespace: &str) -> Result<Vec<KubernetesPod>, ApiError> {
-    fetch_json(&format!("/k8s/clusters/{}/namespaces/{}/pods", cluster_id, namespace)).await
+    fetch_json(&format!(
+        "/k8s/clusters/{}/namespaces/{}/pods",
+        cluster_id, namespace
+    ))
+    .await
 }
 
 /// Get pod details
-pub async fn get_pod(cluster_id: &str, namespace: &str, pod_name: &str) -> Result<KubernetesPod, ApiError> {
-    fetch_json(&format!("/k8s/clusters/{}/namespaces/{}/pods/{}", cluster_id, namespace, pod_name)).await
+pub async fn get_pod(
+    cluster_id: &str,
+    namespace: &str,
+    pod_name: &str,
+) -> Result<KubernetesPod, ApiError> {
+    fetch_json(&format!(
+        "/k8s/clusters/{}/namespaces/{}/pods/{}",
+        cluster_id, namespace, pod_name
+    ))
+    .await
 }
 
 /// Delete a pod
 pub async fn delete_pod(cluster_id: &str, namespace: &str, pod_name: &str) -> Result<(), ApiError> {
-    delete_json(&format!("/k8s/clusters/{}/namespaces/{}/pods/{}", cluster_id, namespace, pod_name)).await
+    delete_json(&format!(
+        "/k8s/clusters/{}/namespaces/{}/pods/{}",
+        cluster_id, namespace, pod_name
+    ))
+    .await
 }
 
 /// Get pod logs
-pub async fn get_pod_logs(cluster_id: &str, namespace: &str, pod_name: &str, container: Option<&str>) -> Result<String, ApiError> {
-    let mut url = format!("/k8s/clusters/{}/namespaces/{}/pods/{}/logs", cluster_id, namespace, pod_name);
+pub async fn get_pod_logs(
+    cluster_id: &str,
+    namespace: &str,
+    pod_name: &str,
+    container: Option<&str>,
+) -> Result<String, ApiError> {
+    let mut url = format!(
+        "/k8s/clusters/{}/namespaces/{}/pods/{}/logs",
+        cluster_id, namespace, pod_name
+    );
     if let Some(container) = container {
         url = format!("{}?container={}", url, container);
     }
@@ -1253,69 +1475,179 @@ pub async fn get_pod_logs(cluster_id: &str, namespace: &str, pod_name: &str, con
 }
 
 /// Get deployments in a namespace
-pub async fn get_deployments(cluster_id: &str, namespace: &str) -> Result<Vec<KubernetesDeployment>, ApiError> {
-    fetch_json(&format!("/k8s/clusters/{}/namespaces/{}/deployments", cluster_id, namespace)).await
+pub async fn get_deployments(
+    cluster_id: &str,
+    namespace: &str,
+) -> Result<Vec<KubernetesDeployment>, ApiError> {
+    fetch_json(&format!(
+        "/k8s/clusters/{}/namespaces/{}/deployments",
+        cluster_id, namespace
+    ))
+    .await
 }
 
 /// Get deployment details
-pub async fn get_deployment(cluster_id: &str, namespace: &str, deployment_name: &str) -> Result<KubernetesDeployment, ApiError> {
-    fetch_json(&format!("/k8s/clusters/{}/namespaces/{}/deployments/{}", cluster_id, namespace, deployment_name)).await
+pub async fn get_deployment(
+    cluster_id: &str,
+    namespace: &str,
+    deployment_name: &str,
+) -> Result<KubernetesDeployment, ApiError> {
+    fetch_json(&format!(
+        "/k8s/clusters/{}/namespaces/{}/deployments/{}",
+        cluster_id, namespace, deployment_name
+    ))
+    .await
 }
 
 /// Scale deployment
-pub async fn scale_deployment(cluster_id: &str, namespace: &str, deployment_name: &str, replicas: u32) -> Result<(), ApiError> {
-    post_json(&format!("/k8s/clusters/{}/namespaces/{}/deployments/{}/scale", cluster_id, namespace, deployment_name),
-              &serde_json::json!({"replicas": replicas})).await
+pub async fn scale_deployment(
+    cluster_id: &str,
+    namespace: &str,
+    deployment_name: &str,
+    replicas: u32,
+) -> Result<(), ApiError> {
+    post_json(
+        &format!(
+            "/k8s/clusters/{}/namespaces/{}/deployments/{}/scale",
+            cluster_id, namespace, deployment_name
+        ),
+        &serde_json::json!({"replicas": replicas}),
+    )
+    .await
 }
 
 /// Restart deployment
-pub async fn restart_deployment(cluster_id: &str, namespace: &str, deployment_name: &str) -> Result<(), ApiError> {
-    post_empty(&format!("/k8s/clusters/{}/namespaces/{}/deployments/{}/restart", cluster_id, namespace, deployment_name)).await
+pub async fn restart_deployment(
+    cluster_id: &str,
+    namespace: &str,
+    deployment_name: &str,
+) -> Result<(), ApiError> {
+    post_empty(&format!(
+        "/k8s/clusters/{}/namespaces/{}/deployments/{}/restart",
+        cluster_id, namespace, deployment_name
+    ))
+    .await
 }
 
 /// Delete deployment
-pub async fn delete_deployment(cluster_id: &str, namespace: &str, deployment_name: &str) -> Result<(), ApiError> {
-    delete_json(&format!("/k8s/clusters/{}/namespaces/{}/deployments/{}", cluster_id, namespace, deployment_name)).await
+pub async fn delete_deployment(
+    cluster_id: &str,
+    namespace: &str,
+    deployment_name: &str,
+) -> Result<(), ApiError> {
+    delete_json(&format!(
+        "/k8s/clusters/{}/namespaces/{}/deployments/{}",
+        cluster_id, namespace, deployment_name
+    ))
+    .await
 }
 
 /// Get services in a namespace
-pub async fn get_services(cluster_id: &str, namespace: &str) -> Result<Vec<KubernetesService>, ApiError> {
-    fetch_json(&format!("/k8s/clusters/{}/namespaces/{}/services", cluster_id, namespace)).await
+pub async fn get_services(
+    cluster_id: &str,
+    namespace: &str,
+) -> Result<Vec<KubernetesService>, ApiError> {
+    fetch_json(&format!(
+        "/k8s/clusters/{}/namespaces/{}/services",
+        cluster_id, namespace
+    ))
+    .await
 }
 
 /// Get service details
-pub async fn get_service(cluster_id: &str, namespace: &str, service_name: &str) -> Result<KubernetesService, ApiError> {
-    fetch_json(&format!("/k8s/clusters/{}/namespaces/{}/services/{}", cluster_id, namespace, service_name)).await
+pub async fn get_service(
+    cluster_id: &str,
+    namespace: &str,
+    service_name: &str,
+) -> Result<KubernetesService, ApiError> {
+    fetch_json(&format!(
+        "/k8s/clusters/{}/namespaces/{}/services/{}",
+        cluster_id, namespace, service_name
+    ))
+    .await
 }
 
 /// Create service
-pub async fn create_service(cluster_id: &str, namespace: &str, service: CreateServiceRequest) -> Result<KubernetesService, ApiError> {
-    post_json(&format!("/k8s/clusters/{}/namespaces/{}/services", cluster_id, namespace), &service).await
+pub async fn create_service(
+    cluster_id: &str,
+    namespace: &str,
+    service: CreateServiceRequest,
+) -> Result<KubernetesService, ApiError> {
+    post_json(
+        &format!(
+            "/k8s/clusters/{}/namespaces/{}/services",
+            cluster_id, namespace
+        ),
+        &service,
+    )
+    .await
 }
 
 /// Delete service
-pub async fn delete_service(cluster_id: &str, namespace: &str, service_name: &str) -> Result<(), ApiError> {
-    delete_json(&format!("/k8s/clusters/{}/namespaces/{}/services/{}", cluster_id, namespace, service_name)).await
+pub async fn delete_service(
+    cluster_id: &str,
+    namespace: &str,
+    service_name: &str,
+) -> Result<(), ApiError> {
+    delete_json(&format!(
+        "/k8s/clusters/{}/namespaces/{}/services/{}",
+        cluster_id, namespace, service_name
+    ))
+    .await
 }
 
 /// Get ingresses in a namespace
-pub async fn get_ingresses(cluster_id: &str, namespace: &str) -> Result<Vec<KubernetesIngress>, ApiError> {
-    fetch_json(&format!("/k8s/clusters/{}/namespaces/{}/ingresses", cluster_id, namespace)).await
+pub async fn get_ingresses(
+    cluster_id: &str,
+    namespace: &str,
+) -> Result<Vec<KubernetesIngress>, ApiError> {
+    fetch_json(&format!(
+        "/k8s/clusters/{}/namespaces/{}/ingresses",
+        cluster_id, namespace
+    ))
+    .await
 }
 
 /// Get ingress details
-pub async fn get_ingress(cluster_id: &str, namespace: &str, ingress_name: &str) -> Result<KubernetesIngress, ApiError> {
-    fetch_json(&format!("/k8s/clusters/{}/namespaces/{}/ingresses/{}", cluster_id, namespace, ingress_name)).await
+pub async fn get_ingress(
+    cluster_id: &str,
+    namespace: &str,
+    ingress_name: &str,
+) -> Result<KubernetesIngress, ApiError> {
+    fetch_json(&format!(
+        "/k8s/clusters/{}/namespaces/{}/ingresses/{}",
+        cluster_id, namespace, ingress_name
+    ))
+    .await
 }
 
 /// Create ingress
-pub async fn create_ingress(cluster_id: &str, namespace: &str, ingress: CreateIngressRequest) -> Result<KubernetesIngress, ApiError> {
-    post_json(&format!("/k8s/clusters/{}/namespaces/{}/ingresses", cluster_id, namespace), &ingress).await
+pub async fn create_ingress(
+    cluster_id: &str,
+    namespace: &str,
+    ingress: CreateIngressRequest,
+) -> Result<KubernetesIngress, ApiError> {
+    post_json(
+        &format!(
+            "/k8s/clusters/{}/namespaces/{}/ingresses",
+            cluster_id, namespace
+        ),
+        &ingress,
+    )
+    .await
 }
 
 /// Delete ingress
-pub async fn delete_ingress(cluster_id: &str, namespace: &str, ingress_name: &str) -> Result<(), ApiError> {
-    delete_json(&format!("/k8s/clusters/{}/namespaces/{}/ingresses/{}", cluster_id, namespace, ingress_name)).await
+pub async fn delete_ingress(
+    cluster_id: &str,
+    namespace: &str,
+    ingress_name: &str,
+) -> Result<(), ApiError> {
+    delete_json(&format!(
+        "/k8s/clusters/{}/namespaces/{}/ingresses/{}",
+        cluster_id, namespace, ingress_name
+    ))
+    .await
 }
 
 // ============================================================================
@@ -1371,8 +1703,8 @@ pub struct MigrationJob {
     pub source_node: String,
     pub target_node: String,
     pub migration_type: String, // online, offline
-    pub status: String, // pending, running, completed, failed, cancelled
-    pub progress: u32, // 0-100
+    pub status: String,         // pending, running, completed, failed, cancelled
+    pub progress: u32,          // 0-100
     pub start_time: chrono::DateTime<chrono::Utc>,
     pub end_time: Option<chrono::DateTime<chrono::Utc>>,
     pub error: Option<String>,
@@ -1547,7 +1879,10 @@ pub async fn remove_helm_repository(repo_name: &str) -> Result<(), ApiError> {
 }
 
 /// Search Helm charts
-pub async fn search_helm_charts(query: &str, repo: Option<&str>) -> Result<Vec<HelmChart>, ApiError> {
+pub async fn search_helm_charts(
+    query: &str,
+    repo: Option<&str>,
+) -> Result<Vec<HelmChart>, ApiError> {
     let mut url = format!("/k8s/helm/charts?query={}", query);
     if let Some(repo) = repo {
         url = format!("{}&repo={}", url, repo);
@@ -1566,7 +1901,11 @@ pub async fn get_helm_chart_versions(repo: &str, chart: &str) -> Result<Vec<Stri
 }
 
 /// Get chart values
-pub async fn get_helm_chart_values(repo: &str, chart: &str, version: Option<&str>) -> Result<serde_json::Value, ApiError> {
+pub async fn get_helm_chart_values(
+    repo: &str,
+    chart: &str,
+    version: Option<&str>,
+) -> Result<serde_json::Value, ApiError> {
     let mut url = format!("/k8s/helm/charts/{}/{}/values", repo, chart);
     if let Some(version) = version {
         url = format!("{}?version={}", url, version);
@@ -1575,7 +1914,10 @@ pub async fn get_helm_chart_values(repo: &str, chart: &str, version: Option<&str
 }
 
 /// Get Helm releases
-pub async fn get_helm_releases(cluster_id: &str, namespace: Option<&str>) -> Result<Vec<HelmRelease>, ApiError> {
+pub async fn get_helm_releases(
+    cluster_id: &str,
+    namespace: Option<&str>,
+) -> Result<Vec<HelmRelease>, ApiError> {
     let mut url = format!("/k8s/clusters/{}/helm/releases", cluster_id);
     if let Some(namespace) = namespace {
         url = format!("{}?namespace={}", url, namespace);
@@ -1584,39 +1926,105 @@ pub async fn get_helm_releases(cluster_id: &str, namespace: Option<&str>) -> Res
 }
 
 /// Get Helm release details
-pub async fn get_helm_release(cluster_id: &str, namespace: &str, release_name: &str) -> Result<HelmRelease, ApiError> {
-    fetch_json(&format!("/k8s/clusters/{}/helm/releases/{}/{}", cluster_id, namespace, release_name)).await
+pub async fn get_helm_release(
+    cluster_id: &str,
+    namespace: &str,
+    release_name: &str,
+) -> Result<HelmRelease, ApiError> {
+    fetch_json(&format!(
+        "/k8s/clusters/{}/helm/releases/{}/{}",
+        cluster_id, namespace, release_name
+    ))
+    .await
 }
 
 /// Install Helm chart
-pub async fn install_helm_chart(cluster_id: &str, namespace: &str, request: HelmInstallRequest) -> Result<HelmRelease, ApiError> {
-    post_json(&format!("/k8s/clusters/{}/namespaces/{}/helm/install", cluster_id, namespace), &request).await
+pub async fn install_helm_chart(
+    cluster_id: &str,
+    namespace: &str,
+    request: HelmInstallRequest,
+) -> Result<HelmRelease, ApiError> {
+    post_json(
+        &format!(
+            "/k8s/clusters/{}/namespaces/{}/helm/install",
+            cluster_id, namespace
+        ),
+        &request,
+    )
+    .await
 }
 
 /// Upgrade Helm release
-pub async fn upgrade_helm_release(cluster_id: &str, namespace: &str, release_name: &str, request: HelmInstallRequest) -> Result<HelmRelease, ApiError> {
-    post_json(&format!("/k8s/clusters/{}/namespaces/{}/helm/releases/{}/upgrade", cluster_id, namespace, release_name), &request).await
+pub async fn upgrade_helm_release(
+    cluster_id: &str,
+    namespace: &str,
+    release_name: &str,
+    request: HelmInstallRequest,
+) -> Result<HelmRelease, ApiError> {
+    post_json(
+        &format!(
+            "/k8s/clusters/{}/namespaces/{}/helm/releases/{}/upgrade",
+            cluster_id, namespace, release_name
+        ),
+        &request,
+    )
+    .await
 }
 
 /// Uninstall Helm release
-pub async fn uninstall_helm_release(cluster_id: &str, namespace: &str, release_name: &str) -> Result<(), ApiError> {
-    delete_json(&format!("/k8s/clusters/{}/namespaces/{}/helm/releases/{}", cluster_id, namespace, release_name)).await
+pub async fn uninstall_helm_release(
+    cluster_id: &str,
+    namespace: &str,
+    release_name: &str,
+) -> Result<(), ApiError> {
+    delete_json(&format!(
+        "/k8s/clusters/{}/namespaces/{}/helm/releases/{}",
+        cluster_id, namespace, release_name
+    ))
+    .await
 }
 
 /// Get Helm release values
-pub async fn get_helm_release_values(cluster_id: &str, namespace: &str, release_name: &str) -> Result<HelmValues, ApiError> {
-    fetch_json(&format!("/k8s/clusters/{}/namespaces/{}/helm/releases/{}/values", cluster_id, namespace, release_name)).await
+pub async fn get_helm_release_values(
+    cluster_id: &str,
+    namespace: &str,
+    release_name: &str,
+) -> Result<HelmValues, ApiError> {
+    fetch_json(&format!(
+        "/k8s/clusters/{}/namespaces/{}/helm/releases/{}/values",
+        cluster_id, namespace, release_name
+    ))
+    .await
 }
 
 /// Get Helm release history
-pub async fn get_helm_release_history(cluster_id: &str, namespace: &str, release_name: &str) -> Result<Vec<HelmRelease>, ApiError> {
-    fetch_json(&format!("/k8s/clusters/{}/namespaces/{}/helm/releases/{}/history", cluster_id, namespace, release_name)).await
+pub async fn get_helm_release_history(
+    cluster_id: &str,
+    namespace: &str,
+    release_name: &str,
+) -> Result<Vec<HelmRelease>, ApiError> {
+    fetch_json(&format!(
+        "/k8s/clusters/{}/namespaces/{}/helm/releases/{}/history",
+        cluster_id, namespace, release_name
+    ))
+    .await
 }
 
 /// Rollback Helm release
-pub async fn rollback_helm_release(cluster_id: &str, namespace: &str, release_name: &str, revision: u32) -> Result<HelmRelease, ApiError> {
-    post_json(&format!("/k8s/clusters/{}/namespaces/{}/helm/releases/{}/rollback", cluster_id, namespace, release_name),
-              &serde_json::json!({"revision": revision})).await
+pub async fn rollback_helm_release(
+    cluster_id: &str,
+    namespace: &str,
+    release_name: &str,
+    revision: u32,
+) -> Result<HelmRelease, ApiError> {
+    post_json(
+        &format!(
+            "/k8s/clusters/{}/namespaces/{}/helm/releases/{}/rollback",
+            cluster_id, namespace, release_name
+        ),
+        &serde_json::json!({"revision": revision}),
+    )
+    .await
 }
 
 // ============================================================================
@@ -1624,53 +2032,145 @@ pub async fn rollback_helm_release(cluster_id: &str, namespace: &str, release_na
 // ============================================================================
 
 /// Get ConfigMaps in a namespace
-pub async fn get_configmaps(cluster_id: &str, namespace: &str) -> Result<Vec<KubernetesConfigMap>, ApiError> {
-    fetch_json(&format!("/k8s/clusters/{}/namespaces/{}/configmaps", cluster_id, namespace)).await
+pub async fn get_configmaps(
+    cluster_id: &str,
+    namespace: &str,
+) -> Result<Vec<KubernetesConfigMap>, ApiError> {
+    fetch_json(&format!(
+        "/k8s/clusters/{}/namespaces/{}/configmaps",
+        cluster_id, namespace
+    ))
+    .await
 }
 
 /// Get ConfigMap details
-pub async fn get_configmap(cluster_id: &str, namespace: &str, configmap_name: &str) -> Result<KubernetesConfigMap, ApiError> {
-    fetch_json(&format!("/k8s/clusters/{}/namespaces/{}/configmaps/{}", cluster_id, namespace, configmap_name)).await
+pub async fn get_configmap(
+    cluster_id: &str,
+    namespace: &str,
+    configmap_name: &str,
+) -> Result<KubernetesConfigMap, ApiError> {
+    fetch_json(&format!(
+        "/k8s/clusters/{}/namespaces/{}/configmaps/{}",
+        cluster_id, namespace, configmap_name
+    ))
+    .await
 }
 
 /// Create ConfigMap
-pub async fn create_configmap(cluster_id: &str, namespace: &str, request: CreateConfigMapRequest) -> Result<KubernetesConfigMap, ApiError> {
-    post_json(&format!("/k8s/clusters/{}/namespaces/{}/configmaps", cluster_id, namespace), &request).await
+pub async fn create_configmap(
+    cluster_id: &str,
+    namespace: &str,
+    request: CreateConfigMapRequest,
+) -> Result<KubernetesConfigMap, ApiError> {
+    post_json(
+        &format!(
+            "/k8s/clusters/{}/namespaces/{}/configmaps",
+            cluster_id, namespace
+        ),
+        &request,
+    )
+    .await
 }
 
 /// Update ConfigMap
-pub async fn update_configmap(cluster_id: &str, namespace: &str, configmap_name: &str, request: CreateConfigMapRequest) -> Result<KubernetesConfigMap, ApiError> {
-    post_json(&format!("/k8s/clusters/{}/namespaces/{}/configmaps/{}", cluster_id, namespace, configmap_name), &request).await
+pub async fn update_configmap(
+    cluster_id: &str,
+    namespace: &str,
+    configmap_name: &str,
+    request: CreateConfigMapRequest,
+) -> Result<KubernetesConfigMap, ApiError> {
+    post_json(
+        &format!(
+            "/k8s/clusters/{}/namespaces/{}/configmaps/{}",
+            cluster_id, namespace, configmap_name
+        ),
+        &request,
+    )
+    .await
 }
 
 /// Delete ConfigMap
-pub async fn delete_configmap(cluster_id: &str, namespace: &str, configmap_name: &str) -> Result<(), ApiError> {
-    delete_json(&format!("/k8s/clusters/{}/namespaces/{}/configmaps/{}", cluster_id, namespace, configmap_name)).await
+pub async fn delete_configmap(
+    cluster_id: &str,
+    namespace: &str,
+    configmap_name: &str,
+) -> Result<(), ApiError> {
+    delete_json(&format!(
+        "/k8s/clusters/{}/namespaces/{}/configmaps/{}",
+        cluster_id, namespace, configmap_name
+    ))
+    .await
 }
 
 /// Get Secrets in a namespace
-pub async fn get_secrets(cluster_id: &str, namespace: &str) -> Result<Vec<KubernetesSecret>, ApiError> {
-    fetch_json(&format!("/k8s/clusters/{}/namespaces/{}/secrets", cluster_id, namespace)).await
+pub async fn get_secrets(
+    cluster_id: &str,
+    namespace: &str,
+) -> Result<Vec<KubernetesSecret>, ApiError> {
+    fetch_json(&format!(
+        "/k8s/clusters/{}/namespaces/{}/secrets",
+        cluster_id, namespace
+    ))
+    .await
 }
 
 /// Get Secret details
-pub async fn get_secret(cluster_id: &str, namespace: &str, secret_name: &str) -> Result<KubernetesSecret, ApiError> {
-    fetch_json(&format!("/k8s/clusters/{}/namespaces/{}/secrets/{}", cluster_id, namespace, secret_name)).await
+pub async fn get_secret(
+    cluster_id: &str,
+    namespace: &str,
+    secret_name: &str,
+) -> Result<KubernetesSecret, ApiError> {
+    fetch_json(&format!(
+        "/k8s/clusters/{}/namespaces/{}/secrets/{}",
+        cluster_id, namespace, secret_name
+    ))
+    .await
 }
 
 /// Create Secret
-pub async fn create_secret(cluster_id: &str, namespace: &str, request: CreateSecretRequest) -> Result<KubernetesSecret, ApiError> {
-    post_json(&format!("/k8s/clusters/{}/namespaces/{}/secrets", cluster_id, namespace), &request).await
+pub async fn create_secret(
+    cluster_id: &str,
+    namespace: &str,
+    request: CreateSecretRequest,
+) -> Result<KubernetesSecret, ApiError> {
+    post_json(
+        &format!(
+            "/k8s/clusters/{}/namespaces/{}/secrets",
+            cluster_id, namespace
+        ),
+        &request,
+    )
+    .await
 }
 
 /// Update Secret
-pub async fn update_secret(cluster_id: &str, namespace: &str, secret_name: &str, request: CreateSecretRequest) -> Result<KubernetesSecret, ApiError> {
-    post_json(&format!("/k8s/clusters/{}/namespaces/{}/secrets/{}", cluster_id, namespace, secret_name), &request).await
+pub async fn update_secret(
+    cluster_id: &str,
+    namespace: &str,
+    secret_name: &str,
+    request: CreateSecretRequest,
+) -> Result<KubernetesSecret, ApiError> {
+    post_json(
+        &format!(
+            "/k8s/clusters/{}/namespaces/{}/secrets/{}",
+            cluster_id, namespace, secret_name
+        ),
+        &request,
+    )
+    .await
 }
 
 /// Delete Secret
-pub async fn delete_secret(cluster_id: &str, namespace: &str, secret_name: &str) -> Result<(), ApiError> {
-    delete_json(&format!("/k8s/clusters/{}/namespaces/{}/secrets/{}", cluster_id, namespace, secret_name)).await
+pub async fn delete_secret(
+    cluster_id: &str,
+    namespace: &str,
+    secret_name: &str,
+) -> Result<(), ApiError> {
+    delete_json(&format!(
+        "/k8s/clusters/{}/namespaces/{}/secrets/{}",
+        cluster_id, namespace, secret_name
+    ))
+    .await
 }
 
 // ============================================================================
@@ -1678,42 +2178,74 @@ pub async fn delete_secret(cluster_id: &str, namespace: &str, secret_name: &str)
 // ============================================================================
 
 /// Get ConfigMaps in a namespace (alias)
-pub async fn get_kubernetes_configmaps(cluster_id: &str, namespace: Option<&str>) -> Result<Vec<KubernetesConfigMap>, ApiError> {
+pub async fn get_kubernetes_configmaps(
+    cluster_id: &str,
+    namespace: Option<&str>,
+) -> Result<Vec<KubernetesConfigMap>, ApiError> {
     get_configmaps(cluster_id, namespace.unwrap_or("default")).await
 }
 
 /// Create ConfigMap (alias)
-pub async fn create_kubernetes_configmap(cluster_id: &str, namespace: &str, request: CreateConfigMapRequest) -> Result<KubernetesConfigMap, ApiError> {
+pub async fn create_kubernetes_configmap(
+    cluster_id: &str,
+    namespace: &str,
+    request: CreateConfigMapRequest,
+) -> Result<KubernetesConfigMap, ApiError> {
     create_configmap(cluster_id, namespace, request).await
 }
 
 /// Update ConfigMap (alias)
-pub async fn update_kubernetes_configmap(cluster_id: &str, namespace: &str, configmap_name: &str, request: CreateConfigMapRequest) -> Result<KubernetesConfigMap, ApiError> {
+pub async fn update_kubernetes_configmap(
+    cluster_id: &str,
+    namespace: &str,
+    configmap_name: &str,
+    request: CreateConfigMapRequest,
+) -> Result<KubernetesConfigMap, ApiError> {
     update_configmap(cluster_id, namespace, configmap_name, request).await
 }
 
 /// Delete ConfigMap (alias)
-pub async fn delete_kubernetes_configmap(cluster_id: &str, namespace: &str, configmap_name: &str) -> Result<(), ApiError> {
+pub async fn delete_kubernetes_configmap(
+    cluster_id: &str,
+    namespace: &str,
+    configmap_name: &str,
+) -> Result<(), ApiError> {
     delete_configmap(cluster_id, namespace, configmap_name).await
 }
 
 /// Get Secrets in a namespace (alias)
-pub async fn get_kubernetes_secrets(cluster_id: &str, namespace: Option<&str>) -> Result<Vec<KubernetesSecret>, ApiError> {
+pub async fn get_kubernetes_secrets(
+    cluster_id: &str,
+    namespace: Option<&str>,
+) -> Result<Vec<KubernetesSecret>, ApiError> {
     get_secrets(cluster_id, namespace.unwrap_or("default")).await
 }
 
 /// Create Secret (alias)
-pub async fn create_kubernetes_secret(cluster_id: &str, namespace: &str, request: CreateSecretRequest) -> Result<KubernetesSecret, ApiError> {
+pub async fn create_kubernetes_secret(
+    cluster_id: &str,
+    namespace: &str,
+    request: CreateSecretRequest,
+) -> Result<KubernetesSecret, ApiError> {
     create_secret(cluster_id, namespace, request).await
 }
 
 /// Update Secret (alias)
-pub async fn update_kubernetes_secret(cluster_id: &str, namespace: &str, secret_name: &str, request: CreateSecretRequest) -> Result<KubernetesSecret, ApiError> {
+pub async fn update_kubernetes_secret(
+    cluster_id: &str,
+    namespace: &str,
+    secret_name: &str,
+    request: CreateSecretRequest,
+) -> Result<KubernetesSecret, ApiError> {
     update_secret(cluster_id, namespace, secret_name, request).await
 }
 
 /// Delete Secret (alias)
-pub async fn delete_kubernetes_secret(cluster_id: &str, namespace: &str, secret_name: &str) -> Result<(), ApiError> {
+pub async fn delete_kubernetes_secret(
+    cluster_id: &str,
+    namespace: &str,
+    secret_name: &str,
+) -> Result<(), ApiError> {
     delete_secret(cluster_id, namespace, secret_name).await
 }
 
@@ -2006,7 +2538,10 @@ pub async fn get_vm_snapshot(vm_id: &str, snapshot_id: &str) -> Result<VmSnapsho
 }
 
 /// Create a new VM snapshot
-pub async fn create_vm_snapshot(vm_id: &str, request: CreateSnapshotRequest) -> Result<VmSnapshot, ApiError> {
+pub async fn create_vm_snapshot(
+    vm_id: &str,
+    request: CreateSnapshotRequest,
+) -> Result<VmSnapshot, ApiError> {
     post_json(&format!("/vms/{}/snapshots", vm_id), &request).await
 }
 
@@ -2016,8 +2551,16 @@ pub async fn delete_vm_snapshot(vm_id: &str, snapshot_id: &str) -> Result<(), Ap
 }
 
 /// Restore a VM snapshot
-pub async fn restore_vm_snapshot(vm_id: &str, snapshot_id: &str, request: RestoreSnapshotRequest) -> Result<(), ApiError> {
-    post_json(&format!("/vms/{}/snapshots/{}/restore", vm_id, snapshot_id), &request).await
+pub async fn restore_vm_snapshot(
+    vm_id: &str,
+    snapshot_id: &str,
+    request: RestoreSnapshotRequest,
+) -> Result<(), ApiError> {
+    post_json(
+        &format!("/vms/{}/snapshots/{}/restore", vm_id, snapshot_id),
+        &request,
+    )
+    .await
 }
 
 /// Get snapshot tree for a VM
@@ -2037,12 +2580,17 @@ pub async fn get_snapshot_schedule(id: &str) -> Result<SnapshotSchedule, ApiErro
 }
 
 /// Create a new snapshot schedule
-pub async fn create_snapshot_schedule(request: CreateSnapshotScheduleRequest) -> Result<SnapshotSchedule, ApiError> {
+pub async fn create_snapshot_schedule(
+    request: CreateSnapshotScheduleRequest,
+) -> Result<SnapshotSchedule, ApiError> {
     post_json("/snapshot-schedules", &request).await
 }
 
 /// Update a snapshot schedule
-pub async fn update_snapshot_schedule(id: &str, request: CreateSnapshotScheduleRequest) -> Result<SnapshotSchedule, ApiError> {
+pub async fn update_snapshot_schedule(
+    id: &str,
+    request: CreateSnapshotScheduleRequest,
+) -> Result<SnapshotSchedule, ApiError> {
     put_json(&format!("/snapshot-schedules/{}", id), &request).await
 }
 
@@ -2063,12 +2611,17 @@ pub async fn get_snapshot_quota(id: &str) -> Result<SnapshotQuota, ApiError> {
 }
 
 /// Create a new snapshot quota
-pub async fn create_snapshot_quota(request: CreateSnapshotQuotaRequest) -> Result<SnapshotQuota, ApiError> {
+pub async fn create_snapshot_quota(
+    request: CreateSnapshotQuotaRequest,
+) -> Result<SnapshotQuota, ApiError> {
     post_json("/snapshot-quotas", &request).await
 }
 
 /// Update a snapshot quota
-pub async fn update_snapshot_quota(id: &str, request: CreateSnapshotQuotaRequest) -> Result<SnapshotQuota, ApiError> {
+pub async fn update_snapshot_quota(
+    id: &str,
+    request: CreateSnapshotQuotaRequest,
+) -> Result<SnapshotQuota, ApiError> {
     put_json(&format!("/snapshot-quotas/{}", id), &request).await
 }
 
@@ -2088,7 +2641,10 @@ pub async fn get_snapshot_quota_summary() -> Result<QuotaSummary, ApiError> {
 }
 
 /// Enforce snapshot quota
-pub async fn enforce_snapshot_quota(id: &str, request: EnforceQuotaRequest) -> Result<(), ApiError> {
+pub async fn enforce_snapshot_quota(
+    id: &str,
+    request: EnforceQuotaRequest,
+) -> Result<(), ApiError> {
     post_json(&format!("/snapshot-quotas/{}/enforce", id), &request).await
 }
 
@@ -2115,7 +2671,11 @@ pub async fn delete_template(id: &str) -> Result<(), ApiError> {
 
 /// Clone a template
 pub async fn clone_template(id: &str, name: String) -> Result<(), ApiError> {
-    post_json(&format!("/templates/{}/clone", id), &serde_json::json!({"name": name})).await
+    post_json(
+        &format!("/templates/{}/clone", id),
+        &serde_json::json!({"name": name}),
+    )
+    .await
 }
 
 // =============================================================================
@@ -2281,7 +2841,10 @@ pub struct MigrationRequest {
 // Cluster Management API Functions (duplicate get_cluster_nodes removed)
 
 /// Add a new node to the cluster
-pub async fn add_cluster_node(name: String, request: AddNodeRequest) -> Result<ClusterNode, ApiError> {
+pub async fn add_cluster_node(
+    name: String,
+    request: AddNodeRequest,
+) -> Result<ClusterNode, ApiError> {
     post_json(&format!("/cluster/nodes/{}", name), &request).await
 }
 
@@ -2291,7 +2854,9 @@ pub async fn get_cluster_architecture() -> Result<ClusterArchitecture, ApiError>
 }
 
 /// Find the best node for a VM
-pub async fn find_best_node_for_vm(request: FindNodeRequest) -> Result<NodeRecommendation, ApiError> {
+pub async fn find_best_node_for_vm(
+    request: FindNodeRequest,
+) -> Result<NodeRecommendation, ApiError> {
     post_json("/cluster/find-node", &request).await
 }
 
@@ -2350,7 +2915,11 @@ pub async fn delete_ha_group(group_id: String) -> Result<(), ApiError> {
 
 /// Assign resource to HA group
 pub async fn assign_resource_to_ha_group(assignment: HaResourceAssignment) -> Result<(), ApiError> {
-    post_json(&format!("/ha/groups/{}/resources", assignment.group_id), &assignment).await
+    post_json(
+        &format!("/ha/groups/{}/resources", assignment.group_id),
+        &assignment,
+    )
+    .await
 }
 
 // Migration Management API Functions for the UI components
@@ -2370,7 +2939,9 @@ pub async fn cancel_migration_job(job_id: String) -> Result<(), ApiError> {
 }
 
 /// Create bulk migration job
-pub async fn create_bulk_migration_job(job: BulkMigrationJob) -> Result<BulkMigrationJob, ApiError> {
+pub async fn create_bulk_migration_job(
+    job: BulkMigrationJob,
+) -> Result<BulkMigrationJob, ApiError> {
     post_json("/migration/bulk", &job).await
 }
 
@@ -2494,7 +3065,7 @@ pub struct MetricDefinition {
     pub retention: String,
     pub cardinality: u64,
     pub last_scraped: String,
-    pub source: String, // prometheus, node_exporter, custom, etc.
+    pub source: String,   // prometheus, node_exporter, custom, etc.
     pub category: String, // system, application, network, storage
 }
 
@@ -2598,8 +3169,15 @@ pub async fn get_metrics_catalog() -> Result<Vec<MetricDefinition>, ApiError> {
     fetch_json("/metrics/catalog").await
 }
 
-pub async fn get_metric_samples(metric_name: String, time_range: String) -> Result<MetricSeries, ApiError> {
-    fetch_json(&format!("/metrics/{}/samples?range={}", metric_name, time_range)).await
+pub async fn get_metric_samples(
+    metric_name: String,
+    time_range: String,
+) -> Result<MetricSeries, ApiError> {
+    fetch_json(&format!(
+        "/metrics/{}/samples?range={}",
+        metric_name, time_range
+    ))
+    .await
 }
 
 pub async fn get_query_history(time_range: String) -> Result<Vec<QueryHistoryEntry>, ApiError> {
@@ -2607,14 +3185,20 @@ pub async fn get_query_history(time_range: String) -> Result<Vec<QueryHistoryEnt
 }
 
 pub async fn toggle_query_favorite(entry_id: String) -> Result<(), ApiError> {
-    post_json(&format!("/metrics/query-history/{}/favorite", entry_id), &()).await
+    post_json(
+        &format!("/metrics/query-history/{}/favorite", entry_id),
+        &(),
+    )
+    .await
 }
 
 pub async fn get_query_templates() -> Result<Vec<QueryTemplate>, ApiError> {
     fetch_json("/metrics/query-templates").await
 }
 
-pub async fn create_query_template(request: CreateQueryTemplateRequest) -> Result<QueryTemplate, ApiError> {
+pub async fn create_query_template(
+    request: CreateQueryTemplateRequest,
+) -> Result<QueryTemplate, ApiError> {
     post_json("/metrics/query-templates", &request).await
 }
 
@@ -2639,10 +3223,18 @@ pub async fn delete_alert_rule(rule_id: String) -> Result<(), ApiError> {
 }
 
 pub async fn toggle_alert_rule(rule_id: String, enabled: bool) -> Result<(), ApiError> {
-    put_json(&format!("/alerts/rules/{}/toggle", rule_id), &serde_json::json!({"enabled": enabled})).await
+    put_json(
+        &format!("/alerts/rules/{}/toggle", rule_id),
+        &serde_json::json!({"enabled": enabled}),
+    )
+    .await
 }
 
-pub async fn preview_alert_rule(query: String, condition: String, threshold: f64) -> Result<AlertPreview, ApiError> {
+pub async fn preview_alert_rule(
+    query: String,
+    condition: String,
+    threshold: f64,
+) -> Result<AlertPreview, ApiError> {
     let request = serde_json::json!({
         "query": query,
         "condition": condition,
@@ -2699,12 +3291,17 @@ pub async fn silence_alert(alert_id: String, duration_seconds: u32) -> Result<()
 }
 
 /// Create notification channel
-pub async fn create_notification_channel(channel: NotificationChannel) -> Result<NotificationChannel, ApiError> {
+pub async fn create_notification_channel(
+    channel: NotificationChannel,
+) -> Result<NotificationChannel, ApiError> {
     post_json("/notifications/channels", &channel).await
 }
 
 /// Update notification channel
-pub async fn update_notification_channel(channel_id: &str, channel: NotificationChannel) -> Result<NotificationChannel, ApiError> {
+pub async fn update_notification_channel(
+    channel_id: &str,
+    channel: NotificationChannel,
+) -> Result<NotificationChannel, ApiError> {
     put_json(&format!("/notifications/channels/{}", channel_id), &channel).await
 }
 
@@ -2843,7 +3440,11 @@ pub async fn get_network_interfaces() -> Result<Vec<NetworkInterface>, ApiError>
 
 /// Update network interface
 pub async fn update_network_interface(interface: NetworkInterface) -> Result<(), ApiError> {
-    post_json(&format!("/system/network/interfaces/{}", interface.name), &interface).await
+    post_json(
+        &format!("/system/network/interfaces/{}", interface.name),
+        &interface,
+    )
+    .await
 }
 
 /// Get DNS configuration
@@ -2878,7 +3479,11 @@ pub async fn get_services_status() -> Result<Vec<ServiceStatus>, ApiError> {
 
 /// Control service (start, stop, restart, enable, disable)
 pub async fn control_service(service_name: &str, action: &str) -> Result<(), ApiError> {
-    post_json(&format!("/system/services/{}/{}", service_name, action), &()).await
+    post_json(
+        &format!("/system/services/{}/{}", service_name, action),
+        &(),
+    )
+    .await
 }
 
 // Removing old get_system_logs - using the extended version with filters below
@@ -3063,7 +3668,8 @@ pub async fn run_diagnostic_test(test_name: &str) -> Result<DiagnosticTestResult
 }
 
 /// Run all diagnostic tests
-pub async fn run_all_diagnostic_tests() -> Result<std::collections::HashMap<String, DiagnosticTestResult>, ApiError> {
+pub async fn run_all_diagnostic_tests(
+) -> Result<std::collections::HashMap<String, DiagnosticTestResult>, ApiError> {
     post_json("/system/diagnostics/tests/run-all", &()).await
 }
 
@@ -3224,12 +3830,17 @@ pub async fn get_custom_dashboard(id: &str) -> Result<CustomDashboard, ApiError>
 }
 
 /// Create custom dashboard
-pub async fn create_custom_dashboard(request: CreateDashboardRequest) -> Result<CustomDashboard, ApiError> {
+pub async fn create_custom_dashboard(
+    request: CreateDashboardRequest,
+) -> Result<CustomDashboard, ApiError> {
     post_json("/dashboards/custom", &request).await
 }
 
 /// Update custom dashboard
-pub async fn update_custom_dashboard(id: &str, request: UpdateDashboardRequest) -> Result<CustomDashboard, ApiError> {
+pub async fn update_custom_dashboard(
+    id: &str,
+    request: UpdateDashboardRequest,
+) -> Result<CustomDashboard, ApiError> {
     put_json(&format!("/dashboards/custom/{}", id), &request).await
 }
 
@@ -3239,7 +3850,10 @@ pub async fn delete_custom_dashboard(id: &str) -> Result<(), ApiError> {
 }
 
 /// Clone custom dashboard
-pub async fn clone_custom_dashboard(id: &str, request: CloneDashboardRequest) -> Result<CustomDashboard, ApiError> {
+pub async fn clone_custom_dashboard(
+    id: &str,
+    request: CloneDashboardRequest,
+) -> Result<CustomDashboard, ApiError> {
     post_json(&format!("/dashboards/custom/{}/clone", id), &request).await
 }
 
@@ -3249,7 +3863,9 @@ pub async fn export_dashboard(id: &str) -> Result<String, ApiError> {
 }
 
 /// Import dashboard
-pub async fn import_dashboard(request: ImportDashboardRequest) -> Result<CustomDashboard, ApiError> {
+pub async fn import_dashboard(
+    request: ImportDashboardRequest,
+) -> Result<CustomDashboard, ApiError> {
     post_json("/dashboards/custom/import", &request).await
 }
 
@@ -3259,24 +3875,53 @@ pub async fn get_dashboard_widgets(dashboard_id: &str) -> Result<Vec<DashboardWi
 }
 
 /// Add widget to dashboard
-pub async fn add_dashboard_widget(dashboard_id: &str, request: CreateWidgetRequest) -> Result<DashboardWidget, ApiError> {
-    post_json(&format!("/dashboards/custom/{}/widgets", dashboard_id), &request).await
+pub async fn add_dashboard_widget(
+    dashboard_id: &str,
+    request: CreateWidgetRequest,
+) -> Result<DashboardWidget, ApiError> {
+    post_json(
+        &format!("/dashboards/custom/{}/widgets", dashboard_id),
+        &request,
+    )
+    .await
 }
 
 /// Update widget position
-pub async fn update_widget_position(dashboard_id: &str, widget_id: &str, x: u32, y: u32) -> Result<(), ApiError> {
-    put_json(&format!("/dashboards/custom/{}/widgets/{}/position", dashboard_id, widget_id),
-             &serde_json::json!({"x": x, "y": y})).await
+pub async fn update_widget_position(
+    dashboard_id: &str,
+    widget_id: &str,
+    x: u32,
+    y: u32,
+) -> Result<(), ApiError> {
+    put_json(
+        &format!(
+            "/dashboards/custom/{}/widgets/{}/position",
+            dashboard_id, widget_id
+        ),
+        &serde_json::json!({"x": x, "y": y}),
+    )
+    .await
 }
 
 /// Remove widget from dashboard
 pub async fn remove_dashboard_widget(dashboard_id: &str, widget_id: &str) -> Result<(), ApiError> {
-    delete_json(&format!("/dashboards/custom/{}/widgets/{}", dashboard_id, widget_id)).await
+    delete_json(&format!(
+        "/dashboards/custom/{}/widgets/{}",
+        dashboard_id, widget_id
+    ))
+    .await
 }
 
 /// Save dashboard layout
-pub async fn save_dashboard_layout(dashboard_id: &str, widgets: Vec<DashboardWidget>) -> Result<(), ApiError> {
-    put_json(&format!("/dashboards/custom/{}/layout", dashboard_id), &widgets).await
+pub async fn save_dashboard_layout(
+    dashboard_id: &str,
+    widgets: Vec<DashboardWidget>,
+) -> Result<(), ApiError> {
+    put_json(
+        &format!("/dashboards/custom/{}/layout", dashboard_id),
+        &widgets,
+    )
+    .await
 }
 
 /// Get all widgets across dashboards
@@ -3290,9 +3935,15 @@ pub async fn bulk_delete_widgets(widget_ids: Vec<String>) -> Result<(), ApiError
 }
 
 /// Bulk move widgets
-pub async fn bulk_move_widgets(widget_ids: Vec<String>, target_dashboard_id: String) -> Result<(), ApiError> {
-    post_json("/dashboards/widgets/bulk-move",
-              &serde_json::json!({"widget_ids": widget_ids, "target_dashboard_id": target_dashboard_id})).await
+pub async fn bulk_move_widgets(
+    widget_ids: Vec<String>,
+    target_dashboard_id: String,
+) -> Result<(), ApiError> {
+    post_json(
+        "/dashboards/widgets/bulk-move",
+        &serde_json::json!({"widget_ids": widget_ids, "target_dashboard_id": target_dashboard_id}),
+    )
+    .await
 }
 
 /// Get chart templates
@@ -3301,7 +3952,9 @@ pub async fn get_chart_templates() -> Result<Vec<ChartTemplate>, ApiError> {
 }
 
 /// Create chart template
-pub async fn create_chart_template(request: CreateChartTemplateRequest) -> Result<ChartTemplate, ApiError> {
+pub async fn create_chart_template(
+    request: CreateChartTemplateRequest,
+) -> Result<ChartTemplate, ApiError> {
     post_json("/dashboards/chart-templates", &request).await
 }
 
@@ -3573,7 +4226,11 @@ pub struct CreateInvestigationRequest {
 }
 
 // Audit Log API Functions
-pub async fn get_audit_events(filter: AuditFilter, page: u64, page_size: u64) -> Result<(Vec<AuditEvent>, u64), ApiError> {
+pub async fn get_audit_events(
+    filter: AuditFilter,
+    page: u64,
+    page_size: u64,
+) -> Result<(Vec<AuditEvent>, u64), ApiError> {
     let request = serde_json::json!({
         "filter": filter,
         "page": page,
@@ -3595,8 +4252,15 @@ pub async fn get_security_events(time_range: String) -> Result<Vec<SecurityEvent
     fetch_json(&format!("/security/events?range={}", time_range)).await
 }
 
-pub async fn update_security_event_status(event_id: String, status: String) -> Result<(), ApiError> {
-    put_json(&format!("/security/events/{}/status", event_id), &serde_json::json!({"status": status})).await
+pub async fn update_security_event_status(
+    event_id: String,
+    status: String,
+) -> Result<(), ApiError> {
+    put_json(
+        &format!("/security/events/{}/status", event_id),
+        &serde_json::json!({"status": status}),
+    )
+    .await
 }
 
 pub async fn get_active_threats() -> Result<Vec<SecurityThreat>, ApiError> {
@@ -3616,23 +4280,38 @@ pub async fn get_compliance_frameworks() -> Result<Vec<ComplianceFramework>, Api
     fetch_json("/compliance/frameworks").await
 }
 
-pub async fn get_compliance_controls(framework_id: String) -> Result<Vec<ComplianceControl>, ApiError> {
+pub async fn get_compliance_controls(
+    framework_id: String,
+) -> Result<Vec<ComplianceControl>, ApiError> {
     fetch_json(&format!("/compliance/frameworks/{}/controls", framework_id)).await
 }
 
 pub async fn run_compliance_assessment(framework_id: String) -> Result<(), ApiError> {
-    post_json(&format!("/compliance/frameworks/{}/assess", framework_id), &()).await
+    post_json(
+        &format!("/compliance/frameworks/{}/assess", framework_id),
+        &(),
+    )
+    .await
 }
 
-pub async fn set_control_override(control_id: String, override_data: ManualOverride) -> Result<(), ApiError> {
-    put_json(&format!("/compliance/controls/{}/override", control_id), &override_data).await
+pub async fn set_control_override(
+    control_id: String,
+    override_data: ManualOverride,
+) -> Result<(), ApiError> {
+    put_json(
+        &format!("/compliance/controls/{}/override", control_id),
+        &override_data,
+    )
+    .await
 }
 
 pub async fn get_compliance_reports() -> Result<Vec<ComplianceReport>, ApiError> {
     fetch_json("/compliance/reports").await
 }
 
-pub async fn generate_compliance_report(request: GenerateReportRequest) -> Result<ComplianceReport, ApiError> {
+pub async fn generate_compliance_report(
+    request: GenerateReportRequest,
+) -> Result<ComplianceReport, ApiError> {
     post_json("/compliance/reports/generate", &request).await
 }
 
@@ -3645,20 +4324,43 @@ pub async fn get_investigation(id: String) -> Result<Investigation, ApiError> {
     fetch_json(&format!("/forensics/investigations/{}", id)).await
 }
 
-pub async fn create_investigation(request: CreateInvestigationRequest) -> Result<Investigation, ApiError> {
+pub async fn create_investigation(
+    request: CreateInvestigationRequest,
+) -> Result<Investigation, ApiError> {
     post_json("/forensics/investigations", &request).await
 }
 
 pub async fn update_investigation_status(id: String, status: String) -> Result<(), ApiError> {
-    put_json(&format!("/forensics/investigations/{}/status", id), &serde_json::json!({"status": status})).await
+    put_json(
+        &format!("/forensics/investigations/{}/status", id),
+        &serde_json::json!({"status": status}),
+    )
+    .await
 }
 
-pub async fn add_investigation_finding(investigation_id: String, finding: Finding) -> Result<(), ApiError> {
-    post_json(&format!("/forensics/investigations/{}/findings", investigation_id), &finding).await
+pub async fn add_investigation_finding(
+    investigation_id: String,
+    finding: Finding,
+) -> Result<(), ApiError> {
+    post_json(
+        &format!("/forensics/investigations/{}/findings", investigation_id),
+        &finding,
+    )
+    .await
 }
 
-pub async fn collect_investigation_artifact(investigation_id: String, request: serde_json::Value) -> Result<Artifact, ApiError> {
-    post_json(&format!("/forensics/investigations/{}/artifacts/collect", investigation_id), &request).await
+pub async fn collect_investigation_artifact(
+    investigation_id: String,
+    request: serde_json::Value,
+) -> Result<Artifact, ApiError> {
+    post_json(
+        &format!(
+            "/forensics/investigations/{}/artifacts/collect",
+            investigation_id
+        ),
+        &request,
+    )
+    .await
 }
 
 // ============================================================================
@@ -3742,7 +4444,11 @@ pub async fn verify_totp_setup(code: String) -> Result<Vec<String>, ApiError> {
 }
 
 pub async fn register_webauthn_credential(name: String) -> Result<(), ApiError> {
-    post_json("/auth/mfa/webauthn/register", &serde_json::json!({"name": name})).await
+    post_json(
+        "/auth/mfa/webauthn/register",
+        &serde_json::json!({"name": name}),
+    )
+    .await
 }
 
 pub async fn regenerate_mfa_backup_codes() -> Result<Vec<String>, ApiError> {
@@ -3754,7 +4460,11 @@ pub async fn revoke_trusted_device(device_id: String) -> Result<(), ApiError> {
 }
 
 pub async fn disable_mfa(method_id: String, verification_code: String) -> Result<(), ApiError> {
-    post_json(&format!("/auth/mfa/methods/{}/disable", method_id), &serde_json::json!({"code": verification_code})).await
+    post_json(
+        &format!("/auth/mfa/methods/{}/disable", method_id),
+        &serde_json::json!({"code": verification_code}),
+    )
+    .await
 }
 
 pub async fn set_primary_mfa_method(method_id: String) -> Result<(), ApiError> {
@@ -3965,39 +4675,68 @@ pub async fn get_disk_partitions(disk_id: &str) -> Result<Vec<PartitionInfo>, Ap
     fetch_json(&format!("/storage/disks/{}/partitions", disk_id)).await
 }
 
-pub async fn create_partition(disk_id: &str, size_bytes: u64, filesystem: &str) -> Result<PartitionInfo, ApiError> {
+pub async fn create_partition(
+    disk_id: &str,
+    size_bytes: u64,
+    filesystem: &str,
+) -> Result<PartitionInfo, ApiError> {
     post_json(
         &format!("/storage/disks/{}/partitions", disk_id),
         &serde_json::json!({
             "size_bytes": size_bytes,
             "filesystem": filesystem
-        })
-    ).await
+        }),
+    )
+    .await
 }
 
 pub async fn delete_partition(disk_id: &str, partition_id: &str) -> Result<(), ApiError> {
-    delete_json(&format!("/storage/disks/{}/partitions/{}", disk_id, partition_id)).await
+    delete_json(&format!(
+        "/storage/disks/{}/partitions/{}",
+        disk_id, partition_id
+    ))
+    .await
 }
 
-pub async fn format_partition(disk_id: &str, partition_id: &str, filesystem: &str) -> Result<(), ApiError> {
+pub async fn format_partition(
+    disk_id: &str,
+    partition_id: &str,
+    filesystem: &str,
+) -> Result<(), ApiError> {
     post_json(
-        &format!("/storage/disks/{}/partitions/{}/format", disk_id, partition_id),
-        &serde_json::json!({"filesystem": filesystem})
-    ).await
+        &format!(
+            "/storage/disks/{}/partitions/{}/format",
+            disk_id, partition_id
+        ),
+        &serde_json::json!({"filesystem": filesystem}),
+    )
+    .await
 }
 
-pub async fn mount_partition(disk_id: &str, partition_id: &str, mount_point: &str) -> Result<(), ApiError> {
+pub async fn mount_partition(
+    disk_id: &str,
+    partition_id: &str,
+    mount_point: &str,
+) -> Result<(), ApiError> {
     post_json(
-        &format!("/storage/disks/{}/partitions/{}/mount", disk_id, partition_id),
-        &serde_json::json!({"mount_point": mount_point})
-    ).await
+        &format!(
+            "/storage/disks/{}/partitions/{}/mount",
+            disk_id, partition_id
+        ),
+        &serde_json::json!({"mount_point": mount_point}),
+    )
+    .await
 }
 
 pub async fn unmount_partition(disk_id: &str, partition_id: &str) -> Result<(), ApiError> {
     post_json(
-        &format!("/storage/disks/{}/partitions/{}/unmount", disk_id, partition_id),
-        &()
-    ).await
+        &format!(
+            "/storage/disks/{}/partitions/{}/unmount",
+            disk_id, partition_id
+        ),
+        &(),
+    )
+    .await
 }
 
 // Volume Management API
@@ -4039,36 +4778,46 @@ pub async fn get_volume(volume_id: &str) -> Result<VolumeInfo, ApiError> {
 }
 
 pub async fn create_new_volume(form: CreateVolumeForm) -> Result<VolumeInfo, ApiError> {
-    post_json("/storage/volumes", &serde_json::json!({
-        "name": form.name,
-        "pool_id": form.pool_id,
-        "size_gb": form.size_gb,
-        "volume_type": form.volume_type,
-        "format": form.format,
-        "thin_provisioned": form.thin_provisioned,
-        "description": form.description
-    })).await
+    post_json(
+        "/storage/volumes",
+        &serde_json::json!({
+            "name": form.name,
+            "pool_id": form.pool_id,
+            "size_gb": form.size_gb,
+            "volume_type": form.volume_type,
+            "format": form.format,
+            "thin_provisioned": form.thin_provisioned,
+            "description": form.description
+        }),
+    )
+    .await
 }
 
 pub async fn resize_volume_api(volume_id: &str, new_size_gb: u64) -> Result<(), ApiError> {
     put_json(
         &format!("/storage/volumes/{}/resize", volume_id),
-        &serde_json::json!({"size_gb": new_size_gb})
-    ).await
+        &serde_json::json!({"size_gb": new_size_gb}),
+    )
+    .await
 }
 
 pub async fn delete_volume_api(volume_id: &str) -> Result<(), ApiError> {
     delete_json(&format!("/storage/volumes/{}", volume_id)).await
 }
 
-pub async fn attach_volume(volume_id: &str, vm_id: &str, device: Option<&str>) -> Result<(), ApiError> {
+pub async fn attach_volume(
+    volume_id: &str,
+    vm_id: &str,
+    device: Option<&str>,
+) -> Result<(), ApiError> {
     post_json(
         &format!("/storage/volumes/{}/attach", volume_id),
         &serde_json::json!({
             "vm_id": vm_id,
             "device": device
-        })
-    ).await
+        }),
+    )
+    .await
 }
 
 pub async fn detach_volume(volume_id: &str) -> Result<(), ApiError> {
@@ -4079,25 +4828,38 @@ pub async fn get_volume_snapshots(volume_id: &str) -> Result<Vec<VolumeSnapshot>
     fetch_json(&format!("/storage/volumes/{}/snapshots", volume_id)).await
 }
 
-pub async fn create_volume_snapshot(volume_id: &str, name: &str, description: Option<&str>) -> Result<VolumeSnapshot, ApiError> {
+pub async fn create_volume_snapshot(
+    volume_id: &str,
+    name: &str,
+    description: Option<&str>,
+) -> Result<VolumeSnapshot, ApiError> {
     post_json(
         &format!("/storage/volumes/{}/snapshots", volume_id),
         &serde_json::json!({
             "name": name,
             "description": description
-        })
-    ).await
+        }),
+    )
+    .await
 }
 
 pub async fn delete_volume_snapshot(volume_id: &str, snapshot_id: &str) -> Result<(), ApiError> {
-    delete_json(&format!("/storage/volumes/{}/snapshots/{}", volume_id, snapshot_id)).await
+    delete_json(&format!(
+        "/storage/volumes/{}/snapshots/{}",
+        volume_id, snapshot_id
+    ))
+    .await
 }
 
 pub async fn restore_volume_snapshot(volume_id: &str, snapshot_id: &str) -> Result<(), ApiError> {
     post_json(
-        &format!("/storage/volumes/{}/snapshots/{}/restore", volume_id, snapshot_id),
-        &()
-    ).await
+        &format!(
+            "/storage/volumes/{}/snapshots/{}/restore",
+            volume_id, snapshot_id
+        ),
+        &(),
+    )
+    .await
 }
 
 // SMART Monitoring API
@@ -4114,14 +4876,19 @@ pub async fn get_smart_alerts() -> Result<Vec<SmartAlert>, ApiError> {
 }
 
 pub async fn acknowledge_smart_alert(alert_id: &str) -> Result<(), ApiError> {
-    put_json(&format!("/storage/smart/alerts/{}/acknowledge", alert_id), &()).await
+    put_json(
+        &format!("/storage/smart/alerts/{}/acknowledge", alert_id),
+        &(),
+    )
+    .await
 }
 
 pub async fn start_smart_test(disk_id: &str, test_type: &str) -> Result<(), ApiError> {
     post_json(
         &format!("/storage/smart/disks/{}/test", disk_id),
-        &serde_json::json!({"test_type": test_type})
-    ).await
+        &serde_json::json!({"test_type": test_type}),
+    )
+    .await
 }
 
 pub async fn get_smart_test_status(disk_id: &str) -> Result<serde_json::Value, ApiError> {
@@ -4212,7 +4979,9 @@ pub async fn get_migratable_resources(pool_id: &str) -> Result<Vec<MigratableRes
     fetch_json(&format!("/storage/pools/{}/resources", pool_id)).await
 }
 
-pub async fn create_storage_migration(request: CreateMigrationRequest) -> Result<StorageMigrationJob, ApiError> {
+pub async fn create_storage_migration(
+    request: CreateMigrationRequest,
+) -> Result<StorageMigrationJob, ApiError> {
     post_json("/storage/migrations", &request).await
 }
 
@@ -4261,7 +5030,9 @@ pub struct CreateStoragePoolRequest {
     pub config: serde_json::Value,
 }
 
-pub async fn create_storage_pool(request: CreateStoragePoolRequest) -> Result<StoragePoolInfo, ApiError> {
+pub async fn create_storage_pool(
+    request: CreateStoragePoolRequest,
+) -> Result<StoragePoolInfo, ApiError> {
     post_json("/storage/pools", &request).await
 }
 
@@ -4288,7 +5059,7 @@ pub struct BackupValidation {
     pub backup_name: String,
     pub vm_name: String,
     pub validation_type: String, // checksum, integrity, restore_test
-    pub status: String, // pending, running, passed, failed, skipped
+    pub status: String,          // pending, running, passed, failed, skipped
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
     pub duration_seconds: Option<u64>,
@@ -4321,7 +5092,7 @@ pub struct RestoreTest {
     pub id: String,
     pub backup_id: String,
     pub backup_name: String,
-    pub test_type: String, // full_restore, partial_restore, boot_test
+    pub test_type: String,          // full_restore, partial_restore, boot_test
     pub target_environment: String, // isolated_vm, sandbox, staging
     pub status: String, // pending, provisioning, restoring, testing, cleaning, passed, failed
     pub progress: f64,
@@ -4354,7 +5125,7 @@ pub struct ValidationSchedule {
     pub id: String,
     pub name: String,
     pub enabled: bool,
-    pub schedule: String, // cron expression
+    pub schedule: String,         // cron expression
     pub backup_selection: String, // all, recent, specific
     pub validation_types: Vec<String>,
     pub notify_on_failure: bool,
@@ -4395,18 +5166,26 @@ pub async fn get_backup_validation(validation_id: &str) -> Result<BackupValidati
     fetch_json(&format!("/backups/validations/{}", validation_id)).await
 }
 
-pub async fn start_backup_validation(backup_id: &str, validation_type: &str) -> Result<BackupValidation, ApiError> {
+pub async fn start_backup_validation(
+    backup_id: &str,
+    validation_type: &str,
+) -> Result<BackupValidation, ApiError> {
     post_json(
         "/backups/validations",
         &serde_json::json!({
             "backup_id": backup_id,
             "validation_type": validation_type
-        })
-    ).await
+        }),
+    )
+    .await
 }
 
 pub async fn cancel_backup_validation(validation_id: &str) -> Result<(), ApiError> {
-    post_json(&format!("/backups/validations/{}/cancel", validation_id), &()).await
+    post_json(
+        &format!("/backups/validations/{}/cancel", validation_id),
+        &(),
+    )
+    .await
 }
 
 pub async fn delete_backup_validation(validation_id: &str) -> Result<(), ApiError> {
@@ -4414,7 +5193,11 @@ pub async fn delete_backup_validation(validation_id: &str) -> Result<(), ApiErro
 }
 
 pub async fn retry_backup_validation(validation_id: &str) -> Result<BackupValidation, ApiError> {
-    post_json(&format!("/backups/validations/{}/retry", validation_id), &()).await
+    post_json(
+        &format!("/backups/validations/{}/retry", validation_id),
+        &(),
+    )
+    .await
 }
 
 // Restore Test API Functions
@@ -4426,15 +5209,20 @@ pub async fn get_restore_test(test_id: &str) -> Result<RestoreTest, ApiError> {
     fetch_json(&format!("/backups/restore-tests/{}", test_id)).await
 }
 
-pub async fn start_restore_test(backup_id: &str, test_type: &str, target_environment: &str) -> Result<RestoreTest, ApiError> {
+pub async fn start_restore_test(
+    backup_id: &str,
+    test_type: &str,
+    target_environment: &str,
+) -> Result<RestoreTest, ApiError> {
     post_json(
         "/backups/restore-tests",
         &serde_json::json!({
             "backup_id": backup_id,
             "test_type": test_type,
             "target_environment": target_environment
-        })
-    ).await
+        }),
+    )
+    .await
 }
 
 pub async fn cancel_restore_test(test_id: &str) -> Result<(), ApiError> {
@@ -4458,12 +5246,21 @@ pub async fn get_validation_schedule(schedule_id: &str) -> Result<ValidationSche
     fetch_json(&format!("/backups/validation-schedules/{}", schedule_id)).await
 }
 
-pub async fn create_validation_schedule(request: CreateValidationScheduleRequest) -> Result<ValidationSchedule, ApiError> {
+pub async fn create_validation_schedule(
+    request: CreateValidationScheduleRequest,
+) -> Result<ValidationSchedule, ApiError> {
     post_json("/backups/validation-schedules", &request).await
 }
 
-pub async fn update_validation_schedule(schedule_id: &str, request: CreateValidationScheduleRequest) -> Result<ValidationSchedule, ApiError> {
-    put_json(&format!("/backups/validation-schedules/{}", schedule_id), &request).await
+pub async fn update_validation_schedule(
+    schedule_id: &str,
+    request: CreateValidationScheduleRequest,
+) -> Result<ValidationSchedule, ApiError> {
+    put_json(
+        &format!("/backups/validation-schedules/{}", schedule_id),
+        &request,
+    )
+    .await
 }
 
 pub async fn delete_validation_schedule(schedule_id: &str) -> Result<(), ApiError> {
@@ -4471,15 +5268,27 @@ pub async fn delete_validation_schedule(schedule_id: &str) -> Result<(), ApiErro
 }
 
 pub async fn enable_validation_schedule(schedule_id: &str) -> Result<(), ApiError> {
-    post_json(&format!("/backups/validation-schedules/{}/enable", schedule_id), &()).await
+    post_json(
+        &format!("/backups/validation-schedules/{}/enable", schedule_id),
+        &(),
+    )
+    .await
 }
 
 pub async fn disable_validation_schedule(schedule_id: &str) -> Result<(), ApiError> {
-    post_json(&format!("/backups/validation-schedules/{}/disable", schedule_id), &()).await
+    post_json(
+        &format!("/backups/validation-schedules/{}/disable", schedule_id),
+        &(),
+    )
+    .await
 }
 
 pub async fn run_validation_schedule_now(schedule_id: &str) -> Result<(), ApiError> {
-    post_json(&format!("/backups/validation-schedules/{}/run", schedule_id), &()).await
+    post_json(
+        &format!("/backups/validation-schedules/{}/run", schedule_id),
+        &(),
+    )
+    .await
 }
 
 // Available Backups API

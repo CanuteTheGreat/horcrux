@@ -2,7 +2,6 @@
 ///!
 ///! Provides VM cloning capabilities using snapshots and disk copy operations.
 ///! Supports both full clones (independent copy) and linked clones (based on snapshots).
-
 use horcrux_common::{Result, VmConfig, VmDisk, VmStatus};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -67,11 +66,7 @@ impl VmCloneManager {
     }
 
     /// Clone a virtual machine
-    pub async fn clone_vm(
-        &self,
-        source_vm: &VmConfig,
-        options: CloneOptions,
-    ) -> Result<VmConfig> {
+    pub async fn clone_vm(&self, source_vm: &VmConfig, options: CloneOptions) -> Result<VmConfig> {
         info!("Cloning VM {} to {}", source_vm.id, options.name);
 
         // Generate new VM ID if not provided
@@ -81,18 +76,13 @@ impl VmCloneManager {
         tokio::fs::create_dir_all(&self.storage_path)
             .await
             .map_err(|e| {
-                horcrux_common::Error::System(format!(
-                    "Failed to create storage directory: {}",
-                    e
-                ))
+                horcrux_common::Error::System(format!("Failed to create storage directory: {}", e))
             })?;
 
         // Clone all disks
         let mut cloned_disks = Vec::new();
         for (idx, disk) in source_vm.disks.iter().enumerate() {
-            let cloned_disk = self
-                .clone_disk(disk, &new_vm_id, idx, options.mode)
-                .await?;
+            let cloned_disk = self.clone_disk(disk, &new_vm_id, idx, options.mode).await?;
             cloned_disks.push(cloned_disk);
         }
 
@@ -135,7 +125,8 @@ impl VmCloneManager {
 
         // Generate new disk path
         let new_disk_path = if disk_index == 0 {
-            self.storage_path.join(format!("{}.{}", new_vm_id, extension))
+            self.storage_path
+                .join(format!("{}.{}", new_vm_id, extension))
         } else {
             self.storage_path
                 .join(format!("{}-disk{}.{}", new_vm_id, disk_index, extension))
@@ -154,9 +145,7 @@ impl VmCloneManager {
                 self.clone_qcow2_disk(source_path, &new_disk_path, mode)
                     .await?
             }
-            StorageType::Raw => {
-                self.clone_raw_disk(source_path, &new_disk_path).await?
-            }
+            StorageType::Raw => self.clone_raw_disk(source_path, &new_disk_path).await?,
             StorageType::Zfs => {
                 self.clone_zfs_disk(&source_disk.path, new_vm_id, disk_index)
                     .await?
@@ -260,9 +249,7 @@ impl VmCloneManager {
             .arg(dest_path)
             .output()
             .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to run qemu-img: {}", e))
-            })?;
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to run qemu-img: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -323,7 +310,9 @@ impl VmCloneManager {
             .arg(&clone_name)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to run zfs clone: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run zfs clone: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -398,9 +387,7 @@ impl VmCloneManager {
             .arg(vg_name)
             .output()
             .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to run lvcreate: {}", e))
-            })?;
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to run lvcreate: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -569,7 +556,9 @@ impl VmCloneManager {
             .arg(format!("{}/{}", pool, clone_image))
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to run rbd clone: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run rbd clone: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -588,7 +577,9 @@ impl VmCloneManager {
             Ok(StorageType::Zfs)
         } else if disk_path.starts_with("/dev/") && disk_path.contains("/lv-") {
             Ok(StorageType::Lvm)
-        } else if disk_path.contains("rbd:") || (disk_path.contains('/') && !disk_path.starts_with("/dev/")) {
+        } else if disk_path.contains("rbd:")
+            || (disk_path.contains('/') && !disk_path.starts_with("/dev/"))
+        {
             // Check if it's RBD format (pool/image)
             if !disk_path.starts_with('/') && disk_path.contains('/') {
                 Ok(StorageType::Ceph)
@@ -621,12 +612,9 @@ impl VmCloneManager {
                     })?;
                 }
                 StorageType::Zfs => {
-                    let zvol_name = disk
-                        .path
-                        .strip_prefix("/dev/zvol/")
-                        .ok_or_else(|| {
-                            horcrux_common::Error::InvalidConfig("Invalid ZFS path".to_string())
-                        })?;
+                    let zvol_name = disk.path.strip_prefix("/dev/zvol/").ok_or_else(|| {
+                        horcrux_common::Error::InvalidConfig("Invalid ZFS path".to_string())
+                    })?;
 
                     Command::new("zfs")
                         .arg("destroy")
@@ -724,20 +712,19 @@ impl VmCloneManager {
             // Validate custom MAC addresses
             for mac in custom_macs {
                 if !Self::validate_mac_address(mac) {
-                    return Err(horcrux_common::Error::InvalidConfig(
-                        format!("Invalid MAC address format: {}", mac)
-                    ));
+                    return Err(horcrux_common::Error::InvalidConfig(format!(
+                        "Invalid MAC address format: {}",
+                        mac
+                    )));
                 }
             }
 
             if custom_macs.len() != network_interface_count {
-                return Err(horcrux_common::Error::InvalidConfig(
-                    format!(
-                        "MAC address count mismatch: expected {}, got {}",
-                        network_interface_count,
-                        custom_macs.len()
-                    )
-                ));
+                return Err(horcrux_common::Error::InvalidConfig(format!(
+                    "MAC address count mismatch: expected {}, got {}",
+                    network_interface_count,
+                    custom_macs.len()
+                )));
             }
 
             Ok(custom_macs.clone())
@@ -813,29 +800,29 @@ impl VmCloneManager {
         // Validate hostname
         if let Some(ref hostname) = network_config.hostname {
             if !Self::validate_hostname(hostname) {
-                return Err(horcrux_common::Error::InvalidConfig(
-                    format!("Invalid hostname format: {}", hostname)
-                ));
+                return Err(horcrux_common::Error::InvalidConfig(format!(
+                    "Invalid hostname format: {}",
+                    hostname
+                )));
             }
         }
 
         // Validate IP addresses
         if let Some(ref ips) = network_config.ip_addresses {
             if ips.len() != network_interface_count {
-                return Err(horcrux_common::Error::InvalidConfig(
-                    format!(
-                        "IP address count mismatch: expected {}, got {}",
-                        network_interface_count,
-                        ips.len()
-                    )
-                ));
+                return Err(horcrux_common::Error::InvalidConfig(format!(
+                    "IP address count mismatch: expected {}, got {}",
+                    network_interface_count,
+                    ips.len()
+                )));
             }
 
             for ip in ips {
                 if !Self::validate_ipv4_address(ip) {
-                    return Err(horcrux_common::Error::InvalidConfig(
-                        format!("Invalid IP address format: {}", ip)
-                    ));
+                    return Err(horcrux_common::Error::InvalidConfig(format!(
+                        "Invalid IP address format: {}",
+                        ip
+                    )));
                 }
             }
         }
@@ -843,9 +830,10 @@ impl VmCloneManager {
         // Validate gateway
         if let Some(ref gateway) = network_config.gateway {
             if !Self::validate_ipv4_address(gateway) {
-                return Err(horcrux_common::Error::InvalidConfig(
-                    format!("Invalid gateway IP address: {}", gateway)
-                ));
+                return Err(horcrux_common::Error::InvalidConfig(format!(
+                    "Invalid gateway IP address: {}",
+                    gateway
+                )));
             }
         }
 
@@ -853,9 +841,10 @@ impl VmCloneManager {
         if let Some(ref dns_servers) = network_config.dns_servers {
             for dns in dns_servers {
                 if !Self::validate_ipv4_address(dns) {
-                    return Err(horcrux_common::Error::InvalidConfig(
-                        format!("Invalid DNS server IP address: {}", dns)
-                    ));
+                    return Err(horcrux_common::Error::InvalidConfig(format!(
+                        "Invalid DNS server IP address: {}",
+                        dns
+                    )));
                 }
             }
         }
@@ -863,9 +852,10 @@ impl VmCloneManager {
         // Validate domain
         if let Some(ref domain) = network_config.domain {
             if !Self::validate_hostname(domain) {
-                return Err(horcrux_common::Error::InvalidConfig(
-                    format!("Invalid domain name: {}", domain)
-                ));
+                return Err(horcrux_common::Error::InvalidConfig(format!(
+                    "Invalid domain name: {}",
+                    domain
+                )));
             }
         }
 
@@ -988,7 +978,8 @@ impl VmCloneManager {
         fs::write(&user_data_path, user_data).await?;
 
         // Generate network-config
-        let network_config_yaml = self.generate_cloud_init_network_config(network_config, mac_addresses);
+        let network_config_yaml =
+            self.generate_cloud_init_network_config(network_config, mac_addresses);
         let network_config_path = cloud_init_dir.join("network-config");
         fs::write(&network_config_path, network_config_yaml).await?;
 
@@ -1062,8 +1053,8 @@ enum StorageType {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::CloneMode;
+    use super::*;
     use horcrux_common::VmArchitecture;
 
     fn create_test_vm_config() -> VmConfig {
@@ -1101,7 +1092,9 @@ mod tests {
 
         // ZFS detection
         assert!(matches!(
-            manager.detect_storage_type("/dev/zvol/pool/vm-100").unwrap(),
+            manager
+                .detect_storage_type("/dev/zvol/pool/vm-100")
+                .unwrap(),
             StorageType::Zfs
         ));
 
@@ -1121,7 +1114,9 @@ mod tests {
 
         // Raw detection
         assert!(matches!(
-            manager.detect_storage_type("/var/lib/horcrux/vms/100.raw").unwrap(),
+            manager
+                .detect_storage_type("/var/lib/horcrux/vms/100.raw")
+                .unwrap(),
             StorageType::Raw
         ));
 
@@ -1367,7 +1362,10 @@ mod tests {
             id: Some("custom-id".to_string()),
             mode: CloneMode::Linked,
             start: true,
-            mac_addresses: Some(vec!["52:54:00:11:22:33".to_string(), "52:54:00:44:55:66".to_string()]),
+            mac_addresses: Some(vec![
+                "52:54:00:11:22:33".to_string(),
+                "52:54:00:44:55:66".to_string(),
+            ]),
             description: Some("Full config".to_string()),
             network_config: None,
         };
@@ -1448,7 +1446,9 @@ mod tests {
 
         // Invalid MAC addresses
         assert!(!VmCloneManager::validate_mac_address("52:54:00:12:34")); // Too short
-        assert!(!VmCloneManager::validate_mac_address("52:54:00:12:34:56:78")); // Too long
+        assert!(!VmCloneManager::validate_mac_address(
+            "52:54:00:12:34:56:78"
+        )); // Too long
         assert!(!VmCloneManager::validate_mac_address("52-54-00-12-34-56")); // Wrong separator
         assert!(!VmCloneManager::validate_mac_address("52:54:00:12:34:ZZ")); // Invalid hex
         assert!(!VmCloneManager::validate_mac_address("52:54:0:12:34:56")); // Single digit
@@ -1793,7 +1793,8 @@ mod tests {
         };
 
         let mac_addresses = vec!["52:54:00:11:22:33".to_string()];
-        let network_yaml = manager.generate_cloud_init_network_config(&network_config, &mac_addresses);
+        let network_yaml =
+            manager.generate_cloud_init_network_config(&network_config, &mac_addresses);
 
         assert!(network_yaml.contains("version: 2"));
         assert!(network_yaml.contains("ethernets:"));
@@ -1812,10 +1813,7 @@ mod tests {
 
         let network_config = NetworkConfig {
             hostname: Some("db-server".to_string()),
-            ip_addresses: Some(vec![
-                "192.168.1.200".to_string(),
-                "10.0.0.100".to_string(),
-            ]),
+            ip_addresses: Some(vec!["192.168.1.200".to_string(), "10.0.0.100".to_string()]),
             gateway: Some("192.168.1.1".to_string()),
             dns_servers: Some(vec!["192.168.1.10".to_string()]),
             domain: Some("internal.local".to_string()),
@@ -1826,7 +1824,8 @@ mod tests {
             "52:54:00:44:55:66".to_string(),
         ];
 
-        let network_yaml = manager.generate_cloud_init_network_config(&network_config, &mac_addresses);
+        let network_yaml =
+            manager.generate_cloud_init_network_config(&network_config, &mac_addresses);
 
         assert!(network_yaml.contains("eth0:"));
         assert!(network_yaml.contains("eth1:"));
@@ -1850,7 +1849,8 @@ mod tests {
         };
 
         let mac_addresses = vec!["52:54:00:11:22:33".to_string()];
-        let network_yaml = manager.generate_cloud_init_network_config(&network_config, &mac_addresses);
+        let network_yaml =
+            manager.generate_cloud_init_network_config(&network_config, &mac_addresses);
 
         assert!(network_yaml.contains("version: 2"));
         assert!(network_yaml.contains("eth0:"));
@@ -1878,7 +1878,8 @@ mod tests {
         // This test will only fully succeed if genisoimage or mkisofs is installed
         // But we can still test the YAML generation
         let user_data = manager.generate_cloud_init_user_data(&network_config, &mac_addresses);
-        let network_yaml = manager.generate_cloud_init_network_config(&network_config, &mac_addresses);
+        let network_yaml =
+            manager.generate_cloud_init_network_config(&network_config, &mac_addresses);
 
         assert!(!user_data.is_empty());
         assert!(!network_yaml.is_empty());

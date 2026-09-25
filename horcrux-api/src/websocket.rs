@@ -1,6 +1,6 @@
+use crate::middleware::auth::AuthUser;
 ///! WebSocket support for real-time updates
 ///! Provides live VM status updates, metrics streaming, and event notifications
-
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -14,7 +14,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
-use crate::middleware::auth::AuthUser;
 
 /// WebSocket event types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,16 +133,14 @@ pub enum WsEvent {
 
     /// Generic notification
     Notification {
-        level: String,  // info, warning, error
+        level: String, // info, warning, error
         title: String,
         message: String,
         timestamp: String,
     },
 
     /// Heartbeat/ping to keep connection alive
-    Ping {
-        timestamp: String,
-    },
+    Ping { timestamp: String },
 
     /// Subscription confirmation
     Subscribed {
@@ -161,7 +158,6 @@ pub enum WsEvent {
     // =========================================================================
     // Kubernetes Events
     // =========================================================================
-
     /// K8s Pod status changed
     K8sPodStatusChanged {
         cluster_id: String,
@@ -296,17 +292,20 @@ impl WsState {
 
     /// Get the number of active connections
     pub fn connection_count(&self) -> usize {
-        self.connection_count.load(std::sync::atomic::Ordering::SeqCst)
+        self.connection_count
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Increment connection count
     pub fn increment_connections(&self) {
-        self.connection_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.connection_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Decrement connection count
     pub fn decrement_connections(&self) {
-        self.connection_count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        self.connection_count
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Close all connections by broadcasting shutdown
@@ -422,7 +421,12 @@ impl WsState {
     }
 
     /// Broadcast migration started
-    pub fn broadcast_migration_started(&self, vm_id: String, source_node: String, target_node: String) {
+    pub fn broadcast_migration_started(
+        &self,
+        vm_id: String,
+        source_node: String,
+        target_node: String,
+    ) {
         self.broadcast(WsEvent::MigrationStarted {
             vm_id,
             source_node,
@@ -449,7 +453,12 @@ impl WsState {
     }
 
     /// Broadcast migration completed
-    pub fn broadcast_migration_completed(&self, vm_id: String, target_node: String, duration_seconds: u64) {
+    pub fn broadcast_migration_completed(
+        &self,
+        vm_id: String,
+        target_node: String,
+        duration_seconds: u64,
+    ) {
         self.broadcast(WsEvent::MigrationCompleted {
             vm_id,
             target_node,
@@ -697,7 +706,10 @@ async fn handle_socket(socket: WebSocket, ws_state: Arc<WsState>, auth_user: Aut
     let welcome = WsEvent::Notification {
         level: "info".to_string(),
         title: "Connected".to_string(),
-        message: format!("WebSocket connection established for user {}", auth_user.username),
+        message: format!(
+            "WebSocket connection established for user {}",
+            auth_user.username
+        ),
         timestamp: chrono::Utc::now().to_rfc3339(),
     };
 
@@ -908,7 +920,12 @@ mod tests {
 
         if let Ok(event) = rx.try_recv() {
             match event {
-                WsEvent::VmStatusChanged { vm_id, old_status, new_status, .. } => {
+                WsEvent::VmStatusChanged {
+                    vm_id,
+                    old_status,
+                    new_status,
+                    ..
+                } => {
                     assert_eq!(vm_id, "vm-100");
                     assert_eq!(old_status, "stopped");
                     assert_eq!(new_status, "running");
@@ -931,7 +948,12 @@ mod tests {
 
         if let Ok(event) = rx.try_recv() {
             match event {
-                WsEvent::Notification { level, title, message, .. } => {
+                WsEvent::Notification {
+                    level,
+                    title,
+                    message,
+                    ..
+                } => {
                     assert_eq!(level, "warning");
                     assert_eq!(title, "Test Alert");
                     assert_eq!(message, "This is a test notification");

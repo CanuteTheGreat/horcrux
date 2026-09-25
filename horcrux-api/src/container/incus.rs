@@ -3,7 +3,6 @@
 ///!
 ///! Note: This module is future-ready but not yet integrated into the main API.
 ///! It will be activated when Incus container management is added to the platform.
-
 use super::Container;
 use horcrux_common::{ContainerConfig, ContainerRuntime, ContainerStatus, Result};
 use tokio::process::Command;
@@ -21,7 +20,10 @@ impl IncusContainerManager {
 
     /// Create a new Incus container
     pub async fn create_container(&self, config: &ContainerConfig) -> Result<Container> {
-        info!("Creating Incus container: {} (ID: {})", config.name, config.id);
+        info!(
+            "Creating Incus container: {} (ID: {})",
+            config.name, config.id
+        );
 
         // Launch container instance with Incus
         let output = Command::new("incus")
@@ -34,7 +36,9 @@ impl IncusContainerManager {
             .arg(format!("limits.memory={}MB", config.memory))
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to run incus init: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run incus init: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -60,7 +64,10 @@ impl IncusContainerManager {
 
     /// Start an Incus container
     pub async fn start_container(&self, container: &Container) -> Result<()> {
-        info!("Starting Incus container: {} (ID: {})", container.name, container.id);
+        info!(
+            "Starting Incus container: {} (ID: {})",
+            container.name, container.id
+        );
 
         if container.status == ContainerStatus::Running {
             return Err(horcrux_common::Error::InvalidConfig(format!(
@@ -74,7 +81,9 @@ impl IncusContainerManager {
             .arg(&container.name)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to run incus start: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run incus start: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -91,7 +100,10 @@ impl IncusContainerManager {
 
     /// Stop an Incus container
     pub async fn stop_container(&self, container: &Container) -> Result<()> {
-        info!("Stopping Incus container: {} (ID: {})", container.name, container.id);
+        info!(
+            "Stopping Incus container: {} (ID: {})",
+            container.name, container.id
+        );
 
         if container.status == ContainerStatus::Stopped {
             return Err(horcrux_common::Error::InvalidConfig(format!(
@@ -105,7 +117,9 @@ impl IncusContainerManager {
             .arg(&container.name)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to run incus stop: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run incus stop: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -122,7 +136,10 @@ impl IncusContainerManager {
 
     /// Delete an Incus container
     pub async fn delete_container(&self, container: &Container) -> Result<()> {
-        info!("Deleting Incus container: {} (ID: {})", container.name, container.id);
+        info!(
+            "Deleting Incus container: {} (ID: {})",
+            container.name, container.id
+        );
 
         if container.status == ContainerStatus::Running {
             return Err(horcrux_common::Error::InvalidConfig(format!(
@@ -136,7 +153,9 @@ impl IncusContainerManager {
             .arg(&container.name)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to run incus delete: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run incus delete: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -158,7 +177,9 @@ impl IncusContainerManager {
             .arg(&container.name)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to run incus pause: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run incus pause: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -178,7 +199,9 @@ impl IncusContainerManager {
             .arg(&container.name)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to run incus start: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run incus start: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -198,7 +221,9 @@ impl IncusContainerManager {
             .arg(name)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to run incus info: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run incus info: {}", e))
+            })?;
 
         if !output.status.success() {
             return Err(horcrux_common::Error::ContainerNotFound(name.to_string()));

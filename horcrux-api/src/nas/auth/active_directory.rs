@@ -4,8 +4,8 @@
 
 use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
 use std::collections::HashMap;
+use tokio::process::Command;
 
 /// Active Directory Configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -173,8 +173,10 @@ impl ActiveDirectoryManager {
     pub async fn leave_domain(&self, admin_user: &str, admin_password: &str) -> Result<()> {
         let output = Command::new("net")
             .args([
-                "ads", "leave",
-                "-U", &format!("{}%{}", admin_user, admin_password),
+                "ads",
+                "leave",
+                "-U",
+                &format!("{}%{}", admin_user, admin_password),
             ])
             .output()
             .await
@@ -193,10 +195,7 @@ impl ActiveDirectoryManager {
 
     /// Check domain join status
     pub async fn get_join_status(&self) -> Result<AdJoinStatus> {
-        let output = Command::new("net")
-            .args(["ads", "testjoin"])
-            .output()
-            .await;
+        let output = Command::new("net").args(["ads", "testjoin"]).output().await;
 
         let joined = match output {
             Ok(out) => out.status.success(),
@@ -297,7 +296,11 @@ impl ActiveDirectoryManager {
             username: parts[0].to_string(),
             uid: parts[2].parse().unwrap_or(0),
             gid: parts[3].parse().unwrap_or(0),
-            full_name: if parts[4].is_empty() { None } else { Some(parts[4].to_string()) },
+            full_name: if parts[4].is_empty() {
+                None
+            } else {
+                Some(parts[4].to_string())
+            },
             home_directory: parts[5].to_string(),
             shell: parts[6].to_string(),
             sid: None,
@@ -377,7 +380,11 @@ impl ActiveDirectoryManager {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(stdout.lines().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+        Ok(stdout
+            .lines()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect())
     }
 
     /// Authenticate user against AD
@@ -404,7 +411,9 @@ impl ActiveDirectoryManager {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        stdout.trim().parse()
+        stdout
+            .trim()
+            .parse()
             .map_err(|_| Error::Internal("Invalid UID".to_string()))
     }
 
@@ -432,27 +441,38 @@ impl ActiveDirectoryManager {
         config.push_str(&format!("   realm = {}\n", self.config.kerberos_realm));
         config.push_str("   security = ADS\n");
         config.push_str("   encrypt passwords = yes\n");
-        config.push_str(&format!("   idmap config * : backend = {}\n", self.config.idmap_backend));
-        config.push_str(&format!("   idmap config * : range = {}-{}\n",
-            self.config.idmap_range_start,
-            self.config.idmap_range_end
-        ));
-        config.push_str(&format!("   idmap config {} : backend = {}\n",
-            self.config.workgroup,
+        config.push_str(&format!(
+            "   idmap config * : backend = {}\n",
             self.config.idmap_backend
         ));
-        config.push_str(&format!("   idmap config {} : range = {}-{}\n",
-            self.config.workgroup,
-            self.config.idmap_range_start,
-            self.config.idmap_range_end
+        config.push_str(&format!(
+            "   idmap config * : range = {}-{}\n",
+            self.config.idmap_range_start, self.config.idmap_range_end
+        ));
+        config.push_str(&format!(
+            "   idmap config {} : backend = {}\n",
+            self.config.workgroup, self.config.idmap_backend
+        ));
+        config.push_str(&format!(
+            "   idmap config {} : range = {}-{}\n",
+            self.config.workgroup, self.config.idmap_range_start, self.config.idmap_range_end
         ));
 
         if self.config.use_rfc2307 {
-            config.push_str(&format!("   idmap config {} : schema_mode = rfc2307\n", self.config.workgroup));
+            config.push_str(&format!(
+                "   idmap config {} : schema_mode = rfc2307\n",
+                self.config.workgroup
+            ));
         }
 
-        config.push_str(&format!("   template shell = {}\n", self.config.default_shell));
-        config.push_str(&format!("   template homedir = {}\n", self.config.home_dir_template));
+        config.push_str(&format!(
+            "   template shell = {}\n",
+            self.config.default_shell
+        ));
+        config.push_str(&format!(
+            "   template homedir = {}\n",
+            self.config.home_dir_template
+        ));
         config.push_str("   winbind use default domain = yes\n");
         config.push_str("   winbind enum users = yes\n");
         config.push_str("   winbind enum groups = yes\n");
@@ -475,13 +495,15 @@ impl ActiveDirectoryManager {
     /// Write smb.conf
     async fn write_smb_conf(&self) -> Result<()> {
         let config = self.generate_smb_conf();
-        tokio::fs::write(&self.smb_conf, config).await
+        tokio::fs::write(&self.smb_conf, config)
+            .await
             .map_err(|e| Error::Internal(format!("Failed to write smb.conf: {}", e)))
     }
 
     /// Generate krb5.conf for AD
     fn generate_krb5_conf(&self) -> String {
-        format!(r#"[libdefaults]
+        format!(
+            r#"[libdefaults]
     default_realm = {}
     dns_lookup_kdc = true
     dns_lookup_realm = true
@@ -504,8 +526,14 @@ impl ActiveDirectoryManager {
 "#,
             self.config.kerberos_realm,
             self.config.kerberos_realm,
-            self.config.domain_controller.as_deref().unwrap_or(&self.config.domain),
-            self.config.domain_controller.as_deref().unwrap_or(&self.config.domain),
+            self.config
+                .domain_controller
+                .as_deref()
+                .unwrap_or(&self.config.domain),
+            self.config
+                .domain_controller
+                .as_deref()
+                .unwrap_or(&self.config.domain),
             self.config.domain.to_lowercase(),
             self.config.domain.to_lowercase(),
             self.config.kerberos_realm,
@@ -517,7 +545,8 @@ impl ActiveDirectoryManager {
     /// Write krb5.conf
     async fn write_krb5_conf(&self) -> Result<()> {
         let config = self.generate_krb5_conf();
-        tokio::fs::write(&self.krb5_conf, config).await
+        tokio::fs::write(&self.krb5_conf, config)
+            .await
             .map_err(|e| Error::Internal(format!("Failed to write krb5.conf: {}", e)))
     }
 
@@ -533,12 +562,16 @@ impl ActiveDirectoryManager {
 
         if let Some(stdin) = child.stdin.as_mut() {
             use tokio::io::AsyncWriteExt;
-            stdin.write_all(password.as_bytes()).await
+            stdin
+                .write_all(password.as_bytes())
+                .await
                 .map_err(|e| Error::Internal(format!("Failed to write password: {}", e)))?;
             stdin.write_all(b"\n").await.ok();
         }
 
-        let output = child.wait_with_output().await
+        let output = child
+            .wait_with_output()
+            .await
             .map_err(|e| Error::Internal(format!("kinit failed: {}", e)))?;
 
         if !output.status.success() {
@@ -552,7 +585,8 @@ impl ActiveDirectoryManager {
     /// Configure NSS for winbind
     async fn configure_nss(&self) -> Result<()> {
         // Read current nsswitch.conf
-        let content = tokio::fs::read_to_string("/etc/nsswitch.conf").await
+        let content = tokio::fs::read_to_string("/etc/nsswitch.conf")
+            .await
             .unwrap_or_default();
 
         let mut new_content = String::new();
@@ -579,7 +613,8 @@ impl ActiveDirectoryManager {
             new_content.push_str("group: files winbind\n");
         }
 
-        tokio::fs::write("/etc/nsswitch.conf", new_content).await
+        tokio::fs::write("/etc/nsswitch.conf", new_content)
+            .await
             .map_err(|e| Error::Internal(format!("Failed to write nsswitch.conf: {}", e)))
     }
 
@@ -659,10 +694,7 @@ impl ActiveDirectoryManager {
 
     /// Refresh winbind cache
     pub async fn refresh_cache(&self) -> Result<()> {
-        let _ = Command::new("net")
-            .args(["cache", "flush"])
-            .output()
-            .await;
+        let _ = Command::new("net").args(["cache", "flush"]).output().await;
 
         Ok(())
     }
@@ -710,7 +742,10 @@ impl ActiveDirectoryManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("DNS registration failed: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "DNS registration failed: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -726,7 +761,10 @@ impl ActiveDirectoryManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("DNS unregistration failed: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "DNS unregistration failed: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -742,7 +780,10 @@ impl ActiveDirectoryManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Password rotation failed: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Password rotation failed: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -758,12 +799,16 @@ impl ActiveDirectoryManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Keytab creation failed: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Keytab creation failed: {}",
+                stderr
+            )));
         }
 
         // Copy to specified path if different from default
         if keytab_path != "/etc/krb5.keytab" {
-            tokio::fs::copy("/etc/krb5.keytab", keytab_path).await
+            tokio::fs::copy("/etc/krb5.keytab", keytab_path)
+                .await
                 .map_err(|e| Error::Internal(format!("Failed to copy keytab: {}", e)))?;
         }
 
@@ -780,7 +825,10 @@ impl ActiveDirectoryManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Add keytab principal failed: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Add keytab principal failed: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -799,7 +847,8 @@ impl ActiveDirectoryManager {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(stdout.lines()
+        Ok(stdout
+            .lines()
             .filter(|l| l.contains("@"))
             .map(|l| l.trim().to_string())
             .collect())
@@ -951,7 +1000,8 @@ impl ActiveDirectoryManager {
 
         let dc_name = if let Ok(out) = dc_output {
             let stdout = String::from_utf8_lossy(&out.stdout);
-            stdout.lines()
+            stdout
+                .lines()
                 .find(|l| l.contains("DC name"))
                 .and_then(|l| l.split(':').nth(1))
                 .map(|s| s.trim().to_string())
@@ -969,41 +1019,67 @@ impl ActiveDirectoryManager {
     /// Configure NTP to sync with AD domain
     pub async fn configure_time_sync(&self) -> Result<()> {
         // Try to get DC as NTP server
-        let dc = self.config.domain_controller.as_ref()
+        let dc = self
+            .config
+            .domain_controller
+            .as_ref()
             .cloned()
             .unwrap_or_else(|| self.config.domain.clone());
 
         // Write chrony or ntp config
-        let chrony_config = format!(r#"# AD Domain Controller time sync
+        let chrony_config = format!(
+            r#"# AD Domain Controller time sync
 server {} iburst prefer
 driftfile /var/lib/chrony/drift
 makestep 1.0 3
 rtcsync
-"#, dc);
+"#,
+            dc
+        );
 
         // Try chrony first
         if let Err(_) = tokio::fs::write("/etc/chrony.conf", &chrony_config).await {
             // Fall back to ntp.conf format
-            let ntp_config = format!(r#"# AD Domain Controller time sync
+            let ntp_config = format!(
+                r#"# AD Domain Controller time sync
 server {} iburst prefer
 driftfile /var/lib/ntp/drift
-"#, dc);
+"#,
+                dc
+            );
 
-            tokio::fs::write("/etc/ntp.conf", &ntp_config).await
+            tokio::fs::write("/etc/ntp.conf", &ntp_config)
+                .await
                 .map_err(|e| Error::Internal(format!("Failed to write NTP config: {}", e)))?;
         }
 
         // Restart time service
-        let _ = Command::new("systemctl").args(["restart", "chronyd"]).output().await;
-        let _ = Command::new("systemctl").args(["restart", "ntpd"]).output().await;
-        let _ = Command::new("rc-service").args(["chronyd", "restart"]).output().await;
-        let _ = Command::new("rc-service").args(["ntpd", "restart"]).output().await;
+        let _ = Command::new("systemctl")
+            .args(["restart", "chronyd"])
+            .output()
+            .await;
+        let _ = Command::new("systemctl")
+            .args(["restart", "ntpd"])
+            .output()
+            .await;
+        let _ = Command::new("rc-service")
+            .args(["chronyd", "restart"])
+            .output()
+            .await;
+        let _ = Command::new("rc-service")
+            .args(["ntpd", "restart"])
+            .output()
+            .await;
 
         Ok(())
     }
 
     /// Get effective permissions for a user on a path
-    pub async fn get_effective_permissions(&self, username: &str, path: &str) -> Result<EffectivePermissions> {
+    pub async fn get_effective_permissions(
+        &self,
+        username: &str,
+        path: &str,
+    ) -> Result<EffectivePermissions> {
         // Get user's SID
         let user_sid = self.get_user_sid(username).await.ok();
 
@@ -1113,23 +1189,29 @@ driftfile /var/lib/ntp/drift
 
     /// Configure PAM with additional options
     async fn configure_pam_advanced(&self, create_home: bool) -> Result<()> {
-        let pam_winbind = format!(r#"# Horcrux AD PAM configuration
+        let pam_winbind = format!(
+            r#"# Horcrux AD PAM configuration
 auth        sufficient    pam_winbind.so
 account     sufficient    pam_winbind.so
 password    sufficient    pam_winbind.so
 session     optional      pam_winbind.so
-"#);
+"#
+        );
 
-        tokio::fs::write("/etc/pam.d/horcrux-ad", &pam_winbind).await
+        tokio::fs::write("/etc/pam.d/horcrux-ad", &pam_winbind)
+            .await
             .map_err(|e| Error::Internal(format!("Failed to write PAM config: {}", e)))?;
 
         if create_home {
             // Configure mkhomedir
-            let mkhomedir = "session     optional      pam_mkhomedir.so skel=/etc/skel umask=0077\n";
-            let mut content = tokio::fs::read_to_string("/etc/pam.d/horcrux-ad").await
+            let mkhomedir =
+                "session     optional      pam_mkhomedir.so skel=/etc/skel umask=0077\n";
+            let mut content = tokio::fs::read_to_string("/etc/pam.d/horcrux-ad")
+                .await
                 .unwrap_or_default();
             content.push_str(mkhomedir);
-            tokio::fs::write("/etc/pam.d/horcrux-ad", content).await
+            tokio::fs::write("/etc/pam.d/horcrux-ad", content)
+                .await
                 .map_err(|e| Error::Internal(format!("Failed to write PAM config: {}", e)))?;
         }
 
@@ -1158,7 +1240,9 @@ session     optional      pam_winbind.so
             .unwrap_or(false);
 
         if !prereqs.samba_installed {
-            prereqs.errors.push("Samba (net command) not installed".to_string());
+            prereqs
+                .errors
+                .push("Samba (net command) not installed".to_string());
         }
 
         // Check if winbind is installed
@@ -1182,18 +1266,20 @@ session     optional      pam_winbind.so
             .unwrap_or(false);
 
         if !prereqs.krb5_installed {
-            prereqs.errors.push("MIT Kerberos not installed".to_string());
+            prereqs
+                .errors
+                .push("MIT Kerberos not installed".to_string());
         }
 
         // Check DNS resolution
-        let dc = self.config.domain_controller.as_ref()
+        let dc = self
+            .config
+            .domain_controller
+            .as_ref()
             .cloned()
             .unwrap_or_else(|| self.config.domain.clone());
 
-        let dns_check = Command::new("host")
-            .arg(&dc)
-            .output()
-            .await;
+        let dns_check = Command::new("host").arg(&dc).output().await;
 
         prereqs.dns_resolves = dns_check.map(|o| o.status.success()).unwrap_or(false);
         if !prereqs.dns_resolves {
@@ -1224,29 +1310,34 @@ session     optional      pam_winbind.so
         }
 
         // Check time sync (compare with DC if possible)
-        let time_check = Command::new("ntpdate")
-            .args(["-q", &dc])
-            .output()
-            .await;
+        let time_check = Command::new("ntpdate").args(["-q", &dc]).output().await;
 
-        prereqs.time_synced = time_check.map(|o| {
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            // If offset is less than 5 minutes, we're good
-            !stdout.contains("offset") ||
-            stdout.lines().any(|l| {
-                if let Some(offset_str) = l.split("offset").nth(1) {
-                    if let Ok(offset) = offset_str.trim().split_whitespace().next()
-                        .unwrap_or("0").parse::<f64>()
-                    {
-                        return offset.abs() < 300.0;
-                    }
-                }
-                true
+        prereqs.time_synced = time_check
+            .map(|o| {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                // If offset is less than 5 minutes, we're good
+                !stdout.contains("offset")
+                    || stdout.lines().any(|l| {
+                        if let Some(offset_str) = l.split("offset").nth(1) {
+                            if let Ok(offset) = offset_str
+                                .trim()
+                                .split_whitespace()
+                                .next()
+                                .unwrap_or("0")
+                                .parse::<f64>()
+                            {
+                                return offset.abs() < 300.0;
+                            }
+                        }
+                        true
+                    })
             })
-        }).unwrap_or(true);
+            .unwrap_or(true);
 
         if !prereqs.time_synced {
-            prereqs.errors.push("Time not synchronized with DC (>5 min offset)".to_string());
+            prereqs
+                .errors
+                .push("Time not synchronized with DC (>5 min offset)".to_string());
         }
 
         Ok(prereqs)

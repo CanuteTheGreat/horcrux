@@ -6,16 +6,19 @@
 //! - TLS certificate management
 //! - Annotation and label management
 
+use crate::api::{
+    self, CreateIngressRequest, IngressPath, IngressRule, IngressTLS, KubernetesIngress,
+};
 use leptos::*;
 use leptos_router::*;
-use crate::api::{self, KubernetesIngress, CreateIngressRequest, IngressRule, IngressPath, IngressTLS};
 use std::collections::HashMap;
 
 #[component]
 pub fn IngressesPage() -> impl IntoView {
     let params = use_params_map();
     let cluster_id = move || params.with(|p| p.get("cluster_id").cloned().unwrap_or_default());
-    let namespace = move || params.with(|p| p.get("namespace").cloned().unwrap_or("default".to_string()));
+    let namespace =
+        move || params.with(|p| p.get("namespace").cloned().unwrap_or("default".to_string()));
 
     let (ingresses, set_ingresses) = create_signal::<Vec<KubernetesIngress>>(vec![]);
     let (loading, set_loading) = create_signal(true);
@@ -95,7 +98,8 @@ pub fn IngressesPage() -> impl IntoView {
                     }
                 },
                 std::time::Duration::from_secs(15),
-            ).ok();
+            )
+            .ok();
         }
     });
 
@@ -108,12 +112,16 @@ pub fn IngressesPage() -> impl IntoView {
     let filtered_ingresses = move || {
         let search = search_filter.get().to_lowercase();
 
-        ingresses.get()
+        ingresses
+            .get()
             .into_iter()
             .filter(|ingress| {
                 search.is_empty()
                     || ingress.name.to_lowercase().contains(&search)
-                    || ingress.hosts.iter().any(|host| host.to_lowercase().contains(&search))
+                    || ingress
+                        .hosts
+                        .iter()
+                        .any(|host| host.to_lowercase().contains(&search))
             })
             .collect::<Vec<_>>()
     };
@@ -126,10 +134,19 @@ pub fn IngressesPage() -> impl IntoView {
             let cluster_id = cluster_id();
             let namespace = namespace();
             let name = ingress_name.get();
-            let class = if ingress_class.get().is_empty() { None } else { Some(ingress_class.get()) };
+            let class = if ingress_class.get().is_empty() {
+                None
+            } else {
+                Some(ingress_class.get())
+            };
             let rules = ingress_rules.get();
-            let tls = if tls_config.get().is_empty() { None } else { Some(tls_config.get()) };
-            let annotations_map: HashMap<String, String> = annotations.get()
+            let tls = if tls_config.get().is_empty() {
+                None
+            } else {
+                Some(tls_config.get())
+            };
+            let annotations_map: HashMap<String, String> = annotations
+                .get()
                 .into_iter()
                 .filter(|(k, v)| !k.is_empty() && !v.is_empty())
                 .collect();
@@ -152,7 +169,11 @@ pub fn IngressesPage() -> impl IntoView {
                     rules,
                     tls,
                     labels: None,
-                    annotations: if annotations_map.is_empty() { None } else { Some(annotations_map) },
+                    annotations: if annotations_map.is_empty() {
+                        None
+                    } else {
+                        Some(annotations_map)
+                    },
                 };
 
                 match api::create_ingress(&cluster_id, &namespace, request).await {

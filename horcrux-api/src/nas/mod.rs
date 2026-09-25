@@ -24,12 +24,12 @@
 //! - `iscsi-target` - iSCSI block storage
 //! - `rsync-server` - Rsync daemon
 
-pub mod shares;
 pub mod auth;
-pub mod services;
-pub mod storage;
 pub mod monitoring;
 pub mod scheduler;
+pub mod services;
+pub mod shares;
+pub mod storage;
 
 use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -38,10 +38,10 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 // Re-export core types
-pub use shares::{NasShare, ShareProtocol, ShareAccess, SharePermissions};
-pub use auth::{NasUser, NasGroup, AclEntry};
+pub use auth::{AclEntry, NasGroup, NasUser};
 pub use services::NasService;
-pub use storage::{NasPool, NasDataset, NasSnapshot};
+pub use shares::{NasShare, ShareAccess, SharePermissions, ShareProtocol};
+pub use storage::{NasDataset, NasPool, NasSnapshot};
 
 /// Share protocol type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -322,14 +322,15 @@ impl NasManager {
     }
 
     /// Update an existing share
-    pub async fn update_share(&self, id: &str, share: shares::NasShare) -> Result<shares::NasShare> {
+    pub async fn update_share(
+        &self,
+        id: &str,
+        share: shares::NasShare,
+    ) -> Result<shares::NasShare> {
         let mut shares = self.shares.write().await;
 
         if !shares.contains_key(id) {
-            return Err(Error::NotFound(format!(
-                "Share with ID {} not found",
-                id
-            )));
+            return Err(Error::NotFound(format!("Share with ID {} not found", id)));
         }
 
         shares.insert(id.to_string(), share.clone());
@@ -345,10 +346,7 @@ impl NasManager {
         if let Some(share) = shares.remove(id) {
             self.remove_share_config(&share).await?;
         } else {
-            return Err(Error::NotFound(format!(
-                "Share with ID {} not found",
-                id
-            )));
+            return Err(Error::NotFound(format!("Share with ID {} not found", id)));
         }
 
         Ok(())
@@ -358,9 +356,10 @@ impl NasManager {
     pub async fn get_share(&self, id: &str) -> Result<shares::NasShare> {
         let shares = self.shares.read().await;
 
-        shares.get(id).cloned().ok_or_else(|| {
-            Error::NotFound(format!("Share with ID {} not found", id))
-        })
+        shares
+            .get(id)
+            .cloned()
+            .ok_or_else(|| Error::NotFound(format!("Share with ID {} not found", id)))
     }
 
     /// List all shares
@@ -379,10 +378,7 @@ impl NasManager {
             drop(shares);
             self.apply_share_config(&share_clone).await?;
         } else {
-            return Err(Error::NotFound(format!(
-                "Share with ID {} not found",
-                id
-            )));
+            return Err(Error::NotFound(format!("Share with ID {} not found", id)));
         }
 
         Ok(())
@@ -398,10 +394,7 @@ impl NasManager {
             drop(shares);
             self.remove_share_config(&share_clone).await?;
         } else {
-            return Err(Error::NotFound(format!(
-                "Share with ID {} not found",
-                id
-            )));
+            return Err(Error::NotFound(format!("Share with ID {} not found", id)));
         }
 
         Ok(())
@@ -434,10 +427,7 @@ impl NasManager {
         if let Some(user) = users.remove(id) {
             self.auth_manager.delete_system_user(&user).await?;
         } else {
-            return Err(Error::NotFound(format!(
-                "User with ID {} not found",
-                id
-            )));
+            return Err(Error::NotFound(format!("User with ID {} not found", id)));
         }
 
         Ok(())
@@ -447,9 +437,10 @@ impl NasManager {
     pub async fn get_user(&self, id: &str) -> Result<auth::NasUser> {
         let users = self.users.read().await;
 
-        users.get(id).cloned().ok_or_else(|| {
-            Error::NotFound(format!("User with ID {} not found", id))
-        })
+        users
+            .get(id)
+            .cloned()
+            .ok_or_else(|| Error::NotFound(format!("User with ID {} not found", id)))
     }
 
     /// List all NAS users
@@ -465,10 +456,7 @@ impl NasManager {
         if let Some(user) = users.get(id) {
             self.auth_manager.set_password(user, password).await?;
         } else {
-            return Err(Error::NotFound(format!(
-                "User with ID {} not found",
-                id
-            )));
+            return Err(Error::NotFound(format!("User with ID {} not found", id)));
         }
 
         Ok(())
@@ -500,10 +488,7 @@ impl NasManager {
         if let Some(group) = groups.remove(id) {
             self.auth_manager.delete_system_group(&group).await?;
         } else {
-            return Err(Error::NotFound(format!(
-                "Group with ID {} not found",
-                id
-            )));
+            return Err(Error::NotFound(format!("Group with ID {} not found", id)));
         }
 
         Ok(())

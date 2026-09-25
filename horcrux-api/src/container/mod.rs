@@ -1,17 +1,16 @@
+pub mod docker;
+pub mod incus;
 ///! Container management module
 ///! Handles LXC, LXD, Incus, Docker, and Podman container lifecycle
-
 pub mod lxc;
 pub mod lxd;
-pub mod incus;
-pub mod docker;
 pub mod podman;
 
+use crate::db::Database;
 use horcrux_common::{ContainerConfig, ContainerRuntime, ContainerStatus, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::db::Database;
 
 /// Container instance (runtime-agnostic)
 #[derive(Debug, Clone)]
@@ -47,7 +46,7 @@ pub struct ContainerManager {
     incus_manager: incus::IncusContainerManager,
     docker_manager: docker::DockerManager,
     podman_manager: podman::PodmanManager,
-    _db: Option<Arc<Database>>,  // Reserved for future persistent container storage
+    _db: Option<Arc<Database>>, // Reserved for future persistent container storage
 }
 
 impl ContainerManager {
@@ -162,8 +161,12 @@ impl ContainerManager {
                 ContainerRuntime::Lxc => self.lxc_manager.delete_container(&container).await?,
                 ContainerRuntime::Lxd => self.lxd_manager.delete_container(&container).await?,
                 ContainerRuntime::Incus => self.incus_manager.delete_container(&container).await?,
-                ContainerRuntime::Docker => self.docker_manager.delete_container(&container).await?,
-                ContainerRuntime::Podman => self.podman_manager.delete_container(&container).await?,
+                ContainerRuntime::Docker => {
+                    self.docker_manager.delete_container(&container).await?
+                }
+                ContainerRuntime::Podman => {
+                    self.podman_manager.delete_container(&container).await?
+                }
             }
             Ok(())
         } else {
@@ -215,11 +218,31 @@ impl ContainerManager {
             .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?;
 
         let status = match container.runtime {
-            ContainerRuntime::Lxc => self.lxc_manager.get_container_status(&container.name).await?,
-            ContainerRuntime::Lxd => self.lxd_manager.get_container_status(&container.name).await?,
-            ContainerRuntime::Incus => self.incus_manager.get_container_status(&container.name).await?,
-            ContainerRuntime::Docker => self.docker_manager.get_container_status(&container.name).await?,
-            ContainerRuntime::Podman => self.podman_manager.get_container_status(&container.name).await?,
+            ContainerRuntime::Lxc => {
+                self.lxc_manager
+                    .get_container_status(&container.name)
+                    .await?
+            }
+            ContainerRuntime::Lxd => {
+                self.lxd_manager
+                    .get_container_status(&container.name)
+                    .await?
+            }
+            ContainerRuntime::Incus => {
+                self.incus_manager
+                    .get_container_status(&container.name)
+                    .await?
+            }
+            ContainerRuntime::Docker => {
+                self.docker_manager
+                    .get_container_status(&container.name)
+                    .await?
+            }
+            ContainerRuntime::Podman => {
+                self.podman_manager
+                    .get_container_status(&container.name)
+                    .await?
+            }
         };
 
         Ok(status)
@@ -233,18 +256,44 @@ impl ContainerManager {
             .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?;
 
         let output = match container.runtime {
-            ContainerRuntime::Lxc => self.lxc_manager.exec_command(&container.name, &command).await?,
-            ContainerRuntime::Lxd => self.lxd_manager.exec_command(&container.name, &command).await?,
-            ContainerRuntime::Incus => self.incus_manager.exec_command(&container.name, &command).await?,
-            ContainerRuntime::Docker => self.docker_manager.exec_command(&container.name, &command).await?,
-            ContainerRuntime::Podman => self.podman_manager.exec_command(&container.name, &command).await?,
+            ContainerRuntime::Lxc => {
+                self.lxc_manager
+                    .exec_command(&container.name, &command)
+                    .await?
+            }
+            ContainerRuntime::Lxd => {
+                self.lxd_manager
+                    .exec_command(&container.name, &command)
+                    .await?
+            }
+            ContainerRuntime::Incus => {
+                self.incus_manager
+                    .exec_command(&container.name, &command)
+                    .await?
+            }
+            ContainerRuntime::Docker => {
+                self.docker_manager
+                    .exec_command(&container.name, &command)
+                    .await?
+            }
+            ContainerRuntime::Podman => {
+                self.podman_manager
+                    .exec_command(&container.name, &command)
+                    .await?
+            }
         };
 
         Ok(output)
     }
 
     /// Clone a container
-    pub async fn clone_container(&self, source_id: &str, target_id: &str, target_name: &str, snapshot: bool) -> Result<ContainerConfig> {
+    pub async fn clone_container(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        target_name: &str,
+        snapshot: bool,
+    ) -> Result<ContainerConfig> {
         let containers = self.containers.read().await;
         let source_container = containers
             .get(source_id)
@@ -252,19 +301,29 @@ impl ContainerManager {
 
         match source_container.runtime {
             ContainerRuntime::Lxc => {
-                self.lxc_manager.clone_container(&source_container.name, target_name, snapshot).await?;
+                self.lxc_manager
+                    .clone_container(&source_container.name, target_name, snapshot)
+                    .await?;
             }
             ContainerRuntime::Lxd => {
-                self.lxd_manager.clone_container(&source_container.name, target_name, snapshot).await?;
+                self.lxd_manager
+                    .clone_container(&source_container.name, target_name, snapshot)
+                    .await?;
             }
             ContainerRuntime::Incus => {
-                self.incus_manager.clone_container(&source_container.name, target_name, snapshot).await?;
+                self.incus_manager
+                    .clone_container(&source_container.name, target_name, snapshot)
+                    .await?;
             }
             ContainerRuntime::Docker => {
-                self.docker_manager.clone_container(&source_container.name, target_name, snapshot).await?;
+                self.docker_manager
+                    .clone_container(&source_container.name, target_name, snapshot)
+                    .await?;
             }
             ContainerRuntime::Podman => {
-                self.podman_manager.clone_container(&source_container.name, target_name, snapshot).await?;
+                self.podman_manager
+                    .clone_container(&source_container.name, target_name, snapshot)
+                    .await?;
             }
         }
 
@@ -275,7 +334,15 @@ impl ContainerManager {
             runtime: source_container.runtime.clone(),
             memory: source_container.memory,
             cpus: source_container.cpus,
-            rootfs: format!("{}/{}", source_container.rootfs.rsplit('/').nth(1).unwrap_or("/var/lib"), target_name),
+            rootfs: format!(
+                "{}/{}",
+                source_container
+                    .rootfs
+                    .rsplit('/')
+                    .nth(1)
+                    .unwrap_or("/var/lib"),
+                target_name
+            ),
             status: ContainerStatus::Stopped,
         };
 

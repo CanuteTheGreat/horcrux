@@ -43,7 +43,7 @@ pub struct VGpuProfile {
 pub struct VGpuConfig {
     pub enabled: bool,
     pub vgpu_type: VGpuType,
-    pub device_id: String, // PCI device ID (e.g., "0000:01:00.0")
+    pub device_id: String,       // PCI device ID (e.g., "0000:01:00.0")
     pub profile: Option<String>, // vGPU profile name
     pub migration_enabled: bool,
 }
@@ -98,7 +98,9 @@ impl VGpuManager {
             .args(&["-nn", "-d", "10de:"])
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to list NVIDIA devices: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to list NVIDIA devices: {}", e))
+            })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut devices = Vec::new();
@@ -178,7 +180,9 @@ impl VGpuManager {
             .args(&["-nn", "-d", "1002:"])
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to list AMD devices: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to list AMD devices: {}", e))
+            })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut devices = Vec::new();
@@ -207,7 +211,9 @@ impl VGpuManager {
             .args(&["-nn", "-d", "8086:"])
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to list Intel devices: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to list Intel devices: {}", e))
+            })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut devices = Vec::new();
@@ -261,11 +267,7 @@ impl VGpuManager {
     }
 
     /// Attach vGPU to VM
-    pub async fn attach_vgpu(
-        &self,
-        vm_id: u32,
-        config: &VGpuConfig,
-    ) -> Result<()> {
+    pub async fn attach_vgpu(&self, vm_id: u32, config: &VGpuConfig) -> Result<()> {
         info!("Attaching vGPU {} to VM {}", config.device_id, vm_id);
 
         match config.vgpu_type {
@@ -283,7 +285,9 @@ impl VGpuManager {
         // Create vGPU instance
         let vgpu_uuid = uuid::Uuid::new_v4();
         let profile = config.profile.as_ref().ok_or_else(|| {
-            horcrux_common::Error::InvalidConfig("vGPU profile required for NVIDIA vGPU".to_string())
+            horcrux_common::Error::InvalidConfig(
+                "vGPU profile required for NVIDIA vGPU".to_string(),
+            )
         })?;
 
         let mdev_path = format!(
@@ -318,7 +322,9 @@ impl VGpuManager {
 
         let vgpu_uuid = uuid::Uuid::new_v4();
         let profile = config.profile.as_ref().ok_or_else(|| {
-            horcrux_common::Error::InvalidConfig("vGPU profile required for Intel GVT-g".to_string())
+            horcrux_common::Error::InvalidConfig(
+                "vGPU profile required for Intel GVT-g".to_string(),
+            )
         })?;
 
         let mdev_path = format!(
@@ -328,7 +334,9 @@ impl VGpuManager {
 
         tokio::fs::write(&mdev_path, vgpu_uuid.to_string())
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to create GVT-g vGPU: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to create GVT-g vGPU: {}", e))
+            })?;
 
         info!("Created Intel GVT-g instance: {}", vgpu_uuid);
 
@@ -337,7 +345,10 @@ impl VGpuManager {
 
     /// Attach PCI passthrough
     async fn attach_pci_passthrough(&self, vm_id: u32, config: &VGpuConfig) -> Result<()> {
-        info!("Attaching PCI passthrough {} to VM {}", config.device_id, vm_id);
+        info!(
+            "Attaching PCI passthrough {} to VM {}",
+            config.device_id, vm_id
+        );
 
         // Bind to vfio-pci driver
         self.bind_vfio_pci(&config.device_id).await?;
@@ -349,14 +360,14 @@ impl VGpuManager {
     async fn bind_vfio_pci(&self, pci_id: &str) -> Result<()> {
         // Get device vendor and device ID
         let ids_path = format!("/sys/bus/pci/devices/{}/vendor", pci_id);
-        let vendor = tokio::fs::read_to_string(&ids_path)
-            .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to read vendor ID: {}", e)))?;
+        let vendor = tokio::fs::read_to_string(&ids_path).await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to read vendor ID: {}", e))
+        })?;
 
         let ids_path = format!("/sys/bus/pci/devices/{}/device", pci_id);
-        let device = tokio::fs::read_to_string(&ids_path)
-            .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to read device ID: {}", e)))?;
+        let device = tokio::fs::read_to_string(&ids_path).await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to read device ID: {}", e))
+        })?;
 
         // Unbind from current driver
         let unbind_path = format!("/sys/bus/pci/devices/{}/driver/unbind", pci_id);
@@ -366,7 +377,9 @@ impl VGpuManager {
         let new_id_path = "/sys/bus/pci/drivers/vfio-pci/new_id";
         tokio::fs::write(new_id_path, format!("{} {}", vendor.trim(), device.trim()))
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to bind vfio-pci: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to bind vfio-pci: {}", e))
+            })?;
 
         Ok(())
     }
@@ -386,9 +399,9 @@ impl VGpuManager {
     /// Check if vGPU migration is supported
     pub fn supports_migration(&self, vgpu_type: &VGpuType) -> bool {
         match vgpu_type {
-            VGpuType::Nvidia => true,  // NVIDIA vGPU supports live migration
-            VGpuType::Amd => false,    // AMD MxGPU has limited migration support
-            VGpuType::Intel => false,  // Intel GVT-g doesn't support live migration
+            VGpuType::Nvidia => true,       // NVIDIA vGPU supports live migration
+            VGpuType::Amd => false,         // AMD MxGPU has limited migration support
+            VGpuType::Intel => false,       // Intel GVT-g doesn't support live migration
             VGpuType::Passthrough => false, // Full passthrough can't migrate
         }
     }

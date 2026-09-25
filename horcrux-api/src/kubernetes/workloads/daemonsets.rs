@@ -10,10 +10,7 @@ use crate::kubernetes::types::DaemonSetInfo;
 
 /// List DaemonSets in a namespace
 #[cfg(feature = "kubernetes")]
-pub async fn list_daemonsets(
-    client: &K8sClient,
-    namespace: &str,
-) -> K8sResult<Vec<DaemonSetInfo>> {
+pub async fn list_daemonsets(client: &K8sClient, namespace: &str) -> K8sResult<Vec<DaemonSetInfo>> {
     use k8s_openapi::api::apps::v1::DaemonSet;
     use kube::api::{Api, ListParams};
 
@@ -41,11 +38,7 @@ pub async fn get_daemonset(
 
 /// Delete a DaemonSet
 #[cfg(feature = "kubernetes")]
-pub async fn delete_daemonset(
-    client: &K8sClient,
-    namespace: &str,
-    name: &str,
-) -> K8sResult<()> {
+pub async fn delete_daemonset(client: &K8sClient, namespace: &str, name: &str) -> K8sResult<()> {
     use k8s_openapi::api::apps::v1::DaemonSet;
     use kube::api::{Api, DeleteParams};
 
@@ -95,10 +88,7 @@ fn daemonset_to_info(ds: k8s_openapi::api::apps::v1::DaemonSet) -> DaemonSetInfo
     let status = ds.status.unwrap_or_default();
 
     // Get selector labels
-    let selector = spec
-        .selector
-        .match_labels
-        .unwrap_or_default();
+    let selector = spec.selector.match_labels.unwrap_or_default();
 
     // Get update strategy
     let update_strategy = spec
@@ -127,7 +117,9 @@ pub async fn list_daemonsets(
     _client: &K8sClient,
     _namespace: &str,
 ) -> K8sResult<Vec<DaemonSetInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -136,16 +128,16 @@ pub async fn get_daemonset(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<DaemonSetInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
-pub async fn delete_daemonset(
-    _client: &K8sClient,
-    _namespace: &str,
-    _name: &str,
-) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+pub async fn delete_daemonset(_client: &K8sClient, _namespace: &str, _name: &str) -> K8sResult<()> {
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -154,5 +146,7 @@ pub async fn restart_daemonset(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<DaemonSetInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }

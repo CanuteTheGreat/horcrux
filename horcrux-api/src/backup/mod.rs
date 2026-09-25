@@ -1,9 +1,8 @@
+pub mod providers;
+mod retention;
 ///! Backup and restore system (vzdump equivalent)
 ///! Provides VM and container backup with scheduling and retention
-
 mod scheduler;
-mod retention;
-pub mod providers;
 
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
@@ -16,9 +15,9 @@ use tokio::sync::RwLock;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BackupMode {
-    Snapshot,   // Use storage snapshots (ZFS/Ceph/LVM)
-    Suspend,    // Suspend VM, copy, resume
-    Stop,       // Stop VM, copy, start
+    Snapshot, // Use storage snapshots (ZFS/Ceph/LVM)
+    Suspend,  // Suspend VM, copy, resume
+    Stop,     // Stop VM, copy, start
 }
 
 /// Backup compression
@@ -36,9 +35,9 @@ pub enum Compression {
 pub struct BackupConfig {
     pub id: String,
     pub name: String,
-    pub target_type: TargetType,  // VM or Container
+    pub target_type: TargetType, // VM or Container
     pub target_id: String,
-    pub storage: String,           // Backup storage location
+    pub storage: String, // Backup storage location
     pub mode: BackupMode,
     pub compression: Compression,
     pub notes: Option<String>,
@@ -57,13 +56,13 @@ pub enum TargetType {
 pub struct BackupJob {
     pub id: String,
     pub enabled: bool,
-    pub schedule: String,  // Cron-like schedule
-    pub targets: Vec<String>,  // VM/Container IDs
+    pub schedule: String,     // Cron-like schedule
+    pub targets: Vec<String>, // VM/Container IDs
     pub storage: String,
     pub mode: BackupMode,
     pub compression: Compression,
     pub retention: RetentionPolicy,
-    pub notify: Option<String>,  // Email for notifications
+    pub notify: Option<String>, // Email for notifications
 }
 
 /// Retention policy
@@ -84,7 +83,7 @@ pub struct Backup {
     pub target_id: String,
     pub target_name: String,
     pub timestamp: i64,
-    pub size: u64,  // Bytes
+    pub size: u64, // Bytes
     pub mode: BackupMode,
     pub compression: Compression,
     pub path: PathBuf,
@@ -153,7 +152,11 @@ impl BackupManager {
 
     /// Create a backup
     pub async fn create_backup(&self, config: BackupConfig) -> Result<Backup> {
-        tracing::info!("Creating backup for {} {}", config.target_type.as_str(), config.target_id);
+        tracing::info!(
+            "Creating backup for {} {}",
+            config.target_type.as_str(),
+            config.target_id
+        );
 
         // Generate backup metadata
         let backup_id = uuid::Uuid::new_v4().to_string();
@@ -172,15 +175,9 @@ impl BackupManager {
 
         // Perform the actual backup based on mode
         let size = match config.mode {
-            BackupMode::Snapshot => {
-                self.backup_with_snapshot(&config, &backup_path).await?
-            }
-            BackupMode::Suspend => {
-                self.backup_with_suspend(&config, &backup_path).await?
-            }
-            BackupMode::Stop => {
-                self.backup_with_stop(&config, &backup_path).await?
-            }
+            BackupMode::Snapshot => self.backup_with_snapshot(&config, &backup_path).await?,
+            BackupMode::Suspend => self.backup_with_suspend(&config, &backup_path).await?,
+            BackupMode::Stop => self.backup_with_stop(&config, &backup_path).await?,
         };
 
         let backup = Backup {
@@ -207,9 +204,9 @@ impl BackupManager {
     /// Restore from backup
     pub async fn restore_backup(&self, backup_id: &str, target_id: Option<String>) -> Result<()> {
         let backups = self.backups.read().await;
-        let backup = backups
-            .get(backup_id)
-            .ok_or_else(|| horcrux_common::Error::System(format!("Backup {} not found", backup_id)))?;
+        let backup = backups.get(backup_id).ok_or_else(|| {
+            horcrux_common::Error::System(format!("Backup {} not found", backup_id))
+        })?;
 
         tracing::info!("Restoring backup {} to {:?}", backup_id, target_id);
 
@@ -218,11 +215,10 @@ impl BackupManager {
 
         // Extract and restore based on backup type
         match backup.target_type {
-            TargetType::Vm => {
-                self.restore_vm_backup(backup, &restore_target).await?
-            }
+            TargetType::Vm => self.restore_vm_backup(backup, &restore_target).await?,
             TargetType::Container => {
-                self.restore_container_backup(backup, &restore_target).await?
+                self.restore_container_backup(backup, &restore_target)
+                    .await?
             }
         }
 
@@ -255,7 +251,10 @@ impl BackupManager {
             tracing::info!("Backup {} deleted", backup_id);
             Ok(())
         } else {
-            Err(horcrux_common::Error::System(format!("Backup {} not found", backup_id)))
+            Err(horcrux_common::Error::System(format!(
+                "Backup {} not found",
+                backup_id
+            )))
         }
     }
 
@@ -315,11 +314,14 @@ impl BackupManager {
 
         // Determine which storage backend to use based on config.storage
         let size = if config.storage.starts_with("zfs:") && self.zfs_backend.is_some() {
-            self.backup_with_zfs_snapshot(config, path, &snapshot_name).await?
+            self.backup_with_zfs_snapshot(config, path, &snapshot_name)
+                .await?
         } else if config.storage.starts_with("ceph:") && self.ceph_backend.is_some() {
-            self.backup_with_ceph_snapshot(config, path, &snapshot_name).await?
+            self.backup_with_ceph_snapshot(config, path, &snapshot_name)
+                .await?
         } else if config.storage.starts_with("lvm:") && self.lvm_backend.is_some() {
-            self.backup_with_lvm_snapshot(config, path, &snapshot_name).await?
+            self.backup_with_lvm_snapshot(config, path, &snapshot_name)
+                .await?
         } else {
             // Fallback to file-based backup
             self.backup_with_file_copy(config, path).await?
@@ -328,20 +330,32 @@ impl BackupManager {
         Ok(size)
     }
 
-    async fn backup_with_zfs_snapshot(&self, config: &BackupConfig, path: &PathBuf, snapshot_name: &str) -> Result<u64> {
-        let zfs = self.zfs_backend.as_ref().ok_or_else(||
-            horcrux_common::Error::System("ZFS backend not configured".to_string()))?;
+    async fn backup_with_zfs_snapshot(
+        &self,
+        config: &BackupConfig,
+        path: &PathBuf,
+        snapshot_name: &str,
+    ) -> Result<u64> {
+        let zfs = self.zfs_backend.as_ref().ok_or_else(|| {
+            horcrux_common::Error::System("ZFS backend not configured".to_string())
+        })?;
 
         // Extract pool and volume from storage path (e.g., "zfs:tank/vms/vm-100")
-        let storage_path = config.storage.strip_prefix("zfs:").unwrap_or(&config.storage);
+        let storage_path = config
+            .storage
+            .strip_prefix("zfs:")
+            .unwrap_or(&config.storage);
 
         // Create ZFS snapshot
-        zfs.create_snapshot(storage_path, &config.target_id, snapshot_name).await?;
+        zfs.create_snapshot(storage_path, &config.target_id, snapshot_name)
+            .await?;
 
         // Export snapshot to file using zfs send
         let snapshot_path = format!("{}@{}", config.target_id, snapshot_name);
-        let export_cmd = format!("zfs send {}/{} | {} > {}",
-            storage_path, snapshot_path,
+        let export_cmd = format!(
+            "zfs send {}/{} | {} > {}",
+            storage_path,
+            snapshot_path,
             self.get_compression_cmd(&config.compression),
             path.display()
         );
@@ -364,7 +378,10 @@ impl BackupManager {
         let size = metadata.len();
 
         // Clean up snapshot after export
-        let destroy_cmd = format!("zfs destroy {}/{}@{}", storage_path, config.target_id, snapshot_name);
+        let destroy_cmd = format!(
+            "zfs destroy {}/{}@{}",
+            storage_path, config.target_id, snapshot_name
+        );
         tokio::process::Command::new("sh")
             .arg("-c")
             .arg(&destroy_cmd)
@@ -375,19 +392,32 @@ impl BackupManager {
         Ok(size)
     }
 
-    async fn backup_with_ceph_snapshot(&self, config: &BackupConfig, path: &PathBuf, snapshot_name: &str) -> Result<u64> {
-        let ceph = self.ceph_backend.as_ref().ok_or_else(||
-            horcrux_common::Error::System("Ceph backend not configured".to_string()))?;
+    async fn backup_with_ceph_snapshot(
+        &self,
+        config: &BackupConfig,
+        path: &PathBuf,
+        snapshot_name: &str,
+    ) -> Result<u64> {
+        let ceph = self.ceph_backend.as_ref().ok_or_else(|| {
+            horcrux_common::Error::System("Ceph backend not configured".to_string())
+        })?;
 
         // Extract pool from storage path (e.g., "ceph:rbd/vms")
-        let storage_path = config.storage.strip_prefix("ceph:").unwrap_or(&config.storage);
+        let storage_path = config
+            .storage
+            .strip_prefix("ceph:")
+            .unwrap_or(&config.storage);
 
         // Create Ceph RBD snapshot
-        ceph.create_snapshot(storage_path, &config.target_id, snapshot_name).await?;
+        ceph.create_snapshot(storage_path, &config.target_id, snapshot_name)
+            .await?;
 
         // Export snapshot using rbd export
-        let export_cmd = format!("rbd export {}/{}@{} - | {} > {}",
-            storage_path, config.target_id, snapshot_name,
+        let export_cmd = format!(
+            "rbd export {}/{}@{} - | {} > {}",
+            storage_path,
+            config.target_id,
+            snapshot_name,
             self.get_compression_cmd(&config.compression),
             path.display()
         );
@@ -410,7 +440,10 @@ impl BackupManager {
         let size = metadata.len();
 
         // Clean up snapshot
-        let rm_snap_cmd = format!("rbd snap rm {}/{}@{}", storage_path, config.target_id, snapshot_name);
+        let rm_snap_cmd = format!(
+            "rbd snap rm {}/{}@{}",
+            storage_path, config.target_id, snapshot_name
+        );
         tokio::process::Command::new("sh")
             .arg("-c")
             .arg(&rm_snap_cmd)
@@ -421,19 +454,30 @@ impl BackupManager {
         Ok(size)
     }
 
-    async fn backup_with_lvm_snapshot(&self, config: &BackupConfig, path: &PathBuf, snapshot_name: &str) -> Result<u64> {
-        let lvm = self.lvm_backend.as_ref().ok_or_else(||
-            horcrux_common::Error::System("LVM backend not configured".to_string()))?;
+    async fn backup_with_lvm_snapshot(
+        &self,
+        config: &BackupConfig,
+        path: &PathBuf,
+        snapshot_name: &str,
+    ) -> Result<u64> {
+        let lvm = self.lvm_backend.as_ref().ok_or_else(|| {
+            horcrux_common::Error::System("LVM backend not configured".to_string())
+        })?;
 
         // Extract VG from storage path (e.g., "lvm:vg0")
-        let storage_path = config.storage.strip_prefix("lvm:").unwrap_or(&config.storage);
+        let storage_path = config
+            .storage
+            .strip_prefix("lvm:")
+            .unwrap_or(&config.storage);
 
         // Create LVM snapshot
-        lvm.create_snapshot(storage_path, &config.target_id, snapshot_name).await?;
+        lvm.create_snapshot(storage_path, &config.target_id, snapshot_name)
+            .await?;
 
         // Export snapshot using dd
         let snapshot_device = format!("/dev/{}/{}", storage_path, snapshot_name);
-        let export_cmd = format!("dd if={} bs=4M | {} > {}",
+        let export_cmd = format!(
+            "dd if={} bs=4M | {} > {}",
             snapshot_device,
             self.get_compression_cmd(&config.compression),
             path.display()
@@ -474,7 +518,8 @@ impl BackupManager {
 
         let source_path = PathBuf::from(&config.storage).join(&config.target_id);
 
-        let copy_cmd = format!("tar -cf - -C {} . | {} > {}",
+        let copy_cmd = format!(
+            "tar -cf - -C {} . | {} > {}",
             source_path.display(),
             self.get_compression_cmd(&config.compression),
             path.display()
@@ -520,7 +565,10 @@ impl BackupManager {
         // For standalone operation, check if QEMU monitor socket exists and send suspend command
         let monitor_path = format!("/var/run/qemu-server/{}.mon", config.target_id);
         if std::path::Path::new(&monitor_path).exists() {
-            tracing::info!("Found QEMU monitor at {}, would send stop command", monitor_path);
+            tracing::info!(
+                "Found QEMU monitor at {}, would send stop command",
+                monitor_path
+            );
             // Would use: echo "stop" | socat - UNIX-CONNECT:/path/to/monitor.sock
         } else {
             tracing::warn!("QEMU monitor not found, backup may capture inconsistent state");
@@ -566,7 +614,10 @@ impl BackupManager {
                 // Would use: echo "quit" | socat - UNIX-CONNECT:/path/to/monitor.sock
             }
         } else {
-            tracing::info!("VM {} is not running, proceeding with backup", config.target_id);
+            tracing::info!(
+                "VM {} is not running, proceeding with backup",
+                config.target_id
+            );
         }
 
         tracing::info!("Step 2: Copying disk files...");
@@ -587,11 +638,14 @@ impl BackupManager {
         tracing::info!("Restoring VM backup to {}", target_id);
 
         // Determine restore method based on backup path extension
-        if backup.path.extension().and_then(|e| e.to_str()) == Some("zst") ||
-           backup.path.extension().and_then(|e| e.to_str()) == Some("gz") {
-            self.restore_from_compressed_backup(backup, target_id).await?;
+        if backup.path.extension().and_then(|e| e.to_str()) == Some("zst")
+            || backup.path.extension().and_then(|e| e.to_str()) == Some("gz")
+        {
+            self.restore_from_compressed_backup(backup, target_id)
+                .await?;
         } else {
-            self.restore_from_uncompressed_backup(backup, target_id).await?;
+            self.restore_from_uncompressed_backup(backup, target_id)
+                .await?;
         }
 
         Ok(())
@@ -601,7 +655,8 @@ impl BackupManager {
         tracing::info!("Restoring container backup to {}", target_id);
 
         // Same restore logic as VMs for now
-        self.restore_from_compressed_backup(backup, target_id).await?;
+        self.restore_from_compressed_backup(backup, target_id)
+            .await?;
 
         Ok(())
     }
@@ -619,7 +674,8 @@ impl BackupManager {
         tokio::fs::create_dir_all(&restore_path).await?;
 
         // Extract backup
-        let extract_cmd = format!("{} < {} | tar -xf - -C {}",
+        let extract_cmd = format!(
+            "{} < {} | tar -xf - -C {}",
             decompress_cmd,
             backup.path.display(),
             restore_path.display()
@@ -642,12 +698,17 @@ impl BackupManager {
         Ok(())
     }
 
-    async fn restore_from_uncompressed_backup(&self, backup: &Backup, target_id: &str) -> Result<()> {
+    async fn restore_from_uncompressed_backup(
+        &self,
+        backup: &Backup,
+        target_id: &str,
+    ) -> Result<()> {
         let restore_path = self.restore_dir.join(target_id);
         tokio::fs::create_dir_all(&restore_path).await?;
 
         // Direct tar extraction
-        let extract_cmd = format!("tar -xf {} -C {}",
+        let extract_cmd = format!(
+            "tar -xf {} -C {}",
             backup.path.display(),
             restore_path.display()
         );

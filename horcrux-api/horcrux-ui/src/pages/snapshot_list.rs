@@ -1,5 +1,5 @@
-use leptos::*;
 use crate::api;
+use leptos::*;
 
 #[component]
 pub fn SnapshotList() -> impl IntoView {
@@ -46,7 +46,13 @@ pub fn SnapshotList() -> impl IntoView {
 
     let restore_snapshot = move |vm_id: String, snapshot_id: String| {
         if web_sys::window()
-            .and_then(|w| w.confirm_with_message(&format!("Restore snapshot {}? Current state will be lost.", snapshot_id)).ok())
+            .and_then(|w| {
+                w.confirm_with_message(&format!(
+                    "Restore snapshot {}? Current state will be lost.",
+                    snapshot_id
+                ))
+                .ok()
+            })
             .unwrap_or(false)
         {
             spawn_local(async move {
@@ -61,7 +67,10 @@ pub fn SnapshotList() -> impl IntoView {
 
     let delete_snapshot = move |vm_id: String, snapshot_id: String| {
         if web_sys::window()
-            .and_then(|w| w.confirm_with_message(&format!("Delete snapshot {}?", snapshot_id)).ok())
+            .and_then(|w| {
+                w.confirm_with_message(&format!("Delete snapshot {}?", snapshot_id))
+                    .ok()
+            })
             .unwrap_or(false)
         {
             spawn_local(async move {

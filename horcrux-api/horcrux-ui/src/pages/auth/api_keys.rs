@@ -3,15 +3,16 @@
 //! Manage API tokens for programmatic access to Horcrux.
 //! Provides token generation, usage tracking, and security monitoring.
 
-use leptos::*;
 use crate::api;
+use leptos::*;
 use std::collections::HashMap;
 
 /// API key management page component
 #[component]
 pub fn ApiKeysPage() -> impl IntoView {
     let (users, set_users) = create_signal(Vec::<api::User>::new());
-    let (user_tokens, set_user_tokens) = create_signal(HashMap::<String, Vec<api::ApiToken>>::new());
+    let (user_tokens, set_user_tokens) =
+        create_signal(HashMap::<String, Vec<api::ApiToken>>::new());
     let (selected_user, set_selected_user) = create_signal(None::<String>);
     let (loading, set_loading) = create_signal(true);
     let (error_message, set_error_message) = create_signal(None::<String>);
@@ -525,199 +526,199 @@ where
     let user_id_for_submit2 = user_id_for_submit.clone();
 
     view! {
-        <div class="create-token-form-container">
-            {move || if let Some(token_id) = generated_token.get() {
-                let token_for_input = token_id.clone();
-                let token_for_example = token_id.clone();
-                view! {
-                    <div class="token-generated">
-                        <div class="success-header">
-                            <span class="success-icon">"✅"</span>
-                            <h3>"API Token Created Successfully"</h3>
-                        </div>
+            <div class="create-token-form-container">
+                {move || if let Some(token_id) = generated_token.get() {
+                    let token_for_input = token_id.clone();
+                    let token_for_example = token_id.clone();
+                    view! {
+                        <div class="token-generated">
+                            <div class="success-header">
+                                <span class="success-icon">"✅"</span>
+                                <h3>"API Token Created Successfully"</h3>
+                            </div>
 
-                        <div class="token-display">
-                            <label>"Your new API token:"</label>
-                            <div class="token-value">
+                            <div class="token-display">
+                                <label>"Your new API token:"</label>
+                                <div class="token-value">
+                                    <input
+                                        type="text"
+                                        value={token_for_input}
+                                        readonly=true
+                                        class="token-input"
+                                    />
+                                    <button
+                                        class="btn btn-secondary"
+                                        on:click=move |_| {
+                                            // Simple notification instead of clipboard API
+                                            web_sys::console::log_1(&"Please copy the token manually".into());
+                                        }
+                                    >
+                                        "Copy"
+                                    </button>
+                                </div>
+
+                                <div class="security-warning">
+                                    <strong>"[!] Security Notice:"</strong>
+                                    " Please copy this token now. You won't be able to see it again for security reasons."
+                                </div>
+                            </div>
+
+                            <div class="token-usage-info">
+                                <h4>"Using Your API Token"</h4>
+                                <p>"Include this token in your API requests:"</p>
+                                <pre class="code-example">
+    {format!(r#"curl -H "Authorization: Bearer {}" \
+         -H "Content-Type: application/json" \
+         http://localhost:8006/api/vms"#, token_for_example)}
+                                </pre>
+                            </div>
+                        </div>
+                    }.into_view()
+                } else {
+                    let on_success_inner2 = on_success_for_submit.clone();
+                    let on_error_inner2 = on_error_for_submit.clone();
+                    let user_id_inner = user_id_for_submit2.clone();
+                    view! {
+                        <form class="create-token-form" on:submit=move |ev: web_sys::SubmitEvent| {
+                            ev.prevent_default();
+
+                            let request = api::CreateApiTokenRequest {
+                                comment: if comment.get().trim().is_empty() {
+                                    None
+                                } else {
+                                    Some(comment.get().trim().to_string())
+                                },
+                                expire: calculate_expiry(),
+                                permissions: None,
+                            };
+
+                            set_creating.set(true);
+
+                            let user_id_clone = user_id_inner.clone();
+                            let on_success_inner = on_success_inner2.clone();
+                            let on_error_inner = on_error_inner2.clone();
+
+                            spawn_local(async move {
+                                match api::create_api_token(&user_id_clone, request).await {
+                                    Ok(token) => {
+                                        set_generated_token.set(Some(token.id));
+                                        on_success_inner();
+                                    }
+                                    Err(e) => {
+                                        on_error_inner(format!("Failed to create API token: {}", e));
+                                    }
+                                }
+                                set_creating.set(false);
+                            });
+                        }>
+                            <h3>{format!("Create API Token for {}", username)}</h3>
+
+                            <div class="form-group">
+                                <label for="token-comment">"Comment (Optional)"</label>
                                 <input
                                     type="text"
-                                    value={token_for_input}
-                                    readonly=true
-                                    class="token-input"
+                                    id="token-comment"
+                                    prop:value=move || comment.get()
+                                    on:input=move |ev| set_comment.set(event_target_value(&ev))
+                                    placeholder="e.g., Production monitoring, CI/CD pipeline"
+                                    maxlength="200"
                                 />
+                                <small>"A description to help identify this token's purpose"</small>
+                            </div>
+
+                            <div class="form-group">
+                                <label>"Token Expiration"</label>
+                                <div class="expiry-options">
+                                    <label class="radio-option">
+                                        <input
+                                            type="radio"
+                                            name="expiry"
+                                            value="never"
+                                            checked=move || expire_option.get() == "never"
+                                            on:change=move |_| set_expire_option.set("never".to_string())
+                                        />
+                                        <span>"Never expires"</span>
+                                    </label>
+
+                                    <label class="radio-option">
+                                        <input
+                                            type="radio"
+                                            name="expiry"
+                                            value="30days"
+                                            checked=move || expire_option.get() == "30days"
+                                            on:change=move |_| set_expire_option.set("30days".to_string())
+                                        />
+                                        <span>"30 days"</span>
+                                    </label>
+
+                                    <label class="radio-option">
+                                        <input
+                                            type="radio"
+                                            name="expiry"
+                                            value="90days"
+                                            checked=move || expire_option.get() == "90days"
+                                            on:change=move |_| set_expire_option.set("90days".to_string())
+                                        />
+                                        <span>"90 days (recommended)"</span>
+                                    </label>
+
+                                    <label class="radio-option">
+                                        <input
+                                            type="radio"
+                                            name="expiry"
+                                            value="365days"
+                                            checked=move || expire_option.get() == "365days"
+                                            on:change=move |_| set_expire_option.set("365days".to_string())
+                                        />
+                                        <span>"1 year"</span>
+                                    </label>
+
+                                    <label class="radio-option">
+                                        <input
+                                            type="radio"
+                                            name="expiry"
+                                            value="custom"
+                                            checked=move || expire_option.get() == "custom"
+                                            on:change=move |_| set_expire_option.set("custom".to_string())
+                                        />
+                                        <span>"Custom:"</span>
+                                        <input
+                                            type="number"
+                                            prop:value=move || custom_days.get()
+                                            on:input=move |ev| set_custom_days.set(event_target_value(&ev))
+                                            min="1"
+                                            max="3650"
+                                            class="custom-days-input"
+                                            disabled=move || expire_option.get() != "custom"
+                                        />
+                                        <span>"days"</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="security-notice">
+                                <h4>"🔒 Security Best Practices"</h4>
+                                <ul>
+                                    <li>"Store the token securely and never share it publicly"</li>
+                                    <li>"Use environment variables instead of hardcoding in code"</li>
+                                    <li>"Rotate tokens regularly for enhanced security"</li>
+                                    <li>"Set appropriate expiration dates for automated systems"</li>
+                                    <li>"Revoke unused or compromised tokens immediately"</li>
+                                </ul>
+                            </div>
+
+                            <div class="form-actions">
                                 <button
-                                    class="btn btn-secondary"
-                                    on:click=move |_| {
-                                        // Simple notification instead of clipboard API
-                                        web_sys::console::log_1(&"Please copy the token manually".into());
-                                    }
+                                    type="submit"
+                                    class="btn btn-primary"
+                                    disabled=move || creating.get()
                                 >
-                                    "Copy"
+                                    {move || if creating.get() { "Creating Token..." } else { "Create API Token" }}
                                 </button>
                             </div>
-
-                            <div class="security-warning">
-                                <strong>"[!] Security Notice:"</strong>
-                                " Please copy this token now. You won't be able to see it again for security reasons."
-                            </div>
-                        </div>
-
-                        <div class="token-usage-info">
-                            <h4>"Using Your API Token"</h4>
-                            <p>"Include this token in your API requests:"</p>
-                            <pre class="code-example">
-{format!(r#"curl -H "Authorization: Bearer {}" \
-     -H "Content-Type: application/json" \
-     http://localhost:8006/api/vms"#, token_for_example)}
-                            </pre>
-                        </div>
-                    </div>
-                }.into_view()
-            } else {
-                let on_success_inner2 = on_success_for_submit.clone();
-                let on_error_inner2 = on_error_for_submit.clone();
-                let user_id_inner = user_id_for_submit2.clone();
-                view! {
-                    <form class="create-token-form" on:submit=move |ev: web_sys::SubmitEvent| {
-                        ev.prevent_default();
-
-                        let request = api::CreateApiTokenRequest {
-                            comment: if comment.get().trim().is_empty() {
-                                None
-                            } else {
-                                Some(comment.get().trim().to_string())
-                            },
-                            expire: calculate_expiry(),
-                            permissions: None,
-                        };
-
-                        set_creating.set(true);
-
-                        let user_id_clone = user_id_inner.clone();
-                        let on_success_inner = on_success_inner2.clone();
-                        let on_error_inner = on_error_inner2.clone();
-
-                        spawn_local(async move {
-                            match api::create_api_token(&user_id_clone, request).await {
-                                Ok(token) => {
-                                    set_generated_token.set(Some(token.id));
-                                    on_success_inner();
-                                }
-                                Err(e) => {
-                                    on_error_inner(format!("Failed to create API token: {}", e));
-                                }
-                            }
-                            set_creating.set(false);
-                        });
-                    }>
-                        <h3>{format!("Create API Token for {}", username)}</h3>
-
-                        <div class="form-group">
-                            <label for="token-comment">"Comment (Optional)"</label>
-                            <input
-                                type="text"
-                                id="token-comment"
-                                prop:value=move || comment.get()
-                                on:input=move |ev| set_comment.set(event_target_value(&ev))
-                                placeholder="e.g., Production monitoring, CI/CD pipeline"
-                                maxlength="200"
-                            />
-                            <small>"A description to help identify this token's purpose"</small>
-                        </div>
-
-                        <div class="form-group">
-                            <label>"Token Expiration"</label>
-                            <div class="expiry-options">
-                                <label class="radio-option">
-                                    <input
-                                        type="radio"
-                                        name="expiry"
-                                        value="never"
-                                        checked=move || expire_option.get() == "never"
-                                        on:change=move |_| set_expire_option.set("never".to_string())
-                                    />
-                                    <span>"Never expires"</span>
-                                </label>
-
-                                <label class="radio-option">
-                                    <input
-                                        type="radio"
-                                        name="expiry"
-                                        value="30days"
-                                        checked=move || expire_option.get() == "30days"
-                                        on:change=move |_| set_expire_option.set("30days".to_string())
-                                    />
-                                    <span>"30 days"</span>
-                                </label>
-
-                                <label class="radio-option">
-                                    <input
-                                        type="radio"
-                                        name="expiry"
-                                        value="90days"
-                                        checked=move || expire_option.get() == "90days"
-                                        on:change=move |_| set_expire_option.set("90days".to_string())
-                                    />
-                                    <span>"90 days (recommended)"</span>
-                                </label>
-
-                                <label class="radio-option">
-                                    <input
-                                        type="radio"
-                                        name="expiry"
-                                        value="365days"
-                                        checked=move || expire_option.get() == "365days"
-                                        on:change=move |_| set_expire_option.set("365days".to_string())
-                                    />
-                                    <span>"1 year"</span>
-                                </label>
-
-                                <label class="radio-option">
-                                    <input
-                                        type="radio"
-                                        name="expiry"
-                                        value="custom"
-                                        checked=move || expire_option.get() == "custom"
-                                        on:change=move |_| set_expire_option.set("custom".to_string())
-                                    />
-                                    <span>"Custom:"</span>
-                                    <input
-                                        type="number"
-                                        prop:value=move || custom_days.get()
-                                        on:input=move |ev| set_custom_days.set(event_target_value(&ev))
-                                        min="1"
-                                        max="3650"
-                                        class="custom-days-input"
-                                        disabled=move || expire_option.get() != "custom"
-                                    />
-                                    <span>"days"</span>
-                                </label>
-                            </div>
-                        </div>
-
-                        <div class="security-notice">
-                            <h4>"🔒 Security Best Practices"</h4>
-                            <ul>
-                                <li>"Store the token securely and never share it publicly"</li>
-                                <li>"Use environment variables instead of hardcoding in code"</li>
-                                <li>"Rotate tokens regularly for enhanced security"</li>
-                                <li>"Set appropriate expiration dates for automated systems"</li>
-                                <li>"Revoke unused or compromised tokens immediately"</li>
-                            </ul>
-                        </div>
-
-                        <div class="form-actions">
-                            <button
-                                type="submit"
-                                class="btn btn-primary"
-                                disabled=move || creating.get()
-                            >
-                                {move || if creating.get() { "Creating Token..." } else { "Create API Token" }}
-                            </button>
-                        </div>
-                    </form>
-                }.into_view()
-            }}
-        </div>
-    }
+                        </form>
+                    }.into_view()
+                }}
+            </div>
+        }
 }

@@ -6,13 +6,13 @@
 //! - Post-copy migration for large VMs
 //! - Migration progress tracking
 
+use chrono::{DateTime, Utc};
+use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn, error, debug};
-use horcrux_common::Result;
-use chrono::{DateTime, Utc};
+use tracing::{debug, error, info, warn};
 
 /// Migration types supported
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -276,37 +276,44 @@ impl MigrationManager {
         config: Option<MigrationConfig>,
     ) -> Result<String> {
         // Run pre-migration checks
-        let checks = self.check_migration(&vm_id, &source_node, &target_node, &migration_type).await;
+        let checks = self
+            .check_migration(&vm_id, &source_node, &target_node, &migration_type)
+            .await;
 
-        let blocking_failures: Vec<_> = checks.iter()
-            .filter(|c| !c.passed && c.blocking)
-            .collect();
+        let blocking_failures: Vec<_> = checks.iter().filter(|c| !c.passed && c.blocking).collect();
 
         if !blocking_failures.is_empty() {
-            let reasons: Vec<_> = blocking_failures.iter()
+            let reasons: Vec<_> = blocking_failures
+                .iter()
                 .map(|c| c.message.clone())
                 .collect();
-            return Err(horcrux_common::Error::System(
-                format!("Pre-migration checks failed: {}", reasons.join(", "))
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Pre-migration checks failed: {}",
+                reasons.join(", ")
+            )));
         }
 
         // Check concurrent migration limit
         let jobs = self.jobs.read().await;
-        let active_count = jobs.values()
-            .filter(|j| matches!(j.state,
-                MigrationState::Transferring |
-                MigrationState::SyncingStorage |
-                MigrationState::Converging |
-                MigrationState::Switching
-            ))
+        let active_count = jobs
+            .values()
+            .filter(|j| {
+                matches!(
+                    j.state,
+                    MigrationState::Transferring
+                        | MigrationState::SyncingStorage
+                        | MigrationState::Converging
+                        | MigrationState::Switching
+                )
+            })
             .count();
         drop(jobs);
 
         if active_count >= self.max_concurrent {
-            return Err(horcrux_common::Error::System(
-                format!("Maximum concurrent migrations ({}) reached", self.max_concurrent)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Maximum concurrent migrations ({}) reached",
+                self.max_concurrent
+            )));
         }
 
         // Create migration job
@@ -369,7 +376,8 @@ impl MigrationManager {
         info!(job_id = %job.id, "Starting live migration");
 
         // Phase 1: Pre-copy - Transfer all memory pages
-        self.update_state(&job.id, MigrationState::Transferring).await?;
+        self.update_state(&job.id, MigrationState::Transferring)
+            .await?;
 
         // In a real implementation, this would use QEMU's migrate command
         // qemu-monitor-command: migrate -d tcp:target:4444
@@ -393,11 +401,13 @@ impl MigrationManager {
         }
 
         // Phase 2: Converging - Final dirty page sync
-        self.update_state(&job.id, MigrationState::Converging).await?;
+        self.update_state(&job.id, MigrationState::Converging)
+            .await?;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // Phase 3: Switching - Stop source, start destination
-        self.update_state(&job.id, MigrationState::Switching).await?;
+        self.update_state(&job.id, MigrationState::Switching)
+            .await?;
 
         // In a real implementation:
         // 1. Send QMP command to finalize migration
@@ -427,7 +437,8 @@ impl MigrationManager {
         // 2. Wait for clean shutdown
 
         // Phase 2: Copy storage
-        self.update_state(&job.id, MigrationState::SyncingStorage).await?;
+        self.update_state(&job.id, MigrationState::SyncingStorage)
+            .await?;
 
         // Simulate storage copy
         for progress in (0..=100).step_by(10) {
@@ -440,11 +451,13 @@ impl MigrationManager {
         }
 
         // Phase 3: Transfer memory state (if suspended)
-        self.update_state(&job.id, MigrationState::Transferring).await?;
+        self.update_state(&job.id, MigrationState::Transferring)
+            .await?;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // Phase 4: Start VM on target
-        self.update_state(&job.id, MigrationState::Switching).await?;
+        self.update_state(&job.id, MigrationState::Switching)
+            .await?;
 
         // In a real implementation:
         // 1. Create VM on target with same config
@@ -467,7 +480,8 @@ impl MigrationManager {
         info!(job_id = %job.id, "Starting post-copy migration");
 
         // Phase 1: Transfer minimal state
-        self.update_state(&job.id, MigrationState::Transferring).await?;
+        self.update_state(&job.id, MigrationState::Transferring)
+            .await?;
 
         // In a real implementation:
         // 1. Transfer CPU state and device state
@@ -475,7 +489,8 @@ impl MigrationManager {
         // 3. Fetch memory pages on demand
 
         // Phase 2: Switch to destination
-        self.update_state(&job.id, MigrationState::Switching).await?;
+        self.update_state(&job.id, MigrationState::Switching)
+            .await?;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // Phase 3: Background page fetch
@@ -532,9 +547,10 @@ impl MigrationManager {
         // Can only cancel pending or in-progress migrations
         match &job.state {
             MigrationState::Completed | MigrationState::Failed(_) | MigrationState::Cancelled => {
-                return Err(horcrux_common::Error::System(
-                    format!("Cannot cancel migration in state {:?}", job.state)
-                ));
+                return Err(horcrux_common::Error::System(format!(
+                    "Cannot cancel migration in state {:?}",
+                    job.state
+                )));
             }
             _ => {}
         }
@@ -585,9 +601,9 @@ impl MigrationManager {
     /// Get migration job
     pub async fn get_job(&self, job_id: &str) -> Result<MigrationJob> {
         let jobs = self.jobs.read().await;
-        jobs.get(job_id)
-            .cloned()
-            .ok_or_else(|| horcrux_common::Error::System(format!("Migration job {} not found", job_id)))
+        jobs.get(job_id).cloned().ok_or_else(|| {
+            horcrux_common::Error::System(format!("Migration job {} not found", job_id))
+        })
     }
 
     /// Get migration job by VM ID
@@ -605,11 +621,13 @@ impl MigrationManager {
         let jobs = self.jobs.read().await;
         jobs.values()
             .filter(|j| {
-                include_completed || !matches!(j.state,
-                    MigrationState::Completed |
-                    MigrationState::Failed(_) |
-                    MigrationState::Cancelled
-                )
+                include_completed
+                    || !matches!(
+                        j.state,
+                        MigrationState::Completed
+                            | MigrationState::Failed(_)
+                            | MigrationState::Cancelled
+                    )
             })
             .cloned()
             .collect()
@@ -629,10 +647,15 @@ impl MigrationManager {
         let mut jobs = self.jobs.write().await;
         let cutoff = Utc::now() - chrono::Duration::hours(max_age_hours as i64);
 
-        let old_jobs: Vec<_> = jobs.iter()
+        let old_jobs: Vec<_> = jobs
+            .iter()
             .filter(|(_, j)| {
-                matches!(j.state, MigrationState::Completed | MigrationState::Failed(_) | MigrationState::Cancelled)
-                    && j.completed_at.map(|t| t < cutoff).unwrap_or(false)
+                matches!(
+                    j.state,
+                    MigrationState::Completed
+                        | MigrationState::Failed(_)
+                        | MigrationState::Cancelled
+                ) && j.completed_at.map(|t| t < cutoff).unwrap_or(false)
             })
             .map(|(id, _)| id.clone())
             .collect();
@@ -658,12 +681,9 @@ mod tests {
     async fn test_migration_checks() {
         let manager = MigrationManager::new();
 
-        let checks = manager.check_migration(
-            "vm-100",
-            "node1",
-            "node2",
-            &MigrationType::Live,
-        ).await;
+        let checks = manager
+            .check_migration("vm-100", "node1", "node2", &MigrationType::Live)
+            .await;
 
         assert!(checks.iter().all(|c| c.passed));
     }
@@ -672,14 +692,12 @@ mod tests {
     async fn test_same_node_migration_fails() {
         let manager = MigrationManager::new();
 
-        let checks = manager.check_migration(
-            "vm-100",
-            "node1",
-            "node1",
-            &MigrationType::Live,
-        ).await;
+        let checks = manager
+            .check_migration("vm-100", "node1", "node1", &MigrationType::Live)
+            .await;
 
-        let different_nodes = checks.iter()
+        let different_nodes = checks
+            .iter()
             .find(|c| c.check_name == "different_nodes")
             .unwrap();
 
@@ -691,13 +709,16 @@ mod tests {
     async fn test_start_migration() {
         let manager = MigrationManager::new();
 
-        let job_id = manager.start_migration(
-            "vm-100".to_string(),
-            "node1".to_string(),
-            "node2".to_string(),
-            MigrationType::Offline,
-            None,
-        ).await.unwrap();
+        let job_id = manager
+            .start_migration(
+                "vm-100".to_string(),
+                "node1".to_string(),
+                "node2".to_string(),
+                MigrationType::Offline,
+                None,
+            )
+            .await
+            .unwrap();
 
         let job = manager.get_job(&job_id).await.unwrap();
         assert_eq!(job.state, MigrationState::Completed);
@@ -707,13 +728,16 @@ mod tests {
     async fn test_list_jobs() {
         let manager = MigrationManager::new();
 
-        manager.start_migration(
-            "vm-100".to_string(),
-            "node1".to_string(),
-            "node2".to_string(),
-            MigrationType::Offline,
-            None,
-        ).await.unwrap();
+        manager
+            .start_migration(
+                "vm-100".to_string(),
+                "node1".to_string(),
+                "node2".to_string(),
+                MigrationType::Offline,
+                None,
+            )
+            .await
+            .unwrap();
 
         let all_jobs = manager.list_jobs(true).await;
         assert_eq!(all_jobs.len(), 1);

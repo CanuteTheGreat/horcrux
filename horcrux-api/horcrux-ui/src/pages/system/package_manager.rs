@@ -1,5 +1,5 @@
-use leptos::*;
 use crate::api::*;
+use leptos::*;
 
 #[component]
 pub fn PackageManagerPage() -> impl IntoView {
@@ -10,7 +10,8 @@ pub fn PackageManagerPage() -> impl IntoView {
     let (package_filter, set_package_filter) = create_signal("all".to_string());
     let (search_query, set_search_query) = create_signal(String::new());
     let (show_updates_only, set_show_updates_only) = create_signal(false);
-    let (selected_packages, set_selected_packages) = create_signal(std::collections::HashSet::<String>::new());
+    let (selected_packages, set_selected_packages) =
+        create_signal(std::collections::HashSet::<String>::new());
     let (package_manager_type, set_package_manager_type) = create_signal("auto".to_string());
 
     // Package operations
@@ -35,7 +36,9 @@ pub fn PackageManagerPage() -> impl IntoView {
                 set_success_message.set(Some("Package database updated successfully".to_string()));
                 refresh_packages.dispatch(());
             }
-            Err(e) => set_error_message.set(Some(format!("Failed to update package database: {}", e))),
+            Err(e) => {
+                set_error_message.set(Some(format!("Failed to update package database: {}", e)))
+            }
         }
 
         set_loading.set(false);
@@ -49,10 +52,16 @@ pub fn PackageManagerPage() -> impl IntoView {
 
             match install_package(&package_name).await {
                 Ok(_) => {
-                    set_success_message.set(Some(format!("Package '{}' installed successfully", package_name)));
+                    set_success_message.set(Some(format!(
+                        "Package '{}' installed successfully",
+                        package_name
+                    )));
                     refresh_packages.dispatch(());
                 }
-                Err(e) => set_error_message.set(Some(format!("Failed to install package '{}': {}", package_name, e))),
+                Err(e) => set_error_message.set(Some(format!(
+                    "Failed to install package '{}': {}",
+                    package_name, e
+                ))),
             }
 
             set_loading.set(false);
@@ -67,10 +76,16 @@ pub fn PackageManagerPage() -> impl IntoView {
 
             match remove_package(&package_name).await {
                 Ok(_) => {
-                    set_success_message.set(Some(format!("Package '{}' removed successfully", package_name)));
+                    set_success_message.set(Some(format!(
+                        "Package '{}' removed successfully",
+                        package_name
+                    )));
                     refresh_packages.dispatch(());
                 }
-                Err(e) => set_error_message.set(Some(format!("Failed to remove package '{}': {}", package_name, e))),
+                Err(e) => set_error_message.set(Some(format!(
+                    "Failed to remove package '{}': {}",
+                    package_name, e
+                ))),
             }
 
             set_loading.set(false);
@@ -85,10 +100,16 @@ pub fn PackageManagerPage() -> impl IntoView {
 
             match upgrade_package(&package_name).await {
                 Ok(_) => {
-                    set_success_message.set(Some(format!("Package '{}' upgraded successfully", package_name)));
+                    set_success_message.set(Some(format!(
+                        "Package '{}' upgraded successfully",
+                        package_name
+                    )));
                     refresh_packages.dispatch(());
                 }
-                Err(e) => set_error_message.set(Some(format!("Failed to upgrade package '{}': {}", package_name, e))),
+                Err(e) => set_error_message.set(Some(format!(
+                    "Failed to upgrade package '{}': {}",
+                    package_name, e
+                ))),
             }
 
             set_loading.set(false);
@@ -101,7 +122,10 @@ pub fn PackageManagerPage() -> impl IntoView {
 
         match upgrade_all_packages().await {
             Ok(upgraded_count) => {
-                set_success_message.set(Some(format!("Successfully upgraded {} packages", upgraded_count)));
+                set_success_message.set(Some(format!(
+                    "Successfully upgraded {} packages",
+                    upgraded_count
+                )));
                 refresh_packages.dispatch(());
             }
             Err(e) => set_error_message.set(Some(format!("Failed to upgrade packages: {}", e))),
@@ -121,7 +145,10 @@ pub fn PackageManagerPage() -> impl IntoView {
 
         match bulk_install_packages(packages_to_install.clone()).await {
             Ok(_) => {
-                set_success_message.set(Some(format!("Successfully installed {} packages", packages_to_install.len())));
+                set_success_message.set(Some(format!(
+                    "Successfully installed {} packages",
+                    packages_to_install.len()
+                )));
                 set_selected_packages.set(std::collections::HashSet::new());
                 refresh_packages.dispatch(());
             }
@@ -137,12 +164,13 @@ pub fn PackageManagerPage() -> impl IntoView {
         let filter = package_filter.get();
         let updates_only = show_updates_only.get();
 
-        packages.get()
+        packages
+            .get()
             .into_iter()
             .filter(|package| {
-                let matches_search = query.is_empty() ||
-                    package.name.to_lowercase().contains(&query) ||
-                    package.description.to_lowercase().contains(&query);
+                let matches_search = query.is_empty()
+                    || package.name.to_lowercase().contains(&query)
+                    || package.description.to_lowercase().contains(&query);
 
                 let matches_filter = match filter.as_str() {
                     "installed" => package.status == "installed",

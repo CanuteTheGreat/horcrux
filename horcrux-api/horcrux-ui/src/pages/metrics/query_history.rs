@@ -1,6 +1,8 @@
+use crate::api::{
+    create_query_template, get_query_history, get_query_templates, toggle_query_favorite,
+    CreateQueryTemplateRequest, QueryHistoryEntry, QueryTemplate,
+};
 use leptos::*;
-use crate::api::{QueryHistoryEntry, QueryTemplate, CreateQueryTemplateRequest,
-    get_query_history, get_query_templates, toggle_query_favorite, create_query_template};
 
 #[component]
 pub fn QueryHistoryPage() -> impl IntoView {
@@ -54,20 +56,26 @@ pub fn QueryHistoryPage() -> impl IntoView {
 
     // Filtered history
     let filtered_history = create_memo(move |_| {
-        let mut filtered: Vec<QueryHistoryEntry> = history.get()
+        let mut filtered: Vec<QueryHistoryEntry> = history
+            .get()
             .into_iter()
             .filter(|entry| {
                 let search_match = if search_term.get().is_empty() {
                     true
                 } else {
                     let term = search_term.get().to_lowercase();
-                    entry.query.to_lowercase().contains(&term) ||
-                    entry.user.to_lowercase().contains(&term) ||
-                    entry.tags.iter().any(|tag| tag.to_lowercase().contains(&term))
+                    entry.query.to_lowercase().contains(&term)
+                        || entry.user.to_lowercase().contains(&term)
+                        || entry
+                            .tags
+                            .iter()
+                            .any(|tag| tag.to_lowercase().contains(&term))
                 };
 
-                let status_match = filter_status.get() == "all" || entry.status == filter_status.get();
-                let source_match = filter_source.get() == "all" || entry.source == filter_source.get();
+                let status_match =
+                    filter_status.get() == "all" || entry.status == filter_status.get();
+                let source_match =
+                    filter_source.get() == "all" || entry.source == filter_source.get();
                 let user_match = filter_user.get() == "all" || entry.user == filter_user.get();
                 let favorites_match = !show_favorites_only.get() || entry.favorite;
 
@@ -85,7 +93,10 @@ pub fn QueryHistoryPage() -> impl IntoView {
         web_sys::window()
             .unwrap()
             .location()
-            .set_href(&format!("/metrics/explorer?query={}", urlencoding::encode(&query)))
+            .set_href(&format!(
+                "/metrics/explorer?query={}",
+                urlencoding::encode(&query)
+            ))
             .unwrap();
     };
 
@@ -135,7 +146,7 @@ pub fn QueryHistoryPage() -> impl IntoView {
                 }
                 true
             }
-            Err(_) => false
+            Err(_) => false,
         }
     });
 

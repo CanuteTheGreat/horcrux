@@ -1,5 +1,4 @@
 ///! Cluster node representation
-
 use serde::{Deserialize, Serialize};
 
 /// CPU architecture
@@ -7,7 +6,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "lowercase")]
 pub enum Architecture {
     #[serde(rename = "x86_64")]
-    X86_64,  // amd64
+    X86_64, // amd64
     #[serde(rename = "aarch64")]
     Aarch64, // arm64
     #[serde(rename = "riscv64")]
@@ -67,11 +66,11 @@ pub struct Node {
     pub name: String,
     pub ip: String,
     pub status: NodeStatus,
-    pub priority: u32,     // For HA failover priority
-    pub is_local: bool,    // Is this the local node?
+    pub priority: u32,              // For HA failover priority
+    pub is_local: bool,             // Is this the local node?
     pub architecture: Architecture, // CPU architecture
-    pub cpu_cores: u32,    // Total CPU cores
-    pub memory_total: u64, // Total RAM in bytes
+    pub cpu_cores: u32,             // Total CPU cores
+    pub memory_total: u64,          // Total RAM in bytes
 }
 
 /// Node status

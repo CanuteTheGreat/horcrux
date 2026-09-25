@@ -1,17 +1,17 @@
 //! Cluster Module Tests
 //! Tests for cluster management, node balancing, affinity rules, and architecture support
 
-use horcrux_api::cluster::balancer::{
-    ClusterBalancer, BalancingPolicy, BalancingStrategy, NodeResources, VmResources,
-    MigrationRecommendation, MigrationPriority,
-};
 use horcrux_api::cluster::affinity::{
-    AffinityManager, AffinityRule, AffinityRuleType, AffinityPolicy,
-    NodeAffinityRule, ResourceAffinityRule, AntiAffinityRule,
+    AffinityManager, AffinityPolicy, AffinityRule, AffinityRuleType, AntiAffinityRule,
+    NodeAffinityRule, ResourceAffinityRule,
 };
 use horcrux_api::cluster::arch::{
-    ArchitectureManager, ArchitectureInfo, Endianness, PlacementCompatibility,
-    MigrationCompatibility, ClusterArchStats, EmulationType,
+    ArchitectureInfo, ArchitectureManager, ClusterArchStats, EmulationType, Endianness,
+    MigrationCompatibility, PlacementCompatibility,
+};
+use horcrux_api::cluster::balancer::{
+    BalancingPolicy, BalancingStrategy, ClusterBalancer, MigrationPriority,
+    MigrationRecommendation, NodeResources, VmResources,
 };
 use std::collections::HashMap;
 
@@ -263,7 +263,11 @@ fn test_create_anti_affinity_rule() {
         id: "rule-3".to_string(),
         name: "Spread DB replicas".to_string(),
         rule_type: AffinityRuleType::AntiAffinity(AntiAffinityRule {
-            resources: vec!["vm-db-1".to_string(), "vm-db-2".to_string(), "vm-db-3".to_string()],
+            resources: vec![
+                "vm-db-1".to_string(),
+                "vm-db-2".to_string(),
+                "vm-db-3".to_string(),
+            ],
             policy: AffinityPolicy::Required,
         }),
         enabled: true,
@@ -276,10 +280,7 @@ fn test_create_anti_affinity_rule() {
 
 #[test]
 fn test_affinity_policies() {
-    let policies = vec![
-        AffinityPolicy::Required,
-        AffinityPolicy::Preferred,
-    ];
+    let policies = vec![AffinityPolicy::Required, AffinityPolicy::Preferred];
 
     for policy in policies {
         let json = serde_json::to_string(&policy).unwrap();
@@ -359,7 +360,9 @@ fn test_node_suggestion_with_affinity() {
     ];
     let placements = HashMap::new();
 
-    let suggested = manager.suggest_node("vm-pinned", &available_nodes, &placements).unwrap();
+    let suggested = manager
+        .suggest_node("vm-pinned", &available_nodes, &placements)
+        .unwrap();
     assert!(suggested == "node1" || suggested == "node2");
 }
 
@@ -420,17 +423,25 @@ fn test_detect_host_architecture() {
 fn test_register_node() {
     let mut manager = ArchitectureManager::new();
 
-    assert!(manager.register_node("node1".to_string(), "x86_64".to_string()).is_ok());
-    assert!(manager.register_node("node2".to_string(), "aarch64".to_string()).is_ok());
+    assert!(manager
+        .register_node("node1".to_string(), "x86_64".to_string())
+        .is_ok());
+    assert!(manager
+        .register_node("node2".to_string(), "aarch64".to_string())
+        .is_ok());
 
     // Unknown architecture should fail
-    assert!(manager.register_node("node3".to_string(), "unknown".to_string()).is_err());
+    assert!(manager
+        .register_node("node3".to_string(), "unknown".to_string())
+        .is_err());
 }
 
 #[test]
 fn test_native_placement() {
     let mut manager = ArchitectureManager::new();
-    manager.register_node("node1".to_string(), "x86_64".to_string()).unwrap();
+    manager
+        .register_node("node1".to_string(), "x86_64".to_string())
+        .unwrap();
 
     let compat = manager.can_run_on_node("x86_64", "node1").unwrap();
     assert!(compat.compatible);
@@ -442,7 +453,9 @@ fn test_native_placement() {
 #[test]
 fn test_emulated_placement() {
     let mut manager = ArchitectureManager::new();
-    manager.register_node("node1".to_string(), "x86_64".to_string()).unwrap();
+    manager
+        .register_node("node1".to_string(), "x86_64".to_string())
+        .unwrap();
 
     let compat = manager.can_run_on_node("aarch64", "node1").unwrap();
     assert!(compat.compatible);
@@ -455,8 +468,12 @@ fn test_emulated_placement() {
 #[test]
 fn test_placement_suggestion() {
     let mut manager = ArchitectureManager::new();
-    manager.register_node("node1".to_string(), "x86_64".to_string()).unwrap();
-    manager.register_node("node2".to_string(), "aarch64".to_string()).unwrap();
+    manager
+        .register_node("node1".to_string(), "x86_64".to_string())
+        .unwrap();
+    manager
+        .register_node("node2".to_string(), "aarch64".to_string())
+        .unwrap();
 
     let available = vec!["node1".to_string(), "node2".to_string()];
 
@@ -474,17 +491,27 @@ fn test_placement_suggestion() {
 #[test]
 fn test_migration_validation() {
     let mut manager = ArchitectureManager::new();
-    manager.register_node("node1".to_string(), "x86_64".to_string()).unwrap();
-    manager.register_node("node2".to_string(), "x86_64".to_string()).unwrap();
-    manager.register_node("node3".to_string(), "aarch64".to_string()).unwrap();
+    manager
+        .register_node("node1".to_string(), "x86_64".to_string())
+        .unwrap();
+    manager
+        .register_node("node2".to_string(), "x86_64".to_string())
+        .unwrap();
+    manager
+        .register_node("node3".to_string(), "aarch64".to_string())
+        .unwrap();
 
     // Same architecture migration (x86_64 -> x86_64)
-    let migration = manager.validate_migration("x86_64", "node1", "node2").unwrap();
+    let migration = manager
+        .validate_migration("x86_64", "node1", "node2")
+        .unwrap();
     assert!(migration.compatible);
     assert!(!migration.requires_shutdown);
 
     // Cross-architecture migration (x86_64 -> aarch64 for x86_64 VM)
-    let migration = manager.validate_migration("x86_64", "node1", "node3").unwrap();
+    let migration = manager
+        .validate_migration("x86_64", "node1", "node3")
+        .unwrap();
     // aarch64 can't run x86_64 natively, needs emulation
     assert!(migration.compatible || !migration.compatible); // Depends on emulation support
 }
@@ -492,9 +519,15 @@ fn test_migration_validation() {
 #[test]
 fn test_cluster_arch_stats() {
     let mut manager = ArchitectureManager::new();
-    manager.register_node("node1".to_string(), "x86_64".to_string()).unwrap();
-    manager.register_node("node2".to_string(), "x86_64".to_string()).unwrap();
-    manager.register_node("node3".to_string(), "aarch64".to_string()).unwrap();
+    manager
+        .register_node("node1".to_string(), "x86_64".to_string())
+        .unwrap();
+    manager
+        .register_node("node2".to_string(), "x86_64".to_string())
+        .unwrap();
+    manager
+        .register_node("node3".to_string(), "aarch64".to_string())
+        .unwrap();
 
     let stats = manager.get_cluster_stats();
     assert_eq!(stats.total_nodes, 3);
@@ -522,7 +555,9 @@ fn test_custom_architecture_registration() {
     assert!(manager.get_architecture("loongarch64").is_some());
 
     // Can now register nodes with this architecture
-    assert!(manager.register_node("loong-node".to_string(), "loongarch64".to_string()).is_ok());
+    assert!(manager
+        .register_node("loong-node".to_string(), "loongarch64".to_string())
+        .is_ok());
 }
 
 #[test]

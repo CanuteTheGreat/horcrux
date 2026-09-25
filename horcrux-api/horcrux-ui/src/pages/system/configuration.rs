@@ -1,12 +1,13 @@
+use crate::api::*;
 use leptos::*;
 use wasm_bindgen::JsCast;
-use crate::api::*;
 use web_sys::MouseEvent;
 
 #[component]
 pub fn SystemConfigurationPage() -> impl IntoView {
     let (system_config, set_system_config) = create_signal(None::<SystemConfiguration>);
-    let (network_interfaces, set_network_interfaces) = create_signal(Vec::<NetworkInterface>::new());
+    let (network_interfaces, set_network_interfaces) =
+        create_signal(Vec::<NetworkInterface>::new());
     let (dns_config, set_dns_config) = create_signal(None::<DnsConfiguration>);
     let (ntp_config, set_ntp_config) = create_signal(None::<NtpConfiguration>);
     let (loading, set_loading) = create_signal(false);
@@ -51,12 +52,16 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                 set_form_locale.set(config.locale.clone());
                 set_system_config.set(Some(config));
             }
-            Err(e) => set_error_message.set(Some(format!("Failed to load system configuration: {}", e))),
+            Err(e) => {
+                set_error_message.set(Some(format!("Failed to load system configuration: {}", e)))
+            }
         }
 
         match get_network_interfaces().await {
             Ok(interfaces) => set_network_interfaces.set(interfaces),
-            Err(e) => set_error_message.set(Some(format!("Failed to load network interfaces: {}", e))),
+            Err(e) => {
+                set_error_message.set(Some(format!("Failed to load network interfaces: {}", e)))
+            }
         }
 
         match get_dns_configuration().await {
@@ -65,7 +70,9 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                 set_form_dns_search_domains.set(dns.search_domains.join(" "));
                 set_dns_config.set(Some(dns));
             }
-            Err(e) => set_error_message.set(Some(format!("Failed to load DNS configuration: {}", e))),
+            Err(e) => {
+                set_error_message.set(Some(format!("Failed to load DNS configuration: {}", e)))
+            }
         }
 
         match get_ntp_configuration().await {
@@ -74,7 +81,9 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                 set_form_ntp_timezone.set(ntp.timezone.clone());
                 set_ntp_config.set(Some(ntp));
             }
-            Err(e) => set_error_message.set(Some(format!("Failed to load NTP configuration: {}", e))),
+            Err(e) => {
+                set_error_message.set(Some(format!("Failed to load NTP configuration: {}", e)))
+            }
         }
 
         set_loading.set(false);
@@ -87,14 +96,19 @@ pub fn SystemConfigurationPage() -> impl IntoView {
 
         let config = SystemConfiguration {
             hostname: form_hostname.get(),
-            domain: if form_domain.get().is_empty() { None } else { Some(form_domain.get()) },
+            domain: if form_domain.get().is_empty() {
+                None
+            } else {
+                Some(form_domain.get())
+            },
             timezone: form_timezone.get(),
             locale: form_locale.get(),
         };
 
         match update_system_configuration(config).await {
             Ok(_) => {
-                set_success_message.set(Some("General configuration saved successfully".to_string()));
+                set_success_message
+                    .set(Some("General configuration saved successfully".to_string()));
                 load_data.dispatch(());
             }
             Err(e) => set_error_message.set(Some(format!("Failed to save configuration: {}", e))),
@@ -121,9 +135,21 @@ pub fn SystemConfigurationPage() -> impl IntoView {
         let interface = NetworkInterface {
             name: form_interface_name.get(),
             method: form_interface_method.get(),
-            address: if form_interface_address.get().is_empty() { None } else { Some(form_interface_address.get()) },
-            netmask: if form_interface_netmask.get().is_empty() { None } else { Some(form_interface_netmask.get()) },
-            gateway: if form_interface_gateway.get().is_empty() { None } else { Some(form_interface_gateway.get()) },
+            address: if form_interface_address.get().is_empty() {
+                None
+            } else {
+                Some(form_interface_address.get())
+            },
+            netmask: if form_interface_netmask.get().is_empty() {
+                None
+            } else {
+                Some(form_interface_netmask.get())
+            },
+            gateway: if form_interface_gateway.get().is_empty() {
+                None
+            } else {
+                Some(form_interface_gateway.get())
+            },
             mtu: Some(form_interface_mtu.get()),
             auto: true,
             bridge: None,
@@ -150,8 +176,16 @@ pub fn SystemConfigurationPage() -> impl IntoView {
         set_error_message.set(None);
 
         let dns = DnsConfiguration {
-            servers: form_dns_servers.get().lines().map(|s| s.trim().to_string()).collect(),
-            search_domains: form_dns_search_domains.get().split_whitespace().map(|s| s.to_string()).collect(),
+            servers: form_dns_servers
+                .get()
+                .lines()
+                .map(|s| s.trim().to_string())
+                .collect(),
+            search_domains: form_dns_search_domains
+                .get()
+                .split_whitespace()
+                .map(|s| s.to_string())
+                .collect(),
         };
 
         match update_dns_configuration(dns).await {
@@ -159,7 +193,9 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                 set_success_message.set(Some("DNS configuration saved successfully".to_string()));
                 load_data.dispatch(());
             }
-            Err(e) => set_error_message.set(Some(format!("Failed to save DNS configuration: {}", e))),
+            Err(e) => {
+                set_error_message.set(Some(format!("Failed to save DNS configuration: {}", e)))
+            }
         }
 
         set_loading.set(false);
@@ -171,7 +207,11 @@ pub fn SystemConfigurationPage() -> impl IntoView {
         set_error_message.set(None);
 
         let ntp = NtpConfiguration {
-            servers: form_ntp_servers.get().lines().map(|s| s.trim().to_string()).collect(),
+            servers: form_ntp_servers
+                .get()
+                .lines()
+                .map(|s| s.trim().to_string())
+                .collect(),
             timezone: form_ntp_timezone.get(),
         };
 
@@ -180,7 +220,9 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                 set_success_message.set(Some("NTP configuration saved successfully".to_string()));
                 load_data.dispatch(());
             }
-            Err(e) => set_error_message.set(Some(format!("Failed to save NTP configuration: {}", e))),
+            Err(e) => {
+                set_error_message.set(Some(format!("Failed to save NTP configuration: {}", e)))
+            }
         }
 
         set_loading.set(false);
@@ -206,11 +248,19 @@ pub fn SystemConfigurationPage() -> impl IntoView {
     };
 
     let get_interface_status = |interface: &NetworkInterface| {
-        if interface.auto { "Enabled" } else { "Disabled" }
+        if interface.auto {
+            "Enabled"
+        } else {
+            "Disabled"
+        }
     };
 
     let get_interface_status_color = |interface: &NetworkInterface| {
-        if interface.auto { "text-green-600" } else { "text-gray-500" }
+        if interface.auto {
+            "text-green-600"
+        } else {
+            "text-gray-500"
+        }
     };
 
     // Clear messages after delay

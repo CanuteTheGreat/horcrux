@@ -6,9 +6,7 @@ use crate::kubernetes::client::K8sClient;
 #[cfg(not(feature = "kubernetes"))]
 use crate::kubernetes::error::K8sError;
 use crate::kubernetes::error::K8sResult;
-use crate::kubernetes::types::{
-    ClusterHealth, ComponentHealth, HealthStatus, NodeHealthSummary,
-};
+use crate::kubernetes::types::{ClusterHealth, ComponentHealth, HealthStatus, NodeHealthSummary};
 
 /// Perform a comprehensive health check on a cluster
 #[cfg(feature = "kubernetes")]
@@ -81,10 +79,7 @@ pub async fn check_health(client: &K8sClient) -> K8sResult<ClusterHealth> {
     for node in node_list.items {
         total_nodes += 1;
 
-        let conditions = node
-            .status
-            .and_then(|s| s.conditions)
-            .unwrap_or_default();
+        let conditions = node.status.and_then(|s| s.conditions).unwrap_or_default();
 
         let is_ready = conditions
             .iter()

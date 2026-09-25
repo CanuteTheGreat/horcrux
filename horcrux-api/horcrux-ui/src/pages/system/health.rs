@@ -1,5 +1,5 @@
-use leptos::*;
 use crate::api::*;
+use leptos::*;
 
 #[component]
 pub fn SystemHealthPage() -> impl IntoView {
@@ -68,13 +68,21 @@ pub fn SystemHealthPage() -> impl IntoView {
     };
 
     let get_usage_color = |percentage: f64| -> &'static str {
-        if percentage >= 90.0 { "danger" }
-        else if percentage >= 75.0 { "warning" }
-        else { "success" }
+        if percentage >= 90.0 {
+            "danger"
+        } else if percentage >= 75.0 {
+            "warning"
+        } else {
+            "success"
+        }
     };
 
     let calculate_percentage = |used: u64, total: u64| -> f64 {
-        if total == 0 { 0.0 } else { (used as f64 / total as f64) * 100.0 }
+        if total == 0 {
+            0.0
+        } else {
+            (used as f64 / total as f64) * 100.0
+        }
     };
 
     view! {

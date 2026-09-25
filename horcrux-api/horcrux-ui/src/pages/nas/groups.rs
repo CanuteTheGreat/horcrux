@@ -20,10 +20,7 @@ pub fn GroupsPage() -> impl IntoView {
     create_effect(move |_| {
         spawn_local(async move {
             set_loading.set(true);
-            match reqwasm::http::Request::get("/api/nas/groups")
-                .send()
-                .await
-            {
+            match reqwasm::http::Request::get("/api/nas/groups").send().await {
                 Ok(resp) => {
                     if resp.ok() {
                         if let Ok(data) = resp.json::<Vec<NasGroup>>().await {

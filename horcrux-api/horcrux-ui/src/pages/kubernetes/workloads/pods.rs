@@ -6,15 +6,16 @@
 //! - Pod deletion and restart operations
 //! - Container details and monitoring
 
+use crate::api::{self, KubernetesPod, PodStatus};
 use leptos::*;
 use leptos_router::*;
-use crate::api::{self, KubernetesPod, PodStatus};
 
 #[component]
 pub fn PodsPage() -> impl IntoView {
     let params = use_params_map();
     let cluster_id = move || params.with(|p| p.get("cluster_id").cloned().unwrap_or_default());
-    let namespace = move || params.with(|p| p.get("namespace").cloned().unwrap_or("default".to_string()));
+    let namespace =
+        move || params.with(|p| p.get("namespace").cloned().unwrap_or("default".to_string()));
 
     let (pods, set_pods) = create_signal::<Vec<KubernetesPod>>(vec![]);
     let (loading, set_loading) = create_signal(true);
@@ -65,7 +66,8 @@ pub fn PodsPage() -> impl IntoView {
                     }
                 },
                 std::time::Duration::from_secs(10),
-            ).ok();
+            )
+            .ok();
         }
     });
 
@@ -83,7 +85,8 @@ pub fn PodsPage() -> impl IntoView {
             .into_iter()
             .filter(|pod| {
                 let name_match = search.is_empty() || pod.name.to_lowercase().contains(&search);
-                let status_match = status.is_empty() || pod.status.phase.eq_ignore_ascii_case(&status);
+                let status_match =
+                    status.is_empty() || pod.status.phase.eq_ignore_ascii_case(&status);
                 name_match && status_match
             })
             .collect::<Vec<_>>()
@@ -134,15 +137,13 @@ pub fn PodsPage() -> impl IntoView {
     };
 
     // Get status badge class
-    let status_class = |status: &PodStatus| {
-        match status.phase.as_str() {
-            "Running" => "bg-green-100 text-green-800",
-            "Pending" => "bg-yellow-100 text-yellow-800",
-            "Succeeded" => "bg-blue-100 text-blue-800",
-            "Failed" => "bg-red-100 text-red-800",
-            "Unknown" => "bg-gray-100 text-gray-800",
-            _ => "bg-gray-100 text-gray-800",
-        }
+    let status_class = |status: &PodStatus| match status.phase.as_str() {
+        "Running" => "bg-green-100 text-green-800",
+        "Pending" => "bg-yellow-100 text-yellow-800",
+        "Succeeded" => "bg-blue-100 text-blue-800",
+        "Failed" => "bg-red-100 text-red-800",
+        "Unknown" => "bg-gray-100 text-gray-800",
+        _ => "bg-gray-100 text-gray-800",
     };
 
     view! {

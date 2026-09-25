@@ -10,11 +10,11 @@ pub struct ConfigLoader;
 impl ConfigLoader {
     /// Load configuration from file
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<OtelConfig, String> {
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read config file: {}", e))?;
+        let content =
+            fs::read_to_string(path).map_err(|e| format!("Failed to read config file: {}", e))?;
 
-        let config: OtelConfig = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse config: {}", e))?;
+        let config: OtelConfig =
+            serde_json::from_str(&content).map_err(|e| format!("Failed to parse config: {}", e))?;
 
         Ok(config)
     }
@@ -24,8 +24,7 @@ impl ConfigLoader {
         let content = serde_json::to_string_pretty(config)
             .map_err(|e| format!("Failed to serialize config: {}", e))?;
 
-        fs::write(path, content)
-            .map_err(|e| format!("Failed to write config file: {}", e))?;
+        fs::write(path, content).map_err(|e| format!("Failed to write config file: {}", e))?;
 
         Ok(())
     }

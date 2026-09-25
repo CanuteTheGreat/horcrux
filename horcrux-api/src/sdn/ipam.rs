@@ -2,9 +2,9 @@
 //!
 //! Manages IP address allocation, tracking, and DNS integration.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
-use serde::{Deserialize, Serialize};
 
 /// IPAM database for tracking IP allocations
 pub struct IpamManager {
@@ -59,7 +59,9 @@ impl IpamManager {
         ip: IpAddr,
         info: AllocationInfo,
     ) -> Result<(), String> {
-        let subnet = self.allocations.get_mut(subnet_id)
+        let subnet = self
+            .allocations
+            .get_mut(subnet_id)
             .ok_or_else(|| format!("Subnet {} not initialized", subnet_id))?;
 
         // Check if IP already allocated
@@ -82,7 +84,9 @@ impl IpamManager {
         subnet_id: &str,
         mut info: AllocationInfo,
     ) -> Result<IpAddr, String> {
-        let subnet = self.allocations.get(subnet_id)
+        let subnet = self
+            .allocations
+            .get(subnet_id)
             .ok_or_else(|| format!("Subnet {} not initialized", subnet_id))?;
 
         let (network, prefix_len) = Self::parse_cidr(&subnet.subnet_cidr)?;
@@ -98,7 +102,9 @@ impl IpamManager {
 
     /// Release an IP address
     pub fn release(&mut self, subnet_id: &str, ip: &IpAddr) -> Result<(), String> {
-        let subnet = self.allocations.get_mut(subnet_id)
+        let subnet = self
+            .allocations
+            .get_mut(subnet_id)
             .ok_or_else(|| format!("Subnet {} not found", subnet_id))?;
 
         if subnet.used_ips.remove(ip).is_none() {
@@ -110,20 +116,24 @@ impl IpamManager {
 
     /// Get allocation info for an IP
     pub fn get_allocation(&self, subnet_id: &str, ip: &IpAddr) -> Option<&AllocationInfo> {
-        self.allocations.get(subnet_id)
+        self.allocations
+            .get(subnet_id)
             .and_then(|subnet| subnet.used_ips.get(ip))
     }
 
     /// List all allocations in a subnet
     pub fn list_allocations(&self, subnet_id: &str) -> Vec<AllocationInfo> {
-        self.allocations.get(subnet_id)
+        self.allocations
+            .get(subnet_id)
             .map(|subnet| subnet.used_ips.values().cloned().collect())
             .unwrap_or_default()
     }
 
     /// Get subnet utilization stats
     pub fn get_utilization(&self, subnet_id: &str) -> Result<SubnetUtilization, String> {
-        let subnet = self.allocations.get(subnet_id)
+        let subnet = self
+            .allocations
+            .get(subnet_id)
             .ok_or_else(|| format!("Subnet {} not found", subnet_id))?;
 
         let (_, prefix_len) = Self::parse_cidr(&subnet.subnet_cidr)?;
@@ -151,12 +161,13 @@ impl IpamManager {
 
     /// Find IPs by hostname
     pub fn find_by_hostname(&self, hostname: &str) -> Vec<AllocationInfo> {
-        self.allocations.values()
+        self.allocations
+            .values()
             .flat_map(|subnet| {
-                subnet.used_ips.values()
-                    .filter(|alloc| {
-                        alloc.hostname.as_ref().map_or(false, |h| h == hostname)
-                    })
+                subnet
+                    .used_ips
+                    .values()
+                    .filter(|alloc| alloc.hostname.as_ref().map_or(false, |h| h == hostname))
                     .cloned()
             })
             .collect()
@@ -164,12 +175,13 @@ impl IpamManager {
 
     /// Find IPs by MAC address
     pub fn find_by_mac(&self, mac: &str) -> Vec<AllocationInfo> {
-        self.allocations.values()
+        self.allocations
+            .values()
             .flat_map(|subnet| {
-                subnet.used_ips.values()
-                    .filter(|alloc| {
-                        alloc.mac_address.as_ref().map_or(false, |m| m == mac)
-                    })
+                subnet
+                    .used_ips
+                    .values()
+                    .filter(|alloc| alloc.mac_address.as_ref().map_or(false, |m| m == mac))
                     .cloned()
             })
             .collect()
@@ -183,7 +195,9 @@ impl IpamManager {
         network: &Ipv4Addr,
         prefix_len: u8,
     ) -> Result<IpAddr, String> {
-        let subnet = self.allocations.get(subnet_id)
+        let subnet = self
+            .allocations
+            .get(subnet_id)
             .ok_or_else(|| format!("Subnet {} not found", subnet_id))?;
 
         let network_u32 = u32::from(*network);
@@ -214,9 +228,11 @@ impl IpamManager {
             return Err("Invalid CIDR format".to_string());
         }
 
-        let network: Ipv4Addr = parts[0].parse()
+        let network: Ipv4Addr = parts[0]
+            .parse()
             .map_err(|_| "Invalid IP address".to_string())?;
-        let prefix_len: u8 = parts[1].parse()
+        let prefix_len: u8 = parts[1]
+            .parse()
             .map_err(|_| "Invalid prefix length".to_string())?;
 
         if prefix_len > 32 {
@@ -232,7 +248,11 @@ impl IpamManager {
         if let IpAddr::V4(ipv4) = ip {
             let ip_u32 = u32::from(*ipv4);
             let network_u32 = u32::from(network);
-            let mask = if prefix_len == 0 { 0 } else { !0u32 << (32 - prefix_len) };
+            let mask = if prefix_len == 0 {
+                0
+            } else {
+                !0u32 << (32 - prefix_len)
+            };
 
             Ok((ip_u32 & mask) == (network_u32 & mask))
         } else {
@@ -270,13 +290,19 @@ mod tests {
         };
 
         // Allocate specific IP
-        assert!(ipam.allocate_specific("subnet1", "10.0.1.10".parse().unwrap(), info.clone()).is_ok());
+        assert!(ipam
+            .allocate_specific("subnet1", "10.0.1.10".parse().unwrap(), info.clone())
+            .is_ok());
 
         // Try to allocate same IP again
-        assert!(ipam.allocate_specific("subnet1", "10.0.1.10".parse().unwrap(), info).is_err());
+        assert!(ipam
+            .allocate_specific("subnet1", "10.0.1.10".parse().unwrap(), info)
+            .is_err());
 
         // Release IP
-        assert!(ipam.release("subnet1", &"10.0.1.10".parse().unwrap()).is_ok());
+        assert!(ipam
+            .release("subnet1", &"10.0.1.10".parse().unwrap())
+            .is_ok());
     }
 
     #[test]

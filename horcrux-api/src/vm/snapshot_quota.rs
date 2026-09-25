@@ -37,19 +37,19 @@ pub struct SnapshotQuota {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum QuotaType {
-    PerVm,        // Quota applies to single VM
-    PerPool,      // Quota applies to storage pool
-    Global,       // Global quota across all snapshots
+    PerVm,   // Quota applies to single VM
+    PerPool, // Quota applies to storage pool
+    Global,  // Global quota across all snapshots
 }
 
 /// Cleanup policy when quota is exceeded
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum CleanupPolicy {
-    OldestFirst,        // Delete oldest snapshots first
-    LargestFirst,       // Delete largest snapshots first
-    LeastUsedFirst,     // Delete least accessed snapshots first
-    Manual,             // Require manual intervention
+    OldestFirst,    // Delete oldest snapshots first
+    LargestFirst,   // Delete largest snapshots first
+    LeastUsedFirst, // Delete least accessed snapshots first
+    Manual,         // Require manual intervention
 }
 
 /// Current quota usage statistics
@@ -213,9 +213,14 @@ impl SnapshotQuotaManager {
     ) -> Result<QuotaCheckResult> {
         // Check VM-specific quota
         if let Some(vm_quota) = self.find_quota_for_vm(vm_id).await {
-            let usage = self.calculate_usage(&vm_quota.id, Some(vm_id), None).await?;
+            let usage = self
+                .calculate_usage(&vm_quota.id, Some(vm_id), None)
+                .await?;
 
-            if let Some(result) = self.evaluate_quota(&vm_quota, &usage, estimated_size_bytes).await {
+            if let Some(result) = self
+                .evaluate_quota(&vm_quota, &usage, estimated_size_bytes)
+                .await
+            {
                 return Ok(result);
             }
         }
@@ -223,9 +228,14 @@ impl SnapshotQuotaManager {
         // Check pool-specific quota
         if let Some(pool) = pool_id {
             if let Some(pool_quota) = self.find_quota_for_pool(pool).await {
-                let usage = self.calculate_usage(&pool_quota.id, None, Some(pool)).await?;
+                let usage = self
+                    .calculate_usage(&pool_quota.id, None, Some(pool))
+                    .await?;
 
-                if let Some(result) = self.evaluate_quota(&pool_quota, &usage, estimated_size_bytes).await {
+                if let Some(result) = self
+                    .evaluate_quota(&pool_quota, &usage, estimated_size_bytes)
+                    .await
+                {
                     return Ok(result);
                 }
             }
@@ -235,7 +245,10 @@ impl SnapshotQuotaManager {
         if let Some(global_quota) = self.find_global_quota().await {
             let usage = self.calculate_usage(&global_quota.id, None, None).await?;
 
-            if let Some(result) = self.evaluate_quota(&global_quota, &usage, estimated_size_bytes).await {
+            if let Some(result) = self
+                .evaluate_quota(&global_quota, &usage, estimated_size_bytes)
+                .await
+            {
                 return Ok(result);
             }
         }
@@ -293,7 +306,8 @@ impl SnapshotQuotaManager {
 
             // Calculate suggested cleanup if auto-cleanup is enabled
             let suggested_cleanup = if quota.auto_cleanup_enabled {
-                self.calculate_cleanup_suggestions(quota, usage, estimated_size_bytes).await
+                self.calculate_cleanup_suggestions(quota, usage, estimated_size_bytes)
+                    .await
             } else {
                 vec![]
             };
@@ -301,7 +315,9 @@ impl SnapshotQuotaManager {
             Some(QuotaCheckResult {
                 can_create: quota.auto_cleanup_enabled && !suggested_cleanup.is_empty(),
                 quota_id: Some(quota.id.clone()),
-                available_bytes: quota.max_size_bytes.saturating_sub(usage.current_size_bytes),
+                available_bytes: quota
+                    .max_size_bytes
+                    .saturating_sub(usage.current_size_bytes),
                 required_bytes: estimated_size_bytes,
                 reason: Some(reason),
                 suggested_cleanup,
@@ -331,8 +347,8 @@ impl SnapshotQuotaManager {
         let mut cleanup = Vec::new();
         let mut freed_space = 0u64;
 
-        let space_to_free = (usage.current_size_bytes + required_space)
-            .saturating_sub(quota.max_size_bytes);
+        let space_to_free =
+            (usage.current_size_bytes + required_space).saturating_sub(quota.max_size_bytes);
 
         // Sort snapshots based on cleanup policy
         match quota.cleanup_policy {
@@ -386,7 +402,9 @@ impl SnapshotQuotaManager {
             return Ok(usage.clone());
         }
 
-        let quota = self.get_quota(quota_id).await
+        let quota = self
+            .get_quota(quota_id)
+            .await
             .ok_or_else(|| horcrux_common::Error::System("Quota not found".to_string()))?;
 
         Ok(QuotaUsage {
@@ -408,7 +426,9 @@ impl SnapshotQuotaManager {
         quota_id: &str,
         snapshots: Vec<SnapshotUsageInfo>,
     ) -> Result<QuotaUsage> {
-        let quota = self.get_quota(quota_id).await
+        let quota = self
+            .get_quota(quota_id)
+            .await
             .ok_or_else(|| horcrux_common::Error::System("Quota not found".to_string()))?;
 
         let current_size_bytes: u64 = snapshots.iter().map(|s| s.size_bytes).sum();
@@ -538,7 +558,10 @@ impl SnapshotQuotaManager {
 
         let total_quotas = quotas.len();
         let exceeded_quotas = cache.values().filter(|u| u.is_exceeded).count();
-        let warning_quotas = cache.values().filter(|u| u.is_warning && !u.is_exceeded).count();
+        let warning_quotas = cache
+            .values()
+            .filter(|u| u.is_warning && !u.is_exceeded)
+            .count();
 
         let total_size_bytes: u64 = cache.values().map(|u| u.current_size_bytes).sum();
         let total_max_bytes: u64 = quotas.values().map(|q| q.max_size_bytes).sum();
@@ -757,16 +780,14 @@ mod tests {
             .unwrap();
 
         // Simulate existing snapshots using 4 GB
-        let snapshots = vec![
-            SnapshotUsageInfo {
-                snapshot_id: "snap-1".to_string(),
-                vm_id: "vm-100".to_string(),
-                name: "snapshot-1".to_string(),
-                size_bytes: 4 * 1024 * 1024 * 1024,
-                created_at: 1000,
-                last_accessed_at: Some(2000),
-            },
-        ];
+        let snapshots = vec![SnapshotUsageInfo {
+            snapshot_id: "snap-1".to_string(),
+            vm_id: "vm-100".to_string(),
+            name: "snapshot-1".to_string(),
+            size_bytes: 4 * 1024 * 1024 * 1024,
+            created_at: 1000,
+            last_accessed_at: Some(2000),
+        }];
 
         let _ = manager.update_usage_cache(&quota.id, snapshots).await;
 

@@ -3,8 +3,8 @@
 pub mod card;
 pub mod header;
 pub mod loading;
-pub mod status_badge;
 pub mod pull_to_refresh;
+pub mod status_badge;
 pub mod swipe_action;
 
 pub use card::Card;

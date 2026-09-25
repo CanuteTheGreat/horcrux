@@ -1,10 +1,9 @@
-use leptos::*;
 use crate::api::{
-    VmTemplate, CreateTemplateRequest,
-    get_templates, create_template, delete_template, clone_template,
-    get_vms
+    clone_template, create_template, delete_template, get_templates, get_vms,
+    CreateTemplateRequest, VmTemplate,
 };
 use horcrux_common::VmConfig;
+use leptos::*;
 
 #[component]
 pub fn TemplateManagerPage() -> impl IntoView {
@@ -54,10 +53,7 @@ pub fn TemplateManagerPage() -> impl IntoView {
 
     // Auto-refresh every 60 seconds
     use leptos::set_interval;
-    set_interval(
-        move || load_templates(),
-        std::time::Duration::from_secs(60),
-    );
+    set_interval(move || load_templates(), std::time::Duration::from_secs(60));
 
     let filtered_templates = move || {
         let query = search_query.get().to_lowercase();
@@ -68,9 +64,12 @@ pub fn TemplateManagerPage() -> impl IntoView {
                 .get()
                 .into_iter()
                 .filter(|template| {
-                    template.name.to_lowercase().contains(&query) ||
-                    template.description.as_ref().map_or(false, |d| d.to_lowercase().contains(&query)) ||
-                    template.source_vm_id.to_lowercase().contains(&query)
+                    template.name.to_lowercase().contains(&query)
+                        || template
+                            .description
+                            .as_ref()
+                            .map_or(false, |d| d.to_lowercase().contains(&query))
+                        || template.source_vm_id.to_lowercase().contains(&query)
                 })
                 .collect()
         }
@@ -115,7 +114,10 @@ pub fn TemplateManagerPage() -> impl IntoView {
     let delete_template_action = move |template_id: String, template_name: String| {
         if web_sys::window()
             .unwrap()
-            .confirm_with_message(&format!("Are you sure you want to delete template '{}'? This action cannot be undone.", template_name))
+            .confirm_with_message(&format!(
+                "Are you sure you want to delete template '{}'? This action cannot be undone.",
+                template_name
+            ))
             .unwrap()
         {
             spawn_local(async move {
@@ -150,7 +152,10 @@ pub fn TemplateManagerPage() -> impl IntoView {
                     Ok(_) => {
                         set_show_clone_modal.set(false);
                         reset_form();
-                        set_success_message.set(Some(format!("Template cloned as '{}' successfully", new_name)));
+                        set_success_message.set(Some(format!(
+                            "Template cloned as '{}' successfully",
+                            new_name
+                        )));
                         set_timeout(
                             move || set_success_message.set(None),
                             std::time::Duration::from_secs(3),

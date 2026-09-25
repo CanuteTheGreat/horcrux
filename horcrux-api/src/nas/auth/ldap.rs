@@ -151,63 +151,101 @@ impl LdapClient {
 
     /// Search for users
     pub async fn search_users(&self, filter: Option<&str>) -> Result<Vec<LdapUser>> {
-        let user_filter = filter.unwrap_or(&format!("(objectClass={})", self.config.user_object_class));
+        let user_filter =
+            filter.unwrap_or(&format!("(objectClass={})", self.config.user_object_class));
         let search_base = format!("{},{}", self.config.user_base, self.config.base_dn);
 
-        let output = self.ldap_search(&search_base, user_filter, &[
-            "dn", "uid", "uidNumber", "gidNumber", "cn", "homeDirectory",
-            "loginShell", "mail", "displayName"
-        ]).await?;
+        let output = self
+            .ldap_search(
+                &search_base,
+                user_filter,
+                &[
+                    "dn",
+                    "uid",
+                    "uidNumber",
+                    "gidNumber",
+                    "cn",
+                    "homeDirectory",
+                    "loginShell",
+                    "mail",
+                    "displayName",
+                ],
+            )
+            .await?;
 
         Ok(Self::parse_user_entries(&output))
     }
 
     /// Get a specific user by UID
     pub async fn get_user(&self, uid: &str) -> Result<LdapUser> {
-        let filter = format!("(&(objectClass={})({}={}))",
-            self.config.user_object_class,
-            self.config.uid_attribute,
-            uid
+        let filter = format!(
+            "(&(objectClass={})({}={}))",
+            self.config.user_object_class, self.config.uid_attribute, uid
         );
         let search_base = format!("{},{}", self.config.user_base, self.config.base_dn);
 
-        let output = self.ldap_search(&search_base, &filter, &[
-            "dn", "uid", "uidNumber", "gidNumber", "cn", "homeDirectory",
-            "loginShell", "mail", "displayName"
-        ]).await?;
+        let output = self
+            .ldap_search(
+                &search_base,
+                &filter,
+                &[
+                    "dn",
+                    "uid",
+                    "uidNumber",
+                    "gidNumber",
+                    "cn",
+                    "homeDirectory",
+                    "loginShell",
+                    "mail",
+                    "displayName",
+                ],
+            )
+            .await?;
 
         let users = Self::parse_user_entries(&output);
-        users.into_iter().next()
+        users
+            .into_iter()
+            .next()
             .ok_or_else(|| Error::NotFound(format!("User '{}' not found", uid)))
     }
 
     /// Search for groups
     pub async fn search_groups(&self, filter: Option<&str>) -> Result<Vec<LdapGroup>> {
-        let group_filter = filter.unwrap_or(&format!("(objectClass={})", self.config.group_object_class));
+        let group_filter =
+            filter.unwrap_or(&format!("(objectClass={})", self.config.group_object_class));
         let search_base = format!("{},{}", self.config.group_base, self.config.base_dn);
 
-        let output = self.ldap_search(&search_base, group_filter, &[
-            "dn", "cn", "gidNumber", "memberUid", "description"
-        ]).await?;
+        let output = self
+            .ldap_search(
+                &search_base,
+                group_filter,
+                &["dn", "cn", "gidNumber", "memberUid", "description"],
+            )
+            .await?;
 
         Ok(Self::parse_group_entries(&output))
     }
 
     /// Get a specific group by CN
     pub async fn get_group(&self, cn: &str) -> Result<LdapGroup> {
-        let filter = format!("(&(objectClass={})({}={}))",
-            self.config.group_object_class,
-            self.config.group_attribute,
-            cn
+        let filter = format!(
+            "(&(objectClass={})({}={}))",
+            self.config.group_object_class, self.config.group_attribute, cn
         );
         let search_base = format!("{},{}", self.config.group_base, self.config.base_dn);
 
-        let output = self.ldap_search(&search_base, &filter, &[
-            "dn", "cn", "gidNumber", "memberUid", "description"
-        ]).await?;
+        let output = self
+            .ldap_search(
+                &search_base,
+                &filter,
+                &["dn", "cn", "gidNumber", "memberUid", "description"],
+            )
+            .await?;
 
         let groups = Self::parse_group_entries(&output);
-        groups.into_iter().next()
+        groups
+            .into_iter()
+            .next()
             .ok_or_else(|| Error::NotFound(format!("Group '{}' not found", cn)))
     }
 
@@ -219,11 +257,16 @@ impl LdapClient {
         // Attempt bind with user's credentials
         let args = vec![
             "-x",
-            "-H", &self.config.uri,
-            "-D", &user.dn,
-            "-w", password,
-            "-b", &self.config.base_dn,
-            "-s", "base",
+            "-H",
+            &self.config.uri,
+            "-D",
+            &user.dn,
+            "-w",
+            password,
+            "-b",
+            &self.config.base_dn,
+            "-s",
+            "base",
         ];
 
         let output = Command::new("ldapsearch")
@@ -237,10 +280,9 @@ impl LdapClient {
 
     /// Get groups for a user
     pub async fn get_user_groups(&self, uid: &str) -> Result<Vec<String>> {
-        let filter = format!("(&(objectClass={})({}={}))",
-            self.config.group_object_class,
-            self.config.member_attribute,
-            uid
+        let filter = format!(
+            "(&(objectClass={})({}={}))",
+            self.config.group_object_class, self.config.member_attribute, uid
         );
         let search_base = format!("{},{}", self.config.group_base, self.config.base_dn);
 
@@ -403,7 +445,8 @@ impl LdapClient {
     /// Configure NSS to use LDAP
     pub async fn configure_nss(&self) -> Result<()> {
         // Generate nslcd.conf for nss-pam-ldapd
-        let config = format!(r#"# Horcrux NAS LDAP NSS configuration
+        let config = format!(
+            r#"# Horcrux NAS LDAP NSS configuration
 uid nslcd
 gid nslcd
 uri {}
@@ -421,14 +464,22 @@ filter group (objectClass={})
             self.config.base_dn,
             self.config.bind_dn.as_deref().unwrap_or(""),
             self.config.bind_password.as_deref().unwrap_or(""),
-            if self.config.use_tls { "start_tls" } else { "off" },
-            self.config.tls_ca_cert.as_deref().unwrap_or("/etc/ssl/certs/ca-certificates.crt"),
+            if self.config.use_tls {
+                "start_tls"
+            } else {
+                "off"
+            },
+            self.config
+                .tls_ca_cert
+                .as_deref()
+                .unwrap_or("/etc/ssl/certs/ca-certificates.crt"),
             self.config.user_object_class,
             self.config.user_object_class,
             self.config.group_object_class,
         );
 
-        tokio::fs::write("/etc/nslcd.conf", config).await
+        tokio::fs::write("/etc/nslcd.conf", config)
+            .await
             .map_err(|e| Error::Internal(format!("Failed to write nslcd.conf: {}", e)))?;
 
         // Restart nslcd
@@ -486,7 +537,8 @@ impl LdapClient {
     /// Configure PAM to use LDAP authentication
     pub async fn configure_pam(&self) -> Result<()> {
         // Create PAM LDAP configuration
-        let pam_config = format!(r#"# Horcrux NAS PAM LDAP configuration
+        let pam_config = format!(
+            r#"# Horcrux NAS PAM LDAP configuration
 base {}
 uri {}
 binddn {}
@@ -499,11 +551,19 @@ tls_cacertfile {}
             self.config.uri,
             self.config.bind_dn.as_deref().unwrap_or(""),
             self.config.bind_password.as_deref().unwrap_or(""),
-            if self.config.use_tls { "start_tls" } else { "off" },
-            self.config.tls_ca_cert.as_deref().unwrap_or("/etc/ssl/certs/ca-certificates.crt"),
+            if self.config.use_tls {
+                "start_tls"
+            } else {
+                "off"
+            },
+            self.config
+                .tls_ca_cert
+                .as_deref()
+                .unwrap_or("/etc/ssl/certs/ca-certificates.crt"),
         );
 
-        tokio::fs::write("/etc/pam_ldap.conf", pam_config).await
+        tokio::fs::write("/etc/pam_ldap.conf", pam_config)
+            .await
             .map_err(|e| Error::Internal(format!("Failed to write pam_ldap.conf: {}", e)))?;
 
         // Configure /etc/nsswitch.conf for LDAP
@@ -517,7 +577,8 @@ services:   files
 ethers:     files
 rpc:        files
 "#;
-        tokio::fs::write("/etc/nsswitch.conf", nsswitch).await
+        tokio::fs::write("/etc/nsswitch.conf", nsswitch)
+            .await
             .map_err(|e| Error::Internal(format!("Failed to write nsswitch.conf: {}", e)))?;
 
         Ok(())
@@ -532,20 +593,24 @@ rpc:        files
 
         for user in ldap_users {
             // Check if user exists
-            let output = Command::new("id")
-                .arg(&user.uid)
-                .output()
-                .await;
+            let output = Command::new("id").arg(&user.uid).output().await;
 
             if output.map(|o| o.status.success()).unwrap_or(false) {
                 // Update existing user
                 let result = Command::new("usermod")
                     .args([
-                        "-u", &user.uid_number.to_string(),
-                        "-g", &user.gid_number.to_string(),
-                        "-c", &user.cn,
-                        "-d", user.home_directory.as_deref().unwrap_or(&format!("/home/{}", user.uid)),
-                        "-s", user.login_shell.as_deref().unwrap_or("/bin/bash"),
+                        "-u",
+                        &user.uid_number.to_string(),
+                        "-g",
+                        &user.gid_number.to_string(),
+                        "-c",
+                        &user.cn,
+                        "-d",
+                        user.home_directory
+                            .as_deref()
+                            .unwrap_or(&format!("/home/{}", user.uid)),
+                        "-s",
+                        user.login_shell.as_deref().unwrap_or("/bin/bash"),
                         &user.uid,
                     ])
                     .output()
@@ -560,11 +625,18 @@ rpc:        files
                 // Create new user
                 let result = Command::new("useradd")
                     .args([
-                        "-u", &user.uid_number.to_string(),
-                        "-g", &user.gid_number.to_string(),
-                        "-c", &user.cn,
-                        "-d", user.home_directory.as_deref().unwrap_or(&format!("/home/{}", user.uid)),
-                        "-s", user.login_shell.as_deref().unwrap_or("/bin/bash"),
+                        "-u",
+                        &user.uid_number.to_string(),
+                        "-g",
+                        &user.gid_number.to_string(),
+                        "-c",
+                        &user.cn,
+                        "-d",
+                        user.home_directory
+                            .as_deref()
+                            .unwrap_or(&format!("/home/{}", user.uid)),
+                        "-s",
+                        user.login_shell.as_deref().unwrap_or("/bin/bash"),
                         "-m",
                         &user.uid,
                     ])
@@ -652,10 +724,9 @@ rpc:        files
 
     /// Search users by attribute
     pub async fn search_users_by(&self, attr: &str, value: &str) -> Result<Vec<LdapUser>> {
-        let filter = format!("(&(objectClass={})({}={}))",
-            self.config.user_object_class,
-            attr,
-            value
+        let filter = format!(
+            "(&(objectClass={})({}={}))",
+            self.config.user_object_class, attr, value
         );
         self.search_users(Some(&filter)).await
     }
@@ -680,36 +751,57 @@ rpc:        files
 
     /// Get user by UID number
     pub async fn get_user_by_uid_number(&self, uid_number: u32) -> Result<LdapUser> {
-        let filter = format!("(&(objectClass={})(uidNumber={}))",
-            self.config.user_object_class,
-            uid_number
+        let filter = format!(
+            "(&(objectClass={})(uidNumber={}))",
+            self.config.user_object_class, uid_number
         );
         let search_base = format!("{},{}", self.config.user_base, self.config.base_dn);
 
-        let output = self.ldap_search(&search_base, &filter, &[
-            "dn", "uid", "uidNumber", "gidNumber", "cn", "homeDirectory",
-            "loginShell", "mail", "displayName"
-        ]).await?;
+        let output = self
+            .ldap_search(
+                &search_base,
+                &filter,
+                &[
+                    "dn",
+                    "uid",
+                    "uidNumber",
+                    "gidNumber",
+                    "cn",
+                    "homeDirectory",
+                    "loginShell",
+                    "mail",
+                    "displayName",
+                ],
+            )
+            .await?;
 
         let users = Self::parse_user_entries(&output);
-        users.into_iter().next()
+        users
+            .into_iter()
+            .next()
             .ok_or_else(|| Error::NotFound(format!("User with UID {} not found", uid_number)))
     }
 
     /// Get group by GID number
     pub async fn get_group_by_gid_number(&self, gid_number: u32) -> Result<LdapGroup> {
-        let filter = format!("(&(objectClass={})(gidNumber={}))",
-            self.config.group_object_class,
-            gid_number
+        let filter = format!(
+            "(&(objectClass={})(gidNumber={}))",
+            self.config.group_object_class, gid_number
         );
         let search_base = format!("{},{}", self.config.group_base, self.config.base_dn);
 
-        let output = self.ldap_search(&search_base, &filter, &[
-            "dn", "cn", "gidNumber", "memberUid", "description"
-        ]).await?;
+        let output = self
+            .ldap_search(
+                &search_base,
+                &filter,
+                &["dn", "cn", "gidNumber", "memberUid", "description"],
+            )
+            .await?;
 
         let groups = Self::parse_group_entries(&output);
-        groups.into_iter().next()
+        groups
+            .into_iter()
+            .next()
             .ok_or_else(|| Error::NotFound(format!("Group with GID {} not found", gid_number)))
     }
 }

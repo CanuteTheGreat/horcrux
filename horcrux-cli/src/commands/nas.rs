@@ -148,7 +148,12 @@ pub async fn handle_nas_command(
             }
         }
 
-        NasCommands::ShareCreate { name, path, smb, nfs } => {
+        NasCommands::ShareCreate {
+            name,
+            path,
+            smb,
+            nfs,
+        } => {
             let request = CreateShareRequest {
                 name: name.clone(),
                 path,
@@ -165,12 +170,14 @@ pub async fn handle_nas_command(
         }
 
         NasCommands::ShareEnable { id } => {
-            api.post_empty(&format!("/api/nas/shares/{}/enable", id), &()).await?;
+            api.post_empty(&format!("/api/nas/shares/{}/enable", id), &())
+                .await?;
             output::print_success(&format!("Share {} enabled", id));
         }
 
         NasCommands::ShareDisable { id } => {
-            api.post_empty(&format!("/api/nas/shares/{}/disable", id), &()).await?;
+            api.post_empty(&format!("/api/nas/shares/{}/disable", id), &())
+                .await?;
             output::print_success(&format!("Share {} disabled", id));
         }
 
@@ -200,7 +207,11 @@ pub async fn handle_nas_command(
             }
         }
 
-        NasCommands::UserCreate { username, password, full_name } => {
+        NasCommands::UserCreate {
+            username,
+            password,
+            full_name,
+        } => {
             let request = CreateUserRequest {
                 username: username.clone(),
                 password,
@@ -217,7 +228,8 @@ pub async fn handle_nas_command(
 
         NasCommands::UserPassword { id, password } => {
             let body = serde_json::json!({ "password": password });
-            api.post_empty(&format!("/api/nas/users/{}/password", id), &body).await?;
+            api.post_empty(&format!("/api/nas/users/{}/password", id), &body)
+                .await?;
             output::print_success("Password updated");
         }
 
@@ -292,14 +304,16 @@ pub async fn handle_nas_command(
         }
 
         NasCommands::PoolScrub { id } => {
-            api.post_empty(&format!("/api/nas/pools/{}/scrub", id), &()).await?;
+            api.post_empty(&format!("/api/nas/pools/{}/scrub", id), &())
+                .await?;
             output::print_success(&format!("Scrub started for pool {}", id));
         }
 
         // Snapshots
         NasCommands::SnapshotList { dataset_id } => {
-            let snapshots: Vec<NasSnapshot> =
-                api.get(&format!("/api/nas/datasets/{}/snapshots", dataset_id)).await?;
+            let snapshots: Vec<NasSnapshot> = api
+                .get(&format!("/api/nas/datasets/{}/snapshots", dataset_id))
+                .await?;
             if output_format == "json" {
                 println!("{}", serde_json::to_string_pretty(&snapshots)?);
             } else if output_format == "yaml" {
@@ -315,8 +329,12 @@ pub async fn handle_nas_command(
 
         NasCommands::SnapshotCreate { dataset_id, name } => {
             let request = CreateSnapshotRequest { name: name.clone() };
-            let snap: NasSnapshot =
-                api.post(&format!("/api/nas/datasets/{}/snapshots", dataset_id), &request).await?;
+            let snap: NasSnapshot = api
+                .post(
+                    &format!("/api/nas/datasets/{}/snapshots", dataset_id),
+                    &request,
+                )
+                .await?;
             output::print_success(&format!("Snapshot '{}' created (ID: {})", name, snap.id));
         }
 
@@ -326,7 +344,8 @@ pub async fn handle_nas_command(
         }
 
         NasCommands::SnapshotRollback { id } => {
-            api.post_empty(&format!("/api/nas/snapshots/{}/rollback", id), &()).await?;
+            api.post_empty(&format!("/api/nas/snapshots/{}/rollback", id), &())
+                .await?;
             output::print_success(&format!("Rolled back to snapshot {}", id));
         }
 
@@ -352,17 +371,20 @@ pub async fn handle_nas_command(
         }
 
         NasCommands::ServiceStart { name } => {
-            api.post_empty(&format!("/api/nas/services/{}/start", name), &()).await?;
+            api.post_empty(&format!("/api/nas/services/{}/start", name), &())
+                .await?;
             output::print_success(&format!("Service {} started", name));
         }
 
         NasCommands::ServiceStop { name } => {
-            api.post_empty(&format!("/api/nas/services/{}/stop", name), &()).await?;
+            api.post_empty(&format!("/api/nas/services/{}/stop", name), &())
+                .await?;
             output::print_success(&format!("Service {} stopped", name));
         }
 
         NasCommands::ServiceRestart { name } => {
-            api.post_empty(&format!("/api/nas/services/{}/restart", name), &()).await?;
+            api.post_empty(&format!("/api/nas/services/{}/restart", name), &())
+                .await?;
             output::print_success(&format!("Service {} restarted", name));
         }
 
@@ -429,8 +451,14 @@ pub async fn handle_nas_command(
             } else if output_format == "yaml" {
                 println!("{}", serde_yaml::to_string(&status)?);
             } else {
-                let running = status.get("running").and_then(|v| v.as_bool()).unwrap_or(false);
-                println!("S3 Gateway: {}", if running { "running" } else { "stopped" });
+                let running = status
+                    .get("running")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                println!(
+                    "S3 Gateway: {}",
+                    if running { "running" } else { "stopped" }
+                );
             }
         }
 
@@ -623,8 +651,14 @@ pub async fn handle_directory_command(
                 println!("{}", serde_yaml::to_string(&status)?);
             } else {
                 println!("LDAP Directory Status");
-                println!("  Configured: {}", if status.configured { "yes" } else { "no" });
-                println!("  Connected:  {}", if status.connected { "yes" } else { "no" });
+                println!(
+                    "  Configured: {}",
+                    if status.configured { "yes" } else { "no" }
+                );
+                println!(
+                    "  Connected:  {}",
+                    if status.connected { "yes" } else { "no" }
+                );
                 if let Some(uri) = &status.uri {
                     println!("  Server:     {}", uri);
                 }
@@ -637,20 +671,28 @@ pub async fn handle_directory_command(
             Ok(true)
         }
 
-        LdapConfigure { uri, base_dn, bind_dn, bind_password } => {
+        LdapConfigure {
+            uri,
+            base_dn,
+            bind_dn,
+            bind_password,
+        } => {
             let request = LdapConfigRequest {
                 uri: uri.clone(),
                 base_dn: base_dn.clone(),
                 bind_dn: bind_dn.clone(),
                 bind_password: bind_password.clone(),
             };
-            api.post_empty("/api/nas/directory/ldap/configure", &request).await?;
+            api.post_empty("/api/nas/directory/ldap/configure", &request)
+                .await?;
             output::print_success("LDAP configured successfully");
             Ok(true)
         }
 
         LdapSync => {
-            let result: serde_json::Value = api.post("/api/nas/directory/ldap/sync", &serde_json::json!({})).await?;
+            let result: serde_json::Value = api
+                .post("/api/nas/directory/ldap/sync", &serde_json::json!({}))
+                .await?;
             if output_format == "json" {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
@@ -666,24 +708,33 @@ pub async fn handle_directory_command(
         }
 
         LdapSearchUsers { filter } => {
-            let users: Vec<LdapUser> = api.get(&format!(
-                "/api/nas/directory/ldap/users?filter={}",
-                urlencoding::encode(filter)
-            )).await?;
+            let users: Vec<LdapUser> = api
+                .get(&format!(
+                    "/api/nas/directory/ldap/users?filter={}",
+                    urlencoding::encode(filter)
+                ))
+                .await?;
             if output_format == "json" {
                 println!("{}", serde_json::to_string_pretty(&users)?);
             } else if output_format == "yaml" {
                 println!("{}", serde_yaml::to_string(&users)?);
             } else {
-                println!("{:<20} {:<30} {:<10} {:<10}", "UID", "CN", "UIDNUM", "GIDNUM");
+                println!(
+                    "{:<20} {:<30} {:<10} {:<10}",
+                    "UID", "CN", "UIDNUM", "GIDNUM"
+                );
                 println!("{}", "-".repeat(75));
                 for user in users {
                     println!(
                         "{:<20} {:<30} {:<10} {:<10}",
                         user.uid,
                         user.cn,
-                        user.uid_number.map(|n| n.to_string()).unwrap_or("-".to_string()),
-                        user.gid_number.map(|n| n.to_string()).unwrap_or("-".to_string())
+                        user.uid_number
+                            .map(|n| n.to_string())
+                            .unwrap_or("-".to_string()),
+                        user.gid_number
+                            .map(|n| n.to_string())
+                            .unwrap_or("-".to_string())
                     );
                 }
             }
@@ -691,10 +742,12 @@ pub async fn handle_directory_command(
         }
 
         LdapSearchGroups { filter } => {
-            let groups: Vec<LdapGroup> = api.get(&format!(
-                "/api/nas/directory/ldap/groups?filter={}",
-                urlencoding::encode(filter)
-            )).await?;
+            let groups: Vec<LdapGroup> = api
+                .get(&format!(
+                    "/api/nas/directory/ldap/groups?filter={}",
+                    urlencoding::encode(filter)
+                ))
+                .await?;
             if output_format == "json" {
                 println!("{}", serde_json::to_string_pretty(&groups)?);
             } else if output_format == "yaml" {
@@ -706,7 +759,10 @@ pub async fn handle_directory_command(
                     println!(
                         "{:<30} {:<10} {:<10}",
                         group.cn,
-                        group.gid_number.map(|n| n.to_string()).unwrap_or("-".to_string()),
+                        group
+                            .gid_number
+                            .map(|n| n.to_string())
+                            .unwrap_or("-".to_string()),
                         group.member_count
                     );
                 }
@@ -716,11 +772,17 @@ pub async fn handle_directory_command(
 
         LdapTest => {
             let result: serde_json::Value = api.get("/api/nas/directory/ldap/test").await?;
-            let success = result.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+            let success = result
+                .get("success")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             if success {
                 output::print_success("LDAP connection test successful");
             } else {
-                let error = result.get("error").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+                let error = result
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown error");
                 println!("LDAP connection test failed: {}", error);
             }
             Ok(true)
@@ -735,9 +797,15 @@ pub async fn handle_directory_command(
                 println!("{}", serde_yaml::to_string(&status)?);
             } else {
                 println!("Kerberos Status");
-                println!("  Configured:     {}", if status.configured { "yes" } else { "no" });
+                println!(
+                    "  Configured:     {}",
+                    if status.configured { "yes" } else { "no" }
+                );
                 println!("  Default Realm:  {}", status.default_realm);
-                println!("  Keytab Exists:  {}", if status.keytab_exists { "yes" } else { "no" });
+                println!(
+                    "  Keytab Exists:  {}",
+                    if status.keytab_exists { "yes" } else { "no" }
+                );
                 println!("  Active Tickets: {}", status.active_tickets);
                 if !status.realms.is_empty() {
                     println!("  Realms:         {}", status.realms.join(", "));
@@ -746,13 +814,18 @@ pub async fn handle_directory_command(
             Ok(true)
         }
 
-        KerberosConfigure { realm, kdc, admin_server } => {
+        KerberosConfigure {
+            realm,
+            kdc,
+            admin_server,
+        } => {
             let request = KerberosConfigRequest {
                 realm: realm.clone(),
                 kdc: kdc.clone(),
                 admin_server: admin_server.clone(),
             };
-            api.post_empty("/api/nas/directory/kerberos/configure", &request).await?;
+            api.post_empty("/api/nas/directory/kerberos/configure", &request)
+                .await?;
             output::print_success(&format!("Kerberos configured for realm {}", realm));
             Ok(true)
         }
@@ -764,7 +837,8 @@ pub async fn handle_directory_command(
             });
 
             if keytab.is_some() {
-                api.post_empty("/api/nas/directory/kerberos/kinit", &body).await?;
+                api.post_empty("/api/nas/directory/kerberos/kinit", &body)
+                    .await?;
                 output::print_success(&format!("Obtained ticket for {} using keytab", principal));
             } else {
                 // Need password - prompt user
@@ -776,14 +850,16 @@ pub async fn handle_directory_command(
                     "principal": principal,
                     "password": password
                 });
-                api.post_empty("/api/nas/directory/kerberos/kinit", &body).await?;
+                api.post_empty("/api/nas/directory/kerberos/kinit", &body)
+                    .await?;
                 output::print_success(&format!("Obtained ticket for {}", principal));
             }
             Ok(true)
         }
 
         KerberosKlist => {
-            let tickets: Vec<KerberosTicket> = api.get("/api/nas/directory/kerberos/tickets").await?;
+            let tickets: Vec<KerberosTicket> =
+                api.get("/api/nas/directory/kerberos/tickets").await?;
             if output_format == "json" {
                 println!("{}", serde_json::to_string_pretty(&tickets)?);
             } else if output_format == "yaml" {
@@ -808,14 +884,18 @@ pub async fn handle_directory_command(
         }
 
         KerberosKdestroy => {
-            api.post_empty("/api/nas/directory/kerberos/kdestroy", &()).await?;
+            api.post_empty("/api/nas/directory/kerberos/kdestroy", &())
+                .await?;
             output::print_success("Kerberos tickets destroyed");
             Ok(true)
         }
 
         KerberosKeytabList { keytab } => {
             let url = match keytab {
-                Some(kt) => format!("/api/nas/directory/kerberos/keytab?path={}", urlencoding::encode(kt)),
+                Some(kt) => format!(
+                    "/api/nas/directory/kerberos/keytab?path={}",
+                    urlencoding::encode(kt)
+                ),
                 None => "/api/nas/directory/kerberos/keytab".to_string(),
             };
             let entries: Vec<String> = api.get(&url).await?;
@@ -844,7 +924,8 @@ pub async fn handle_directory_command(
                 "password": password,
                 "keytab": keytab
             });
-            api.post_empty("/api/nas/directory/kerberos/keytab", &body).await?;
+            api.post_empty("/api/nas/directory/kerberos/keytab", &body)
+                .await?;
             output::print_success(&format!("Keytab entry created for {}", principal));
             Ok(true)
         }
@@ -858,21 +939,32 @@ pub async fn handle_directory_command(
                 println!("{}", serde_yaml::to_string(&status)?);
             } else {
                 println!("Active Directory Status");
-                println!("  Joined:           {}", if status.joined { "yes" } else { "no" });
+                println!(
+                    "  Joined:           {}",
+                    if status.joined { "yes" } else { "no" }
+                );
                 if let Some(domain) = &status.domain {
                     println!("  Domain:           {}", domain);
                 }
                 if let Some(dc) = &status.domain_controller {
                     println!("  Domain Controller: {}", dc);
                 }
-                println!("  Winbind Running:  {}", if status.winbind_running { "yes" } else { "no" });
+                println!(
+                    "  Winbind Running:  {}",
+                    if status.winbind_running { "yes" } else { "no" }
+                );
                 println!("  Kerberos Realm:   {}", status.kerberos_realm);
                 println!("  ID Map Backend:   {}", status.idmap_backend);
             }
             Ok(true)
         }
 
-        AdJoin { domain, username, ou, register_dns } => {
+        AdJoin {
+            domain,
+            username,
+            ou,
+            register_dns,
+        } => {
             // Need password for domain join
             print!("Password for {}: ", username);
             use std::io::Write;
@@ -886,7 +978,8 @@ pub async fn handle_directory_command(
                 computer_ou: ou.clone(),
                 register_dns: *register_dns,
             };
-            api.post_empty("/api/nas/directory/ad/join", &request).await?;
+            api.post_empty("/api/nas/directory/ad/join", &request)
+                .await?;
             output::print_success(&format!("Successfully joined domain {}", domain));
             Ok(true)
         }
@@ -902,7 +995,8 @@ pub async fn handle_directory_command(
                 username: username.clone(),
                 password,
             };
-            api.post_empty("/api/nas/directory/ad/leave", &request).await?;
+            api.post_empty("/api/nas/directory/ad/leave", &request)
+                .await?;
             output::print_success("Successfully left Active Directory domain");
             Ok(true)
         }
@@ -914,7 +1008,10 @@ pub async fn handle_directory_command(
             } else if output_format == "yaml" {
                 println!("{}", serde_yaml::to_string(&users)?);
             } else {
-                println!("{:<25} {:<8} {:<8} {:<30}", "USERNAME", "UID", "GID", "FULL NAME");
+                println!(
+                    "{:<25} {:<8} {:<8} {:<30}",
+                    "USERNAME", "UID", "GID", "FULL NAME"
+                );
                 println!("{}", "-".repeat(75));
                 for user in users {
                     println!(
@@ -939,17 +1036,24 @@ pub async fn handle_directory_command(
                 println!("{:<30} {:<8} {:<10}", "NAME", "GID", "MEMBERS");
                 println!("{}", "-".repeat(55));
                 for group in groups {
-                    println!("{:<30} {:<8} {:<10}", group.name, group.gid, group.members.len());
+                    println!(
+                        "{:<30} {:<8} {:<10}",
+                        group.name,
+                        group.gid,
+                        group.members.len()
+                    );
                 }
             }
             Ok(true)
         }
 
         AdUserGroups { username } => {
-            let groups: Vec<String> = api.get(&format!(
-                "/api/nas/directory/ad/users/{}/groups",
-                urlencoding::encode(username)
-            )).await?;
+            let groups: Vec<String> = api
+                .get(&format!(
+                    "/api/nas/directory/ad/users/{}/groups",
+                    urlencoding::encode(username)
+                ))
+                .await?;
             if output_format == "json" {
                 println!("{}", serde_json::to_string_pretty(&groups)?);
             } else if output_format == "yaml" {
@@ -971,8 +1075,14 @@ pub async fn handle_directory_command(
                 println!("{}", serde_yaml::to_string(&status)?);
             } else {
                 println!("Trust Relationship Status");
-                println!("  Machine Secret Valid: {}", if status.secret_valid { "yes" } else { "no" });
-                println!("  DC Reachable:         {}", if status.dc_reachable { "yes" } else { "no" });
+                println!(
+                    "  Machine Secret Valid: {}",
+                    if status.secret_valid { "yes" } else { "no" }
+                );
+                println!(
+                    "  DC Reachable:         {}",
+                    if status.dc_reachable { "yes" } else { "no" }
+                );
                 if status.secret_valid && status.dc_reachable {
                     output::print_success("Trust relationship is healthy");
                 } else {
@@ -1003,10 +1113,12 @@ pub async fn handle_directory_command(
         }
 
         AdVerifyPrereqs { domain } => {
-            let prereqs: JoinPrerequisites = api.get(&format!(
-                "/api/nas/directory/ad/prerequisites?domain={}",
-                urlencoding::encode(domain)
-            )).await?;
+            let prereqs: JoinPrerequisites = api
+                .get(&format!(
+                    "/api/nas/directory/ad/prerequisites?domain={}",
+                    urlencoding::encode(domain)
+                ))
+                .await?;
             if output_format == "json" {
                 println!("{}", serde_json::to_string_pretty(&prereqs)?);
             } else if output_format == "yaml" {
@@ -1037,7 +1149,10 @@ pub async fn handle_directory_command(
                 if prereqs.errors.is_empty() {
                     output::print_success("All prerequisites met - ready to join domain");
                 } else {
-                    println!("Warning: {} issue(s) found - review before joining", prereqs.errors.len());
+                    println!(
+                        "Warning: {} issue(s) found - review before joining",
+                        prereqs.errors.len()
+                    );
                 }
             }
             Ok(true)
@@ -1050,7 +1165,12 @@ pub async fn handle_directory_command(
 
 fn print_prereq_status(name: &str, status: bool) {
     let icon = if status { "✓" } else { "✗" };
-    println!("  {} {:<20} {}", icon, name, if status { "OK" } else { "FAILED" });
+    println!(
+        "  {} {:<20} {}",
+        icon,
+        name,
+        if status { "OK" } else { "FAILED" }
+    );
 }
 
 // Scheduler Types
@@ -1126,13 +1246,20 @@ pub async fn handle_scheduler_command(
                 println!("{}", serde_yaml::to_string(&status)?);
             } else {
                 println!("Scheduler Status");
-                println!("  Running:          {}", if status.running { "yes" } else { "no" });
+                println!(
+                    "  Running:          {}",
+                    if status.running { "yes" } else { "no" }
+                );
                 println!("  Total Jobs:       {}", status.total_jobs);
                 println!("  Enabled Jobs:     {}", status.enabled_jobs);
                 println!("  Running Jobs:     {}", status.running_jobs);
                 println!("  Failures (24h):   {}", status.recent_failures_24h);
                 if let Some(next) = &status.next_scheduled {
-                    println!("  Next Job:         {} ({})", next.job_name, format_timestamp(next.next_run));
+                    println!(
+                        "  Next Job:         {} ({})",
+                        next.job_name,
+                        format_timestamp(next.next_run)
+                    );
                 }
             }
             Ok(true)
@@ -1152,7 +1279,10 @@ pub async fn handle_scheduler_command(
                 println!("{}", "-".repeat(110));
                 for job in jobs {
                     let job_type = parse_job_type(&job.job_type);
-                    let last_run = job.last_run.map(format_timestamp).unwrap_or_else(|| "never".to_string());
+                    let last_run = job
+                        .last_run
+                        .map(format_timestamp)
+                        .unwrap_or_else(|| "never".to_string());
                     println!(
                         "{:<36} {:<20} {:<12} {:<15} {:<8} {:<15}",
                         job.id,
@@ -1179,8 +1309,18 @@ pub async fn handle_scheduler_command(
                 println!("  Type:       {}", parse_job_type(&job.job_type));
                 println!("  Schedule:   {}", job.schedule);
                 println!("  Enabled:    {}", if job.enabled { "yes" } else { "no" });
-                println!("  Last Run:   {}", job.last_run.map(format_timestamp).unwrap_or_else(|| "never".to_string()));
-                println!("  Next Run:   {}", job.next_run.map(format_timestamp).unwrap_or_else(|| "-".to_string()));
+                println!(
+                    "  Last Run:   {}",
+                    job.last_run
+                        .map(format_timestamp)
+                        .unwrap_or_else(|| "never".to_string())
+                );
+                println!(
+                    "  Next Run:   {}",
+                    job.next_run
+                        .map(format_timestamp)
+                        .unwrap_or_else(|| "-".to_string())
+                );
                 if let Some(status) = &job.last_status {
                     println!("  Last Status: {}", status);
                 }
@@ -1188,7 +1328,15 @@ pub async fn handle_scheduler_command(
             Ok(true)
         }
 
-        JobCreate { name, job_type, schedule, dataset, pool, task_id, keep_count } => {
+        JobCreate {
+            name,
+            job_type,
+            schedule,
+            dataset,
+            pool,
+            task_id,
+            keep_count,
+        } => {
             let request = NasCreateJobRequest {
                 name: name.clone(),
                 job_type: job_type.clone(),
@@ -1204,36 +1352,52 @@ pub async fn handle_scheduler_command(
         }
 
         JobDelete { id } => {
-            api.delete(&format!("/api/nas/scheduler/jobs/{}", id)).await?;
+            api.delete(&format!("/api/nas/scheduler/jobs/{}", id))
+                .await?;
             output::print_success(&format!("Job {} deleted", id));
             Ok(true)
         }
 
         JobRun { id } => {
-            let result: serde_json::Value = api.post(&format!("/api/nas/scheduler/jobs/{}/run", id), &serde_json::json!({})).await?;
+            let result: serde_json::Value = api
+                .post(
+                    &format!("/api/nas/scheduler/jobs/{}/run", id),
+                    &serde_json::json!({}),
+                )
+                .await?;
             if output_format == "json" {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
-                let history_id = result.get("history_id").and_then(|v| v.as_str()).unwrap_or("unknown");
-                output::print_success(&format!("Job {} started (execution ID: {})", id, history_id));
+                let history_id = result
+                    .get("history_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                output::print_success(&format!(
+                    "Job {} started (execution ID: {})",
+                    id, history_id
+                ));
             }
             Ok(true)
         }
 
         JobPause { id } => {
-            api.post_empty(&format!("/api/nas/scheduler/jobs/{}/pause", id), &()).await?;
+            api.post_empty(&format!("/api/nas/scheduler/jobs/{}/pause", id), &())
+                .await?;
             output::print_success(&format!("Job {} paused", id));
             Ok(true)
         }
 
         JobResume { id } => {
-            api.post_empty(&format!("/api/nas/scheduler/jobs/{}/resume", id), &()).await?;
+            api.post_empty(&format!("/api/nas/scheduler/jobs/{}/resume", id), &())
+                .await?;
             output::print_success(&format!("Job {} resumed", id));
             Ok(true)
         }
 
         JobHistory { id } => {
-            let history: Vec<NasJobHistoryEntry> = api.get(&format!("/api/nas/scheduler/jobs/{}/history", id)).await?;
+            let history: Vec<NasJobHistoryEntry> = api
+                .get(&format!("/api/nas/scheduler/jobs/{}/history", id))
+                .await?;
             if output_format == "json" {
                 println!("{}", serde_json::to_string_pretty(&history)?);
             } else if output_format == "yaml" {
@@ -1246,15 +1410,18 @@ pub async fn handle_scheduler_command(
                 println!("{}", "-".repeat(120));
                 for entry in history {
                     let started = format_timestamp(entry.started_at);
-                    let completed = entry.completed_at.map(format_timestamp).unwrap_or_else(|| "-".to_string());
-                    let error = entry.error_message.as_ref().map(|e| truncate_str(e, 28)).unwrap_or_else(|| "-".to_string());
+                    let completed = entry
+                        .completed_at
+                        .map(format_timestamp)
+                        .unwrap_or_else(|| "-".to_string());
+                    let error = entry
+                        .error_message
+                        .as_ref()
+                        .map(|e| truncate_str(e, 28))
+                        .unwrap_or_else(|| "-".to_string());
                     println!(
                         "{:<36} {:<20} {:<20} {:<10} {:<30}",
-                        entry.id,
-                        started,
-                        completed,
-                        entry.status,
-                        error
+                        entry.id, started, completed, entry.status, error
                     );
                 }
             }

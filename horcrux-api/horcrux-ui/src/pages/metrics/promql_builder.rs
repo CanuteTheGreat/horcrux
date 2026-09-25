@@ -1,5 +1,5 @@
-use leptos::*;
 use crate::api::*;
+use leptos::*;
 
 #[component]
 pub fn PromQLBuilderPage() -> impl IntoView {
@@ -31,11 +31,21 @@ pub fn PromQLBuilderPage() -> impl IntoView {
             let open_braces = query.matches('{').count();
             let close_braces = query.matches('}').count();
 
-            let is_valid = open_parens == close_parens && open_brackets == close_brackets && open_braces == close_braces;
+            let is_valid = open_parens == close_parens
+                && open_brackets == close_brackets
+                && open_braces == close_braces;
             let result = QueryValidationResult {
                 valid: is_valid,
-                message: if is_valid { String::new() } else { "Unbalanced brackets".to_string() },
-                errors: if is_valid { vec![] } else { vec!["Unbalanced brackets".to_string()] },
+                message: if is_valid {
+                    String::new()
+                } else {
+                    "Unbalanced brackets".to_string()
+                },
+                errors: if is_valid {
+                    vec![]
+                } else {
+                    vec!["Unbalanced brackets".to_string()]
+                },
                 warnings: vec![],
                 suggestions: vec![],
             };
@@ -64,19 +74,22 @@ pub fn PromQLBuilderPage() -> impl IntoView {
                         if labels.is_empty() {
                             name.clone()
                         } else {
-                            let label_str = labels.iter()
+                            let label_str = labels
+                                .iter()
                                 .map(|(k, v)| format!("{}=\"{}\"", k, v))
                                 .collect::<Vec<_>>()
                                 .join(", ");
                             format!("{}{{ {} }}", name, label_str)
                         }
-                    },
-                    QueryComponent::Function { name, args, modifiers: _ } => {
+                    }
+                    QueryComponent::Function {
+                        name,
+                        args,
+                        modifiers: _,
+                    } => {
                         format!("{}({})", name, args.join(", "))
-                    },
-                    QueryComponent::Operator { operator } => {
-                        operator.clone()
-                    },
+                    }
+                    QueryComponent::Operator { operator } => operator.clone(),
                 };
                 query.push_str(&component_str);
             }
@@ -188,9 +201,7 @@ pub fn PromQLBuilderPage() -> impl IntoView {
     ];
 
     let promql_operators = vec![
-        "+", "-", "*", "/", "%", "^",
-        "==", "!=", ">", "<", ">=", "<=",
-        "and", "or", "unless",
+        "+", "-", "*", "/", "%", "^", "==", "!=", ">", "<", ">=", "<=", "and", "or", "unless",
     ];
 
     // Clear messages after delay
@@ -599,10 +610,7 @@ pub fn PromQLBuilderPage() -> impl IntoView {
 }
 
 #[component]
-fn QueryComponentEditor<F>(
-    component: QueryComponent,
-    on_update: F,
-) -> impl IntoView
+fn QueryComponentEditor<F>(component: QueryComponent, on_update: F) -> impl IntoView
 where
     F: Fn(QueryComponent) + 'static,
 {

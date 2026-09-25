@@ -203,7 +203,9 @@ pub async fn create_limit_range(
     client: &K8sClient,
     request: &CreateLimitRangeRequest,
 ) -> K8sResult<LimitRangeInfo> {
-    use k8s_openapi::api::core::v1::{LimitRange, LimitRangeItem as K8sLimitRangeItem, LimitRangeSpec};
+    use k8s_openapi::api::core::v1::{
+        LimitRange, LimitRangeItem as K8sLimitRangeItem, LimitRangeSpec,
+    };
     use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use kube::api::{Api, PostParams};
@@ -214,23 +216,29 @@ pub async fn create_limit_range(
     let limits: Vec<K8sLimitRangeItem> = request
         .limits
         .iter()
-        .map(|l| {
-            K8sLimitRangeItem {
-                type_: l.limit_type.clone(),
-                default: l.default.as_ref().map(|d| {
-                    d.iter().map(|(k, v)| (k.clone(), Quantity(v.clone()))).collect()
-                }),
-                default_request: l.default_request.as_ref().map(|d| {
-                    d.iter().map(|(k, v)| (k.clone(), Quantity(v.clone()))).collect()
-                }),
-                max: l.max.as_ref().map(|d| {
-                    d.iter().map(|(k, v)| (k.clone(), Quantity(v.clone()))).collect()
-                }),
-                min: l.min.as_ref().map(|d| {
-                    d.iter().map(|(k, v)| (k.clone(), Quantity(v.clone()))).collect()
-                }),
-                ..Default::default()
-            }
+        .map(|l| K8sLimitRangeItem {
+            type_: l.limit_type.clone(),
+            default: l.default.as_ref().map(|d| {
+                d.iter()
+                    .map(|(k, v)| (k.clone(), Quantity(v.clone())))
+                    .collect()
+            }),
+            default_request: l.default_request.as_ref().map(|d| {
+                d.iter()
+                    .map(|(k, v)| (k.clone(), Quantity(v.clone())))
+                    .collect()
+            }),
+            max: l.max.as_ref().map(|d| {
+                d.iter()
+                    .map(|(k, v)| (k.clone(), Quantity(v.clone())))
+                    .collect()
+            }),
+            min: l.min.as_ref().map(|d| {
+                d.iter()
+                    .map(|(k, v)| (k.clone(), Quantity(v.clone())))
+                    .collect()
+            }),
+            ..Default::default()
         })
         .collect();
 
@@ -254,11 +262,7 @@ pub async fn create_limit_range(
 
 /// Delete a LimitRange
 #[cfg(feature = "kubernetes")]
-pub async fn delete_limit_range(
-    client: &K8sClient,
-    namespace: &str,
-    name: &str,
-) -> K8sResult<()> {
+pub async fn delete_limit_range(client: &K8sClient, namespace: &str, name: &str) -> K8sResult<()> {
     use k8s_openapi::api::core::v1::LimitRange;
     use kube::api::{Api, DeleteParams};
 
@@ -278,18 +282,18 @@ fn limit_range_to_info(range: k8s_openapi::api::core::v1::LimitRange) -> LimitRa
         .into_iter()
         .map(|l| LimitRangeItem {
             limit_type: l.type_,
-            default: l.default.map(|d| {
-                d.into_iter().map(|(k, v)| (k, v.0)).collect()
-            }),
-            default_request: l.default_request.map(|d| {
-                d.into_iter().map(|(k, v)| (k, v.0)).collect()
-            }),
-            max: l.max.map(|d| {
-                d.into_iter().map(|(k, v)| (k, v.0)).collect()
-            }),
-            min: l.min.map(|d| {
-                d.into_iter().map(|(k, v)| (k, v.0)).collect()
-            }),
+            default: l
+                .default
+                .map(|d| d.into_iter().map(|(k, v)| (k, v.0)).collect()),
+            default_request: l
+                .default_request
+                .map(|d| d.into_iter().map(|(k, v)| (k, v.0)).collect()),
+            max: l
+                .max
+                .map(|d| d.into_iter().map(|(k, v)| (k, v.0)).collect()),
+            min: l
+                .min
+                .map(|d| d.into_iter().map(|(k, v)| (k, v.0)).collect()),
         })
         .collect();
 
@@ -311,7 +315,9 @@ pub async fn list_resource_quotas(
     _client: &K8sClient,
     _namespace: &str,
 ) -> K8sResult<Vec<ResourceQuotaInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -320,7 +326,9 @@ pub async fn get_resource_quota(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<ResourceQuotaInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -328,7 +336,9 @@ pub async fn create_resource_quota(
     _client: &K8sClient,
     _request: &CreateResourceQuotaRequest,
 ) -> K8sResult<ResourceQuotaInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -338,7 +348,9 @@ pub async fn update_resource_quota(
     _name: &str,
     _hard: &std::collections::BTreeMap<String, String>,
 ) -> K8sResult<ResourceQuotaInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -347,7 +359,9 @@ pub async fn delete_resource_quota(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -355,7 +369,9 @@ pub async fn list_limit_ranges(
     _client: &K8sClient,
     _namespace: &str,
 ) -> K8sResult<Vec<LimitRangeInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -364,7 +380,9 @@ pub async fn get_limit_range(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<LimitRangeInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -372,7 +390,9 @@ pub async fn create_limit_range(
     _client: &K8sClient,
     _request: &CreateLimitRangeRequest,
 ) -> K8sResult<LimitRangeInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -381,5 +401,7 @@ pub async fn delete_limit_range(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }

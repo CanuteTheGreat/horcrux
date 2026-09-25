@@ -1,5 +1,4 @@
 ///! nftables integration for firewall rules
-
 use super::{FirewallAction, FirewallRule};
 use horcrux_common::Result;
 use std::collections::HashMap;
@@ -11,7 +10,7 @@ use tracing::{error, info, warn};
 /// Rule handle tracking
 #[derive(Debug, Clone)]
 struct RuleHandle {
-    _rule_id: String,  // Reserved for future rule queries
+    _rule_id: String, // Reserved for future rule queries
     chain_name: String,
     handle: u64,
 }
@@ -44,7 +43,9 @@ impl NftablesManager {
             .arg(&self.table_name)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to create nftables table: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to create nftables table: {}", e))
+            })?;
 
         if !output.status.success() && !String::from_utf8_lossy(&output.stderr).contains("exists") {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -80,7 +81,9 @@ impl NftablesManager {
             .arg(&nft_rule)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to add nftables rule: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to add nftables rule: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -127,7 +130,9 @@ impl NftablesManager {
             .arg(&nft_rule)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to add nftables rule: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to add nftables rule: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -174,7 +179,9 @@ impl NftablesManager {
                 .arg(rule_handle.handle.to_string())
                 .output()
                 .await
-                .map_err(|e| horcrux_common::Error::System(format!("Failed to delete nftables rule: {}", e)))?;
+                .map_err(|e| {
+                    horcrux_common::Error::System(format!("Failed to delete nftables rule: {}", e))
+                })?;
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -209,7 +216,9 @@ impl NftablesManager {
                 .arg(rule_handle.handle.to_string())
                 .output()
                 .await
-                .map_err(|e| horcrux_common::Error::System(format!("Failed to delete nftables rule: {}", e)))?;
+                .map_err(|e| {
+                    horcrux_common::Error::System(format!("Failed to delete nftables rule: {}", e))
+                })?;
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -219,7 +228,10 @@ impl NftablesManager {
 
             info!("Removed firewall rule {} for container {}", rule_id, ct_id);
         } else {
-            warn!("Firewall rule {} not found for container {}", rule_id, ct_id);
+            warn!(
+                "Firewall rule {} not found for container {}",
+                rule_id, ct_id
+            );
         }
 
         Ok(())
@@ -332,7 +344,9 @@ impl NftablesManager {
             .arg(&self.table_name)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to flush nftables table: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to flush nftables table: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -368,7 +382,9 @@ impl NftablesManager {
             .arg(&chain_name)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to flush nftables chain: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to flush nftables chain: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -399,7 +415,9 @@ impl NftablesManager {
             .arg(&chain_name)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to flush nftables chain: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to flush nftables chain: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -425,7 +443,9 @@ impl NftablesManager {
             .arg(chain_name)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to list nftables chain: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to list nftables chain: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -438,7 +458,11 @@ impl NftablesManager {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let rules: Vec<String> = stdout
             .lines()
-            .filter(|line| line.trim().starts_with("ip ") || line.trim().starts_with("tcp ") || line.trim().starts_with("udp "))
+            .filter(|line| {
+                line.trim().starts_with("ip ")
+                    || line.trim().starts_with("tcp ")
+                    || line.trim().starts_with("udp ")
+            })
             .map(|s| s.trim().to_string())
             .collect();
 

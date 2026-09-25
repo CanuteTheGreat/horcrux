@@ -5,12 +5,12 @@
 //! - Strong consistency for critical state (VM ownership, locks)
 //! - Conflict resolution for concurrent updates
 
+use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{RwLock, broadcast};
-use tracing::{info, warn, debug};
-use horcrux_common::Result;
+use tokio::sync::{broadcast, RwLock};
+use tracing::{debug, info, warn};
 
 /// State synchronization message types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,9 +46,17 @@ pub struct StateUpdate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StateOperation {
     /// VM state change
-    VmStateChange { vm_id: String, old_state: String, new_state: String },
+    VmStateChange {
+        vm_id: String,
+        old_state: String,
+        new_state: String,
+    },
     /// VM migration
-    VmMigration { vm_id: String, from_node: String, to_node: String },
+    VmMigration {
+        vm_id: String,
+        from_node: String,
+        to_node: String,
+    },
     /// VM created
     VmCreated { vm_id: String, node: String },
     /// VM deleted
@@ -155,7 +163,9 @@ impl StateSyncManager {
 
         // Apply the operation
         match &update.operation {
-            StateOperation::VmStateChange { vm_id, new_state, .. } => {
+            StateOperation::VmStateChange {
+                vm_id, new_state, ..
+            } => {
                 state.vm_states.insert(vm_id.clone(), new_state.clone());
             }
             StateOperation::VmMigration { vm_id, to_node, .. } => {
@@ -170,12 +180,15 @@ impl StateSyncManager {
                 state.vm_states.remove(vm_id);
             }
             StateOperation::NodeJoined { node_id, .. } => {
-                state.node_statuses.insert(node_id.clone(), NodeSyncStatus {
-                    node_id: node_id.clone(),
-                    state_version: update.version,
-                    last_seen: update.timestamp,
-                    is_online: true,
-                });
+                state.node_statuses.insert(
+                    node_id.clone(),
+                    NodeSyncStatus {
+                        node_id: node_id.clone(),
+                        state_version: update.version,
+                        last_seen: update.timestamp,
+                        is_online: true,
+                    },
+                );
             }
             StateOperation::NodeLeft { node_id } => {
                 if let Some(status) = state.node_statuses.get_mut(node_id) {
@@ -186,7 +199,10 @@ impl StateSyncManager {
             StateOperation::ConfigChange { key, value } => {
                 state.config.insert(key.clone(), value.clone());
             }
-            StateOperation::HaStateChange { vm_id, state: new_state } => {
+            StateOperation::HaStateChange {
+                vm_id,
+                state: new_state,
+            } => {
                 state.ha_states.insert(vm_id.clone(), new_state.clone());
             }
         }
@@ -261,7 +277,9 @@ impl StateSyncManager {
                     lock.expires_at = now + self.lock_timeout_secs;
                     state.locks.insert(resource_id.to_string(), lock);
                     return Ok(true);
-                } else if existing.lock_type == LockType::Exclusive || lock_type == LockType::Exclusive {
+                } else if existing.lock_type == LockType::Exclusive
+                    || lock_type == LockType::Exclusive
+                {
                     // Can't acquire exclusive lock or request exclusive on shared
                     return Ok(false);
                 }
@@ -294,9 +312,10 @@ impl StateSyncManager {
 
         if let Some(lock) = state.locks.get(resource_id) {
             if lock.holder != self.local_node {
-                return Err(horcrux_common::Error::System(
-                    format!("Cannot release lock held by {}", lock.holder)
-                ));
+                return Err(horcrux_common::Error::System(format!(
+                    "Cannot release lock held by {}",
+                    lock.holder
+                )));
             }
         }
 
@@ -315,7 +334,9 @@ impl StateSyncManager {
         let state = self.state.read().await;
         let now = chrono::Utc::now().timestamp();
 
-        state.locks.get(resource_id)
+        state
+            .locks
+            .get(resource_id)
             .map(|l| l.holder == self.local_node && l.expires_at > now)
             .unwrap_or(false)
     }
@@ -327,7 +348,9 @@ impl StateSyncManager {
 
     /// Check if a node is online
     pub async fn is_node_online(&self, node_id: &str) -> bool {
-        self.state.read().await
+        self.state
+            .read()
+            .await
             .node_statuses
             .get(node_id)
             .map(|s| s.is_online)
@@ -363,7 +386,8 @@ impl StateSyncManager {
         let mut state = self.state.write().await;
         let now = chrono::Utc::now().timestamp();
 
-        let expired: Vec<_> = state.locks
+        let expired: Vec<_> = state
+            .locks
             .iter()
             .filter(|(_, l)| l.expires_at < now)
             .map(|(id, _)| id.clone())
@@ -386,10 +410,13 @@ mod tests {
 
         assert_eq!(manager.get_version().await, 0);
 
-        manager.broadcast_change(StateOperation::VmCreated {
-            vm_id: "vm-100".to_string(),
-            node: "node1".to_string(),
-        }).await.unwrap();
+        manager
+            .broadcast_change(StateOperation::VmCreated {
+                vm_id: "vm-100".to_string(),
+                node: "node1".to_string(),
+            })
+            .await
+            .unwrap();
 
         // Version should not change (only tracked updates change it)
         assert_eq!(manager.get_version().await, 0);
@@ -400,7 +427,10 @@ mod tests {
         let manager = StateSyncManager::new("node1".to_string());
 
         // Acquire lock
-        let acquired = manager.acquire_lock("vm-100", LockType::Exclusive).await.unwrap();
+        let acquired = manager
+            .acquire_lock("vm-100", LockType::Exclusive)
+            .await
+            .unwrap();
         assert!(acquired);
 
         // Check we hold it

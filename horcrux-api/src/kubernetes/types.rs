@@ -273,9 +273,16 @@ pub struct ContainerInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase", tag = "type")]
 pub enum ContainerState {
-    Waiting { reason: Option<String> },
-    Running { started_at: Option<String> },
-    Terminated { exit_code: i32, reason: Option<String> },
+    Waiting {
+        reason: Option<String>,
+    },
+    Running {
+        started_at: Option<String>,
+    },
+    Terminated {
+        exit_code: i32,
+        reason: Option<String>,
+    },
     Unknown,
 }
 

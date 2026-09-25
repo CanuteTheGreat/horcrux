@@ -60,18 +60,14 @@ pub async fn create_network_policy(
         rules
             .iter()
             .map(|r| K8sIngressRule {
-                from: r.from.as_ref().map(|peers| {
-                    peers
-                        .iter()
-                        .map(|p| convert_peer(p))
-                        .collect()
-                }),
-                ports: r.ports.as_ref().map(|ports| {
-                    ports
-                        .iter()
-                        .map(|p| convert_port(p))
-                        .collect()
-                }),
+                from: r
+                    .from
+                    .as_ref()
+                    .map(|peers| peers.iter().map(|p| convert_peer(p)).collect()),
+                ports: r
+                    .ports
+                    .as_ref()
+                    .map(|ports| ports.iter().map(|p| convert_port(p)).collect()),
             })
             .collect()
     });
@@ -81,18 +77,14 @@ pub async fn create_network_policy(
         rules
             .iter()
             .map(|r| K8sEgressRule {
-                to: r.to.as_ref().map(|peers| {
-                    peers
-                        .iter()
-                        .map(|p| convert_peer(p))
-                        .collect()
-                }),
-                ports: r.ports.as_ref().map(|ports| {
-                    ports
-                        .iter()
-                        .map(|p| convert_port(p))
-                        .collect()
-                }),
+                to: r
+                    .to
+                    .as_ref()
+                    .map(|peers| peers.iter().map(|p| convert_peer(p)).collect()),
+                ports: r
+                    .ports
+                    .as_ref()
+                    .map(|ports| ports.iter().map(|p| convert_port(p)).collect()),
             })
             .collect()
     });
@@ -197,10 +189,7 @@ fn network_policy_to_info(
     let spec = policy.spec.unwrap_or_default();
 
     // Get pod selector
-    let pod_selector = spec
-        .pod_selector
-        .match_labels
-        .unwrap_or_default();
+    let pod_selector = spec.pod_selector.match_labels.unwrap_or_default();
 
     // Get policy types
     let policy_types = spec.policy_types.unwrap_or_default();
@@ -227,7 +216,9 @@ pub async fn list_network_policies(
     _client: &K8sClient,
     _namespace: &str,
 ) -> K8sResult<Vec<NetworkPolicyInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -236,7 +227,9 @@ pub async fn get_network_policy(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<NetworkPolicyInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -244,7 +237,9 @@ pub async fn create_network_policy(
     _client: &K8sClient,
     _request: &CreateNetworkPolicyRequest,
 ) -> K8sResult<NetworkPolicyInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -253,5 +248,7 @@ pub async fn delete_network_policy(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }

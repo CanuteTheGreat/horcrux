@@ -391,11 +391,7 @@ pub async fn create_role_binding(
 
 /// Delete a RoleBinding
 #[cfg(feature = "kubernetes")]
-pub async fn delete_role_binding(
-    client: &K8sClient,
-    namespace: &str,
-    name: &str,
-) -> K8sResult<()> {
+pub async fn delete_role_binding(client: &K8sClient, namespace: &str, name: &str) -> K8sResult<()> {
     use k8s_openapi::api::rbac::v1::RoleBinding;
     use kube::api::{Api, DeleteParams};
 
@@ -591,7 +587,9 @@ pub async fn list_service_accounts(
     _client: &K8sClient,
     _namespace: &str,
 ) -> K8sResult<Vec<ServiceAccountInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -600,7 +598,9 @@ pub async fn get_service_account(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<ServiceAccountInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -608,7 +608,9 @@ pub async fn create_service_account(
     _client: &K8sClient,
     _request: &CreateServiceAccountRequest,
 ) -> K8sResult<ServiceAccountInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -617,37 +619,51 @@ pub async fn delete_service_account(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn list_roles(_client: &K8sClient, _namespace: &str) -> K8sResult<Vec<RoleInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn get_role(_client: &K8sClient, _namespace: &str, _name: &str) -> K8sResult<RoleInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn create_role(_client: &K8sClient, _request: &CreateRoleRequest) -> K8sResult<RoleInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn delete_role(_client: &K8sClient, _namespace: &str, _name: &str) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn list_cluster_roles(_client: &K8sClient) -> K8sResult<Vec<ClusterRoleInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn get_cluster_role(_client: &K8sClient, _name: &str) -> K8sResult<ClusterRoleInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -655,12 +671,16 @@ pub async fn create_cluster_role(
     _client: &K8sClient,
     _request: &CreateClusterRoleRequest,
 ) -> K8sResult<ClusterRoleInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn delete_cluster_role(_client: &K8sClient, _name: &str) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -668,7 +688,9 @@ pub async fn list_role_bindings(
     _client: &K8sClient,
     _namespace: &str,
 ) -> K8sResult<Vec<RoleBindingInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -677,7 +699,9 @@ pub async fn get_role_binding(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<RoleBindingInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -685,7 +709,9 @@ pub async fn create_role_binding(
     _client: &K8sClient,
     _request: &CreateRoleBindingRequest,
 ) -> K8sResult<RoleBindingInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -694,14 +720,18 @@ pub async fn delete_role_binding(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn list_cluster_role_bindings(
     _client: &K8sClient,
 ) -> K8sResult<Vec<ClusterRoleBindingInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -709,7 +739,9 @@ pub async fn get_cluster_role_binding(
     _client: &K8sClient,
     _name: &str,
 ) -> K8sResult<ClusterRoleBindingInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -717,10 +749,14 @@ pub async fn create_cluster_role_binding(
     _client: &K8sClient,
     _request: &CreateClusterRoleBindingRequest,
 ) -> K8sResult<ClusterRoleBindingInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn delete_cluster_role_binding(_client: &K8sClient, _name: &str) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }

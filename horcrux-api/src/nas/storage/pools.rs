@@ -3,8 +3,8 @@
 //! Handles creation, destruction, and management of storage pools
 //! (ZFS pools, Btrfs volumes, mdraid arrays).
 
-use horcrux_common::{Error, Result};
 use crate::nas::storage::{NasPool, PoolHealth, RaidLevel, StorageType};
+use horcrux_common::{Error, Result};
 use std::collections::HashMap;
 use tokio::process::Command;
 
@@ -12,9 +12,7 @@ use tokio::process::Command;
 #[cfg(feature = "nas-zfs")]
 pub async fn list_zfs_pools() -> Result<Vec<NasPool>> {
     let output = Command::new("zpool")
-        .args([
-            "list", "-H", "-o", "name,size,alloc,free,health,altroot",
-        ])
+        .args(["list", "-H", "-o", "name,size,alloc,free,health,altroot"])
         .output()
         .await
         .map_err(|e| Error::Internal(format!("zpool list failed: {}", e)))?;
@@ -163,7 +161,9 @@ pub async fn create_zfs_pool(
         return Err(Error::Validation("Pool name cannot be empty".to_string()));
     }
     if devices.is_empty() {
-        return Err(Error::Validation("At least one device is required".to_string()));
+        return Err(Error::Validation(
+            "At least one device is required".to_string(),
+        ));
     }
 
     // Build zpool create command
@@ -221,10 +221,7 @@ pub async fn create_zfs_pool(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(Error::Internal(format!(
-            "zpool create failed: {}",
-            stderr
-        )));
+        return Err(Error::Internal(format!("zpool create failed: {}", stderr)));
     }
 
     // Return the created pool
@@ -246,10 +243,7 @@ pub async fn destroy_zfs_pool(name: &str) -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(Error::Internal(format!(
-            "zpool destroy failed: {}",
-            stderr
-        )));
+        return Err(Error::Internal(format!("zpool destroy failed: {}", stderr)));
     }
 
     Ok(())
@@ -266,10 +260,7 @@ pub async fn scrub_zfs_pool(name: &str) -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(Error::Internal(format!(
-            "zpool scrub failed: {}",
-            stderr
-        )));
+        return Err(Error::Internal(format!("zpool scrub failed: {}", stderr)));
     }
 
     Ok(())

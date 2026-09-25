@@ -103,9 +103,7 @@ fn pod_to_info(pod: k8s_openapi::api::core::v1::Pod) -> PodInfo {
         .containers
         .iter()
         .map(|c| {
-            let cs = container_statuses
-                .iter()
-                .find(|cs| cs.name == c.name);
+            let cs = container_statuses.iter().find(|cs| cs.name == c.name);
 
             let (ready, restart_count, state) = if let Some(cs) = cs {
                 let state = if let Some(ref s) = cs.state {
@@ -156,9 +154,7 @@ fn pod_to_info(pod: k8s_openapi::api::core::v1::Pod) -> PodInfo {
         containers,
         labels: metadata.labels.unwrap_or_default(),
         annotations: metadata.annotations.unwrap_or_default(),
-        created_at: metadata
-            .creation_timestamp
-            .map(|t| t.0.to_rfc3339()),
+        created_at: metadata.creation_timestamp.map(|t| t.0.to_rfc3339()),
         restart_count,
     }
 }
@@ -170,17 +166,23 @@ pub async fn list_pods(
     _namespace: &str,
     _label_selector: Option<&str>,
 ) -> K8sResult<Vec<PodInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn get_pod(_client: &K8sClient, _namespace: &str, _name: &str) -> K8sResult<PodInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn delete_pod(_client: &K8sClient, _namespace: &str, _name: &str) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -192,5 +194,7 @@ pub async fn get_pod_logs(
     _tail_lines: Option<i64>,
     _timestamps: bool,
 ) -> K8sResult<String> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }

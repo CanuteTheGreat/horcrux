@@ -7,10 +7,10 @@
 //! - Volume management
 //! - SMART monitoring
 
-mod pool_management;
-mod migration;
 mod disk_management;
-mod volume_management;
+mod migration;
+mod pool_management;
 mod smart_monitoring;
+mod volume_management;
 
 pub use pool_management::StorageManagement;

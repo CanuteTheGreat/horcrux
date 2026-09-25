@@ -1,8 +1,8 @@
 //! Storage Pool Management Page
 
+use crate::api::{delete_json, fetch_json};
 use leptos::*;
 use serde::{Deserialize, Serialize};
-use crate::api::{fetch_json, delete_json};
 
 /// Storage pool information
 #[derive(Debug, Clone, Serialize, Deserialize)]

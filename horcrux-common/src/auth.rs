@@ -1,5 +1,4 @@
 ///! Authentication and authorization types
-
 use serde::{Deserialize, Serialize};
 
 /// User account
@@ -7,13 +6,13 @@ use serde::{Deserialize, Serialize};
 pub struct User {
     pub id: String,
     pub username: String,
-    pub password_hash: String,  // BCrypt hash
+    pub password_hash: String, // BCrypt hash
     pub email: String,
     pub role: String,  // Single primary role
-    pub realm: String,  // pam, ldap, ad, etc.
+    pub realm: String, // pam, ldap, ad, etc.
     pub enabled: bool,
     #[serde(default)]
-    pub roles: Vec<String>,  // Additional roles for compatibility
+    pub roles: Vec<String>, // Additional roles for compatibility
     pub comment: Option<String>,
 }
 
@@ -21,10 +20,10 @@ pub struct User {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RealmType {
-    Pam,        // Linux PAM
-    Ldap,       // LDAP server
-    Ad,         // Active Directory
-    OpenId,     // OpenID Connect
+    Pam,    // Linux PAM
+    Ldap,   // LDAP server
+    Ad,     // Active Directory
+    OpenId, // OpenID Connect
 }
 
 /// Authentication realm configuration
@@ -88,7 +87,7 @@ pub struct Role {
 /// Permission for resources
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Permission {
-    pub path: String,       // e.g., "/vms/100", "/storage/zfs-pool"
+    pub path: String, // e.g., "/vms/100", "/storage/zfs-pool"
     pub privileges: Vec<Privilege>,
 }
 
@@ -97,14 +96,14 @@ pub struct Permission {
 #[serde(rename_all = "PascalCase")]
 pub enum Privilege {
     // VM privileges
-    VmAudit,        // View VM
-    VmConsole,      // Access console
-    VmConfig,       // Modify config
-    VmPowerMgmt,    // Start/stop/reboot
-    VmAllocate,     // Create/delete VM
-    VmMigrate,      // Migrate VM
-    VmSnapshot,     // Create snapshots
-    VmBackup,       // Backup VM
+    VmAudit,     // View VM
+    VmConsole,   // Access console
+    VmConfig,    // Modify config
+    VmPowerMgmt, // Start/stop/reboot
+    VmAllocate,  // Create/delete VM
+    VmMigrate,   // Migrate VM
+    VmSnapshot,  // Create snapshots
+    VmBackup,    // Backup VM
 
     // Storage privileges
     DatastoreAudit,
@@ -131,7 +130,7 @@ pub struct ApiToken {
     pub id: String,
     pub user: String,
     pub enabled: bool,
-    pub expire: Option<i64>,  // Unix timestamp
+    pub expire: Option<i64>, // Unix timestamp
     pub comment: Option<String>,
 }
 

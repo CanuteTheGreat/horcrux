@@ -1,7 +1,7 @@
+use crate::api::*;
 use leptos::*;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
-use crate::api::*;
 
 // WebAuthnChallenge is the only type not in api.rs
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -771,12 +771,17 @@ pub fn MfaManagementPage() -> impl IntoView {
 
 // Helper component for MFA policy editing
 #[component]
-fn MfaPolicyEditor(policy: MfaEnforcementPolicy, on_save: impl Fn(MfaEnforcementPolicy) + 'static) -> impl IntoView {
+fn MfaPolicyEditor(
+    policy: MfaEnforcementPolicy,
+    on_save: impl Fn(MfaEnforcementPolicy) + 'static,
+) -> impl IntoView {
     let (global_enforcement, set_global_enforcement) = create_signal(policy.global_enforcement);
     let (grace_period, set_grace_period) = create_signal(policy.grace_period_days);
-    let (require_backup_codes, set_require_backup_codes) = create_signal(policy.require_backup_codes);
+    let (require_backup_codes, set_require_backup_codes) =
+        create_signal(policy.require_backup_codes);
     let (max_trusted_devices, set_max_trusted_devices) = create_signal(policy.max_trusted_devices);
-    let (trusted_device_expiry, set_trusted_device_expiry) = create_signal(policy.trusted_device_expiry_days);
+    let (trusted_device_expiry, set_trusted_device_expiry) =
+        create_signal(policy.trusted_device_expiry_days);
 
     view! {
         <div class="mfa-policy-editor">
@@ -902,24 +907,26 @@ fn MfaPolicyEditor(policy: MfaEnforcementPolicy, on_save: impl Fn(MfaEnforcement
 #[component]
 fn UsersMfaStatusTable(
     users: Vec<UserMfaStatus>,
-    on_action: impl Fn(String, String) + 'static + Clone
+    on_action: impl Fn(String, String) + 'static + Clone,
 ) -> impl IntoView {
     let (search_term, set_search_term) = create_signal(String::new());
     let (filter_status, set_filter_status) = create_signal("all".to_string());
 
     let filtered_users = create_memo(move |_| {
-        users.clone()
+        users
+            .clone()
             .into_iter()
             .filter(|user| {
                 let search_match = if search_term.get().is_empty() {
                     true
                 } else {
                     let term = search_term.get().to_lowercase();
-                    user.username.to_lowercase().contains(&term) ||
-                    user.email.to_lowercase().contains(&term)
+                    user.username.to_lowercase().contains(&term)
+                        || user.email.to_lowercase().contains(&term)
                 };
 
-                let status_match = filter_status.get() == "all" || user.enforcement_status == filter_status.get();
+                let status_match =
+                    filter_status.get() == "all" || user.enforcement_status == filter_status.get();
 
                 search_match && status_match
             })

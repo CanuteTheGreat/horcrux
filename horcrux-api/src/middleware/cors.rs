@@ -74,11 +74,7 @@ impl CorsConfig {
 }
 
 /// CORS middleware
-pub async fn cors_middleware(
-    config: CorsConfig,
-    request: Request<Body>,
-    next: Next,
-) -> Response {
+pub async fn cors_middleware(config: CorsConfig, request: Request<Body>, next: Next) -> Response {
     let origin = request
         .headers()
         .get(header::ORIGIN)

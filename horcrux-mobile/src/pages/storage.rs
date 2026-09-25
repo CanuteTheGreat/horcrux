@@ -1,7 +1,7 @@
 //! Storage page for mobile UI
 
-use yew::prelude::*;
 use crate::components::Header;
+use yew::prelude::*;
 
 #[function_component(StorageView)]
 pub fn storage_view() -> Html {

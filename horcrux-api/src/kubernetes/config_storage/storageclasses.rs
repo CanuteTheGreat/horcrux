@@ -172,12 +172,16 @@ fn storage_class_to_info(sc: k8s_openapi::api::storage::v1::StorageClass) -> Sto
 // Stubs for when kubernetes feature is disabled
 #[cfg(not(feature = "kubernetes"))]
 pub async fn list_storage_classes(_client: &K8sClient) -> K8sResult<Vec<StorageClassInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn get_storage_class(_client: &K8sClient, _name: &str) -> K8sResult<StorageClassInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -185,15 +189,21 @@ pub async fn create_storage_class(
     _client: &K8sClient,
     _request: &CreateStorageClassRequest,
 ) -> K8sResult<StorageClassInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn delete_storage_class(_client: &K8sClient, _name: &str) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn set_default_storage_class(_client: &K8sClient, _name: &str) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }

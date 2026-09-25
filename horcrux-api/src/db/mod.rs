@@ -1,7 +1,6 @@
 ///! Database layer using SQLite
 ///!
 ///! Provides persistent storage for VMs, users, sessions, audit logs, etc.
-
 pub mod migrations;
 
 use horcrux_common::Result;
@@ -37,7 +36,9 @@ impl Database {
             .max_connections(32)
             .connect(&connect_url)
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Database connection failed: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Database connection failed: {}", e))
+            })?;
 
         tracing::info!("Database connection established");
 
@@ -89,7 +90,9 @@ impl Database {
         sqlx::query("SELECT 1")
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Database health check failed: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Database health check failed: {}", e))
+            })?;
         Ok(())
     }
 }
@@ -97,7 +100,7 @@ impl Database {
 /// VM database operations
 pub mod vms {
     use super::*;
-    use horcrux_common::{VmConfig, VmStatus, VmArchitecture, VmHypervisor};
+    use horcrux_common::{VmArchitecture, VmConfig, VmHypervisor, VmStatus};
 
     pub async fn create_vm(pool: &SqlitePool, vm: &VmConfig) -> Result<()> {
         let status_str = format!("{:?}", vm.status).to_lowercase();
@@ -106,7 +109,7 @@ pub mod vms {
 
         sqlx::query(
             "INSERT INTO vms (id, name, hypervisor, memory, cpus, disk_size, status, architecture)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&vm.id)
         .bind(&vm.name)
@@ -157,7 +160,7 @@ pub mod vms {
         sqlx::query(
             "UPDATE vms SET name = ?, hypervisor = ?, memory = ?, cpus = ?, disk_size = ?,
              status = ?, architecture = ?, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?"
+             WHERE id = ?",
         )
         .bind(&vm.name)
         .bind(&hypervisor_str)
@@ -233,14 +236,13 @@ pub mod vms {
 /// User and session database operations
 pub mod users {
     use super::*;
-    use horcrux_common::auth::{User, Session};
+    use horcrux_common::auth::{Session, User};
     use sqlx::Row;
-    
 
     pub async fn create_user(pool: &SqlitePool, user: &User) -> Result<()> {
         sqlx::query(
             "INSERT INTO users (id, username, password_hash, email, role, realm, enabled)
-             VALUES (?, ?, ?, ?, ?, ?, ?)"
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&user.id)
         .bind(&user.username)
@@ -291,7 +293,7 @@ pub mod users {
 
         sqlx::query(
             "INSERT INTO sessions (id, user_id, expires_at)
-             VALUES (?, ?, ?)"
+             VALUES (?, ?, ?)",
         )
         .bind(&session.id)
         .bind(&session.user_id)
@@ -339,7 +341,9 @@ pub mod users {
             .bind(session_id)
             .execute(pool)
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to delete session: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to delete session: {}", e))
+            })?;
 
         Ok(())
     }
@@ -351,7 +355,9 @@ pub mod users {
             .bind(now)
             .execute(pool)
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to cleanup sessions: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to cleanup sessions: {}", e))
+            })?;
 
         Ok(())
     }
@@ -374,13 +380,15 @@ pub mod users {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use horcrux_common::{VmConfig, VmStatus, VmArchitecture, VmHypervisor};
+    use horcrux_common::{VmArchitecture, VmConfig, VmHypervisor, VmStatus};
 
     async fn create_test_db() -> Database {
         // Use in-memory database for tests
         let db_url = "sqlite::memory:";
 
-        let db = Database::new(&db_url).await.expect("Failed to create database");
+        let db = Database::new(&db_url)
+            .await
+            .expect("Failed to create database");
         db.migrate().await.expect("Failed to run migrations");
         db
     }
@@ -429,14 +437,21 @@ mod tests {
         let mut updated_config = retrieved.clone();
         updated_config.name = "Updated Test VM 1".to_string();
         updated_config.memory = 4096;
-        db.update_vm(&updated_config).await.expect("Failed to update VM");
+        db.update_vm(&updated_config)
+            .await
+            .expect("Failed to update VM");
 
-        let updated = db.get_vm("test-vm-1").await.expect("Failed to get updated VM");
+        let updated = db
+            .get_vm("test-vm-1")
+            .await
+            .expect("Failed to get updated VM");
         assert_eq!(updated.name, "Updated Test VM 1");
         assert_eq!(updated.memory, 4096);
 
         // Delete VM
-        db.delete_vm("test-vm-1").await.expect("Failed to delete VM");
+        db.delete_vm("test-vm-1")
+            .await
+            .expect("Failed to delete VM");
 
         let result = db.get_vm("test-vm-1").await;
         assert!(result.is_err(), "VM should not exist after deletion");
@@ -448,10 +463,8 @@ mod tests {
 
         // Create multiple VMs
         for i in 1..=5 {
-            let vm_config = create_test_vm_config(
-                &format!("test-vm-{}", i),
-                &format!("Test VM {}", i),
-            );
+            let vm_config =
+                create_test_vm_config(&format!("test-vm-{}", i), &format!("Test VM {}", i));
             db.create_vm(&vm_config).await.expect("Failed to create VM");
         }
 
@@ -513,7 +526,8 @@ mod tests {
             vm_config.status = status.clone();
             db.create_vm(&vm_config).await.expect("Failed to create VM");
 
-            let retrieved = db.get_vm(&format!("test-vm-status-{}", i))
+            let retrieved = db
+                .get_vm(&format!("test-vm-status-{}", i))
                 .await
                 .expect("Failed to get VM");
             assert_eq!(retrieved.status, *status);
@@ -532,14 +546,13 @@ mod tests {
         ];
 
         for (i, arch) in architectures.iter().enumerate() {
-            let mut vm_config = create_test_vm_config(
-                &format!("test-vm-arch-{}", i),
-                &format!("Arch Test {}", i),
-            );
+            let mut vm_config =
+                create_test_vm_config(&format!("test-vm-arch-{}", i), &format!("Arch Test {}", i));
             vm_config.architecture = arch.clone();
             db.create_vm(&vm_config).await.expect("Failed to create VM");
 
-            let retrieved = db.get_vm(&format!("test-vm-arch-{}", i))
+            let retrieved = db
+                .get_vm(&format!("test-vm-arch-{}", i))
                 .await
                 .expect("Failed to get VM");
             assert_eq!(retrieved.architecture, *arch);
@@ -550,11 +563,7 @@ mod tests {
     async fn test_vm_hypervisor_persistence() {
         let db = create_test_db().await;
 
-        let hypervisors = vec![
-            VmHypervisor::Qemu,
-            VmHypervisor::Lxd,
-            VmHypervisor::Incus,
-        ];
+        let hypervisors = vec![VmHypervisor::Qemu, VmHypervisor::Lxd, VmHypervisor::Incus];
 
         for (i, hypervisor) in hypervisors.iter().enumerate() {
             let mut vm_config = create_test_vm_config(
@@ -564,7 +573,8 @@ mod tests {
             vm_config.hypervisor = hypervisor.clone();
             db.create_vm(&vm_config).await.expect("Failed to create VM");
 
-            let retrieved = db.get_vm(&format!("test-vm-hyp-{}", i))
+            let retrieved = db
+                .get_vm(&format!("test-vm-hyp-{}", i))
                 .await
                 .expect("Failed to get VM");
             assert_eq!(retrieved.hypervisor, *hypervisor);
@@ -575,7 +585,7 @@ mod tests {
 /// Audit log database operations
 pub mod audit {
     use super::*;
-    use crate::audit::{AuditEvent, AuditEventType, AuditSeverity, AuditResult};
+    use crate::audit::{AuditEvent, AuditEventType, AuditResult, AuditSeverity};
     use sqlx::Row;
 
     #[allow(dead_code)]
@@ -587,7 +597,7 @@ pub mod audit {
         sqlx::query(
             "INSERT INTO audit_logs (timestamp, event_type, severity, user, source_ip,
              resource, action, result, details, session_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(event.timestamp.timestamp())
         .bind(&event_type)
@@ -641,10 +651,9 @@ pub mod audit {
         }
         sql_query = sql_query.bind(limit as i64);
 
-        let rows = sql_query
-            .fetch_all(pool)
-            .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to query audit logs: {}", e)))?;
+        let rows = sql_query.fetch_all(pool).await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to query audit logs: {}", e))
+        })?;
 
         let mut events = Vec::new();
         for row in rows {

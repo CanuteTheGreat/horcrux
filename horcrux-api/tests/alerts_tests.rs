@@ -1,12 +1,8 @@
 //! Alerts Module Tests
 //! Tests for alert rules, notifications, and alert management
 
-use horcrux_api::alerts::{
-    AlertManager, AlertRule, AlertSeverity, AlertStatus, Alert, MetricType,
-};
-use horcrux_api::alerts::notifications::{
-    NotificationChannel, EmailConfig, WebhookConfig,
-};
+use horcrux_api::alerts::notifications::{EmailConfig, NotificationChannel, WebhookConfig};
+use horcrux_api::alerts::{Alert, AlertManager, AlertRule, AlertSeverity, AlertStatus, MetricType};
 
 // ============== Alert Manager Tests ==============
 
@@ -117,7 +113,9 @@ async fn test_get_alert_history() {
 #[tokio::test]
 async fn test_acknowledge_nonexistent_alert() {
     let manager = AlertManager::new();
-    let result = manager.acknowledge_alert("nonexistent", "target", "admin").await;
+    let result = manager
+        .acknowledge_alert("nonexistent", "target", "admin")
+        .await;
     assert!(result.is_err());
 }
 
@@ -228,9 +226,7 @@ fn test_webhook_channel_serialization() {
         config: WebhookConfig {
             url: "https://hooks.example.com/alerts".to_string(),
             method: "POST".to_string(),
-            headers: vec![
-                ("Content-Type".to_string(), "application/json".to_string()),
-            ],
+            headers: vec![("Content-Type".to_string(), "application/json".to_string())],
             auth_token: Some("token123".to_string()),
         },
     };
@@ -277,23 +273,29 @@ async fn test_list_notification_channels() {
     assert!(manager.list_notification_channels().await.is_empty());
 
     // Add multiple channels
-    manager.add_notification_channel(NotificationChannel::Syslog {
-        name: "Syslog".to_string(),
-        enabled: true,
-        min_severity: AlertSeverity::Info,
-    }).await.unwrap();
+    manager
+        .add_notification_channel(NotificationChannel::Syslog {
+            name: "Syslog".to_string(),
+            enabled: true,
+            min_severity: AlertSeverity::Info,
+        })
+        .await
+        .unwrap();
 
-    manager.add_notification_channel(NotificationChannel::Webhook {
-        name: "Webhook".to_string(),
-        enabled: false,
-        min_severity: AlertSeverity::Critical,
-        config: WebhookConfig {
-            url: "https://example.com".to_string(),
-            method: "POST".to_string(),
-            headers: vec![],
-            auth_token: None,
-        },
-    }).await.unwrap();
+    manager
+        .add_notification_channel(NotificationChannel::Webhook {
+            name: "Webhook".to_string(),
+            enabled: false,
+            min_severity: AlertSeverity::Critical,
+            config: WebhookConfig {
+                url: "https://example.com".to_string(),
+                method: "POST".to_string(),
+                headers: vec![],
+                auth_token: None,
+            },
+        })
+        .await
+        .unwrap();
 
     assert_eq!(manager.list_notification_channels().await.len(), 2);
 }

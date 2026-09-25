@@ -1,5 +1,5 @@
-use leptos::*;
 use crate::api;
+use leptos::*;
 
 #[component]
 pub fn ReplicationList() -> impl IntoView {
@@ -36,7 +36,10 @@ pub fn ReplicationList() -> impl IntoView {
 
     let delete_job = move |job_id: String| {
         if web_sys::window()
-            .and_then(|w| w.confirm_with_message(&format!("Delete replication job {}?", job_id)).ok())
+            .and_then(|w| {
+                w.confirm_with_message(&format!("Delete replication job {}?", job_id))
+                    .ok()
+            })
             .unwrap_or(false)
         {
             spawn_local(async move {

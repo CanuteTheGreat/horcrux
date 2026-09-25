@@ -8,9 +8,9 @@ use std::process::Command;
 /// VLAN configuration
 #[derive(Debug, Clone)]
 pub struct VlanConfig {
-    pub tag: u16,          // VLAN tag (1-4094)
-    pub parent_iface: String,  // Parent interface (e.g., "eth0")
-    pub bridge: String,    // Bridge name (e.g., "vmbr0")
+    pub tag: u16,             // VLAN tag (1-4094)
+    pub parent_iface: String, // Parent interface (e.g., "eth0")
+    pub bridge: String,       // Bridge name (e.g., "vmbr0")
 }
 
 pub struct VlanManager;
@@ -29,11 +29,16 @@ impl VlanManager {
         // ip link add link eth0 name eth0.100 type vlan id 100
         let output = Command::new("ip")
             .args(&[
-                "link", "add",
-                "link", &config.parent_iface,
-                "name", &vlan_iface,
-                "type", "vlan",
-                "id", &config.tag.to_string(),
+                "link",
+                "add",
+                "link",
+                &config.parent_iface,
+                "name",
+                &vlan_iface,
+                "type",
+                "vlan",
+                "id",
+                &config.tag.to_string(),
             ])
             .output()
             .map_err(|e| format!("Failed to execute ip command: {}", e))?;
@@ -103,8 +108,14 @@ impl VlanManager {
         // Enable VLAN filtering on bridge
         let output = Command::new("ip")
             .args(&[
-                "link", "set", "dev", bridge_name,
-                "type", "bridge", "vlan_filtering", "1"
+                "link",
+                "set",
+                "dev",
+                bridge_name,
+                "type",
+                "bridge",
+                "vlan_filtering",
+                "1",
             ])
             .output()
             .map_err(|e| format!("Failed to enable VLAN filtering: {}", e))?;
@@ -208,7 +219,9 @@ impl VlanManager {
             .filter(|line| line.contains("vlan"))
             .filter_map(|line| {
                 // Parse interface name from output like: "5: eth0.100@eth0: <BROADCAST..."
-                line.split(':').nth(1).map(|s| s.trim().split('@').next().unwrap().to_string())
+                line.split(':')
+                    .nth(1)
+                    .map(|s| s.trim().split('@').next().unwrap().to_string())
             })
             .collect();
 
@@ -234,7 +247,9 @@ impl VlanManager {
             .lines()
             .filter_map(|line| {
                 if line.contains("bridge") {
-                    line.split(':').nth(1).map(|s| s.trim().split('@').next().unwrap().to_string())
+                    line.split(':')
+                        .nth(1)
+                        .map(|s| s.trim().split('@').next().unwrap().to_string())
                 } else {
                     None
                 }

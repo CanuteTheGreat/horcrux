@@ -1,5 +1,5 @@
-use leptos::*;
 use crate::websocket;
+use leptos::*;
 
 #[component]
 pub fn Monitoring() -> impl IntoView {

@@ -6,7 +6,7 @@ use crate::kubernetes::client::K8sClient;
 #[cfg(not(feature = "kubernetes"))]
 use crate::kubernetes::error::K8sError;
 use crate::kubernetes::error::K8sResult;
-use crate::kubernetes::types::{CreatePvcRequest, CreatePvRequest, PvClaimRef, PvcInfo, PvInfo};
+use crate::kubernetes::types::{CreatePvRequest, CreatePvcRequest, PvClaimRef, PvInfo, PvcInfo};
 
 // ============================================================================
 // PersistentVolumeClaim Operations
@@ -124,7 +124,10 @@ fn pvc_to_info(pvc: k8s_openapi::api::core::v1::PersistentVolumeClaim) -> PvcInf
         status: status.phase.unwrap_or_else(|| "Unknown".to_string()),
         volume_name: spec.volume_name,
         storage_class: spec.storage_class_name,
-        access_modes: status.access_modes.or(spec.access_modes).unwrap_or_default(),
+        access_modes: status
+            .access_modes
+            .or(spec.access_modes)
+            .unwrap_or_default(),
         capacity,
         requested_capacity,
         labels: metadata.labels.unwrap_or_default(),
@@ -263,40 +266,56 @@ fn pv_to_info(pv: k8s_openapi::api::core::v1::PersistentVolume) -> PvInfo {
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn list_pvcs(_client: &K8sClient, _namespace: &str) -> K8sResult<Vec<PvcInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn get_pvc(_client: &K8sClient, _namespace: &str, _name: &str) -> K8sResult<PvcInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn create_pvc(_client: &K8sClient, _request: &CreatePvcRequest) -> K8sResult<PvcInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn delete_pvc(_client: &K8sClient, _namespace: &str, _name: &str) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn list_pvs(_client: &K8sClient) -> K8sResult<Vec<PvInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn get_pv(_client: &K8sClient, _name: &str) -> K8sResult<PvInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn create_pv(_client: &K8sClient, _request: &CreatePvRequest) -> K8sResult<PvInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn delete_pv(_client: &K8sClient, _name: &str) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }

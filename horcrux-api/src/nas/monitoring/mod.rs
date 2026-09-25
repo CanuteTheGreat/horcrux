@@ -5,9 +5,9 @@
 pub mod health;
 pub mod metrics;
 
-use horcrux_common::{Error, Result};
 use crate::nas::services::NasService;
 use crate::nas::storage::{NasPool, PoolHealth};
+use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 
 /// NAS health status
@@ -465,7 +465,11 @@ impl MonitoringManager {
     /// Get alerts by level
     pub async fn get_alerts_by_level(&self, level: AlertLevel) -> Vec<NasAlert> {
         let alerts = self.alerts.read().await;
-        alerts.iter().filter(|a| a.level == level).cloned().collect()
+        alerts
+            .iter()
+            .filter(|a| a.level == level)
+            .cloned()
+            .collect()
     }
 
     /// Check health and create alerts for issues
@@ -477,25 +481,38 @@ impl MonitoringManager {
             if pool.usage_percent > self.thresholds.pool_usage_critical as f64 {
                 self.create_alert(
                     AlertLevel::Critical,
-                    AlertSource::Pool { name: pool.name.clone() },
-                    format!("Pool '{}' usage at {:.1}% (critical threshold: {}%)",
-                        pool.name, pool.usage_percent, self.thresholds.pool_usage_critical),
-                ).await;
+                    AlertSource::Pool {
+                        name: pool.name.clone(),
+                    },
+                    format!(
+                        "Pool '{}' usage at {:.1}% (critical threshold: {}%)",
+                        pool.name, pool.usage_percent, self.thresholds.pool_usage_critical
+                    ),
+                )
+                .await;
             } else if pool.usage_percent > self.thresholds.pool_usage_warning as f64 {
                 self.create_alert(
                     AlertLevel::Warning,
-                    AlertSource::Pool { name: pool.name.clone() },
-                    format!("Pool '{}' usage at {:.1}% (warning threshold: {}%)",
-                        pool.name, pool.usage_percent, self.thresholds.pool_usage_warning),
-                ).await;
+                    AlertSource::Pool {
+                        name: pool.name.clone(),
+                    },
+                    format!(
+                        "Pool '{}' usage at {:.1}% (warning threshold: {}%)",
+                        pool.name, pool.usage_percent, self.thresholds.pool_usage_warning
+                    ),
+                )
+                .await;
             }
 
             if pool.status == HealthStatus::Critical {
                 self.create_alert(
                     AlertLevel::Critical,
-                    AlertSource::Pool { name: pool.name.clone() },
+                    AlertSource::Pool {
+                        name: pool.name.clone(),
+                    },
                     format!("Pool '{}' health is critical", pool.name),
-                ).await;
+                )
+                .await;
             }
         }
 
@@ -504,9 +521,12 @@ impl MonitoringManager {
             if !service.running {
                 self.create_alert(
                     AlertLevel::Warning,
-                    AlertSource::Service { name: format!("{:?}", service.service) },
+                    AlertSource::Service {
+                        name: format!("{:?}", service.service),
+                    },
                     format!("Service {:?} is not running", service.service),
-                ).await;
+                )
+                .await;
             }
         }
 
@@ -679,7 +699,10 @@ impl MonitoringManager {
                 0.0
             },
             active_alerts: alerts.len() as u32,
-            critical_alerts: alerts.iter().filter(|a| a.level == AlertLevel::Critical).count() as u32,
+            critical_alerts: alerts
+                .iter()
+                .filter(|a| a.level == AlertLevel::Critical)
+                .count() as u32,
         })
     }
 }

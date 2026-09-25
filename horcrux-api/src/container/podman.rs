@@ -1,6 +1,5 @@
 ///! Podman container integration
 ///! Podman is a daemonless alternative to Docker
-
 use super::Container;
 use horcrux_common::{ContainerConfig, ContainerRuntime, ContainerStatus, Result};
 use tokio::process::Command;
@@ -16,7 +15,10 @@ impl PodmanManager {
 
     /// Create a new Podman container
     pub async fn create_container(&self, config: &ContainerConfig) -> Result<Container> {
-        info!("Creating Podman container: {} (ID: {})", config.name, config.id);
+        info!(
+            "Creating Podman container: {} (ID: {})",
+            config.name, config.id
+        );
 
         // Create and configure Podman container
         let mut cmd = Command::new("podman");
@@ -43,7 +45,10 @@ impl PodmanManager {
         }
 
         let container_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        info!("Podman container {} created successfully (Podman ID: {})", config.id, container_id);
+        info!(
+            "Podman container {} created successfully (Podman ID: {})",
+            config.id, container_id
+        );
 
         Ok(Container {
             id: config.id.clone(),
@@ -58,7 +63,10 @@ impl PodmanManager {
 
     /// Start a Podman container
     pub async fn start_container(&self, container: &Container) -> Result<()> {
-        info!("Starting Podman container: {} (ID: {})", container.name, container.id);
+        info!(
+            "Starting Podman container: {} (ID: {})",
+            container.name, container.id
+        );
 
         if container.status == ContainerStatus::Running {
             return Err(horcrux_common::Error::InvalidConfig(format!(
@@ -91,7 +99,10 @@ impl PodmanManager {
 
     /// Stop a Podman container
     pub async fn stop_container(&self, container: &Container) -> Result<()> {
-        info!("Stopping Podman container: {} (ID: {})", container.name, container.id);
+        info!(
+            "Stopping Podman container: {} (ID: {})",
+            container.name, container.id
+        );
 
         if container.status == ContainerStatus::Stopped {
             return Err(horcrux_common::Error::InvalidConfig(format!(
@@ -124,7 +135,10 @@ impl PodmanManager {
 
     /// Delete a Podman container
     pub async fn delete_container(&self, container: &Container) -> Result<()> {
-        info!("Deleting Podman container: {} (ID: {})", container.name, container.id);
+        info!(
+            "Deleting Podman container: {} (ID: {})",
+            container.name, container.id
+        );
 
         if container.status == ContainerStatus::Running {
             return Err(horcrux_common::Error::InvalidConfig(format!(
@@ -169,9 +183,7 @@ impl PodmanManager {
             .arg("--version")
             .output()
             .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to run podman: {}", e))
-            })?;
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to run podman: {}", e)))?;
 
         if !output.status.success() {
             return Err(horcrux_common::Error::System(

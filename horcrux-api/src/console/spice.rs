@@ -15,10 +15,10 @@ use tokio::sync::RwLock;
 #[derive(Debug, Clone)]
 pub struct SpiceConfig {
     pub vm_id: String,
-    pub port: u16,         // SPICE port
+    pub port: u16,             // SPICE port
     pub tls_port: Option<u16>, // Optional TLS port
     pub password: Option<String>,
-    pub addr: String,      // Listen address
+    pub addr: String, // Listen address
     pub disable_ticketing: bool,
 }
 
@@ -83,19 +83,17 @@ impl SpiceManager {
     /// Get SPICE port for a VM
     pub async fn get_spice_port(&self, vm_id: &str) -> Result<u16> {
         let configs = self.spice_configs.read().await;
-        configs
-            .get(vm_id)
-            .map(|c| c.port)
-            .ok_or_else(|| horcrux_common::Error::System(format!("SPICE not configured for VM {}", vm_id)))
+        configs.get(vm_id).map(|c| c.port).ok_or_else(|| {
+            horcrux_common::Error::System(format!("SPICE not configured for VM {}", vm_id))
+        })
     }
 
     /// Get SPICE configuration for a VM
     pub async fn get_spice_config(&self, vm_id: &str) -> Result<SpiceConfig> {
         let configs = self.spice_configs.read().await;
-        configs
-            .get(vm_id)
-            .cloned()
-            .ok_or_else(|| horcrux_common::Error::System(format!("SPICE not configured for VM {}", vm_id)))
+        configs.get(vm_id).cloned().ok_or_else(|| {
+            horcrux_common::Error::System(format!("SPICE not configured for VM {}", vm_id))
+        })
     }
 
     /// Disable SPICE for a VM
@@ -113,10 +111,15 @@ impl SpiceManager {
             .arg(format!("qemu.*{}", vm_id))
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to find VM process: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to find VM process: {}", e))
+            })?;
 
         if !output.status.success() {
-            return Err(horcrux_common::Error::System(format!("VM {} is not running", vm_id)));
+            return Err(horcrux_common::Error::System(format!(
+                "VM {} is not running",
+                vm_id
+            )));
         }
 
         let pid_str = String::from_utf8_lossy(&output.stdout);
@@ -184,7 +187,9 @@ impl SpiceManager {
             .await;
 
         match output {
-            Ok(out) => out.status.success() || String::from_utf8_lossy(&out.stderr).contains("spice"),
+            Ok(out) => {
+                out.status.success() || String::from_utf8_lossy(&out.stderr).contains("spice")
+            }
             Err(_) => false,
         }
     }
@@ -194,9 +199,10 @@ impl SpiceManager {
         let monitor_path = format!("/var/run/qemu-server/{}.mon", vm_id);
 
         if !std::path::Path::new(&monitor_path).exists() {
-            return Err(horcrux_common::Error::System(
-                format!("QEMU monitor not found for VM {}", vm_id)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "QEMU monitor not found for VM {}",
+                vm_id
+            )));
         }
 
         // Use socat to send command to QEMU monitor
@@ -225,15 +231,15 @@ impl SpiceManager {
             }
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
-                Err(horcrux_common::Error::System(
-                    format!("Failed to set SPICE password: {}", stderr)
-                ))
+                Err(horcrux_common::Error::System(format!(
+                    "Failed to set SPICE password: {}",
+                    stderr
+                )))
             }
-            Err(e) => {
-                Err(horcrux_common::Error::System(
-                    format!("Failed to communicate with QEMU monitor: {}", e)
-                ))
-            }
+            Err(e) => Err(horcrux_common::Error::System(format!(
+                "Failed to communicate with QEMU monitor: {}",
+                e
+            ))),
         }
     }
 

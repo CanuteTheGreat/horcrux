@@ -1,10 +1,10 @@
 //! Cluster pages for mobile UI
 
-use yew::prelude::*;
 use wasm_bindgen_futures::spawn_local;
+use yew::prelude::*;
 
 use crate::api::{ApiClient, ClusterStatus, NodeInfo};
-use crate::components::{Header, Card, Loading};
+use crate::components::{Card, Header, Loading};
 
 #[function_component(ClusterView)]
 pub fn cluster_view() -> Html {

@@ -228,8 +228,7 @@ impl HorcruxConfig {
         let content = std::fs::read_to_string(path)
             .map_err(|e| ConfigError::FileRead(path.clone(), e.to_string()))?;
 
-        toml::from_str(&content)
-            .map_err(|e| ConfigError::Parse(e.to_string()))
+        toml::from_str(&content).map_err(|e| ConfigError::Parse(e.to_string()))
     }
 
     /// Find configuration file in standard locations
@@ -243,9 +242,7 @@ impl HorcruxConfig {
             Some(PathBuf::from("./horcrux.toml")),
         ];
 
-        paths.into_iter()
-            .flatten()
-            .find(|p| p.exists())
+        paths.into_iter().flatten().find(|p| p.exists())
     }
 
     /// Apply environment variable overrides
@@ -365,13 +362,15 @@ impl HorcruxConfig {
 
         // Validate database URL
         if self.database.url.is_empty() {
-            return Err(ConfigError::Validation("Database URL cannot be empty".to_string()));
+            return Err(ConfigError::Validation(
+                "Database URL cannot be empty".to_string(),
+            ));
         }
 
         // Validate socket patterns contain placeholder
         if !self.qemu.qmp_socket_pattern.contains("{vm_id}") {
             return Err(ConfigError::Validation(
-                "QMP socket pattern must contain {vm_id} placeholder".to_string()
+                "QMP socket pattern must contain {vm_id} placeholder".to_string(),
             ));
         }
 

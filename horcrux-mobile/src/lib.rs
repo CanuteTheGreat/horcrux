@@ -9,8 +9,8 @@ mod components;
 mod pages;
 mod router;
 
-use yew::prelude::*;
 use router::{switch, Route};
+use yew::prelude::*;
 use yew_router::prelude::*;
 
 /// Main mobile application component

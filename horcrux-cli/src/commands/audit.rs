@@ -1,5 +1,5 @@
 use crate::api::ApiClient;
-use crate::output::{self, OutputFormat, format_relative_time};
+use crate::output::{self, format_relative_time, OutputFormat};
 use crate::AuditCommands;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -93,7 +93,12 @@ pub async fn handle_audit_command(
     output_format: &str,
 ) -> Result<()> {
     match command {
-        AuditCommands::Query { event_type, user, severity, limit } => {
+        AuditCommands::Query {
+            event_type,
+            user,
+            severity,
+            limit,
+        } => {
             // Build query string
             let mut params = vec![format!("limit={}", limit)];
             if let Some(et) = event_type {
@@ -119,15 +124,20 @@ pub async fn handle_audit_command(
             }
             let query = params.join("&");
 
-            let events: Vec<AuditEvent> = api.get(&format!("/api/audit/failed-logins?{}", query)).await?;
+            let events: Vec<AuditEvent> = api
+                .get(&format!("/api/audit/failed-logins?{}", query))
+                .await?;
             let format = OutputFormat::from_str(output_format);
             let rows: Vec<FailedLoginRow> = events.into_iter().map(FailedLoginRow::from).collect();
             output::print_output(rows, format)?;
         }
         AuditCommands::Security { limit } => {
-            let events: Vec<AuditEvent> = api.get(&format!("/api/audit/security-events?limit={}", limit)).await?;
+            let events: Vec<AuditEvent> = api
+                .get(&format!("/api/audit/security-events?limit={}", limit))
+                .await?;
             let format = OutputFormat::from_str(output_format);
-            let rows: Vec<SecurityEventRow> = events.into_iter().map(SecurityEventRow::from).collect();
+            let rows: Vec<SecurityEventRow> =
+                events.into_iter().map(SecurityEventRow::from).collect();
             output::print_output(rows, format)?;
         }
         AuditCommands::Export { output: path } => {

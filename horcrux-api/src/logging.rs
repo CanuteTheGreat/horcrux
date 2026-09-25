@@ -1,19 +1,18 @@
+use std::io;
+use tracing_appender::{non_blocking, rolling};
 ///! Logging configuration module
 ///! Provides structured logging configuration with multiple outputs
-
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-use tracing_appender::{non_blocking, rolling};
-use std::io;
 
 /// Logging configuration
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct LoggingConfig {
-    pub level: String,          // log level (trace, debug, info, warn, error)
-    pub file_path: Option<String>,  // log file path
-    pub rotation: LogRotation,  // log rotation policy
-    pub json_format: bool,      // use JSON formatting
-    pub include_targets: Vec<String>,  // specific targets to include
+    pub level: String,                // log level (trace, debug, info, warn, error)
+    pub file_path: Option<String>,    // log file path
+    pub rotation: LogRotation,        // log rotation policy
+    pub json_format: bool,            // use JSON formatting
+    pub include_targets: Vec<String>, // specific targets to include
 }
 
 /// Log rotation policy
@@ -42,8 +41,8 @@ impl LoggingConfig {
     #[allow(dead_code)]
     pub fn init(&self) -> Result<(), Box<dyn std::error::Error>> {
         // Create environment filter
-        let env_filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(&self.level));
+        let env_filter =
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&self.level));
 
         // Console layer with colors
         let console_layer = fmt::layer()
@@ -107,7 +106,8 @@ impl LoggingConfig {
             level,
             file_path,
             ..Default::default()
-        }.init()
+        }
+        .init()
     }
 }
 
@@ -151,19 +151,10 @@ macro_rules! log_vm_operation {
 #[macro_export]
 macro_rules! log_api_request {
     ($method:expr, $path:expr) => {
-        tracing::debug!(
-            method = $method,
-            path = $path,
-            "API request"
-        )
+        tracing::debug!(method = $method, path = $path, "API request")
     };
     ($method:expr, $path:expr, $user:expr) => {
-        tracing::debug!(
-            method = $method,
-            path = $path,
-            user = $user,
-            "API request"
-        )
+        tracing::debug!(method = $method, path = $path, user = $user, "API request")
     };
 }
 
@@ -171,11 +162,7 @@ macro_rules! log_api_request {
 #[macro_export]
 macro_rules! log_db_operation {
     ($op:expr, $table:expr) => {
-        tracing::debug!(
-            operation = $op,
-            table = $table,
-            "Database operation"
-        )
+        tracing::debug!(operation = $op, table = $table, "Database operation")
     };
     ($op:expr, $table:expr, $id:expr) => {
         tracing::debug!(

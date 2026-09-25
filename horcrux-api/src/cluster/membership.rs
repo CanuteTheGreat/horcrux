@@ -6,15 +6,15 @@
 //! - Graceful node departure
 //! - Node eviction for unresponsive nodes
 
+use chrono::{DateTime, Utc};
+use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{RwLock, broadcast};
-use tracing::{info, warn, error, debug};
-use horcrux_common::Result;
-use chrono::{DateTime, Utc};
+use tokio::sync::{broadcast, RwLock};
+use tracing::{debug, error, info, warn};
 
-use super::node::{Node, NodeStatus, Architecture};
+use super::node::{Architecture, Node, NodeStatus};
 
 /// Join request from a node wanting to join the cluster
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,11 +158,15 @@ impl MembershipManager {
     }
 
     /// Initialize as first node (create cluster)
-    pub async fn initialize_cluster(&self, cluster_name: String, local_node: &Node) -> Result<String> {
+    pub async fn initialize_cluster(
+        &self,
+        cluster_name: String,
+        local_node: &Node,
+    ) -> Result<String> {
         let mut name = self.cluster_name.write().await;
         if name.is_some() {
             return Err(horcrux_common::Error::System(
-                "Already part of a cluster".to_string()
+                "Already part of a cluster".to_string(),
             ));
         }
 
@@ -417,9 +421,8 @@ impl MembershipManager {
     /// Initiate graceful leave (for local node)
     pub async fn leave_cluster(&self) -> Result<()> {
         let local_id = self.local_node_id.read().await;
-        let node_id = local_id.ok_or_else(|| {
-            horcrux_common::Error::System("Not part of a cluster".to_string())
-        })?;
+        let node_id = local_id
+            .ok_or_else(|| horcrux_common::Error::System("Not part of a cluster".to_string()))?;
         drop(local_id);
 
         info!(node_id = node_id, "Initiating graceful cluster leave");
@@ -444,7 +447,7 @@ impl MembershipManager {
 
         if *local_id != *master_id {
             return Err(horcrux_common::Error::System(
-                "Only master can evict nodes".to_string()
+                "Only master can evict nodes".to_string(),
             ));
         }
         drop(local_id);
@@ -454,23 +457,28 @@ impl MembershipManager {
         let local = self.local_node_id.read().await;
         if *local == Some(node_id) {
             return Err(horcrux_common::Error::System(
-                "Cannot evict self from cluster".to_string()
+                "Cannot evict self from cluster".to_string(),
             ));
         }
         drop(local);
 
-        warn!(node_id = node_id, reason = reason, "Evicting node from cluster");
+        warn!(
+            node_id = node_id,
+            reason = reason,
+            "Evicting node from cluster"
+        );
 
-        self.handle_leave(node_id, LeaveReason::Evicted(reason.to_string())).await
+        self.handle_leave(node_id, LeaveReason::Evicted(reason.to_string()))
+            .await
     }
 
     /// Update node status
     pub async fn update_node_status(&self, node_id: u32, status: NodeStatus) -> Result<()> {
         let mut members = self.members.write().await;
 
-        let member = members.get_mut(&node_id).ok_or_else(|| {
-            horcrux_common::Error::System(format!("Node {} not found", node_id))
-        })?;
+        let member = members
+            .get_mut(&node_id)
+            .ok_or_else(|| horcrux_common::Error::System(format!("Node {} not found", node_id)))?;
 
         let old_status = member.status.clone();
         if old_status == status {
@@ -505,7 +513,8 @@ impl MembershipManager {
         let members = self.members.read().await;
 
         // Simple election: pick the online node with lowest ID
-        let new_master = members.values()
+        let new_master = members
+            .values()
             .filter(|m| m.status == NodeStatus::Online)
             .min_by_key(|m| m.node_id);
 
@@ -514,7 +523,7 @@ impl MembershipManager {
             None => {
                 error!("No online nodes available for master election");
                 return Err(horcrux_common::Error::System(
-                    "No online nodes available for master election".to_string()
+                    "No online nodes available for master election".to_string(),
                 ));
             }
         };
@@ -599,7 +608,8 @@ impl MembershipManager {
         let mut pending = self.pending_joins.write().await;
         let now = Utc::now();
 
-        let expired: Vec<_> = pending.iter()
+        let expired: Vec<_> = pending
+            .iter()
             .filter(|(_, p)| p.expires_at < now)
             .map(|(id, _)| id.clone())
             .collect();
@@ -620,7 +630,8 @@ impl MembershipManager {
             .as_nanos();
 
         // Simple token generation (in production, use cryptographic random)
-        format!("hx-{:x}-{:x}",
+        format!(
+            "hx-{:x}-{:x}",
             timestamp,
             std::process::id() as u128 ^ timestamp
         )
@@ -652,10 +663,16 @@ mod tests {
         let manager = MembershipManager::new();
 
         let node = Node::new_local(1, "node1".to_string(), "192.168.1.1".to_string());
-        let token = manager.initialize_cluster("test-cluster".to_string(), &node).await.unwrap();
+        let token = manager
+            .initialize_cluster("test-cluster".to_string(), &node)
+            .await
+            .unwrap();
 
         assert!(!token.is_empty());
-        assert_eq!(manager.get_cluster_name().await, Some("test-cluster".to_string()));
+        assert_eq!(
+            manager.get_cluster_name().await,
+            Some("test-cluster".to_string())
+        );
         assert!(manager.is_master().await);
 
         let members = manager.get_members().await;
@@ -669,7 +686,10 @@ mod tests {
 
         // Initialize cluster first
         let node = Node::new_local(1, "node1".to_string(), "192.168.1.1".to_string());
-        let token = manager.initialize_cluster("test-cluster".to_string(), &node).await.unwrap();
+        let token = manager
+            .initialize_cluster("test-cluster".to_string(), &node)
+            .await
+            .unwrap();
 
         // Create join request
         let request = JoinRequest {
@@ -688,7 +708,9 @@ mod tests {
         let response = manager.handle_join_request(request).await;
 
         match response {
-            JoinResponse::Accepted { node_id, members, .. } => {
+            JoinResponse::Accepted {
+                node_id, members, ..
+            } => {
                 assert_eq!(node_id, 2);
                 assert_eq!(members.len(), 2);
             }
@@ -701,7 +723,10 @@ mod tests {
         let manager = MembershipManager::new();
 
         let node = Node::new_local(1, "node1".to_string(), "192.168.1.1".to_string());
-        manager.initialize_cluster("test-cluster".to_string(), &node).await.unwrap();
+        manager
+            .initialize_cluster("test-cluster".to_string(), &node)
+            .await
+            .unwrap();
 
         let request = JoinRequest {
             node_name: "node2".to_string(),
@@ -731,7 +756,10 @@ mod tests {
         let manager = MembershipManager::new();
 
         let node = Node::new_local(1, "node1".to_string(), "192.168.1.1".to_string());
-        manager.initialize_cluster("test-cluster".to_string(), &node).await.unwrap();
+        manager
+            .initialize_cluster("test-cluster".to_string(), &node)
+            .await
+            .unwrap();
 
         manager.leave_cluster().await.unwrap();
 

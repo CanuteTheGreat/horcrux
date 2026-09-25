@@ -14,10 +14,7 @@ pub fn NasDashboard() -> impl IntoView {
     create_effect(move |_| {
         spawn_local(async move {
             set_loading.set(true);
-            match reqwasm::http::Request::get("/api/nas/health")
-                .send()
-                .await
-            {
+            match reqwasm::http::Request::get("/api/nas/health").send().await {
                 Ok(resp) => {
                     if resp.ok() {
                         if let Ok(data) = resp.json::<serde_json::Value>().await {

@@ -1,7 +1,6 @@
 ///! CNI (Container Network Interface) implementation
 ///! Provides Kubernetes-style networking for containers
 ///! Implements CNI spec version 1.0.0
-
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -30,8 +29,8 @@ pub enum CniPluginType {
     Ipvlan,
     Vlan,
     Vxlan,
-    Ptp,      // Point-to-point
-    Host,     // Host networking
+    Ptp,  // Point-to-point
+    Host, // Host networking
     Loopback,
 }
 
@@ -134,10 +133,14 @@ impl CniManager {
             ]
         });
 
-        tokio::fs::write(&conf_file, serde_json::to_string_pretty(&conf_list)
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to serialize CNI config: {}", e)))?)
-            .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to write CNI config: {}", e)))?;
+        tokio::fs::write(
+            &conf_file,
+            serde_json::to_string_pretty(&conf_list).map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to serialize CNI config: {}", e))
+            })?,
+        )
+        .await
+        .map_err(|e| horcrux_common::Error::System(format!("Failed to write CNI config: {}", e)))?;
 
         self.networks.insert(config.name.clone(), config);
         tracing::info!("Created CNI network: {}", conf_file.display());
@@ -153,8 +156,9 @@ impl CniManager {
         interface_name: &str,
         netns_path: &str,
     ) -> Result<CniResult> {
-        let network = self.networks.get(network_name)
-            .ok_or_else(|| horcrux_common::Error::System(format!("Network {} not found", network_name)))?;
+        let network = self.networks.get(network_name).ok_or_else(|| {
+            horcrux_common::Error::System(format!("Network {} not found", network_name))
+        })?;
 
         // Prepare CNI environment variables
         let env_vars = vec![
@@ -166,9 +170,12 @@ impl CniManager {
         ];
 
         // Call CNI plugin
-        let plugin_path = self.cni_bin_dir.join(format!("{:?}", network.plugin_type).to_lowercase());
-        let config_json = serde_json::to_string(&network)
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to serialize CNI config: {}", e)))?;
+        let plugin_path = self
+            .cni_bin_dir
+            .join(format!("{:?}", network.plugin_type).to_lowercase());
+        let config_json = serde_json::to_string(&network).map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to serialize CNI config: {}", e))
+        })?;
 
         let mut cmd = Command::new(&plugin_path);
         for (key, value) in env_vars {
@@ -180,7 +187,9 @@ impl CniManager {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to spawn CNI plugin: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to spawn CNI plugin: {}", e))
+            })?;
 
         // Write config to stdin and close it
         if let Some(mut stdin) = child.stdin.take() {
@@ -193,21 +202,31 @@ impl CniManager {
 
         if !result.status.success() {
             let stderr = String::from_utf8_lossy(&result.stderr);
-            return Err(horcrux_common::Error::System(format!("CNI plugin failed: {}", stderr)));
+            return Err(horcrux_common::Error::System(format!(
+                "CNI plugin failed: {}",
+                stderr
+            )));
         }
 
         // Parse CNI result
         let stdout = String::from_utf8_lossy(&result.stdout);
-        let cni_result: CniResult = serde_json::from_str(&stdout)
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to parse CNI result: {}", e)))?;
+        let cni_result: CniResult = serde_json::from_str(&stdout).map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to parse CNI result: {}", e))
+        })?;
 
         // Store attachment
-        let ip_address = cni_result.ips.first()
+        let ip_address = cni_result
+            .ips
+            .first()
             .and_then(|ip| ip.address.split('/').next())
             .and_then(|ip_str| ip_str.parse().ok())
-            .ok_or_else(|| horcrux_common::Error::System("No IP address in CNI result".to_string()))?;
+            .ok_or_else(|| {
+                horcrux_common::Error::System("No IP address in CNI result".to_string())
+            })?;
 
-        let mac_address = cni_result.interfaces.first()
+        let mac_address = cni_result
+            .interfaces
+            .first()
             .map(|iface| iface.mac.clone())
             .unwrap_or_else(|| "00:00:00:00:00:00".to_string());
 
@@ -243,8 +262,9 @@ impl CniManager {
         interface_name: &str,
         netns_path: &str,
     ) -> Result<()> {
-        let network = self.networks.get(network_name)
-            .ok_or_else(|| horcrux_common::Error::System(format!("Network {} not found", network_name)))?;
+        let network = self.networks.get(network_name).ok_or_else(|| {
+            horcrux_common::Error::System(format!("Network {} not found", network_name))
+        })?;
 
         // Prepare CNI environment variables
         let env_vars = vec![
@@ -256,9 +276,12 @@ impl CniManager {
         ];
 
         // Call CNI plugin
-        let plugin_path = self.cni_bin_dir.join(format!("{:?}", network.plugin_type).to_lowercase());
-        let config_json = serde_json::to_string(&network)
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to serialize CNI config: {}", e)))?;
+        let plugin_path = self
+            .cni_bin_dir
+            .join(format!("{:?}", network.plugin_type).to_lowercase());
+        let config_json = serde_json::to_string(&network).map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to serialize CNI config: {}", e))
+        })?;
 
         let mut cmd = Command::new(&plugin_path);
         for (key, value) in env_vars {
@@ -270,7 +293,9 @@ impl CniManager {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to spawn CNI plugin: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to spawn CNI plugin: {}", e))
+            })?;
 
         // Write config to stdin and close it
         if let Some(mut stdin) = child.stdin.take() {
@@ -292,7 +317,11 @@ impl CniManager {
             attachments.retain(|a| a.network_name != network_name);
         }
 
-        tracing::info!("Detached container {} from network {}", container_id, network_name);
+        tracing::info!(
+            "Detached container {} from network {}",
+            container_id,
+            network_name
+        );
 
         Ok(())
     }
@@ -305,8 +334,9 @@ impl CniManager {
         interface_name: &str,
         netns_path: &str,
     ) -> Result<()> {
-        let network = self.networks.get(network_name)
-            .ok_or_else(|| horcrux_common::Error::System(format!("Network {} not found", network_name)))?;
+        let network = self.networks.get(network_name).ok_or_else(|| {
+            horcrux_common::Error::System(format!("Network {} not found", network_name))
+        })?;
 
         let env_vars = vec![
             ("CNI_COMMAND", "CHECK"),
@@ -316,9 +346,12 @@ impl CniManager {
             ("CNI_PATH", self.cni_bin_dir.to_str().unwrap()),
         ];
 
-        let plugin_path = self.cni_bin_dir.join(format!("{:?}", network.plugin_type).to_lowercase());
-        let config_json = serde_json::to_string(&network)
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to serialize CNI config: {}", e)))?;
+        let plugin_path = self
+            .cni_bin_dir
+            .join(format!("{:?}", network.plugin_type).to_lowercase());
+        let config_json = serde_json::to_string(&network).map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to serialize CNI config: {}", e))
+        })?;
 
         let mut cmd = Command::new(&plugin_path);
         for (key, value) in env_vars {
@@ -330,7 +363,9 @@ impl CniManager {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to spawn CNI plugin: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to spawn CNI plugin: {}", e))
+            })?;
 
         // Write config to stdin and close it
         if let Some(mut stdin) = child.stdin.take() {
@@ -343,7 +378,10 @@ impl CniManager {
 
         if !result.status.success() {
             let stderr = String::from_utf8_lossy(&result.stderr);
-            return Err(horcrux_common::Error::System(format!("CNI CHECK failed: {}", stderr)));
+            return Err(horcrux_common::Error::System(format!(
+                "CNI CHECK failed: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -383,7 +421,9 @@ impl CniManager {
 
     /// Get CNI plugin capabilities
     pub async fn get_capabilities(&self, plugin_type: &CniPluginType) -> Result<Vec<String>> {
-        let plugin_path = self.cni_bin_dir.join(format!("{:?}", plugin_type).to_lowercase());
+        let plugin_path = self
+            .cni_bin_dir
+            .join(format!("{:?}", plugin_type).to_lowercase());
 
         if !plugin_path.exists() {
             return Err(horcrux_common::Error::System(format!(
@@ -414,12 +454,10 @@ impl CniManager {
                 range_start: Some("10.88.0.10".parse().unwrap()),
                 range_end: Some("10.88.255.254".parse().unwrap()),
                 gateway: Some("10.88.0.1".parse().unwrap()),
-                routes: vec![
-                    RouteConfig {
-                        dst: "0.0.0.0/0".to_string(),
-                        gw: None,
-                    }
-                ],
+                routes: vec![RouteConfig {
+                    dst: "0.0.0.0/0".to_string(),
+                    gw: None,
+                }],
             },
             dns: Some(DnsConfig {
                 nameservers: vec!["8.8.8.8".parse().unwrap(), "8.8.4.4".parse().unwrap()],

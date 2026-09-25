@@ -17,13 +17,13 @@ use tracing::{error, info, warn};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OidcConfig {
     pub enabled: bool,
-    pub issuer_url: String,            // e.g., "https://keycloak.example.com/auth/realms/horcrux"
+    pub issuer_url: String, // e.g., "https://keycloak.example.com/auth/realms/horcrux"
     pub client_id: String,
     pub client_secret: String,
-    pub redirect_uri: String,          // e.g., "https://horcrux.example.com/api/auth/oidc/callback"
-    pub scopes: Vec<String>,           // e.g., ["openid", "profile", "email"]
-    pub auto_create_users: bool,       // Automatically create users on first login
-    pub role_claim: Option<String>,    // Claim name for role mapping (e.g., "roles")
+    pub redirect_uri: String, // e.g., "https://horcrux.example.com/api/auth/oidc/callback"
+    pub scopes: Vec<String>,  // e.g., ["openid", "profile", "email"]
+    pub auto_create_users: bool, // Automatically create users on first login
+    pub role_claim: Option<String>, // Claim name for role mapping (e.g., "roles")
     pub role_mapping: HashMap<String, String>, // Map OIDC roles to Horcrux roles
 }
 
@@ -35,7 +35,11 @@ impl Default for OidcConfig {
             client_id: String::new(),
             client_secret: String::new(),
             redirect_uri: String::new(),
-            scopes: vec!["openid".to_string(), "profile".to_string(), "email".to_string()],
+            scopes: vec![
+                "openid".to_string(),
+                "profile".to_string(),
+                "email".to_string(),
+            ],
             auto_create_users: true,
             role_claim: Some("roles".to_string()),
             role_mapping: HashMap::new(),
@@ -66,16 +70,16 @@ pub struct Jwks {
 /// JSON Web Key
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Jwk {
-    pub kty: String,           // Key type (RSA, EC, etc.)
-    pub kid: Option<String>,   // Key ID
-    pub alg: Option<String>,   // Algorithm
+    pub kty: String,         // Key type (RSA, EC, etc.)
+    pub kid: Option<String>, // Key ID
+    pub alg: Option<String>, // Algorithm
     #[serde(rename = "use")]
-    pub use_: Option<String>,  // Public key use (sig, enc)
-    pub n: Option<String>,     // RSA modulus
-    pub e: Option<String>,     // RSA exponent
-    pub x: Option<String>,     // EC x coordinate
-    pub y: Option<String>,     // EC y coordinate
-    pub crv: Option<String>,   // EC curve
+    pub use_: Option<String>, // Public key use (sig, enc)
+    pub n: Option<String>,   // RSA modulus
+    pub e: Option<String>,   // RSA exponent
+    pub x: Option<String>,   // EC x coordinate
+    pub y: Option<String>,   // EC y coordinate
+    pub crv: Option<String>, // EC curve
 }
 
 /// Cached JWKS with timestamp
@@ -99,7 +103,7 @@ pub struct TokenResponse {
 /// OIDC user info
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserInfo {
-    pub sub: String,                           // Subject (unique user ID)
+    pub sub: String, // Subject (unique user ID)
     pub name: Option<String>,
     pub given_name: Option<String>,
     pub family_name: Option<String>,
@@ -113,11 +117,11 @@ pub struct UserInfo {
 /// ID token claims (JWT)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdTokenClaims {
-    pub iss: String,      // Issuer
-    pub sub: String,      // Subject
-    pub aud: String,      // Audience (client_id)
-    pub exp: u64,         // Expiration time
-    pub iat: u64,         // Issued at
+    pub iss: String, // Issuer
+    pub sub: String, // Subject
+    pub aud: String, // Audience (client_id)
+    pub exp: u64,    // Expiration time
+    pub iat: u64,    // Issued at
     pub nonce: Option<String>,
     pub email: Option<String>,
     pub name: Option<String>,
@@ -169,11 +173,9 @@ impl OidcProvider {
 
         info!("Loading OIDC discovery from {}", discovery_url);
 
-        let response = self.client
-            .get(&discovery_url)
-            .send()
-            .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to fetch OIDC discovery: {}", e)))?;
+        let response = self.client.get(&discovery_url).send().await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to fetch OIDC discovery: {}", e))
+        })?;
 
         if !response.status().is_success() {
             return Err(horcrux_common::Error::System(format!(
@@ -182,10 +184,9 @@ impl OidcProvider {
             )));
         }
 
-        let discovery: OidcDiscovery = response
-            .json()
-            .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to parse OIDC discovery: {}", e)))?;
+        let discovery: OidcDiscovery = response.json().await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to parse OIDC discovery: {}", e))
+        })?;
 
         let mut disc = self.discovery.write().await;
         *disc = Some(discovery.clone());
@@ -200,7 +201,9 @@ impl OidcProvider {
         let config = self.config.read().await;
 
         if !config.enabled {
-            return Err(horcrux_common::Error::InvalidConfig("OIDC is not enabled".to_string()));
+            return Err(horcrux_common::Error::InvalidConfig(
+                "OIDC is not enabled".to_string(),
+            ));
         }
 
         // Ensure discovery is loaded
@@ -234,7 +237,9 @@ impl OidcProvider {
         let config = self.config.read().await;
 
         if !config.enabled {
-            return Err(horcrux_common::Error::InvalidConfig("OIDC is not enabled".to_string()));
+            return Err(horcrux_common::Error::InvalidConfig(
+                "OIDC is not enabled".to_string(),
+            ));
         }
 
         // Ensure discovery is loaded
@@ -258,7 +263,8 @@ impl OidcProvider {
 
         info!("Exchanging authorization code for tokens");
 
-        let response = self.client
+        let response = self
+            .client
             .post(&discovery.token_endpoint)
             .form(&params)
             .send()
@@ -274,10 +280,9 @@ impl OidcProvider {
             )));
         }
 
-        let token_response: TokenResponse = response
-            .json()
-            .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to parse token response: {}", e)))?;
+        let token_response: TokenResponse = response.json().await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to parse token response: {}", e))
+        })?;
 
         Ok(token_response)
     }
@@ -287,7 +292,9 @@ impl OidcProvider {
         let config = self.config.read().await;
 
         if !config.enabled {
-            return Err(horcrux_common::Error::InvalidConfig("OIDC is not enabled".to_string()));
+            return Err(horcrux_common::Error::InvalidConfig(
+                "OIDC is not enabled".to_string(),
+            ));
         }
 
         // Ensure discovery is loaded
@@ -303,12 +310,15 @@ impl OidcProvider {
 
         info!("Fetching user info from {}", discovery.userinfo_endpoint);
 
-        let response = self.client
+        let response = self
+            .client
             .get(&discovery.userinfo_endpoint)
             .bearer_auth(access_token)
             .send()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("User info request failed: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("User info request failed: {}", e))
+            })?;
 
         if !response.status().is_success() {
             return Err(horcrux_common::Error::System(format!(
@@ -317,10 +327,9 @@ impl OidcProvider {
             )));
         }
 
-        let user_info: UserInfo = response
-            .json()
-            .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to parse user info: {}", e)))?;
+        let user_info: UserInfo = response.json().await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to parse user info: {}", e))
+        })?;
 
         Ok(user_info)
     }
@@ -340,7 +349,8 @@ impl OidcProvider {
 
         info!("Fetching JWKS from {}", discovery.jwks_uri);
 
-        let response = self.client
+        let response = self
+            .client
             .get(&discovery.jwks_uri)
             .send()
             .await
@@ -358,7 +368,10 @@ impl OidcProvider {
             .await
             .map_err(|e| horcrux_common::Error::System(format!("Failed to parse JWKS: {}", e)))?;
 
-        info!("JWKS fetched successfully, {} keys available", jwks.keys.len());
+        info!(
+            "JWKS fetched successfully, {} keys available",
+            jwks.keys.len()
+        );
 
         Ok(jwks)
     }
@@ -395,9 +408,9 @@ impl OidcProvider {
 
     /// Find a JWK by key ID (kid)
     fn find_jwk<'a>(&self, jwks: &'a Jwks, kid: &str) -> Option<&'a Jwk> {
-        jwks.keys.iter().find(|key| {
-            key.kid.as_ref().map(|k| k == kid).unwrap_or(false)
-        })
+        jwks.keys
+            .iter()
+            .find(|key| key.kid.as_ref().map(|k| k == kid).unwrap_or(false))
     }
 
     /// Convert JWK to DecodingKey
@@ -405,47 +418,58 @@ impl OidcProvider {
         match jwk.kty.as_str() {
             "RSA" => {
                 // RSA key
-                let n = jwk.n.as_ref()
-                    .ok_or_else(|| horcrux_common::Error::System("Missing RSA modulus (n)".to_string()))?;
-                let e = jwk.e.as_ref()
-                    .ok_or_else(|| horcrux_common::Error::System("Missing RSA exponent (e)".to_string()))?;
+                let n = jwk.n.as_ref().ok_or_else(|| {
+                    horcrux_common::Error::System("Missing RSA modulus (n)".to_string())
+                })?;
+                let e = jwk.e.as_ref().ok_or_else(|| {
+                    horcrux_common::Error::System("Missing RSA exponent (e)".to_string())
+                })?;
 
                 // Decode base64url encoded modulus and exponent
                 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
                 use base64::Engine;
 
-                let _n_bytes = URL_SAFE_NO_PAD.decode(n)
-                    .map_err(|e| horcrux_common::Error::System(format!("Failed to decode RSA modulus: {}", e)))?;
-                let _e_bytes = URL_SAFE_NO_PAD.decode(e)
-                    .map_err(|e| horcrux_common::Error::System(format!("Failed to decode RSA exponent: {}", e)))?;
+                let _n_bytes = URL_SAFE_NO_PAD.decode(n).map_err(|e| {
+                    horcrux_common::Error::System(format!("Failed to decode RSA modulus: {}", e))
+                })?;
+                let _e_bytes = URL_SAFE_NO_PAD.decode(e).map_err(|e| {
+                    horcrux_common::Error::System(format!("Failed to decode RSA exponent: {}", e))
+                })?;
 
-                DecodingKey::from_rsa_components(n, e)
-                    .map_err(|e| horcrux_common::Error::System(format!("Failed to create RSA key: {}", e)))
+                DecodingKey::from_rsa_components(n, e).map_err(|e| {
+                    horcrux_common::Error::System(format!("Failed to create RSA key: {}", e))
+                })
             }
             "EC" => {
                 // Elliptic Curve key
-                let x = jwk.x.as_ref()
-                    .ok_or_else(|| horcrux_common::Error::System("Missing EC x coordinate".to_string()))?;
-                let y = jwk.y.as_ref()
-                    .ok_or_else(|| horcrux_common::Error::System("Missing EC y coordinate".to_string()))?;
+                let x = jwk.x.as_ref().ok_or_else(|| {
+                    horcrux_common::Error::System("Missing EC x coordinate".to_string())
+                })?;
+                let y = jwk.y.as_ref().ok_or_else(|| {
+                    horcrux_common::Error::System("Missing EC y coordinate".to_string())
+                })?;
 
-                DecodingKey::from_ec_components(x, y)
-                    .map_err(|e| horcrux_common::Error::System(format!("Failed to create EC key: {}", e)))
+                DecodingKey::from_ec_components(x, y).map_err(|e| {
+                    horcrux_common::Error::System(format!("Failed to create EC key: {}", e))
+                })
             }
-            kty => {
-                Err(horcrux_common::Error::System(format!("Unsupported key type: {}", kty)))
-            }
+            kty => Err(horcrux_common::Error::System(format!(
+                "Unsupported key type: {}",
+                kty
+            ))),
         }
     }
 
     /// Verify and decode ID token with full signature validation
     pub async fn verify_id_token(&self, id_token: &str) -> Result<IdTokenClaims> {
         // Step 1: Decode JWT header to get kid (key ID)
-        let header = decode_header(id_token)
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to decode JWT header: {}", e)))?;
+        let header = decode_header(id_token).map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to decode JWT header: {}", e))
+        })?;
 
-        let kid = header.kid
-            .ok_or_else(|| horcrux_common::Error::System("JWT header missing kid (key ID)".to_string()))?;
+        let kid = header.kid.ok_or_else(|| {
+            horcrux_common::Error::System("JWT header missing kid (key ID)".to_string())
+        })?;
 
         info!("Verifying ID token with kid: {}", kid);
 
@@ -453,8 +477,9 @@ impl OidcProvider {
         let jwks = self.get_jwks().await?;
 
         // Step 3: Find matching public key
-        let jwk = self.find_jwk(&jwks, &kid)
-            .ok_or_else(|| horcrux_common::Error::System(format!("No matching key found for kid: {}", kid)))?;
+        let jwk = self.find_jwk(&jwks, &kid).ok_or_else(|| {
+            horcrux_common::Error::System(format!("No matching key found for kid: {}", kid))
+        })?;
 
         // Step 4: Convert JWK to DecodingKey
         let decoding_key = self.jwk_to_decoding_key(jwk)?;
@@ -487,26 +512,36 @@ impl OidcProvider {
         validation.validate_nbf = true; // Validate "not before" claim
 
         // Step 7: Verify signature and decode claims
-        let token_data = decode::<IdTokenClaims>(id_token, &decoding_key, &validation)
-            .map_err(|e| horcrux_common::Error::System(format!("JWT verification failed: {}", e)))?;
+        let token_data =
+            decode::<IdTokenClaims>(id_token, &decoding_key, &validation).map_err(|e| {
+                horcrux_common::Error::System(format!("JWT verification failed: {}", e))
+            })?;
 
-        info!("ID token verified successfully for subject: {}", token_data.claims.sub);
+        info!(
+            "ID token verified successfully for subject: {}",
+            token_data.claims.sub
+        );
 
         Ok(token_data.claims)
     }
 
     /// Verify ID token with nonce validation
-    pub async fn verify_id_token_with_nonce(&self, id_token: &str, expected_nonce: &str) -> Result<IdTokenClaims> {
+    pub async fn verify_id_token_with_nonce(
+        &self,
+        id_token: &str,
+        expected_nonce: &str,
+    ) -> Result<IdTokenClaims> {
         let claims = self.verify_id_token(id_token).await?;
 
         // Verify nonce matches
         match &claims.nonce {
             Some(nonce) if nonce == expected_nonce => Ok(claims),
-            Some(nonce) => Err(horcrux_common::Error::System(
-                format!("Nonce mismatch: expected '{}', got '{}'", expected_nonce, nonce)
-            )),
+            Some(nonce) => Err(horcrux_common::Error::System(format!(
+                "Nonce mismatch: expected '{}', got '{}'",
+                expected_nonce, nonce
+            ))),
             None => Err(horcrux_common::Error::System(
-                "ID token missing nonce claim".to_string()
+                "ID token missing nonce claim".to_string(),
             )),
         }
     }
@@ -516,7 +551,9 @@ impl OidcProvider {
         let config = self.config.read().await;
 
         if !config.enabled {
-            return Err(horcrux_common::Error::InvalidConfig("OIDC is not enabled".to_string()));
+            return Err(horcrux_common::Error::InvalidConfig(
+                "OIDC is not enabled".to_string(),
+            ));
         }
 
         // Ensure discovery is loaded
@@ -539,7 +576,8 @@ impl OidcProvider {
 
         info!("Refreshing access token");
 
-        let response = self.client
+        let response = self
+            .client
             .post(&discovery.token_endpoint)
             .form(&params)
             .send()
@@ -553,10 +591,9 @@ impl OidcProvider {
             )));
         }
 
-        let token_response: TokenResponse = response
-            .json()
-            .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to parse token response: {}", e)))?;
+        let token_response: TokenResponse = response.json().await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to parse token response: {}", e))
+        })?;
 
         Ok(token_response)
     }
@@ -566,7 +603,9 @@ impl OidcProvider {
         let config = self.config.read().await;
 
         if !config.enabled {
-            return Err(horcrux_common::Error::InvalidConfig("OIDC is not enabled".to_string()));
+            return Err(horcrux_common::Error::InvalidConfig(
+                "OIDC is not enabled".to_string(),
+            ));
         }
 
         // Ensure discovery is loaded
@@ -602,7 +641,9 @@ impl OidcProvider {
     pub async fn map_roles(&self, user_info: &UserInfo) -> Vec<String> {
         let config = self.config.read().await;
 
-        let role_claim_name = config.role_claim.as_ref()
+        let role_claim_name = config
+            .role_claim
+            .as_ref()
             .map(|s| s.as_str())
             .unwrap_or("roles");
 
@@ -683,15 +724,14 @@ mod tests {
     #[tokio::test]
     async fn test_map_roles() {
         let mut config = OidcConfig::default();
-        config.role_mapping.insert("admin".to_string(), "administrator".to_string());
+        config
+            .role_mapping
+            .insert("admin".to_string(), "administrator".to_string());
 
         let provider = OidcProvider::new(config);
 
         let mut additional_claims = HashMap::new();
-        additional_claims.insert(
-            "roles".to_string(),
-            serde_json::json!(["admin", "user"])
-        );
+        additional_claims.insert("roles".to_string(), serde_json::json!(["admin", "user"]));
 
         let user_info = UserInfo {
             sub: "user123".to_string(),

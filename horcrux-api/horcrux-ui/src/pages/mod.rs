@@ -1,55 +1,63 @@
-pub mod dashboard;
-mod vm_list;
-mod vm_create;
 mod alerts;
-mod login;
-mod container_list;
-mod snapshot_list;
-mod clone_list;
-mod replication_list;
-mod monitoring;
-mod gpu;
-mod kubernetes;
-pub mod storage;
-mod network;
-mod console;
+pub mod audit;
 pub mod auth;
 pub mod backup;
+mod clone_list;
+mod console;
+mod container_list;
+pub mod dashboard;
+mod gpu;
 pub mod ha;
-pub mod system;
-pub mod audit;
+mod kubernetes;
+mod login;
 pub mod metrics;
+mod monitoring;
 pub mod nas;
+mod network;
+mod replication_list;
+mod snapshot_list;
+pub mod storage;
+pub mod system;
+mod vm_create;
+mod vm_list;
 
-pub use dashboard::Dashboard;
-pub use vm_list::VmList;
-pub use vm_create::VmCreate;
 pub use alerts::Alerts;
-pub use login::Login;
-pub use container_list::ContainerList;
-pub use snapshot_list::SnapshotList;
 pub use clone_list::CloneList;
-pub use replication_list::ReplicationList;
-pub use monitoring::Monitoring;
+pub use container_list::ContainerList;
+pub use dashboard::Dashboard;
 pub use gpu::GpuManagement;
-pub use storage::StorageManagement;
+pub use login::Login;
+pub use monitoring::Monitoring;
 pub use network::NetworkManagement;
+pub use replication_list::ReplicationList;
+pub use snapshot_list::SnapshotList;
+pub use storage::StorageManagement;
+pub use vm_create::VmCreate;
+pub use vm_list::VmList;
 // pub use console::ConsolePage;
 
 // Re-export auth components
-pub use auth::{UsersPage, RolesPage, SessionsPage, ApiKeysPage};
+pub use auth::{ApiKeysPage, RolesPage, SessionsPage, UsersPage};
 
 // Re-export kubernetes components
-pub use kubernetes::{KubernetesManagement, PodsPage, DeploymentsPage, ServicesPage, IngressesPage, ClusterDashboard, HelmRepositoriesPage, HelmChartsPage, HelmReleasesPage, ConfigMapsPage, SecretsPage};
+pub use kubernetes::{
+    ClusterDashboard, ConfigMapsPage, DeploymentsPage, HelmChartsPage, HelmReleasesPage,
+    HelmRepositoriesPage, IngressesPage, KubernetesManagement, PodsPage, SecretsPage, ServicesPage,
+};
 
 // Re-export backup components
-pub use backup::{BackupDashboard, BackupJobsPage, RetentionPoliciesPage, SnapshotManagerPage, TemplateManagerPage};
+pub use backup::{
+    BackupDashboard, BackupJobsPage, RetentionPoliciesPage, SnapshotManagerPage,
+    TemplateManagerPage,
+};
 
 // Re-export HA components
-pub use ha::{HaDashboard, ClusterManagementPage, HaGroupsPage, MigrationCenterPage};
+pub use ha::{ClusterManagementPage, HaDashboard, HaGroupsPage, MigrationCenterPage};
 
 // Re-export monitoring components
-pub use monitoring::{AlertCenterPage, DashboardsPage, MetricsExplorerPage, NotificationsPage, ObservabilityPage};
+pub use monitoring::{
+    AlertCenterPage, DashboardsPage, MetricsExplorerPage, NotificationsPage, ObservabilityPage,
+};
 
 // Re-export system components
 
@@ -63,4 +71,8 @@ pub use monitoring::{AlertCenterPage, DashboardsPage, MetricsExplorerPage, Notif
 
 // Re-export NAS components
 #[allow(unused_imports)]
-pub use nas::{NasDashboard, SharesPage as NasSharesPage, NasUsersPage, GroupsPage as NasGroupsPage, ServicesPage as NasServicesPage, PoolsPage, IscsiPage, S3Page, DirectoryPage, SchedulerPage as NasSchedulerPage};
+pub use nas::{
+    DirectoryPage, GroupsPage as NasGroupsPage, IscsiPage, NasDashboard, NasUsersPage, PoolsPage,
+    S3Page, SchedulerPage as NasSchedulerPage, ServicesPage as NasServicesPage,
+    SharesPage as NasSharesPage,
+};

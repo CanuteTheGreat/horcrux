@@ -1,5 +1,5 @@
 use crate::api::ApiClient;
-use crate::output::{OutputFormat, format_bytes, format_duration};
+use crate::output::{format_bytes, format_duration, OutputFormat};
 use crate::MonitorCommands;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -46,7 +46,11 @@ impl From<VmMetrics> for VmMetricsRow {
             name: m.vm_name,
             cpu_usage: format!("{:.1}%", m.cpu_usage),
             memory: format_bytes(m.memory_usage),
-            disk_rw: format!("{}/{}", format_bytes(m.disk_read), format_bytes(m.disk_write)),
+            disk_rw: format!(
+                "{}/{}",
+                format_bytes(m.disk_read),
+                format_bytes(m.disk_write)
+            ),
             net_io: format!("{}/{}", format_bytes(m.net_in), format_bytes(m.net_out)),
         }
     }
@@ -97,7 +101,10 @@ pub async fn handle_monitor_command(
                 println!("Node Metrics:");
                 println!("  CPU Usage:    {:.1}%", metrics.cpu_usage);
                 println!("  Memory Usage: {:.1}%", metrics.memory_usage);
-                println!("  Memory Total: {}", format_bytes(metrics.memory_total * 1024 * 1024 * 1024));
+                println!(
+                    "  Memory Total: {}",
+                    format_bytes(metrics.memory_total * 1024 * 1024 * 1024)
+                );
                 println!("  Disk Usage:   {:.1}%", metrics.disk_usage);
                 println!("  Uptime:       {}", format_duration(metrics.uptime));
             } else {
@@ -116,12 +123,16 @@ pub async fn handle_monitor_command(
         }
         MonitorCommands::Storage { name } => {
             let metrics: Vec<StorageMetrics> = if let Some(pool_name) = name {
-                vec![api.get(&format!("/api/monitoring/storage/{}", pool_name)).await?]
+                vec![
+                    api.get(&format!("/api/monitoring/storage/{}", pool_name))
+                        .await?,
+                ]
             } else {
                 api.get("/api/monitoring/storage").await?
             };
             let format = OutputFormat::from_str(output_format);
-            let rows: Vec<StorageMetricsRow> = metrics.into_iter().map(StorageMetricsRow::from).collect();
+            let rows: Vec<StorageMetricsRow> =
+                metrics.into_iter().map(StorageMetricsRow::from).collect();
             crate::output::print_output(rows, format)?;
         }
         MonitorCommands::Cluster => {
@@ -132,15 +143,18 @@ pub async fn handle_monitor_command(
                 println!("Cluster Metrics:");
                 println!("  CPU Usage:    {:.1}%", metrics.cpu_usage);
                 println!("  Memory Usage: {:.1}%", metrics.memory_usage);
-                println!("  Memory Total: {}", format_bytes(metrics.memory_total * 1024 * 1024 * 1024));
+                println!(
+                    "  Memory Total: {}",
+                    format_bytes(metrics.memory_total * 1024 * 1024 * 1024)
+                );
                 println!("  Disk Usage:   {:.1}%", metrics.disk_usage);
             } else {
                 crate::output::print_single(&metrics, format)?;
             }
         }
         MonitorCommands::Watch { interval } => {
-            use std::time::Duration;
             use std::io::Write;
+            use std::time::Duration;
 
             println!("Watching metrics (press Ctrl+C to stop)...\n");
 

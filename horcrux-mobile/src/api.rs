@@ -42,7 +42,11 @@ impl ApiClient {
             .map_err(|e| format!("Request failed: {}", e))?;
 
         if !response.ok() {
-            return Err(format!("HTTP {}: {}", response.status(), response.status_text()));
+            return Err(format!(
+                "HTTP {}: {}",
+                response.status(),
+                response.status_text()
+            ));
         }
 
         response
@@ -72,7 +76,11 @@ impl ApiClient {
             .map_err(|e| format!("Request failed: {}", e))?;
 
         if !response.ok() {
-            return Err(format!("HTTP {}: {}", response.status(), response.status_text()));
+            return Err(format!(
+                "HTTP {}: {}",
+                response.status(),
+                response.status_text()
+            ));
         }
 
         response

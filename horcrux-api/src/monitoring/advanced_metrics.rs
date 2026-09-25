@@ -37,21 +37,21 @@ pub struct PsiResource {
 /// ZFS ARC (Adaptive Replacement Cache) statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZfsArcStats {
-    pub size: u64,           // Current ARC size in bytes
-    pub target_size: u64,    // Target ARC size
-    pub min_size: u64,       // Minimum ARC size
-    pub max_size: u64,       // Maximum ARC size
-    pub hits: u64,           // Cache hits
-    pub misses: u64,         // Cache misses
-    pub hit_ratio: f64,      // Hit ratio percentage
-    pub mru_size: u64,       // MRU (Most Recently Used) size
-    pub mfu_size: u64,       // MFU (Most Frequently Used) size
-    pub metadata_size: u64,  // Metadata cache size
-    pub data_size: u64,      // Data cache size
-    pub evict_skip: u64,     // Eviction skips
-    pub l2_size: u64,        // L2ARC size
-    pub l2_hits: u64,        // L2ARC hits
-    pub l2_misses: u64,      // L2ARC misses
+    pub size: u64,          // Current ARC size in bytes
+    pub target_size: u64,   // Target ARC size
+    pub min_size: u64,      // Minimum ARC size
+    pub max_size: u64,      // Maximum ARC size
+    pub hits: u64,          // Cache hits
+    pub misses: u64,        // Cache misses
+    pub hit_ratio: f64,     // Hit ratio percentage
+    pub mru_size: u64,      // MRU (Most Recently Used) size
+    pub mfu_size: u64,      // MFU (Most Frequently Used) size
+    pub metadata_size: u64, // Metadata cache size
+    pub data_size: u64,     // Data cache size
+    pub evict_skip: u64,    // Eviction skips
+    pub l2_size: u64,       // L2ARC size
+    pub l2_hits: u64,       // L2ARC hits
+    pub l2_misses: u64,     // L2ARC misses
 }
 
 /// NUMA (Non-Uniform Memory Access) statistics
@@ -219,9 +219,7 @@ impl AdvancedMetrics {
         let mut nodes = Vec::new();
 
         // Check how many NUMA nodes exist
-        let node_dirs = fs::read_dir("/sys/devices/system/node")
-            .await
-            .ok()?;
+        let node_dirs = fs::read_dir("/sys/devices/system/node").await.ok()?;
 
         let mut node_entries = Vec::new();
         let mut dir_stream = node_dirs;
@@ -302,7 +300,8 @@ impl AdvancedMetrics {
                 // Range: "0-3"
                 let range: Vec<&str> = part.split('-').collect();
                 if range.len() == 2 {
-                    if let (Ok(start), Ok(end)) = (range[0].parse::<u32>(), range[1].parse::<u32>()) {
+                    if let (Ok(start), Ok(end)) = (range[0].parse::<u32>(), range[1].parse::<u32>())
+                    {
                         for cpu in start..=end {
                             cpus.push(cpu);
                         }

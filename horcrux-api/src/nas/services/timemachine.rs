@@ -2,11 +2,11 @@
 //!
 //! Provides macOS Time Machine backup target functionality via AFP or SMB.
 
-use horcrux_common::{Error, Result};
 use crate::nas::shares::NasShare;
+use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
 use std::path::Path;
+use tokio::process::Command;
 
 /// Time Machine target configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,15 +88,17 @@ pub async fn configure_timemachine(share: &mut NasShare, quota_gb: u64) -> Resul
         if !smb_config.vfs_objects.contains(&"fruit".to_string()) {
             smb_config.vfs_objects.push("fruit".to_string());
         }
-        if !smb_config.vfs_objects.contains(&"streams_xattr".to_string()) {
+        if !smb_config
+            .vfs_objects
+            .contains(&"streams_xattr".to_string())
+        {
             smb_config.vfs_objects.push("streams_xattr".to_string());
         }
 
         // Add Time Machine parameters
-        smb_config.extra_parameters.insert(
-            "fruit:time machine".to_string(),
-            "yes".to_string(),
-        );
+        smb_config
+            .extra_parameters
+            .insert("fruit:time machine".to_string(), "yes".to_string());
 
         if quota_gb > 0 {
             // Convert GB to bytes
@@ -266,15 +268,20 @@ impl TimeMachineManager {
     }
 
     /// Get backup info for a specific machine
-    pub async fn get_backup_info(&self, target_path: &str, machine_id: &str) -> Result<TimeMachineStatus> {
-        let bundle_path = Path::new(target_path)
-            .join(format!("{}.sparsebundle", machine_id));
+    pub async fn get_backup_info(
+        &self,
+        target_path: &str,
+        machine_id: &str,
+    ) -> Result<TimeMachineStatus> {
+        let bundle_path = Path::new(target_path).join(format!("{}.sparsebundle", machine_id));
 
         if !bundle_path.exists() {
-            let bundle_path = Path::new(target_path)
-                .join(format!("{}.backupbundle", machine_id));
+            let bundle_path = Path::new(target_path).join(format!("{}.backupbundle", machine_id));
             if !bundle_path.exists() {
-                return Err(Error::NotFound(format!("Backup for '{}' not found", machine_id)));
+                return Err(Error::NotFound(format!(
+                    "Backup for '{}' not found",
+                    machine_id
+                )));
             }
         }
 
@@ -331,36 +338,43 @@ impl TimeMachineManager {
 
     /// Delete a specific machine's backup
     pub async fn delete_backup(&self, target_path: &str, machine_id: &str) -> Result<()> {
-        let bundle_path = Path::new(target_path)
-            .join(format!("{}.sparsebundle", machine_id));
+        let bundle_path = Path::new(target_path).join(format!("{}.sparsebundle", machine_id));
 
         if bundle_path.exists() {
-            tokio::fs::remove_dir_all(&bundle_path).await.map_err(|e| {
-                Error::Internal(format!("Failed to delete backup: {}", e))
-            })?;
+            tokio::fs::remove_dir_all(&bundle_path)
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to delete backup: {}", e)))?;
             return Ok(());
         }
 
-        let bundle_path = Path::new(target_path)
-            .join(format!("{}.backupbundle", machine_id));
+        let bundle_path = Path::new(target_path).join(format!("{}.backupbundle", machine_id));
 
         if bundle_path.exists() {
-            tokio::fs::remove_dir_all(&bundle_path).await.map_err(|e| {
-                Error::Internal(format!("Failed to delete backup: {}", e))
-            })?;
+            tokio::fs::remove_dir_all(&bundle_path)
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to delete backup: {}", e)))?;
             return Ok(());
         }
 
-        Err(Error::NotFound(format!("Backup for '{}' not found", machine_id)))
+        Err(Error::NotFound(format!(
+            "Backup for '{}' not found",
+            machine_id
+        )))
     }
 
     /// Verify backup integrity
-    pub async fn verify_backup(&self, target_path: &str, machine_id: &str) -> Result<BackupVerifyResult> {
-        let bundle_path = Path::new(target_path)
-            .join(format!("{}.sparsebundle", machine_id));
+    pub async fn verify_backup(
+        &self,
+        target_path: &str,
+        machine_id: &str,
+    ) -> Result<BackupVerifyResult> {
+        let bundle_path = Path::new(target_path).join(format!("{}.sparsebundle", machine_id));
 
         if !bundle_path.exists() {
-            return Err(Error::NotFound(format!("Backup for '{}' not found", machine_id)));
+            return Err(Error::NotFound(format!(
+                "Backup for '{}' not found",
+                machine_id
+            )));
         }
 
         // Check for required files
@@ -394,12 +408,19 @@ impl TimeMachineManager {
             has_token,
             band_count,
             total_size_bytes: total_size,
-            errors: if valid { Vec::new() } else { vec!["Missing required files".to_string()] },
+            errors: if valid {
+                Vec::new()
+            } else {
+                vec!["Missing required files".to_string()]
+            },
         })
     }
 
     /// Get overall Time Machine status
-    pub async fn get_status(&self, targets: &[TimeMachineTarget]) -> Result<TimeMachineOverallStatus> {
+    pub async fn get_status(
+        &self,
+        targets: &[TimeMachineTarget],
+    ) -> Result<TimeMachineOverallStatus> {
         let mut total_backups = 0u32;
         let mut total_size = 0u64;
         let mut active_targets = 0u32;
@@ -454,14 +475,21 @@ impl TimeMachineManager {
     }
 
     /// Apply quota to a machine's backup
-    pub async fn set_machine_quota(&self, target_path: &str, machine_id: &str, quota_gb: u64) -> Result<()> {
+    pub async fn set_machine_quota(
+        &self,
+        target_path: &str,
+        machine_id: &str,
+        quota_gb: u64,
+    ) -> Result<()> {
         // For sparse bundles, we can set the size limit in the Info.plist
         // This is a simplified implementation
-        let bundle_path = Path::new(target_path)
-            .join(format!("{}.sparsebundle", machine_id));
+        let bundle_path = Path::new(target_path).join(format!("{}.sparsebundle", machine_id));
 
         if !bundle_path.exists() {
-            return Err(Error::NotFound(format!("Backup for '{}' not found", machine_id)));
+            return Err(Error::NotFound(format!(
+                "Backup for '{}' not found",
+                machine_id
+            )));
         }
 
         // Use hdiutil on macOS or sparsebundlefs tools on Linux

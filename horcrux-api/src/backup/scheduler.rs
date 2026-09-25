@@ -1,6 +1,5 @@
 ///! Backup job scheduler
 ///! Handles cron-like scheduling of backup jobs
-
 use super::BackupJob;
 use horcrux_common::Result;
 use tracing::info;
@@ -15,7 +14,10 @@ impl BackupScheduler {
 
     /// Schedule a backup job
     pub async fn schedule_job(&self, job: &BackupJob) -> Result<()> {
-        info!("Scheduling backup job {} with schedule: {}", job.id, job.schedule);
+        info!(
+            "Scheduling backup job {} with schedule: {}",
+            job.id, job.schedule
+        );
 
         // In production, this would:
         // 1. Parse cron schedule

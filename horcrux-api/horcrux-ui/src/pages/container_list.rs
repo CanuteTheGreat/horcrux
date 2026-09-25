@@ -1,5 +1,5 @@
-use leptos::*;
 use crate::api;
+use leptos::*;
 
 #[component]
 pub fn ContainerList() -> impl IntoView {
@@ -42,7 +42,10 @@ pub fn ContainerList() -> impl IntoView {
 
     let delete_container = move |container_id: String| {
         if web_sys::window()
-            .and_then(|w| w.confirm_with_message(&format!("Delete container {}?", container_id)).ok())
+            .and_then(|w| {
+                w.confirm_with_message(&format!("Delete container {}?", container_id))
+                    .ok()
+            })
             .unwrap_or(false)
         {
             spawn_local(async move {

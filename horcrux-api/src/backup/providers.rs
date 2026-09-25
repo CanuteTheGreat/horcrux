@@ -36,11 +36,7 @@ impl ProviderManager {
     }
 
     /// Register a backup provider
-    pub async fn register_provider(
-        &self,
-        name: String,
-        provider: Provider,
-    ) -> Result<(), String> {
+    pub async fn register_provider(&self, name: String, provider: Provider) -> Result<(), String> {
         let mut providers = self.providers.write().await;
 
         if providers.contains_key(&name) {
@@ -99,11 +95,7 @@ impl ProviderManager {
     }
 
     /// Delete backup from provider
-    pub async fn delete_backup(
-        &self,
-        provider_name: &str,
-        backup_id: &str,
-    ) -> Result<(), String> {
+    pub async fn delete_backup(&self, provider_name: &str, backup_id: &str) -> Result<(), String> {
         let providers = self.providers.read().await;
         let provider = providers
             .get(provider_name)
@@ -337,7 +329,10 @@ impl BackupProvider for S3Provider {
     }
 
     async fn list(&self) -> Result<Vec<BackupMetadata>, String> {
-        let url = format!("{}/{}?list-type=2", self.config.endpoint, self.config.bucket);
+        let url = format!(
+            "{}/{}?list-type=2",
+            self.config.endpoint, self.config.bucket
+        );
 
         let response = self
             .client
@@ -365,7 +360,10 @@ impl BackupProvider for S3Provider {
             .map_err(|e| format!("Connection test failed: {}", e))?;
 
         if !response.status().is_success() {
-            return Err(format!("S3 connection test failed: HTTP {}", response.status()));
+            return Err(format!(
+                "S3 connection test failed: HTTP {}",
+                response.status()
+            ));
         }
 
         Ok(())
@@ -545,7 +543,10 @@ mod tests {
 
         let provider = Provider::Http(HttpProvider::new(config));
 
-        manager.register_provider("test".to_string(), provider).await.unwrap();
+        manager
+            .register_provider("test".to_string(), provider)
+            .await
+            .unwrap();
 
         let providers = manager.list_providers().await;
         assert_eq!(providers.len(), 1);

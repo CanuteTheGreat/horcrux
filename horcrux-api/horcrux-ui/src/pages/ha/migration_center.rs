@@ -1,7 +1,7 @@
-use leptos::*;
 use crate::api::*;
-use web_sys::MouseEvent;
+use leptos::*;
 use wasm_bindgen::JsCast;
+use web_sys::MouseEvent;
 
 #[component]
 pub fn MigrationCenterPage() -> impl IntoView {
@@ -24,7 +24,8 @@ pub fn MigrationCenterPage() -> impl IntoView {
     let (with_local_disks, set_with_local_disks) = create_signal(false);
 
     // Bulk migration
-    let (selected_resources, set_selected_resources) = create_signal(Vec::<(String, String)>::new());
+    let (selected_resources, set_selected_resources) =
+        create_signal(Vec::<(String, String)>::new());
     let (bulk_target_node, set_bulk_target_node) = create_signal(String::new());
     let (bulk_max_workers, set_bulk_max_workers) = create_signal(2);
 
@@ -135,7 +136,9 @@ pub fn MigrationCenterPage() -> impl IntoView {
                 set_selected_resources.set(Vec::new());
                 load_data.dispatch(());
             }
-            Err(e) => set_error_message.set(Some(format!("Failed to create bulk migration: {}", e))),
+            Err(e) => {
+                set_error_message.set(Some(format!("Failed to create bulk migration: {}", e)))
+            }
         }
 
         set_loading.set(false);
@@ -175,7 +178,8 @@ pub fn MigrationCenterPage() -> impl IntoView {
                 .map(|vm| vm.name.clone())
                 .unwrap_or_else(|| format!("VM {}", resource_id))
         } else {
-            containers.get()
+            containers
+                .get()
                 .iter()
                 .find(|ct| ct.vmid.to_string() == resource_id)
                 .map(|ct| ct.hostname.clone())
@@ -185,7 +189,8 @@ pub fn MigrationCenterPage() -> impl IntoView {
 
     let get_optimal_target_node = move |resource_id: &str| {
         // Simple logic to find best node based on resource usage
-        cluster_nodes.get()
+        cluster_nodes
+            .get()
             .iter()
             .filter(|node| node.status == "online")
             .min_by_key(|node| node.memory_used + node.cpu_usage as u64)

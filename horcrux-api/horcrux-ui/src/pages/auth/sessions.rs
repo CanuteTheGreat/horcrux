@@ -3,8 +3,8 @@
 //! Monitor active user sessions and provide session termination capabilities.
 //! Shows real-time session information with security event monitoring.
 
-use leptos::*;
 use crate::api;
+use leptos::*;
 use std::collections::HashMap;
 
 /// Session management page component
@@ -49,7 +49,8 @@ pub fn SessionsPage() -> impl IntoView {
                     }
                 },
                 std::time::Duration::from_secs(30),
-            ).expect("Failed to set interval");
+            )
+            .expect("Failed to set interval");
 
             on_cleanup(move || {
                 timer.clear();
@@ -80,7 +81,8 @@ pub fn SessionsPage() -> impl IntoView {
                     refresh_sessions();
                 }
                 Err(e) => {
-                    set_error_message.set(Some(format!("Failed to terminate user sessions: {}", e)));
+                    set_error_message
+                        .set(Some(format!("Failed to terminate user sessions: {}", e)));
                 }
             }
         });
@@ -91,7 +93,8 @@ pub fn SessionsPage() -> impl IntoView {
         let user_filter = filter_user.get().to_lowercase();
         let realm_filter = filter_realm.get();
 
-        sessions.get()
+        sessions
+            .get()
             .into_iter()
             .filter(|session| {
                 if !user_filter.is_empty() {
@@ -125,7 +128,10 @@ pub fn SessionsPage() -> impl IntoView {
         let mut grouped: HashMap<String, Vec<api::UserSession>> = HashMap::new();
         for session in filtered_sessions() {
             let user_key = format!("{}@{}", session.username, session.realm);
-            grouped.entry(user_key).or_insert_with(Vec::new).push(session);
+            grouped
+                .entry(user_key)
+                .or_insert_with(Vec::new)
+                .push(session);
         }
         grouped
     };
@@ -134,13 +140,15 @@ pub fn SessionsPage() -> impl IntoView {
     let session_stats = move || {
         let all_sessions = sessions.get();
         let total_sessions = all_sessions.len();
-        let unique_users = all_sessions.iter()
+        let unique_users = all_sessions
+            .iter()
             .map(|s| format!("{}@{}", s.username, s.realm))
             .collect::<std::collections::HashSet<_>>()
             .len();
 
         let now = chrono::Utc::now().timestamp();
-        let expiring_soon = all_sessions.iter()
+        let expiring_soon = all_sessions
+            .iter()
             .filter(|s| s.expires - now < 3600) // Expiring within 1 hour
             .count();
 
@@ -414,7 +422,10 @@ pub fn SessionsPage() -> impl IntoView {
 }
 
 // Utility function to set interval with cleanup
-fn set_interval_with_handle<F>(f: F, duration: std::time::Duration) -> Result<IntervalHandle, wasm_bindgen::JsValue>
+fn set_interval_with_handle<F>(
+    f: F,
+    duration: std::time::Duration,
+) -> Result<IntervalHandle, wasm_bindgen::JsValue>
 where
     F: Fn() + 'static,
 {
@@ -439,6 +450,8 @@ struct IntervalHandle {
 
 impl IntervalHandle {
     fn clear(self) {
-        web_sys::window().unwrap().clear_interval_with_handle(self.handle);
+        web_sys::window()
+            .unwrap()
+            .clear_interval_with_handle(self.handle);
     }
 }

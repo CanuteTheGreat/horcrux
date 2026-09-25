@@ -1,7 +1,10 @@
+use crate::api::{
+    create_kubernetes_secret, delete_kubernetes_secret, get_kubernetes_secrets,
+    update_kubernetes_secret, CreateSecretRequest, KubernetesSecret,
+};
+use base64::Engine;
 use leptos::*;
 use std::collections::HashMap;
-use base64::Engine;
-use crate::api::{KubernetesSecret, CreateSecretRequest, get_kubernetes_secrets, create_kubernetes_secret, update_kubernetes_secret, delete_kubernetes_secret};
 
 #[component]
 pub fn SecretsPage() -> impl IntoView {
@@ -60,10 +63,7 @@ pub fn SecretsPage() -> impl IntoView {
 
     // Auto-refresh every 30 seconds
     use leptos::set_interval;
-    set_interval(
-        move || load_secrets(),
-        std::time::Duration::from_secs(30),
-    );
+    set_interval(move || load_secrets(), std::time::Duration::from_secs(30));
 
     let filtered_secrets = move || {
         let query = search_query.get().to_lowercase();
@@ -74,9 +74,14 @@ pub fn SecretsPage() -> impl IntoView {
                 .get()
                 .into_iter()
                 .filter(|secret| {
-                    secret.name.to_lowercase().contains(&query) ||
-                    secret.namespace.to_lowercase().contains(&query) ||
-                    secret.secret_type.as_deref().unwrap_or("").to_lowercase().contains(&query)
+                    secret.name.to_lowercase().contains(&query)
+                        || secret.namespace.to_lowercase().contains(&query)
+                        || secret
+                            .secret_type
+                            .as_deref()
+                            .unwrap_or("")
+                            .to_lowercase()
+                            .contains(&query)
                 })
                 .collect()
         }
@@ -120,7 +125,11 @@ pub fn SecretsPage() -> impl IntoView {
             docker_username.get(),
             docker_password.get(),
             docker_email.get(),
-            base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", docker_username.get(), docker_password.get()))
+            base64::engine::general_purpose::STANDARD.encode(format!(
+                "{}:{}",
+                docker_username.get(),
+                docker_password.get()
+            ))
         );
         data.insert(".dockerconfigjson".to_string(), config);
         set_secret_data.set(data);
@@ -149,8 +158,16 @@ pub fn SecretsPage() -> impl IntoView {
             secret_type: secret_type.get(),
             data: secret_data.get(),
             string_data: None,
-            labels: if labels.get().is_empty() { None } else { Some(labels.get()) },
-            annotations: if annotations.get().is_empty() { None } else { Some(annotations.get()) },
+            labels: if labels.get().is_empty() {
+                None
+            } else {
+                Some(labels.get())
+            },
+            annotations: if annotations.get().is_empty() {
+                None
+            } else {
+                Some(annotations.get())
+            },
         };
 
         let ns = namespace.get();
@@ -184,12 +201,27 @@ pub fn SecretsPage() -> impl IntoView {
                 secret_type: secret_type.get(),
                 data: secret_data.get(),
                 string_data: None,
-                labels: if labels.get().is_empty() { None } else { Some(labels.get()) },
-                annotations: if annotations.get().is_empty() { None } else { Some(annotations.get()) },
+                labels: if labels.get().is_empty() {
+                    None
+                } else {
+                    Some(labels.get())
+                },
+                annotations: if annotations.get().is_empty() {
+                    None
+                } else {
+                    Some(annotations.get())
+                },
             };
 
             spawn_local(async move {
-                match update_kubernetes_secret(&cluster_id.get(), &secret.namespace, &secret.name, request).await {
+                match update_kubernetes_secret(
+                    &cluster_id.get(),
+                    &secret.namespace,
+                    &secret.name,
+                    request,
+                )
+                .await
+                {
                     Ok(_) => {
                         set_show_edit_modal.set(false);
                         reset_form();
@@ -204,11 +236,16 @@ pub fn SecretsPage() -> impl IntoView {
     let delete_secret = move |secret: KubernetesSecret| {
         if web_sys::window()
             .unwrap()
-            .confirm_with_message(&format!("Are you sure you want to delete Secret '{}'?", secret.name))
+            .confirm_with_message(&format!(
+                "Are you sure you want to delete Secret '{}'?",
+                secret.name
+            ))
             .unwrap()
         {
             spawn_local(async move {
-                match delete_kubernetes_secret(&cluster_id.get(), &secret.namespace, &secret.name).await {
+                match delete_kubernetes_secret(&cluster_id.get(), &secret.namespace, &secret.name)
+                    .await
+                {
                     Ok(_) => load_secrets(),
                     Err(e) => set_error.set(Some(format!("Failed to delete Secret: {}", e))),
                 }
@@ -216,14 +253,12 @@ pub fn SecretsPage() -> impl IntoView {
         }
     };
 
-    let get_secret_type_color = move |secret_type: &Option<String>| {
-        match secret_type.as_deref() {
-            Some("Opaque") => "bg-gray-100 text-gray-800",
-            Some("kubernetes.io/tls") => "bg-green-100 text-green-800",
-            Some("kubernetes.io/dockerconfigjson") => "bg-blue-100 text-blue-800",
-            Some("kubernetes.io/service-account-token") => "bg-purple-100 text-purple-800",
-            _ => "bg-gray-100 text-gray-800",
-        }
+    let get_secret_type_color = move |secret_type: &Option<String>| match secret_type.as_deref() {
+        Some("Opaque") => "bg-gray-100 text-gray-800",
+        Some("kubernetes.io/tls") => "bg-green-100 text-green-800",
+        Some("kubernetes.io/dockerconfigjson") => "bg-blue-100 text-blue-800",
+        Some("kubernetes.io/service-account-token") => "bg-purple-100 text-purple-800",
+        _ => "bg-gray-100 text-gray-800",
     };
 
     view! {

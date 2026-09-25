@@ -160,7 +160,9 @@ pub fn use_websocket(topics: Vec<String>) -> (ReadSignal<Option<WsEvent>>, ReadS
             set_connected.set(true);
 
             // Send subscription request
-            let subscription = WsSubscription { topics: topics_clone.clone() };
+            let subscription = WsSubscription {
+                topics: topics_clone.clone(),
+            };
             if let Ok(json) = serde_json::to_string(&subscription) {
                 let _ = cloned_ws.send_with_str(&json);
             }
@@ -219,10 +221,7 @@ mod tests {
     #[test]
     fn test_ws_subscription_serialization() {
         let subscription = WsSubscription {
-            topics: vec![
-                TOPIC_VM_STATUS.to_string(),
-                TOPIC_VM_METRICS.to_string(),
-            ],
+            topics: vec![TOPIC_VM_STATUS.to_string(), TOPIC_VM_METRICS.to_string()],
         };
 
         let json = serde_json::to_string(&subscription).unwrap();
@@ -245,7 +244,12 @@ mod tests {
 
         let event: WsEvent = serde_json::from_str(json).unwrap();
         match event {
-            WsEvent::VmStatusChanged { vm_id, old_status, new_status, .. } => {
+            WsEvent::VmStatusChanged {
+                vm_id,
+                old_status,
+                new_status,
+                ..
+            } => {
                 assert_eq!(vm_id, "vm-100");
                 assert_eq!(old_status, "stopped");
                 assert_eq!(new_status, "running");
@@ -270,7 +274,12 @@ mod tests {
 
         let event: WsEvent = serde_json::from_str(json).unwrap();
         match event {
-            WsEvent::NodeMetrics { hostname, cpu_usage, memory_usage, .. } => {
+            WsEvent::NodeMetrics {
+                hostname,
+                cpu_usage,
+                memory_usage,
+                ..
+            } => {
                 assert_eq!(hostname, "node1");
                 assert_eq!(cpu_usage, 45.5);
                 assert_eq!(memory_usage, 60.2);

@@ -1,5 +1,5 @@
-use leptos::*;
 use crate::api::*;
+use leptos::*;
 
 #[component]
 pub fn DashboardBuilderPage() -> impl IntoView {
@@ -52,7 +52,8 @@ pub fn DashboardBuilderPage() -> impl IntoView {
         set_loading.set(true);
         set_error_message.set(None);
 
-        let tags: Vec<String> = dashboard_tags.get()
+        let tags: Vec<String> = dashboard_tags
+            .get()
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -74,7 +75,10 @@ pub fn DashboardBuilderPage() -> impl IntoView {
 
         match create_custom_dashboard(request).await {
             Ok(dashboard) => {
-                set_success_message.set(Some(format!("Dashboard '{}' created successfully", dashboard.name)));
+                set_success_message.set(Some(format!(
+                    "Dashboard '{}' created successfully",
+                    dashboard.name
+                )));
                 set_show_create_modal.set(false);
                 clear_form();
                 load_dashboards.dispatch(());
@@ -91,7 +95,8 @@ pub fn DashboardBuilderPage() -> impl IntoView {
             set_loading.set(true);
             set_error_message.set(None);
 
-            let tags: Vec<String> = dashboard_tags.get()
+            let tags: Vec<String> = dashboard_tags
+                .get()
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
@@ -113,7 +118,10 @@ pub fn DashboardBuilderPage() -> impl IntoView {
 
             match update_custom_dashboard(&dashboard.id, request).await {
                 Ok(updated_dashboard) => {
-                    set_success_message.set(Some(format!("Dashboard '{}' updated successfully", updated_dashboard.name)));
+                    set_success_message.set(Some(format!(
+                        "Dashboard '{}' updated successfully",
+                        updated_dashboard.name
+                    )));
                     set_show_edit_modal.set(false);
                     clear_form();
                     load_dashboards.dispatch(());
@@ -158,7 +166,10 @@ pub fn DashboardBuilderPage() -> impl IntoView {
 
             match clone_custom_dashboard(&dashboard.id, request).await {
                 Ok(cloned_dashboard) => {
-                    set_success_message.set(Some(format!("Dashboard cloned as '{}'", cloned_dashboard.name)));
+                    set_success_message.set(Some(format!(
+                        "Dashboard cloned as '{}'",
+                        cloned_dashboard.name
+                    )));
                     load_dashboards.dispatch(());
                 }
                 Err(e) => set_error_message.set(Some(format!("Failed to clone dashboard: {}", e))),
@@ -192,7 +203,10 @@ pub fn DashboardBuilderPage() -> impl IntoView {
                     let url = web_sys::Url::create_object_url_with_blob(&blob).unwrap();
 
                     element.set_href(&url);
-                    element.set_download(&format!("dashboard-{}.json", dashboard.name.replace(" ", "_").to_lowercase()));
+                    element.set_download(&format!(
+                        "dashboard-{}.json",
+                        dashboard.name.replace(" ", "_").to_lowercase()
+                    ));
                     element.click();
 
                     web_sys::Url::revoke_object_url(&url).unwrap();
@@ -222,13 +236,20 @@ pub fn DashboardBuilderPage() -> impl IntoView {
         let query = search_query.get().to_lowercase();
         let category = filter_category.get();
 
-        dashboards.get()
+        dashboards
+            .get()
             .into_iter()
             .filter(|dashboard| {
-                let matches_search = query.is_empty() ||
-                    dashboard.name.to_lowercase().contains(&query) ||
-                    dashboard.description.as_ref().map_or(false, |d| d.to_lowercase().contains(&query)) ||
-                    dashboard.tags.iter().any(|tag| tag.to_lowercase().contains(&query));
+                let matches_search = query.is_empty()
+                    || dashboard.name.to_lowercase().contains(&query)
+                    || dashboard
+                        .description
+                        .as_ref()
+                        .map_or(false, |d| d.to_lowercase().contains(&query))
+                    || dashboard
+                        .tags
+                        .iter()
+                        .any(|tag| tag.to_lowercase().contains(&query));
 
                 let matches_category = category == "all" || dashboard.category == category;
 
@@ -238,7 +259,8 @@ pub fn DashboardBuilderPage() -> impl IntoView {
     };
 
     let get_category_list = move || -> Vec<String> {
-        let mut categories: Vec<String> = dashboards.get()
+        let mut categories: Vec<String> = dashboards
+            .get()
             .iter()
             .map(|d| d.category.clone())
             .collect::<std::collections::HashSet<_>>()

@@ -1,6 +1,5 @@
 ///! Monitoring and metrics collection
 ///! Provides real-time and historical resource metrics for VMs, containers, and system
-
 pub mod advanced_metrics;
 
 use horcrux_common::Result;
@@ -24,7 +23,7 @@ pub struct ResourceMetrics {
 /// CPU metrics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CpuMetrics {
-    pub usage_percent: f64,      // 0-100 per core (can exceed 100 for multi-core)
+    pub usage_percent: f64, // 0-100 per core (can exceed 100 for multi-core)
     pub cores: u32,
     pub load_average: f64,
 }
@@ -412,7 +411,9 @@ impl MonitoringManager {
         let cpu_usage = Self::read_cgroup_cpu(&cgroup_path).await.unwrap_or(0.0);
 
         // Read memory usage from cgroup
-        let (memory_current, memory_max) = Self::read_cgroup_memory(&cgroup_path).await.unwrap_or((0, 1024 * 1024 * 1024));
+        let (memory_current, memory_max) = Self::read_cgroup_memory(&cgroup_path)
+            .await
+            .unwrap_or((0, 1024 * 1024 * 1024));
 
         let usage_percent = if memory_max > 0 {
             (memory_current as f64 / memory_max as f64) * 100.0
@@ -658,10 +659,7 @@ impl MonitoringManager {
         }
 
         // Try LXC
-        if let Ok(output) = tokio::process::Command::new("lxc-ls")
-            .output()
-            .await
-        {
+        if let Ok(output) = tokio::process::Command::new("lxc-ls").output().await {
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let ids: Vec<String> = stdout.lines().map(|s| s.trim().to_string()).collect();
@@ -744,15 +742,19 @@ impl MonitoringManager {
 
         for line in meminfo.lines() {
             if line.starts_with("MemTotal:") {
-                total = line.split_whitespace()
+                total = line
+                    .split_whitespace()
                     .nth(1)
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(0) * 1024; // Convert from KB to bytes
+                    .unwrap_or(0)
+                    * 1024; // Convert from KB to bytes
             } else if line.starts_with("MemAvailable:") {
-                available = line.split_whitespace()
+                available = line
+                    .split_whitespace()
                     .nth(1)
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(0) * 1024;
+                    .unwrap_or(0)
+                    * 1024;
             }
         }
 

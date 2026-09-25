@@ -6,7 +6,6 @@
 ///! - Restore to previous snapshot
 ///! - Delete snapshots
 ///! - Snapshot trees and rollback
-
 use crate::migration::qemu_monitor::QemuMonitor;
 use horcrux_common::{Result, VmConfig, VmStatus};
 use serde::{Deserialize, Serialize};
@@ -33,9 +32,9 @@ pub struct VmSnapshot {
 /// VM state at snapshot time
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum VmSnapshotState {
-    Running,  // Live snapshot with memory
-    Stopped,  // Disk-only snapshot
-    Paused,   // VM was paused during snapshot
+    Running, // Live snapshot with memory
+    Stopped, // Disk-only snapshot
+    Paused,  // VM was paused during snapshot
 }
 
 /// Disk snapshot information
@@ -143,19 +142,17 @@ impl VmSnapshotManager {
         let mut disk_snapshots = Vec::new();
         for (idx, disk) in vm_config.disks.iter().enumerate() {
             let disk_snapshot = self
-                .create_disk_snapshot(
-                    &vm_config.id,
-                    &disk.path,
-                    &snapshot_name,
-                    idx,
-                )
+                .create_disk_snapshot(&vm_config.id, &disk.path, &snapshot_name, idx)
                 .await?;
             disk_snapshots.push(disk_snapshot);
         }
 
         // Create memory snapshot if requested and VM is running
         let memory_snapshot = if include_memory && vm_state == VmSnapshotState::Running {
-            Some(self.create_memory_snapshot(&vm_config.id, &snapshot_id).await?)
+            Some(
+                self.create_memory_snapshot(&vm_config.id, &snapshot_id)
+                    .await?,
+            )
         } else {
             None
         };
@@ -459,7 +456,10 @@ impl VmSnapshotManager {
                     .await?;
             }
             StorageType::Btrfs => {
-                let snapshot_path = format!("{}.snap_{}", disk_snap.snapshot_path, disk_snap.snapshot_name);
+                let snapshot_path = format!(
+                    "{}.snap_{}",
+                    disk_snap.snapshot_path, disk_snap.snapshot_name
+                );
                 Command::new("btrfs")
                     .arg("subvolume")
                     .arg("delete")
@@ -471,7 +471,10 @@ impl VmSnapshotManager {
                 Command::new("rbd")
                     .arg("snap")
                     .arg("rm")
-                    .arg(format!("{}@{}", disk_snap.snapshot_path, disk_snap.snapshot_name))
+                    .arg(format!(
+                        "{}@{}",
+                        disk_snap.snapshot_path, disk_snap.snapshot_name
+                    ))
                     .output()
                     .await?;
             }
@@ -481,11 +484,7 @@ impl VmSnapshotManager {
     }
 
     /// Restore VM to a snapshot
-    pub async fn restore_snapshot(
-        &self,
-        snapshot_id: &str,
-        restore_memory: bool,
-    ) -> Result<()> {
+    pub async fn restore_snapshot(&self, snapshot_id: &str, restore_memory: bool) -> Result<()> {
         let snapshot = self
             .snapshots
             .get(snapshot_id)
@@ -515,7 +514,10 @@ impl VmSnapshotManager {
                     // Then we trigger incoming migration from the memory file
                     match monitor.migrate_incoming(memory_file).await {
                         Ok(()) => {
-                            tracing::info!("Memory state restoration initiated for VM {}", snapshot.vm_id);
+                            tracing::info!(
+                                "Memory state restoration initiated for VM {}",
+                                snapshot.vm_id
+                            );
 
                             // Wait for migration to complete
                             let mut attempts = 0;
@@ -599,7 +601,10 @@ impl VmSnapshotManager {
                 Command::new("rbd")
                     .arg("snap")
                     .arg("rollback")
-                    .arg(format!("{}@{}", disk_snap.snapshot_path, disk_snap.snapshot_name))
+                    .arg(format!(
+                        "{}@{}",
+                        disk_snap.snapshot_path, disk_snap.snapshot_name
+                    ))
                     .output()
                     .await?;
             }
@@ -649,9 +654,10 @@ impl VmSnapshotManager {
         // the most recent snapshot without children.
         if self.snapshots.get(snapshot_id).is_some() {
             // A snapshot is "current" if no other snapshots have it as parent
-            !self.snapshots.values().any(|s| {
-                s.parent_snapshot.as_ref().map(|p| p.as_str()) == Some(snapshot_id)
-            })
+            !self
+                .snapshots
+                .values()
+                .any(|s| s.parent_snapshot.as_ref().map(|p| p.as_str()) == Some(snapshot_id))
         } else {
             false
         }
@@ -688,7 +694,10 @@ impl VmSnapshotManager {
 
         // Check if QMP socket exists
         if !qmp_socket.exists() {
-            tracing::warn!("QMP socket not found for VM {}, cannot pause via QEMU monitor", vm_id);
+            tracing::warn!(
+                "QMP socket not found for VM {}, cannot pause via QEMU monitor",
+                vm_id
+            );
             return Ok(());
         }
 
@@ -704,7 +713,10 @@ impl VmSnapshotManager {
 
         // Check if QMP socket exists
         if !qmp_socket.exists() {
-            tracing::warn!("QMP socket not found for VM {}, cannot resume via QEMU monitor", vm_id);
+            tracing::warn!(
+                "QMP socket not found for VM {}, cannot resume via QEMU monitor",
+                vm_id
+            );
             return Ok(());
         }
 
@@ -720,7 +732,10 @@ impl VmSnapshotManager {
 
         // Check if QMP socket exists
         if !qmp_socket.exists() {
-            tracing::warn!("QMP socket not found for VM {}, cannot stop via QEMU monitor", vm_id);
+            tracing::warn!(
+                "QMP socket not found for VM {}, cannot stop via QEMU monitor",
+                vm_id
+            );
             return Ok(());
         }
 
@@ -747,8 +762,9 @@ impl VmSnapshotManager {
         fs::create_dir_all(&self.snapshot_dir).await?;
 
         let metadata_file = format!("{}/{}.json", self.snapshot_dir, snapshot.id);
-        let json = serde_json::to_string_pretty(snapshot)
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to serialize snapshot: {}", e)))?;
+        let json = serde_json::to_string_pretty(snapshot).map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to serialize snapshot: {}", e))
+        })?;
 
         fs::write(&metadata_file, json).await?;
         Ok(())
@@ -810,7 +826,9 @@ mod tests {
         let manager = VmSnapshotManager::new("/tmp/snapshots".to_string());
 
         assert_eq!(
-            manager.detect_storage_type("/dev/zvol/tank/vm-100-disk-0").unwrap(),
+            manager
+                .detect_storage_type("/dev/zvol/tank/vm-100-disk-0")
+                .unwrap(),
             StorageType::Zfs
         );
 
@@ -820,12 +838,16 @@ mod tests {
         );
 
         assert_eq!(
-            manager.detect_storage_type("/var/lib/vz/images/100/vm-100-disk-0.qcow2").unwrap(),
+            manager
+                .detect_storage_type("/var/lib/vz/images/100/vm-100-disk-0.qcow2")
+                .unwrap(),
             StorageType::Qcow2
         );
 
         assert_eq!(
-            manager.detect_storage_type("/mnt/btrfs/vm-100-disk-0").unwrap(),
+            manager
+                .detect_storage_type("/mnt/btrfs/vm-100-disk-0")
+                .unwrap(),
             StorageType::Btrfs
         );
 
@@ -880,12 +902,14 @@ mod tests {
         let mut vm_config = create_test_vm_config();
         vm_config.status = VmStatus::Stopped;
 
-        let result = manager.create_snapshot(
-            &vm_config,
-            "test-snapshot".to_string(),
-            Some("Test description".to_string()),
-            false,
-        ).await;
+        let result = manager
+            .create_snapshot(
+                &vm_config,
+                "test-snapshot".to_string(),
+                Some("Test description".to_string()),
+                false,
+            )
+            .await;
 
         assert!(result.is_ok());
         let snapshot = result.unwrap();
@@ -901,12 +925,9 @@ mod tests {
         let mut manager = VmSnapshotManager::new("/tmp/test-snapshots".to_string());
         let vm_config = create_test_vm_config();
 
-        let result = manager.create_snapshot(
-            &vm_config,
-            "live-snapshot".to_string(),
-            None,
-            false,
-        ).await;
+        let result = manager
+            .create_snapshot(&vm_config, "live-snapshot".to_string(), None, false)
+            .await;
 
         assert!(result.is_ok());
         let snapshot = result.unwrap();
@@ -928,9 +949,15 @@ mod tests {
         vm_config2.status = VmStatus::Stopped;
 
         // Create snapshots for different VMs
-        let _ = manager.create_snapshot(&vm_config1, "snap1".to_string(), None, false).await;
-        let _ = manager.create_snapshot(&vm_config1, "snap2".to_string(), None, false).await;
-        let _ = manager.create_snapshot(&vm_config2, "snap3".to_string(), None, false).await;
+        let _ = manager
+            .create_snapshot(&vm_config1, "snap1".to_string(), None, false)
+            .await;
+        let _ = manager
+            .create_snapshot(&vm_config1, "snap2".to_string(), None, false)
+            .await;
+        let _ = manager
+            .create_snapshot(&vm_config2, "snap3".to_string(), None, false)
+            .await;
 
         let vm100_snapshots = manager.list_snapshots("vm-100");
         let vm200_snapshots = manager.list_snapshots("vm-200");
@@ -945,12 +972,10 @@ mod tests {
         let mut vm_config = create_test_vm_config();
         vm_config.status = VmStatus::Stopped;
 
-        let snapshot = manager.create_snapshot(
-            &vm_config,
-            "delete-test".to_string(),
-            None,
-            false,
-        ).await.unwrap();
+        let snapshot = manager
+            .create_snapshot(&vm_config, "delete-test".to_string(), None, false)
+            .await
+            .unwrap();
 
         let snapshot_id = snapshot.id.clone();
 
@@ -1024,12 +1049,15 @@ mod tests {
         vm_config.status = VmStatus::Stopped;
 
         // Create snapshot
-        let snapshot = manager.create_snapshot(
-            &vm_config,
-            "persist-test".to_string(),
-            Some("Testing persistence".to_string()),
-            false,
-        ).await.unwrap();
+        let snapshot = manager
+            .create_snapshot(
+                &vm_config,
+                "persist-test".to_string(),
+                Some("Testing persistence".to_string()),
+                false,
+            )
+            .await
+            .unwrap();
 
         let snapshot_id = snapshot.id.clone();
 

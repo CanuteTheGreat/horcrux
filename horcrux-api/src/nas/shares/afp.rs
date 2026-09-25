@@ -2,8 +2,8 @@
 //!
 //! Manages Netatalk configuration for macOS file sharing and Time Machine support.
 
-use horcrux_common::{Error, Result};
 use crate::nas::shares::{AfpShareConfig, NasShare};
+use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::process::Command;
@@ -104,7 +104,10 @@ impl AfpManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Failed to terminate AFP session {}: {}", pid, stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to terminate AFP session {}: {}",
+                pid, stderr
+            )));
         }
 
         Ok(())
@@ -173,10 +176,22 @@ impl AfpManager {
 
         section.push_str(&format!("   mimic model = {}\n", g.mimic_model));
         section.push_str(&format!("   uam list = {}\n", g.uam_list));
-        section.push_str(&format!("   save password = {}\n", if g.save_password { "yes" } else { "no" }));
-        section.push_str(&format!("   set password = {}\n", if g.set_password { "yes" } else { "no" }));
-        section.push_str(&format!("   zeroconf = {}\n", if g.zeroconf { "yes" } else { "no" }));
-        section.push_str(&format!("   spotlight = {}\n", if g.spotlight { "yes" } else { "no" }));
+        section.push_str(&format!(
+            "   save password = {}\n",
+            if g.save_password { "yes" } else { "no" }
+        ));
+        section.push_str(&format!(
+            "   set password = {}\n",
+            if g.set_password { "yes" } else { "no" }
+        ));
+        section.push_str(&format!(
+            "   zeroconf = {}\n",
+            if g.zeroconf { "yes" } else { "no" }
+        ));
+        section.push_str(&format!(
+            "   spotlight = {}\n",
+            if g.spotlight { "yes" } else { "no" }
+        ));
         section.push_str(&format!("   log level = {}\n", g.log_level));
 
         if let Some(ref listener) = g.fce_listener {
@@ -208,12 +223,18 @@ impl AfpManager {
             if let Some(quota) = config.time_machine_quota_gb {
                 // Convert GB to bytes
                 let quota_bytes = quota * 1024 * 1024 * 1024;
-                section.push_str(&format!("   vol size limit = {}\n", quota_bytes / 1024 / 1024));
+                section.push_str(&format!(
+                    "   vol size limit = {}\n",
+                    quota_bytes / 1024 / 1024
+                ));
             }
         }
 
         if !config.valid_users.is_empty() {
-            section.push_str(&format!("   valid users = {}\n", config.valid_users.join(" ")));
+            section.push_str(&format!(
+                "   valid users = {}\n",
+                config.valid_users.join(" ")
+            ));
         }
 
         if !config.rolist.is_empty() {
@@ -259,10 +280,7 @@ impl AfpManager {
         match tokio::fs::read_to_string(&self.config_path).await {
             Ok(content) => Ok(content),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-            Err(e) => Err(Error::Internal(format!(
-                "Failed to read afp.conf: {}",
-                e
-            ))),
+            Err(e) => Err(Error::Internal(format!("Failed to read afp.conf: {}", e))),
         }
     }
 
@@ -311,10 +329,7 @@ impl AfpManager {
 
     /// Check if Netatalk is running
     pub async fn is_running(&self) -> bool {
-        let output = Command::new("pgrep")
-            .arg("netatalk")
-            .output()
-            .await;
+        let output = Command::new("pgrep").arg("netatalk").output().await;
 
         match output {
             Ok(out) => out.status.success(),
@@ -380,9 +395,7 @@ impl AfpManager {
 
     /// Get connected AFP clients
     pub async fn get_connections(&self) -> Result<Vec<AfpConnection>> {
-        let output = Command::new("afpstats")
-            .output()
-            .await;
+        let output = Command::new("afpstats").output().await;
 
         if let Ok(out) = output {
             if out.status.success() {
@@ -392,9 +405,7 @@ impl AfpManager {
         }
 
         // Fallback: try macusers
-        let output = Command::new("macusers")
-            .output()
-            .await;
+        let output = Command::new("macusers").output().await;
 
         if let Ok(out) = output {
             if out.status.success() {
@@ -464,7 +475,8 @@ impl AfpManager {
         if enabled {
             // Register with Avahi/mDNSResponder
             let service_name = name.unwrap_or(&self.global_config.hostname);
-            let avahi_service = format!(r#"<?xml version="1.0" standalone='no'?>
+            let avahi_service = format!(
+                r#"<?xml version="1.0" standalone='no'?>
 <!DOCTYPE service-group SYSTEM "avahi-service.dtd">
 <service-group>
   <name>{}</name>
@@ -478,7 +490,9 @@ impl AfpManager {
     <txt-record>model=Xserve</txt-record>
   </service>
 </service-group>
-"#, service_name);
+"#,
+                service_name
+            );
 
             let avahi_path = "/etc/avahi/services/afpd.service";
             let _ = tokio::fs::write(avahi_path, avahi_service).await;
@@ -497,9 +511,14 @@ impl AfpManager {
     }
 
     /// Configure Time Machine advertisement for a share
-    pub async fn configure_time_machine_bonjour(&self, share_name: &str, enabled: bool) -> Result<()> {
+    pub async fn configure_time_machine_bonjour(
+        &self,
+        share_name: &str,
+        enabled: bool,
+    ) -> Result<()> {
         if enabled {
-            let avahi_service = format!(r#"<?xml version="1.0" standalone='no'?>
+            let avahi_service = format!(
+                r#"<?xml version="1.0" standalone='no'?>
 <!DOCTYPE service-group SYSTEM "avahi-service.dtd">
 <service-group>
   <name>{}</name>
@@ -514,7 +533,9 @@ impl AfpManager {
     <port>548</port>
   </service>
 </service-group>
-"#, share_name, share_name);
+"#,
+                share_name, share_name
+            );
 
             let avahi_path = format!("/etc/avahi/services/timemachine-{}.service", share_name);
             let _ = tokio::fs::write(&avahi_path, avahi_service).await;
@@ -541,10 +562,7 @@ impl AfpManager {
 
         for bundle in sparse_bundles {
             // Get bundle size
-            let output = Command::new("du")
-                .args(["-sb", &bundle])
-                .output()
-                .await;
+            let output = Command::new("du").args(["-sb", &bundle]).output().await;
 
             if let Ok(out) = output {
                 if out.status.success() {
@@ -579,7 +597,15 @@ impl AfpManager {
 
     async fn find_sparse_bundles(path: &str) -> Result<Vec<String>> {
         let output = Command::new("find")
-            .args([path, "-maxdepth", "2", "-name", "*.sparsebundle", "-type", "d"])
+            .args([
+                path,
+                "-maxdepth",
+                "2",
+                "-name",
+                "*.sparsebundle",
+                "-type",
+                "d",
+            ])
             .output()
             .await
             .map_err(|e| Error::Internal(format!("Failed to find sparse bundles: {}", e)))?;
@@ -593,14 +619,22 @@ impl AfpManager {
     }
 
     /// Clean up old Time Machine backups
-    pub async fn cleanup_time_machine_backups(&self, volume_path: &str, max_age_days: u32) -> Result<u32> {
+    pub async fn cleanup_time_machine_backups(
+        &self,
+        volume_path: &str,
+        max_age_days: u32,
+    ) -> Result<u32> {
         let output = Command::new("find")
             .args([
                 volume_path,
-                "-maxdepth", "2",
-                "-name", "*.sparsebundle",
-                "-type", "d",
-                "-mtime", &format!("+{}", max_age_days),
+                "-maxdepth",
+                "2",
+                "-name",
+                "*.sparsebundle",
+                "-type",
+                "d",
+                "-mtime",
+                &format!("+{}", max_age_days),
             ])
             .output()
             .await
@@ -623,10 +657,7 @@ impl AfpManager {
 
     /// Get Netatalk version
     pub async fn get_version(&self) -> Result<String> {
-        let output = Command::new("netatalk")
-            .args(["-V"])
-            .output()
-            .await;
+        let output = Command::new("netatalk").args(["-V"]).output().await;
 
         if let Ok(out) = output {
             let stdout = String::from_utf8_lossy(&out.stdout);
@@ -638,10 +669,7 @@ impl AfpManager {
         }
 
         // Try afpd
-        let output = Command::new("afpd")
-            .args(["-V"])
-            .output()
-            .await;
+        let output = Command::new("afpd").args(["-V"]).output().await;
 
         if let Ok(out) = output {
             let stdout = String::from_utf8_lossy(&out.stdout);
@@ -662,10 +690,7 @@ impl AfpManager {
     pub async fn configure_spotlight(&self, volume_path: &str, enabled: bool) -> Result<()> {
         if enabled {
             // Start spotlight indexer for this path
-            let _ = Command::new("dbd")
-                .args(["-r", volume_path])
-                .output()
-                .await;
+            let _ = Command::new("dbd").args(["-r", volume_path]).output().await;
         } else {
             // Remove spotlight index
             let index_path = format!("{}/.AppleDB", volume_path);
@@ -698,7 +723,7 @@ impl AfpManager {
                     }
                 }
 
-                let name = &line[1..line.len()-1];
+                let name = &line[1..line.len() - 1];
                 current_share = Some(ParsedAfpShare {
                     name: name.to_string(),
                     path: String::new(),
@@ -719,9 +744,8 @@ impl AfpManager {
                         "path" => share.path = value,
                         "time machine" => share.time_machine = value == "yes",
                         "valid users" => {
-                            share.valid_users = value.split_whitespace()
-                                .map(|s| s.to_string())
-                                .collect();
+                            share.valid_users =
+                                value.split_whitespace().map(|s| s.to_string()).collect();
                         }
                         _ => {
                             share.options.insert(key, value);

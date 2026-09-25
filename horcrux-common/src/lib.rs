@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum VmHypervisor {
-    Qemu,      // QEMU/KVM
-    Lxd,       // LXD (can do VMs)
-    Incus,     // Incus (LXD fork)
+    Qemu,  // QEMU/KVM
+    Lxd,   // LXD (can do VMs)
+    Incus, // Incus (LXD fork)
 }
 
 /// CPU architecture for VMs
@@ -18,13 +18,13 @@ pub enum VmHypervisor {
 #[serde(rename_all = "lowercase")]
 pub enum VmArchitecture {
     #[serde(rename = "x86_64")]
-    X86_64,      // amd64
+    X86_64, // amd64
     #[serde(rename = "aarch64")]
-    Aarch64,     // arm64
+    Aarch64, // arm64
     #[serde(rename = "riscv64")]
-    Riscv64,     // risc-v 64-bit
+    Riscv64, // risc-v 64-bit
     #[serde(rename = "ppc64le")]
-    Ppc64le,     // powerpc 64-bit little-endian
+    Ppc64le, // powerpc 64-bit little-endian
 }
 
 impl Default for VmArchitecture {
@@ -55,9 +55,9 @@ pub struct VmConfig {
     pub id: String,
     pub name: String,
     pub hypervisor: VmHypervisor,
-    pub memory: u64,      // Memory in MB
+    pub memory: u64, // Memory in MB
     pub cpus: u32,
-    pub disk_size: u64,   // Disk size in GB (legacy, kept for compatibility)
+    pub disk_size: u64, // Disk size in GB (legacy, kept for compatibility)
     pub status: VmStatus,
     #[serde(default)]
     pub architecture: VmArchitecture, // CPU architecture
@@ -90,11 +90,11 @@ impl std::fmt::Display for VmStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ContainerRuntime {
-    Lxc,       // LXC
-    Lxd,       // LXD (can do containers)
-    Incus,     // Incus (LXD fork, can do containers)
-    Docker,    // Docker
-    Podman,    // Podman (daemonless Docker alternative)
+    Lxc,    // LXC
+    Lxd,    // LXD (can do containers)
+    Incus,  // Incus (LXD fork, can do containers)
+    Docker, // Docker
+    Podman, // Podman (daemonless Docker alternative)
 }
 
 /// Container configuration
@@ -103,9 +103,9 @@ pub struct ContainerConfig {
     pub id: String,
     pub name: String,
     pub runtime: ContainerRuntime,
-    pub memory: u64,      // Memory in MB
+    pub memory: u64, // Memory in MB
     pub cpus: u32,
-    pub rootfs: String,   // Path to rootfs or image name for Docker
+    pub rootfs: String, // Path to rootfs or image name for Docker
     pub status: ContainerStatus,
 }
 

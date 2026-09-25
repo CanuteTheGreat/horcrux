@@ -65,7 +65,13 @@ impl Metric {
         writeln!(&mut output, "# HELP {} {}", self.name, self.help).unwrap();
 
         // Write TYPE line
-        writeln!(&mut output, "# TYPE {} {}", self.name, self.metric_type.as_str()).unwrap();
+        writeln!(
+            &mut output,
+            "# TYPE {} {}",
+            self.name,
+            self.metric_type.as_str()
+        )
+        .unwrap();
 
         // Write metric values
         for (labels, value) in &self.values {
@@ -272,33 +278,82 @@ impl PrometheusManager {
     }
 
     /// Update VM metrics
-    pub async fn update_vm_metrics(&self, vm_id: &str, vm_name: &str, cpu_usage: f64, memory_usage: u64, _status: &str) {
+    pub async fn update_vm_metrics(
+        &self,
+        vm_id: &str,
+        vm_name: &str,
+        cpu_usage: f64,
+        memory_usage: u64,
+        _status: &str,
+    ) {
         let mut labels = HashMap::new();
         labels.insert("vm_id".to_string(), vm_id.to_string());
         labels.insert("vm_name".to_string(), vm_name.to_string());
 
-        self.registry.set_gauge("horcrux_vm_cpu_usage_percent", labels.clone(), cpu_usage).await;
-        self.registry.set_gauge("horcrux_vm_memory_usage_bytes", labels.clone(), memory_usage as f64).await;
+        self.registry
+            .set_gauge("horcrux_vm_cpu_usage_percent", labels.clone(), cpu_usage)
+            .await;
+        self.registry
+            .set_gauge(
+                "horcrux_vm_memory_usage_bytes",
+                labels.clone(),
+                memory_usage as f64,
+            )
+            .await;
     }
 
     /// Update node metrics
-    pub async fn update_node_metrics(&self, node_name: &str, cpu_usage: f64, memory_usage: u64, uptime: u64) {
+    pub async fn update_node_metrics(
+        &self,
+        node_name: &str,
+        cpu_usage: f64,
+        memory_usage: u64,
+        uptime: u64,
+    ) {
         let mut labels = HashMap::new();
         labels.insert("node".to_string(), node_name.to_string());
 
-        self.registry.set_gauge("horcrux_node_cpu_usage_percent", labels.clone(), cpu_usage).await;
-        self.registry.set_gauge("horcrux_node_memory_usage_bytes", labels.clone(), memory_usage as f64).await;
-        self.registry.set_gauge("horcrux_node_uptime_seconds", labels.clone(), uptime as f64).await;
+        self.registry
+            .set_gauge("horcrux_node_cpu_usage_percent", labels.clone(), cpu_usage)
+            .await;
+        self.registry
+            .set_gauge(
+                "horcrux_node_memory_usage_bytes",
+                labels.clone(),
+                memory_usage as f64,
+            )
+            .await;
+        self.registry
+            .set_gauge("horcrux_node_uptime_seconds", labels.clone(), uptime as f64)
+            .await;
     }
 
     /// Update storage metrics
-    pub async fn update_storage_metrics(&self, pool_id: &str, pool_name: &str, total: u64, used: u64) {
+    pub async fn update_storage_metrics(
+        &self,
+        pool_id: &str,
+        pool_name: &str,
+        total: u64,
+        used: u64,
+    ) {
         let mut labels = HashMap::new();
         labels.insert("pool_id".to_string(), pool_id.to_string());
         labels.insert("pool_name".to_string(), pool_name.to_string());
 
-        self.registry.set_gauge("horcrux_storage_total_bytes", labels.clone(), (total * 1024 * 1024 * 1024) as f64).await;
-        self.registry.set_gauge("horcrux_storage_used_bytes", labels.clone(), ((total - used) * 1024 * 1024 * 1024) as f64).await;
+        self.registry
+            .set_gauge(
+                "horcrux_storage_total_bytes",
+                labels.clone(),
+                (total * 1024 * 1024 * 1024) as f64,
+            )
+            .await;
+        self.registry
+            .set_gauge(
+                "horcrux_storage_used_bytes",
+                labels.clone(),
+                ((total - used) * 1024 * 1024 * 1024) as f64,
+            )
+            .await;
     }
 
     /// Increment HTTP request counter
@@ -308,13 +363,27 @@ impl PrometheusManager {
         labels.insert("path".to_string(), path.to_string());
         labels.insert("status".to_string(), status_code.to_string());
 
-        self.registry.inc_counter("horcrux_http_requests_total", labels).await;
+        self.registry
+            .inc_counter("horcrux_http_requests_total", labels)
+            .await;
     }
 
     /// Update cluster metrics
     pub async fn update_cluster_metrics(&self, total_nodes: usize, online_nodes: usize) {
-        self.registry.set_gauge("horcrux_cluster_nodes_total", HashMap::new(), total_nodes as f64).await;
-        self.registry.set_gauge("horcrux_cluster_nodes_online", HashMap::new(), online_nodes as f64).await;
+        self.registry
+            .set_gauge(
+                "horcrux_cluster_nodes_total",
+                HashMap::new(),
+                total_nodes as f64,
+            )
+            .await;
+        self.registry
+            .set_gauge(
+                "horcrux_cluster_nodes_online",
+                HashMap::new(),
+                online_nodes as f64,
+            )
+            .await;
     }
 
     /// Export metrics in Prometheus format

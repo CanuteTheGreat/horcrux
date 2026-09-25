@@ -1,14 +1,15 @@
-use leptos::*;
 use crate::api::{
-    ClusterNode, ClusterArchitecture, HaStatus, HaResource, HaGroup, MigrationJob,
-    get_cluster_nodes, get_cluster_architecture, get_ha_status, get_ha_resources,
-    get_ha_groups, HaClusterStatus, HaResourceState, HealthCheckStatus
+    get_cluster_architecture, get_cluster_nodes, get_ha_groups, get_ha_resources, get_ha_status,
+    ClusterArchitecture, ClusterNode, HaClusterStatus, HaGroup, HaResource, HaResourceState,
+    HaStatus, HealthCheckStatus, MigrationJob,
 };
+use leptos::*;
 
 #[component]
 pub fn HaDashboard() -> impl IntoView {
     let (cluster_nodes, set_cluster_nodes) = create_signal(Vec::<ClusterNode>::new());
-    let (cluster_architecture, set_cluster_architecture) = create_signal(None::<ClusterArchitecture>);
+    let (cluster_architecture, set_cluster_architecture) =
+        create_signal(None::<ClusterArchitecture>);
     let (ha_status, set_ha_status) = create_signal(None::<HaStatus>);
     let (ha_resources, set_ha_resources) = create_signal(Vec::<HaResource>::new());
     let (ha_groups, set_ha_groups) = create_signal(Vec::<HaGroup>::new());
@@ -72,31 +73,25 @@ pub fn HaDashboard() -> impl IntoView {
         std::time::Duration::from_secs(30),
     );
 
-    let get_node_status_color = move |status: &str| {
-        match status.to_lowercase().as_str() {
-            "online" => "bg-green-100 text-green-800",
-            "offline" => "bg-red-100 text-red-800",
-            "maintenance" => "bg-yellow-100 text-yellow-800",
-            _ => "bg-gray-100 text-gray-800",
-        }
+    let get_node_status_color = move |status: &str| match status.to_lowercase().as_str() {
+        "online" => "bg-green-100 text-green-800",
+        "offline" => "bg-red-100 text-red-800",
+        "maintenance" => "bg-yellow-100 text-yellow-800",
+        _ => "bg-gray-100 text-gray-800",
     };
 
-    let get_ha_status_color = move |status: &HaClusterStatus| {
-        match status {
-            HaClusterStatus::Active => "bg-green-100 text-green-800",
-            HaClusterStatus::Degraded => "bg-yellow-100 text-yellow-800",
-            HaClusterStatus::Failed => "bg-red-100 text-red-800",
-            HaClusterStatus::Maintenance => "bg-blue-100 text-blue-800",
-        }
+    let get_ha_status_color = move |status: &HaClusterStatus| match status {
+        HaClusterStatus::Active => "bg-green-100 text-green-800",
+        HaClusterStatus::Degraded => "bg-yellow-100 text-yellow-800",
+        HaClusterStatus::Failed => "bg-red-100 text-red-800",
+        HaClusterStatus::Maintenance => "bg-blue-100 text-blue-800",
     };
 
-    let get_health_status_color = move |status: &HealthCheckStatus| {
-        match status {
-            HealthCheckStatus::Healthy => "bg-green-100 text-green-800",
-            HealthCheckStatus::Warning => "bg-yellow-100 text-yellow-800",
-            HealthCheckStatus::Critical => "bg-red-100 text-red-800",
-            HealthCheckStatus::Unknown => "bg-gray-100 text-gray-800",
-        }
+    let get_health_status_color = move |status: &HealthCheckStatus| match status {
+        HealthCheckStatus::Healthy => "bg-green-100 text-green-800",
+        HealthCheckStatus::Warning => "bg-yellow-100 text-yellow-800",
+        HealthCheckStatus::Critical => "bg-red-100 text-red-800",
+        HealthCheckStatus::Unknown => "bg-gray-100 text-gray-800",
     };
 
     let calculate_cluster_health = move || {
@@ -106,7 +101,10 @@ pub fn HaDashboard() -> impl IntoView {
         }
 
         let total = nodes.len();
-        let online = nodes.iter().filter(|n| n.status.to_lowercase() == "online").count();
+        let online = nodes
+            .iter()
+            .filter(|n| n.status.to_lowercase() == "online")
+            .count();
         let health_percentage = (online as f64 / total as f64) * 100.0;
 
         match health_percentage {

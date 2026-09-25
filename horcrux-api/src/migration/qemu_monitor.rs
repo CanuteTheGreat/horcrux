@@ -114,10 +114,9 @@ impl QemuMonitor {
     async fn connect(&self) -> Result<UnixStream> {
         debug!("Connecting to QEMU monitor at {:?}", self.socket_path);
 
-        let stream = UnixStream::connect(&self.socket_path).await
-            .map_err(|e| horcrux_common::Error::System(
-                format!("Failed to connect to QEMU monitor: {}", e)
-            ))?;
+        let stream = UnixStream::connect(&self.socket_path).await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to connect to QEMU monitor: {}", e))
+        })?;
 
         Ok(stream)
     }
@@ -136,10 +135,9 @@ impl QemuMonitor {
 
         // Read and discard the initial QMP greeting
         let mut greeting = String::new();
-        reader.read_line(&mut greeting).await
-            .map_err(|e| horcrux_common::Error::System(
-                format!("Failed to read QMP greeting: {}", e)
-            ))?;
+        reader.read_line(&mut greeting).await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to read QMP greeting: {}", e))
+        })?;
 
         debug!("QMP greeting: {}", greeting.trim());
 
@@ -149,26 +147,25 @@ impl QemuMonitor {
             arguments: None,
         };
 
-        let cmd_json = serde_json::to_string(&qmp_cmd)
-            .map_err(|e| horcrux_common::Error::System(
-                format!("Failed to serialize QMP command: {}", e)
-            ))?;
+        let cmd_json = serde_json::to_string(&qmp_cmd).map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to serialize QMP command: {}", e))
+        })?;
 
-        write_half.write_all(cmd_json.as_bytes()).await
-            .map_err(|e| horcrux_common::Error::System(
-                format!("Failed to write QMP command: {}", e)
-            ))?;
-        write_half.write_all(b"\n").await
-            .map_err(|e| horcrux_common::Error::System(
-                format!("Failed to write newline: {}", e)
-            ))?;
+        write_half
+            .write_all(cmd_json.as_bytes())
+            .await
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to write QMP command: {}", e))
+            })?;
+        write_half.write_all(b"\n").await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to write newline: {}", e))
+        })?;
 
         // Read response
         let mut response = String::new();
-        reader.read_line(&mut response).await
-            .map_err(|e| horcrux_common::Error::System(
-                format!("Failed to read QMP response: {}", e)
-            ))?;
+        reader.read_line(&mut response).await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to read QMP response: {}", e))
+        })?;
 
         debug!("QMP capabilities response: {}", response.trim());
 
@@ -178,39 +175,38 @@ impl QemuMonitor {
             arguments,
         };
 
-        let cmd_json = serde_json::to_string(&actual_cmd)
-            .map_err(|e| horcrux_common::Error::System(
-                format!("Failed to serialize QMP command: {}", e)
-            ))?;
+        let cmd_json = serde_json::to_string(&actual_cmd).map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to serialize QMP command: {}", e))
+        })?;
 
-        write_half.write_all(cmd_json.as_bytes()).await
-            .map_err(|e| horcrux_common::Error::System(
-                format!("Failed to write QMP command: {}", e)
-            ))?;
-        write_half.write_all(b"\n").await
-            .map_err(|e| horcrux_common::Error::System(
-                format!("Failed to write newline: {}", e)
-            ))?;
+        write_half
+            .write_all(cmd_json.as_bytes())
+            .await
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to write QMP command: {}", e))
+            })?;
+        write_half.write_all(b"\n").await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to write newline: {}", e))
+        })?;
 
         // Read command response
         let mut response = String::new();
-        reader.read_line(&mut response).await
-            .map_err(|e| horcrux_common::Error::System(
-                format!("Failed to read QMP response: {}", e)
-            ))?;
+        reader.read_line(&mut response).await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to read QMP response: {}", e))
+        })?;
 
         debug!("QMP command response: {}", response.trim());
 
         // Parse response
-        let qmp_response: QmpResponse = serde_json::from_str(&response)
-            .map_err(|e| horcrux_common::Error::System(
-                format!("Failed to parse QMP response: {}", e)
-            ))?;
+        let qmp_response: QmpResponse = serde_json::from_str(&response).map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to parse QMP response: {}", e))
+        })?;
 
         if let Some(error) = qmp_response.error {
-            return Err(horcrux_common::Error::System(
-                format!("QMP error: {} - {}", error.class, error.desc)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "QMP error: {} - {}",
+                error.class, error.desc
+            )));
         }
 
         Ok(qmp_response.return_value.unwrap_or(serde_json::Value::Null))
@@ -229,11 +225,10 @@ impl QemuMonitor {
     /// Parse migration status from QMP response
     fn parse_migration_status(&self, value: serde_json::Value) -> Result<MigrationStatus> {
         // Extract status string
-        let status_str = value.get("status")
+        let status_str = value
+            .get("status")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| horcrux_common::Error::System(
-                "Missing migration status".to_string()
-            ))?;
+            .ok_or_else(|| horcrux_common::Error::System("Missing migration status".to_string()))?;
 
         let status = match status_str {
             "none" => MigrationState::None,
@@ -256,60 +251,57 @@ impl QemuMonitor {
         // Extract RAM statistics
         let ram = value.get("ram").unwrap_or(&serde_json::Value::Null);
 
-        let ram_transferred = ram.get("transferred")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) / (1024 * 1024); // Convert to MB
+        let ram_transferred =
+            ram.get("transferred").and_then(|v| v.as_u64()).unwrap_or(0) / (1024 * 1024); // Convert to MB
 
-        let ram_remaining = ram.get("remaining")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) / (1024 * 1024);
+        let ram_remaining =
+            ram.get("remaining").and_then(|v| v.as_u64()).unwrap_or(0) / (1024 * 1024);
 
-        let ram_total = ram.get("total")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) / (1024 * 1024);
+        let ram_total = ram.get("total").and_then(|v| v.as_u64()).unwrap_or(0) / (1024 * 1024);
 
-        let ram_duplicate = ram.get("duplicate")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) / (1024 * 1024);
+        let ram_duplicate =
+            ram.get("duplicate").and_then(|v| v.as_u64()).unwrap_or(0) / (1024 * 1024);
 
-        let ram_normal = ram.get("normal")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) / (1024 * 1024);
+        let ram_normal = ram.get("normal").and_then(|v| v.as_u64()).unwrap_or(0) / (1024 * 1024);
 
-        let ram_normal_bytes = ram.get("normal-bytes")
+        let ram_normal_bytes = ram
+            .get("normal-bytes")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
 
-        let dirty_pages_rate = ram.get("dirty-pages-rate")
+        let dirty_pages_rate = ram
+            .get("dirty-pages-rate")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
 
-        let mbps = ram.get("mbps")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0);
+        let mbps = ram.get("mbps").and_then(|v| v.as_f64()).unwrap_or(0.0);
 
-        let dirty_sync_count = ram.get("dirty-sync-count")
+        let dirty_sync_count = ram
+            .get("dirty-sync-count")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
 
-        let page_size = ram.get("page-size")
+        let page_size = ram
+            .get("page-size")
             .and_then(|v| v.as_u64())
-            .unwrap_or(4096) / 1024; // Convert to KB
+            .unwrap_or(4096)
+            / 1024; // Convert to KB
 
         // Extract timing information
-        let total_time = value.get("total-time")
+        let total_time = value
+            .get("total-time")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
 
-        let downtime = value.get("downtime")
+        let downtime = value.get("downtime").and_then(|v| v.as_u64()).unwrap_or(0);
+
+        let setup_time = value
+            .get("setup-time")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
 
-        let setup_time = value.get("setup-time")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-
-        let expected_downtime = value.get("expected-downtime")
+        let expected_downtime = value
+            .get("expected-downtime")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
 
@@ -338,16 +330,19 @@ impl QemuMonitor {
 
         let response = self.execute_command("query-status", None).await?;
 
-        let status = response.get("status")
+        let status = response
+            .get("status")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string();
 
-        let running = response.get("running")
+        let running = response
+            .get("running")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let singlestep = response.get("singlestep")
+        let singlestep = response
+            .get("singlestep")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
@@ -360,11 +355,20 @@ impl QemuMonitor {
     }
 
     /// Start migration via QMP
-    pub async fn migrate(&self, uri: &str, incremental: bool, blk: bool, detach: bool) -> Result<()> {
+    pub async fn migrate(
+        &self,
+        uri: &str,
+        incremental: bool,
+        blk: bool,
+        detach: bool,
+    ) -> Result<()> {
         info!("Starting migration to {}", uri);
 
         let mut args = serde_json::Map::new();
-        args.insert("uri".to_string(), serde_json::Value::String(uri.to_string()));
+        args.insert(
+            "uri".to_string(),
+            serde_json::Value::String(uri.to_string()),
+        );
 
         if incremental {
             args.insert("inc".to_string(), serde_json::Value::Bool(true));
@@ -378,7 +382,8 @@ impl QemuMonitor {
             args.insert("detach".to_string(), serde_json::Value::Bool(true));
         }
 
-        self.execute_command("migrate", Some(serde_json::Value::Object(args))).await?;
+        self.execute_command("migrate", Some(serde_json::Value::Object(args)))
+            .await?;
 
         info!("Migration command sent successfully");
         Ok(())
@@ -396,24 +401,38 @@ impl QemuMonitor {
 
     /// Set migration downtime limit (in seconds)
     pub async fn migrate_set_downtime(&self, downtime_secs: f64) -> Result<()> {
-        info!("Setting migration downtime limit to {} seconds", downtime_secs);
+        info!(
+            "Setting migration downtime limit to {} seconds",
+            downtime_secs
+        );
 
         let mut args = serde_json::Map::new();
         args.insert("value".to_string(), serde_json::Value::from(downtime_secs));
 
-        self.execute_command("migrate-set-parameters", Some(serde_json::Value::Object(args))).await?;
+        self.execute_command(
+            "migrate-set-parameters",
+            Some(serde_json::Value::Object(args)),
+        )
+        .await?;
 
         Ok(())
     }
 
     /// Set migration speed limit (in bytes/sec)
     pub async fn migrate_set_speed(&self, speed_bytes_per_sec: u64) -> Result<()> {
-        info!("Setting migration speed limit to {} bytes/sec", speed_bytes_per_sec);
+        info!(
+            "Setting migration speed limit to {} bytes/sec",
+            speed_bytes_per_sec
+        );
 
         let mut args = serde_json::Map::new();
-        args.insert("value".to_string(), serde_json::Value::from(speed_bytes_per_sec));
+        args.insert(
+            "value".to_string(),
+            serde_json::Value::from(speed_bytes_per_sec),
+        );
 
-        self.execute_command("migrate_set_speed", Some(serde_json::Value::Object(args))).await?;
+        self.execute_command("migrate_set_speed", Some(serde_json::Value::Object(args)))
+            .await?;
 
         Ok(())
     }
@@ -486,11 +505,18 @@ impl QemuMonitor {
     pub async fn savevm(&self, name: &str) -> Result<()> {
         info!("Saving VM state: {}", name);
         let mut args = serde_json::Map::new();
-        args.insert("name".to_string(), serde_json::Value::String(name.to_string()));
+        args.insert(
+            "name".to_string(),
+            serde_json::Value::String(name.to_string()),
+        );
 
-        self.execute_command("human-monitor-command", Some(serde_json::json!({
-            "command-line": format!("savevm {}", name)
-        }))).await?;
+        self.execute_command(
+            "human-monitor-command",
+            Some(serde_json::json!({
+                "command-line": format!("savevm {}", name)
+            })),
+        )
+        .await?;
 
         info!("VM state saved: {}", name);
         Ok(())
@@ -500,9 +526,13 @@ impl QemuMonitor {
     pub async fn loadvm(&self, name: &str) -> Result<()> {
         info!("Loading VM state: {}", name);
 
-        self.execute_command("human-monitor-command", Some(serde_json::json!({
-            "command-line": format!("loadvm {}", name)
-        }))).await?;
+        self.execute_command(
+            "human-monitor-command",
+            Some(serde_json::json!({
+                "command-line": format!("loadvm {}", name)
+            })),
+        )
+        .await?;
 
         info!("VM state loaded: {}", name);
         Ok(())
@@ -512,9 +542,13 @@ impl QemuMonitor {
     pub async fn delvm(&self, name: &str) -> Result<()> {
         info!("Deleting VM snapshot: {}", name);
 
-        self.execute_command("human-monitor-command", Some(serde_json::json!({
-            "command-line": format!("delvm {}", name)
-        }))).await?;
+        self.execute_command(
+            "human-monitor-command",
+            Some(serde_json::json!({
+                "command-line": format!("delvm {}", name)
+            })),
+        )
+        .await?;
 
         info!("VM snapshot deleted: {}", name);
         Ok(())
@@ -524,9 +558,14 @@ impl QemuMonitor {
     pub async fn info_snapshots(&self) -> Result<String> {
         debug!("Listing VM snapshots");
 
-        let response = self.execute_command("human-monitor-command", Some(serde_json::json!({
-            "command-line": "info snapshots"
-        }))).await?;
+        let response = self
+            .execute_command(
+                "human-monitor-command",
+                Some(serde_json::json!({
+                    "command-line": "info snapshots"
+                })),
+            )
+            .await?;
 
         // Response is in "return" field as a string
         let output = response.as_str().unwrap_or("").to_string();
@@ -552,7 +591,8 @@ impl QemuMonitor {
         let mut args = serde_json::Map::new();
         args.insert("uri".to_string(), serde_json::Value::String(uri));
 
-        self.execute_command("migrate-incoming", Some(serde_json::Value::Object(args))).await?;
+        self.execute_command("migrate-incoming", Some(serde_json::Value::Object(args)))
+            .await?;
 
         info!("Incoming migration started from: {}", file_path);
         Ok(())
@@ -562,11 +602,18 @@ impl QemuMonitor {
 
     /// Create disk snapshot (internal QCOW2 snapshot)
     pub async fn blockdev_snapshot(&self, device: &str, snapshot_name: &str) -> Result<()> {
-        info!("Creating block device snapshot: {} -> {}", device, snapshot_name);
+        info!(
+            "Creating block device snapshot: {} -> {}",
+            device, snapshot_name
+        );
 
-        self.execute_command("human-monitor-command", Some(serde_json::json!({
-            "command-line": format!("snapshot_blkdev {} {}", device, snapshot_name)
-        }))).await?;
+        self.execute_command(
+            "human-monitor-command",
+            Some(serde_json::json!({
+                "command-line": format!("snapshot_blkdev {} {}", device, snapshot_name)
+            })),
+        )
+        .await?;
 
         info!("Block device snapshot created");
         Ok(())
@@ -578,10 +625,9 @@ impl QemuMonitor {
 
         let response = self.execute_command("query-block", None).await?;
 
-        let blocks = response.as_array()
-            .ok_or_else(|| horcrux_common::Error::System(
-                "Expected array in query-block response".to_string()
-            ))?;
+        let blocks = response.as_array().ok_or_else(|| {
+            horcrux_common::Error::System("Expected array in query-block response".to_string())
+        })?;
 
         let mut result = Vec::new();
         for block in blocks {
@@ -602,7 +648,8 @@ impl QemuMonitor {
                     device: device.to_string(),
                     file,
                     read_only: ro,
-                    removable: block.get("removable")
+                    removable: block
+                        .get("removable")
                         .and_then(|r| r.as_bool())
                         .unwrap_or(false),
                 });

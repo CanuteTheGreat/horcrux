@@ -1,6 +1,5 @@
 ///! Firewall management module
 ///! Provides distributed firewall with datacenter, node, VM, and container level rules
-
 mod nftables;
 mod security_groups;
 
@@ -18,10 +17,10 @@ pub struct FirewallRule {
     pub action: FirewallAction,
     pub direction: Direction,
     pub protocol: Option<Protocol>,
-    pub source: Option<String>,      // IP/CIDR or security group
-    pub dest: Option<String>,         // IP/CIDR or security group
-    pub sport: Option<String>,        // Source port or range
-    pub dport: Option<String>,        // Dest port or range
+    pub source: Option<String>, // IP/CIDR or security group
+    pub dest: Option<String>,   // IP/CIDR or security group
+    pub sport: Option<String>,  // Source port or range
+    pub dport: Option<String>,  // Dest port or range
     pub comment: Option<String>,
     pub log: bool,
     pub position: u32,
@@ -40,8 +39,8 @@ pub enum FirewallAction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Direction {
-    In,   // Incoming
-    Out,  // Outgoing
+    In,  // Incoming
+    Out, // Outgoing
 }
 
 /// Network protocol
@@ -103,18 +102,27 @@ impl FirewallManager {
             }
             FirewallScope::Node(node) => {
                 let mut rules = self.node_rules.write().await;
-                rules.entry(node).or_insert_with(Vec::new).push(rule.clone());
+                rules
+                    .entry(node)
+                    .or_insert_with(Vec::new)
+                    .push(rule.clone());
             }
             FirewallScope::Vm(vm_id) => {
                 let mut rules = self.vm_rules.write().await;
-                rules.entry(vm_id.clone()).or_insert_with(Vec::new).push(rule.clone());
+                rules
+                    .entry(vm_id.clone())
+                    .or_insert_with(Vec::new)
+                    .push(rule.clone());
 
                 // Apply to nftables for this VM
                 self.nftables.add_vm_rule(&vm_id, &rule).await?;
             }
             FirewallScope::Container(ct_id) => {
                 let mut rules = self.container_rules.write().await;
-                rules.entry(ct_id.clone()).or_insert_with(Vec::new).push(rule.clone());
+                rules
+                    .entry(ct_id.clone())
+                    .or_insert_with(Vec::new)
+                    .push(rule.clone());
 
                 // Apply to nftables for this container
                 self.nftables.add_container_rule(&ct_id, &rule).await?;
@@ -204,9 +212,9 @@ impl FirewallManager {
         target: FirewallScope,
     ) -> Result<()> {
         let groups = self.security_groups.read().await;
-        let group = groups
-            .get(group_name)
-            .ok_or_else(|| horcrux_common::Error::System(format!("Security group {} not found", group_name)))?;
+        let group = groups.get(group_name).ok_or_else(|| {
+            horcrux_common::Error::System(format!("Security group {} not found", group_name))
+        })?;
 
         // Apply all rules from the security group
         for rule in &group.rules {
@@ -237,10 +245,9 @@ impl FirewallManager {
     /// Get security group by name
     pub async fn get_security_group(&self, name: &str) -> Result<SecurityGroup> {
         let groups = self.security_groups.read().await;
-        groups
-            .get(name)
-            .cloned()
-            .ok_or_else(|| horcrux_common::Error::System(format!("Security group {} not found", name)))
+        groups.get(name).cloned().ok_or_else(|| {
+            horcrux_common::Error::System(format!("Security group {} not found", name))
+        })
     }
 
     /// Apply firewall rules for a specific scope

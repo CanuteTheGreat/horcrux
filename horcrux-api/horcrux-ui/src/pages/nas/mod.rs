@@ -12,23 +12,23 @@
 //! - Job scheduling for automated tasks
 
 mod dashboard;
+mod directory;
+mod groups;
+mod iscsi;
+mod pools;
+mod s3;
+mod scheduler;
+mod services;
 mod shares;
 mod users;
-mod groups;
-mod services;
-mod pools;
-mod iscsi;
-mod s3;
-mod directory;
-mod scheduler;
 
 pub use dashboard::NasDashboard;
+pub use directory::DirectoryPage;
+pub use groups::GroupsPage;
+pub use iscsi::IscsiPage;
+pub use pools::PoolsPage;
+pub use s3::S3Page;
+pub use scheduler::SchedulerPage;
+pub use services::ServicesPage;
 pub use shares::SharesPage;
 pub use users::UsersPage as NasUsersPage;
-pub use groups::GroupsPage;
-pub use services::ServicesPage;
-pub use pools::PoolsPage;
-pub use iscsi::IscsiPage;
-pub use s3::S3Page;
-pub use directory::DirectoryPage;
-pub use scheduler::SchedulerPage;

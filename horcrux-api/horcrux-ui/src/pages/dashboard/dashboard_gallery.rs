@@ -1,11 +1,13 @@
-use leptos::*;
 use crate::api::*;
+use leptos::*;
 
 #[component]
 pub fn DashboardGalleryPage() -> impl IntoView {
-    let (featured_dashboards, set_featured_dashboards) = create_signal(Vec::<CustomDashboard>::new());
+    let (featured_dashboards, set_featured_dashboards) =
+        create_signal(Vec::<CustomDashboard>::new());
     let (public_dashboards, set_public_dashboards) = create_signal(Vec::<CustomDashboard>::new());
-    let (dashboard_categories, set_dashboard_categories) = create_signal(Vec::<DashboardCategory>::new());
+    let (dashboard_categories, set_dashboard_categories) =
+        create_signal(Vec::<DashboardCategory>::new());
     let (loading, set_loading) = create_signal(false);
     let (error_message, set_error_message) = create_signal(None::<String>);
     let (success_message, set_success_message) = create_signal(None::<String>);
@@ -22,13 +24,17 @@ pub fn DashboardGalleryPage() -> impl IntoView {
         // Load featured dashboards
         match get_featured_dashboards().await {
             Ok(dashboards) => set_featured_dashboards.set(dashboards),
-            Err(e) => set_error_message.set(Some(format!("Failed to load featured dashboards: {}", e))),
+            Err(e) => {
+                set_error_message.set(Some(format!("Failed to load featured dashboards: {}", e)))
+            }
         }
 
         // Load public dashboards
         match get_public_dashboards().await {
             Ok(dashboards) => set_public_dashboards.set(dashboards),
-            Err(e) => set_error_message.set(Some(format!("Failed to load public dashboards: {}", e))),
+            Err(e) => {
+                set_error_message.set(Some(format!("Failed to load public dashboards: {}", e)))
+            }
         }
 
         // Load categories
@@ -55,7 +61,10 @@ pub fn DashboardGalleryPage() -> impl IntoView {
 
             match import_dashboard(request).await {
                 Ok(imported_dashboard) => {
-                    set_success_message.set(Some(format!("Dashboard imported as '{}'", imported_dashboard.name)));
+                    set_success_message.set(Some(format!(
+                        "Dashboard imported as '{}'",
+                        imported_dashboard.name
+                    )));
                 }
                 Err(e) => set_error_message.set(Some(format!("Failed to import dashboard: {}", e))),
             }
@@ -69,7 +78,10 @@ pub fn DashboardGalleryPage() -> impl IntoView {
         let dashboard_id = dashboard_id.clone();
         async move {
             // This would open a preview modal or navigate to preview page
-            set_success_message.set(Some(format!("Opening preview for dashboard {}", dashboard_id)));
+            set_success_message.set(Some(format!(
+                "Opening preview for dashboard {}",
+                dashboard_id
+            )));
         }
     });
 
@@ -79,13 +91,20 @@ pub fn DashboardGalleryPage() -> impl IntoView {
         let category = selected_category.get();
         let sort = sort_by.get();
 
-        let mut filtered: Vec<CustomDashboard> = public_dashboards.get()
+        let mut filtered: Vec<CustomDashboard> = public_dashboards
+            .get()
             .into_iter()
             .filter(|dashboard| {
-                let matches_search = query.is_empty() ||
-                    dashboard.name.to_lowercase().contains(&query) ||
-                    dashboard.description.as_ref().map_or(false, |d| d.to_lowercase().contains(&query)) ||
-                    dashboard.tags.iter().any(|tag| tag.to_lowercase().contains(&query));
+                let matches_search = query.is_empty()
+                    || dashboard.name.to_lowercase().contains(&query)
+                    || dashboard
+                        .description
+                        .as_ref()
+                        .map_or(false, |d| d.to_lowercase().contains(&query))
+                    || dashboard
+                        .tags
+                        .iter()
+                        .any(|tag| tag.to_lowercase().contains(&query));
 
                 let matches_category = category == "all" || dashboard.category == category;
 

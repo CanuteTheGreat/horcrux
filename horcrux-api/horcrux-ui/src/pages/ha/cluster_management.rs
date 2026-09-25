@@ -1,14 +1,15 @@
-use leptos::*;
-use horcrux_common::VmConfig;
 use crate::api::{
-    ClusterNode, ClusterArchitecture, AddNodeRequest, FindNodeRequest, NodeRecommendation,
-    get_cluster_nodes, get_cluster_architecture, add_cluster_node, find_best_node_for_vm, get_vms
+    add_cluster_node, find_best_node_for_vm, get_cluster_architecture, get_cluster_nodes, get_vms,
+    AddNodeRequest, ClusterArchitecture, ClusterNode, FindNodeRequest, NodeRecommendation,
 };
+use horcrux_common::VmConfig;
+use leptos::*;
 
 #[component]
 pub fn ClusterManagementPage() -> impl IntoView {
     let (cluster_nodes, set_cluster_nodes) = create_signal(Vec::<ClusterNode>::new());
-    let (cluster_architecture, set_cluster_architecture) = create_signal(None::<ClusterArchitecture>);
+    let (cluster_architecture, set_cluster_architecture) =
+        create_signal(None::<ClusterArchitecture>);
     let (vms, set_vms) = create_signal(Vec::<VmConfig>::new());
     let (loading, set_loading) = create_signal(false);
     let (error, set_error) = create_signal(None::<String>);
@@ -26,7 +27,8 @@ pub fn ClusterManagementPage() -> impl IntoView {
     // Node finder state
     let (selected_vm_id, set_selected_vm_id) = create_signal(String::new());
     let (preferred_arch, set_preferred_arch) = create_signal(String::new());
-    let (node_recommendations, set_node_recommendations) = create_signal(Vec::<NodeRecommendation>::new());
+    let (node_recommendations, set_node_recommendations) =
+        create_signal(Vec::<NodeRecommendation>::new());
 
     let load_cluster_data = move || {
         set_loading.set(true);
@@ -78,9 +80,9 @@ pub fn ClusterManagementPage() -> impl IntoView {
                 .get()
                 .into_iter()
                 .filter(|node| {
-                    node.name.to_lowercase().contains(&query) ||
-                    node.address.to_lowercase().contains(&query) ||
-                    node.architecture.to_lowercase().contains(&query)
+                    node.name.to_lowercase().contains(&query)
+                        || node.address.to_lowercase().contains(&query)
+                        || node.architecture.to_lowercase().contains(&query)
                 })
                 .collect()
         }
@@ -97,7 +99,11 @@ pub fn ClusterManagementPage() -> impl IntoView {
         let request = AddNodeRequest {
             name: node_name.get(),
             address: node_address.get(),
-            ssh_key: if node_ssh_key.get().is_empty() { None } else { Some(node_ssh_key.get()) },
+            ssh_key: if node_ssh_key.get().is_empty() {
+                None
+            } else {
+                Some(node_ssh_key.get())
+            },
             architecture: node_architecture.get(),
         };
 
@@ -128,7 +134,11 @@ pub fn ClusterManagementPage() -> impl IntoView {
                     "vcpus": 2,
                     "disk_size": 20
                 }),
-                preferred_architecture: if preferred_arch.get().is_empty() { None } else { Some(preferred_arch.get()) },
+                preferred_architecture: if preferred_arch.get().is_empty() {
+                    None
+                } else {
+                    Some(preferred_arch.get())
+                },
                 exclude_nodes: Vec::new(),
             };
 
@@ -143,13 +153,11 @@ pub fn ClusterManagementPage() -> impl IntoView {
         }
     };
 
-    let get_node_status_color = move |status: &str| {
-        match status.to_lowercase().as_str() {
-            "online" => "bg-green-100 text-green-800",
-            "offline" => "bg-red-100 text-red-800",
-            "maintenance" => "bg-yellow-100 text-yellow-800",
-            _ => "bg-gray-100 text-gray-800",
-        }
+    let get_node_status_color = move |status: &str| match status.to_lowercase().as_str() {
+        "online" => "bg-green-100 text-green-800",
+        "offline" => "bg-red-100 text-red-800",
+        "maintenance" => "bg-yellow-100 text-yellow-800",
+        _ => "bg-gray-100 text-gray-800",
     };
 
     let get_usage_color = move |usage: f64| {

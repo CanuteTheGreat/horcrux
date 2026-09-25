@@ -3,8 +3,8 @@
 //! Complete user management interface for Horcrux enterprise features.
 //! Provides CRUD operations for users, role assignments, and bulk operations.
 
-use leptos::*;
 use crate::api;
+use leptos::*;
 use std::collections::HashSet;
 
 /// User management page component
@@ -55,7 +55,8 @@ pub fn UsersPage() -> impl IntoView {
         let role_f = role_filter.get();
         let status_f = status_filter.get();
 
-        users.get()
+        users
+            .get()
             .into_iter()
             .filter(|user| {
                 // Search filter
@@ -86,8 +87,16 @@ pub fn UsersPage() -> impl IntoView {
                 if !status_f.is_empty() && status_f != "all" {
                     let enabled = user.enabled;
                     match status_f.as_str() {
-                        "enabled" => if !enabled { return false; },
-                        "disabled" => if enabled { return false; },
+                        "enabled" => {
+                            if !enabled {
+                                return false;
+                            }
+                        }
+                        "disabled" => {
+                            if enabled {
+                                return false;
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -110,10 +119,7 @@ pub fn UsersPage() -> impl IntoView {
 
     // Select all filtered users
     let select_all_users = move |_| {
-        let all_ids: HashSet<String> = filtered_users()
-            .into_iter()
-            .map(|user| user.id)
-            .collect();
+        let all_ids: HashSet<String> = filtered_users().into_iter().map(|user| user.id).collect();
         set_selected_users.set(all_ids);
     };
 
@@ -238,9 +244,7 @@ pub fn UsersPage() -> impl IntoView {
     };
 
     // Get unique roles for filter
-    let available_roles = move || {
-        roles.get().into_iter().map(|r| r.name).collect::<Vec<_>>()
-    };
+    let available_roles = move || roles.get().into_iter().map(|r| r.name).collect::<Vec<_>>();
 
     view! {
         <div class="users-management-page">
@@ -542,11 +546,7 @@ pub fn UsersPage() -> impl IntoView {
 
 /// Create user form component
 #[component]
-pub fn CreateUserForm<F, G>(
-    roles: Vec<api::Role>,
-    on_success: F,
-    on_error: G,
-) -> impl IntoView
+pub fn CreateUserForm<F, G>(roles: Vec<api::Role>, on_success: F, on_error: G) -> impl IntoView
 where
     F: Fn() + 'static,
     G: Fn(String) + 'static,

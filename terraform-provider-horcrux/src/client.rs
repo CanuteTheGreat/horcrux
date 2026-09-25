@@ -65,10 +65,7 @@ impl HorcruxClient {
         }
 
         let response: LoginResponse = self
-            .post(
-                "/api/auth/login",
-                &LoginRequest { username, password },
-            )
+            .post("/api/auth/login", &LoginRequest { username, password })
             .await?;
 
         self.token = Some(response.token.clone());
@@ -92,12 +89,7 @@ impl HorcruxClient {
     /// GET request
     pub async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
-        let response = self
-            .client
-            .get(&url)
-            .headers(self.headers())
-            .send()
-            .await?;
+        let response = self.client.get(&url).headers(self.headers()).send().await?;
 
         self.handle_response(response).await
     }
@@ -150,10 +142,7 @@ impl HorcruxClient {
     }
 
     /// Handle API response
-    async fn handle_response<T: DeserializeOwned>(
-        &self,
-        response: reqwest::Response,
-    ) -> Result<T> {
+    async fn handle_response<T: DeserializeOwned>(&self, response: reqwest::Response) -> Result<T> {
         let status = response.status();
 
         if status.is_success() {
@@ -488,7 +477,10 @@ impl HorcruxClient {
         self.get(&format!("/api/storage/{}", id)).await
     }
 
-    pub async fn create_storage_pool(&self, request: &CreateStoragePoolRequest) -> Result<StoragePool> {
+    pub async fn create_storage_pool(
+        &self,
+        request: &CreateStoragePoolRequest,
+    ) -> Result<StoragePool> {
         self.post("/api/storage", request).await
     }
 
@@ -522,7 +514,10 @@ impl HorcruxClient {
         self.get(&format!("/api/firewall/rules/{}", id)).await
     }
 
-    pub async fn create_firewall_rule(&self, request: &CreateFirewallRuleRequest) -> Result<FirewallRule> {
+    pub async fn create_firewall_rule(
+        &self,
+        request: &CreateFirewallRuleRequest,
+    ) -> Result<FirewallRule> {
         self.post("/api/firewall/rules", request).await
     }
 

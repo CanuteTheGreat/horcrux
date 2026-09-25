@@ -1,13 +1,14 @@
+use crate::api::*;
 use leptos::*;
 use wasm_bindgen::JsCast;
-use crate::api::*;
 use web_sys::MouseEvent;
 
 #[component]
 pub fn AlertCenterPage() -> impl IntoView {
     let (alert_rules, set_alert_rules) = create_signal(Vec::<AlertRule>::new());
     let (active_alerts, set_active_alerts) = create_signal(Vec::<ActiveAlert>::new());
-    let (notification_channels, set_notification_channels) = create_signal(Vec::<NotificationChannel>::new());
+    let (notification_channels, set_notification_channels) =
+        create_signal(Vec::<NotificationChannel>::new());
     let (selected_rule, set_selected_rule) = create_signal(None::<AlertRule>);
     let (show_create_modal, set_show_create_modal) = create_signal(false);
     let (show_edit_modal, set_show_edit_modal) = create_signal(false);
@@ -95,7 +96,11 @@ pub fn AlertCenterPage() -> impl IntoView {
         let new_rule = AlertRule {
             id: format!("rule-{}", chrono::Utc::now().timestamp()),
             name: form_name.get(),
-            description: if form_description.get().is_empty() { None } else { Some(form_description.get()) },
+            description: if form_description.get().is_empty() {
+                None
+            } else {
+                Some(form_description.get())
+            },
             metric: form_metric.get(),
             condition: form_condition.get(),
             threshold: form_threshold.get(),
@@ -131,7 +136,11 @@ pub fn AlertCenterPage() -> impl IntoView {
             let updated_rule = AlertRule {
                 id: rule.id.clone(),
                 name: form_name.get(),
-                description: if form_description.get().is_empty() { None } else { Some(form_description.get()) },
+                description: if form_description.get().is_empty() {
+                    None
+                } else {
+                    Some(form_description.get())
+                },
                 metric: form_metric.get(),
                 condition: form_condition.get(),
                 threshold: form_threshold.get(),
@@ -153,7 +162,9 @@ pub fn AlertCenterPage() -> impl IntoView {
                     clear_form();
                     load_data.dispatch(());
                 }
-                Err(e) => set_error_message.set(Some(format!("Failed to update alert rule: {}", e))),
+                Err(e) => {
+                    set_error_message.set(Some(format!("Failed to update alert rule: {}", e)))
+                }
             }
 
             set_loading.set(false);
@@ -169,7 +180,9 @@ pub fn AlertCenterPage() -> impl IntoView {
 
             match delete_alert_rule(rule_id).await {
                 Ok(_) => load_data.dispatch(()),
-                Err(e) => set_error_message.set(Some(format!("Failed to delete alert rule: {}", e))),
+                Err(e) => {
+                    set_error_message.set(Some(format!("Failed to delete alert rule: {}", e)))
+                }
             }
 
             set_loading.set(false);
@@ -201,7 +214,9 @@ pub fn AlertCenterPage() -> impl IntoView {
         async move {
             match acknowledge_alert(alert_id).await {
                 Ok(_) => load_data.dispatch(()),
-                Err(e) => set_error_message.set(Some(format!("Failed to acknowledge alert: {}", e))),
+                Err(e) => {
+                    set_error_message.set(Some(format!("Failed to acknowledge alert: {}", e)))
+                }
             }
         }
     });

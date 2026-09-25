@@ -1,7 +1,6 @@
 ///! Audit logging system
 ///!
 ///! Provides comprehensive security audit logs for compliance and security monitoring
-
 pub mod database;
 pub mod middleware;
 pub mod rotation;
@@ -10,8 +9,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::RwLock;
 
 /// Audit event type
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -89,7 +88,7 @@ pub struct AuditEvent {
     pub severity: AuditSeverity,
     pub user: Option<String>,
     pub source_ip: Option<String>,
-    pub resource: Option<String>,  // VM ID, storage pool, etc.
+    pub resource: Option<String>, // VM ID, storage pool, etc.
     pub action: String,
     pub result: AuditResult,
     pub details: Option<String>,
@@ -117,7 +116,7 @@ impl AuditLogger {
         Self {
             events: Arc::new(RwLock::new(Vec::new())),
             log_file,
-            max_events_memory: 10000,  // Keep last 10000 events in memory
+            max_events_memory: 10000, // Keep last 10000 events in memory
             enabled: Arc::new(RwLock::new(true)),
         }
     }
@@ -189,7 +188,11 @@ impl AuditLogger {
     }
 
     /// Write event to log file
-    async fn write_to_file(&self, path: &PathBuf, event: &AuditEvent) -> Result<(), std::io::Error> {
+    async fn write_to_file(
+        &self,
+        path: &PathBuf,
+        event: &AuditEvent,
+    ) -> Result<(), std::io::Error> {
         // Create parent directories if needed
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -219,7 +222,8 @@ impl AuditLogger {
     ) -> Vec<AuditEvent> {
         let events = self.events.read().await;
 
-        let filtered: Vec<AuditEvent> = events.iter()
+        let filtered: Vec<AuditEvent> = events
+            .iter()
             .filter(|e| {
                 if let Some(ref et) = event_type {
                     if &e.event_type != et {
@@ -283,7 +287,8 @@ impl AuditLogger {
             None,
             None,
             Some(limit),
-        ).await
+        )
+        .await
     }
 
     /// Detect brute force attacks
@@ -291,7 +296,8 @@ impl AuditLogger {
         let events = self.events.read().await;
         let cutoff_time = Utc::now() - chrono::Duration::minutes(window_minutes);
 
-        let mut failed_attempts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut failed_attempts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
 
         for event in events.iter() {
             if event.event_type == AuditEventType::LoginFailed && event.timestamp > cutoff_time {
@@ -301,7 +307,8 @@ impl AuditLogger {
             }
         }
 
-        failed_attempts.iter()
+        failed_attempts
+            .iter()
             .filter(|(_, &count)| count >= threshold)
             .map(|(user, _)| user.clone())
             .collect()
@@ -311,12 +318,16 @@ impl AuditLogger {
     pub async fn get_security_events(&self, limit: usize) -> Vec<AuditEvent> {
         let events = self.events.read().await;
 
-        events.iter()
-            .filter(|e| matches!(e.event_type,
-                AuditEventType::SuspiciousActivity |
-                AuditEventType::BruteForceDetected |
-                AuditEventType::PermissionDenied
-            ))
+        events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.event_type,
+                    AuditEventType::SuspiciousActivity
+                        | AuditEventType::BruteForceDetected
+                        | AuditEventType::PermissionDenied
+                )
+            })
             .rev()
             .take(limit)
             .cloned()
@@ -385,32 +396,31 @@ mod tests {
     async fn test_query_by_type() {
         let logger = AuditLogger::new(None);
 
-        logger.log(create_event(
-            AuditEventType::Login,
-            AuditSeverity::Info,
-            Some("user1".to_string()),
-            None,
-            "Login".to_string(),
-            AuditResult::Success,
-        )).await;
+        logger
+            .log(create_event(
+                AuditEventType::Login,
+                AuditSeverity::Info,
+                Some("user1".to_string()),
+                None,
+                "Login".to_string(),
+                AuditResult::Success,
+            ))
+            .await;
 
-        logger.log(create_event(
-            AuditEventType::VmCreated,
-            AuditSeverity::Info,
-            Some("user1".to_string()),
-            None,
-            "VM created".to_string(),
-            AuditResult::Success,
-        )).await;
+        logger
+            .log(create_event(
+                AuditEventType::VmCreated,
+                AuditSeverity::Info,
+                Some("user1".to_string()),
+                None,
+                "VM created".to_string(),
+                AuditResult::Success,
+            ))
+            .await;
 
-        let logins = logger.query(
-            Some(AuditEventType::Login),
-            None,
-            None,
-            None,
-            None,
-            None,
-        ).await;
+        let logins = logger
+            .query(Some(AuditEventType::Login), None, None, None, None, None)
+            .await;
 
         assert_eq!(logins.len(), 1);
         assert_eq!(logins[0].event_type, AuditEventType::Login);
@@ -422,14 +432,16 @@ mod tests {
 
         // Simulate 5 failed login attempts
         for _ in 0..5 {
-            logger.log(create_event(
-                AuditEventType::LoginFailed,
-                AuditSeverity::Warning,
-                Some("attacker".to_string()),
-                Some("10.0.0.1".to_string()),
-                "Failed login".to_string(),
-                AuditResult::Failure,
-            )).await;
+            logger
+                .log(create_event(
+                    AuditEventType::LoginFailed,
+                    AuditSeverity::Warning,
+                    Some("attacker".to_string()),
+                    Some("10.0.0.1".to_string()),
+                    "Failed login".to_string(),
+                    AuditResult::Failure,
+                ))
+                .await;
         }
 
         let suspects = logger.detect_brute_force(3, 10).await;
@@ -441,32 +453,38 @@ mod tests {
     async fn test_event_counts() {
         let logger = AuditLogger::new(None);
 
-        logger.log(create_event(
-            AuditEventType::Login,
-            AuditSeverity::Info,
-            None,
-            None,
-            "Login".to_string(),
-            AuditResult::Success,
-        )).await;
+        logger
+            .log(create_event(
+                AuditEventType::Login,
+                AuditSeverity::Info,
+                None,
+                None,
+                "Login".to_string(),
+                AuditResult::Success,
+            ))
+            .await;
 
-        logger.log(create_event(
-            AuditEventType::Login,
-            AuditSeverity::Info,
-            None,
-            None,
-            "Login".to_string(),
-            AuditResult::Success,
-        )).await;
+        logger
+            .log(create_event(
+                AuditEventType::Login,
+                AuditSeverity::Info,
+                None,
+                None,
+                "Login".to_string(),
+                AuditResult::Success,
+            ))
+            .await;
 
-        logger.log(create_event(
-            AuditEventType::VmCreated,
-            AuditSeverity::Info,
-            None,
-            None,
-            "VM created".to_string(),
-            AuditResult::Success,
-        )).await;
+        logger
+            .log(create_event(
+                AuditEventType::VmCreated,
+                AuditSeverity::Info,
+                None,
+                None,
+                "VM created".to_string(),
+                AuditResult::Success,
+            ))
+            .await;
 
         let counts = logger.get_event_counts().await;
         assert_eq!(counts.get("Login"), Some(&2));

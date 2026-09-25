@@ -15,16 +15,16 @@
 
 #![allow(dead_code)]
 
+pub mod bridge;
+pub mod cni;
+pub mod fabric;
+pub mod ipam;
+pub mod ovs;
+pub mod policy;
+pub mod templates;
 pub mod vlan;
 pub mod vxlan;
-pub mod ovs;
-pub mod templates;
-pub mod ipam;
 pub mod zones;
-pub mod bridge;
-pub mod fabric;
-pub mod cni;
-pub mod policy;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -42,9 +42,9 @@ pub struct Zone {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ZoneType {
-    Simple,   // Basic zone with VLANs
-    Vxlan,    // VXLAN overlay network
-    Evpn,     // EVPN (Ethernet VPN) - advanced, future
+    Simple, // Basic zone with VLANs
+    Vxlan,  // VXLAN overlay network
+    Evpn,   // EVPN (Ethernet VPN) - advanced, future
 }
 
 /// Virtual network (VNet) - actual network within a zone
@@ -53,10 +53,10 @@ pub struct VNet {
     pub id: String,
     pub zone_id: String,
     pub name: String,
-    pub tag: u32,         // VLAN tag (1-4094) or VXLAN VNI
+    pub tag: u32, // VLAN tag (1-4094) or VXLAN VNI
     pub vnet_type: VNetType,
     pub subnets: Vec<Subnet>,
-    pub bridge: String,   // Linux bridge name
+    pub bridge: String, // Linux bridge name
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -70,7 +70,7 @@ pub enum VNetType {
 pub struct Subnet {
     pub id: String,
     pub vnet_id: String,
-    pub cidr: String,     // e.g., "10.0.1.0/24"
+    pub cidr: String, // e.g., "10.0.1.0/24"
     pub gateway: Option<IpAddr>,
     pub dns_servers: Vec<IpAddr>,
     pub dhcp_range: Option<DhcpRange>,
@@ -153,7 +153,10 @@ impl SdnManager {
             }
             VNetType::Vxlan => {
                 if vnet.tag > 16777215 {
-                    return Err(format!("Invalid VXLAN VNI: {} (must be 0-16777215)", vnet.tag));
+                    return Err(format!(
+                        "Invalid VXLAN VNI: {} (must be 0-16777215)",
+                        vnet.tag
+                    ));
                 }
             }
         }
@@ -161,7 +164,10 @@ impl SdnManager {
         // Check for tag conflicts in the same zone
         for existing_vnet in self.vnets.values() {
             if existing_vnet.zone_id == vnet.zone_id && existing_vnet.tag == vnet.tag {
-                return Err(format!("Tag {} already in use in zone {}", vnet.tag, vnet.zone_id));
+                return Err(format!(
+                    "Tag {} already in use in zone {}",
+                    vnet.tag, vnet.zone_id
+                ));
             }
         }
 
@@ -192,7 +198,9 @@ impl SdnManager {
         assigned_to: Option<String>,
         preferred_ip: Option<IpAddr>,
     ) -> Result<IpAllocation, String> {
-        let subnet = self.subnets.get(subnet_id)
+        let subnet = self
+            .subnets
+            .get(subnet_id)
             .ok_or_else(|| format!("Subnet {} not found", subnet_id))?
             .clone();
 
@@ -258,7 +266,8 @@ impl SdnManager {
 
     /// Get VNets in a specific zone
     pub fn list_vnets_in_zone(&self, zone_id: &str) -> Vec<VNet> {
-        self.vnets.values()
+        self.vnets
+            .values()
             .filter(|v| v.zone_id == zone_id)
             .cloned()
             .collect()
@@ -271,7 +280,8 @@ impl SdnManager {
 
     /// Get allocations in a subnet
     pub fn list_allocations(&self, subnet_id: &str) -> Vec<IpAllocation> {
-        self.allocations.values()
+        self.allocations
+            .values()
             .filter(|a| a.subnet_id == subnet_id)
             .cloned()
             .collect()
@@ -289,9 +299,11 @@ impl SdnManager {
             return Err("Invalid CIDR format".to_string());
         }
 
-        let network: Ipv4Addr = parts[0].parse()
+        let network: Ipv4Addr = parts[0]
+            .parse()
             .map_err(|_| "Invalid IP address".to_string())?;
-        let prefix_len: u8 = parts[1].parse()
+        let prefix_len: u8 = parts[1]
+            .parse()
             .map_err(|_| "Invalid prefix length".to_string())?;
 
         if prefix_len > 32 {
@@ -305,7 +317,11 @@ impl SdnManager {
         if let IpAddr::V4(ipv4) = ip {
             let ip_u32 = u32::from(*ipv4);
             let network_u32 = u32::from(*network);
-            let mask = if prefix_len == 0 { 0 } else { !0u32 << (32 - prefix_len) };
+            let mask = if prefix_len == 0 {
+                0
+            } else {
+                !0u32 << (32 - prefix_len)
+            };
 
             (ip_u32 & mask) == (network_u32 & mask)
         } else {

@@ -1,5 +1,5 @@
 use crate::api::ApiClient;
-use crate::output::{self, OutputFormat, format_bytes};
+use crate::output::{self, format_bytes, OutputFormat};
 use crate::ClusterCommands;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -107,7 +107,8 @@ pub async fn handle_cluster_command(
                 address: address.clone(),
             };
 
-            api.post_empty(&format!("/api/cluster/nodes/{}", name), &request).await?;
+            api.post_empty(&format!("/api/cluster/nodes/{}", name), &request)
+                .await?;
             output::print_created("Node", &name, &address);
         }
         ClusterCommands::Remove { name } => {
@@ -117,7 +118,11 @@ pub async fn handle_cluster_command(
         ClusterCommands::Architecture => {
             let summary: ArchitectureSummary = api.get("/api/cluster/architecture").await?;
             let format = OutputFormat::from_str(output_format);
-            let rows: Vec<ArchRow> = summary.architectures.into_iter().map(ArchRow::from).collect();
+            let rows: Vec<ArchRow> = summary
+                .architectures
+                .into_iter()
+                .map(ArchRow::from)
+                .collect();
             output::print_output(rows, format)?;
         }
     }

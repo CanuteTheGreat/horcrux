@@ -2,8 +2,7 @@
 //! Tests for VM live migration, offline migration, rollback, and health checks
 
 use horcrux_api::migration::{
-    MigrationManager, MigrationConfig, MigrationType, MigrationState,
-    MigrationJob, MigrationStats,
+    MigrationConfig, MigrationJob, MigrationManager, MigrationState, MigrationStats, MigrationType,
 };
 
 #[tokio::test]

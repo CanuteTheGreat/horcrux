@@ -1,6 +1,5 @@
 ///! Container metrics collection via cgroups
 ///! Supports both cgroups v1 and v2
-
 use std::collections::HashMap;
 use std::fs;
 use std::io;
@@ -106,9 +105,15 @@ pub fn get_container_cgroup_path(container_id: &str, subsystem: &str) -> io::Res
     } else {
         // cgroups v1: separate hierarchies per subsystem
         let paths = vec![
-            format!("/sys/fs/cgroup/{}/system.slice/docker-{}.scope", subsystem, container_id),
+            format!(
+                "/sys/fs/cgroup/{}/system.slice/docker-{}.scope",
+                subsystem, container_id
+            ),
             format!("/sys/fs/cgroup/{}/docker/{}", subsystem, container_id),
-            format!("/sys/fs/cgroup/{}/machine.slice/libpod-{}.scope", subsystem, container_id),
+            format!(
+                "/sys/fs/cgroup/{}/machine.slice/libpod-{}.scope",
+                subsystem, container_id
+            ),
         ];
 
         for path in paths {
@@ -151,7 +156,10 @@ pub fn read_container_cpu_usage(container_id: &str) -> io::Result<u64> {
         return Ok(content.trim().parse().unwrap_or(0));
     }
 
-    Err(io::Error::new(io::ErrorKind::NotFound, "CPU usage not found"))
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        "CPU usage not found",
+    ))
 }
 
 /// Read memory usage from cgroups
@@ -183,10 +191,7 @@ pub fn read_container_memory_usage(container_id: &str) -> io::Result<(u64, u64)>
 
         // Read current memory usage
         let usage_path = cgroup_path.join("memory.usage_in_bytes");
-        let usage = fs::read_to_string(usage_path)?
-            .trim()
-            .parse()
-            .unwrap_or(0);
+        let usage = fs::read_to_string(usage_path)?.trim().parse().unwrap_or(0);
 
         // Read memory limit
         let limit_path = cgroup_path.join("memory.limit_in_bytes");
@@ -328,7 +333,10 @@ fn read_container_network_stats(container_id: &str) -> io::Result<(u64, u64)> {
 /// Get the init process PID for a container
 fn get_container_init_pid(container_id: &str) -> io::Result<u32> {
     // Docker stores PID in a file
-    let docker_pid_file = format!("/var/run/docker/containerd/daemon/io.containerd.runtime.v2.task/moby/{}/init.pid", container_id);
+    let docker_pid_file = format!(
+        "/var/run/docker/containerd/daemon/io.containerd.runtime.v2.task/moby/{}/init.pid",
+        container_id
+    );
     if let Ok(content) = fs::read_to_string(&docker_pid_file) {
         if let Ok(pid) = content.trim().parse::<u32>() {
             return Ok(pid);
@@ -363,13 +371,17 @@ fn get_container_init_pid(container_id: &str) -> io::Result<u32> {
 
 /// Get container stats via Docker API using bollard
 async fn get_docker_container_stats_via_api(container_id: &str) -> io::Result<ContainerMetrics> {
-    use bollard::Docker;
     use bollard::container::StatsOptions;
+    use bollard::Docker;
     use futures::StreamExt;
 
     // Connect to Docker API
-    let docker = Docker::connect_with_local_defaults()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Docker API unavailable: {}", e)))?;
+    let docker = Docker::connect_with_local_defaults().map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("Docker API unavailable: {}", e),
+        )
+    })?;
 
     let stats_options = StatsOptions {
         stream: false,
@@ -379,12 +391,13 @@ async fn get_docker_container_stats_via_api(container_id: &str) -> io::Result<Co
     let mut stats_stream = docker.stats(container_id, Some(stats_options));
 
     if let Some(stats_result) = stats_stream.next().await {
-        let stats = stats_result
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to get stats: {}", e)))?;
+        let stats = stats_result.map_err(|e| {
+            io::Error::new(io::ErrorKind::Other, format!("Failed to get stats: {}", e))
+        })?;
 
         // Parse CPU stats
-        let cpu_delta = stats.cpu_stats.cpu_usage.total_usage
-            - stats.precpu_stats.cpu_usage.total_usage;
+        let cpu_delta =
+            stats.cpu_stats.cpu_usage.total_usage - stats.precpu_stats.cpu_usage.total_usage;
         let system_delta = stats.cpu_stats.system_cpu_usage.unwrap_or(0)
             - stats.precpu_stats.system_cpu_usage.unwrap_or(0);
         let num_cpus = stats.cpu_stats.online_cpus.unwrap_or(1) as f64;
@@ -474,26 +487,29 @@ pub fn list_running_containers() -> io::Result<Vec<String>> {
 
 /// List containers via Docker API
 async fn list_containers_via_docker_api() -> io::Result<Vec<String>> {
-    use bollard::Docker;
     use bollard::container::ListContainersOptions;
+    use bollard::Docker;
 
-    let docker = Docker::connect_with_local_defaults()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Docker API unavailable: {}", e)))?;
+    let docker = Docker::connect_with_local_defaults().map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("Docker API unavailable: {}", e),
+        )
+    })?;
 
     let options = Some(ListContainersOptions::<String> {
         all: false, // Only running containers
         ..Default::default()
     });
 
-    let containers = docker
-        .list_containers(options)
-        .await
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to list containers: {}", e)))?;
+    let containers = docker.list_containers(options).await.map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("Failed to list containers: {}", e),
+        )
+    })?;
 
-    let ids: Vec<String> = containers
-        .into_iter()
-        .filter_map(|c| c.id)
-        .collect();
+    let ids: Vec<String> = containers.into_iter().filter_map(|c| c.id).collect();
 
     Ok(ids)
 }

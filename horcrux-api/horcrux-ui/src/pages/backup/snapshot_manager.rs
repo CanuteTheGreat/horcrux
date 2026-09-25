@@ -1,14 +1,13 @@
-use leptos::*;
 use crate::api::{
-    VmSnapshot, CreateSnapshotRequest, RestoreSnapshotRequest, SnapshotTreeNode,
-    SnapshotSchedule, CreateSnapshotScheduleRequest, SnapshotQuota, CreateSnapshotQuotaRequest, QuotaSummary, RetentionPolicy, QuotaType, CleanupPolicy,
-    get_vm_snapshots, create_vm_snapshot, delete_vm_snapshot, restore_vm_snapshot, get_vm_snapshot_tree,
-    get_snapshot_schedules, create_snapshot_schedule, delete_snapshot_schedule,
-    get_snapshot_quotas, create_snapshot_quota, delete_snapshot_quota,
-    get_snapshot_quota_summary,
-    get_vms
+    create_snapshot_quota, create_snapshot_schedule, create_vm_snapshot, delete_snapshot_quota,
+    delete_snapshot_schedule, delete_vm_snapshot, get_snapshot_quota_summary, get_snapshot_quotas,
+    get_snapshot_schedules, get_vm_snapshot_tree, get_vm_snapshots, get_vms, restore_vm_snapshot,
+    CleanupPolicy, CreateSnapshotQuotaRequest, CreateSnapshotRequest,
+    CreateSnapshotScheduleRequest, QuotaSummary, QuotaType, RestoreSnapshotRequest,
+    RetentionPolicy, SnapshotQuota, SnapshotSchedule, SnapshotTreeNode, VmSnapshot,
 };
 use horcrux_common::VmConfig;
+use leptos::*;
 
 fn format_bytes_static(bytes: u64) -> String {
     if bytes < 1024 {
@@ -85,8 +84,10 @@ pub fn SnapshotManagerPage() -> impl IntoView {
     let (quota_description, set_quota_description) = create_signal(String::new());
     let (quota_type, set_quota_type) = create_signal(QuotaType::MaxCount);
     let (quota_limit, set_quota_limit) = create_signal(10u64);
-    let (quota_storage_path, set_quota_storage_path) = create_signal("/var/lib/libvirt/images".to_string());
-    let (quota_cleanup_policy, set_quota_cleanup_policy) = create_signal(CleanupPolicy::OldestFirst);
+    let (quota_storage_path, set_quota_storage_path) =
+        create_signal("/var/lib/libvirt/images".to_string());
+    let (quota_cleanup_policy, set_quota_cleanup_policy) =
+        create_signal(CleanupPolicy::OldestFirst);
     let (quota_enabled, set_quota_enabled) = create_signal(true);
 
     let load_vms = move || {
@@ -199,7 +200,10 @@ pub fn SnapshotManagerPage() -> impl IntoView {
         if let Some(vm_id) = selected_vm_id.get() {
             if web_sys::window()
                 .unwrap()
-                .confirm_with_message(&format!("Are you sure you want to delete snapshot '{}'?", snapshot_id))
+                .confirm_with_message(&format!(
+                    "Are you sure you want to delete snapshot '{}'?",
+                    snapshot_id
+                ))
                 .unwrap()
             {
                 spawn_local(async move {
@@ -349,7 +353,6 @@ pub fn SnapshotManagerPage() -> impl IntoView {
             format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
         }
     };
-
 
     view! {
         <div class="p-6">

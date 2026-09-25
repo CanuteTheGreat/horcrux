@@ -1,5 +1,5 @@
-use leptos::*;
 use crate::api::*;
+use leptos::*;
 
 // All types imported from crate::api::* (Investigation, TimelineEntry, Finding, Artifact, CreateInvestigationRequest)
 
@@ -60,20 +60,23 @@ pub fn ForensicsPage() -> impl IntoView {
 
     // Filtered investigations
     let filtered_investigations = create_memo(move |_| {
-        investigations.get()
+        investigations
+            .get()
             .into_iter()
             .filter(|inv| {
                 let search_match = if search_term.get().is_empty() {
                     true
                 } else {
                     let term = search_term.get().to_lowercase();
-                    inv.title.to_lowercase().contains(&term) ||
-                    inv.description.to_lowercase().contains(&term) ||
-                    inv.tags.iter().any(|t| t.to_lowercase().contains(&term))
+                    inv.title.to_lowercase().contains(&term)
+                        || inv.description.to_lowercase().contains(&term)
+                        || inv.tags.iter().any(|t| t.to_lowercase().contains(&term))
                 };
 
-                let status_match = filter_status.get() == "all" || inv.status == filter_status.get();
-                let severity_match = filter_severity.get() == "all" || inv.severity == filter_severity.get();
+                let status_match =
+                    filter_status.get() == "all" || inv.status == filter_status.get();
+                let severity_match =
+                    filter_severity.get() == "all" || inv.severity == filter_severity.get();
 
                 search_match && status_match && severity_match
             })
@@ -87,7 +90,12 @@ pub fn ForensicsPage() -> impl IntoView {
             description: inv_description.get(),
             severity: inv_severity.get(),
             related_events: vec![],
-            tags: inv_tags.get().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+            tags: inv_tags
+                .get()
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
         };
 
         match create_investigation(request).await {
@@ -108,7 +116,7 @@ pub fn ForensicsPage() -> impl IntoView {
                 set_current_view.set("detail".to_string());
                 true
             }
-            Err(_) => false
+            Err(_) => false,
         }
     });
 

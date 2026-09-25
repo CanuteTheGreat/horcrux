@@ -10,10 +10,7 @@ use crate::kubernetes::types::{EventFilter, InvolvedObject, K8sEvent};
 
 /// List events in a namespace
 #[cfg(feature = "kubernetes")]
-pub async fn list_events(
-    client: &K8sClient,
-    namespace: Option<&str>,
-) -> K8sResult<Vec<K8sEvent>> {
+pub async fn list_events(client: &K8sClient, namespace: Option<&str>) -> K8sResult<Vec<K8sEvent>> {
     use k8s_openapi::api::core::v1::Event;
     use kube::api::{Api, ListParams};
 
@@ -112,8 +109,14 @@ pub async fn list_events_for_resource(
 pub async fn watch_events(
     client: &K8sClient,
     namespace: Option<&str>,
-) -> K8sResult<impl futures::Stream<Item = Result<kube::runtime::watcher::Event<k8s_openapi::api::core::v1::Event>, kube::runtime::watcher::Error>>>
-{
+) -> K8sResult<
+    impl futures::Stream<
+        Item = Result<
+            kube::runtime::watcher::Event<k8s_openapi::api::core::v1::Event>,
+            kube::runtime::watcher::Error,
+        >,
+    >,
+> {
     use k8s_openapi::api::core::v1::Event;
     use kube::api::Api;
     use kube::runtime::watcher;

@@ -1,6 +1,5 @@
 ///! VM template management
 ///! Provides template creation, cloning (full and linked/COW)
-
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -15,13 +14,13 @@ pub struct Template {
     pub name: String,
     pub description: Option<String>,
     pub source_vm_id: String,
-    pub created: i64,  // Unix timestamp
+    pub created: i64, // Unix timestamp
     pub disk_path: PathBuf,
     pub storage_type: StorageType,
-    pub memory: u64,   // MB
+    pub memory: u64, // MB
     pub cpus: u32,
     pub os_type: OsType,
-    pub cloudinit_template: Option<String>,  // Default cloud-init config
+    pub cloudinit_template: Option<String>, // Default cloud-init config
 }
 
 /// Storage type for templates
@@ -47,8 +46,8 @@ pub enum OsType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CloneType {
-    Full,    // Complete copy
-    Linked,  // COW/snapshot-based clone
+    Full,   // Complete copy
+    Linked, // COW/snapshot-based clone
 }
 
 /// Clone request
@@ -57,7 +56,7 @@ pub struct CloneRequest {
     pub new_vm_id: String,
     pub new_vm_name: String,
     pub clone_type: CloneType,
-    pub storage_pool: Option<String>,  // Target storage pool
+    pub storage_pool: Option<String>, // Target storage pool
     pub cloudinit_config: Option<crate::cloudinit::CloudInitConfig>,
 }
 
@@ -137,15 +136,11 @@ impl TemplateManager {
     }
 
     /// Clone a template to create a new VM
-    pub async fn clone_template(
-        &self,
-        template_id: &str,
-        request: CloneRequest,
-    ) -> Result<String> {
+    pub async fn clone_template(&self, template_id: &str, request: CloneRequest) -> Result<String> {
         let templates = self.templates.read().await;
-        let template = templates
-            .get(template_id)
-            .ok_or_else(|| horcrux_common::Error::System(format!("Template {} not found", template_id)))?;
+        let template = templates.get(template_id).ok_or_else(|| {
+            horcrux_common::Error::System(format!("Template {} not found", template_id))
+        })?;
 
         tracing::info!(
             "Cloning template {} to VM {} ({:?})",
@@ -192,10 +187,9 @@ impl TemplateManager {
     /// Get template by ID
     pub async fn get_template(&self, template_id: &str) -> Result<Template> {
         let templates = self.templates.read().await;
-        templates
-            .get(template_id)
-            .cloned()
-            .ok_or_else(|| horcrux_common::Error::System(format!("Template {} not found", template_id)))
+        templates.get(template_id).cloned().ok_or_else(|| {
+            horcrux_common::Error::System(format!("Template {} not found", template_id))
+        })
     }
 
     /// Delete a template
@@ -210,7 +204,10 @@ impl TemplateManager {
             tracing::info!("Template deleted: {}", template_id);
             Ok(())
         } else {
-            Err(horcrux_common::Error::System(format!("Template {} not found", template_id)))
+            Err(horcrux_common::Error::System(format!(
+                "Template {} not found",
+                template_id
+            )))
         }
     }
 
@@ -226,19 +223,22 @@ impl TemplateManager {
                     let snapshot_name = format!("template-{}", template.id);
                     // Extract pool and dataset from path
                     // For simplicity, using a placeholder - real implementation would parse the path
-                    zfs.create_snapshot("tank/vms", &template.source_vm_id, &snapshot_name).await?;
+                    zfs.create_snapshot("tank/vms", &template.source_vm_id, &snapshot_name)
+                        .await?;
                 }
             }
             StorageType::Ceph => {
                 if let Some(ceph) = &self.ceph_backend {
                     let snapshot_name = format!("template-{}", template.id);
-                    ceph.create_snapshot("rbd/vms", &template.source_vm_id, &snapshot_name).await?;
+                    ceph.create_snapshot("rbd/vms", &template.source_vm_id, &snapshot_name)
+                        .await?;
                 }
             }
             StorageType::Lvm => {
                 if let Some(lvm) = &self.lvm_backend {
                     let snapshot_name = format!("template-{}", template.id);
-                    lvm.create_snapshot("vg0", &template.source_vm_id, &snapshot_name).await?;
+                    lvm.create_snapshot("vg0", &template.source_vm_id, &snapshot_name)
+                        .await?;
                 }
             }
             StorageType::Directory => {
@@ -259,24 +259,33 @@ impl TemplateManager {
     }
 
     async fn clone_zfs_linked(&self, template: &Template, request: &CloneRequest) -> Result<()> {
-        let zfs = self.zfs_backend.as_ref()
-            .ok_or_else(|| horcrux_common::Error::System("ZFS backend not configured".to_string()))?;
+        let zfs = self.zfs_backend.as_ref().ok_or_else(|| {
+            horcrux_common::Error::System("ZFS backend not configured".to_string())
+        })?;
 
         let snapshot_name = format!("template-{}", template.id);
         let clone_name = request.new_vm_id.clone();
 
         // Clone from snapshot (COW)
-        zfs.clone_snapshot("tank/vms", &template.source_vm_id, &snapshot_name, &clone_name).await?;
+        zfs.clone_snapshot(
+            "tank/vms",
+            &template.source_vm_id,
+            &snapshot_name,
+            &clone_name,
+        )
+        .await?;
 
         Ok(())
     }
 
     async fn clone_zfs_full(&self, template: &Template, request: &CloneRequest) -> Result<()> {
-        let zfs = self.zfs_backend.as_ref()
-            .ok_or_else(|| horcrux_common::Error::System("ZFS backend not configured".to_string()))?;
+        let zfs = self.zfs_backend.as_ref().ok_or_else(|| {
+            horcrux_common::Error::System("ZFS backend not configured".to_string())
+        })?;
 
         // Create a new zvol and copy data
-        zfs.create_volume("tank/vms", &request.new_vm_id, template.memory / 1024).await?;
+        zfs.create_volume("tank/vms", &request.new_vm_id, template.memory / 1024)
+            .await?;
 
         // Use zfs send/receive for full copy
         let snapshot_name = format!("template-{}", template.id);
@@ -302,8 +311,9 @@ impl TemplateManager {
     }
 
     async fn clone_ceph_linked(&self, template: &Template, request: &CloneRequest) -> Result<()> {
-        let ceph = self.ceph_backend.as_ref()
-            .ok_or_else(|| horcrux_common::Error::System("Ceph backend not configured".to_string()))?;
+        let ceph = self.ceph_backend.as_ref().ok_or_else(|| {
+            horcrux_common::Error::System("Ceph backend not configured".to_string())
+        })?;
 
         let snapshot_name = format!("template-{}", template.id);
 
@@ -319,17 +329,25 @@ impl TemplateManager {
             .await?;
 
         // Clone from snapshot (COW)
-        ceph.clone_snapshot("rbd/vms", &template.source_vm_id, &snapshot_name, &request.new_vm_id).await?;
+        ceph.clone_snapshot(
+            "rbd/vms",
+            &template.source_vm_id,
+            &snapshot_name,
+            &request.new_vm_id,
+        )
+        .await?;
 
         Ok(())
     }
 
     async fn clone_ceph_full(&self, template: &Template, request: &CloneRequest) -> Result<()> {
-        let ceph = self.ceph_backend.as_ref()
-            .ok_or_else(|| horcrux_common::Error::System("Ceph backend not configured".to_string()))?;
+        let ceph = self.ceph_backend.as_ref().ok_or_else(|| {
+            horcrux_common::Error::System("Ceph backend not configured".to_string())
+        })?;
 
         // Create new RBD image
-        ceph.create_volume("rbd/vms", &request.new_vm_id, template.memory / 1024).await?;
+        ceph.create_volume("rbd/vms", &request.new_vm_id, template.memory / 1024)
+            .await?;
 
         // Copy data using rbd export/import
         let snapshot_name = format!("template-{}", template.id);
@@ -355,23 +373,27 @@ impl TemplateManager {
     }
 
     async fn clone_lvm_linked(&self, template: &Template, request: &CloneRequest) -> Result<()> {
-        let lvm = self.lvm_backend.as_ref()
-            .ok_or_else(|| horcrux_common::Error::System("LVM backend not configured".to_string()))?;
+        let lvm = self.lvm_backend.as_ref().ok_or_else(|| {
+            horcrux_common::Error::System("LVM backend not configured".to_string())
+        })?;
 
         let snapshot_name = format!("template-{}", template.id);
 
         // LVM snapshots are already COW, so we create a snapshot of the snapshot
-        lvm.create_snapshot("vg0", &snapshot_name, &request.new_vm_id).await?;
+        lvm.create_snapshot("vg0", &snapshot_name, &request.new_vm_id)
+            .await?;
 
         Ok(())
     }
 
     async fn clone_lvm_full(&self, template: &Template, request: &CloneRequest) -> Result<()> {
-        let lvm = self.lvm_backend.as_ref()
-            .ok_or_else(|| horcrux_common::Error::System("LVM backend not configured".to_string()))?;
+        let lvm = self.lvm_backend.as_ref().ok_or_else(|| {
+            horcrux_common::Error::System("LVM backend not configured".to_string())
+        })?;
 
         // Create new LV
-        lvm.create_volume("vg0", &request.new_vm_id, template.memory / 1024).await?;
+        lvm.create_volume("vg0", &request.new_vm_id, template.memory / 1024)
+            .await?;
 
         // Copy data using dd
         let snapshot_name = format!("template-{}", template.id);

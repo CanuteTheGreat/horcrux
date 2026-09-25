@@ -1,11 +1,11 @@
 //! VM pages for mobile UI
 
+use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
 use yew_router::prelude::*;
-use wasm_bindgen_futures::spawn_local;
 
 use crate::api::{ApiClient, VmInfo};
-use crate::components::{Header, Card, StatusBadge, Loading};
+use crate::components::{Card, Header, Loading, StatusBadge};
 use crate::router::Route;
 
 /// VM list page

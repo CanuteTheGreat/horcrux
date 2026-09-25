@@ -193,9 +193,9 @@ impl VaultManager {
         jwt_path: &str,
     ) -> Result<String> {
         // Read JWT token from file
-        let jwt = tokio::fs::read_to_string(jwt_path).await.map_err(|e| {
-            horcrux_common::Error::System(format!("Failed to read JWT: {}", e))
-        })?;
+        let jwt = tokio::fs::read_to_string(jwt_path)
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to read JWT: {}", e)))?;
 
         let url = format!("{}/v1/auth/kubernetes/login", config.address);
 
@@ -289,10 +289,7 @@ impl VaultManager {
         }
 
         let token = self.get_token().await?;
-        let url = format!(
-            "{}/v1/{}/data/{}",
-            config.address, config.mount_path, path
-        );
+        let url = format!("{}/v1/{}/data/{}", config.address, config.mount_path, path);
 
         let mut request = self.client.get(&url).header("X-Vault-Token", token);
 
@@ -300,9 +297,10 @@ impl VaultManager {
             request = request.header("X-Vault-Namespace", ns);
         }
 
-        let response = request.send().await.map_err(|e| {
-            horcrux_common::Error::System(format!("Failed to read secret: {}", e))
-        })?;
+        let response = request
+            .send()
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to read secret: {}", e)))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -339,10 +337,7 @@ impl VaultManager {
                     .get("destroyed")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
-                version: meta
-                    .get("version")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32,
+                version: meta.get("version").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
             })
         } else {
             None
@@ -362,10 +357,7 @@ impl VaultManager {
         }
 
         let token = self.get_token().await?;
-        let url = format!(
-            "{}/v1/{}/data/{}",
-            config.address, config.mount_path, path
-        );
+        let url = format!("{}/v1/{}/data/{}", config.address, config.mount_path, path);
 
         let payload = serde_json::json!({
             "data": data,
@@ -381,9 +373,10 @@ impl VaultManager {
             request = request.header("X-Vault-Namespace", ns);
         }
 
-        let response = request.send().await.map_err(|e| {
-            horcrux_common::Error::System(format!("Failed to write secret: {}", e))
-        })?;
+        let response = request
+            .send()
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to write secret: {}", e)))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -462,9 +455,10 @@ impl VaultManager {
             request = request.header("X-Vault-Namespace", ns);
         }
 
-        let response = request.send().await.map_err(|e| {
-            horcrux_common::Error::System(format!("Failed to list secrets: {}", e))
-        })?;
+        let response = request
+            .send()
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to list secrets: {}", e)))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -621,8 +615,11 @@ impl VaultManager {
     pub async fn store_kubeconfig(&self, cluster_id: &str, kubeconfig: &str) -> Result<()> {
         let mut data = HashMap::new();
         data.insert("kubeconfig".to_string(), kubeconfig.to_string());
-        self.write_secret(&format!("kubernetes/clusters/{}/kubeconfig", cluster_id), data)
-            .await
+        self.write_secret(
+            &format!("kubernetes/clusters/{}/kubeconfig", cluster_id),
+            data,
+        )
+        .await
     }
 
     /// Retrieve kubeconfig for a Kubernetes cluster

@@ -7,8 +7,8 @@ use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
-use tokio::process::Command;
 use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
 
 /// S3 Gateway configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -269,14 +269,39 @@ pub enum S3Event {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum NotificationTarget {
-    Webhook { url: String, auth_token: Option<String> },
-    Amqp { url: String, exchange: String, routing_key: String },
-    Kafka { brokers: Vec<String>, topic: String },
-    Nats { address: String, subject: String },
-    Redis { address: String, key: String },
-    Postgres { connection_string: String, table: String },
-    Mysql { dsn: String, table: String },
-    Elasticsearch { url: String, index: String },
+    Webhook {
+        url: String,
+        auth_token: Option<String>,
+    },
+    Amqp {
+        url: String,
+        exchange: String,
+        routing_key: String,
+    },
+    Kafka {
+        brokers: Vec<String>,
+        topic: String,
+    },
+    Nats {
+        address: String,
+        subject: String,
+    },
+    Redis {
+        address: String,
+        key: String,
+    },
+    Postgres {
+        connection_string: String,
+        table: String,
+    },
+    Mysql {
+        dsn: String,
+        table: String,
+    },
+    Elasticsearch {
+        url: String,
+        index: String,
+    },
 }
 
 /// S3 Access Key
@@ -502,13 +527,19 @@ impl S3GatewayManager {
         let url = format!(
             "{}://{}:{}",
             protocol,
-            if self.config.address == "0.0.0.0" { "127.0.0.1" } else { &self.config.address },
+            if self.config.address == "0.0.0.0" {
+                "127.0.0.1"
+            } else {
+                &self.config.address
+            },
             self.config.port
         );
 
         let output = Command::new("mc")
             .args([
-                "alias", "set", &self.mc_alias,
+                "alias",
+                "set",
+                &self.mc_alias,
                 &url,
                 &self.config.root_user,
                 &self.config.root_password,
@@ -519,7 +550,10 @@ impl S3GatewayManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("mc alias setup failed: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "mc alias setup failed: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -541,7 +575,8 @@ impl S3GatewayManager {
         crate::nas::services::manage_service(
             &crate::nas::services::NasService::Minio,
             crate::nas::services::ServiceAction::Start,
-        ).await?;
+        )
+        .await?;
 
         // Wait for service to be ready
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
@@ -557,7 +592,8 @@ impl S3GatewayManager {
         crate::nas::services::manage_service(
             &crate::nas::services::NasService::Minio,
             crate::nas::services::ServiceAction::Stop,
-        ).await
+        )
+        .await
     }
 
     /// Restart the S3 gateway
@@ -566,7 +602,8 @@ impl S3GatewayManager {
         crate::nas::services::manage_service(
             &crate::nas::services::NasService::Minio,
             crate::nas::services::ServiceAction::Restart,
-        ).await?;
+        )
+        .await?;
 
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
         let _ = self.setup_mc_alias().await;
@@ -689,15 +726,33 @@ impl S3GatewayManager {
         // Parse JSON response
         let mut drives = Vec::new();
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-            if let Some(disks) = json.get("info").and_then(|i| i.get("backend")).and_then(|b| b.get("onlineDisks")) {
+            if let Some(disks) = json
+                .get("info")
+                .and_then(|i| i.get("backend"))
+                .and_then(|b| b.get("onlineDisks"))
+            {
                 if let Some(disk_list) = disks.as_array() {
                     for disk in disk_list {
                         drives.push(DriveInfo {
-                            path: disk.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                            state: disk.get("state").and_then(|v| v.as_str()).unwrap_or("online").to_string(),
-                            total_bytes: disk.get("totalSpace").and_then(|v| v.as_u64()).unwrap_or(0),
+                            path: disk
+                                .get("path")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            state: disk
+                                .get("state")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("online")
+                                .to_string(),
+                            total_bytes: disk
+                                .get("totalSpace")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0),
                             used_bytes: disk.get("usedSpace").and_then(|v| v.as_u64()).unwrap_or(0),
-                            available_bytes: disk.get("availableSpace").and_then(|v| v.as_u64()).unwrap_or(0),
+                            available_bytes: disk
+                                .get("availableSpace")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0),
                         });
                     }
                 }
@@ -736,7 +791,11 @@ impl S3GatewayManager {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-            if let Some(uptime) = json.get("info").and_then(|i| i.get("uptime")).and_then(|u| u.as_u64()) {
+            if let Some(uptime) = json
+                .get("info")
+                .and_then(|i| i.get("uptime"))
+                .and_then(|u| u.as_u64())
+            {
                 return Ok(uptime);
             }
         }
@@ -783,7 +842,11 @@ impl S3GatewayManager {
     // ========== Bucket Operations ==========
 
     /// Create a bucket
-    pub async fn create_bucket(&self, name: &str, options: Option<CreateBucketOptions>) -> Result<S3Bucket> {
+    pub async fn create_bucket(
+        &self,
+        name: &str,
+        options: Option<CreateBucketOptions>,
+    ) -> Result<S3Bucket> {
         let opts = options.unwrap_or_default();
 
         // Create bucket using mc
@@ -807,7 +870,10 @@ impl S3GatewayManager {
             if stderr.contains("already exists") || stderr.contains("already owned") {
                 return Err(Error::Conflict(format!("Bucket '{}' already exists", name)));
             }
-            return Err(Error::Internal(format!("Failed to create bucket: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to create bucket: {}",
+                stderr
+            )));
         }
 
         // Set versioning if requested
@@ -832,7 +898,14 @@ impl S3GatewayManager {
 
         Ok(S3Bucket {
             name: name.to_string(),
-            path: format!("{}/{}", self.config.data_dirs.first().unwrap_or(&"/mnt/nas/s3".to_string()), name),
+            path: format!(
+                "{}/{}",
+                self.config
+                    .data_dirs
+                    .first()
+                    .unwrap_or(&"/mnt/nas/s3".to_string()),
+                name
+            ),
             versioning: opts.versioning,
             object_locking: opts.object_locking,
             quota_bytes: opts.quota.map(|q| q.quota_bytes),
@@ -866,7 +939,10 @@ impl S3GatewayManager {
             if stderr.contains("not empty") {
                 return Err(Error::Conflict("Bucket is not empty".to_string()));
             }
-            return Err(Error::Internal(format!("Failed to delete bucket: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to delete bucket: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -894,11 +970,20 @@ impl S3GatewayManager {
                         let name = key.trim_end_matches('/');
                         buckets.push(S3Bucket {
                             name: name.to_string(),
-                            path: format!("{}/{}", self.config.data_dirs.first().unwrap_or(&"/mnt/nas/s3".to_string()), name),
+                            path: format!(
+                                "{}/{}",
+                                self.config
+                                    .data_dirs
+                                    .first()
+                                    .unwrap_or(&"/mnt/nas/s3".to_string()),
+                                name
+                            ),
                             versioning: false,
                             object_locking: false,
                             quota_bytes: None,
-                            created_at: json.get("lastModified").and_then(|v| v.as_str())
+                            created_at: json
+                                .get("lastModified")
+                                .and_then(|v| v.as_str())
                                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                                 .map(|d| d.timestamp())
                                 .unwrap_or(0),
@@ -944,7 +1029,14 @@ impl S3GatewayManager {
 
         Ok(S3Bucket {
             name: name.to_string(),
-            path: format!("{}/{}", self.config.data_dirs.first().unwrap_or(&"/mnt/nas/s3".to_string()), name),
+            path: format!(
+                "{}/{}",
+                self.config
+                    .data_dirs
+                    .first()
+                    .unwrap_or(&"/mnt/nas/s3".to_string()),
+                name
+            ),
             versioning,
             object_locking: false, // Would need to parse from mc output
             quota_bytes: quota.map(|q| q.quota_bytes),
@@ -969,7 +1061,10 @@ impl S3GatewayManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Failed to set versioning: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to set versioning: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -978,7 +1073,12 @@ impl S3GatewayManager {
     /// Get bucket versioning status
     pub async fn get_bucket_versioning(&self, bucket: &str) -> Result<bool> {
         let output = Command::new("mc")
-            .args(["version", "info", &format!("{}/{}", self.mc_alias, bucket), "--json"])
+            .args([
+                "version",
+                "info",
+                &format!("{}/{}", self.mc_alias, bucket),
+                "--json",
+            ])
             .output()
             .await
             .map_err(|e| Error::Internal(format!("mc version failed: {}", e)))?;
@@ -988,7 +1088,8 @@ impl S3GatewayManager {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(stdout.contains("\"versioning\":\"Enabled\"") || stdout.contains("\"versioning\": \"Enabled\""))
+        Ok(stdout.contains("\"versioning\":\"Enabled\"")
+            || stdout.contains("\"versioning\": \"Enabled\""))
     }
 
     /// Set bucket quota
@@ -1000,10 +1101,13 @@ impl S3GatewayManager {
 
         let output = Command::new("mc")
             .args([
-                "quota", "set",
+                "quota",
+                "set",
                 &format!("{}/{}", self.mc_alias, bucket),
-                "--size", &format!("{}B", quota.quota_bytes),
-                "--type", quota_type,
+                "--size",
+                &format!("{}B", quota.quota_bytes),
+                "--type",
+                quota_type,
             ])
             .output()
             .await
@@ -1020,7 +1124,12 @@ impl S3GatewayManager {
     /// Get bucket quota
     pub async fn get_bucket_quota(&self, bucket: &str) -> Result<Option<BucketQuota>> {
         let output = Command::new("mc")
-            .args(["quota", "info", &format!("{}/{}", self.mc_alias, bucket), "--json"])
+            .args([
+                "quota",
+                "info",
+                &format!("{}/{}", self.mc_alias, bucket),
+                "--json",
+            ])
             .output()
             .await
             .map_err(|e| Error::Internal(format!("mc quota failed: {}", e)))?;
@@ -1037,7 +1146,11 @@ impl S3GatewayManager {
             ) {
                 if quota > 0 {
                     return Ok(Some(BucketQuota {
-                        quota_type: if quota_type == "fifo" { QuotaType::Fifo } else { QuotaType::Hard },
+                        quota_type: if quota_type == "fifo" {
+                            QuotaType::Fifo
+                        } else {
+                            QuotaType::Hard
+                        },
                         quota_bytes: quota,
                     }));
                 }
@@ -1057,14 +1170,21 @@ impl S3GatewayManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Failed to clear quota: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to clear quota: {}",
+                stderr
+            )));
         }
 
         Ok(())
     }
 
     /// Set bucket encryption
-    pub async fn set_bucket_encryption(&self, bucket: &str, encryption: &BucketEncryption) -> Result<()> {
+    pub async fn set_bucket_encryption(
+        &self,
+        bucket: &str,
+        encryption: &BucketEncryption,
+    ) -> Result<()> {
         let enc_type = match encryption.encryption_type {
             EncryptionType::SseS3 => "sse-s3",
             EncryptionType::SseKms => "sse-kms",
@@ -1086,21 +1206,27 @@ impl S3GatewayManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Failed to set encryption: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to set encryption: {}",
+                stderr
+            )));
         }
 
         Ok(())
     }
 
     /// Set bucket tags
-    pub async fn set_bucket_tags(&self, bucket: &str, tags: &HashMap<String, String>) -> Result<()> {
-        let tags_str: Vec<String> = tags.iter()
-            .map(|(k, v)| format!("{}={}", k, v))
-            .collect();
+    pub async fn set_bucket_tags(
+        &self,
+        bucket: &str,
+        tags: &HashMap<String, String>,
+    ) -> Result<()> {
+        let tags_str: Vec<String> = tags.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
 
         let output = Command::new("mc")
             .args([
-                "tag", "set",
+                "tag",
+                "set",
                 &format!("{}/{}", self.mc_alias, bucket),
                 &tags_str.join("&"),
             ])
@@ -1119,7 +1245,12 @@ impl S3GatewayManager {
     /// Get bucket tags
     pub async fn get_bucket_tags(&self, bucket: &str) -> Result<HashMap<String, String>> {
         let output = Command::new("mc")
-            .args(["tag", "list", &format!("{}/{}", self.mc_alias, bucket), "--json"])
+            .args([
+                "tag",
+                "list",
+                &format!("{}/{}", self.mc_alias, bucket),
+                "--json",
+            ])
             .output()
             .await
             .map_err(|e| Error::Internal(format!("mc tag failed: {}", e)))?;
@@ -1151,15 +1282,12 @@ impl S3GatewayManager {
 
         // Write to temp file
         let temp_file = format!("/tmp/lifecycle_{}.xml", bucket);
-        tokio::fs::write(&temp_file, &xml).await.map_err(|e| {
-            Error::Internal(format!("Failed to write lifecycle config: {}", e))
-        })?;
+        tokio::fs::write(&temp_file, &xml)
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to write lifecycle config: {}", e)))?;
 
         let output = Command::new("mc")
-            .args([
-                "ilm", "import",
-                &format!("{}/{}", self.mc_alias, bucket),
-            ])
+            .args(["ilm", "import", &format!("{}/{}", self.mc_alias, bucket)])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -1180,7 +1308,12 @@ impl S3GatewayManager {
     /// Get bucket lifecycle rules
     pub async fn get_bucket_lifecycle(&self, bucket: &str) -> Result<Vec<LifecycleRule>> {
         let output = Command::new("mc")
-            .args(["ilm", "ls", &format!("{}/{}", self.mc_alias, bucket), "--json"])
+            .args([
+                "ilm",
+                "ls",
+                &format!("{}/{}", self.mc_alias, bucket),
+                "--json",
+            ])
             .output()
             .await
             .map_err(|e| Error::Internal(format!("mc ilm failed: {}", e)))?;
@@ -1197,9 +1330,17 @@ impl S3GatewayManager {
                 if let Some(id) = json.get("id").and_then(|i| i.as_str()) {
                     rules.push(LifecycleRule {
                         id: id.to_string(),
-                        prefix: json.get("prefix").and_then(|p| p.as_str()).unwrap_or("").to_string(),
+                        prefix: json
+                            .get("prefix")
+                            .and_then(|p| p.as_str())
+                            .unwrap_or("")
+                            .to_string(),
                         enabled: json.get("status").and_then(|s| s.as_str()) == Some("Enabled"),
-                        expiration_days: json.get("expiration").and_then(|e| e.get("days")).and_then(|d| d.as_u64()).map(|d| d as u32),
+                        expiration_days: json
+                            .get("expiration")
+                            .and_then(|e| e.get("days"))
+                            .and_then(|d| d.as_u64())
+                            .map(|d| d as u32),
                         transition_days: None,
                         transition_storage_class: None,
                         delete_markers: false,
@@ -1218,19 +1359,17 @@ impl S3GatewayManager {
     /// Create S3 user
     pub async fn create_user(&self, username: &str, password: &str) -> Result<S3User> {
         let output = Command::new("mc")
-            .args([
-                "admin", "user", "add",
-                &self.mc_alias,
-                username,
-                password,
-            ])
+            .args(["admin", "user", "add", &self.mc_alias, username, password])
             .output()
             .await
             .map_err(|e| Error::Internal(format!("mc admin user add failed: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Failed to create user: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to create user: {}",
+                stderr
+            )));
         }
 
         Ok(S3User {
@@ -1252,7 +1391,10 @@ impl S3GatewayManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Failed to delete user: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to delete user: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -1279,8 +1421,11 @@ impl S3GatewayManager {
                     users.push(S3User {
                         username: access_key.to_string(),
                         enabled: json.get("userStatus").and_then(|s| s.as_str()) == Some("enabled"),
-                        policies: json.get("policyName").and_then(|p| p.as_str())
-                            .map(|s| vec![s.to_string()]).unwrap_or_default(),
+                        policies: json
+                            .get("policyName")
+                            .and_then(|p| p.as_str())
+                            .map(|s| vec![s.to_string()])
+                            .unwrap_or_default(),
                         groups: vec![],
                         created_at: 0,
                     });
@@ -1295,10 +1440,13 @@ impl S3GatewayManager {
     pub async fn set_user_policy(&self, username: &str, policy: &str) -> Result<()> {
         let output = Command::new("mc")
             .args([
-                "admin", "policy", "attach",
+                "admin",
+                "policy",
+                "attach",
                 &self.mc_alias,
                 policy,
-                "--user", username,
+                "--user",
+                username,
             ])
             .output()
             .await
@@ -1324,7 +1472,10 @@ impl S3GatewayManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Failed to {} user: {}", status, stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to {} user: {}",
+                status, stderr
+            )));
         }
 
         Ok(())
@@ -1333,7 +1484,11 @@ impl S3GatewayManager {
     // ========== Access Key Operations ==========
 
     /// Create access key
-    pub async fn create_access_key(&self, user_id: &str, description: Option<&str>) -> Result<S3AccessKey> {
+    pub async fn create_access_key(
+        &self,
+        user_id: &str,
+        description: Option<&str>,
+    ) -> Result<S3AccessKey> {
         // Generate random access key and secret
         use rand::Rng;
         let mut rng = rand::thread_rng();
@@ -1346,9 +1501,14 @@ impl S3GatewayManager {
             .collect();
 
         let mut args = vec![
-            "admin".to_string(), "user".to_string(), "svcacct".to_string(), "add".to_string(),
-            "--access-key".to_string(), access_key.clone(),
-            "--secret-key".to_string(), secret_key.clone(),
+            "admin".to_string(),
+            "user".to_string(),
+            "svcacct".to_string(),
+            "add".to_string(),
+            "--access-key".to_string(),
+            access_key.clone(),
+            "--secret-key".to_string(),
+            secret_key.clone(),
         ];
 
         if let Some(desc) = description {
@@ -1367,7 +1527,10 @@ impl S3GatewayManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Failed to create access key: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to create access key: {}",
+                stderr
+            )));
         }
 
         Ok(S3AccessKey {
@@ -1393,7 +1556,10 @@ impl S3GatewayManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Failed to delete access key: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to delete access key: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -1402,7 +1568,15 @@ impl S3GatewayManager {
     /// List access keys for user
     pub async fn list_access_keys(&self, user_id: &str) -> Result<Vec<S3AccessKey>> {
         let output = Command::new("mc")
-            .args(["admin", "user", "svcacct", "list", &self.mc_alias, user_id, "--json"])
+            .args([
+                "admin",
+                "user",
+                "svcacct",
+                "list",
+                &self.mc_alias,
+                user_id,
+                "--json",
+            ])
             .output()
             .await
             .map_err(|e| Error::Internal(format!("mc svcacct list failed: {}", e)))?;
@@ -1421,7 +1595,10 @@ impl S3GatewayManager {
                         access_key: access_key.to_string(),
                         secret_key: String::new(),
                         user_id: user_id.to_string(),
-                        description: json.get("description").and_then(|d| d.as_str()).map(|s| s.to_string()),
+                        description: json
+                            .get("description")
+                            .and_then(|d| d.as_str())
+                            .map(|s| s.to_string()),
                         enabled: json.get("accountStatus").and_then(|s| s.as_str()) != Some("off"),
                         expires_at: None,
                         created_at: 0,
@@ -1446,12 +1623,19 @@ impl S3GatewayManager {
 
         // Write to temp file
         let temp_file = format!("/tmp/policy_{}.json", name);
-        tokio::fs::write(&temp_file, policy_json).await.map_err(|e| {
-            Error::Internal(format!("Failed to write policy file: {}", e))
-        })?;
+        tokio::fs::write(&temp_file, policy_json)
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to write policy file: {}", e)))?;
 
         let output = Command::new("mc")
-            .args(["admin", "policy", "create", &self.mc_alias, name, &temp_file])
+            .args([
+                "admin",
+                "policy",
+                "create",
+                &self.mc_alias,
+                name,
+                &temp_file,
+            ])
             .output()
             .await
             .map_err(|e| Error::Internal(format!("mc policy create failed: {}", e)))?;
@@ -1461,7 +1645,10 @@ impl S3GatewayManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Failed to create policy: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to create policy: {}",
+                stderr
+            )));
         }
 
         Ok(S3Policy {
@@ -1481,7 +1668,10 @@ impl S3GatewayManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Failed to delete policy: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to delete policy: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -1505,8 +1695,14 @@ impl S3GatewayManager {
         for line in stdout.lines() {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
                 if let Some(policy) = json.get("policy").and_then(|p| p.as_str()) {
-                    let builtin = ["readonly", "readwrite", "writeonly", "diagnostics", "consoleAdmin"]
-                        .contains(&policy);
+                    let builtin = [
+                        "readonly",
+                        "readwrite",
+                        "writeonly",
+                        "diagnostics",
+                        "consoleAdmin",
+                    ]
+                    .contains(&policy);
                     policies.push(S3Policy {
                         name: policy.to_string(),
                         policy: String::new(),
@@ -1522,7 +1718,12 @@ impl S3GatewayManager {
     // ========== Object Operations ==========
 
     /// List objects in bucket
-    pub async fn list_objects(&self, bucket: &str, prefix: Option<&str>, recursive: bool) -> Result<Vec<S3Object>> {
+    pub async fn list_objects(
+        &self,
+        bucket: &str,
+        prefix: Option<&str>,
+        recursive: bool,
+    ) -> Result<Vec<S3Object>> {
         let mut args = vec!["ls".to_string()];
 
         if recursive {
@@ -1558,14 +1759,30 @@ impl S3GatewayManager {
                         objects.push(S3Object {
                             key: key.to_string(),
                             size: json.get("size").and_then(|s| s.as_u64()).unwrap_or(0),
-                            last_modified: json.get("lastModified").and_then(|l| l.as_str())
+                            last_modified: json
+                                .get("lastModified")
+                                .and_then(|l| l.as_str())
                                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                                 .map(|d| d.timestamp())
                                 .unwrap_or(0),
-                            etag: json.get("etag").and_then(|e| e.as_str()).unwrap_or("").to_string(),
-                            content_type: json.get("contentType").and_then(|c| c.as_str()).map(|s| s.to_string()),
-                            storage_class: json.get("storageClass").and_then(|s| s.as_str()).unwrap_or("STANDARD").to_string(),
-                            version_id: json.get("versionId").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                            etag: json
+                                .get("etag")
+                                .and_then(|e| e.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            content_type: json
+                                .get("contentType")
+                                .and_then(|c| c.as_str())
+                                .map(|s| s.to_string()),
+                            storage_class: json
+                                .get("storageClass")
+                                .and_then(|s| s.as_str())
+                                .unwrap_or("STANDARD")
+                                .to_string(),
+                            version_id: json
+                                .get("versionId")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string()),
                             is_delete_marker: false,
                             metadata: HashMap::new(),
                             tags: HashMap::new(),
@@ -1588,7 +1805,10 @@ impl S3GatewayManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Failed to delete object: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to delete object: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -1601,12 +1821,19 @@ impl S3GatewayManager {
         match request.method.to_uppercase().as_str() {
             "GET" => args.push("download".to_string()),
             "PUT" => args.push("upload".to_string()),
-            _ => return Err(Error::Validation("Invalid method, use GET or PUT".to_string())),
+            _ => {
+                return Err(Error::Validation(
+                    "Invalid method, use GET or PUT".to_string(),
+                ))
+            }
         }
 
         args.push("--expire".to_string());
         args.push(format!("{}s", request.expires_secs));
-        args.push(format!("{}/{}/{}", self.mc_alias, request.bucket, request.key));
+        args.push(format!(
+            "{}/{}/{}",
+            self.mc_alias, request.bucket, request.key
+        ));
 
         let output = Command::new("mc")
             .args(&args)
@@ -1616,7 +1843,10 @@ impl S3GatewayManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Failed to generate presigned URL: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to generate presigned URL: {}",
+                stderr
+            )));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1647,9 +1877,9 @@ impl S3GatewayManager {
 
         // Write environment file
         let env_path = "/etc/default/minio";
-        tokio::fs::write(env_path, &env_content).await.map_err(|e| {
-            Error::Internal(format!("Failed to write MinIO config: {}", e))
-        })?;
+        tokio::fs::write(env_path, &env_content)
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to write MinIO config: {}", e)))?;
 
         // Write systemd service file if needed
         if crate::nas::services::detect_init_system() == crate::nas::services::InitSystem::Systemd {
@@ -1676,10 +1906,7 @@ impl S3GatewayManager {
         // Server address
         content.push_str(&format!(
             "MINIO_OPTS=\"--address {}:{} --console-address {}:{}\"\n",
-            self.config.address,
-            self.config.port,
-            self.config.address,
-            self.config.console_port,
+            self.config.address, self.config.port, self.config.address, self.config.console_port,
         ));
 
         // Region
@@ -1693,9 +1920,7 @@ impl S3GatewayManager {
         // TLS
         if let Some(ref tls) = self.config.tls {
             if tls.enabled {
-                content.push_str(&format!(
-                    "MINIO_CERTS_DIR=/etc/minio/certs\n"
-                ));
+                content.push_str(&format!("MINIO_CERTS_DIR=/etc/minio/certs\n"));
             }
         }
 
@@ -1717,7 +1942,10 @@ impl S3GatewayManager {
         if self.config.audit_log {
             if let Some(ref webhook) = self.config.audit_webhook {
                 content.push_str(&format!("MINIO_AUDIT_WEBHOOK_ENABLE_target1=on\n"));
-                content.push_str(&format!("MINIO_AUDIT_WEBHOOK_ENDPOINT_target1={}\n", webhook));
+                content.push_str(&format!(
+                    "MINIO_AUDIT_WEBHOOK_ENDPOINT_target1={}\n",
+                    webhook
+                ));
             }
         }
 
@@ -1728,7 +1956,10 @@ impl S3GatewayManager {
             content.push_str(&format!("MINIO_CACHE_EXPIRY={}\n", cache.expiry));
             content.push_str(&format!("MINIO_CACHE_QUOTA={}\n", cache.quota));
             if !cache.exclude.is_empty() {
-                content.push_str(&format!("MINIO_CACHE_EXCLUDE={}\n", cache.exclude.join(";")));
+                content.push_str(&format!(
+                    "MINIO_CACHE_EXCLUDE={}\n",
+                    cache.exclude.join(";")
+                ));
             }
         }
 
@@ -1757,9 +1988,9 @@ TimeoutStopSec=0
 WantedBy=multi-user.target
 "#;
 
-        tokio::fs::write("/etc/systemd/system/minio.service", service).await.map_err(|e| {
-            Error::Internal(format!("Failed to write systemd service: {}", e))
-        })?;
+        tokio::fs::write("/etc/systemd/system/minio.service", service)
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to write systemd service: {}", e)))?;
 
         // Reload systemd
         let _ = Command::new("systemctl")
@@ -1802,9 +2033,9 @@ stop() {
 }
 "#;
 
-        tokio::fs::write("/etc/init.d/minio", service).await.map_err(|e| {
-            Error::Internal(format!("Failed to write OpenRC service: {}", e))
-        })?;
+        tokio::fs::write("/etc/init.d/minio", service)
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to write OpenRC service: {}", e)))?;
 
         // Make executable
         let _ = Command::new("chmod")
@@ -1840,10 +2071,12 @@ pub struct CreateBucketOptions {
 /// Generate lifecycle XML from rules
 fn generate_lifecycle_xml(rules: &[LifecycleRule]) -> String {
     let mut xml = r#"<?xml version="1.0" encoding="UTF-8"?>
-<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">"#.to_string();
+<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">"#
+        .to_string();
 
     for rule in rules {
-        xml.push_str(&format!(r#"
+        xml.push_str(&format!(
+            r#"
   <Rule>
     <ID>{}</ID>
     <Status>{}</Status>
@@ -1856,17 +2089,23 @@ fn generate_lifecycle_xml(rules: &[LifecycleRule]) -> String {
         ));
 
         if let Some(days) = rule.expiration_days {
-            xml.push_str(&format!(r#"
+            xml.push_str(&format!(
+                r#"
     <Expiration>
       <Days>{}</Days>
-    </Expiration>"#, days));
+    </Expiration>"#,
+                days
+            ));
         }
 
         if let Some(days) = rule.noncurrent_expiration_days {
-            xml.push_str(&format!(r#"
+            xml.push_str(&format!(
+                r#"
     <NoncurrentVersionExpiration>
       <NoncurrentDays>{}</NoncurrentDays>
-    </NoncurrentVersionExpiration>"#, days));
+    </NoncurrentVersionExpiration>"#,
+                days
+            ));
         }
 
         xml.push_str("\n  </Rule>");
@@ -1924,19 +2163,17 @@ mod tests {
 
     #[test]
     fn test_lifecycle_xml() {
-        let rules = vec![
-            LifecycleRule {
-                id: "delete-old".to_string(),
-                prefix: "logs/".to_string(),
-                enabled: true,
-                expiration_days: Some(30),
-                transition_days: None,
-                transition_storage_class: None,
-                delete_markers: false,
-                noncurrent_expiration_days: Some(7),
-                tags: HashMap::new(),
-            },
-        ];
+        let rules = vec![LifecycleRule {
+            id: "delete-old".to_string(),
+            prefix: "logs/".to_string(),
+            enabled: true,
+            expiration_days: Some(30),
+            transition_days: None,
+            transition_storage_class: None,
+            delete_markers: false,
+            noncurrent_expiration_days: Some(7),
+            tags: HashMap::new(),
+        }];
 
         let xml = generate_lifecycle_xml(&rules);
         assert!(xml.contains("<ID>delete-old</ID>"));

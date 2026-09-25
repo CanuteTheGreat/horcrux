@@ -1,5 +1,5 @@
+use crate::api::{get_metric_samples, get_metrics_catalog, MetricDefinition, MetricSeries};
 use leptos::*;
-use crate::api::{MetricDefinition, MetricSeries, get_metrics_catalog, get_metric_samples};
 
 #[component]
 pub fn MetricsCatalogPage() -> impl IntoView {
@@ -40,21 +40,25 @@ pub fn MetricsCatalogPage() -> impl IntoView {
 
     // Filtered and sorted metrics
     let filtered_metrics = create_memo(move |_| {
-        let mut filtered: Vec<MetricDefinition> = metrics.get()
+        let mut filtered: Vec<MetricDefinition> = metrics
+            .get()
             .into_iter()
             .filter(|metric| {
                 let search_match = if search_term.get().is_empty() {
                     true
                 } else {
                     let term = search_term.get().to_lowercase();
-                    metric.name.to_lowercase().contains(&term) ||
-                    metric.description.to_lowercase().contains(&term) ||
-                    metric.help.to_lowercase().contains(&term)
+                    metric.name.to_lowercase().contains(&term)
+                        || metric.description.to_lowercase().contains(&term)
+                        || metric.help.to_lowercase().contains(&term)
                 };
 
-                let category_match = selected_category.get() == "all" || metric.category == selected_category.get();
-                let type_match = selected_type.get() == "all" || metric.metric_type == selected_type.get();
-                let source_match = selected_source.get() == "all" || metric.source == selected_source.get();
+                let category_match =
+                    selected_category.get() == "all" || metric.category == selected_category.get();
+                let type_match =
+                    selected_type.get() == "all" || metric.metric_type == selected_type.get();
+                let source_match =
+                    selected_source.get() == "all" || metric.source == selected_source.get();
 
                 search_match && category_match && type_match && source_match
             })
@@ -79,7 +83,8 @@ pub fn MetricsCatalogPage() -> impl IntoView {
 
     // Get unique categories, types, and sources for filters
     let categories = create_memo(move |_| {
-        let mut cats: Vec<String> = metrics.get()
+        let mut cats: Vec<String> = metrics
+            .get()
             .iter()
             .map(|m| m.category.clone())
             .collect::<std::collections::HashSet<_>>()
@@ -90,7 +95,8 @@ pub fn MetricsCatalogPage() -> impl IntoView {
     });
 
     let metric_types = create_memo(move |_| {
-        let mut types: Vec<String> = metrics.get()
+        let mut types: Vec<String> = metrics
+            .get()
             .iter()
             .map(|m| m.metric_type.clone())
             .collect::<std::collections::HashSet<_>>()
@@ -101,7 +107,8 @@ pub fn MetricsCatalogPage() -> impl IntoView {
     });
 
     let sources = create_memo(move |_| {
-        let mut srcs: Vec<String> = metrics.get()
+        let mut srcs: Vec<String> = metrics
+            .get()
             .iter()
             .map(|m| m.source.clone())
             .collect::<std::collections::HashSet<_>>()

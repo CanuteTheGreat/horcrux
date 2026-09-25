@@ -1,25 +1,24 @@
-///! Virtual machine management module
-///! Handles QEMU/KVM, LXD, and Incus virtual machine lifecycle
-
-pub mod qemu;
-pub mod lxd;
-pub mod incus;
-pub mod vgpu;
-pub mod snapshot;
-pub mod snapshot_scheduler;
-pub mod snapshot_quota;
 pub mod clone;
 pub mod clone_progress;
 pub mod cross_node_clone;
+pub mod incus;
+pub mod lxd;
+///! Virtual machine management module
+///! Handles QEMU/KVM, LXD, and Incus virtual machine lifecycle
+pub mod qemu;
 pub mod replication;
+pub mod snapshot;
+pub mod snapshot_quota;
+pub mod snapshot_scheduler;
+pub mod vgpu;
 
 pub use qemu::{QemuManager, QemuVm};
 
+use crate::db::Database;
 use horcrux_common::{Result, VmConfig};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::db::Database;
 
 /// Virtual machine manager
 pub struct VmManager {
@@ -82,9 +81,10 @@ impl VmManager {
 
         // Check if VM with this ID already exists
         if vms.contains_key(&config.id) {
-            return Err(horcrux_common::Error::InvalidConfig(
-                format!("VM with ID {} already exists", config.id)
-            ));
+            return Err(horcrux_common::Error::InvalidConfig(format!(
+                "VM with ID {} already exists",
+                config.id
+            )));
         }
 
         // Create the VM
@@ -103,7 +103,8 @@ impl VmManager {
     /// Start a virtual machine
     pub async fn start_vm(&self, id: &str) -> Result<VmConfig> {
         let vms = self.vms.read().await;
-        let vm = vms.get(id)
+        let vm = vms
+            .get(id)
             .ok_or_else(|| horcrux_common::Error::VmNotFound(id.to_string()))?;
 
         self.qemu.start_vm(vm).await?;
@@ -113,7 +114,8 @@ impl VmManager {
     /// Stop a virtual machine
     pub async fn stop_vm(&self, id: &str) -> Result<VmConfig> {
         let vms = self.vms.read().await;
-        let vm = vms.get(id)
+        let vm = vms
+            .get(id)
             .ok_or_else(|| horcrux_common::Error::VmNotFound(id.to_string()))?;
 
         self.qemu.stop_vm(vm).await?;
@@ -142,7 +144,7 @@ impl VmManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use horcrux_common::{VmConfig, VmStatus, VmArchitecture, VmHypervisor};
+    use horcrux_common::{VmArchitecture, VmConfig, VmHypervisor, VmStatus};
 
     fn create_test_vm_config(id: &str, name: &str) -> VmConfig {
         VmConfig {

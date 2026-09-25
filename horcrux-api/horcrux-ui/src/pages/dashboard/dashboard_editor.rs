@@ -1,6 +1,6 @@
+use crate::api::*;
 use leptos::*;
 use leptos_router::*;
-use crate::api::*;
 
 #[component]
 pub fn DashboardEditorPage() -> impl IntoView {
@@ -98,7 +98,10 @@ pub fn DashboardEditorPage() -> impl IntoView {
 
         match add_dashboard_widget(&id, request).await {
             Ok(widget) => {
-                set_success_message.set(Some(format!("Widget '{}' added successfully", widget.title)));
+                set_success_message.set(Some(format!(
+                    "Widget '{}' added successfully",
+                    widget.title
+                )));
                 set_show_add_widget_modal.set(false);
                 clear_widget_form();
                 load_dashboard.dispatch(());
@@ -130,7 +133,9 @@ pub fn DashboardEditorPage() -> impl IntoView {
                         }
                     });
                 }
-                Err(e) => set_error_message.set(Some(format!("Failed to update widget position: {}", e))),
+                Err(e) => {
+                    set_error_message.set(Some(format!("Failed to update widget position: {}", e)))
+                }
             }
         }
     });
@@ -181,17 +186,15 @@ pub fn DashboardEditorPage() -> impl IntoView {
     });
 
     // Helper functions
-    let get_widget_component = move |widget: DashboardWidget| {
-        match widget.widget_type.as_str() {
-            "line_chart" => view! { <LineChartWidget widget=widget/> }.into_view(),
-            "bar_chart" => view! { <BarChartWidget widget=widget/> }.into_view(),
-            "pie_chart" => view! { <PieChartWidget widget=widget/> }.into_view(),
-            "gauge" => view! { <GaugeWidget widget=widget/> }.into_view(),
-            "table" => view! { <TableWidget widget=widget/> }.into_view(),
-            "metric" => view! { <MetricWidget widget=widget/> }.into_view(),
-            "heatmap" => view! { <HeatmapWidget widget=widget/> }.into_view(),
-            _ => view! { <DefaultWidget widget=widget/> }.into_view(),
-        }
+    let get_widget_component = move |widget: DashboardWidget| match widget.widget_type.as_str() {
+        "line_chart" => view! { <LineChartWidget widget=widget/> }.into_view(),
+        "bar_chart" => view! { <BarChartWidget widget=widget/> }.into_view(),
+        "pie_chart" => view! { <PieChartWidget widget=widget/> }.into_view(),
+        "gauge" => view! { <GaugeWidget widget=widget/> }.into_view(),
+        "table" => view! { <TableWidget widget=widget/> }.into_view(),
+        "metric" => view! { <MetricWidget widget=widget/> }.into_view(),
+        "heatmap" => view! { <HeatmapWidget widget=widget/> }.into_view(),
+        _ => view! { <DefaultWidget widget=widget/> }.into_view(),
     };
 
     // Clear messages after delay

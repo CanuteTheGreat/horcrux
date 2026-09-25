@@ -1,5 +1,5 @@
-use leptos::*;
 use crate::api::*;
+use leptos::*;
 
 #[component]
 pub fn ServicesPage() -> impl IntoView {
@@ -33,7 +33,8 @@ pub fn ServicesPage() -> impl IntoView {
 
             match control_service(&service_name, &action).await {
                 Ok(_) => {
-                    set_success_message.set(Some(format!("Successfully {} service '{}'",
+                    set_success_message.set(Some(format!(
+                        "Successfully {} service '{}'",
                         match action.as_str() {
                             "start" => "started",
                             "stop" => "stopped",
@@ -41,11 +42,16 @@ pub fn ServicesPage() -> impl IntoView {
                             "enable" => "enabled",
                             "disable" => "disabled",
                             _ => "controlled",
-                        }, service_name)));
+                        },
+                        service_name
+                    )));
                     // Reload services after action
                     load_services.dispatch(());
                 }
-                Err(e) => set_error_message.set(Some(format!("Failed to {} service '{}': {}", action, service_name, e))),
+                Err(e) => set_error_message.set(Some(format!(
+                    "Failed to {} service '{}': {}",
+                    action, service_name, e
+                ))),
             }
 
             set_loading.set(false);
@@ -57,15 +63,15 @@ pub fn ServicesPage() -> impl IntoView {
         let query = search_query.get().to_lowercase();
         let status_filter = filter_status.get();
 
-        services.get()
+        services
+            .get()
             .into_iter()
             .filter(|service| {
-                let matches_search = query.is_empty() ||
-                    service.name.to_lowercase().contains(&query) ||
-                    service.description.to_lowercase().contains(&query);
+                let matches_search = query.is_empty()
+                    || service.name.to_lowercase().contains(&query)
+                    || service.description.to_lowercase().contains(&query);
 
-                let matches_status = status_filter == "all" ||
-                    service.status == status_filter;
+                let matches_status = status_filter == "all" || service.status == status_filter;
 
                 matches_search && matches_status
             })
@@ -104,13 +110,10 @@ pub fn ServicesPage() -> impl IntoView {
         }
     };
 
-    let can_start = |service: &ServiceStatus| -> bool {
-        service.status == "inactive" && service.enabled
-    };
+    let can_start =
+        |service: &ServiceStatus| -> bool { service.status == "inactive" && service.enabled };
 
-    let can_stop = |service: &ServiceStatus| -> bool {
-        service.status == "active"
-    };
+    let can_stop = |service: &ServiceStatus| -> bool { service.status == "active" };
 
     // Clear messages after delay
     let clear_messages = move || {

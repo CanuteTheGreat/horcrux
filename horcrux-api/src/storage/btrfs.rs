@@ -1,15 +1,14 @@
+use super::StoragePool;
 ///! BtrFS storage backend
 ///!
 ///! Provides BtrFS filesystem support with native snapshots and subvolumes
 ///!
 ///! Note: This module is complete but not yet fully integrated into the storage manager.
 ///! It will be activated when BtrFS backend support is enabled in the platform.
-
 use horcrux_common::Result;
-use tokio::process::Command as AsyncCommand;
 use serde::{Deserialize, Serialize};
-use super::StoragePool;
 use std::path::PathBuf;
+use tokio::process::Command as AsyncCommand;
 
 /// BtrFS manager
 #[allow(dead_code)]
@@ -44,7 +43,7 @@ impl BtrFsManager {
     pub async fn validate_pool(&self, pool: &StoragePool) -> Result<()> {
         if pool.path.is_empty() {
             return Err(horcrux_common::Error::System(
-                "BtrFS path is required".to_string()
+                "BtrFS path is required".to_string(),
             ));
         }
 
@@ -60,20 +59,24 @@ impl BtrFsManager {
             .args(&["-f", "-c", "%T", path])
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to check filesystem: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to check filesystem: {}", e))
+            })?;
 
         if !output.status.success() {
-            return Err(horcrux_common::Error::System(
-                format!("Path {} is not accessible", path)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Path {} is not accessible",
+                path
+            )));
         }
 
         let fs_type = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
         if fs_type != "btrfs" {
-            return Err(horcrux_common::Error::System(
-                format!("Path {} is not on BtrFS filesystem (found: {})", path, fs_type)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Path {} is not on BtrFS filesystem (found: {})",
+                path, fs_type
+            )));
         }
 
         Ok(())
@@ -89,13 +92,16 @@ impl BtrFsManager {
             .args(&["subvolume", "create", subvol_path.to_str().unwrap()])
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to create subvolume: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to create subvolume: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(
-                format!("Subvolume creation failed: {}", stderr)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Subvolume creation failed: {}",
+                stderr
+            )));
         }
 
         Ok(subvol_path.to_string_lossy().to_string())
@@ -109,13 +115,16 @@ impl BtrFsManager {
             .args(&["subvolume", "delete", subvol_path])
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to delete subvolume: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to delete subvolume: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(
-                format!("Subvolume deletion failed: {}", stderr)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Subvolume deletion failed: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -140,21 +149,25 @@ impl BtrFsManager {
         let output = AsyncCommand::new("qemu-img")
             .args(&[
                 "create",
-                "-f", "qcow2",
+                "-f",
+                "qcow2",
                 image_path.to_str().unwrap(),
                 &format!("{}G", size_gb),
             ])
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to create volume: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to create volume: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             // Clean up subvolume on failure
             let _ = self.delete_subvolume(&subvol_path).await;
-            return Err(horcrux_common::Error::System(
-                format!("Volume creation failed: {}", stderr)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Volume creation failed: {}",
+                stderr
+            )));
         }
 
         Ok(image_path.to_string_lossy().to_string())
@@ -187,11 +200,12 @@ impl BtrFsManager {
         readonly: bool,
     ) -> Result<String> {
         let source = PathBuf::from(source_path);
-        let parent = source.parent().ok_or_else(|| {
-            horcrux_common::Error::System("Invalid source path".to_string())
-        })?;
+        let parent = source
+            .parent()
+            .ok_or_else(|| horcrux_common::Error::System("Invalid source path".to_string()))?;
 
-        let snapshot_path = parent.join(format!("{}-snapshot-{}",
+        let snapshot_path = parent.join(format!(
+            "{}-snapshot-{}",
             source.file_name().unwrap().to_str().unwrap(),
             snapshot_name
         ));
@@ -216,13 +230,16 @@ impl BtrFsManager {
             .args(&args)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to create snapshot: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to create snapshot: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(
-                format!("Snapshot creation failed: {}", stderr)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Snapshot creation failed: {}",
+                stderr
+            )));
         }
 
         Ok(snapshot_path.to_string_lossy().to_string())
@@ -234,19 +251,23 @@ impl BtrFsManager {
             .args(&["subvolume", "list", "-s", base_path])
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to list snapshots: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to list snapshots: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(
-                format!("Snapshot list failed: {}", stderr)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Snapshot list failed: {}",
+                stderr
+            )));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut snapshots = Vec::new();
 
-        for line in stdout.lines().skip(1) {  // Skip header
+        for line in stdout.lines().skip(1) {
+            // Skip header
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 9 {
                 snapshots.push(BtrFsSnapshot {
@@ -262,12 +283,12 @@ impl BtrFsManager {
     }
 
     /// Restore from snapshot
-    pub async fn restore_snapshot(
-        &self,
-        snapshot_path: &str,
-        target_path: &str,
-    ) -> Result<()> {
-        tracing::info!("Restoring from snapshot {} to {}", snapshot_path, target_path);
+    pub async fn restore_snapshot(&self, snapshot_path: &str, target_path: &str) -> Result<()> {
+        tracing::info!(
+            "Restoring from snapshot {} to {}",
+            snapshot_path,
+            target_path
+        );
 
         // Delete target if it exists
         if PathBuf::from(target_path).exists() {
@@ -276,20 +297,19 @@ impl BtrFsManager {
 
         // Create writable snapshot at target location
         let output = AsyncCommand::new("btrfs")
-            .args(&[
-                "subvolume", "snapshot",
-                snapshot_path,
-                target_path,
-            ])
+            .args(&["subvolume", "snapshot", snapshot_path, target_path])
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to restore snapshot: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to restore snapshot: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(
-                format!("Snapshot restore failed: {}", stderr)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Snapshot restore failed: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -304,7 +324,9 @@ impl BtrFsManager {
             .map_err(|e| horcrux_common::Error::System(format!("Failed to get usage: {}", e)))?;
 
         if !output.status.success() {
-            return Err(horcrux_common::Error::System("Failed to get filesystem usage".to_string()));
+            return Err(horcrux_common::Error::System(
+                "Failed to get filesystem usage".to_string(),
+            ));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -330,7 +352,7 @@ impl BtrFsManager {
     /// Enable/disable compression
     pub async fn set_compression(&self, path: &str, algorithm: Option<&str>) -> Result<()> {
         let value = match algorithm {
-            Some(algo) => format!("compress={}", algo),  // zlib, lzo, zstd
+            Some(algo) => format!("compress={}", algo), // zlib, lzo, zstd
             None => "compress=no".to_string(),
         };
 
@@ -340,13 +362,16 @@ impl BtrFsManager {
             .args(&["property", "set", path, "compression", &value])
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to set compression: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to set compression: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(
-                format!("Compression setting failed: {}", stderr)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Compression setting failed: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -364,9 +389,10 @@ impl BtrFsManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(
-                format!("Defragmentation failed: {}", stderr)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Defragmentation failed: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -390,7 +416,9 @@ impl BtrFsManager {
             .map_err(|e| horcrux_common::Error::System(format!("Failed to get version: {}", e)))?;
 
         if !output.status.success() {
-            return Err(horcrux_common::Error::System("Failed to get BtrFS version".to_string()));
+            return Err(horcrux_common::Error::System(
+                "Failed to get BtrFS version".to_string(),
+            ));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);

@@ -10,10 +10,7 @@ use crate::kubernetes::types::{ConfigMapInfo, CreateConfigMapRequest, UpdateConf
 
 /// List ConfigMaps in a namespace
 #[cfg(feature = "kubernetes")]
-pub async fn list_configmaps(
-    client: &K8sClient,
-    namespace: &str,
-) -> K8sResult<Vec<ConfigMapInfo>> {
+pub async fn list_configmaps(client: &K8sClient, namespace: &str) -> K8sResult<Vec<ConfigMapInfo>> {
     use k8s_openapi::api::core::v1::ConfigMap;
     use kube::api::{Api, ListParams};
 
@@ -76,7 +73,9 @@ pub async fn create_configmap(
         immutable: None,
     };
 
-    let created = configmaps.create(&PostParams::default(), &configmap).await?;
+    let created = configmaps
+        .create(&PostParams::default(), &configmap)
+        .await?;
     Ok(configmap_to_info(created))
 }
 
@@ -119,11 +118,7 @@ pub async fn update_configmap(
 
 /// Delete a ConfigMap
 #[cfg(feature = "kubernetes")]
-pub async fn delete_configmap(
-    client: &K8sClient,
-    namespace: &str,
-    name: &str,
-) -> K8sResult<()> {
+pub async fn delete_configmap(client: &K8sClient, namespace: &str, name: &str) -> K8sResult<()> {
     use k8s_openapi::api::core::v1::ConfigMap;
     use kube::api::{Api, DeleteParams};
 
@@ -163,7 +158,9 @@ pub async fn list_configmaps(
     _client: &K8sClient,
     _namespace: &str,
 ) -> K8sResult<Vec<ConfigMapInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -172,7 +169,9 @@ pub async fn get_configmap(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<ConfigMapInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -180,7 +179,9 @@ pub async fn create_configmap(
     _client: &K8sClient,
     _request: &CreateConfigMapRequest,
 ) -> K8sResult<ConfigMapInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -190,14 +191,14 @@ pub async fn update_configmap(
     _name: &str,
     _request: &UpdateConfigMapRequest,
 ) -> K8sResult<ConfigMapInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
-pub async fn delete_configmap(
-    _client: &K8sClient,
-    _namespace: &str,
-    _name: &str,
-) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+pub async fn delete_configmap(_client: &K8sClient, _namespace: &str, _name: &str) -> K8sResult<()> {
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }

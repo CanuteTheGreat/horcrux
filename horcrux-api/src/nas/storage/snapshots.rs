@@ -3,12 +3,12 @@
 //! Handles ZFS snapshots, Btrfs snapshots, and LVM snapshots with
 //! automatic scheduling, retention policies, and lifecycle management.
 
-use horcrux_common::{Error, Result};
 use crate::nas::storage::NasSnapshot;
-use tokio::process::Command;
+use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use tokio::process::Command;
 
 /// Snapshot type based on backend
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -139,17 +139,35 @@ impl SnapshotManager {
         let mut caps = Vec::new();
 
         // Check ZFS
-        if Command::new("which").arg("zfs").output().await.map(|o| o.status.success()).unwrap_or(false) {
+        if Command::new("which")
+            .arg("zfs")
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
             caps.push(SnapshotType::Zfs);
         }
 
         // Check Btrfs
-        if Command::new("which").arg("btrfs").output().await.map(|o| o.status.success()).unwrap_or(false) {
+        if Command::new("which")
+            .arg("btrfs")
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
             caps.push(SnapshotType::Btrfs);
         }
 
         // Check LVM
-        if Command::new("which").arg("lvcreate").output().await.map(|o| o.status.success()).unwrap_or(false) {
+        if Command::new("which")
+            .arg("lvcreate")
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
             caps.push(SnapshotType::Lvm);
         }
 
@@ -246,9 +264,14 @@ pub async fn list_all_snapshots() -> Result<Vec<NasSnapshot>> {
         // List all ZFS snapshots
         let output = Command::new("zfs")
             .args([
-                "list", "-H", "-t", "snapshot",
-                "-o", "name,used,refer,creation",
-                "-s", "creation",
+                "list",
+                "-H",
+                "-t",
+                "snapshot",
+                "-o",
+                "name,used,refer,creation",
+                "-s",
+                "creation",
             ])
             .output()
             .await;
@@ -271,9 +294,15 @@ pub async fn list_all_snapshots() -> Result<Vec<NasSnapshot>> {
 async fn list_zfs_snapshots(dataset: &str) -> Result<Vec<NasSnapshot>> {
     let output = Command::new("zfs")
         .args([
-            "list", "-H", "-t", "snapshot", "-r",
-            "-o", "name,used,refer,creation",
-            "-s", "creation",
+            "list",
+            "-H",
+            "-t",
+            "snapshot",
+            "-r",
+            "-o",
+            "name,used,refer,creation",
+            "-s",
+            "creation",
             dataset,
         ])
         .output()
@@ -294,7 +323,10 @@ async fn list_zfs_snapshots(dataset: &str) -> Result<Vec<NasSnapshot>> {
 
             // Parse snapshot name from full_name (dataset@snapshot)
             let (parent_dataset, snap_name) = if let Some(idx) = full_name.find('@') {
-                (full_name[..idx].to_string(), full_name[idx + 1..].to_string())
+                (
+                    full_name[..idx].to_string(),
+                    full_name[idx + 1..].to_string(),
+                )
             } else {
                 continue;
             };
@@ -381,10 +413,7 @@ async fn create_zfs_snapshot(dataset: &str, name: &str) -> Result<NasSnapshot> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(Error::Internal(format!(
-            "zfs snapshot failed: {}",
-            stderr
-        )));
+        return Err(Error::Internal(format!("zfs snapshot failed: {}", stderr)));
     }
 
     // Get the created snapshot
@@ -407,10 +436,7 @@ pub async fn delete_snapshot(snapshot: &str) -> Result<()> {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!(
-                "zfs destroy failed: {}",
-                stderr
-            )));
+            return Err(Error::Internal(format!("zfs destroy failed: {}", stderr)));
         }
     }
 
@@ -434,10 +460,7 @@ pub async fn rollback_snapshot(snapshot: &str) -> Result<()> {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!(
-                "zfs rollback failed: {}",
-                stderr
-            )));
+            return Err(Error::Internal(format!("zfs rollback failed: {}", stderr)));
         }
     }
 
@@ -461,10 +484,7 @@ pub async fn clone_snapshot(snapshot: &str, target: &str) -> Result<()> {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!(
-                "zfs clone failed: {}",
-                stderr
-            )));
+            return Err(Error::Internal(format!("zfs clone failed: {}", stderr)));
         }
     }
 
@@ -488,10 +508,7 @@ pub async fn hold_snapshot(snapshot: &str, tag: &str) -> Result<()> {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!(
-                "zfs hold failed: {}",
-                stderr
-            )));
+            return Err(Error::Internal(format!("zfs hold failed: {}", stderr)));
         }
     }
 
@@ -515,10 +532,7 @@ pub async fn release_hold(snapshot: &str, tag: &str) -> Result<()> {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!(
-                "zfs release failed: {}",
-                stderr
-            )));
+            return Err(Error::Internal(format!("zfs release failed: {}", stderr)));
         }
     }
 
@@ -547,7 +561,10 @@ fn parse_zfs_snapshot_list(output: &str) -> Vec<NasSnapshot> {
             let full_name = parts[0].to_string();
 
             let (parent_dataset, snap_name) = if let Some(idx) = full_name.find('@') {
-                (full_name[..idx].to_string(), full_name[idx + 1..].to_string())
+                (
+                    full_name[..idx].to_string(),
+                    full_name[idx + 1..].to_string(),
+                )
             } else {
                 continue;
             };
@@ -585,10 +602,7 @@ pub async fn list_btrfs_snapshots(subvolume: &str) -> Result<Vec<NasSnapshot>> {
 
     // List snapshots using btrfs subvolume list
     let output = Command::new("btrfs")
-        .args([
-            "subvolume", "list", "-s",
-            "-o", subvolume,
-        ])
+        .args(["subvolume", "list", "-s", "-o", subvolume])
         .output()
         .await
         .map_err(|e| Error::Internal(format!("btrfs subvolume list failed: {}", e)))?;
@@ -675,7 +689,11 @@ async fn get_btrfs_snapshot_info(path: &str) -> Result<NasSnapshot> {
 
 /// Create a Btrfs snapshot
 #[cfg(feature = "nas-btrfs")]
-pub async fn create_btrfs_snapshot(source: &str, dest: &str, readonly: bool) -> Result<NasSnapshot> {
+pub async fn create_btrfs_snapshot(
+    source: &str,
+    dest: &str,
+    readonly: bool,
+) -> Result<NasSnapshot> {
     let mut args = vec!["subvolume", "snapshot"];
 
     if readonly {
@@ -693,7 +711,10 @@ pub async fn create_btrfs_snapshot(source: &str, dest: &str, readonly: bool) -> 
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(Error::Internal(format!("btrfs snapshot failed: {}", stderr)));
+        return Err(Error::Internal(format!(
+            "btrfs snapshot failed: {}",
+            stderr
+        )));
     }
 
     get_btrfs_snapshot_info(dest).await
@@ -729,7 +750,8 @@ pub async fn list_lvm_snapshots(volume_group: &str) -> Result<Vec<NasSnapshot>> 
     let output = Command::new("lvs")
         .args([
             "--noheadings",
-            "-o", "lv_name,origin,lv_size,lv_time,lv_attr",
+            "-o",
+            "lv_name,origin,lv_size,lv_time,lv_attr",
             volume_group,
         ])
         .output()
@@ -755,8 +777,7 @@ pub async fn list_lvm_snapshots(volume_group: &str) -> Result<Vec<NasSnapshot>> 
             }
 
             let size = super::parse_size(parts[2]).unwrap_or(0);
-            let created_at = parse_lvm_timestamp(parts.get(3).unwrap_or(&""))
-                .unwrap_or(0);
+            let created_at = parse_lvm_timestamp(parts.get(3).unwrap_or(&"")).unwrap_or(0);
 
             snapshots.push(NasSnapshot {
                 id: format!("{}_{}", volume_group.replace('/', "_"), name),
@@ -792,8 +813,10 @@ pub async fn create_lvm_snapshot(
     let output = Command::new("lvcreate")
         .args([
             "--snapshot",
-            "--name", snapshot_name,
-            "--size", size,
+            "--name",
+            snapshot_name,
+            "--size",
+            size,
             source_lv,
         ])
         .output()
@@ -981,10 +1004,9 @@ pub async fn apply_retention_policy(
                 result.deleted.push(snapshot.full_name.clone());
             }
             Err(e) => {
-                result.errors.push(format!(
-                    "Failed to delete {}: {}",
-                    snapshot.full_name, e
-                ));
+                result
+                    .errors
+                    .push(format!("Failed to delete {}: {}", snapshot.full_name, e));
                 result.success = false;
             }
         }
@@ -1019,10 +1041,9 @@ pub async fn execute_schedule(schedule: &SnapshotSchedule) -> Result<SnapshotOpe
                     result.created.push(snap.full_name);
                 }
                 Err(e) => {
-                    result.errors.push(format!(
-                        "Failed to create snapshot for {}: {}",
-                        dataset, e
-                    ));
+                    result
+                        .errors
+                        .push(format!("Failed to create snapshot for {}: {}", dataset, e));
                     result.success = false;
                 }
             }
@@ -1254,17 +1275,9 @@ pub async fn send_snapshot_to_file(
     args.push(snapshot);
 
     let command = if compressed {
-        format!(
-            "zfs {} | gzip > {}",
-            args.join(" "),
-            output_path
-        )
+        format!("zfs {} | gzip > {}", args.join(" "), output_path)
     } else {
-        format!(
-            "zfs {} > {}",
-            args.join(" "),
-            output_path
-        )
+        format!("zfs {} > {}", args.join(" "), output_path)
     };
 
     let output = Command::new("sh")
@@ -1279,9 +1292,9 @@ pub async fn send_snapshot_to_file(
     }
 
     // Get file size
-    let metadata = tokio::fs::metadata(output_path).await.map_err(|e| {
-        Error::Internal(format!("Failed to get file size: {}", e))
-    })?;
+    let metadata = tokio::fs::metadata(output_path)
+        .await
+        .map_err(|e| Error::Internal(format!("Failed to get file size: {}", e)))?;
 
     Ok(metadata.len())
 }
@@ -1302,17 +1315,9 @@ pub async fn receive_snapshot_from_file(
     args.push(target_dataset);
 
     let command = if input_path.ends_with(".gz") {
-        format!(
-            "gunzip -c {} | zfs {}",
-            input_path,
-            args.join(" ")
-        )
+        format!("gunzip -c {} | zfs {}", input_path, args.join(" "))
     } else {
-        format!(
-            "zfs {} < {}",
-            args.join(" "),
-            input_path
-        )
+        format!("zfs {} < {}", args.join(" "), input_path)
     };
 
     let output = Command::new("sh")

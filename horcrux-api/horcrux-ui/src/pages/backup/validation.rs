@@ -1,9 +1,8 @@
-use leptos::*;
 use crate::api::{
-    BackupValidation, RestoreTest, ValidationSchedule,
-    get_backup_validations, get_restore_tests, get_validation_schedules,
-    start_backup_validation, start_restore_test,
+    get_backup_validations, get_restore_tests, get_validation_schedules, start_backup_validation,
+    start_restore_test, BackupValidation, RestoreTest, ValidationSchedule,
 };
+use leptos::*;
 
 #[component]
 pub fn BackupValidationPage() -> impl IntoView {
@@ -56,7 +55,10 @@ pub fn BackupValidationPage() -> impl IntoView {
         let all = validations.get();
         let passed = all.iter().filter(|v| v.status == "passed").count();
         let failed = all.iter().filter(|v| v.status == "failed").count();
-        let pending = all.iter().filter(|v| v.status == "pending" || v.status == "running").count();
+        let pending = all
+            .iter()
+            .filter(|v| v.status == "pending" || v.status == "running")
+            .count();
         (all.len(), passed, failed, pending)
     };
 

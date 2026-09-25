@@ -6,12 +6,12 @@
 //! - Automatic expansion
 //! - Deduplication awareness
 
+use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn, debug};
-use horcrux_common::Result;
+use tracing::{debug, info, warn};
 
 use super::StorageType;
 
@@ -126,11 +126,11 @@ impl ThinProvisionManager {
     pub fn supports_thin_provisioning(storage_type: &StorageType) -> bool {
         matches!(
             storage_type,
-            StorageType::Zfs |
-            StorageType::Ceph |
-            StorageType::Lvm |
-            StorageType::BtrFs |
-            StorageType::Directory // qcow2 files are thin
+            StorageType::Zfs
+                | StorageType::Ceph
+                | StorageType::Lvm
+                | StorageType::BtrFs
+                | StorageType::Directory // qcow2 files are thin
         )
     }
 
@@ -161,15 +161,11 @@ impl ThinProvisionManager {
     }
 
     /// Update volume allocation info
-    pub async fn update_volume_allocation(
-        &self,
-        name: &str,
-        allocated_size: u64,
-    ) -> Result<()> {
+    pub async fn update_volume_allocation(&self, name: &str, allocated_size: u64) -> Result<()> {
         let mut volumes = self.volumes.write().await;
-        let volume = volumes.get_mut(name).ok_or_else(|| {
-            horcrux_common::Error::System(format!("Volume {} not found", name))
-        })?;
+        let volume = volumes
+            .get_mut(name)
+            .ok_or_else(|| horcrux_common::Error::System(format!("Volume {} not found", name)))?;
 
         volume.allocated_size = allocated_size;
         volume.utilization = if volume.virtual_size > 0 {
@@ -223,13 +219,9 @@ impl ThinProvisionManager {
         physical_used: u64,
     ) -> PoolThinStatus {
         let volumes = self.volumes.read().await;
-        let pool_volumes: Vec<_> = volumes.values()
-            .filter(|v| v.pool_id == pool_id)
-            .collect();
+        let pool_volumes: Vec<_> = volumes.values().filter(|v| v.pool_id == pool_id).collect();
 
-        let total_provisioned: u64 = pool_volumes.iter()
-            .map(|v| v.virtual_size)
-            .sum();
+        let total_provisioned: u64 = pool_volumes.iter().map(|v| v.virtual_size).sum();
 
         let overcommit_ratio = if physical_capacity > 0 {
             (total_provisioned as f64) / (physical_capacity as f64)
@@ -285,7 +277,8 @@ impl ThinProvisionManager {
                     ),
                     timestamp: chrono::Utc::now().timestamp(),
                     acknowledged: false,
-                }).await;
+                })
+                .await;
             } else if status.warning {
                 self.add_alert(ThinAlert {
                     pool_id: pool_id.clone(),
@@ -297,7 +290,8 @@ impl ThinProvisionManager {
                     ),
                     timestamp: chrono::Utc::now().timestamp(),
                     acknowledged: false,
-                }).await;
+                })
+                .await;
             }
 
             // Check over-commitment
@@ -313,7 +307,8 @@ impl ThinProvisionManager {
                         ),
                         timestamp: chrono::Utc::now().timestamp(),
                         acknowledged: false,
-                    }).await;
+                    })
+                    .await;
                 }
             }
         }
@@ -325,9 +320,7 @@ impl ThinProvisionManager {
 
         // Check for duplicate unacknowledged alerts
         let duplicate = alerts.iter().any(|a| {
-            a.pool_id == alert.pool_id &&
-            a.alert_type == alert.alert_type &&
-            !a.acknowledged
+            a.pool_id == alert.pool_id && a.alert_type == alert.alert_type && !a.acknowledged
         });
 
         if !duplicate {
@@ -344,11 +337,9 @@ impl ThinProvisionManager {
     /// Get unacknowledged alerts
     pub async fn get_alerts(&self, pool_id: Option<&str>) -> Vec<ThinAlert> {
         let alerts = self.alerts.read().await;
-        alerts.iter()
-            .filter(|a| {
-                !a.acknowledged &&
-                pool_id.map(|p| a.pool_id == p).unwrap_or(true)
-            })
+        alerts
+            .iter()
+            .filter(|a| !a.acknowledged && pool_id.map(|p| a.pool_id == p).unwrap_or(true))
             .cloned()
             .collect()
     }
@@ -366,7 +357,8 @@ impl ThinProvisionManager {
     /// Get all volumes for a pool
     pub async fn get_pool_volumes(&self, pool_id: &str) -> Vec<ThinVolumeInfo> {
         let volumes = self.volumes.read().await;
-        volumes.values()
+        volumes
+            .values()
             .filter(|v| v.pool_id == pool_id)
             .cloned()
             .collect()
@@ -381,7 +373,9 @@ impl ThinProvisionManager {
             .arg(path)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to check file size: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to check file size: {}", e))
+            })?;
 
         let apparent_str = String::from_utf8_lossy(&output.stdout);
         let apparent_size: u64 = apparent_str
@@ -396,7 +390,9 @@ impl ThinProvisionManager {
             .arg(path)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to check file size: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to check file size: {}", e))
+            })?;
 
         let actual_str = String::from_utf8_lossy(&output.stdout);
         let actual_size: u64 = actual_str
@@ -437,12 +433,24 @@ mod tests {
 
     #[test]
     fn test_thin_provisioning_support() {
-        assert!(ThinProvisionManager::supports_thin_provisioning(&StorageType::Zfs));
-        assert!(ThinProvisionManager::supports_thin_provisioning(&StorageType::Ceph));
-        assert!(ThinProvisionManager::supports_thin_provisioning(&StorageType::Lvm));
-        assert!(ThinProvisionManager::supports_thin_provisioning(&StorageType::BtrFs));
-        assert!(!ThinProvisionManager::supports_thin_provisioning(&StorageType::Nfs));
-        assert!(!ThinProvisionManager::supports_thin_provisioning(&StorageType::Iscsi));
+        assert!(ThinProvisionManager::supports_thin_provisioning(
+            &StorageType::Zfs
+        ));
+        assert!(ThinProvisionManager::supports_thin_provisioning(
+            &StorageType::Ceph
+        ));
+        assert!(ThinProvisionManager::supports_thin_provisioning(
+            &StorageType::Lvm
+        ));
+        assert!(ThinProvisionManager::supports_thin_provisioning(
+            &StorageType::BtrFs
+        ));
+        assert!(!ThinProvisionManager::supports_thin_provisioning(
+            &StorageType::Nfs
+        ));
+        assert!(!ThinProvisionManager::supports_thin_provisioning(
+            &StorageType::Iscsi
+        ));
     }
 
     #[tokio::test]
@@ -450,30 +458,42 @@ mod tests {
         let manager = ThinProvisionManager::new();
 
         // Configure pool with 2x overcommit
-        manager.configure_pool("pool1", ThinProvisionConfig {
-            enabled: true,
-            max_overcommit_ratio: 2.0,
-            ..Default::default()
-        }).await.unwrap();
+        manager
+            .configure_pool(
+                "pool1",
+                ThinProvisionConfig {
+                    enabled: true,
+                    max_overcommit_ratio: 2.0,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
 
         // Physical capacity: 100GB
         // Already provisioned: 150GB
         // Trying to add: 40GB (would be 190GB, 1.9x - allowed)
-        let allowed = manager.check_provision_allowed(
-            "pool1",
-            100 * 1024 * 1024 * 1024,
-            150 * 1024 * 1024 * 1024,
-            40 * 1024 * 1024 * 1024,
-        ).await.unwrap();
+        let allowed = manager
+            .check_provision_allowed(
+                "pool1",
+                100 * 1024 * 1024 * 1024,
+                150 * 1024 * 1024 * 1024,
+                40 * 1024 * 1024 * 1024,
+            )
+            .await
+            .unwrap();
         assert!(allowed);
 
         // Trying to add: 60GB (would be 210GB, 2.1x - not allowed)
-        let allowed = manager.check_provision_allowed(
-            "pool1",
-            100 * 1024 * 1024 * 1024,
-            150 * 1024 * 1024 * 1024,
-            60 * 1024 * 1024 * 1024,
-        ).await.unwrap();
+        let allowed = manager
+            .check_provision_allowed(
+                "pool1",
+                100 * 1024 * 1024 * 1024,
+                150 * 1024 * 1024 * 1024,
+                60 * 1024 * 1024 * 1024,
+            )
+            .await
+            .unwrap();
         assert!(!allowed);
     }
 
@@ -482,30 +502,36 @@ mod tests {
         let manager = ThinProvisionManager::new();
 
         // Configure pool
-        manager.configure_pool("pool1", ThinProvisionConfig {
-            enabled: true,
-            warning_threshold: 0.80,
-            critical_threshold: 0.95,
-            ..Default::default()
-        }).await.unwrap();
+        manager
+            .configure_pool(
+                "pool1",
+                ThinProvisionConfig {
+                    enabled: true,
+                    warning_threshold: 0.80,
+                    critical_threshold: 0.95,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
 
         // Register a volume
-        manager.register_volume(ThinVolumeInfo {
-            name: "vol1".to_string(),
-            pool_id: "pool1".to_string(),
-            virtual_size: 200 * 1024 * 1024 * 1024, // 200GB provisioned
-            allocated_size: 50 * 1024 * 1024 * 1024, // 50GB actual
-            utilization: 0.25,
-            is_sparse: true,
-            last_checked: 0,
-        }).await;
+        manager
+            .register_volume(ThinVolumeInfo {
+                name: "vol1".to_string(),
+                pool_id: "pool1".to_string(),
+                virtual_size: 200 * 1024 * 1024 * 1024, // 200GB provisioned
+                allocated_size: 50 * 1024 * 1024 * 1024, // 50GB actual
+                utilization: 0.25,
+                is_sparse: true,
+                last_checked: 0,
+            })
+            .await;
 
         // Physical: 100GB capacity, 85GB used (85% - should be warning)
-        let status = manager.get_pool_status(
-            "pool1",
-            100 * 1024 * 1024 * 1024,
-            85 * 1024 * 1024 * 1024,
-        ).await;
+        let status = manager
+            .get_pool_status("pool1", 100 * 1024 * 1024 * 1024, 85 * 1024 * 1024 * 1024)
+            .await;
 
         assert!(status.warning);
         assert!(!status.critical);

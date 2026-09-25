@@ -16,8 +16,8 @@ pub struct Fabric {
     pub id: String,
     pub name: String,
     pub fabric_type: FabricType,
-    pub spine_nodes: Vec<String>,   // Spine layer nodes
-    pub leaf_nodes: Vec<String>,    // Leaf layer nodes
+    pub spine_nodes: Vec<String>, // Spine layer nodes
+    pub leaf_nodes: Vec<String>,  // Leaf layer nodes
     pub routing_protocol: RoutingProtocol,
     pub redundancy: RedundancyConfig,
 }
@@ -46,17 +46,17 @@ pub enum RoutingProtocol {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OpenFabricConfig {
-    pub area: String,           // IS-IS area
-    pub tier: u8,               // Tier in the fabric (0=spine, 1=leaf)
+    pub area: String, // IS-IS area
+    pub tier: u8,     // Tier in the fabric (0=spine, 1=leaf)
     pub flooding_reduction: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OspfConfig {
-    pub area_id: String,        // OSPF area ID (e.g., "0.0.0.0")
+    pub area_id: String, // OSPF area ID (e.g., "0.0.0.0")
     pub network_type: OspfNetworkType,
-    pub hello_interval: u16,    // seconds
-    pub dead_interval: u16,     // seconds
+    pub hello_interval: u16, // seconds
+    pub dead_interval: u16,  // seconds
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -68,8 +68,8 @@ pub enum OspfNetworkType {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BgpConfig {
-    pub asn: u32,               // Autonomous System Number
-    pub router_id: String,      // BGP router ID
+    pub asn: u32,          // Autonomous System Number
+    pub router_id: String, // BGP router ID
     pub neighbors: Vec<BgpNeighbor>,
 }
 
@@ -103,9 +103,9 @@ pub struct FabricLink {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum LinkType {
-    Spine,      // Spine to leaf
-    Leaf,       // Leaf to compute/storage
-    Peer,       // Spine to spine or leaf to leaf
+    Spine, // Spine to leaf
+    Leaf,  // Leaf to compute/storage
+    Peer,  // Spine to spine or leaf to leaf
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -167,7 +167,9 @@ impl FabricManager {
         source: &str,
         destination: &str,
     ) -> Result<Vec<Vec<String>>, String> {
-        let fabric = self.fabrics.get(fabric_id)
+        let fabric = self
+            .fabrics
+            .get(fabric_id)
             .ok_or_else(|| format!("Fabric {} not found", fabric_id))?;
 
         match fabric.fabric_type {
@@ -175,9 +177,7 @@ impl FabricManager {
                 // In spine-leaf, all paths go through spines
                 self.calculate_spine_leaf_paths(fabric, source, destination)
             }
-            FabricType::MultiTier => {
-                self.calculate_multi_tier_paths(fabric, source, destination)
-            }
+            FabricType::MultiTier => self.calculate_multi_tier_paths(fabric, source, destination),
             FabricType::Collapsed => {
                 // Direct paths in collapsed fabric
                 Ok(vec![vec![source.to_string(), destination.to_string()]])
@@ -187,7 +187,9 @@ impl FabricManager {
 
     /// Handle link failure and trigger failover
     pub fn handle_link_failure(&mut self, link_id: &str) -> Result<(), String> {
-        let link = self.links.get_mut(link_id)
+        let link = self
+            .links
+            .get_mut(link_id)
             .ok_or_else(|| format!("Link {} not found", link_id))?;
 
         link.status = LinkStatus::Down;
@@ -197,7 +199,9 @@ impl FabricManager {
 
         // Check fabric configuration without holding borrow
         let (auto_failover, needs_routing_update) = {
-            let fabric = self.fabrics.get(&fabric_id)
+            let fabric = self
+                .fabrics
+                .get(&fabric_id)
                 .ok_or_else(|| format!("Fabric {} not found", fabric_id))?;
 
             let auto_failover = fabric.redundancy.auto_failover;
@@ -223,10 +227,14 @@ impl FabricManager {
 
     /// Get fabric statistics
     pub fn get_fabric_stats(&self, fabric_id: &str) -> Result<FabricStats, String> {
-        let fabric = self.fabrics.get(fabric_id)
+        let fabric = self
+            .fabrics
+            .get(fabric_id)
             .ok_or_else(|| format!("Fabric {} not found", fabric_id))?;
 
-        let fabric_links: Vec<_> = self.links.values()
+        let fabric_links: Vec<_> = self
+            .links
+            .values()
             .filter(|l| {
                 fabric.spine_nodes.contains(&l.source_node)
                     || fabric.spine_nodes.contains(&l.dest_node)
@@ -236,10 +244,17 @@ impl FabricManager {
             .collect();
 
         let total_links = fabric_links.len();
-        let up_links = fabric_links.iter().filter(|l| l.status == LinkStatus::Up).count();
-        let down_links = fabric_links.iter().filter(|l| l.status == LinkStatus::Down).count();
+        let up_links = fabric_links
+            .iter()
+            .filter(|l| l.status == LinkStatus::Up)
+            .count();
+        let down_links = fabric_links
+            .iter()
+            .filter(|l| l.status == LinkStatus::Down)
+            .count();
 
-        let total_bandwidth: u32 = fabric_links.iter()
+        let total_bandwidth: u32 = fabric_links
+            .iter()
             .filter(|l| l.status == LinkStatus::Up)
             .map(|l| l.bandwidth_gbps)
             .sum();
@@ -328,11 +343,7 @@ impl FabricManager {
         // In spine-leaf, traffic goes: leaf -> spine -> leaf
         // Each spine provides an equal-cost path (ECMP)
         for spine in &fabric.spine_nodes {
-            let path = vec![
-                source.to_string(),
-                spine.clone(),
-                destination.to_string(),
-            ];
+            let path = vec![source.to_string(), spine.clone(), destination.to_string()];
             paths.push(path);
         }
 
@@ -350,12 +361,15 @@ impl FabricManager {
     }
 
     fn find_fabric_for_link(&self, link_id: &str) -> Result<String, String> {
-        let link = self.links.get(link_id)
+        let link = self
+            .links
+            .get(link_id)
             .ok_or_else(|| format!("Link {} not found", link_id))?;
 
         for (fabric_id, fabric) in &self.fabrics {
             if fabric.spine_nodes.contains(&link.source_node)
-                || fabric.leaf_nodes.contains(&link.source_node) {
+                || fabric.leaf_nodes.contains(&link.source_node)
+            {
                 return Ok(fabric_id.clone());
             }
         }
@@ -364,10 +378,14 @@ impl FabricManager {
     }
 
     fn trigger_failover(&mut self, fabric_id: &str, failed_link_id: &str) -> Result<(), String> {
-        let _fabric = self.fabrics.get(fabric_id)
+        let _fabric = self
+            .fabrics
+            .get(fabric_id)
             .ok_or_else(|| format!("Fabric {} not found", fabric_id))?;
 
-        let _failed_link = self.links.get(failed_link_id)
+        let _failed_link = self
+            .links
+            .get(failed_link_id)
             .ok_or_else(|| format!("Link {} not found", failed_link_id))?;
 
         tracing::warn!(
@@ -389,18 +407,27 @@ impl FabricManager {
     }
 
     fn recalculate_routing(&mut self, fabric_id: &str) -> Result<(), String> {
-        let fabric = self.fabrics.get(fabric_id)
+        let fabric = self
+            .fabrics
+            .get(fabric_id)
             .ok_or_else(|| format!("Fabric {} not found", fabric_id))?;
 
         tracing::debug!("Recalculating routing for fabric {}", fabric_id);
 
         // Get all active links
-        let active_links: Vec<_> = self.links.values()
+        let active_links: Vec<_> = self
+            .links
+            .values()
             .filter(|link| link.status == LinkStatus::Up)
             .collect();
 
         // Recalculate routes for each node
-        let all_nodes: Vec<_> = fabric.spine_nodes.iter().chain(fabric.leaf_nodes.iter()).cloned().collect();
+        let all_nodes: Vec<_> = fabric
+            .spine_nodes
+            .iter()
+            .chain(fabric.leaf_nodes.iter())
+            .cloned()
+            .collect();
 
         for node in &all_nodes {
             // Calculate new routes for this node
@@ -415,7 +442,9 @@ impl FabricManager {
                 if let Ok(paths) = self.calculate_spine_leaf_paths(fabric, node, target) {
                     // Add routes for all valid paths (ECMP)
                     for path in paths {
-                        if path.len() >= 2 && Self::path_uses_only_active_links_static(&path, &active_links) {
+                        if path.len() >= 2
+                            && Self::path_uses_only_active_links_static(&path, &active_links)
+                        {
                             let next_hop = path.get(1).unwrap().clone();
 
                             new_routes.push(Route {
@@ -446,8 +475,8 @@ impl FabricManager {
 
             // Check if link exists and is active
             let has_active_link = active_links.iter().any(|link| {
-                (&link.source_node == source && &link.dest_node == dest) ||
-                (&link.source_node == dest && &link.dest_node == source)
+                (&link.source_node == source && &link.dest_node == dest)
+                    || (&link.source_node == dest && &link.dest_node == source)
             });
 
             if !has_active_link {
@@ -469,10 +498,14 @@ impl FabricManager {
 
     /// List links in a fabric
     pub fn list_fabric_links(&self, fabric_id: &str) -> Result<Vec<&FabricLink>, String> {
-        let fabric = self.fabrics.get(fabric_id)
+        let fabric = self
+            .fabrics
+            .get(fabric_id)
             .ok_or_else(|| format!("Fabric {} not found", fabric_id))?;
 
-        let links: Vec<_> = self.links.values()
+        let links: Vec<_> = self
+            .links
+            .values()
             .filter(|l| {
                 fabric.spine_nodes.contains(&l.source_node)
                     || fabric.spine_nodes.contains(&l.dest_node)

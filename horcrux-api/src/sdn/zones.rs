@@ -53,14 +53,16 @@ impl ZoneManager {
 
     /// List zones of a specific type
     pub fn list_by_type(&self, zone_type: ZoneType) -> Vec<&Zone> {
-        self.zones.values()
+        self.zones
+            .values()
             .filter(|z| z.zone_type == zone_type)
             .collect()
     }
 
     /// List zones containing a specific node
     pub fn list_by_node(&self, node_id: &str) -> Vec<&Zone> {
-        self.zones.values()
+        self.zones
+            .values()
             .filter(|z| z.nodes.contains(&node_id.to_string()))
             .collect()
     }
@@ -85,7 +87,9 @@ impl ZoneManager {
 
     /// Add node to zone
     pub fn add_node(&mut self, zone_id: &str, node_id: String) -> Result<(), String> {
-        let zone = self.zones.get_mut(zone_id)
+        let zone = self
+            .zones
+            .get_mut(zone_id)
             .ok_or_else(|| format!("Zone {} not found", zone_id))?;
 
         if !zone.nodes.contains(&node_id) {
@@ -97,7 +101,9 @@ impl ZoneManager {
 
     /// Remove node from zone
     pub fn remove_node(&mut self, zone_id: &str, node_id: &str) -> Result<(), String> {
-        let zone = self.zones.get_mut(zone_id)
+        let zone = self
+            .zones
+            .get_mut(zone_id)
             .ok_or_else(|| format!("Zone {} not found", zone_id))?;
 
         zone.nodes.retain(|n| n != node_id);

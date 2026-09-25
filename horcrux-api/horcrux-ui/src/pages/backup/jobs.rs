@@ -1,10 +1,9 @@
-use leptos::*;
 use crate::api::{
-    BackupJob, CreateBackupJobRequest, RetentionPolicy, BackupTarget, BackupEncryption,
-    get_backup_jobs, create_backup_job, run_backup_job_now,
-    get_vms, BackupStatus
+    create_backup_job, get_backup_jobs, get_vms, run_backup_job_now, BackupEncryption, BackupJob,
+    BackupStatus, BackupTarget, CreateBackupJobRequest, RetentionPolicy,
 };
 use horcrux_common::VmConfig;
+use leptos::*;
 
 #[component]
 pub fn BackupJobsPage() -> impl IntoView {
@@ -78,8 +77,11 @@ pub fn BackupJobsPage() -> impl IntoView {
                 .get()
                 .into_iter()
                 .filter(|job| {
-                    job.name.to_lowercase().contains(&query) ||
-                    job.description.as_ref().map_or(false, |d| d.to_lowercase().contains(&query))
+                    job.name.to_lowercase().contains(&query)
+                        || job
+                            .description
+                            .as_ref()
+                            .map_or(false, |d| d.to_lowercase().contains(&query))
                 })
                 .collect()
         }
@@ -116,12 +118,36 @@ pub fn BackupJobsPage() -> impl IntoView {
 
     let create_backup_job = move || {
         let retention = RetentionPolicy {
-            keep_hourly: if keep_hourly.get() > 0 { Some(keep_hourly.get()) } else { None },
-            keep_daily: if keep_daily.get() > 0 { Some(keep_daily.get()) } else { None },
-            keep_weekly: if keep_weekly.get() > 0 { Some(keep_weekly.get()) } else { None },
-            keep_monthly: if keep_monthly.get() > 0 { Some(keep_monthly.get()) } else { None },
-            keep_yearly: if keep_yearly.get() > 0 { Some(keep_yearly.get()) } else { None },
-            max_age_days: if max_age_days.get() > 0 { Some(max_age_days.get()) } else { None },
+            keep_hourly: if keep_hourly.get() > 0 {
+                Some(keep_hourly.get())
+            } else {
+                None
+            },
+            keep_daily: if keep_daily.get() > 0 {
+                Some(keep_daily.get())
+            } else {
+                None
+            },
+            keep_weekly: if keep_weekly.get() > 0 {
+                Some(keep_weekly.get())
+            } else {
+                None
+            },
+            keep_monthly: if keep_monthly.get() > 0 {
+                Some(keep_monthly.get())
+            } else {
+                None
+            },
+            keep_yearly: if keep_yearly.get() > 0 {
+                Some(keep_yearly.get())
+            } else {
+                None
+            },
+            max_age_days: if max_age_days.get() > 0 {
+                Some(max_age_days.get())
+            } else {
+                None
+            },
         };
 
         let target = BackupTarget {
@@ -139,7 +165,11 @@ pub fn BackupJobsPage() -> impl IntoView {
 
         let request = CreateBackupJobRequest {
             name: name.get(),
-            description: if description.get().is_empty() { None } else { Some(description.get()) },
+            description: if description.get().is_empty() {
+                None
+            } else {
+                Some(description.get())
+            },
             vm_ids: selected_vm_ids.get(),
             schedule: schedule.get(),
             retention,
@@ -171,15 +201,13 @@ pub fn BackupJobsPage() -> impl IntoView {
         });
     };
 
-    let get_status_color = move |status: &Option<BackupStatus>| {
-        match status {
-            Some(BackupStatus::Completed) => "bg-green-100 text-green-800",
-            Some(BackupStatus::Running) => "bg-blue-100 text-blue-800",
-            Some(BackupStatus::Pending) => "bg-yellow-100 text-yellow-800",
-            Some(BackupStatus::Failed) => "bg-red-100 text-red-800",
-            Some(BackupStatus::Cancelled) => "bg-gray-100 text-gray-800",
-            None => "bg-gray-100 text-gray-800",
-        }
+    let get_status_color = move |status: &Option<BackupStatus>| match status {
+        Some(BackupStatus::Completed) => "bg-green-100 text-green-800",
+        Some(BackupStatus::Running) => "bg-blue-100 text-blue-800",
+        Some(BackupStatus::Pending) => "bg-yellow-100 text-yellow-800",
+        Some(BackupStatus::Failed) => "bg-red-100 text-red-800",
+        Some(BackupStatus::Cancelled) => "bg-gray-100 text-gray-800",
+        None => "bg-gray-100 text-gray-800",
     };
 
     let get_cron_description = move |cron: &str| -> String {

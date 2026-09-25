@@ -117,10 +117,11 @@ impl MtlsManager {
 
         // Load CA certificate
         if self.config.ca_cert_path.exists() {
-            let ca_cert = tokio::fs::read(&self.config.ca_cert_path).await
-                .map_err(|e| MtlsError::CertificateLoadError(
-                    format!("Failed to load CA cert: {}", e)
-                ))?;
+            let ca_cert = tokio::fs::read(&self.config.ca_cert_path)
+                .await
+                .map_err(|e| {
+                    MtlsError::CertificateLoadError(format!("Failed to load CA cert: {}", e))
+                })?;
             self.ca_cert = Some(ca_cert);
             info!(
                 path = %self.config.ca_cert_path.display(),
@@ -128,17 +129,16 @@ impl MtlsManager {
             );
         } else {
             return Err(MtlsError::CertificateNotFound(
-                self.config.ca_cert_path.to_string_lossy().to_string()
+                self.config.ca_cert_path.to_string_lossy().to_string(),
             ));
         }
 
         // Load CRL if configured
         if let Some(ref crl_path) = self.config.crl_path {
             if crl_path.exists() {
-                let crl_data = tokio::fs::read(crl_path).await
-                    .map_err(|e| MtlsError::CrlLoadError(
-                        format!("Failed to load CRL: {}", e)
-                    ))?;
+                let crl_data = tokio::fs::read(crl_path)
+                    .await
+                    .map_err(|e| MtlsError::CrlLoadError(format!("Failed to load CRL: {}", e)))?;
                 *self.crl.write().await = Some(crl_data);
                 info!(
                     path = %crl_path.display(),
@@ -211,7 +211,8 @@ impl MtlsManager {
             .map_err(|e| MtlsError::ParseError(format!("Invalid UTF-8: {}", e)))?;
 
         // Extract CN from subject (simplified)
-        let cn = self.extract_field(cert_str, "CN=")
+        let cn = self
+            .extract_field(cert_str, "CN=")
             .unwrap_or_else(|| "unknown".to_string());
 
         // Extract other fields
@@ -230,7 +231,7 @@ impl MtlsManager {
             organizational_unit: ou,
             serial_number: format!("{:016x}", rand::random::<u64>()),
             fingerprint,
-            not_before: now - 86400, // 1 day ago
+            not_before: now - 86400,      // 1 day ago
             not_after: now + 365 * 86400, // 1 year from now
             sans: Vec::new(),
         })
@@ -242,7 +243,9 @@ impl MtlsManager {
             if let Some(pos) = line.find(prefix) {
                 let start = pos + prefix.len();
                 let value = &line[start..];
-                let end = value.find('/').or_else(|| value.find(','))
+                let end = value
+                    .find('/')
+                    .or_else(|| value.find(','))
                     .unwrap_or(value.len());
                 return Some(value[..end].trim().to_string());
             }
@@ -269,10 +272,9 @@ impl MtlsManager {
     pub async fn reload_crl(&self) -> Result<(), MtlsError> {
         if let Some(ref crl_path) = self.config.crl_path {
             if crl_path.exists() {
-                let crl_data = tokio::fs::read(crl_path).await
-                    .map_err(|e| MtlsError::CrlLoadError(
-                        format!("Failed to reload CRL: {}", e)
-                    ))?;
+                let crl_data = tokio::fs::read(crl_path)
+                    .await
+                    .map_err(|e| MtlsError::CrlLoadError(format!("Failed to reload CRL: {}", e)))?;
                 *self.crl.write().await = Some(crl_data);
                 info!("CRL reloaded");
             }

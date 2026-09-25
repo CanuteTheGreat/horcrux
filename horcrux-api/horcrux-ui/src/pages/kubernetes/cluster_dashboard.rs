@@ -3,8 +3,8 @@
 //! Comprehensive cluster management interface with multi-cluster overview,
 //! health monitoring, and cluster operations.
 
-use leptos::*;
 use crate::api;
+use leptos::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -85,7 +85,8 @@ pub struct NodeCondition {
 #[component]
 pub fn ClusterDashboard() -> impl IntoView {
     let (clusters, set_clusters) = create_signal(Vec::<K8sCluster>::new());
-    let (cluster_health, set_cluster_health) = create_signal(HashMap::<String, ClusterHealth>::new());
+    let (cluster_health, set_cluster_health) =
+        create_signal(HashMap::<String, ClusterHealth>::new());
     let (selected_cluster, set_selected_cluster) = create_signal(None::<String>);
     let (loading, set_loading) = create_signal(true);
     let (error_message, set_error_message) = create_signal(None::<String>);
@@ -106,9 +107,12 @@ pub fn ClusterDashboard() -> impl IntoView {
                     // Load health for each cluster
                     let mut health_map = HashMap::new();
                     for cluster in clusters_data {
-                        if let Ok(health) = api::fetch_json::<ClusterHealth>(
-                            &format!("/k8s/clusters/{}/health", cluster.id)
-                        ).await {
+                        if let Ok(health) = api::fetch_json::<ClusterHealth>(&format!(
+                            "/k8s/clusters/{}/health",
+                            cluster.id
+                        ))
+                        .await
+                        {
                             health_map.insert(cluster.id, health);
                         }
                     }
@@ -168,15 +172,12 @@ pub fn ClusterDashboard() -> impl IntoView {
         let health_map = cluster_health.get();
 
         let total_clusters = clusters_list.len();
-        let healthy_clusters = health_map.values()
+        let healthy_clusters = health_map
+            .values()
             .filter(|h| h.status == "healthy")
             .count();
-        let total_nodes: u32 = clusters_list.iter()
-            .map(|c| c.node_count)
-            .sum();
-        let ready_nodes: u32 = health_map.values()
-            .map(|h| h.node_status.ready_nodes)
-            .sum();
+        let total_nodes: u32 = clusters_list.iter().map(|c| c.node_count).sum();
+        let ready_nodes: u32 = health_map.values().map(|h| h.node_status.ready_nodes).sum();
 
         (total_clusters, healthy_clusters, total_nodes, ready_nodes)
     };
@@ -444,11 +445,7 @@ where
 
 /// Add cluster form component
 #[component]
-pub fn AddClusterForm<F, G, H>(
-    on_success: F,
-    on_cancel: G,
-    on_error: H,
-) -> impl IntoView
+pub fn AddClusterForm<F, G, H>(on_success: F, on_cancel: G, on_error: H) -> impl IntoView
 where
     F: Fn() + 'static,
     G: Fn() + 'static,
@@ -465,8 +462,7 @@ where
     let on_error_rc = std::rc::Rc::new(on_error);
 
     let is_valid = move || {
-        !cluster_name.get().trim().is_empty() &&
-        !kubeconfig_content.get().trim().is_empty()
+        !cluster_name.get().trim().is_empty() && !kubeconfig_content.get().trim().is_empty()
     };
 
     let on_success_clone = on_success_rc.clone();
@@ -599,10 +595,7 @@ where
 
 /// Cluster detail modal component
 #[component]
-pub fn ClusterDetailModal<F>(
-    cluster_id: String,
-    on_close: F,
-) -> impl IntoView
+pub fn ClusterDetailModal<F>(cluster_id: String, on_close: F) -> impl IntoView
 where
     F: Fn() + Clone + 'static,
 {
@@ -617,12 +610,17 @@ where
             set_loading.set(true);
 
             // Load cluster info
-            if let Ok(cluster_data) = api::fetch_json::<K8sCluster>(&format!("/k8s/clusters/{}", cluster_id)).await {
+            if let Ok(cluster_data) =
+                api::fetch_json::<K8sCluster>(&format!("/k8s/clusters/{}", cluster_id)).await
+            {
                 set_cluster.set(Some(cluster_data));
             }
 
             // Load nodes
-            if let Ok(nodes_data) = api::fetch_json::<Vec<K8sNode>>(&format!("/k8s/clusters/{}/nodes", cluster_id)).await {
+            if let Ok(nodes_data) =
+                api::fetch_json::<Vec<K8sNode>>(&format!("/k8s/clusters/{}/nodes", cluster_id))
+                    .await
+            {
                 set_nodes.set(nodes_data);
             }
 
@@ -733,7 +731,10 @@ where
 }
 
 // Utility function to set interval with cleanup
-fn set_interval_with_handle<F>(f: F, duration: std::time::Duration) -> Result<IntervalHandle, wasm_bindgen::JsValue>
+fn set_interval_with_handle<F>(
+    f: F,
+    duration: std::time::Duration,
+) -> Result<IntervalHandle, wasm_bindgen::JsValue>
 where
     F: Fn() + 'static,
 {
@@ -758,6 +759,8 @@ struct IntervalHandle {
 
 impl IntervalHandle {
     fn clear(self) {
-        web_sys::window().unwrap().clear_interval_with_handle(self.handle);
+        web_sys::window()
+            .unwrap()
+            .clear_interval_with_handle(self.handle);
     }
 }

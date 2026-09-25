@@ -103,9 +103,18 @@ impl WebSocketProxy {
     async fn run_proxy(ticket_id: &str, vnc_host: &str, vnc_port: u16, ws_port: u16) -> Result<()> {
         let listener = TcpListener::bind(format!("0.0.0.0:{}", ws_port))
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to bind WebSocket port {}: {}", ws_port, e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!(
+                    "Failed to bind WebSocket port {}: {}",
+                    ws_port, e
+                ))
+            })?;
 
-        tracing::info!("WebSocket proxy listening on port {} for ticket {}", ws_port, ticket_id);
+        tracing::info!(
+            "WebSocket proxy listening on port {} for ticket {}",
+            ws_port,
+            ticket_id
+        );
 
         loop {
             match listener.accept().await {
@@ -114,7 +123,9 @@ impl WebSocketProxy {
                     let vnc_host = vnc_host.to_string();
 
                     tokio::spawn(async move {
-                        if let Err(e) = Self::handle_connection(ws_stream, &vnc_host, vnc_port).await {
+                        if let Err(e) =
+                            Self::handle_connection(ws_stream, &vnc_host, vnc_port).await
+                        {
                             tracing::error!("Connection error: {}", e);
                         }
                     });
@@ -131,7 +142,9 @@ impl WebSocketProxy {
         // Connect to VNC server
         let vnc_stream = TcpStream::connect(format!("{}:{}", vnc_host, vnc_port))
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to connect to VNC server: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to connect to VNC server: {}", e))
+            })?;
 
         tracing::debug!("Connected to VNC server at {}:{}", vnc_host, vnc_port);
 
@@ -163,9 +176,18 @@ impl WebSocketProxy {
     async fn run_unix_proxy(ticket_id: &str, socket_path: &str, ws_port: u16) -> Result<()> {
         let listener = TcpListener::bind(format!("0.0.0.0:{}", ws_port))
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to bind WebSocket port {}: {}", ws_port, e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!(
+                    "Failed to bind WebSocket port {}: {}",
+                    ws_port, e
+                ))
+            })?;
 
-        tracing::info!("WebSocket Unix socket proxy listening on port {} for ticket {}", ws_port, ticket_id);
+        tracing::info!(
+            "WebSocket Unix socket proxy listening on port {} for ticket {}",
+            ws_port,
+            ticket_id
+        );
 
         loop {
             match listener.accept().await {
@@ -174,7 +196,8 @@ impl WebSocketProxy {
                     let socket_path = socket_path.to_string();
 
                     tokio::spawn(async move {
-                        if let Err(e) = Self::handle_unix_connection(ws_stream, &socket_path).await {
+                        if let Err(e) = Self::handle_unix_connection(ws_stream, &socket_path).await
+                        {
                             tracing::error!("Unix socket connection error: {}", e);
                         }
                     });
@@ -191,7 +214,12 @@ impl WebSocketProxy {
         // Connect to Unix socket
         let unix_stream = tokio::net::UnixStream::connect(socket_path)
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to connect to Unix socket {}: {}", socket_path, e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!(
+                    "Failed to connect to Unix socket {}: {}",
+                    socket_path, e
+                ))
+            })?;
 
         tracing::debug!("Connected to Unix socket at {}", socket_path);
 
@@ -257,7 +285,10 @@ mod tests {
     #[tokio::test]
     async fn test_proxy_creation() {
         let proxy = WebSocketProxy::new();
-        let port = proxy.start_proxy("test-ticket", "127.0.0.1", 5900).await.unwrap();
+        let port = proxy
+            .start_proxy("test-ticket", "127.0.0.1", 5900)
+            .await
+            .unwrap();
         assert!(port >= 6080);
 
         let config = proxy.get_proxy("test-ticket").await.unwrap();

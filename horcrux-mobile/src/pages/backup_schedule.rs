@@ -1,13 +1,13 @@
-use yew::prelude::*;
 use serde::{Deserialize, Serialize};
 use web_sys::HtmlInputElement;
+use yew::prelude::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BackupJob {
     pub id: String,
     pub name: String,
     pub target: String,
-    pub schedule: String,  // Cron expression
+    pub schedule: String, // Cron expression
     pub retention_days: u32,
     pub compression: String,
     pub enabled: bool,
@@ -61,7 +61,7 @@ impl Component for BackupSchedulePage {
             show_create: false,
             job_name: String::new(),
             job_target: String::new(),
-            job_schedule: "0 2 * * *".to_string(),  // Default: 2 AM daily
+            job_schedule: "0 2 * * *".to_string(), // Default: 2 AM daily
             job_retention: "30".to_string(),
             job_compression: "zstd".to_string(),
         }
@@ -160,10 +160,13 @@ impl Component for BackupSchedulePage {
 
                 wasm_bindgen_futures::spawn_local(async move {
                     // API call to create job
-                    web_sys::console::log_1(&format!(
-                        "Creating backup job: {} for {} with schedule {}",
-                        name, target, schedule
-                    ).into());
+                    web_sys::console::log_1(
+                        &format!(
+                            "Creating backup job: {} for {} with schedule {}",
+                            name, target, schedule
+                        )
+                        .into(),
+                    );
 
                     link.send_message(Msg::JobCreated);
                 });
@@ -183,10 +186,9 @@ impl Component for BackupSchedulePage {
 
                     let enabled = job.enabled;
                     wasm_bindgen_futures::spawn_local(async move {
-                        web_sys::console::log_1(&format!(
-                            "Toggled job {}: enabled={}",
-                            job_id, enabled
-                        ).into());
+                        web_sys::console::log_1(
+                            &format!("Toggled job {}: enabled={}", job_id, enabled).into(),
+                        );
                     });
                 }
                 true

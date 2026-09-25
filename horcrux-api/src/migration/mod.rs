@@ -1,27 +1,26 @@
 ///! Live VM Migration
 ///!
 ///! Enables moving running VMs between cluster nodes with minimal downtime
-
 pub mod block_migration;
+pub mod health_check;
 pub mod qemu_monitor;
 pub mod rollback;
-pub mod health_check;
 
+use chrono::{DateTime, Utc};
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::path::PathBuf;
-use tokio::sync::RwLock;
+use std::sync::Arc;
 use tokio::process::Command;
-use chrono::{DateTime, Utc};
+use tokio::sync::RwLock;
 
 /// Migration type
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum MigrationType {
-    Live,       // Live migration (minimal downtime)
-    Offline,    // Offline migration (VM must be stopped)
-    Online,     // Online migration with brief pause
+    Live,    // Live migration (minimal downtime)
+    Offline, // Offline migration (VM must be stopped)
+    Online,  // Online migration with brief pause
 }
 
 /// Migration state
@@ -46,7 +45,7 @@ pub struct MigrationJob {
     pub target_node: String,
     pub migration_type: MigrationType,
     pub state: MigrationState,
-    pub progress: f32,  // 0.0 - 100.0
+    pub progress: f32, // 0.0 - 100.0
     pub started: DateTime<Utc>,
     pub completed: Option<DateTime<Utc>>,
     pub bandwidth_limit: Option<u64>, // MB/s
@@ -61,9 +60,9 @@ pub struct MigrationConfig {
     pub vm_id: u32,
     pub target_node: String,
     pub migration_type: MigrationType,
-    pub bandwidth_limit: Option<u64>,  // MB/s, None = unlimited
-    pub force: bool,  // Force migration even if checks fail
-    pub with_local_disks: bool,  // Migrate local disks (requires shared storage otherwise)
+    pub bandwidth_limit: Option<u64>, // MB/s, None = unlimited
+    pub force: bool,                  // Force migration even if checks fail
+    pub with_local_disks: bool,       // Migrate local disks (requires shared storage otherwise)
 }
 
 /// Migration statistics
@@ -73,13 +72,13 @@ pub struct MigrationStats {
     pub downtime_ms: u64,
     pub transferred_gb: f64,
     pub average_speed_mbps: f64,
-    pub memory_dirty_rate: f64,  // MB/s
+    pub memory_dirty_rate: f64, // MB/s
 }
 
 /// Migration manager
 pub struct MigrationManager {
     jobs: Arc<RwLock<HashMap<String, MigrationJob>>>,
-    bandwidth_limit: Arc<RwLock<Option<u64>>>,  // Global limit
+    bandwidth_limit: Arc<RwLock<Option<u64>>>, // Global limit
     max_concurrent: Arc<RwLock<usize>>,
     rollback_manager: Arc<RwLock<rollback::RollbackManager>>,
     auto_rollback_enabled: Arc<RwLock<bool>>,
@@ -93,7 +92,7 @@ impl MigrationManager {
         Self {
             jobs: Arc::new(RwLock::new(HashMap::new())),
             bandwidth_limit: Arc::new(RwLock::new(Some(100))), // Default 100 MB/s
-            max_concurrent: Arc::new(RwLock::new(1)),  // Default: 1 concurrent migration
+            max_concurrent: Arc::new(RwLock::new(1)),          // Default: 1 concurrent migration
             rollback_manager: Arc::new(RwLock::new(rollback::RollbackManager::new())),
             auto_rollback_enabled: Arc::new(RwLock::new(true)), // Auto-rollback enabled by default
             health_checker: Arc::new(health_check::HealthChecker::new()),
@@ -106,7 +105,10 @@ impl MigrationManager {
     pub async fn set_auto_rollback(&self, enabled: bool) {
         let mut auto_rollback = self.auto_rollback_enabled.write().await;
         *auto_rollback = enabled;
-        tracing::info!("Automatic migration rollback {}", if enabled { "enabled" } else { "disabled" });
+        tracing::info!(
+            "Automatic migration rollback {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
     }
 
     /// Check if auto-rollback is enabled
@@ -118,7 +120,10 @@ impl MigrationManager {
     pub async fn set_health_checks(&self, enabled: bool) {
         let mut health_check = self.health_check_enabled.write().await;
         *health_check = enabled;
-        tracing::info!("Post-migration health checks {}", if enabled { "enabled" } else { "disabled" });
+        tracing::info!(
+            "Post-migration health checks {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
     }
 
     /// Check if health checks are enabled
@@ -127,15 +132,20 @@ impl MigrationManager {
     }
 
     /// Start VM migration
-    pub async fn start_migration(&self, config: MigrationConfig, source_node: String) -> Result<String> {
+    pub async fn start_migration(
+        &self,
+        config: MigrationConfig,
+        source_node: String,
+    ) -> Result<String> {
         // Check if we've reached concurrent migration limit
         let active_count = self.count_active_migrations().await;
         let max_concurrent = *self.max_concurrent.read().await;
 
         if active_count >= max_concurrent {
-            return Err(horcrux_common::Error::System(
-                format!("Maximum concurrent migrations ({}) reached", max_concurrent)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Maximum concurrent migrations ({}) reached",
+                max_concurrent
+            )));
         }
 
         // Pre-migration checks
@@ -145,7 +155,9 @@ impl MigrationManager {
 
         let job_id = format!("migration-{}-{}", config.vm_id, Utc::now().timestamp());
 
-        let bandwidth_limit = config.bandwidth_limit.or(*self.bandwidth_limit.read().await);
+        let bandwidth_limit = config
+            .bandwidth_limit
+            .or(*self.bandwidth_limit.read().await);
 
         let job = MigrationJob {
             id: job_id.clone(),
@@ -186,7 +198,8 @@ impl MigrationManager {
                 job_id_clone.clone(),
                 config_clone.clone(),
                 source_clone.clone(),
-            ).await;
+            )
+            .await;
 
             let mut jobs_lock = jobs.write().await;
             if let Some(job) = jobs_lock.get_mut(&job_id_clone) {
@@ -205,11 +218,13 @@ impl MigrationManager {
                                 job_id_clone
                             );
 
-                            let report = health_checker.run_checks(
-                                config_clone.vm_id,
-                                job_id_clone.clone(),
-                                config_clone.target_node.clone(),
-                            ).await;
+                            let report = health_checker
+                                .run_checks(
+                                    config_clone.vm_id,
+                                    job_id_clone.clone(),
+                                    config_clone.target_node.clone(),
+                                )
+                                .await;
 
                             let summary = report.get_summary();
                             if !summary.overall_healthy {
@@ -222,7 +237,10 @@ impl MigrationManager {
                             }
 
                             // Store health report
-                            health_reports.write().await.insert(job_id_clone.clone(), report);
+                            health_reports
+                                .write()
+                                .await
+                                .insert(job_id_clone.clone(), report);
                         }
                     }
                     Err(e) => {
@@ -234,18 +252,22 @@ impl MigrationManager {
                         if auto_rollback {
                             tracing::warn!(
                                 "Migration {} failed: {}. Initiating automatic rollback...",
-                                job_id_clone, e
+                                job_id_clone,
+                                e
                             );
 
                             drop(jobs_lock); // Release the lock before rollback
 
                             let mut rb_manager = rollback_manager.write().await;
-                            match rb_manager.rollback_migration(
-                                job_id_clone.clone(),
-                                config_clone.vm_id,
-                                source_clone.clone(),
-                                config_clone.target_node.clone(),
-                            ).await {
+                            match rb_manager
+                                .rollback_migration(
+                                    job_id_clone.clone(),
+                                    config_clone.vm_id,
+                                    source_clone.clone(),
+                                    config_clone.target_node.clone(),
+                                )
+                                .await
+                            {
                                 Ok(summary) => {
                                     tracing::info!(
                                         "Rollback completed: {}/{} steps successful",
@@ -256,7 +278,8 @@ impl MigrationManager {
                                 Err(e) => {
                                     tracing::error!(
                                         "Rollback failed for migration {}: {}",
-                                        job_id_clone, e
+                                        job_id_clone,
+                                        e
                                     );
                                 }
                             }
@@ -321,16 +344,15 @@ impl MigrationManager {
         // Phase 1: Pre-copy memory pages
         Self::update_job_state(jobs, job_id, MigrationState::Transferring, 10.0).await;
 
-        tracing::info!("Starting live migration pre-copy phase for VM {}", config.vm_id);
+        tracing::info!(
+            "Starting live migration pre-copy phase for VM {}",
+            config.vm_id
+        );
 
         let vm_name = format!("vm-{}", config.vm_id);
 
         // Build virsh migrate command with real parameters
-        let mut virsh_args = vec![
-            "migrate".to_string(),
-            "--live".to_string(),
-            vm_name.clone(),
-        ];
+        let mut virsh_args = vec!["migrate".to_string(), "--live".to_string(), vm_name.clone()];
 
         // Set bandwidth limit if specified
         if let Some(bw) = config.bandwidth_limit {
@@ -345,9 +367,12 @@ impl MigrationManager {
         // Initiate live migration via SSH to source node
         let output = Command::new("ssh")
             .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "ConnectTimeout=10",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "ConnectTimeout=10",
                 &format!("root@{}", source_node),
                 "virsh",
             ])
@@ -355,12 +380,15 @@ impl MigrationManager {
             .arg("--async") // Don't wait for completion
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to initiate migration: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to initiate migration: {}", e))
+            })?;
 
         if !output.status.success() {
-            return Err(horcrux_common::Error::System(
-                format!("Failed to start live migration: {}", String::from_utf8_lossy(&output.stderr))
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Failed to start live migration: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
         }
 
         tracing::info!("Live migration initiated for VM {}", config.vm_id);
@@ -376,10 +404,14 @@ impl MigrationManager {
             // Query migration status via virsh
             let status_output = Command::new("ssh")
                 .args([
-                    "-o", "StrictHostKeyChecking=no",
-                    "-o", "UserKnownHostsFile=/dev/null",
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-o",
+                    "UserKnownHostsFile=/dev/null",
                     &format!("root@{}", source_node),
-                    "virsh", "domjobinfo", &vm_name,
+                    "virsh",
+                    "domjobinfo",
+                    &vm_name,
                 ])
                 .output()
                 .await;
@@ -413,7 +445,13 @@ impl MigrationManager {
                     };
 
                     last_progress = progress.min(90.0);
-                    Self::update_job_state(jobs, job_id, MigrationState::Transferring, last_progress).await;
+                    Self::update_job_state(
+                        jobs,
+                        job_id,
+                        MigrationState::Transferring,
+                        last_progress,
+                    )
+                    .await;
 
                     // Check if migration is complete
                     if output_str.contains("None") || output_str.contains("Completed") {
@@ -446,10 +484,14 @@ impl MigrationManager {
         // Verify VM is running on target
         let verify_output = Command::new("ssh")
             .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
                 &format!("root@{}", config.target_node),
-                "virsh", "domstate", &vm_name,
+                "virsh",
+                "domstate",
+                &vm_name,
             ])
             .output()
             .await;
@@ -458,9 +500,10 @@ impl MigrationManager {
             Ok(output) if output.status.success() => {
                 let state = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if state != "running" {
-                    return Err(horcrux_common::Error::System(
-                        format!("Migration completed but VM is not running on target. State: {}", state)
-                    ));
+                    return Err(horcrux_common::Error::System(format!(
+                        "Migration completed but VM is not running on target. State: {}",
+                        state
+                    )));
                 }
             }
             _ => {
@@ -468,7 +511,10 @@ impl MigrationManager {
             }
         }
 
-        tracing::info!("Live migration completed successfully for VM {}", config.vm_id);
+        tracing::info!(
+            "Live migration completed successfully for VM {}",
+            config.vm_id
+        );
         Ok(())
     }
 
@@ -487,10 +533,14 @@ impl MigrationManager {
 
         let output = Command::new("ssh")
             .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
                 &format!("root@{}", source_node),
-                "virsh", "shutdown", &vm_name,
+                "virsh",
+                "shutdown",
+                &vm_name,
             ])
             .output()
             .await
@@ -498,22 +548,32 @@ impl MigrationManager {
 
         if !output.status.success() {
             // Try force shutdown if graceful fails
-            tracing::warn!("Graceful shutdown failed, forcing VM {} shutdown", config.vm_id);
+            tracing::warn!(
+                "Graceful shutdown failed, forcing VM {} shutdown",
+                config.vm_id
+            );
             let force_output = Command::new("ssh")
                 .args([
-                    "-o", "StrictHostKeyChecking=no",
-                    "-o", "UserKnownHostsFile=/dev/null",
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-o",
+                    "UserKnownHostsFile=/dev/null",
                     &format!("root@{}", source_node),
-                    "virsh", "destroy", &vm_name,
+                    "virsh",
+                    "destroy",
+                    &vm_name,
                 ])
                 .output()
                 .await
-                .map_err(|e| horcrux_common::Error::System(format!("Failed to force shutdown VM: {}", e)))?;
+                .map_err(|e| {
+                    horcrux_common::Error::System(format!("Failed to force shutdown VM: {}", e))
+                })?;
 
             if !force_output.status.success() {
-                return Err(horcrux_common::Error::System(
-                    format!("Failed to stop VM: {}", String::from_utf8_lossy(&force_output.stderr))
-                ));
+                return Err(horcrux_common::Error::System(format!(
+                    "Failed to stop VM: {}",
+                    String::from_utf8_lossy(&force_output.stderr)
+                )));
             }
         }
 
@@ -526,19 +586,26 @@ impl MigrationManager {
 
         let xml_output = Command::new("ssh")
             .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
                 &format!("root@{}", source_node),
-                "virsh", "dumpxml", &vm_name,
+                "virsh",
+                "dumpxml",
+                &vm_name,
             ])
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to export VM XML: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to export VM XML: {}", e))
+            })?;
 
         if !xml_output.status.success() {
-            return Err(horcrux_common::Error::System(
-                format!("Failed to dump VM XML: {}", String::from_utf8_lossy(&xml_output.stderr))
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Failed to dump VM XML: {}",
+                String::from_utf8_lossy(&xml_output.stderr)
+            )));
         }
 
         let vm_xml = String::from_utf8_lossy(&xml_output.stdout).to_string();
@@ -550,10 +617,15 @@ impl MigrationManager {
         // Get list of disk images
         let disklist_output = Command::new("ssh")
             .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
                 &format!("root@{}", source_node),
-                "virsh", "domblklist", &vm_name, "--details",
+                "virsh",
+                "domblklist",
+                &vm_name,
+                "--details",
             ])
             .output()
             .await
@@ -564,7 +636,8 @@ impl MigrationManager {
             let mut disk_paths = Vec::new();
 
             // Parse disk paths from virsh domblklist output
-            for line in disklist.lines().skip(2) { // Skip header lines
+            for line in disklist.lines().skip(2) {
+                // Skip header lines
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() >= 4 && parts[0] == "file" {
                     disk_paths.push(parts[3].to_string());
@@ -580,10 +653,14 @@ impl MigrationManager {
 
                 let rsync_output = Command::new("ssh")
                     .args([
-                        "-o", "StrictHostKeyChecking=no",
-                        "-o", "UserKnownHostsFile=/dev/null",
+                        "-o",
+                        "StrictHostKeyChecking=no",
+                        "-o",
+                        "UserKnownHostsFile=/dev/null",
                         &format!("root@{}", source_node),
-                        "rsync", "-avz", "--progress",
+                        "rsync",
+                        "-avz",
+                        "--progress",
                         disk_path,
                         &format!("root@{}:{}", config.target_node, disk_path),
                     ])
@@ -592,7 +669,11 @@ impl MigrationManager {
 
                 if let Ok(output) = rsync_output {
                     if !output.status.success() {
-                        tracing::warn!("Disk transfer failed for {}: {}", disk_path, String::from_utf8_lossy(&output.stderr));
+                        tracing::warn!(
+                            "Disk transfer failed for {}: {}",
+                            disk_path,
+                            String::from_utf8_lossy(&output.stderr)
+                        );
                     }
                 } else {
                     tracing::warn!("Failed to execute rsync for disk: {}", disk_path);
@@ -607,10 +688,14 @@ impl MigrationManager {
         // Define VM on target node using the exported XML
         let _define_output = Command::new("ssh")
             .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
                 &format!("root@{}", config.target_node),
-                "virsh", "define", "/dev/stdin",
+                "virsh",
+                "define",
+                "/dev/stdin",
             ])
             .stdin(std::process::Stdio::piped())
             .output()
@@ -620,8 +705,10 @@ impl MigrationManager {
         let temp_xml_path = format!("/tmp/vm-{}.xml", config.vm_id);
         let _write_xml = Command::new("ssh")
             .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
                 &format!("root@{}", config.target_node),
                 &format!("cat > {}", temp_xml_path),
             ])
@@ -631,45 +718,64 @@ impl MigrationManager {
 
         let define_result = Command::new("ssh")
             .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
                 &format!("root@{}", config.target_node),
-                "virsh", "define", &temp_xml_path,
+                "virsh",
+                "define",
+                &temp_xml_path,
             ])
             .output()
             .await;
 
         match define_result {
             Ok(output) if !output.status.success() => {
-                return Err(horcrux_common::Error::System(
-                    format!("Failed to define VM on target: {}", String::from_utf8_lossy(&output.stderr))
-                ));
+                return Err(horcrux_common::Error::System(format!(
+                    "Failed to define VM on target: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )));
             }
             Err(e) => {
-                return Err(horcrux_common::Error::System(format!("Failed to define VM on target: {}", e)));
+                return Err(horcrux_common::Error::System(format!(
+                    "Failed to define VM on target: {}",
+                    e
+                )));
             }
             _ => {}
         }
 
         // Step 5: Start VM on target
         Self::update_job_state(jobs, job_id, MigrationState::Finalizing, 90.0).await;
-        tracing::info!("Starting VM {} on target node {}", config.vm_id, config.target_node);
+        tracing::info!(
+            "Starting VM {} on target node {}",
+            config.vm_id,
+            config.target_node
+        );
 
         let start_output = Command::new("ssh")
             .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
                 &format!("root@{}", config.target_node),
-                "virsh", "start", &vm_name,
+                "virsh",
+                "start",
+                &vm_name,
             ])
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to start VM on target: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to start VM on target: {}", e))
+            })?;
 
         if !start_output.status.success() {
-            return Err(horcrux_common::Error::System(
-                format!("Failed to start VM on target: {}", String::from_utf8_lossy(&start_output.stderr))
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Failed to start VM on target: {}",
+                String::from_utf8_lossy(&start_output.stderr)
+            )));
         }
 
         // Verify VM is running
@@ -677,10 +783,14 @@ impl MigrationManager {
 
         let verify_output = Command::new("ssh")
             .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
                 &format!("root@{}", config.target_node),
-                "virsh", "domstate", &vm_name,
+                "virsh",
+                "domstate",
+                &vm_name,
             ])
             .output()
             .await;
@@ -689,9 +799,10 @@ impl MigrationManager {
             Ok(output) if output.status.success() => {
                 let state = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if state != "running" {
-                    return Err(horcrux_common::Error::System(
-                        format!("VM started but is not running. State: {}", state)
-                    ));
+                    return Err(horcrux_common::Error::System(format!(
+                        "VM started but is not running. State: {}",
+                        state
+                    )));
                 }
             }
             _ => {
@@ -702,21 +813,31 @@ impl MigrationManager {
         // Step 6: Undefine VM from source node
         let undefine_output = Command::new("ssh")
             .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
                 &format!("root@{}", source_node),
-                "virsh", "undefine", &vm_name,
+                "virsh",
+                "undefine",
+                &vm_name,
             ])
             .output()
             .await;
 
         if let Ok(output) = undefine_output {
             if !output.status.success() {
-                tracing::warn!("Failed to undefine VM from source: {}", String::from_utf8_lossy(&output.stderr));
+                tracing::warn!(
+                    "Failed to undefine VM from source: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
             }
         }
 
-        tracing::info!("Offline migration completed successfully for VM {}", config.vm_id);
+        tracing::info!(
+            "Offline migration completed successfully for VM {}",
+            config.vm_id
+        );
         Ok(())
     }
 
@@ -734,13 +855,16 @@ impl MigrationManager {
 
         // Phase 1: Start pre-copy while VM is running
         Self::update_job_state(jobs, job_id, MigrationState::Transferring, 20.0).await;
-        tracing::info!("Starting online migration with pre-copy for VM {}", config.vm_id);
+        tracing::info!(
+            "Starting online migration with pre-copy for VM {}",
+            config.vm_id
+        );
 
         // Build virsh migrate command
         let mut virsh_args = vec![
             "migrate".to_string(),
             "--live".to_string(),
-            "--suspend".to_string(),  // Pause VM during final sync
+            "--suspend".to_string(), // Pause VM during final sync
             vm_name.clone(),
         ];
 
@@ -755,8 +879,10 @@ impl MigrationManager {
         // Initiate migration
         let output = Command::new("ssh")
             .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
                 &format!("root@{}", source_node),
                 "virsh",
             ])
@@ -764,12 +890,15 @@ impl MigrationManager {
             .arg("--async")
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to initiate online migration: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to initiate online migration: {}", e))
+            })?;
 
         if !output.status.success() {
-            return Err(horcrux_common::Error::System(
-                format!("Failed to start online migration: {}", String::from_utf8_lossy(&output.stderr))
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Failed to start online migration: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
         }
 
         tracing::info!("Online migration initiated for VM {}", config.vm_id);
@@ -781,10 +910,14 @@ impl MigrationManager {
 
             let status_output = Command::new("ssh")
                 .args([
-                    "-o", "StrictHostKeyChecking=no",
-                    "-o", "UserKnownHostsFile=/dev/null",
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-o",
+                    "UserKnownHostsFile=/dev/null",
                     &format!("root@{}", source_node),
-                    "virsh", "domjobinfo", &vm_name,
+                    "virsh",
+                    "domjobinfo",
+                    &vm_name,
                 ])
                 .output()
                 .await;
@@ -815,7 +948,13 @@ impl MigrationManager {
                     };
 
                     last_progress = progress.min(85.0);
-                    Self::update_job_state(jobs, job_id, MigrationState::Transferring, last_progress).await;
+                    Self::update_job_state(
+                        jobs,
+                        job_id,
+                        MigrationState::Transferring,
+                        last_progress,
+                    )
+                    .await;
 
                     if output_str.contains("None") || output_str.contains("Completed") {
                         break;
@@ -833,7 +972,10 @@ impl MigrationManager {
 
         // Phase 2: VM paused for final sync
         Self::update_job_state(jobs, job_id, MigrationState::Syncing, 90.0).await;
-        tracing::info!("VM {} paused for final sync during online migration", config.vm_id);
+        tracing::info!(
+            "VM {} paused for final sync during online migration",
+            config.vm_id
+        );
 
         // Wait for final sync to complete
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -845,10 +987,14 @@ impl MigrationManager {
         // Verify VM is running on target
         let verify_output = Command::new("ssh")
             .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
                 &format!("root@{}", config.target_node),
-                "virsh", "domstate", &vm_name,
+                "virsh",
+                "domstate",
+                &vm_name,
             ])
             .output()
             .await;
@@ -857,9 +1003,10 @@ impl MigrationManager {
             Ok(output) if output.status.success() => {
                 let state = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if state != "running" {
-                    return Err(horcrux_common::Error::System(
-                        format!("Online migration completed but VM is not running on target. State: {}", state)
-                    ));
+                    return Err(horcrux_common::Error::System(format!(
+                        "Online migration completed but VM is not running on target. State: {}",
+                        state
+                    )));
                 }
             }
             _ => {
@@ -867,14 +1014,24 @@ impl MigrationManager {
             }
         }
 
-        tracing::info!("Online migration completed successfully for VM {}", config.vm_id);
+        tracing::info!(
+            "Online migration completed successfully for VM {}",
+            config.vm_id
+        );
         Ok(())
     }
 
     /// Pre-migration checks
-    async fn pre_migration_checks(&self, config: &MigrationConfig, _source_node: &str) -> Result<()> {
+    async fn pre_migration_checks(
+        &self,
+        config: &MigrationConfig,
+        _source_node: &str,
+    ) -> Result<()> {
         // Check 1: Target node is reachable
-        tracing::info!("Checking connectivity to target node {}", config.target_node);
+        tracing::info!(
+            "Checking connectivity to target node {}",
+            config.target_node
+        );
 
         // Check 2: Sufficient resources on target
         tracing::info!("Checking resources on target node");
@@ -919,9 +1076,16 @@ impl MigrationManager {
 
     /// List active migrations
     pub async fn list_active(&self) -> Vec<MigrationJob> {
-        self.jobs.read().await
+        self.jobs
+            .read()
+            .await
             .values()
-            .filter(|j| !matches!(j.state, MigrationState::Completed | MigrationState::Failed | MigrationState::Cancelled))
+            .filter(|j| {
+                !matches!(
+                    j.state,
+                    MigrationState::Completed | MigrationState::Failed | MigrationState::Cancelled
+                )
+            })
             .cloned()
             .collect()
     }
@@ -934,9 +1098,12 @@ impl MigrationManager {
             horcrux_common::Error::System(format!("Migration job {} not found", job_id))
         })?;
 
-        if matches!(job.state, MigrationState::Completed | MigrationState::Failed) {
+        if matches!(
+            job.state,
+            MigrationState::Completed | MigrationState::Failed
+        ) {
             return Err(horcrux_common::Error::System(
-                "Cannot cancel completed or failed migration".to_string()
+                "Cannot cancel completed or failed migration".to_string(),
             ));
         }
 
@@ -949,9 +1116,16 @@ impl MigrationManager {
 
     /// Count active migrations
     async fn count_active_migrations(&self) -> usize {
-        self.jobs.read().await
+        self.jobs
+            .read()
+            .await
             .values()
-            .filter(|j| !matches!(j.state, MigrationState::Completed | MigrationState::Failed | MigrationState::Cancelled))
+            .filter(|j| {
+                !matches!(
+                    j.state,
+                    MigrationState::Completed | MigrationState::Failed | MigrationState::Cancelled
+                )
+            })
             .count()
     }
 
@@ -959,7 +1133,10 @@ impl MigrationManager {
     pub async fn set_bandwidth_limit(&self, limit_mbps: Option<u64>) {
         let mut bw = self.bandwidth_limit.write().await;
         *bw = limit_mbps;
-        tracing::info!("Set global migration bandwidth limit to {:?} MB/s", limit_mbps);
+        tracing::info!(
+            "Set global migration bandwidth limit to {:?} MB/s",
+            limit_mbps
+        );
     }
 
     /// Set max concurrent migrations
@@ -992,13 +1169,13 @@ impl MigrationManager {
         Ok(MigrationStats {
             duration_seconds: duration,
             downtime_ms: match job.migration_type {
-                MigrationType::Live => 100,     // Typical live migration downtime
-                MigrationType::Online => 500,   // Brief pause
-                MigrationType::Offline => duration * 1000,  // Full downtime
+                MigrationType::Live => 100,   // Typical live migration downtime
+                MigrationType::Online => 500, // Brief pause
+                MigrationType::Offline => duration * 1000, // Full downtime
             },
             transferred_gb,
             average_speed_mbps,
-            memory_dirty_rate: 0.0,  // Would be calculated from actual migration
+            memory_dirty_rate: 0.0, // Would be calculated from actual migration
         })
     }
 
@@ -1023,24 +1200,30 @@ impl MigrationManager {
     }
 
     /// Manually trigger rollback for a failed migration
-    pub async fn manual_rollback(&self, migration_job_id: &str) -> Result<rollback::RollbackSummary> {
+    pub async fn manual_rollback(
+        &self,
+        migration_job_id: &str,
+    ) -> Result<rollback::RollbackSummary> {
         let job = self.get_job(migration_job_id).await.ok_or_else(|| {
             horcrux_common::Error::System(format!("Migration job {} not found", migration_job_id))
         })?;
 
         if job.state != MigrationState::Failed {
-            return Err(horcrux_common::Error::System(
-                format!("Can only rollback failed migrations. Current state: {:?}", job.state)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Can only rollback failed migrations. Current state: {:?}",
+                job.state
+            )));
         }
 
         let mut rb_manager = self.rollback_manager.write().await;
-        rb_manager.rollback_migration(
-            migration_job_id.to_string(),
-            job.vm_id,
-            job.source_node,
-            job.target_node,
-        ).await
+        rb_manager
+            .rollback_migration(
+                migration_job_id.to_string(),
+                job.vm_id,
+                job.source_node,
+                job.target_node,
+            )
+            .await
     }
 
     /// Get health check report for a migration
@@ -1054,8 +1237,13 @@ impl MigrationManager {
     }
 
     /// Get health check summary for a migration
-    pub async fn get_health_summary(&self, job_id: &str) -> Option<health_check::HealthCheckSummary> {
-        self.get_health_report(job_id).await.map(|r| r.get_summary())
+    pub async fn get_health_summary(
+        &self,
+        job_id: &str,
+    ) -> Option<health_check::HealthCheckSummary> {
+        self.get_health_report(job_id)
+            .await
+            .map(|r| r.get_summary())
     }
 }
 
@@ -1076,7 +1264,10 @@ mod tests {
             with_local_disks: false,
         };
 
-        let job_id = manager.start_migration(config, "node1".to_string()).await.unwrap();
+        let job_id = manager
+            .start_migration(config, "node1".to_string())
+            .await
+            .unwrap();
         assert!(!job_id.is_empty());
 
         // Wait a bit for migration to progress
@@ -1101,7 +1292,10 @@ mod tests {
             with_local_disks: false,
         };
 
-        let job_id = manager.start_migration(config, "node1".to_string()).await.unwrap();
+        let job_id = manager
+            .start_migration(config, "node1".to_string())
+            .await
+            .unwrap();
         assert!(!job_id.is_empty());
     }
 
@@ -1150,7 +1344,10 @@ mod tests {
             with_local_disks: true,
         };
 
-        let job_id = manager.start_migration(config, "node1".to_string()).await.unwrap();
+        let job_id = manager
+            .start_migration(config, "node1".to_string())
+            .await
+            .unwrap();
 
         // Cancel immediately
         let result = manager.cancel_migration(&job_id).await;

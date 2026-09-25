@@ -1,5 +1,4 @@
 ///! VM management commands
-
 use crate::api::ApiClient;
 use crate::output::{self, OutputFormat};
 use crate::VmCommands;
@@ -56,7 +55,7 @@ pub async fn handle_vm_command(
             cpus,
             disk,
         } => {
-            use horcrux_common::{VmStatus, VmArchitecture, VmHypervisor};
+            use horcrux_common::{VmArchitecture, VmHypervisor, VmStatus};
 
             let vm_config = VmConfig {
                 id: format!("vm-{}", chrono::Utc::now().timestamp()),
@@ -90,11 +89,8 @@ pub async fn handle_vm_command(
 
         VmCommands::Restart { id } => {
             // Stop then start
-            api.post::<VmConfig, _>(
-                &format!("/api/vms/{}/stop", id),
-                &serde_json::json!({}),
-            )
-            .await?;
+            api.post::<VmConfig, _>(&format!("/api/vms/{}/stop", id), &serde_json::json!({}))
+                .await?;
             output::print_info(&format!("VM {} stopped, restarting...", id));
 
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;

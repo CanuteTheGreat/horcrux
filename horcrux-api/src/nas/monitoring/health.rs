@@ -1,17 +1,14 @@
 //! NAS health check module
 
-use horcrux_common::{Error, Result};
 use crate::nas::monitoring::HealthStatus;
+use horcrux_common::{Error, Result};
 
 /// Check SMB health
 #[cfg(feature = "smb")]
 pub async fn check_smb_health() -> Result<HealthStatus> {
     use tokio::process::Command;
 
-    let output = Command::new("smbstatus")
-        .args(["--version"])
-        .output()
-        .await;
+    let output = Command::new("smbstatus").args(["--version"]).output().await;
 
     match output {
         Ok(o) if o.status.success() => Ok(HealthStatus::Healthy),
@@ -48,10 +45,7 @@ pub async fn check_nfs_health() -> Result<HealthStatus> {
 pub async fn check_zfs_health() -> Result<HealthStatus> {
     use tokio::process::Command;
 
-    let output = Command::new("zpool")
-        .args(["status", "-x"])
-        .output()
-        .await;
+    let output = Command::new("zpool").args(["status", "-x"]).output().await;
 
     match output {
         Ok(o) => {

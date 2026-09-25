@@ -5,8 +5,7 @@
 use crate::client::HorcruxClient;
 use crate::resources::{get_all_resources, Resource, ResourceState};
 use crate::schema::{
-    Diagnostic, ProviderSchema, RpcRequest, RpcResponse, SchemaAttribute,
-    SchemaBlock,
+    Diagnostic, ProviderSchema, RpcRequest, RpcResponse, SchemaAttribute, SchemaBlock,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -75,7 +74,9 @@ impl HorcruxProvider {
             .with_attribute(
                 "api_token",
                 SchemaAttribute::string()
-                    .with_description("API token for authentication (alternative to username/password)")
+                    .with_description(
+                        "API token for authentication (alternative to username/password)",
+                    )
                     .optional()
                     .sensitive(),
             )
@@ -174,9 +175,7 @@ impl HorcruxProvider {
         let response = match request.method.as_str() {
             "GetProviderSchema" => self.handle_get_schema(request.id),
             "ConfigureProvider" => self.handle_configure(request.id, &request.params),
-            "ValidateResourceConfig" => {
-                self.handle_validate_resource(request.id, &request.params)
-            }
+            "ValidateResourceConfig" => self.handle_validate_resource(request.id, &request.params),
             "PlanResourceChange" => self.handle_plan_resource(request.id, &request.params),
             "ApplyResourceChange" => self.handle_apply_resource(request.id, &request.params),
             "ReadResource" => self.handle_read_resource(request.id, &request.params),
@@ -279,10 +278,8 @@ impl HorcruxProvider {
             .get("proposed_new_state")
             .and_then(|v| {
                 v.as_object().map(|obj| {
-                    let values: HashMap<String, Value> = obj
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect();
+                    let values: HashMap<String, Value> =
+                        obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                     ResourceState { values }
                 })
             })
@@ -350,10 +347,8 @@ impl HorcruxProvider {
             .get("planned_state")
             .and_then(|v| {
                 v.as_object().map(|obj| {
-                    let values: HashMap<String, Value> = obj
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect();
+                    let values: HashMap<String, Value> =
+                        obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                     ResourceState { values }
                 })
             })
@@ -457,10 +452,8 @@ impl HorcruxProvider {
             .get("current_state")
             .and_then(|v| {
                 v.as_object().map(|obj| {
-                    let values: HashMap<String, Value> = obj
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect();
+                    let values: HashMap<String, Value> =
+                        obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                     ResourceState { values }
                 })
             })
@@ -606,9 +599,8 @@ mod tests {
     #[test]
     fn test_handle_get_schema() {
         let provider = HorcruxProvider::new();
-        let response = provider.handle_request(
-            r#"{"jsonrpc":"2.0","id":1,"method":"GetProviderSchema","params":{}}"#,
-        );
+        let response = provider
+            .handle_request(r#"{"jsonrpc":"2.0","id":1,"method":"GetProviderSchema","params":{}}"#);
 
         assert!(response.contains("provider"));
         assert!(response.contains("resource_schemas"));
@@ -617,9 +609,8 @@ mod tests {
     #[test]
     fn test_handle_unknown_method() {
         let provider = HorcruxProvider::new();
-        let response = provider.handle_request(
-            r#"{"jsonrpc":"2.0","id":1,"method":"UnknownMethod","params":{}}"#,
-        );
+        let response = provider
+            .handle_request(r#"{"jsonrpc":"2.0","id":1,"method":"UnknownMethod","params":{}}"#);
 
         assert!(response.contains("error"));
         assert!(response.contains("Method not found"));

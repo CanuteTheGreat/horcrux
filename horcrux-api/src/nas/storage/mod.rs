@@ -8,11 +8,11 @@
 //! - Periodic snapshots
 //! - Replication tasks
 
-pub mod pools;
 pub mod datasets;
-pub mod snapshots;
-pub mod replication;
+pub mod pools;
 pub mod quotas;
+pub mod replication;
+pub mod snapshots;
 
 use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};

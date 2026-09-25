@@ -1,7 +1,6 @@
 ///! Network Templates
 ///!
 ///! Reusable network configurations for VMs and containers
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -22,12 +21,12 @@ pub struct NetworkTemplate {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum TemplateType {
-    Bridge,     // Standard Linux bridge
-    OvsBridge,  // Open vSwitch bridge
-    Macvlan,    // MACVLAN interface
-    Ipvlan,     // IPVLAN interface
-    Vxlan,      // VXLAN overlay
-    Custom,     // Custom configuration
+    Bridge,    // Standard Linux bridge
+    OvsBridge, // Open vSwitch bridge
+    Macvlan,   // MACVLAN interface
+    Ipvlan,    // IPVLAN interface
+    Vxlan,     // VXLAN overlay
+    Custom,    // Custom configuration
 }
 
 /// Network configuration
@@ -97,9 +96,9 @@ pub struct IpConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum IpMode {
-    Static,   // Static IP assignment
-    Dhcp,     // DHCP from network
-    Manual,   // Manually configured later
+    Static, // Static IP assignment
+    Dhcp,   // DHCP from network
+    Manual, // Manually configured later
 }
 
 /// Firewall configuration
@@ -247,12 +246,18 @@ impl TemplateManager {
         // Validate VLAN if present
         if let Some(vlan) = &template.config.vlan {
             if vlan.vlan_id == 0 || vlan.vlan_id > 4095 {
-                return Err(format!("Invalid VLAN ID: {} (must be 1-4095)", vlan.vlan_id));
+                return Err(format!(
+                    "Invalid VLAN ID: {} (must be 1-4095)",
+                    vlan.vlan_id
+                ));
             }
 
             for allowed_vlan in &vlan.allowed_vlans {
                 if *allowed_vlan == 0 || *allowed_vlan > 4095 {
-                    return Err(format!("Invalid allowed VLAN: {} (must be 1-4095)", allowed_vlan));
+                    return Err(format!(
+                        "Invalid allowed VLAN: {} (must be 1-4095)",
+                        allowed_vlan
+                    ));
                 }
             }
 
@@ -298,8 +303,13 @@ impl TemplateManager {
     }
 
     /// Apply a template to create network configuration for a VM/container
-    pub fn apply_template(&self, template_id: &str, instance_id: &str) -> Result<AppliedConfig, String> {
-        let template = self.get_template(template_id)
+    pub fn apply_template(
+        &self,
+        template_id: &str,
+        instance_id: &str,
+    ) -> Result<AppliedConfig, String> {
+        let template = self
+            .get_template(template_id)
             .ok_or_else(|| format!("Template {} not found", template_id))?;
 
         // Generate configuration based on template
@@ -312,8 +322,18 @@ impl TemplateManager {
             gateway: template.config.ip_config.gateway.clone(),
             dns_servers: template.config.ip_config.dns_servers.clone(),
             mtu: template.config.ip_config.mtu,
-            firewall_enabled: template.config.firewall.as_ref().map(|f| f.enabled).unwrap_or(false),
-            qos_enabled: template.config.qos.as_ref().map(|q| q.enabled).unwrap_or(false),
+            firewall_enabled: template
+                .config
+                .firewall
+                .as_ref()
+                .map(|f| f.enabled)
+                .unwrap_or(false),
+            qos_enabled: template
+                .config
+                .qos
+                .as_ref()
+                .map(|q| q.enabled)
+                .unwrap_or(false),
         };
 
         Ok(config)

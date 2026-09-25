@@ -1,14 +1,13 @@
+pub mod affinity;
+pub mod arch;
+pub mod balancer;
 ///! Clustering support module
 ///! Provides multi-node cluster management, HA, and VM migration using Corosync
-
 pub mod corosync;
-pub mod node;
-pub mod affinity;
-pub mod balancer;
-pub mod arch;
-pub mod state_sync;
-pub mod migration;
 pub mod membership;
+pub mod migration;
+pub mod node;
+pub mod state_sync;
 
 use horcrux_common::Result;
 pub use node::{Node, NodeStatus};
@@ -27,7 +26,7 @@ pub struct ClusterConfig {
 
 /// Cluster manager
 pub struct ClusterManager {
-    _config: Arc<RwLock<Option<ClusterConfig>>>,  // Reserved for runtime cluster config updates
+    _config: Arc<RwLock<Option<ClusterConfig>>>, // Reserved for runtime cluster config updates
     nodes: Arc<RwLock<HashMap<String, Node>>>,
     corosync: corosync::CorosyncManager,
     local_node_name: Arc<RwLock<Option<String>>>,
@@ -155,9 +154,9 @@ impl ClusterManager {
     pub async fn remove_node(&self, node_name: &str) -> Result<()> {
         let mut nodes = self.nodes.write().await;
 
-        let node = nodes
-            .get(node_name)
-            .ok_or_else(|| horcrux_common::Error::InvalidConfig(format!("Node {} not found", node_name)))?;
+        let node = nodes.get(node_name).ok_or_else(|| {
+            horcrux_common::Error::InvalidConfig(format!("Node {} not found", node_name))
+        })?;
 
         if node.is_local {
             return Err(horcrux_common::Error::InvalidConfig(
@@ -188,7 +187,10 @@ impl ClusterManager {
             .ok_or_else(|| horcrux_common::Error::System("Not part of a cluster".to_string()))?;
 
         let nodes = self.nodes.read().await;
-        let online_nodes = nodes.values().filter(|n| n.status == NodeStatus::Online).count();
+        let online_nodes = nodes
+            .values()
+            .filter(|n| n.status == NodeStatus::Online)
+            .count();
 
         let quorum = self.corosync.check_quorum().await?;
 
@@ -216,9 +218,9 @@ impl ClusterManager {
     ) -> Result<()> {
         let nodes = self.nodes.read().await;
 
-        let target = nodes
-            .get(target_node)
-            .ok_or_else(|| horcrux_common::Error::InvalidConfig(format!("Target node {} not found", target_node)))?;
+        let target = nodes.get(target_node).ok_or_else(|| {
+            horcrux_common::Error::InvalidConfig(format!("Target node {} not found", target_node))
+        })?;
 
         if target.status != NodeStatus::Online {
             return Err(horcrux_common::Error::System(format!(
@@ -266,7 +268,12 @@ impl ClusterManager {
     }
 
     /// Find best node for a VM based on architecture and resources
-    pub async fn find_best_node(&self, vm_arch: &node::Architecture, required_memory: u64, required_cores: u32) -> Result<String> {
+    pub async fn find_best_node(
+        &self,
+        vm_arch: &node::Architecture,
+        required_memory: u64,
+        required_cores: u32,
+    ) -> Result<String> {
         let nodes = self.nodes.read().await;
 
         let mut candidates: Vec<_> = nodes
@@ -295,8 +302,10 @@ impl ClusterManager {
                 (false, true) => std::cmp::Ordering::Greater,
                 _ => {
                     // If both native or both emulated, prefer more resources
-                    let a_score = (a.memory_total / required_memory) + (a.cpu_cores as u64 / required_cores as u64);
-                    let b_score = (b.memory_total / required_memory) + (b.cpu_cores as u64 / required_cores as u64);
+                    let a_score = (a.memory_total / required_memory)
+                        + (a.cpu_cores as u64 / required_cores as u64);
+                    let b_score = (b.memory_total / required_memory)
+                        + (b.cpu_cores as u64 / required_cores as u64);
                     b_score.cmp(&a_score)
                 }
             }

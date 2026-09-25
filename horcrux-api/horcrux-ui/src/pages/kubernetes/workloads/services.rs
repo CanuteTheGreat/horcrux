@@ -6,16 +6,17 @@
 //! - Port and selector management
 //! - Load balancer configuration
 
+use crate::api::{self, CreateServiceRequest, KubernetesService, ServicePort};
 use leptos::*;
 use leptos_router::*;
-use crate::api::{self, KubernetesService, CreateServiceRequest, ServicePort};
 use std::collections::HashMap;
 
 #[component]
 pub fn ServicesPage() -> impl IntoView {
     let params = use_params_map();
     let cluster_id = move || params.with(|p| p.get("cluster_id").cloned().unwrap_or_default());
-    let namespace = move || params.with(|p| p.get("namespace").cloned().unwrap_or("default".to_string()));
+    let namespace =
+        move || params.with(|p| p.get("namespace").cloned().unwrap_or("default".to_string()));
 
     let (services, set_services) = create_signal::<Vec<KubernetesService>>(vec![]);
     let (loading, set_loading) = create_signal(true);
@@ -36,7 +37,8 @@ pub fn ServicesPage() -> impl IntoView {
         target_port: Some("80".to_string()),
         node_port: None,
     }]);
-    let (service_selectors, set_service_selectors) = create_signal::<Vec<(String, String)>>(vec![("app".to_string(), "".to_string())]);
+    let (service_selectors, set_service_selectors) =
+        create_signal::<Vec<(String, String)>>(vec![("app".to_string(), "".to_string())]);
 
     // Reset form helper
     let reset_create_form = move || {
@@ -90,7 +92,8 @@ pub fn ServicesPage() -> impl IntoView {
                     }
                 },
                 std::time::Duration::from_secs(15),
-            ).ok();
+            )
+            .ok();
         }
     });
 
@@ -104,11 +107,13 @@ pub fn ServicesPage() -> impl IntoView {
         let search = search_filter.get().to_lowercase();
         let type_filter = service_type_filter.get();
 
-        services.get()
+        services
+            .get()
             .into_iter()
             .filter(|service| {
                 let name_match = search.is_empty() || service.name.to_lowercase().contains(&search);
-                let type_match = type_filter.is_empty() || service.service_type.eq_ignore_ascii_case(&type_filter);
+                let type_match = type_filter.is_empty()
+                    || service.service_type.eq_ignore_ascii_case(&type_filter);
                 name_match && type_match
             })
             .collect::<Vec<_>>()
@@ -124,7 +129,8 @@ pub fn ServicesPage() -> impl IntoView {
             let name = service_name.get();
             let svc_type = service_type.get();
             let ports = service_ports.get();
-            let selectors: HashMap<String, String> = service_selectors.get()
+            let selectors: HashMap<String, String> = service_selectors
+                .get()
                 .into_iter()
                 .filter(|(k, v)| !k.is_empty() && !v.is_empty())
                 .collect();
@@ -252,7 +258,13 @@ pub fn ServicesPage() -> impl IntoView {
         ports
             .iter()
             .map(|port| {
-                let mut port_str = format!("{}:{}", port.port, port.target_port.as_ref().unwrap_or(&"<unknown>".to_string()));
+                let mut port_str = format!(
+                    "{}:{}",
+                    port.port,
+                    port.target_port
+                        .as_ref()
+                        .unwrap_or(&"<unknown>".to_string())
+                );
                 if let Some(node_port) = port.node_port {
                     port_str.push_str(&format!(":{}", node_port));
                 }

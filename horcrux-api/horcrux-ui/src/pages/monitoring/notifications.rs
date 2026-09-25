@@ -1,11 +1,12 @@
+use crate::api::*;
 use leptos::*;
 use wasm_bindgen::JsCast;
-use crate::api::*;
 use web_sys::MouseEvent;
 
 #[component]
 pub fn NotificationsPage() -> impl IntoView {
-    let (notification_channels, set_notification_channels) = create_signal(Vec::<NotificationChannel>::new());
+    let (notification_channels, set_notification_channels) =
+        create_signal(Vec::<NotificationChannel>::new());
     let (webhook_configs, set_webhook_configs) = create_signal(Vec::<WebhookConfig>::new());
     let (selected_channel, set_selected_channel) = create_signal(None::<NotificationChannel>);
     let (show_create_modal, set_show_create_modal) = create_signal(false);
@@ -105,7 +106,9 @@ pub fn NotificationsPage() -> impl IntoView {
 
         match get_notification_channels().await {
             Ok(channels) => set_notification_channels.set(channels),
-            Err(e) => set_error_message.set(Some(format!("Failed to load notification channels: {}", e))),
+            Err(e) => {
+                set_error_message.set(Some(format!("Failed to load notification channels: {}", e)))
+            }
         }
 
         match get_webhook_configs().await {
@@ -165,7 +168,11 @@ pub fn NotificationsPage() -> impl IntoView {
         let new_channel = NotificationChannel {
             id: format!("channel-{}", chrono::Utc::now().timestamp()),
             name: form_name.get(),
-            description: if form_description.get().is_empty() { None } else { Some(form_description.get()) },
+            description: if form_description.get().is_empty() {
+                None
+            } else {
+                Some(form_description.get())
+            },
             channel_type: form_type.get(),
             enabled: form_enabled.get(),
             config,
@@ -181,7 +188,10 @@ pub fn NotificationsPage() -> impl IntoView {
                 clear_form();
                 load_data.dispatch(());
             }
-            Err(e) => set_error_message.set(Some(format!("Failed to create notification channel: {}", e))),
+            Err(e) => set_error_message.set(Some(format!(
+                "Failed to create notification channel: {}",
+                e
+            ))),
         }
 
         set_loading.set(false);
@@ -237,7 +247,11 @@ pub fn NotificationsPage() -> impl IntoView {
             let updated_channel = NotificationChannel {
                 id: channel.id.clone(),
                 name: form_name.get(),
-                description: if form_description.get().is_empty() { None } else { Some(form_description.get()) },
+                description: if form_description.get().is_empty() {
+                    None
+                } else {
+                    Some(form_description.get())
+                },
                 channel_type: form_type.get(),
                 enabled: form_enabled.get(),
                 config,
@@ -254,7 +268,10 @@ pub fn NotificationsPage() -> impl IntoView {
                     clear_form();
                     load_data.dispatch(());
                 }
-                Err(e) => set_error_message.set(Some(format!("Failed to update notification channel: {}", e))),
+                Err(e) => set_error_message.set(Some(format!(
+                    "Failed to update notification channel: {}",
+                    e
+                ))),
             }
 
             set_loading.set(false);
@@ -270,7 +287,10 @@ pub fn NotificationsPage() -> impl IntoView {
 
             match delete_notification_channel(channel_id).await {
                 Ok(_) => load_data.dispatch(()),
-                Err(e) => set_error_message.set(Some(format!("Failed to delete notification channel: {}", e))),
+                Err(e) => set_error_message.set(Some(format!(
+                    "Failed to delete notification channel: {}",
+                    e
+                ))),
             }
 
             set_loading.set(false);
@@ -289,7 +309,8 @@ pub fn NotificationsPage() -> impl IntoView {
                     set_show_test_modal.set(false);
                     // Show success message
                 }
-                Err(e) => set_error_message.set(Some(format!("Failed to test notification channel: {}", e))),
+                Err(e) => set_error_message
+                    .set(Some(format!("Failed to test notification channel: {}", e))),
             }
 
             set_loading.set(false);
@@ -304,36 +325,61 @@ pub fn NotificationsPage() -> impl IntoView {
         set_form_enabled.set(channel.enabled);
 
         match &channel.config {
-            NotificationChannelConfig::Email { address, smtp_server, smtp_port, username, password, use_tls } => {
+            NotificationChannelConfig::Email {
+                address,
+                smtp_server,
+                smtp_port,
+                username,
+                password,
+                use_tls,
+            } => {
                 set_form_email_address.set(address.clone());
                 set_form_smtp_server.set(smtp_server.clone());
                 set_form_smtp_port.set(*smtp_port);
                 set_form_smtp_username.set(username.clone());
                 set_form_smtp_password.set(password.clone());
                 set_form_use_tls.set(*use_tls);
-            },
-            NotificationChannelConfig::Slack { webhook_url, channel, username, icon_emoji } => {
+            }
+            NotificationChannelConfig::Slack {
+                webhook_url,
+                channel,
+                username,
+                icon_emoji,
+            } => {
                 set_form_slack_webhook_url.set(webhook_url.clone());
                 set_form_slack_channel.set(channel.clone().unwrap_or_default());
                 set_form_slack_username.set(username.clone().unwrap_or_default());
                 set_form_slack_icon_emoji.set(icon_emoji.clone().unwrap_or_default());
-            },
+            }
             NotificationChannelConfig::Teams { webhook_url } => {
                 set_form_teams_webhook_url.set(webhook_url.clone());
-            },
-            NotificationChannelConfig::Discord { webhook_url, username, avatar_url: _ } => {
+            }
+            NotificationChannelConfig::Discord {
+                webhook_url,
+                username,
+                avatar_url: _,
+            } => {
                 set_form_discord_webhook_url.set(webhook_url.clone());
                 set_form_discord_username.set(username.clone().unwrap_or_default());
-            },
-            NotificationChannelConfig::PagerDuty { integration_key, routing_key: _, severity } => {
+            }
+            NotificationChannelConfig::PagerDuty {
+                integration_key,
+                routing_key: _,
+                severity,
+            } => {
                 set_form_pagerduty_routing_key.set(integration_key.clone());
                 set_form_pagerduty_severity.set(severity.clone());
-            },
-            NotificationChannelConfig::Webhook { url, method, headers, auth: _ } => {
+            }
+            NotificationChannelConfig::Webhook {
+                url,
+                method,
+                headers,
+                auth: _,
+            } => {
                 set_form_webhook_url.set(url.clone());
                 set_form_webhook_method.set(method.clone());
                 set_form_webhook_headers.set(format_headers(headers));
-            },
+            }
         }
     };
 

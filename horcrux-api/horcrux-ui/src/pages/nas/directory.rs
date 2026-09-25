@@ -545,7 +545,10 @@ fn AdPanel() -> impl IntoView {
 
     let leave_domain = move |_| {
         if !web_sys::window()
-            .and_then(|w| w.confirm_with_message("Are you sure you want to leave the domain?").ok())
+            .and_then(|w| {
+                w.confirm_with_message("Are you sure you want to leave the domain?")
+                    .ok()
+            })
             .unwrap_or(false)
         {
             return;

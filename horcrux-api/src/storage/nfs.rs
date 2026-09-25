@@ -35,13 +35,11 @@ impl NfsManager {
         info!("Mounting NFS export {} to {}", config.export, mount_point);
 
         // Create mount point
-        tokio::fs::create_dir_all(mount_point).await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to create mount point: {}", e)))?;
+        tokio::fs::create_dir_all(mount_point).await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to create mount point: {}", e))
+        })?;
 
-        let mut args = vec![
-            "-t".to_string(),
-            "nfs".to_string(),
-        ];
+        let mut args = vec!["-t".to_string(), "nfs".to_string()];
 
         // Add NFS version
         if let Some(ref version) = config.version {
@@ -142,7 +140,9 @@ impl NfsManager {
             ])
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to create volume: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to create volume: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -159,18 +159,15 @@ impl NfsManager {
     pub async fn delete_volume(&self, volume_path: &str) -> Result<()> {
         info!("Deleting NFS volume: {}", volume_path);
 
-        tokio::fs::remove_file(volume_path).await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to delete volume: {}", e)))?;
+        tokio::fs::remove_file(volume_path).await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to delete volume: {}", e))
+        })?;
 
         Ok(())
     }
 
     /// Create a snapshot (copy-on-write)
-    pub async fn create_snapshot(
-        &self,
-        volume_path: &str,
-        snapshot_name: &str,
-    ) -> Result<()> {
+    pub async fn create_snapshot(&self, volume_path: &str, snapshot_name: &str) -> Result<()> {
         info!("Creating NFS snapshot: {}", snapshot_name);
 
         let snapshot_path = format!("{}.{}", volume_path, snapshot_name);
@@ -189,7 +186,9 @@ impl NfsManager {
             ])
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to create snapshot: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to create snapshot: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -222,12 +221,7 @@ impl NfsManager {
         let exports: Vec<String> = stdout
             .lines()
             .skip(1) // Skip header
-            .map(|line| {
-                line.split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .to_string()
-            })
+            .map(|line| line.split_whitespace().next().unwrap_or("").to_string())
             .filter(|s| !s.is_empty())
             .collect();
 
@@ -244,7 +238,7 @@ impl NfsManager {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NfsConfig {
     pub server: String,
-    pub export: String, // server:/export/path
+    pub export: String,          // server:/export/path
     pub version: Option<String>, // "3", "4", "4.1"
     pub read_only: bool,
 }

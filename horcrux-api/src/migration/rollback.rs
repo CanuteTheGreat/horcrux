@@ -1,14 +1,13 @@
+use chrono::{DateTime, Utc};
 ///! Migration Rollback and Recovery
 ///!
 ///! Provides automatic rollback capabilities when migrations fail,
 ///! ensuring VMs are restored to a working state on the source node
-
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::{error, info, warn};
-use chrono::{DateTime, Utc};
 use tokio::process::Command;
+use tracing::{error, info, warn};
 
 /// Rollback action type
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -84,7 +83,10 @@ impl RollbackPlan {
         // Step 1: Cleanup any partial disk images on target
         steps.push(RollbackStep::new(
             RollbackAction::CleanupTargetDisks,
-            format!("Clean up incomplete disk images on target node {}", target_node),
+            format!(
+                "Clean up incomplete disk images on target node {}",
+                target_node
+            ),
         ));
 
         // Step 2: Unregister VM from target node
@@ -152,7 +154,10 @@ impl RollbackPlan {
                 Err(e) => {
                     let error_msg = e.to_string();
                     self.steps[i].mark_executed(false, Some(error_msg.clone()));
-                    error!("✗ Rollback step failed: {} - {}", self.steps[i].description, error_msg);
+                    error!(
+                        "✗ Rollback step failed: {} - {}",
+                        self.steps[i].description, error_msg
+                    );
                     all_successful = false;
 
                     // Continue with remaining steps even if one fails
@@ -186,7 +191,10 @@ impl RollbackPlan {
 
             Err(horcrux_common::Error::System(format!(
                 "Rollback partially failed. {} of {} steps completed",
-                self.steps.iter().filter(|s| s.success == Some(true)).count(),
+                self.steps
+                    .iter()
+                    .filter(|s| s.success == Some(true))
+                    .count(),
                 self.steps.len()
             )))
         }
@@ -195,24 +203,12 @@ impl RollbackPlan {
     /// Execute a single rollback step by action
     async fn execute_step_by_action(&self, action: &RollbackAction) -> Result<()> {
         match action {
-            RollbackAction::CleanupTargetDisks => {
-                self.cleanup_target_disks().await
-            }
-            RollbackAction::UnregisterTargetVm => {
-                self.unregister_target_vm().await
-            }
-            RollbackAction::ReleaseTargetResources => {
-                self.release_target_resources().await
-            }
-            RollbackAction::RestoreSourceConfig => {
-                self.restore_source_config().await
-            }
-            RollbackAction::RestoreNetworkConfig => {
-                self.restore_network_config().await
-            }
-            RollbackAction::RestartVmOnSource => {
-                self.restart_vm_on_source().await
-            }
+            RollbackAction::CleanupTargetDisks => self.cleanup_target_disks().await,
+            RollbackAction::UnregisterTargetVm => self.unregister_target_vm().await,
+            RollbackAction::ReleaseTargetResources => self.release_target_resources().await,
+            RollbackAction::RestoreSourceConfig => self.restore_source_config().await,
+            RollbackAction::RestoreNetworkConfig => self.restore_network_config().await,
+            RollbackAction::RestartVmOnSource => self.restart_vm_on_source().await,
         }
     }
 
@@ -234,9 +230,12 @@ impl RollbackPlan {
         for pattern in cleanup_patterns {
             let output = Command::new("ssh")
                 .args([
-                    "-o", "StrictHostKeyChecking=no",
-                    "-o", "UserKnownHostsFile=/dev/null",
-                    "-o", "ConnectTimeout=10",
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-o",
+                    "UserKnownHostsFile=/dev/null",
+                    "-o",
+                    "ConnectTimeout=10",
                     &format!("root@{}", self.target_node),
                     &format!("rm -f {}", pattern),
                 ])
@@ -266,14 +265,17 @@ impl RollbackPlan {
 
         let output = Command::new("ssh")
             .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "ConnectTimeout=10",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "ConnectTimeout=10",
                 &format!("root@{}", self.target_node),
                 "virsh",
                 "undefine",
                 &vm_name,
-                "--nvram",  // Also remove NVRAM if exists
+                "--nvram", // Also remove NVRAM if exists
             ])
             .output()
             .await?;
@@ -304,9 +306,12 @@ impl RollbackPlan {
         // Try to destroy VM if it's still running
         let _output = Command::new("ssh")
             .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "ConnectTimeout=10",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "ConnectTimeout=10",
                 &format!("root@{}", self.target_node),
                 "virsh",
                 "destroy",
@@ -334,9 +339,12 @@ impl RollbackPlan {
         // Check if VM is defined on source
         let output = Command::new("ssh")
             .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "ConnectTimeout=10",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "ConnectTimeout=10",
                 &format!("root@{}", self.source_node),
                 "virsh",
                 "dominfo",
@@ -346,9 +354,10 @@ impl RollbackPlan {
             .await?;
 
         if !output.status.success() {
-            return Err(horcrux_common::Error::System(
-                format!("VM {} not found on source node {}", vm_name, self.source_node)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "VM {} not found on source node {}",
+                vm_name, self.source_node
+            )));
         }
 
         info!("VM configuration verified on {}", self.source_node);
@@ -379,9 +388,12 @@ impl RollbackPlan {
 
         let output = Command::new("ssh")
             .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "ConnectTimeout=10",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "ConnectTimeout=10",
                 &format!("root@{}", self.source_node),
                 "virsh",
                 "start",
@@ -392,9 +404,10 @@ impl RollbackPlan {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(
-                format!("Failed to start VM on source: {}", stderr)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Failed to start VM on source: {}",
+                stderr
+            )));
         }
 
         // Wait a moment for VM to initialize
@@ -403,9 +416,12 @@ impl RollbackPlan {
         // Verify VM is running
         let output = Command::new("ssh")
             .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "ConnectTimeout=10",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "ConnectTimeout=10",
                 &format!("root@{}", self.source_node),
                 "virsh",
                 "domstate",
@@ -417,9 +433,10 @@ impl RollbackPlan {
         let state = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
         if state != "running" {
-            return Err(horcrux_common::Error::System(
-                format!("VM started but is not running. State: {}", state)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "VM started but is not running. State: {}",
+                state
+            )));
         }
 
         info!(
@@ -432,8 +449,16 @@ impl RollbackPlan {
     /// Get summary of rollback execution
     pub fn get_summary(&self) -> RollbackSummary {
         let total_steps = self.steps.len();
-        let successful_steps = self.steps.iter().filter(|s| s.success == Some(true)).count();
-        let failed_steps = self.steps.iter().filter(|s| s.success == Some(false)).count();
+        let successful_steps = self
+            .steps
+            .iter()
+            .filter(|s| s.success == Some(true))
+            .count();
+        let failed_steps = self
+            .steps
+            .iter()
+            .filter(|s| s.success == Some(false))
+            .count();
         let pending_steps = self.steps.iter().filter(|s| !s.executed).count();
 
         let duration_seconds = if let (Some(start), Some(end)) = (self.started, self.completed) {
@@ -493,12 +518,7 @@ impl RollbackManager {
             migration_job_id, vm_id
         );
 
-        let mut plan = RollbackPlan::new(
-            migration_job_id.clone(),
-            vm_id,
-            source_node,
-            target_node,
-        );
+        let mut plan = RollbackPlan::new(migration_job_id.clone(), vm_id, source_node, target_node);
 
         let result = plan.execute().await;
 

@@ -1,6 +1,5 @@
 ///! Network Policy Enforcement
 ///! Provides Kubernetes-style network policies for traffic filtering
-
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -67,10 +66,7 @@ pub struct EgressRule {
 pub enum PeerSelector {
     PodSelector(LabelSelector),
     NamespaceSelector(LabelSelector),
-    IpBlock {
-        cidr: String,
-        except: Vec<String>,
-    },
+    IpBlock { cidr: String, except: Vec<String> },
 }
 
 /// Network policy port specification
@@ -110,7 +106,9 @@ impl NetworkPolicyManager {
     pub fn create_policy(&mut self, policy: NetworkPolicy) -> Result<()> {
         // Validate policy
         if policy.name.is_empty() {
-            return Err(horcrux_common::Error::System("Policy name cannot be empty".to_string()));
+            return Err(horcrux_common::Error::System(
+                "Policy name cannot be empty".to_string(),
+            ));
         }
 
         // Add to namespace index
@@ -167,8 +165,14 @@ impl NetworkPolicyManager {
     }
 
     /// Update policy for a pod (recalculate applicable policies)
-    pub fn update_pod_policies(&mut self, pod_id: &str, pod_labels: &HashMap<String, String>, namespace: &str) {
-        let applicable_policies: Vec<String> = self.policies
+    pub fn update_pod_policies(
+        &mut self,
+        pod_id: &str,
+        pod_labels: &HashMap<String, String>,
+        namespace: &str,
+    ) {
+        let applicable_policies: Vec<String> = self
+            .policies
             .values()
             .filter(|policy| {
                 policy.enabled
@@ -178,8 +182,13 @@ impl NetworkPolicyManager {
             .map(|policy| policy.id.clone())
             .collect();
 
-        self.pod_policies.insert(pod_id.to_string(), applicable_policies);
-        tracing::debug!("Updated policies for pod {}: {} policies", pod_id, self.pod_policies.get(pod_id).map(|p| p.len()).unwrap_or(0));
+        self.pod_policies
+            .insert(pod_id.to_string(), applicable_policies);
+        tracing::debug!(
+            "Updated policies for pod {}: {} policies",
+            pod_id,
+            self.pod_policies.get(pod_id).map(|p| p.len()).unwrap_or(0)
+        );
     }
 
     /// Check if a connection is allowed by network policies
@@ -250,7 +259,10 @@ impl NetworkPolicyManager {
         let mut rules = Vec::new();
 
         // Chain name based on policy ID
-        let chain_name = format!("HORCRUX-POL-{}", policy_id.chars().take(8).collect::<String>().to_uppercase());
+        let chain_name = format!(
+            "HORCRUX-POL-{}",
+            policy_id.chars().take(8).collect::<String>().to_uppercase()
+        );
 
         // Create custom chain
         rules.push(format!("iptables -N {}", chain_name));
@@ -335,7 +347,10 @@ impl NetworkPolicyManager {
         }
 
         // Default drop
-        rules.push(format!("nft add rule inet horcrux policy_{} drop", policy_id));
+        rules.push(format!(
+            "nft add rule inet horcrux policy_{} drop",
+            policy_id
+        ));
 
         rules
     }
@@ -474,11 +489,15 @@ mod tests {
         labels.insert("env".to_string(), "prod".to_string());
 
         let mut selector = LabelSelector::default();
-        selector.match_labels.insert("app".to_string(), "web".to_string());
+        selector
+            .match_labels
+            .insert("app".to_string(), "web".to_string());
 
         assert!(manager.matches_selector(&selector, &labels));
 
-        selector.match_labels.insert("app".to_string(), "db".to_string());
+        selector
+            .match_labels
+            .insert("app".to_string(), "db".to_string());
         assert!(!manager.matches_selector(&selector, &labels));
     }
 }

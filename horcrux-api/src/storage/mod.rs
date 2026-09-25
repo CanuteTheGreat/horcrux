@@ -1,18 +1,17 @@
+pub mod btrfs;
+pub mod ceph;
+pub mod cifs;
+pub mod directory;
+pub mod glusterfs;
+pub mod iscsi;
+pub mod lvm;
+pub mod migration;
+pub mod nfs;
+pub mod s3;
+pub mod thin_provision;
 ///! Storage backend management
 ///! Supports ZFS, Ceph, LVM, iSCSI, directory-based, GlusterFS, BtrFS, and S3 storage
-
 pub mod zfs;
-pub mod ceph;
-pub mod lvm;
-pub mod iscsi;
-pub mod directory;
-pub mod cifs;
-pub mod nfs;
-pub mod glusterfs;
-pub mod btrfs;
-pub mod s3;
-pub mod migration;
-pub mod thin_provision;
 
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
@@ -43,8 +42,8 @@ pub struct StoragePool {
     pub name: String,
     pub storage_type: StorageType,
     pub path: String,
-    pub available: u64,  // Available space in GB
-    pub total: u64,      // Total space in GB
+    pub available: u64, // Available space in GB
+    pub total: u64,     // Total space in GB
     pub enabled: bool,
 }
 
@@ -124,19 +123,22 @@ impl StorageManager {
                 // S3 validation: verify path contains valid bucket configuration
                 // Format expected: "s3://bucket-name" or "s3://endpoint/bucket-name"
                 if pool.path.is_empty() {
-                    return Err(horcrux_common::Error::InvalidConfig("S3 path cannot be empty".to_string()));
+                    return Err(horcrux_common::Error::InvalidConfig(
+                        "S3 path cannot be empty".to_string(),
+                    ));
                 }
 
                 if !pool.path.starts_with("s3://") {
-                    return Err(horcrux_common::Error::InvalidConfig(
-                        format!("S3 path must start with 's3://', got: {}", pool.path)
-                    ));
+                    return Err(horcrux_common::Error::InvalidConfig(format!(
+                        "S3 path must start with 's3://', got: {}",
+                        pool.path
+                    )));
                 }
 
                 let bucket_part = pool.path.strip_prefix("s3://").unwrap();
                 if bucket_part.is_empty() {
                     return Err(horcrux_common::Error::InvalidConfig(
-                        "S3 path must specify bucket name after 's3://'".to_string()
+                        "S3 path must specify bucket name after 's3://'".to_string(),
                     ));
                 }
 
@@ -144,7 +146,7 @@ impl StorageManager {
                 let bucket_name = bucket_part.split('/').next().unwrap_or("");
                 if bucket_name.len() < 3 || bucket_name.len() > 63 {
                     return Err(horcrux_common::Error::InvalidConfig(
-                        "S3 bucket name must be between 3 and 63 characters".to_string()
+                        "S3 bucket name must be between 3 and 63 characters".to_string(),
                     ));
                 }
 
@@ -180,9 +182,9 @@ impl StorageManager {
         size_gb: u64,
     ) -> Result<String> {
         let pools = self.pools.read().await;
-        let pool = pools
-            .get(pool_id)
-            .ok_or_else(|| horcrux_common::Error::System(format!("Storage pool {} not found", pool_id)))?;
+        let pool = pools.get(pool_id).ok_or_else(|| {
+            horcrux_common::Error::System(format!("Storage pool {} not found", pool_id))
+        })?;
 
         if !pool.enabled {
             return Err(horcrux_common::Error::InvalidConfig(format!(
@@ -231,29 +233,39 @@ impl StorageManager {
                 *lun_id += 1;
                 drop(lun_counters);
 
-                self.iscsi.create_volume(&target, current_lun, size_gb).await?
+                self.iscsi
+                    .create_volume(&target, current_lun, size_gb)
+                    .await?
             }
             StorageType::Cifs => {
                 // For CIFS, create file in mounted share
-                self.cifs.create_volume(&pool.path, volume_name, size_gb).await?
+                self.cifs
+                    .create_volume(&pool.path, volume_name, size_gb)
+                    .await?
             }
             StorageType::Nfs => {
                 // For NFS, create file in NFS mount
-                self.nfs.create_volume(&pool.path, volume_name, size_gb).await?
+                self.nfs
+                    .create_volume(&pool.path, volume_name, size_gb)
+                    .await?
             }
             StorageType::GlusterFs => {
                 // For GlusterFS, create file in gluster volume
-                self.glusterfs.create_volume(&pool.path, volume_name, size_gb).await?
+                self.glusterfs
+                    .create_volume(&pool.path, volume_name, size_gb)
+                    .await?
             }
             StorageType::BtrFs => {
                 // For BtrFS, create subvolume
-                self.btrfs.create_volume(&pool.path, volume_name, size_gb).await?
+                self.btrfs
+                    .create_volume(&pool.path, volume_name, size_gb)
+                    .await?
             }
             StorageType::S3 => {
                 // S3 doesn't support block volumes, use for backup storage instead
                 return Err(horcrux_common::Error::InvalidConfig(
-                    "S3 storage is for backups/objects only, not for VM volumes".to_string()
-                ))
+                    "S3 storage is for backups/objects only, not for VM volumes".to_string(),
+                ));
             }
         };
 
@@ -264,21 +276,25 @@ impl StorageManager {
     #[allow(dead_code)]
     pub async fn delete_volume(&self, pool_id: &str, volume_name: &str) -> Result<()> {
         let pools = self.pools.read().await;
-        let pool = pools
-            .get(pool_id)
-            .ok_or_else(|| horcrux_common::Error::System(format!("Storage pool {} not found", pool_id)))?;
+        let pool = pools.get(pool_id).ok_or_else(|| {
+            horcrux_common::Error::System(format!("Storage pool {} not found", pool_id))
+        })?;
 
         match pool.storage_type {
             StorageType::Zfs => self.zfs.delete_volume(&pool.path, volume_name).await?,
             StorageType::Ceph => self.ceph.delete_volume(&pool.path, volume_name).await?,
             StorageType::Lvm => self.lvm.delete_volume(&pool.path, volume_name).await?,
-            StorageType::Directory => self.directory.delete_volume(&pool.path, volume_name).await?,
-            StorageType::Iscsi => {},
-            StorageType::Cifs => {},
-            StorageType::Nfs => {},
-            StorageType::GlusterFs => {},
-            StorageType::BtrFs => {},
-            StorageType::S3 => {},
+            StorageType::Directory => {
+                self.directory
+                    .delete_volume(&pool.path, volume_name)
+                    .await?
+            }
+            StorageType::Iscsi => {}
+            StorageType::Cifs => {}
+            StorageType::Nfs => {}
+            StorageType::GlusterFs => {}
+            StorageType::BtrFs => {}
+            StorageType::S3 => {}
         }
 
         Ok(())
@@ -292,9 +308,9 @@ impl StorageManager {
         snapshot_name: &str,
     ) -> Result<()> {
         let pools = self.pools.read().await;
-        let pool = pools
-            .get(pool_id)
-            .ok_or_else(|| horcrux_common::Error::System(format!("Storage pool {} not found", pool_id)))?;
+        let pool = pools.get(pool_id).ok_or_else(|| {
+            horcrux_common::Error::System(format!("Storage pool {} not found", pool_id))
+        })?;
 
         match pool.storage_type {
             StorageType::Zfs => {
@@ -335,12 +351,16 @@ impl StorageManager {
             StorageType::GlusterFs => {
                 // GlusterFS snapshot takes volume_path and snapshot_name
                 let volume_path = format!("{}/{}", pool.path, volume_name);
-                self.glusterfs.create_snapshot(&volume_path, snapshot_name).await?;
+                self.glusterfs
+                    .create_snapshot(&volume_path, snapshot_name)
+                    .await?;
             }
             StorageType::BtrFs => {
                 // BtrFS snapshot takes source_path, snapshot_name, and readonly flag
                 let source_path = format!("{}/{}", pool.path, volume_name);
-                self.btrfs.create_snapshot(&source_path, snapshot_name, false).await?;
+                self.btrfs
+                    .create_snapshot(&source_path, snapshot_name, false)
+                    .await?;
             }
             StorageType::S3 => {
                 return Err(horcrux_common::Error::InvalidConfig(
@@ -360,9 +380,9 @@ impl StorageManager {
         snapshot_name: &str,
     ) -> Result<()> {
         let pools = self.pools.read().await;
-        let pool = pools
-            .get(pool_id)
-            .ok_or_else(|| horcrux_common::Error::System(format!("Storage pool {} not found", pool_id)))?;
+        let pool = pools.get(pool_id).ok_or_else(|| {
+            horcrux_common::Error::System(format!("Storage pool {} not found", pool_id))
+        })?;
 
         match pool.storage_type {
             StorageType::Zfs => {
@@ -409,7 +429,9 @@ impl StorageManager {
                 // BtrFS restore_snapshot takes snapshot_path and target_path
                 let snapshot_path = format!("{}/{}@{}", pool.path, volume_name, snapshot_name);
                 let target_path = format!("{}/{}", pool.path, volume_name);
-                self.btrfs.restore_snapshot(&snapshot_path, &target_path).await?
+                self.btrfs
+                    .restore_snapshot(&snapshot_path, &target_path)
+                    .await?
             }
             StorageType::S3 => {
                 return Err(horcrux_common::Error::InvalidConfig(

@@ -6,8 +6,8 @@
 //! - Repository updates and synchronization
 //! - Repository removal and cleanup
 
+use crate::api::{self, AddHelmRepoRequest, HelmRepository};
 use leptos::*;
-use crate::api::{self, HelmRepository, AddHelmRepoRequest};
 
 #[component]
 pub fn HelmRepositoriesPage() -> impl IntoView {
@@ -64,7 +64,8 @@ pub fn HelmRepositoriesPage() -> impl IntoView {
                     }
                 },
                 std::time::Duration::from_secs(30),
-            ).ok();
+            )
+            .ok();
         }
     });
 
@@ -77,13 +78,17 @@ pub fn HelmRepositoriesPage() -> impl IntoView {
     let filtered_repositories = move || {
         let search = search_filter.get().to_lowercase();
 
-        repositories.get()
+        repositories
+            .get()
             .into_iter()
             .filter(|repo| {
                 search.is_empty()
                     || repo.name.to_lowercase().contains(&search)
                     || repo.url.to_lowercase().contains(&search)
-                    || repo.description.as_ref().map_or(false, |d| d.to_lowercase().contains(&search))
+                    || repo
+                        .description
+                        .as_ref()
+                        .map_or(false, |d| d.to_lowercase().contains(&search))
             })
             .collect::<Vec<_>>()
     };
@@ -92,8 +97,16 @@ pub fn HelmRepositoriesPage() -> impl IntoView {
     let add_repository = move || {
         let name = repo_name.get();
         let url = repo_url.get();
-        let user = if username.get().is_empty() { None } else { Some(username.get()) };
-        let pass = if password.get().is_empty() { None } else { Some(password.get()) };
+        let user = if username.get().is_empty() {
+            None
+        } else {
+            Some(username.get())
+        };
+        let pass = if password.get().is_empty() {
+            None
+        } else {
+            Some(password.get())
+        };
         let force = if force_update.get() { Some(true) } else { None };
 
         if name.is_empty() {
@@ -173,13 +186,11 @@ pub fn HelmRepositoriesPage() -> impl IntoView {
     };
 
     // Get status badge class
-    let status_class = |status: &str| {
-        match status {
-            "ready" | "active" => "bg-green-100 text-green-800",
-            "updating" | "syncing" => "bg-yellow-100 text-yellow-800",
-            "error" | "failed" => "bg-red-100 text-red-800",
-            _ => "bg-gray-100 text-gray-800",
-        }
+    let status_class = |status: &str| match status {
+        "ready" | "active" => "bg-green-100 text-green-800",
+        "updating" | "syncing" => "bg-yellow-100 text-yellow-800",
+        "error" | "failed" => "bg-red-100 text-red-800",
+        _ => "bg-gray-100 text-gray-800",
     };
 
     view! {

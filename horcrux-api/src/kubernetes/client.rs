@@ -144,8 +144,8 @@ impl K8sClient {
     /// Check if the cluster is reachable
     #[cfg(feature = "kubernetes")]
     pub async fn health_check(&self) -> K8sResult<ClusterStatus> {
-        use kube::api::Api;
         use k8s_openapi::api::core::v1::Namespace;
+        use kube::api::Api;
 
         let namespaces: Api<Namespace> = Api::all(self.inner.clone());
 
@@ -175,8 +175,8 @@ impl K8sClient {
     /// Get number of nodes in the cluster
     #[cfg(feature = "kubernetes")]
     pub async fn get_node_count(&self) -> K8sResult<u32> {
-        use kube::api::Api;
         use k8s_openapi::api::core::v1::Node;
+        use kube::api::Api;
 
         let nodes: Api<Node> = Api::all(self.inner.clone());
         let node_list = nodes.list(&Default::default()).await?;

@@ -1,5 +1,4 @@
 ///! CLI configuration management
-
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

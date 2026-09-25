@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::time::Duration;
 
 // Benchmark configuration
@@ -14,9 +14,7 @@ fn bench_vm_list_scaling(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
             // Simulate VM list creation
             b.iter(|| {
-                let vms: Vec<String> = (0..size)
-                    .map(|i| format!("vm-{}", i))
-                    .collect();
+                let vms: Vec<String> = (0..size).map(|i| format!("vm-{}", i)).collect();
                 black_box(vms)
             });
         });
@@ -31,9 +29,7 @@ fn bench_database_operations(c: &mut Criterion) {
 
     // Benchmark in-memory database creation
     group.bench_function("create_in_memory_db", |b| {
-        b.iter(|| {
-            black_box("sqlite::memory:")
-        });
+        b.iter(|| black_box("sqlite::memory:"));
     });
 
     group.finish();
@@ -111,35 +107,27 @@ fn bench_hashmap_operations(c: &mut Criterion) {
     let mut group = c.benchmark_group("hashmap_operations");
 
     for size in [SMALL_DATASET, MEDIUM_DATASET, LARGE_DATASET].iter() {
-        group.bench_with_input(
-            BenchmarkId::new("insert", size),
-            size,
-            |b, &size| {
-                b.iter(|| {
-                    let mut map = std::collections::HashMap::new();
-                    for i in 0..size {
-                        map.insert(format!("vm-{}", i), i);
-                    }
-                    black_box(map)
-                });
-            },
-        );
-
-        group.bench_with_input(
-            BenchmarkId::new("lookup", size),
-            size,
-            |b, &size| {
+        group.bench_with_input(BenchmarkId::new("insert", size), size, |b, &size| {
+            b.iter(|| {
                 let mut map = std::collections::HashMap::new();
                 for i in 0..size {
                     map.insert(format!("vm-{}", i), i);
                 }
+                black_box(map)
+            });
+        });
 
-                b.iter(|| {
-                    let value = map.get("vm-50");
-                    black_box(value)
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("lookup", size), size, |b, &size| {
+            let mut map = std::collections::HashMap::new();
+            for i in 0..size {
+                map.insert(format!("vm-{}", i), i);
+            }
+
+            b.iter(|| {
+                let value = map.get("vm-50");
+                black_box(value)
+            });
+        });
     }
 
     group.finish();
@@ -154,9 +142,7 @@ fn bench_async_overhead(c: &mut Criterion) {
     group.bench_function("spawn_task", |b| {
         b.iter(|| {
             rt.block_on(async {
-                let handle = tokio::spawn(async {
-                    42
-                });
+                let handle = tokio::spawn(async { 42 });
                 black_box(handle.await.unwrap())
             })
         });
@@ -167,11 +153,7 @@ fn bench_async_overhead(c: &mut Criterion) {
             42
         }
 
-        b.iter(|| {
-            rt.block_on(async {
-                black_box(simple_async().await)
-            })
-        });
+        b.iter(|| rt.block_on(async { black_box(simple_async().await) }));
     });
 
     group.finish();

@@ -1,5 +1,4 @@
 ///! Database migrations
-
 use horcrux_common::Result;
 use sqlx::SqlitePool;
 
@@ -10,36 +9,118 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
             executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )"
+        )",
     )
     .execute(pool)
     .await
-    .map_err(|e| horcrux_common::Error::System(format!("Failed to create migrations table: {}", e)))?;
+    .map_err(|e| {
+        horcrux_common::Error::System(format!("Failed to create migrations table: {}", e))
+    })?;
 
     // Run migrations in order
     run_migration(pool, "001_create_vms_table", MIGRATION_001_CREATE_VMS).await?;
     run_migration(pool, "002_create_users_table", MIGRATION_002_CREATE_USERS).await?;
-    run_migration(pool, "003_create_sessions_table", MIGRATION_003_CREATE_SESSIONS).await?;
-    run_migration(pool, "004_create_audit_logs_table", MIGRATION_004_CREATE_AUDIT_LOGS).await?;
-    run_migration(pool, "005_create_storage_pools_table", MIGRATION_005_CREATE_STORAGE_POOLS).await?;
-    run_migration(pool, "006_create_backups_table", MIGRATION_006_CREATE_BACKUPS).await?;
-    run_migration(pool, "007_create_cluster_nodes_table", MIGRATION_007_CREATE_CLUSTER_NODES).await?;
-    run_migration(pool, "008_create_api_keys_table", MIGRATION_008_CREATE_API_KEYS).await?;
-    run_migration(pool, "009_create_k8s_clusters_table", MIGRATION_009_CREATE_K8S_CLUSTERS).await?;
-    run_migration(pool, "010_create_k8s_helm_repos_table", MIGRATION_010_CREATE_K8S_HELM_REPOS).await?;
+    run_migration(
+        pool,
+        "003_create_sessions_table",
+        MIGRATION_003_CREATE_SESSIONS,
+    )
+    .await?;
+    run_migration(
+        pool,
+        "004_create_audit_logs_table",
+        MIGRATION_004_CREATE_AUDIT_LOGS,
+    )
+    .await?;
+    run_migration(
+        pool,
+        "005_create_storage_pools_table",
+        MIGRATION_005_CREATE_STORAGE_POOLS,
+    )
+    .await?;
+    run_migration(
+        pool,
+        "006_create_backups_table",
+        MIGRATION_006_CREATE_BACKUPS,
+    )
+    .await?;
+    run_migration(
+        pool,
+        "007_create_cluster_nodes_table",
+        MIGRATION_007_CREATE_CLUSTER_NODES,
+    )
+    .await?;
+    run_migration(
+        pool,
+        "008_create_api_keys_table",
+        MIGRATION_008_CREATE_API_KEYS,
+    )
+    .await?;
+    run_migration(
+        pool,
+        "009_create_k8s_clusters_table",
+        MIGRATION_009_CREATE_K8S_CLUSTERS,
+    )
+    .await?;
+    run_migration(
+        pool,
+        "010_create_k8s_helm_repos_table",
+        MIGRATION_010_CREATE_K8S_HELM_REPOS,
+    )
+    .await?;
 
     // NAS migrations (011-019)
     #[cfg(feature = "nas")]
     {
-        run_migration(pool, "011_create_nas_shares_table", MIGRATION_011_CREATE_NAS_SHARES).await?;
-        run_migration(pool, "012_create_nas_users_table", MIGRATION_012_CREATE_NAS_USERS).await?;
-        run_migration(pool, "013_create_nas_groups_table", MIGRATION_013_CREATE_NAS_GROUPS).await?;
-        run_migration(pool, "014_create_nas_pools_table", MIGRATION_014_CREATE_NAS_POOLS).await?;
-        run_migration(pool, "015_create_nas_snapshots_table", MIGRATION_015_CREATE_NAS_SNAPSHOTS).await?;
-        run_migration(pool, "016_create_nas_replication_table", MIGRATION_016_CREATE_NAS_REPLICATION).await?;
-        run_migration(pool, "017_create_nas_iscsi_table", MIGRATION_017_CREATE_NAS_ISCSI).await?;
+        run_migration(
+            pool,
+            "011_create_nas_shares_table",
+            MIGRATION_011_CREATE_NAS_SHARES,
+        )
+        .await?;
+        run_migration(
+            pool,
+            "012_create_nas_users_table",
+            MIGRATION_012_CREATE_NAS_USERS,
+        )
+        .await?;
+        run_migration(
+            pool,
+            "013_create_nas_groups_table",
+            MIGRATION_013_CREATE_NAS_GROUPS,
+        )
+        .await?;
+        run_migration(
+            pool,
+            "014_create_nas_pools_table",
+            MIGRATION_014_CREATE_NAS_POOLS,
+        )
+        .await?;
+        run_migration(
+            pool,
+            "015_create_nas_snapshots_table",
+            MIGRATION_015_CREATE_NAS_SNAPSHOTS,
+        )
+        .await?;
+        run_migration(
+            pool,
+            "016_create_nas_replication_table",
+            MIGRATION_016_CREATE_NAS_REPLICATION,
+        )
+        .await?;
+        run_migration(
+            pool,
+            "017_create_nas_iscsi_table",
+            MIGRATION_017_CREATE_NAS_ISCSI,
+        )
+        .await?;
         run_migration(pool, "018_create_nas_s3_table", MIGRATION_018_CREATE_NAS_S3).await?;
-        run_migration(pool, "019_create_nas_scheduler_table", MIGRATION_019_CREATE_NAS_SCHEDULER).await?;
+        run_migration(
+            pool,
+            "019_create_nas_scheduler_table",
+            MIGRATION_019_CREATE_NAS_SCHEDULER,
+        )
+        .await?;
     }
 
     Ok(())

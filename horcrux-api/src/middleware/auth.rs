@@ -1,7 +1,6 @@
 ///! Authentication middleware
 ///!
 ///! Validates JWT tokens or session cookies for API requests
-
 use axum::{
     extract::{Request, State},
     http::{HeaderMap, StatusCode},
@@ -9,7 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation, Algorithm};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -40,11 +39,11 @@ pub struct AuthUser {
 /// JWT claims structure
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
-    sub: String,      // subject (user ID)
+    sub: String, // subject (user ID)
     username: String,
     role: String,
-    exp: usize,       // expiration time (seconds since epoch)
-    iat: usize,       // issued at (seconds since epoch)
+    exp: usize, // expiration time (seconds since epoch)
+    iat: usize, // issued at (seconds since epoch)
 }
 
 /// JWT secret key (singleton)
@@ -104,7 +103,12 @@ pub async fn auth_middleware(
                     match crate::db::users::get_session(state.database.pool(), session_id).await {
                         Ok(session) => {
                             // Get user details
-                            match crate::db::users::get_user_by_username(state.database.pool(), &session.username).await {
+                            match crate::db::users::get_user_by_username(
+                                state.database.pool(),
+                                &session.username,
+                            )
+                            .await
+                            {
                                 Ok(user) => {
                                     let auth_user = AuthUser {
                                         user_id: user.id,
@@ -155,7 +159,8 @@ pub async fn auth_middleware(
 
     Err(AuthError {
         error: "unauthorized".to_string(),
-        message: "Authentication required. Provide Bearer token, session cookie, or API key.".to_string(),
+        message: "Authentication required. Provide Bearer token, session cookie, or API key."
+            .to_string(),
     })
 }
 
@@ -216,12 +221,14 @@ pub fn generate_jwt_token(user_id: &str, username: &str, role: &str) -> Result<S
     let encoding_key = EncodingKey::from_secret(secret.as_bytes());
     let header = Header::new(Algorithm::HS256);
 
-    encode(&header, &claims, &encoding_key)
-        .map_err(|e| format!("Failed to generate JWT: {}", e))
+    encode(&header, &claims, &encoding_key).map_err(|e| format!("Failed to generate JWT: {}", e))
 }
 
 /// Validate API key against database
-async fn validate_api_key(db: &Arc<crate::db::Database>, api_key: &str) -> Result<AuthUser, String> {
+async fn validate_api_key(
+    db: &Arc<crate::db::Database>,
+    api_key: &str,
+) -> Result<AuthUser, String> {
     use argon2::{Argon2, PasswordHash, PasswordVerifier};
 
     // API keys should be in the format: "hx_<random_string>"
@@ -252,18 +259,22 @@ async fn validate_api_key(db: &Arc<crate::db::Database>, api_key: &str) -> Resul
         }
 
         // Verify API key hash (using Argon2)
-        let parsed_hash = PasswordHash::new(&key_hash)
-            .map_err(|_| "Invalid hash format".to_string())?;
+        let parsed_hash =
+            PasswordHash::new(&key_hash).map_err(|_| "Invalid hash format".to_string())?;
 
-        if Argon2::default().verify_password(api_key.as_bytes(), &parsed_hash).is_ok() {
+        if Argon2::default()
+            .verify_password(api_key.as_bytes(), &parsed_hash)
+            .is_ok()
+        {
             // Key is valid, get user info
             let user_id: String = row.get("user_id");
 
             // Update last_used_at
-            let _ = sqlx::query("UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?")
-                .bind(row.get::<String, _>("id"))
-                .execute(pool)
-                .await;
+            let _ =
+                sqlx::query("UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?")
+                    .bind(row.get::<String, _>("id"))
+                    .execute(pool)
+                    .await;
 
             // Get user details
             match crate::db::users::get_user_by_username(pool, &user_id).await {
@@ -291,7 +302,14 @@ async fn validate_api_key(db: &Arc<crate::db::Database>, api_key: &str) -> Resul
 
 /// Role-based access control middleware
 #[allow(dead_code)]
-pub fn require_role(required_role: &'static str) -> impl Fn(Request, Next) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response, StatusCode>> + Send>> + Clone {
+pub fn require_role(
+    required_role: &'static str,
+) -> impl Fn(
+    Request,
+    Next,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<Response, StatusCode>> + Send>,
+> + Clone {
     move |request: Request, next: Next| {
         Box::pin(async move {
             // Get user from request extensions

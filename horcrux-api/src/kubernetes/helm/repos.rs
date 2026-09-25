@@ -206,7 +206,12 @@ pub async fn show_chart(chart_name: &str) -> K8sResult<HelmChartInfo> {
         description: info.description,
         home: info.home,
         sources: info.sources.unwrap_or_default(),
-        maintainers: info.maintainers.unwrap_or_default().into_iter().map(|m| m.into()).collect(),
+        maintainers: info
+            .maintainers
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| m.into())
+            .collect(),
         keywords: info.keywords.unwrap_or_default(),
         icon: info.icon,
         api_version: info.api_version,
@@ -312,11 +317,7 @@ struct HelmHubSearchItem {
 impl From<HelmHubSearchItem> for HelmChart {
     fn from(item: HelmHubSearchItem) -> Self {
         // Extract name from URL
-        let name = item.url
-            .rsplit('/')
-            .next()
-            .unwrap_or(&item.url)
-            .to_string();
+        let name = item.url.rsplit('/').next().unwrap_or(&item.url).to_string();
 
         HelmChart {
             name,

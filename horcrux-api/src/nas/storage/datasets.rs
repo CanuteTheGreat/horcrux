@@ -2,8 +2,8 @@
 //!
 //! Handles ZFS datasets, Btrfs subvolumes, and LVM volumes.
 
-use horcrux_common::{Error, Result};
 use crate::nas::storage::{DatasetType, NasDataset};
+use horcrux_common::{Error, Result};
 use std::collections::HashMap;
 use tokio::process::Command;
 
@@ -26,8 +26,13 @@ pub async fn list_datasets(pool: &str) -> Result<Vec<NasDataset>> {
 async fn list_zfs_datasets(pool: &str) -> Result<Vec<NasDataset>> {
     let output = Command::new("zfs")
         .args([
-            "list", "-H", "-r", "-t", "filesystem,volume",
-            "-o", "name,used,refer,avail,quota,refquota,compression,recordsize,atime,sync,mountpoint",
+            "list",
+            "-H",
+            "-r",
+            "-t",
+            "filesystem,volume",
+            "-o",
+            "name,used,refer,avail,quota,refquota,compression,recordsize,atime,sync,mountpoint",
             pool,
         ])
         .output()
@@ -45,7 +50,11 @@ async fn list_zfs_datasets(pool: &str) -> Result<Vec<NasDataset>> {
         let parts: Vec<&str> = line.split('\t').collect();
         if parts.len() >= 11 {
             let full_name = parts[0].to_string();
-            let name = full_name.rsplit('/').next().unwrap_or(&full_name).to_string();
+            let name = full_name
+                .rsplit('/')
+                .next()
+                .unwrap_or(&full_name)
+                .to_string();
 
             let used_bytes = super::parse_size(parts[1]).unwrap_or(0);
             let referenced_bytes = super::parse_size(parts[2]).unwrap_or(0);
@@ -126,10 +135,7 @@ async fn create_zfs_dataset(pool: &str, name: &str) -> Result<NasDataset> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(Error::Internal(format!(
-            "zfs create failed: {}",
-            stderr
-        )));
+        return Err(Error::Internal(format!("zfs create failed: {}", stderr)));
     }
 
     // Get the created dataset
@@ -152,10 +158,7 @@ pub async fn destroy_dataset(dataset: &str) -> Result<()> {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!(
-                "zfs destroy failed: {}",
-                stderr
-            )));
+            return Err(Error::Internal(format!("zfs destroy failed: {}", stderr)));
         }
     }
 
@@ -179,10 +182,7 @@ pub async fn set_property(dataset: &str, property: &str, value: &str) -> Result<
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!(
-                "zfs set failed: {}",
-                stderr
-            )));
+            return Err(Error::Internal(format!("zfs set failed: {}", stderr)));
         }
     }
 

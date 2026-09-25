@@ -2,9 +2,9 @@
 //!
 //! Handles Services, Ingress, and NetworkPolicies.
 
-pub mod services;
 pub mod ingress;
 pub mod network_policies;
+pub mod services;
 
 /// Networking manager aggregating all networking operations
 pub struct NetworkingManager;

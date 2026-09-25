@@ -493,7 +493,10 @@ impl IscsiTargetManager {
             IscsiBackend::Tgtd => "/etc/tgt/targets.conf".to_string(),
             IscsiBackend::Lio => "/etc/target/saveconfig.json".to_string(),
         };
-        Self { config, config_path }
+        Self {
+            config,
+            config_path,
+        }
     }
 
     /// Set global configuration
@@ -518,10 +521,14 @@ impl IscsiTargetManager {
     /// Validate IQN format
     pub fn validate_iqn(iqn: &str) -> Result<()> {
         if !iqn.starts_with("iqn.") && !iqn.starts_with("eui.") && !iqn.starts_with("naa.") {
-            return Err(Error::Validation("IQN must start with iqn., eui., or naa.".to_string()));
+            return Err(Error::Validation(
+                "IQN must start with iqn., eui., or naa.".to_string(),
+            ));
         }
         if iqn.len() > 223 {
-            return Err(Error::Validation("IQN exceeds maximum length of 223 characters".to_string()));
+            return Err(Error::Validation(
+                "IQN exceeds maximum length of 223 characters".to_string(),
+            ));
         }
         Ok(())
     }
@@ -577,11 +584,16 @@ impl IscsiTargetManager {
         // Create target
         let output = Command::new("tgtadm")
             .args([
-                "--lld", "iscsi",
-                "--mode", "target",
-                "--op", "new",
-                "--tid", &tid.to_string(),
-                "--targetname", &target.iqn,
+                "--lld",
+                "iscsi",
+                "--mode",
+                "target",
+                "--op",
+                "new",
+                "--tid",
+                &tid.to_string(),
+                "--targetname",
+                &target.iqn,
             ])
             .output()
             .await
@@ -589,7 +601,10 @@ impl IscsiTargetManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Failed to create target: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to create target: {}",
+                stderr
+            )));
         }
 
         // Add LUNs
@@ -624,16 +639,17 @@ impl IscsiTargetManager {
     async fn create_target_lio(&self, target: &IscsiTarget) -> Result<u32> {
         // Create target
         let output = Command::new("targetcli")
-            .args([
-                &format!("/iscsi create {}", target.iqn),
-            ])
+            .args([&format!("/iscsi create {}", target.iqn)])
             .output()
             .await
             .map_err(|e| Error::Internal(format!("targetcli failed: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Failed to create target: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to create target: {}",
+                stderr
+            )));
         }
 
         // Create TPG (Target Portal Group)
@@ -669,11 +685,15 @@ impl IscsiTargetManager {
                 // Force close all sessions
                 let _ = Command::new("tgtadm")
                     .args([
-                        "--lld", "iscsi",
-                        "--mode", "target",
-                        "--op", "delete",
+                        "--lld",
+                        "iscsi",
+                        "--mode",
+                        "target",
+                        "--op",
+                        "delete",
                         "--force",
-                        "--tid", &tid.to_string(),
+                        "--tid",
+                        &tid.to_string(),
                     ])
                     .output()
                     .await;
@@ -689,7 +709,10 @@ impl IscsiTargetManager {
 
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(Error::Internal(format!("Failed to delete target: {}", stderr)));
+                    return Err(Error::Internal(format!(
+                        "Failed to delete target: {}",
+                        stderr
+                    )));
                 }
 
                 self.save_lio_config().await
@@ -706,12 +729,18 @@ impl IscsiTargetManager {
 
                 let output = Command::new("tgtadm")
                     .args([
-                        "--lld", "iscsi",
-                        "--mode", "target",
-                        "--op", "update",
-                        "--tid", &tid.to_string(),
-                        "--name", "state",
-                        "--value", state,
+                        "--lld",
+                        "iscsi",
+                        "--mode",
+                        "target",
+                        "--op",
+                        "update",
+                        "--tid",
+                        &tid.to_string(),
+                        "--name",
+                        "state",
+                        "--value",
+                        state,
                     ])
                     .output()
                     .await
@@ -719,21 +748,31 @@ impl IscsiTargetManager {
 
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(Error::Internal(format!("Failed to update target state: {}", stderr)));
+                    return Err(Error::Internal(format!(
+                        "Failed to update target state: {}",
+                        stderr
+                    )));
                 }
                 Ok(())
             }
             IscsiBackend::Lio => {
                 let enable_str = if enabled { "1" } else { "0" };
                 let output = Command::new("targetcli")
-                    .args([&format!("/iscsi/{}/tpg1 set attribute demo_mode_write_protect={}", iqn, if enabled { "0" } else { "1" })])
+                    .args([&format!(
+                        "/iscsi/{}/tpg1 set attribute demo_mode_write_protect={}",
+                        iqn,
+                        if enabled { "0" } else { "1" }
+                    )])
                     .output()
                     .await
                     .map_err(|e| Error::Internal(format!("targetcli failed: {}", e)))?;
 
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(Error::Internal(format!("Failed to update target: {}", stderr)));
+                    return Err(Error::Internal(format!(
+                        "Failed to update target: {}",
+                        stderr
+                    )));
                 }
                 Ok(())
             }
@@ -909,7 +948,9 @@ impl IscsiTargetManager {
                 for part in parts {
                     if part.starts_with("iqn.") || part.contains(":iqn.") {
                         let iqn = if part.contains(':') {
-                            part.split(':').find(|s| s.starts_with("iqn.")).unwrap_or(part)
+                            part.split(':')
+                                .find(|s| s.starts_with("iqn."))
+                                .unwrap_or(part)
                         } else {
                             part
                         };
@@ -972,12 +1013,18 @@ impl IscsiTargetManager {
     /// Add LUN using tgtd
     async fn add_lun_tgtd(&self, tid: u32, lun: &IscsiLun) -> Result<()> {
         let mut args = vec![
-            "--lld".to_string(), "iscsi".to_string(),
-            "--mode".to_string(), "logicalunit".to_string(),
-            "--op".to_string(), "new".to_string(),
-            "--tid".to_string(), tid.to_string(),
-            "--lun".to_string(), lun.lun_id.to_string(),
-            "--backing-store".to_string(), lun.path.clone(),
+            "--lld".to_string(),
+            "iscsi".to_string(),
+            "--mode".to_string(),
+            "logicalunit".to_string(),
+            "--op".to_string(),
+            "new".to_string(),
+            "--tid".to_string(),
+            tid.to_string(),
+            "--lun".to_string(),
+            lun.lun_id.to_string(),
+            "--backing-store".to_string(),
+            lun.path.clone(),
         ];
 
         // Add type-specific options
@@ -1012,12 +1059,18 @@ impl IscsiTargetManager {
         if lun.read_only {
             let _ = Command::new("tgtadm")
                 .args([
-                    "--lld", "iscsi",
-                    "--mode", "logicalunit",
-                    "--op", "update",
-                    "--tid", &tid.to_string(),
-                    "--lun", &lun.lun_id.to_string(),
-                    "--params", "readonly=1",
+                    "--lld",
+                    "iscsi",
+                    "--mode",
+                    "logicalunit",
+                    "--op",
+                    "update",
+                    "--tid",
+                    &tid.to_string(),
+                    "--lun",
+                    &lun.lun_id.to_string(),
+                    "--params",
+                    "readonly=1",
                 ])
                 .output()
                 .await;
@@ -1040,13 +1093,22 @@ impl IscsiTargetManager {
         // Create backstore
         let backstore_cmd = match lun.lun_type {
             LunType::Block | LunType::Passthrough => {
-                format!("/backstores/{} create {} {}", backstore_type, backstore_name, lun.path)
+                format!(
+                    "/backstores/{} create {} {}",
+                    backstore_type, backstore_name, lun.path
+                )
             }
             LunType::File => {
-                format!("/backstores/{} create {} {} {}", backstore_type, backstore_name, lun.path, lun.size_bytes)
+                format!(
+                    "/backstores/{} create {} {} {}",
+                    backstore_type, backstore_name, lun.path, lun.size_bytes
+                )
             }
             LunType::Ramdisk => {
-                format!("/backstores/{} create {} {}", backstore_type, backstore_name, lun.size_bytes)
+                format!(
+                    "/backstores/{} create {} {}",
+                    backstore_type, backstore_name, lun.size_bytes
+                )
             }
         };
 
@@ -1060,7 +1122,10 @@ impl IscsiTargetManager {
             let stderr = String::from_utf8_lossy(&output.stderr);
             // Check if already exists
             if !stderr.contains("already exists") {
-                return Err(Error::Internal(format!("Failed to create backstore: {}", stderr)));
+                return Err(Error::Internal(format!(
+                    "Failed to create backstore: {}",
+                    stderr
+                )));
             }
         }
 
@@ -1092,11 +1157,16 @@ impl IscsiTargetManager {
 
                 let output = Command::new("tgtadm")
                     .args([
-                        "--lld", "iscsi",
-                        "--mode", "logicalunit",
-                        "--op", "delete",
-                        "--tid", &tid.to_string(),
-                        "--lun", &lun_id.to_string(),
+                        "--lld",
+                        "iscsi",
+                        "--mode",
+                        "logicalunit",
+                        "--op",
+                        "delete",
+                        "--tid",
+                        &tid.to_string(),
+                        "--lun",
+                        &lun_id.to_string(),
                     ])
                     .output()
                     .await
@@ -1127,14 +1197,20 @@ impl IscsiTargetManager {
     }
 
     /// Create a new LUN backing store (zvol or file)
-    pub async fn create_lun_backing(&self, name: &str, options: &CreateLunOptions) -> Result<String> {
+    pub async fn create_lun_backing(
+        &self,
+        name: &str,
+        options: &CreateLunOptions,
+    ) -> Result<String> {
         match options.lun_type {
             LunType::Block => {
                 // Create ZFS zvol
                 if let Some(ref pool) = options.zfs_pool {
                     self.create_zvol(pool, name, options).await
                 } else {
-                    Err(Error::Validation("ZFS pool required for block LUN".to_string()))
+                    Err(Error::Validation(
+                        "ZFS pool required for block LUN".to_string(),
+                    ))
                 }
             }
             LunType::File => {
@@ -1142,13 +1218,20 @@ impl IscsiTargetManager {
                 let dir = options.file_dir.as_deref().unwrap_or("/var/lib/iscsi");
                 self.create_file_lun(dir, name, options).await
             }
-            _ => Err(Error::Validation("Unsupported LUN type for creation".to_string())),
+            _ => Err(Error::Validation(
+                "Unsupported LUN type for creation".to_string(),
+            )),
         }
     }
 
     /// Create ZFS zvol for LUN
     #[cfg(feature = "nas-zfs")]
-    async fn create_zvol(&self, pool: &str, name: &str, options: &CreateLunOptions) -> Result<String> {
+    async fn create_zvol(
+        &self,
+        pool: &str,
+        name: &str,
+        options: &CreateLunOptions,
+    ) -> Result<String> {
         let zvol_name = format!("{}/iscsi-{}", pool, name);
         let size = format!("{}B", options.size_bytes);
 
@@ -1186,23 +1269,36 @@ impl IscsiTargetManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Failed to create zvol: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to create zvol: {}",
+                stderr
+            )));
         }
 
         Ok(format!("/dev/zvol/{}", zvol_name))
     }
 
     #[cfg(not(feature = "nas-zfs"))]
-    async fn create_zvol(&self, _pool: &str, _name: &str, _options: &CreateLunOptions) -> Result<String> {
+    async fn create_zvol(
+        &self,
+        _pool: &str,
+        _name: &str,
+        _options: &CreateLunOptions,
+    ) -> Result<String> {
         Err(Error::Internal("ZFS support not enabled".to_string()))
     }
 
     /// Create file-backed LUN
-    async fn create_file_lun(&self, dir: &str, name: &str, options: &CreateLunOptions) -> Result<String> {
+    async fn create_file_lun(
+        &self,
+        dir: &str,
+        name: &str,
+        options: &CreateLunOptions,
+    ) -> Result<String> {
         // Ensure directory exists
-        tokio::fs::create_dir_all(dir).await.map_err(|e| {
-            Error::Internal(format!("Failed to create directory: {}", e))
-        })?;
+        tokio::fs::create_dir_all(dir)
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to create directory: {}", e)))?;
 
         let path = format!("{}/{}.img", dir, name);
 
@@ -1216,7 +1312,10 @@ impl IscsiTargetManager {
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(Error::Internal(format!("Failed to create file: {}", stderr)));
+                return Err(Error::Internal(format!(
+                    "Failed to create file: {}",
+                    stderr
+                )));
             }
         } else {
             // Create pre-allocated file with fallocate
@@ -1242,7 +1341,10 @@ impl IscsiTargetManager {
 
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(Error::Internal(format!("Failed to create file: {}", stderr)));
+                    return Err(Error::Internal(format!(
+                        "Failed to create file: {}",
+                        stderr
+                    )));
                 }
             }
         }
@@ -1263,13 +1365,16 @@ impl IscsiTargetManager {
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(Error::Internal(format!("Failed to delete zvol: {}", stderr)));
+                return Err(Error::Internal(format!(
+                    "Failed to delete zvol: {}",
+                    stderr
+                )));
             }
         } else if std::path::Path::new(path).exists() {
             // File
-            tokio::fs::remove_file(path).await.map_err(|e| {
-                Error::Internal(format!("Failed to delete file: {}", e))
-            })?;
+            tokio::fs::remove_file(path)
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to delete file: {}", e)))?;
         }
 
         Ok(())
@@ -1296,11 +1401,16 @@ impl IscsiTargetManager {
     async fn set_acl_tgtd(&self, tid: u32, initiator: &str) -> Result<()> {
         let output = Command::new("tgtadm")
             .args([
-                "--lld", "iscsi",
-                "--mode", "target",
-                "--op", "bind",
-                "--tid", &tid.to_string(),
-                "--initiator-address", initiator,
+                "--lld",
+                "iscsi",
+                "--mode",
+                "target",
+                "--op",
+                "bind",
+                "--tid",
+                &tid.to_string(),
+                "--initiator-address",
+                initiator,
             ])
             .output()
             .await
@@ -1317,7 +1427,10 @@ impl IscsiTargetManager {
     /// Set ACL using LIO
     async fn set_acl_lio(&self, iqn: &str, initiator_iqn: &str) -> Result<()> {
         let output = Command::new("targetcli")
-            .args([&format!("/iscsi/{}/tpg1/acls create {}", iqn, initiator_iqn)])
+            .args([&format!(
+                "/iscsi/{}/tpg1/acls create {}",
+                iqn, initiator_iqn
+            )])
             .output()
             .await
             .map_err(|e| Error::Internal(format!("targetcli failed: {}", e)))?;
@@ -1338,11 +1451,16 @@ impl IscsiTargetManager {
 
                 let output = Command::new("tgtadm")
                     .args([
-                        "--lld", "iscsi",
-                        "--mode", "target",
-                        "--op", "unbind",
-                        "--tid", &tid.to_string(),
-                        "--initiator-address", initiator_iqn,
+                        "--lld",
+                        "iscsi",
+                        "--mode",
+                        "target",
+                        "--op",
+                        "unbind",
+                        "--tid",
+                        &tid.to_string(),
+                        "--initiator-address",
+                        initiator_iqn,
                     ])
                     .output()
                     .await
@@ -1357,7 +1475,10 @@ impl IscsiTargetManager {
             }
             IscsiBackend::Lio => {
                 let output = Command::new("targetcli")
-                    .args([&format!("/iscsi/{}/tpg1/acls delete {}", iqn, initiator_iqn)])
+                    .args([&format!(
+                        "/iscsi/{}/tpg1/acls delete {}",
+                        iqn, initiator_iqn
+                    )])
                     .output()
                     .await
                     .map_err(|e| Error::Internal(format!("targetcli failed: {}", e)))?;
@@ -1394,11 +1515,16 @@ impl IscsiTargetManager {
         // Create account
         let output = Command::new("tgtadm")
             .args([
-                "--lld", "iscsi",
-                "--mode", "account",
-                "--op", "new",
-                "--user", &chap.username,
-                "--password", &chap.password,
+                "--lld",
+                "iscsi",
+                "--mode",
+                "account",
+                "--op",
+                "new",
+                "--user",
+                &chap.username,
+                "--password",
+                &chap.password,
             ])
             .output()
             .await
@@ -1408,17 +1534,25 @@ impl IscsiTargetManager {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if !stderr.contains("already exists") {
-                return Err(Error::Internal(format!("Failed to create account: {}", stderr)));
+                return Err(Error::Internal(format!(
+                    "Failed to create account: {}",
+                    stderr
+                )));
             }
         }
 
         // Bind to target
         let mut args = vec![
-            "--lld".to_string(), "iscsi".to_string(),
-            "--mode".to_string(), "account".to_string(),
-            "--op".to_string(), "bind".to_string(),
-            "--tid".to_string(), tid.to_string(),
-            "--user".to_string(), chap.username.clone(),
+            "--lld".to_string(),
+            "iscsi".to_string(),
+            "--mode".to_string(),
+            "account".to_string(),
+            "--op".to_string(),
+            "bind".to_string(),
+            "--tid".to_string(),
+            tid.to_string(),
+            "--user".to_string(),
+            chap.username.clone(),
         ];
 
         if is_outgoing {
@@ -1433,7 +1567,10 @@ impl IscsiTargetManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Failed to bind account: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to bind account: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -1442,9 +1579,15 @@ impl IscsiTargetManager {
     /// Set CHAP using LIO
     async fn set_chap_lio(&self, iqn: &str, chap: &ChapAuth, is_outgoing: bool) -> Result<()> {
         let attr = if is_outgoing {
-            format!("set auth userid={} password={}", chap.username, chap.password)
+            format!(
+                "set auth userid={} password={}",
+                chap.username, chap.password
+            )
         } else {
-            format!("set auth userid={} password={}", chap.username, chap.password)
+            format!(
+                "set auth userid={} password={}",
+                chap.username, chap.password
+            )
         };
 
         let output = Command::new("targetcli")
@@ -1460,7 +1603,10 @@ impl IscsiTargetManager {
 
         // Enable authentication
         let _ = Command::new("targetcli")
-            .args([&format!("/iscsi/{}/tpg1 set attribute authentication=1", iqn)])
+            .args([&format!(
+                "/iscsi/{}/tpg1 set attribute authentication=1",
+                iqn
+            )])
             .output()
             .await;
 
@@ -1607,12 +1753,18 @@ impl IscsiTargetManager {
 
                 let output = Command::new("tgtadm")
                     .args([
-                        "--lld", "iscsi",
-                        "--mode", "conn",
-                        "--op", "delete",
-                        "--tid", &tid.to_string(),
-                        "--sid", "1", // Would need to find actual SID
-                        "--cid", "0",
+                        "--lld",
+                        "iscsi",
+                        "--mode",
+                        "conn",
+                        "--op",
+                        "delete",
+                        "--tid",
+                        &tid.to_string(),
+                        "--sid",
+                        "1", // Would need to find actual SID
+                        "--cid",
+                        "0",
                     ])
                     .output()
                     .await
@@ -1620,14 +1772,20 @@ impl IscsiTargetManager {
 
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(Error::Internal(format!("Failed to disconnect session: {}", stderr)));
+                    return Err(Error::Internal(format!(
+                        "Failed to disconnect session: {}",
+                        stderr
+                    )));
                 }
 
                 Ok(())
             }
             IscsiBackend::Lio => {
                 let output = Command::new("targetcli")
-                    .args([&format!("/iscsi/{}/tpg1/acls/{} delete", iqn, initiator_iqn)])
+                    .args([&format!(
+                        "/iscsi/{}/tpg1/acls/{} delete",
+                        iqn, initiator_iqn
+                    )])
                     .output()
                     .await
                     .map_err(|e| Error::Internal(format!("targetcli failed: {}", e)))?;
@@ -1651,7 +1809,8 @@ impl IscsiTargetManager {
                 crate::nas::services::manage_service(
                     &crate::nas::services::NasService::Tgtd,
                     crate::nas::services::ServiceAction::Start,
-                ).await
+                )
+                .await
             }
             IscsiBackend::Lio => {
                 // LIO uses target.service
@@ -1679,7 +1838,8 @@ impl IscsiTargetManager {
                 crate::nas::services::manage_service(
                     &crate::nas::services::NasService::Tgtd,
                     crate::nas::services::ServiceAction::Stop,
-                ).await
+                )
+                .await
             }
             IscsiBackend::Lio => {
                 let output = Command::new("systemctl")
@@ -1708,25 +1868,22 @@ impl IscsiTargetManager {
                     .await
                     .map(|s| s.success())
                     .unwrap_or(false)
-                    ||
-                Command::new("rc-service")
-                    .args(["tgtd", "status"])
-                    .output()
-                    .await
-                    .map(|o| {
-                        let stdout = String::from_utf8_lossy(&o.stdout);
-                        stdout.contains("started") || stdout.contains("running")
-                    })
-                    .unwrap_or(false)
+                    || Command::new("rc-service")
+                        .args(["tgtd", "status"])
+                        .output()
+                        .await
+                        .map(|o| {
+                            let stdout = String::from_utf8_lossy(&o.stdout);
+                            stdout.contains("started") || stdout.contains("running")
+                        })
+                        .unwrap_or(false)
             }
-            IscsiBackend::Lio => {
-                Command::new("systemctl")
-                    .args(["is-active", "--quiet", "target"])
-                    .status()
-                    .await
-                    .map(|s| s.success())
-                    .unwrap_or(false)
-            }
+            IscsiBackend::Lio => Command::new("systemctl")
+                .args(["is-active", "--quiet", "target"])
+                .status()
+                .await
+                .map(|s| s.success())
+                .unwrap_or(false),
         }
     }
 
@@ -1745,7 +1902,8 @@ impl IscsiTargetManager {
         };
 
         let total_luns: u32 = targets.iter().map(|t| t.luns.len() as u32).sum();
-        let total_size: u64 = targets.iter()
+        let total_size: u64 = targets
+            .iter()
             .flat_map(|t| t.luns.iter())
             .map(|l| l.size_bytes)
             .sum();
@@ -1784,9 +1942,9 @@ impl IscsiTargetManager {
             tokio::fs::create_dir_all(parent).await.ok();
         }
 
-        tokio::fs::write(&self.config_path, config.as_bytes()).await.map_err(|e| {
-            Error::Internal(format!("Failed to save config: {}", e))
-        })
+        tokio::fs::write(&self.config_path, config.as_bytes())
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to save config: {}", e)))
     }
 
     /// Save LIO configuration
@@ -1799,7 +1957,10 @@ impl IscsiTargetManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Failed to save config: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to save config: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -1817,7 +1978,10 @@ impl IscsiTargetManager {
 
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(Error::Internal(format!("Failed to restore config: {}", stderr)));
+                    return Err(Error::Internal(format!(
+                        "Failed to restore config: {}",
+                        stderr
+                    )));
                 }
 
                 Ok(())
@@ -1831,7 +1995,10 @@ impl IscsiTargetManager {
 
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(Error::Internal(format!("Failed to restore config: {}", stderr)));
+                    return Err(Error::Internal(format!(
+                        "Failed to restore config: {}",
+                        stderr
+                    )));
                 }
 
                 Ok(())

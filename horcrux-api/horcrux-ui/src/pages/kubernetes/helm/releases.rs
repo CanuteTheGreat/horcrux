@@ -6,9 +6,9 @@
 //! - Values inspection and modification
 //! - Release lifecycle management
 
+use crate::api::{self, HelmInstallRequest, HelmRelease, HelmValues};
 use leptos::*;
 use leptos_router::*;
-use crate::api::{self, HelmRelease, HelmValues, HelmInstallRequest};
 
 #[component]
 pub fn HelmReleasesPage() -> impl IntoView {
@@ -47,7 +47,11 @@ pub fn HelmReleasesPage() -> impl IntoView {
 
             set_loading.set(true);
             spawn_local(async move {
-                let ns = if namespace.is_empty() { None } else { Some(namespace) };
+                let ns = if namespace.is_empty() {
+                    None
+                } else {
+                    Some(namespace)
+                };
                 match api::get_helm_releases(&cluster_id, ns.as_deref()).await {
                     Ok(data) => {
                         set_releases.set(data);
@@ -73,7 +77,8 @@ pub fn HelmReleasesPage() -> impl IntoView {
                     }
                 },
                 std::time::Duration::from_secs(15),
-            ).ok();
+            )
+            .ok();
         }
     });
 
@@ -87,15 +92,19 @@ pub fn HelmReleasesPage() -> impl IntoView {
         let search = search_filter.get().to_lowercase();
         let status = status_filter.get();
 
-        releases.get()
+        releases
+            .get()
             .into_iter()
             .filter(|release| {
                 let name_match = search.is_empty() || release.name.to_lowercase().contains(&search);
-                let namespace_match = search.is_empty() || release.namespace.to_lowercase().contains(&search);
-                let chart_match = search.is_empty() || release.chart.to_lowercase().contains(&search);
+                let namespace_match =
+                    search.is_empty() || release.namespace.to_lowercase().contains(&search);
+                let chart_match =
+                    search.is_empty() || release.chart.to_lowercase().contains(&search);
                 let search_match = name_match || namespace_match || chart_match;
 
-                let status_match = status.is_empty() || release.status.eq_ignore_ascii_case(&status);
+                let status_match =
+                    status.is_empty() || release.status.eq_ignore_ascii_case(&status);
 
                 search_match && status_match
             })
@@ -111,13 +120,18 @@ pub fn HelmReleasesPage() -> impl IntoView {
             set_show_values_modal.set(true);
 
             spawn_local(async move {
-                match api::get_helm_release_values(&cluster_id, &release.namespace, &release.name).await {
+                match api::get_helm_release_values(&cluster_id, &release.namespace, &release.name)
+                    .await
+                {
                     Ok(values) => {
                         set_release_values.set(Some(values));
                         set_error.set(None);
                     }
                     Err(e) => {
-                        set_error.set(Some(format!("Failed to load release values: {}", e.message)));
+                        set_error.set(Some(format!(
+                            "Failed to load release values: {}",
+                            e.message
+                        )));
                     }
                 }
             });
@@ -133,13 +147,18 @@ pub fn HelmReleasesPage() -> impl IntoView {
             set_show_history_modal.set(true);
 
             spawn_local(async move {
-                match api::get_helm_release_history(&cluster_id, &release.namespace, &release.name).await {
+                match api::get_helm_release_history(&cluster_id, &release.namespace, &release.name)
+                    .await
+                {
                     Ok(history) => {
                         set_release_history.set(history);
                         set_error.set(None);
                     }
                     Err(e) => {
-                        set_error.set(Some(format!("Failed to load release history: {}", e.message)));
+                        set_error.set(Some(format!(
+                            "Failed to load release history: {}",
+                            e.message
+                        )));
                     }
                 }
             });
@@ -153,12 +172,20 @@ pub fn HelmReleasesPage() -> impl IntoView {
 
         // Load current values for editing
         spawn_local(async move {
-            match api::get_helm_release_values(&cluster_id(), &release.namespace, &release.name).await {
+            match api::get_helm_release_values(&cluster_id(), &release.namespace, &release.name)
+                .await
+            {
                 Ok(values) => {
-                    set_upgrade_values.set(serde_json::to_string_pretty(&values.user_supplied_values).unwrap_or_default());
+                    set_upgrade_values.set(
+                        serde_json::to_string_pretty(&values.user_supplied_values)
+                            .unwrap_or_default(),
+                    );
                 }
                 Err(e) => {
-                    set_error.set(Some(format!("Failed to load current values: {}", e.message)));
+                    set_error.set(Some(format!(
+                        "Failed to load current values: {}",
+                        e.message
+                    )));
                 }
             }
         });
@@ -176,7 +203,11 @@ pub fn HelmReleasesPage() -> impl IntoView {
                 None => return,
             };
 
-            let version = if new_chart_version.get().is_empty() { None } else { Some(new_chart_version.get()) };
+            let version = if new_chart_version.get().is_empty() {
+                None
+            } else {
+                Some(new_chart_version.get())
+            };
             let values_text = upgrade_values.get();
 
             let values = if values_text.trim().is_empty() {
@@ -203,7 +234,14 @@ pub fn HelmReleasesPage() -> impl IntoView {
                     timeout: Some("300s".to_string()),
                 };
 
-                match api::upgrade_helm_release(&cluster_id, &release.namespace, &release.name, request).await {
+                match api::upgrade_helm_release(
+                    &cluster_id,
+                    &release.namespace,
+                    &release.name,
+                    request,
+                )
+                .await
+                {
                     Ok(_) => {
                         set_show_upgrade_modal.set(false);
                         load_releases();
@@ -224,7 +262,14 @@ pub fn HelmReleasesPage() -> impl IntoView {
         move |release: HelmRelease, revision: u32| {
             let cluster_id = cluster_id();
             spawn_local(async move {
-                match api::rollback_helm_release(&cluster_id, &release.namespace, &release.name, revision).await {
+                match api::rollback_helm_release(
+                    &cluster_id,
+                    &release.namespace,
+                    &release.name,
+                    revision,
+                )
+                .await
+                {
                     Ok(_) => {
                         load_releases();
                         set_show_history_modal.set(false);
@@ -244,7 +289,9 @@ pub fn HelmReleasesPage() -> impl IntoView {
         move |release: HelmRelease| {
             let cluster_id = cluster_id();
             spawn_local(async move {
-                match api::uninstall_helm_release(&cluster_id, &release.namespace, &release.name).await {
+                match api::uninstall_helm_release(&cluster_id, &release.namespace, &release.name)
+                    .await
+                {
                     Ok(()) => {
                         load_releases();
                         set_error.set(None);
@@ -258,14 +305,12 @@ pub fn HelmReleasesPage() -> impl IntoView {
     };
 
     // Get status badge class
-    let status_class = |status: &str| {
-        match status {
-            "deployed" => "bg-green-100 text-green-800",
-            "pending-install" | "pending-upgrade" => "bg-yellow-100 text-yellow-800",
-            "failed" => "bg-red-100 text-red-800",
-            "uninstalled" => "bg-gray-100 text-gray-800",
-            _ => "bg-blue-100 text-blue-800",
-        }
+    let status_class = |status: &str| match status {
+        "deployed" => "bg-green-100 text-green-800",
+        "pending-install" | "pending-upgrade" => "bg-yellow-100 text-yellow-800",
+        "failed" => "bg-red-100 text-red-800",
+        "uninstalled" => "bg-gray-100 text-gray-800",
+        _ => "bg-blue-100 text-blue-800",
     };
 
     view! {

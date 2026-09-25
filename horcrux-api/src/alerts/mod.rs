@@ -1,8 +1,7 @@
+pub mod notifications;
 ///! Alert system module
 ///! Provides threshold-based monitoring alerts with email and webhook notifications
-
 pub mod rules;
-pub mod notifications;
 
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
@@ -10,9 +9,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-#[allow(unused_imports)]
-pub use rules::{AlertRule, MetricType, AlertCondition, ComparisonOperator};
 pub use notifications::NotificationChannel;
+#[allow(unused_imports)]
+pub use rules::{AlertCondition, AlertRule, ComparisonOperator, MetricType};
 
 /// Alert severity level
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,8 +26,8 @@ pub enum AlertSeverity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AlertStatus {
-    Firing,      // Alert condition is currently true
-    Resolved,    // Alert condition is no longer true
+    Firing,       // Alert condition is currently true
+    Resolved,     // Alert condition is no longer true
     Acknowledged, // Alert has been acknowledged by admin
 }
 
@@ -41,10 +40,10 @@ pub struct Alert {
     pub severity: AlertSeverity,
     pub status: AlertStatus,
     pub message: String,
-    pub target: String,         // VM ID, node name, etc.
+    pub target: String, // VM ID, node name, etc.
     pub metric_value: f64,
     pub threshold: f64,
-    pub fired_at: i64,          // Unix timestamp when alert fired
+    pub fired_at: i64,            // Unix timestamp when alert fired
     pub resolved_at: Option<i64>, // Unix timestamp when resolved
     pub acknowledged_at: Option<i64>,
     pub acknowledged_by: Option<String>,
@@ -75,9 +74,10 @@ impl AlertManager {
         let mut rules = self.rules.write().await;
 
         if rules.contains_key(&rule.id) {
-            return Err(horcrux_common::Error::InvalidConfig(
-                format!("Alert rule {} already exists", rule.id)
-            ));
+            return Err(horcrux_common::Error::InvalidConfig(format!(
+                "Alert rule {} already exists",
+                rule.id
+            )));
         }
 
         rules.insert(rule.id.clone(), rule);
@@ -87,8 +87,9 @@ impl AlertManager {
     /// Remove an alert rule
     pub async fn remove_rule(&self, rule_id: &str) -> Result<()> {
         let mut rules = self.rules.write().await;
-        rules.remove(rule_id)
-            .ok_or_else(|| horcrux_common::Error::System(format!("Alert rule {} not found", rule_id)))?;
+        rules.remove(rule_id).ok_or_else(|| {
+            horcrux_common::Error::System(format!("Alert rule {} not found", rule_id))
+        })?;
         Ok(())
     }
 
@@ -224,7 +225,12 @@ impl AlertManager {
         alert.acknowledged_at = Some(chrono::Utc::now().timestamp());
         alert.acknowledged_by = Some(user.to_string());
 
-        tracing::info!("Alert acknowledged by {}: {} for {}", user, alert.rule_name, alert.target);
+        tracing::info!(
+            "Alert acknowledged by {}: {} for {}",
+            user,
+            alert.rule_name,
+            alert.target
+        );
 
         Ok(())
     }
@@ -240,11 +246,7 @@ impl AlertManager {
         let history = self.alert_history.read().await;
         let limit = limit.unwrap_or(100).min(self.max_history);
 
-        history.iter()
-            .rev()
-            .take(limit)
-            .cloned()
-            .collect()
+        history.iter().rev().take(limit).cloned().collect()
     }
 
     /// Add a notification channel
@@ -266,9 +268,21 @@ impl AlertManager {
 
         for channel in channels.iter() {
             let (enabled, min_severity) = match channel {
-                NotificationChannel::Email { enabled, min_severity, .. } => (enabled, min_severity),
-                NotificationChannel::Webhook { enabled, min_severity, .. } => (enabled, min_severity),
-                NotificationChannel::Syslog { enabled, min_severity, .. } => (enabled, min_severity),
+                NotificationChannel::Email {
+                    enabled,
+                    min_severity,
+                    ..
+                } => (enabled, min_severity),
+                NotificationChannel::Webhook {
+                    enabled,
+                    min_severity,
+                    ..
+                } => (enabled, min_severity),
+                NotificationChannel::Syslog {
+                    enabled,
+                    min_severity,
+                    ..
+                } => (enabled, min_severity),
             };
 
             if !enabled {
@@ -306,7 +320,10 @@ impl AlertManager {
     fn should_notify(min_severity: &AlertSeverity, alert_severity: &AlertSeverity) -> bool {
         match min_severity {
             AlertSeverity::Info => true,
-            AlertSeverity::Warning => matches!(alert_severity, AlertSeverity::Warning | AlertSeverity::Critical),
+            AlertSeverity::Warning => matches!(
+                alert_severity,
+                AlertSeverity::Warning | AlertSeverity::Critical
+            ),
             AlertSeverity::Critical => matches!(alert_severity, AlertSeverity::Critical),
         }
     }
@@ -326,8 +343,17 @@ mod tests {
 
     #[test]
     fn test_severity_notification() {
-        assert!(AlertManager::should_notify(&AlertSeverity::Info, &AlertSeverity::Critical));
-        assert!(AlertManager::should_notify(&AlertSeverity::Warning, &AlertSeverity::Critical));
-        assert!(!AlertManager::should_notify(&AlertSeverity::Critical, &AlertSeverity::Warning));
+        assert!(AlertManager::should_notify(
+            &AlertSeverity::Info,
+            &AlertSeverity::Critical
+        ));
+        assert!(AlertManager::should_notify(
+            &AlertSeverity::Warning,
+            &AlertSeverity::Critical
+        ));
+        assert!(!AlertManager::should_notify(
+            &AlertSeverity::Critical,
+            &AlertSeverity::Warning
+        ));
     }
 }

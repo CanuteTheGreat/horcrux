@@ -1,11 +1,10 @@
-///! Authentication and authorization module
-
-pub mod pam;
 pub mod ldap;
-pub mod session;
-pub mod rbac;
 pub mod oidc;
+///! Authentication and authorization module
+pub mod pam;
 pub mod password;
+pub mod rbac;
+pub mod session;
 
 use horcrux_common::auth::*;
 use horcrux_common::Result;
@@ -104,15 +103,21 @@ impl AuthManager {
 
         // Authenticate based on realm
         let authenticated = match realm.as_str() {
-            "pam" => self.pam.authenticate(&request.username, &request.password).await?,
+            "pam" => {
+                self.pam
+                    .authenticate(&request.username, &request.password)
+                    .await?
+            }
             "ldap" => {
                 let realms = self.realms.read().await;
-                let realm_config = realms
-                    .get("ldap")
-                    .ok_or_else(|| horcrux_common::Error::System("LDAP realm not configured".to_string()))?;
+                let realm_config = realms.get("ldap").ok_or_else(|| {
+                    horcrux_common::Error::System("LDAP realm not configured".to_string())
+                })?;
 
                 if let RealmConfig::Ldap(config) = &realm_config.config {
-                    self.ldap.authenticate(&request.username, &request.password, config).await?
+                    self.ldap
+                        .authenticate(&request.username, &request.password, config)
+                        .await?
                 } else {
                     false
                 }
@@ -141,7 +146,10 @@ impl AuthManager {
         }
 
         // Create session
-        let session = self.session_manager.create_session(&user.id, &user.username, &realm).await;
+        let session = self
+            .session_manager
+            .create_session(&user.id, &user.username, &realm)
+            .await;
         let csrf_token = self.session_manager.generate_csrf_token();
 
         let mut sessions = self.sessions.write().await;
@@ -210,7 +218,10 @@ impl AuthManager {
         let key = format!("{}@{}", username, realm);
 
         if users.remove(&key).is_none() {
-            return Err(horcrux_common::Error::System(format!("User {} not found", key)));
+            return Err(horcrux_common::Error::System(format!(
+                "User {} not found",
+                key
+            )));
         }
 
         Ok(())
@@ -269,13 +280,17 @@ impl AuthManager {
             .ok_or_else(|| horcrux_common::Error::System("Invalid API token".to_string()))?;
 
         if !token.enabled {
-            return Err(horcrux_common::Error::System("API token is disabled".to_string()));
+            return Err(horcrux_common::Error::System(
+                "API token is disabled".to_string(),
+            ));
         }
 
         if let Some(expire) = token.expire {
             let now = chrono::Utc::now().timestamp();
             if expire < now {
-                return Err(horcrux_common::Error::System("API token expired".to_string()));
+                return Err(horcrux_common::Error::System(
+                    "API token expired".to_string(),
+                ));
             }
         }
 
@@ -304,7 +319,10 @@ impl AuthManager {
     pub async fn delete_user(&self, user_id: &str) -> Result<()> {
         let mut users = self.users.write().await;
         if users.remove(user_id).is_none() {
-            return Err(horcrux_common::Error::System(format!("User {} not found", user_id)));
+            return Err(horcrux_common::Error::System(format!(
+                "User {} not found",
+                user_id
+            )));
         }
         Ok(())
     }

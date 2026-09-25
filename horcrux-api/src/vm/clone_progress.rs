@@ -180,7 +180,7 @@ impl CloneJob {
 /// Clone job manager
 pub struct CloneJobManager {
     jobs: Arc<RwLock<HashMap<String, CloneJob>>>,
-    _max_completed_jobs: usize,  // Reserved for configurable job history limit
+    _max_completed_jobs: usize, // Reserved for configurable job history limit
 }
 
 impl CloneJobManager {
@@ -225,9 +225,7 @@ impl CloneJobManager {
     pub async fn list_active_jobs(&self) -> Vec<CloneJob> {
         let jobs = self.jobs.read().await;
         jobs.values()
-            .filter(|job| {
-                matches!(job.state, CloneJobState::Queued | CloneJobState::Running)
-            })
+            .filter(|job| matches!(job.state, CloneJobState::Queued | CloneJobState::Running))
             .cloned()
             .collect()
     }
@@ -429,10 +427,7 @@ impl CloneJobManager {
     }
 
     /// Clean up old completed jobs (internal, requires write lock)
-    async fn cleanup_old_jobs_internal(
-        &self,
-        jobs: &mut HashMap<String, CloneJob>,
-    ) {
+    async fn cleanup_old_jobs_internal(&self, jobs: &mut HashMap<String, CloneJob>) {
         let mut completed_jobs: Vec<_> = jobs
             .values()
             .filter(|job| {

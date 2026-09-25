@@ -1,7 +1,6 @@
 ///! RBAC (Role-Based Access Control) middleware
 ///!
 ///! Enforces permissions based on user roles and resource paths
-
 use axum::{
     extract::{Request, State},
     http::StatusCode,
@@ -42,7 +41,9 @@ pub async fn rbac_middleware(
     // Verify the user is authenticated (authentication happens in auth middleware)
     // Resource-specific RBAC will be enforced in individual handlers using check_user_privilege()
     // Get authenticated user from request extensions (set by auth middleware)
-    let _auth_user = request.extensions().get::<AuthUser>()
+    let _auth_user = request
+        .extensions()
+        .get::<AuthUser>()
         .ok_or_else(|| RbacError {
             error: "unauthenticated".to_string(),
             message: "Authentication required before RBAC check".to_string(),
@@ -77,7 +78,8 @@ pub async fn check_user_privilege(
 
     // Check permission using RBAC manager
     let rbac = crate::auth::rbac::RbacManager::new();
-    let has_permission = rbac.check_permission(&user, &roles, resource_path, required_privilege)
+    let has_permission = rbac
+        .check_permission(&user, &roles, resource_path, required_privilege)
         .await
         .map_err(|e| RbacError {
             error: "rbac_check_failed".to_string(),
@@ -152,10 +154,7 @@ fn get_default_roles() -> std::collections::HashMap<String, horcrux_common::auth
             description: "Basic VM access (start/stop/view)".to_string(),
             permissions: vec![Permission {
                 path: "/api/vms/**".to_string(),
-                privileges: vec![
-                    Privilege::VmPowerMgmt,
-                    Privilege::VmAudit,
-                ],
+                privileges: vec![Privilege::VmPowerMgmt, Privilege::VmAudit],
             }],
         },
     );
@@ -166,16 +165,14 @@ fn get_default_roles() -> std::collections::HashMap<String, horcrux_common::auth
         Role {
             name: "StorageAdmin".to_string(),
             description: "Storage pool and datastore management".to_string(),
-            permissions: vec![
-                Permission {
-                    path: "/api/storage/**".to_string(),
-                    privileges: vec![
-                        Privilege::DatastoreAllocate,
-                        Privilege::DatastoreAudit,
-                        Privilege::PoolAllocate,
-                    ],
-                },
-            ],
+            permissions: vec![Permission {
+                path: "/api/storage/**".to_string(),
+                privileges: vec![
+                    Privilege::DatastoreAllocate,
+                    Privilege::DatastoreAudit,
+                    Privilege::PoolAllocate,
+                ],
+            }],
         },
     );
 
@@ -204,9 +201,14 @@ fn get_default_roles() -> std::collections::HashMap<String, horcrux_common::auth
 #[macro_export]
 macro_rules! require_privilege {
     ($state:expr, $auth_user:expr, $resource:expr, $privilege:expr) => {
-        if !$crate::middleware::rbac::check_user_privilege(&$state, &$auth_user, $resource, $privilege)
-            .await
-            .map_err(|_| $crate::ApiError::Forbidden("Insufficient permissions".to_string()))?
+        if !$crate::middleware::rbac::check_user_privilege(
+            &$state,
+            &$auth_user,
+            $resource,
+            $privilege,
+        )
+        .await
+        .map_err(|_| $crate::ApiError::Forbidden("Insufficient permissions".to_string()))?
         {
             return Err($crate::ApiError::Forbidden(format!(
                 "User does not have privilege '{:?}' for resource '{}'",

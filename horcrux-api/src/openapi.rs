@@ -1,7 +1,6 @@
 ///! OpenAPI/Swagger UI integration
 ///!
 ///! Provides interactive API documentation at /api/docs
-
 use axum::{
     response::{Html, IntoResponse},
     routing::get,
@@ -13,10 +12,7 @@ pub async fn serve_openapi_spec() -> impl IntoResponse {
     // Read the OpenAPI YAML file
     let openapi_yaml = include_str!("../../docs/openapi.yaml");
 
-    (
-        [("content-type", "application/x-yaml")],
-        openapi_yaml
-    )
+    ([("content-type", "application/x-yaml")], openapi_yaml)
 }
 
 /// Serve OpenAPI specification in JSON format
@@ -29,10 +25,7 @@ pub async fn serve_openapi_json() -> impl IntoResponse {
         "swagger_ui": "/api/docs"
     }"#;
 
-    (
-        [("content-type", "application/json")],
-        json
-    )
+    ([("content-type", "application/json")], json)
 }
 
 /// Serve Swagger UI HTML page

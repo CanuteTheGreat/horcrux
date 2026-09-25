@@ -1,5 +1,5 @@
-use leptos::*;
 use crate::api;
+use leptos::*;
 
 #[component]
 pub fn Dashboard() -> impl IntoView {
@@ -61,7 +61,7 @@ pub fn Dashboard() -> impl IntoView {
                 {move || node_metrics.get().map(|metrics| view! {
                     <div class="system-info">
                         <p><strong>"Hostname:"</strong> " " {&metrics.hostname}</p>
-                        <p><strong>"Memory:"</strong> " " {format!("{} / {} GB", 
+                        <p><strong>"Memory:"</strong> " " {format!("{} / {} GB",
                             metrics.memory_used / 1024 / 1024 / 1024,
                             metrics.memory_total / 1024 / 1024 / 1024
                         )}</p>
@@ -101,7 +101,7 @@ fn format_uptime(seconds: u64) -> String {
     let days = seconds / 86400;
     let hours = (seconds % 86400) / 3600;
     let mins = (seconds % 3600) / 60;
-    
+
     if days > 0 {
         format!("{}d {}h {}m", days, hours, mins)
     } else if hours > 0 {

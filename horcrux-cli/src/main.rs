@@ -1,7 +1,6 @@
 ///! Horcrux CLI
 ///!
 ///! Command-line interface for Horcrux virtualization platform
-
 mod api;
 mod commands;
 mod config;
@@ -930,7 +929,8 @@ async fn main() -> Result<()> {
             commands::clone::handle_clone_command(command, &api_client, &cli.output).await?
         }
         Commands::Replication { command } => {
-            commands::replication::handle_replication_command(command, &api_client, &cli.output).await?
+            commands::replication::handle_replication_command(command, &api_client, &cli.output)
+                .await?
         }
         Commands::Nas { command } => {
             commands::nas::handle_nas_command(command, &api_client, &cli.output).await?

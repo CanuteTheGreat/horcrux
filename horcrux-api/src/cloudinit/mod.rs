@@ -1,6 +1,5 @@
 ///! Cloud-init integration for automated VM provisioning
 ///! Generates cloud-init ISO images with user-data and meta-data
-
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -20,8 +19,8 @@ pub struct CloudInitConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserConfig {
     pub name: String,
-    pub password: Option<String>,  // Hashed password
-    pub plain_password: Option<String>,  // Will be hashed
+    pub password: Option<String>,       // Hashed password
+    pub plain_password: Option<String>, // Will be hashed
     pub sudo: bool,
     pub shell: Option<String>,
 }
@@ -29,16 +28,16 @@ pub struct UserConfig {
 /// Network configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkConfig {
-    pub version: u8,  // Version 1 or 2
+    pub version: u8, // Version 1 or 2
     pub ethernets: Vec<EthernetConfig>,
 }
 
 /// Ethernet interface configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EthernetConfig {
-    pub name: String,  // e.g., "eth0"
+    pub name: String, // e.g., "eth0"
     pub dhcp4: bool,
-    pub addresses: Vec<String>,  // CIDR notation
+    pub addresses: Vec<String>, // CIDR notation
     pub gateway4: Option<String>,
     pub nameservers: Vec<String>,
 }

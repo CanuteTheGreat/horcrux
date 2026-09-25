@@ -1,6 +1,5 @@
 ///! Corosync integration for cluster management
 ///! Corosync provides the cluster communication layer and quorum
-
 use super::node::Node;
 use horcrux_common::Result;
 use tokio::process::Command;
@@ -103,9 +102,7 @@ impl CorosyncManager {
             .arg("-s")
             .output()
             .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to check quorum: {}", e))
-            })?;
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to check quorum: {}", e)))?;
 
         if !output.status.success() {
             return Ok(false);

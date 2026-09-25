@@ -3,7 +3,6 @@
 ///!
 ///! Note: This module is future-ready but not yet integrated into the main API.
 ///! It will be activated when LXD VM management is added to the platform.
-
 use super::QemuVm;
 use horcrux_common::{Result, VmConfig, VmStatus};
 use serde::{Deserialize, Serialize};
@@ -66,7 +65,10 @@ impl LxdManager {
             name: config.name.clone(),
             memory: config.memory,
             cpus: config.cpus,
-            disk_path: std::path::PathBuf::from(format!("/var/lib/lxd/virtual-machines/{}", config.name)),
+            disk_path: std::path::PathBuf::from(format!(
+                "/var/lib/lxd/virtual-machines/{}",
+                config.name
+            )),
             disk_size: config.disk_size,
             status: VmStatus::Stopped,
             _pid: None,
@@ -89,7 +91,9 @@ impl LxdManager {
             .arg(&vm.name)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to run lxc start: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run lxc start: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -151,7 +155,9 @@ impl LxdManager {
             .arg(&vm.name)
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to run lxc delete: {}", e)))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run lxc delete: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

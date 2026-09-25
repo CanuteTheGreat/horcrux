@@ -10,22 +10,22 @@ use std::io;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-#[cfg(feature = "qemu")]
-use tracing::{debug, error};
 #[cfg(not(feature = "qemu"))]
 use tracing::warn;
+#[cfg(feature = "qemu")]
+use tracing::{debug, error};
 
 /// VM metrics from libvirt
 #[derive(Debug, Clone)]
 pub struct VmMetrics {
-    pub cpu_time: u64,           // CPU time in nanoseconds
-    pub cpu_usage_percent: f64,  // CPU usage percentage
-    pub memory_actual: u64,      // Actual memory usage in bytes
-    pub memory_rss: u64,         // Resident set size in bytes
-    pub disk_read_bytes: u64,    // Disk read bytes
-    pub disk_write_bytes: u64,   // Disk write bytes
-    pub network_rx_bytes: u64,   // Network receive bytes
-    pub network_tx_bytes: u64,   // Network transmit bytes
+    pub cpu_time: u64,          // CPU time in nanoseconds
+    pub cpu_usage_percent: f64, // CPU usage percentage
+    pub memory_actual: u64,     // Actual memory usage in bytes
+    pub memory_rss: u64,        // Resident set size in bytes
+    pub disk_read_bytes: u64,   // Disk read bytes
+    pub disk_write_bytes: u64,  // Disk write bytes
+    pub network_rx_bytes: u64,  // Network receive bytes
+    pub network_tx_bytes: u64,  // Network transmit bytes
 }
 
 /// Previous VM metrics for rate calculation

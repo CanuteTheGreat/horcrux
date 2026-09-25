@@ -6,20 +6,22 @@
 //! - Restart and delete operations
 //! - Deployment history and rollback
 
+use crate::api::{self, DeploymentCondition, DeploymentReplicas, KubernetesDeployment};
 use leptos::*;
 use leptos_router::*;
-use crate::api::{self, KubernetesDeployment, DeploymentReplicas, DeploymentCondition};
 
 #[component]
 pub fn DeploymentsPage() -> impl IntoView {
     let params = use_params_map();
     let cluster_id = move || params.with(|p| p.get("cluster_id").cloned().unwrap_or_default());
-    let namespace = move || params.with(|p| p.get("namespace").cloned().unwrap_or("default".to_string()));
+    let namespace =
+        move || params.with(|p| p.get("namespace").cloned().unwrap_or("default".to_string()));
 
     let (deployments, set_deployments) = create_signal::<Vec<KubernetesDeployment>>(vec![]);
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal::<Option<String>>(None);
-    let (selected_deployment, set_selected_deployment) = create_signal::<Option<KubernetesDeployment>>(None);
+    let (selected_deployment, set_selected_deployment) =
+        create_signal::<Option<KubernetesDeployment>>(None);
     let (show_scale_modal, set_show_scale_modal) = create_signal(false);
     let (scale_replicas, set_scale_replicas) = create_signal(1u32);
     let (scaling, set_scaling) = create_signal(false);
@@ -64,7 +66,8 @@ pub fn DeploymentsPage() -> impl IntoView {
                     }
                 },
                 std::time::Duration::from_secs(15),
-            ).ok();
+            )
+            .ok();
         }
     });
 
@@ -77,7 +80,8 @@ pub fn DeploymentsPage() -> impl IntoView {
     let filtered_deployments = move || {
         let search = search_filter.get().to_lowercase();
 
-        deployments.get()
+        deployments
+            .get()
             .into_iter()
             .filter(|deployment| {
                 search.is_empty() || deployment.name.to_lowercase().contains(&search)
@@ -95,7 +99,9 @@ pub fn DeploymentsPage() -> impl IntoView {
             set_scaling.set(true);
 
             spawn_local(async move {
-                match api::scale_deployment(&cluster_id, &namespace, &deployment_name, replicas).await {
+                match api::scale_deployment(&cluster_id, &namespace, &deployment_name, replicas)
+                    .await
+                {
                     Ok(()) => {
                         set_show_scale_modal.set(false);
                         load_deployments();
@@ -139,7 +145,9 @@ pub fn DeploymentsPage() -> impl IntoView {
             let cluster_id = cluster_id();
             let namespace = namespace();
             spawn_local(async move {
-                if let Err(e) = api::delete_deployment(&cluster_id, &namespace, &deployment_name).await {
+                if let Err(e) =
+                    api::delete_deployment(&cluster_id, &namespace, &deployment_name).await
+                {
                     set_error.set(Some(format!("Failed to delete deployment: {}", e.message)));
                 } else {
                     load_deployments();
@@ -153,7 +161,10 @@ pub fn DeploymentsPage() -> impl IntoView {
         if replicas.ready == replicas.desired {
             format!("{}/{}", replicas.ready, replicas.desired)
         } else {
-            format!("{}/{} ({})", replicas.ready, replicas.desired, replicas.current)
+            format!(
+                "{}/{} ({})",
+                replicas.ready, replicas.desired, replicas.current
+            )
         }
     };
 

@@ -1,8 +1,10 @@
 ///! noVNC WebSocket proxy implementation
 ///! Provides WebSocket proxy for VNC connections using Axum WebSocket support
-
 use axum::{
-    extract::{ws::{Message, WebSocket}, Path, State, WebSocketUpgrade},
+    extract::{
+        ws::{Message, WebSocket},
+        Path, State, WebSocketUpgrade,
+    },
     response::Response,
 };
 use futures::{SinkExt, StreamExt}; // For split(), send(), and recv() methods
@@ -50,7 +52,10 @@ async fn handle_vnc_connection(ws_socket: WebSocket, vnc_port: u16) {
     let vnc_stream = match TcpStream::connect(format!("127.0.0.1:{}", vnc_port)).await {
         Ok(stream) => stream,
         Err(e) => {
-            error!("Failed to connect to VNC server on port {}: {}", vnc_port, e);
+            error!(
+                "Failed to connect to VNC server on port {}: {}",
+                vnc_port, e
+            );
             return;
         }
     };
@@ -130,7 +135,10 @@ async fn handle_vnc_connection(ws_socket: WebSocket, vnc_port: u16) {
         }
     }
 
-    info!("VNC WebSocket proxy connection closed for port {}", vnc_port);
+    info!(
+        "VNC WebSocket proxy connection closed for port {}",
+        vnc_port
+    );
 }
 
 /// Get noVNC client HTML page

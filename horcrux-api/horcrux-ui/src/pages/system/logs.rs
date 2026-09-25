@@ -1,6 +1,6 @@
+use crate::api::*;
 use leptos::*;
 use wasm_bindgen::JsCast;
-use crate::api::*;
 
 #[component]
 pub fn SystemLogsPage() -> impl IntoView {
@@ -20,9 +20,21 @@ pub fn SystemLogsPage() -> impl IntoView {
         set_error_message.set(None);
 
         let filters = LogFilters {
-            level: if log_level.get() == "all" { None } else { Some(log_level.get()) },
-            service: if service_filter.get() == "all" { None } else { Some(service_filter.get()) },
-            search: if search_query.get().is_empty() { None } else { Some(search_query.get()) },
+            level: if log_level.get() == "all" {
+                None
+            } else {
+                Some(log_level.get())
+            },
+            service: if service_filter.get() == "all" {
+                None
+            } else {
+                Some(service_filter.get())
+            },
+            search: if search_query.get().is_empty() {
+                None
+            } else {
+                Some(search_query.get())
+            },
             limit: Some(lines_limit.get()),
         };
 
@@ -58,9 +70,21 @@ pub fn SystemLogsPage() -> impl IntoView {
             set_error_message.set(None);
 
             let filters = LogFilters {
-                level: if log_level.get() == "all" { None } else { Some(log_level.get()) },
-                service: if service_filter.get() == "all" { None } else { Some(service_filter.get()) },
-                search: if search_query.get().is_empty() { None } else { Some(search_query.get()) },
+                level: if log_level.get() == "all" {
+                    None
+                } else {
+                    Some(log_level.get())
+                },
+                service: if service_filter.get() == "all" {
+                    None
+                } else {
+                    Some(service_filter.get())
+                },
+                search: if search_query.get().is_empty() {
+                    None
+                } else {
+                    Some(search_query.get())
+                },
                 limit: None, // Export all matching logs
             };
 
@@ -106,11 +130,16 @@ pub fn SystemLogsPage() -> impl IntoView {
 
     let format_timestamp = |timestamp: &str| -> String {
         // Format the timestamp for display (assuming ISO format)
-        timestamp.chars().take(19).collect::<String>().replace("T", " ")
+        timestamp
+            .chars()
+            .take(19)
+            .collect::<String>()
+            .replace("T", " ")
     };
 
     let get_service_list = move || -> Vec<String> {
-        let mut services: Vec<String> = logs.get()
+        let mut services: Vec<String> = logs
+            .get()
             .iter()
             .filter_map(|log| log.service.clone())
             .collect::<std::collections::HashSet<_>>()

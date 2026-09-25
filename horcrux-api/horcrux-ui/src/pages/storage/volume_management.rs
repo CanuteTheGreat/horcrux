@@ -1,5 +1,5 @@
-use leptos::*;
 use crate::api::*;
+use leptos::*;
 
 #[component]
 pub fn VolumeManagementPage() -> impl IntoView {
@@ -43,26 +43,37 @@ pub fn VolumeManagementPage() -> impl IntoView {
 
     let filtered_volumes = move || {
         let f = filters.get();
-        volumes.get().into_iter().filter(|v| {
-            let search_match = f.search.is_empty() ||
-                v.name.to_lowercase().contains(&f.search.to_lowercase()) ||
-                v.pool_name.to_lowercase().contains(&f.search.to_lowercase());
-            let pool_match = f.pool_id.as_ref().map_or(true, |p| p.is_empty() || &v.pool_id == p);
-            let type_match = f.volume_type.as_ref().map_or(true, |t| t.is_empty() || &v.volume_type == t);
-            let status_match = f.status.as_ref().map_or(true, |s| s.is_empty() || &v.status == s);
-            let attached_match = !f.attached_only || v.attached_to.is_some();
+        volumes
+            .get()
+            .into_iter()
+            .filter(|v| {
+                let search_match = f.search.is_empty()
+                    || v.name.to_lowercase().contains(&f.search.to_lowercase())
+                    || v.pool_name
+                        .to_lowercase()
+                        .contains(&f.search.to_lowercase());
+                let pool_match = f
+                    .pool_id
+                    .as_ref()
+                    .map_or(true, |p| p.is_empty() || &v.pool_id == p);
+                let type_match = f
+                    .volume_type
+                    .as_ref()
+                    .map_or(true, |t| t.is_empty() || &v.volume_type == t);
+                let status_match = f
+                    .status
+                    .as_ref()
+                    .map_or(true, |s| s.is_empty() || &v.status == s);
+                let attached_match = !f.attached_only || v.attached_to.is_some();
 
-            search_match && pool_match && type_match && status_match && attached_match
-        }).collect::<Vec<_>>()
+                search_match && pool_match && type_match && status_match && attached_match
+            })
+            .collect::<Vec<_>>()
     };
 
-    let total_size = move || {
-        filtered_volumes().iter().map(|v| v.size_bytes).sum::<u64>()
-    };
+    let total_size = move || filtered_volumes().iter().map(|v| v.size_bytes).sum::<u64>();
 
-    let total_used = move || {
-        filtered_volumes().iter().map(|v| v.used_bytes).sum::<u64>()
-    };
+    let total_used = move || filtered_volumes().iter().map(|v| v.used_bytes).sum::<u64>();
 
     let create_volume = move |_| {
         let form = create_form.get();

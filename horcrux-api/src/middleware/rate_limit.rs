@@ -1,7 +1,6 @@
 ///! Rate limiting middleware
 ///!
 ///! Implements token bucket algorithm to limit request rates per IP/user
-
 use axum::{
     extract::{ConnectInfo, Request},
     http::StatusCode,
@@ -107,9 +106,9 @@ impl RateLimiter {
     async fn check(&self, key: &str) -> RateLimitResult {
         let mut buckets = self.buckets.write().await;
 
-        let bucket = buckets.entry(key.to_string()).or_insert_with(|| {
-            TokenBucket::new(self.config.max_requests, self.config.window)
-        });
+        let bucket = buckets
+            .entry(key.to_string())
+            .or_insert_with(|| TokenBucket::new(self.config.max_requests, self.config.window));
 
         let allowed = bucket.try_consume();
         let remaining = bucket.remaining();
@@ -168,7 +167,10 @@ pub async fn rate_limit_middleware(
     // Determine rate limit key
     let key = if limiter.config.per_user {
         // Try to get user from request extensions (set by auth middleware)
-        if let Some(auth_user) = request.extensions().get::<crate::middleware::auth::AuthUser>() {
+        if let Some(auth_user) = request
+            .extensions()
+            .get::<crate::middleware::auth::AuthUser>()
+        {
             format!("user:{}", auth_user.user_id)
         } else {
             // Fallback to IP

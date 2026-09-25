@@ -2,11 +2,11 @@
 //!
 //! Handles Pods, Deployments, StatefulSets, DaemonSets, Jobs, and CronJobs.
 
-pub mod pods;
-pub mod deployments;
-pub mod statefulsets;
 pub mod daemonsets;
+pub mod deployments;
 pub mod jobs;
+pub mod pods;
+pub mod statefulsets;
 
 use crate::kubernetes::client::K8sClient;
 use crate::kubernetes::error::K8sResult;

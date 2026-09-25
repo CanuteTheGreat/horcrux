@@ -1,5 +1,4 @@
 ///! LXC container integration
-
 use super::Container;
 use horcrux_common::{ContainerConfig, ContainerRuntime, ContainerStatus, Result};
 use std::path::PathBuf;
@@ -20,7 +19,10 @@ impl LxcManager {
 
     /// Create a new LXC container
     pub async fn create_container(&self, config: &ContainerConfig) -> Result<Container> {
-        info!("Creating LXC container: {} (ID: {})", config.name, config.id);
+        info!(
+            "Creating LXC container: {} (ID: {})",
+            config.name, config.id
+        );
 
         // Create container using lxc-create
         let output = Command::new("lxc-create")
@@ -62,7 +64,11 @@ impl LxcManager {
             runtime: ContainerRuntime::Lxc,
             memory: config.memory,
             cpus: config.cpus,
-            rootfs: self.storage_path.join(&config.name).to_string_lossy().to_string(),
+            rootfs: self
+                .storage_path
+                .join(&config.name)
+                .to_string_lossy()
+                .to_string(),
             status: ContainerStatus::Stopped,
         })
     }
@@ -77,21 +83,19 @@ impl LxcManager {
             memory, cpus
         );
 
-        tokio::fs::write(&config_path, limits)
-            .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!(
-                    "Failed to configure container limits: {}",
-                    e
-                ))
-            })?;
+        tokio::fs::write(&config_path, limits).await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to configure container limits: {}", e))
+        })?;
 
         Ok(())
     }
 
     /// Start an LXC container
     pub async fn start_container(&self, container: &Container) -> Result<()> {
-        info!("Starting LXC container: {} (ID: {})", container.name, container.id);
+        info!(
+            "Starting LXC container: {} (ID: {})",
+            container.name, container.id
+        );
 
         if container.status == ContainerStatus::Running {
             return Err(horcrux_common::Error::InvalidConfig(format!(
@@ -124,7 +128,10 @@ impl LxcManager {
 
     /// Stop an LXC container
     pub async fn stop_container(&self, container: &Container) -> Result<()> {
-        info!("Stopping LXC container: {} (ID: {})", container.name, container.id);
+        info!(
+            "Stopping LXC container: {} (ID: {})",
+            container.name, container.id
+        );
 
         if container.status == ContainerStatus::Stopped {
             return Err(horcrux_common::Error::InvalidConfig(format!(
@@ -138,9 +145,7 @@ impl LxcManager {
             .arg(&container.name)
             .output()
             .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to run lxc-stop: {}", e))
-            })?;
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to run lxc-stop: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -157,7 +162,10 @@ impl LxcManager {
 
     /// Delete an LXC container
     pub async fn delete_container(&self, container: &Container) -> Result<()> {
-        info!("Deleting LXC container: {} (ID: {})", container.name, container.id);
+        info!(
+            "Deleting LXC container: {} (ID: {})",
+            container.name, container.id
+        );
 
         // Ensure container is stopped first
         if container.status == ContainerStatus::Running {
@@ -225,9 +233,7 @@ impl LxcManager {
             .arg("-s")
             .output()
             .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to run lxc-info: {}", e))
-            })?;
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to run lxc-info: {}", e)))?;
 
         if !output.status.success() {
             return Err(horcrux_common::Error::ContainerNotFound(name.to_string()));
@@ -249,7 +255,10 @@ impl LxcManager {
 
     /// Pause/freeze a container
     pub async fn pause_container(&self, container: &Container) -> Result<()> {
-        info!("Pausing LXC container: {} (ID: {})", container.name, container.id);
+        info!(
+            "Pausing LXC container: {} (ID: {})",
+            container.name, container.id
+        );
 
         let output = Command::new("lxc-freeze")
             .arg("-n")
@@ -274,7 +283,10 @@ impl LxcManager {
 
     /// Resume/unfreeze a container
     pub async fn resume_container(&self, container: &Container) -> Result<()> {
-        info!("Resuming LXC container: {} (ID: {})", container.name, container.id);
+        info!(
+            "Resuming LXC container: {} (ID: {})",
+            container.name, container.id
+        );
 
         let output = Command::new("lxc-unfreeze")
             .arg("-n")
@@ -304,9 +316,7 @@ impl LxcManager {
             .arg(name)
             .output()
             .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to run lxc-info: {}", e))
-            })?;
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to run lxc-info: {}", e)))?;
 
         if !output.status.success() {
             return Err(horcrux_common::Error::ContainerNotFound(name.to_string()));
@@ -341,7 +351,9 @@ impl LxcManager {
                 }
                 "PID" => info.pid = value.parse().ok(),
                 "IP" => info.ip_address = Some(value.to_string()),
-                "CPU use" => info.cpu_usage = value.split_whitespace().next().and_then(|s| s.parse().ok()),
+                "CPU use" => {
+                    info.cpu_usage = value.split_whitespace().next().and_then(|s| s.parse().ok())
+                }
                 "Memory use" => {
                     if let Some(mem_str) = value.split_whitespace().next() {
                         info.memory_usage = self.parse_memory(mem_str);
@@ -406,9 +418,7 @@ impl LxcManager {
         let output = Command::new("lxc-ls")
             .output()
             .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to run lxc-ls: {}", e))
-            })?;
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to run lxc-ls: {}", e)))?;
 
         if !output.status.success() {
             return Err(horcrux_common::Error::System(
@@ -417,12 +427,19 @@ impl LxcManager {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(stdout.lines().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+        Ok(stdout
+            .lines()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect())
     }
 
     /// Clone/snapshot a container
     pub async fn clone_container(&self, source: &str, target: &str, snapshot: bool) -> Result<()> {
-        info!("Cloning LXC container: {} -> {} (snapshot: {})", source, target, snapshot);
+        info!(
+            "Cloning LXC container: {} -> {} (snapshot: {})",
+            source, target, snapshot
+        );
 
         let mut cmd = Command::new("lxc-copy");
         cmd.arg("-n").arg(source).arg("-N").arg(target);
@@ -431,9 +448,10 @@ impl LxcManager {
             cmd.arg("-s");
         }
 
-        let output = cmd.output().await.map_err(|e| {
-            horcrux_common::Error::System(format!("Failed to run lxc-copy: {}", e))
-        })?;
+        let output = cmd
+            .output()
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to run lxc-copy: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

@@ -55,9 +55,12 @@ pub fn IscsiPage() -> impl IntoView {
     let toggle_target = move |target_id: String, enable: bool| {
         spawn_local(async move {
             let action = if enable { "enable" } else { "disable" };
-            let _ = reqwasm::http::Request::post(&format!("/api/nas/iscsi/targets/{}/{}", target_id, action))
-                .send()
-                .await;
+            let _ = reqwasm::http::Request::post(&format!(
+                "/api/nas/iscsi/targets/{}/{}",
+                target_id, action
+            ))
+            .send()
+            .await;
         });
     };
 
@@ -67,9 +70,12 @@ pub fn IscsiPage() -> impl IntoView {
             .unwrap_or(false)
         {
             spawn_local(async move {
-                let _ = reqwasm::http::Request::delete(&format!("/api/nas/iscsi/targets/{}", target_id))
-                    .send()
-                    .await;
+                let _ = reqwasm::http::Request::delete(&format!(
+                    "/api/nas/iscsi/targets/{}",
+                    target_id
+                ))
+                .send()
+                .await;
             });
         }
     };

@@ -47,7 +47,10 @@ impl LvmManager {
         volume_name: &str,
         size_gb: u64,
     ) -> Result<String> {
-        info!("Creating LVM volume: {}/{} ({}GB)", vg_name, volume_name, size_gb);
+        info!(
+            "Creating LVM volume: {}/{} ({}GB)",
+            vg_name, volume_name, size_gb
+        );
 
         let output = Command::new("lvcreate")
             .arg("-L")
@@ -120,7 +123,7 @@ impl LvmManager {
             .arg("-n")
             .arg(snapshot_name)
             .arg(format!("{}/{}", vg_name, volume_name))
-            .arg("-L")  // Thick provision snapshot
+            .arg("-L") // Thick provision snapshot
             .arg("10G") // Default snapshot size, can be customized
             .output()
             .await
@@ -214,7 +217,11 @@ impl LvmManager {
     }
 
     /// Get snapshot chain info (for volume chains feature)
-    pub async fn get_snapshot_chain(&self, vg_name: &str, volume_name: &str) -> Result<SnapshotChain> {
+    pub async fn get_snapshot_chain(
+        &self,
+        vg_name: &str,
+        volume_name: &str,
+    ) -> Result<SnapshotChain> {
         let snapshots = self.list_snapshots(vg_name, volume_name).await?;
 
         Ok(SnapshotChain {

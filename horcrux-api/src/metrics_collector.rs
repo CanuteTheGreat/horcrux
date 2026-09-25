@@ -1,18 +1,17 @@
 ///! Background metrics collection task
 ///! Periodically collects system and VM metrics and broadcasts them via WebSocket
-
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info};
 
-use crate::websocket::WsState;
+use crate::metrics::{LibvirtManager, MetricsCache};
 use crate::monitoring::MonitoringManager;
 use crate::vm::VmManager;
-use crate::metrics::{MetricsCache, LibvirtManager};
+use crate::websocket::WsState;
 
 /// Metrics collection intervals
-const NODE_METRICS_INTERVAL_SECS: u64 = 5;  // Collect node metrics every 5 seconds
-const VM_METRICS_INTERVAL_SECS: u64 = 10;   // Collect VM metrics every 10 seconds
+const NODE_METRICS_INTERVAL_SECS: u64 = 5; // Collect node metrics every 5 seconds
+const VM_METRICS_INTERVAL_SECS: u64 = 10; // Collect VM metrics every 10 seconds
 
 /// Start the metrics collection background task
 pub fn start_metrics_collector(
@@ -30,12 +29,21 @@ pub fn start_metrics_collector(
     let metrics_cache_clone = metrics_cache.clone();
     tokio::spawn(async move {
         let mut interval = interval(Duration::from_secs(NODE_METRICS_INTERVAL_SECS));
-        info!("Starting node metrics collector (interval: {}s)", NODE_METRICS_INTERVAL_SECS);
+        info!(
+            "Starting node metrics collector (interval: {}s)",
+            NODE_METRICS_INTERVAL_SECS
+        );
 
         loop {
             interval.tick().await;
 
-            match collect_and_broadcast_node_metrics(&ws_state_clone, &monitoring_manager_clone, &metrics_cache_clone).await {
+            match collect_and_broadcast_node_metrics(
+                &ws_state_clone,
+                &monitoring_manager_clone,
+                &metrics_cache_clone,
+            )
+            .await
+            {
                 Ok(_) => debug!("Node metrics collected and broadcast"),
                 Err(e) => error!("Failed to collect node metrics: {}", e),
             }
@@ -45,7 +53,10 @@ pub fn start_metrics_collector(
     // Spawn VM metrics collection task
     tokio::spawn(async move {
         let mut interval = interval(Duration::from_secs(VM_METRICS_INTERVAL_SECS));
-        info!("Starting VM metrics collector (interval: {}s)", VM_METRICS_INTERVAL_SECS);
+        info!(
+            "Starting VM metrics collector (interval: {}s)",
+            VM_METRICS_INTERVAL_SECS
+        );
 
         loop {
             interval.tick().await;
@@ -94,11 +105,7 @@ async fn collect_and_broadcast_node_metrics(
         cpu_usage,
         memory_usage,
         disk_usage_percent,
-        [
-            load.one_min,
-            load.five_min,
-            load.fifteen_min,
-        ],
+        [load.one_min, load.five_min, load.fifteen_min],
     );
 
     Ok(())
@@ -179,7 +186,8 @@ async fn collect_vm_metrics(
     if let Ok(metrics) = crate::metrics::get_docker_container_stats(vm_id).await {
         debug!(
             "Collected container metrics for {}: CPU={:.1}%, MEM={:.1}%",
-            vm_id, metrics.cpu_usage_percent,
+            vm_id,
+            metrics.cpu_usage_percent,
             (metrics.memory_usage_bytes as f64 / metrics.memory_limit_bytes as f64) * 100.0
         );
 
@@ -198,15 +206,18 @@ async fn collect_vm_metrics(
     use rand::Rng;
     let mut rng = rand::thread_rng();
 
-    debug!("Using simulated metrics for VM {} (no real metrics available)", vm_id);
+    debug!(
+        "Using simulated metrics for VM {} (no real metrics available)",
+        vm_id
+    );
 
     Ok((
-        rng.gen_range(5.0..95.0),          // cpu_usage (%)
-        rng.gen_range(20.0..80.0),         // memory_usage (%)
-        rng.gen_range(0..100_000_000),     // disk_read (bytes)
-        rng.gen_range(0..50_000_000),      // disk_write (bytes)
-        rng.gen_range(0..500_000_000),     // network_rx (bytes)
-        rng.gen_range(0..200_000_000),     // network_tx (bytes)
+        rng.gen_range(5.0..95.0),      // cpu_usage (%)
+        rng.gen_range(20.0..80.0),     // memory_usage (%)
+        rng.gen_range(0..100_000_000), // disk_read (bytes)
+        rng.gen_range(0..50_000_000),  // disk_write (bytes)
+        rng.gen_range(0..500_000_000), // network_rx (bytes)
+        rng.gen_range(0..200_000_000), // network_tx (bytes)
     ))
 }
 

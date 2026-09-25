@@ -6,7 +6,9 @@ use crate::kubernetes::client::K8sClient;
 #[cfg(not(feature = "kubernetes"))]
 use crate::kubernetes::error::K8sError;
 use crate::kubernetes::error::K8sResult;
-use crate::kubernetes::types::{CreateCronJobRequest, CreateJobRequest, CronJobInfo, JobInfo, JobStatus};
+use crate::kubernetes::types::{
+    CreateCronJobRequest, CreateJobRequest, CronJobInfo, JobInfo, JobStatus,
+};
 
 // ============================================================================
 // Job Operations
@@ -14,10 +16,7 @@ use crate::kubernetes::types::{CreateCronJobRequest, CreateJobRequest, CronJobIn
 
 /// List Jobs in a namespace
 #[cfg(feature = "kubernetes")]
-pub async fn list_jobs(
-    client: &K8sClient,
-    namespace: &str,
-) -> K8sResult<Vec<JobInfo>> {
+pub async fn list_jobs(client: &K8sClient, namespace: &str) -> K8sResult<Vec<JobInfo>> {
     use k8s_openapi::api::batch::v1::Job;
     use kube::api::{Api, ListParams};
 
@@ -29,11 +28,7 @@ pub async fn list_jobs(
 
 /// Get a specific Job
 #[cfg(feature = "kubernetes")]
-pub async fn get_job(
-    client: &K8sClient,
-    namespace: &str,
-    name: &str,
-) -> K8sResult<JobInfo> {
+pub async fn get_job(client: &K8sClient, namespace: &str, name: &str) -> K8sResult<JobInfo> {
     use k8s_openapi::api::batch::v1::Job;
     use kube::api::Api;
 
@@ -45,10 +40,7 @@ pub async fn get_job(
 
 /// Create a new Job
 #[cfg(feature = "kubernetes")]
-pub async fn create_job(
-    client: &K8sClient,
-    request: &CreateJobRequest,
-) -> K8sResult<JobInfo> {
+pub async fn create_job(client: &K8sClient, request: &CreateJobRequest) -> K8sResult<JobInfo> {
     use k8s_openapi::api::batch::v1::{Job, JobSpec};
     use k8s_openapi::api::core::v1::{Container, EnvVar, PodSpec, PodTemplateSpec};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
@@ -173,9 +165,7 @@ fn job_to_info(job: k8s_openapi::api::batch::v1::Job) -> JobInfo {
     let status = job.status.unwrap_or_default();
 
     // Determine job status
-    let job_status = if status.succeeded.unwrap_or(0) > 0
-        && status.succeeded == spec.completions
-    {
+    let job_status = if status.succeeded.unwrap_or(0) > 0 && status.succeeded == spec.completions {
         JobStatus::Complete
     } else if status.failed.unwrap_or(0) > 0 {
         JobStatus::Failed
@@ -212,10 +202,7 @@ fn job_to_info(job: k8s_openapi::api::batch::v1::Job) -> JobInfo {
 
 /// List CronJobs in a namespace
 #[cfg(feature = "kubernetes")]
-pub async fn list_cronjobs(
-    client: &K8sClient,
-    namespace: &str,
-) -> K8sResult<Vec<CronJobInfo>> {
+pub async fn list_cronjobs(client: &K8sClient, namespace: &str) -> K8sResult<Vec<CronJobInfo>> {
     use k8s_openapi::api::batch::v1::CronJob;
     use kube::api::{Api, ListParams};
 
@@ -347,11 +334,7 @@ pub async fn create_cronjob(
 
 /// Delete a CronJob
 #[cfg(feature = "kubernetes")]
-pub async fn delete_cronjob(
-    client: &K8sClient,
-    namespace: &str,
-    name: &str,
-) -> K8sResult<()> {
+pub async fn delete_cronjob(client: &K8sClient, namespace: &str, name: &str) -> K8sResult<()> {
     use k8s_openapi::api::batch::v1::CronJob;
     use kube::api::{Api, DeleteParams};
 
@@ -425,11 +408,17 @@ pub async fn trigger_cronjob(
         metadata: ObjectMeta {
             name: Some(job_name),
             namespace: Some(namespace.to_string()),
-            labels: job_template.metadata.as_ref().and_then(|m| m.labels.clone()),
+            labels: job_template
+                .metadata
+                .as_ref()
+                .and_then(|m| m.labels.clone()),
             annotations: Some(
-                [("cronjob.kubernetes.io/triggered-manually".to_string(), "true".to_string())]
-                    .into_iter()
-                    .collect(),
+                [(
+                    "cronjob.kubernetes.io/triggered-manually".to_string(),
+                    "true".to_string(),
+                )]
+                .into_iter()
+                .collect(),
             ),
             owner_references: Some(vec![owner_ref]),
             ..Default::default()
@@ -453,7 +442,9 @@ fn cronjob_to_info(cronjob: k8s_openapi::api::batch::v1::CronJob) -> CronJobInfo
         namespace: metadata.namespace.unwrap_or_default(),
         schedule: spec.schedule,
         suspend: spec.suspend.unwrap_or(false),
-        concurrency_policy: spec.concurrency_policy.unwrap_or_else(|| "Allow".to_string()),
+        concurrency_policy: spec
+            .concurrency_policy
+            .unwrap_or_else(|| "Allow".to_string()),
         successful_jobs_history_limit: spec.successful_jobs_history_limit,
         failed_jobs_history_limit: spec.failed_jobs_history_limit,
         active_jobs: status.active.map(|a| a.len() as i32).unwrap_or(0),
@@ -470,17 +461,23 @@ fn cronjob_to_info(cronjob: k8s_openapi::api::batch::v1::CronJob) -> CronJobInfo
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn list_jobs(_client: &K8sClient, _namespace: &str) -> K8sResult<Vec<JobInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn get_job(_client: &K8sClient, _namespace: &str, _name: &str) -> K8sResult<JobInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn create_job(_client: &K8sClient, _request: &CreateJobRequest) -> K8sResult<JobInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -490,12 +487,16 @@ pub async fn delete_job(
     _name: &str,
     _propagation_policy: Option<&str>,
 ) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn list_cronjobs(_client: &K8sClient, _namespace: &str) -> K8sResult<Vec<CronJobInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -504,7 +505,9 @@ pub async fn get_cronjob(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<CronJobInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -512,12 +515,16 @@ pub async fn create_cronjob(
     _client: &K8sClient,
     _request: &CreateCronJobRequest,
 ) -> K8sResult<CronJobInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn delete_cronjob(_client: &K8sClient, _namespace: &str, _name: &str) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -527,7 +534,9 @@ pub async fn suspend_cronjob(
     _name: &str,
     _suspend: bool,
 ) -> K8sResult<CronJobInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -536,5 +545,7 @@ pub async fn trigger_cronjob(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<JobInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }

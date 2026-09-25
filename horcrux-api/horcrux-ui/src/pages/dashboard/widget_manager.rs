@@ -1,5 +1,5 @@
-use leptos::*;
 use crate::api::*;
+use leptos::*;
 
 #[component]
 pub fn WidgetManagerPage() -> impl IntoView {
@@ -11,7 +11,8 @@ pub fn WidgetManagerPage() -> impl IntoView {
     let (filter_type, set_filter_type) = create_signal("all".to_string());
     let (filter_dashboard, set_filter_dashboard) = create_signal("all".to_string());
     let (show_bulk_actions, set_show_bulk_actions) = create_signal(false);
-    let (selected_widgets, set_selected_widgets) = create_signal(std::collections::HashSet::<String>::new());
+    let (selected_widgets, set_selected_widgets) =
+        create_signal(std::collections::HashSet::<String>::new());
 
     // Load all widgets across dashboards
     let load_widgets = create_action(move |_: &()| async move {
@@ -38,7 +39,10 @@ pub fn WidgetManagerPage() -> impl IntoView {
 
         match bulk_delete_widgets(widget_ids.clone()).await {
             Ok(_) => {
-                set_success_message.set(Some(format!("Successfully deleted {} widgets", widget_ids.len())));
+                set_success_message.set(Some(format!(
+                    "Successfully deleted {} widgets",
+                    widget_ids.len()
+                )));
                 set_selected_widgets.set(std::collections::HashSet::new());
                 set_show_bulk_actions.set(false);
                 load_widgets.dispatch(());
@@ -63,7 +67,10 @@ pub fn WidgetManagerPage() -> impl IntoView {
 
             match bulk_move_widgets(widget_ids.clone(), target_dashboard_id).await {
                 Ok(_) => {
-                    set_success_message.set(Some(format!("Successfully moved {} widgets", widget_ids.len())));
+                    set_success_message.set(Some(format!(
+                        "Successfully moved {} widgets",
+                        widget_ids.len()
+                    )));
                     set_selected_widgets.set(std::collections::HashSet::new());
                     set_show_bulk_actions.set(false);
                     load_widgets.dispatch(());
@@ -95,7 +102,8 @@ pub fn WidgetManagerPage() -> impl IntoView {
 
             match add_dashboard_widget(&widget.dashboard_id, request).await {
                 Ok(new_widget) => {
-                    set_success_message.set(Some(format!("Widget duplicated as '{}'", new_widget.title)));
+                    set_success_message
+                        .set(Some(format!("Widget duplicated as '{}'", new_widget.title)));
                     load_widgets.dispatch(());
                 }
                 Err(e) => set_error_message.set(Some(format!("Failed to duplicate widget: {}", e))),
@@ -109,7 +117,8 @@ pub fn WidgetManagerPage() -> impl IntoView {
     let export_widget_action = create_action(move |widget: &DashboardWidget| {
         let widget = widget.clone();
         async move {
-            let export_data = serde_json::to_string_pretty(&widget.config).unwrap_or_else(|_| "{}".to_string());
+            let export_data =
+                serde_json::to_string_pretty(&widget.config).unwrap_or_else(|_| "{}".to_string());
 
             // Trigger download
             use wasm_bindgen::prelude::*;
@@ -126,7 +135,10 @@ pub fn WidgetManagerPage() -> impl IntoView {
             let url = web_sys::Url::create_object_url_with_blob(&blob).unwrap();
 
             element.set_href(&url);
-            element.set_download(&format!("widget-{}.json", widget.title.replace(" ", "_").to_lowercase()));
+            element.set_download(&format!(
+                "widget-{}.json",
+                widget.title.replace(" ", "_").to_lowercase()
+            ));
             element.click();
 
             web_sys::Url::revoke_object_url(&url).unwrap();
@@ -140,13 +152,14 @@ pub fn WidgetManagerPage() -> impl IntoView {
         let widget_type = filter_type.get();
         let dashboard = filter_dashboard.get();
 
-        widgets.get()
+        widgets
+            .get()
             .into_iter()
             .filter(|widget| {
-                let matches_search = query.is_empty() ||
-                    widget.title.to_lowercase().contains(&query) ||
-                    widget.metric.to_lowercase().contains(&query) ||
-                    widget.dashboard_name.to_lowercase().contains(&query);
+                let matches_search = query.is_empty()
+                    || widget.title.to_lowercase().contains(&query)
+                    || widget.metric.to_lowercase().contains(&query)
+                    || widget.dashboard_name.to_lowercase().contains(&query);
 
                 let matches_type = widget_type == "all" || widget.widget_type == widget_type;
                 let matches_dashboard = dashboard == "all" || widget.dashboard_id == dashboard;
@@ -157,7 +170,8 @@ pub fn WidgetManagerPage() -> impl IntoView {
     };
 
     let get_dashboard_list = move || -> Vec<(String, String)> {
-        let mut dashboards: Vec<(String, String)> = widgets.get()
+        let mut dashboards: Vec<(String, String)> = widgets
+            .get()
             .iter()
             .map(|w| (w.dashboard_id.clone(), w.dashboard_name.clone()))
             .collect::<std::collections::HashSet<_>>()
@@ -168,7 +182,8 @@ pub fn WidgetManagerPage() -> impl IntoView {
     };
 
     let get_widget_type_list = move || -> Vec<String> {
-        let mut types: Vec<String> = widgets.get()
+        let mut types: Vec<String> = widgets
+            .get()
             .iter()
             .map(|w| w.widget_type.clone())
             .collect::<std::collections::HashSet<_>>()

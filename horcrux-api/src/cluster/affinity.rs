@@ -16,7 +16,7 @@ pub struct AffinityRule {
     pub name: String,
     pub rule_type: AffinityRuleType,
     pub enabled: bool,
-    pub priority: u32,  // Higher priority rules are evaluated first
+    pub priority: u32, // Higher priority rules are evaluated first
     pub description: String,
 }
 
@@ -33,22 +33,22 @@ pub enum AffinityRuleType {
 /// Node affinity - pin specific resources to specific nodes
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NodeAffinityRule {
-    pub resources: Vec<String>,  // VM/CT IDs
-    pub nodes: Vec<String>,      // Preferred node IDs
+    pub resources: Vec<String>, // VM/CT IDs
+    pub nodes: Vec<String>,     // Preferred node IDs
     pub policy: AffinityPolicy,
 }
 
 /// Resource affinity - keep resources together
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResourceAffinityRule {
-    pub resources: Vec<String>,  // VM/CT IDs that should stay together
+    pub resources: Vec<String>, // VM/CT IDs that should stay together
     pub policy: AffinityPolicy,
 }
 
 /// Anti-affinity - spread resources apart
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AntiAffinityRule {
-    pub resources: Vec<String>,  // VM/CT IDs that should be separated
+    pub resources: Vec<String>, // VM/CT IDs that should be separated
     pub policy: AffinityPolicy,
 }
 
@@ -103,7 +103,8 @@ impl AffinityManager {
 
     /// List rules affecting a specific resource
     pub fn list_rules_for_resource(&self, resource_id: &str) -> Vec<&AffinityRule> {
-        self.rules.values()
+        self.rules
+            .values()
             .filter(|rule| self.rule_affects_resource(rule, resource_id))
             .collect()
     }
@@ -120,7 +121,9 @@ impl AffinityManager {
         }
 
         // Get all rules affecting this resource, sorted by priority
-        let mut relevant_rules: Vec<_> = self.rules.values()
+        let mut relevant_rules: Vec<_> = self
+            .rules
+            .values()
             .filter(|r| r.enabled && self.rule_affects_resource(r, resource_id))
             .collect();
         relevant_rules.sort_by(|a, b| b.priority.cmp(&a.priority));
@@ -138,21 +141,28 @@ impl AffinityManager {
         // Check for hard constraints (Required policies)
         for rule in &relevant_rules {
             if let AffinityRuleType::NodeAffinity(na) = &rule.rule_type {
-                if na.policy == AffinityPolicy::Required && na.resources.contains(&resource_id.to_string()) {
+                if na.policy == AffinityPolicy::Required
+                    && na.resources.contains(&resource_id.to_string())
+                {
                     // Must be on one of these nodes
-                    let valid_nodes: Vec<_> = available_nodes.iter()
+                    let valid_nodes: Vec<_> = available_nodes
+                        .iter()
                         .filter(|n| na.nodes.contains(n))
                         .collect();
 
                     if valid_nodes.is_empty() {
-                        return Err(format!("Required node affinity cannot be satisfied for {}", resource_id));
+                        return Err(format!(
+                            "Required node affinity cannot be satisfied for {}",
+                            resource_id
+                        ));
                     }
                 }
             }
         }
 
         // Return node with highest score
-        let best_node = node_scores.iter()
+        let best_node = node_scores
+            .iter()
             .max_by_key(|(_, score)| *score)
             .map(|(node, _)| node.clone())
             .unwrap_or_else(|| available_nodes[0].clone());
@@ -167,7 +177,9 @@ impl AffinityManager {
         target_node: &str,
         current_placements: &HashMap<String, String>,
     ) -> Result<(), String> {
-        let relevant_rules: Vec<_> = self.rules.values()
+        let relevant_rules: Vec<_> = self
+            .rules
+            .values()
             .filter(|r| r.enabled && self.rule_affects_resource(r, resource_id))
             .collect();
 
@@ -176,7 +188,8 @@ impl AffinityManager {
                 AffinityRuleType::NodeAffinity(na) => {
                     if na.policy == AffinityPolicy::Required
                         && na.resources.contains(&resource_id.to_string())
-                        && !na.nodes.contains(&target_node.to_string()) {
+                        && !na.nodes.contains(&target_node.to_string())
+                    {
                         return Err(format!(
                             "Required node affinity violated: {} must be on one of {:?}",
                             resource_id, na.nodes
@@ -184,7 +197,9 @@ impl AffinityManager {
                     }
                 }
                 AffinityRuleType::ResourceAffinity(ra) => {
-                    if ra.policy == AffinityPolicy::Required && ra.resources.contains(&resource_id.to_string()) {
+                    if ra.policy == AffinityPolicy::Required
+                        && ra.resources.contains(&resource_id.to_string())
+                    {
                         // Check if other resources in the group are on the same node
                         for other_resource in &ra.resources {
                             if other_resource != resource_id {
@@ -201,7 +216,9 @@ impl AffinityManager {
                     }
                 }
                 AffinityRuleType::AntiAffinity(aa) => {
-                    if aa.policy == AffinityPolicy::Required && aa.resources.contains(&resource_id.to_string()) {
+                    if aa.policy == AffinityPolicy::Required
+                        && aa.resources.contains(&resource_id.to_string())
+                    {
                         // Check if any other resources in the group are on the same node
                         for other_resource in &aa.resources {
                             if other_resource != resource_id {
@@ -237,7 +254,9 @@ impl AffinityManager {
             }
             AffinityRuleType::ResourceAffinity(ra) => {
                 if ra.resources.len() < 2 {
-                    return Err("ResourceAffinity rule must have at least two resources".to_string());
+                    return Err(
+                        "ResourceAffinity rule must have at least two resources".to_string()
+                    );
                 }
             }
             AffinityRuleType::AntiAffinity(aa) => {
@@ -252,7 +271,9 @@ impl AffinityManager {
     fn rule_affects_resource(&self, rule: &AffinityRule, resource_id: &str) -> bool {
         match &rule.rule_type {
             AffinityRuleType::NodeAffinity(na) => na.resources.contains(&resource_id.to_string()),
-            AffinityRuleType::ResourceAffinity(ra) => ra.resources.contains(&resource_id.to_string()),
+            AffinityRuleType::ResourceAffinity(ra) => {
+                ra.resources.contains(&resource_id.to_string())
+            }
             AffinityRuleType::AntiAffinity(aa) => aa.resources.contains(&resource_id.to_string()),
         }
     }
@@ -264,15 +285,20 @@ impl AffinityManager {
         current_placements: &HashMap<String, String>,
         scores: &mut HashMap<String, i32>,
     ) {
-        let weight = if matches!(rule.rule_type, AffinityRuleType::NodeAffinity(_)) { 100 }
-            else { match &rule.rule_type {
+        let weight = if matches!(rule.rule_type, AffinityRuleType::NodeAffinity(_)) {
+            100
+        } else {
+            match &rule.rule_type {
                 AffinityRuleType::NodeAffinity(na) if na.policy == AffinityPolicy::Required => 100,
                 AffinityRuleType::NodeAffinity(_) => 50,
-                AffinityRuleType::ResourceAffinity(ra) if ra.policy == AffinityPolicy::Required => 100,
+                AffinityRuleType::ResourceAffinity(ra) if ra.policy == AffinityPolicy::Required => {
+                    100
+                }
                 AffinityRuleType::ResourceAffinity(_) => 50,
                 AffinityRuleType::AntiAffinity(aa) if aa.policy == AffinityPolicy::Required => 100,
                 AffinityRuleType::AntiAffinity(_) => 50,
-        }};
+            }
+        };
 
         match &rule.rule_type {
             AffinityRuleType::NodeAffinity(na) => {
@@ -334,10 +360,16 @@ mod tests {
 
         am.add_rule(rule).unwrap();
 
-        let available_nodes = vec!["node1".to_string(), "node2".to_string(), "node3".to_string()];
+        let available_nodes = vec![
+            "node1".to_string(),
+            "node2".to_string(),
+            "node3".to_string(),
+        ];
         let placements = HashMap::new();
 
-        let suggested = am.suggest_node("vm-db", &available_nodes, &placements).unwrap();
+        let suggested = am
+            .suggest_node("vm-db", &available_nodes, &placements)
+            .unwrap();
         assert!(suggested == "node1" || suggested == "node2");
 
         // Validate that placement on node3 would fail
@@ -368,7 +400,9 @@ mod tests {
         placements.insert("vm-db".to_string(), "node1".to_string());
 
         // vm-web should prefer node1 where vm-db is
-        let suggested = am.suggest_node("vm-web", &available_nodes, &placements).unwrap();
+        let suggested = am
+            .suggest_node("vm-web", &available_nodes, &placements)
+            .unwrap();
         assert_eq!(suggested, "node1");
     }
 

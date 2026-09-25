@@ -1,5 +1,5 @@
 use crate::api::ApiClient;
-use crate::output::{self, OutputFormat, format_bytes};
+use crate::output::{self, format_bytes, OutputFormat};
 use crate::StorageCommands;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -78,7 +78,11 @@ pub async fn handle_storage_command(
             let format = OutputFormat::from_str(output_format);
             output::print_single(&pool, format)?;
         }
-        StorageCommands::Create { name, storage_type, path } => {
+        StorageCommands::Create {
+            name,
+            storage_type,
+            path,
+        } => {
             let request = CreatePoolRequest {
                 name: name.clone(),
                 storage_type: storage_type.clone(),
@@ -92,13 +96,18 @@ pub async fn handle_storage_command(
             api.delete(&format!("/api/storage/pools/{}", id)).await?;
             output::print_deleted("Storage pool", &id);
         }
-        StorageCommands::CreateVolume { pool_id, name, size } => {
+        StorageCommands::CreateVolume {
+            pool_id,
+            name,
+            size,
+        } => {
             let request = CreateVolumeRequest {
                 name: name.clone(),
                 size,
             };
 
-            api.post_empty(&format!("/api/storage/pools/{}/volumes", pool_id), &request).await?;
+            api.post_empty(&format!("/api/storage/pools/{}/volumes", pool_id), &request)
+                .await?;
             output::print_created("Volume", &name, &format!("{} GB", size));
         }
     }

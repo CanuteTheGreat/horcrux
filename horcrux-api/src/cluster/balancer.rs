@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeResources {
     pub node_name: String,
-    pub cpu_usage: f32,        // Percentage 0-100
-    pub memory_usage: f32,     // Percentage 0-100
-    pub disk_usage: f32,       // Percentage 0-100
-    pub network_usage: f32,    // Mbps
+    pub cpu_usage: f32,     // Percentage 0-100
+    pub memory_usage: f32,  // Percentage 0-100
+    pub disk_usage: f32,    // Percentage 0-100
+    pub network_usage: f32, // Mbps
     pub vm_count: usize,
     pub total_cpu_cores: usize,
     pub total_memory_gb: usize,
@@ -56,8 +56,8 @@ impl Default for BalancingPolicy {
         Self {
             enabled: false,
             strategy: BalancingStrategy::Weighted,
-            threshold: 20.0,  // 20% difference
-            min_gain: 5.0,    // 5% improvement
+            threshold: 20.0, // 20% difference
+            min_gain: 5.0,   // 5% improvement
             max_migrations: 3,
             aggressive: false,
         }
@@ -99,13 +99,13 @@ impl ClusterBalancer {
             BalancingStrategy::Cpu => node.cpu_usage,
             BalancingStrategy::Memory => node.memory_usage,
             BalancingStrategy::VmCount => {
-                (node.vm_count as f32 / 10.0) * 100.0  // Normalize to percentage
+                (node.vm_count as f32 / 10.0) * 100.0 // Normalize to percentage
             }
             BalancingStrategy::Weighted => {
                 // Weighted average: CPU 40%, Memory 40%, VM count 20%
-                (node.cpu_usage * 0.4) +
-                (node.memory_usage * 0.4) +
-                ((node.vm_count as f32 / 10.0) * 100.0 * 0.2)
+                (node.cpu_usage * 0.4)
+                    + (node.memory_usage * 0.4)
+                    + ((node.vm_count as f32 / 10.0) * 100.0 * 0.2)
             }
         }
     }
@@ -113,12 +113,10 @@ impl ClusterBalancer {
     /// Check if cluster is balanced
     pub fn is_balanced(&self, nodes: &[NodeResources]) -> bool {
         if nodes.len() < 2 {
-            return true;  // Single node is always "balanced"
+            return true; // Single node is always "balanced"
         }
 
-        let scores: Vec<f32> = nodes.iter()
-            .map(|n| self.calculate_node_score(n))
-            .collect();
+        let scores: Vec<f32> = nodes.iter().map(|n| self.calculate_node_score(n)).collect();
 
         let max_score = scores.iter().cloned().fold(f32::MIN, f32::max);
         let min_score = scores.iter().cloned().fold(f32::MAX, f32::min);
@@ -139,7 +137,8 @@ impl ClusterBalancer {
         }
 
         // Calculate node scores
-        let mut node_scores: Vec<(String, f32)> = nodes.iter()
+        let mut node_scores: Vec<(String, f32)> = nodes
+            .iter()
             .map(|n| (n.node_name.clone(), self.calculate_node_score(n)))
             .collect();
 
@@ -150,12 +149,14 @@ impl ClusterBalancer {
         let min_score = node_scores[node_scores.len() - 1].1;
 
         if max_score - min_score <= self.policy.threshold {
-            return Vec::new();  // Already balanced
+            return Vec::new(); // Already balanced
         }
 
         tracing::info!(
             "Cluster imbalance detected: max={:.1}%, min={:.1}%, diff={:.1}%",
-            max_score, min_score, max_score - min_score
+            max_score,
+            min_score,
+            max_score - min_score
         );
 
         // Generate migration recommendations
@@ -180,12 +181,8 @@ impl ClusterBalancer {
             }
 
             // Calculate improvement if we migrate this VM
-            let improvement = self.calculate_migration_improvement(
-                nodes,
-                vm,
-                overloaded_node,
-                underloaded_node,
-            );
+            let improvement =
+                self.calculate_migration_improvement(nodes, vm, overloaded_node, underloaded_node);
 
             if improvement >= self.policy.min_gain {
                 let priority = if improvement > 20.0 {
@@ -200,10 +197,7 @@ impl ClusterBalancer {
                     vm_id: vm.vm_id,
                     from_node: overloaded_node.clone(),
                     to_node: underloaded_node.clone(),
-                    reason: format!(
-                        "Rebalance cluster: {:.1}% improvement",
-                        improvement
-                    ),
+                    reason: format!("Rebalance cluster: {:.1}% improvement", improvement),
                     score_improvement: improvement,
                     priority,
                 });
@@ -214,8 +208,11 @@ impl ClusterBalancer {
 
         // Sort by priority and improvement
         recommendations.sort_by(|a, b| {
-            b.priority.cmp(&a.priority)
-                .then(b.score_improvement.partial_cmp(&a.score_improvement).unwrap())
+            b.priority.cmp(&a.priority).then(
+                b.score_improvement
+                    .partial_cmp(&a.score_improvement)
+                    .unwrap(),
+            )
         });
 
         recommendations
@@ -257,11 +254,7 @@ impl ClusterBalancer {
     }
 
     /// Find best node for VM placement
-    pub fn find_best_node(
-        &self,
-        nodes: &[NodeResources],
-        vm: &VmResources,
-    ) -> Option<String> {
+    pub fn find_best_node(&self, nodes: &[NodeResources], vm: &VmResources) -> Option<String> {
         if nodes.is_empty() {
             return None;
         }
@@ -275,7 +268,7 @@ impl ClusterBalancer {
             let mem_available = node.total_memory_gb as f32 * (1.0 - node.memory_usage / 100.0);
 
             if cpu_available < vm.cpu_cores as f32 || mem_available < vm.memory_gb as f32 {
-                continue;  // Not enough resources
+                continue; // Not enough resources
             }
 
             // Score this node (lower is better for placement)
@@ -384,7 +377,7 @@ mod tests {
         let recommendations = balancer.get_recommendations(&nodes, &vms);
 
         assert!(!recommendations.is_empty());
-        assert!(recommendations.len() <= 2);  // max_migrations = 2
+        assert!(recommendations.len() <= 2); // max_migrations = 2
         assert_eq!(recommendations[0].from_node, "node1");
         assert_eq!(recommendations[0].to_node, "node2");
     }
@@ -404,7 +397,7 @@ mod tests {
 
         let best = balancer.find_best_node(&nodes, &vm);
 
-        assert_eq!(best, Some("node2".to_string()));  // Least loaded
+        assert_eq!(best, Some("node2".to_string())); // Least loaded
     }
 
     #[test]
@@ -426,6 +419,6 @@ mod tests {
         policy.strategy = BalancingStrategy::Weighted;
         let balancer = ClusterBalancer::new(policy);
         let score = balancer.calculate_node_score(&node);
-        assert!(score > 50.0 && score < 75.0);  // Weighted average
+        assert!(score > 50.0 && score < 75.0); // Weighted average
     }
 }

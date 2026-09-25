@@ -1,7 +1,7 @@
-use leptos::*;
-use leptos_router::*;
 use crate::api;
 use horcrux_common::VmConfig;
+use leptos::*;
+use leptos_router::*;
 
 #[component]
 pub fn VmList() -> impl IntoView {
@@ -44,7 +44,10 @@ pub fn VmList() -> impl IntoView {
 
     let delete_vm = move |vm_id: String| {
         if web_sys::window()
-            .and_then(|w| w.confirm_with_message(&format!("Delete VM {}?", vm_id)).ok())
+            .and_then(|w| {
+                w.confirm_with_message(&format!("Delete VM {}?", vm_id))
+                    .ok()
+            })
             .unwrap_or(false)
         {
             spawn_local(async move {

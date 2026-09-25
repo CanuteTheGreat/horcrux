@@ -3,22 +3,44 @@
 //! Complete RBAC management interface for roles and permissions.
 //! Provides visual permission matrix and role customization.
 
-use leptos::*;
 use crate::api;
+use leptos::*;
 use std::collections::HashMap;
 
 /// Available privilege types for the permission system
 const AVAILABLE_PRIVILEGES: &[&str] = &[
-    "VmAudit", "VmConsole", "VmConfig", "VmPowerMgmt", "VmAllocate",
-    "VmMigrate", "VmSnapshot", "VmBackup", "DatastoreAudit", "DatastoreAllocate",
-    "DatastoreAllocateSpace", "PoolAudit", "PoolAllocate", "SysAudit",
-    "SysModify", "SysConsole", "UserModify", "PermissionsModify"
+    "VmAudit",
+    "VmConsole",
+    "VmConfig",
+    "VmPowerMgmt",
+    "VmAllocate",
+    "VmMigrate",
+    "VmSnapshot",
+    "VmBackup",
+    "DatastoreAudit",
+    "DatastoreAllocate",
+    "DatastoreAllocateSpace",
+    "PoolAudit",
+    "PoolAllocate",
+    "SysAudit",
+    "SysModify",
+    "SysConsole",
+    "UserModify",
+    "PermissionsModify",
 ];
 
 /// Common resource paths for permission assignment
 const COMMON_PATHS: &[&str] = &[
-    "/", "/vms", "/vms/*", "/storage", "/storage/*",
-    "/pools", "/pools/*", "/cluster", "/users", "/system"
+    "/",
+    "/vms",
+    "/vms/*",
+    "/storage",
+    "/storage/*",
+    "/pools",
+    "/pools/*",
+    "/cluster",
+    "/users",
+    "/system",
 ];
 
 /// Role management page component
@@ -68,9 +90,8 @@ pub fn RolesPage() -> impl IntoView {
     };
 
     // Check if role is built-in and cannot be deleted
-    let is_builtin_role = |role_name: &str| {
-        matches!(role_name, "Administrator" | "PVEAdmin" | "PVEVMUser")
-    };
+    let is_builtin_role =
+        |role_name: &str| matches!(role_name, "Administrator" | "PVEAdmin" | "PVEVMUser");
 
     view! {
         <div class="roles-management-page">
@@ -299,10 +320,7 @@ pub fn RolesPage() -> impl IntoView {
 
 /// Create role form component
 #[component]
-pub fn CreateRoleForm<F, G>(
-    on_success: F,
-    on_error: G,
-) -> impl IntoView
+pub fn CreateRoleForm<F, G>(on_success: F, on_error: G) -> impl IntoView
 where
     F: Fn() + 'static,
     G: Fn(String) + 'static,
@@ -315,9 +333,8 @@ where
     let on_success_rc = std::rc::Rc::new(on_success);
     let on_error_rc = std::rc::Rc::new(on_error);
 
-    let is_valid = move || {
-        !role_name.get().trim().is_empty() && !description.get().trim().is_empty()
-    };
+    let is_valid =
+        move || !role_name.get().trim().is_empty() && !description.get().trim().is_empty();
 
     let on_success_clone = on_success_rc.clone();
     let on_error_clone = on_error_rc.clone();

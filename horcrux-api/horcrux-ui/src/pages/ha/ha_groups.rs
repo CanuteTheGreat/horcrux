@@ -1,6 +1,6 @@
+use crate::api::*;
 use leptos::*;
 use wasm_bindgen::JsCast;
-use crate::api::*;
 use web_sys::MouseEvent;
 
 #[component]
@@ -80,7 +80,11 @@ pub fn HaGroupsPage() -> impl IntoView {
             max_restart: form_max_restart.get(),
             max_relocate: form_max_relocate.get(),
             enabled: form_enabled.get(),
-            comment: if form_comment.get().is_empty() { None } else { Some(form_comment.get()) },
+            comment: if form_comment.get().is_empty() {
+                None
+            } else {
+                Some(form_comment.get())
+            },
             resources: Vec::new(),
             nodes: cluster_nodes.get().into_iter().map(|n| n.name).collect(),
             state: "active".to_string(),
@@ -114,7 +118,11 @@ pub fn HaGroupsPage() -> impl IntoView {
                 max_restart: form_max_restart.get(),
                 max_relocate: form_max_relocate.get(),
                 enabled: form_enabled.get(),
-                comment: if form_comment.get().is_empty() { None } else { Some(form_comment.get()) },
+                comment: if form_comment.get().is_empty() {
+                    None
+                } else {
+                    Some(form_comment.get())
+                },
                 resources: group.resources,
                 nodes: group.nodes,
                 state: group.state,
@@ -147,7 +155,11 @@ pub fn HaGroupsPage() -> impl IntoView {
                 let assignment = HaResourceAssignment {
                     group_id: group.id.clone(),
                     resource_id: resource_id.clone(),
-                    resource_type: if vms.get().iter().any(|vm| vm.vmid.to_string() == *resource_id) {
+                    resource_type: if vms
+                        .get()
+                        .iter()
+                        .any(|vm| vm.vmid.to_string() == *resource_id)
+                    {
                         "vm".to_string()
                     } else {
                         "container".to_string()
@@ -159,7 +171,10 @@ pub fn HaGroupsPage() -> impl IntoView {
                 match assign_resource_to_ha_group(assignment).await {
                     Ok(_) => {}
                     Err(e) => {
-                        set_error_message.set(Some(format!("Failed to assign resource {}: {}", resource_id, e)));
+                        set_error_message.set(Some(format!(
+                            "Failed to assign resource {}: {}",
+                            resource_id, e
+                        )));
                         break;
                     }
                 }

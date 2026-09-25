@@ -3,12 +3,12 @@
 //! Manages ProFTPD configuration with TLS/SSL, virtual users,
 //! quotas, bandwidth limiting, and SFTP via OpenSSH.
 
-use horcrux_common::{Error, Result};
 use crate::nas::shares::{FtpShareConfig, NasShare};
-use tokio::process::Command;
+use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use tokio::process::Command;
 
 /// FTP/FTPS protocol mode
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -446,18 +446,17 @@ impl FtpManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Failed to terminate FTP session {}: {}", pid, stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to terminate FTP session {}: {}",
+                pid, stderr
+            )));
         }
 
         Ok(())
     }
 
     /// Create with custom paths
-    pub fn with_paths(
-        proftpd_conf: &str,
-        proftpd_conf_d: &str,
-        virtual_users_file: &str,
-    ) -> Self {
+    pub fn with_paths(proftpd_conf: &str, proftpd_conf_d: &str, virtual_users_file: &str) -> Self {
         let use_systemd = Path::new("/run/systemd/system").exists();
 
         Self {
@@ -472,9 +471,9 @@ impl FtpManager {
 
     /// Initialize required directories
     pub async fn init(&self) -> Result<()> {
-        tokio::fs::create_dir_all(&self.proftpd_conf_d).await.map_err(|e| {
-            Error::Internal(format!("Failed to create proftpd conf.d: {}", e))
-        })?;
+        tokio::fs::create_dir_all(&self.proftpd_conf_d)
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to create proftpd conf.d: {}", e)))?;
 
         tokio::fs::create_dir_all("/var/log/proftpd").await.ok();
 
@@ -492,7 +491,11 @@ impl FtpManager {
 
         // Backup existing config
         if Path::new(&self.proftpd_conf).exists() {
-            let backup_path = format!("{}.bak.{}", self.proftpd_conf, chrono::Utc::now().timestamp());
+            let backup_path = format!(
+                "{}.bak.{}",
+                self.proftpd_conf,
+                chrono::Utc::now().timestamp()
+            );
             tokio::fs::copy(&self.proftpd_conf, &backup_path).await.ok();
         }
 
@@ -529,13 +532,25 @@ impl FtpManager {
 
         // Connection limits
         conf.push_str(&format!("MaxClients\t\t\t{}\n", config.max_clients));
-        conf.push_str(&format!("MaxClientsPerHost\t\t{}\n", config.max_clients_per_host));
-        conf.push_str(&format!("MaxLoginAttempts\t\t{}\n", config.max_login_attempts));
-        conf.push_str(&format!("MaxConnectionsPerHost\t\t{}\n\n", config.max_clients_per_host));
+        conf.push_str(&format!(
+            "MaxClientsPerHost\t\t{}\n",
+            config.max_clients_per_host
+        ));
+        conf.push_str(&format!(
+            "MaxLoginAttempts\t\t{}\n",
+            config.max_login_attempts
+        ));
+        conf.push_str(&format!(
+            "MaxConnectionsPerHost\t\t{}\n\n",
+            config.max_clients_per_host
+        ));
 
         // Timeouts
         conf.push_str(&format!("TimeoutIdle\t\t\t{}\n", config.timeout_idle));
-        conf.push_str(&format!("TimeoutNoTransfer\t\t{}\n", config.timeout_no_transfer));
+        conf.push_str(&format!(
+            "TimeoutNoTransfer\t\t{}\n",
+            config.timeout_no_transfer
+        ));
         conf.push_str(&format!("TimeoutStalled\t\t\t{}\n", config.timeout_stalled));
         conf.push_str("TimeoutLogin\t\t\t120\n\n");
 
@@ -672,14 +687,8 @@ impl FtpManager {
         conf.push_str("</IfModule>\n\n");
 
         // Logging
-        conf.push_str(&format!(
-            "SystemLog\t\t\t{}\n",
-            config.log_file
-        ));
-        conf.push_str(&format!(
-            "TransferLog\t\t\t{}\n",
-            config.transfer_log
-        ));
+        conf.push_str(&format!("SystemLog\t\t\t{}\n", config.log_file));
+        conf.push_str(&format!("TransferLog\t\t\t{}\n", config.transfer_log));
 
         if config.extended_log {
             conf.push_str("LogFormat\t\t\tdefault \"%h %l %u %t \\\"%r\\\" %s %b\"\n");
@@ -748,10 +757,8 @@ impl FtpManager {
     /// Add an FTP share
     pub async fn add_share(&self, share: &NasShare) -> Result<()> {
         let config = self.read_config().await?;
-        let share_section = self.generate_share_section(
-            share,
-            &share.ftp_config.clone().unwrap_or_default(),
-        );
+        let share_section =
+            self.generate_share_section(share, &share.ftp_config.clone().unwrap_or_default());
 
         let mut new_config = config;
         new_config.push_str(&share_section);
@@ -893,9 +900,7 @@ impl FtpManager {
 
         tokio::fs::write(&self.proftpd_conf, content)
             .await
-            .map_err(|e| {
-                Error::Internal(format!("Failed to write proftpd.conf: {}", e))
-            })
+            .map_err(|e| Error::Internal(format!("Failed to write proftpd.conf: {}", e)))
     }
 
     /// Test ProFTPD configuration syntax
@@ -1012,10 +1017,7 @@ impl FtpManager {
 
     /// Check if ProFTPD is running
     pub async fn is_running(&self) -> bool {
-        let output = Command::new("pgrep")
-            .args(["-x", "proftpd"])
-            .output()
-            .await;
+        let output = Command::new("pgrep").args(["-x", "proftpd"]).output().await;
 
         match output {
             Ok(out) => out.status.success(),
@@ -1056,7 +1058,11 @@ impl FtpManager {
         };
 
         // Get active connections
-        let active_connections = self.get_connections().await.map(|c| c.len() as u32).unwrap_or(0);
+        let active_connections = self
+            .get_connections()
+            .await
+            .map(|c| c.len() as u32)
+            .unwrap_or(0);
 
         // Get uptime
         let uptime_seconds = self.get_uptime().await.unwrap_or(0);
@@ -1106,7 +1112,10 @@ impl FtpManager {
                     login_time: parts[3].to_string(),
                     idle_seconds: parts[4].parse().unwrap_or(0),
                     current_dir: parts.get(5).map(|s| s.to_string()).unwrap_or_default(),
-                    action: parts.get(6).map(|s| s.to_string()).unwrap_or_else(|| "IDLE".to_string()),
+                    action: parts
+                        .get(6)
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "IDLE".to_string()),
                     current_file: parts.get(7).map(|s| s.to_string()),
                 });
             }
@@ -1149,7 +1158,10 @@ impl FtpManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Failed to kill session: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to kill session: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -1158,9 +1170,9 @@ impl FtpManager {
     /// Add a virtual user
     pub async fn add_virtual_user(&self, user: &FtpVirtualUser) -> Result<()> {
         // Create home directory
-        tokio::fs::create_dir_all(&user.home_dir).await.map_err(|e| {
-            Error::Internal(format!("Failed to create home directory: {}", e))
-        })?;
+        tokio::fs::create_dir_all(&user.home_dir)
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to create home directory: {}", e)))?;
 
         // Use ftpasswd to add user
         let output = Command::new("ftpasswd")
@@ -1191,11 +1203,7 @@ impl FtpManager {
 
         // Set home directory ownership
         Command::new("chown")
-            .args([
-                "-R",
-                &format!("{}:{}", user.uid, user.gid),
-                &user.home_dir,
-            ])
+            .args(["-R", &format!("{}:{}", user.uid, user.gid), &user.home_dir])
             .output()
             .await
             .ok();
@@ -1215,9 +1223,7 @@ impl FtpManager {
             // Remove existing entry for this user
             content = content
                 .lines()
-                .filter(|line| {
-                    !line.starts_with(&format!("{}:", user.username))
-                })
+                .filter(|line| !line.starts_with(&format!("{}:", user.username)))
                 .collect::<Vec<_>>()
                 .join("\n");
 
@@ -1304,7 +1310,9 @@ impl FtpManager {
             .map_err(|e| Error::Internal(format!("Failed to create password hash: {}", e)))?;
 
         if !output.status.success() {
-            return Err(Error::Internal("Failed to create password hash".to_string()));
+            return Err(Error::Internal(
+                "Failed to create password hash".to_string(),
+            ));
         }
 
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -1355,10 +1363,7 @@ impl FtpManager {
 
     /// Parse HH:MM:SS or MM:SS to seconds
     fn parse_hms(&self, hms: &str) -> u64 {
-        let parts: Vec<u64> = hms
-            .split(':')
-            .filter_map(|p| p.parse().ok())
-            .collect();
+        let parts: Vec<u64> = hms.split(':').filter_map(|p| p.parse().ok()).collect();
 
         match parts.len() {
             3 => parts[0] * 3600 + parts[1] * 60 + parts[2],
@@ -1383,9 +1388,9 @@ impl FtpManager {
             });
         }
 
-        let content = tokio::fs::read_to_string(path).await.map_err(|e| {
-            Error::Internal(format!("Failed to read xferlog: {}", e))
-        })?;
+        let content = tokio::fs::read_to_string(path)
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to read xferlog: {}", e)))?;
 
         let mut stats = FtpTransferStats {
             bytes_uploaded: 0,
@@ -1485,7 +1490,11 @@ impl FtpManager {
         }
 
         // Backup and write
-        let backup_path = format!("{}.bak.{}", self.sshd_config, chrono::Utc::now().timestamp());
+        let backup_path = format!(
+            "{}.bak.{}",
+            self.sshd_config,
+            chrono::Utc::now().timestamp()
+        );
         tokio::fs::copy(&self.sshd_config, &backup_path).await.ok();
 
         tokio::fs::write(&self.sshd_config, new_content)
@@ -1528,7 +1537,10 @@ impl FtpManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("Failed to reload sshd: {}", stderr)));
+            return Err(Error::Internal(format!(
+                "Failed to reload sshd: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -1546,7 +1558,10 @@ impl FtpManager {
             let stderr = String::from_utf8_lossy(&output.stderr);
             // Ignore "already exists" errors
             if !stderr.contains("already exists") {
-                return Err(Error::Internal(format!("Failed to create group: {}", stderr)));
+                return Err(Error::Internal(format!(
+                    "Failed to create group: {}",
+                    stderr
+                )));
             }
         }
 
@@ -1573,11 +1588,7 @@ impl FtpManager {
     }
 
     /// Generate TLS certificate for FTP
-    pub async fn generate_tls_cert(
-        &self,
-        common_name: &str,
-        days: u32,
-    ) -> Result<FtpTlsConfig> {
+    pub async fn generate_tls_cert(&self, common_name: &str, days: u32) -> Result<FtpTlsConfig> {
         let cert_dir = "/etc/ssl/certs";
         let key_dir = "/etc/ssl/private";
 

@@ -6,13 +6,13 @@
 //! - Cross-backend migration (ZFS -> Ceph, etc.)
 //! - Migration progress tracking
 
+use chrono::{DateTime, Utc};
+use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn, error, debug};
-use horcrux_common::Result;
-use chrono::{DateTime, Utc};
+use tracing::{debug, error, info, warn};
 
 use super::StorageType;
 
@@ -166,9 +166,10 @@ impl StorageMigrationManager {
         // Check if volume is already being migrated
         let active = self.active_migrations.read().await;
         if active.contains_key(&volume_name) {
-            return Err(horcrux_common::Error::System(
-                format!("Volume {} is already being migrated", volume_name)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Volume {} is already being migrated",
+                volume_name
+            )));
         }
         drop(active);
 
@@ -259,7 +260,8 @@ impl StorageMigrationManager {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // Phase 3: Switch to new storage
-        self.update_state(&job.id, MigrationState::Switching).await?;
+        self.update_state(&job.id, MigrationState::Switching)
+            .await?;
 
         // QMP: block-job-complete to switch to mirror
 
@@ -407,9 +409,10 @@ impl StorageMigrationManager {
 
         match &job.state {
             MigrationState::Completed | MigrationState::Failed(_) | MigrationState::Cancelled => {
-                return Err(horcrux_common::Error::System(
-                    format!("Cannot cancel migration in state {:?}", job.state)
-                ));
+                return Err(horcrux_common::Error::System(format!(
+                    "Cannot cancel migration in state {:?}",
+                    job.state
+                )));
             }
             _ => {}
         }
@@ -453,9 +456,9 @@ impl StorageMigrationManager {
     /// Get migration job
     pub async fn get_job(&self, job_id: &str) -> Result<StorageMigrationJob> {
         let jobs = self.jobs.read().await;
-        jobs.get(job_id)
-            .cloned()
-            .ok_or_else(|| horcrux_common::Error::System(format!("Migration job {} not found", job_id)))
+        jobs.get(job_id).cloned().ok_or_else(|| {
+            horcrux_common::Error::System(format!("Migration job {} not found", job_id))
+        })
     }
 
     /// List all migration jobs
@@ -463,11 +466,13 @@ impl StorageMigrationManager {
         let jobs = self.jobs.read().await;
         jobs.values()
             .filter(|j| {
-                include_completed || !matches!(j.state,
-                    MigrationState::Completed |
-                    MigrationState::Failed(_) |
-                    MigrationState::Cancelled
-                )
+                include_completed
+                    || !matches!(
+                        j.state,
+                        MigrationState::Completed
+                            | MigrationState::Failed(_)
+                            | MigrationState::Cancelled
+                    )
             })
             .cloned()
             .collect()
@@ -541,15 +546,18 @@ mod tests {
     async fn test_start_migration() {
         let manager = StorageMigrationManager::new();
 
-        let job_id = manager.start_migration(
-            "vm-100-disk-0".to_string(),
-            "pool1".to_string(),
-            "pool2".to_string(),
-            StorageType::Directory,
-            StorageType::Directory,
-            None,
-            None,
-        ).await.unwrap();
+        let job_id = manager
+            .start_migration(
+                "vm-100-disk-0".to_string(),
+                "pool1".to_string(),
+                "pool2".to_string(),
+                StorageType::Directory,
+                StorageType::Directory,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
 
         let job = manager.get_job(&job_id).await.unwrap();
         assert_eq!(job.state, MigrationState::Completed);

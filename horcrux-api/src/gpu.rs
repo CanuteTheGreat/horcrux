@@ -50,10 +50,7 @@ impl GpuManager {
         let mut devices = Vec::new();
 
         // Use lspci to find GPU devices
-        let output = Command::new("lspci")
-            .args(["-nn", "-D"])
-            .output()
-            .await?;
+        let output = Command::new("lspci").args(["-nn", "-D"]).output().await?;
 
         if !output.status.success() {
             return Err(horcrux_common::Error::System(
@@ -202,10 +199,9 @@ impl GpuManager {
     /// Get specific GPU device
     pub async fn get_device(&self, pci_address: &str) -> Result<GpuDevice> {
         let devices = self.devices.read().await;
-        devices
-            .get(pci_address)
-            .cloned()
-            .ok_or_else(|| horcrux_common::Error::System(format!("GPU device {} not found", pci_address)))
+        devices.get(pci_address).cloned().ok_or_else(|| {
+            horcrux_common::Error::System(format!("GPU device {} not found", pci_address))
+        })
     }
 
     /// Bind GPU to vfio-pci driver for passthrough
@@ -307,7 +303,8 @@ impl GpuManager {
         // Check if IOMMU is enabled
         if !self.check_iommu_enabled().await {
             return Err(horcrux_common::Error::InvalidConfig(
-                "IOMMU is not enabled. Add intel_iommu=on or amd_iommu=on to kernel parameters".to_string(),
+                "IOMMU is not enabled. Add intel_iommu=on or amd_iommu=on to kernel parameters"
+                    .to_string(),
             ));
         }
 

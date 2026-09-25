@@ -1,5 +1,5 @@
-use leptos::*;
 use crate::api::*;
+use leptos::*;
 
 // All types imported from crate::api::* (SecurityEvent, SecurityIndicator, SecurityThreat, SecurityStats)
 
@@ -53,21 +53,29 @@ pub fn SecurityEventsPage() -> impl IntoView {
 
     // Filtered events
     let filtered_events = create_memo(move |_| {
-        security_events.get()
+        security_events
+            .get()
             .into_iter()
             .filter(|event| {
                 let search_match = if search_term.get().is_empty() {
                     true
                 } else {
                     let term = search_term.get().to_lowercase();
-                    event.description.to_lowercase().contains(&term) ||
-                    event.source_ip.to_lowercase().contains(&term) ||
-                    event.target_user.as_ref().map(|u| u.to_lowercase().contains(&term)).unwrap_or(false)
+                    event.description.to_lowercase().contains(&term)
+                        || event.source_ip.to_lowercase().contains(&term)
+                        || event
+                            .target_user
+                            .as_ref()
+                            .map(|u| u.to_lowercase().contains(&term))
+                            .unwrap_or(false)
                 };
 
-                let severity_match = filter_severity.get() == "all" || event.severity == filter_severity.get();
-                let status_match = filter_status.get() == "all" || event.status == filter_status.get();
-                let type_match = filter_event_type.get() == "all" || event.event_type == filter_event_type.get();
+                let severity_match =
+                    filter_severity.get() == "all" || event.severity == filter_severity.get();
+                let status_match =
+                    filter_status.get() == "all" || event.status == filter_status.get();
+                let type_match =
+                    filter_event_type.get() == "all" || event.event_type == filter_event_type.get();
 
                 search_match && severity_match && status_match && type_match
             })

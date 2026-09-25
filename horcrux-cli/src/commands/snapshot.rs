@@ -1,7 +1,6 @@
 ///! VM snapshot management commands
-
 use crate::api::ApiClient;
-use crate::output::{self, OutputFormat, format_bytes};
+use crate::output::{self, format_bytes, OutputFormat};
 use crate::SnapshotCommands;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -47,7 +46,8 @@ pub async fn handle_snapshot_command(
 ) -> Result<()> {
     match command {
         SnapshotCommands::List { vm_id } => {
-            let snapshots: Vec<Snapshot> = api.get(&format!("/api/vms/{}/snapshots", vm_id)).await?;
+            let snapshots: Vec<Snapshot> =
+                api.get(&format!("/api/vms/{}/snapshots", vm_id)).await?;
             let format = OutputFormat::from_str(output_format);
             let rows: Vec<SnapshotRow> = snapshots.into_iter().map(SnapshotRow::from).collect();
             output::print_output(rows, format)?;
@@ -85,7 +85,7 @@ pub async fn handle_snapshot_command(
             spinner.set_style(
                 ProgressStyle::default_spinner()
                     .template("{spinner:.green} {msg}")
-                    .unwrap()
+                    .unwrap(),
             );
             spinner.set_message(format!("Creating snapshot '{}'...", name));
             spinner.enable_steady_tick(std::time::Duration::from_millis(100));
@@ -118,7 +118,7 @@ pub async fn handle_snapshot_command(
             spinner.set_style(
                 ProgressStyle::default_spinner()
                     .template("{spinner:.green} {msg}")
-                    .unwrap()
+                    .unwrap(),
             );
             spinner.set_message("Restoring snapshot...");
             spinner.enable_steady_tick(std::time::Duration::from_millis(100));
@@ -152,7 +152,8 @@ pub async fn handle_snapshot_command(
         }
 
         SnapshotCommands::Tree { vm_id } => {
-            let snapshots: Vec<Snapshot> = api.get(&format!("/api/vms/{}/snapshots", vm_id)).await?;
+            let snapshots: Vec<Snapshot> =
+                api.get(&format!("/api/vms/{}/snapshots", vm_id)).await?;
 
             if snapshots.is_empty() {
                 output::print_info("No snapshots found for this VM");

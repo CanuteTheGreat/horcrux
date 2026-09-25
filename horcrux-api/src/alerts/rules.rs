@@ -2,8 +2,8 @@
 
 #![allow(dead_code)]
 
-use serde::{Deserialize, Serialize};
 use super::AlertSeverity;
+use serde::{Deserialize, Serialize};
 
 /// Type of metric to monitor
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,7 +69,7 @@ pub struct AlertCondition {
     pub operator: ComparisonOperator,
     pub threshold: f64,
     pub target_pattern: String, // e.g., "vm-*", "node-*", "*", "vm-100"
-    pub duration_seconds: u64,   // How long condition must be true before firing
+    pub duration_seconds: u64,  // How long condition must be true before firing
 }
 
 impl AlertCondition {

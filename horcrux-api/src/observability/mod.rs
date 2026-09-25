@@ -10,10 +10,10 @@
 
 #![allow(dead_code)]
 
+pub mod config;
 pub mod metrics;
 pub mod prometheus;
 pub mod tracing_export;
-pub mod config;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -170,12 +170,10 @@ impl MetricsExporter {
         let payload = MetricsPayload {
             resource_metrics: vec![ResourceMetrics {
                 resource: Resource {
-                    attributes: vec![
-                        Attribute {
-                            key: "service.name".to_string(),
-                            value: AttributeValue::String("horcrux".to_string()),
-                        },
-                    ],
+                    attributes: vec![Attribute {
+                        key: "service.name".to_string(),
+                        value: AttributeValue::String("horcrux".to_string()),
+                    }],
                 },
                 scope_metrics: vec![ScopeMetrics {
                     scope: InstrumentationScope {
@@ -199,10 +197,7 @@ impl MetricsExporter {
             .map_err(|e| format!("Failed to send metrics: {}", e))?;
 
         if !response.status().is_success() {
-            return Err(format!(
-                "Metrics export failed: HTTP {}",
-                response.status()
-            ));
+            return Err(format!("Metrics export failed: HTTP {}", response.status()));
         }
 
         Ok(())
@@ -239,12 +234,10 @@ impl TraceExporter {
         let payload = TracesPayload {
             resource_spans: vec![ResourceSpans {
                 resource: Resource {
-                    attributes: vec![
-                        Attribute {
-                            key: "service.name".to_string(),
-                            value: AttributeValue::String("horcrux".to_string()),
-                        },
-                    ],
+                    attributes: vec![Attribute {
+                        key: "service.name".to_string(),
+                        value: AttributeValue::String("horcrux".to_string()),
+                    }],
                 },
                 scope_spans: vec![ScopeSpans {
                     scope: InstrumentationScope {
@@ -334,9 +327,18 @@ pub struct Metric {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum MetricData {
-    Gauge { data_points: Vec<DataPoint> },
-    Sum { data_points: Vec<DataPoint>, aggregation_temporality: i32, is_monotonic: bool },
-    Histogram { data_points: Vec<HistogramDataPoint>, aggregation_temporality: i32 },
+    Gauge {
+        data_points: Vec<DataPoint>,
+    },
+    Sum {
+        data_points: Vec<DataPoint>,
+        aggregation_temporality: i32,
+        is_monotonic: bool,
+    },
+    Histogram {
+        data_points: Vec<HistogramDataPoint>,
+        aggregation_temporality: i32,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

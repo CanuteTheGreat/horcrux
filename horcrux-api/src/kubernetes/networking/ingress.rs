@@ -12,10 +12,7 @@ use crate::kubernetes::types::{
 
 /// List Ingresses in a namespace
 #[cfg(feature = "kubernetes")]
-pub async fn list_ingresses(
-    client: &K8sClient,
-    namespace: &str,
-) -> K8sResult<Vec<IngressInfo>> {
+pub async fn list_ingresses(client: &K8sClient, namespace: &str) -> K8sResult<Vec<IngressInfo>> {
     use k8s_openapi::api::networking::v1::Ingress;
     use kube::api::{Api, ListParams};
 
@@ -48,8 +45,9 @@ pub async fn create_ingress(
     request: &CreateIngressRequest,
 ) -> K8sResult<IngressInfo> {
     use k8s_openapi::api::networking::v1::{
-        HTTPIngressPath, HTTPIngressRuleValue, Ingress, IngressBackend, IngressRule as K8sIngressRule,
-        IngressServiceBackend, IngressSpec, IngressTLS, ServiceBackendPort,
+        HTTPIngressPath, HTTPIngressRuleValue, Ingress, IngressBackend,
+        IngressRule as K8sIngressRule, IngressServiceBackend, IngressSpec, IngressTLS,
+        ServiceBackendPort,
     };
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use kube::api::{Api, PostParams};
@@ -215,11 +213,7 @@ pub async fn update_ingress(
 
 /// Delete an Ingress
 #[cfg(feature = "kubernetes")]
-pub async fn delete_ingress(
-    client: &K8sClient,
-    namespace: &str,
-    name: &str,
-) -> K8sResult<()> {
+pub async fn delete_ingress(client: &K8sClient, namespace: &str, name: &str) -> K8sResult<()> {
     use k8s_openapi::api::networking::v1::Ingress;
     use kube::api::{Api, DeleteParams};
 
@@ -323,11 +317,10 @@ fn ingress_to_info(ingress: k8s_openapi::api::networking::v1::Ingress) -> Ingres
 
 // Stubs for when kubernetes feature is disabled
 #[cfg(not(feature = "kubernetes"))]
-pub async fn list_ingresses(
-    _client: &K8sClient,
-    _namespace: &str,
-) -> K8sResult<Vec<IngressInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+pub async fn list_ingresses(_client: &K8sClient, _namespace: &str) -> K8sResult<Vec<IngressInfo>> {
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -336,7 +329,9 @@ pub async fn get_ingress(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<IngressInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -344,7 +339,9 @@ pub async fn create_ingress(
     _client: &K8sClient,
     _request: &CreateIngressRequest,
 ) -> K8sResult<IngressInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -354,14 +351,14 @@ pub async fn update_ingress(
     _name: &str,
     _request: &CreateIngressRequest,
 ) -> K8sResult<IngressInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
-pub async fn delete_ingress(
-    _client: &K8sClient,
-    _namespace: &str,
-    _name: &str,
-) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+pub async fn delete_ingress(_client: &K8sClient, _namespace: &str, _name: &str) -> K8sResult<()> {
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }

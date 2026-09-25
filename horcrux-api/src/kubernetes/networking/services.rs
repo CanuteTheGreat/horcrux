@@ -10,10 +10,7 @@ use crate::kubernetes::types::{CreateServiceRequest, ServiceInfo, ServicePort, S
 
 /// List Services in a namespace
 #[cfg(feature = "kubernetes")]
-pub async fn list_services(
-    client: &K8sClient,
-    namespace: &str,
-) -> K8sResult<Vec<ServiceInfo>> {
+pub async fn list_services(client: &K8sClient, namespace: &str) -> K8sResult<Vec<ServiceInfo>> {
     use k8s_openapi::api::core::v1::Service;
     use kube::api::{Api, ListParams};
 
@@ -161,11 +158,7 @@ pub async fn update_service(
 
 /// Delete a Service
 #[cfg(feature = "kubernetes")]
-pub async fn delete_service(
-    client: &K8sClient,
-    namespace: &str,
-    name: &str,
-) -> K8sResult<()> {
+pub async fn delete_service(client: &K8sClient, namespace: &str, name: &str) -> K8sResult<()> {
     use k8s_openapi::api::core::v1::Service;
     use kube::api::{Api, DeleteParams};
 
@@ -235,7 +228,9 @@ fn service_to_info(service: k8s_openapi::api::core::v1::Service) -> ServiceInfo 
 // Stubs for when kubernetes feature is disabled
 #[cfg(not(feature = "kubernetes"))]
 pub async fn list_services(_client: &K8sClient, _namespace: &str) -> K8sResult<Vec<ServiceInfo>> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -244,7 +239,9 @@ pub async fn get_service(
     _namespace: &str,
     _name: &str,
 ) -> K8sResult<ServiceInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -252,7 +249,9 @@ pub async fn create_service(
     _client: &K8sClient,
     _request: &CreateServiceRequest,
 ) -> K8sResult<ServiceInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
@@ -262,10 +261,14 @@ pub async fn update_service(
     _name: &str,
     _request: &CreateServiceRequest,
 ) -> K8sResult<ServiceInfo> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "kubernetes"))]
 pub async fn delete_service(_client: &K8sClient, _namespace: &str, _name: &str) -> K8sResult<()> {
-    Err(K8sError::Internal("Kubernetes feature not enabled".to_string()))
+    Err(K8sError::Internal(
+        "Kubernetes feature not enabled".to_string(),
+    ))
 }

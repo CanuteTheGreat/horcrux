@@ -3,8 +3,8 @@
 //! Handles ConfigMaps, Secrets, PVCs, PVs, and StorageClasses.
 
 pub mod configmaps;
-pub mod secrets;
 pub mod pvcs;
+pub mod secrets;
 pub mod storageclasses;
 
 /// Config and storage manager

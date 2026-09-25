@@ -2,8 +2,8 @@
 //!
 //! Manages rsyncd for efficient backup and sync operations.
 
-use horcrux_common::{Error, Result};
 use crate::nas::shares::NasShare;
+use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
@@ -182,20 +182,32 @@ max connections = {}
         ));
 
         if !module.auth_users.is_empty() {
-            section.push_str(&format!("    auth users = {}\n", module.auth_users.join(",")));
+            section.push_str(&format!(
+                "    auth users = {}\n",
+                module.auth_users.join(",")
+            ));
             if let Some(ref secrets) = module.secrets_file {
                 section.push_str(&format!("    secrets file = {}\n", secrets));
             }
         }
 
         if !module.hosts_allow.is_empty() {
-            section.push_str(&format!("    hosts allow = {}\n", module.hosts_allow.join(" ")));
+            section.push_str(&format!(
+                "    hosts allow = {}\n",
+                module.hosts_allow.join(" ")
+            ));
         }
         if !module.hosts_deny.is_empty() {
-            section.push_str(&format!("    hosts deny = {}\n", module.hosts_deny.join(" ")));
+            section.push_str(&format!(
+                "    hosts deny = {}\n",
+                module.hosts_deny.join(" ")
+            ));
         }
 
-        section.push_str(&format!("    max connections = {}\n", module.max_connections));
+        section.push_str(&format!(
+            "    max connections = {}\n",
+            module.max_connections
+        ));
 
         if module.transfer_logging {
             section.push_str("    transfer logging = yes\n");
@@ -210,9 +222,7 @@ max connections = {}
         let config = self.generate_config(modules);
         tokio::fs::write(&self.config_path, config)
             .await
-            .map_err(|e| {
-                Error::Internal(format!("Failed to write rsyncd.conf: {}", e))
-            })
+            .map_err(|e| Error::Internal(format!("Failed to write rsyncd.conf: {}", e)))
     }
 
     /// Reload rsync daemon
@@ -336,14 +346,17 @@ max connections = {}
                         "read only" => module.read_only = value == "yes",
                         "list" => module.list = value == "yes",
                         "auth users" => {
-                            module.auth_users = value.split(',').map(|s| s.trim().to_string()).collect();
+                            module.auth_users =
+                                value.split(',').map(|s| s.trim().to_string()).collect();
                         }
                         "secrets file" => module.secrets_file = Some(value.to_string()),
                         "hosts allow" => {
-                            module.hosts_allow = value.split_whitespace().map(|s| s.to_string()).collect();
+                            module.hosts_allow =
+                                value.split_whitespace().map(|s| s.to_string()).collect();
                         }
                         "hosts deny" => {
-                            module.hosts_deny = value.split_whitespace().map(|s| s.to_string()).collect();
+                            module.hosts_deny =
+                                value.split_whitespace().map(|s| s.to_string()).collect();
                         }
                         "max connections" => {
                             module.max_connections = value.parse().unwrap_or(10);
@@ -370,7 +383,10 @@ max connections = {}
                 return Ok(module);
             }
         }
-        Err(Error::NotFound(format!("Rsync module '{}' not found", name)))
+        Err(Error::NotFound(format!(
+            "Rsync module '{}' not found",
+            name
+        )))
     }
 
     /// Add a module to the configuration
@@ -411,14 +427,19 @@ max connections = {}
     /// Delete a module
     pub async fn delete_module(&self, name: &str) -> Result<()> {
         let modules = self.list_modules().await?;
-        let new_modules: Vec<RsyncModule> = modules.into_iter().filter(|m| m.name != name).collect();
+        let new_modules: Vec<RsyncModule> =
+            modules.into_iter().filter(|m| m.name != name).collect();
 
         self.write_config(&new_modules).await?;
         self.reload().await
     }
 
     /// Create a secrets file for a module
-    pub async fn create_secrets_file(&self, module_name: &str, users: &[(String, String)]) -> Result<String> {
+    pub async fn create_secrets_file(
+        &self,
+        module_name: &str,
+        users: &[(String, String)],
+    ) -> Result<String> {
         let secrets_path = format!("/etc/rsyncd.secrets.{}", module_name);
 
         let mut content = String::new();
@@ -426,9 +447,9 @@ max connections = {}
             content.push_str(&format!("{}:{}\n", user, password));
         }
 
-        tokio::fs::write(&secrets_path, &content).await.map_err(|e| {
-            Error::Internal(format!("Failed to write secrets file: {}", e))
-        })?;
+        tokio::fs::write(&secrets_path, &content)
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to write secrets file: {}", e)))?;
 
         // Set permissions to 600
         let output = Command::new("chmod")
@@ -438,7 +459,9 @@ max connections = {}
 
         if let Ok(out) = output {
             if !out.status.success() {
-                return Err(Error::Internal("Failed to set secrets file permissions".to_string()));
+                return Err(Error::Internal(
+                    "Failed to set secrets file permissions".to_string(),
+                ));
             }
         }
 
@@ -446,7 +469,12 @@ max connections = {}
     }
 
     /// Add a user to an existing secrets file
-    pub async fn add_user_to_secrets(&self, secrets_path: &str, user: &str, password: &str) -> Result<()> {
+    pub async fn add_user_to_secrets(
+        &self,
+        secrets_path: &str,
+        user: &str,
+        password: &str,
+    ) -> Result<()> {
         let mut content = tokio::fs::read_to_string(secrets_path)
             .await
             .unwrap_or_default();
@@ -463,9 +491,9 @@ max connections = {}
         }
         content.push_str(&format!("{}:{}\n", user, password));
 
-        tokio::fs::write(secrets_path, content).await.map_err(|e| {
-            Error::Internal(format!("Failed to write secrets file: {}", e))
-        })
+        tokio::fs::write(secrets_path, content)
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to write secrets file: {}", e)))
     }
 
     /// Remove a user from a secrets file
@@ -481,9 +509,9 @@ max connections = {}
 
         let new_content = lines.join("\n") + "\n";
 
-        tokio::fs::write(secrets_path, new_content).await.map_err(|e| {
-            Error::Internal(format!("Failed to write secrets file: {}", e))
-        })
+        tokio::fs::write(secrets_path, new_content)
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to write secrets file: {}", e)))
     }
 
     /// Set global configuration

@@ -8,11 +8,11 @@
 
 #![allow(dead_code)]
 
+use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use horcrux_common::Result;
 
 // Permission and Privilege structures - duplicated from rbac for now
 // In production, these would be exported from rbac module
@@ -107,7 +107,7 @@ pub struct ResourcePool {
     pub name: String,
     pub description: String,
     pub resource_type: ResourceType,
-    pub resources: Vec<String>,     // Resource IDs
+    pub resources: Vec<String>,      // Resource IDs
     pub allowed_groups: Vec<String>, // Groups with access
     pub allowed_users: Vec<String>,  // Individual users with access
     pub inherited_permissions: Vec<Permission>,
@@ -148,9 +148,10 @@ impl GroupManager {
         let mut groups = self.groups.write().await;
 
         if groups.contains_key(&group.id) {
-            return Err(horcrux_common::Error::InvalidConfig(
-                format!("Group {} already exists", group.id)
-            ));
+            return Err(horcrux_common::Error::InvalidConfig(format!(
+                "Group {} already exists",
+                group.id
+            )));
         }
 
         groups.insert(group.id.clone(), group.clone());
@@ -165,9 +166,7 @@ impl GroupManager {
         groups
             .get(group_id)
             .cloned()
-            .ok_or_else(|| horcrux_common::Error::System(
-                format!("Group {} not found", group_id)
-            ))
+            .ok_or_else(|| horcrux_common::Error::System(format!("Group {} not found", group_id)))
     }
 
     /// List all groups
@@ -181,9 +180,10 @@ impl GroupManager {
         let mut groups = self.groups.write().await;
 
         if !groups.contains_key(&group.id) {
-            return Err(horcrux_common::Error::System(
-                format!("Group {} not found", group.id)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Group {} not found",
+                group.id
+            )));
         }
 
         let mut updated_group = group;
@@ -200,9 +200,10 @@ impl GroupManager {
         let mut groups = self.groups.write().await;
 
         if groups.remove(group_id).is_none() {
-            return Err(horcrux_common::Error::System(
-                format!("Group {} not found", group_id)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Group {} not found",
+                group_id
+            )));
         }
 
         tracing::info!("Deleted user group: {}", group_id);
@@ -213,10 +214,9 @@ impl GroupManager {
     pub async fn add_user_to_group(&self, group_id: &str, user_id: &str) -> Result<()> {
         let mut groups = self.groups.write().await;
 
-        let group = groups.get_mut(group_id)
-            .ok_or_else(|| horcrux_common::Error::System(
-                format!("Group {} not found", group_id)
-            ))?;
+        let group = groups.get_mut(group_id).ok_or_else(|| {
+            horcrux_common::Error::System(format!("Group {} not found", group_id))
+        })?;
 
         if !group.members.contains(&user_id.to_string()) {
             group.members.push(user_id.to_string());
@@ -231,10 +231,9 @@ impl GroupManager {
     pub async fn remove_user_from_group(&self, group_id: &str, user_id: &str) -> Result<()> {
         let mut groups = self.groups.write().await;
 
-        let group = groups.get_mut(group_id)
-            .ok_or_else(|| horcrux_common::Error::System(
-                format!("Group {} not found", group_id)
-            ))?;
+        let group = groups.get_mut(group_id).ok_or_else(|| {
+            horcrux_common::Error::System(format!("Group {} not found", group_id))
+        })?;
 
         group.members.retain(|id| id != user_id);
         group.updated_at = chrono::Utc::now().timestamp();
@@ -293,7 +292,8 @@ impl GroupManager {
 
         // Remove duplicates
         permissions.sort_by(|a, b| {
-            a.path.cmp(&b.path)
+            a.path
+                .cmp(&b.path)
                 .then(a.privilege.to_string().cmp(&b.privilege.to_string()))
         });
         permissions.dedup_by(|a, b| {
@@ -328,9 +328,10 @@ impl GroupManager {
         let mut pools = self.pools.write().await;
 
         if pools.contains_key(&pool.id) {
-            return Err(horcrux_common::Error::InvalidConfig(
-                format!("Pool {} already exists", pool.id)
-            ));
+            return Err(horcrux_common::Error::InvalidConfig(format!(
+                "Pool {} already exists",
+                pool.id
+            )));
         }
 
         pools.insert(pool.id.clone(), pool.clone());
@@ -345,9 +346,7 @@ impl GroupManager {
         pools
             .get(pool_id)
             .cloned()
-            .ok_or_else(|| horcrux_common::Error::System(
-                format!("Pool {} not found", pool_id)
-            ))
+            .ok_or_else(|| horcrux_common::Error::System(format!("Pool {} not found", pool_id)))
     }
 
     /// List all resource pools
@@ -384,7 +383,11 @@ impl GroupManager {
     }
 
     /// Get all resources in pools accessible by a user
-    pub async fn get_user_accessible_resources(&self, user_id: &str, resource_type: &ResourceType) -> Vec<String> {
+    pub async fn get_user_accessible_resources(
+        &self,
+        user_id: &str,
+        resource_type: &ResourceType,
+    ) -> Vec<String> {
         let pools = self.list_pools().await;
         let mut resources = Vec::new();
 
@@ -441,7 +444,10 @@ mod tests {
         };
 
         manager.create_group(group).await.unwrap();
-        manager.add_user_to_group("admins", "user123").await.unwrap();
+        manager
+            .add_user_to_group("admins", "user123")
+            .await
+            .unwrap();
 
         let groups = manager.get_user_groups("user123").await;
         assert_eq!(groups.len(), 1);
@@ -457,12 +463,10 @@ mod tests {
             id: "staff".to_string(),
             name: "Staff".to_string(),
             description: "All staff".to_string(),
-            permissions: vec![
-                Permission {
-                    path: "/api/vms/*".to_string(),
-                    privilege: Privilege::VmAudit,
-                }
-            ],
+            permissions: vec![Permission {
+                path: "/api/vms/*".to_string(),
+                privilege: Privilege::VmAudit,
+            }],
             parent_groups: vec![],
             members: vec![],
             created_at: 0,
@@ -474,12 +478,10 @@ mod tests {
             id: "developers".to_string(),
             name: "Developers".to_string(),
             description: "Development team".to_string(),
-            permissions: vec![
-                Permission {
-                    path: "/api/vms/*".to_string(),
-                    privilege: Privilege::VmConfig,
-                }
-            ],
+            permissions: vec![Permission {
+                path: "/api/vms/*".to_string(),
+                privilege: Privilege::VmConfig,
+            }],
             parent_groups: vec!["staff".to_string()],
             members: vec!["dev1".to_string()],
             created_at: 0,
@@ -531,7 +533,9 @@ mod tests {
         assert!(manager.check_pool_access("prod-vms", "admin1").await);
 
         // Get accessible resources
-        let resources = manager.get_user_accessible_resources("admin1", &ResourceType::Vm).await;
+        let resources = manager
+            .get_user_accessible_resources("admin1", &ResourceType::Vm)
+            .await;
         assert_eq!(resources.len(), 2);
     }
 }

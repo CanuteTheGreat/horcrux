@@ -1,8 +1,8 @@
 //! GPU Passthrough Management Page
 
+use crate::api::{fetch_json, post_empty};
 use leptos::*;
 use serde::{Deserialize, Serialize};
-use crate::api::{fetch_json, post_empty};
 
 /// GPU device information
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,6 +1,5 @@
 ///! Real system metrics collection
 ///! Reads from /proc filesystem for accurate node metrics
-
 use std::fs;
 use std::io;
 
@@ -20,7 +19,14 @@ pub struct CpuStats {
 impl CpuStats {
     /// Calculate total CPU time
     pub fn total(&self) -> u64 {
-        self.user + self.nice + self.system + self.idle + self.iowait + self.irq + self.softirq + self.steal
+        self.user
+            + self.nice
+            + self.system
+            + self.idle
+            + self.iowait
+            + self.irq
+            + self.softirq
+            + self.steal
     }
 
     /// Calculate idle time
@@ -64,7 +70,10 @@ pub fn read_cpu_stats() -> io::Result<CpuStats> {
         }
     }
 
-    Err(io::Error::new(io::ErrorKind::NotFound, "CPU stats not found"))
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        "CPU stats not found",
+    ))
 }
 
 /// Memory statistics from /proc/meminfo
@@ -80,7 +89,8 @@ pub struct MemoryStats {
 impl MemoryStats {
     /// Calculate used memory
     pub fn used(&self) -> u64 {
-        self.total.saturating_sub(self.free + self.buffers + self.cached)
+        self.total
+            .saturating_sub(self.free + self.buffers + self.cached)
     }
 
     /// Calculate usage percentage
@@ -147,7 +157,10 @@ pub fn read_load_average() -> io::Result<LoadAverage> {
             fifteen_min: parts[2].parse().unwrap_or(0.0),
         })
     } else {
-        Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid loadavg format"))
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid loadavg format",
+        ))
     }
 }
 
@@ -165,7 +178,10 @@ pub fn read_uptime() -> io::Result<u64> {
         let uptime: f64 = parts[0].parse().unwrap_or(0.0);
         Ok(uptime as u64)
     } else {
-        Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid uptime format"))
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid uptime format",
+        ))
     }
 }
 
@@ -194,7 +210,10 @@ pub fn read_disk_stats(device: &str) -> io::Result<DiskStats> {
         }
     }
 
-    Err(io::Error::new(io::ErrorKind::NotFound, format!("Device {} not found", device)))
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("Device {} not found", device),
+    ))
 }
 
 /// Network statistics from /proc/net/dev
@@ -220,16 +239,19 @@ pub fn read_network_stats(interface: &str) -> io::Result<NetworkStats> {
         }
     }
 
-    Err(io::Error::new(io::ErrorKind::NotFound, format!("Interface {} not found", interface)))
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("Interface {} not found", interface),
+    ))
 }
 
 /// Process statistics from /proc/[pid]/stat
 #[derive(Debug, Clone)]
 pub struct ProcessStats {
     pub pid: u32,
-    pub utime: u64,  // User mode time
-    pub stime: u64,  // Kernel mode time
-    pub rss: u64,    // Resident Set Size (pages)
+    pub utime: u64, // User mode time
+    pub stime: u64, // Kernel mode time
+    pub rss: u64,   // Resident Set Size (pages)
 }
 
 /// Read process stats from /proc/[pid]/stat
@@ -248,7 +270,10 @@ pub fn read_process_stats(pid: u32) -> io::Result<ProcessStats> {
             rss: parts[23].parse().unwrap_or(0),
         })
     } else {
-        Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid stat format"))
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid stat format",
+        ))
     }
 }
 

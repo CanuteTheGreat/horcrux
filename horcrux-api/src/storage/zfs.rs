@@ -46,7 +46,10 @@ impl ZfsManager {
         volume_name: &str,
         size_gb: u64,
     ) -> Result<String> {
-        info!("Creating ZFS volume: {}/{} ({}GB)", pool_path, volume_name, size_gb);
+        info!(
+            "Creating ZFS volume: {}/{} ({}GB)",
+            pool_path, volume_name, size_gb
+        );
 
         let volume_path = format!("{}/{}", pool_path, volume_name);
 
@@ -260,7 +263,8 @@ impl ZfsManager {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let pools = stdout.lines()
+        let pools = stdout
+            .lines()
             .filter_map(|line| {
                 let parts: Vec<_> = line.split('\t').collect();
                 if parts.len() >= 6 {
@@ -312,9 +316,7 @@ impl ZfsManager {
             .arg(pool_name)
             .output()
             .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to start scrub: {}", e))
-            })?;
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to start scrub: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -337,9 +339,7 @@ impl ZfsManager {
             .arg(pool_name)
             .output()
             .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to stop scrub: {}", e))
-            })?;
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to stop scrub: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -378,14 +378,13 @@ impl ZfsManager {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let snapshots = stdout.lines()
+        let snapshots = stdout
+            .lines()
             .filter_map(|line| {
                 let parts: Vec<_> = line.split('\t').collect();
                 if parts.len() >= 4 {
                     let name = parts[0].to_string();
-                    let snapshot_name = name.split('@').last()
-                        .unwrap_or(&name)
-                        .to_string();
+                    let snapshot_name = name.split('@').last().unwrap_or(&name).to_string();
 
                     Some(ZfsSnapshotInfo {
                         full_name: name,
@@ -452,8 +451,7 @@ impl ZfsManager {
             cmd.arg("-i").arg(base);
         }
 
-        cmd.arg(snapshot_path)
-            .stdout(std::process::Stdio::piped());
+        cmd.arg(snapshot_path).stdout(std::process::Stdio::piped());
 
         let child = cmd.spawn().map_err(|e| {
             horcrux_common::Error::System(format!("Failed to start ZFS send: {}", e))

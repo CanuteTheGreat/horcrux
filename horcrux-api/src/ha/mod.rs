@@ -6,21 +6,21 @@
 
 pub mod fencing;
 
+use chrono::{DateTime, Utc};
 use horcrux_common::Result;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
 
 /// HA resource state
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum HaState {
-    Started,    // Resource is running
-    Stopped,    // Resource is intentionally stopped
-    Migrating,  // Resource is being migrated
-    Error,      // Resource failed and needs attention
-    Disabled,   // HA disabled for this resource
+    Started,   // Resource is running
+    Stopped,   // Resource is intentionally stopped
+    Migrating, // Resource is being migrated
+    Error,     // Resource failed and needs attention
+    Disabled,  // HA disabled for this resource
 }
 
 /// HA resource (VM or container)
@@ -43,8 +43,8 @@ pub struct HaResource {
 pub struct HaGroup {
     pub name: String,
     pub nodes: Vec<String>,
-    pub restricted: bool,   // Only use nodes in group
-    pub no_failback: bool,  // Don't migrate back to preferred node
+    pub restricted: bool,  // Only use nodes in group
+    pub no_failback: bool, // Don't migrate back to preferred node
 }
 
 /// HA resource configuration
@@ -121,12 +121,17 @@ impl HaManager {
         let mut groups = self.groups.write().await;
 
         if groups.contains_key(&group.name) {
-            return Err(horcrux_common::Error::System(
-                format!("HA group {} already exists", group.name)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "HA group {} already exists",
+                group.name
+            )));
         }
 
-        tracing::info!("Adding HA group: {} with nodes {:?}", group.name, group.nodes);
+        tracing::info!(
+            "Adding HA group: {} with nodes {:?}",
+            group.name,
+            group.nodes
+        );
         groups.insert(group.name.clone(), group);
         Ok(())
     }
@@ -135,13 +140,13 @@ impl HaManager {
     pub async fn remove_group(&self, name: &str) -> Result<()> {
         // Check if any resources use this group
         let resources = self.resources.read().await;
-        let using_group = resources.values()
-            .any(|r| r.group == name);
+        let using_group = resources.values().any(|r| r.group == name);
 
         if using_group {
-            return Err(horcrux_common::Error::System(
-                format!("Cannot remove group {}: resources still using it", name)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "Cannot remove group {}: resources still using it",
+                name
+            )));
         }
 
         drop(resources);
@@ -164,18 +169,20 @@ impl HaManager {
         {
             let groups = self.groups.read().await;
             if !groups.contains_key(&config.group) {
-                return Err(horcrux_common::Error::System(
-                    format!("HA group {} does not exist", config.group)
-                ));
+                return Err(horcrux_common::Error::System(format!(
+                    "HA group {} does not exist",
+                    config.group
+                )));
             }
         }
 
         let mut resources = self.resources.write().await;
 
         if resources.contains_key(&config.vm_id) {
-            return Err(horcrux_common::Error::System(
-                format!("VM {} already has HA enabled", config.vm_id)
-            ));
+            return Err(horcrux_common::Error::System(format!(
+                "VM {} already has HA enabled",
+                config.vm_id
+            )));
         }
 
         let resource = HaResource {
@@ -191,7 +198,11 @@ impl HaManager {
             last_state_change: Utc::now(),
         };
 
-        tracing::info!("Added HA resource: VM {} to group {}", config.vm_id, config.group);
+        tracing::info!(
+            "Added HA resource: VM {} to group {}",
+            config.vm_id,
+            config.group
+        );
         resources.insert(config.vm_id, resource);
 
         Ok(())
@@ -205,9 +216,10 @@ impl HaManager {
             tracing::info!("Removed HA resource: VM {}", vm_id);
             Ok(())
         } else {
-            Err(horcrux_common::Error::System(
-                format!("VM {} not managed by HA", vm_id)
-            ))
+            Err(horcrux_common::Error::System(format!(
+                "VM {} not managed by HA",
+                vm_id
+            )))
         }
     }
 
@@ -242,7 +254,8 @@ impl HaManager {
             if resource.relocate_count >= resource.max_relocate {
                 tracing::error!(
                     "VM {} exceeded max relocations ({}), setting to error state",
-                    vm_id, resource.max_relocate
+                    vm_id,
+                    resource.max_relocate
                 );
                 resource.state = HaState::Error;
                 continue;
@@ -267,7 +280,8 @@ impl HaManager {
                     new_state: HaState::Migrating,
                     node: target.clone(),
                     message: format!("Migrating from failed node {}", failed_node),
-                }).await;
+                })
+                .await;
 
                 migrated_vms.push(*vm_id);
             } else {
@@ -305,11 +319,19 @@ impl HaManager {
                 old_state: HaState::Error,
                 new_state: HaState::Started,
                 node: node.to_string(),
-                message: format!("Restart attempt {}/{}", resource.restart_count, resource.max_restart),
-            }).await;
+                message: format!(
+                    "Restart attempt {}/{}",
+                    resource.restart_count, resource.max_restart
+                ),
+            })
+            .await;
 
-            tracing::info!("Attempting restart {}/{} for VM {}",
-                resource.restart_count, resource.max_restart, vm_id);
+            tracing::info!(
+                "Attempting restart {}/{} for VM {}",
+                resource.restart_count,
+                resource.max_restart,
+                vm_id
+            );
 
             return Ok(HaAction::Restart);
         }
@@ -332,9 +354,14 @@ impl HaManager {
                     new_state: HaState::Migrating,
                     node: target.clone(),
                     message: format!("Migrating after {} failed restarts", resource.max_restart),
-                }).await;
+                })
+                .await;
 
-                tracing::info!("Migrating VM {} to {} after restart failures", vm_id, target);
+                tracing::info!(
+                    "Migrating VM {} to {} after restart failures",
+                    vm_id,
+                    target
+                );
                 return Ok(HaAction::Migrate(target));
             }
         }
@@ -350,9 +377,13 @@ impl HaManager {
             new_state: HaState::Error,
             node: node.to_string(),
             message: "All recovery attempts exhausted".to_string(),
-        }).await;
+        })
+        .await;
 
-        tracing::error!("VM {} exceeded all recovery limits, setting to error state", vm_id);
+        tracing::error!(
+            "VM {} exceeded all recovery limits, setting to error state",
+            vm_id
+        );
         Ok(HaAction::None)
     }
 
@@ -407,7 +438,12 @@ impl HaManager {
     }
 
     /// Update resource state (called when state changes externally)
-    pub async fn update_resource_state(&self, vm_id: u32, new_state: HaState, node: Option<String>) -> Result<()> {
+    pub async fn update_resource_state(
+        &self,
+        vm_id: u32,
+        new_state: HaState,
+        node: Option<String>,
+    ) -> Result<()> {
         let mut resources = self.resources.write().await;
 
         let resource = resources.get_mut(&vm_id).ok_or_else(|| {
@@ -427,7 +463,12 @@ impl HaManager {
             resource.restart_count = 0;
         }
 
-        tracing::info!("Updated HA resource VM {} state: {:?} -> {:?}", vm_id, old_state, new_state);
+        tracing::info!(
+            "Updated HA resource VM {} state: {:?} -> {:?}",
+            vm_id,
+            old_state,
+            new_state
+        );
 
         Ok(())
     }

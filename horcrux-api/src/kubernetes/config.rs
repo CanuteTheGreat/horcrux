@@ -33,7 +33,11 @@ impl KubeconfigStore {
         vault: Option<Arc<VaultManager>>,
         encryption: Option<Arc<EncryptionManager>>,
     ) -> Self {
-        Self { db, vault, encryption }
+        Self {
+            db,
+            vault,
+            encryption,
+        }
     }
 
     /// Store kubeconfig for a cluster
@@ -46,14 +50,14 @@ impl KubeconfigStore {
                 data.insert("kubeconfig".to_string(), kubeconfig.to_string());
 
                 vault
-                    .write_secret(&format!("kubernetes/clusters/{}/kubeconfig", cluster_id), data)
+                    .write_secret(
+                        &format!("kubernetes/clusters/{}/kubeconfig", cluster_id),
+                        data,
+                    )
                     .await
                     .map_err(|e| K8sError::Internal(format!("Failed to store in Vault: {}", e)))?;
 
-                tracing::info!(
-                    "Stored kubeconfig for cluster {} in Vault",
-                    cluster_id
-                );
+                tracing::info!("Stored kubeconfig for cluster {} in Vault", cluster_id);
                 return Ok(());
             }
         }
@@ -120,11 +124,7 @@ impl KubeconfigStore {
                         }
                     }
                     Err(e) => {
-                        tracing::debug!(
-                            "Kubeconfig not found in Vault for {}: {}",
-                            cluster_id,
-                            e
-                        );
+                        tracing::debug!("Kubeconfig not found in Vault for {}: {}", cluster_id, e);
                     }
                 }
             }
@@ -132,13 +132,12 @@ impl KubeconfigStore {
 
         // Fall back to database
         if let Some(db) = &self.db {
-            let row: Option<(Option<String>,)> = sqlx::query_as(
-                "SELECT kubeconfig_encrypted FROM k8s_clusters WHERE id = ?",
-            )
-            .bind(cluster_id)
-            .fetch_optional(db.pool())
-            .await
-            .map_err(|e| K8sError::Internal(format!("Database query failed: {}", e)))?;
+            let row: Option<(Option<String>,)> =
+                sqlx::query_as("SELECT kubeconfig_encrypted FROM k8s_clusters WHERE id = ?")
+                    .bind(cluster_id)
+                    .fetch_optional(db.pool())
+                    .await
+                    .map_err(|e| K8sError::Internal(format!("Database query failed: {}", e)))?;
 
             if let Some((Some(encrypted_kubeconfig),)) = row {
                 // Decrypt the kubeconfig if encryption is available
@@ -326,9 +325,7 @@ pub mod db {
         }
         query.push_str(" WHERE id = ?");
 
-        let mut q = sqlx::query(&query)
-            .bind(status.to_string())
-            .bind(now);
+        let mut q = sqlx::query(&query).bind(status.to_string()).bind(now);
 
         if let Some(v) = version {
             q = q.bind(v);

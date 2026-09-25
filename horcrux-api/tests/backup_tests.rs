@@ -2,8 +2,8 @@
 //! Tests for backup creation, restoration, scheduling, and retention
 
 use horcrux_api::backup::{
-    BackupManager, BackupConfig, BackupMode, Compression, TargetType,
-    BackupJob, RetentionPolicy, Backup,
+    Backup, BackupConfig, BackupJob, BackupManager, BackupMode, Compression, RetentionPolicy,
+    TargetType,
 };
 
 #[tokio::test]
@@ -15,11 +15,7 @@ async fn test_backup_manager_creation() {
 
 #[tokio::test]
 async fn test_backup_modes() {
-    let modes = vec![
-        BackupMode::Snapshot,
-        BackupMode::Suspend,
-        BackupMode::Stop,
-    ];
+    let modes = vec![BackupMode::Snapshot, BackupMode::Suspend, BackupMode::Stop];
 
     for mode in modes {
         let json = serde_json::to_string(&mode).unwrap();
@@ -46,10 +42,7 @@ async fn test_compression_types() {
 
 #[tokio::test]
 async fn test_target_types() {
-    let targets = vec![
-        TargetType::Vm,
-        TargetType::Container,
-    ];
+    let targets = vec![TargetType::Vm, TargetType::Container];
 
     for target in targets {
         let json = serde_json::to_string(&target).unwrap();

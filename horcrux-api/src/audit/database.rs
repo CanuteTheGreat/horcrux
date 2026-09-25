@@ -148,7 +148,8 @@ impl DatabaseAuditLogger {
             let result_str: String = row.get("result");
 
             events.push(AuditEvent {
-                timestamp: DateTime::from_timestamp(timestamp_secs, 0).unwrap_or_else(|| Utc::now()),
+                timestamp: DateTime::from_timestamp(timestamp_secs, 0)
+                    .unwrap_or_else(|| Utc::now()),
                 event_type: Self::parse_event_type(&event_type_str),
                 severity: Self::parse_severity(&severity_str),
                 user: row.get("username"),
@@ -166,12 +167,12 @@ impl DatabaseAuditLogger {
 
     /// Get event counts by type
     pub async fn get_event_counts(&self) -> Result<std::collections::HashMap<String, i64>> {
-        let rows = sqlx::query("SELECT event_type, COUNT(*) as count FROM audit_events GROUP BY event_type")
-            .fetch_all(&self.db)
-            .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to get event counts: {}", e))
-            })?;
+        let rows = sqlx::query(
+            "SELECT event_type, COUNT(*) as count FROM audit_events GROUP BY event_type",
+        )
+        .fetch_all(&self.db)
+        .await
+        .map_err(|e| horcrux_common::Error::System(format!("Failed to get event counts: {}", e)))?;
 
         let mut counts = std::collections::HashMap::new();
         for row in rows {
@@ -184,7 +185,11 @@ impl DatabaseAuditLogger {
     }
 
     /// Get failed login attempts
-    pub async fn get_failed_logins(&self, user: Option<String>, limit: usize) -> Result<Vec<AuditEvent>> {
+    pub async fn get_failed_logins(
+        &self,
+        user: Option<String>,
+        limit: usize,
+    ) -> Result<Vec<AuditEvent>> {
         self.query(
             Some(AuditEventType::LoginFailed),
             user,
@@ -257,7 +262,8 @@ impl DatabaseAuditLogger {
             let result_str: String = row.get("result");
 
             events.push(AuditEvent {
-                timestamp: DateTime::from_timestamp(timestamp_secs, 0).unwrap_or_else(|| Utc::now()),
+                timestamp: DateTime::from_timestamp(timestamp_secs, 0)
+                    .unwrap_or_else(|| Utc::now()),
                 event_type: Self::parse_event_type(&event_type_str),
                 severity: Self::parse_severity(&severity_str),
                 user: row.get("username"),
@@ -300,9 +306,7 @@ impl DatabaseAuditLogger {
         let total_row = sqlx::query("SELECT COUNT(*) as count FROM audit_events")
             .fetch_one(&self.db)
             .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to count events: {}", e))
-            })?;
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to count events: {}", e)))?;
         let total_events: i64 = total_row.get("count");
 
         // Events by severity

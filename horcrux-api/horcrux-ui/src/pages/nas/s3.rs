@@ -112,13 +112,19 @@ pub fn S3Page() -> impl IntoView {
 
     let delete_bucket = move |bucket_name: String| {
         if web_sys::window()
-            .and_then(|w| w.confirm_with_message(&format!("Delete bucket '{}'?", bucket_name)).ok())
+            .and_then(|w| {
+                w.confirm_with_message(&format!("Delete bucket '{}'?", bucket_name))
+                    .ok()
+            })
             .unwrap_or(false)
         {
             spawn_local(async move {
-                let _ = reqwasm::http::Request::delete(&format!("/api/nas/s3-gateway/buckets/{}", bucket_name))
-                    .send()
-                    .await;
+                let _ = reqwasm::http::Request::delete(&format!(
+                    "/api/nas/s3-gateway/buckets/{}",
+                    bucket_name
+                ))
+                .send()
+                .await;
             });
         }
     };
@@ -129,9 +135,10 @@ pub fn S3Page() -> impl IntoView {
             .unwrap_or(false)
         {
             spawn_local(async move {
-                let _ = reqwasm::http::Request::delete(&format!("/api/nas/s3-gateway/keys/{}", key_id))
-                    .send()
-                    .await;
+                let _ =
+                    reqwasm::http::Request::delete(&format!("/api/nas/s3-gateway/keys/{}", key_id))
+                        .send()
+                        .await;
             });
         }
     };

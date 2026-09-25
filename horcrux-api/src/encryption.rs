@@ -170,8 +170,9 @@ impl EncryptionManager {
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         // Create cipher
-        let cipher = Aes256Gcm::new_from_slice(key)
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to create cipher: {}", e)))?;
+        let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to create cipher: {}", e))
+        })?;
 
         // Encrypt
         let ciphertext = cipher
@@ -204,8 +205,9 @@ impl EncryptionManager {
         let encrypted_data = &ciphertext[NONCE_SIZE..];
 
         // Create cipher
-        let cipher = Aes256Gcm::new_from_slice(key)
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to create cipher: {}", e)))?;
+        let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to create cipher: {}", e))
+        })?;
 
         // Decrypt
         cipher

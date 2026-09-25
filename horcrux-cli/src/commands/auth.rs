@@ -1,5 +1,4 @@
 ///! Authentication commands
-
 use crate::api::ApiClient;
 use crate::config::Config;
 use crate::output;
@@ -94,9 +93,7 @@ pub async fn handle_auth_command(
             } else {
                 // Prompt for password
                 use dialoguer::Password;
-                Password::new()
-                    .with_prompt("Password")
-                    .interact()?
+                Password::new().with_prompt("Password").interact()?
             };
 
             let request = LoginRequest {
@@ -177,16 +174,16 @@ pub async fn handle_auth_command(
             old_password,
             new_password,
         } => {
-            let username = config.username.as_ref()
+            let username = config
+                .username
+                .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("Not logged in. Use 'horcrux auth login' first"))?;
 
             let old_password = if let Some(pwd) = old_password {
                 pwd
             } else {
                 use dialoguer::Password;
-                Password::new()
-                    .with_prompt("Current password")
-                    .interact()?
+                Password::new().with_prompt("Current password").interact()?
             };
 
             let new_password = if let Some(pwd) = new_password {

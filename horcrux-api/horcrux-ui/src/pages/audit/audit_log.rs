@@ -1,5 +1,8 @@
+use crate::api::{
+    export_audit_events, get_audit_events, get_audit_filter_options, AuditEvent,
+    AuditExportRequest, AuditFilter,
+};
 use leptos::*;
-use crate::api::{AuditEvent, AuditFilter, AuditExportRequest, get_audit_events, export_audit_events, get_audit_filter_options};
 
 #[component]
 pub fn AuditLogPage() -> impl IntoView {
@@ -36,7 +39,7 @@ pub fn AuditLogPage() -> impl IntoView {
         "event_type".to_string(),
         "user".to_string(),
         "action".to_string(),
-        "success".to_string()
+        "success".to_string(),
     ]);
     let (include_details, set_include_details) = create_signal(false);
 
@@ -49,36 +52,46 @@ pub fn AuditLogPage() -> impl IntoView {
     let (refresh_interval, set_refresh_interval) = create_signal(5000);
 
     // Build filter helper - must be defined before use
-    let build_current_filter = move || {
-        AuditFilter {
-            start_time: if start_date.get().is_empty() { None } else { Some(start_date.get()) },
-            end_time: if end_date.get().is_empty() { None } else { Some(end_date.get()) },
-            event_types: selected_event_types.get(),
-            users: selected_users.get(),
-            resource_types: vec![],
-            actions: vec![],
-            severity_levels: if selected_severity.get() == "all" {
-                vec![]
-            } else {
-                vec![selected_severity.get()]
-            },
-            success_filter: match success_filter.get().as_str() {
-                "success" => Some(true),
-                "failure" => Some(false),
-                _ => None,
-            },
-            source_ips: if source_ip_filter.get().is_empty() {
-                vec![]
-            } else {
-                vec![source_ip_filter.get()]
-            },
-            search_term: if search_term.get().is_empty() { None } else { Some(search_term.get()) },
-            correlation_id: if correlation_id_filter.get().is_empty() {
-                None
-            } else {
-                Some(correlation_id_filter.get())
-            },
-        }
+    let build_current_filter = move || AuditFilter {
+        start_time: if start_date.get().is_empty() {
+            None
+        } else {
+            Some(start_date.get())
+        },
+        end_time: if end_date.get().is_empty() {
+            None
+        } else {
+            Some(end_date.get())
+        },
+        event_types: selected_event_types.get(),
+        users: selected_users.get(),
+        resource_types: vec![],
+        actions: vec![],
+        severity_levels: if selected_severity.get() == "all" {
+            vec![]
+        } else {
+            vec![selected_severity.get()]
+        },
+        success_filter: match success_filter.get().as_str() {
+            "success" => Some(true),
+            "failure" => Some(false),
+            _ => None,
+        },
+        source_ips: if source_ip_filter.get().is_empty() {
+            vec![]
+        } else {
+            vec![source_ip_filter.get()]
+        },
+        search_term: if search_term.get().is_empty() {
+            None
+        } else {
+            Some(search_term.get())
+        },
+        correlation_id: if correlation_id_filter.get().is_empty() {
+            None
+        } else {
+            Some(correlation_id_filter.get())
+        },
     };
 
     // Load initial data and filter options
@@ -114,10 +127,14 @@ pub fn AuditLogPage() -> impl IntoView {
             spawn_local(async move {
                 loop {
                     gloo_timers::future::TimeoutFuture::new(interval).await;
-                    if !auto_refresh.get() { break; }
+                    if !auto_refresh.get() {
+                        break;
+                    }
 
                     let filter = build_current_filter();
-                    if let Ok((events, total)) = get_audit_events(filter, page.get(), page_size.get()).await {
+                    if let Ok((events, total)) =
+                        get_audit_events(filter, page.get(), page_size.get()).await
+                    {
                         set_audit_events.set(events);
                         set_total_events.set(total);
                     }
@@ -871,7 +888,9 @@ impl ToTitleCase for str {
                 let mut chars = word.chars();
                 match chars.next() {
                     None => String::new(),
-                    Some(first) => first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
+                    Some(first) => {
+                        first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
+                    }
                 }
             })
             .collect::<Vec<_>>()
