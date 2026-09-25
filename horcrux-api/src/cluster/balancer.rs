@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use crate::cluster::node::Architecture;
 use serde::{Deserialize, Serialize};
 
 /// Node resource usage
@@ -14,6 +15,9 @@ pub struct NodeResources {
     pub total_cpu_cores: usize,
     pub total_memory_gb: usize,
     pub total_disk_gb: usize,
+    /// CPU architecture of this node (default: x86_64 for backward compatibility)
+    #[serde(default)]
+    pub architecture: Architecture,
 }
 
 /// VM resource requirements
@@ -25,6 +29,9 @@ pub struct VmResources {
     pub disk_gb: usize,
     pub current_node: String,
     pub can_migrate: bool,
+    /// Target CPU architecture the VM requires (default: x86_64 for backward compatibility)
+    #[serde(default)]
+    pub architecture: Architecture,
 }
 
 /// Balancing strategy
@@ -254,15 +261,50 @@ impl ClusterBalancer {
     }
 
     /// Find best node for VM placement
+    ///
+    /// Smart resource-aware, architecture-aware node selection:
+    /// 1. Filter out nodes that cannot run the VM's architecture at all
+    ///    (e.g. a riscv64-only node can never run an x86_64 VM).
+    /// 2. Within the compatible set, partition into "native" (no emulation)
+    ///    and "emulation-only" (cross-arch via QEMU) candidates.
+    /// 3. Prefer native nodes: pick the least-loaded native node that has
+    ///    sufficient free resources. Only fall back to an emulation-capable
+    ///    node if no native node has room.
     pub fn find_best_node(&self, nodes: &[NodeResources], vm: &VmResources) -> Option<String> {
         if nodes.is_empty() {
             return None;
         }
 
+        // Step 1: filter to architecture-compatible nodes only. A node that
+        // cannot run this VM's architecture (native or emulated) is never a
+        // candidate, regardless of how idle it is.
+        let compatible: Vec<&NodeResources> = nodes
+            .iter()
+            .filter(|n| n.architecture.can_run(&vm.architecture))
+            .collect();
+
+        if compatible.is_empty() {
+            return None;
+        }
+
+        // Step 2: partition into native vs. emulation-only candidates.
+        let (native, emulated): (Vec<&NodeResources>, Vec<&NodeResources>) = compatible
+            .into_iter()
+            .partition(|n| n.architecture.is_native(&vm.architecture));
+
+        // Step 3: try native nodes first (least-loaded with sufficient resources),
+        // then fall back to emulation-capable nodes.
+        self.best_scored_node(&native, vm)
+            .or_else(|| self.best_scored_node(&emulated, vm))
+    }
+
+    /// Score a set of already architecture-filtered candidates and return the
+    /// least-loaded one that has sufficient free CPU/memory for the VM.
+    fn best_scored_node(&self, candidates: &[&NodeResources], vm: &VmResources) -> Option<String> {
         let mut best_node: Option<&NodeResources> = None;
         let mut best_score = f32::MAX;
 
-        for node in nodes {
+        for node in candidates {
             // Check if node has sufficient resources
             let cpu_available = node.total_cpu_cores as f32 * (1.0 - node.cpu_usage / 100.0);
             let mem_available = node.total_memory_gb as f32 * (1.0 - node.memory_usage / 100.0);
@@ -276,7 +318,7 @@ impl ClusterBalancer {
 
             if score < best_score {
                 best_score = score;
-                best_node = Some(node);
+                best_node = Some(*node);
             }
         }
 
@@ -309,6 +351,20 @@ mod tests {
             total_cpu_cores: 16,
             total_memory_gb: 64,
             total_disk_gb: 1000,
+            architecture: Architecture::X86_64,
+        }
+    }
+
+    fn create_test_node_with_arch(
+        name: &str,
+        cpu: f32,
+        memory: f32,
+        vm_count: usize,
+        architecture: Architecture,
+    ) -> NodeResources {
+        NodeResources {
+            architecture,
+            ..create_test_node(name, cpu, memory, vm_count)
         }
     }
 
@@ -320,6 +376,14 @@ mod tests {
             disk_gb: 50,
             current_node: node.to_string(),
             can_migrate: true,
+            architecture: Architecture::X86_64,
+        }
+    }
+
+    fn create_test_vm_with_arch(id: u32, node: &str, architecture: Architecture) -> VmResources {
+        VmResources {
+            architecture,
+            ..create_test_vm(id, node)
         }
     }
 
@@ -420,5 +484,116 @@ mod tests {
         let balancer = ClusterBalancer::new(policy);
         let score = balancer.calculate_node_score(&node);
         assert!(score > 50.0 && score < 75.0); // Weighted average
+    }
+
+    /// A 3-node mixed-architecture cluster: x86_64, aarch64, riscv64.
+    fn mixed_arch_cluster() -> Vec<NodeResources> {
+        vec![
+            create_test_node_with_arch("x86-node", 40.0, 40.0, 4, Architecture::X86_64),
+            create_test_node_with_arch("arm-node", 10.0, 10.0, 1, Architecture::Aarch64),
+            create_test_node_with_arch("riscv-node", 5.0, 5.0, 0, Architecture::Riscv64),
+        ]
+    }
+
+    #[test]
+    fn test_x86_vm_never_placed_on_riscv_node() {
+        let policy = BalancingPolicy::default();
+        let balancer = ClusterBalancer::new(policy);
+        let nodes = mixed_arch_cluster();
+
+        let vm = create_test_vm_with_arch(200, "", Architecture::X86_64);
+        let best = balancer.find_best_node(&nodes, &vm);
+
+        // riscv64 cannot emulate anything (see Architecture::can_run), so it
+        // must never be selected for an x86_64 VM even though it is the
+        // least-loaded node in the cluster.
+        assert_ne!(best, Some("riscv-node".to_string()));
+    }
+
+    #[test]
+    fn test_x86_vm_prefers_native_over_emulated_when_both_have_room() {
+        let policy = BalancingPolicy::default();
+        let balancer = ClusterBalancer::new(policy);
+        let nodes = mixed_arch_cluster();
+
+        let vm = create_test_vm_with_arch(201, "", Architecture::X86_64);
+        let best = balancer.find_best_node(&nodes, &vm);
+
+        // x86-node is native for an x86_64 VM; arm-node could only run it via
+        // QEMU emulation. Even though arm-node is less loaded, the native
+        // node should be preferred.
+        assert_eq!(best, Some("x86-node".to_string()));
+    }
+
+    #[test]
+    fn test_x86_vm_falls_back_to_emulation_when_native_has_no_room() {
+        let policy = BalancingPolicy::default();
+        let balancer = ClusterBalancer::new(policy);
+
+        // Native x86 node is fully saturated; only the arm64 (emulation)
+        // node has any resources left.
+        let nodes = vec![
+            create_test_node_with_arch("x86-node", 99.0, 99.0, 20, Architecture::X86_64),
+            create_test_node_with_arch("arm-node", 10.0, 10.0, 1, Architecture::Aarch64),
+            create_test_node_with_arch("riscv-node", 5.0, 5.0, 0, Architecture::Riscv64),
+        ];
+
+        let vm = create_test_vm_with_arch(202, "", Architecture::X86_64);
+        let best = balancer.find_best_node(&nodes, &vm);
+
+        assert_eq!(best, Some("arm-node".to_string()));
+    }
+
+    #[test]
+    fn test_riscv_vm_only_placeable_on_riscv_node() {
+        let policy = BalancingPolicy::default();
+        let balancer = ClusterBalancer::new(policy);
+        let nodes = mixed_arch_cluster();
+
+        let vm = create_test_vm_with_arch(203, "", Architecture::Riscv64);
+        let best = balancer.find_best_node(&nodes, &vm);
+
+        // Neither x86_64 nor aarch64 hosts can emulate riscv64 in this
+        // model's emulation matrix (Architecture::can_run only allows
+        // x86_64/aarch64 hosts to emulate *other* architectures as guests,
+        // not as targets here) -- riscv64 VMs must land only on riscv64
+        // hosts.
+        assert_eq!(best, Some("riscv-node".to_string()));
+    }
+
+    #[test]
+    fn test_riscv_vm_no_placement_when_riscv_node_unavailable() {
+        let policy = BalancingPolicy::default();
+        let balancer = ClusterBalancer::new(policy);
+
+        let nodes = vec![
+            create_test_node_with_arch("x86-node", 10.0, 10.0, 1, Architecture::X86_64),
+            create_test_node_with_arch("arm-node", 10.0, 10.0, 1, Architecture::Aarch64),
+        ];
+
+        let vm = create_test_vm_with_arch(204, "", Architecture::Riscv64);
+        let best = balancer.find_best_node(&nodes, &vm);
+
+        // No node in the cluster can run a riscv64 VM (native or emulated),
+        // so placement must return None rather than silently picking an
+        // incompatible node.
+        assert_eq!(best, None);
+    }
+
+    #[test]
+    fn test_no_placement_when_no_resources_anywhere() {
+        let policy = BalancingPolicy::default();
+        let balancer = ClusterBalancer::new(policy);
+
+        // All nodes are architecture-compatible but completely saturated.
+        let nodes = vec![
+            create_test_node_with_arch("x86-node", 100.0, 100.0, 50, Architecture::X86_64),
+            create_test_node_with_arch("x86-node-2", 99.0, 99.0, 50, Architecture::X86_64),
+        ];
+
+        let vm = create_test_vm_with_arch(205, "", Architecture::X86_64);
+        let best = balancer.find_best_node(&nodes, &vm);
+
+        assert_eq!(best, None);
     }
 }

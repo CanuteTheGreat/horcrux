@@ -16,6 +16,29 @@ pub enum Architecture {
     Unknown,
 }
 
+impl Default for Architecture {
+    fn default() -> Self {
+        Architecture::X86_64
+    }
+}
+
+impl From<&horcrux_common::VmArchitecture> for Architecture {
+    fn from(vm_arch: &horcrux_common::VmArchitecture) -> Self {
+        match vm_arch {
+            horcrux_common::VmArchitecture::X86_64 => Architecture::X86_64,
+            horcrux_common::VmArchitecture::Aarch64 => Architecture::Aarch64,
+            horcrux_common::VmArchitecture::Riscv64 => Architecture::Riscv64,
+            horcrux_common::VmArchitecture::Ppc64le => Architecture::Ppc64le,
+        }
+    }
+}
+
+impl From<horcrux_common::VmArchitecture> for Architecture {
+    fn from(vm_arch: horcrux_common::VmArchitecture) -> Self {
+        Architecture::from(&vm_arch)
+    }
+}
+
 impl Architecture {
     /// Detect the current system architecture
     pub fn detect() -> Self {
