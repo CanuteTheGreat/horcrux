@@ -40,7 +40,7 @@ jobs:
           echo '<meta http-equiv="refresh" content="0; url=horcrux_api/index.html">' > public/index.html
 
       - name: Upload pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: https://github.com/actions/upload-pages-artifact@v3
         with:
           path: public
 
@@ -57,4 +57,4 @@ jobs:
     steps:
       - name: Deploy to Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: https://github.com/actions/deploy-pages@v4
