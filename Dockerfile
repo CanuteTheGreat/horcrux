@@ -17,8 +17,10 @@ ARG HORCRUX_USE="qemu cli monitoring systemd webui"
 RUN emerge-webrsync
 
 # Register this project's own overlay as a local Portage repo
-RUN mkdir -p /var/db/repos/horcrux-overlay/{app-emulation,metadata} && \
+RUN mkdir -p /var/db/repos/horcrux-overlay/{app-emulation,metadata,profiles} && \
     echo 'masters = gentoo' > /var/db/repos/horcrux-overlay/metadata/layout.conf && \
+    echo 'thin-manifests = true' >> /var/db/repos/horcrux-overlay/metadata/layout.conf && \
+    echo 'horcrux-overlay' > /var/db/repos/horcrux-overlay/profiles/repo_name && \
     mkdir -p /etc/portage/repos.conf
 COPY gentoo/app-emulation /var/db/repos/horcrux-overlay/app-emulation
 RUN printf '[horcrux-overlay]\nlocation = /var/db/repos/horcrux-overlay\npriority = 50\n' \
@@ -35,6 +37,12 @@ RUN echo "app-emulation/horcrux ${HORCRUX_USE}" > /etc/portage/package.use/horcr
 WORKDIR /var/db/repos/horcrux-overlay/app-emulation/horcrux
 COPY . /usr/src/horcrux
 RUN cd /usr/src/horcrux && cargo vendor /var/cache/distfiles/horcrux-vendor 2>&1 | tail -5 || true
+
+# Generate a real Manifest for the ebuild (thin-manifests only needs
+# Manifest.gz-style DIST entries when SRC_URI points at real distfiles;
+# for this from-source dev build there's nothing to fetch, so an empty/
+# generated Manifest satisfies Portage's manifest-verification check)
+RUN ebuild /var/db/repos/horcrux-overlay/app-emulation/horcrux/horcrux-0.1.0.ebuild manifest --force
 
 # Build and install via emerge, exactly like a real Gentoo host would
 RUN emerge --verbose --autounmask-write app-emulation/horcrux && \
