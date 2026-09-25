@@ -6,6 +6,37 @@ use horcrux_common::VmConfig;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 const API_BASE: &str = "http://localhost:8006/api";
+const AUTH_TOKEN_KEY: &str = "horcrux_auth_token";
+
+/// Store the JWT auth token in browser localStorage after a successful login.
+pub fn set_auth_token(token: &str) {
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = storage.set_item(AUTH_TOKEN_KEY, token);
+    }
+}
+
+/// Read the stored JWT auth token, if any.
+pub fn get_auth_token() -> Option<String> {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|storage| storage.get_item(AUTH_TOKEN_KEY).ok().flatten())
+}
+
+/// Clear the stored JWT auth token (on logout).
+pub fn clear_auth_token() {
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = storage.remove_item(AUTH_TOKEN_KEY);
+    }
+}
+
+/// Apply the stored Authorization header to a request builder, if a token is present.
+fn with_auth(request: reqwasm::http::Request) -> reqwasm::http::Request {
+    if let Some(token) = get_auth_token() {
+        request.header("Authorization", &format!("Bearer {}", token))
+    } else {
+        request
+    }
+}
 
 /// Generic JSON fetch helper
 pub async fn fetch_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> {
@@ -17,7 +48,7 @@ pub async fn fetch_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> 
         format!("{}{}", API_BASE, path)
     };
 
-    let response = reqwasm::http::Request::get(&url)
+    let response = with_auth(reqwasm::http::Request::get(&url))
         .send()
         .await
         .map_err(|e| ApiError { message: e.to_string() })?;
@@ -39,7 +70,7 @@ pub async fn post_json<T: DeserializeOwned, B: Serialize>(path: &str, body: &B) 
         format!("{}{}", API_BASE, path)
     };
 
-    let response = reqwasm::http::Request::post(&url)
+    let response = with_auth(reqwasm::http::Request::post(&url))
         .header("Content-Type", "application/json")
         .body(serde_json::to_string(body).unwrap())
         .send()
@@ -63,7 +94,7 @@ pub async fn put_json<T: DeserializeOwned, B: Serialize>(path: &str, body: &B) -
         format!("{}{}", API_BASE, path)
     };
 
-    let response = reqwasm::http::Request::put(&url)
+    let response = with_auth(reqwasm::http::Request::put(&url))
         .header("Content-Type", "application/json")
         .body(serde_json::to_string(body).unwrap())
         .send()
@@ -87,7 +118,7 @@ pub async fn delete_json(path: &str) -> Result<(), ApiError> {
         format!("{}{}", API_BASE, path)
     };
 
-    let response = reqwasm::http::Request::delete(&url)
+    let response = with_auth(reqwasm::http::Request::delete(&url))
         .send()
         .await
         .map_err(|e| ApiError { message: e.to_string() })?;
@@ -109,7 +140,7 @@ pub async fn post_empty(path: &str) -> Result<(), ApiError> {
         format!("{}{}", API_BASE, path)
     };
 
-    let response = reqwasm::http::Request::post(&url)
+    let response = with_auth(reqwasm::http::Request::post(&url))
         .send()
         .await
         .map_err(|e| ApiError { message: e.to_string() })?;
@@ -131,7 +162,7 @@ pub async fn fetch_text(path: &str) -> Result<String, ApiError> {
         format!("{}{}", API_BASE, path)
     };
 
-    let response = reqwasm::http::Request::get(&url)
+    let response = with_auth(reqwasm::http::Request::get(&url))
         .send()
         .await
         .map_err(|e| ApiError { message: e.to_string() })?;
@@ -1173,12 +1204,16 @@ pub async fn change_password(user_id: &str, request: ChangePasswordRequest) -> R
 
 /// Login user
 pub async fn login(request: LoginRequest) -> Result<LoginResponse, ApiError> {
-    post_json("/auth/login", &request).await
+    let response: LoginResponse = post_json("/auth/login", &request).await?;
+    set_auth_token(&response.ticket);
+    Ok(response)
 }
 
 /// Logout current user
 pub async fn logout() -> Result<(), ApiError> {
-    post_empty("/auth/logout").await
+    let result = post_empty("/auth/logout").await;
+    clear_auth_token();
+    result
 }
 
 /// Verify current session
