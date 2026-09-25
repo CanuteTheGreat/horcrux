@@ -97,6 +97,10 @@ horcrux-cli storage create --name nfs-storage --type nfs --path nfs://server/pat
 
 ### Install Corosync/Pacemaker
 ```bash
+# Gentoo (primary platform)
+sudo emerge -av sys-cluster/corosync sys-cluster/pacemaker
+
+# Other distributions
 sudo apt install corosync pacemaker
 ```
 

@@ -44,13 +44,19 @@ GPU: Optional (for vGPU testing)
 ### Software
 
 **Operating System**:
-- Ubuntu 22.04/24.04 LTS
-- Debian 12
-- RHEL 9 / Rocky Linux 9
+- **Gentoo Linux (primary/recommended)** -- see AGENTS.md and the main
+  README for why this is the project's actual target platform
+- Ubuntu 22.04/24.04 LTS, Debian 12, RHEL 9 / Rocky Linux 9 (also supported)
 - **NOT WSL2** (requires native Linux with KVM)
 
 **Required Packages**:
 ```bash
+# Gentoo (primary platform)
+sudo emerge -av app-emulation/qemu app-emulation/libvirt \
+                net-misc/bridge-utils app-emulation/virt-manager \
+                sys-firmware/edk2-ovmf dev-db/postgresql dev-db/sqlite \
+                app-containers/docker
+
 # Ubuntu/Debian
 sudo apt-get install qemu-kvm libvirt-daemon-system libvirt-clients \
                      bridge-utils virt-manager ovmf \

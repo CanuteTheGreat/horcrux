@@ -191,6 +191,10 @@ See **[docs/INSTALLATION.md](docs/INSTALLATION.md)** for complete installation g
 
 ### Docker Quick Start (Development) 🐳
 
+The Docker path builds through this project's own Gentoo/Portage overlay
+(`gentoo/`) inside the container, so USE flags still apply — it is a dev/CI
+convenience for fast iteration, not a separate non-Gentoo deployment target.
+
 ```bash
 # Clone and run with Docker
 git clone https://github.com/CanuteTheGreat/horcrux.git
