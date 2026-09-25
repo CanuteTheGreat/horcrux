@@ -10,7 +10,12 @@ app-emulation/qemu aio alsa bpf bzip2 caps curl fdt filecaps fuse gnutls io-urin
 app-emulation/qemu jpeg lzo ncurses nfs numa -opengl pin-upstream-blobs png
 app-emulation/qemu -pulseaudio -sdl -sdl-image seccomp slirp snappy spice ssh
 app-emulation/qemu -static-user udev usb usbredir vde vhost-net -virgl virtfs vnc
-app-emulation/qemu xattr xen zstd
+# xen: app-emulation/xen-tools-4.20.3's ebuild is broken in this Gentoo
+# snapshot (src_prepare does `mv ../dtc-v${QEMU_DTC_VERSION} ...` with
+# QEMU_DTC_VERSION unset, so it dies with "cannot stat '../dtc-v'").
+# This is a headless KVM-only VM host - Xen PV support isn't needed,
+# so disable the USE flag entirely to avoid pulling in xen-tools.
+app-emulation/qemu xattr -xen zstd
 # vte requires gtk (REQUIRED_USE: vte? ( gtk )) and neither is needed for a
 # headless VM host with no local GUI console widget - left off deliberately.
 # CPU targets for cross-architecture emulation
@@ -23,7 +28,7 @@ app-emulation/qemu qemu_user_targets_riscv64 qemu_user_targets_arm
 app-emulation/libvirt apparmor audit caps dbus dtrace fuse glusterfs iscsi
 app-emulation/libvirt iscsi-direct libssh libvirtd lvm lxc nfs numa openvz
 app-emulation/libvirt parted pcap policykit qemu sasl udev vepa virt-network
-app-emulation/libvirt virtualbox wireshark-plugins xen zfs
+app-emulation/libvirt virtualbox wireshark-plugins -xen zfs
 
 # Virt-manager - GUI management (optional)
 app-emulation/virt-manager gtk policykit sasl
