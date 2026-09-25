@@ -126,7 +126,7 @@ impl AuthManager {
         };
 
         if !authenticated {
-            return Err(horcrux_common::Error::System("Authentication failed".to_string()));
+            return Err(horcrux_common::Error::AuthenticationFailed);
         }
 
         // Get user info
@@ -134,10 +134,10 @@ impl AuthManager {
         let user_key = format!("{}@{}", request.username, realm);
         let user = users
             .get(&user_key)
-            .ok_or_else(|| horcrux_common::Error::System("User not found".to_string()))?;
+            .ok_or(horcrux_common::Error::AuthenticationFailed)?;
 
         if !user.enabled {
-            return Err(horcrux_common::Error::System("User account is disabled".to_string()));
+            return Err(horcrux_common::Error::AuthenticationFailed);
         }
 
         // Create session
