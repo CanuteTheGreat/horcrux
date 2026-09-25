@@ -65,8 +65,9 @@ deploy/*
 !deploy/config.toml.example
 !deploy/prometheus.yml
 
-# Gentoo-specific
-gentoo/
+# (gentoo/ is intentionally NOT excluded — the Dockerfile emerges the app
+# through this project's own Gentoo overlay, so it needs to be in the build
+# context)
 
 # Mobile app - include Cargo.toml for workspace
 horcrux-mobile/*
