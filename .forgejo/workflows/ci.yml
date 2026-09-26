@@ -151,7 +151,7 @@ jobs:
             ${{ runner.os }}-cargo-wasm-
 
       - name: Build UI
-        working-directory: horcrux-ui
+        working-directory: horcrux-api/horcrux-ui
         run: trunk build --release
 
   security-audit:
