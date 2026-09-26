@@ -61,10 +61,14 @@ ENV EGIT_OVERRIDE_REPO_HORCRUX=/usr/src/horcrux
 # generated Manifest satisfies Portage's manifest-verification check)
 RUN ebuild /var/db/repos/horcrux-overlay/app-emulation/horcrux/horcrux-0.1.0.ebuild manifest --force
 
-# Build and install via emerge, exactly like a real Gentoo host would
-RUN emerge --verbose --autounmask-write app-emulation/horcrux && \
+# Build and install via emerge, exactly like a real Gentoo host would.
+# --quiet-build=y suppresses Portage's per-package compiler noise (only
+# showing merge progress + real errors) so the combined build log stays
+# under CI's log-size cap across ~77 packages; failures still surface
+# their full build log via FEATURES=buildlog + the emerge failure summary.
+RUN emerge --verbose --quiet-build=y --autounmask-write app-emulation/horcrux && \
     etc-update --automode -5 || true
-RUN emerge --verbose app-emulation/horcrux
+RUN emerge --verbose --quiet-build=y app-emulation/horcrux
 
 # --- Runtime stage --------------------------------------------------------
 # Still Gentoo — a slim stage3 with only the installed package and its
