@@ -89,8 +89,10 @@ async fn admin_token(client: &Client) -> String {
                     "Admin login failed: {}",
                     response.status()
                 );
-                let body: serde_json::Value =
-                    response.json().await.expect("Failed to parse login response");
+                let body: serde_json::Value = response
+                    .json()
+                    .await
+                    .expect("Failed to parse login response");
                 break body["ticket"]
                     .as_str()
                     .expect("Login response missing ticket")
@@ -454,7 +456,10 @@ async fn test_backup_operations() {
         .json()
         .await
         .expect("Failed to parse backup response");
-    let backup_id = backup["id"].as_str().expect("Backup should have an id").to_string();
+    let backup_id = backup["id"]
+        .as_str()
+        .expect("Backup should have an id")
+        .to_string();
 
     wait_for_operation(1000).await;
 
