@@ -66,11 +66,57 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Build horcrux-api server (for integration tests)
+        run: cargo build --all-features -p horcrux-api --bin horcrux-api
+
+      - name: Start horcrux-api server
+        # integration_tests.rs (horcrux-api/tests/) is a real end-to-end
+        # suite: it talks to a live server over HTTP at localhost:8006
+        # (see API_BASE in the test file), it doesn't spin one up itself.
+        # `cargo test --workspace` never starts that server, so every one
+        # of those 22 tests was failing on "connection refused" in CI.
+        # Point the server at throwaway /tmp paths so it doesn't need
+        # root to create /var/lib/horcrux or /var/log/horcrux, then wait
+        # for /api/health before letting the test steps run.
+        run: |
+          mkdir -p /tmp/horcrux-ci-data
+          HORCRUX_HOST=127.0.0.1 \
+          HORCRUX_PORT=8006 \
+          HORCRUX_DATA_DIR=/tmp/horcrux-ci-data \
+          HORCRUX_DATABASE_URL="sqlite:///tmp/horcrux-ci-data/horcrux.db" \
+          ADMIN_PASSWORD=admin \
+          RUST_LOG=info \
+          nohup ./target/debug/horcrux-api > /tmp/horcrux-api.log 2>&1 &
+          echo $! > /tmp/horcrux-api.pid
+
+          echo "Waiting for horcrux-api to become healthy..."
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8006/api/health > /dev/null 2>&1; then
+              echo "horcrux-api is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "horcrux-api did not become healthy in time" >&2
+          cat /tmp/horcrux-api.log >&2
+          exit 1
+
       - name: Run tests
         run: cargo test --all-features --workspace
 
       - name: Run tests (no default features)
         run: cargo test --no-default-features -p horcrux-api
+
+      - name: Dump horcrux-api server log
+        if: always()
+        run: cat /tmp/horcrux-api.log || true
+
+      - name: Stop horcrux-api server
+        if: always()
+        run: |
+          if [ -f /tmp/horcrux-api.pid ]; then
+            kill "$(cat /tmp/horcrux-api.pid)" 2>/dev/null || true
+          fi
 
   build:
     name: Build
