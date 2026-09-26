@@ -53,7 +53,12 @@ jobs:
         uses: https://github.com/dtolnay/rust-toolchain@stable
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev
+        # qemu-system-x86 / qemu-utils give the integration suite real
+        # qemu-img and qemu-system-x86_64 binaries: without them, VM
+        # creation (qemu-img), storage-pool/snapshot validation, and
+        # VM start (needed for the console/VNC tests) all fail even
+        # though the server itself starts fine.
+        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev qemu-system-x86 qemu-utils
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -78,12 +83,31 @@ jobs:
         # Point the server at throwaway /tmp paths so it doesn't need
         # root to create /var/lib/horcrux or /var/log/horcrux, then wait
         # for /api/health before letting the test steps run.
+        #
+        # HORCRUX_CNI_BIN_DIR/HORCRUX_CNI_CONF_DIR redirect CNI network
+        # tests away from the real /opt/cni/bin (/etc/cni/net.d), which
+        # don't exist and aren't writable on an unprivileged runner - the
+        # CNI bin dir just needs to exist for CNI to be considered
+        # "enabled"; the conf dir is where CniManager writes .conflist
+        # files it creates via the API.
+        #
+        # test_backup_operations and test_storage_snapshots hardcode
+        # "/var/lib/horcrux/..." storage paths directly in the test file
+        # (they're exercising the same paths a real deployment would use,
+        # not test-owned throwaway ones), so those two directories need to
+        # actually exist and be writable by the runner user - create and
+        # chown them with sudo rather than editing the test file.
         run: |
           mkdir -p /tmp/horcrux-ci-data
+          mkdir -p /tmp/horcrux-ci-cni/bin /tmp/horcrux-ci-cni/conf.d
+          sudo mkdir -p /var/lib/horcrux/backups /var/lib/horcrux/storage/snapshot-test
+          sudo chown -R "$(id -u):$(id -g)" /var/lib/horcrux
           HORCRUX_HOST=127.0.0.1 \
           HORCRUX_PORT=8006 \
           HORCRUX_DATA_DIR=/tmp/horcrux-ci-data \
           HORCRUX_DATABASE_URL="sqlite:///tmp/horcrux-ci-data/horcrux.db" \
+          HORCRUX_CNI_BIN_DIR=/tmp/horcrux-ci-cni/bin \
+          HORCRUX_CNI_CONF_DIR=/tmp/horcrux-ci-cni/conf.d \
           ADMIN_PASSWORD=admin \
           RUST_LOG=info \
           nohup ./target/debug/horcrux-api > /tmp/horcrux-api.log 2>&1 &

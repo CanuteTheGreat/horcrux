@@ -524,6 +524,31 @@ impl BackupManager {
 
         let source_path = PathBuf::from(&config.storage).join(&config.target_id);
 
+        // The source directory (a per-target subfolder under the backup
+        // storage location) and the backup storage location itself may not
+        // exist yet on a fresh install/CI environment - the API never
+        // created either, so `tar -C <missing dir>` and the output
+        // redirect both failed with "Directory nonexistent" the first time
+        // a backup was attempted. Create them (source empty is fine - an
+        // empty tar archive is still a valid, if unhelpful, backup) rather
+        // than requiring an operator to pre-provision the tree by hand.
+        tokio::fs::create_dir_all(&source_path).await.map_err(|e| {
+            horcrux_common::Error::System(format!(
+                "Failed to create backup source directory {}: {}",
+                source_path.display(),
+                e
+            ))
+        })?;
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                horcrux_common::Error::System(format!(
+                    "Failed to create backup storage directory {}: {}",
+                    parent.display(),
+                    e
+                ))
+            })?;
+        }
+
         let copy_cmd = format!(
             "tar -cf - -C {} . | {} > {}",
             source_path.display(),

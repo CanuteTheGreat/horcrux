@@ -83,8 +83,14 @@ impl ConsoleManager {
 
         match console_type {
             ConsoleType::Vnc => {
-                // Get or start VNC server for this VM
-                let vnc_port = self.vnc_manager.get_vnc_port(vm_id).await?;
+                // Get or start VNC server for this VM. Must be
+                // ensure_vnc_enabled (lazily enables + registers VNC for a
+                // running VM), not get_vnc_port (which only looks up an
+                // already-registered config and errors "VNC not configured"
+                // for every VM that hasn't had enable_vnc called on it
+                // out-of-band - which in practice was every VM, since
+                // nothing else in the codebase ever called it).
+                let vnc_port = self.vnc_manager.ensure_vnc_enabled(vm_id).await?;
 
                 // Start WebSocket proxy
                 let ws_port = self

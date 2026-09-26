@@ -17,6 +17,7 @@ pub use qemu::{QemuManager, QemuVm};
 use crate::db::Database;
 use horcrux_common::{Result, VmConfig, VmStatus};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -47,6 +48,18 @@ impl VmManager {
         Self {
             vms: Arc::new(RwLock::new(HashMap::new())),
             qemu: QemuManager::new(),
+            db: Some(db),
+        }
+    }
+
+    /// Create VmManager with database support and an explicit VM storage
+    /// path (honors `HORCRUX_DATA_DIR`/`HORCRUX_VM_STORAGE` instead of the
+    /// hardcoded `/var/lib/horcrux/vms` default, which doesn't exist and
+    /// isn't writable in unprivileged environments like CI runners).
+    pub fn with_database_and_storage_path(db: Arc<Database>, vm_storage_path: PathBuf) -> Self {
+        Self {
+            vms: Arc::new(RwLock::new(HashMap::new())),
+            qemu: QemuManager::with_storage_path(vm_storage_path),
             db: Some(db),
         }
     }

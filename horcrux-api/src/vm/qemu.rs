@@ -57,6 +57,14 @@ impl QemuManager {
         }
     }
 
+    /// Create a QEMU manager that stores VM disk images under the given
+    /// path instead of the hardcoded default. Lets deployments (and tests)
+    /// honor `HORCRUX_DATA_DIR`/`HORCRUX_VM_STORAGE` instead of always
+    /// requiring `/var/lib/horcrux/vms` to exist and be writable.
+    pub fn with_storage_path(storage_path: PathBuf) -> Self {
+        Self { storage_path }
+    }
+
     /// Create a new QEMU virtual machine
     pub async fn create_vm(&self, config: &VmConfig) -> Result<QemuVm> {
         info!("Creating VM: {} (ID: {})", config.name, config.id);

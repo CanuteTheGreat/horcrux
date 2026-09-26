@@ -348,7 +348,10 @@ async fn main() -> anyhow::Result<()> {
 
     let state = Arc::new(AppState {
         config: horcrux_config.clone(),
-        vm_manager: Arc::new(VmManager::with_database(database.clone())),
+        vm_manager: Arc::new(VmManager::with_database_and_storage_path(
+            database.clone(),
+            horcrux_config.paths.vm_storage.clone(),
+        )),
         container_manager: Arc::new(container::ContainerManager::with_database(database.clone())),
         backup_manager: Arc::new(BackupManager::with_restore_dir(
             horcrux_config.paths.restore.clone(),

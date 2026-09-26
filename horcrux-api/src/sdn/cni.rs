@@ -121,6 +121,20 @@ impl CniManager {
         // Write network configuration file
         let conf_file = self.cni_conf_dir.join(format!("{}.conflist", config.name));
 
+        // The conf dir (default /etc/cni/net.d) may not exist yet on a
+        // fresh install or in an unprivileged CI environment - creating it
+        // here means callers only need to set HORCRUX_CNI_CONF_DIR to a
+        // writable path, not also pre-create it by hand.
+        tokio::fs::create_dir_all(&self.cni_conf_dir)
+            .await
+            .map_err(|e| {
+                horcrux_common::Error::System(format!(
+                    "Failed to create CNI conf directory {}: {}",
+                    self.cni_conf_dir.display(),
+                    e
+                ))
+            })?;
+
         let conf_list = serde_json::json!({
             "cniVersion": config.cni_version,
             "name": config.name,
