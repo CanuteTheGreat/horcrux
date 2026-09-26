@@ -12,6 +12,16 @@ FROM gentoo/stage3:amd64-systemd AS builder
 
 ARG HORCRUX_USE="qemu cli monitoring systemd webui"
 
+# Portage's stage3 default FEATURES enable ipc-sandbox/network-sandbox/
+# pid-sandbox, which require unprivileged user-namespace unshare() calls
+# (CAP_SYS_ADMIN-equivalent). CI runners (Forgejo/GitHub Actions Docker-in-
+# Docker) generally don't grant this, so emerge fails with
+# "Unable to unshare: EPERM" on every build step. Keep file-level
+# sandbox/usersandbox (no namespaces needed) but drop the namespace-based
+# ones, matching how most Gentoo Docker CI setups build in containers.
+RUN echo 'FEATURES="${FEATURES} -ipc-sandbox -network-sandbox -pid-sandbox"' \
+    >> /etc/portage/make.conf
+
 # Sync the Gentoo package tree (uses the webrsync snapshot method, no full
 # rsync mirror needed inside a container build)
 RUN emerge-webrsync
