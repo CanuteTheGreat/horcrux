@@ -105,9 +105,12 @@ RDEPEND="
 "
 
 # Build dependencies
+# virtual/rust (not a hard dev-lang/rust atom) so operators/CI can satisfy
+# this with either the from-source dev-lang/rust or the prebuilt
+# dev-lang/rust-bin — both provide virtual/rust and a working rustc/cargo.
 DEPEND="
 	${RDEPEND}
-	>=dev-lang/rust-1.82
+	>=virtual/rust-1.82
 "
 
 BDEPEND=""

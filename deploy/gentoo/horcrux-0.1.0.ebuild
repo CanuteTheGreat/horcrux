@@ -109,7 +109,7 @@ RDEPEND="
 # Build dependencies
 DEPEND="
 	${RDEPEND}
-	>=dev-lang/rust-1.82
+	>=virtual/rust-1.82
 "
 
 BDEPEND=""

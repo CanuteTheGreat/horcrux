@@ -41,6 +41,22 @@ COPY gentoo/package.use/horcrux /etc/portage/package.use/horcrux
 COPY gentoo/package.accept_keywords/horcrux /etc/portage/package.accept_keywords/horcrux
 RUN echo "app-emulation/horcrux ${HORCRUX_USE}" > /etc/portage/package.use/horcrux-docker-build
 
+# The container-build path only needs a *working* Rust toolchain, not a
+# from-source one — dev-lang/rust (source) plus rust-src/doc/rust-analyzer
+# USE flags compiles ~77 packages including LLVM/rustc itself, which alone
+# blows well past any CI job's wall-clock budget (observed: still on package
+# 62/77, dev-lang/rust itself, after 30 minutes — CI killed the container,
+# not a real build failure). dev-lang/rust-bin installs the same upstream
+# rustc/cargo as prebuilt binaries and satisfies the same virtual/rust and
+# app-emulation/horcrux dependency atoms, so it's a correct substitution for
+# this containerized build specifically. Bare-metal Gentoo installs following
+# gentoo/sets/horcrux directly are unaffected and still build Rust from
+# source if that's what the operator's package.use says.
+RUN mkdir -p /etc/portage/package.mask /etc/portage/package.accept_keywords /etc/portage/package.use && \
+    echo 'dev-lang/rust' > /etc/portage/package.mask/horcrux-docker-build && \
+    echo 'dev-lang/rust-bin ~amd64 ~arm64' >> /etc/portage/package.accept_keywords/horcrux && \
+    echo 'dev-lang/rust-bin clippy rust-src rustfmt wasm' >> /etc/portage/package.use/horcrux
+
 # The ebuild pulls source via the project's release tarball/vendored crates;
 # for a from-source container build we vendor the working tree directly
 # instead of fetching a tagged release.
