@@ -123,14 +123,25 @@ impl QemuManager {
         // Build QEMU command
         let mut cmd = Command::new("qemu-system-x86_64");
 
-        cmd.arg("-enable-kvm")
-            .arg("-m")
+        // Prefer hardware acceleration (KVM) when the host supports it, but
+        // fall back to software emulation (TCG) rather than failing when
+        // nested virtualization is unavailable (no usable /dev/kvm).
+        // Note: use "-machine accel=..." (not "-accel") since older QEMU
+        // builds don't support the standalone "-accel kvm:tcg" fallback list.
+        if tokio::fs::metadata("/dev/kvm").await.is_ok() {
+            cmd.arg("-machine").arg("accel=kvm:tcg");
+        } else {
+            cmd.arg("-machine").arg("accel=tcg");
+        }
+
+        cmd.arg("-m")
             .arg(vm.memory.to_string())
             .arg("-smp")
             .arg(vm.cpus.to_string())
             .arg("-drive")
             .arg(format!("file={},format=qcow2", vm.disk_path.display()))
-            .arg("-nographic")
+            .arg("-display")
+            .arg("none")
             .arg("-daemonize")
             .arg("-pidfile")
             .arg(format!("/var/run/horcrux-vm-{}.pid", vm.id))

@@ -19,6 +19,7 @@ use tracing::{error, info, warn};
 /// Snapshot schedule configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotSchedule {
+    #[serde(default)]
     pub id: String,
     pub vm_id: String,
     pub name: String,
@@ -26,8 +27,11 @@ pub struct SnapshotSchedule {
     pub retention_count: u32, // Number of snapshots to keep
     pub enabled: bool,
     pub include_memory: bool,
+    #[serde(default)]
     pub last_run: Option<i64>,
+    #[serde(default)]
     pub next_run: i64,
+    #[serde(default)]
     pub created_at: i64,
 }
 

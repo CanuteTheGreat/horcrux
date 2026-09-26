@@ -306,11 +306,16 @@ pub mod users {
     }
 
     pub async fn get_session(pool: &SqlitePool, session_id: &str) -> Result<Session> {
-        let row = sqlx::query("SELECT * FROM sessions WHERE id = ?")
-            .bind(session_id)
-            .fetch_one(pool)
-            .await
-            .map_err(|_| horcrux_common::Error::InvalidSession)?;
+        let row = sqlx::query(
+            "SELECT sessions.id AS id, sessions.user_id AS user_id, sessions.expires_at AS expires_at, \
+                    users.username AS username, users.realm AS realm \
+             FROM sessions JOIN users ON users.id = sessions.user_id \
+             WHERE sessions.id = ?",
+        )
+        .bind(session_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|_| horcrux_common::Error::InvalidSession)?;
 
         let expires_at_timestamp: i64 = row.get("expires_at");
         let expires_at = chrono::DateTime::from_timestamp(expires_at_timestamp, 0)
@@ -328,8 +333,8 @@ pub mod users {
             user_id: row.get("user_id"),
             expires_at,
             session_id: id,
-            username: String::new(),
-            realm: String::new(),
+            username: row.get("username"),
+            realm: row.get("realm"),
             created: 0,
             expires: expires_at_timestamp,
         })

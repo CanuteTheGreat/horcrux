@@ -15,7 +15,7 @@ pub mod vgpu;
 pub use qemu::{QemuManager, QemuVm};
 
 use crate::db::Database;
-use horcrux_common::{Result, VmConfig};
+use horcrux_common::{Result, VmConfig, VmStatus};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -108,24 +108,40 @@ impl VmManager {
 
     /// Start a virtual machine
     pub async fn start_vm(&self, id: &str) -> Result<VmConfig> {
-        let vms = self.vms.read().await;
+        let mut vms = self.vms.write().await;
         let vm = vms
-            .get(id)
+            .get_mut(id)
             .ok_or_else(|| horcrux_common::Error::VmNotFound(id.to_string()))?;
 
         self.qemu.start_vm(vm).await?;
-        Ok(vm.to_config())
+        vm.status = VmStatus::Running;
+        let config = vm.to_config();
+
+        // Persist the new status if available
+        if let Some(db) = &self.db {
+            db.update_vm(&config).await?;
+        }
+
+        Ok(config)
     }
 
     /// Stop a virtual machine
     pub async fn stop_vm(&self, id: &str) -> Result<VmConfig> {
-        let vms = self.vms.read().await;
+        let mut vms = self.vms.write().await;
         let vm = vms
-            .get(id)
+            .get_mut(id)
             .ok_or_else(|| horcrux_common::Error::VmNotFound(id.to_string()))?;
 
         self.qemu.stop_vm(vm).await?;
-        Ok(vm.to_config())
+        vm.status = VmStatus::Stopped;
+        let config = vm.to_config();
+
+        // Persist the new status if available
+        if let Some(db) = &self.db {
+            db.update_vm(&config).await?;
+        }
+
+        Ok(config)
     }
 
     /// Delete a virtual machine
@@ -133,14 +149,22 @@ impl VmManager {
         let mut vms = self.vms.write().await;
 
         if let Some(vm) = vms.remove(id) {
-            self.qemu.delete_vm(&vm).await?;
+            // Best-effort: the on-disk/hypervisor resources may already be
+            // gone (e.g. after a server restart with a stale in-memory
+            // entry); don't let that failure prevent the DB row cleanup.
+            let _ = self.qemu.delete_vm(&vm).await;
 
-            // Delete from database if available
             if let Some(db) = &self.db {
                 db.delete_vm(id).await?;
             }
 
             Ok(())
+        } else if let Some(db) = &self.db {
+            // Not tracked in memory (e.g. loaded from a previous process),
+            // but may still have a row in the database. Delete it there so
+            // callers don't get a false VmNotFound for a VM that still
+            // exists persistently.
+            db.delete_vm(id).await
         } else {
             Err(horcrux_common::Error::VmNotFound(id.to_string()))
         }

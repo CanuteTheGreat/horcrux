@@ -6854,9 +6854,10 @@ struct CloneResponse {
 async fn login(
     State(state): State<Arc<AppState>>,
     Json(request): Json<LoginRequest>,
-) -> Result<Json<LoginResponse>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     use crate::auth::password::verify_password;
     use crate::middleware::auth::generate_jwt_token;
+    use axum::response::IntoResponse;
 
     // Try database authentication first
     match db::users::get_user_by_username(state.database.pool(), &request.username).await {
@@ -6887,31 +6888,64 @@ async fn login(
             let token = generate_jwt_token(&user.id, &user.username, &user.role)
                 .map_err(|e| ApiError::Internal(format!("Failed to generate token: {}", e)))?;
 
-            Ok(Json(LoginResponse {
+            let body = LoginResponse {
                 ticket: token,
-                csrf_token: session_id,
+                csrf_token: session_id.clone(),
                 username: user.username,
                 roles: vec![user.role],
-            }))
+            };
+
+            // Also issue a session_id cookie so clients that prefer
+            // cookie-based auth (e.g. browsers) can use protected
+            // endpoints without handling the bearer token directly.
+            let cookie = format!(
+                "session_id={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400",
+                session_id
+            );
+            let mut response = Json(body).into_response();
+            if let Ok(value) = axum::http::HeaderValue::from_str(&cookie) {
+                response
+                    .headers_mut()
+                    .insert(axum::http::header::SET_COOKIE, value);
+            }
+            Ok(response)
         }
         Err(_) => {
             // Fall back to auth manager (PAM/LDAP) if database user not found
             let response = state.auth_manager.login(request).await?;
-            Ok(Json(response))
+            Ok(Json(response).into_response())
         }
     }
 }
 
 async fn logout(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<LogoutRequest>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
 ) -> Result<StatusCode, ApiError> {
-    state.auth_manager.logout(&request.session_id).await?;
+    // Support both JSON body {"session_id": "..."} (in-memory PAM/LDAP sessions)
+    // and a `session_id` cookie (database-backed sessions issued by /auth/login).
+    if let Ok(request) = serde_json::from_slice::<LogoutRequest>(&body) {
+        let _ = state.auth_manager.logout(&request.session_id).await;
+    }
+
+    if let Some(cookie_header) = headers.get("cookie") {
+        if let Ok(cookie_str) = cookie_header.to_str() {
+            for cookie in cookie_str.split(';') {
+                let cookie = cookie.trim();
+                if let Some(session_id) = cookie.strip_prefix("session_id=") {
+                    let _ = db::users::delete_session(state.database.pool(), session_id).await;
+                }
+            }
+        }
+    }
+
     Ok(StatusCode::OK)
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Default)]
 struct LogoutRequest {
+    #[serde(default)]
     session_id: String,
 }
 
