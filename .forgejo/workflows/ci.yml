@@ -129,7 +129,15 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y build-essential
 
       - name: Install trunk
-        run: cargo install trunk
+        # `cargo install trunk` from source hits a real dependency conflict:
+        # lightningcss pulls in two incompatible cssparser versions (0.33 vs
+        # 0.37), failing to compile (confirmed 2026-09-25). Install the
+        # prebuilt binary release instead - avoids building lightningcss
+        # from source entirely, and is faster too.
+        run: |
+          curl -L https://github.com/trunk-rs/trunk/releases/latest/download/trunk-x86_64-unknown-linux-gnu.tar.gz | tar xzf -
+          sudo mv trunk /usr/local/bin/trunk
+          trunk --version
 
       - name: Cache cargo registry
         uses: actions/cache@v4
