@@ -217,20 +217,27 @@ impl StateSyncManager {
     }
 
     /// Create and broadcast a local state change
+    ///
+    /// This only announces the change to peers; it does not bump this
+    /// node's own tracked `version` or mutate local state. Version
+    /// tracking (and applying the operation) only happens when an update
+    /// is processed through `apply_update` (including loopback of our own
+    /// broadcasts, if the caller chooses to route it that way).
     pub async fn broadcast_change(&self, operation: StateOperation) -> Result<()> {
-        let mut state = self.state.write().await;
+        let state = self.state.read().await;
         let version = state.version + 1;
+        let node = self.local_node.clone();
+        drop(state);
 
         let update = StateUpdate {
             version,
             timestamp: chrono::Utc::now().timestamp(),
-            node: self.local_node.clone(),
+            node,
             operation,
         };
 
-        state.version = version;
-
-        // Broadcast to peers
+        // Broadcast to peers; local version is untouched until an update
+        // is actually applied via apply_update.
         let _ = self.update_tx.send(SyncMessage::Update(update));
 
         Ok(())

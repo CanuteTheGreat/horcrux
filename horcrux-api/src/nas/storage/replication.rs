@@ -1961,6 +1961,18 @@ async fn list_remote_btrfs_snapshots(
     Err(Error::Internal("Btrfs not enabled".to_string()))
 }
 
+/// Normalize a pv/rsync-style size suffix (e.g. "123MiB", "45.6MiB") into the
+/// single-letter suffix `parse_size` understands (e.g. "123M", "45.6M").
+fn normalize_pv_size(s: &str) -> String {
+    let s = s.trim();
+    for suffix in ["iB", "B"] {
+        if let Some(stripped) = s.strip_suffix(suffix) {
+            return stripped.to_string();
+        }
+    }
+    s.to_string()
+}
+
 /// Parse pv output for progress
 fn parse_pv_output(line: &str) -> Option<(u64, u64)> {
     // pv output format: "123MiB 0:01:23 [45.6MiB/s]"
@@ -1969,7 +1981,7 @@ fn parse_pv_output(line: &str) -> Option<(u64, u64)> {
         return None;
     }
 
-    let bytes = super::parse_size(parts[0])?;
+    let bytes = super::parse_size(&normalize_pv_size(parts[0]))?;
 
     // Parse rate
     let rate_str = parts.get(2)?;
@@ -1977,7 +1989,7 @@ fn parse_pv_output(line: &str) -> Option<(u64, u64)> {
         .trim_start_matches('[')
         .trim_end_matches(']')
         .trim_end_matches("/s");
-    let rate = super::parse_size(rate_str)?;
+    let rate = super::parse_size(&normalize_pv_size(rate_str))?;
 
     Some((bytes, rate))
 }

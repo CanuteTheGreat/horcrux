@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use super::node::{Architecture, Node, NodeStatus};
 
@@ -521,10 +521,14 @@ impl MembershipManager {
         let new_master = match new_master {
             Some(m) => m.clone(),
             None => {
-                error!("No online nodes available for master election");
-                return Err(horcrux_common::Error::System(
-                    "No online nodes available for master election".to_string(),
-                ));
+                // Nobody left to elect (e.g. the last member just left the
+                // cluster gracefully). This is not an error condition: just
+                // clear the master and return, rather than failing the
+                // caller's leave/failure-handling flow.
+                drop(members);
+                info!("No online nodes available for master election; clearing master");
+                *self.master_node_id.write().await = None;
+                return Ok(());
             }
         };
         drop(members);

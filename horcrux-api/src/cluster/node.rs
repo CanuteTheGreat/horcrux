@@ -52,6 +52,9 @@ impl Architecture {
         match (self, target) {
             // Same architecture always works
             (a, b) if a == b => true,
+            // riscv64 guests have no QEMU emulation path modeled here: they
+            // must land on a native riscv64 host, never on x86_64/aarch64.
+            (_, Architecture::Riscv64) => false,
             // x86_64 can emulate other architectures via QEMU (slower)
             (Architecture::X86_64, _) => true,
             // aarch64 can emulate other architectures via QEMU (slower)

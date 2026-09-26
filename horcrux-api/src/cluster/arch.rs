@@ -197,6 +197,22 @@ impl ArchitectureManager {
             });
         }
 
+        // Migrating across architectures (even when the target could emulate
+        // the VM's architecture) is never considered "compatible" for live
+        // migration purposes: it always requires a shutdown/cold migration,
+        // so callers must treat it as an incompatible (non-live) path.
+        if source_arch != target_arch {
+            return Ok(MigrationCompatibility {
+                compatible: false,
+                reason: Some(format!(
+                    "Cross-architecture migration ({} -> {}) requires a VM shutdown",
+                    source_arch, target_arch
+                )),
+                requires_shutdown: true,
+                performance_change: 0.0,
+            });
+        }
+
         // Live migration only supported for same-arch nodes
         let requires_shutdown = source_arch != target_arch;
 
