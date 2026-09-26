@@ -66,10 +66,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
 
     // Auto-refresh every 60 seconds
     use leptos::set_interval;
-    set_interval(
-        load_cluster_data,
-        std::time::Duration::from_secs(60),
-    );
+    set_interval(load_cluster_data, std::time::Duration::from_secs(60));
 
     let filtered_nodes = move || {
         let query = search_query.get().to_lowercase();

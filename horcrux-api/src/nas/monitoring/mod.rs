@@ -119,8 +119,7 @@ pub enum AlertSource {
 }
 
 /// NAS metrics
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NasMetrics {
     /// Total shares
     pub total_shares: u32,
@@ -151,7 +150,6 @@ pub struct NasMetrics {
     /// Replication tasks
     pub replication_tasks: u32,
 }
-
 
 /// Get overall NAS health
 pub async fn get_nas_health() -> Result<NasHealth> {

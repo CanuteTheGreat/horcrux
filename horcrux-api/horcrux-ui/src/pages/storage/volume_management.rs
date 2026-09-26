@@ -22,7 +22,9 @@ pub fn VolumeManagementPage() -> impl IntoView {
             set_loading.set(true);
 
             // Load pools for filtering
-            if let Ok(pool_list) = get_storage_pools().await { set_pools.set(pool_list) }
+            if let Ok(pool_list) = get_storage_pools().await {
+                set_pools.set(pool_list)
+            }
 
             // Load volumes
             match get_volumes(filters.get()).await {

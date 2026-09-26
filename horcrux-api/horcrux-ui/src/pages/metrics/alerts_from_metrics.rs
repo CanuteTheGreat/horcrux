@@ -186,7 +186,9 @@ pub fn AlertsFromMetricsPage() -> impl IntoView {
                 set_edit_rule_id.set(None);
 
                 // Reload rules
-                if let Ok(rules) = get_alert_rules().await { set_alert_rules.set(rules) }
+                if let Ok(rules) = get_alert_rules().await {
+                    set_alert_rules.set(rules)
+                }
                 true
             }
             Err(_) => false,
@@ -212,7 +214,9 @@ pub fn AlertsFromMetricsPage() -> impl IntoView {
         spawn_local(async move {
             if delete_alert_rule(rule_id).await.is_ok() {
                 // Reload rules
-                if let Ok(rules) = get_alert_rules().await { set_alert_rules.set(rules) }
+                if let Ok(rules) = get_alert_rules().await {
+                    set_alert_rules.set(rules)
+                }
             }
         });
     };
@@ -222,7 +226,9 @@ pub fn AlertsFromMetricsPage() -> impl IntoView {
         spawn_local(async move {
             if toggle_alert_rule(rule_id, enabled).await.is_ok() {
                 // Reload rules
-                if let Ok(rules) = get_alert_rules().await { set_alert_rules.set(rules) }
+                if let Ok(rules) = get_alert_rules().await {
+                    set_alert_rules.set(rules)
+                }
             }
         });
     };

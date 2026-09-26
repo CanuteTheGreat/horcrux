@@ -48,7 +48,6 @@ pub enum ClusterStatus {
     Unknown,
 }
 
-
 impl std::fmt::Display for ClusterStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -76,7 +75,6 @@ pub enum ClusterProvider {
     /// Managed Kubernetes (EKS, GKE, AKS, etc.)
     Managed,
 }
-
 
 impl std::fmt::Display for ClusterProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -249,7 +247,6 @@ pub enum PodStatus {
     Unknown,
 }
 
-
 /// Container information within a pod
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContainerInfo {
@@ -278,7 +275,6 @@ pub enum ContainerState {
     #[default]
     Unknown,
 }
-
 
 /// Simplified deployment information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -316,8 +312,7 @@ pub struct ServiceInfo {
 }
 
 /// Service type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ServiceType {
     #[default]
     ClusterIP,
@@ -325,7 +320,6 @@ pub enum ServiceType {
     LoadBalancer,
     ExternalName,
 }
-
 
 /// Service port definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -621,7 +615,6 @@ pub enum JobStatus {
     #[default]
     Unknown,
 }
-
 
 /// Simplified CronJob information
 #[derive(Debug, Clone, Serialize, Deserialize)]

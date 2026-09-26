@@ -2,12 +2,10 @@
 //! Tests for zones, VNets, subnets, IPAM, and network policies
 
 use horcrux_api::sdn::policy::{
-    IngressRule, LabelOperator, LabelSelector, NetworkPolicy,
-    NetworkPolicyManager, NetworkPolicyPort, PeerSelector, PolicyType, Protocol,
+    IngressRule, LabelOperator, LabelSelector, NetworkPolicy, NetworkPolicyManager,
+    NetworkPolicyPort, PeerSelector, PolicyType, Protocol,
 };
-use horcrux_api::sdn::{
-    DhcpRange, SdnManager, Subnet, VNet, VNetType, Zone, ZoneType,
-};
+use horcrux_api::sdn::{DhcpRange, SdnManager, Subnet, VNet, VNetType, Zone, ZoneType};
 use std::collections::HashMap;
 use std::net::IpAddr;
 

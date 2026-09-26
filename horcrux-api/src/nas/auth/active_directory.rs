@@ -1039,7 +1039,10 @@ rtcsync
         );
 
         // Try chrony first
-        if tokio::fs::write("/etc/chrony.conf", &chrony_config).await.is_err() {
+        if tokio::fs::write("/etc/chrony.conf", &chrony_config)
+            .await
+            .is_err()
+        {
             // Fall back to ntp.conf format
             let ntp_config = format!(
                 r#"# AD Domain Controller time sync
@@ -1195,7 +1198,8 @@ auth        sufficient    pam_winbind.so
 account     sufficient    pam_winbind.so
 password    sufficient    pam_winbind.so
 session     optional      pam_winbind.so
-"#.to_string();
+"#
+        .to_string();
 
         tokio::fs::write("/etc/pam.d/horcrux-ad", &pam_winbind)
             .await

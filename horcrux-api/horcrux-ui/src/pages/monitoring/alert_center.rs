@@ -80,7 +80,9 @@ pub fn AlertCenterPage() -> impl IntoView {
             Err(e) => set_error_message.set(Some(format!("Failed to load active alerts: {}", e))),
         }
 
-        if let Ok(channels) = get_notification_channels().await { set_notification_channels.set(channels) }
+        if let Ok(channels) = get_notification_channels().await {
+            set_notification_channels.set(channels)
+        }
 
         set_loading.set(false);
     });

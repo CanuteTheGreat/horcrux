@@ -155,10 +155,7 @@ impl IscsiManager {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let sessions: Vec<IscsiSession> = stdout
-            .lines()
-            .filter_map(IscsiSession::parse)
-            .collect();
+        let sessions: Vec<IscsiSession> = stdout.lines().filter_map(IscsiSession::parse).collect();
 
         Ok(sessions)
     }

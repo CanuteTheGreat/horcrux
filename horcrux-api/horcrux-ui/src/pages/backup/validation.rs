@@ -36,9 +36,13 @@ pub fn BackupValidationPage() -> impl IntoView {
                 Err(e) => set_error.set(Some(format!("Failed to load validations: {}", e))),
             }
 
-            if let Ok(list) = get_restore_tests().await { set_restore_tests.set(list) }
+            if let Ok(list) = get_restore_tests().await {
+                set_restore_tests.set(list)
+            }
 
-            if let Ok(list) = get_validation_schedules().await { set_schedules.set(list) }
+            if let Ok(list) = get_validation_schedules().await {
+                set_schedules.set(list)
+            }
 
             set_loading.set(false);
         });

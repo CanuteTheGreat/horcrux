@@ -11,8 +11,7 @@ use std::path::Path;
 use tokio::process::Command;
 
 /// FTP/FTPS protocol mode
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum FtpProtocol {
     /// Plain FTP (port 21)
     Ftp,
@@ -24,7 +23,6 @@ pub enum FtpProtocol {
     /// SFTP via OpenSSH (port 22)
     Sftp,
 }
-
 
 /// TLS/SSL configuration for FTPS
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,8 +88,7 @@ impl Default for FtpPassiveConfig {
 }
 
 /// Bandwidth limiting configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FtpBandwidthConfig {
     /// Maximum download rate per user (KB/s, 0 = unlimited)
     pub max_download_rate: u64,
@@ -102,7 +99,6 @@ pub struct FtpBandwidthConfig {
     /// Maximum site-wide upload rate (KB/s, 0 = unlimited)
     pub site_upload_rate: u64,
 }
-
 
 /// Virtual user configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]

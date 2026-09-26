@@ -85,7 +85,6 @@ pub enum AccessLevel {
     NoAccess,
 }
 
-
 /// Case sensitivity mode for file names
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -99,7 +98,6 @@ pub enum CaseSensitivity {
     /// Case-insensitive (Windows-style)
     Insensitive,
 }
-
 
 /// NAS service status
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,8 +119,7 @@ pub struct ServiceStatus {
 }
 
 /// Quota configuration for users/groups/shares
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct QuotaConfig {
     /// Per-user quotas
     pub user_quotas: HashMap<String, QuotaLimit>,
@@ -133,7 +130,6 @@ pub struct QuotaConfig {
     /// Dataset-level refquota in GB (ZFS refquota)
     pub dataset_refquota_gb: Option<u64>,
 }
-
 
 /// Quota limits
 #[derive(Debug, Clone, Serialize, Deserialize)]

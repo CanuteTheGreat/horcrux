@@ -148,8 +148,7 @@ impl DatabaseAuditLogger {
             let result_str: String = row.get("result");
 
             events.push(AuditEvent {
-                timestamp: DateTime::from_timestamp(timestamp_secs, 0)
-                    .unwrap_or_else(Utc::now),
+                timestamp: DateTime::from_timestamp(timestamp_secs, 0).unwrap_or_else(Utc::now),
                 event_type: Self::parse_event_type(&event_type_str),
                 severity: Self::parse_severity(&severity_str),
                 user: row.get("username"),
@@ -262,8 +261,7 @@ impl DatabaseAuditLogger {
             let result_str: String = row.get("result");
 
             events.push(AuditEvent {
-                timestamp: DateTime::from_timestamp(timestamp_secs, 0)
-                    .unwrap_or_else(Utc::now),
+                timestamp: DateTime::from_timestamp(timestamp_secs, 0).unwrap_or_else(Utc::now),
                 event_type: Self::parse_event_type(&event_type_str),
                 severity: Self::parse_severity(&severity_str),
                 user: row.get("username"),

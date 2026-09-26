@@ -9,8 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Main configuration struct for Horcrux
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HorcruxConfig {
     /// Server configuration
     pub server: ServerConfig,
@@ -114,7 +113,6 @@ pub struct CniConfig {
     /// Enable CNI features
     pub enabled: bool,
 }
-
 
 impl Default for ServerConfig {
     fn default() -> Self {

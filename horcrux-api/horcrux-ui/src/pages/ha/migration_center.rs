@@ -52,11 +52,17 @@ pub fn MigrationCenterPage() -> impl IntoView {
             Err(e) => set_error_message.set(Some(format!("Failed to load migration jobs: {}", e))),
         }
 
-        if let Ok(vm_list) = get_virtual_machines().await { set_vms.set(vm_list) }
+        if let Ok(vm_list) = get_virtual_machines().await {
+            set_vms.set(vm_list)
+        }
 
-        if let Ok(container_list) = get_containers().await { set_containers.set(container_list) }
+        if let Ok(container_list) = get_containers().await {
+            set_containers.set(container_list)
+        }
 
-        if let Ok(nodes) = get_cluster_nodes().await { set_cluster_nodes.set(nodes) }
+        if let Ok(nodes) = get_cluster_nodes().await {
+            set_cluster_nodes.set(nodes)
+        }
 
         set_loading.set(false);
     });

@@ -70,16 +70,18 @@ pub fn UsersPage() -> impl IntoView {
                 }
 
                 // Realm filter
-                if !realm_f.is_empty() && realm_f != "all"
-                    && user.realm != realm_f {
-                        return false;
-                    }
+                if !realm_f.is_empty() && realm_f != "all" && user.realm != realm_f {
+                    return false;
+                }
 
                 // Role filter
-                if !role_f.is_empty() && role_f != "all"
-                    && user.role != role_f && !user.roles.contains(&role_f) {
-                        return false;
-                    }
+                if !role_f.is_empty()
+                    && role_f != "all"
+                    && user.role != role_f
+                    && !user.roles.contains(&role_f)
+                {
+                    return false;
+                }
 
                 // Status filter
                 if !status_f.is_empty() && status_f != "all" {
@@ -90,10 +92,9 @@ pub fn UsersPage() -> impl IntoView {
                                 return false;
                             }
                         }
-                        "disabled"
-                            if enabled => {
-                                return false;
-                            }
+                        "disabled" if enabled => {
+                            return false;
+                        }
                         _ => {}
                     }
                 }

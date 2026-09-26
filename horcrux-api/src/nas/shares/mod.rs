@@ -99,7 +99,6 @@ impl NasShare {
     }
 }
 
-
 /// Share permissions configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SharePermissions {
@@ -168,7 +167,6 @@ pub struct AclFlags {
     pub no_propagate_inherit: bool,
     pub inherit_only: bool,
 }
-
 
 // === Protocol-specific configurations ===
 
@@ -303,8 +301,7 @@ pub enum NfsSecurity {
 
 /// AFP share configuration
 #[cfg(feature = "afp")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AfpShareConfig {
     /// Enable as Time Machine target
     pub time_machine: bool,

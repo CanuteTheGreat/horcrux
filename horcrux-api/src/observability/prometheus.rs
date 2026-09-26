@@ -80,10 +80,7 @@ impl PrometheusExporter {
         // Group metrics by name
         let mut grouped: HashMap<String, Vec<&Metric>> = HashMap::new();
         for metric in metrics.iter() {
-            grouped
-                .entry(metric.name.clone())
-                .or_default()
-                .push(metric);
+            grouped.entry(metric.name.clone()).or_default().push(metric);
         }
 
         // Format metrics

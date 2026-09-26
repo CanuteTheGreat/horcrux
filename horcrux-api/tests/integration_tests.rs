@@ -374,10 +374,7 @@ async fn test_backup_operations() {
     wait_for_operation(3000).await;
 
     // 2. List backups
-    let response = client
-        .get(format!("{}/backup/list", API_BASE))
-        .send()
-        .await;
+    let response = client.get(format!("{}/backup/list", API_BASE)).send().await;
 
     assert!(response.is_ok(), "Failed to list backups");
     let backups: Vec<BackupInfo> = response

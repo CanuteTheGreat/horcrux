@@ -641,9 +641,7 @@ impl OidcProvider {
     pub async fn map_roles(&self, user_info: &UserInfo) -> Vec<String> {
         let config = self.config.read().await;
 
-        let role_claim_name = config
-            .role_claim.as_deref()
-            .unwrap_or("roles");
+        let role_claim_name = config.role_claim.as_deref().unwrap_or("roles");
 
         // Extract roles from user info
         let oidc_roles: Vec<String> = user_info

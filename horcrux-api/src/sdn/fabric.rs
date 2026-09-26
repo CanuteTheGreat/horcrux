@@ -290,10 +290,9 @@ impl FabricManager {
                     return Err("Spine-leaf fabric requires at least one leaf node".to_string());
                 }
             }
-            FabricType::Collapsed
-                if fabric.spine_nodes.len() + fabric.leaf_nodes.len() < 2 => {
-                    return Err("Collapsed fabric requires at least two nodes".to_string());
-                }
+            FabricType::Collapsed if fabric.spine_nodes.len() + fabric.leaf_nodes.len() < 2 => {
+                return Err("Collapsed fabric requires at least two nodes".to_string());
+            }
             _ => {}
         }
 

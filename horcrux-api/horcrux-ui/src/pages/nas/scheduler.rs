@@ -85,7 +85,8 @@ pub fn SchedulerPage() -> impl IntoView {
             // Fetch jobs
             if let Ok(resp) = reqwasm::http::Request::get("/api/nas/scheduler/jobs")
                 .send()
-                .await {
+                .await
+            {
                 if resp.ok() {
                     if let Ok(data) = resp.json::<Vec<ScheduledJob>>().await {
                         set_jobs.set(data);
@@ -106,7 +107,8 @@ pub fn SchedulerPage() -> impl IntoView {
                     job_id
                 ))
                 .send()
-                .await {
+                .await
+                {
                     if resp.ok() {
                         if let Ok(data) = resp.json::<Vec<JobHistory>>().await {
                             set_history.set(data);

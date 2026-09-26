@@ -276,10 +276,9 @@ impl CronSchedule {
 
             // Apply step
             for (i, &v) in range_values.iter().enumerate() {
-                if i % (step as usize) == 0
-                    && !values.contains(&v) {
-                        values.push(v);
-                    }
+                if i % (step as usize) == 0 && !values.contains(&v) {
+                    values.push(v);
+                }
             }
         }
 

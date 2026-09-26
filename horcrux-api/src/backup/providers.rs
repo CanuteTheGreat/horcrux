@@ -56,7 +56,9 @@ impl ProviderManager {
     /// List registered providers
     pub async fn list_providers(&self) -> Vec<ProviderInfo> {
         let providers = self.providers.read().await;
-        providers.values().map(|provider| provider.get_info())
+        providers
+            .values()
+            .map(|provider| provider.get_info())
             .collect()
     }
 

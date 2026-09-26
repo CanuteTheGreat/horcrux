@@ -95,11 +95,9 @@ impl LibvirtManager {
         })?;
 
         // Get domain info for memory and CPU
-        let info = domain.get_info().map_err(|e| {
-            io::Error::other(
-                format!("Failed to get domain info: {:?}", e),
-            )
-        })?;
+        let info = domain
+            .get_info()
+            .map_err(|e| io::Error::other(format!("Failed to get domain info: {:?}", e)))?;
 
         let memory_actual = info.memory * 1024; // Convert KB to bytes
         let cpu_time = info.cpu_time; // nanoseconds
@@ -198,21 +196,17 @@ impl LibvirtManager {
             io::Error::new(io::ErrorKind::NotConnected, "Not connected to libvirt")
         })?;
 
-        let num_domains = conn.num_of_domains().map_err(|e| {
-            io::Error::other(
-                format!("Failed to get domain count: {:?}", e),
-            )
-        })?;
+        let num_domains = conn
+            .num_of_domains()
+            .map_err(|e| io::Error::other(format!("Failed to get domain count: {:?}", e)))?;
 
         if num_domains == 0 {
             return Ok(Vec::new());
         }
 
-        let domain_ids = conn.list_domains().map_err(|e| {
-            io::Error::other(
-                format!("Failed to list domains: {:?}", e),
-            )
-        })?;
+        let domain_ids = conn
+            .list_domains()
+            .map_err(|e| io::Error::other(format!("Failed to list domains: {:?}", e)))?;
 
         let mut vm_names = Vec::new();
         for id in domain_ids {
@@ -231,11 +225,8 @@ impl LibvirtManager {
     pub async fn disconnect(&self) -> io::Result<()> {
         let mut connection = self.connection.write().await;
         if let Some(mut conn) = connection.take() {
-            conn.close().map_err(|e| {
-                io::Error::other(
-                    format!("Failed to close connection: {:?}", e),
-                )
-            })?;
+            conn.close()
+                .map_err(|e| io::Error::other(format!("Failed to close connection: {:?}", e)))?;
             debug!("Disconnected from libvirt");
         }
         Ok(())

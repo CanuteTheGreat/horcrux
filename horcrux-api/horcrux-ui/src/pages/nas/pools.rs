@@ -56,7 +56,8 @@ pub fn PoolsPage() -> impl IntoView {
             // Fetch datasets
             if let Ok(resp) = reqwasm::http::Request::get("/api/nas/datasets")
                 .send()
-                .await {
+                .await
+            {
                 if resp.ok() {
                     if let Ok(data) = resp.json::<Vec<Dataset>>().await {
                         set_datasets.set(data);

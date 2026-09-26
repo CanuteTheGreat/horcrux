@@ -1494,7 +1494,7 @@ mod nas_handlers {
     use crate::nas::monitoring::{collect_metrics, get_nas_health};
     #[cfg(feature = "iscsi-target")]
     use crate::nas::services::iscsi::IscsiTargetManager;
-    
+
     #[cfg(feature = "s3-gateway")]
     use crate::nas::services::s3::S3GatewayManager;
     use crate::nas::services::{get_service_status, manage_service, NasService, ServiceAction};
@@ -1537,7 +1537,6 @@ mod nas_handlers {
     pub async fn nas_list_shares(
         State(state): State<Arc<AppState>>,
     ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
-        
         // Query database for shares
         let shares = sqlx::query_as::<_, (String, String, String, String, bool, Option<String>, i64)>(
             "SELECT id, name, path, owner_user, enabled, description, created_at FROM nas_shares ORDER BY name"
@@ -1566,7 +1565,6 @@ mod nas_handlers {
         State(state): State<Arc<AppState>>,
         Json(body): Json<serde_json::Value>,
     ) -> Result<Json<serde_json::Value>, ApiError> {
-        
         let name = body
             .get("name")
             .and_then(|v| v.as_str())
@@ -2743,7 +2741,6 @@ mod nas_handlers {
         State(state): State<Arc<AppState>>,
         Path(id): Path<String>,
     ) -> Result<Json<serde_json::Value>, ApiError> {
-        
         // Get task details
         let task = sqlx::query_as::<_, (String, String, String, String)>(
             "SELECT source_dataset, target_host, target_dataset, name FROM nas_replication_tasks WHERE id = ?"
@@ -4558,9 +4555,7 @@ mod nas_handlers {
                     .get("task_id")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| {
-                        ApiError::BadRequest(
-                            "Replication job requires 'task_id' field".to_string(),
-                        )
+                        ApiError::BadRequest("Replication job requires 'task_id' field".to_string())
                     })?;
                 target = task_id.to_string();
                 JobType::Replication
@@ -6889,9 +6884,8 @@ async fn login(
             db::users::create_session(state.database.pool(), &session).await?;
 
             // Generate JWT token
-            let token = generate_jwt_token(&user.id, &user.username, &user.role).map_err(|e| {
-                ApiError::Internal(format!("Failed to generate token: {}", e))
-            })?;
+            let token = generate_jwt_token(&user.id, &user.username, &user.role)
+                .map_err(|e| ApiError::Internal(format!("Failed to generate token: {}", e)))?;
 
             Ok(Json(LoginResponse {
                 ticket: token,

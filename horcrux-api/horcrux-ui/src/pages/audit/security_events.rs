@@ -85,7 +85,10 @@ pub fn SecurityEventsPage() -> impl IntoView {
     // Update event status
     let update_event_status = move |event_id: String, new_status: String| {
         spawn_local(async move {
-            if update_security_event_status(event_id, new_status).await.is_ok() {
+            if update_security_event_status(event_id, new_status)
+                .await
+                .is_ok()
+            {
                 // Reload events
                 if let Ok(events) = get_security_events(time_range.get()).await {
                     set_security_events.set(events);

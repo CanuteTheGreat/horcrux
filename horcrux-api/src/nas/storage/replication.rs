@@ -2220,9 +2220,9 @@ pub async fn apply_retention(dataset: &str, policy: &RetentionPolicy) -> Result<
             && super::snapshots::delete_snapshot(&snapshot.full_name)
                 .await
                 .is_ok()
-            {
-                deleted += 1;
-            }
+        {
+            deleted += 1;
+        }
     }
 
     Ok(deleted)

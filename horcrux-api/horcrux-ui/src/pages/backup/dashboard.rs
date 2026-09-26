@@ -63,10 +63,7 @@ pub fn BackupDashboard() -> impl IntoView {
 
     // Auto-refresh every 30 seconds
     use leptos::set_interval;
-    set_interval(
-        load_dashboard_data,
-        std::time::Duration::from_secs(30),
-    );
+    set_interval(load_dashboard_data, std::time::Duration::from_secs(30));
 
     let get_status_color = move |status: &BackupStatus| match status {
         BackupStatus::Completed => "bg-green-100 text-green-800",

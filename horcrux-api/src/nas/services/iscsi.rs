@@ -21,7 +21,6 @@ pub enum IscsiBackend {
     Lio,
 }
 
-
 /// Global iSCSI configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IscsiGlobalConfig {
@@ -155,8 +154,7 @@ impl Default for IscsiPortal {
 }
 
 /// Target-specific parameters
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TargetParams {
     /// Maximum connections
     pub max_connections: Option<u32>,
@@ -181,7 +179,6 @@ pub struct TargetParams {
     /// Queue depth
     pub queue_depth: Option<u32>,
 }
-
 
 /// iSCSI LUN
 #[derive(Debug, Clone, Serialize, Deserialize)]

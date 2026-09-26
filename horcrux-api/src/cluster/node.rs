@@ -18,7 +18,6 @@ pub enum Architecture {
     Unknown,
 }
 
-
 impl From<&horcrux_common::VmArchitecture> for Architecture {
     fn from(vm_arch: &horcrux_common::VmArchitecture) -> Self {
         match vm_arch {

@@ -376,11 +376,8 @@ async fn get_docker_container_stats_via_api(container_id: &str) -> io::Result<Co
     use futures::StreamExt;
 
     // Connect to Docker API
-    let docker = Docker::connect_with_local_defaults().map_err(|e| {
-        io::Error::other(
-            format!("Docker API unavailable: {}", e),
-        )
-    })?;
+    let docker = Docker::connect_with_local_defaults()
+        .map_err(|e| io::Error::other(format!("Docker API unavailable: {}", e)))?;
 
     let stats_options = StatsOptions {
         stream: false,
@@ -390,9 +387,8 @@ async fn get_docker_container_stats_via_api(container_id: &str) -> io::Result<Co
     let mut stats_stream = docker.stats(container_id, Some(stats_options));
 
     if let Some(stats_result) = stats_stream.next().await {
-        let stats = stats_result.map_err(|e| {
-            io::Error::other(format!("Failed to get stats: {}", e))
-        })?;
+        let stats =
+            stats_result.map_err(|e| io::Error::other(format!("Failed to get stats: {}", e)))?;
 
         // Parse CPU stats
         let cpu_delta =
@@ -489,22 +485,18 @@ async fn list_containers_via_docker_api() -> io::Result<Vec<String>> {
     use bollard::container::ListContainersOptions;
     use bollard::Docker;
 
-    let docker = Docker::connect_with_local_defaults().map_err(|e| {
-        io::Error::other(
-            format!("Docker API unavailable: {}", e),
-        )
-    })?;
+    let docker = Docker::connect_with_local_defaults()
+        .map_err(|e| io::Error::other(format!("Docker API unavailable: {}", e)))?;
 
     let options = Some(ListContainersOptions::<String> {
         all: false, // Only running containers
         ..Default::default()
     });
 
-    let containers = docker.list_containers(options).await.map_err(|e| {
-        io::Error::other(
-            format!("Failed to list containers: {}", e),
-        )
-    })?;
+    let containers = docker
+        .list_containers(options)
+        .await
+        .map_err(|e| io::Error::other(format!("Failed to list containers: {}", e)))?;
 
     let ids: Vec<String> = containers.into_iter().filter_map(|c| c.id).collect();
 

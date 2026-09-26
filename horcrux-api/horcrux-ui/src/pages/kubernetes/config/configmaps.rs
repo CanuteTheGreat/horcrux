@@ -53,10 +53,7 @@ pub fn ConfigMapsPage() -> impl IntoView {
 
     // Auto-refresh every 30 seconds
     use leptos::set_interval;
-    set_interval(
-        load_configmaps,
-        std::time::Duration::from_secs(30),
-    );
+    set_interval(load_configmaps, std::time::Duration::from_secs(30));
 
     let filtered_configmaps = move || {
         let query = search_query.get().to_lowercase();

@@ -22,7 +22,6 @@ use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
-
 /// NAS User definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NasUser {

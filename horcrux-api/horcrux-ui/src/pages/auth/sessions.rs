@@ -98,14 +98,17 @@ pub fn SessionsPage() -> impl IntoView {
             .into_iter()
             .filter(|session| {
                 if !user_filter.is_empty()
-                    && !session.username.to_lowercase().contains(&user_filter) {
-                        return false;
-                    }
+                    && !session.username.to_lowercase().contains(&user_filter)
+                {
+                    return false;
+                }
 
-                if !realm_filter.is_empty() && realm_filter != "all"
-                    && session.realm != realm_filter {
-                        return false;
-                    }
+                if !realm_filter.is_empty()
+                    && realm_filter != "all"
+                    && session.realm != realm_filter
+                {
+                    return false;
+                }
 
                 true
             })
@@ -126,10 +129,7 @@ pub fn SessionsPage() -> impl IntoView {
         let mut grouped: HashMap<String, Vec<api::UserSession>> = HashMap::new();
         for session in filtered_sessions() {
             let user_key = format!("{}@{}", session.username, session.realm);
-            grouped
-                .entry(user_key)
-                .or_default()
-                .push(session);
+            grouped.entry(user_key).or_default().push(session);
         }
         grouped
     };

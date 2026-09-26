@@ -49,8 +49,7 @@ impl Default for WebdavGlobalConfig {
 }
 
 /// WebDAV authentication type
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum WebdavAuthType {
     /// No authentication
     None,
@@ -65,10 +64,8 @@ pub enum WebdavAuthType {
     Pam,
 }
 
-
 /// WebDAV authentication type (legacy alias)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum WebDavAuthType {
     /// No authentication
     None,
@@ -82,7 +79,6 @@ pub enum WebDavAuthType {
     /// PAM authentication
     Pam,
 }
-
 
 /// SSL/TLS configuration for WebDAV
 #[derive(Debug, Clone, Serialize, Deserialize)]

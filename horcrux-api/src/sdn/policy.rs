@@ -25,8 +25,7 @@ pub enum PolicyType {
 }
 
 /// Label selector for pod matching
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LabelSelector {
     pub match_labels: HashMap<String, String>,
     pub match_expressions: Vec<LabelExpression>,
@@ -432,7 +431,6 @@ impl NetworkPolicyManager {
         false
     }
 }
-
 
 #[cfg(test)]
 mod tests {

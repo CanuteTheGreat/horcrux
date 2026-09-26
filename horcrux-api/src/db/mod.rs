@@ -511,10 +511,12 @@ mod tests {
         let db = create_test_db().await;
 
         // Test all VM statuses
-        let statuses = [VmStatus::Running,
+        let statuses = [
+            VmStatus::Running,
             VmStatus::Stopped,
             VmStatus::Paused,
-            VmStatus::Unknown];
+            VmStatus::Unknown,
+        ];
 
         for (i, status) in statuses.iter().enumerate() {
             let mut vm_config = create_test_vm_config(
@@ -536,10 +538,12 @@ mod tests {
     async fn test_vm_architecture_persistence() {
         let db = create_test_db().await;
 
-        let architectures = [VmArchitecture::X86_64,
+        let architectures = [
+            VmArchitecture::X86_64,
             VmArchitecture::Aarch64,
             VmArchitecture::Riscv64,
-            VmArchitecture::Ppc64le];
+            VmArchitecture::Ppc64le,
+        ];
 
         for (i, arch) in architectures.iter().enumerate() {
             let mut vm_config =

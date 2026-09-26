@@ -63,7 +63,8 @@ pub fn S3Page() -> impl IntoView {
             // Fetch buckets
             if let Ok(resp) = reqwasm::http::Request::get("/api/nas/s3-gateway/buckets")
                 .send()
-                .await {
+                .await
+            {
                 if resp.ok() {
                     if let Ok(data) = resp.json::<Vec<S3Bucket>>().await {
                         set_buckets.set(data);
@@ -74,7 +75,8 @@ pub fn S3Page() -> impl IntoView {
             // Fetch access keys
             if let Ok(resp) = reqwasm::http::Request::get("/api/nas/s3-gateway/keys")
                 .send()
-                .await {
+                .await
+            {
                 if resp.ok() {
                     if let Ok(data) = resp.json::<Vec<S3AccessKey>>().await {
                         set_access_keys.set(data);

@@ -68,10 +68,7 @@ pub fn HaDashboard() -> impl IntoView {
 
     // Auto-refresh every 30 seconds
     use leptos::set_interval;
-    set_interval(
-        load_dashboard_data,
-        std::time::Duration::from_secs(30),
-    );
+    set_interval(load_dashboard_data, std::time::Duration::from_secs(30));
 
     let get_node_status_color = move |status: &str| match status.to_lowercase().as_str() {
         "online" => "bg-green-100 text-green-800",

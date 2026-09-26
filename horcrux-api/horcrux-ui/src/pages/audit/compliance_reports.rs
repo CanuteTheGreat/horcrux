@@ -161,7 +161,10 @@ pub fn ComplianceReportsPage() -> impl IntoView {
             };
 
             spawn_local(async move {
-                if set_control_override(control.id.clone(), override_data).await.is_ok() {
+                if set_control_override(control.id.clone(), override_data)
+                    .await
+                    .is_ok()
+                {
                     set_show_override_modal.set(false);
                     set_override_reason.set(String::new());
                     set_override_expires.set(String::new());

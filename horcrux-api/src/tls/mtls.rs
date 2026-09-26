@@ -183,9 +183,10 @@ impl MtlsManager {
 
         // Check allowed CNs
         if !self.config.allowed_cns.is_empty()
-            && !self.config.allowed_cns.contains(&identity.common_name) {
-                return VerificationResult::CnNotAllowed(identity.common_name.clone());
-            }
+            && !self.config.allowed_cns.contains(&identity.common_name)
+        {
+            return VerificationResult::CnNotAllowed(identity.common_name.clone());
+        }
 
         // Check allowed organizations
         if !self.config.allowed_orgs.is_empty() {
