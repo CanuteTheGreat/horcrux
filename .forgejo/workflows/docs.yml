@@ -18,6 +18,9 @@ jobs:
       - name: Install Rust toolchain
         uses: https://github.com/dtolnay/rust-toolchain@stable
 
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
