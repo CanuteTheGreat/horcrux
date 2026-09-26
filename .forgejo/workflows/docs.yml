@@ -42,22 +42,14 @@ jobs:
           cp -r docs/* public/ 2>/dev/null || true
           echo '<meta http-equiv="refresh" content="0; url=horcrux_api/index.html">' > public/index.html
 
-      - name: Upload pages artifact
-        uses: https://github.com/actions/upload-pages-artifact@v3
+      # This Forgejo instance has no GitHub-Pages-equivalent hosting product
+      # (upload-pages-artifact/deploy-pages are GHES-only APIs Forgejo does
+      # not implement - confirmed via GHESNotSupportedError in CI, 2026-09-25).
+      # Publish the built docs as a plain downloadable artifact instead so
+      # this job actually passes and the docs remain retrievable.
+      - name: Upload docs artifact
+        uses: actions/upload-artifact@v4
         with:
+          name: horcrux-docs
           path: public
-
-  deploy-docs:
-    name: Deploy Documentation
-    runs-on: ubuntu-latest
-    needs: build-docs
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: forgejo-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to Pages
-        id: deployment
-        uses: https://github.com/actions/deploy-pages@v4
+          retention-days: 30
