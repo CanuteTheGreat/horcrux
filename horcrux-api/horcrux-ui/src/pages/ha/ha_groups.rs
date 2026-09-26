@@ -1,3 +1,4 @@
+#![allow(clippy::cmp_owned)]
 use crate::api::*;
 use leptos::*;
 use wasm_bindgen::JsCast;
@@ -50,20 +51,11 @@ pub fn HaGroupsPage() -> impl IntoView {
             Err(e) => set_error_message.set(Some(format!("Failed to load HA groups: {}", e))),
         }
 
-        match get_virtual_machines().await {
-            Ok(vm_list) => set_vms.set(vm_list),
-            Err(_) => {}
-        }
+        if let Ok(vm_list) = get_virtual_machines().await { set_vms.set(vm_list) }
 
-        match get_containers().await {
-            Ok(container_list) => set_containers.set(container_list),
-            Err(_) => {}
-        }
+        if let Ok(container_list) = get_containers().await { set_containers.set(container_list) }
 
-        match get_cluster_nodes().await {
-            Ok(nodes) => set_cluster_nodes.set(nodes),
-            Err(_) => {}
-        }
+        if let Ok(nodes) = get_cluster_nodes().await { set_cluster_nodes.set(nodes) }
 
         set_loading.set(false);
     });

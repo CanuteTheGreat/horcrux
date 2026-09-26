@@ -102,6 +102,12 @@ pub struct HaManager {
     node_resources: Arc<RwLock<HashMap<String, NodeResources>>>,
 }
 
+impl Default for HaManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HaManager {
     pub fn new() -> Self {
         Self {
@@ -245,7 +251,7 @@ impl HaManager {
     pub async fn remove_resource(&self, vm_id: u32) -> Result<()> {
         let mut resources = self.resources.write().await;
 
-        if let Some(_) = resources.remove(&vm_id) {
+        if resources.remove(&vm_id).is_some() {
             tracing::info!("Removed HA resource: VM {}", vm_id);
             Ok(())
         } else {
@@ -509,7 +515,7 @@ impl HaManager {
         // Legacy fallback: first available node with no resource/architecture
         // data at all (keeps old behavior for callers/tests that don't feed
         // node_resources into the HA manager).
-        for node in unknown_candidates {
+        if let Some(node) = unknown_candidates.into_iter().next() {
             return Ok(Some(node.clone()));
         }
 

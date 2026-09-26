@@ -1,11 +1,11 @@
-///! Snapshot Replication Module
-///!
-///! Provides cross-node snapshot replication using:
-///! - ZFS send/receive for incremental transfers
-///! - SSH tunneling for secure transfer
-///! - Bandwidth throttling
-///! - Progress tracking
-///! - Automatic cleanup of old replicas
+//! Snapshot Replication Module
+//!
+//! Provides cross-node snapshot replication using:
+//! - ZFS send/receive for incremental transfers
+//! - SSH tunneling for secure transfer
+//! - Bandwidth throttling
+//! - Progress tracking
+//! - Automatic cleanup of old replicas
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -73,6 +73,12 @@ pub enum ReplicationStatus {
 pub struct ReplicationManager {
     jobs: Arc<RwLock<HashMap<String, ReplicationJob>>>,
     active_replications: Arc<RwLock<HashMap<String, ReplicationState>>>,
+}
+
+impl Default for ReplicationManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ReplicationManager {
@@ -246,7 +252,7 @@ impl ReplicationManager {
             .arg("snapshot")
             .arg("-o")
             .arg("name")
-            .arg(&format!("{}/{}", job.target_pool, job.source_vm_id))
+            .arg(format!("{}/{}", job.target_pool, job.source_vm_id))
             .output()
             .await
             .map_err(|e| {
@@ -279,7 +285,7 @@ impl ReplicationManager {
         let mut ssh_cmd = if !bandwidth_limit.is_empty() {
             // Use pv for bandwidth throttling
             let mut cmd = Command::new("ssh");
-            cmd.arg(&job.target_node).arg(&format!(
+            cmd.arg(&job.target_node).arg(format!(
                 "pv -L {} | zfs receive -F {}",
                 bandwidth_limit, target_path
             ));
@@ -446,7 +452,7 @@ impl ReplicationManager {
             .arg("name")
             .arg("-s")
             .arg("creation")
-            .arg(&format!("{}/{}", job.target_pool, job.source_vm_id))
+            .arg(format!("{}/{}", job.target_pool, job.source_vm_id))
             .output()
             .await
             .map_err(|e| {
@@ -489,7 +495,7 @@ impl ReplicationManager {
             .arg("name")
             .arg("-s")
             .arg("creation")
-            .arg(&format!("{}/{}", job.target_pool, job.source_vm_id))
+            .arg(format!("{}/{}", job.target_pool, job.source_vm_id))
             .output()
             .await
             .map_err(|e| {
@@ -555,7 +561,7 @@ impl ReplicationManager {
             ReplicationSchedule::Hourly => from + 3600,
             ReplicationSchedule::Daily { hour } => {
                 let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(from, 0)
-                    .unwrap_or_else(|| chrono::Utc::now());
+                    .unwrap_or_else(chrono::Utc::now);
                 let mut next = dt
                     .date_naive()
                     .and_hms_opt(*hour as u32, 0, 0)

@@ -1,5 +1,5 @@
-///! Background metrics collection task
-///! Periodically collects system and VM metrics and broadcasts them via WebSocket
+//! Background metrics collection task
+//! Periodically collects system and VM metrics and broadcasts them via WebSocket
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info};
@@ -232,8 +232,8 @@ mod tests {
         assert!(result.is_ok());
 
         let (cpu, memory, disk_read, disk_write, net_rx, net_tx) = result.unwrap();
-        assert!(cpu >= 0.0 && cpu <= 100.0);
-        assert!(memory >= 0.0 && memory <= 100.0);
+        assert!((0.0..=100.0).contains(&cpu));
+        assert!((0.0..=100.0).contains(&memory));
         assert!(disk_read < 1_000_000_000);
         assert!(disk_write < 1_000_000_000);
         assert!(net_rx < 1_000_000_000);

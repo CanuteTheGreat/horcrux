@@ -136,7 +136,7 @@ pub fn ComplianceReportsPage() -> impl IntoView {
     // Run compliance assessment
     let run_assessment = move |framework_id: String| {
         spawn_local(async move {
-            if let Ok(_) = run_compliance_assessment(framework_id).await {
+            if run_compliance_assessment(framework_id).await.is_ok() {
                 // Reload frameworks
                 if let Ok(fw) = get_compliance_frameworks().await {
                     set_frameworks.set(fw);
@@ -161,7 +161,7 @@ pub fn ComplianceReportsPage() -> impl IntoView {
             };
 
             spawn_local(async move {
-                if let Ok(_) = set_control_override(control.id.clone(), override_data).await {
+                if set_control_override(control.id.clone(), override_data).await.is_ok() {
                     set_show_override_modal.set(false);
                     set_override_reason.set(String::new());
                     set_override_expires.set(String::new());

@@ -63,7 +63,7 @@ pub fn SecretsPage() -> impl IntoView {
 
     // Auto-refresh every 30 seconds
     use leptos::set_interval;
-    set_interval(move || load_secrets(), std::time::Duration::from_secs(30));
+    set_interval(load_secrets, std::time::Duration::from_secs(30));
 
     let filtered_secrets = move || {
         let query = search_query.get().to_lowercase();

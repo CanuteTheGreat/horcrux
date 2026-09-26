@@ -176,7 +176,7 @@ pub fn ChartLibraryPage() -> impl IntoView {
                     || template
                         .description
                         .as_ref()
-                        .map_or(false, |d| d.to_lowercase().contains(&query));
+                        .is_some_and(|d| d.to_lowercase().contains(&query));
 
                 let matches_category = category == "all" || template.category == category;
                 let matches_type = chart_type == "all" || template.chart_type == chart_type;

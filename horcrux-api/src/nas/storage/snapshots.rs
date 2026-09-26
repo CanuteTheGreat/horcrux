@@ -886,7 +886,7 @@ pub async fn apply_retention_policy(
     }
 
     // Sort by creation time (newest first)
-    snapshots.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    snapshots.sort_by_key(|x| std::cmp::Reverse(x.created_at));
 
     let now = chrono::Utc::now().timestamp();
 
@@ -905,11 +905,11 @@ pub async fn apply_retention_policy(
 
     for snapshot in &snapshots {
         let dt = chrono::DateTime::from_timestamp(snapshot.created_at, 0)
-            .unwrap_or_else(|| chrono::Utc::now());
+            .unwrap_or_else(chrono::Utc::now);
 
         let hour_key = dt.format("%Y%m%d%H").to_string();
         let day_key = dt.format("%Y%m%d").to_string();
-        let week_key = format!("{}{}", dt.format("%Y").to_string(), dt.iso_week().week());
+        let week_key = format!("{}{}", dt.format("%Y"), dt.iso_week().week());
         let month_key = dt.format("%Y%m").to_string();
         let year_key = dt.format("%Y").to_string();
 

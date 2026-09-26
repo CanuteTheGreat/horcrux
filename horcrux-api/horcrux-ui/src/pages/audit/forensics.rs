@@ -135,7 +135,7 @@ pub fn ForensicsPage() -> impl IntoView {
             };
 
             spawn_local(async move {
-                if let Ok(_) = add_investigation_finding(inv.id.clone(), finding).await {
+                if add_investigation_finding(inv.id.clone(), finding).await.is_ok() {
                     set_show_add_finding.set(false);
                     set_finding_title.set(String::new());
                     set_finding_description.set(String::new());
@@ -160,7 +160,7 @@ pub fn ForensicsPage() -> impl IntoView {
                     "time_end": artifact_time_end.get(),
                 });
 
-                if let Ok(_) = collect_investigation_artifact(inv.id.clone(), request).await {
+                if collect_investigation_artifact(inv.id.clone(), request).await.is_ok() {
                     set_show_collect_artifact.set(false);
                     set_artifact_source.set(String::new());
                     set_artifact_time_start.set(String::new());
@@ -179,7 +179,7 @@ pub fn ForensicsPage() -> impl IntoView {
     let update_status = move |new_status: String| {
         if let Some(inv) = selected_investigation.get() {
             spawn_local(async move {
-                if let Ok(_) = update_investigation_status(inv.id.clone(), new_status).await {
+                if update_investigation_status(inv.id.clone(), new_status).await.is_ok() {
                     // Reload investigation
                     if let Ok(updated_inv) = get_investigation(inv.id).await {
                         set_selected_investigation.set(Some(updated_inv));

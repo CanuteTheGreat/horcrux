@@ -1,5 +1,5 @@
-///! Backup retention policy management
-///! Implements Proxmox-style retention (keep-hourly, keep-daily, etc.)
+//! Backup retention policy management
+//! Implements Proxmox-style retention (keep-hourly, keep-daily, etc.)
 use super::{Backup, RetentionPolicy};
 use chrono::{Datelike, Timelike};
 use std::collections::HashMap;
@@ -17,8 +17,8 @@ impl RetentionManager {
         let mut to_delete = Vec::new();
 
         // Sort backups by timestamp (newest first)
-        let mut sorted: Vec<&Backup> = backups.iter().copied().collect();
-        sorted.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        let mut sorted: Vec<&Backup> = backups.to_vec();
+        sorted.sort_by_key(|x| std::cmp::Reverse(x.timestamp));
 
         // Group backups by time period
         let mut hourly = Vec::new();
@@ -38,36 +38,36 @@ impl RetentionManager {
 
             // Hourly
             let hour_key = (dt.year(), dt.month(), dt.day(), dt.hour());
-            if !seen_hours.contains_key(&hour_key) {
-                seen_hours.insert(hour_key, backup.id.clone());
+            if let std::collections::hash_map::Entry::Vacant(e) = seen_hours.entry(hour_key) {
+                e.insert(backup.id.clone());
                 hourly.push(backup.id.clone());
             }
 
             // Daily
             let day_key = (dt.year(), dt.month(), dt.day());
-            if !seen_days.contains_key(&day_key) {
-                seen_days.insert(day_key, backup.id.clone());
+            if let std::collections::hash_map::Entry::Vacant(e) = seen_days.entry(day_key) {
+                e.insert(backup.id.clone());
                 daily.push(backup.id.clone());
             }
 
             // Weekly
             let week_key = (dt.year(), dt.iso_week().week());
-            if !seen_weeks.contains_key(&week_key) {
-                seen_weeks.insert(week_key, backup.id.clone());
+            if let std::collections::hash_map::Entry::Vacant(e) = seen_weeks.entry(week_key) {
+                e.insert(backup.id.clone());
                 weekly.push(backup.id.clone());
             }
 
             // Monthly
             let month_key = (dt.year(), dt.month());
-            if !seen_months.contains_key(&month_key) {
-                seen_months.insert(month_key, backup.id.clone());
+            if let std::collections::hash_map::Entry::Vacant(e) = seen_months.entry(month_key) {
+                e.insert(backup.id.clone());
                 monthly.push(backup.id.clone());
             }
 
             // Yearly
             let year_key = dt.year();
-            if !seen_years.contains_key(&year_key) {
-                seen_years.insert(year_key, backup.id.clone());
+            if let std::collections::hash_map::Entry::Vacant(e) = seen_years.entry(year_key) {
+                e.insert(backup.id.clone());
                 yearly.push(backup.id.clone());
             }
         }

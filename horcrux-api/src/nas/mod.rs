@@ -38,10 +38,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 // Re-export core types
-pub use auth::{AclEntry, NasGroup, NasUser};
 pub use services::NasService;
-pub use shares::{NasShare, ShareAccess, SharePermissions, ShareProtocol};
-pub use storage::{NasDataset, NasPool, NasSnapshot};
 
 /// Share protocol type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -77,8 +74,10 @@ impl std::fmt::Display for Protocol {
 /// Access level for shares
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum AccessLevel {
     /// Read-only access
+    #[default]
     ReadOnly,
     /// Read and write access
     ReadWrite,
@@ -86,17 +85,14 @@ pub enum AccessLevel {
     NoAccess,
 }
 
-impl Default for AccessLevel {
-    fn default() -> Self {
-        AccessLevel::ReadOnly
-    }
-}
 
 /// Case sensitivity mode for file names
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum CaseSensitivity {
     /// Auto-detect based on filesystem
+    #[default]
     Auto,
     /// Case-sensitive (Unix-style)
     Sensitive,
@@ -104,11 +100,6 @@ pub enum CaseSensitivity {
     Insensitive,
 }
 
-impl Default for CaseSensitivity {
-    fn default() -> Self {
-        CaseSensitivity::Auto
-    }
-}
 
 /// NAS service status
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,6 +122,7 @@ pub struct ServiceStatus {
 
 /// Quota configuration for users/groups/shares
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct QuotaConfig {
     /// Per-user quotas
     pub user_quotas: HashMap<String, QuotaLimit>,
@@ -142,16 +134,6 @@ pub struct QuotaConfig {
     pub dataset_refquota_gb: Option<u64>,
 }
 
-impl Default for QuotaConfig {
-    fn default() -> Self {
-        Self {
-            user_quotas: HashMap::new(),
-            group_quotas: HashMap::new(),
-            dataset_quota_gb: None,
-            dataset_refquota_gb: None,
-        }
-    }
-}
 
 /// Quota limits
 #[derive(Debug, Clone, Serialize, Deserialize)]

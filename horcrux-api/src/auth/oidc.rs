@@ -642,9 +642,7 @@ impl OidcProvider {
         let config = self.config.read().await;
 
         let role_claim_name = config
-            .role_claim
-            .as_ref()
-            .map(|s| s.as_str())
+            .role_claim.as_deref()
             .unwrap_or("roles");
 
         // Extract roles from user info

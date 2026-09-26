@@ -1,4 +1,4 @@
-///! LXC container integration
+//! LXC container integration
 use super::Container;
 use horcrux_common::{ContainerConfig, ContainerRuntime, ContainerStatus, Result};
 use std::path::PathBuf;
@@ -8,6 +8,12 @@ use tracing::{debug, error, info};
 /// LXC container manager
 pub struct LxcManager {
     storage_path: PathBuf,
+}
+
+impl Default for LxcManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl LxcManager {

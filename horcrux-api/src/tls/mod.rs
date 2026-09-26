@@ -1,6 +1,6 @@
-///! TLS/SSL configuration and certificate management
-///!
-///! Provides secure HTTPS connections and certificate management
+//! TLS/SSL configuration and certificate management
+//!
+//! Provides secure HTTPS connections and certificate management
 pub mod mtls;
 
 use horcrux_common::Result;
@@ -72,6 +72,12 @@ pub struct CertificateInfo {
 pub struct TlsManager {
     config: Arc<RwLock<TlsConfig>>,
     certificates: Arc<RwLock<Vec<CertificateInfo>>>,
+}
+
+impl Default for TlsManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TlsManager {
@@ -153,7 +159,7 @@ impl TlsManager {
 
         // Generate private key
         let key_output = tokio::process::Command::new("openssl")
-            .args(&["genrsa", "-out", output_key, "4096"])
+            .args(["genrsa", "-out", output_key, "4096"])
             .output()
             .await
             .map_err(|e| horcrux_common::Error::System(format!("Failed to generate key: {}", e)))?;
@@ -166,7 +172,7 @@ impl TlsManager {
 
         // Generate certificate
         let cert_output = tokio::process::Command::new("openssl")
-            .args(&[
+            .args([
                 "req",
                 "-new",
                 "-x509",
@@ -207,7 +213,7 @@ impl TlsManager {
     pub async fn get_certificate_info(&self, cert_path: &str) -> Result<CertificateInfo> {
         // Get subject
         let subject_output = tokio::process::Command::new("openssl")
-            .args(&["x509", "-in", cert_path, "-noout", "-subject"])
+            .args(["x509", "-in", cert_path, "-noout", "-subject"])
             .output()
             .await
             .map_err(|e| horcrux_common::Error::System(format!("Failed to read cert: {}", e)))?;
@@ -220,7 +226,7 @@ impl TlsManager {
 
         // Get issuer
         let issuer_output = tokio::process::Command::new("openssl")
-            .args(&["x509", "-in", cert_path, "-noout", "-issuer"])
+            .args(["x509", "-in", cert_path, "-noout", "-issuer"])
             .output()
             .await
             .map_err(|e| horcrux_common::Error::System(format!("Failed to read issuer: {}", e)))?;
@@ -233,7 +239,7 @@ impl TlsManager {
 
         // Get valid from
         let startdate_output = tokio::process::Command::new("openssl")
-            .args(&["x509", "-in", cert_path, "-noout", "-startdate"])
+            .args(["x509", "-in", cert_path, "-noout", "-startdate"])
             .output()
             .await?;
 
@@ -245,7 +251,7 @@ impl TlsManager {
 
         // Get valid until
         let enddate_output = tokio::process::Command::new("openssl")
-            .args(&["x509", "-in", cert_path, "-noout", "-enddate"])
+            .args(["x509", "-in", cert_path, "-noout", "-enddate"])
             .output()
             .await?;
 
@@ -257,7 +263,7 @@ impl TlsManager {
 
         // Get serial number
         let serial_output = tokio::process::Command::new("openssl")
-            .args(&["x509", "-in", cert_path, "-noout", "-serial"])
+            .args(["x509", "-in", cert_path, "-noout", "-serial"])
             .output()
             .await?;
 
@@ -269,7 +275,7 @@ impl TlsManager {
 
         // Get fingerprint
         let fingerprint_output = tokio::process::Command::new("openssl")
-            .args(&[
+            .args([
                 "x509",
                 "-in",
                 cert_path,
@@ -288,7 +294,7 @@ impl TlsManager {
 
         // Get SANs
         let san_output = tokio::process::Command::new("openssl")
-            .args(&["x509", "-in", cert_path, "-noout", "-text"])
+            .args(["x509", "-in", cert_path, "-noout", "-text"])
             .output()
             .await?;
 
@@ -320,6 +326,7 @@ impl TlsManager {
     }
 
     /// Generate Certificate Signing Request (CSR)
+    #[allow(clippy::too_many_arguments)]
     pub async fn generate_csr(
         &self,
         common_name: &str,
@@ -351,7 +358,7 @@ impl TlsManager {
 
         // Generate private key
         let key_output = tokio::process::Command::new("openssl")
-            .args(&["genrsa", "-out", output_key, "4096"])
+            .args(["genrsa", "-out", output_key, "4096"])
             .output()
             .await
             .map_err(|e| horcrux_common::Error::System(format!("Failed to generate key: {}", e)))?;
@@ -364,7 +371,7 @@ impl TlsManager {
 
         // Generate CSR
         let csr_output = tokio::process::Command::new("openssl")
-            .args(&[
+            .args([
                 "req", "-new", "-key", output_key, "-out", output_csr, "-subj", &subject,
             ])
             .output()
@@ -420,7 +427,7 @@ impl TlsManager {
         // Parse expiry date (simplified - real implementation should use proper date parsing)
         // For now, we'll use openssl to check
         let output = tokio::process::Command::new("openssl")
-            .args(&[
+            .args([
                 "x509",
                 "-in",
                 cert_path,
@@ -531,6 +538,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn test_validate_tls_versions() {
         let mut config = TlsConfig::default();
         config.min_version = TlsVersion::Tls13;

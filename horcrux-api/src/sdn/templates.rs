@@ -1,6 +1,6 @@
-///! Network Templates
-///!
-///! Reusable network configurations for VMs and containers
+//! Network Templates
+//!
+//! Reusable network configurations for VMs and containers
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -178,6 +178,12 @@ pub struct TemplateManager {
     templates: HashMap<String, NetworkTemplate>,
 }
 
+impl Default for TemplateManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TemplateManager {
     pub fn new() -> Self {
         Self {
@@ -280,7 +286,7 @@ impl TemplateManager {
 
         // Validate MTU if present
         if let Some(mtu) = template.config.ip_config.mtu {
-            if mtu < 68 || mtu > 9000 {
+            if !(68..=9000).contains(&mtu) {
                 return Err(format!("Invalid MTU: {} (must be 68-9000)", mtu));
             }
         }

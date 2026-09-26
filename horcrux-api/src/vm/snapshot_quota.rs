@@ -94,6 +94,12 @@ pub struct SnapshotQuotaManager {
     usage_cache: Arc<RwLock<HashMap<String, QuotaUsage>>>,
 }
 
+impl Default for SnapshotQuotaManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SnapshotQuotaManager {
     pub fn new() -> Self {
         Self {
@@ -103,6 +109,7 @@ impl SnapshotQuotaManager {
     }
 
     /// Create a new snapshot quota
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_quota(
         &self,
         name: String,
@@ -442,7 +449,7 @@ impl SnapshotQuotaManager {
 
         let is_warning = usage_percent >= quota.warning_threshold_percent as f32;
         let is_exceeded = current_size_bytes > quota.max_size_bytes
-            || quota.max_count.map_or(false, |max| current_count > max);
+            || quota.max_count.is_some_and(|max| current_count > max);
 
         let usage = QuotaUsage {
             quota_id: quota_id.to_string(),
@@ -833,7 +840,7 @@ mod tests {
                 snapshot_id: "snap-2".to_string(),
                 vm_id: "vm-100".to_string(),
                 name: "middle".to_string(),
-                size_bytes: 1 * 1024 * 1024 * 1024,
+                size_bytes: 1024 * 1024 * 1024,
                 created_at: 2000,
                 last_accessed_at: Some(2500),
             },

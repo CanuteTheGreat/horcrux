@@ -1,6 +1,6 @@
 use crate::middleware::auth::AuthUser;
-///! WebSocket support for real-time updates
-///! Provides live VM status updates, metrics streaming, and event notifications
+/// WebSocket support for real-time updates
+/// Provides live VM status updates, metrics streaming, and event notifications
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -280,6 +280,12 @@ pub struct WsState {
     connection_count: Arc<std::sync::atomic::AtomicUsize>,
 }
 
+impl Default for WsState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WsState {
     /// Create new WebSocket state
     pub fn new() -> Self {
@@ -342,6 +348,7 @@ impl WsState {
     }
 
     /// Broadcast VM metrics
+    #[allow(clippy::too_many_arguments)]
     pub fn broadcast_vm_metrics(
         &self,
         vm_id: String,

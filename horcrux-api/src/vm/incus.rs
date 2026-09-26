@@ -11,6 +11,12 @@ use tracing::{error, info};
 /// Incus manager for virtual machines
 pub struct IncusManager {}
 
+impl Default for IncusManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IncusManager {
     pub fn new() -> Self {
         Self {}

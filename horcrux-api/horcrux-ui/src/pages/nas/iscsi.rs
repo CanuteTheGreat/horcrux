@@ -180,8 +180,8 @@ pub fn IscsiPage() -> impl IntoView {
                                             }}
 
                                             <div class="target-actions">
-                                                <a href={format!("/nas/iscsi/{}", &target.id)} class="btn btn-sm">"Manage"</a>
-                                                <a href={format!("/nas/iscsi/{}/luns", &target.id)} class="btn btn-sm">"Add LUN"</a>
+                                                <a href={format!("/nas/iscsi/{}", target.id)} class="btn btn-sm">"Manage"</a>
+                                                <a href={format!("/nas/iscsi/{}/luns", target.id)} class="btn btn-sm">"Add LUN"</a>
                                                 <button
                                                     class={if is_enabled { "btn btn-sm btn-warning" } else { "btn btn-sm btn-success" }}
                                                     on:click=move |_| toggle_target(target_id_toggle.clone(), !is_enabled)

@@ -1,6 +1,6 @@
 pub mod notifications;
-///! Alert system module
-///! Provides threshold-based monitoring alerts with email and webhook notifications
+/// Alert system module
+/// Provides threshold-based monitoring alerts with email and webhook notifications
 pub mod rules;
 
 use horcrux_common::Result;
@@ -56,6 +56,12 @@ pub struct AlertManager {
     alert_history: Arc<RwLock<Vec<Alert>>>,
     notification_channels: Arc<RwLock<Vec<NotificationChannel>>>,
     max_history: usize,
+}
+
+impl Default for AlertManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AlertManager {
@@ -308,8 +314,7 @@ impl AlertManager {
         }
 
         // Simple wildcard matching
-        if pattern.ends_with('*') {
-            let prefix = &pattern[..pattern.len() - 1];
+        if let Some(prefix) = pattern.strip_suffix('*') {
             return target.starts_with(prefix);
         }
 

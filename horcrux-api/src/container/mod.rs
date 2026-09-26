@@ -1,7 +1,7 @@
 pub mod docker;
 pub mod incus;
-///! Container management module
-///! Handles LXC, LXD, Incus, Docker, and Podman container lifecycle
+/// Container management module
+/// Handles LXC, LXD, Incus, Docker, and Podman container lifecycle
 pub mod lxc;
 pub mod lxd;
 pub mod podman;
@@ -47,6 +47,12 @@ pub struct ContainerManager {
     docker_manager: docker::DockerManager,
     podman_manager: podman::PodmanManager,
     _db: Option<Arc<Database>>, // Reserved for future persistent container storage
+}
+
+impl Default for ContainerManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ContainerManager {

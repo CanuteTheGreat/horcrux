@@ -190,7 +190,7 @@ fn determine_result(status: u16) -> AuditResult {
 }
 
 /// Audit middleware that logs HTTP requests
-pub async fn audit_middleware<S>(
+pub async fn audit_middleware(
     State(audit_logger): State<Arc<super::AuditLogger>>,
     request: Request,
     next: Next,

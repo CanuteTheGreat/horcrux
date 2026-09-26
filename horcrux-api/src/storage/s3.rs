@@ -37,6 +37,12 @@ pub struct S3Object {
     pub storage_class: Option<String>,
 }
 
+impl Default for S3Manager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl S3Manager {
     pub fn new() -> Self {
         Self {

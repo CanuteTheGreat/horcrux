@@ -52,20 +52,11 @@ pub fn MigrationCenterPage() -> impl IntoView {
             Err(e) => set_error_message.set(Some(format!("Failed to load migration jobs: {}", e))),
         }
 
-        match get_virtual_machines().await {
-            Ok(vm_list) => set_vms.set(vm_list),
-            Err(_) => {}
-        }
+        if let Ok(vm_list) = get_virtual_machines().await { set_vms.set(vm_list) }
 
-        match get_containers().await {
-            Ok(container_list) => set_containers.set(container_list),
-            Err(_) => {}
-        }
+        if let Ok(container_list) = get_containers().await { set_containers.set(container_list) }
 
-        match get_cluster_nodes().await {
-            Ok(nodes) => set_cluster_nodes.set(nodes),
-            Err(_) => {}
-        }
+        if let Ok(nodes) = get_cluster_nodes().await { set_cluster_nodes.set(nodes) }
 
         set_loading.set(false);
     });
@@ -174,14 +165,14 @@ pub fn MigrationCenterPage() -> impl IntoView {
         if resource_type == "vm" {
             vms.get()
                 .iter()
-                .find(|vm| vm.vmid.to_string() == resource_id)
+                .find(|vm| vm.vmid == resource_id)
                 .map(|vm| vm.name.clone())
                 .unwrap_or_else(|| format!("VM {}", resource_id))
         } else {
             containers
                 .get()
                 .iter()
-                .find(|ct| ct.vmid.to_string() == resource_id)
+                .find(|ct| ct.vmid == resource_id)
                 .map(|ct| ct.hostname.clone())
                 .unwrap_or_else(|| format!("CT {}", resource_id))
         }

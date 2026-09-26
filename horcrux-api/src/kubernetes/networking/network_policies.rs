@@ -1,3 +1,4 @@
+#![allow(clippy::needless_update)]
 //! NetworkPolicy operations
 //!
 //! CRUD operations for Kubernetes NetworkPolicies.
@@ -63,11 +64,11 @@ pub async fn create_network_policy(
                 from: r
                     .from
                     .as_ref()
-                    .map(|peers| peers.iter().map(|p| convert_peer(p)).collect()),
+                    .map(|peers| peers.iter().map(convert_peer).collect()),
                 ports: r
                     .ports
                     .as_ref()
-                    .map(|ports| ports.iter().map(|p| convert_port(p)).collect()),
+                    .map(|ports| ports.iter().map(convert_port).collect()),
             })
             .collect()
     });
@@ -80,11 +81,11 @@ pub async fn create_network_policy(
                 to: r
                     .to
                     .as_ref()
-                    .map(|peers| peers.iter().map(|p| convert_peer(p)).collect()),
+                    .map(|peers| peers.iter().map(convert_peer).collect()),
                 ports: r
                     .ports
                     .as_ref()
-                    .map(|ports| ports.iter().map(|p| convert_port(p)).collect()),
+                    .map(|ports| ports.iter().map(convert_port).collect()),
             })
             .collect()
     });

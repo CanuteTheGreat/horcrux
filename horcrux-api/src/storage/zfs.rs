@@ -11,6 +11,12 @@ use tracing::{error, info};
 /// ZFS storage manager
 pub struct ZfsManager {}
 
+impl Default for ZfsManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ZfsManager {
     pub fn new() -> Self {
         Self {}
@@ -384,7 +390,7 @@ impl ZfsManager {
                 let parts: Vec<_> = line.split('\t').collect();
                 if parts.len() >= 4 {
                     let name = parts[0].to_string();
-                    let snapshot_name = name.split('@').last().unwrap_or(&name).to_string();
+                    let snapshot_name = name.split('@').next_back().unwrap_or(&name).to_string();
 
                     Some(ZfsSnapshotInfo {
                         full_name: name,

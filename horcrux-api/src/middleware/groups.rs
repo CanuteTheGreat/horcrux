@@ -131,6 +131,12 @@ pub struct GroupManager {
     pools: Arc<RwLock<HashMap<String, ResourcePool>>>,
 }
 
+impl Default for GroupManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GroupManager {
     pub fn new() -> Self {
         Self {

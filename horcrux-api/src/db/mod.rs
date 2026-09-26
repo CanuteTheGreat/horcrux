@@ -1,6 +1,6 @@
-///! Database layer using SQLite
-///!
-///! Provides persistent storage for VMs, users, sessions, audit logs, etc.
+//! Database layer using SQLite
+//!
+//! Provides persistent storage for VMs, users, sessions, audit logs, etc.
 pub mod migrations;
 
 use horcrux_common::Result;
@@ -133,7 +133,7 @@ pub mod vms {
             .await
             .map_err(|_e| horcrux_common::Error::VmNotFound(id.to_string()))?;
 
-        Ok(row_to_vm(&row)?)
+        row_to_vm(&row)
     }
 
     pub async fn list_vms(pool: &SqlitePool) -> Result<Vec<VmConfig>> {
@@ -386,7 +386,7 @@ mod tests {
         // Use in-memory database for tests
         let db_url = "sqlite::memory:";
 
-        let db = Database::new(&db_url)
+        let db = Database::new(db_url)
             .await
             .expect("Failed to create database");
         db.migrate().await.expect("Failed to run migrations");
@@ -511,12 +511,10 @@ mod tests {
         let db = create_test_db().await;
 
         // Test all VM statuses
-        let statuses = vec![
-            VmStatus::Running,
+        let statuses = [VmStatus::Running,
             VmStatus::Stopped,
             VmStatus::Paused,
-            VmStatus::Unknown,
-        ];
+            VmStatus::Unknown];
 
         for (i, status) in statuses.iter().enumerate() {
             let mut vm_config = create_test_vm_config(
@@ -538,12 +536,10 @@ mod tests {
     async fn test_vm_architecture_persistence() {
         let db = create_test_db().await;
 
-        let architectures = vec![
-            VmArchitecture::X86_64,
+        let architectures = [VmArchitecture::X86_64,
             VmArchitecture::Aarch64,
             VmArchitecture::Riscv64,
-            VmArchitecture::Ppc64le,
-        ];
+            VmArchitecture::Ppc64le];
 
         for (i, arch) in architectures.iter().enumerate() {
             let mut vm_config =
@@ -563,7 +559,7 @@ mod tests {
     async fn test_vm_hypervisor_persistence() {
         let db = create_test_db().await;
 
-        let hypervisors = vec![VmHypervisor::Qemu, VmHypervisor::Lxd, VmHypervisor::Incus];
+        let hypervisors = [VmHypervisor::Qemu, VmHypervisor::Lxd, VmHypervisor::Incus];
 
         for (i, hypervisor) in hypervisors.iter().enumerate() {
             let mut vm_config = create_test_vm_config(

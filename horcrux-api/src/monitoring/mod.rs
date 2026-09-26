@@ -1,5 +1,6 @@
-///! Monitoring and metrics collection
-///! Provides real-time and historical resource metrics for VMs, containers, and system
+#![allow(clippy::unnecessary_filter_map)]
+//! Monitoring and metrics collection
+//! Provides real-time and historical resource metrics for VMs, containers, and system
 pub mod advanced_metrics;
 
 use horcrux_common::Result;
@@ -97,6 +98,12 @@ pub struct MonitoringManager {
     // Simple in-memory time series storage (would use proper TSDB in production)
     history: Arc<RwLock<HashMap<String, Vec<TimeSeriesPoint>>>>,
     max_history_points: usize,
+}
+
+impl Default for MonitoringManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MonitoringManager {
@@ -787,7 +794,7 @@ impl MonitoringManager {
         let loadavg = tokio::fs::read_to_string("/proc/loadavg").await?;
         let parts: Vec<&str> = loadavg.split_whitespace().collect();
 
-        let load1 = parts.get(0).and_then(|s| s.parse().ok()).unwrap_or(0.0);
+        let load1 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0.0);
         let load5 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0.0);
         let load15 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0.0);
 

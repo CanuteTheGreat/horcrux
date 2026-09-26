@@ -97,17 +97,15 @@ pub fn SessionsPage() -> impl IntoView {
             .get()
             .into_iter()
             .filter(|session| {
-                if !user_filter.is_empty() {
-                    if !session.username.to_lowercase().contains(&user_filter) {
+                if !user_filter.is_empty()
+                    && !session.username.to_lowercase().contains(&user_filter) {
                         return false;
                     }
-                }
 
-                if !realm_filter.is_empty() && realm_filter != "all" {
-                    if session.realm != realm_filter {
+                if !realm_filter.is_empty() && realm_filter != "all"
+                    && session.realm != realm_filter {
                         return false;
                     }
-                }
 
                 true
             })
@@ -130,7 +128,7 @@ pub fn SessionsPage() -> impl IntoView {
             let user_key = format!("{}@{}", session.username, session.realm);
             grouped
                 .entry(user_key)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(session);
         }
         grouped
@@ -296,7 +294,7 @@ pub fn SessionsPage() -> impl IntoView {
                             <div class="sessions-list">
                                 {grouped_sessions.into_iter().map(|(user_key, user_sessions)| {
                                     let parts: Vec<String> = user_key.split('@').map(|s| s.to_string()).collect();
-                                    let username = parts.get(0).cloned().unwrap_or_else(|| "unknown".to_string());
+                                    let username = parts.first().cloned().unwrap_or_else(|| "unknown".to_string());
                                     let realm = parts.get(1).cloned().unwrap_or_else(|| "unknown".to_string());
                                     let username_for_display = username.clone();
                                     let realm_for_display = realm.clone();

@@ -28,7 +28,7 @@ impl VlanManager {
         // Create VLAN interface
         // ip link add link eth0 name eth0.100 type vlan id 100
         let output = Command::new("ip")
-            .args(&[
+            .args([
                 "link",
                 "add",
                 "link",
@@ -52,7 +52,7 @@ impl VlanManager {
 
         // Bring interface up
         let output = Command::new("ip")
-            .args(&["link", "set", "dev", &vlan_iface, "up"])
+            .args(["link", "set", "dev", &vlan_iface, "up"])
             .output()
             .map_err(|e| format!("Failed to bring up VLAN interface: {}", e))?;
 
@@ -74,7 +74,7 @@ impl VlanManager {
         let vlan_iface = format!("{}.{}", parent_iface, tag);
 
         let output = Command::new("ip")
-            .args(&["link", "delete", &vlan_iface])
+            .args(["link", "delete", &vlan_iface])
             .output()
             .map_err(|e| format!("Failed to delete VLAN interface: {}", e))?;
 
@@ -93,7 +93,7 @@ impl VlanManager {
     pub fn create_bridge(bridge_name: &str) -> Result<(), String> {
         // Create bridge
         let output = Command::new("ip")
-            .args(&["link", "add", "name", bridge_name, "type", "bridge"])
+            .args(["link", "add", "name", bridge_name, "type", "bridge"])
             .output()
             .map_err(|e| format!("Failed to create bridge: {}", e))?;
 
@@ -107,7 +107,7 @@ impl VlanManager {
 
         // Enable VLAN filtering on bridge
         let output = Command::new("ip")
-            .args(&[
+            .args([
                 "link",
                 "set",
                 "dev",
@@ -129,7 +129,7 @@ impl VlanManager {
 
         // Bring bridge up
         let output = Command::new("ip")
-            .args(&["link", "set", "dev", bridge_name, "up"])
+            .args(["link", "set", "dev", bridge_name, "up"])
             .output()
             .map_err(|e| format!("Failed to bring up bridge: {}", e))?;
 
@@ -147,11 +147,11 @@ impl VlanManager {
     pub fn delete_bridge(bridge_name: &str) -> Result<(), String> {
         // Bring bridge down first
         let _ = Command::new("ip")
-            .args(&["link", "set", "dev", bridge_name, "down"])
+            .args(["link", "set", "dev", bridge_name, "down"])
             .output();
 
         let output = Command::new("ip")
-            .args(&["link", "delete", bridge_name])
+            .args(["link", "delete", bridge_name])
             .output()
             .map_err(|e| format!("Failed to delete bridge: {}", e))?;
 
@@ -168,7 +168,7 @@ impl VlanManager {
     /// Add interface to bridge
     pub fn add_to_bridge(iface: &str, bridge: &str) -> Result<(), String> {
         let output = Command::new("ip")
-            .args(&["link", "set", "dev", iface, "master", bridge])
+            .args(["link", "set", "dev", iface, "master", bridge])
             .output()
             .map_err(|e| format!("Failed to add interface to bridge: {}", e))?;
 
@@ -185,7 +185,7 @@ impl VlanManager {
     /// Remove interface from bridge
     pub fn remove_from_bridge(iface: &str) -> Result<(), String> {
         let output = Command::new("ip")
-            .args(&["link", "set", "dev", iface, "nomaster"])
+            .args(["link", "set", "dev", iface, "nomaster"])
             .output()
             .map_err(|e| format!("Failed to remove interface from bridge: {}", e))?;
 
@@ -202,7 +202,7 @@ impl VlanManager {
     /// List all VLAN interfaces
     pub fn list_vlans() -> Result<Vec<String>, String> {
         let output = Command::new("ip")
-            .args(&["-d", "link", "show", "type", "vlan"])
+            .args(["-d", "link", "show", "type", "vlan"])
             .output()
             .map_err(|e| format!("Failed to list VLANs: {}", e))?;
 
@@ -231,7 +231,7 @@ impl VlanManager {
     /// List all bridges
     pub fn list_bridges() -> Result<Vec<String>, String> {
         let output = Command::new("ip")
-            .args(&["link", "show", "type", "bridge"])
+            .args(["link", "show", "type", "bridge"])
             .output()
             .map_err(|e| format!("Failed to list bridges: {}", e))?;
 

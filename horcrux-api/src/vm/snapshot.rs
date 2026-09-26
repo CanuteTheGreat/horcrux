@@ -1,11 +1,11 @@
-///! VM Snapshot Management
-///!
-///! Provides snapshot functionality for virtual machines:
-///! - Create snapshots (memory + disk state)
-///! - List snapshots with metadata
-///! - Restore to previous snapshot
-///! - Delete snapshots
-///! - Snapshot trees and rollback
+//! VM Snapshot Management
+//!
+//! Provides snapshot functionality for virtual machines:
+//! - Create snapshots (memory + disk state)
+//! - List snapshots with metadata
+//! - Restore to previous snapshot
+//! - Delete snapshots
+//! - Snapshot trees and rollback
 use crate::migration::qemu_monitor::QemuMonitor;
 use horcrux_common::{Result, VmConfig, VmStatus};
 use serde::{Deserialize, Serialize};
@@ -652,12 +652,12 @@ impl VmSnapshotManager {
         // In a real implementation, this would check which snapshot
         // the VM is currently running from. For now, check if it's
         // the most recent snapshot without children.
-        if self.snapshots.get(snapshot_id).is_some() {
+        if self.snapshots.contains_key(snapshot_id) {
             // A snapshot is "current" if no other snapshots have it as parent
             !self
                 .snapshots
                 .values()
-                .any(|s| s.parent_snapshot.as_ref().map(|p| p.as_str()) == Some(snapshot_id))
+                .any(|s| s.parent_snapshot.as_deref() == Some(snapshot_id))
         } else {
             false
         }

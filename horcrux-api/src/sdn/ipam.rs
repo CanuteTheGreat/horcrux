@@ -34,6 +34,12 @@ pub enum AllocationType {
     Reserved, // Reserved for special use
 }
 
+impl Default for IpamManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IpamManager {
     pub fn new() -> Self {
         IpamManager {
@@ -167,7 +173,7 @@ impl IpamManager {
                 subnet
                     .used_ips
                     .values()
-                    .filter(|alloc| alloc.hostname.as_ref().map_or(false, |h| h == hostname))
+                    .filter(|alloc| alloc.hostname.as_ref().is_some_and(|h| h == hostname))
                     .cloned()
             })
             .collect()
@@ -181,7 +187,7 @@ impl IpamManager {
                 subnet
                     .used_ips
                     .values()
-                    .filter(|alloc| alloc.mac_address.as_ref().map_or(false, |m| m == mac))
+                    .filter(|alloc| alloc.mac_address.as_ref().is_some_and(|m| m == mac))
                     .cloned()
             })
             .collect()

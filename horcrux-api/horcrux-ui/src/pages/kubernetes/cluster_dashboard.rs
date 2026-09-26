@@ -314,7 +314,7 @@ pub fn ClusterDashboard() -> impl IntoView {
                                             on_delete=move || {
                                                 if web_sys::window()
                                                     .unwrap()
-                                                    .confirm_with_message(&format!("Delete cluster '{}'? This will remove all associated resources.", &cluster_id_delete))
+                                                    .confirm_with_message(&format!("Delete cluster '{}'? This will remove all associated resources.", cluster_id_delete))
                                                     .unwrap_or(false)
                                                 {
                                                     delete_cluster(cluster_id_delete.clone());

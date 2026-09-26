@@ -20,6 +20,7 @@ pub struct K8sCluster {
 
 /// Cluster health response
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ClusterHealth {
     pub status: String,
     pub api_server_healthy: bool,

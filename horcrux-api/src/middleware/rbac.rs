@@ -1,6 +1,6 @@
-///! RBAC (Role-Based Access Control) middleware
-///!
-///! Enforces permissions based on user roles and resource paths
+//! RBAC (Role-Based Access Control) middleware
+//!
+//! Enforces permissions based on user roles and resource paths
 use axum::{
     extract::{Request, State},
     http::StatusCode,

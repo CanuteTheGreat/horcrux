@@ -53,7 +53,7 @@ pub fn TemplateManagerPage() -> impl IntoView {
 
     // Auto-refresh every 60 seconds
     use leptos::set_interval;
-    set_interval(move || load_templates(), std::time::Duration::from_secs(60));
+    set_interval(load_templates, std::time::Duration::from_secs(60));
 
     let filtered_templates = move || {
         let query = search_query.get().to_lowercase();
@@ -68,7 +68,7 @@ pub fn TemplateManagerPage() -> impl IntoView {
                         || template
                             .description
                             .as_ref()
-                            .map_or(false, |d| d.to_lowercase().contains(&query))
+                            .is_some_and(|d| d.to_lowercase().contains(&query))
                         || template.source_vm_id.to_lowercase().contains(&query)
                 })
                 .collect()

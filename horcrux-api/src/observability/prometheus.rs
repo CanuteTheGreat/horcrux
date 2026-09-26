@@ -1,6 +1,6 @@
-///! Prometheus metrics exporter
-///!
-///! Exposes Horcrux metrics in Prometheus format
+//! Prometheus metrics exporter
+//!
+//! Exposes Horcrux metrics in Prometheus format
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -82,7 +82,7 @@ impl PrometheusExporter {
         for metric in metrics.iter() {
             grouped
                 .entry(metric.name.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(metric);
         }
 

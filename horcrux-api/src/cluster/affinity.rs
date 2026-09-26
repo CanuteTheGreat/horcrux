@@ -21,6 +21,7 @@ pub struct AffinityRule {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[allow(clippy::enum_variant_names)]
 pub enum AffinityRuleType {
     /// Pin resources to specific nodes
     NodeAffinity(NodeAffinityRule),
@@ -65,6 +66,12 @@ pub struct AffinityManager {
     rules: HashMap<String, AffinityRule>,
 }
 
+impl Default for AffinityManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AffinityManager {
     pub fn new() -> Self {
         AffinityManager {
@@ -97,7 +104,7 @@ impl AffinityManager {
     /// List all rules
     pub fn list_rules(&self) -> Vec<&AffinityRule> {
         let mut rules: Vec<_> = self.rules.values().collect();
-        rules.sort_by(|a, b| b.priority.cmp(&a.priority));
+        rules.sort_by_key(|x| std::cmp::Reverse(x.priority));
         rules
     }
 
@@ -126,7 +133,7 @@ impl AffinityManager {
             .values()
             .filter(|r| r.enabled && self.rule_affects_resource(r, resource_id))
             .collect();
-        relevant_rules.sort_by(|a, b| b.priority.cmp(&a.priority));
+        relevant_rules.sort_by_key(|x| std::cmp::Reverse(x.priority));
 
         // Score each node based on affinity rules
         let mut node_scores: HashMap<String, i32> = HashMap::new();
@@ -424,7 +431,7 @@ mod tests {
 
         am.add_rule(rule).unwrap();
 
-        let _available_nodes = vec!["node1".to_string(), "node2".to_string()];
+        let _available_nodes = ["node1".to_string(), "node2".to_string()];
         let mut placements = HashMap::new();
         placements.insert("vm-replica1".to_string(), "node1".to_string());
 

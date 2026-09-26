@@ -276,11 +276,10 @@ impl CronSchedule {
 
             // Apply step
             for (i, &v) in range_values.iter().enumerate() {
-                if i % (step as usize) == 0 {
-                    if !values.contains(&v) {
+                if i % (step as usize) == 0
+                    && !values.contains(&v) {
                         values.push(v);
                     }
-                }
             }
         }
 
@@ -316,7 +315,7 @@ impl CronSchedule {
             if self.matches(&current) {
                 return Some(current);
             }
-            current = current + chrono::Duration::minutes(1);
+            current += chrono::Duration::minutes(1);
         }
 
         None
@@ -893,7 +892,7 @@ impl NasScheduler {
     }
 
     /// Run health check job
-    async fn run_health_check_job(job: &ScheduledJob) -> Result<Option<serde_json::Value>> {
+    async fn run_health_check_job(_job: &ScheduledJob) -> Result<Option<serde_json::Value>> {
         let mut results = HashMap::new();
 
         // Check services

@@ -1,6 +1,6 @@
-///! Rate limiting middleware
-///!
-///! Implements token bucket algorithm to limit request rates per IP/user
+//! Rate limiting middleware
+//!
+//! Implements token bucket algorithm to limit request rates per IP/user
 use axum::{
     extract::{ConnectInfo, Request},
     http::StatusCode,

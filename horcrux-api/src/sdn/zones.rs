@@ -9,6 +9,12 @@ pub struct ZoneManager {
     zones: HashMap<String, Zone>,
 }
 
+impl Default for ZoneManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ZoneManager {
     pub fn new() -> Self {
         ZoneManager {

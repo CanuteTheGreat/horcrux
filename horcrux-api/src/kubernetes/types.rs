@@ -33,6 +33,7 @@ pub struct K8sCluster {
 /// Cluster connection status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ClusterStatus {
     /// Successfully connected to cluster
     Connected,
@@ -43,14 +44,10 @@ pub enum ClusterStatus {
     /// Connection error or cluster unhealthy
     Error,
     /// Status unknown
+    #[default]
     Unknown,
 }
 
-impl Default for ClusterStatus {
-    fn default() -> Self {
-        Self::Unknown
-    }
-}
 
 impl std::fmt::Display for ClusterStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -67,8 +64,10 @@ impl std::fmt::Display for ClusterStatus {
 /// Cluster provisioning method
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ClusterProvider {
     /// External cluster (connected via kubeconfig)
+    #[default]
     External,
     /// Provisioned with k3s
     K3s,
@@ -78,11 +77,6 @@ pub enum ClusterProvider {
     Managed,
 }
 
-impl Default for ClusterProvider {
-    fn default() -> Self {
-        Self::External
-    }
-}
 
 impl std::fmt::Display for ClusterProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -245,19 +239,16 @@ pub struct PodInfo {
 /// Pod status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum PodStatus {
     Pending,
     Running,
     Succeeded,
     Failed,
+    #[default]
     Unknown,
 }
 
-impl Default for PodStatus {
-    fn default() -> Self {
-        Self::Unknown
-    }
-}
 
 /// Container information within a pod
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -272,6 +263,7 @@ pub struct ContainerInfo {
 /// Container state
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase", tag = "type")]
+#[derive(Default)]
 pub enum ContainerState {
     Waiting {
         reason: Option<String>,
@@ -283,14 +275,10 @@ pub enum ContainerState {
         exit_code: i32,
         reason: Option<String>,
     },
+    #[default]
     Unknown,
 }
 
-impl Default for ContainerState {
-    fn default() -> Self {
-        Self::Unknown
-    }
-}
 
 /// Simplified deployment information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -329,18 +317,15 @@ pub struct ServiceInfo {
 
 /// Service type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum ServiceType {
+    #[default]
     ClusterIP,
     NodePort,
     LoadBalancer,
     ExternalName,
 }
 
-impl Default for ServiceType {
-    fn default() -> Self {
-        Self::ClusterIP
-    }
-}
 
 /// Service port definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -626,20 +611,17 @@ pub struct JobInfo {
 /// Job status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum JobStatus {
     Pending,
     Running,
     Complete,
     Failed,
     Suspended,
+    #[default]
     Unknown,
 }
 
-impl Default for JobStatus {
-    fn default() -> Self {
-        Self::Unknown
-    }
-}
 
 /// Simplified CronJob information
 #[derive(Debug, Clone, Serialize, Deserialize)]

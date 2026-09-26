@@ -1,3 +1,4 @@
+#![allow(clippy::if_same_then_else)]
 //! iSCSI Target module
 //!
 //! Manages iSCSI targets for block-level storage access.
@@ -11,19 +12,15 @@ use tokio::process::Command;
 /// iSCSI backend implementation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum IscsiBackend {
     /// tgtd - SCSI Target Framework
+    #[default]
     Tgtd,
     /// LIO - Linux-IO Target (kernel-based)
     Lio,
 }
 
-impl Default for IscsiBackend {
-    fn default() -> Self {
-        // Prefer LIO if available (kernel-based, better performance)
-        Self::Tgtd
-    }
-}
 
 /// Global iSCSI configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,6 +156,7 @@ impl Default for IscsiPortal {
 
 /// Target-specific parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct TargetParams {
     /// Maximum connections
     pub max_connections: Option<u32>,
@@ -184,23 +182,6 @@ pub struct TargetParams {
     pub queue_depth: Option<u32>,
 }
 
-impl Default for TargetParams {
-    fn default() -> Self {
-        Self {
-            max_connections: None,
-            immediate_data: None,
-            initial_r2t: None,
-            max_burst_length: None,
-            first_burst_length: None,
-            max_outstanding_r2t: None,
-            max_recv_data_segment: None,
-            data_pdu_in_order: None,
-            data_sequence_in_order: None,
-            error_recovery_level: None,
-            queue_depth: None,
-        }
-    }
-}
 
 /// iSCSI LUN
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -279,7 +260,7 @@ pub enum ScsiDeviceType {
 }
 
 /// iSCSI initiator ACL
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IscsiAcl {
     /// Initiator IQN pattern
     pub initiator_iqn: String,
@@ -514,7 +495,7 @@ impl IscsiTargetManager {
         format!(
             "iqn.{}.com.horcrux:{}",
             now.format("%Y-%m"),
-            name.to_lowercase().replace(' ', "-").replace('_', "-")
+            name.to_lowercase().replace([' ', '_'], "-")
         )
     }
 
@@ -983,7 +964,7 @@ impl IscsiTargetManager {
     }
 
     /// Get TID for IQN (tgtd only)
-    async fn get_tid_for_iqn(&self, iqn: &str) -> Result<u32> {
+    pub async fn get_tid_for_iqn(&self, iqn: &str) -> Result<u32> {
         let targets = self.list_targets().await?;
         targets
             .iter()

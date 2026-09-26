@@ -54,18 +54,14 @@ pub fn PoolsPage() -> impl IntoView {
             }
 
             // Fetch datasets
-            match reqwasm::http::Request::get("/api/nas/datasets")
+            if let Ok(resp) = reqwasm::http::Request::get("/api/nas/datasets")
                 .send()
-                .await
-            {
-                Ok(resp) => {
-                    if resp.ok() {
-                        if let Ok(data) = resp.json::<Vec<Dataset>>().await {
-                            set_datasets.set(data);
-                        }
+                .await {
+                if resp.ok() {
+                    if let Ok(data) = resp.json::<Vec<Dataset>>().await {
+                        set_datasets.set(data);
                     }
                 }
-                Err(_) => {}
             }
 
             set_loading.set(false);
@@ -168,7 +164,7 @@ pub fn PoolsPage() -> impl IntoView {
                                                 {pool.disks.join(", ")}
                                             </div>
                                             <div class="pool-actions">
-                                                <a href={format!("/nas/pools/{}", &pool.id)} class="btn btn-sm">"Manage"</a>
+                                                <a href={format!("/nas/pools/{}", pool.id)} class="btn btn-sm">"Manage"</a>
                                                 <button
                                                     class="btn btn-sm"
                                                     on:click=move |_| scrub_pool(pool_id_scrub.clone())
@@ -220,8 +216,8 @@ pub fn PoolsPage() -> impl IntoView {
                                                 <td>{ds.compression.clone().unwrap_or_else(|| "-".to_string())}</td>
                                                 <td>{ds.snapshots}</td>
                                                 <td class="actions">
-                                                    <a href={format!("/nas/datasets/{}", &ds.id)} class="btn btn-sm">"Edit"</a>
-                                                    <a href={format!("/nas/datasets/{}/snapshots", &ds.id)} class="btn btn-sm">"Snapshots"</a>
+                                                    <a href={format!("/nas/datasets/{}", ds.id)} class="btn btn-sm">"Edit"</a>
+                                                    <a href={format!("/nas/datasets/{}/snapshots", ds.id)} class="btn btn-sm">"Snapshots"</a>
                                                 </td>
                                             </tr>
                                         }

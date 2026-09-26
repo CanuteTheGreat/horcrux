@@ -15,6 +15,12 @@ use tracing::{error, info};
 /// NFS storage manager
 pub struct NfsManager {}
 
+impl Default for NfsManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NfsManager {
     pub fn new() -> Self {
         Self {}
@@ -131,7 +137,7 @@ impl NfsManager {
 
         // Create qcow2 image
         let output = AsyncCommand::new("qemu-img")
-            .args(&[
+            .args([
                 "create",
                 "-f",
                 "qcow2",
@@ -174,7 +180,7 @@ impl NfsManager {
 
         // Create snapshot as qcow2 with backing file
         let output = AsyncCommand::new("qemu-img")
-            .args(&[
+            .args([
                 "create",
                 "-f",
                 "qcow2",
@@ -204,7 +210,7 @@ impl NfsManager {
     /// List NFS exports on a server
     pub async fn list_exports(server: &str) -> Result<Vec<String>> {
         let output = AsyncCommand::new("showmount")
-            .args(&["-e", server])
+            .args(["-e", server])
             .output()
             .await
             .map_err(|e| horcrux_common::Error::System(format!("Failed to list exports: {}", e)))?;

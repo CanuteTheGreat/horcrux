@@ -69,7 +69,7 @@ pub fn MetricsCatalogPage() -> impl IntoView {
             "name" => filtered.sort_by(|a, b| a.name.cmp(&b.name)),
             "type" => filtered.sort_by(|a, b| a.metric_type.cmp(&b.metric_type)),
             "category" => filtered.sort_by(|a, b| a.category.cmp(&b.category)),
-            "cardinality" => filtered.sort_by(|a, b| a.cardinality.cmp(&b.cardinality)),
+            "cardinality" => filtered.sort_by_key(|a| a.cardinality),
             "last_scraped" => filtered.sort_by(|a, b| a.last_scraped.cmp(&b.last_scraped)),
             _ => {}
         }

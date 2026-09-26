@@ -1,4 +1,4 @@
-///! QEMU/KVM integration
+//! QEMU/KVM integration
 use horcrux_common::{Result, VmConfig, VmHypervisor, VmStatus};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -42,6 +42,12 @@ impl QemuVm {
 /// QEMU manager for VM operations
 pub struct QemuManager {
     storage_path: PathBuf,
+}
+
+impl Default for QemuManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl QemuManager {

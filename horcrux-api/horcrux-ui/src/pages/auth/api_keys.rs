@@ -273,9 +273,9 @@ pub fn ApiKeysPage() -> impl IntoView {
                         user_id=user_id.clone()
                         username=selected_username
                         on_success={
-                            let set_show_create_form = set_show_create_form.clone();
+                            let set_show_create_form = set_show_create_form;
                             let user_id_clone = user_id.clone();
-                            let set_success_message = set_success_message.clone();
+                            let set_success_message = set_success_message;
                             move || {
                                 set_show_create_form.set(false);
                                 refresh_user_tokens(user_id_clone.clone());
@@ -283,7 +283,7 @@ pub fn ApiKeysPage() -> impl IntoView {
                             }
                         }
                         on_error={
-                            let set_error_message = set_error_message.clone();
+                            let set_error_message = set_error_message;
                             move |msg| set_error_message.set(Some(msg))
                         }
                     />

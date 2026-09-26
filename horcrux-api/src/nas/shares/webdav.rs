@@ -50,10 +50,12 @@ impl Default for WebdavGlobalConfig {
 
 /// WebDAV authentication type
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Default)]
 pub enum WebdavAuthType {
     /// No authentication
     None,
     /// HTTP Basic authentication
+    #[default]
     Basic,
     /// HTTP Digest authentication
     Digest,
@@ -63,18 +65,15 @@ pub enum WebdavAuthType {
     Pam,
 }
 
-impl Default for WebdavAuthType {
-    fn default() -> Self {
-        Self::Basic
-    }
-}
 
 /// WebDAV authentication type (legacy alias)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Default)]
 pub enum WebDavAuthType {
     /// No authentication
     None,
     /// HTTP Basic authentication
+    #[default]
     Basic,
     /// HTTP Digest authentication
     Digest,
@@ -84,11 +83,6 @@ pub enum WebDavAuthType {
     Pam,
 }
 
-impl Default for WebDavAuthType {
-    fn default() -> Self {
-        Self::Basic
-    }
-}
 
 /// SSL/TLS configuration for WebDAV
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -779,18 +773,15 @@ location /webdav/{} {{
                 server_block.push_str("        create_full_put_path on;\n");
 
                 // Copy auth from main config
-                match config.auth_type {
-                    WebDavAuthType::Basic => {
-                        server_block.push_str(&format!(
-                            "        auth_basic \"CalDAV - {}\";\n",
-                            share.name
-                        ));
-                        server_block.push_str(&format!(
-                            "        auth_basic_user_file {}/webdav-{};\n",
-                            self.htpasswd_dir, share.id
-                        ));
-                    }
-                    _ => {}
+                if config.auth_type == WebDavAuthType::Basic {
+                    server_block.push_str(&format!(
+                        "        auth_basic \"CalDAV - {}\";\n",
+                        share.name
+                    ));
+                    server_block.push_str(&format!(
+                        "        auth_basic_user_file {}/webdav-{};\n",
+                        self.htpasswd_dir, share.id
+                    ));
                 }
 
                 server_block.push_str("    }\n");
@@ -806,18 +797,15 @@ location /webdav/{} {{
                 server_block.push_str("        create_full_put_path on;\n");
 
                 // Copy auth from main config
-                match config.auth_type {
-                    WebDavAuthType::Basic => {
-                        server_block.push_str(&format!(
-                            "        auth_basic \"CardDAV - {}\";\n",
-                            share.name
-                        ));
-                        server_block.push_str(&format!(
-                            "        auth_basic_user_file {}/webdav-{};\n",
-                            self.htpasswd_dir, share.id
-                        ));
-                    }
-                    _ => {}
+                if config.auth_type == WebDavAuthType::Basic {
+                    server_block.push_str(&format!(
+                        "        auth_basic \"CardDAV - {}\";\n",
+                        share.name
+                    ));
+                    server_block.push_str(&format!(
+                        "        auth_basic_user_file {}/webdav-{};\n",
+                        self.htpasswd_dir, share.id
+                    ));
                 }
 
                 server_block.push_str("    }\n");
@@ -1247,7 +1235,7 @@ location /webdav/{} {{
             .filter(|line| !line.is_empty() && !line.starts_with('#'))
             .filter_map(|line| {
                 let parts: Vec<&str> = line.splitn(2, ':').collect();
-                if parts.len() >= 1 {
+                if !parts.is_empty() {
                     Some(WebDavUser {
                         username: parts[0].to_string(),
                         enabled: true,

@@ -111,7 +111,7 @@ pub fn validate_memory(memory: u64) -> ValidationResult<()> {
     }
 
     // Memory should be a power of 2 or at least aligned to 128MB
-    if memory % 128 != 0 {
+    if !memory.is_multiple_of(128) {
         return Err(Error::Validation(
             "Memory should be aligned to 128 MB".to_string(),
         ));
@@ -392,7 +392,7 @@ pub fn validate_port(port: u16) -> ValidationResult<()> {
     const MAX_PORT: u16 = 65535;
     const PRIVILEGED_PORT: u16 = 1024;
 
-    if port < MIN_PORT || port > MAX_PORT {
+    if !(MIN_PORT..=MAX_PORT).contains(&port) {
         return Err(Error::Validation(format!(
             "Port must be between {} and {}",
             MIN_PORT, MAX_PORT

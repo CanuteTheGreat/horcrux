@@ -72,7 +72,6 @@ use tls::TlsManager;
 use tokio::net::TcpListener;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::{error, info};
-use tracing_subscriber;
 use vm::VmManager;
 
 #[derive(Clone)]
@@ -1495,8 +1494,7 @@ mod nas_handlers {
     use crate::nas::monitoring::{collect_metrics, get_nas_health};
     #[cfg(feature = "iscsi-target")]
     use crate::nas::services::iscsi::IscsiTargetManager;
-    #[cfg(feature = "rsync-server")]
-    use crate::nas::services::rsync::RsyncManager;
+    
     #[cfg(feature = "s3-gateway")]
     use crate::nas::services::s3::S3GatewayManager;
     use crate::nas::services::{get_service_status, manage_service, NasService, ServiceAction};
@@ -1539,7 +1537,7 @@ mod nas_handlers {
     pub async fn nas_list_shares(
         State(state): State<Arc<AppState>>,
     ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
-        use crate::nas::{NasConfig, NasManager};
+        
         // Query database for shares
         let shares = sqlx::query_as::<_, (String, String, String, String, bool, Option<String>, i64)>(
             "SELECT id, name, path, owner_user, enabled, description, created_at FROM nas_shares ORDER BY name"
@@ -1568,7 +1566,7 @@ mod nas_handlers {
         State(state): State<Arc<AppState>>,
         Json(body): Json<serde_json::Value>,
     ) -> Result<Json<serde_json::Value>, ApiError> {
-        use crate::nas::shares::NasShare;
+        
         let name = body
             .get("name")
             .and_then(|v| v.as_str())
@@ -2093,10 +2091,10 @@ mod nas_handlers {
             .unwrap_or("stripe");
         let raid_level = match raid_str.to_lowercase().as_str() {
             "mirror" => RaidLevel::Mirror,
-            "raidz1" | "raidz" => RaidLevel::RaidZ1,
+            "raidz1" | "raidz" => RaidLevel::RaidZ,
             "raidz2" => RaidLevel::RaidZ2,
             "raidz3" => RaidLevel::RaidZ3,
-            _ => RaidLevel::Stripe,
+            _ => RaidLevel::Raid0,
         };
         let manager = StorageManager::new();
         match manager.create_zfs_pool(name, raid_level, &devices).await {
@@ -2186,7 +2184,7 @@ mod nas_handlers {
                     Ok(Json(serde_json::json!({
                         "name": pool.name,
                         "health": format!("{:?}", pool.health),
-                        "capacity": pool.capacity_bytes,
+                        "capacity": pool.total_bytes,
                         "used": pool.used_bytes,
                         "available": pool.available_bytes,
                     })))
@@ -2745,7 +2743,7 @@ mod nas_handlers {
         State(state): State<Arc<AppState>>,
         Path(id): Path<String>,
     ) -> Result<Json<serde_json::Value>, ApiError> {
-        use crate::nas::storage::replication;
+        
         // Get task details
         let task = sqlx::query_as::<_, (String, String, String, String)>(
             "SELECT source_dataset, target_host, target_dataset, name FROM nas_replication_tasks WHERE id = ?"
@@ -3182,6 +3180,7 @@ mod nas_handlers {
                         lun_type,
                         size_bytes,
                         read_only,
+                        ..Default::default()
                     })
                 })
                 .collect()
@@ -3200,6 +3199,7 @@ mod nas_handlers {
                         Some(IscsiAcl {
                             initiator_iqn: initiator_iqn.to_string(),
                             allowed,
+                            ..Default::default()
                         })
                     })
                     .collect()
@@ -3215,6 +3215,7 @@ mod nas_handlers {
             acls,
             chap: None,
             created_at: chrono::Utc::now().timestamp(),
+            ..Default::default()
         };
 
         let manager = IscsiTargetManager::new();
@@ -3297,6 +3298,7 @@ mod nas_handlers {
                         lun_type,
                         size_bytes,
                         read_only,
+                        ..Default::default()
                     })
                 })
                 .collect()
@@ -3315,6 +3317,7 @@ mod nas_handlers {
                         Some(IscsiAcl {
                             initiator_iqn: initiator_iqn.to_string(),
                             allowed,
+                            ..Default::default()
                         })
                     })
                     .collect()
@@ -3324,20 +3327,15 @@ mod nas_handlers {
 
         // Parse CHAP if provided
         let chap: Option<ChapAuth> = if let Some(chap_obj) = body.get("chap") {
-            let username = chap_obj.get("username").and_then(|v| v.as_str())?;
-            let password = chap_obj.get("password").and_then(|v| v.as_str())?;
-            Some(ChapAuth {
-                username: username.to_string(),
-                password: password.to_string(),
-                mutual_username: chap_obj
-                    .get("mutual_username")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
-                mutual_password: chap_obj
-                    .get("mutual_password")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
-            })
+            let username = chap_obj.get("username").and_then(|v| v.as_str());
+            let password = chap_obj.get("password").and_then(|v| v.as_str());
+            match (username, password) {
+                (Some(username), Some(password)) => Some(ChapAuth {
+                    username: username.to_string(),
+                    password: password.to_string(),
+                }),
+                _ => None,
+            }
         } else {
             None
         };
@@ -3356,6 +3354,7 @@ mod nas_handlers {
             acls,
             chap,
             created_at: chrono::Utc::now().timestamp(),
+            ..Default::default()
         };
 
         manager
@@ -3451,6 +3450,7 @@ mod nas_handlers {
             lun_type,
             size_bytes,
             read_only,
+            ..Default::default()
         };
 
         let manager = IscsiTargetManager::new();
@@ -3654,7 +3654,7 @@ mod nas_handlers {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ApiError::BadRequest("Missing 'name' field".to_string()))?;
         let manager = S3GatewayManager::new();
-        match manager.create_bucket(name).await {
+        match manager.create_bucket(name, None).await {
             Ok(bucket) => Ok(Json(serde_json::to_value(bucket).unwrap_or_default())),
             Err(e) => Err(ApiError::Internal(format!(
                 "Failed to create bucket: {}",
@@ -3696,7 +3696,7 @@ mod nas_handlers {
     ) -> Result<(), ApiError> {
         let manager = S3GatewayManager::new();
         manager
-            .delete_bucket(&name)
+            .delete_bucket(&name, false)
             .await
             .map_err(|e| ApiError::Internal(format!("Failed to delete bucket: {}", e)))
     }
@@ -4524,6 +4524,9 @@ mod nas_handlers {
             .ok_or_else(|| ApiError::BadRequest("Missing 'schedule' field".to_string()))?;
 
         // Parse job type
+        let target: String;
+        let mut params: std::collections::HashMap<String, serde_json::Value> =
+            std::collections::HashMap::new();
         let job_type = match job_type_str.to_lowercase().as_str() {
             "snapshot" => {
                 let dataset = body
@@ -4532,9 +4535,8 @@ mod nas_handlers {
                     .ok_or_else(|| {
                         ApiError::BadRequest("Snapshot job requires 'dataset' field".to_string())
                     })?;
-                JobType::Snapshot {
-                    dataset: dataset.to_string(),
-                }
+                target = dataset.to_string();
+                JobType::Snapshot
             }
             "retention" | "retention_cleanup" => {
                 let dataset = body
@@ -4546,34 +4548,42 @@ mod nas_handlers {
                 let keep_count = body
                     .get("keep_count")
                     .and_then(|v| v.as_u64())
-                    .unwrap_or(10) as usize;
-                JobType::RetentionCleanup {
-                    dataset: dataset.to_string(),
-                    keep_count,
-                }
+                    .unwrap_or(10);
+                target = dataset.to_string();
+                params.insert("keep_count".to_string(), serde_json::json!(keep_count));
+                JobType::RetentionCleanup
             }
             "replication" => {
                 let task_id = body
                     .get("task_id")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| {
-                        ApiError::BadRequest("Replication job requires 'task_id' field".to_string())
+                        ApiError::BadRequest(
+                            "Replication job requires 'task_id' field".to_string(),
+                        )
                     })?;
-                JobType::Replication {
-                    task_id: task_id.to_string(),
-                }
+                target = task_id.to_string();
+                JobType::Replication
             }
             "scrub" => {
                 let pool = body.get("pool").and_then(|v| v.as_str()).ok_or_else(|| {
                     ApiError::BadRequest("Scrub job requires 'pool' field".to_string())
                 })?;
-                JobType::Scrub {
-                    pool: pool.to_string(),
-                }
+                target = pool.to_string();
+                JobType::Scrub
             }
-            "health_check" => JobType::HealthCheck,
-            "quota_check" => JobType::QuotaCheck,
-            "smart_check" => JobType::SmartCheck,
+            "health_check" => {
+                target = String::new();
+                JobType::HealthCheck
+            }
+            "quota_check" => {
+                target = String::new();
+                JobType::QuotaCheck
+            }
+            "smart_check" => {
+                target = String::new();
+                JobType::SmartCheck
+            }
             "custom" | "custom_script" => {
                 let script = body.get("script").and_then(|v| v.as_str()).ok_or_else(|| {
                     ApiError::BadRequest("Custom job requires 'script' field".to_string())
@@ -4587,10 +4597,9 @@ mod nas_handlers {
                             .collect()
                     })
                     .unwrap_or_default();
-                JobType::CustomScript {
-                    script: script.to_string(),
-                    args,
-                }
+                target = script.to_string();
+                params.insert("args".to_string(), serde_json::json!(args));
+                JobType::Custom
             }
             _ => {
                 return Err(ApiError::BadRequest(format!(
@@ -4606,10 +4615,35 @@ mod nas_handlers {
 
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp();
-        let next_run = schedule.next_run_time();
+        let now_dt = chrono::Utc::now();
+        let next_run = schedule
+            .next_run_after(&now_dt)
+            .map(|dt| dt.timestamp())
+            .unwrap_or(now);
+
+        let job = ScheduledJob {
+            id: id.clone(),
+            name: name.to_string(),
+            job_type,
+            schedule: schedule_str.to_string(),
+            target,
+            params,
+            enabled: true,
+            run_on_startup: false,
+            last_run: None,
+            last_status: None,
+            last_duration_ms: None,
+            last_error: None,
+            next_run: Some(next_run),
+            priority: 100,
+            timeout_secs: 0,
+            max_retries: 0,
+            created_at: now,
+            modified_at: now,
+        };
 
         // Serialize job_type for storage
-        let job_type_json = serde_json::to_string(&job_type).unwrap_or_default();
+        let job_type_json = serde_json::to_string(&job.job_type).unwrap_or_default();
 
         sqlx::query(
             "INSERT INTO nas_scheduled_jobs (id, name, job_type, schedule, enabled, next_run, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?, ?)"
@@ -4689,7 +4723,9 @@ mod nas_handlers {
             use crate::nas::scheduler::CronSchedule;
             let parsed = CronSchedule::parse(schedule)
                 .map_err(|e| ApiError::BadRequest(format!("Invalid cron schedule: {}", e)))?;
-            let next_run = parsed.next_run_time();
+            let next_run = parsed
+                .next_run_after(&chrono::Utc::now())
+                .map(|dt| dt.timestamp());
             sqlx::query("UPDATE nas_scheduled_jobs SET schedule = ?, next_run = ?, updated_at = ? WHERE id = ?")
                 .bind(schedule).bind(next_run).bind(now).bind(&id)
                 .execute(state.database.pool()).await
@@ -6854,7 +6890,7 @@ async fn login(
 
             // Generate JWT token
             let token = generate_jwt_token(&user.id, &user.username, &user.role).map_err(|e| {
-                ApiError::Internal(format!("Failed to generate token: {}", e.to_string()))
+                ApiError::Internal(format!("Failed to generate token: {}", e))
             })?;
 
             Ok(Json(LoginResponse {
@@ -6949,7 +6985,10 @@ async fn register_user(
     }
 
     // Check if user already exists
-    if let Ok(_) = db::users::get_user_by_username(state.database.pool(), &req.username).await {
+    if db::users::get_user_by_username(state.database.pool(), &req.username)
+        .await
+        .is_ok()
+    {
         return Err(ApiError::Internal("Username already exists".to_string()));
     }
 
@@ -7050,7 +7089,7 @@ async fn change_password(
     .bind(&req.username)
     .execute(state.database.pool())
     .await
-    .map_err(|e| ApiError::Internal(format!("Failed to update password: {}", e.to_string())))?;
+    .map_err(|e| ApiError::Internal(format!("Failed to update password: {}", e)))?;
 
     Ok(StatusCode::OK)
 }
@@ -7106,7 +7145,7 @@ async fn create_api_key(
     .bind(expires_at)
     .execute(state.database.pool())
     .await
-    .map_err(|e| ApiError::Internal(format!("Failed to create API key: {}", e.to_string())))?;
+    .map_err(|e| ApiError::Internal(format!("Failed to create API key: {}", e)))?;
 
     Ok(Json(CreateApiKeyResponse {
         id: key_id,
@@ -7143,7 +7182,7 @@ async fn list_api_keys(
     .bind(&user.id)
     .fetch_all(state.database.pool())
     .await
-    .map_err(|e| ApiError::Internal(format!("Failed to list API keys: {}", e.to_string())))?;
+    .map_err(|e| ApiError::Internal(format!("Failed to list API keys: {}", e)))?;
 
     let mut keys = Vec::new();
     for row in rows {
@@ -7176,7 +7215,7 @@ async fn revoke_api_key(
         .bind(&user.id)
         .execute(state.database.pool())
         .await
-        .map_err(|e| ApiError::Internal(format!("Failed to revoke API key: {}", e.to_string())))?;
+        .map_err(|e| ApiError::Internal(format!("Failed to revoke API key: {}", e)))?;
 
     if result.rows_affected() == 0 {
         return Err(ApiError::NotFound("API key not found".to_string()));
@@ -7695,7 +7734,7 @@ async fn get_storage_pool(
         .storage_manager
         .get_pool(&id)
         .await
-        .map_err(|e| ApiError::from(e))?;
+        .map_err(ApiError::from)?;
     Ok(Json(pool))
 }
 
@@ -7744,7 +7783,7 @@ async fn add_storage_pool(
         .storage_manager
         .add_pool(pool)
         .await
-        .map_err(|e| ApiError::from(e))?;
+        .map_err(ApiError::from)?;
     Ok(Json(pool))
 }
 
@@ -7756,7 +7795,7 @@ async fn remove_storage_pool(
         .storage_manager
         .remove_pool(&id)
         .await
-        .map_err(|e| ApiError::from(e))?;
+        .map_err(ApiError::from)?;
     Ok(StatusCode::OK)
 }
 
@@ -7775,7 +7814,7 @@ async fn create_volume(
         .storage_manager
         .create_volume(&pool_id, &req.name, req.size)
         .await
-        .map_err(|e| ApiError::from(e))?;
+        .map_err(ApiError::from)?;
     Ok(StatusCode::OK)
 }
 

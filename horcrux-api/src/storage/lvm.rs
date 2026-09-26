@@ -11,6 +11,12 @@ use tracing::{error, info};
 /// LVM storage manager
 pub struct LvmManager {}
 
+impl Default for LvmManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LvmManager {
     pub fn new() -> Self {
         Self {}
@@ -204,7 +210,7 @@ impl LvmManager {
         let snapshots: Vec<String> = stdout
             .lines()
             .filter_map(|line| {
-                let parts: Vec<&str> = line.trim().split_whitespace().collect();
+                let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() == 2 && parts[1] == volume_name {
                     Some(parts[0].to_string())
                 } else {

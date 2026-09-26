@@ -63,6 +63,12 @@ impl Default for OtelConfig {
     }
 }
 
+impl Default for OtelManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OtelManager {
     pub fn new() -> Self {
         Self {

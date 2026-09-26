@@ -101,6 +101,12 @@ pub struct SdnManager {
     allocations: HashMap<IpAddr, IpAllocation>,
 }
 
+impl Default for SdnManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SdnManager {
     pub fn new() -> Self {
         SdnManager {

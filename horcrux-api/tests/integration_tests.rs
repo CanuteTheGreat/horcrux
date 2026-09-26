@@ -11,6 +11,8 @@
 //!
 //! Run with: cargo test --test integration_tests
 
+#![allow(clippy::unnecessary_unwrap)]
+
 use horcrux_common::*;
 use reqwest::Client;
 use serde_json::json;
@@ -51,7 +53,7 @@ async fn test_vm_lifecycle() {
     });
 
     let response = client
-        .post(&format!("{}/vms", API_BASE))
+        .post(format!("{}/vms", API_BASE))
         .json(&vm_config)
         .send()
         .await;
@@ -66,7 +68,7 @@ async fn test_vm_lifecycle() {
 
     // 2. Get VM details
     let response = client
-        .get(&format!("{}/vms/{}", API_BASE, TEST_VM_ID))
+        .get(format!("{}/vms/{}", API_BASE, TEST_VM_ID))
         .send()
         .await;
 
@@ -79,7 +81,7 @@ async fn test_vm_lifecycle() {
 
     // 3. Start VM
     let response = client
-        .post(&format!("{}/vms/{}/start", API_BASE, TEST_VM_ID))
+        .post(format!("{}/vms/{}/start", API_BASE, TEST_VM_ID))
         .send()
         .await;
 
@@ -88,7 +90,7 @@ async fn test_vm_lifecycle() {
 
     // Verify VM is running
     let response = client
-        .get(&format!("{}/vms/{}", API_BASE, TEST_VM_ID))
+        .get(format!("{}/vms/{}", API_BASE, TEST_VM_ID))
         .send()
         .await;
 
@@ -97,7 +99,7 @@ async fn test_vm_lifecycle() {
 
     // 4. Stop VM
     let response = client
-        .post(&format!("{}/vms/{}/stop", API_BASE, TEST_VM_ID))
+        .post(format!("{}/vms/{}/stop", API_BASE, TEST_VM_ID))
         .send()
         .await;
 
@@ -106,7 +108,7 @@ async fn test_vm_lifecycle() {
 
     // 5. Delete VM
     let response = client
-        .delete(&format!("{}/vms/{}", API_BASE, TEST_VM_ID))
+        .delete(format!("{}/vms/{}", API_BASE, TEST_VM_ID))
         .send()
         .await;
 
@@ -114,7 +116,7 @@ async fn test_vm_lifecycle() {
 
     // Verify VM is deleted
     let response = client
-        .get(&format!("{}/vms/{}", API_BASE, TEST_VM_ID))
+        .get(format!("{}/vms/{}", API_BASE, TEST_VM_ID))
         .send()
         .await;
 
@@ -127,7 +129,7 @@ async fn test_cluster_operations() {
 
     // 1. Get cluster status
     let response = client
-        .get(&format!("{}/cluster/status", API_BASE))
+        .get(format!("{}/cluster/status", API_BASE))
         .send()
         .await;
 
@@ -138,7 +140,7 @@ async fn test_cluster_operations() {
         .await
         .expect("Failed to parse cluster status");
     assert!(
-        status.nodes.len() > 0,
+        !status.nodes.is_empty(),
         "Cluster should have at least one node"
     );
 
@@ -150,7 +152,7 @@ async fn test_cluster_operations() {
     });
 
     let response = client
-        .post(&format!("{}/cluster/join", API_BASE))
+        .post(format!("{}/cluster/join", API_BASE))
         .json(&join_request)
         .send()
         .await;
@@ -162,7 +164,7 @@ async fn test_cluster_operations() {
 
     // 3. Get node list
     let response = client
-        .get(&format!("{}/cluster/nodes", API_BASE))
+        .get(format!("{}/cluster/nodes", API_BASE))
         .send()
         .await;
 
@@ -172,11 +174,11 @@ async fn test_cluster_operations() {
         .json()
         .await
         .expect("Failed to parse nodes");
-    assert!(nodes.len() > 0, "Should have at least one node");
+    assert!(!nodes.is_empty(), "Should have at least one node");
 
     // 4. Get quorum info
     let response = client
-        .get(&format!("{}/cluster/quorum", API_BASE))
+        .get(format!("{}/cluster/quorum", API_BASE))
         .send()
         .await;
 
@@ -189,7 +191,7 @@ async fn test_storage_operations() {
 
     // 1. List storage pools
     let response = client
-        .get(&format!("{}/storage/pools", API_BASE))
+        .get(format!("{}/storage/pools", API_BASE))
         .send()
         .await;
 
@@ -203,7 +205,7 @@ async fn test_storage_operations() {
     });
 
     let response = client
-        .post(&format!("{}/storage/pools", API_BASE))
+        .post(format!("{}/storage/pools", API_BASE))
         .json(&zfs_pool)
         .send()
         .await;
@@ -223,7 +225,7 @@ async fn test_storage_operations() {
     });
 
     let response = client
-        .post(&format!("{}/storage/pools", API_BASE))
+        .post(format!("{}/storage/pools", API_BASE))
         .json(&lvm_pool)
         .send()
         .await;
@@ -242,12 +244,13 @@ async fn test_storage_operations() {
     });
 
     let response = client
-        .post(&format!("{}/storage/pools", API_BASE))
+        .post(format!("{}/storage/pools", API_BASE))
         .json(&dir_pool)
         .send()
         .await;
 
     let dir_pool_created = response.is_ok() && response.as_ref().unwrap().status().is_success();
+    #[allow(unused_assignments)]
     let mut test_pool_id = String::new();
 
     if dir_pool_created {
@@ -261,7 +264,7 @@ async fn test_storage_operations() {
 
         // 5. Get pool details
         let response = client
-            .get(&format!("{}/storage/pools/{}", API_BASE, test_pool_id))
+            .get(format!("{}/storage/pools/{}", API_BASE, test_pool_id))
             .send()
             .await;
 
@@ -274,7 +277,7 @@ async fn test_storage_operations() {
         });
 
         let response = client
-            .post(&format!(
+            .post(format!(
                 "{}/storage/pools/{}/volumes",
                 API_BASE, test_pool_id
             ))
@@ -288,7 +291,7 @@ async fn test_storage_operations() {
 
         // 7. Delete the test pool
         let response = client
-            .delete(&format!("{}/storage/pools/{}", API_BASE, test_pool_id))
+            .delete(format!("{}/storage/pools/{}", API_BASE, test_pool_id))
             .send()
             .await;
 
@@ -303,7 +306,7 @@ async fn test_storage_operations() {
     });
 
     let _ = client
-        .post(&format!("{}/storage/pools", API_BASE))
+        .post(format!("{}/storage/pools", API_BASE))
         .json(&ceph_pool)
         .send()
         .await;
@@ -317,7 +320,7 @@ async fn test_storage_operations() {
     });
 
     let _ = client
-        .post(&format!("{}/storage/pools", API_BASE))
+        .post(format!("{}/storage/pools", API_BASE))
         .json(&nfs_pool)
         .send()
         .await;
@@ -341,7 +344,7 @@ async fn test_backup_operations() {
     });
 
     let _ = client
-        .post(&format!("{}/vms", API_BASE))
+        .post(format!("{}/vms", API_BASE))
         .json(&vm_config)
         .send()
         .await;
@@ -356,7 +359,7 @@ async fn test_backup_operations() {
     });
 
     let response = client
-        .post(&format!("{}/backup/create", API_BASE))
+        .post(format!("{}/backup/create", API_BASE))
         .json(&backup_request)
         .send()
         .await;
@@ -372,7 +375,7 @@ async fn test_backup_operations() {
 
     // 2. List backups
     let response = client
-        .get(&format!("{}/backup/list", API_BASE))
+        .get(format!("{}/backup/list", API_BASE))
         .send()
         .await;
 
@@ -382,11 +385,11 @@ async fn test_backup_operations() {
         .json()
         .await
         .expect("Failed to parse backups");
-    assert!(backups.len() > 0, "Should have at least one backup");
+    assert!(!backups.is_empty(), "Should have at least one backup");
 
     // 3. Get backup info
     let response = client
-        .get(&format!("{}/backup/{}", API_BASE, backup_id))
+        .get(format!("{}/backup/{}", API_BASE, backup_id))
         .send()
         .await;
 
@@ -400,7 +403,7 @@ async fn test_backup_operations() {
     });
 
     let response = client
-        .post(&format!("{}/backup/restore", API_BASE))
+        .post(format!("{}/backup/restore", API_BASE))
         .json(&restore_request)
         .send()
         .await;
@@ -409,7 +412,7 @@ async fn test_backup_operations() {
 
     // Cleanup
     let _ = client
-        .delete(&format!("{}/vms/backup-test-vm", API_BASE))
+        .delete(format!("{}/vms/backup-test-vm", API_BASE))
         .send()
         .await;
 }
@@ -420,7 +423,7 @@ async fn test_monitoring_and_alerts() {
 
     // 1. Get node metrics
     let response = client
-        .get(&format!("{}/monitoring/node/metrics", API_BASE))
+        .get(format!("{}/monitoring/node/metrics", API_BASE))
         .send()
         .await;
 
@@ -444,7 +447,7 @@ async fn test_monitoring_and_alerts() {
     });
 
     let response = client
-        .post(&format!("{}/alerts/rules", API_BASE))
+        .post(format!("{}/alerts/rules", API_BASE))
         .json(&alert_rule)
         .send()
         .await;
@@ -453,7 +456,7 @@ async fn test_monitoring_and_alerts() {
 
     // 3. List alert rules
     let response = client
-        .get(&format!("{}/alerts/rules", API_BASE))
+        .get(format!("{}/alerts/rules", API_BASE))
         .send()
         .await;
 
@@ -463,16 +466,16 @@ async fn test_monitoring_and_alerts() {
         .json()
         .await
         .expect("Failed to parse rules");
-    assert!(rules.len() > 0, "Should have at least one alert rule");
+    assert!(!rules.is_empty(), "Should have at least one alert rule");
 
     // 4. Get active alerts
     let response = client
-        .get(&format!("{}/alerts/active", API_BASE))
+        .get(format!("{}/alerts/active", API_BASE))
         .send()
         .await;
 
     assert!(response.is_ok(), "Failed to get active alerts");
-    let alerts: Vec<Alert> = response
+    let _alerts: Vec<Alert> = response
         .unwrap()
         .json()
         .await
@@ -480,7 +483,7 @@ async fn test_monitoring_and_alerts() {
 
     // 5. Get alert history
     let response = client
-        .get(&format!("{}/alerts/history", API_BASE))
+        .get(format!("{}/alerts/history", API_BASE))
         .send()
         .await;
 
@@ -498,7 +501,7 @@ async fn test_authentication() {
     });
 
     let response = client
-        .post(&format!("{}/auth/login", API_BASE))
+        .post(format!("{}/auth/login", API_BASE))
         .json(&login_request)
         .send()
         .await;
@@ -517,7 +520,7 @@ async fn test_authentication() {
     // 2. Verify token works
     let token = token_response["token"].as_str().unwrap();
     let response = client
-        .get(&format!("{}/auth/verify", API_BASE))
+        .get(format!("{}/auth/verify", API_BASE))
         .bearer_auth(token)
         .send()
         .await;
@@ -531,7 +534,7 @@ async fn test_authentication() {
     });
 
     let response = client
-        .post(&format!("{}/auth/login", API_BASE))
+        .post(format!("{}/auth/login", API_BASE))
         .json(&bad_login)
         .send()
         .await;
@@ -551,7 +554,7 @@ async fn test_firewall_rules() {
 
     // 1. List firewall rules
     let response = client
-        .get(&format!("{}/firewall/rules", API_BASE))
+        .get(format!("{}/firewall/rules", API_BASE))
         .send()
         .await;
 
@@ -569,7 +572,7 @@ async fn test_firewall_rules() {
     });
 
     let response = client
-        .post(&format!("{}/firewall/rules", API_BASE))
+        .post(format!("{}/firewall/rules", API_BASE))
         .json(&rule)
         .send()
         .await;
@@ -578,7 +581,7 @@ async fn test_firewall_rules() {
 
     // 3. Get rule details
     let response = client
-        .get(&format!("{}/firewall/rules/test-http-allow", API_BASE))
+        .get(format!("{}/firewall/rules/test-http-allow", API_BASE))
         .send()
         .await;
 
@@ -594,7 +597,7 @@ async fn test_firewall_rules() {
 
     // 4. Apply firewall rules
     let response = client
-        .post(&format!("{}/firewall/apply", API_BASE))
+        .post(format!("{}/firewall/apply", API_BASE))
         .send()
         .await;
 
@@ -602,7 +605,7 @@ async fn test_firewall_rules() {
 
     // 5. Delete test rule
     let _ = client
-        .delete(&format!("{}/firewall/rules/test-http-allow", API_BASE))
+        .delete(format!("{}/firewall/rules/test-http-allow", API_BASE))
         .send()
         .await;
 }
@@ -612,7 +615,7 @@ async fn test_template_operations() {
     let client = create_client();
 
     // 1. List templates
-    let response = client.get(&format!("{}/templates", API_BASE)).send().await;
+    let response = client.get(format!("{}/templates", API_BASE)).send().await;
 
     assert!(response.is_ok(), "Failed to list templates");
 
@@ -624,7 +627,7 @@ async fn test_template_operations() {
     });
 
     let response = client
-        .post(&format!("{}/templates/create", API_BASE))
+        .post(format!("{}/templates/create", API_BASE))
         .json(&template_request)
         .send()
         .await;
@@ -642,7 +645,7 @@ async fn test_template_operations() {
         });
 
         let response = client
-            .post(&format!("{}/templates/deploy", API_BASE))
+            .post(format!("{}/templates/deploy", API_BASE))
             .json(&deploy_request)
             .send()
             .await;
@@ -668,14 +671,14 @@ async fn test_console_access() {
     });
 
     let _ = client
-        .post(&format!("{}/vms", API_BASE))
+        .post(format!("{}/vms", API_BASE))
         .json(&vm_config)
         .send()
         .await;
 
     // Start VM
     let _ = client
-        .post(&format!("{}/vms/console-test-vm/start", API_BASE))
+        .post(format!("{}/vms/console-test-vm/start", API_BASE))
         .send()
         .await;
 
@@ -683,7 +686,7 @@ async fn test_console_access() {
 
     // 1. Get VNC console URL
     let response = client
-        .get(&format!("{}/vms/console-test-vm/console/vnc", API_BASE))
+        .get(format!("{}/vms/console-test-vm/console/vnc", API_BASE))
         .send()
         .await;
 
@@ -697,7 +700,7 @@ async fn test_console_access() {
 
     // 2. Get serial console
     let response = client
-        .get(&format!("{}/vms/console-test-vm/console/serial", API_BASE))
+        .get(format!("{}/vms/console-test-vm/console/serial", API_BASE))
         .send()
         .await;
 
@@ -708,14 +711,14 @@ async fn test_console_access() {
 
     // Cleanup
     let _ = client
-        .post(&format!("{}/vms/console-test-vm/stop", API_BASE))
+        .post(format!("{}/vms/console-test-vm/stop", API_BASE))
         .send()
         .await;
 
     wait_for_operation(1000).await;
 
     let _ = client
-        .delete(&format!("{}/vms/console-test-vm", API_BASE))
+        .delete(format!("{}/vms/console-test-vm", API_BASE))
         .send()
         .await;
 }
@@ -725,7 +728,7 @@ async fn test_api_health() {
     let client = create_client();
 
     // Test health endpoint
-    let response = client.get(&format!("{}/health", API_BASE)).send().await;
+    let response = client.get(format!("{}/health", API_BASE)).send().await;
 
     assert!(response.is_ok(), "Health check failed");
     assert_eq!(
@@ -746,7 +749,7 @@ async fn test_session_management() {
     });
 
     let response = client
-        .post(&format!("{}/auth/login", API_BASE))
+        .post(format!("{}/auth/login", API_BASE))
         .json(&login_request)
         .send()
         .await;
@@ -773,7 +776,7 @@ async fn test_session_management() {
 
     // 2. Use session cookie to access protected endpoint
     let response = client
-        .get(&format!("{}/vms", API_BASE))
+        .get(format!("{}/vms", API_BASE))
         .header("Cookie", format!("session_id={}", session_id))
         .send()
         .await;
@@ -783,7 +786,7 @@ async fn test_session_management() {
 
     // 3. Logout (destroy session)
     let response = client
-        .post(&format!("{}/auth/logout", API_BASE))
+        .post(format!("{}/auth/logout", API_BASE))
         .header("Cookie", format!("session_id={}", session_id))
         .send()
         .await;
@@ -792,7 +795,7 @@ async fn test_session_management() {
 
     // 4. Verify session is invalid after logout
     let response = client
-        .get(&format!("{}/vms", API_BASE))
+        .get(format!("{}/vms", API_BASE))
         .header("Cookie", format!("session_id={}", session_id))
         .send()
         .await;
@@ -818,7 +821,7 @@ async fn test_password_change() {
 
     // Assume test user exists or create one first
     let _ = client
-        .post(&format!("{}/users", API_BASE))
+        .post(format!("{}/users", API_BASE))
         .json(&json!({
             "username": "testuser",
             "password": "testpass123",
@@ -829,7 +832,7 @@ async fn test_password_change() {
         .await;
 
     let response = client
-        .post(&format!("{}/auth/login", API_BASE))
+        .post(format!("{}/auth/login", API_BASE))
         .json(&login_request)
         .send()
         .await;
@@ -850,7 +853,7 @@ async fn test_password_change() {
     });
 
     let response = client
-        .post(&format!("{}/auth/password", API_BASE))
+        .post(format!("{}/auth/password", API_BASE))
         .bearer_auth(token)
         .json(&change_request)
         .send()
@@ -865,7 +868,7 @@ async fn test_password_change() {
     });
 
     let response = client
-        .post(&format!("{}/auth/login", API_BASE))
+        .post(format!("{}/auth/login", API_BASE))
         .json(&old_login)
         .send()
         .await;
@@ -885,7 +888,7 @@ async fn test_password_change() {
     });
 
     let response = client
-        .post(&format!("{}/auth/login", API_BASE))
+        .post(format!("{}/auth/login", API_BASE))
         .json(&new_login)
         .send()
         .await;
@@ -894,7 +897,7 @@ async fn test_password_change() {
 
     // Cleanup
     let _ = client
-        .delete(&format!("{}/users/testuser", API_BASE))
+        .delete(format!("{}/users/testuser", API_BASE))
         .bearer_auth(token)
         .send()
         .await;
@@ -911,7 +914,7 @@ async fn test_api_token_generation() {
     });
 
     let response = client
-        .post(&format!("{}/auth/login", API_BASE))
+        .post(format!("{}/auth/login", API_BASE))
         .json(&login_request)
         .send()
         .await;
@@ -930,7 +933,7 @@ async fn test_api_token_generation() {
     });
 
     let response = client
-        .post(&format!("{}/users/admin/api-keys", API_BASE))
+        .post(format!("{}/users/admin/api-keys", API_BASE))
         .bearer_auth(jwt_token)
         .json(&api_key_request)
         .send()
@@ -953,7 +956,7 @@ async fn test_api_token_generation() {
 
     // 3. Use API key to access endpoint
     let response = client
-        .get(&format!("{}/vms", API_BASE))
+        .get(format!("{}/vms", API_BASE))
         .header("X-API-Key", api_key)
         .send()
         .await;
@@ -963,14 +966,14 @@ async fn test_api_token_generation() {
 
     // 4. List user's API keys
     let response = client
-        .get(&format!("{}/users/admin/api-keys", API_BASE))
+        .get(format!("{}/users/admin/api-keys", API_BASE))
         .bearer_auth(jwt_token)
         .send()
         .await;
 
     assert!(response.is_ok(), "Failed to list API keys");
     let keys: Vec<serde_json::Value> = response.unwrap().json().await.unwrap();
-    assert!(keys.len() > 0, "Should have at least one API key");
+    assert!(!keys.is_empty(), "Should have at least one API key");
 }
 
 #[tokio::test]
@@ -992,7 +995,7 @@ async fn test_rbac_permissions() {
     });
 
     let response = client
-        .post(&format!("{}/auth/login", API_BASE))
+        .post(format!("{}/auth/login", API_BASE))
         .json(&admin_login)
         .send()
         .await;
@@ -1005,7 +1008,7 @@ async fn test_rbac_permissions() {
     let admin_jwt = admin_token["token"].as_str().unwrap();
 
     let _ = client
-        .post(&format!("{}/users", API_BASE))
+        .post(format!("{}/users", API_BASE))
         .bearer_auth(admin_jwt)
         .json(&user_request)
         .send()
@@ -1018,7 +1021,7 @@ async fn test_rbac_permissions() {
     });
 
     let response = client
-        .post(&format!("{}/auth/login", API_BASE))
+        .post(format!("{}/auth/login", API_BASE))
         .json(&user_login)
         .send()
         .await;
@@ -1032,7 +1035,7 @@ async fn test_rbac_permissions() {
 
     // 3. VmUser can view VMs (VmAudit privilege)
     let response = client
-        .get(&format!("{}/vms", API_BASE))
+        .get(format!("{}/vms", API_BASE))
         .bearer_auth(user_jwt)
         .send()
         .await;
@@ -1041,7 +1044,7 @@ async fn test_rbac_permissions() {
 
     // 4. VmUser can start/stop VMs (VmPowerMgmt privilege)
     let response = client
-        .post(&format!("{}/vms/test-vm/start", API_BASE))
+        .post(format!("{}/vms/test-vm/start", API_BASE))
         .bearer_auth(user_jwt)
         .send()
         .await;
@@ -1060,7 +1063,7 @@ async fn test_rbac_permissions() {
     });
 
     let response = client
-        .post(&format!("{}/vms", API_BASE))
+        .post(format!("{}/vms", API_BASE))
         .bearer_auth(user_jwt)
         .json(&vm_config)
         .send()
@@ -1078,7 +1081,7 @@ async fn test_rbac_permissions() {
 
     // Cleanup
     let _ = client
-        .delete(&format!("{}/users/vmuser", API_BASE))
+        .delete(format!("{}/users/vmuser", API_BASE))
         .bearer_auth(admin_jwt)
         .send()
         .await;
@@ -1107,7 +1110,7 @@ async fn test_cni_network_operations() {
     });
 
     let response = client
-        .post(&format!("{}/cni/networks", API_BASE))
+        .post(format!("{}/cni/networks", API_BASE))
         .json(&network_config)
         .send()
         .await;
@@ -1120,7 +1123,7 @@ async fn test_cni_network_operations() {
 
     // 2. List CNI networks
     let response = client
-        .get(&format!("{}/cni/networks", API_BASE))
+        .get(format!("{}/cni/networks", API_BASE))
         .send()
         .await;
 
@@ -1131,7 +1134,7 @@ async fn test_cni_network_operations() {
 
     // 3. Delete CNI network
     let response = client
-        .delete(&format!("{}/cni/networks/test-bridge", API_BASE))
+        .delete(format!("{}/cni/networks/test-bridge", API_BASE))
         .send()
         .await;
 
@@ -1158,7 +1161,7 @@ async fn test_network_policy_enforcement() {
     });
 
     let response = client
-        .post(&format!("{}/network-policies", API_BASE))
+        .post(format!("{}/network-policies", API_BASE))
         .json(&policy)
         .send()
         .await;
@@ -1171,17 +1174,17 @@ async fn test_network_policy_enforcement() {
 
     // 2. List network policies
     let response = client
-        .get(&format!("{}/network-policies", API_BASE))
+        .get(format!("{}/network-policies", API_BASE))
         .send()
         .await;
 
     assert!(response.is_ok(), "Failed to list network policies");
     let policies: Vec<serde_json::Value> = response.unwrap().json().await.unwrap();
-    assert!(policies.len() > 0, "Should have at least one policy");
+    assert!(!policies.is_empty(), "Should have at least one policy");
 
     // 3. Get iptables rules for policy
     let response = client
-        .get(&format!(
+        .get(format!(
             "{}/network-policies/test-policy-1/iptables",
             API_BASE
         ))
@@ -1190,11 +1193,11 @@ async fn test_network_policy_enforcement() {
 
     assert!(response.is_ok(), "Failed to get iptables rules");
     let rules: Vec<String> = response.unwrap().json().await.unwrap();
-    assert!(rules.len() > 0, "Should generate iptables rules");
+    assert!(!rules.is_empty(), "Should generate iptables rules");
 
     // 4. Delete network policy
     let response = client
-        .delete(&format!("{}/network-policies/test-policy-1", API_BASE))
+        .delete(format!("{}/network-policies/test-policy-1", API_BASE))
         .send()
         .await;
 
@@ -1218,7 +1221,7 @@ async fn test_vm_migration() {
     });
 
     let response = client
-        .post(&format!("{}/vms", API_BASE))
+        .post(format!("{}/vms", API_BASE))
         .json(&vm_config)
         .send()
         .await;
@@ -1237,7 +1240,7 @@ async fn test_vm_migration() {
     });
 
     let response = client
-        .post(&format!("{}/migrate/migration-test-vm", API_BASE))
+        .post(format!("{}/migrate/migration-test-vm", API_BASE))
         .json(&migrate_request)
         .send()
         .await;
@@ -1247,13 +1250,13 @@ async fn test_vm_migration() {
         let job_id: serde_json::Value = response.unwrap().json().await.unwrap();
         assert!(job_id.is_string(), "Should receive migration job ID");
 
-        let job_id_str = job_id.as_str().unwrap();
+        let _job_id_str = job_id.as_str().unwrap();
 
         // 2. Check migration status
         wait_for_operation(500).await;
 
         let response = client
-            .get(&format!("{}/migrate/migration-test-vm/status", API_BASE))
+            .get(format!("{}/migrate/migration-test-vm/status", API_BASE))
             .send()
             .await;
 
@@ -1274,7 +1277,7 @@ async fn test_vm_migration() {
     });
 
     let _ = client
-        .post(&format!("{}/migrate/migration-test-vm", API_BASE))
+        .post(format!("{}/migrate/migration-test-vm", API_BASE))
         .json(&live_migrate_request)
         .send()
         .await;
@@ -1283,7 +1286,7 @@ async fn test_vm_migration() {
     // Cleanup
     wait_for_operation(1000).await;
     let _ = client
-        .delete(&format!("{}/vms/migration-test-vm", API_BASE))
+        .delete(format!("{}/vms/migration-test-vm", API_BASE))
         .send()
         .await;
 }
@@ -1303,7 +1306,7 @@ async fn test_storage_snapshots() {
     });
 
     let response = client
-        .post(&format!("{}/storage/pools", API_BASE))
+        .post(format!("{}/storage/pools", API_BASE))
         .json(&pool_config)
         .send()
         .await;
@@ -1324,7 +1327,7 @@ async fn test_storage_snapshots() {
     });
 
     let response = client
-        .post(&format!("{}/storage/pools/{}/volumes", API_BASE, pool_id))
+        .post(format!("{}/storage/pools/{}/volumes", API_BASE, pool_id))
         .json(&volume_request)
         .send()
         .await;
@@ -1342,7 +1345,7 @@ async fn test_storage_snapshots() {
 
     // Cleanup
     let _ = client
-        .delete(&format!("{}/storage/pools/{}", API_BASE, pool_id))
+        .delete(format!("{}/storage/pools/{}", API_BASE, pool_id))
         .send()
         .await;
 }
@@ -1363,7 +1366,7 @@ async fn test_container_lifecycle() {
     });
 
     let response = client
-        .post(&format!("{}/containers", API_BASE))
+        .post(format!("{}/containers", API_BASE))
         .json(&container_config)
         .send()
         .await;
@@ -1377,7 +1380,7 @@ async fn test_container_lifecycle() {
 
     // 2. Get container details
     let response = client
-        .get(&format!("{}/containers/test-container-1", API_BASE))
+        .get(format!("{}/containers/test-container-1", API_BASE))
         .send()
         .await;
 
@@ -1385,7 +1388,7 @@ async fn test_container_lifecycle() {
 
     // 3. Start container
     let response = client
-        .post(&format!("{}/containers/test-container-1/start", API_BASE))
+        .post(format!("{}/containers/test-container-1/start", API_BASE))
         .send()
         .await;
 
@@ -1394,7 +1397,7 @@ async fn test_container_lifecycle() {
 
         // 4. Check container status
         let response = client
-            .get(&format!("{}/containers/test-container-1/status", API_BASE))
+            .get(format!("{}/containers/test-container-1/status", API_BASE))
             .send()
             .await;
 
@@ -1402,7 +1405,7 @@ async fn test_container_lifecycle() {
 
         // 5. Pause container (if supported)
         let response = client
-            .post(&format!("{}/containers/test-container-1/pause", API_BASE))
+            .post(format!("{}/containers/test-container-1/pause", API_BASE))
             .send()
             .await;
 
@@ -1411,7 +1414,7 @@ async fn test_container_lifecycle() {
 
             // 6. Resume container
             let _ = client
-                .post(&format!("{}/containers/test-container-1/resume", API_BASE))
+                .post(format!("{}/containers/test-container-1/resume", API_BASE))
                 .send()
                 .await;
 
@@ -1425,7 +1428,7 @@ async fn test_container_lifecycle() {
         });
 
         let response = client
-            .post(&format!("{}/containers/test-container-1/exec", API_BASE))
+            .post(format!("{}/containers/test-container-1/exec", API_BASE))
             .json(&exec_request)
             .send()
             .await;
@@ -1437,7 +1440,7 @@ async fn test_container_lifecycle() {
 
         // 8. Stop container
         let response = client
-            .post(&format!("{}/containers/test-container-1/stop", API_BASE))
+            .post(format!("{}/containers/test-container-1/stop", API_BASE))
             .send()
             .await;
 
@@ -1452,7 +1455,7 @@ async fn test_container_lifecycle() {
     });
 
     let response = client
-        .post(&format!("{}/containers/test-container-1/clone", API_BASE))
+        .post(format!("{}/containers/test-container-1/clone", API_BASE))
         .json(&clone_request)
         .send()
         .await;
@@ -1462,14 +1465,14 @@ async fn test_container_lifecycle() {
 
         // Cleanup clone
         let _ = client
-            .delete(&format!("{}/containers/test-container-2", API_BASE))
+            .delete(format!("{}/containers/test-container-2", API_BASE))
             .send()
             .await;
     }
 
     // 10. Delete container
     let response = client
-        .delete(&format!("{}/containers/test-container-1", API_BASE))
+        .delete(format!("{}/containers/test-container-1", API_BASE))
         .send()
         .await;
 
@@ -1493,7 +1496,7 @@ async fn test_snapshot_scheduling() {
     });
 
     let response = client
-        .post(&format!("{}/vms", API_BASE))
+        .post(format!("{}/vms", API_BASE))
         .json(&vm_config)
         .send()
         .await;
@@ -1519,7 +1522,7 @@ async fn test_snapshot_scheduling() {
     });
 
     let response = client
-        .post(&format!("{}/snapshot-schedules", API_BASE))
+        .post(format!("{}/snapshot-schedules", API_BASE))
         .json(&schedule)
         .send()
         .await;
@@ -1532,7 +1535,7 @@ async fn test_snapshot_scheduling() {
 
         // 2. List snapshot schedules
         let response = client
-            .get(&format!("{}/snapshot-schedules", API_BASE))
+            .get(format!("{}/snapshot-schedules", API_BASE))
             .send()
             .await;
 
@@ -1540,7 +1543,7 @@ async fn test_snapshot_scheduling() {
 
         // 3. Get specific schedule
         let response = client
-            .get(&format!("{}/snapshot-schedules/{}", API_BASE, schedule_id))
+            .get(format!("{}/snapshot-schedules/{}", API_BASE, schedule_id))
             .send()
             .await;
 
@@ -1552,7 +1555,7 @@ async fn test_snapshot_scheduling() {
         });
 
         let response = client
-            .put(&format!("{}/snapshot-schedules/{}", API_BASE, schedule_id))
+            .put(format!("{}/snapshot-schedules/{}", API_BASE, schedule_id))
             .json(&update)
             .send()
             .await;
@@ -1563,7 +1566,7 @@ async fn test_snapshot_scheduling() {
 
         // 5. Delete schedule
         let response = client
-            .delete(&format!("{}/snapshot-schedules/{}", API_BASE, schedule_id))
+            .delete(format!("{}/snapshot-schedules/{}", API_BASE, schedule_id))
             .send()
             .await;
 
@@ -1573,7 +1576,7 @@ async fn test_snapshot_scheduling() {
     // Cleanup VM
     wait_for_operation(1000).await;
     let _ = client
-        .delete(&format!("{}/vms/schedule-test-vm", API_BASE))
+        .delete(format!("{}/vms/schedule-test-vm", API_BASE))
         .send()
         .await;
 }
@@ -1595,7 +1598,7 @@ async fn test_high_availability() {
     });
 
     let response = client
-        .post(&format!("{}/vms", API_BASE))
+        .post(format!("{}/vms", API_BASE))
         .json(&vm_config)
         .send()
         .await;
@@ -1614,7 +1617,7 @@ async fn test_high_availability() {
     });
 
     let response = client
-        .post(&format!("{}/ha/groups", API_BASE))
+        .post(format!("{}/ha/groups", API_BASE))
         .json(&ha_group)
         .send()
         .await;
@@ -1623,7 +1626,7 @@ async fn test_high_availability() {
         wait_for_operation(500).await;
 
         // 2. List HA groups
-        let response = client.get(&format!("{}/ha/groups", API_BASE)).send().await;
+        let response = client.get(format!("{}/ha/groups", API_BASE)).send().await;
 
         assert!(response.is_ok(), "Failed to list HA groups");
     }
@@ -1637,7 +1640,7 @@ async fn test_high_availability() {
     });
 
     let response = client
-        .post(&format!("{}/ha/resources", API_BASE))
+        .post(format!("{}/ha/resources", API_BASE))
         .json(&ha_resource)
         .send()
         .await;
@@ -1647,20 +1650,20 @@ async fn test_high_availability() {
 
         // 4. List HA resources
         let response = client
-            .get(&format!("{}/ha/resources", API_BASE))
+            .get(format!("{}/ha/resources", API_BASE))
             .send()
             .await;
 
         assert!(response.is_ok(), "Failed to list HA resources");
 
         // 5. Get HA status
-        let response = client.get(&format!("{}/ha/status", API_BASE)).send().await;
+        let response = client.get(format!("{}/ha/status", API_BASE)).send().await;
 
         assert!(response.is_ok(), "Failed to get HA status");
 
         // 6. Remove VM from HA
         let response = client
-            .delete(&format!("{}/ha/resources/ha-test-vm", API_BASE))
+            .delete(format!("{}/ha/resources/ha-test-vm", API_BASE))
             .send()
             .await;
 
@@ -1670,7 +1673,7 @@ async fn test_high_availability() {
     // Cleanup VM
     wait_for_operation(1000).await;
     let _ = client
-        .delete(&format!("{}/vms/ha-test-vm", API_BASE))
+        .delete(format!("{}/vms/ha-test-vm", API_BASE))
         .send()
         .await;
 }
@@ -1694,7 +1697,7 @@ async fn test_multi_hypervisor_support() {
     });
 
     let response = client
-        .post(&format!("{}/vms", API_BASE))
+        .post(format!("{}/vms", API_BASE))
         .json(&qemu_vm)
         .send()
         .await;
@@ -1702,7 +1705,7 @@ async fn test_multi_hypervisor_support() {
     if response.is_ok() {
         wait_for_operation(500).await;
         let _ = client
-            .delete(&format!("{}/vms/qemu-test", API_BASE))
+            .delete(format!("{}/vms/qemu-test", API_BASE))
             .send()
             .await;
     }
@@ -1720,7 +1723,7 @@ async fn test_multi_hypervisor_support() {
     });
 
     let response = client
-        .post(&format!("{}/vms", API_BASE))
+        .post(format!("{}/vms", API_BASE))
         .json(&lxd_vm)
         .send()
         .await;
@@ -1728,7 +1731,7 @@ async fn test_multi_hypervisor_support() {
     if response.is_ok() {
         wait_for_operation(500).await;
         let _ = client
-            .delete(&format!("{}/vms/lxd-test", API_BASE))
+            .delete(format!("{}/vms/lxd-test", API_BASE))
             .send()
             .await;
     }
@@ -1746,7 +1749,7 @@ async fn test_multi_hypervisor_support() {
     });
 
     let response = client
-        .post(&format!("{}/vms", API_BASE))
+        .post(format!("{}/vms", API_BASE))
         .json(&incus_vm)
         .send()
         .await;
@@ -1754,7 +1757,7 @@ async fn test_multi_hypervisor_support() {
     if response.is_ok() {
         wait_for_operation(500).await;
         let _ = client
-            .delete(&format!("{}/vms/incus-test", API_BASE))
+            .delete(format!("{}/vms/incus-test", API_BASE))
             .send()
             .await;
     }

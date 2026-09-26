@@ -70,18 +70,16 @@ pub fn UsersPage() -> impl IntoView {
                 }
 
                 // Realm filter
-                if !realm_f.is_empty() && realm_f != "all" {
-                    if user.realm != realm_f {
+                if !realm_f.is_empty() && realm_f != "all"
+                    && user.realm != realm_f {
                         return false;
                     }
-                }
 
                 // Role filter
-                if !role_f.is_empty() && role_f != "all" {
-                    if user.role != role_f && !user.roles.contains(&role_f) {
+                if !role_f.is_empty() && role_f != "all"
+                    && user.role != role_f && !user.roles.contains(&role_f) {
                         return false;
                     }
-                }
 
                 // Status filter
                 if !status_f.is_empty() && status_f != "all" {
@@ -92,11 +90,10 @@ pub fn UsersPage() -> impl IntoView {
                                 return false;
                             }
                         }
-                        "disabled" => {
-                            if enabled {
+                        "disabled"
+                            if enabled => {
                                 return false;
                             }
-                        }
                         _ => {}
                     }
                 }
@@ -283,8 +280,8 @@ pub fn UsersPage() -> impl IntoView {
                     <CreateUserForm
                         roles=roles.get()
                         on_success={
-                            let set_show_create_form = set_show_create_form.clone();
-                            let set_users = set_users.clone();
+                            let set_show_create_form = set_show_create_form;
+                            let set_users = set_users;
                             move || {
                                 set_show_create_form.set(false);
                                 // Refresh users list
@@ -296,7 +293,7 @@ pub fn UsersPage() -> impl IntoView {
                             }
                         }
                         on_error={
-                            let set_error_message = set_error_message.clone();
+                            let set_error_message = set_error_message;
                             move |msg| set_error_message.set(Some(msg))
                         }
                     />
@@ -482,7 +479,7 @@ pub fn UsersPage() -> impl IntoView {
                                                         </span>
                                                     </td>
                                                     <td>
-                                                        {user.last_login.as_ref().map(|login| login.clone()).unwrap_or_else(|| "Never".to_string())}
+                                                        {user.last_login.clone().unwrap_or_else(|| "Never".to_string())}
                                                     </td>
                                                     <td class="actions-cell">
                                                         <div class="action-buttons">
@@ -505,7 +502,7 @@ pub fn UsersPage() -> impl IntoView {
                                                                 on:click=move |_| {
                                                                     if web_sys::window()
                                                                         .unwrap()
-                                                                        .confirm_with_message(&format!("Delete user '{}'?", &user.username))
+                                                                        .confirm_with_message(&format!("Delete user '{}'?", user.username))
                                                                         .unwrap_or(false)
                                                                     {
                                                                         delete_user(user_id_delete.clone());

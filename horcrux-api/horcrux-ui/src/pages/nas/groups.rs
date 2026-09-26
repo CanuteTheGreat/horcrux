@@ -96,7 +96,7 @@ pub fn GroupsPage() -> impl IntoView {
                                                 <td>{member_count} " members"</td>
                                                 <td>{group.description.clone().unwrap_or_else(|| "-".to_string())}</td>
                                                 <td class="actions">
-                                                    <a href={format!("/nas/groups/{}", &group.id)} class="btn btn-sm">"Manage"</a>
+                                                    <a href={format!("/nas/groups/{}", group.id)} class="btn btn-sm">"Manage"</a>
                                                     <button
                                                         class="btn btn-sm btn-danger"
                                                         on:click=move |_| delete_group(group_id.clone())

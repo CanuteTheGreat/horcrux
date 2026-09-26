@@ -96,8 +96,7 @@ impl LibvirtManager {
 
         // Get domain info for memory and CPU
         let info = domain.get_info().map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::Other,
+            io::Error::other(
                 format!("Failed to get domain info: {:?}", e),
             )
         })?;
@@ -200,8 +199,7 @@ impl LibvirtManager {
         })?;
 
         let num_domains = conn.num_of_domains().map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::Other,
+            io::Error::other(
                 format!("Failed to get domain count: {:?}", e),
             )
         })?;
@@ -211,8 +209,7 @@ impl LibvirtManager {
         }
 
         let domain_ids = conn.list_domains().map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::Other,
+            io::Error::other(
                 format!("Failed to list domains: {:?}", e),
             )
         })?;
@@ -235,8 +232,7 @@ impl LibvirtManager {
         let mut connection = self.connection.write().await;
         if let Some(mut conn) = connection.take() {
             conn.close().map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::Other,
+                io::Error::other(
                     format!("Failed to close connection: {:?}", e),
                 )
             })?;

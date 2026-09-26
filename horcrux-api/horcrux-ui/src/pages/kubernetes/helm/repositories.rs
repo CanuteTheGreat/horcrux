@@ -88,7 +88,7 @@ pub fn HelmRepositoriesPage() -> impl IntoView {
                     || repo
                         .description
                         .as_ref()
-                        .map_or(false, |d| d.to_lowercase().contains(&search))
+                        .is_some_and(|d| d.to_lowercase().contains(&search))
             })
             .collect::<Vec<_>>()
     };

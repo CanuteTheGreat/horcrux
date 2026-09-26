@@ -2,6 +2,7 @@
 //!
 //! Provides LDAP client functionality for authenticating users and groups
 //! against external LDAP directories.
+#![allow(clippy::manual_strip)]
 
 use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -370,14 +371,14 @@ impl LdapClient {
             }
 
             if let Some(ref mut user) = current {
-                if line.starts_with("uid: ") {
-                    user.uid = line[5..].to_string();
-                } else if line.starts_with("uidNumber: ") {
-                    user.uid_number = line[11..].parse().unwrap_or(0);
-                } else if line.starts_with("gidNumber: ") {
-                    user.gid_number = line[11..].parse().unwrap_or(0);
-                } else if line.starts_with("cn: ") {
-                    user.cn = line[4..].to_string();
+                if let Some(rest) = line.strip_prefix("uid: ") {
+                    user.uid = rest.to_string();
+                } else if let Some(rest) = line.strip_prefix("uidNumber: ") {
+                    user.uid_number = rest.parse().unwrap_or(0);
+                } else if let Some(rest) = line.strip_prefix("gidNumber: ") {
+                    user.gid_number = rest.parse().unwrap_or(0);
+                } else if let Some(rest) = line.strip_prefix("cn: ") {
+                    user.cn = rest.to_string();
                 } else if line.starts_with("homeDirectory: ") {
                     user.home_directory = Some(line[15..].to_string());
                 } else if line.starts_with("loginShell: ") {
@@ -423,10 +424,10 @@ impl LdapClient {
             }
 
             if let Some(ref mut group) = current {
-                if line.starts_with("cn: ") {
-                    group.cn = line[4..].to_string();
-                } else if line.starts_with("gidNumber: ") {
-                    group.gid_number = line[11..].parse().unwrap_or(0);
+                if let Some(rest) = line.strip_prefix("cn: ") {
+                    group.cn = rest.to_string();
+                } else if let Some(rest) = line.strip_prefix("gidNumber: ") {
+                    group.gid_number = rest.parse().unwrap_or(0);
                 } else if line.starts_with("memberUid: ") {
                     group.members.push(line[11..].to_string());
                 } else if line.starts_with("description: ") {

@@ -229,7 +229,7 @@ impl AuditRotator {
         }
 
         // Sort by modification time (oldest first)
-        archives.sort_by(|a, b| a.1.cmp(&b.1));
+        archives.sort_by_key(|a| a.1);
 
         // Remove oldest archives if exceeding limit
         let to_remove = archives.len().saturating_sub(self.config.max_archives);
@@ -289,7 +289,7 @@ impl AuditRotator {
         }
 
         // Sort by creation time (newest first)
-        archives.sort_by(|a, b| b.created_timestamp.cmp(&a.created_timestamp));
+        archives.sort_by_key(|x| std::cmp::Reverse(x.created_timestamp));
 
         Ok(archives)
     }

@@ -1,3 +1,4 @@
+#![allow(clippy::redundant_locals)]
 //! Helm Charts Browsing and Installation Page
 //!
 //! Provides comprehensive Helm chart management including:
@@ -82,7 +83,7 @@ pub fn HelmChartsPage() -> impl IntoView {
 
     // Load releases
     let load_releases = {
-        let cluster_id = cluster_id.clone();
+        let cluster_id = cluster_id;
         move || {
             let cluster_id = cluster_id();
             if cluster_id.is_empty() {
@@ -159,7 +160,7 @@ pub fn HelmChartsPage() -> impl IntoView {
 
     // Install chart
     let install_chart = {
-        let cluster_id = cluster_id.clone();
+        let cluster_id = cluster_id;
         move || {
             let cluster_id = cluster_id();
             let chart = match selected_chart.get() {
@@ -236,7 +237,7 @@ pub fn HelmChartsPage() -> impl IntoView {
 
     // Uninstall release
     let uninstall_release = {
-        let cluster_id = cluster_id.clone();
+        let cluster_id = cluster_id;
         move |release: HelmRelease| {
             let cluster_id = cluster_id();
             spawn_local(async move {

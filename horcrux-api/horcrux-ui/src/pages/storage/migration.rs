@@ -1,3 +1,4 @@
+#![allow(clippy::manual_checked_ops)]
 use crate::api::*;
 use leptos::*;
 use serde::{Deserialize, Serialize};
@@ -982,6 +983,7 @@ pub fn StorageMigrationPage() -> impl IntoView {
 
 // Storage pool info for migration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct StoragePoolInfo {
     pub id: String,
     pub name: String,

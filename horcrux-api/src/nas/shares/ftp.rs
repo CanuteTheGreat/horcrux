@@ -12,10 +12,12 @@ use tokio::process::Command;
 
 /// FTP/FTPS protocol mode
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Default)]
 pub enum FtpProtocol {
     /// Plain FTP (port 21)
     Ftp,
     /// FTP with explicit TLS (FTPES, port 21)
+    #[default]
     FtpExplicitTls,
     /// FTP with implicit TLS (FTPS, port 990)
     FtpImplicitTls,
@@ -23,11 +25,6 @@ pub enum FtpProtocol {
     Sftp,
 }
 
-impl Default for FtpProtocol {
-    fn default() -> Self {
-        Self::FtpExplicitTls
-    }
-}
 
 /// TLS/SSL configuration for FTPS
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,6 +91,7 @@ impl Default for FtpPassiveConfig {
 
 /// Bandwidth limiting configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct FtpBandwidthConfig {
     /// Maximum download rate per user (KB/s, 0 = unlimited)
     pub max_download_rate: u64,
@@ -105,16 +103,6 @@ pub struct FtpBandwidthConfig {
     pub site_upload_rate: u64,
 }
 
-impl Default for FtpBandwidthConfig {
-    fn default() -> Self {
-        Self {
-            max_download_rate: 0,
-            max_upload_rate: 0,
-            site_download_rate: 0,
-            site_upload_rate: 0,
-        }
-    }
-}
 
 /// Virtual user configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -701,7 +689,7 @@ impl FtpManager {
 
         // Hide files
         if let Some(ref pattern) = config.hide_files {
-            conf.push_str(&format!("<Directory /*>\n"));
+            conf.push_str("<Directory /*>\n");
             conf.push_str(&format!("  HideFiles\t\t\t({})\n", pattern));
             conf.push_str("</Directory>\n\n");
         }
@@ -803,7 +791,7 @@ impl FtpManager {
         // User restrictions
         if !config.allowed_users.is_empty() {
             let users = config.allowed_users.join(" ");
-            section.push_str(&format!("  <Limit ALL>\n"));
+            section.push_str("  <Limit ALL>\n");
             section.push_str(&format!("    AllowUser {}\n", users));
             section.push_str("    DenyAll\n");
             section.push_str("  </Limit>\n");

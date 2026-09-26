@@ -3,8 +3,8 @@ pub mod clone_progress;
 pub mod cross_node_clone;
 pub mod incus;
 pub mod lxd;
-///! Virtual machine management module
-///! Handles QEMU/KVM, LXD, and Incus virtual machine lifecycle
+/// Virtual machine management module
+/// Handles QEMU/KVM, LXD, and Incus virtual machine lifecycle
 pub mod qemu;
 pub mod replication;
 pub mod snapshot;
@@ -25,6 +25,12 @@ pub struct VmManager {
     vms: Arc<RwLock<HashMap<String, QemuVm>>>,
     qemu: QemuManager,
     db: Option<Arc<Database>>,
+}
+
+impl Default for VmManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl VmManager {

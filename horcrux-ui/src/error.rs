@@ -1,6 +1,6 @@
-///! User-friendly error handling for the UI
-///!
-///! Provides error message formatting and display components
+//! User-friendly error handling for the UI
+//!
+//! Provides error message formatting and display components
 
 use leptos::*;
 use serde::{Deserialize, Serialize};

@@ -1,8 +1,8 @@
-///! Incus container integration
-///! Incus (LXD fork) can manage both VMs and containers - this module handles containers
-///!
-///! Note: This module is future-ready but not yet integrated into the main API.
-///! It will be activated when Incus container management is added to the platform.
+//! Incus container integration
+//! Incus (LXD fork) can manage both VMs and containers - this module handles containers
+//!
+//! Note: This module is future-ready but not yet integrated into the main API.
+//! It will be activated when Incus container management is added to the platform.
 use super::Container;
 use horcrux_common::{ContainerConfig, ContainerRuntime, ContainerStatus, Result};
 use tokio::process::Command;
@@ -13,6 +13,12 @@ use tracing::{error, info};
 pub struct IncusContainerManager {}
 
 #[allow(dead_code)]
+impl Default for IncusContainerManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IncusContainerManager {
     pub fn new() -> Self {
         Self {}

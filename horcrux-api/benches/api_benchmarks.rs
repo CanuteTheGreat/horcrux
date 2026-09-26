@@ -1,13 +1,13 @@
-///! Performance benchmarks for Horcrux API
-///!
-///! Run with: cargo bench --package horcrux-api
-///!
-///! Benchmarks cover:
-///! - VM lifecycle operations
-///! - Storage operations
-///! - Snapshot creation
-///! - Database queries
-///! - Authentication
+//! Performance benchmarks for Horcrux API
+//!
+//! Run with: cargo bench --package horcrux-api
+//!
+//! Benchmarks cover:
+//! - VM lifecycle operations
+//! - Storage operations
+//! - Snapshot creation
+//! - Database queries
+//! - Authentication
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use horcrux_common::*;
 use std::time::Duration;
@@ -98,11 +98,9 @@ fn benchmark_rbac_path_matching(c: &mut Criterion) {
             &(pattern, test_path),
             |b, (pattern, test_path)| {
                 b.iter(|| {
-                    let matches = if pattern.ends_with("/**") {
-                        let prefix = &pattern[..pattern.len() - 3];
+                    let matches = if let Some(prefix) = pattern.strip_suffix("/**") {
                         test_path.starts_with(prefix)
-                    } else if pattern.ends_with("/*") {
-                        let prefix = &pattern[..pattern.len() - 2];
+                    } else if let Some(prefix) = pattern.strip_suffix("/*") {
                         if !test_path.starts_with(prefix) {
                             false
                         } else {

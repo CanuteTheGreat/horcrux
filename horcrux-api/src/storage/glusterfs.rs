@@ -60,6 +60,12 @@ pub struct GlusterFsVolumeInfo {
     pub bricks: Vec<String>,
 }
 
+impl Default for GlusterFsManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GlusterFsManager {
     pub fn new() -> Self {
         Self {}
@@ -108,7 +114,7 @@ impl GlusterFsManager {
 
         // Mount using glusterfs FUSE client
         let output = AsyncCommand::new("mount")
-            .args(&[
+            .args([
                 "-t",
                 "glusterfs",
                 "-o",
@@ -177,7 +183,7 @@ impl GlusterFsManager {
     /// Get GlusterFS volume information
     pub async fn get_volume_info(&self, server: &str, volume: &str) -> Result<GlusterFsVolumeInfo> {
         let output = AsyncCommand::new("gluster")
-            .args(&["--remote-host", server, "volume", "info", volume])
+            .args(["--remote-host", server, "volume", "info", volume])
             .output()
             .await
             .map_err(|e| {
@@ -261,7 +267,7 @@ impl GlusterFsManager {
 
         // Create qcow2 image
         let output = AsyncCommand::new("qemu-img")
-            .args(&[
+            .args([
                 "create",
                 "-f",
                 "qcow2",
@@ -302,7 +308,7 @@ impl GlusterFsManager {
 
         // Use qcow2 internal snapshots
         let output = AsyncCommand::new("qemu-img")
-            .args(&["snapshot", "-c", snapshot_name, volume_path])
+            .args(["snapshot", "-c", snapshot_name, volume_path])
             .output()
             .await
             .map_err(|e| {
@@ -323,7 +329,7 @@ impl GlusterFsManager {
     /// List GlusterFS volumes on server
     pub async fn list_volumes(server: &str) -> Result<Vec<String>> {
         let output = AsyncCommand::new("gluster")
-            .args(&["--remote-host", server, "volume", "list"])
+            .args(["--remote-host", server, "volume", "list"])
             .output()
             .await
             .map_err(|e| horcrux_common::Error::System(format!("Failed to list volumes: {}", e)))?;

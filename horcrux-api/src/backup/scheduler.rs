@@ -1,5 +1,5 @@
-///! Backup job scheduler
-///! Handles cron-like scheduling of backup jobs
+//! Backup job scheduler
+//! Handles cron-like scheduling of backup jobs
 use super::BackupJob;
 use horcrux_common::Result;
 use tracing::info;

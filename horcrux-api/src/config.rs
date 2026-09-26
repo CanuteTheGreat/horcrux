@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 /// Main configuration struct for Horcrux
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct HorcruxConfig {
     /// Server configuration
     pub server: ServerConfig,
@@ -114,19 +115,6 @@ pub struct CniConfig {
     pub enabled: bool,
 }
 
-impl Default for HorcruxConfig {
-    fn default() -> Self {
-        Self {
-            server: ServerConfig::default(),
-            paths: PathsConfig::default(),
-            database: DatabaseConfig::default(),
-            tls: TlsConfig::default(),
-            qemu: QemuConfig::default(),
-            logging: LoggingConfig::default(),
-            cni: CniConfig::default(),
-        }
-    }
-}
 
 impl Default for ServerConfig {
     fn default() -> Self {

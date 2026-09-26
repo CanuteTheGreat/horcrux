@@ -1,3 +1,4 @@
+#![allow(clippy::redundant_locals)]
 //! Service Management Page
 //!
 //! Provides comprehensive service management interface including:
@@ -56,8 +57,8 @@ pub fn ServicesPage() -> impl IntoView {
 
     // Load services
     let load_services = {
-        let cluster_id = cluster_id.clone();
-        let namespace = namespace.clone();
+        let cluster_id = cluster_id;
+        let namespace = namespace;
         move || {
             let cluster_id = cluster_id();
             let namespace = namespace();
@@ -121,8 +122,8 @@ pub fn ServicesPage() -> impl IntoView {
 
     // Create service
     let create_service = {
-        let cluster_id = cluster_id.clone();
-        let namespace = namespace.clone();
+        let cluster_id = cluster_id;
+        let namespace = namespace;
         move || {
             let cluster_id = cluster_id();
             let namespace = namespace();
@@ -173,8 +174,8 @@ pub fn ServicesPage() -> impl IntoView {
 
     // Delete service
     let delete_service = {
-        let cluster_id = cluster_id.clone();
-        let namespace = namespace.clone();
+        let cluster_id = cluster_id;
+        let namespace = namespace;
         move |service_name: String| {
             let cluster_id = cluster_id();
             let namespace = namespace();

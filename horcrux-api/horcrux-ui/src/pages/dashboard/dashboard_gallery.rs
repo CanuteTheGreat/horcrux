@@ -100,7 +100,7 @@ pub fn DashboardGalleryPage() -> impl IntoView {
                     || dashboard
                         .description
                         .as_ref()
-                        .map_or(false, |d| d.to_lowercase().contains(&query))
+                        .is_some_and(|d| d.to_lowercase().contains(&query))
                     || dashboard
                         .tags
                         .iter()
@@ -114,10 +114,10 @@ pub fn DashboardGalleryPage() -> impl IntoView {
 
         // Sort dashboards
         match sort.as_str() {
-            "popular" => filtered.sort_by(|a, b| b.usage_count.cmp(&a.usage_count)),
+            "popular" => filtered.sort_by_key(|x| std::cmp::Reverse(x.usage_count)),
             "recent" => filtered.sort_by(|a, b| b.updated_at.cmp(&a.updated_at)),
             "name" => filtered.sort_by(|a, b| a.name.cmp(&b.name)),
-            "widgets" => filtered.sort_by(|a, b| b.widget_count.cmp(&a.widget_count)),
+            "widgets" => filtered.sort_by_key(|x| std::cmp::Reverse(x.widget_count)),
             _ => {}
         }
 

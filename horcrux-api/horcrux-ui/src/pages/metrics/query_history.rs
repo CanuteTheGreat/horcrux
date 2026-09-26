@@ -105,10 +105,7 @@ pub fn QueryHistoryPage() -> impl IntoView {
         spawn_local(async move {
             let _ = toggle_query_favorite(entry_id).await;
             // Reload history
-            match get_query_history(time_range.get()).await {
-                Ok(hist) => set_history.set(hist),
-                Err(_) => {}
-            }
+            if let Ok(hist) = get_query_history(time_range.get()).await { set_history.set(hist) }
         });
     };
 
@@ -140,10 +137,7 @@ pub fn QueryHistoryPage() -> impl IntoView {
                 set_template_query.set(String::new());
 
                 // Reload templates
-                match get_query_templates().await {
-                    Ok(tmpl) => set_templates.set(tmpl),
-                    Err(_) => {}
-                }
+                if let Ok(tmpl) = get_query_templates().await { set_templates.set(tmpl) }
                 true
             }
             Err(_) => false,
@@ -201,10 +195,7 @@ pub fn QueryHistoryPage() -> impl IntoView {
                                             let range = event_target_value(&ev);
                                             set_time_range.set(range.clone());
                                             spawn_local(async move {
-                                                match get_query_history(range).await {
-                                                    Ok(hist) => set_history.set(hist),
-                                                    Err(_) => {}
-                                                }
+                                                if let Ok(hist) = get_query_history(range).await { set_history.set(hist) }
                                             });
                                         }
                                     >

@@ -38,6 +38,12 @@ pub struct GpuManager {
     devices: Arc<RwLock<HashMap<String, GpuDevice>>>,
 }
 
+impl Default for GpuManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GpuManager {
     pub fn new() -> Self {
         Self {

@@ -1,3 +1,4 @@
+#![allow(clippy::type_complexity)]
 //! Kubeconfig storage and management
 //!
 //! Handles secure storage of kubeconfig credentials using Vault (when enabled)

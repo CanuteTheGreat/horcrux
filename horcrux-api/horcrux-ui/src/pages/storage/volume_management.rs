@@ -22,10 +22,7 @@ pub fn VolumeManagementPage() -> impl IntoView {
             set_loading.set(true);
 
             // Load pools for filtering
-            match get_storage_pools().await {
-                Ok(pool_list) => set_pools.set(pool_list),
-                Err(_) => {}
-            }
+            if let Ok(pool_list) = get_storage_pools().await { set_pools.set(pool_list) }
 
             // Load volumes
             match get_volumes(filters.get()).await {
@@ -55,15 +52,15 @@ pub fn VolumeManagementPage() -> impl IntoView {
                 let pool_match = f
                     .pool_id
                     .as_ref()
-                    .map_or(true, |p| p.is_empty() || &v.pool_id == p);
+                    .is_none_or(|p| p.is_empty() || &v.pool_id == p);
                 let type_match = f
                     .volume_type
                     .as_ref()
-                    .map_or(true, |t| t.is_empty() || &v.volume_type == t);
+                    .is_none_or(|t| t.is_empty() || &v.volume_type == t);
                 let status_match = f
                     .status
                     .as_ref()
-                    .map_or(true, |s| s.is_empty() || &v.status == s);
+                    .is_none_or(|s| s.is_empty() || &v.status == s);
                 let attached_match = !f.attached_only || v.attached_to.is_some();
 
                 search_match && pool_match && type_match && status_match && attached_match

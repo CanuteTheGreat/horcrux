@@ -9,8 +9,8 @@ pub mod migration;
 pub mod nfs;
 pub mod s3;
 pub mod thin_provision;
-///! Storage backend management
-///! Supports ZFS, Ceph, LVM, iSCSI, directory-based, GlusterFS, BtrFS, and S3 storage
+/// Storage backend management
+/// Supports ZFS, Ceph, LVM, iSCSI, directory-based, GlusterFS, BtrFS, and S3 storage
 pub mod zfs;
 
 use horcrux_common::Result;
@@ -62,6 +62,12 @@ pub struct StorageManager {
     s3: s3::S3Manager,
     // Track next LUN ID for each iSCSI target
     iscsi_lun_counters: Arc<RwLock<HashMap<String, u32>>>,
+}
+
+impl Default for StorageManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StorageManager {

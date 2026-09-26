@@ -245,7 +245,7 @@ pub fn DashboardBuilderPage() -> impl IntoView {
                     || dashboard
                         .description
                         .as_ref()
-                        .map_or(false, |d| d.to_lowercase().contains(&query))
+                        .is_some_and(|d| d.to_lowercase().contains(&query))
                     || dashboard
                         .tags
                         .iter()

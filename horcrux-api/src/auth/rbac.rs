@@ -1,10 +1,16 @@
-///! Role-Based Access Control (RBAC)
+//! Role-Based Access Control (RBAC)
 use horcrux_common::auth::{Privilege, Role, User};
 use horcrux_common::Result;
 use std::collections::HashMap;
 
 /// RBAC manager
 pub struct RbacManager {}
+
+impl Default for RbacManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl RbacManager {
     pub fn new() -> Self {
@@ -51,16 +57,14 @@ impl RbacManager {
         }
 
         // Wildcard match
-        if permission_path.ends_with("/*") {
-            let prefix = &permission_path[..permission_path.len() - 2];
+        if let Some(prefix) = permission_path.strip_suffix("/*") {
             if resource_path.starts_with(prefix) {
                 return true;
             }
         }
 
         // Recursive wildcard
-        if permission_path.ends_with("/**") {
-            let prefix = &permission_path[..permission_path.len() - 3];
+        if let Some(prefix) = permission_path.strip_suffix("/**") {
             if resource_path.starts_with(prefix) {
                 return true;
             }

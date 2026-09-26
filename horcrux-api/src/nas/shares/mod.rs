@@ -99,8 +99,6 @@ impl NasShare {
     }
 }
 
-/// Share access level (re-export for convenience)
-pub use crate::nas::AccessLevel as ShareAccess;
 
 /// Share permissions configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -171,8 +169,6 @@ pub struct AclFlags {
     pub inherit_only: bool,
 }
 
-/// Share protocol (re-export)
-pub use crate::nas::Protocol as ShareProtocol;
 
 // === Protocol-specific configurations ===
 
@@ -308,6 +304,7 @@ pub enum NfsSecurity {
 /// AFP share configuration
 #[cfg(feature = "afp")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct AfpShareConfig {
     /// Enable as Time Machine target
     pub time_machine: bool,
@@ -319,19 +316,6 @@ pub struct AfpShareConfig {
     pub rolist: Vec<String>,
     /// Read-write users
     pub rwlist: Vec<String>,
-}
-
-#[cfg(feature = "afp")]
-impl Default for AfpShareConfig {
-    fn default() -> Self {
-        Self {
-            time_machine: false,
-            time_machine_quota_gb: None,
-            valid_users: Vec::new(),
-            rolist: Vec::new(),
-            rwlist: Vec::new(),
-        }
-    }
 }
 
 /// WebDAV configuration

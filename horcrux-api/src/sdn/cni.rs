@@ -1,6 +1,6 @@
-///! CNI (Container Network Interface) implementation
-///! Provides Kubernetes-style networking for containers
-///! Implements CNI spec version 1.0.0
+//! CNI (Container Network Interface) implementation
+//! Provides Kubernetes-style networking for containers
+//! Implements CNI spec version 1.0.0
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -241,7 +241,7 @@ impl CniManager {
 
         self.attachments
             .entry(container_id.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(attachment);
 
         tracing::info!(

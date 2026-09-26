@@ -1,7 +1,7 @@
 use std::io;
 use tracing_appender::{non_blocking, rolling};
-///! Logging configuration module
-///! Provides structured logging configuration with multiple outputs
+/// Logging configuration module
+/// Provides structured logging configuration with multiple outputs
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// Logging configuration

@@ -120,6 +120,7 @@ pub enum AlertSource {
 
 /// NAS metrics
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct NasMetrics {
     /// Total shares
     pub total_shares: u32,
@@ -151,26 +152,6 @@ pub struct NasMetrics {
     pub replication_tasks: u32,
 }
 
-impl Default for NasMetrics {
-    fn default() -> Self {
-        Self {
-            total_shares: 0,
-            active_shares: 0,
-            total_users: 0,
-            active_connections: 0,
-            smb_connections: 0,
-            nfs_clients: 0,
-            afp_connections: 0,
-            iscsi_sessions: 0,
-            total_storage_bytes: 0,
-            used_storage_bytes: 0,
-            bytes_read: 0,
-            bytes_written: 0,
-            snapshot_count: 0,
-            replication_tasks: 0,
-        }
-    }
-}
 
 /// Get overall NAS health
 pub async fn get_nas_health() -> Result<NasHealth> {
@@ -558,7 +539,7 @@ impl MonitoringManager {
         };
 
         ServiceHealth {
-            service: service.clone(),
+            service: *service,
             status,
             running,
             response_time_ms: Some(response_time),

@@ -55,6 +55,12 @@ pub struct ConsoleManager {
     ws_proxy: Arc<websocket::WebSocketProxy>,
 }
 
+impl Default for ConsoleManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConsoleManager {
     pub fn new() -> Self {
         Self {

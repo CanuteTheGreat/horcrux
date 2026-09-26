@@ -8,6 +8,7 @@ use leptos::*;
 
 /// Console access types
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum ConsoleType {
     VNC,
     SPICE,
@@ -179,7 +180,7 @@ fn NoVncConsole(url: Option<String>) -> impl IntoView {
                         id="console-frame"
                         class="console-iframe"
                         src=format!("/novnc/vnc.html?host=localhost&port=8006&path=api/vms/{}/vnc&autoconnect=true&resize=scale",
-                            url.split('/').last().unwrap_or(""))
+                            url.split('/').next_back().unwrap_or(""))
                         allowfullscreen=true
                     />
                 }.into_view(),

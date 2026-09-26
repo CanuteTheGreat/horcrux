@@ -1,5 +1,5 @@
-///! Container metrics collection via cgroups
-///! Supports both cgroups v1 and v2
+//! Container metrics collection via cgroups
+//! Supports both cgroups v1 and v2
 use std::collections::HashMap;
 use std::fs;
 use std::io;
@@ -220,10 +220,10 @@ pub fn read_container_blkio_stats(container_id: &str) -> io::Result<(u64, u64)> 
         for line in content.lines() {
             let parts: Vec<&str> = line.split_whitespace().collect();
             for part in parts.iter().skip(1) {
-                if part.starts_with("rbytes=") {
-                    read_bytes += part[7..].parse::<u64>().unwrap_or(0);
-                } else if part.starts_with("wbytes=") {
-                    write_bytes += part[7..].parse::<u64>().unwrap_or(0);
+                if let Some(stripped) = part.strip_prefix("rbytes=") {
+                    read_bytes += stripped.parse::<u64>().unwrap_or(0);
+                } else if let Some(stripped) = part.strip_prefix("wbytes=") {
+                    write_bytes += stripped.parse::<u64>().unwrap_or(0);
                 }
             }
         }
@@ -377,8 +377,7 @@ async fn get_docker_container_stats_via_api(container_id: &str) -> io::Result<Co
 
     // Connect to Docker API
     let docker = Docker::connect_with_local_defaults().map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::Other,
+        io::Error::other(
             format!("Docker API unavailable: {}", e),
         )
     })?;
@@ -392,7 +391,7 @@ async fn get_docker_container_stats_via_api(container_id: &str) -> io::Result<Co
 
     if let Some(stats_result) = stats_stream.next().await {
         let stats = stats_result.map_err(|e| {
-            io::Error::new(io::ErrorKind::Other, format!("Failed to get stats: {}", e))
+            io::Error::other(format!("Failed to get stats: {}", e))
         })?;
 
         // Parse CPU stats
@@ -491,8 +490,7 @@ async fn list_containers_via_docker_api() -> io::Result<Vec<String>> {
     use bollard::Docker;
 
     let docker = Docker::connect_with_local_defaults().map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::Other,
+        io::Error::other(
             format!("Docker API unavailable: {}", e),
         )
     })?;
@@ -503,8 +501,7 @@ async fn list_containers_via_docker_api() -> io::Result<Vec<String>> {
     });
 
     let containers = docker.list_containers(options).await.map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::Other,
+        io::Error::other(
             format!("Failed to list containers: {}", e),
         )
     })?;
@@ -522,8 +519,7 @@ mod tests {
     fn test_detect_cgroups_version() {
         // This test will pass on any Linux system with cgroups
         let result = detect_cgroups_version();
-        if result.is_ok() {
-            let version = result.unwrap();
+        if let Ok(version) = result {
             assert!(version == 1 || version == 2);
         }
     }

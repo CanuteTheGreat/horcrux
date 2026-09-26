@@ -1,10 +1,11 @@
-///! Automatic Snapshot Scheduling
-///!
-///! Provides cron-like scheduling for automated VM snapshots:
-///! - Scheduled snapshot creation (hourly, daily, weekly, monthly)
-///! - Retention policies (keep last N snapshots)
-///! - Background task execution
-///! - Failure handling and retry logic
+#![allow(clippy::type_complexity)]
+//! Automatic Snapshot Scheduling
+//!
+//! Provides cron-like scheduling for automated VM snapshots:
+//! - Scheduled snapshot creation (hourly, daily, weekly, monthly)
+//! - Retention policies (keep last N snapshots)
+//! - Background task execution
+//! - Failure handling and retry logic
 use super::snapshot::{VmSnapshot, VmSnapshotManager};
 use chrono::Datelike;
 use horcrux_common::{Result, VmConfig};
@@ -45,7 +46,7 @@ impl ScheduleFrequency {
     /// Calculate next run time from given timestamp
     pub fn next_run_after(&self, timestamp: i64) -> i64 {
         let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp, 0)
-            .unwrap_or_else(|| chrono::Utc::now());
+            .unwrap_or_else(chrono::Utc::now);
 
         let next = match self {
             ScheduleFrequency::Hourly => dt + chrono::Duration::hours(1),
@@ -238,7 +239,7 @@ impl SnapshotScheduler {
         snapshots.retain(|s| s.name.starts_with(schedule_name));
 
         // Sort by creation time (newest first)
-        snapshots.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        snapshots.sort_by_key(|x| std::cmp::Reverse(x.created_at));
 
         // Delete snapshots beyond retention count
         if snapshots.len() > retention_count as usize {

@@ -1,3 +1,4 @@
+#![allow(clippy::redundant_locals)]
 //! Deployment Management Page
 //!
 //! Provides comprehensive deployment management interface including:
@@ -30,8 +31,8 @@ pub fn DeploymentsPage() -> impl IntoView {
 
     // Load deployments
     let load_deployments = {
-        let cluster_id = cluster_id.clone();
-        let namespace = namespace.clone();
+        let cluster_id = cluster_id;
+        let namespace = namespace;
         move || {
             let cluster_id = cluster_id();
             let namespace = namespace();
@@ -91,8 +92,8 @@ pub fn DeploymentsPage() -> impl IntoView {
 
     // Scale deployment
     let scale_deployment = {
-        let cluster_id = cluster_id.clone();
-        let namespace = namespace.clone();
+        let cluster_id = cluster_id;
+        let namespace = namespace;
         move |deployment_name: String, replicas: u32| {
             let cluster_id = cluster_id();
             let namespace = namespace();
@@ -118,8 +119,8 @@ pub fn DeploymentsPage() -> impl IntoView {
 
     // Restart deployment
     let restart_deployment = {
-        let cluster_id = cluster_id.clone();
-        let namespace = namespace.clone();
+        let cluster_id = cluster_id;
+        let namespace = namespace;
         move |deployment_name: String| {
             let cluster_id = cluster_id();
             let namespace = namespace();
@@ -139,8 +140,8 @@ pub fn DeploymentsPage() -> impl IntoView {
 
     // Delete deployment
     let delete_deployment = {
-        let cluster_id = cluster_id.clone();
-        let namespace = namespace.clone();
+        let cluster_id = cluster_id;
+        let namespace = namespace;
         move |deployment_name: String| {
             let cluster_id = cluster_id();
             let namespace = namespace();

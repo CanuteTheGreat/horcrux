@@ -713,7 +713,7 @@ impl KerberosManager {
                         service_principal: parts.last().unwrap_or(&"").to_string(),
                         valid_starting: format!(
                             "{} {}",
-                            parts.get(0).unwrap_or(&""),
+                            parts.first().unwrap_or(&""),
                             parts.get(1).unwrap_or(&"")
                         ),
                         expires: format!(

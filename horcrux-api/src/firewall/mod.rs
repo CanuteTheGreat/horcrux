@@ -1,5 +1,5 @@
-///! Firewall management module
-///! Provides distributed firewall with datacenter, node, VM, and container level rules
+//! Firewall management module
+//! Provides distributed firewall with datacenter, node, VM, and container level rules
 mod nftables;
 mod security_groups;
 
@@ -79,6 +79,12 @@ pub struct FirewallManager {
     container_rules: Arc<RwLock<HashMap<String, Vec<FirewallRule>>>>,
     security_groups: Arc<RwLock<HashMap<String, SecurityGroup>>>,
     nftables: nftables::NftablesManager,
+}
+
+impl Default for FirewallManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FirewallManager {

@@ -1,5 +1,5 @@
-///! WebSocket client for real-time updates
-///! Provides live VM status, metrics, and event notifications
+//! WebSocket client for real-time updates
+//! Provides live VM status, metrics, and event notifications
 
 use leptos::*;
 use serde::{Deserialize, Serialize};

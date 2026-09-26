@@ -1,6 +1,6 @@
-///! Password hashing and verification using Argon2
-///!
-///! Provides secure password hashing with Argon2id
+//! Password hashing and verification using Argon2
+//!
+//! Provides secure password hashing with Argon2id
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,

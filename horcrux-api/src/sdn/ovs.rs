@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-///! Open vSwitch (OVS) Implementation
-///!
-///! Provides advanced software-defined networking with OpenFlow support.
-///! OVS is a production-grade multilayer virtual switch.
+/// Open vSwitch (OVS) Implementation
+///
+/// Provides advanced software-defined networking with OpenFlow support.
+/// OVS is a production-grade multilayer virtual switch.
 use std::process::Command;
 
 /// OVS bridge configuration
@@ -116,7 +116,7 @@ impl OvsManager {
             };
 
             let output = Command::new("ovs-vsctl")
-                .args(&["set-fail-mode", &config.name, mode_str])
+                .args(["set-fail-mode", &config.name, mode_str])
                 .output()
                 .map_err(|e| format!("Failed to set fail mode: {}", e))?;
 
@@ -134,7 +134,7 @@ impl OvsManager {
             let protocols_arg = format!("protocols={}", protocols);
 
             let output = Command::new("ovs-vsctl")
-                .args(&["set", "bridge", &config.name, &protocols_arg])
+                .args(["set", "bridge", &config.name, &protocols_arg])
                 .output()
                 .map_err(|e| format!("Failed to set protocols: {}", e))?;
 
@@ -149,7 +149,7 @@ impl OvsManager {
         // Set controller
         if let Some(controller) = &config.controller {
             let output = Command::new("ovs-vsctl")
-                .args(&["set-controller", &config.name, controller])
+                .args(["set-controller", &config.name, controller])
                 .output()
                 .map_err(|e| format!("Failed to set controller: {}", e))?;
 
@@ -167,7 +167,7 @@ impl OvsManager {
     /// Delete an OVS bridge
     pub fn delete_bridge(bridge_name: &str) -> Result<(), String> {
         let output = Command::new("ovs-vsctl")
-            .args(&["del-br", bridge_name])
+            .args(["del-br", bridge_name])
             .output()
             .map_err(|e| format!("Failed to delete OVS bridge: {}", e))?;
 
@@ -184,16 +184,16 @@ impl OvsManager {
     /// Add a port to an OVS bridge
     pub fn add_port(bridge_name: &str, port: &OvsPort) -> Result<(), String> {
         let mut cmd = Command::new("ovs-vsctl");
-        cmd.args(&["add-port", bridge_name, &port.name]);
+        cmd.args(["add-port", bridge_name, &port.name]);
 
         // Set port type
         match &port.port_type {
             PortType::Internal => {
-                cmd.args(&["--", "set", "interface", &port.name, "type=internal"]);
+                cmd.args(["--", "set", "interface", &port.name, "type=internal"]);
             }
             PortType::Patch => {
                 if let Some(peer) = port.options.get("peer") {
-                    cmd.args(&[
+                    cmd.args([
                         "--",
                         "set",
                         "interface",
@@ -231,7 +231,7 @@ impl OvsManager {
             }
             PortType::Gre => {
                 if let Some(remote_ip) = port.options.get("remote_ip") {
-                    cmd.args(&[
+                    cmd.args([
                         "--",
                         "set",
                         "interface",
@@ -245,7 +245,7 @@ impl OvsManager {
             }
             PortType::Geneve => {
                 if let Some(remote_ip) = port.options.get("remote_ip") {
-                    cmd.args(&[
+                    cmd.args([
                         "--",
                         "set",
                         "interface",
@@ -289,7 +289,7 @@ impl OvsManager {
     /// Remove a port from an OVS bridge
     pub fn delete_port(bridge_name: &str, port_name: &str) -> Result<(), String> {
         let output = Command::new("ovs-vsctl")
-            .args(&["del-port", bridge_name, port_name])
+            .args(["del-port", bridge_name, port_name])
             .output()
             .map_err(|e| format!("Failed to delete port: {}", e))?;
 
@@ -310,7 +310,7 @@ impl OvsManager {
         }
 
         let output = Command::new("ovs-vsctl")
-            .args(&["set", "port", port_name, &format!("tag={}", vlan)])
+            .args(["set", "port", port_name, &format!("tag={}", vlan)])
             .output()
             .map_err(|e| format!("Failed to set VLAN tag: {}", e))?;
 
@@ -334,7 +334,7 @@ impl OvsManager {
         let trunks_arg = format!("trunks=[{}]", trunks_str.join(","));
 
         let output = Command::new("ovs-vsctl")
-            .args(&["set", "port", port_name, &trunks_arg])
+            .args(["set", "port", port_name, &trunks_arg])
             .output()
             .map_err(|e| format!("Failed to set trunk VLANs: {}", e))?;
 
@@ -374,7 +374,7 @@ impl OvsManager {
     /// List ports on a bridge
     pub fn list_ports(bridge_name: &str) -> Result<Vec<String>, String> {
         let output = Command::new("ovs-vsctl")
-            .args(&["list-ports", bridge_name])
+            .args(["list-ports", bridge_name])
             .output()
             .map_err(|e| format!("Failed to list ports: {}", e))?;
 
@@ -409,7 +409,7 @@ impl OvsManager {
         }
 
         let output = Command::new("ovs-ofctl")
-            .args(&["add-flow", bridge_name, &flow_str])
+            .args(["add-flow", bridge_name, &flow_str])
             .output()
             .map_err(|e| format!("Failed to add flow: {}", e))?;
 
@@ -426,7 +426,7 @@ impl OvsManager {
     /// Delete all flows from a bridge
     pub fn delete_flows(bridge_name: &str) -> Result<(), String> {
         let output = Command::new("ovs-ofctl")
-            .args(&["del-flows", bridge_name])
+            .args(["del-flows", bridge_name])
             .output()
             .map_err(|e| format!("Failed to delete flows: {}", e))?;
 
@@ -443,7 +443,7 @@ impl OvsManager {
     /// Show flows on a bridge
     pub fn show_flows(bridge_name: &str) -> Result<String, String> {
         let output = Command::new("ovs-ofctl")
-            .args(&["dump-flows", bridge_name])
+            .args(["dump-flows", bridge_name])
             .output()
             .map_err(|e| format!("Failed to show flows: {}", e))?;
 
@@ -460,7 +460,7 @@ impl OvsManager {
     /// Get bridge information
     pub fn get_bridge_info(bridge_name: &str) -> Result<BridgeInfo, String> {
         let output = Command::new("ovs-vsctl")
-            .args(&["show", bridge_name])
+            .args(["show", bridge_name])
             .output()
             .map_err(|e| format!("Failed to get bridge info: {}", e))?;
 

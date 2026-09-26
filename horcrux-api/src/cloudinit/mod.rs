@@ -1,5 +1,5 @@
-///! Cloud-init integration for automated VM provisioning
-///! Generates cloud-init ISO images with user-data and meta-data
+//! Cloud-init integration for automated VM provisioning
+//! Generates cloud-init ISO images with user-data and meta-data
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -111,7 +111,7 @@ impl CloudInitManager {
             user_data.push_str("users:\n");
             user_data.push_str("  - name: ");
             user_data.push_str(&user.name);
-            user_data.push_str("\n");
+            user_data.push('\n');
 
             if user.sudo {
                 user_data.push_str("    sudo: ALL=(ALL) NOPASSWD:ALL\n");

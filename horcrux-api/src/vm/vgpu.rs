@@ -65,6 +65,12 @@ pub struct VGpuDevice {
 pub struct VGpuManager {}
 
 #[allow(dead_code)]
+impl Default for VGpuManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VGpuManager {
     pub fn new() -> Self {
         Self {}
@@ -95,7 +101,7 @@ impl VGpuManager {
     /// List NVIDIA vGPU devices
     async fn list_nvidia_devices(&self) -> Result<Vec<VGpuDevice>> {
         let output = AsyncCommand::new("lspci")
-            .args(&["-nn", "-d", "10de:"])
+            .args(["-nn", "-d", "10de:"])
             .output()
             .await
             .map_err(|e| {
@@ -130,7 +136,7 @@ impl VGpuManager {
     async fn get_nvidia_vgpu_profiles(&self, pci_id: &str) -> Result<Vec<VGpuProfile>> {
         // Check if nvidia-smi is available
         let output = AsyncCommand::new("nvidia-smi")
-            .args(&["vgpu", "-i", pci_id, "-q"])
+            .args(["vgpu", "-i", pci_id, "-q"])
             .output()
             .await;
 
@@ -177,7 +183,7 @@ impl VGpuManager {
     /// List AMD MxGPU devices
     async fn list_amd_devices(&self) -> Result<Vec<VGpuDevice>> {
         let output = AsyncCommand::new("lspci")
-            .args(&["-nn", "-d", "1002:"])
+            .args(["-nn", "-d", "1002:"])
             .output()
             .await
             .map_err(|e| {
@@ -208,7 +214,7 @@ impl VGpuManager {
     /// List Intel GVT-g devices
     async fn list_intel_devices(&self) -> Result<Vec<VGpuDevice>> {
         let output = AsyncCommand::new("lspci")
-            .args(&["-nn", "-d", "8086:"])
+            .args(["-nn", "-d", "8086:"])
             .output()
             .await
             .map_err(|e| {

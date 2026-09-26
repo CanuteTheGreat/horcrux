@@ -1,6 +1,6 @@
 pub mod ldap;
 pub mod oidc;
-///! Authentication and authorization module
+/// Authentication and authorization module
 pub mod pam;
 pub mod password;
 pub mod rbac;
@@ -23,6 +23,12 @@ pub struct AuthManager {
     ldap: ldap::LdapAuthenticator,
     session_manager: session::SessionManager,
     rbac: rbac::RbacManager,
+}
+
+impl Default for AuthManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AuthManager {

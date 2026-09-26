@@ -1,3 +1,4 @@
+#![allow(clippy::redundant_locals)]
 //! Pod Management Page
 //!
 //! Provides comprehensive pod management interface including:
@@ -30,8 +31,8 @@ pub fn PodsPage() -> impl IntoView {
 
     // Load pods
     let load_pods = {
-        let cluster_id = cluster_id.clone();
-        let namespace = namespace.clone();
+        let cluster_id = cluster_id;
+        let namespace = namespace;
         move || {
             let cluster_id = cluster_id();
             let namespace = namespace();
@@ -94,8 +95,8 @@ pub fn PodsPage() -> impl IntoView {
 
     // Delete pod action
     let delete_pod = {
-        let cluster_id = cluster_id.clone();
-        let namespace = namespace.clone();
+        let cluster_id = cluster_id;
+        let namespace = namespace;
         move |pod_name: String| {
             let cluster_id = cluster_id();
             let namespace = namespace();
@@ -111,8 +112,8 @@ pub fn PodsPage() -> impl IntoView {
 
     // View pod logs
     let view_logs = {
-        let cluster_id = cluster_id.clone();
-        let namespace = namespace.clone();
+        let cluster_id = cluster_id;
+        let namespace = namespace;
         move |pod: KubernetesPod, container: Option<String>| {
             let cluster_id = cluster_id();
             let namespace = namespace();

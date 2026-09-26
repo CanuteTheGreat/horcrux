@@ -5,6 +5,7 @@ use wasm_bindgen::JsCast;
 
 // WebAuthnChallenge is the only type not in api.rs
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct WebAuthnChallenge {
     pub challenge: String,
     pub rp_id: String,
@@ -148,7 +149,7 @@ pub fn MfaManagementPage() -> impl IntoView {
     let revoke_device = move || {
         if let Some(device) = device_to_revoke.get() {
             spawn_local(async move {
-                if let Ok(_) = revoke_trusted_device(device.id).await {
+                if revoke_trusted_device(device.id).await.is_ok() {
                     set_show_revoke_device.set(false);
                     set_device_to_revoke.set(None);
 
@@ -164,7 +165,7 @@ pub fn MfaManagementPage() -> impl IntoView {
     // Disable MFA method
     let disable_mfa_method = move |method_id: String| {
         spawn_local(async move {
-            if let Ok(_) = disable_mfa(method_id, disable_mfa_code.get()).await {
+            if disable_mfa(method_id, disable_mfa_code.get()).await.is_ok() {
                 set_show_disable_mfa.set(false);
                 set_disable_mfa_code.set(String::new());
 
@@ -179,7 +180,7 @@ pub fn MfaManagementPage() -> impl IntoView {
     // Set method as primary
     let set_primary_method = move |method_id: String| {
         spawn_local(async move {
-            if let Ok(_) = set_primary_mfa_method(method_id).await {
+            if set_primary_mfa_method(method_id).await.is_ok() {
                 // Reload MFA status
                 if let Ok(status) = get_mfa_status().await {
                     set_mfa_status.set(Some(status));
@@ -473,7 +474,7 @@ pub fn MfaManagementPage() -> impl IntoView {
                             {enforcement_policy.get().map(|policy| view! {
                                 <MfaPolicyEditor policy=policy on_save=move |updated_policy| {
                                     spawn_local(async move {
-                                        if let Ok(_) = update_mfa_enforcement_policy(updated_policy).await {
+                                        if update_mfa_enforcement_policy(updated_policy).await.is_ok() {
                                             if let Ok(policy) = get_mfa_enforcement_policy().await {
                                                 set_enforcement_policy.set(Some(policy));
                                             }

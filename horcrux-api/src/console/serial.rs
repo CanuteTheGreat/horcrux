@@ -58,7 +58,7 @@ impl SerialManager {
         let pty_path = self
             .get_serial_pty(vm_id)
             .await
-            .unwrap_or_else(|_| format!("/dev/pts/0")); // Fallback
+            .unwrap_or_else(|_| "/dev/pts/0".to_string()); // Fallback
 
         let config = SerialConfig {
             vm_id: vm_id.to_string(),

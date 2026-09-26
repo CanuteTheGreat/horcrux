@@ -111,10 +111,7 @@ pub fn NotificationsPage() -> impl IntoView {
             }
         }
 
-        match get_webhook_configs().await {
-            Ok(webhooks) => set_webhook_configs.set(webhooks),
-            Err(_) => {}
-        }
+        if let Ok(webhooks) = get_webhook_configs().await { set_webhook_configs.set(webhooks) }
 
         set_loading.set(false);
     });

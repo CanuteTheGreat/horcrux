@@ -11,6 +11,12 @@ use tracing::{error, info};
 /// Ceph RBD storage manager
 pub struct CephManager {}
 
+impl Default for CephManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CephManager {
     pub fn new() -> Self {
         Self {}

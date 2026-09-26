@@ -11,6 +11,12 @@ use tracing::{error, info};
 /// Directory storage manager
 pub struct DirectoryManager {}
 
+impl Default for DirectoryManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DirectoryManager {
     pub fn new() -> Self {
         Self {}

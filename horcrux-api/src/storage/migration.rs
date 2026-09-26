@@ -153,6 +153,7 @@ impl StorageMigrationManager {
     }
 
     /// Start a storage migration
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_migration(
         &self,
         volume_name: String,

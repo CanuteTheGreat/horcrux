@@ -1,3 +1,4 @@
+#![allow(clippy::redundant_locals)]
 use crate::api::*;
 use leptos::*;
 
@@ -17,7 +18,7 @@ pub fn PromQLBuilderPage() -> impl IntoView {
 
     // Validate query - local validation since API doesn't have this endpoint yet
     let validate_query_local = {
-        let set_query_validation = set_query_validation.clone();
+        let set_query_validation = set_query_validation;
         move |query: &str| {
             if query.is_empty() {
                 set_query_validation.set(None);
@@ -55,7 +56,7 @@ pub fn PromQLBuilderPage() -> impl IntoView {
 
     // Rebuild query from components - defined early for use in other closures
     let rebuild_query = {
-        let validate_query_local = validate_query_local.clone();
+        let validate_query_local = validate_query_local;
         move || {
             let components = query_components.get();
             if components.is_empty() {

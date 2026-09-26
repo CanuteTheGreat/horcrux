@@ -1,5 +1,5 @@
-///! Network Policy Enforcement
-///! Provides Kubernetes-style network policies for traffic filtering
+//! Network Policy Enforcement
+//! Provides Kubernetes-style network policies for traffic filtering
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -26,6 +26,7 @@ pub enum PolicyType {
 
 /// Label selector for pod matching
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct LabelSelector {
     pub match_labels: HashMap<String, String>,
     pub match_expressions: Vec<LabelExpression>,
@@ -78,6 +79,7 @@ pub struct NetworkPolicyPort {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum Protocol {
     TCP,
     UDP,
@@ -91,6 +93,12 @@ pub struct NetworkPolicyManager {
     pod_policies: HashMap<String, Vec<String>>,
     // Mapping from namespace to policies
     namespace_policies: HashMap<String, Vec<String>>,
+}
+
+impl Default for NetworkPolicyManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NetworkPolicyManager {
@@ -114,7 +122,7 @@ impl NetworkPolicyManager {
         // Add to namespace index
         self.namespace_policies
             .entry(policy.namespace.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(policy.id.clone());
 
         self.policies.insert(policy.id.clone(), policy);
@@ -425,14 +433,6 @@ impl NetworkPolicyManager {
     }
 }
 
-impl Default for LabelSelector {
-    fn default() -> Self {
-        Self {
-            match_labels: HashMap::new(),
-            match_expressions: Vec::new(),
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

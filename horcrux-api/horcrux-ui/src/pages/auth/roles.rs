@@ -1,3 +1,4 @@
+#![allow(clippy::redundant_locals)]
 //! Role and Permission Management
 //!
 //! Complete RBAC management interface for roles and permissions.
@@ -136,8 +137,8 @@ pub fn RolesPage() -> impl IntoView {
                 view! {
                     <CreateRoleForm
                         on_success={
-                            let set_show_create_form = set_show_create_form.clone();
-                            let set_roles = set_roles.clone();
+                            let set_show_create_form = set_show_create_form;
+                            let set_roles = set_roles;
                             move || {
                                 set_show_create_form.set(false);
                                 // Refresh roles list
@@ -149,7 +150,7 @@ pub fn RolesPage() -> impl IntoView {
                             }
                         }
                         on_error={
-                            let set_error_message = set_error_message.clone();
+                            let set_error_message = set_error_message;
                             move |msg| set_error_message.set(Some(msg))
                         }
                     />
@@ -225,7 +226,7 @@ pub fn RolesPage() -> impl IntoView {
                                                                 on:click=move |_| {
                                                                     if web_sys::window()
                                                                         .unwrap()
-                                                                        .confirm_with_message(&format!("Delete role '{}'? This action cannot be undone.", &role_name_delete))
+                                                                        .confirm_with_message(&format!("Delete role '{}'? This action cannot be undone.", role_name_delete))
                                                                         .unwrap_or(false)
                                                                     {
                                                                         delete_role(role_name_delete.clone());
@@ -292,12 +293,12 @@ pub fn RolesPage() -> impl IntoView {
                 <RoleEditModal
                     role=role
                     on_close={
-                        let set_selected_role = set_selected_role.clone();
+                        let set_selected_role = set_selected_role;
                         move || set_selected_role.set(None)
                     }
                     on_save={
-                        let set_selected_role = set_selected_role.clone();
-                        let set_roles = set_roles.clone();
+                        let set_selected_role = set_selected_role;
+                        let set_roles = set_roles;
                         move || {
                             set_selected_role.set(None);
                             // Refresh roles list
@@ -309,7 +310,7 @@ pub fn RolesPage() -> impl IntoView {
                         }
                     }
                     on_error={
-                        let set_error_message = set_error_message.clone();
+                        let set_error_message = set_error_message;
                         move |msg| set_error_message.set(Some(msg))
                     }
                 />

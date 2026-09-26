@@ -1,6 +1,6 @@
-///! Standardized error handling for API responses
-///!
-///! Provides consistent JSON error responses across all API endpoints
+//! Standardized error handling for API responses
+//!
+//! Provides consistent JSON error responses across all API endpoints
 use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},

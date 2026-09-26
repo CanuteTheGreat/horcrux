@@ -20,6 +20,12 @@ pub struct ArchitectureManager {
     emulation_matrix: HashMap<(String, String), EmulationSupport>,
 }
 
+impl Default for ArchitectureManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ArchitectureManager {
     pub fn new() -> Self {
         let mut mgr = ArchitectureManager {

@@ -1,4 +1,4 @@
-///! nftables integration for firewall rules
+//! nftables integration for firewall rules
 use super::{FirewallAction, FirewallRule};
 use horcrux_common::Result;
 use std::collections::HashMap;

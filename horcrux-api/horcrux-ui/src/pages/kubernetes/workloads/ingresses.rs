@@ -1,3 +1,4 @@
+#![allow(clippy::redundant_locals)]
 //! Ingress Management Page
 //!
 //! Provides comprehensive ingress management interface including:
@@ -62,8 +63,8 @@ pub fn IngressesPage() -> impl IntoView {
 
     // Load ingresses
     let load_ingresses = {
-        let cluster_id = cluster_id.clone();
-        let namespace = namespace.clone();
+        let cluster_id = cluster_id;
+        let namespace = namespace;
         move || {
             let cluster_id = cluster_id();
             let namespace = namespace();
@@ -128,8 +129,8 @@ pub fn IngressesPage() -> impl IntoView {
 
     // Create ingress
     let create_ingress = {
-        let cluster_id = cluster_id.clone();
-        let namespace = namespace.clone();
+        let cluster_id = cluster_id;
+        let namespace = namespace;
         move || {
             let cluster_id = cluster_id();
             let namespace = namespace();
@@ -194,8 +195,8 @@ pub fn IngressesPage() -> impl IntoView {
 
     // Delete ingress
     let delete_ingress = {
-        let cluster_id = cluster_id.clone();
-        let namespace = namespace.clone();
+        let cluster_id = cluster_id;
+        let namespace = namespace;
         move |ingress_name: String| {
             let cluster_id = cluster_id();
             let namespace = namespace();

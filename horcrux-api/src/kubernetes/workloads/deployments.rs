@@ -152,7 +152,7 @@ pub async fn rollback_deployment(
         })
         .collect();
 
-    rs_with_revision.sort_by(|a, b| b.0.cmp(&a.0));
+    rs_with_revision.sort_by_key(|x| std::cmp::Reverse(x.0));
 
     // Find target revision
     let target_rs = if let Some(rev) = revision {

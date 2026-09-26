@@ -75,6 +75,12 @@ pub struct VaultManager {
     token_cache: Arc<RwLock<Option<String>>>,
 }
 
+impl Default for VaultManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VaultManager {
     pub fn new() -> Self {
         Self {
@@ -274,8 +280,7 @@ impl VaultManager {
         let token = self.token_cache.read().await;
         token
             .as_ref()
-            .ok_or_else(|| horcrux_common::Error::System("Not authenticated to Vault".to_string()))
-            .map(|t| t.clone())
+            .ok_or_else(|| horcrux_common::Error::System("Not authenticated to Vault".to_string())).cloned()
     }
 
     /// Read secret from Vault
@@ -322,8 +327,7 @@ impl VaultManager {
             .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
             .collect();
 
-        let metadata = if let Some(meta) = body["data"]["metadata"].as_object() {
-            Some(SecretMetadata {
+        let metadata = body["data"]["metadata"].as_object().map(|meta| SecretMetadata {
                 created_time: meta
                     .get("created_time")
                     .and_then(|v| v.as_str())
@@ -338,10 +342,7 @@ impl VaultManager {
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
                 version: meta.get("version").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            })
-        } else {
-            None
-        };
+            });
 
         Ok(Secret { data, metadata })
     }

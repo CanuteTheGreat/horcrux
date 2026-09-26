@@ -15,6 +15,12 @@ use tracing::info;
 /// CIFS/SMB storage manager
 pub struct CifsManager {}
 
+impl Default for CifsManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CifsManager {
     pub fn new() -> Self {
         Self {}
@@ -143,7 +149,7 @@ impl CifsManager {
 
         // Create qcow2 image
         let output = AsyncCommand::new("qemu-img")
-            .args(&[
+            .args([
                 "create",
                 "-f",
                 "qcow2",

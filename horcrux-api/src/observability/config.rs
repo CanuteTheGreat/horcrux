@@ -30,6 +30,7 @@ impl ConfigLoader {
     }
 
     /// Create example configuration file
+    #[allow(clippy::field_reassign_with_default)]
     pub fn create_example_config() -> OtelConfig {
         let mut config = OtelConfig::default();
         config.enabled = true;

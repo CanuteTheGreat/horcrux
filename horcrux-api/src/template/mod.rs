@@ -1,5 +1,5 @@
-///! VM template management
-///! Provides template creation, cloning (full and linked/COW)
+//! VM template management
+//! Provides template creation, cloning (full and linked/COW)
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -68,6 +68,12 @@ pub struct TemplateManager {
     lvm_backend: Option<Arc<crate::storage::lvm::LvmManager>>,
 }
 
+impl Default for TemplateManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TemplateManager {
     pub fn new() -> Self {
         Self {
@@ -92,6 +98,7 @@ impl TemplateManager {
     }
 
     /// Convert a VM to a template
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_template(
         &self,
         vm_id: &str,

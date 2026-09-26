@@ -85,7 +85,7 @@ pub fn SecurityEventsPage() -> impl IntoView {
     // Update event status
     let update_event_status = move |event_id: String, new_status: String| {
         spawn_local(async move {
-            if let Ok(_) = update_security_event_status(event_id, new_status).await {
+            if update_security_event_status(event_id, new_status).await.is_ok() {
                 // Reload events
                 if let Ok(events) = get_security_events(time_range.get()).await {
                     set_security_events.set(events);
@@ -98,7 +98,7 @@ pub fn SecurityEventsPage() -> impl IntoView {
     let block_ip = move || {
         let ip = ip_to_block.get();
         spawn_local(async move {
-            if let Ok(_) = block_ip_address(ip).await {
+            if block_ip_address(ip).await.is_ok() {
                 set_show_block_ip_modal.set(false);
                 set_ip_to_block.set(String::new());
                 // Reload stats

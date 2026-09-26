@@ -1,5 +1,5 @@
-///! LXD container integration
-///! LXD can manage both VMs and containers - this module handles containers
+//! LXD container integration
+//! LXD can manage both VMs and containers - this module handles containers
 use super::Container;
 use horcrux_common::{ContainerConfig, ContainerRuntime, ContainerStatus, Result};
 use tokio::process::Command;
@@ -7,6 +7,12 @@ use tracing::{error, info};
 
 /// LXD container manager
 pub struct LxdContainerManager {}
+
+impl Default for LxdContainerManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl LxdContainerManager {
     pub fn new() -> Self {

@@ -1,6 +1,6 @@
-///! Live VM Migration
-///!
-///! Enables moving running VMs between cluster nodes with minimal downtime
+//! Live VM Migration
+//!
+//! Enables moving running VMs between cluster nodes with minimal downtime
 pub mod block_migration;
 pub mod health_check;
 pub mod qemu_monitor;
@@ -85,6 +85,12 @@ pub struct MigrationManager {
     health_checker: Arc<health_check::HealthChecker>,
     health_check_enabled: Arc<RwLock<bool>>,
     health_reports: Arc<RwLock<HashMap<String, health_check::HealthCheckReport>>>,
+}
+
+impl Default for MigrationManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MigrationManager {

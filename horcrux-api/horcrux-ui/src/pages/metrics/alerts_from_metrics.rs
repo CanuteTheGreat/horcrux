@@ -6,12 +6,12 @@ use leptos::*;
 
 fn parse_duration_to_seconds(duration: &str) -> u32 {
     let duration = duration.trim();
-    if duration.ends_with('s') {
-        duration[..duration.len() - 1].parse().unwrap_or(60)
-    } else if duration.ends_with('m') {
-        duration[..duration.len() - 1].parse::<u32>().unwrap_or(1) * 60
-    } else if duration.ends_with('h') {
-        duration[..duration.len() - 1].parse::<u32>().unwrap_or(1) * 3600
+    if let Some(stripped) = duration.strip_suffix('s') {
+        stripped.parse().unwrap_or(60)
+    } else if let Some(stripped) = duration.strip_suffix('m') {
+        stripped.parse::<u32>().unwrap_or(1) * 60
+    } else if let Some(stripped) = duration.strip_suffix('h') {
+        stripped.parse::<u32>().unwrap_or(1) * 3600
     } else {
         duration.parse().unwrap_or(60)
     }
@@ -186,10 +186,7 @@ pub fn AlertsFromMetricsPage() -> impl IntoView {
                 set_edit_rule_id.set(None);
 
                 // Reload rules
-                match get_alert_rules().await {
-                    Ok(rules) => set_alert_rules.set(rules),
-                    Err(_) => {}
-                }
+                if let Ok(rules) = get_alert_rules().await { set_alert_rules.set(rules) }
                 true
             }
             Err(_) => false,
@@ -213,12 +210,9 @@ pub fn AlertsFromMetricsPage() -> impl IntoView {
     // Delete alert rule
     let delete_rule = move |rule_id: String| {
         spawn_local(async move {
-            if let Ok(_) = delete_alert_rule(rule_id).await {
+            if delete_alert_rule(rule_id).await.is_ok() {
                 // Reload rules
-                match get_alert_rules().await {
-                    Ok(rules) => set_alert_rules.set(rules),
-                    Err(_) => {}
-                }
+                if let Ok(rules) = get_alert_rules().await { set_alert_rules.set(rules) }
             }
         });
     };
@@ -226,12 +220,9 @@ pub fn AlertsFromMetricsPage() -> impl IntoView {
     // Toggle alert rule
     let toggle_rule = move |rule_id: String, enabled: bool| {
         spawn_local(async move {
-            if let Ok(_) = toggle_alert_rule(rule_id, enabled).await {
+            if toggle_alert_rule(rule_id, enabled).await.is_ok() {
                 // Reload rules
-                match get_alert_rules().await {
-                    Ok(rules) => set_alert_rules.set(rules),
-                    Err(_) => {}
-                }
+                if let Ok(rules) = get_alert_rules().await { set_alert_rules.set(rules) }
             }
         });
     };

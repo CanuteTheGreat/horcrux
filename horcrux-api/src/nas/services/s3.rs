@@ -1488,15 +1488,17 @@ impl S3GatewayManager {
         description: Option<&str>,
     ) -> Result<S3AccessKey> {
         // Generate random access key and secret
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-
-        let access_key: String = (0..20)
-            .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
-            .collect();
-        let secret_key: String = (0..40)
-            .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
-            .collect();
+        let (access_key, secret_key) = {
+            use rand::Rng;
+            let mut rng = rand::thread_rng();
+            let access_key: String = (0..20)
+                .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
+                .collect();
+            let secret_key: String = (0..40)
+                .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
+                .collect();
+            (access_key, secret_key)
+        };
 
         let mut args = vec![
             "admin".to_string(),
@@ -1918,7 +1920,7 @@ impl S3GatewayManager {
         // TLS
         if let Some(ref tls) = self.config.tls {
             if tls.enabled {
-                content.push_str(&format!("MINIO_CERTS_DIR=/etc/minio/certs\n"));
+                content.push_str("MINIO_CERTS_DIR=/etc/minio/certs\n");
             }
         }
 
@@ -1926,7 +1928,7 @@ impl S3GatewayManager {
         if self.config.metrics {
             content.push_str("MINIO_PROMETHEUS_AUTH_TYPE=public\n");
             if let Some(ref token) = self.config.metrics_auth_token {
-                content.push_str(&format!("MINIO_PROMETHEUS_AUTH_TYPE=jwt\n"));
+                content.push_str("MINIO_PROMETHEUS_AUTH_TYPE=jwt\n");
                 content.push_str(&format!("MINIO_PROMETHEUS_JWT_SECRET={}\n", token));
             }
         }
@@ -1939,7 +1941,7 @@ impl S3GatewayManager {
         // Audit
         if self.config.audit_log {
             if let Some(ref webhook) = self.config.audit_webhook {
-                content.push_str(&format!("MINIO_AUDIT_WEBHOOK_ENABLE_target1=on\n"));
+                content.push_str("MINIO_AUDIT_WEBHOOK_ENABLE_target1=on\n");
                 content.push_str(&format!(
                     "MINIO_AUDIT_WEBHOOK_ENDPOINT_target1={}\n",
                     webhook
@@ -1949,7 +1951,7 @@ impl S3GatewayManager {
 
         // Cache
         if let Some(ref cache) = self.config.cache {
-            content.push_str(&format!("MINIO_CACHE=on\n"));
+            content.push_str("MINIO_CACHE=on\n");
             content.push_str(&format!("MINIO_CACHE_DRIVES={}\n", cache.drives.join(",")));
             content.push_str(&format!("MINIO_CACHE_EXPIRY={}\n", cache.expiry));
             content.push_str(&format!("MINIO_CACHE_QUOTA={}\n", cache.quota));

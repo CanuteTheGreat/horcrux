@@ -61,33 +61,25 @@ pub fn S3Page() -> impl IntoView {
             }
 
             // Fetch buckets
-            match reqwasm::http::Request::get("/api/nas/s3-gateway/buckets")
+            if let Ok(resp) = reqwasm::http::Request::get("/api/nas/s3-gateway/buckets")
                 .send()
-                .await
-            {
-                Ok(resp) => {
-                    if resp.ok() {
-                        if let Ok(data) = resp.json::<Vec<S3Bucket>>().await {
-                            set_buckets.set(data);
-                        }
+                .await {
+                if resp.ok() {
+                    if let Ok(data) = resp.json::<Vec<S3Bucket>>().await {
+                        set_buckets.set(data);
                     }
                 }
-                Err(_) => {}
             }
 
             // Fetch access keys
-            match reqwasm::http::Request::get("/api/nas/s3-gateway/keys")
+            if let Ok(resp) = reqwasm::http::Request::get("/api/nas/s3-gateway/keys")
                 .send()
-                .await
-            {
-                Ok(resp) => {
-                    if resp.ok() {
-                        if let Ok(data) = resp.json::<Vec<S3AccessKey>>().await {
-                            set_access_keys.set(data);
-                        }
+                .await {
+                if resp.ok() {
+                    if let Ok(data) = resp.json::<Vec<S3AccessKey>>().await {
+                        set_access_keys.set(data);
                     }
                 }
-                Err(_) => {}
             }
 
             set_loading.set(false);
@@ -253,7 +245,7 @@ pub fn S3Page() -> impl IntoView {
                                                         <td>{if bucket.versioning { "Enabled" } else { "Disabled" }}</td>
                                                         <td>{&bucket.created_at}</td>
                                                         <td class="actions">
-                                                            <a href={format!("/nas/s3/buckets/{}", &bucket.name)} class="btn btn-sm">"Browse"</a>
+                                                            <a href={format!("/nas/s3/buckets/{}", bucket.name)} class="btn btn-sm">"Browse"</a>
                                                             <button
                                                                 class="btn btn-sm btn-danger"
                                                                 on:click=move |_| delete_bucket(bucket_name.clone())

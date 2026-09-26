@@ -69,7 +69,7 @@ pub fn HaDashboard() -> impl IntoView {
     // Auto-refresh every 30 seconds
     use leptos::set_interval;
     set_interval(
-        move || load_dashboard_data(),
+        load_dashboard_data,
         std::time::Duration::from_secs(30),
     );
 

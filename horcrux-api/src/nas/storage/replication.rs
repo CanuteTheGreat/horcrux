@@ -2,6 +2,7 @@
 //!
 //! Handles ZFS send/receive, Btrfs send/receive, and rsync-based replication.
 //! Supports multiple transports, bandwidth limiting, and progress tracking.
+#![allow(clippy::manual_checked_ops)]
 
 use crate::nas::storage::{
     ReplicationDirection, ReplicationTask, ReplicationTransport, RetentionPolicy, StorageType,
@@ -2215,14 +2216,13 @@ pub async fn apply_retention(dataset: &str, policy: &RetentionPolicy) -> Result<
             _ => policy.yearly.map(|_| true).unwrap_or(false),
         };
 
-        if !should_keep {
-            if super::snapshots::delete_snapshot(&snapshot.full_name)
+        if !should_keep
+            && super::snapshots::delete_snapshot(&snapshot.full_name)
                 .await
                 .is_ok()
             {
                 deleted += 1;
             }
-        }
     }
 
     Ok(deleted)

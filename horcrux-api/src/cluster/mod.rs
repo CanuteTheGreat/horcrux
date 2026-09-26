@@ -1,8 +1,8 @@
 pub mod affinity;
 pub mod arch;
 pub mod balancer;
-///! Clustering support module
-///! Provides multi-node cluster management, HA, and VM migration using Corosync
+/// Clustering support module
+/// Provides multi-node cluster management, HA, and VM migration using Corosync
 pub mod corosync;
 pub mod membership;
 pub mod migration;
@@ -33,6 +33,12 @@ pub struct ClusterManager {
 }
 
 #[allow(dead_code)]
+impl Default for ClusterManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ClusterManager {
     pub fn new() -> Self {
         Self {

@@ -1,11 +1,13 @@
-///! Cluster node representation
+//! Cluster node representation
 use serde::{Deserialize, Serialize};
 
 /// CPU architecture
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum Architecture {
     #[serde(rename = "x86_64")]
+    #[default]
     X86_64, // amd64
     #[serde(rename = "aarch64")]
     Aarch64, // arm64
@@ -16,11 +18,6 @@ pub enum Architecture {
     Unknown,
 }
 
-impl Default for Architecture {
-    fn default() -> Self {
-        Architecture::X86_64
-    }
-}
 
 impl From<&horcrux_common::VmArchitecture> for Architecture {
     fn from(vm_arch: &horcrux_common::VmArchitecture) -> Self {

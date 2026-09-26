@@ -1,4 +1,4 @@
-///! Database migrations
+//! Database migrations
 use horcrux_common::Result;
 use sqlx::SqlitePool;
 

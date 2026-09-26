@@ -465,6 +465,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn test_different_strategies() {
         let mut policy = BalancingPolicy::default();
 

@@ -159,7 +159,7 @@ impl CloneJob {
     /// Get elapsed time in seconds
     pub fn elapsed_seconds(&self) -> Option<i64> {
         self.started_at.map(|start| {
-            let end = self.completed_at.unwrap_or_else(|| Utc::now());
+            let end = self.completed_at.unwrap_or_else(Utc::now);
             (end - start).num_seconds()
         })
     }
@@ -181,6 +181,12 @@ impl CloneJob {
 pub struct CloneJobManager {
     jobs: Arc<RwLock<HashMap<String, CloneJob>>>,
     _max_completed_jobs: usize, // Reserved for configurable job history limit
+}
+
+impl Default for CloneJobManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CloneJobManager {

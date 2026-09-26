@@ -10,7 +10,7 @@ impl BridgeManager {
     /// Create a Linux bridge
     pub fn create(name: &str) -> Result<(), String> {
         let output = Command::new("ip")
-            .args(&["link", "add", "name", name, "type", "bridge"])
+            .args(["link", "add", "name", name, "type", "bridge"])
             .output()
             .map_err(|e| format!("Failed to create bridge: {}", e))?;
 
@@ -33,7 +33,7 @@ impl BridgeManager {
         let _ = Self::set_state(name, false);
 
         let output = Command::new("ip")
-            .args(&["link", "delete", name])
+            .args(["link", "delete", name])
             .output()
             .map_err(|e| format!("Failed to delete bridge: {}", e))?;
 
@@ -52,7 +52,7 @@ impl BridgeManager {
         let state = if up { "up" } else { "down" };
 
         let output = Command::new("ip")
-            .args(&["link", "set", "dev", name, state])
+            .args(["link", "set", "dev", name, state])
             .output()
             .map_err(|e| format!("Failed to set bridge state: {}", e))?;
 
@@ -69,7 +69,7 @@ impl BridgeManager {
     /// Add interface to bridge
     pub fn add_port(bridge: &str, interface: &str) -> Result<(), String> {
         let output = Command::new("ip")
-            .args(&["link", "set", "dev", interface, "master", bridge])
+            .args(["link", "set", "dev", interface, "master", bridge])
             .output()
             .map_err(|e| format!("Failed to add port to bridge: {}", e))?;
 
@@ -86,7 +86,7 @@ impl BridgeManager {
     /// Remove interface from bridge
     pub fn remove_port(interface: &str) -> Result<(), String> {
         let output = Command::new("ip")
-            .args(&["link", "set", "dev", interface, "nomaster"])
+            .args(["link", "set", "dev", interface, "nomaster"])
             .output()
             .map_err(|e| format!("Failed to remove port from bridge: {}", e))?;
 
@@ -103,7 +103,7 @@ impl BridgeManager {
     /// Enable VLAN filtering on bridge
     pub fn enable_vlan_filtering(bridge: &str) -> Result<(), String> {
         let output = Command::new("ip")
-            .args(&[
+            .args([
                 "link",
                 "set",
                 "dev",
@@ -129,7 +129,7 @@ impl BridgeManager {
     /// List all bridges
     pub fn list() -> Result<Vec<String>, String> {
         let output = Command::new("ip")
-            .args(&["link", "show", "type", "bridge"])
+            .args(["link", "show", "type", "bridge"])
             .output()
             .map_err(|e| format!("Failed to list bridges: {}", e))?;
 
@@ -160,7 +160,7 @@ impl BridgeManager {
     /// Get bridge ports
     pub fn get_ports(bridge: &str) -> Result<Vec<String>, String> {
         let output = Command::new("bridge")
-            .args(&["link", "show", "master", bridge])
+            .args(["link", "show", "master", bridge])
             .output()
             .map_err(|e| format!("Failed to get bridge ports: {}", e))?;
 

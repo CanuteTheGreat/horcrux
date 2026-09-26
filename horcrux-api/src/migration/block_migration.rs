@@ -87,6 +87,12 @@ pub struct BlockMigrationManager {
     jobs: Arc<RwLock<HashMap<String, BlockMigrationJob>>>,
 }
 
+impl Default for BlockMigrationManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BlockMigrationManager {
     pub fn new() -> Self {
         Self {

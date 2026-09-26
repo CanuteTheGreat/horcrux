@@ -7,7 +7,7 @@
 
 use horcrux_common::{Result, VmConfig};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::process::Command;
 use tracing::{info, warn};
 
@@ -269,7 +269,7 @@ impl CrossNodeCloneManager {
         &self,
         disk: &horcrux_common::VmDisk,
         config: &CrossNodeCloneConfig,
-        target_path: &PathBuf,
+        target_path: &Path,
         ssh_user: &str,
         ssh_port: u16,
     ) -> Result<()> {
@@ -321,7 +321,7 @@ impl CrossNodeCloneManager {
         &self,
         disk: &horcrux_common::VmDisk,
         config: &CrossNodeCloneConfig,
-        target_path: &PathBuf,
+        target_path: &Path,
         ssh_user: &str,
         ssh_port: u16,
     ) -> Result<()> {
@@ -405,7 +405,7 @@ impl CrossNodeCloneManager {
         &self,
         disk: &horcrux_common::VmDisk,
         config: &CrossNodeCloneConfig,
-        target_path: &PathBuf,
+        target_path: &Path,
         ssh_user: &str,
         ssh_port: u16,
     ) -> Result<()> {
@@ -489,7 +489,7 @@ impl CrossNodeCloneManager {
         &self,
         disk: &horcrux_common::VmDisk,
         config: &CrossNodeCloneConfig,
-        target_path: &PathBuf,
+        target_path: &Path,
         ssh_user: &str,
         ssh_port: u16,
     ) -> Result<()> {
@@ -597,7 +597,7 @@ impl CrossNodeCloneManager {
             let size = self
                 .get_disk_size(&disk.path, source_node)
                 .await
-                .unwrap_or((disk.size_gb as u64) * 1024 * 1024 * 1024);
+                .unwrap_or(disk.size_gb * 1024 * 1024 * 1024);
             total_size += size;
         }
 

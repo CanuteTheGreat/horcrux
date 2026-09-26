@@ -1,6 +1,6 @@
-///! Audit logging system
-///!
-///! Provides comprehensive security audit logs for compliance and security monitoring
+//! Audit logging system
+//!
+//! Provides comprehensive security audit logs for compliance and security monitoring
 pub mod database;
 pub mod middleware;
 pub mod rotation;

@@ -1,5 +1,5 @@
-///! Webhook notification system
-///! Sends HTTP POST requests to configured endpoints when events occur
+//! Webhook notification system
+//! Sends HTTP POST requests to configured endpoints when events occur
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -113,6 +113,12 @@ pub struct WebhookManager {
     webhooks: Arc<RwLock<HashMap<String, WebhookConfig>>>,
     deliveries: Arc<RwLock<Vec<WebhookDelivery>>>,
     client: reqwest::Client,
+}
+
+impl Default for WebhookManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WebhookManager {

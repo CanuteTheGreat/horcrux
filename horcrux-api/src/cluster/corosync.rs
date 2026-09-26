@@ -1,5 +1,5 @@
-///! Corosync integration for cluster management
-///! Corosync provides the cluster communication layer and quorum
+//! Corosync integration for cluster management
+//! Corosync provides the cluster communication layer and quorum
 use super::node::Node;
 use horcrux_common::Result;
 use tokio::process::Command;
@@ -7,6 +7,12 @@ use tracing::{error, info};
 
 /// Corosync manager
 pub struct CorosyncManager {}
+
+impl Default for CorosyncManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl CorosyncManager {
     pub fn new() -> Self {

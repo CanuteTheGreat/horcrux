@@ -28,6 +28,12 @@ pub struct ProviderManager {
     providers: Arc<RwLock<HashMap<String, Provider>>>,
 }
 
+impl Default for ProviderManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProviderManager {
     pub fn new() -> Self {
         Self {
@@ -50,9 +56,7 @@ impl ProviderManager {
     /// List registered providers
     pub async fn list_providers(&self) -> Vec<ProviderInfo> {
         let providers = self.providers.read().await;
-        providers
-            .iter()
-            .map(|(_name, provider)| provider.get_info())
+        providers.values().map(|provider| provider.get_info())
             .collect()
     }
 

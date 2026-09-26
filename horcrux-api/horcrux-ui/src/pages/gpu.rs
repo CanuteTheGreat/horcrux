@@ -179,7 +179,7 @@ pub fn GpuManagement() -> impl IntoView {
                                         </div>
                                         <div class="detail-row">
                                             <span class="label">"Vendor/Device ID:"</span>
-                                            <code>{format!("{}:{}", &gpu.vendor_id, &gpu.device_id)}</code>
+                                            <code>{format!("{}:{}", gpu.vendor_id, gpu.device_id)}</code>
                                         </div>
                                         <div class="detail-row">
                                             <span class="label">"Driver:"</span>

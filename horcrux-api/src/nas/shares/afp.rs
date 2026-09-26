@@ -143,7 +143,7 @@ impl AfpManager {
         let mut config = String::new();
 
         config.push_str(&self.generate_global_section());
-        config.push_str("\n");
+        config.push('\n');
 
         // Time Machine preset
         config.push_str("; Preset for Time Machine volumes\n");

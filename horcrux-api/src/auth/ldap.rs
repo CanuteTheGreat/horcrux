@@ -1,9 +1,9 @@
-///! LDAP authentication integration
-///!
-///! Implements LDAP authentication using:
-///! 1. ldapsearch command-line tool (most compatible)
-///! 2. Direct LDAP bind verification
-///! 3. Group membership checking
+//! LDAP authentication integration
+//!
+//! Implements LDAP authentication using:
+//! 1. ldapsearch command-line tool (most compatible)
+//! 2. Direct LDAP bind verification
+//! 3. Group membership checking
 use horcrux_common::auth::LdapConfig;
 use horcrux_common::Result;
 use std::process::Stdio;
@@ -12,6 +12,12 @@ use tracing::{error, info, warn};
 
 /// LDAP authenticator
 pub struct LdapAuthenticator {}
+
+impl Default for LdapAuthenticator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl LdapAuthenticator {
     pub fn new() -> Self {
@@ -36,7 +42,7 @@ impl LdapAuthenticator {
         }
 
         // Sanitize username for LDAP injection attacks
-        if username.contains(|c: char| matches!(c, '*' | '(' | ')' | '\\' | '\0')) {
+        if username.contains(['*', '(', ')', '\\', '\0']) {
             warn!("Invalid characters in username for LDAP: {}", username);
             return Ok(false);
         }

@@ -22,7 +22,7 @@ pub async fn get_node_metrics(client: &K8sClient) -> K8sResult<Vec<NodeMetrics>>
         .inner()
         .request(request)
         .await
-        .map_err(|e| crate::kubernetes::error::K8sError::KubeError(e))?;
+        .map_err(crate::kubernetes::error::K8sError::KubeError)?;
 
     // Parse the response
     let items = response["items"].as_array().cloned().unwrap_or_default();
@@ -61,7 +61,7 @@ pub async fn get_node_metric(client: &K8sClient, name: &str) -> K8sResult<NodeMe
         .inner()
         .request(request)
         .await
-        .map_err(|e| crate::kubernetes::error::K8sError::KubeError(e))?;
+        .map_err(crate::kubernetes::error::K8sError::KubeError)?;
 
     let usage = &response["usage"];
     let cpu = usage["cpu"].as_str().unwrap_or("0").to_string();
@@ -92,7 +92,7 @@ pub async fn get_pod_metrics(client: &K8sClient, namespace: &str) -> K8sResult<V
         .inner()
         .request(request)
         .await
-        .map_err(|e| crate::kubernetes::error::K8sError::KubeError(e))?;
+        .map_err(crate::kubernetes::error::K8sError::KubeError)?;
 
     let items = response["items"].as_array().cloned().unwrap_or_default();
 
@@ -154,7 +154,7 @@ pub async fn get_pod_metric(
         .inner()
         .request(request)
         .await
-        .map_err(|e| crate::kubernetes::error::K8sError::KubeError(e))?;
+        .map_err(crate::kubernetes::error::K8sError::KubeError)?;
 
     let timestamp = response["timestamp"].as_str().unwrap_or("").to_string();
 
@@ -198,7 +198,7 @@ pub async fn get_all_pod_metrics(client: &K8sClient) -> K8sResult<Vec<PodMetrics
         .inner()
         .request(request)
         .await
-        .map_err(|e| crate::kubernetes::error::K8sError::KubeError(e))?;
+        .map_err(crate::kubernetes::error::K8sError::KubeError)?;
 
     let items = response["items"].as_array().cloned().unwrap_or_default();
 

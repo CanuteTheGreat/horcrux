@@ -82,7 +82,7 @@ impl VxlanManager {
 
         // Bring interface up
         let output = Command::new("ip")
-            .args(&["link", "set", "dev", &vxlan_iface, "up"])
+            .args(["link", "set", "dev", &vxlan_iface, "up"])
             .output()
             .map_err(|e| format!("Failed to bring up VXLAN interface: {}", e))?;
 
@@ -95,7 +95,7 @@ impl VxlanManager {
 
         // Add to bridge
         let output = Command::new("ip")
-            .args(&["link", "set", "dev", &vxlan_iface, "master", &config.bridge])
+            .args(["link", "set", "dev", &vxlan_iface, "master", &config.bridge])
             .output()
             .map_err(|e| format!("Failed to add VXLAN to bridge: {}", e))?;
 
@@ -114,7 +114,7 @@ impl VxlanManager {
         let vxlan_iface = format!("vxlan{}", vni);
 
         let output = Command::new("ip")
-            .args(&["link", "delete", &vxlan_iface])
+            .args(["link", "delete", &vxlan_iface])
             .output()
             .map_err(|e| format!("Failed to delete VXLAN interface: {}", e))?;
 
@@ -134,7 +134,7 @@ impl VxlanManager {
 
         // bridge fdb append 00:00:00:00:00:00 dev vxlan100 dst <remote_ip>
         let output = Command::new("bridge")
-            .args(&[
+            .args([
                 "fdb",
                 "append",
                 "00:00:00:00:00:00",
@@ -161,7 +161,7 @@ impl VxlanManager {
         let remote_str = remote_ip.to_string();
 
         let output = Command::new("bridge")
-            .args(&[
+            .args([
                 "fdb",
                 "delete",
                 "00:00:00:00:00:00",
@@ -186,7 +186,7 @@ impl VxlanManager {
     /// List all VXLAN interfaces
     pub fn list_vxlans() -> Result<Vec<String>, String> {
         let output = Command::new("ip")
-            .args(&["-d", "link", "show", "type", "vxlan"])
+            .args(["-d", "link", "show", "type", "vxlan"])
             .output()
             .map_err(|e| format!("Failed to list VXLANs: {}", e))?;
 
@@ -216,7 +216,7 @@ impl VxlanManager {
         let vxlan_iface = format!("vxlan{}", vni);
 
         let output = Command::new("ip")
-            .args(&["-d", "-j", "link", "show", &vxlan_iface])
+            .args(["-d", "-j", "link", "show", &vxlan_iface])
             .output()
             .map_err(|e| format!("Failed to get VXLAN info: {}", e))?;
 

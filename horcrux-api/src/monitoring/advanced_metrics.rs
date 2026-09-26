@@ -73,6 +73,12 @@ pub struct NumaNode {
 /// Advanced metrics collector
 pub struct AdvancedMetrics {}
 
+impl Default for AdvancedMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AdvancedMetrics {
     pub fn new() -> Self {
         Self {}
@@ -279,7 +285,7 @@ impl AdvancedMetrics {
         // Read CPU list
         let cpulist_path = format!("{}/cpulist", base_path);
         let cpulist = fs::read_to_string(&cpulist_path).await.ok()?;
-        let cpus = self.parse_cpu_list(&cpulist.trim());
+        let cpus = self.parse_cpu_list(cpulist.trim());
 
         Some(NumaNode {
             node_id,

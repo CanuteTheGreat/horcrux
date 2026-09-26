@@ -1,4 +1,4 @@
-///! Docker container integration
+//! Docker container integration
 use super::Container;
 use bollard::container::{ListContainersOptions, StatsOptions};
 use bollard::models::ContainerStateStatusEnum;
@@ -12,6 +12,12 @@ use tracing::{debug, error, info, warn};
 pub struct DockerManager {
     /// Docker API client (optional - falls back to CLI if unavailable)
     docker: Option<Arc<Docker>>,
+}
+
+impl Default for DockerManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DockerManager {

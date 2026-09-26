@@ -15,6 +15,12 @@ use tracing::{error, info};
 /// iSCSI storage manager
 pub struct IscsiManager {}
 
+impl Default for IscsiManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IscsiManager {
     pub fn new() -> Self {
         Self {}
@@ -36,7 +42,7 @@ impl IscsiManager {
         info!("Discovering iSCSI targets on portal: {}", portal);
 
         let output = Command::new("iscsiadm")
-            .args(&["-m", "discovery", "-t", "st", "-p", portal])
+            .args(["-m", "discovery", "-t", "st", "-p", portal])
             .output()
             .await
             .map_err(|e| {
@@ -72,7 +78,7 @@ impl IscsiManager {
 
         // Login to target
         let output = Command::new("iscsiadm")
-            .args(&[
+            .args([
                 "-m",
                 "node",
                 "-T",
@@ -106,7 +112,7 @@ impl IscsiManager {
         info!("Logging out from iSCSI target: {}", target.iqn);
 
         let output = Command::new("iscsiadm")
-            .args(&[
+            .args([
                 "-m",
                 "node",
                 "-T",
@@ -136,7 +142,7 @@ impl IscsiManager {
     /// List active iSCSI sessions
     pub async fn list_sessions(&self) -> Result<Vec<IscsiSession>> {
         let output = Command::new("iscsiadm")
-            .args(&["-m", "session"])
+            .args(["-m", "session"])
             .output()
             .await
             .map_err(|e| {
@@ -151,7 +157,7 @@ impl IscsiManager {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let sessions: Vec<IscsiSession> = stdout
             .lines()
-            .filter_map(|line| IscsiSession::parse(line))
+            .filter_map(IscsiSession::parse)
             .collect();
 
         Ok(sessions)
@@ -206,7 +212,7 @@ impl IscsiManager {
         let file_path = format!("/var/lib/iscsi/{}.img", backstore_name);
 
         let output = Command::new("targetcli")
-            .args(&[
+            .args([
                 "/backstores/fileio",
                 "create",
                 &backstore_name,
@@ -229,7 +235,7 @@ impl IscsiManager {
 
         // Create LUN
         let output = Command::new("targetcli")
-            .args(&[
+            .args([
                 &format!("/iscsi/{}/tpg1/luns", target.iqn),
                 "create",
                 &format!("/backstores/fileio/{}", backstore_name),
@@ -257,7 +263,7 @@ impl IscsiManager {
         info!("Deleting iSCSI volume: {} LUN {}", target.iqn, lun_id);
 
         let output = Command::new("targetcli")
-            .args(&[
+            .args([
                 &format!("/iscsi/{}/tpg1/luns/lun{}", target.iqn, lun_id),
                 "delete",
             ])
@@ -288,7 +294,7 @@ impl IscsiManager {
         info!("Configuring CHAP authentication for target: {}", target.iqn);
 
         let output = Command::new("iscsiadm")
-            .args(&[
+            .args([
                 "-m",
                 "node",
                 "-T",
@@ -314,7 +320,7 @@ impl IscsiManager {
 
         // Set username
         let output = Command::new("iscsiadm")
-            .args(&[
+            .args([
                 "-m",
                 "node",
                 "-T",
@@ -341,7 +347,7 @@ impl IscsiManager {
 
         // Set password
         let output = Command::new("iscsiadm")
-            .args(&[
+            .args([
                 "-m",
                 "node",
                 "-T",

@@ -1,5 +1,5 @@
-///! noVNC WebSocket proxy implementation
-///! Provides WebSocket proxy for VNC connections using Axum WebSocket support
+//! noVNC WebSocket proxy implementation
+//! Provides WebSocket proxy for VNC connections using Axum WebSocket support
 use axum::{
     extract::{
         ws::{Message, WebSocket},

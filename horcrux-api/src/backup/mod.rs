@@ -1,7 +1,7 @@
 pub mod providers;
 mod retention;
-///! Backup and restore system (vzdump equivalent)
-///! Provides VM and container backup with scheduling and retention
+/// Backup and restore system (vzdump equivalent)
+/// Provides VM and container backup with scheduling and retention
 mod scheduler;
 
 use horcrux_common::Result;
@@ -102,6 +102,12 @@ pub struct BackupManager {
     lvm_backend: Option<Arc<crate::storage::lvm::LvmManager>>,
     /// Directory for restore operations
     restore_dir: PathBuf,
+}
+
+impl Default for BackupManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BackupManager {

@@ -1,6 +1,6 @@
-///! Authentication middleware
-///!
-///! Validates JWT tokens or session cookies for API requests
+//! Authentication middleware
+//!
+//! Validates JWT tokens or session cookies for API requests
 use axum::{
     extract::{Request, State},
     http::{HeaderMap, StatusCode},

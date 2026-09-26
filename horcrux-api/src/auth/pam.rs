@@ -1,9 +1,9 @@
-///! PAM (Pluggable Authentication Modules) integration
-///!
-///! Implements system authentication via PAM using multiple methods:
-///! 1. Direct PAM conversation (requires pam-sys crate - not included)
-///! 2. SSH-based verification (using system's SSH with PAM)
-///! 3. Shadow file verification (requires root privileges)
+//! PAM (Pluggable Authentication Modules) integration
+//!
+//! Implements system authentication via PAM using multiple methods:
+//! 1. Direct PAM conversation (requires pam-sys crate - not included)
+//! 2. SSH-based verification (using system's SSH with PAM)
+//! 3. Shadow file verification (requires root privileges)
 use horcrux_common::Result;
 use std::process::Stdio;
 use tokio::process::Command;
@@ -12,6 +12,12 @@ use tracing::{error, info, warn};
 /// PAM authenticator
 pub struct PamAuthenticator {
     service_name: String,
+}
+
+impl Default for PamAuthenticator {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PamAuthenticator {

@@ -1,7 +1,7 @@
-///! VM Cloning functionality
-///!
-///! Provides VM cloning capabilities using snapshots and disk copy operations.
-///! Supports both full clones (independent copy) and linked clones (based on snapshots).
+//! VM Cloning functionality
+//!
+//! Provides VM cloning capabilities using snapshots and disk copy operations.
+//! Supports both full clones (independent copy) and linked clones (based on snapshots).
 use horcrux_common::{Result, VmConfig, VmDisk, VmStatus};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -919,14 +919,14 @@ impl VmCloneManager {
         for (idx, mac) in mac_addresses.iter().enumerate() {
             let iface_name = format!("eth{}", idx);
             yaml.push_str(&format!("  {}:\n", iface_name));
-            yaml.push_str(&format!("    match:\n"));
+            yaml.push_str("    match:\n");
             yaml.push_str(&format!("      macaddress: {}\n", mac));
             yaml.push_str(&format!("    set-name: {}\n", iface_name));
 
             // Configure IP address if provided
             if let Some(ref ips) = network_config.ip_addresses {
                 if let Some(ip) = ips.get(idx) {
-                    yaml.push_str(&format!("    addresses:\n"));
+                    yaml.push_str("    addresses:\n");
                     yaml.push_str(&format!("      - {}/24\n", ip)); // Default /24 netmask
                 }
             }
@@ -934,8 +934,8 @@ impl VmCloneManager {
             // Configure gateway (only on first interface)
             if idx == 0 {
                 if let Some(ref gateway) = network_config.gateway {
-                    yaml.push_str(&format!("    routes:\n"));
-                    yaml.push_str(&format!("      - to: default\n"));
+                    yaml.push_str("    routes:\n");
+                    yaml.push_str("      - to: default\n");
                     yaml.push_str(&format!("        via: {}\n", gateway));
                 }
             }
@@ -943,15 +943,15 @@ impl VmCloneManager {
             // Configure DNS servers (only on first interface)
             if idx == 0 {
                 if let Some(ref dns_servers) = network_config.dns_servers {
-                    yaml.push_str(&format!("    nameservers:\n"));
-                    yaml.push_str(&format!("      addresses:\n"));
+                    yaml.push_str("    nameservers:\n");
+                    yaml.push_str("      addresses:\n");
                     for dns in dns_servers {
                         yaml.push_str(&format!("        - {}\n", dns));
                     }
 
                     // Add domain search if specified
                     if let Some(ref domain) = network_config.domain {
-                        yaml.push_str(&format!("      search:\n"));
+                        yaml.push_str("      search:\n");
                         yaml.push_str(&format!("        - {}\n", domain));
                     }
                 }
@@ -1217,8 +1217,7 @@ mod tests {
 
         let result = manager.clone_vm(&source_vm, options).await;
 
-        if result.is_ok() {
-            let cloned = result.unwrap();
+        if let Ok(cloned) = result {
             assert_eq!(cloned.id, "vm-101");
             assert_eq!(cloned.name, "cloned-vm");
             assert_eq!(cloned.memory, source_vm.memory);
@@ -1248,8 +1247,7 @@ mod tests {
 
         let result = manager.clone_vm(&source_vm, options).await;
 
-        if result.is_ok() {
-            let cloned = result.unwrap();
+        if let Ok(cloned) = result {
             assert!(!cloned.id.is_empty());
             assert_ne!(cloned.id, source_vm.id);
             assert_eq!(cloned.name, "auto-id-clone");
@@ -1278,8 +1276,7 @@ mod tests {
 
         let result = manager.clone_vm(&source_vm, options).await;
 
-        if result.is_ok() {
-            let cloned = result.unwrap();
+        if let Ok(cloned) = result {
             assert_eq!(cloned.memory, 4096, "Memory should be preserved");
             assert_eq!(cloned.cpus, 4, "CPU count should be preserved");
             assert_eq!(cloned.hypervisor, source_vm.hypervisor);
@@ -1308,8 +1305,7 @@ mod tests {
 
         let result = manager.clone_vm(&source_vm, options).await;
 
-        if result.is_ok() {
-            let cloned = result.unwrap();
+        if let Ok(cloned) = result {
             // Cloned VM should always start in Stopped status
             assert_eq!(cloned.status, VmStatus::Stopped);
         }

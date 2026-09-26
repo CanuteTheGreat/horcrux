@@ -28,11 +28,8 @@ pub fn SmartMonitoringPage() -> impl IntoView {
                 }
             }
 
-            match get_smart_alerts().await {
-                Ok(alert_list) => {
-                    set_alerts.set(alert_list);
-                }
-                Err(_) => {}
+            if let Ok(alert_list) = get_smart_alerts().await {
+                set_alerts.set(alert_list);
             }
 
             set_loading.set(false);

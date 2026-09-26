@@ -123,7 +123,7 @@ pub fn SharesPage() -> impl IntoView {
                                                 </td>
                                                 <td>{share.description.unwrap_or_default()}</td>
                                                 <td class="actions">
-                                                    <a href={format!("/nas/shares/{}", &share.id)} class="btn btn-sm">"Edit"</a>
+                                                    <a href={format!("/nas/shares/{}", share.id)} class="btn btn-sm">"Edit"</a>
                                                     <button
                                                         class={if is_enabled { "btn btn-sm btn-warning" } else { "btn btn-sm btn-success" }}
                                                         on:click=move |_| toggle_share(share_id_toggle.clone(), !is_enabled)

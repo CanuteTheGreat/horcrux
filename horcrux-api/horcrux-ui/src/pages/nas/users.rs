@@ -116,7 +116,7 @@ pub fn UsersPage() -> impl IntoView {
                                                     </span>
                                                 </td>
                                                 <td class="actions">
-                                                    <a href={format!("/nas/users/{}", &user.id)} class="btn btn-sm">"Edit"</a>
+                                                    <a href={format!("/nas/users/{}", user.id)} class="btn btn-sm">"Edit"</a>
                                                     <button class="btn btn-sm">"Password"</button>
                                                     <button
                                                         class="btn btn-sm btn-danger"

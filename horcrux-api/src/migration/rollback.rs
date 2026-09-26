@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
-///! Migration Rollback and Recovery
-///!
-///! Provides automatic rollback capabilities when migrations fail,
-///! ensuring VMs are restored to a working state on the source node
+/// Migration Rollback and Recovery
+///
+/// Provides automatic rollback capabilities when migrations fail,
+/// ensuring VMs are restored to a working state on the source node
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -496,6 +496,12 @@ pub struct RollbackSummary {
 /// Rollback manager
 pub struct RollbackManager {
     rollbacks: HashMap<String, RollbackPlan>,
+}
+
+impl Default for RollbackManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RollbackManager {

@@ -1,10 +1,16 @@
-///! Session management
+//! Session management
 use horcrux_common::auth::Session;
 use uuid::Uuid;
 
 /// Session manager
 pub struct SessionManager {
     session_duration: i64, // Session duration in seconds
+}
+
+impl Default for SessionManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SessionManager {

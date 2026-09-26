@@ -64,7 +64,7 @@ pub fn BackupJobsPage() -> impl IntoView {
     // Auto-refresh every 60 seconds
     use leptos::set_interval;
     set_interval(
-        move || load_backup_jobs(),
+        load_backup_jobs,
         std::time::Duration::from_secs(60),
     );
 
@@ -81,7 +81,7 @@ pub fn BackupJobsPage() -> impl IntoView {
                         || job
                             .description
                             .as_ref()
-                            .map_or(false, |d| d.to_lowercase().contains(&query))
+                            .is_some_and(|d| d.to_lowercase().contains(&query))
                 })
                 .collect()
         }

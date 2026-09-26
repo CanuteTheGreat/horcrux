@@ -1,3 +1,4 @@
+#![allow(clippy::redundant_locals)]
 //! Helm Releases Management Page
 //!
 //! Provides comprehensive Helm release management including:
@@ -36,8 +37,8 @@ pub fn HelmReleasesPage() -> impl IntoView {
 
     // Load releases
     let load_releases = {
-        let cluster_id = cluster_id.clone();
-        let namespace = namespace.clone();
+        let cluster_id = cluster_id;
+        let namespace = namespace;
         move || {
             let cluster_id = cluster_id();
             let namespace = namespace();
@@ -113,7 +114,7 @@ pub fn HelmReleasesPage() -> impl IntoView {
 
     // View release values
     let view_values = {
-        let cluster_id = cluster_id.clone();
+        let cluster_id = cluster_id;
         move |release: HelmRelease| {
             let cluster_id = cluster_id();
             set_selected_release.set(Some(release.clone()));
@@ -140,7 +141,7 @@ pub fn HelmReleasesPage() -> impl IntoView {
 
     // View release history
     let view_history = {
-        let cluster_id = cluster_id.clone();
+        let cluster_id = cluster_id;
         move |release: HelmRelease| {
             let cluster_id = cluster_id();
             set_selected_release.set(Some(release.clone()));
@@ -195,7 +196,7 @@ pub fn HelmReleasesPage() -> impl IntoView {
 
     // Upgrade release
     let upgrade_release = {
-        let cluster_id = cluster_id.clone();
+        let cluster_id = cluster_id;
         move || {
             let cluster_id = cluster_id();
             let release = match selected_release.get() {
@@ -258,7 +259,7 @@ pub fn HelmReleasesPage() -> impl IntoView {
 
     // Rollback release
     let rollback_release = {
-        let cluster_id = cluster_id.clone();
+        let cluster_id = cluster_id;
         move |release: HelmRelease, revision: u32| {
             let cluster_id = cluster_id();
             spawn_local(async move {
@@ -285,7 +286,7 @@ pub fn HelmReleasesPage() -> impl IntoView {
 
     // Uninstall release
     let uninstall_release = {
-        let cluster_id = cluster_id.clone();
+        let cluster_id = cluster_id;
         move |release: HelmRelease| {
             let cluster_id = cluster_id();
             spawn_local(async move {

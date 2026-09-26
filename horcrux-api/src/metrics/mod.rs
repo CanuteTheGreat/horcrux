@@ -3,8 +3,8 @@
 
 pub mod container;
 pub mod libvirt;
-///! Real metrics collection module
-///! Provides actual system, VM, and container metrics
+/// Real metrics collection module
+/// Provides actual system, VM, and container metrics
 pub mod system;
 
 // Re-export commonly used functions

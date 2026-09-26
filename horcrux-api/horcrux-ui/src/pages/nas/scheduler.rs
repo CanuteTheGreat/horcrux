@@ -83,18 +83,14 @@ pub fn SchedulerPage() -> impl IntoView {
             }
 
             // Fetch jobs
-            match reqwasm::http::Request::get("/api/nas/scheduler/jobs")
+            if let Ok(resp) = reqwasm::http::Request::get("/api/nas/scheduler/jobs")
                 .send()
-                .await
-            {
-                Ok(resp) => {
-                    if resp.ok() {
-                        if let Ok(data) = resp.json::<Vec<ScheduledJob>>().await {
-                            set_jobs.set(data);
-                        }
+                .await {
+                if resp.ok() {
+                    if let Ok(data) = resp.json::<Vec<ScheduledJob>>().await {
+                        set_jobs.set(data);
                     }
                 }
-                Err(_) => {}
             }
 
             set_loading.set(false);
@@ -105,21 +101,17 @@ pub fn SchedulerPage() -> impl IntoView {
     create_effect(move |_| {
         if let Some(job_id) = selected_job_id.get() {
             spawn_local(async move {
-                match reqwasm::http::Request::get(&format!(
+                if let Ok(resp) = reqwasm::http::Request::get(&format!(
                     "/api/nas/scheduler/jobs/{}/history",
                     job_id
                 ))
                 .send()
-                .await
-                {
-                    Ok(resp) => {
-                        if resp.ok() {
-                            if let Ok(data) = resp.json::<Vec<JobHistory>>().await {
-                                set_history.set(data);
-                            }
+                .await {
+                    if resp.ok() {
+                        if let Ok(data) = resp.json::<Vec<JobHistory>>().await {
+                            set_history.set(data);
                         }
                     }
-                    Err(_) => {}
                 }
             });
         }

@@ -1,5 +1,5 @@
-///! Podman container integration
-///! Podman is a daemonless alternative to Docker
+//! Podman container integration
+//! Podman is a daemonless alternative to Docker
 use super::Container;
 use horcrux_common::{ContainerConfig, ContainerRuntime, ContainerStatus, Result};
 use tokio::process::Command;
@@ -7,6 +7,12 @@ use tracing::{error, info};
 
 /// Podman container manager
 pub struct PodmanManager {}
+
+impl Default for PodmanManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl PodmanManager {
     pub fn new() -> Self {

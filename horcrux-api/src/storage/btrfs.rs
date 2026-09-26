@@ -1,10 +1,10 @@
 use super::StoragePool;
-///! BtrFS storage backend
-///!
-///! Provides BtrFS filesystem support with native snapshots and subvolumes
-///!
-///! Note: This module is complete but not yet fully integrated into the storage manager.
-///! It will be activated when BtrFS backend support is enabled in the platform.
+/// BtrFS storage backend
+///
+/// Provides BtrFS filesystem support with native snapshots and subvolumes
+///
+/// Note: This module is complete but not yet fully integrated into the storage manager.
+/// It will be activated when BtrFS backend support is enabled in the platform.
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -34,6 +34,12 @@ pub struct SubvolumeInfo {
 }
 
 #[allow(dead_code)]
+impl Default for BtrFsManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BtrFsManager {
     pub fn new() -> Self {
         Self {}
@@ -56,7 +62,7 @@ impl BtrFsManager {
     /// Verify path is on BtrFS
     async fn verify_btrfs(&self, path: &str) -> Result<()> {
         let output = AsyncCommand::new("stat")
-            .args(&["-f", "-c", "%T", path])
+            .args(["-f", "-c", "%T", path])
             .output()
             .await
             .map_err(|e| {
@@ -89,7 +95,7 @@ impl BtrFsManager {
         tracing::info!("Creating BtrFS subvolume: {}", subvol_path.display());
 
         let output = AsyncCommand::new("btrfs")
-            .args(&["subvolume", "create", subvol_path.to_str().unwrap()])
+            .args(["subvolume", "create", subvol_path.to_str().unwrap()])
             .output()
             .await
             .map_err(|e| {
@@ -112,7 +118,7 @@ impl BtrFsManager {
         tracing::info!("Deleting BtrFS subvolume: {}", subvol_path);
 
         let output = AsyncCommand::new("btrfs")
-            .args(&["subvolume", "delete", subvol_path])
+            .args(["subvolume", "delete", subvol_path])
             .output()
             .await
             .map_err(|e| {
@@ -147,7 +153,7 @@ impl BtrFsManager {
         tracing::info!("Creating {}GB volume at {}", size_gb, image_path.display());
 
         let output = AsyncCommand::new("qemu-img")
-            .args(&[
+            .args([
                 "create",
                 "-f",
                 "qcow2",
@@ -248,7 +254,7 @@ impl BtrFsManager {
     /// List snapshots for a subvolume
     pub async fn list_snapshots(&self, base_path: &str) -> Result<Vec<BtrFsSnapshot>> {
         let output = AsyncCommand::new("btrfs")
-            .args(&["subvolume", "list", "-s", base_path])
+            .args(["subvolume", "list", "-s", base_path])
             .output()
             .await
             .map_err(|e| {
@@ -297,7 +303,7 @@ impl BtrFsManager {
 
         // Create writable snapshot at target location
         let output = AsyncCommand::new("btrfs")
-            .args(&["subvolume", "snapshot", snapshot_path, target_path])
+            .args(["subvolume", "snapshot", snapshot_path, target_path])
             .output()
             .await
             .map_err(|e| {
@@ -318,7 +324,7 @@ impl BtrFsManager {
     /// Get filesystem usage
     pub async fn get_usage(&self, path: &str) -> Result<(u64, u64)> {
         let output = AsyncCommand::new("btrfs")
-            .args(&["filesystem", "usage", "-b", path])
+            .args(["filesystem", "usage", "-b", path])
             .output()
             .await
             .map_err(|e| horcrux_common::Error::System(format!("Failed to get usage: {}", e)))?;
@@ -359,7 +365,7 @@ impl BtrFsManager {
         tracing::info!("Setting BtrFS compression on {}: {}", path, value);
 
         let output = AsyncCommand::new("btrfs")
-            .args(&["property", "set", path, "compression", &value])
+            .args(["property", "set", path, "compression", &value])
             .output()
             .await
             .map_err(|e| {
@@ -382,7 +388,7 @@ impl BtrFsManager {
         tracing::info!("Defragmenting BtrFS volume: {}", path);
 
         let output = AsyncCommand::new("btrfs")
-            .args(&["filesystem", "defragment", "-r", path])
+            .args(["filesystem", "defragment", "-r", path])
             .output()
             .await
             .map_err(|e| horcrux_common::Error::System(format!("Defragmentation failed: {}", e)))?;

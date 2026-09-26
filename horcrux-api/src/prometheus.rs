@@ -97,6 +97,12 @@ pub struct PrometheusRegistry {
     metrics: Arc<RwLock<HashMap<String, Metric>>>,
 }
 
+impl Default for PrometheusRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PrometheusRegistry {
     pub fn new() -> Self {
         Self {
@@ -153,6 +159,12 @@ impl PrometheusRegistry {
 /// Prometheus metrics manager
 pub struct PrometheusManager {
     registry: PrometheusRegistry,
+}
+
+impl Default for PrometheusManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PrometheusManager {

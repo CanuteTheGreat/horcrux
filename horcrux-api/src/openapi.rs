@@ -1,6 +1,6 @@
-///! OpenAPI/Swagger UI integration
-///!
-///! Provides interactive API documentation at /api/docs
+//! OpenAPI/Swagger UI integration
+//!
+//! Provides interactive API documentation at /api/docs
 use axum::{
     response::{Html, IntoResponse},
     routing::get,

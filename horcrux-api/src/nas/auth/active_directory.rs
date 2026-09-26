@@ -1,3 +1,4 @@
+#![allow(clippy::redundant_pattern_matching)]
 //! Active Directory Integration module
 //!
 //! Manages Active Directory domain join and integration via Samba/Winbind.
@@ -868,7 +869,7 @@ impl ActiveDirectoryManager {
 
         let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
         // Extract the actual username if format is DOMAIN\user
-        let username = name.split('\\').last().unwrap_or(&name);
+        let username = name.split('\\').next_back().unwrap_or(&name);
 
         self.get_user_info(username).await
     }
@@ -886,7 +887,7 @@ impl ActiveDirectoryManager {
         }
 
         let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let groupname = name.split('\\').last().unwrap_or(&name);
+        let groupname = name.split('\\').next_back().unwrap_or(&name);
 
         self.get_group_info(groupname).await
     }
@@ -1038,7 +1039,7 @@ rtcsync
         );
 
         // Try chrony first
-        if let Err(_) = tokio::fs::write("/etc/chrony.conf", &chrony_config).await {
+        if tokio::fs::write("/etc/chrony.conf", &chrony_config).await.is_err() {
             // Fall back to ntp.conf format
             let ntp_config = format!(
                 r#"# AD Domain Controller time sync
@@ -1189,14 +1190,12 @@ driftfile /var/lib/ntp/drift
 
     /// Configure PAM with additional options
     async fn configure_pam_advanced(&self, create_home: bool) -> Result<()> {
-        let pam_winbind = format!(
-            r#"# Horcrux AD PAM configuration
+        let pam_winbind = r#"# Horcrux AD PAM configuration
 auth        sufficient    pam_winbind.so
 account     sufficient    pam_winbind.so
 password    sufficient    pam_winbind.so
 session     optional      pam_winbind.so
-"#
-        );
+"#.to_string();
 
         tokio::fs::write("/etc/pam.d/horcrux-ad", &pam_winbind)
             .await
@@ -1320,7 +1319,6 @@ session     optional      pam_winbind.so
                     || stdout.lines().any(|l| {
                         if let Some(offset_str) = l.split("offset").nth(1) {
                             if let Ok(offset) = offset_str
-                                .trim()
                                 .split_whitespace()
                                 .next()
                                 .unwrap_or("0")

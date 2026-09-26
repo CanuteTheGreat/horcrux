@@ -1,5 +1,5 @@
-///! Real system metrics collection
-///! Reads from /proc filesystem for accurate node metrics
+//! Real system metrics collection
+//! Reads from /proc filesystem for accurate node metrics
 use std::fs;
 use std::io;
 
