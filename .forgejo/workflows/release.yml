@@ -11,7 +11,7 @@ env:
 jobs:
   build-release:
     name: Build Release
-    runs-on: ubuntu-latest
+    runs-on: x86_64
     strategy:
       matrix:
         include:
@@ -92,7 +92,7 @@ jobs:
 
   build-ui-release:
     name: Build Web UI Release
-    runs-on: ubuntu-latest
+    runs-on: x86_64
     steps:
       - uses: actions/checkout@v4
 
@@ -121,7 +121,7 @@ jobs:
 
   create-release:
     name: Create Release
-    runs-on: ubuntu-latest
+    runs-on: x86_64
     needs: [build-release, build-ui-release]
     permissions:
       contents: write
