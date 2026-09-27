@@ -107,9 +107,12 @@ RDEPEND="
 "
 
 # Build dependencies
+# NOTE: there is no virtual/rust package in the Gentoo tree (never has been -
+# only dev-lang/rust and dev-lang/rust-bin are real ebuilds); depend on either
+# provider directly instead of a nonexistent virtual.
 DEPEND="
 	${RDEPEND}
-	>=virtual/rust-1.82
+	|| ( >=dev-lang/rust-1.82:= >=dev-lang/rust-bin-1.82:= )
 "
 
 BDEPEND=""
