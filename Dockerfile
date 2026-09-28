@@ -57,12 +57,29 @@ RUN mkdir -p /etc/portage/package.mask /etc/portage/package.accept_keywords /etc
     echo 'dev-lang/rust-bin ~amd64 ~arm64' >> /etc/portage/package.accept_keywords/horcrux && \
     echo 'dev-lang/rust-bin clippy rust-src rustfmt wasm' >> /etc/portage/package.use/horcrux
 
+# `cargo vendor` needs a working cargo/rustc *before* we can use it — but
+# the only rust toolchain this build gets is whatever `emerge
+# app-emulation/horcrux` pulls in as a dependency, later in this file. Any
+# `cargo vendor` invocation placed before that point silently fails with
+# "cargo: command not found" (masked by the `tail -5 | true` below, which
+# only ever reflects tail's own exit code, not cargo's), leaving
+# /var/cache/distfiles/horcrux-vendor never created — which is exactly what
+# made the ebuild's own vendor-copy step in src_unpack() correctly detect
+# "nothing there" and skip, so cargo build then failed downstream with
+# "failed to read root of directory source: .../cargo_home/gentoo: No such
+# file or directory". Install dev-lang/rust-bin explicitly first so cargo
+# actually exists when we call it.
+RUN emerge --verbose --quiet-build=y dev-lang/rust-bin
+
 # The ebuild pulls source via the project's release tarball/vendored crates;
 # for a from-source container build we vendor the working tree directly
 # instead of fetching a tagged release.
 WORKDIR /var/db/repos/horcrux-overlay/app-emulation/horcrux
 COPY . /usr/src/horcrux
-RUN cd /usr/src/horcrux && cargo vendor /var/cache/distfiles/horcrux-vendor 2>&1 | tail -5 || true
+RUN cd /usr/src/horcrux && cargo vendor /var/cache/distfiles/horcrux-vendor 2>&1 | tail -20
+RUN test -d /var/cache/distfiles/horcrux-vendor && \
+    test -n "$(ls -A /var/cache/distfiles/horcrux-vendor 2>/dev/null)" || \
+    (echo 'ERROR: cargo vendor produced no output — vendored crate registry is empty' >&2 && exit 1)
 
 # git-r3 would otherwise re-clone from the remote (EGIT_REPO_URI) even though
 # we just vendored the local checkout above, silently ignoring uncommitted
