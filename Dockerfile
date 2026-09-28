@@ -72,7 +72,7 @@ RUN echo "app-emulation/libvirt -policykit -virtualbox -wireshark-plugins -nfs" 
 # CI build only so portage settles on the one version both horcrux and
 # libvirt-python actually agree on.
 RUN mkdir -p /etc/portage/package.mask && \
-    echo "=app-emulation/libvirt-12.7.0" > /etc/portage/package.mask/horcrux-docker-build
+    echo "=app-emulation/libvirt-12.7.0" > /etc/portage/package.mask/horcrux-docker-build-libvirt
 
 # The container-build path only needs a *working* Rust toolchain, not a
 # from-source one — dev-lang/rust (source) plus rust-src/doc/rust-analyzer
