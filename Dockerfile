@@ -41,6 +41,23 @@ COPY gentoo/package.use/horcrux /etc/portage/package.use/horcrux
 COPY gentoo/package.accept_keywords/horcrux /etc/portage/package.accept_keywords/horcrux
 RUN echo "app-emulation/horcrux ${HORCRUX_USE}" > /etc/portage/package.use/horcrux-docker-build
 
+# gentoo/package.use/horcrux (copied above) is the project's real
+# recommended bare-metal package.use — it turns on policykit, virtualbox,
+# wireshark-plugins, and nfs on app-emulation/libvirt for a full desktop/
+# management-capable install. In this minimal CI container that drags in
+# an entire GTK/wireshark/virtualbox/policykit dependency chain that this
+# Gentoo snapshot can't actually satisfy (masked app-text/xmlto-0.0.28-r11,
+# net-libs/gnutls needing a newer version than is unmasked for
+# [pkcs11,tools]) — so --autounmask-write correctly detects the conflict
+# and bails instead of silently guessing. The CI build only needs libvirt's
+# C library/headers for the `virt` crate to link against, not any of the
+# GUI/management extras those flags pull in. Disable them here, in the
+# CI-only override file (loaded after package.use/horcrux alphabetically,
+# so it wins) rather than editing the real recommended config bare-metal
+# operators are meant to copy verbatim.
+RUN echo "app-emulation/libvirt -policykit -virtualbox -wireshark-plugins -nfs" \
+    >> /etc/portage/package.use/horcrux-docker-build
+
 # The container-build path only needs a *working* Rust toolchain, not a
 # from-source one — dev-lang/rust (source) plus rust-src/doc/rust-analyzer
 # USE flags compiles ~77 packages including LLVM/rustc itself, which alone
