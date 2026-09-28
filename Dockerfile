@@ -58,6 +58,22 @@ RUN echo "app-emulation/horcrux ${HORCRUX_USE}" > /etc/portage/package.use/horcr
 RUN echo "app-emulation/libvirt -policykit -virtualbox -wireshark-plugins -nfs" \
     >> /etc/portage/package.use/horcrux-docker-build
 
+# dev-python/libvirt-python's ebuild in this Gentoo snapshot is rigidly
+# version-pinned to app-emulation/libvirt:0/${PV} (exactly 12.6.0 - see
+# upstream's own comment: "these packages get releases together, bump
+# together"), but package.accept_keywords/horcrux accepts ~amd64 for
+# app-emulation/libvirt, so portage's solver prefers the newer unstable
+# libvirt-12.7.0 for horcrux's own direct RDEPEND while libvirt-python
+# simultaneously forces the older libvirt-12.6.0 - an unsatisfiable slot
+# conflict (two package instances in slot 0 pulled into the same graph).
+# This is a genuine tree-lag bug (libvirt-python hasn't been bumped to
+# match libvirt yet in this snapshot), not something an emerge flag can
+# route around. Mask the newer, not-yet-matched libvirt ebuild for this
+# CI build only so portage settles on the one version both horcrux and
+# libvirt-python actually agree on.
+RUN mkdir -p /etc/portage/package.mask && \
+    echo "=app-emulation/libvirt-12.7.0" > /etc/portage/package.mask/horcrux-docker-build
+
 # The container-build path only needs a *working* Rust toolchain, not a
 # from-source one — dev-lang/rust (source) plus rust-src/doc/rust-analyzer
 # USE flags compiles ~77 packages including LLVM/rustc itself, which alone
