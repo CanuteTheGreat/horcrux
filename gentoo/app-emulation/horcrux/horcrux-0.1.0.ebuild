@@ -123,9 +123,31 @@ BDEPEND=""
 # any later cargo_env/cargo_src_compile call dies with:
 #   "FATAL: please call cargo_gen_config before using cargo_env"
 # Define src_unpack explicitly to run both.
+#
+# NOTE 2: this ebuild has CRATES="" (no per-version pinned crate tarballs -
+# there's no crates.io publishing step yet), so cargo_gen_config() points
+# the replaced crates-io registry at "${WORKDIR}/cargo_home/gentoo", which
+# is never populated by the normal CRATES/SRC_URI unpack path and is simply
+# missing, so any later `cargo build` dies with:
+#   "failed to read root of directory source: .../work/cargo_home/gentoo
+#    No such file or directory (os error 2)"
+# The Docker build (see repo Dockerfile) runs `cargo vendor` against the
+# working tree into /var/cache/distfiles/horcrux-vendor precisely so this
+# step can install the result where cargo's generated config expects it.
+# Bare-metal/non-Docker builds without that directory just skip this and
+# behave as before (falling through to whatever CRATES/SRC_URI would have
+# provided, once this project actually publishes pinned crate tarballs).
 src_unpack() {
 	git-r3_src_unpack
 	cargo_gen_config
+
+	local vendor_src="/var/cache/distfiles/horcrux-vendor"
+	local vendor_dst="${WORKDIR}/cargo_home/gentoo"
+	if [[ -d "${vendor_src}" ]]; then
+		mkdir -p "${vendor_dst}" || die "failed to create ${vendor_dst}"
+		cp -r "${vendor_src}/." "${vendor_dst}/" \
+			|| die "failed to install vendored crates into ${vendor_dst}"
+	fi
 }
 
 # Cargo features mapping to USE flags
