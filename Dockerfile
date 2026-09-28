@@ -81,6 +81,16 @@ RUN test -d /var/cache/distfiles/horcrux-vendor && \
     test -n "$(ls -A /var/cache/distfiles/horcrux-vendor 2>/dev/null)" || \
     (echo 'ERROR: cargo vendor produced no output — vendored crate registry is empty' >&2 && exit 1)
 
+# `cargo vendor` above runs as root (this build stage hasn't dropped
+# privileges yet), so every file it writes ends up root-owned with whatever
+# restrictive mode cargo used. Portage's FEATURES=userpriv/usersandbox (on
+# by default) runs the ebuild's src_unpack — including the vendor-copy step
+# in this ebuild — as the unprivileged `portage` user, which then fails with
+# "Permission denied" trying to read root-only vendored crate files. Make
+# the vendored tree world-readable so the emerge step below can actually
+# copy it.
+RUN chmod -R a+rX /var/cache/distfiles/horcrux-vendor
+
 # git-r3 would otherwise re-clone from the remote (EGIT_REPO_URI) even though
 # we just vendored the local checkout above, silently ignoring uncommitted
 # local changes. EGIT_OVERRIDE_REPO_<PN> is git-r3's documented mechanism to
