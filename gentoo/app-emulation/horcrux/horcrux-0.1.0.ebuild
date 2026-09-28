@@ -66,7 +66,10 @@ REQUIRED_USE="
 # Note: All storage backends, networking, SSL, LDAP are always available at runtime
 # These are suggested dependencies that can be installed as needed
 RDEPEND="
-	qemu? ( app-emulation/qemu[spice,usbredir,virtfs] )
+	qemu? (
+		app-emulation/qemu[spice,usbredir,virtfs]
+		app-emulation/libvirt
+	)
 	lxc? ( app-emulation/lxc )
 	lxd? ( app-containers/lxd )
 	incus? ( app-containers/incus )
