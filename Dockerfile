@@ -142,7 +142,20 @@ RUN ebuild /var/db/repos/horcrux-overlay/app-emulation/horcrux/horcrux-0.1.0.ebu
 # showing merge progress + real errors) so the combined build log stays
 # under CI's log-size cap across ~77 packages; failures still surface
 # their full build log via FEATURES=buildlog + the emerge failure summary.
-RUN emerge --verbose --quiet-build=y --autounmask-write app-emulation/horcrux && \
+# NOTE: --autounmask-write always exits non-zero on *this* invocation --
+# it only writes the proposed USE/keyword changes to
+# /etc/portage/package.use/horcrux-docker-build.cfg0000_... under
+# CONFIG_PROTECT and then still refuses to build with the *old* config,
+# by design (it never self-applies). Using `&&` here meant etc-update
+# never ran when that (expected, every time) non-zero exit happened, so
+# the pending .cfg0000 file was never merged into the live package.use
+# file, and the next `emerge` call below failed with the exact same
+# "no ebuilds built with USE flags to satisfy ..." error, forever, since
+# the config it needed to have already been applied by then never was.
+# Use `;` so etc-update always runs regardless of this emerge call's
+# (expected-nonzero) exit code, applying the autounmask'd config so the
+# next emerge invocation actually builds.
+RUN emerge --verbose --quiet-build=y --autounmask-write app-emulation/horcrux; \
     etc-update --automode -5 || true
 RUN emerge --verbose --quiet-build=y app-emulation/horcrux
 
