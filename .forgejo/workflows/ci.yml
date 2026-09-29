@@ -253,7 +253,25 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build Gentoo/Portage image
-        run: docker build -t horcrux/api:${{ github.sha }} .
+        # The Dockerfile's default HORCRUX_USE ("qemu cli monitoring systemd
+        # webui") is the correct bare-metal-recommended feature set, but for
+        # this CI job it silently pulls in app-emulation/qemu with ALL FOUR
+        # softmmu/user cross-arch targets (x86_64/aarch64/riscv64/arm) plus
+        # app-emulation/libvirt (spice-gtk, GTK, etc.) which in turn requires
+        # building llvm-core/llvm from source in BOTH the 21 and 22 slots
+        # simultaneously (two full from-source LLVM builds). Confirmed via
+        # the actual CI log: still on package 161/181 (llvm-core/llvm-22.1.8,
+        # a from-source LLVM build) when the runner killed the job for
+        # exceeding its 3-hour maximum run time -- a real resource/timeout
+        # failure, not a build error. This job only smoke-tests `--version`/
+        # `--help`, so it doesn't need the full qemu/libvirt virtualization
+        # stack at all. Override HORCRUX_USE to the lightweight `docker`
+        # container-runtime backend (still satisfies the ebuild's
+        # REQUIRED_USE of "at least one virt backend or container runtime")
+        # for this CI-only smoke-test image; bare-metal installs following
+        # gentoo/package.use/horcrux are unaffected and still get the full
+        # qemu+libvirt virtualization stack.
+        run: docker build --build-arg HORCRUX_USE="cli systemd docker" -t horcrux/api:${{ github.sha }} .
 
       - name: Smoke-test the built image
         run: docker run --rm horcrux/api:${{ github.sha }} --version || docker run --rm horcrux/api:${{ github.sha }} --help
