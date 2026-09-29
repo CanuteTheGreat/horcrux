@@ -140,7 +140,8 @@ dev-lang/rust clippy doc rust-analyzer -miri -parallel-compiler -profiler -rls
 dev-lang/rust rust-src rustfmt wasm -system-llvm
 
 # Cargo tools
-virtual/rust rustfmt
+# NOTE: virtual/rust does not exist in the Gentoo tree - rustfmt USE flag
+# belongs on the real dev-lang/rust atom above (already set).
 
 # =============================================================================
 # DATABASE & CACHE

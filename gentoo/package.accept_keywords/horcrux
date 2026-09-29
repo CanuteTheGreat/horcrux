@@ -9,7 +9,7 @@
 # Latest Rust is essential for Horcrux development
 
 dev-lang/rust ~amd64 ~arm64 ~riscv
-virtual/rust ~amd64 ~arm64 ~riscv
+dev-lang/rust-bin ~amd64 ~arm64 ~riscv
 dev-util/rustup ~amd64 ~arm64 ~riscv
 
 # =============================================================================
