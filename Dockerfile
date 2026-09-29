@@ -195,4 +195,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8006/api/health || exit 1
 
 WORKDIR /var/lib/horcrux
-CMD ["/usr/local/bin/horcrux-api"]
+ENTRYPOINT ["/usr/local/bin/horcrux-api"]
+CMD []

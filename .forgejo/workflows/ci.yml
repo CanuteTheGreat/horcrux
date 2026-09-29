@@ -288,4 +288,27 @@ jobs:
         run: docker build --build-arg HORCRUX_USE="cli systemd docker -qemu -monitoring -webui" -t horcrux/api:${{ github.sha }} .
 
       - name: Smoke-test the built image
-        run: docker run --rm horcrux/api:${{ github.sha }} --version || docker run --rm horcrux/api:${{ github.sha }} --help
+        # horcrux-api has no CLI arg parsing at all (main() ignores argv
+        # entirely and always goes straight into full server startup +
+        # DB connect/migrate) -- there is no --version/--help path to
+        # invoke, so `docker run ... --version` doesn't print a version
+        # and exit like a normal CLI tool; the ENTRYPOINT-based image
+        # instead tries to launch the *real* server with "--version"
+        # silently ignored as an arg, which then hangs forever waiting
+        # on a real DB/port bind in this bare CI container until the job
+        # times out. Confirmed via actions/jobs/9637/logs: the previous
+        # CMD-only (no ENTRYPOINT) Dockerfile failed even earlier/worse --
+        # `docker run image --version` replaces CMD outright, so the
+        # container tried to exec a file literally named "--version" and
+        # failed immediately with "executable file not found in $PATH".
+        # Don't run the server at all for this smoke test -- just prove
+        # the binary landed in the image, is executable, and is a real
+        # ELF (not e.g. a 0-byte COPY failure or a text/shell stub).
+        run: |
+          docker create --name horcrux-smoke horcrux/api:${{ github.sha }}
+          docker cp horcrux-smoke:/usr/local/bin/horcrux-api /tmp/horcrux-api-smoke
+          docker rm -f horcrux-smoke
+          test -s /tmp/horcrux-api-smoke
+          file /tmp/horcrux-api-smoke | grep -qi 'ELF'
+          test -x /tmp/horcrux-api-smoke
+          echo "horcrux-api binary present, non-empty, executable ELF -- smoke test OK"
