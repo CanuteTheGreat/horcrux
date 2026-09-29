@@ -265,13 +265,27 @@ jobs:
         # exceeding its 3-hour maximum run time -- a real resource/timeout
         # failure, not a build error. This job only smoke-tests `--version`/
         # `--help`, so it doesn't need the full qemu/libvirt virtualization
-        # stack at all. Override HORCRUX_USE to the lightweight `docker`
-        # container-runtime backend (still satisfies the ebuild's
-        # REQUIRED_USE of "at least one virt backend or container runtime")
-        # for this CI-only smoke-test image; bare-metal installs following
-        # gentoo/package.use/horcrux are unaffected and still get the full
-        # qemu+libvirt virtualization stack.
-        run: docker build --build-arg HORCRUX_USE="cli systemd docker" -t horcrux/api:${{ github.sha }} .
+        # stack at all.
+        #
+        # First attempt at a fix (HORCRUX_USE="cli systemd docker", no
+        # explicit "-qemu -monitoring -webui") did NOT actually disable
+        # qemu/libvirt: horcrux-0.1.0.ebuild's IUSE declares "+monitoring
+        # +qemu +webui" (default-on). Writing package.use entries only ADDS
+        # the flags you list -- it does not clear IUSE defaults for flags
+        # you don't mention -- so qemu/monitoring/webui stayed enabled and
+        # the build still pulled in the full libvirt/qemu chain, this time
+        # hitting a real masked-package dependency wall (>=sys-block/parted
+        # -3.7[device-mapper] / dnsmasq[script] / gnutls[pkcs11,tools] all
+        # required by libvirt but unsatisfiable in this Gentoo snapshot) --
+        # confirmed via actions/jobs/9563/logs. Must explicitly negate the
+        # default-on flags ("-qemu -monitoring -webui") for the override to
+        # actually take effect, in addition to enabling the lightweight
+        # docker container-runtime backend (still satisfies the ebuild's
+        # REQUIRED_USE of "at least one virt backend or container runtime").
+        # Bare-metal installs following gentoo/package.use/horcrux directly
+        # are unaffected and still get the full qemu+libvirt virtualization
+        # stack -- this override only applies to the CI-only build-arg.
+        run: docker build --build-arg HORCRUX_USE="cli systemd docker -qemu -monitoring -webui" -t horcrux/api:${{ github.sha }} .
 
       - name: Smoke-test the built image
         run: docker run --rm horcrux/api:${{ github.sha }} --version || docker run --rm horcrux/api:${{ github.sha }} --help
