@@ -55,7 +55,21 @@ RUN echo "app-emulation/horcrux ${HORCRUX_USE}" > /etc/portage/package.use/horcr
 # CI-only override file (loaded after package.use/horcrux alphabetically,
 # so it wins) rather than editing the real recommended config bare-metal
 # operators are meant to copy verbatim.
-RUN echo "app-emulation/libvirt -policykit -virtualbox -wireshark-plugins -nfs" \
+#
+# Also disable `zfs`: libvirt's USE=zfs pulls in sys-fs/zfs, an out-of-tree
+# kernel module package whose pkg_setup phase unconditionally requires a
+# real *configured* kernel source tree at /usr/src/linux (a genuine
+# .config, not just headers) to determine which kernel module ABI to
+# build against - something no container build has or can reasonably
+# fake. Confirmed via the actual CI failure: build got to 142/188
+# packages (well past the earlier autounmask/USE-flag failures) before
+# dying here with "Kernel not configured; no .config found in
+# /usr/src/linux" from linux-info.eclass's require_configured_kernel.
+# ZFS storage-pool support isn't part of this CI-only libvirt link-check
+# build; bare-metal Gentoo installs following gentoo/package.use/horcrux
+# directly are unaffected and still get zfs if the operator's kernel is
+# actually configured for it.
+RUN echo "app-emulation/libvirt -policykit -virtualbox -wireshark-plugins -nfs -zfs" \
     >> /etc/portage/package.use/horcrux-docker-build
 
 # dev-python/libvirt-python's ebuild in this Gentoo snapshot is rigidly
