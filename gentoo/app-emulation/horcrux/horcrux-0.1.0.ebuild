@@ -206,7 +206,20 @@ src_compile() {
 	# Build CLI if enabled
 	if use cli; then
 		einfo "Building CLI tool..."
-		cargo_src_compile -p horcrux-cli
+		# NOTE: cargo_src_compile would reuse the workspace-wide
+		# ECARGO_ARGS set in src_configure() above (e.g. --features
+		# docker/qemu/lxc/...), but horcrux-cli's own Cargo.toml
+		# defines none of those Cargo features -- it's a thin API
+		# client with its own independent dependency set. Cargo
+		# rejects unknown --features flags per-package even inside a
+		# workspace build ("does not contain this feature"), so this
+		# broke the build the moment more than one virtualization/
+		# container-runtime USE flag was enabled together. Build the
+		# CLI package directly via cargo_env, bypassing ECARGO_ARGS,
+		# since it has no USE-gated Cargo features to select.
+		set -- "${CARGO}" build $(usex debug "" --release) -p horcrux-cli
+		einfo "${@}"
+		cargo_env "${@}" || die "cargo build failed (horcrux-cli)"
 	fi
 
 	# Build web UI if enabled
