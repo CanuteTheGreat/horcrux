@@ -35,6 +35,18 @@ pub enum StorageType {
     Directory,
 }
 
+/// Favor ZFS whenever a caller needs a default without asking the user —
+/// checksummed, self-healing (with redundancy), native snapshots/send-recv,
+/// and it's the only backend this crate can actually *create* pools for
+/// today (`create_zfs_pool` below; Btrfs/Mdraid/Lvm are enum variants with
+/// no creation path yet). See `detect_preferred_storage_type` (pools.rs)
+/// for the host-capability-aware version of this same preference.
+impl Default for StorageType {
+    fn default() -> Self {
+        StorageType::Zfs
+    }
+}
+
 impl std::fmt::Display for StorageType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

@@ -3,10 +3,34 @@
 //! Handles creation, destruction, and management of storage pools
 //! (ZFS pools, Btrfs volumes, mdraid arrays).
 
-use crate::nas::storage::{NasPool, PoolHealth, RaidLevel, StorageType};
+use crate::nas::storage::{command_exists, NasPool, PoolHealth, RaidLevel, StorageType};
 use horcrux_common::{Error, Result};
 use std::collections::HashMap;
 use tokio::process::Command;
+
+/// Detect which storage backends this host can actually use, in the
+/// order this codebase favors them: ZFS first (checksummed, self-healing,
+/// native snapshots — see `StorageType`'s `Default` impl in mod.rs for
+/// the full reasoning), then Btrfs, then LVM, then plain mdraid, ending
+/// in `Directory` (always available — every host has a filesystem).
+/// Checks the actual CLI tooling being present (`zpool`, `btrfs`,
+/// `lvcreate`, `mdadm`) rather than assuming from `StorageType`'s own
+/// variant order, since a real host may have any subset installed.
+pub async fn detect_preferred_storage_type() -> StorageType {
+    if command_exists("zpool").await {
+        return StorageType::Zfs;
+    }
+    if command_exists("btrfs").await {
+        return StorageType::Btrfs;
+    }
+    if command_exists("lvcreate").await {
+        return StorageType::Lvm;
+    }
+    if command_exists("mdadm").await {
+        return StorageType::Mdraid;
+    }
+    StorageType::Directory
+}
 
 /// List all ZFS pools
 #[cfg(feature = "nas-zfs")]
