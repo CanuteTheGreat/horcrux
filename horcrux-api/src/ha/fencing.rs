@@ -233,18 +233,34 @@ impl FencingManager {
     async fn execute_fence(&self, device: &FencingDevice, action: FencingAction) -> FencingResult {
         match device.agent_type {
             FencingAgentType::Ipmi => self.fence_ipmi(device, &action).await,
+            // HP iLO and Dell DRAC/iDRAC both expose a standard IPMI 2.0
+            // LAN interface (lanplus), so they are fenced via ipmitool the
+            // same way as a bare IPMI BMC. This is the real, documented
+            // fencing path used by fence_ilo / fence_drac5 style agents.
+            FencingAgentType::Ilo => self.fence_ipmi(device, &action).await,
+            FencingAgentType::Drac => self.fence_ipmi(device, &action).await,
             FencingAgentType::Ssh => self.fence_ssh(device, &action).await,
             FencingAgentType::Libvirt => self.fence_libvirt(device, &action).await,
             FencingAgentType::Watchdog => self.fence_watchdog(device, &action).await,
+            FencingAgentType::SnmpPdu => self.fence_snmp_pdu(device, &action).await,
             FencingAgentType::Manual => FencingResult::ManualRequired,
-            _ => {
-                warn!(agent = ?device.agent_type, "Fencing agent not implemented");
-                FencingResult::Failed(format!("Agent {:?} not implemented", device.agent_type))
+            FencingAgentType::Hypervisor => {
+                warn!(
+                    agent = ?device.agent_type,
+                    "Hypervisor-level fencing (fencing a nested/guest VM from its host \
+                     hypervisor's management API) is not implemented"
+                );
+                FencingResult::Failed(
+                    "Hypervisor fencing agent is not implemented: no hypervisor management \
+                     API client is wired up yet (libvirt-backed VMs should use \
+                     FencingAgentType::Libvirt instead)"
+                        .to_string(),
+                )
             }
         }
     }
 
-    /// IPMI fencing implementation
+    /// IPMI fencing implementation (also used for iLO/DRAC, which are IPMI-compliant BMCs)
     async fn fence_ipmi(&self, device: &FencingDevice, action: &FencingAction) -> FencingResult {
         let action_cmd = match action {
             FencingAction::Off => "power off",
@@ -253,9 +269,22 @@ impl FencingManager {
             FencingAction::Status => "power status",
         };
 
+        // Interface can be overridden per-device (e.g. "lan" for very old
+        // BMCs that don't support lanplus), but lanplus (IPMI v2.0 over
+        // LAN) is the standard for IPMI, iLO and iDRAC today.
+        let interface = device
+            .options
+            .get("interface")
+            .cloned()
+            .unwrap_or_else(|| "lanplus".to_string());
+
         let mut cmd = tokio::process::Command::new("ipmitool");
+        cmd.arg("-I").arg(&interface);
         cmd.arg("-H").arg(&device.address);
 
+        if let Some(port) = device.port {
+            cmd.arg("-p").arg(port.to_string());
+        }
         if let Some(ref user) = device.username {
             cmd.arg("-U").arg(user);
         }
@@ -264,6 +293,158 @@ impl FencingManager {
         }
 
         cmd.args(action_cmd.split_whitespace());
+        cmd.stdin(std::process::Stdio::null());
+
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(self.timeout_secs as u64),
+            cmd.output(),
+        )
+        .await
+        {
+            Ok(Ok(output)) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if output.status.success() {
+                    match action {
+                        FencingAction::Status => {
+                            // ipmitool prints "Chassis Power is on/off" on success;
+                            // surface a failure if the BMC responded but the
+                            // chassis power state can't be determined.
+                            if stdout.to_lowercase().contains("chassis power is") {
+                                FencingResult::Success
+                            } else {
+                                FencingResult::Failed(format!(
+                                    "Unexpected ipmitool status output: {}",
+                                    stdout.trim()
+                                ))
+                            }
+                        }
+                        _ => FencingResult::Success,
+                    }
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let msg = if stderr.to_lowercase().contains("unauthorized")
+                        || stderr.to_lowercase().contains("authentication")
+                    {
+                        format!(
+                            "IPMI authentication failed for {}: {}",
+                            device.address,
+                            stderr.trim()
+                        )
+                    } else if stderr.to_lowercase().contains("unable to establish")
+                        || stderr.to_lowercase().contains("could not connect")
+                        || stderr.to_lowercase().contains("no route to host")
+                    {
+                        format!(
+                            "IPMI connection failed to {}: {}",
+                            device.address,
+                            stderr.trim()
+                        )
+                    } else {
+                        format!("ipmitool exited with {}: {}", output.status, stderr.trim())
+                    };
+                    FencingResult::Failed(msg)
+                }
+            }
+            Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => FencingResult::Failed(
+                "ipmitool binary not found (emerge sys-power/ipmitool)".to_string(),
+            ),
+            Ok(Err(e)) => FencingResult::Failed(format!("Failed to spawn ipmitool: {}", e)),
+            Err(_) => FencingResult::Timeout,
+        }
+    }
+
+    /// SNMP-controlled power distribution unit (PDU) fencing implementation.
+    ///
+    /// Uses `snmpset` (net-snmp) to toggle the outlet's power state OID.
+    /// The outlet OID and SNMP community/version are device-specific and
+    /// must be supplied via `device.options` (`outlet_oid`, `community`,
+    /// `on_value`, `off_value`), since PDU MIBs differ between vendors
+    /// (APC, Raritan, ServerTech, ...).
+    async fn fence_snmp_pdu(
+        &self,
+        device: &FencingDevice,
+        action: &FencingAction,
+    ) -> FencingResult {
+        let Some(outlet_oid) = device.options.get("outlet_oid").cloned() else {
+            return FencingResult::Failed(
+                "SNMP PDU device is missing required option 'outlet_oid'".to_string(),
+            );
+        };
+
+        let community = device
+            .options
+            .get("community")
+            .cloned()
+            .unwrap_or_else(|| "private".to_string());
+
+        if matches!(action, FencingAction::Status) {
+            let mut cmd = tokio::process::Command::new("snmpget");
+            cmd.arg("-v2c")
+                .arg("-c")
+                .arg(&community)
+                .arg(&device.address)
+                .arg(&outlet_oid);
+
+            return match tokio::time::timeout(
+                std::time::Duration::from_secs(self.timeout_secs as u64),
+                cmd.output(),
+            )
+            .await
+            {
+                Ok(Ok(output)) if output.status.success() => FencingResult::Success,
+                Ok(Ok(output)) => FencingResult::Failed(
+                    String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                ),
+                Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => FencingResult::Failed(
+                    "snmpget binary not found (emerge net-analyzer/net-snmp)".to_string(),
+                ),
+                Ok(Err(e)) => FencingResult::Failed(format!("Failed to spawn snmpget: {}", e)),
+                Err(_) => FencingResult::Timeout,
+            };
+        }
+
+        // Value+type to write for on/off, PDU-MIB dependent (commonly an
+        // INTEGER: 1 = on, 2 = off for the standard PowerNet/RFC1628-style
+        // outlet control OIDs), overridable via options.
+        let (value_opt, value) = match action {
+            FencingAction::Off => (
+                "off_value",
+                device
+                    .options
+                    .get("off_value")
+                    .cloned()
+                    .unwrap_or_else(|| "i 2".to_string()),
+            ),
+            FencingAction::On => (
+                "on_value",
+                device
+                    .options
+                    .get("on_value")
+                    .cloned()
+                    .unwrap_or_else(|| "i 1".to_string()),
+            ),
+            FencingAction::Reboot => {
+                // Not all PDU MIBs support a single reboot OID cleanly;
+                // require an explicit reboot_value rather than guessing.
+                match device.options.get("reboot_value").cloned() {
+                    Some(v) => ("reboot_value", v),
+                    None => {
+                        return FencingResult::Failed(
+                            "SNMP PDU reboot requires option 'reboot_value' to be set".to_string(),
+                        )
+                    }
+                }
+            }
+            FencingAction::Status => unreachable!("handled above"),
+        };
+
+        let mut cmd = tokio::process::Command::new("snmpset");
+        cmd.arg("-v2c")
+            .arg("-c")
+            .arg(&community)
+            .arg(&device.address);
+        cmd.arg(&outlet_oid);
+        cmd.args(value.split_whitespace());
 
         match tokio::time::timeout(
             std::time::Duration::from_secs(self.timeout_secs as u64),
@@ -275,10 +456,19 @@ impl FencingManager {
                 if output.status.success() {
                     FencingResult::Success
                 } else {
-                    FencingResult::Failed(String::from_utf8_lossy(&output.stderr).to_string())
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    FencingResult::Failed(format!(
+                        "snmpset ({}) failed for outlet {}: {}",
+                        value_opt,
+                        outlet_oid,
+                        stderr.trim()
+                    ))
                 }
             }
-            Ok(Err(e)) => FencingResult::Failed(format!("Command failed: {}", e)),
+            Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => FencingResult::Failed(
+                "snmpset binary not found (emerge net-analyzer/net-snmp)".to_string(),
+            ),
+            Ok(Err(e)) => FencingResult::Failed(format!("Failed to spawn snmpset: {}", e)),
             Err(_) => FencingResult::Timeout,
         }
     }
