@@ -688,10 +688,7 @@ impl MigrationManager {
                     return MigrationCheck {
                         check_name: "network_connectivity".to_string(),
                         passed: false,
-                        message: format!(
-                            "Failed to resolve target node {}: {}",
-                            target_node, e
-                        ),
+                        message: format!("Failed to resolve target node {}: {}", target_node, e),
                         blocking: true,
                     };
                 }
@@ -701,11 +698,8 @@ impl MigrationManager {
                 continue;
             };
 
-            match tokio::time::timeout(
-                CONNECT_TIMEOUT,
-                tokio::net::TcpStream::connect(socket_addr),
-            )
-            .await
+            match tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::TcpStream::connect(socket_addr))
+                .await
             {
                 Ok(Ok(_stream)) => {
                     return MigrationCheck {
@@ -746,8 +740,8 @@ impl MigrationManager {
     /// checks.
     async fn check_storage_accessible(source_node: &str, target_node: &str) -> MigrationCheck {
         let vm_storage_path = std::env::var("HORCRUX_VM_STORAGE").unwrap_or_else(|_| {
-            let data_dir =
-                std::env::var("HORCRUX_DATA_DIR").unwrap_or_else(|_| "/var/lib/horcrux".to_string());
+            let data_dir = std::env::var("HORCRUX_DATA_DIR")
+                .unwrap_or_else(|_| "/var/lib/horcrux".to_string());
             format!("{}/vms", data_dir.trim_end_matches('/'))
         });
 
@@ -991,7 +985,10 @@ impl MigrationManager {
             }
         }
 
-        Some((model.unwrap_or_else(|| "unknown".to_string()), flags.unwrap_or_default()))
+        Some((
+            model.unwrap_or_else(|| "unknown".to_string()),
+            flags.unwrap_or_default(),
+        ))
     }
 
     /// Check that the target node has enough available RAM for the VM
@@ -1178,8 +1175,7 @@ mod tests {
     #[tokio::test]
     async fn test_network_connectivity_check_unresolvable_host() {
         let check =
-            MigrationManager::check_network_connectivity("this-host-does-not-exist.invalid")
-                .await;
+            MigrationManager::check_network_connectivity("this-host-does-not-exist.invalid").await;
         assert_eq!(check.check_name, "network_connectivity");
         assert!(!check.passed);
         assert!(check.blocking);
