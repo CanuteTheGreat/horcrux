@@ -6045,8 +6045,12 @@ async fn delete_clone_job(
         _ => {}
     }
 
-    // TODO: Implement actual deletion from manager
-    // For now, just return success
+    state
+        .clone_job_manager
+        .delete_job(&job_id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to delete clone job: {}", e)))?;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
