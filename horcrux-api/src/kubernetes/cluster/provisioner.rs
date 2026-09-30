@@ -739,15 +739,25 @@ async fn add_kubeadm_node(node: &ProvisionNode, join_info: &NodeJoinInfo) -> K8s
     // Install prerequisites first
     install_kubeadm_prerequisites(node).await?;
 
+    // The CA cert hash pins kubeadm join's TLS bootstrap to the real control
+    // plane cert - substituting a fake hash here would either make the join
+    // fail with a confusing kubeadm-side error, or (worse) silently weaken
+    // the cert pinning if kubeadm's own validation is ever loosened. Fail
+    // loudly and specifically instead of ever sending a placeholder over
+    // SSH into a real kubeadm join command.
+    let ca_cert_hash = join_info.ca_cert_hash.as_deref().ok_or_else(|| {
+        K8sError::ProvisioningError(format!(
+            "cannot join node {} to the cluster: no CA cert hash available \
+             (join_info.ca_cert_hash was None) - refusing to substitute a \
+             placeholder hash into a real kubeadm join command",
+            node.name
+        ))
+    })?;
+
     // Build join command
     let mut join_cmd = format!(
         "sudo kubeadm join {} --token {} --discovery-token-ca-cert-hash {}",
-        join_info.api_server,
-        join_info.token,
-        join_info
-            .ca_cert_hash
-            .as_deref()
-            .unwrap_or("sha256:placeholder")
+        join_info.api_server, join_info.token, ca_cert_hash
     );
 
     if join_info.control_plane {
