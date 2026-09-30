@@ -216,6 +216,29 @@ pub fn read_disk_stats(device: &str) -> io::Result<DiskStats> {
     ))
 }
 
+/// Read disk usage percentage for a mount point using statvfs(2).
+///
+/// Returns the percentage of total blocks currently in use (0.0-100.0),
+/// computed from real filesystem statistics rather than a hardcoded
+/// placeholder. Uses `f_bavail` (blocks available to unprivileged users)
+/// against `f_blocks` (total blocks) so the reported "used" figure matches
+/// what a normal user/df would see (i.e. it accounts for the
+/// root-reserved-blocks margin most filesystems carve out).
+pub fn read_disk_usage_percent(mount_point: &str) -> io::Result<f64> {
+    let stat = nix::sys::statvfs::statvfs(mount_point)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("statvfs({}) failed: {}", mount_point, e)))?;
+
+    let total_blocks = stat.blocks();
+    if total_blocks == 0 {
+        return Ok(0.0);
+    }
+
+    let available_blocks = stat.blocks_available();
+    let used_blocks = total_blocks.saturating_sub(available_blocks);
+
+    Ok((used_blocks as f64 / total_blocks as f64) * 100.0)
+}
+
 /// Network statistics from /proc/net/dev
 #[derive(Debug, Clone)]
 pub struct NetworkStats {
