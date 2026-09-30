@@ -48,8 +48,19 @@ jobs:
       # v4+ artifact actions ALSO require the newer @actions/artifact API,
       # which this runner does not support (GHESNotSupportedError again).
       # v3 uses the older, supported artifact API - use that instead.
+      # This artifact upload has been observed hard-failing (HTTP 500 on
+      # finalize, after ~10-15min of retries) on the Forgejo instance's
+      # artifact storage backend on essentially every run since 2026-09-24
+      # -- server-side infra flakiness, not a workflow bug. The
+      # horcrux-docs artifact is also not consumed by any other workflow
+      # (release.yml/build-iso.yaml download different artifacts), so it
+      # is purely informational. continue-on-error keeps the actual rustdoc
+      # build (the part with real signal) from being masked by an
+      # unrelated storage-backend outage, while still surfacing upload
+      # failures in the step summary if/when the backend recovers.
       - name: Upload docs artifact
         uses: actions/upload-artifact@v3
+        continue-on-error: true
         with:
           name: horcrux-docs
           path: public
