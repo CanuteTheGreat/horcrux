@@ -105,15 +105,26 @@ RDEPEND="
 "
 
 # Build dependencies
-# virtual/rust (not a hard dev-lang/rust atom) so operators/CI can satisfy
-# this with either the from-source dev-lang/rust or the prebuilt
-# dev-lang/rust-bin — both provide virtual/rust and a working rustc/cargo.
+# NOTE: there is no virtual/rust package in the Gentoo tree (never has been -
+# only dev-lang/rust and dev-lang/rust-bin are real ebuilds); depend on either
+# provider directly instead of a nonexistent virtual. Mirrors the fix already
+# applied to horcrux-0.1.0.ebuild - this live ebuild had been missed.
 DEPEND="
 	${RDEPEND}
-	>=virtual/rust-1.82
+	|| ( >=dev-lang/rust-1.82:= >=dev-lang/rust-bin-1.82:= )
 "
 
 BDEPEND=""
+
+# NOTE: both the cargo and git-r3 eclasses export src_unpack; since git-r3 is
+# inherited after cargo, its src_unpack wrapper silently replaces cargo's,
+# so cargo_gen_config() never runs and any later cargo_env/cargo_src_compile
+# call dies with: "FATAL: please call cargo_gen_config before using cargo_env"
+# Define src_unpack explicitly to run both (live ebuild: use cargo_live_src_unpack).
+src_unpack() {
+	git-r3_src_unpack
+	cargo_live_src_unpack
+}
 
 # Cargo features mapping to USE flags
 src_configure() {

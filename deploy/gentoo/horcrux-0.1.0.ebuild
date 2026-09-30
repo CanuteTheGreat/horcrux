@@ -66,7 +66,10 @@ REQUIRED_USE="
 # Note: All storage backends, networking, SSL, LDAP are always available at runtime
 # These are suggested dependencies that can be installed as needed
 RDEPEND="
-	qemu? ( app-emulation/qemu[spice,usbredir,virtfs] )
+	qemu? (
+		app-emulation/qemu[spice,usbredir,virtfs]
+		app-emulation/libvirt
+	)
 	lxc? ( app-emulation/lxc )
 	lxd? ( app-containers/lxd )
 	incus? ( app-containers/incus )
@@ -107,12 +110,48 @@ RDEPEND="
 "
 
 # Build dependencies
+# NOTE: there is no virtual/rust package in the Gentoo tree (never has been -
+# only dev-lang/rust and dev-lang/rust-bin are real ebuilds); depend on either
+# provider directly instead of a nonexistent virtual.
 DEPEND="
 	${RDEPEND}
-	>=virtual/rust-1.82
+	|| ( >=dev-lang/rust-1.82:= >=dev-lang/rust-bin-1.82:= )
 "
 
 BDEPEND=""
+
+# NOTE: both the cargo and git-r3 eclasses export src_unpack; since git-r3 is
+# inherited after cargo, its src_unpack wrapper silently replaces cargo's,
+# so cargo_gen_config() (which cargo_src_unpack would call) never runs and
+# any later cargo_env/cargo_src_compile call dies with:
+#   "FATAL: please call cargo_gen_config before using cargo_env"
+# Define src_unpack explicitly to run both.
+#
+# NOTE 2: this ebuild has CRATES="" (no per-version pinned crate tarballs -
+# there's no crates.io publishing step yet), so cargo_gen_config() points
+# the replaced crates-io registry at "${WORKDIR}/cargo_home/gentoo", which
+# is never populated by the normal CRATES/SRC_URI unpack path and is simply
+# missing, so any later `cargo build` dies with:
+#   "failed to read root of directory source: .../work/cargo_home/gentoo
+#    No such file or directory (os error 2)"
+# The Docker build (see repo Dockerfile) runs `cargo vendor` against the
+# working tree into /var/cache/distfiles/horcrux-vendor precisely so this
+# step can install the result where cargo's generated config expects it.
+# Bare-metal/non-Docker builds without that directory just skip this and
+# behave as before (falling through to whatever CRATES/SRC_URI would have
+# provided, once this project actually publishes pinned crate tarballs).
+src_unpack() {
+	git-r3_src_unpack
+	cargo_gen_config
+
+	local vendor_src="/var/cache/distfiles/horcrux-vendor"
+	local vendor_dst="${WORKDIR}/cargo_home/gentoo"
+	if [[ -d "${vendor_src}" ]]; then
+		mkdir -p "${vendor_dst}" || die "failed to create ${vendor_dst}"
+		cp -r "${vendor_src}/." "${vendor_dst}/" \
+			|| die "failed to install vendored crates into ${vendor_dst}"
+	fi
+}
 
 # Cargo features mapping to USE flags
 src_configure() {
@@ -167,7 +206,20 @@ src_compile() {
 	# Build CLI if enabled
 	if use cli; then
 		einfo "Building CLI tool..."
-		cargo_src_compile -p horcrux-cli
+		# NOTE: cargo_src_compile would reuse the workspace-wide
+		# ECARGO_ARGS set in src_configure() above (e.g. --features
+		# docker/qemu/lxc/...), but horcrux-cli's own Cargo.toml
+		# defines none of those Cargo features -- it's a thin API
+		# client with its own independent dependency set. Cargo
+		# rejects unknown --features flags per-package even inside a
+		# workspace build ("does not contain this feature"), so this
+		# broke the build the moment more than one virtualization/
+		# container-runtime USE flag was enabled together. Build the
+		# CLI package directly via cargo_env, bypassing ECARGO_ARGS,
+		# since it has no USE-gated Cargo features to select.
+		set -- "${CARGO}" build $(usex debug "" --release) -p horcrux-cli
+		einfo "${@}"
+		cargo_env "${@}" || die "cargo build failed (horcrux-cli)"
 	fi
 
 	# Build web UI if enabled
