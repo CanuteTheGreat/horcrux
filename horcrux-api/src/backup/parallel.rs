@@ -3,8 +3,9 @@
 //! Provides faster backup recovery by restoring multiple
 //! disks/volumes in parallel. Proxmox VE 9.0 feature.
 
-use horcrux_common::Result;
+use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
@@ -112,19 +113,139 @@ impl ParallelRestoreManager {
         })
     }
 
-    /// Restore a single volume (placeholder for actual implementation)
+    /// Restore a single volume from its on-disk backup file to its target
+    /// path.
+    ///
+    /// `VolumeRestore::source_path` is expected to be a regular file
+    /// previously produced by the backup path (see
+    /// `backup::mod::BackupManager::backup_with_file_copy` /
+    /// `backup_with_lvm_snapshot`, which write a `tar` stream, optionally
+    /// piped through `gzip`/`lzop`/`zstd` based on file extension, to a
+    /// single archive file on the configured backup storage). Volume-level
+    /// callers of this manager (anything that builds a `VolumeRestore`) are
+    /// expected to point `source_path` at one such archive and
+    /// `target_path` at the directory the archive should be extracted into
+    /// - mirroring `restore_from_compressed_backup` /
+    /// `restore_from_uncompressed_backup` in `backup::mod`, just invoked
+    /// per-volume instead of per whole-VM backup.
     async fn restore_volume(volume: &VolumeRestore) -> Result<()> {
-        // In production, this would:
-        // 1. Read backup data from source
-        // 2. Decompress if needed
-        // 3. Write to target storage
-        // 4. Verify checksums
+        let source = Path::new(&volume.source_path);
 
-        // Simulate restore time based on size
-        let restore_time_ms = (volume.size_bytes / 100_000_000).max(100); // ~100MB/s
-        tokio::time::sleep(std::time::Duration::from_millis(restore_time_ms)).await;
+        let metadata = tokio::fs::metadata(source).await.map_err(|e| {
+            Error::System(format!(
+                "Volume '{}': backup source '{}' is not accessible: {}",
+                volume.name, volume.source_path, e
+            ))
+        })?;
+
+        if !metadata.is_file() {
+            return Err(Error::System(format!(
+                "Volume '{}': backup source '{}' is not a regular file (archive expected)",
+                volume.name, volume.source_path
+            )));
+        }
+
+        // Verify checksum (sha256) against the archive on disk *before*
+        // touching the target, so a corrupted backup never partially
+        // overwrites a target volume.
+        if let Some(expected) = &volume.checksum {
+            let actual = Self::sha256_file(source).await?;
+            if &actual != expected {
+                return Err(Error::System(format!(
+                    "Volume '{}': checksum mismatch for '{}' (expected {}, got {})",
+                    volume.name, volume.source_path, expected, actual
+                )));
+            }
+        }
+
+        tokio::fs::create_dir_all(&volume.target_path)
+            .await
+            .map_err(|e| {
+                Error::System(format!(
+                    "Volume '{}': failed to create target directory '{}': {}",
+                    volume.name, volume.target_path, e
+                ))
+            })?;
+
+        // Pick the decompressor the same way `backup::mod` picks the
+        // compressor: by archive file extension.
+        let decompress_cmd = match source
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+        {
+            Some(ext) if ext == "gz" || ext == "tgz" => "gunzip",
+            Some(ext) if ext == "lzo" => "lzop -d",
+            Some(ext) if ext == "zst" => "unzstd",
+            _ => "cat",
+        };
+
+        let extract_cmd = format!(
+            "{} < {} | tar -xf - -C {}",
+            decompress_cmd,
+            shell_escape(&volume.source_path),
+            shell_escape(&volume.target_path)
+        );
+
+        let output = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(&extract_cmd)
+            .output()
+            .await
+            .map_err(|e| {
+                Error::System(format!(
+                    "Volume '{}': failed to spawn restore extraction: {}",
+                    volume.name, e
+                ))
+            })?;
+
+        if !output.status.success() {
+            return Err(Error::System(format!(
+                "Volume '{}': restore extraction failed: {}",
+                volume.name,
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        info!(
+            "Volume '{}' restored from '{}' to '{}'",
+            volume.name, volume.source_path, volume.target_path
+        );
 
         Ok(())
+    }
+
+    /// Compute the sha256 hex digest of a file by streaming it in chunks
+    /// (avoids loading multi-GB volume archives fully into memory).
+    async fn sha256_file(path: &Path) -> Result<String> {
+        use sha2::{Digest, Sha256};
+        use tokio::io::AsyncReadExt;
+
+        let mut file = tokio::fs::File::open(path).await.map_err(|e| {
+            Error::System(format!(
+                "Failed to open '{}' for checksum: {}",
+                path.display(),
+                e
+            ))
+        })?;
+
+        let mut hasher = Sha256::new();
+        let mut buf = vec![0u8; 8 * 1024 * 1024];
+        loop {
+            let n = file.read(&mut buf).await.map_err(|e| {
+                Error::System(format!(
+                    "Failed to read '{}' for checksum: {}",
+                    path.display(),
+                    e
+                ))
+            })?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+        }
+
+        Ok(hex::encode(hasher.finalize()))
     }
 
     /// Calculate optimal parallel stream count based on hardware
@@ -171,6 +292,13 @@ pub struct RestoreResult {
     pub throughput_mbps: f64,
 }
 
+/// Single-quote a path for safe interpolation into a `sh -c` command
+/// string (same technique used elsewhere in this codebase for shelling
+/// out to `tar`/`dd`/compression tools).
+fn shell_escape(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,28 +307,93 @@ mod tests {
     async fn test_parallel_restore() {
         let manager = ParallelRestoreManager::new(4);
 
-        let volumes = vec![
-            VolumeRestore {
-                name: "disk0".to_string(),
-                source_path: "/backup/disk0".to_string(),
-                target_path: "/vms/disk0".to_string(),
-                size_bytes: 10_000_000_000, // 10GB
-                checksum: None,
-            },
-            VolumeRestore {
-                name: "disk1".to_string(),
-                source_path: "/backup/disk1".to_string(),
-                target_path: "/vms/disk1".to_string(),
-                size_bytes: 5_000_000_000, // 5GB
-                checksum: None,
-            },
-        ];
+        // Build real tar archives so the restore path has something
+        // genuine to extract, matching what `backup::mod`'s
+        // `backup_with_file_copy` actually produces.
+        let tmp = tempfile::tempdir().unwrap();
+        let mk_volume = |name: &str, tmp: &std::path::Path| -> VolumeRestore {
+            let src_dir = tmp.join(format!("{}-src", name));
+            std::fs::create_dir_all(&src_dir).unwrap();
+            std::fs::write(src_dir.join("data.txt"), b"hello from backup").unwrap();
 
-        let result = manager.restore_parallel("backup-001", volumes).await.unwrap();
+            let archive_path = tmp.join(format!("{}.tar", name));
+            let status = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!(
+                    "tar -cf {} -C {} .",
+                    archive_path.display(),
+                    src_dir.display()
+                ))
+                .status()
+                .unwrap();
+            assert!(status.success());
+
+            let size_bytes = std::fs::metadata(&archive_path).unwrap().len();
+            let target_dir = tmp.join(format!("{}-target", name));
+
+            VolumeRestore {
+                name: name.to_string(),
+                source_path: archive_path.to_string_lossy().to_string(),
+                target_path: target_dir.to_string_lossy().to_string(),
+                size_bytes,
+                checksum: None,
+            }
+        };
+
+        let volumes = vec![
+            mk_volume("disk0", tmp.path()),
+            mk_volume("disk1", tmp.path()),
+        ];
+        let expected_total: u64 = volumes.iter().map(|v| v.size_bytes).sum();
+
+        let result = manager
+            .restore_parallel("backup-001", volumes)
+            .await
+            .unwrap();
 
         assert_eq!(result.restored_volumes.len(), 2);
         assert!(result.failed_volumes.is_empty());
-        assert_eq!(result.total_size_bytes, 15_000_000_000);
+        assert_eq!(result.total_size_bytes, expected_total);
+
+        // Verify the data actually landed on disk.
+        let restored = std::fs::read_to_string(tmp.path().join("disk0-target/data.txt")).unwrap();
+        assert_eq!(restored, "hello from backup");
+    }
+
+    #[tokio::test]
+    async fn test_restore_volume_missing_source_errors() {
+        let volume = VolumeRestore {
+            name: "missing".to_string(),
+            source_path: "/nonexistent/path/that/should/not/exist.tar".to_string(),
+            target_path: "/tmp/horcrux-test-restore-missing".to_string(),
+            size_bytes: 0,
+            checksum: None,
+        };
+
+        let err = ParallelRestoreManager::restore_volume(&volume)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not accessible"));
+    }
+
+    #[tokio::test]
+    async fn test_restore_volume_checksum_mismatch_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let archive_path = tmp.path().join("bad.tar");
+        std::fs::write(&archive_path, b"not really a tar, just needs a checksum").unwrap();
+
+        let volume = VolumeRestore {
+            name: "corrupt".to_string(),
+            source_path: archive_path.to_string_lossy().to_string(),
+            target_path: tmp.path().join("target").to_string_lossy().to_string(),
+            size_bytes: 0,
+            checksum: Some("0".repeat(64)),
+        };
+
+        let err = ParallelRestoreManager::restore_volume(&volume)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("checksum mismatch"));
     }
 
     #[test]
