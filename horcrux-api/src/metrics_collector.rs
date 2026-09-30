@@ -99,10 +99,14 @@ async fn collect_and_broadcast_node_metrics(
     // (VM storage, snapshots, etc. all live under here) via statvfs(2).
     // Falls back to HORCRUX_DATA_DIR if set (matches config.rs's own
     // override), otherwise the default /var/lib/horcrux install path.
-    let data_dir = std::env::var("HORCRUX_DATA_DIR").unwrap_or_else(|_| "/var/lib/horcrux".to_string());
-    let disk_usage_percent = crate::metrics::system::read_disk_usage_percent(&data_dir)
-        .unwrap_or_else(|e| {
-            debug!("Failed to read disk usage for {}: {} (reporting 0.0)", data_dir, e);
+    let data_dir =
+        std::env::var("HORCRUX_DATA_DIR").unwrap_or_else(|_| "/var/lib/horcrux".to_string());
+    let disk_usage_percent =
+        crate::metrics::system::read_disk_usage_percent(&data_dir).unwrap_or_else(|e| {
+            debug!(
+                "Failed to read disk usage for {}: {} (reporting 0.0)",
+                data_dir, e
+            );
             0.0
         });
 
