@@ -225,9 +225,8 @@ pub fn read_disk_stats(device: &str) -> io::Result<DiskStats> {
 /// what a normal user/df would see (i.e. it accounts for the
 /// root-reserved-blocks margin most filesystems carve out).
 pub fn read_disk_usage_percent(mount_point: &str) -> io::Result<f64> {
-    let stat = nix::sys::statvfs::statvfs(mount_point).map_err(|e| {
-        io::Error::other(format!("statvfs({}) failed: {}", mount_point, e))
-    })?;
+    let stat = nix::sys::statvfs::statvfs(mount_point)
+        .map_err(|e| io::Error::other(format!("statvfs({}) failed: {}", mount_point, e)))?;
 
     let total_blocks = stat.blocks();
     if total_blocks == 0 {
