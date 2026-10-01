@@ -750,7 +750,7 @@ async fn add_kubeadm_node(node: &ProvisionNode, join_info: &NodeJoinInfo) -> K8s
             "cannot join node {} to the cluster: no CA cert hash available \
              (join_info.ca_cert_hash was None) - refusing to substitute a \
              placeholder hash into a real kubeadm join command",
-            node.name
+            node.address
         ))
     })?;
 
