@@ -1,0 +1,62 @@
+# Dockerfile for building the Horcrux Gentoo LiveCD/installer ISO.
+#
+# Per AGENTS.md: Horcrux is Gentoo-native end to end -- the outer build
+# tooling must come from Portage (emerge), not apt/dpkg on a Debian/Ubuntu
+# base, even though this is "just" the outer ISO-builder shell and not the
+# installed product itself. build/scripts/build-gentoo-iso.sh already
+# assumes a Gentoo host: it error-messages with `emerge -av squashfs-tools
+# libisoburn grub cpio dosfstools rust` when those are missing, and does
+# all of its OWN package installation inside a chroot via run_chroot/emerge
+# -- this image only needs to provide that outer toolset.
+FROM gentoo/stage3:amd64-systemd
+
+# RUST_VARIANT: same test/release split as Patronus's ISO builder.
+#  - "bin"    (default): dev-lang/rust-bin, prebuilt -- fast, fine for
+#    dev/test ISO builds and CI smoke tests.
+#  - "source": dev-lang/rust compiled through Portage -- hours-long under
+#    emulation but reproducible; use for production/release ISOs.
+ARG RUST_VARIANT=bin
+
+# Same two fixes Patronus's ISO-builder Dockerfile needed, for the same
+# reasons (see patronus/gentoo/docker/Dockerfile.iso-builder):
+#  - FEATURES=-sandbox etc.: Gentoo's ptrace-based build sandbox misreads
+#    process personality bits under QEMU/binfmt (ARM64 Linux hosts) and
+#    Rosetta 2 (Apple Silicon Docker Desktop), aborting any package with a
+#    Rust build-script subprocess. Disposable single-purpose builder image,
+#    safe to disable here.
+#  - dev-lang/rust-bin needs ~amd64 accepted (virtual/rust doesn't exist).
+RUN mkdir -p /etc/portage/package.accept_keywords /etc/portage/package.use && \
+    if [ "${RUST_VARIANT}" = "bin" ]; then \
+        echo "dev-lang/rust-bin ~amd64" > /etc/portage/package.accept_keywords/rust-bin; \
+    fi && \
+    echo 'FEATURES="-sandbox -usersandbox -pid-sandbox -ipc-sandbox -network-sandbox"' \
+        >> /etc/portage/make.conf && \
+    echo "app-emulation/libvirt -virt-network" > /etc/portage/package.use/libvirt
+
+# Outer tooling build-gentoo-iso.sh needs on the HOST side (everything else
+# it installs itself, inside the chroot, via run_chroot + emerge).
+# app-emulation/libvirt: install_horcrux() runs `cargo build --release` on
+# THIS (outer) host before copying the resulting binaries into the chroot
+# rootfs -- horcrux-api links against libvirt (the `virt` crate) for VM
+# metrics, so libvirt's headers/libs must be present here at link time,
+# not just inside the target chroot.
+RUN if [ "${RUST_VARIANT}" = "bin" ]; then RUST_PKG="dev-lang/rust-bin"; else RUST_PKG="dev-lang/rust"; fi && \
+    emerge-webrsync && \
+    emerge --oneshot --quiet \
+        sys-fs/squashfs-tools \
+        dev-libs/libisoburn \
+        sys-boot/grub:2 \
+        app-arch/cpio \
+        sys-fs/dosfstools \
+        app-emulation/libvirt \
+        "${RUST_PKG}" \
+        net-misc/wget
+
+RUN mkdir -p /build/output
+
+WORKDIR /build/horcrux
+
+COPY docker/entrypoint.sh /build/entrypoint.sh
+RUN chmod +x /build/entrypoint.sh
+
+ENTRYPOINT ["/build/entrypoint.sh"]

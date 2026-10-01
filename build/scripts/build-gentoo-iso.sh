@@ -690,6 +690,10 @@ build_kernel() {
         run_chroot "echo 'sys-kernel/gentoo-kernel-bin ~amd64 ~arm64' >> /etc/portage/package.accept_keywords/kernel" 2>/dev/null || true
         run_chroot "echo 'virtual/dist-kernel ~amd64 ~arm64' >> /etc/portage/package.accept_keywords/kernel" 2>/dev/null || true
         run_chroot "echo 'sys-kernel/linux-firmware linux-fw-redistributable no-source-code' >> /etc/portage/package.license" 2>/dev/null || true
+        # gentoo-kernel-bin[initramfs] requires installkernel built with
+        # the dracut USE flag (its default initramfs generator) -- without
+        # this, emerge blocks on an unresolved USE dependency every time.
+        run_chroot "echo '>=sys-kernel/installkernel-68 dracut' >> /etc/portage/package.use/installkernel" 2>/dev/null || true
 
         # Install firmware and binary kernel
         log_info "Installing linux-firmware..."

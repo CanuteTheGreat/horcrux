@@ -695,7 +695,7 @@ impl MigrationManager {
         // The XML is streamed over the ssh process's stdin rather than passed
         // as a shell argument, which avoids shell-quoting corruption and
         // avoids a temp file on the target node.
-        let define_result: std::result::Result<std::process::Output, std::io::Error> = async {
+        let define_result: std::result::Result<std::process::Output, horcrux_common::Error> = async {
             let mut child = Command::new("ssh")
                 .args([
                     "-o",
