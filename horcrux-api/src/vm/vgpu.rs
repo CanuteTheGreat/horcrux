@@ -165,16 +165,129 @@ impl VGpuManager {
         ])
     }
 
-    /// Parse NVIDIA vGPU profiles from nvidia-smi output
+    /// Parse NVIDIA vGPU profiles from `nvidia-smi vgpu -q` output.
+    ///
+    /// Expected blocks look roughly like:
+    /// ```text
+    ///     vGPU Type Supported
+    ///         vGPU 1
+    ///             Name                      : GRID A100-4C
+    ///             Max Instances             : 16
+    ///             Frame Buffer              : 4096 MiB
+    /// ```
+    /// Field order/spacing varies across driver versions, so we track the
+    /// current profile as a set of optional fields and flush it whenever a
+    /// new "vGPU <n>" header (or EOF) is reached. If nothing parses out of
+    /// real output (unexpected format, or future driver changes it again),
+    /// we fall back to the common hardcoded profiles so callers always get
+    /// something usable instead of silently getting an empty list.
     fn parse_nvidia_vgpu_profiles(&self, output: &str) -> Result<Vec<VGpuProfile>> {
-        let profiles = Vec::new();
+        let mut profiles = Vec::new();
 
-        // Simple parsing (in production, use proper parsing)
-        for line in output.lines() {
-            if line.contains("vGPU Type") {
-                // Parse profile information
-                // This is a placeholder - actual parsing would be more complex
+        let mut cur_type: Option<String> = None;
+        let mut cur_name: Option<String> = None;
+        let mut cur_fb_mb: Option<u64> = None;
+        let mut cur_max_instances: Option<u32> = None;
+
+        let flush = |profiles: &mut Vec<VGpuProfile>,
+                     vgpu_type: &mut Option<String>,
+                     name: &mut Option<String>,
+                     fb_mb: &mut Option<u64>,
+                     max_instances: &mut Option<u32>| {
+            if let Some(n) = name.take() {
+                let vt = vgpu_type.take().unwrap_or_else(|| n.clone());
+                let fb = fb_mb.take().unwrap_or(0);
+                let mi = max_instances.take().unwrap_or(1);
+                profiles.push(VGpuProfile {
+                    name: n.to_lowercase().replace([' ', '_'], "-"),
+                    vgpu_type: vt,
+                    framebuffer_mb: fb,
+                    max_instances: mi,
+                    description: format!("{} MiB framebuffer", fb),
+                });
             }
+            *vgpu_type = None;
+            *fb_mb = None;
+            *max_instances = None;
+        };
+
+        for raw_line in output.lines() {
+            let line = raw_line.trim();
+
+            if line.starts_with("vGPU ") && line.chars().nth(5).is_some_and(|c| c.is_ascii_digit())
+            {
+                // New profile block starting: flush whatever we had.
+                flush(
+                    &mut profiles,
+                    &mut cur_type,
+                    &mut cur_name,
+                    &mut cur_fb_mb,
+                    &mut cur_max_instances,
+                );
+                continue;
+            }
+
+            let Some((key, value)) = line.split_once(':') else {
+                continue;
+            };
+            let key = key.trim();
+            let value = value.trim();
+            if value.is_empty() {
+                continue;
+            }
+
+            match key {
+                "Name" => {
+                    cur_type = Some(value.to_string());
+                    cur_name = Some(value.to_string());
+                }
+                "Max Instances" => {
+                    cur_max_instances = value.parse::<u32>().ok();
+                }
+                "Frame Buffer" | "FB Memory" | "Frame Buffer Size" => {
+                    // Typically formatted like "4096 MiB" or "4 GiB"
+                    let mut parts = value.split_whitespace();
+                    if let Some(num) = parts.next().and_then(|n| n.parse::<u64>().ok()) {
+                        let unit = parts.next().unwrap_or("MiB");
+                        cur_fb_mb = Some(if unit.eq_ignore_ascii_case("GiB") {
+                            num * 1024
+                        } else {
+                            num
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Flush the final profile block (no trailing "vGPU N" header follows it).
+        flush(
+            &mut profiles,
+            &mut cur_type,
+            &mut cur_name,
+            &mut cur_fb_mb,
+            &mut cur_max_instances,
+        );
+
+        if profiles.is_empty() {
+            // Unexpected/unparseable output (e.g. driver format changed again) --
+            // fall back to the same common profiles used when nvidia-smi isn't
+            // available at all, rather than silently returning nothing.
+            return Ok(vec![
+                VGpuProfile {
+                    name: "nvidia-256".to_string(),
+                    vgpu_type: "GRID A100-4C".to_string(),
+                    framebuffer_mb: 4096,
+                    max_instances: 16,
+                    description: "4GB framebuffer, compute workloads".to_string(),
+                },
+                VGpuProfile {
+                    name: "nvidia-512".to_string(),
+                    vgpu_type: "GRID A100-8C".to_string(),
+                    framebuffer_mb: 8192,
+                    max_instances: 8,
+                    description: "8GB framebuffer, graphics workloads".to_string(),
+                },
+            ]);
         }
 
         Ok(profiles)
@@ -459,5 +572,45 @@ mod tests {
         let manager = VGpuManager::new();
         assert!(manager.supports_migration(&VGpuType::Nvidia));
         assert!(!manager.supports_migration(&VGpuType::Passthrough));
+    }
+
+    #[test]
+    fn test_parse_nvidia_vgpu_profiles_real_format() {
+        let manager = VGpuManager::new();
+        let sample = "\
+GPU 00000000:01:00.0
+    vGPU Type Supported
+        vGPU 1
+            Name                      : GRID A100-4C
+            Max Instances             : 16
+            Frame Buffer              : 4096 MiB
+        vGPU 2
+            Name                      : GRID A100-8C
+            Max Instances             : 8
+            Frame Buffer              : 8 GiB
+";
+        let profiles = manager.parse_nvidia_vgpu_profiles(sample).unwrap();
+        assert_eq!(profiles.len(), 2);
+
+        assert_eq!(profiles[0].vgpu_type, "GRID A100-4C");
+        assert_eq!(profiles[0].framebuffer_mb, 4096);
+        assert_eq!(profiles[0].max_instances, 16);
+
+        assert_eq!(profiles[1].vgpu_type, "GRID A100-8C");
+        assert_eq!(profiles[1].framebuffer_mb, 8192); // 8 GiB -> 8192 MiB
+        assert_eq!(profiles[1].max_instances, 8);
+    }
+
+    #[test]
+    fn test_parse_nvidia_vgpu_profiles_falls_back_on_unparseable_output() {
+        let manager = VGpuManager::new();
+        let profiles = manager
+            .parse_nvidia_vgpu_profiles("totally unexpected driver output\nwith no known fields")
+            .unwrap();
+        // Should fall back to the common hardcoded profiles rather than an
+        // empty list, since the output didn't match any known field.
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles[0].name, "nvidia-256");
+        assert_eq!(profiles[1].name, "nvidia-512");
     }
 }
