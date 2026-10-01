@@ -695,40 +695,41 @@ impl MigrationManager {
         // The XML is streamed over the ssh process's stdin rather than passed
         // as a shell argument, which avoids shell-quoting corruption and
         // avoids a temp file on the target node.
-        let define_result: std::result::Result<std::process::Output, horcrux_common::Error> = async {
-            let mut child = Command::new("ssh")
-                .args([
-                    "-o",
-                    "StrictHostKeyChecking=no",
-                    "-o",
-                    "UserKnownHostsFile=/dev/null",
-                    &format!("root@{}", config.target_node),
-                    "virsh",
-                    "define",
-                    "/dev/stdin",
-                ])
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()?;
+        let define_result: std::result::Result<std::process::Output, horcrux_common::Error> =
+            async {
+                let mut child = Command::new("ssh")
+                    .args([
+                        "-o",
+                        "StrictHostKeyChecking=no",
+                        "-o",
+                        "UserKnownHostsFile=/dev/null",
+                        &format!("root@{}", config.target_node),
+                        "virsh",
+                        "define",
+                        "/dev/stdin",
+                    ])
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()?;
 
-            {
-                let mut stdin = child.stdin.take().ok_or_else(|| {
-                    std::io::Error::other("failed to open ssh stdin for VM XML transfer")
-                })?;
-                tokio::io::AsyncWriteExt::write_all(&mut stdin, vm_xml.as_bytes()).await?;
-                // Drop stdin to send EOF so `virsh define` can proceed.
+                {
+                    let mut stdin = child.stdin.take().ok_or_else(|| {
+                        std::io::Error::other("failed to open ssh stdin for VM XML transfer")
+                    })?;
+                    tokio::io::AsyncWriteExt::write_all(&mut stdin, vm_xml.as_bytes()).await?;
+                    // Drop stdin to send EOF so `virsh define` can proceed.
+                }
+
+                child.wait_with_output().await
             }
-
-            child.wait_with_output().await
-        }
-        .await
-        .map_err(|e| {
-            horcrux_common::Error::System(format!(
-                "Failed to pipe VM XML to target node for define: {}",
-                e
-            ))
-        });
+            .await
+            .map_err(|e| {
+                horcrux_common::Error::System(format!(
+                    "Failed to pipe VM XML to target node for define: {}",
+                    e
+                ))
+            });
 
         match define_result {
             Ok(output) if !output.status.success() => {
