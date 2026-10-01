@@ -691,50 +691,44 @@ impl MigrationManager {
         Self::update_job_state(jobs, job_id, MigrationState::Syncing, 85.0).await;
         tracing::info!("Importing VM {} configuration on target node", config.vm_id);
 
-        // Define VM on target node using the exported XML
-        let _define_output = Command::new("ssh")
-            .args([
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                &format!("root@{}", config.target_node),
-                "virsh",
-                "define",
-                "/dev/stdin",
-            ])
-            .stdin(std::process::Stdio::piped())
-            .output()
-            .await;
+        // Define VM on target node using the exported XML.
+        // The XML is streamed over the ssh process's stdin rather than passed
+        // as a shell argument, which avoids shell-quoting corruption and
+        // avoids a temp file on the target node.
+        let define_result: Result<std::process::Output, std::io::Error> = async {
+            let mut child = Command::new("ssh")
+                .args([
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-o",
+                    "UserKnownHostsFile=/dev/null",
+                    &format!("root@{}", config.target_node),
+                    "virsh",
+                    "define",
+                    "/dev/stdin",
+                ])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()?;
 
-        // TODO: Pipe vm_xml to stdin - for now, write to temp file
-        let temp_xml_path = format!("/tmp/vm-{}.xml", config.vm_id);
-        let _write_xml = Command::new("ssh")
-            .args([
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                &format!("root@{}", config.target_node),
-                &format!("cat > {}", temp_xml_path),
-            ])
-            .arg(&vm_xml)
-            .output()
-            .await;
+            {
+                let mut stdin = child.stdin.take().ok_or_else(|| {
+                    std::io::Error::other("failed to open ssh stdin for VM XML transfer")
+                })?;
+                tokio::io::AsyncWriteExt::write_all(&mut stdin, vm_xml.as_bytes()).await?;
+                // Drop stdin to send EOF so `virsh define` can proceed.
+            }
 
-        let define_result = Command::new("ssh")
-            .args([
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                &format!("root@{}", config.target_node),
-                "virsh",
-                "define",
-                &temp_xml_path,
-            ])
-            .output()
-            .await;
+            child.wait_with_output().await
+        }
+        .await
+        .map_err(|e| {
+            horcrux_common::Error::System(format!(
+                "Failed to pipe VM XML to target node for define: {}",
+                e
+            ))
+        });
 
         match define_result {
             Ok(output) if !output.status.success() => {
