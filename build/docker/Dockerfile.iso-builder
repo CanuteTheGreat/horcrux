@@ -31,7 +31,8 @@ RUN mkdir -p /etc/portage/package.accept_keywords /etc/portage/package.use && \
     fi && \
     echo 'FEATURES="-sandbox -usersandbox -pid-sandbox -ipc-sandbox -network-sandbox"' \
         >> /etc/portage/make.conf && \
-    echo "app-emulation/libvirt -virt-network" > /etc/portage/package.use/libvirt
+    echo "app-emulation/libvirt -virt-network" > /etc/portage/package.use/libvirt && \
+    echo ">=net-libs/gnutls-3.8.13 tools pkcs11" > /etc/portage/package.use/gnutls
 
 # Outer tooling build-gentoo-iso.sh needs on the HOST side (everything else
 # it installs itself, inside the chroot, via run_chroot + emerge).
