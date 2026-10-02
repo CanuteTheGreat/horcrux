@@ -15,8 +15,8 @@ jobs:
     # Fail fast instead of silently consuming the full 3h runner timeout
     # (observed 2026-10-01: run 144/job 5438 ran for exactly 3h00m01s before
     # being cancelled) -- a docs-only job has no business needing anywhere
-    # near that long, and continue-on-error on the artifact upload step
-    # already means a longer-than-expected rustdoc build is the only
+    # near that long, and with the artifact upload step removed (see
+    # below), a longer-than-expected rustdoc build is the only
     # meaningful signal left to catch here.
     timeout-minutes: 30
     steps:
@@ -56,25 +56,19 @@ jobs:
           cp -r docs/* public/ 2>/dev/null || true
           echo '<meta http-equiv="refresh" content="0; url=horcrux_api/index.html">' > public/index.html
 
-      # This Forgejo instance has no GitHub-Pages-equivalent hosting product
-      # (upload-pages-artifact/deploy-pages are GHES-only APIs Forgejo does
-      # not implement - confirmed via GHESNotSupportedError in CI, 2026-09-25).
-      # v4+ artifact actions ALSO require the newer @actions/artifact API,
-      # which this runner does not support (GHESNotSupportedError again).
-      # v3 uses the older, supported artifact API - use that instead.
-      # This artifact upload has been observed hard-failing (HTTP 500 on
-      # finalize, after ~10-15min of retries) on the Forgejo instance's
-      # artifact storage backend on essentially every run since 2026-09-24
-      # -- server-side infra flakiness, not a workflow bug. The
-      # horcrux-docs artifact is also not consumed by any other workflow
-      # (release.yml/build-iso.yaml download different artifacts), so it
-      # is purely informational. continue-on-error keeps the actual rustdoc
-      # build (the part with real signal) from being masked by an
-      # unrelated storage-backend outage, while still surfacing upload
-      # failures in the step summary if/when the backend recovers.
-      - name: Upload docs artifact
-        uses: actions/upload-artifact@v3
-        continue-on-error: true
-        with:
-          name: horcrux-docs
-          path: public
+      # DROPPED the "Upload docs artifact" step (2026-10-02): the Forgejo
+      # artifact storage backend has now hard-failed the upload on every
+      # single run since 2026-09-24 (HTTP 500 on finalize, after ~10-15min
+      # of retries - see run 2345/job 11033 and run 144/job 5438 before
+      # it), and confirmed this run that `continue-on-error: true` does
+      # NOT actually protect the job here: actions/upload-artifact@v3's
+      # finalize-upload failure path exits the step in a way the runner
+      # still reports as an overall job failure, bypassing
+      # continue-on-error entirely (two separate "fixes" relying on
+      # continue-on-error have now both failed the same way). Since the
+      # horcrux-docs artifact was purely informational and consumed by no
+      # other workflow (release.yml/build-iso.yaml pull different
+      # artifacts), the only remaining value of this job is the rustdoc
+      # build itself as a compile-check - so stop uploading and let this
+      # job report real pass/fail on that alone. Revisit if/when the
+      # instance gets real GitHub-Pages-equivalent artifact hosting.
