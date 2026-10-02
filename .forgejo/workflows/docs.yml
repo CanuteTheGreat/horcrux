@@ -12,6 +12,13 @@ jobs:
   build-docs:
     name: Build Documentation
     runs-on: x86_64
+    # Fail fast instead of silently consuming the full 3h runner timeout
+    # (observed 2026-10-01: run 144/job 5438 ran for exactly 3h00m01s before
+    # being cancelled) -- a docs-only job has no business needing anywhere
+    # near that long, and continue-on-error on the artifact upload step
+    # already means a longer-than-expected rustdoc build is the only
+    # meaningful signal left to catch here.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -19,7 +26,14 @@ jobs:
         uses: https://github.com/dtolnay/rust-toolchain@stable
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential
+        # Must match ci.yml's apt-get install (build-essential + libvirt-dev):
+        # cargo doc --all-features still compiles the virt/qemu feature's
+        # libvirt FFI bindings even though --no-deps skips generating their
+        # doc pages, so the libvirt headers are required here too or the
+        # build fails outright. Missing libvirt-dev here (while every other
+        # workflow job that touches --all-features installs it) was the
+        # actual root cause of this job's recurring failures.
+        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev
 
       - name: Cache cargo registry
         uses: actions/cache@v4
