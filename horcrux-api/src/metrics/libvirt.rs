@@ -189,7 +189,10 @@ impl LibvirtManager {
         let xml = match domain.get_xml_desc(0) {
             Ok(xml) => xml,
             Err(e) => {
-                debug!("get_xml_desc failed, cannot enumerate {} devices: {:?}", element, e);
+                debug!(
+                    "get_xml_desc failed, cannot enumerate {} devices: {:?}",
+                    element, e
+                );
                 return Vec::new();
             }
         };
