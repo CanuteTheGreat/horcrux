@@ -5845,6 +5845,8 @@ struct CloneVmRequest {
     mac_addresses: Option<Vec<String>>,
     #[serde(default)]
     description: Option<String>,
+    #[serde(default)]
+    network_config: Option<vm::clone::NetworkConfig>,
 }
 
 fn default_clone_mode() -> String {
@@ -5883,7 +5885,7 @@ async fn clone_vm(
         start: req.start,
         mac_addresses: req.mac_addresses,
         description: req.description,
-        network_config: None, // TODO: Add network config support to API
+        network_config: req.network_config,
     };
 
     // Clone the VM
