@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::cluster::node::Architecture;
+use crate::cluster::node::{Architecture, PassthroughDeviceRequirement};
 use serde::{Deserialize, Serialize};
 
 /// Node resource usage
@@ -18,6 +18,15 @@ pub struct NodeResources {
     /// CPU architecture of this node (default: x86_64 for backward compatibility)
     #[serde(default)]
     pub architecture: Architecture,
+    /// Live snapshot of this node's passthrough-capable devices (GPUs, etc.)
+    /// that are currently NOT in use by any VM, identified by vendor:device
+    /// ID (see `PassthroughDeviceRequirement`). One entry per physical,
+    /// available unit -- a node with two identical, free GPUs has two
+    /// entries. Populated by the caller (e.g. from `GpuManager::scan_devices`
+    /// filtered to `!in_use`). Defaults to empty for backward compatibility
+    /// with callers/tests that don't yet report passthrough inventory.
+    #[serde(default)]
+    pub available_passthrough_devices: Vec<PassthroughDeviceRequirement>,
 }
 
 /// VM resource requirements
@@ -32,6 +41,11 @@ pub struct VmResources {
     /// Target CPU architecture the VM requires (default: x86_64 for backward compatibility)
     #[serde(default)]
     pub architecture: Architecture,
+    /// Passthrough devices (GPUs, etc.) this VM requires to be physically
+    /// present and available on any node it is placed on. Defaults to empty
+    /// for backward compatibility with VMs that don't use passthrough.
+    #[serde(default)]
+    pub required_passthrough_devices: Vec<PassthroughDeviceRequirement>,
 }
 
 /// Balancing strategy
@@ -265,9 +279,13 @@ impl ClusterBalancer {
     /// Smart resource-aware, architecture-aware node selection:
     /// 1. Filter out nodes that cannot run the VM's architecture at all
     ///    (e.g. a riscv64-only node can never run an x86_64 VM).
-    /// 2. Within the compatible set, partition into "native" (no emulation)
+    /// 2. Filter out nodes missing one or more of the VM's required
+    ///    passthrough devices (GPU, etc.), matched by vendor:device ID among
+    ///    each node's currently-available (not in_use) units -- mirrors the
+    ///    architecture filter exactly, applied right after it.
+    /// 3. Within the compatible set, partition into "native" (no emulation)
     ///    and "emulation-only" (cross-arch via QEMU) candidates.
-    /// 3. Prefer native nodes: pick the least-loaded native node that has
+    /// 4. Prefer native nodes: pick the least-loaded native node that has
     ///    sufficient free resources. Only fall back to an emulation-capable
     ///    node if no native node has room.
     pub fn find_best_node(&self, nodes: &[NodeResources], vm: &VmResources) -> Option<String> {
@@ -281,6 +299,12 @@ impl ClusterBalancer {
         let compatible: Vec<&NodeResources> = nodes
             .iter()
             .filter(|n| n.architecture.can_run(&vm.architecture))
+            .filter(|n| {
+                crate::cluster::node::passthrough_devices_satisfied(
+                    &n.available_passthrough_devices,
+                    &vm.required_passthrough_devices,
+                )
+            })
             .collect();
 
         if compatible.is_empty() {
@@ -352,6 +376,7 @@ mod tests {
             total_memory_gb: 64,
             total_disk_gb: 1000,
             architecture: Architecture::X86_64,
+            available_passthrough_devices: Vec::new(),
         }
     }
 
@@ -377,6 +402,7 @@ mod tests {
             current_node: node.to_string(),
             can_migrate: true,
             architecture: Architecture::X86_64,
+            required_passthrough_devices: Vec::new(),
         }
     }
 

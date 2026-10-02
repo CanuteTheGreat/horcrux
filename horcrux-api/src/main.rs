@@ -7908,6 +7908,7 @@ async fn add_ha_resource(
         max_relocate: 3,                   // Default max relocations
         state: ha::HaState::Started,
         architecture: Default::default(),
+        required_passthrough_devices: Default::default(),
     };
 
     state

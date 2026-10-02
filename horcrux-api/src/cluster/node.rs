@@ -81,6 +81,65 @@ impl Architecture {
     }
 }
 
+/// Identifies a passthrough-capable PCI device (GPU, etc.) by vendor:device
+/// ID rather than by PCI address. PCI addresses (e.g. `0000:01:00.0`) are
+/// specific to the physical slot layout of a single host and are near-certain
+/// to differ on the failover target -- vendor_id:device_id identifies the
+/// same *model* of hardware regardless of which physical node it is plugged
+/// into or which slot it occupies there, so it is the right key for matching
+/// "does this other node have an equivalent device" across a cluster.
+///
+/// `device_name` is an optional human-readable label (e.g. "NVIDIA RTX A6000")
+/// carried for diagnostics/UI only -- it is NOT used for matching since the
+/// same vendor:device pair is authoritative and names can vary slightly
+/// between lspci outputs/driver versions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PassthroughDeviceRequirement {
+    pub vendor_id: String,
+    pub device_id: String,
+    #[serde(default)]
+    pub device_name: String,
+}
+
+impl PassthroughDeviceRequirement {
+    /// Compare only the vendor:device identity (case-insensitive -- lspci ID
+    /// casing is not guaranteed consistent across tools/hosts), ignoring the
+    /// cosmetic device_name label.
+    pub fn same_model(&self, other: &PassthroughDeviceRequirement) -> bool {
+        self.vendor_id.eq_ignore_ascii_case(&other.vendor_id)
+            && self.device_id.eq_ignore_ascii_case(&other.device_id)
+    }
+}
+
+/// Check whether `available` (a list of currently-unused passthrough device
+/// units on some node, one entry per physical unit) contains, as a multiset,
+/// at least one available unit for every entry in `required`. This correctly
+/// handles a VM requiring two devices of the *same* model (needs two distinct
+/// available units, not one unit satisfying both requirements) as well as
+/// nodes that have the right model but every unit already in_use (callers
+/// should not include in_use devices in `available`).
+pub fn passthrough_devices_satisfied(
+    available: &[PassthroughDeviceRequirement],
+    required: &[PassthroughDeviceRequirement],
+) -> bool {
+    if required.is_empty() {
+        return true;
+    }
+
+    let mut remaining: Vec<&PassthroughDeviceRequirement> = available.iter().collect();
+
+    for req in required {
+        match remaining.iter().position(|dev| dev.same_model(req)) {
+            Some(idx) => {
+                remaining.remove(idx);
+            }
+            None => return false,
+        }
+    }
+
+    true
+}
+
 /// Cluster node
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {

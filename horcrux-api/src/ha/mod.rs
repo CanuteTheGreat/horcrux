@@ -7,7 +7,7 @@
 pub mod fencing;
 
 use crate::cluster::balancer::{ClusterBalancer, NodeResources, VmResources};
-use crate::cluster::node::Architecture;
+use crate::cluster::node::{passthrough_devices_satisfied, Architecture, PassthroughDeviceRequirement};
 use chrono::{DateTime, Utc};
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
@@ -43,6 +43,14 @@ pub struct HaResource {
     /// emulated). Defaults to x86_64 for backward compatibility.
     #[serde(default)]
     pub architecture: Architecture,
+    /// Passthrough devices (GPUs, etc.) physically attached to this VM.
+    /// Failover/migration must only ever select a node that currently has an
+    /// available (not in_use) unit of each required device, matched by
+    /// vendor:device ID -- mirrors the architecture field/check exactly.
+    /// Defaults to empty for backward compatibility with VMs that don't use
+    /// passthrough.
+    #[serde(default)]
+    pub required_passthrough_devices: Vec<PassthroughDeviceRequirement>,
 }
 
 /// HA group configuration
@@ -66,6 +74,11 @@ pub struct HaConfig {
     /// compatibility with callers that don't yet pass it through.
     #[serde(default)]
     pub architecture: Architecture,
+    /// Passthrough devices (GPUs, etc.) the VM requires. Defaults to empty
+    /// for backward compatibility with callers that don't yet pass it
+    /// through.
+    #[serde(default)]
+    pub required_passthrough_devices: Vec<PassthroughDeviceRequirement>,
 }
 
 /// HA event for logging/auditing
@@ -235,6 +248,7 @@ impl HaManager {
             relocate_count: 0,
             last_state_change: Utc::now(),
             architecture: config.architecture,
+            required_passthrough_devices: config.required_passthrough_devices,
         };
 
         tracing::info!(
@@ -428,21 +442,30 @@ impl HaManager {
 
     /// Find best node for VM migration
     ///
-    /// Smart, resource- and architecture-aware target selection:
+    /// Smart, resource-, architecture-, and passthrough-device-aware target
+    /// selection:
     /// - Candidate nodes are restricted to the HA group's node list (unchanged
     ///   behavior), minus the VM's current node.
-    /// - The preferred node is honored ONLY if it is present in the group and
-    ///   also architecture-compatible with the VM -- a stale/incompatible
+    /// - The preferred node is honored ONLY if it is present in the group,
+    ///   architecture-compatible with the VM, AND has every passthrough
+    ///   device the VM requires currently available -- a stale/incompatible
     ///   preferred node is never blindly used.
     /// - Remaining candidates are filtered so a node that cannot run the VM's
-    ///   architecture (native or emulated -- see `Architecture::can_run`) is
-    ///   never selected, then least-loaded/native-preferred scoring is
-    ///   applied via `ClusterBalancer::find_best_node`.
+    ///   architecture (native or emulated -- see `Architecture::can_run`) OR
+    ///   is missing one or more required passthrough devices (GPU, etc. --
+    ///   matched by vendor:device ID among the node's currently-available,
+    ///   not-in_use units) is never selected, then least-loaded/native-
+    ///   preferred scoring is applied via `ClusterBalancer::find_best_node`.
     /// - If no live resource snapshot exists for a candidate node (e.g. in
     ///   tests, or before monitoring has reported in), it falls back to the
     ///   original "first available node" behavior for that node -- but ONLY
-    ///   when the node is still architecture-compatible; the architecture
-    ///   check is applied whenever the node's architecture is known.
+    ///   when the node is still architecture-compatible; the architecture and
+    ///   passthrough-device checks are applied whenever the node's resource
+    ///   snapshot is known. A VM with passthrough requirements but no
+    ///   candidate node snapshot at all has no way to be verified compatible,
+    ///   so (same as unknown architecture) it still falls through to the
+    ///   legacy path -- callers that care about passthrough correctness
+    ///   should always populate node_resources via `update_node_resources`.
     async fn find_best_node_for_migration(&self, resource: &HaResource) -> Result<Option<String>> {
         let groups = self.groups.read().await;
 
@@ -452,13 +475,20 @@ impl HaManager {
 
         let node_resources = self.node_resources.read().await;
 
-        // Prefer the preferred node if available AND architecture-compatible.
+        // Prefer the preferred node if available, architecture-compatible,
+        // AND has every required passthrough device currently available.
         if let Some(ref preferred) = resource.preferred_node {
             if group.nodes.contains(preferred) {
                 let compatible = match node_resources.get(preferred) {
-                    Some(res) => res.architecture.can_run(&resource.architecture),
+                    Some(res) => {
+                        res.architecture.can_run(&resource.architecture)
+                            && passthrough_devices_satisfied(
+                                &res.available_passthrough_devices,
+                                &resource.required_passthrough_devices,
+                            )
+                    }
                     // No resource snapshot known for this node -- don't block
-                    // on architecture we have no information about.
+                    // on architecture/passthrough info we don't have.
                     None => true,
                 };
                 if compatible {
@@ -495,6 +525,7 @@ impl HaManager {
                 current_node: resource.current_node.clone().unwrap_or_default(),
                 can_migrate: true,
                 architecture: resource.architecture.clone(),
+                required_passthrough_devices: resource.required_passthrough_devices.clone(),
             };
 
             let balancer = ClusterBalancer::new(Default::default());
@@ -502,14 +533,14 @@ impl HaManager {
                 return Ok(Some(target));
             }
 
-            // No known-resource node was architecture-compatible /
-            // had room. Fall through to the unknown-resource nodes below
-            // ONLY IF they are not architecture-incompatible by name lookup
-            // (we simply have no data, so we can't rule them out, but we
-            // also must not silently pick one over an incompatible known
-            // node -- this mirrors "no resources anywhere" semantics for the
-            // known set while still allowing legacy behavior for nodes with
-            // no monitoring data at all).
+            // No known-resource node was architecture-compatible, had every
+            // required passthrough device available, or had room. Fall
+            // through to the unknown-resource nodes below ONLY IF they are
+            // not ruled out by name lookup (we simply have no data, so we
+            // can't rule them out, but we also must not silently pick one
+            // over an incompatible known node -- this mirrors "no resources
+            // anywhere" semantics for the known set while still allowing
+            // legacy behavior for nodes with no monitoring data at all).
         }
 
         // Legacy fallback: first available node with no resource/architecture
@@ -635,6 +666,7 @@ mod tests {
             max_relocate: 2,
             state: HaState::Started,
             architecture: Architecture::X86_64,
+            required_passthrough_devices: Vec::new(),
         };
         manager.add_resource(config).await.unwrap();
 
@@ -663,6 +695,7 @@ mod tests {
             max_relocate: 2,
             state: HaState::Started,
             architecture: Architecture::X86_64,
+            required_passthrough_devices: Vec::new(),
         };
         manager.add_resource(config).await.unwrap();
 
@@ -682,6 +715,14 @@ mod tests {
     }
 
     fn make_node_resources(name: &str, arch: Architecture) -> NodeResources {
+        make_node_resources_with_devices(name, arch, Vec::new())
+    }
+
+    fn make_node_resources_with_devices(
+        name: &str,
+        arch: Architecture,
+        available_passthrough_devices: Vec<PassthroughDeviceRequirement>,
+    ) -> NodeResources {
         NodeResources {
             node_name: name.to_string(),
             cpu_usage: 10.0,
@@ -693,6 +734,23 @@ mod tests {
             total_memory_gb: 64,
             total_disk_gb: 1000,
             architecture: arch,
+            available_passthrough_devices,
+        }
+    }
+
+    fn gpu_a(device_name: &str) -> PassthroughDeviceRequirement {
+        PassthroughDeviceRequirement {
+            vendor_id: "10de".to_string(),
+            device_id: "2204".to_string(),
+            device_name: device_name.to_string(),
+        }
+    }
+
+    fn gpu_b(device_name: &str) -> PassthroughDeviceRequirement {
+        PassthroughDeviceRequirement {
+            vendor_id: "1002".to_string(),
+            device_id: "73bf".to_string(),
+            device_name: device_name.to_string(),
         }
     }
 
@@ -735,6 +793,7 @@ mod tests {
             max_relocate: 3,
             state: HaState::Started,
             architecture: Architecture::X86_64,
+            required_passthrough_devices: Vec::new(),
         };
         manager.add_resource(config).await.unwrap();
         manager
@@ -802,6 +861,7 @@ mod tests {
             max_relocate: 3,
             state: HaState::Started,
             architecture: Architecture::Riscv64,
+            required_passthrough_devices: Vec::new(),
         };
         manager.add_resource(config).await.unwrap();
         manager
@@ -851,6 +911,7 @@ mod tests {
             max_relocate: 3,
             state: HaState::Started,
             architecture: Architecture::Riscv64,
+            required_passthrough_devices: Vec::new(),
         };
         manager.add_resource(config).await.unwrap();
         manager
@@ -864,6 +925,287 @@ mod tests {
         assert!(migrated.is_empty());
 
         let resource = manager.get_resource(302).await.unwrap();
+        assert_eq!(resource.state, HaState::Error);
+    }
+
+    /// A VM with a GPU passed through must only migrate to a node that has
+    /// the same GPU model (vendor:device ID) available -- never to a node
+    /// lacking that hardware, even if that node is otherwise idle and
+    /// architecture-compatible.
+    #[tokio::test]
+    async fn test_failover_gpu_vm_only_migrates_to_node_with_matching_gpu() {
+        let manager = HaManager::new();
+        manager.enable().await;
+
+        let group = HaGroup {
+            name: "gpu-group".to_string(),
+            nodes: vec![
+                "node-with-gpu".to_string(),
+                "node-without-gpu".to_string(),
+                "node-fails".to_string(),
+            ],
+            restricted: false,
+            no_failback: false,
+        };
+        manager.add_group(group).await.unwrap();
+
+        manager
+            .update_node_resources(make_node_resources_with_devices(
+                "node-fails",
+                Architecture::X86_64,
+                Vec::new(),
+            ))
+            .await;
+        manager
+            .update_node_resources(make_node_resources_with_devices(
+                "node-without-gpu",
+                Architecture::X86_64,
+                Vec::new(),
+            ))
+            .await;
+        manager
+            .update_node_resources(make_node_resources_with_devices(
+                "node-with-gpu",
+                Architecture::X86_64,
+                vec![gpu_a("NVIDIA RTX A6000")],
+            ))
+            .await;
+
+        let config = HaConfig {
+            vm_id: 400,
+            group: "gpu-group".to_string(),
+            max_restart: 0,
+            max_relocate: 3,
+            state: HaState::Started,
+            architecture: Architecture::X86_64,
+            required_passthrough_devices: vec![gpu_a("NVIDIA RTX A6000")],
+        };
+        manager.add_resource(config).await.unwrap();
+        manager
+            .update_resource_state(400, HaState::Started, Some("node-fails".to_string()))
+            .await
+            .unwrap();
+
+        // Only node-with-gpu actually has the required GPU; node-without-gpu
+        // must never be selected even though it is architecture-compatible
+        // and idle.
+        let migrated = manager.handle_node_failure("node-fails").await.unwrap();
+        assert_eq!(migrated, vec![400]);
+
+        let events = manager.get_events(Some(400), None).await;
+        let migrate_event = events
+            .iter()
+            .find(|e| matches!(e.event_type, HaEventType::Migrated))
+            .expect("expected a migration event");
+        assert_ne!(migrate_event.node, "node-without-gpu");
+        assert_eq!(migrate_event.node, "node-with-gpu");
+    }
+
+    /// A node whose matching GPU model is already in_use by another VM (and
+    /// therefore absent from its `available_passthrough_devices` snapshot)
+    /// must NOT be selected as a failover target -- "has the right hardware"
+    /// is not enough, it must currently be free.
+    #[tokio::test]
+    async fn test_failover_gpu_vm_never_migrates_to_node_with_gpu_already_in_use() {
+        let manager = HaManager::new();
+        manager.enable().await;
+
+        let group = HaGroup {
+            name: "gpu-group".to_string(),
+            nodes: vec![
+                "node-gpu-busy".to_string(),
+                "node-gpu-free".to_string(),
+                "node-fails".to_string(),
+            ],
+            restricted: false,
+            no_failback: false,
+        };
+        manager.add_group(group).await.unwrap();
+
+        manager
+            .update_node_resources(make_node_resources_with_devices(
+                "node-fails",
+                Architecture::X86_64,
+                Vec::new(),
+            ))
+            .await;
+        // This node physically has the GPU model, but it's already consumed
+        // by another VM, so the live snapshot reports zero AVAILABLE units.
+        manager
+            .update_node_resources(make_node_resources_with_devices(
+                "node-gpu-busy",
+                Architecture::X86_64,
+                Vec::new(),
+            ))
+            .await;
+        manager
+            .update_node_resources(make_node_resources_with_devices(
+                "node-gpu-free",
+                Architecture::X86_64,
+                vec![gpu_a("NVIDIA RTX A6000")],
+            ))
+            .await;
+
+        let config = HaConfig {
+            vm_id: 401,
+            group: "gpu-group".to_string(),
+            max_restart: 0,
+            max_relocate: 3,
+            state: HaState::Started,
+            architecture: Architecture::X86_64,
+            required_passthrough_devices: vec![gpu_a("NVIDIA RTX A6000")],
+        };
+        manager.add_resource(config).await.unwrap();
+        manager
+            .update_resource_state(401, HaState::Started, Some("node-fails".to_string()))
+            .await
+            .unwrap();
+
+        let migrated = manager.handle_node_failure("node-fails").await.unwrap();
+        assert_eq!(migrated, vec![401]);
+
+        let events = manager.get_events(Some(401), None).await;
+        let migrate_event = events
+            .iter()
+            .find(|e| matches!(e.event_type, HaEventType::Migrated))
+            .expect("expected a migration event");
+        assert_ne!(migrate_event.node, "node-gpu-busy");
+        assert_eq!(migrate_event.node, "node-gpu-free");
+    }
+
+    /// If NO node has the required GPU currently available, failover must
+    /// cleanly transition the resource to HaState::Error -- never silently
+    /// migrate it to a node lacking the hardware (it would simply fail to
+    /// boot there, discovered much later and worse).
+    #[tokio::test]
+    async fn test_failover_gpu_vm_errors_when_no_matching_gpu_available() {
+        let manager = HaManager::new();
+        manager.enable().await;
+
+        let group = HaGroup {
+            name: "gpu-group".to_string(),
+            nodes: vec!["node-fails".to_string(), "node-no-gpu".to_string()],
+            restricted: false,
+            no_failback: false,
+        };
+        manager.add_group(group).await.unwrap();
+
+        manager
+            .update_node_resources(make_node_resources_with_devices(
+                "node-fails",
+                Architecture::X86_64,
+                vec![gpu_a("NVIDIA RTX A6000")],
+            ))
+            .await;
+        manager
+            .update_node_resources(make_node_resources_with_devices(
+                "node-no-gpu",
+                Architecture::X86_64,
+                Vec::new(),
+            ))
+            .await;
+
+        let config = HaConfig {
+            vm_id: 402,
+            group: "gpu-group".to_string(),
+            max_restart: 0,
+            max_relocate: 3,
+            state: HaState::Started,
+            architecture: Architecture::X86_64,
+            required_passthrough_devices: vec![gpu_a("NVIDIA RTX A6000")],
+        };
+        manager.add_resource(config).await.unwrap();
+        manager
+            .update_resource_state(402, HaState::Started, Some("node-fails".to_string()))
+            .await
+            .unwrap();
+
+        // The only remaining candidate (node-no-gpu) lacks the GPU entirely
+        // -- there is no legal migration target.
+        let migrated = manager.handle_node_failure("node-fails").await.unwrap();
+        assert!(migrated.is_empty());
+
+        let resource = manager.get_resource(402).await.unwrap();
+        assert_eq!(resource.state, HaState::Error);
+    }
+
+    /// Mixed-filter composition test: a node that IS architecture-compatible
+    /// but LACKS the required passthrough device must still be excluded --
+    /// proving the architecture filter and the passthrough-device filter
+    /// compose correctly (both must pass), not that either one alone is
+    /// sufficient.
+    #[tokio::test]
+    async fn test_failover_excludes_arch_compatible_node_missing_required_gpu() {
+        let manager = HaManager::new();
+        manager.enable().await;
+
+        let group = HaGroup {
+            name: "mixed-group".to_string(),
+            nodes: vec![
+                "x86-node-fails".to_string(),
+                "x86-node-no-gpu".to_string(),
+                "arm-node-with-gpu".to_string(),
+            ],
+            restricted: false,
+            no_failback: false,
+        };
+        manager.add_group(group).await.unwrap();
+
+        manager
+            .update_node_resources(make_node_resources_with_devices(
+                "x86-node-fails",
+                Architecture::X86_64,
+                vec![gpu_b("AMD RX 6800")],
+            ))
+            .await;
+        // Architecture-compatible (x86_64 == x86_64) but has no GPU at all.
+        manager
+            .update_node_resources(make_node_resources_with_devices(
+                "x86-node-no-gpu",
+                Architecture::X86_64,
+                Vec::new(),
+            ))
+            .await;
+        // Has the matching GPU model, but is riscv64-only -- riscv64 can
+        // never run an x86_64 guest (see `Architecture::can_run`). Using a
+        // riscv64 node here (rather than aarch64, which CAN emulate x86_64)
+        // keeps this node architecture-incompatible on its own axis, so the
+        // test below proves the real point: x86-node-no-gpu alone (arch-
+        // compatible but missing the device) is excluded by the device
+        // filter, not just swept up by an unrelated architecture mismatch.
+        manager
+            .update_node_resources(make_node_resources_with_devices(
+                "arm-node-with-gpu",
+                Architecture::Riscv64,
+                vec![gpu_b("AMD RX 6800")],
+            ))
+            .await;
+
+        let config = HaConfig {
+            vm_id: 403,
+            group: "mixed-group".to_string(),
+            max_restart: 0,
+            max_relocate: 3,
+            state: HaState::Started,
+            architecture: Architecture::X86_64,
+            required_passthrough_devices: vec![gpu_b("AMD RX 6800")],
+        };
+        manager.add_resource(config).await.unwrap();
+        manager
+            .update_resource_state(403, HaState::Started, Some("x86-node-fails".to_string()))
+            .await
+            .unwrap();
+
+        // x86-node-no-gpu is architecture-compatible but missing the GPU;
+        // arm-node-with-gpu (actually riscv64) has the GPU but is
+        // architecture-incompatible. Neither filter alone would reject both
+        // -- only their composition (AND) correctly leaves zero valid
+        // candidates, proving the two checks compose rather than one
+        // overriding the other.
+        let migrated = manager.handle_node_failure("x86-node-fails").await.unwrap();
+        assert!(migrated.is_empty());
+
+        let resource = manager.get_resource(403).await.unwrap();
         assert_eq!(resource.state, HaState::Error);
     }
 }

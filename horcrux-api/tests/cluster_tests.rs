@@ -29,6 +29,7 @@ fn create_test_node(name: &str, cpu: f32, memory: f32, vm_count: usize) -> NodeR
         total_memory_gb: 64,
         total_disk_gb: 1000,
         architecture: Architecture::X86_64,
+        available_passthrough_devices: Vec::new(),
     }
 }
 
@@ -41,6 +42,7 @@ fn create_test_vm(id: u32, node: &str) -> VmResources {
         current_node: node.to_string(),
         can_migrate: true,
         architecture: Architecture::X86_64,
+        required_passthrough_devices: Vec::new(),
     }
 }
 
