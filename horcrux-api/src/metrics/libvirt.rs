@@ -162,30 +162,108 @@ impl LibvirtManager {
         }
     }
 
-    /// Get memory RSS (Resident Set Size)
+    /// Get memory RSS (Resident Set Size) via libvirt's memory_stats API.
+    /// libvirt reports this as VIR_DOMAIN_MEMORY_STAT_RSS, in kilobytes.
     #[cfg(feature = "qemu")]
-    fn get_memory_rss(&self, _domain: &Domain) -> Option<u64> {
-        // TODO: Implement memory stats parsing when virt crate API is available
-        // For now, return None and use memory_actual from domain info
-        None
+    fn get_memory_rss(&self, domain: &Domain) -> Option<u64> {
+        // Tag value from libvirt's virDomainMemoryStatTags enum (VIR_DOMAIN_MEMORY_STAT_RSS).
+        const VIR_DOMAIN_MEMORY_STAT_RSS: u32 = 7;
+
+        match domain.memory_stats(0) {
+            Ok(stats) => stats
+                .into_iter()
+                .find(|s| s.tag == VIR_DOMAIN_MEMORY_STAT_RSS)
+                .map(|s| s.val * 1024), // KB -> bytes
+            Err(e) => {
+                debug!("memory_stats unavailable for domain: {:?}", e);
+                None
+            }
+        }
     }
 
-    /// Get block device statistics
+    /// Enumerate a domain's disk/interface device names from its XML description.
+    /// The virt crate has no structured device-list API, so we parse the
+    /// `<target dev="...">` attributes out of `<disk>`/`<interface>` elements.
     #[cfg(feature = "qemu")]
-    fn get_block_stats(&self, _domain: &Domain) -> (u64, u64) {
-        // TODO: Implement block stats when virt crate API is available
-        // For now, return zeros
-        // In production, would call domain.block_stats() for each device
-        (0, 0)
+    fn list_device_targets(domain: &Domain, element: &str) -> Vec<String> {
+        let xml = match domain.get_xml_desc(0) {
+            Ok(xml) => xml,
+            Err(e) => {
+                debug!("get_xml_desc failed, cannot enumerate {} devices: {:?}", element, e);
+                return Vec::new();
+            }
+        };
+
+        let mut targets = Vec::new();
+        let open_tag = format!("<{}", element);
+        let mut search_from = 0;
+        while let Some(rel_start) = xml[search_from..].find(&open_tag) {
+            let elem_start = search_from + rel_start;
+            let Some(rel_end) = xml[elem_start..].find('>') else {
+                break;
+            };
+            let elem_close = elem_start + rel_end;
+            // Find the nested <target dev="..."/> within this element's opening
+            // span (covers everything up to the matching close, which is
+            // sufficient since target is always a direct child near the top).
+            let scan_end = (elem_close + 400).min(xml.len());
+            if let Some(target_rel) = xml[elem_close..scan_end].find("<target") {
+                let target_start = elem_close + target_rel;
+                let dev_attr = "dev=\"";
+                if let Some(dev_rel) = xml[target_start..scan_end].find(dev_attr) {
+                    let dev_start = target_start + dev_rel + dev_attr.len();
+                    if let Some(end_rel) = xml[dev_start..scan_end].find('"') {
+                        targets.push(xml[dev_start..dev_start + end_rel].to_string());
+                    }
+                }
+            }
+            search_from = elem_close + 1;
+        }
+        targets
     }
 
-    /// Get network interface statistics
+    /// Get block device statistics, summed across all attached disks.
     #[cfg(feature = "qemu")]
-    fn get_network_stats(&self, _domain: &Domain) -> (u64, u64) {
-        // TODO: Implement network stats when virt crate API is available
-        // For now, return zeros
-        // In production, would call domain.interface_stats() for each interface
-        (0, 0)
+    fn get_block_stats(&self, domain: &Domain) -> (u64, u64) {
+        let disks = Self::list_device_targets(domain, "disk");
+        let mut read_bytes: u64 = 0;
+        let mut write_bytes: u64 = 0;
+
+        for disk in &disks {
+            match domain.get_block_stats(disk) {
+                Ok(stats) => {
+                    read_bytes = read_bytes.saturating_add(stats.rd_bytes.max(0) as u64);
+                    write_bytes = write_bytes.saturating_add(stats.wr_bytes.max(0) as u64);
+                }
+                Err(e) => {
+                    debug!("block_stats failed for disk {}: {:?}", disk, e);
+                }
+            }
+        }
+
+        (read_bytes, write_bytes)
+    }
+
+    /// Get network interface statistics, summed across all attached interfaces.
+    #[cfg(feature = "qemu")]
+    fn get_network_stats(&self, domain: &Domain) -> (u64, u64) {
+        let ifaces = Self::list_device_targets(domain, "interface");
+        let mut rx_bytes: u64 = 0;
+        let mut tx_bytes: u64 = 0;
+
+        for iface in &ifaces {
+            match domain.interface_stats(iface) {
+                Ok(stats) => {
+                    rx_bytes = rx_bytes.saturating_add(stats.rx_bytes.max(0) as u64);
+                    tx_bytes = tx_bytes.saturating_add(stats.tx_bytes.max(0) as u64);
+                }
+                Err(e) => {
+                    debug!("interface_stats failed for iface {}: {:?}", iface, e);
+                }
+            }
+        }
+
+        (rx_bytes, tx_bytes)
     }
 
     /// List all running VMs
