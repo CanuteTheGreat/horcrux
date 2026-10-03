@@ -276,8 +276,13 @@ async fn validate_api_key(
                     .execute(pool)
                     .await;
 
-            // Get user details
-            match crate::db::users::get_user_by_username(pool, &user_id).await {
+            // api_keys.user_id is a foreign key into users.id (a UUID), NOT
+            // the username -- it must be resolved with get_user_by_id, not
+            // get_user_by_username. The previous code looked this up by
+            // username (which never matches a UUID) and silently fell back
+            // to a hardcoded role of "user", meaning every API key -- admin
+            // keys included -- was always treated as an unprivileged user.
+            match crate::db::users::get_user_by_id(pool, &user_id).await {
                 Ok(user) => {
                     return Ok(AuthUser {
                         user_id: user.id,
@@ -286,12 +291,7 @@ async fn validate_api_key(
                     });
                 }
                 Err(_) => {
-                    // Try using user_id directly
-                    return Ok(AuthUser {
-                        user_id: user_id.clone(),
-                        username: user_id,
-                        role: "user".to_string(),
-                    });
+                    return Err("API key references a user that no longer exists".to_string());
                 }
             }
         }

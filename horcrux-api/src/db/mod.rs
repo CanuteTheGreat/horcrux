@@ -268,6 +268,20 @@ pub mod users {
         Ok(row_to_user(&row))
     }
 
+    /// Look up a user by their internal ID (e.g. from a foreign key like
+    /// api_keys.user_id), as opposed to their username. These are distinct
+    /// values -- the id is a UUID, the username is user-chosen -- and must
+    /// not be conflated when resolving a user from a non-username source.
+    pub async fn get_user_by_id(pool: &SqlitePool, id: &str) -> Result<User> {
+        let row = sqlx::query("SELECT * FROM users WHERE id = ? AND enabled = 1")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .map_err(|_| horcrux_common::Error::AuthenticationFailed)?;
+
+        Ok(row_to_user(&row))
+    }
+
     pub async fn list_users(pool: &SqlitePool) -> Result<Vec<User>> {
         let rows = sqlx::query("SELECT * FROM users ORDER BY username")
             .fetch_all(pool)
