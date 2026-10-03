@@ -1243,19 +1243,35 @@ async fn test_rbac_permissions() {
         "memory": 512
     });
 
-    let response = client
-        .post(format!("{}/vms", API_BASE))
-        .bearer_auth(user_jwt)
-        .json(&vm_config)
-        .send()
-        .await;
+    // Retry on rate limit, same pattern used everywhere else in this suite
+    // (admin_token(), register/login above, test_session_management's final
+    // assertion): POST /vms shares one rate-limit budget with every other
+    // test hitting it in this binary, so without a retry loop this
+    // assertion can flake on a 429 that has nothing to do with RBAC.
+    let mut attempt = 0;
+    let response = loop {
+        let resp = client
+            .post(format!("{}/vms", API_BASE))
+            .bearer_auth(user_jwt)
+            .json(&vm_config)
+            .send()
+            .await;
+        match &resp {
+            Ok(r) if r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < 30 => {
+                attempt += 1;
+                wait_for_operation(2000).await;
+                continue;
+            }
+            _ => break resp,
+        }
+    };
 
-    if response.is_ok() {
+    if let Ok(resp) = response {
         // Should be forbidden (403) or unauthorized (401). A 422 is also
         // acceptable here: this vm_config is intentionally minimal (it
         // omits fields required by the real schema), so validation may
         // reject it before an authorization check would even matter.
-        let status = response.unwrap().status();
+        let status = resp.status();
         assert!(
             status == 403 || status == 401 || status == 422,
             "VmUser should not be able to create VMs, got status: {}",
