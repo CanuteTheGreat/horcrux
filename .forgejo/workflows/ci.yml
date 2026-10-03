@@ -312,14 +312,36 @@ jobs:
         # straight back into the same qemu-user cross-arch emulation that
         # SIGABRTs Gentoo sandbox's personality() probe mid-build
         # ("unknown x86_64 (CS) personality", confirmed via CI run
-        # 2406/job 11524 even after adding the ARG). Detect the real
-        # runner arch with uname -m and force the matching stage3 variant.
+        # 2406/job 11524 even after adding the ARG).
+        #
+        # `uname -m` is NOT a reliable way to detect the right stage3
+        # variant here: the beauxbatons runner is literally named/labeled
+        # "beauxbatons-x86-emulated" in the task log -- its *job container*
+        # itself runs under x86_64 emulation (to satisfy the `runs-on:
+        # x86_64` label on real Apple Silicon hardware), so `uname -m`
+        # inside the job shell reports x86_64 even though the real Docker
+        # daemon backing it is native arm64 (confirmed via CI run
+        # 2407/job 11531: still "InvalidBaseImagePlatform ... expected
+        # linux/arm64" and the identical sandbox SIGABRT, because the
+        # emulated-x86_64 uname fooled the case statement into picking
+        # amd64 again). Ask the Docker daemon itself what it natively is
+        # instead -- that reflects the real host, not the emulated shell
+        # wrapping this job.
         run: |
-          case "$(uname -m)" in
-            x86_64) target_arch=amd64 ;;
+          daemon_arch="$(docker info --format '{{.Architecture}}' 2>/dev/null || true)"
+          case "$daemon_arch" in
+            x86_64|amd64) target_arch=amd64 ;;
             aarch64|arm64) target_arch=arm64 ;;
-            *) echo "Unsupported runner arch: $(uname -m)" >&2; exit 1 ;;
+            *)
+              echo "Unrecognized Docker daemon architecture: '$daemon_arch' -- falling back to uname -m" >&2
+              case "$(uname -m)" in
+                x86_64) target_arch=amd64 ;;
+                aarch64|arm64) target_arch=arm64 ;;
+                *) echo "Unsupported arch: $(uname -m)" >&2; exit 1 ;;
+              esac
+              ;;
           esac
+          echo "Docker daemon architecture: $daemon_arch -> building stage3:${target_arch}-systemd"
           docker build \
             --build-arg TARGETARCH="$target_arch" \
             --build-arg HORCRUX_USE="cli systemd docker -qemu -monitoring -webui" \
