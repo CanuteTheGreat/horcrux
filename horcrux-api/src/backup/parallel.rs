@@ -48,12 +48,26 @@ impl ParallelRestoreManager {
             let completed = completed_size.clone();
 
             join_set.spawn(async move {
-                // Acquire semaphore permit
-                let _permit = sem.acquire().await.unwrap();
+                // Acquire semaphore permit. `acquire()` only errors if the
+                // semaphore has been closed, which this manager never does;
+                // propagate as a regular restore error instead of panicking
+                // so a future refactor can't turn one bad volume into a
+                // crashed restore task.
+                let _permit = match sem.acquire().await {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        return Err(Error::System(format!(
+                            "Volume '{}': restore concurrency semaphore was closed unexpectedly",
+                            volume.name
+                        )));
+                    }
+                };
 
                 info!("Restoring volume: {}", volume.name);
 
-                // Simulate volume restore (in production, call actual restore logic)
+                // Restore this volume: validates the backup source exists,
+                // verifies its checksum (if present) before touching the
+                // target, then decompresses/copies it into place.
                 let result = Self::restore_volume(&volume).await;
 
                 // Update progress
