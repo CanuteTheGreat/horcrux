@@ -204,8 +204,24 @@ jobs:
         # 0.37), failing to compile (confirmed 2026-09-25). Install the
         # prebuilt binary release instead - avoids building lightningcss
         # from source entirely, and is faster too.
+        #
+        # This job is labeled `runs-on: x86_64`, but the beauxbatons runner
+        # (the designated non-AWS fallback, see standing CI notes) is actual
+        # Apple Silicon hardware and does not always honor an amd64 container
+        # platform for this job -- confirmed 2026-10-02 via `rustc`'s own
+        # "default host tuple is aarch64-unknown-linux-gnu" in this job's log.
+        # A hardcoded x86_64 trunk binary then fails under Rosetta with
+        # "failed to open elf at /lib64/ld-linux-x86-64.so.2". Detect the
+        # actual container arch via `uname -m` and fetch the matching trunk
+        # release so this works whether the job lands on a genuine x86_64
+        # container or an arm64 one.
         run: |
-          curl -L https://github.com/trunk-rs/trunk/releases/latest/download/trunk-x86_64-unknown-linux-gnu.tar.gz | tar xzf -
+          case "$(uname -m)" in
+            x86_64) TRUNK_ARCH=x86_64-unknown-linux-gnu ;;
+            aarch64|arm64) TRUNK_ARCH=aarch64-unknown-linux-gnu ;;
+            *) echo "Unsupported arch for trunk install: $(uname -m)" >&2; exit 1 ;;
+          esac
+          curl -L "https://github.com/trunk-rs/trunk/releases/latest/download/trunk-${TRUNK_ARCH}.tar.gz" | tar xzf -
           sudo mv trunk /usr/local/bin/trunk
           trunk --version
 
