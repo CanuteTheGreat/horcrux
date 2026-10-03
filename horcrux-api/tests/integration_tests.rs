@@ -947,19 +947,30 @@ async fn test_session_management() {
 
     assert!(response.is_ok(), "Logout failed");
 
-    // 4. Verify session is invalid after logout
-    let response = client
-        .get(format!("{}/vms", API_BASE))
-        .header("Cookie", format!("session_id={}", session_id))
-        .send()
-        .await;
+    // 4. Verify session is invalid after logout (retry on rate limit, same
+    // pattern as every other endpoint in this suite -- /vms shares the
+    // general rate-limit budget with the many other tests hitting it, so
+    // without a retry loop this assertion can flake on a 429 that has
+    // nothing to do with session validity, see login retry above).
+    let mut attempt = 0;
+    let response = loop {
+        let resp = client
+            .get(format!("{}/vms", API_BASE))
+            .header("Cookie", format!("session_id={}", session_id))
+            .send()
+            .await;
+        match &resp {
+            Ok(r) if r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < 30 => {
+                attempt += 1;
+                wait_for_operation(2000).await;
+                continue;
+            }
+            _ => break resp,
+        }
+    };
 
-    if response.is_ok() {
-        assert_eq!(
-            response.unwrap().status(),
-            401,
-            "Should reject invalid session"
-        );
+    if let Ok(resp) = response {
+        assert_eq!(resp.status(), 401, "Should reject invalid session");
     }
 }
 
