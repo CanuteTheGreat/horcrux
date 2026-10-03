@@ -8,7 +8,24 @@
 # Override USE flags at build time, e.g.:
 #   docker build --build-arg HORCRUX_USE="qemu cli webui -docker -podman" .
 
-FROM gentoo/stage3:amd64-systemd AS builder
+# TARGETARCH is populated automatically by BuildKit (docker build with
+# BuildKit enabled, the default since Docker 20.10+) to match whichever
+# host architecture is actually doing the build -- no --platform flag or
+# explicit cross-build-arg needed. This matters because CI capacity for
+# this repo comes from a mix of real x86_64 and arm64 runners (see
+# .forgejo/workflows/ci.yml): a stage3 image hardcoded to amd64-systemd
+# forces qemu-user cross-arch emulation on any arm64 runner that picks up
+# the job, and Gentoo's sandbox tool's personality()-based CS-bit probe
+# reliably SIGABRTs under that emulation (confirmed via CI run 2381/job
+# 11305: "unknown x86_64 (CS) personality", aborting dev-lang/go's
+# make.bash mid-bootstrap). Building natively for the runner's own arch
+# avoids the emulation path entirely. gentoo/stage3 publishes both
+# amd64-systemd and arm64-systemd on Docker Hub, so this is a drop-in
+# swap -- default to amd64 for any builder invoking plain `docker build`
+# without BuildKit's arch auto-detection.
+ARG TARGETARCH=amd64
+
+FROM gentoo/stage3:${TARGETARCH}-systemd AS builder
 
 ARG HORCRUX_USE="qemu cli monitoring systemd webui"
 
@@ -176,7 +193,9 @@ RUN emerge --verbose --quiet-build=y app-emulation/horcrux
 # --- Runtime stage --------------------------------------------------------
 # Still Gentoo — a slim stage3 with only the installed package and its
 # runtime deps carried over, so USE-flag-gated components remain accurate.
-FROM gentoo/stage3:amd64-systemd
+ARG TARGETARCH=amd64
+
+FROM gentoo/stage3:${TARGETARCH}-systemd
 
 COPY --from=builder /usr/bin/horcrux-api /usr/local/bin/horcrux-api
 COPY --from=builder /etc/horcrux /etc/horcrux
