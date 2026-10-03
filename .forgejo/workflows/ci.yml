@@ -301,7 +301,29 @@ jobs:
         # Bare-metal installs following gentoo/package.use/horcrux directly
         # are unaffected and still get the full qemu+libvirt virtualization
         # stack -- this override only applies to the CI-only build-arg.
-        run: docker build --build-arg HORCRUX_USE="cli systemd docker -qemu -monitoring -webui" -t horcrux/api:${{ github.sha }} .
+        #
+        # TARGETARCH must be passed explicitly here, not left to BuildKit's
+        # auto-detection: that auto-population only kicks in for
+        # `docker buildx build --platform=...` multi-arch builds, not a
+        # plain `docker build` (even with the BuildKit backend). Without
+        # an explicit --build-arg, the Dockerfile's `ARG TARGETARCH=amd64`
+        # default wins regardless of host arch, so an arm64 runner (e.g.
+        # beauxbatons) still pulls gentoo/stage3:amd64-systemd and falls
+        # straight back into the same qemu-user cross-arch emulation that
+        # SIGABRTs Gentoo sandbox's personality() probe mid-build
+        # ("unknown x86_64 (CS) personality", confirmed via CI run
+        # 2406/job 11524 even after adding the ARG). Detect the real
+        # runner arch with uname -m and force the matching stage3 variant.
+        run: |
+          case "$(uname -m)" in
+            x86_64) target_arch=amd64 ;;
+            aarch64|arm64) target_arch=arm64 ;;
+            *) echo "Unsupported runner arch: $(uname -m)" >&2; exit 1 ;;
+          esac
+          docker build \
+            --build-arg TARGETARCH="$target_arch" \
+            --build-arg HORCRUX_USE="cli systemd docker -qemu -monitoring -webui" \
+            -t horcrux/api:${{ github.sha }} .
 
       - name: Smoke-test the built image
         # horcrux-api has no CLI arg parsing at all (main() ignores argv
