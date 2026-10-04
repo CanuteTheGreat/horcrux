@@ -7,7 +7,9 @@
 pub mod fencing;
 
 use crate::cluster::balancer::{ClusterBalancer, NodeResources, VmResources};
-use crate::cluster::node::{passthrough_devices_satisfied, Architecture, PassthroughDeviceRequirement};
+use crate::cluster::node::{
+    passthrough_devices_satisfied, Architecture, PassthroughDeviceRequirement,
+};
 use chrono::{DateTime, Utc};
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
