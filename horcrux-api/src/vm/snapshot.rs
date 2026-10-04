@@ -162,13 +162,27 @@ impl VmSnapshotManager {
             self.resume_vm(&vm_config.id).await?;
         }
 
+        // Track snapshot lineage: the new snapshot's parent is whichever
+        // existing snapshot for this VM is currently the "head" of the chain
+        // (the most recently created snapshot with no children yet). This
+        // keeps `build_snapshot_tree`/`is_current_snapshot` -- which both
+        // already rely on `parent_snapshot` being populated -- working
+        // correctly instead of silently seeing a flat list of unrelated
+        // root snapshots.
+        let parent_snapshot = self
+            .list_snapshots(&vm_config.id)
+            .into_iter()
+            .filter(|s| self.is_current_snapshot(&s.id))
+            .max_by_key(|s| s.created_at)
+            .map(|s| s.id);
+
         let snapshot = VmSnapshot {
             id: snapshot_id.clone(),
             vm_id: vm_config.id.clone(),
             name: snapshot_name,
             description,
             created_at: timestamp,
-            parent_snapshot: None, // TODO: Track snapshot lineage
+            parent_snapshot,
             vm_state,
             disk_snapshots,
             memory_snapshot,
