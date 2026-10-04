@@ -12,6 +12,18 @@ jobs:
   build-docs:
     name: Build Documentation
     runs-on: x86_64
+    # Pin to a multi-arch tag (not a single-platform sha256 digest) so
+    # this job succeeds regardless of which x86_64-labeled runner picks
+    # it up. Confirmed 2026-10-04: a second runner registered under the
+    # x86_64 label (id 74716d47, version:dev) explicitly requests
+    # platform=linux/arm64 for its job containers, but the runner-default
+    # image is pinned by sha256 digest to a single-platform (amd64-only)
+    # manifest, so "docker create" fails with "image ... does not provide
+    # the specified platform (linux/arm64)" every time that runner wins
+    # the race against the working beauxbatons runner (~every other run).
+    # act-latest is a real multi-arch manifest list, so either runner can
+    # pull the variant matching whatever platform it actually requests.
+    container: catthehacker/ubuntu:act-latest
     # Fail fast instead of silently consuming the full 3h runner timeout
     # (observed 2026-10-01: run 144/job 5438 ran for exactly 3h00m01s before
     # being cancelled) -- a docs-only job has no business needing anywhere
