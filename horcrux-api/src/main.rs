@@ -6943,7 +6943,39 @@ async fn logout(
             for cookie in cookie_str.split(';') {
                 let cookie = cookie.trim();
                 if let Some(session_id) = cookie.strip_prefix("session_id=") {
-                    let _ = db::users::delete_session(state.database.pool(), session_id).await;
+                    // Don't silently swallow a failed delete: under
+                    // concurrent load a transient SQLite lock can make this
+                    // fail even with WAL+busy_timeout configured, and if we
+                    // ignore that, logout reports success to the client
+                    // while the session cookie stays valid server-side (the
+                    // client believes it's logged out, but the old cookie -
+                    // if replayed - still authenticates). Retry briefly,
+                    // then log loudly if it still didn't take; still return
+                    // 200 either way since the client-facing contract for
+                    // logout doesn't change, but this at least makes a real
+                    // failure visible in logs instead of invisible.
+                    let mut attempts = 0;
+                    loop {
+                        match db::users::delete_session(state.database.pool(), session_id).await {
+                            Ok(()) => break,
+                            Err(e) if attempts < 2 => {
+                                attempts += 1;
+                                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                                tracing::warn!(
+                                    "logout: delete_session retry {} for session (error: {})",
+                                    attempts,
+                                    e
+                                );
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    "logout: delete_session failed after retries, session may still be valid: {}",
+                                    e
+                                );
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -40,7 +40,28 @@ impl Database {
                 horcrux_common::Error::System(format!("Database connection failed: {}", e))
             })?;
 
-        tracing::info!("Database connection established");
+        // WAL journaling lets readers and writers run concurrently instead of
+        // blocking each other, and a generous busy_timeout makes sqlx retry
+        // internally (rather than fail outright) on the brief lock contention
+        // that's normal with 32 pooled connections hitting one SQLite file.
+        // Without these, a write under concurrent load can return "database
+        // is locked" - and call sites that don't surface that error (see
+        // `logout`'s delete_session call) would silently no-op instead of
+        // actually persisting the change.
+        sqlx::query("PRAGMA journal_mode=WAL;")
+            .execute(&pool)
+            .await
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to set WAL journal mode: {}", e))
+            })?;
+        sqlx::query("PRAGMA busy_timeout=5000;")
+            .execute(&pool)
+            .await
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to set busy_timeout: {}", e))
+            })?;
+
+        tracing::info!("Database connection established (WAL journal mode, 5s busy_timeout)");
 
         Ok(Self { pool })
     }
