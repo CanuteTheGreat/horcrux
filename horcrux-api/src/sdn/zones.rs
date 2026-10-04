@@ -39,7 +39,11 @@ impl ZoneManager {
                 }
             }
             ZoneType::Evpn => {
-                return Err("EVPN zones not yet supported".to_string());
+                // Same admission rule as SdnManager::create_zone: EVPN
+                // needs at least one node to anchor a VTEP.
+                if zone.nodes.is_empty() {
+                    return Err("EVPN zone requires at least one node".to_string());
+                }
             }
         }
 

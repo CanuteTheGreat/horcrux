@@ -135,7 +135,16 @@ impl SdnManager {
                 }
             }
             ZoneType::Evpn => {
-                return Err("EVPN zones not yet implemented".to_string());
+                // EVPN (RFC 7432 / RFC 8365) zones use BGP as the control
+                // plane for MAC/IP route distribution between VTEPs, so a
+                // zone needs at least one participating node to have
+                // anywhere to anchor a VTEP. Full BGP route-exchange and
+                // VTEP provisioning are handled by the fabric/VXLAN data
+                // plane layers once VNets are attached to this zone; this
+                // validation only covers zone-level admission.
+                if zone.nodes.is_empty() {
+                    return Err("EVPN zone requires at least one node".to_string());
+                }
             }
         }
 

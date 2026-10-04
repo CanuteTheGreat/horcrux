@@ -58,20 +58,34 @@ fn test_vxlan_zone_requires_nodes() {
 }
 
 #[test]
-fn test_evpn_zone_not_implemented() {
+fn test_create_evpn_zone() {
     let mut sdn = SdnManager::new();
 
     let zone = Zone {
         id: "zone-evpn".to_string(),
         name: "EVPN Zone".to_string(),
         zone_type: ZoneType::Evpn,
-        description: "".to_string(),
-        nodes: vec!["node1".to_string()],
+        description: "BGP EVPN overlay zone".to_string(),
+        nodes: vec!["node1".to_string(), "node2".to_string()],
     };
 
-    let result = sdn.create_zone(zone);
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("not yet implemented"));
+    assert!(sdn.create_zone(zone).is_ok());
+    assert_eq!(sdn.list_zones().len(), 1);
+}
+
+#[test]
+fn test_evpn_zone_requires_nodes() {
+    let mut sdn = SdnManager::new();
+
+    let zone = Zone {
+        id: "zone-evpn-empty".to_string(),
+        name: "Empty EVPN Zone".to_string(),
+        zone_type: ZoneType::Evpn,
+        description: "".to_string(),
+        nodes: vec![], // No nodes - should fail, same as VXLAN
+    };
+
+    assert!(sdn.create_zone(zone).is_err());
 }
 
 #[test]
