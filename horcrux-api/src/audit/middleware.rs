@@ -5,34 +5,55 @@
 #![allow(dead_code)]
 
 use axum::{
-    extract::{Request, State},
+    extract::{ConnectInfo, Request, State},
     middleware::Next,
     response::Response,
 };
+use std::net::SocketAddr;
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::{AuditEvent, AuditEventType, AuditResult, AuditSeverity};
 
-/// Extract source IP from request
-fn extract_source_ip(request: &Request) -> Option<String> {
-    // Try X-Forwarded-For header first (for proxies)
-    if let Some(forwarded) = request.headers().get("x-forwarded-for") {
+/// Extract source IP for the audit trail.
+///
+/// This deliberately does NOT trust the `X-Forwarded-For` / `X-Real-IP`
+/// request headers as the authoritative source IP: this API has no trusted
+/// reverse-proxy allowlist configured anywhere (see `horcrux-api/src/main.rs`),
+/// so those headers are fully attacker-controlled on every request that
+/// reaches this listener directly. Logging them verbatim would let any
+/// unauthenticated client forge the IP address recorded against its own
+/// login attempts, permission checks, and VM operations in the security
+/// audit log -- exactly the trail an operator would reach for after an
+/// incident. The real TCP peer address from `ConnectInfo`, provided by
+/// `into_make_service_with_connect_info` in `main.rs`, cannot be spoofed by
+/// the client, so it's the only value used as the logged `source_ip`. The
+/// same pattern is already used for connection-based keying in
+/// `middleware::rate_limit::rate_limit_middleware`.
+///
+/// If a trusted reverse proxy is introduced in front of this service in the
+/// future, this function should instead consult an explicit trusted-proxy
+/// allowlist (e.g. only trust `X-Forwarded-For` when `ConnectInfo`'s peer is
+/// itself one of the configured proxy addresses) rather than trusting the
+/// header unconditionally.
+fn extract_source_ip(peer: SocketAddr, request: &Request) -> Option<String> {
+    if let Some(forwarded) = request
+        .headers()
+        .get("x-forwarded-for")
+        .or_else(|| request.headers().get("x-real-ip"))
+    {
         if let Ok(forwarded_str) = forwarded.to_str() {
-            // Take the first IP in the list
-            return Some(forwarded_str.split(',').next()?.trim().to_string());
+            debug!(
+                peer = %peer.ip(),
+                claimed_forwarded_for = %forwarded_str,
+                "Ignoring client-supplied forwarded-for header for audit source_ip (no trusted proxy configured); logging real peer address instead"
+            );
+        } else {
+            warn!(peer = %peer.ip(), "Received non-UTF8 forwarded-for/real-ip header; ignoring");
         }
     }
 
-    // Try X-Real-IP header
-    if let Some(real_ip) = request.headers().get("x-real-ip") {
-        if let Ok(ip_str) = real_ip.to_str() {
-            return Some(ip_str.to_string());
-        }
-    }
-
-    // TODO: Could also extract from connection info if available
-    None
+    Some(peer.ip().to_string())
 }
 
 /// Extract username from request extensions (set by auth middleware)
@@ -192,13 +213,14 @@ fn determine_result(status: u16) -> AuditResult {
 /// Audit middleware that logs HTTP requests
 pub async fn audit_middleware(
     State(audit_logger): State<Arc<super::AuditLogger>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     request: Request,
     next: Next,
 ) -> Response {
     let method = request.method().to_string();
     let path = request.uri().path().to_string();
     let username = extract_username(&request);
-    let source_ip = extract_source_ip(&request);
+    let source_ip = extract_source_ip(peer, &request);
 
     debug!(
         method = %method,
