@@ -142,12 +142,25 @@ impl QemuManager {
             cmd.arg("-machine").arg("accel=tcg");
         }
 
+        // Redirect the guest serial console to a log file next to the disk
+        // image. This is the only way to observe genuine guest boot
+        // activity (kernel/init output, login prompts) since we run
+        // "-display none -daemonize" and never attach an interactive
+        // console; without it there is no way to tell a VM that is truly
+        // booting an OS apart from one that silently sits at "no bootable
+        // device". Harmless in production (just an extra log file) and
+        // used by the nightly realistic-test workflow to assert on real
+        // guest boot output.
+        let serial_log_path = vm.disk_path.with_extension("serial.log");
+
         cmd.arg("-m")
             .arg(vm.memory.to_string())
             .arg("-smp")
             .arg(vm.cpus.to_string())
             .arg("-drive")
             .arg(format!("file={},format=qcow2", vm.disk_path.display()))
+            .arg("-serial")
+            .arg(format!("file:{}", serial_log_path.display()))
             .arg("-display")
             .arg("none")
             .arg("-daemonize")
