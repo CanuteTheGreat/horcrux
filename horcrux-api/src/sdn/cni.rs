@@ -75,6 +75,12 @@ pub struct CniAttachment {
 /// CNI result (returned from ADD operation)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CniResult {
+    /// Real CNI plugins return this key as "cniVersion" (camelCase) per
+    /// the spec, not "cni_version" - without the rename, serde_json
+    /// fails to deserialize every real plugin's ADD/CHECK response with
+    /// "missing field `cni_version`" even though the field is right
+    /// there in the JSON, just spelled the way the spec actually requires.
+    #[serde(rename = "cniVersion")]
     pub cni_version: String,
     pub interfaces: Vec<CniInterface>,
     pub ips: Vec<CniIpConfig>,
