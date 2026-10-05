@@ -124,38 +124,67 @@ impl ContainerManager {
 
     /// Start a container
     pub async fn start_container(&self, id: &str) -> Result<ContainerConfig> {
-        let containers = self.containers.read().await;
-        let container = containers
-            .get(id)
-            .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?;
+        // Clone the container and drop the read lock before calling out to
+        // the runtime (which can take a while), then take a short write
+        // lock just to flip status. Previously this never updated the
+        // stored status at all: every subsequent call that checks
+        // container.status (e.g. DockerManager::stop_container's "already
+        // stopped" guard) kept seeing the pre-start Stopped value forever,
+        // so a container could be started but could then never be stopped
+        // again through this API - the stop call would always fail with
+        // "Container is already stopped" even while genuinely running.
+        let container = {
+            let containers = self.containers.read().await;
+            containers
+                .get(id)
+                .cloned()
+                .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?
+        };
 
         match container.runtime {
-            ContainerRuntime::Lxc => self.lxc_manager.start_container(container).await?,
-            ContainerRuntime::Lxd => self.lxd_manager.start_container(container).await?,
-            ContainerRuntime::Incus => self.incus_manager.start_container(container).await?,
-            ContainerRuntime::Docker => self.docker_manager.start_container(container).await?,
-            ContainerRuntime::Podman => self.podman_manager.start_container(container).await?,
+            ContainerRuntime::Lxc => self.lxc_manager.start_container(&container).await?,
+            ContainerRuntime::Lxd => self.lxd_manager.start_container(&container).await?,
+            ContainerRuntime::Incus => self.incus_manager.start_container(&container).await?,
+            ContainerRuntime::Docker => self.docker_manager.start_container(&container).await?,
+            ContainerRuntime::Podman => self.podman_manager.start_container(&container).await?,
         }
 
-        Ok(container.to_config())
+        let mut containers = self.containers.write().await;
+        if let Some(stored) = containers.get_mut(id) {
+            stored.status = ContainerStatus::Running;
+        }
+        Ok(ContainerConfig {
+            status: ContainerStatus::Running,
+            ..container.to_config()
+        })
     }
 
     /// Stop a container
     pub async fn stop_container(&self, id: &str) -> Result<ContainerConfig> {
-        let containers = self.containers.read().await;
-        let container = containers
-            .get(id)
-            .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?;
+        let container = {
+            let containers = self.containers.read().await;
+            containers
+                .get(id)
+                .cloned()
+                .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?
+        };
 
         match container.runtime {
-            ContainerRuntime::Lxc => self.lxc_manager.stop_container(container).await?,
-            ContainerRuntime::Lxd => self.lxd_manager.stop_container(container).await?,
-            ContainerRuntime::Incus => self.incus_manager.stop_container(container).await?,
-            ContainerRuntime::Docker => self.docker_manager.stop_container(container).await?,
-            ContainerRuntime::Podman => self.podman_manager.stop_container(container).await?,
+            ContainerRuntime::Lxc => self.lxc_manager.stop_container(&container).await?,
+            ContainerRuntime::Lxd => self.lxd_manager.stop_container(&container).await?,
+            ContainerRuntime::Incus => self.incus_manager.stop_container(&container).await?,
+            ContainerRuntime::Docker => self.docker_manager.stop_container(&container).await?,
+            ContainerRuntime::Podman => self.podman_manager.stop_container(&container).await?,
         }
 
-        Ok(container.to_config())
+        let mut containers = self.containers.write().await;
+        if let Some(stored) = containers.get_mut(id) {
+            stored.status = ContainerStatus::Stopped;
+        }
+        Ok(ContainerConfig {
+            status: ContainerStatus::Stopped,
+            ..container.to_config()
+        })
     }
 
     /// Delete a container
@@ -182,38 +211,58 @@ impl ContainerManager {
 
     /// Pause a container
     pub async fn pause_container(&self, id: &str) -> Result<ContainerConfig> {
-        let containers = self.containers.read().await;
-        let container = containers
-            .get(id)
-            .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?;
+        let container = {
+            let containers = self.containers.read().await;
+            containers
+                .get(id)
+                .cloned()
+                .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?
+        };
 
         match container.runtime {
-            ContainerRuntime::Lxc => self.lxc_manager.pause_container(container).await?,
-            ContainerRuntime::Lxd => self.lxd_manager.pause_container(container).await?,
-            ContainerRuntime::Incus => self.incus_manager.pause_container(container).await?,
-            ContainerRuntime::Docker => self.docker_manager.pause_container(container).await?,
-            ContainerRuntime::Podman => self.podman_manager.pause_container(container).await?,
+            ContainerRuntime::Lxc => self.lxc_manager.pause_container(&container).await?,
+            ContainerRuntime::Lxd => self.lxd_manager.pause_container(&container).await?,
+            ContainerRuntime::Incus => self.incus_manager.pause_container(&container).await?,
+            ContainerRuntime::Docker => self.docker_manager.pause_container(&container).await?,
+            ContainerRuntime::Podman => self.podman_manager.pause_container(&container).await?,
         }
 
-        Ok(container.to_config())
+        let mut containers = self.containers.write().await;
+        if let Some(stored) = containers.get_mut(id) {
+            stored.status = ContainerStatus::Paused;
+        }
+        Ok(ContainerConfig {
+            status: ContainerStatus::Paused,
+            ..container.to_config()
+        })
     }
 
     /// Resume a container
     pub async fn resume_container(&self, id: &str) -> Result<ContainerConfig> {
-        let containers = self.containers.read().await;
-        let container = containers
-            .get(id)
-            .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?;
+        let container = {
+            let containers = self.containers.read().await;
+            containers
+                .get(id)
+                .cloned()
+                .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?
+        };
 
         match container.runtime {
-            ContainerRuntime::Lxc => self.lxc_manager.resume_container(container).await?,
-            ContainerRuntime::Lxd => self.lxd_manager.resume_container(container).await?,
-            ContainerRuntime::Incus => self.incus_manager.resume_container(container).await?,
-            ContainerRuntime::Docker => self.docker_manager.resume_container(container).await?,
-            ContainerRuntime::Podman => self.podman_manager.resume_container(container).await?,
+            ContainerRuntime::Lxc => self.lxc_manager.resume_container(&container).await?,
+            ContainerRuntime::Lxd => self.lxd_manager.resume_container(&container).await?,
+            ContainerRuntime::Incus => self.incus_manager.resume_container(&container).await?,
+            ContainerRuntime::Docker => self.docker_manager.resume_container(&container).await?,
+            ContainerRuntime::Podman => self.podman_manager.resume_container(&container).await?,
         }
 
-        Ok(container.to_config())
+        let mut containers = self.containers.write().await;
+        if let Some(stored) = containers.get_mut(id) {
+            stored.status = ContainerStatus::Running;
+        }
+        Ok(ContainerConfig {
+            status: ContainerStatus::Running,
+            ..container.to_config()
+        })
     }
 
     /// Get container status

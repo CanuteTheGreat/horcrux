@@ -135,6 +135,25 @@ impl CniManager {
                 ))
             })?;
 
+        // Real CNI IPAM plugins (host-local in particular) expect their
+        // own JSON schema - "type"/"rangeStart"/"rangeEnd" (camelCase) -
+        // which does NOT match CniConfig/IpamConfig's Rust/API field names
+        // (ipam_type/range_start/range_end, kept as-is for backwards
+        // compatibility with the existing HTTP API request/response
+        // shape). Serializing config.ipam directly here silently produced
+        // a conflist the real plugin couldn't understand - host-local
+        // would exit with {"code":999,"msg":"cannot convert: no valid IP
+        // addresses"} because it never saw a usable range. Translate field
+        // names when writing the on-disk conflist that real plugins read.
+        let ipam_json = serde_json::json!({
+            "type": config.ipam.ipam_type,
+            "subnet": config.ipam.subnet,
+            "rangeStart": config.ipam.range_start,
+            "rangeEnd": config.ipam.range_end,
+            "gateway": config.ipam.gateway,
+            "routes": config.ipam.routes,
+        });
+
         let conf_list = serde_json::json!({
             "cniVersion": config.cni_version,
             "name": config.name,
@@ -142,7 +161,9 @@ impl CniManager {
                 {
                     "type": format!("{:?}", config.plugin_type).to_lowercase(),
                     "bridge": config.bridge,
-                    "ipam": config.ipam,
+                    "ipam": ipam_json,
+                    "isGateway": true,
+                    "ipMasq": true,
                 }
             ]
         });
