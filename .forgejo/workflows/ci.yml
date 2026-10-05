@@ -37,6 +37,23 @@ jobs:
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev
 
+      - name: Ensure Node.js is present (self-heal)
+        # catthehacker/ubuntu:act-latest job containers on the beauxbatons
+        # runner are reused across runs rather than recreated per-job, and
+        # node has been observed vanishing mid-job (after an apt-get
+        # install of unrelated packages) between 2026-10-04 and
+        # 2026-10-05, breaking every JS action (actions/cache,
+        # actions/checkout's post step) for the rest of the job. Root
+        # cause is the runner's container lifecycle (outside this repo);
+        # self-heal cheaply here rather than fail the whole job.
+        run: |
+          if ! command -v node >/dev/null 2>&1; then
+            echo "::warning::node missing from job container PATH - reinstalling"
+            sudo apt-get update -qq
+            sudo apt-get install -y nodejs
+          fi
+          node --version
+
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
@@ -83,6 +100,23 @@ jobs:
         # VM start (needed for the console/VNC tests) all fail even
         # though the server itself starts fine.
         run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev qemu-system-x86 qemu-utils
+
+      - name: Ensure Node.js is present (self-heal)
+        # catthehacker/ubuntu:act-latest job containers on the beauxbatons
+        # runner are reused across runs rather than recreated per-job, and
+        # node has been observed vanishing mid-job (after an apt-get
+        # install of unrelated packages) between 2026-10-04 and
+        # 2026-10-05, breaking every JS action (actions/cache,
+        # actions/checkout's post step) for the rest of the job. Root
+        # cause is the runner's container lifecycle (outside this repo);
+        # self-heal cheaply here rather than fail the whole job.
+        run: |
+          if ! command -v node >/dev/null 2>&1; then
+            echo "::warning::node missing from job container PATH - reinstalling"
+            sudo apt-get update -qq
+            sudo apt-get install -y nodejs
+          fi
+          node --version
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -201,6 +235,23 @@ jobs:
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev
 
+      - name: Ensure Node.js is present (self-heal)
+        # catthehacker/ubuntu:act-latest job containers on the beauxbatons
+        # runner are reused across runs rather than recreated per-job, and
+        # node has been observed vanishing mid-job (after an apt-get
+        # install of unrelated packages) between 2026-10-04 and
+        # 2026-10-05, breaking every JS action (actions/cache,
+        # actions/checkout's post step) for the rest of the job. Root
+        # cause is the runner's container lifecycle (outside this repo);
+        # self-heal cheaply here rather than fail the whole job.
+        run: |
+          if ! command -v node >/dev/null 2>&1; then
+            echo "::warning::node missing from job container PATH - reinstalling"
+            sudo apt-get update -qq
+            sudo apt-get install -y nodejs
+          fi
+          node --version
+
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
@@ -287,6 +338,23 @@ jobs:
           curl -L "https://github.com/trunk-rs/trunk/releases/latest/download/trunk-${TRUNK_ARCH}.tar.gz" | tar xzf -
           sudo mv trunk /usr/local/bin/trunk
           trunk --version
+
+      - name: Ensure Node.js is present (self-heal)
+        # catthehacker/ubuntu:act-latest job containers on the beauxbatons
+        # runner are reused across runs rather than recreated per-job, and
+        # node has been observed vanishing mid-job (after an apt-get
+        # install of unrelated packages) between 2026-10-04 and
+        # 2026-10-05, breaking every JS action (actions/cache,
+        # actions/checkout's post step) for the rest of the job. Root
+        # cause is the runner's container lifecycle (outside this repo);
+        # self-heal cheaply here rather than fail the whole job.
+        run: |
+          if ! command -v node >/dev/null 2>&1; then
+            echo "::warning::node missing from job container PATH - reinstalling"
+            sudo apt-get update -qq
+            sudo apt-get install -y nodejs
+          fi
+          node --version
 
       - name: Cache cargo registry
         uses: actions/cache@v4
