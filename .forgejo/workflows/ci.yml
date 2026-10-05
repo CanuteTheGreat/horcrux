@@ -183,6 +183,19 @@ jobs:
     # pull the variant matching whatever platform it actually requests.
     container: catthehacker/ubuntu:act-latest
     needs: test
+    # cc-rs (used transitively by ring et al.) treats an explicit
+    # `--target x86_64-unknown-linux-gnu` as a cross-compile even when it
+    # matches the host, and looks for a triple-prefixed compiler
+    # ("x86_64-linux-gnu-gcc") instead of plain "gcc"/"cc". That
+    # prefixed binary isn't guaranteed to exist just because
+    # build-essential is installed (confirmed failing in CI run 2490:
+    # "failed to find tool 'x86_64-linux-gnu-gcc'"), so point cc-rs at
+    # the real installed compiler explicitly instead of hoping the distro
+    # ships a matching prefixed symlink.
+    env:
+      CC_x86_64_unknown_linux_gnu: gcc
+      CXX_x86_64_unknown_linux_gnu: g++
+      AR_x86_64_unknown_linux_gnu: ar
     strategy:
       matrix:
         include:
