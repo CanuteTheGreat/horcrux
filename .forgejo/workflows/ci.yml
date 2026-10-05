@@ -133,6 +133,7 @@ jobs:
           HORCRUX_CNI_BIN_DIR=/tmp/horcrux-ci-cni/bin \
           HORCRUX_CNI_CONF_DIR=/tmp/horcrux-ci-cni/conf.d \
           ADMIN_PASSWORD=admin \
+          RATE_LIMIT_MAX_REQUESTS=100000 \
           RUST_LOG=info \
           nohup ./target/debug/horcrux-api > /tmp/horcrux-api.log 2>&1 &
           echo $! > /tmp/horcrux-api.pid

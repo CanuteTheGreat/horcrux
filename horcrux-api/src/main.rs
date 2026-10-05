@@ -223,8 +223,23 @@ async fn main() -> anyhow::Result<()> {
     info!("Session cleanup task started");
 
     // Initialize rate limiter with custom config
+    //
+    // max_requests is overridable via RATE_LIMIT_MAX_REQUESTS: the default of
+    // 100/user/60s is right for production, but CI's integration test suite
+    // authenticates all ~22 parallel tests as the same shared admin user
+    // (ADMIN_PASSWORD env var above), so per-user limiting gives that one
+    // bucket a 100 req/min budget shared across the whole suite - easily
+    // exhausted by legitimate concurrent test traffic, producing an
+    // intermittent 429 where a test expects 200 (not a real rate-limit bug,
+    // just production limits applied to a test fixture they weren't sized
+    // for). CI sets this much higher; production is unaffected since the
+    // var is unset there.
+    let rate_limit_max_requests: u32 = std::env::var("RATE_LIMIT_MAX_REQUESTS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100);
     let rate_limit_config = middleware::rate_limit::RateLimitConfig {
-        max_requests: 100,
+        max_requests: rate_limit_max_requests,
         window: std::time::Duration::from_secs(60),
         per_user: true,
     };
