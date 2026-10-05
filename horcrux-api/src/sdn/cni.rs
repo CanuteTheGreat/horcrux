@@ -82,8 +82,15 @@ pub struct CniResult {
     /// there in the JSON, just spelled the way the spec actually requires.
     #[serde(rename = "cniVersion")]
     pub cni_version: String,
+    #[serde(default)]
     pub interfaces: Vec<CniInterface>,
+    #[serde(default)]
     pub ips: Vec<CniIpConfig>,
+    /// Real plugins (e.g. host-local with no routes configured) omit
+    /// this key entirely rather than sending an empty array - without
+    /// #[serde(default)] that made deserialization fail with "missing
+    /// field `routes`" on every real ADD that didn't configure routes.
+    #[serde(default)]
     pub routes: Vec<RouteConfig>,
     pub dns: Option<DnsConfig>,
 }
