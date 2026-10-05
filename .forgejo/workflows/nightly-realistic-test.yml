@@ -36,6 +36,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Ensure Node.js is present (self-heal)
+        # This job's container (catthehacker/ubuntu:act-latest) is reused
+        # by the beauxbatons runner across many job runs instead of being
+        # recreated per-run (confirmed via `docker ps -a` in a prior failed
+        # run showing other jobs' containers still alive hours later). On
+        # 2026-10-05 node vanished mid-job from a long-lived container
+        # between the "Verify tool versions" and "Cache cargo registry"
+        # steps, breaking actions/cache and actions/checkout's post step
+        # (both are JS actions that shell out to `node`). Root cause is a
+        # runner/container-lifecycle issue outside this repo, but we can
+        # cheaply self-heal here rather than fail the whole nightly run.
+        run: |
+          if ! command -v node >/dev/null 2>&1; then
+            echo "::warning::node missing from job container PATH - reinstalling (see container-reuse note in this step)"
+            sudo apt-get update -qq
+            sudo apt-get install -y nodejs
+          fi
+          node --version
+
       - name: Install Rust toolchain
         uses: https://github.com/dtolnay/rust-toolchain@stable
 
@@ -99,6 +118,26 @@ jobs:
           qemu-img --version
           docker version
           ls -la "$NIGHTLY_CNI_BIN_DIR"
+
+      - name: Ensure Node.js is present (self-heal, pre-cache)
+        # Second check, right before the next node-dependent (JS) action.
+        # This job's container (catthehacker/ubuntu:act-latest) is reused
+        # by the beauxbatons runner across many job runs instead of being
+        # recreated per-run (confirmed via `docker ps -a` in a prior failed
+        # run showing other jobs' containers still alive hours later). On
+        # 2026-10-05 node vanished mid-job from a long-lived container
+        # between the "Verify tool versions" and "Cache cargo registry"
+        # steps, breaking actions/cache and actions/checkout's post step
+        # (both are JS actions that shell out to `node`). Root cause is a
+        # runner/container-lifecycle issue outside this repo, but we can
+        # cheaply self-heal here rather than fail the whole nightly run.
+        run: |
+          if ! command -v node >/dev/null 2>&1; then
+            echo "::warning::node missing from job container PATH - reinstalling (see container-reuse note in this step)"
+            sudo apt-get update -qq
+            sudo apt-get install -y nodejs
+          fi
+          node --version
 
       - name: Cache cargo registry
         uses: actions/cache@v4
