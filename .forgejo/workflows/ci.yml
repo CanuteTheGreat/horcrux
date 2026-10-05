@@ -183,19 +183,6 @@ jobs:
     # pull the variant matching whatever platform it actually requests.
     container: catthehacker/ubuntu:act-latest
     needs: test
-    # cc-rs (used transitively by ring et al.) treats an explicit
-    # `--target x86_64-unknown-linux-gnu` as a cross-compile even when it
-    # matches the host, and looks for a triple-prefixed compiler
-    # ("x86_64-linux-gnu-gcc") instead of plain "gcc"/"cc". That
-    # prefixed binary isn't guaranteed to exist just because
-    # build-essential is installed (confirmed failing in CI run 2490:
-    # "failed to find tool 'x86_64-linux-gnu-gcc'"), so point cc-rs at
-    # the real installed compiler explicitly instead of hoping the distro
-    # ships a matching prefixed symlink.
-    env:
-      CC_x86_64_unknown_linux_gnu: gcc
-      CXX_x86_64_unknown_linux_gnu: g++
-      AR_x86_64_unknown_linux_gnu: ar
     strategy:
       matrix:
         include:
@@ -226,11 +213,25 @@ jobs:
             ${{ runner.os }}-cargo-${{ matrix.target }}-
 
       - name: Build (features=${{ matrix.features }})
+        # Deliberately NOT passing --target here even though the matrix
+        # names a target triple (kept for cache-key/toolchain-install
+        # purposes). An explicit --target makes cc-rs (via ring et al.)
+        # treat the build as a cross-compile and pass arch-specific flags
+        # like "-m64" to whatever "gcc" happens to be on PATH -- fine on
+        # a genuine x86_64 runner, but this "x86_64"-labeled job can
+        # actually land in an arm64-native container (beauxbatons is real
+        # Apple Silicon; see the Gentoo Docker Build job's own comments on
+        # this), where the installed gcc is arm64-native and rejects
+        # "-m64" outright (confirmed failing in CI run 2497: "gcc: error:
+        # unrecognized command-line option '-m64'"). Every other job in
+        # this workflow (Check/Test/Build Web UI) already builds natively
+        # without --target and passes; do the same here instead of
+        # fighting cc-rs's cross-compile flag selection.
         run: |
           if [ "${{ matrix.features }}" = "full" ]; then
-            cargo build --release --all-features --target ${{ matrix.target }}
+            cargo build --release --all-features
           else
-            cargo build --release --target ${{ matrix.target }}
+            cargo build --release
           fi
 
   build-ui:
