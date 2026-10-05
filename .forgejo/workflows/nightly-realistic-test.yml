@@ -58,10 +58,11 @@ jobs:
       # guest boot (real kernel executing, real serial console output)
       # entirely inside this privileged Linux container - see
       # horcrux-api/tests/nightly_realistic_tests.rs::test_real_qemu_vm_boot.
-      - name: Install real QEMU, CNI plugins, and net tools
+      - name: Install build deps, real QEMU, CNI plugins, and net tools
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            build-essential libvirt-dev \
             qemu-system-x86 qemu-utils \
             containernetworking-plugins \
             iproute2 iputils-ping curl
