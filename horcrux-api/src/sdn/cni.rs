@@ -215,9 +215,16 @@ impl CniManager {
         let result = child.wait_with_output().await?;
 
         if !result.status.success() {
+            // Per the CNI spec, plugins report structured errors as JSON on
+            // stdout (not stderr) when they exit non-zero. Surface both so
+            // callers/operators can actually see why ADD failed instead of
+            // just an empty string.
+            let stdout = String::from_utf8_lossy(&result.stdout);
             let stderr = String::from_utf8_lossy(&result.stderr);
             return Err(horcrux_common::Error::System(format!(
-                "CNI plugin failed: {}",
+                "CNI plugin failed (exit: {:?}): stdout={} stderr={}",
+                result.status.code(),
+                stdout,
                 stderr
             )));
         }
@@ -321,8 +328,14 @@ impl CniManager {
         let result = child.wait_with_output().await?;
 
         if !result.status.success() {
+            let stdout = String::from_utf8_lossy(&result.stdout);
             let stderr = String::from_utf8_lossy(&result.stderr);
-            tracing::warn!("CNI DEL warning: {}", stderr);
+            tracing::warn!(
+                "CNI DEL warning (exit: {:?}): stdout={} stderr={}",
+                result.status.code(),
+                stdout,
+                stderr
+            );
             // Don't fail on DEL errors - best effort cleanup
         }
 
@@ -391,9 +404,12 @@ impl CniManager {
         let result = child.wait_with_output().await?;
 
         if !result.status.success() {
+            let stdout = String::from_utf8_lossy(&result.stdout);
             let stderr = String::from_utf8_lossy(&result.stderr);
             return Err(horcrux_common::Error::System(format!(
-                "CNI CHECK failed: {}",
+                "CNI CHECK failed (exit: {:?}): stdout={} stderr={}",
+                result.status.code(),
+                stdout,
                 stderr
             )));
         }

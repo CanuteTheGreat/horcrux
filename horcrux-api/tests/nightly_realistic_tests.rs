@@ -114,6 +114,14 @@ async fn test_real_qemu_vm_boot() {
         .await
         .expect("start_vm should spawn a real qemu-system-x86_64 process");
 
+    // start_vm() doesn't hand back an updated struct, and QemuVm has no
+    // internal refresh - track the post-start state ourselves so later
+    // stop_vm()/delete_vm() calls see status=Running (they're guarded by
+    // state checks: stop_vm errors out if it still thinks the VM is
+    // Stopped).
+    let mut running_vm = vm.clone();
+    running_vm.status = VmStatus::Running;
+
     let serial_log = vm.disk_path.with_extension("serial.log");
     let deadline = Instant::now() + Duration::from_secs(120);
     let boot_marker = "login as 'cirros' user";
@@ -133,9 +141,11 @@ async fn test_real_qemu_vm_boot() {
 
     // Always try to stop/delete the VM, even if the boot assertion below
     // fails, so a nightly failure doesn't leak a running qemu process.
-    let stop_result = manager.stop_vm(&vm).await;
+    let stop_result = manager.stop_vm(&running_vm).await;
     let _ = tokio::fs::remove_file(&serial_log).await;
-    let delete_result = manager.delete_vm(&vm).await;
+    let mut stopped_vm = running_vm.clone();
+    stopped_vm.status = VmStatus::Stopped;
+    let delete_result = manager.delete_vm(&stopped_vm).await;
 
     assert!(
         booted,
@@ -173,7 +183,15 @@ async fn test_real_docker_container_lifecycle() {
         runtime: ContainerRuntime::Docker,
         memory: 128,
         cpus: 1,
-        rootfs: "alpine:3.20".to_string(),
+        // DockerManager's create_container() has no way to override the
+        // container's command (ContainerConfig.rootfs maps straight to
+        // `docker create ... <IMAGE>`, no CMD/ARGS), so the image's own
+        // default entrypoint must stay running in the foreground on its
+        // own - e.g. alpine's default `/bin/sh` exits immediately with no
+        // tty attached. nginx's default CMD runs the server in the
+        // foreground indefinitely, which is what lets `docker exec` work
+        // below against a genuinely still-running container.
+        rootfs: "nginx:alpine".to_string(),
         status: ContainerStatus::Stopped,
     };
 
