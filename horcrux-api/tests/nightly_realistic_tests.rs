@@ -306,7 +306,7 @@ async fn test_real_cni_networking() {
     run_ok("ip", &["netns", "add", ns1], "create netns 1");
     run_ok("ip", &["netns", "add", ns2], "create netns 2");
 
-    let mut cni = CniManager::new(cni_bin_dir, cni_conf_dir);
+    let mut cni = CniManager::new(cni_bin_dir, cni_conf_dir.clone());
 
     let network_config = CniConfig {
         cni_version: "1.0.0".to_string(),
@@ -328,6 +328,14 @@ async fn test_real_cni_networking() {
     cni.create_network(network_config)
         .await
         .expect("create_network should write a real CNI conflist");
+
+    // Debug aid: print the real conflist CNI plugins will actually read,
+    // so a nightly failure's log shows exactly what was on disk.
+    if let Ok(written) =
+        tokio::fs::read_to_string(cni_conf_dir.join(format!("{network_name}.conflist"))).await
+    {
+        println!("--- {network_name}.conflist on disk ---\n{written}\n---");
+    }
 
     let netns1_path = format!("/var/run/netns/{ns1}");
     let netns2_path = format!("/var/run/netns/{ns2}");

@@ -98,6 +98,38 @@ pub struct CniIpConfig {
     pub interface: Option<u32>,
 }
 
+/// Translate a CniConfig into the actual on-the-wire NetConf JSON real CNI
+/// plugins expect (used both for the on-disk .conflist a plugin chain
+/// manager would read, and for the stdin payload piped directly to a
+/// plugin binary during ADD/DEL/CHECK). CniConfig/IpamConfig's own Rust
+/// field names (plugin_type, ipam_type, range_start, range_end) are kept
+/// as-is for API/backwards compatibility, but they are NOT what real
+/// plugins understand on the wire - the CNI spec requires "type" (not
+/// "plugin_type"/"ipam_type") and "rangeStart"/"rangeEnd" (camelCase, not
+/// snake_case). Serializing the Rust structs directly previously produced
+/// a NetConf real plugins silently misparsed: `bridge` sees no "type" key
+/// matching itself so still runs, but `host-local` sees no usable
+/// "rangeStart"/"rangeEnd" and fails with {"code":999,"msg":"cannot
+/// convert: no valid IP addresses"}.
+fn build_netconf(config: &CniConfig) -> serde_json::Value {
+    serde_json::json!({
+        "cniVersion": config.cni_version,
+        "name": config.name,
+        "type": format!("{:?}", config.plugin_type).to_lowercase(),
+        "bridge": config.bridge,
+        "isGateway": true,
+        "ipMasq": true,
+        "ipam": {
+            "type": config.ipam.ipam_type,
+            "subnet": config.ipam.subnet,
+            "rangeStart": config.ipam.range_start,
+            "rangeEnd": config.ipam.range_end,
+            "gateway": config.ipam.gateway,
+            "routes": config.ipam.routes,
+        },
+    })
+}
+
 /// CNI Manager
 pub struct CniManager {
     cni_bin_dir: PathBuf,
@@ -135,37 +167,10 @@ impl CniManager {
                 ))
             })?;
 
-        // Real CNI IPAM plugins (host-local in particular) expect their
-        // own JSON schema - "type"/"rangeStart"/"rangeEnd" (camelCase) -
-        // which does NOT match CniConfig/IpamConfig's Rust/API field names
-        // (ipam_type/range_start/range_end, kept as-is for backwards
-        // compatibility with the existing HTTP API request/response
-        // shape). Serializing config.ipam directly here silently produced
-        // a conflist the real plugin couldn't understand - host-local
-        // would exit with {"code":999,"msg":"cannot convert: no valid IP
-        // addresses"} because it never saw a usable range. Translate field
-        // names when writing the on-disk conflist that real plugins read.
-        let ipam_json = serde_json::json!({
-            "type": config.ipam.ipam_type,
-            "subnet": config.ipam.subnet,
-            "rangeStart": config.ipam.range_start,
-            "rangeEnd": config.ipam.range_end,
-            "gateway": config.ipam.gateway,
-            "routes": config.ipam.routes,
-        });
-
         let conf_list = serde_json::json!({
             "cniVersion": config.cni_version,
             "name": config.name,
-            "plugins": [
-                {
-                    "type": format!("{:?}", config.plugin_type).to_lowercase(),
-                    "bridge": config.bridge,
-                    "ipam": ipam_json,
-                    "isGateway": true,
-                    "ipMasq": true,
-                }
-            ]
+            "plugins": [build_netconf(&config)]
         });
 
         tokio::fs::write(
@@ -208,7 +213,12 @@ impl CniManager {
         let plugin_path = self
             .cni_bin_dir
             .join(format!("{:?}", network.plugin_type).to_lowercase());
-        let config_json = serde_json::to_string(&network).map_err(|e| {
+        // The stdin payload a CNI plugin receives must be real NetConf
+        // JSON (see build_netconf's doc comment) - serializing `network`
+        // (the CniConfig struct) directly used the wrong field names and
+        // was why ADD/DEL/CHECK always failed against real plugins even
+        // after the on-disk conflist was fixed to use the right schema.
+        let config_json = serde_json::to_string(&build_netconf(network)).map_err(|e| {
             horcrux_common::Error::System(format!("Failed to serialize CNI config: {}", e))
         })?;
 
@@ -321,7 +331,12 @@ impl CniManager {
         let plugin_path = self
             .cni_bin_dir
             .join(format!("{:?}", network.plugin_type).to_lowercase());
-        let config_json = serde_json::to_string(&network).map_err(|e| {
+        // The stdin payload a CNI plugin receives must be real NetConf
+        // JSON (see build_netconf's doc comment) - serializing `network`
+        // (the CniConfig struct) directly used the wrong field names and
+        // was why ADD/DEL/CHECK always failed against real plugins even
+        // after the on-disk conflist was fixed to use the right schema.
+        let config_json = serde_json::to_string(&build_netconf(network)).map_err(|e| {
             horcrux_common::Error::System(format!("Failed to serialize CNI config: {}", e))
         })?;
 
@@ -397,7 +412,12 @@ impl CniManager {
         let plugin_path = self
             .cni_bin_dir
             .join(format!("{:?}", network.plugin_type).to_lowercase());
-        let config_json = serde_json::to_string(&network).map_err(|e| {
+        // The stdin payload a CNI plugin receives must be real NetConf
+        // JSON (see build_netconf's doc comment) - serializing `network`
+        // (the CniConfig struct) directly used the wrong field names and
+        // was why ADD/DEL/CHECK always failed against real plugins even
+        // after the on-disk conflist was fixed to use the right schema.
+        let config_json = serde_json::to_string(&build_netconf(network)).map_err(|e| {
             horcrux_common::Error::System(format!("Failed to serialize CNI config: {}", e))
         })?;
 
