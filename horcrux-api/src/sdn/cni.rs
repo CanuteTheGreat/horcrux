@@ -483,6 +483,29 @@ impl CniManager {
 
     /// Delete a network
     pub async fn delete_network(&mut self, name: &str) -> Result<()> {
+        // Refuse to delete a network that still has containers attached to
+        // it (mirrors Docker/CNI-chain-manager behavior). Without this
+        // check, deleting an in-use network silently removed the
+        // .conflist a plugin needs to run DEL later, orphaning the
+        // veth/bridge interfaces those containers still hold on the host
+        // and leaving stale `attachments` entries pointing at a network
+        // that no longer exists (list_attachments would keep reporting
+        // them forever, since nothing else ever cleans that map).
+        let still_attached: Vec<&str> = self
+            .attachments
+            .iter()
+            .filter(|(_, atts)| atts.iter().any(|a| a.network_name == name))
+            .map(|(container_id, _)| container_id.as_str())
+            .collect();
+        if !still_attached.is_empty() {
+            return Err(horcrux_common::Error::System(format!(
+                "Cannot delete network {}: {} container(s) still attached ({}).                  Detach them first via del_container.",
+                name,
+                still_attached.len(),
+                still_attached.join(", ")
+            )));
+        }
+
         self.networks.remove(name);
 
         // Remove config file
@@ -603,5 +626,49 @@ mod tests {
         };
 
         assert_eq!(route.dst, "0.0.0.0/0");
+    }
+
+    #[tokio::test]
+    async fn test_delete_network_refuses_while_attached() {
+        let dir = std::env::temp_dir().join(format!("horcrux-cni-test-{}", std::process::id()));
+        let mut manager = CniManager::new(dir.join("bin"), dir.join("conf"));
+
+        let config = CniConfig {
+            cni_version: "1.0.0".to_string(),
+            name: "test-net".to_string(),
+            plugin_type: CniPluginType::Bridge,
+            bridge: Some("cni0".to_string()),
+            ipam: IpamConfig::default(),
+            dns: None,
+            capabilities: HashMap::new(),
+        };
+        manager.create_network(config).await.unwrap();
+
+        // Simulate a container already attached to this network (as
+        // add_container would have recorded after a real plugin ADD).
+        manager.attachments.insert(
+            "container-1".to_string(),
+            vec![CniAttachment {
+                container_id: "container-1".to_string(),
+                network_name: "test-net".to_string(),
+                interface_name: "eth0".to_string(),
+                ip_address: "10.88.0.10".parse().unwrap(),
+                mac_address: "00:00:00:00:00:01".to_string(),
+                gateway: None,
+            }],
+        );
+
+        // Deleting a network with a live attachment must fail, not
+        // silently remove the network out from under the container.
+        let err = manager.delete_network("test-net").await.unwrap_err();
+        assert!(err.to_string().contains("container-1"));
+        assert!(manager.get_network("test-net").is_some());
+
+        // Once detached, deletion succeeds.
+        manager.attachments.remove("container-1");
+        manager.delete_network("test-net").await.unwrap();
+        assert!(manager.get_network("test-net").is_none());
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 }
