@@ -151,6 +151,24 @@ jobs:
             ${{ runner.os }}-cargo-nightly-
             ${{ runner.os }}-cargo-
 
+      - name: Make root mount propagation shared (required for ip-netns)
+        # `ip netns add` internally runs `mount --make-shared /run/netns`
+        # (iproute2 needs /run/netns to be a shared-propagation mountpoint
+        # so netns bind-mounts are visible to subsequent `ip netns exec`
+        # invocations). Docker Desktop's LinuxKit VM mounts this job
+        # container's rootfs with MS_PRIVATE propagation by default -
+        # even with the runner's global `privileged: true` - so that
+        # `mount --make-shared` call fails with a plain "Operation not
+        # permitted" and takes down test_real_cni_networking before it
+        # creates a single namespace (confirmed via job 12449's log,
+        # 2026-10-06 run: failure happened at the very first `ip netns
+        # add`, 0.07s into the test, before any CNI/veth/bridge logic
+        # ran at all - a propagation-mode problem, not a CNI bug).
+        # Re-marking propagation as (r)shared from inside the container
+        # is exactly the documented fix and only needs to happen once
+        # per job run, before the test step that calls `ip netns add`.
+        run: sudo mount --make-rshared /
+
       - name: Run realistic end-to-end tests
         # These are the real-boot/real-docker/real-CNI tests - see the
         # module doc comment in nightly_realistic_tests.rs for exactly
