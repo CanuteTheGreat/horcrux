@@ -82,21 +82,60 @@ jobs:
             ${{ runner.os }}-cargo-nightly-
             ${{ runner.os }}-cargo-
 
-      - name: Run in-process stress tests (fleet boot, network isolation, failure injection)
-        # --test-threads=1: like nightly_realistic_tests.rs, these claim
-        # host-wide resources (netns names, bridge devices, a shared
-        # docker name prefix) that would collide if run concurrently with
-        # each other. Concurrency WITHIN each test (the fleet of N
-        # containers, the hammering workers) is exactly what's being
-        # exercised - this flag only serializes the handful of distinct
-        # test *functions* from each other.
+      - name: Probe mount-namespace capability (fail-soft, not fail-fast)
+        # Known, already-investigated environment limitation on this
+        # runner (see nightly-realistic-test.yml's "Preflight" step and
+        # commits 4a5ab32/c7abfee): `ip netns add` needs CLONE_NEWNS, and
+        # Docker Desktop's Enhanced Container Isolation (or an equivalent
+        # seccomp/AppArmor profile) denies it outright for job containers
+        # on beauxbatons - confirmed via `unshare --mount` itself failing
+        # with a flat "Operation not permitted", not an ownership nuance
+        # workaroundable from inside the container. That's a host/runner
+        # config decision for the owner, not something any workflow-level
+        # trick can fix.
+        #
+        # Unlike nightly-realistic-test.yml (where the CNI test is the
+        # ENTIRE point of the job, so failing fast makes sense), this
+        # workflow has four other independent scenarios that don't need
+        # netns at all (concurrent fleet, failure injection, sustained
+        # load, serial-console-gap). So this probe is fail-SOFT: it
+        # records the result and the CNI isolation step below skips
+        # itself with a clear message instead of taking the whole job
+        # down, so the other scenarios still get a real pass/fail result
+        # every run regardless of this host limitation.
+        run: |
+          if unshare --mount --propagation private -- true 2>/tmp/unshare-probe.err; then
+            echo "NIGHTLY_NETNS_OK=true" >> "$GITHUB_ENV"
+            echo "mount-namespace capability available"
+          else
+            echo "NIGHTLY_NETNS_OK=false" >> "$GITHUB_ENV"
+            echo "::warning::unshare --mount is blocked on this runner ($(tr -d '\n' < /tmp/unshare-probe.err)) - CLONE_NEWNS is denied for job containers on beauxbatons (Docker Desktop Enhanced Container Isolation or equivalent). The CNI cross-network isolation test needs 'ip netns' and cannot run here until the host/runner config is changed by the owner; it will be skipped (not faked as a pass) this run. All other stress scenarios are unaffected and will still run."
+          fi
+
+      - name: Run concurrent container fleet test
+        run: |
+          cargo test --test nightly_stress_tests -p horcrux-api \
+            -- --ignored --test-threads=1 --nocapture \
+            test_concurrent_container_fleet
+
+      - name: Run CNI cross-network isolation test
+        if: env.NIGHTLY_NETNS_OK == 'true'
         env:
           NIGHTLY_CNI_CONF_DIR: /tmp/horcrux-stress/cni-conf
         run: |
           cargo test --test nightly_stress_tests -p horcrux-api \
             -- --ignored --test-threads=1 --nocapture \
-            test_concurrent_container_fleet \
-            test_cni_network_partition_isolation \
+            test_cni_network_partition_isolation
+
+      - name: Skip notice - CNI cross-network isolation test
+        if: env.NIGHTLY_NETNS_OK != 'true'
+        run: |
+          echo "SKIPPED test_cni_network_partition_isolation: this runner denies CLONE_NEWNS (ip netns unavailable in this container). See the 'Probe mount-namespace capability' step above for the full explanation. This is an environment limitation, not a passing or faked result."
+
+      - name: Run failure-injection / reconciliation test
+        run: |
+          cargo test --test nightly_stress_tests -p horcrux-api \
+            -- --ignored --test-threads=1 --nocapture \
             test_failure_injection_and_reconciliation
 
       - name: Build horcrux-api server (for load + serial-console-gap tests)
