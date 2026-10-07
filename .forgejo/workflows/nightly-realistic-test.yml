@@ -151,24 +151,6 @@ jobs:
             ${{ runner.os }}-cargo-nightly-
             ${{ runner.os }}-cargo-
 
-      - name: Make root mount propagation shared (required for ip-netns)
-        # `ip netns add` internally runs `mount --make-shared /run/netns`
-        # (iproute2 needs /run/netns to be a shared-propagation mountpoint
-        # so netns bind-mounts are visible to subsequent `ip netns exec`
-        # invocations). Docker Desktop's LinuxKit VM mounts this job
-        # container's rootfs with MS_PRIVATE propagation by default -
-        # even with the runner's global `privileged: true` - so that
-        # `mount --make-shared` call fails with a plain "Operation not
-        # permitted" and takes down test_real_cni_networking before it
-        # creates a single namespace (confirmed via job 12449's log,
-        # 2026-10-06 run: failure happened at the very first `ip netns
-        # add`, 0.07s into the test, before any CNI/veth/bridge logic
-        # ran at all - a propagation-mode problem, not a CNI bug).
-        # Re-marking propagation as (r)shared from inside the container
-        # is exactly the documented fix and only needs to happen once
-        # per job run, before the test step that calls `ip netns add`.
-        run: sudo mount --make-rshared /
-
       - name: Run realistic end-to-end tests
         # These are the real-boot/real-docker/real-CNI tests - see the
         # module doc comment in nightly_realistic_tests.rs for exactly
@@ -176,12 +158,42 @@ jobs:
         # thing happening. --test-threads=1 because the CNI test claims
         # host-wide resources (netns names, a bridge device) that would
         # collide if run concurrently with anything else.
+        #
+        # Mount-namespace note: a prior fix here ran a standalone
+        # `sudo mount --make-rshared /` step before this one, hoping to
+        # flip the *existing* (inherited) mount namespace's root to
+        # shared propagation so `ip netns add`'s internal
+        # `mount --make-shared /run/netns` would stop failing with
+        # "Operation not permitted". It didn't work (still failed
+        # identically in job 12449, 2026-10-06) because Linux only lets
+        # you change a mount's propagation type if you're in (or have
+        # CAP_SYS_ADMIN in) the user namespace that *owns* that mount's
+        # peer group - and on Docker Desktop's LinuxKit VM, this job
+        # container's inherited root mounts (including /run) are owned
+        # by a namespace outside this container's reach even though the
+        # container itself runs as root with `privileged: true`.
+        # Simply being root here isn't the same as owning that
+        # namespace, so re-sharing the *inherited* mount namespace from
+        # inside the container can't work no matter how it's invoked.
+        #
+        # Fix: `unshare --mount` creates a brand-new mount namespace
+        # *owned by the process creating it* - i.e. us, right now, as
+        # root - so we fully own it and can freely flip its propagation
+        # with `mount --make-rshared /` from inside, with no
+        # cross-namespace ownership restriction in the way. Both the
+        # propagation fix and the actual test run happen inside that
+        # same freshly-created, self-owned namespace.
         env:
           NIGHTLY_VM_STORAGE: /tmp/horcrux-nightly/vms
           NIGHTLY_CNI_CONF_DIR: /tmp/horcrux-nightly/cni-conf
         run: |
-          cargo test --test nightly_realistic_tests -p horcrux-api \
-            -- --ignored --test-threads=1 --nocapture
+          sudo --preserve-env=NIGHTLY_VM_STORAGE,NIGHTLY_CNI_CONF_DIR,NIGHTLY_CNI_BIN_DIR,PATH \
+            unshare --mount --propagation private -- bash -c '
+              set -e
+              mount --make-rshared /
+              cargo test --test nightly_realistic_tests -p horcrux-api \
+                -- --ignored --test-threads=1 --nocapture
+            '
 
       - name: Diagnostics on failure
         if: failure()
