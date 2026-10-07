@@ -19,6 +19,11 @@ impl ApiClient {
         }
     }
 
+    /// The configured base URL for the API server
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     /// Set the authentication token
     pub async fn set_token(&self, token: String) {
         let mut t = self.token.write().await;

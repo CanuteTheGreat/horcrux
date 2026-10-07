@@ -652,8 +652,13 @@ fn vm_routes() -> Router<Arc<AppState>> {
         .route("/api/console/:vm_id/vnc", post(create_vnc_console))
         .route("/api/console/:vm_id/websocket", get(get_vnc_websocket))
         .route("/api/console/:vm_id/novnc", get(get_novnc_page))
+        .route("/api/console/:vm_id/serial", post(create_serial_console))
         .route("/api/console/ticket/:ticket_id", get(verify_console_ticket))
         .route("/api/console/ws/:ticket_id", get(vnc_websocket_handler))
+        .route(
+            "/api/console/ws/serial/:ticket_id",
+            get(serial_websocket_handler),
+        )
         // Migration endpoints
         .route("/api/migrate/:vm_id", post(migrate_vm))
         .route("/api/migrate/:vm_id/status", get(get_migration_status))
@@ -7502,6 +7507,30 @@ async fn vnc_websocket_handler(
 ) -> axum::response::Response {
     console::novnc::handle_vnc_websocket(ws, Path(ticket_id), State(state.console_manager.clone()))
         .await
+}
+
+async fn create_serial_console(
+    State(state): State<Arc<AppState>>,
+    Path(vm_id): Path<String>,
+) -> Result<Json<ConsoleInfo>, ApiError> {
+    let info = state
+        .console_manager
+        .create_console(&vm_id, ConsoleType::Serial)
+        .await?;
+    Ok(Json(info))
+}
+
+async fn serial_websocket_handler(
+    ws: axum::extract::ws::WebSocketUpgrade,
+    Path(ticket_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> axum::response::Response {
+    console::serial_ws::handle_serial_websocket(
+        ws,
+        Path(ticket_id),
+        State(state.console_manager.clone()),
+    )
+    .await
 }
 
 // Cluster API handlers

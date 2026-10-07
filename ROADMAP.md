@@ -235,7 +235,8 @@
 
 #### Console Verification ✅ COMPLETE
 **Files**: `horcrux-api/src/console/*.rs`
-**Status**: noVNC production implementation complete
+**Status**: noVNC production implementation complete; serial console HTTP/CLI
+exposure complete
 
 **Completed**:
 - ✅ Full noVNC v1.4.0 integration
@@ -244,9 +245,14 @@
 - ✅ Production-ready RFB protocol support
 - ✅ Connection state handling
 - ✅ Clipboard integration
+- ✅ Serial console exposed over HTTP (`POST /api/console/:vm_id/serial`,
+  `GET /api/console/ws/serial/:ticket_id`) and CLI (`horcrux-cli console
+  <vm_id> --serial`) — the backend (`console/serial.rs`) existed earlier but
+  was never routed/wired until this pass
 
 **Priority**: ~~Medium~~ DONE
-**Effort**: ~~12-15 hours~~ Completed 2025-10-12
+**Effort**: ~~12-15 hours~~ Completed 2025-10-12 (noVNC); serial exposure
+completed 2026-10-06
 
 ### 2.3 User Experience Improvements
 

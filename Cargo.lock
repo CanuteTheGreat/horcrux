@@ -1936,7 +1936,7 @@ dependencies = [
 
 [[package]]
 name = "horcrux-cli"
-version = "0.1.5"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1986,7 +1986,7 @@ dependencies = [
 
 [[package]]
 name = "horcrux-ui"
-version = "0.1.5"
+version = "0.1.4"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -5022,7 +5022,7 @@ dependencies = [
 
 [[package]]
 name = "terraform-provider-horcrux"
-version = "0.1.5"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "async-trait",

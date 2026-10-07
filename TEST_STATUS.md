@@ -126,6 +126,19 @@ Failed to login
 
 **Analysis**: Tests attempt to connect to `http://localhost:8006/api` which requires a running API server. These are proper integration tests (not unit tests).
 
+**Update (2026-10-06)**: `test_console_access` in `integration_tests.rs` is one
+of the 11 server-dependent tests above and is not itself broken — it fails
+for the same reason as the others (no live API server), not because console
+access is unimplemented. The actual console/serial plumbing is now covered by
+a real, self-contained, passing integration test that needs no external
+server: `horcrux-api/tests/serial_console_integration_test.rs` exercises
+`ConsoleManager::create_console(.., ConsoleType::Serial)` end to end —
+enable, ticket issuance, write, read, and the WebSocket/TCP proxy bridge —
+against a stub QEMU-like process. Run it with:
+```bash
+cargo test -p horcrux-api --test serial_console_integration_test
+```
+
 **Resolution**: To run these tests successfully:
 ```bash
 # Terminal 1: Start API server

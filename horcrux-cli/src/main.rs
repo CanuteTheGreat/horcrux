@@ -67,6 +67,14 @@ enum Commands {
         #[arg(short, long, default_value = "live")]
         migration_type: String,
     },
+    /// Open a console session for a VM (VNC by default, or serial)
+    Console {
+        /// VM ID to connect to
+        vm_id: String,
+        /// Use the serial console instead of VNC
+        #[arg(long)]
+        serial: bool,
+    },
     /// Monitor system resources
     Monitor {
         #[command(subcommand)]
@@ -909,6 +917,9 @@ async fn main() -> Result<()> {
                 &api_client,
             )
             .await?
+        }
+        Commands::Console { vm_id, serial } => {
+            commands::console::handle_console_command(&vm_id, serial, &api_client).await?
         }
         Commands::Monitor { command } => {
             commands::monitor::handle_monitor_command(command, &api_client, &cli.output).await?

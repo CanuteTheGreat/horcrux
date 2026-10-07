@@ -111,7 +111,7 @@ Proxmox has:
 ## Priority 2: Important Features
 
 ### 6. Console Access
-**Status:** Not implemented
+**Status:** Implemented (VNC, SPICE, noVNC, serial)
 
 Proxmox has:
 - noVNC (HTML5 VNC in browser)
@@ -119,13 +119,22 @@ Proxmox has:
 - Serial console
 - xterm.js for container console
 
-**What we need:**
+**What we have:**
 ```rust
-// horcrux-api/src/console/mod.rs
-- VNC proxy server
-- WebSocket proxy for console
+// horcrux-api/src/console/{mod,vnc,spice,novnc,serial,serial_ws,websocket}.rs
+- VNC proxy server + noVNC web client (production-ready)
 - SPICE protocol support
+- WebSocket proxy for VNC and serial consoles (ticket-authenticated)
+- Serial console: HTTP route `POST /api/console/:vm_id/serial`, WebSocket
+  bridge `GET /api/console/ws/serial/:ticket_id`, and
+  `horcrux-cli console <vm_id> --serial`
+- Exercised end-to-end by
+  `horcrux-api/tests/serial_console_integration_test.rs`
 ```
+
+**Remaining gap:** container console access (xterm.js style) is still not
+implemented; only VM (QEMU) consoles are covered.
+
 
 ### 7. Software-Defined Networking (SDN)
 **Status:** Not implemented

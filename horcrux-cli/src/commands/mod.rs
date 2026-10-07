@@ -3,6 +3,7 @@ pub mod auth;
 pub mod backup;
 pub mod clone;
 pub mod cluster;
+pub mod console;
 pub mod container;
 pub mod ha;
 pub mod migrate;

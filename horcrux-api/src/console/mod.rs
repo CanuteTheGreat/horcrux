@@ -5,6 +5,7 @@
 
 pub mod novnc;
 mod serial;
+pub mod serial_ws;
 mod spice;
 mod vnc;
 mod websocket;
@@ -245,6 +246,12 @@ impl ConsoleManager {
             "ws://{}:{}/{}",
             info.host, info.ws_port, info.ticket
         ))
+    }
+
+    /// Get the raw Unix socket path backing a VM's serial console.
+    /// Used by the serial WebSocket bridge to know what to proxy to.
+    pub async fn get_serial_socket_path(&self, vm_id: &str) -> Result<String> {
+        self.serial_manager.ensure_serial_enabled(vm_id).await
     }
 
     /// Send data to serial console
