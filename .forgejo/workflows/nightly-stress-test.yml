@@ -1,0 +1,193 @@
+name: Nightly Stress / Adversarial Test
+
+# This is deliberately separate from nightly-realistic-test.yml (one VM
+# boots once, one container lifecycle, one pair of namespaces ping each
+# other - a basic "does the real thing happen at all" check) and from
+# ci.yml (fast per-push checks). This workflow goes further: concurrency,
+# two independent networks with a real negative (isolation) assertion,
+# out-of-band failure injection against the real system, and several
+# minutes of sustained concurrent HTTP load against a live horcrux-api
+# server - the "poke it with a stick" suite. Expensive and noisy by
+# design, so schedule + manual dispatch only, never on push/PR.
+on:
+  workflow_dispatch: {}
+  schedule:
+    # 10:00 UTC == ~03:00 America/Los_Angeles, an hour after
+    # nightly-realistic-test.yml's 09:00 UTC slot so they don't fight over
+    # the same Docker Desktop daemon / CNI bridge devices on beauxbatons.
+    - cron: '0 10 * * *'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  stress-test:
+    name: Concurrent VM/container fleet + isolation + failure-injection + load test
+    # Same dedicated runner as nightly-realistic-test.yml and for the same
+    # reason: real Docker Desktop daemon (genuine Linux kernel, real
+    # netns/veth/CNI) on beauxbatons, reached via the x86_64-labeled
+    # Forgejo runner fleet - never ubuntu-latest (shared AWS ASG fleet,
+    # see rustinion-ci-infra-map skill).
+    runs-on: x86_64
+    container: catthehacker/ubuntu:act-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@stable
+
+      - name: Install build deps, CNI plugins, and net tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential libvirt-dev \
+            containernetworking-plugins \
+            iproute2 iputils-ping curl jq
+
+          if [ -d /usr/lib/cni ]; then
+            echo "NIGHTLY_CNI_BIN_DIR=/usr/lib/cni" >> "$GITHUB_ENV"
+          elif [ -d /opt/cni/bin ]; then
+            echo "NIGHTLY_CNI_BIN_DIR=/opt/cni/bin" >> "$GITHUB_ENV"
+          else
+            echo "No CNI plugin binaries found after install" >&2
+            exit 1
+          fi
+
+      - name: Pre-pull real container images used by the stress fleet
+        # nginx:alpine (long-running, so `docker ps` reports it as
+        # genuinely "running") and alpine:latest (fast create/delete churn
+        # for the load test) - pulled once up front so neither the fleet
+        # boot nor the load test pay first-pull latency mid-measurement.
+        run: |
+          docker pull nginx:alpine
+          docker pull alpine:latest
+
+      - name: Verify tool versions (docker, CNI)
+        run: |
+          docker version
+          ls -la "$NIGHTLY_CNI_BIN_DIR"
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-stress-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-stress-
+            ${{ runner.os }}-cargo-nightly-
+            ${{ runner.os }}-cargo-
+
+      - name: Run in-process stress tests (fleet boot, network isolation, failure injection)
+        # --test-threads=1: like nightly_realistic_tests.rs, these claim
+        # host-wide resources (netns names, bridge devices, a shared
+        # docker name prefix) that would collide if run concurrently with
+        # each other. Concurrency WITHIN each test (the fleet of N
+        # containers, the hammering workers) is exactly what's being
+        # exercised - this flag only serializes the handful of distinct
+        # test *functions* from each other.
+        env:
+          NIGHTLY_CNI_CONF_DIR: /tmp/horcrux-stress/cni-conf
+        run: |
+          cargo test --test nightly_stress_tests -p horcrux-api \
+            -- --ignored --test-threads=1 --nocapture \
+            test_concurrent_container_fleet \
+            test_cni_network_partition_isolation \
+            test_failure_injection_and_reconciliation
+
+      - name: Build horcrux-api server (for load + serial-console-gap tests)
+        run: cargo build --all-features -p horcrux-api --bin horcrux-api
+
+      - name: Start a dedicated horcrux-api server for load testing
+        # Deliberately a different port (8007) and data dir from ci.yml's
+        # integration_tests.rs server (8006 / /tmp/horcrux-ci-data), so
+        # this workflow can never collide with ci.yml if they ever
+        # overlap on the same runner.
+        run: |
+          mkdir -p /tmp/horcrux-stress-data
+          mkdir -p /tmp/horcrux-stress-cni/bin /tmp/horcrux-stress-cni/conf.d
+          HORCRUX_HOST=127.0.0.1 \
+          HORCRUX_PORT=8007 \
+          HORCRUX_DATA_DIR=/tmp/horcrux-stress-data \
+          HORCRUX_DATABASE_URL="sqlite:///tmp/horcrux-stress-data/horcrux.db" \
+          HORCRUX_CNI_BIN_DIR=/tmp/horcrux-stress-cni/bin \
+          HORCRUX_CNI_CONF_DIR=/tmp/horcrux-stress-cni/conf.d \
+          ADMIN_PASSWORD=admin \
+          RATE_LIMIT_MAX_REQUESTS=1000000 \
+          RUST_LOG=info \
+          nohup ./target/debug/horcrux-api > /tmp/horcrux-stress-api.log 2>&1 &
+          echo $! > /tmp/horcrux-stress-api.pid
+
+          echo "Waiting for horcrux-api to become healthy..."
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8007/api/health > /dev/null 2>&1; then
+              echo "horcrux-api is up (pid $(cat /tmp/horcrux-stress-api.pid))"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "horcrux-api did not become healthy in time" >&2
+          cat /tmp/horcrux-stress-api.log >&2
+          exit 1
+
+      - name: Run sustained concurrent load test against the live server
+        # 150s * 6 concurrent workers * 2 ops/iteration (create+delete),
+        # each iteration is a real HTTP round trip plus two real `docker`
+        # invocations server-side - this runs dozens of real create/delete
+        # cycles well within the timeout-minutes budget, continuously
+        # polling /api/health in parallel the whole time.
+        env:
+          NIGHTLY_STRESS_API_BASE: http://127.0.0.1:8007/api
+          NIGHTLY_STRESS_API_PIDFILE: /tmp/horcrux-stress-api.pid
+          NIGHTLY_STRESS_LOAD_SECONDS: "150"
+          NIGHTLY_STRESS_LOAD_CONCURRENCY: "6"
+        run: |
+          cargo test --test nightly_stress_tests -p horcrux-api \
+            -- --ignored --test-threads=1 --nocapture \
+            test_sustained_concurrent_api_load
+
+      - name: Run serial-console-gap check against the live server
+        env:
+          NIGHTLY_STRESS_API_BASE: http://127.0.0.1:8007/api
+        run: |
+          cargo test --test nightly_stress_tests -p horcrux-api \
+            -- --ignored --test-threads=1 --nocapture \
+            test_serial_console_route_not_wired_yet
+
+      - name: Dump horcrux-api server log
+        if: always()
+        run: cat /tmp/horcrux-stress-api.log || true
+
+      - name: Stop horcrux-api server
+        if: always()
+        run: |
+          if [ -f /tmp/horcrux-stress-api.pid ]; then
+            kill "$(cat /tmp/horcrux-stress-api.pid)" 2>/dev/null || true
+          fi
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          echo "--- docker ps -a ---"
+          docker ps -a || true
+          echo "--- leftover netns ---"
+          ip netns list || true
+          echo "--- leftover bridges ---"
+          ip link show type bridge || true
+
+      - name: Clean up resources (backstop - tests clean up their own)
+        if: always()
+        run: |
+          rm -rf /tmp/horcrux-stress /tmp/horcrux-stress-data /tmp/horcrux-stress-cni
+          rm -f /tmp/horcrux-stress-api.pid /tmp/horcrux-stress-api.log
+          docker ps -a --filter "name=horcrux-stress" -q | xargs -r docker rm -f || true
+          for ns in hcx-stress-a1 hcx-stress-a2 hcx-stress-b1 hcx-stress-b2; do
+            ip netns del "$ns" 2>/dev/null || true
+          done
+          ip link del hcx-stress-brA 2>/dev/null || true
+          ip link del hcx-stress-brB 2>/dev/null || true
+          df -h / || true
