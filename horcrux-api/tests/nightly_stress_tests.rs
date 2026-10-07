@@ -502,6 +502,32 @@ async fn test_sustained_concurrent_api_load() {
     sleep(Duration::from_secs(2)).await;
     let fd_before = fd_count(api_pid);
 
+    // The container routes require a bearer token (real run against the
+    // default admin/admin seed user confirmed this with a flat wall of
+    // 401s on the first attempt) - log in once up front and share the
+    // token across every hammering worker, same as integration_tests.rs.
+    let login_body = serde_json::json!({"username": "admin", "password": "admin"});
+    let login_resp = client
+        .post(format!("{api_base}/auth/login"))
+        .json(&login_body)
+        .send()
+        .await
+        .expect("login request should succeed");
+    assert!(
+        login_resp.status().is_success(),
+        "login failed with status {}",
+        login_resp.status()
+    );
+    let login_json: serde_json::Value = login_resp
+        .json()
+        .await
+        .expect("login response should be valid JSON");
+    let token = login_json
+        .get("ticket")
+        .and_then(|v| v.as_str())
+        .expect("login response should include a 'ticket' field (see LoginResponse)")
+        .to_string();
+
     let deadline = Instant::now() + duration;
     let health_url = format!("{api_base}/health");
     let health_base = api_base.clone();
@@ -529,6 +555,7 @@ async fn test_sustained_concurrent_api_load() {
     for worker in 0..concurrency {
         let client = client.clone();
         let api_base = health_base.clone();
+        let token = token.clone();
         worker_handles.push(tokio::spawn(async move {
             let mut ops = 0u64;
             let mut errors: Vec<String> = Vec::new();
@@ -543,6 +570,7 @@ async fn test_sustained_concurrent_api_load() {
                 });
                 let create = client
                     .post(format!("{api_base}/containers"))
+                    .bearer_auth(&token)
                     .json(&body)
                     .send()
                     .await;
@@ -551,6 +579,7 @@ async fn test_sustained_concurrent_api_load() {
                         ops += 1;
                         let del = client
                             .delete(format!("{api_base}/containers/{id}"))
+                            .bearer_auth(&token)
                             .send()
                             .await;
                         match del {
