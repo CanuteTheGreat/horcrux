@@ -139,6 +139,28 @@ jobs:
           fi
           node --version
 
+      - name: Preflight - confirm mount-namespace capability (fail fast)
+        # Confirmed root cause (2026-10-07, run 2617/job 12573, after the
+        # unshare-based fix below was pushed and dispatched for real
+        # verification): `unshare --mount` itself returns a flat
+        # "Operation not permitted" on this runner - not an ownership/
+        # capability nuance, a syscall-level denial. That points at
+        # Docker Desktop's Enhanced Container Isolation (or an
+        # equivalent seccomp/AppArmor profile) blocking CLONE_NEWNS
+        # outright for job containers on beauxbatons, which no amount
+        # of in-container root/privileged tricks can work around - it
+        # has to be disabled/exempted at the Docker Desktop/runner
+        # config level on the host itself (owner action, not a repo fix).
+        # Probe for it here, right after cheap apt installs and before
+        # the ~1-2 minute cargo build, so a still-restricted runner
+        # fails in seconds with a clear, actionable message instead of
+        # quietly burning CI minutes to fail at the very last step.
+        run: |
+          if ! unshare --mount --propagation private -- true 2>/tmp/unshare-probe.err; then
+            echo "::error::unshare --mount is blocked on this runner ($(cat /tmp/unshare-probe.err | tr -d '\n')). This is almost certainly Docker Desktop's Enhanced Container Isolation (or an equivalent seccomp/AppArmor profile) denying CLONE_NEWNS for job containers on beauxbatons. It must be disabled/exempted for this runner at the Docker Desktop / forgejo-runner config level on the host - no workflow-level or in-container fix can work around a host-enforced syscall denial. See the comment on the 'Run realistic end-to-end tests' step for the full investigation history."
+            exit 1
+          fi
+
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
