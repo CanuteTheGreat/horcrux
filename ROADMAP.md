@@ -336,6 +336,54 @@ completed 2026-10-06
 **Effort**: 4-6 weeks
 **Priority**: High (enterprise requirement)
 
+### 3.1b Node Tiering / Weighted Placement (owner idea, 2026-10-08)
+
+**Problem**: in a real-world HA cluster, nodes are rarely identical hardware
+— a cluster accumulates older/slower boxes alongside newer/faster ones over
+time. Today there is no way to express "this node is lower-tier, prefer it
+less" or "pin this VM to only the fast nodes." The two closest existing
+pieces don't actually cover it:
+- `horcrux-api/src/cluster/balancer.rs`'s `ClusterBalancer` /
+  `BalancingStrategy::Weighted` only balances on *live load* (CPU/memory/
+  disk/network/VM-count) via `NodeResources` — there is no admin-assigned
+  weight/tier field on a node at all, "Weighted" here means a weighted
+  combination of load metrics, not node preference.
+- `horcrux-api/src/cluster/affinity.rs`'s `NodeAffinityRule` only pins
+  specific VM IDs to a specific enumerated list of node IDs — there's no
+  reusable "class of nodes" concept, you'd have to hand-list every fast (or
+  every slow) node's ID in every rule and keep it in sync as the cluster
+  changes.
+
+**Idea**: add an explicit per-node weight/tier (e.g. an integer 0-1000 like
+the existing HA resource `priority` field in `horcrux-ui/src/lib.rs`'s
+`HaResource`, or a small enum like `NodeTier::{Fast, Standard, Slow}` —
+integer weight is probably more flexible). Two places need to use it:
+1. **Placement scoring**: `ClusterBalancer::find_best_node` /
+   `get_recommendations` should factor node weight into the score
+   alongside live load, so otherwise-equal nodes prefer the higher-weight
+   one, and a VM only lands on a low-weight node when nothing better-weighted
+   has room.
+2. **Explicit targeting**: extend `AffinityRuleType` with a new
+   `NodeTierAffinity` (or generalize `NodeAffinityRule`) so a VM/CT can be
+   created with "only place on nodes with weight >= N" instead of having to
+   enumerate node names — this is what satisfies the owner's example ("create
+   a VM and associate it with the higher-priority HA cluster nodes" /
+   "...with the lower-priority nodes") without hardcoding node lists that
+   go stale.
+
+**Config/CLI surface** (sketch, not finalized): something like
+`horcrux cluster node set-weight <node> <weight>` to assign it, persisted
+alongside existing node config; then `horcrux vm create ... --node-tier
+fast` (or `--min-node-weight 500`) at creation time, and the same field
+usable as a constraint on HA failover candidate selection (don't fail over
+onto a node below the group's minimum tier) for the general case.
+
+**Effort**: rough guess 1-2 weeks (new field + migration, balancer scoring
+change, one new affinity rule type, CLI/API surface, tests). Not scoped/
+estimated precisely — needs a real design pass before implementation.
+**Priority**: Medium — real operational pain point on mixed-age hardware,
+not blocking anything else on this roadmap.
+
 ### 3.2 Integration Features
 
 #### Cloud Integration
