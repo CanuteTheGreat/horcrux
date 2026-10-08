@@ -832,6 +832,10 @@ fn cluster_routes() -> Router<Arc<AppState>> {
         // Cluster management
         .route("/api/cluster/nodes", get(list_cluster_nodes))
         .route("/api/cluster/nodes/:name", post(add_cluster_node))
+        .route(
+            "/api/cluster/nodes/:name/priority",
+            axum::routing::patch(set_node_priority),
+        )
         .route("/api/cluster/architecture", get(get_cluster_architecture))
         .route("/api/cluster/find-node", post(find_best_node_for_vm))
         // HA (High Availability) endpoints
@@ -7558,6 +7562,11 @@ struct FindNodeRequest {
     architecture: String,
     memory_mb: u64,
     cpu_cores: u32,
+    /// Hard filter: only consider nodes whose placement weight (priority)
+    /// is at least this value. Omit to consider all online, resource-
+    /// compatible nodes regardless of weight.
+    #[serde(default)]
+    min_priority: Option<u32>,
 }
 
 async fn find_best_node_for_vm(
@@ -7580,10 +7589,32 @@ async fn find_best_node_for_vm(
 
     let node_name = state
         .cluster_manager
-        .find_best_node(&arch, request.memory_mb * 1024 * 1024, request.cpu_cores)
+        .find_best_node(
+            &arch,
+            request.memory_mb * 1024 * 1024,
+            request.cpu_cores,
+            request.min_priority,
+        )
         .await?;
 
     Ok(Json(node_name))
+}
+
+#[derive(serde::Deserialize)]
+struct SetNodePriorityRequest {
+    priority: u32,
+}
+
+async fn set_node_priority(
+    State(state): State<Arc<AppState>>,
+    Path(node_name): Path<String>,
+    Json(request): Json<SetNodePriorityRequest>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .cluster_manager
+        .set_node_priority(&node_name, request.priority)
+        .await?;
+    Ok(StatusCode::OK)
 }
 
 // Alert API handlers

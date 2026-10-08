@@ -273,12 +273,21 @@ impl ClusterManager {
         Ok(())
     }
 
-    /// Find best node for a VM based on architecture and resources
+    /// Find best node for a VM based on architecture and resources.
+    ///
+    /// `min_priority`, when set, is a hard filter: a node below this
+    /// placement weight is never a candidate at all, regardless of how idle
+    /// it is. This is what lets a VM be pinned to only the higher-priority
+    /// (newer/faster) tier of a mixed-age cluster -- the reverse (preferring
+    /// the lower tier) works the same way with a low cutoff plus simply not
+    /// having any high-priority nodes with room, since priority is also a
+    /// soft preference among the remaining candidates (see below).
     pub async fn find_best_node(
         &self,
         vm_arch: &node::Architecture,
         required_memory: u64,
         required_cores: u32,
+        min_priority: Option<u32>,
     ) -> Result<String> {
         let nodes = self.nodes.read().await;
 
@@ -289,6 +298,7 @@ impl ClusterManager {
                     && n.can_run_architecture(vm_arch)
                     && n.memory_total >= required_memory
                     && n.cpu_cores >= required_cores
+                    && n.priority >= min_priority.unwrap_or(0)
             })
             .collect();
 
@@ -298,7 +308,8 @@ impl ClusterManager {
             ));
         }
 
-        // Prefer native architecture nodes
+        // Prefer native architecture nodes, then higher placement weight
+        // (priority), then more free resources as the final tiebreaker.
         candidates.sort_by(|a, b| {
             let a_native = a.is_native_for(vm_arch);
             let b_native = b.is_native_for(vm_arch);
@@ -306,18 +317,33 @@ impl ClusterManager {
             match (a_native, b_native) {
                 (true, false) => std::cmp::Ordering::Less,
                 (false, true) => std::cmp::Ordering::Greater,
-                _ => {
-                    // If both native or both emulated, prefer more resources
+                _ => b.priority.cmp(&a.priority).then_with(|| {
+                    // If both native or both emulated and equal priority,
+                    // prefer more resources.
                     let a_score = (a.memory_total / required_memory)
                         + (a.cpu_cores as u64 / required_cores as u64);
                     let b_score = (b.memory_total / required_memory)
                         + (b.cpu_cores as u64 / required_cores as u64);
                     b_score.cmp(&a_score)
-                }
+                }),
             }
         });
 
         Ok(candidates[0].name.clone())
+    }
+
+    /// Set a node's placement/HA weight (0-1000 by convention, not enforced
+    /// here). Higher means preferred for new VM placement and tried first
+    /// for HA failover; lower means "only use this node when nothing
+    /// better-weighted has room" -- the intended way to mark an older/
+    /// slower host as lower priority in a mixed-age cluster.
+    pub async fn set_node_priority(&self, node_name: &str, priority: u32) -> Result<()> {
+        let mut nodes = self.nodes.write().await;
+        let node = nodes.get_mut(node_name).ok_or_else(|| {
+            horcrux_common::Error::InvalidConfig(format!("Node {} not found", node_name))
+        })?;
+        node.priority = priority;
+        Ok(())
     }
 
     /// Get nodes that support a specific architecture

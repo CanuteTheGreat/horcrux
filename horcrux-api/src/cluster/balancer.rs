@@ -27,6 +27,19 @@ pub struct NodeResources {
     /// with callers/tests that don't yet report passthrough inventory.
     #[serde(default)]
     pub available_passthrough_devices: Vec<PassthroughDeviceRequirement>,
+    /// Admin-assigned placement weight (0-1000, default 100/neutral).
+    /// Higher means this node is preferred for new placements and is
+    /// treated as having effectively lower load; lower means "only use
+    /// this node when nothing better-weighted has room" -- the intended
+    /// way to mark an older/slower host as lower priority in a mixed-age
+    /// cluster. Mirrors `cluster::node::Node::priority`. Defaults to 100
+    /// for backward compatibility with callers/tests that don't report it.
+    #[serde(default = "default_placement_weight")]
+    pub placement_weight: u32,
+}
+
+fn default_placement_weight() -> u32 {
+    100
 }
 
 /// VM resource requirements
@@ -46,6 +59,11 @@ pub struct VmResources {
     /// for backward compatibility with VMs that don't use passthrough.
     #[serde(default)]
     pub required_passthrough_devices: Vec<PassthroughDeviceRequirement>,
+    /// Hard filter: only place this VM on a node whose `placement_weight`
+    /// is at least this value. `None` means any weight is acceptable (the
+    /// default, backward-compatible behavior).
+    #[serde(default)]
+    pub min_placement_weight: Option<u32>,
 }
 
 /// Balancing strategy
@@ -115,8 +133,17 @@ impl ClusterBalancer {
     }
 
     /// Calculate node load score
+    ///
+    /// The raw load-based score (from `strategy`) is then adjusted by the
+    /// node's admin-assigned `placement_weight`: weight 100 (default) is
+    /// neutral and leaves the score unchanged; a higher weight scales the
+    /// score down (the node looks less loaded than it really is, so it's
+    /// preferred), a lower weight scales it up (looks more loaded, so it's
+    /// avoided until nothing better-weighted has room). This keeps "lower
+    /// score = more preferred" consistent everywhere the score is used
+    /// (placement, is_balanced, get_recommendations).
     fn calculate_node_score(&self, node: &NodeResources) -> f32 {
-        match self.policy.strategy {
+        let raw = match self.policy.strategy {
             BalancingStrategy::Cpu => node.cpu_usage,
             BalancingStrategy::Memory => node.memory_usage,
             BalancingStrategy::VmCount => {
@@ -128,7 +155,10 @@ impl ClusterBalancer {
                     + (node.memory_usage * 0.4)
                     + ((node.vm_count as f32 / 10.0) * 100.0 * 0.2)
             }
-        }
+        };
+
+        let weight = node.placement_weight.max(1) as f32;
+        raw * (100.0 / weight)
     }
 
     /// Check if cluster is balanced
@@ -293,12 +323,15 @@ impl ClusterBalancer {
             return None;
         }
 
-        // Step 1: filter to architecture-compatible nodes only. A node that
-        // cannot run this VM's architecture (native or emulated) is never a
-        // candidate, regardless of how idle it is.
+        // Step 1: filter to architecture-compatible, sufficiently-weighted
+        // nodes only. A node that cannot run this VM's architecture (native
+        // or emulated), or whose placement_weight is below the VM's
+        // min_placement_weight requirement, is never a candidate regardless
+        // of how idle it is.
         let compatible: Vec<&NodeResources> = nodes
             .iter()
             .filter(|n| n.architecture.can_run(&vm.architecture))
+            .filter(|n| n.placement_weight >= vm.min_placement_weight.unwrap_or(0))
             .filter(|n| {
                 crate::cluster::node::passthrough_devices_satisfied(
                     &n.available_passthrough_devices,
@@ -377,6 +410,20 @@ mod tests {
             total_disk_gb: 1000,
             architecture: Architecture::X86_64,
             available_passthrough_devices: Vec::new(),
+            placement_weight: 100,
+        }
+    }
+
+    fn create_test_node_with_weight(
+        name: &str,
+        cpu: f32,
+        memory: f32,
+        vm_count: usize,
+        placement_weight: u32,
+    ) -> NodeResources {
+        NodeResources {
+            placement_weight,
+            ..create_test_node(name, cpu, memory, vm_count)
         }
     }
 
@@ -403,6 +450,18 @@ mod tests {
             can_migrate: true,
             architecture: Architecture::X86_64,
             required_passthrough_devices: Vec::new(),
+            min_placement_weight: None,
+        }
+    }
+
+    fn create_test_vm_with_min_weight(
+        id: u32,
+        node: &str,
+        min_placement_weight: u32,
+    ) -> VmResources {
+        VmResources {
+            min_placement_weight: Some(min_placement_weight),
+            ..create_test_vm(id, node)
         }
     }
 
@@ -622,5 +681,101 @@ mod tests {
         let best = balancer.find_best_node(&nodes, &vm);
 
         assert_eq!(best, None);
+    }
+
+    #[test]
+    fn test_higher_weight_node_preferred_when_otherwise_equal() {
+        let policy = BalancingPolicy::default();
+        let balancer = ClusterBalancer::new(policy);
+
+        // Identical load on both nodes; only weight differs. The
+        // higher-weight (e.g. newer/faster) node should be preferred even
+        // though load alone would be a tie.
+        let nodes = vec![
+            create_test_node_with_weight("old-node", 40.0, 40.0, 4, 50),
+            create_test_node_with_weight("new-node", 40.0, 40.0, 4, 200),
+        ];
+
+        let vm = create_test_vm(300, "");
+        let best = balancer.find_best_node(&nodes, &vm);
+
+        assert_eq!(best, Some("new-node".to_string()));
+    }
+
+    #[test]
+    fn test_low_weight_node_only_used_when_nothing_better_has_room() {
+        let policy = BalancingPolicy::default();
+        let balancer = ClusterBalancer::new(policy);
+
+        // old-node is lightly loaded but low-weight; new-node carries more
+        // load but is high-weight enough that it still wins the placement
+        // (weight ratio 4x outweighs a 3x raw-load gap here).
+        let nodes = vec![
+            create_test_node_with_weight("old-node", 10.0, 10.0, 1, 50),
+            create_test_node_with_weight("new-node", 30.0, 30.0, 3, 200),
+        ];
+
+        let vm = create_test_vm(301, "");
+        let best = balancer.find_best_node(&nodes, &vm);
+
+        assert_eq!(best, Some("new-node".to_string()));
+
+        // But once the high-weight node is saturated enough that even the
+        // weight bonus can't compensate, the low-weight node is still
+        // usable as a fallback (weight affects preference, not
+        // eligibility, unless min_placement_weight is set).
+        let nodes_saturated = vec![
+            create_test_node_with_weight("old-node", 10.0, 10.0, 1, 50),
+            create_test_node_with_weight("new-node", 90.0, 90.0, 9, 200),
+        ];
+        let best2 = balancer.find_best_node(&nodes_saturated, &vm);
+        assert_eq!(best2, Some("old-node".to_string()));
+    }
+
+    #[test]
+    fn test_vm_pinned_to_minimum_weight_excludes_low_weight_nodes() {
+        let policy = BalancingPolicy::default();
+        let balancer = ClusterBalancer::new(policy);
+
+        let nodes = vec![
+            create_test_node_with_weight("old-node", 5.0, 5.0, 0, 50),
+            create_test_node_with_weight("new-node", 40.0, 40.0, 4, 200),
+        ];
+
+        // Pin to only nodes with weight >= 100 -- old-node (weight 50) must
+        // never be selected even though it is far less loaded.
+        let vm = create_test_vm_with_min_weight(302, "", 100);
+        let best = balancer.find_best_node(&nodes, &vm);
+
+        assert_eq!(best, Some("new-node".to_string()));
+    }
+
+    #[test]
+    fn test_vm_pinned_to_minimum_weight_returns_none_when_none_qualify() {
+        let policy = BalancingPolicy::default();
+        let balancer = ClusterBalancer::new(policy);
+
+        let nodes = vec![create_test_node_with_weight("old-node", 5.0, 5.0, 0, 50)];
+
+        let vm = create_test_vm_with_min_weight(303, "", 100);
+        let best = balancer.find_best_node(&nodes, &vm);
+
+        assert_eq!(best, None);
+    }
+
+    #[test]
+    fn test_default_weight_is_neutral_and_matches_prior_behavior() {
+        let policy = BalancingPolicy::default();
+        let balancer = ClusterBalancer::new(policy);
+
+        // Same scenario as test_best_node_placement, but built through the
+        // weight-aware constructor at the default weight (100) -- must
+        // produce an identical score/result to the original unweighted
+        // behavior.
+        let node = create_test_node_with_weight("node1", 75.0, 50.0, 5, 100);
+        assert_eq!(
+            balancer.calculate_node_score(&node),
+            75.0 * 0.4 + 50.0 * 0.4 + (5.0_f32 / 10.0) * 100.0 * 0.2
+        );
     }
 }

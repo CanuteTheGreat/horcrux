@@ -126,4 +126,21 @@ impl ApiClient {
 
         Ok(())
     }
+
+    pub async fn patch_empty<B: serde::Serialize>(&self, path: &str, body: &B) -> Result<()> {
+        let response = self
+            .build_request(reqwest::Method::PATCH, path)
+            .await
+            .json(body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            anyhow::bail!("API request failed: {} - {}", status, error_text);
+        }
+
+        Ok(())
+    }
 }

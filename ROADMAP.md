@@ -336,7 +336,7 @@ completed 2026-10-06
 **Effort**: 4-6 weeks
 **Priority**: High (enterprise requirement)
 
-### 3.1b Node Tiering / Weighted Placement (owner idea, 2026-10-08)
+### 3.1b Node Tiering / Weighted Placement — IMPLEMENTED (2026-10-08)
 
 **Problem**: in a real-world HA cluster, nodes are rarely identical hardware
 — a cluster accumulates older/slower boxes alongside newer/faster ones over
@@ -383,6 +383,35 @@ change, one new affinity rule type, CLI/API surface, tests). Not scoped/
 estimated precisely — needs a real design pass before implementation.
 **Priority**: Medium — real operational pain point on mixed-age hardware,
 not blocking anything else on this roadmap.
+
+**Status: implemented.** Both the live `ClusterManager::find_best_node`
+path (used by the real `/api/cluster/find-node` API and VM placement) and
+the separate `ClusterBalancer`/`NodeResources` scoring path (used for
+rebalancing recommendations and HA failover target selection) now support
+a per-node placement weight:
+- `cluster::node::Node::priority` (already existed for HA failover
+  ordering, previously unused elsewhere) is now also the general placement
+  weight, default 100. `ClusterManager::find_best_node` takes a new
+  `min_priority: Option<u32>` hard filter and sorts candidates by priority
+  before resource score. `ClusterManager::set_node_priority` sets it;
+  exposed as `PATCH /api/cluster/nodes/:name/priority` and
+  `horcrux cluster set-priority <node> <priority>`.
+- `cluster::balancer::NodeResources::placement_weight` (new field, default
+  100 via serde for backward compat) is factored multiplicatively into
+  `calculate_node_score` (weight 100 = neutral, higher = preferred, lower =
+  avoided until nothing better has room), and
+  `VmResources::min_placement_weight` is a hard eligibility filter in
+  `find_best_node`, same semantics as the ClusterManager side.
+- 5 new unit tests cover: higher-weight preferred when load is tied,
+  weight outweighing a moderate load gap, falling back to a low-weight
+  node when nothing better-weighted has room, a VM pinned to a minimum
+  weight excluding lower-tier nodes entirely, and a default-weight
+  regression check against the pre-existing unweighted scoring.
+- Not done: no dedicated `NodeTierAffinity` rule type in
+  `cluster::affinity` — `min_priority`/`min_placement_weight` as a direct
+  numeric threshold covers the "pin to the higher tier" use case without
+  that extra abstraction layer; revisit only if a named-tier (not numeric)
+  config surface turns out to be wanted later.
 
 ### 3.2 Integration Features
 

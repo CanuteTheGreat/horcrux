@@ -147,7 +147,16 @@ pub struct Node {
     pub name: String,
     pub ip: String,
     pub status: NodeStatus,
-    pub priority: u32,              // For HA failover priority
+    /// Placement/HA weight (0-1000, default 100). Used two ways:
+    ///   1. HA failover ordering for a given resource (higher first).
+    ///   2. General VM placement preference in `ClusterManager::find_best_node`
+    ///      and `ClusterBalancer` -- in a mixed-age cluster, give older/
+    ///      slower nodes a lower weight so they're only chosen when nothing
+    ///      better-weighted has room, and newer/faster nodes a higher weight
+    ///      so they're preferred all else being equal. A VM/HA group can
+    ///      also require a minimum weight (`min_priority`) to pin it to only
+    ///      the higher (or, with a low cutoff, effectively any) tier.
+    pub priority: u32,
     pub is_local: bool,             // Is this the local node?
     pub architecture: Architecture, // CPU architecture
     pub cpu_cores: u32,             // Total CPU cores
@@ -228,5 +237,14 @@ impl Node {
     /// Check if VM would run natively (not emulated) on this node
     pub fn is_native_for(&self, target: &Architecture) -> bool {
         self.architecture.is_native(target)
+    }
+
+    /// Set this node's placement/HA weight (builder style). Not bounds-
+    /// checked here -- callers that expose this over the API/CLI should
+    /// validate the 0-1000 convention themselves and return a proper error
+    /// rather than silently clamping.
+    pub fn with_priority(mut self, priority: u32) -> Self {
+        self.priority = priority;
+        self
     }
 }

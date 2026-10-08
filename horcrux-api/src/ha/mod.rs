@@ -528,6 +528,7 @@ impl HaManager {
                 can_migrate: true,
                 architecture: resource.architecture.clone(),
                 required_passthrough_devices: resource.required_passthrough_devices.clone(),
+                min_placement_weight: None,
             };
 
             let balancer = ClusterBalancer::new(Default::default());
@@ -737,6 +738,7 @@ mod tests {
             total_disk_gb: 1000,
             architecture: arch,
             available_passthrough_devices,
+            placement_weight: 100,
         }
     }
 

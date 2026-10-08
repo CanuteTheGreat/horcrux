@@ -13,6 +13,15 @@ struct Node {
     total_memory: u64,
     total_cpus: u32,
     online: bool,
+    /// Placement/HA weight (0-1000, default 100). Missing on older servers
+    /// that predate this field -- default to 100 (neutral) rather than
+    /// failing deserialization.
+    #[serde(default = "default_priority")]
+    priority: u32,
+}
+
+fn default_priority() -> u32 {
+    100
 }
 
 #[derive(Tabled, Serialize)]
@@ -24,6 +33,7 @@ struct NodeRow {
     memory: String,
     cpus: u32,
     status: String,
+    priority: u32,
 }
 
 impl From<Node> for NodeRow {
@@ -35,6 +45,7 @@ impl From<Node> for NodeRow {
             memory: format_bytes(node.total_memory * 1024 * 1024 * 1024),
             cpus: node.total_cpus,
             status: if node.online { "Online" } else { "Offline" }.to_string(),
+            priority: node.priority,
         }
     }
 }
@@ -114,6 +125,18 @@ pub async fn handle_cluster_command(
         ClusterCommands::Remove { name } => {
             api.delete(&format!("/api/cluster/nodes/{}", name)).await?;
             output::print_deleted("Node", &name);
+        }
+        ClusterCommands::SetPriority { name, priority } => {
+            #[derive(Serialize)]
+            struct SetPriorityRequest {
+                priority: u32,
+            }
+            api.patch_empty(
+                &format!("/api/cluster/nodes/{}/priority", name),
+                &SetPriorityRequest { priority },
+            )
+            .await?;
+            println!("Node '{}' placement weight set to {}", name, priority);
         }
         ClusterCommands::Architecture => {
             let summary: ArchitectureSummary = api.get("/api/cluster/architecture").await?;

@@ -249,6 +249,15 @@ enum ClusterCommands {
     },
     /// Remove a node from cluster
     Remove { name: String },
+    /// Set a node's placement/HA weight (0-1000, default 100). Higher is
+    /// preferred for new VM placement and tried first for HA failover;
+    /// give older/slower nodes in a mixed-age cluster a lower weight.
+    SetPriority {
+        /// Node name
+        name: String,
+        /// New placement weight (0-1000)
+        priority: u32,
+    },
     /// Show cluster architecture summary
     Architecture,
 }
