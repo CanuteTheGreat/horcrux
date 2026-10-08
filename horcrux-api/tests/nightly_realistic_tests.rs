@@ -123,7 +123,20 @@ async fn test_real_qemu_vm_boot() {
     running_vm.status = VmStatus::Running;
 
     let serial_log = vm.disk_path.with_extension("serial.log");
-    let deadline = Instant::now() + Duration::from_secs(120);
+    // 120s was tuned assuming KVM hardware acceleration. CI runners without
+    // a usable /dev/kvm (e.g. nested-virt-restricted containers) fall back
+    // to pure TCG software emulation in qemu.rs's start_vm(), which is
+    // considerably slower. On top of that, CirrOS's cloud-init datasource
+    // probe retries fetching http://169.254.169.254/... (not served by
+    // QEMU's SLIRP user-net backend, since this isn't real EC2) with
+    // exponential backoff before giving up and finally presenting the login
+    // prompt - by observation this alone can burn ~100s of guest-visible
+    // time under TCG, leaving no margin before a 120s wall-clock cutoff and
+    // causing flaky failures that have nothing to do with a real boot
+    // regression (seen repeatedly on the beauxbatons fallback runner, which
+    // has no /dev/kvm). Widen to 240s so a genuinely slow-but-working
+    // TCG boot has headroom; a true hang/crash still fails, just later.
+    let deadline = Instant::now() + Duration::from_secs(240);
     let boot_marker = "login as 'cirros' user";
     let mut last_seen = String::new();
     let mut booted = false;
@@ -149,7 +162,7 @@ async fn test_real_qemu_vm_boot() {
 
     assert!(
         booted,
-        "CirrOS never reached its login prompt within 120s. Last serial \
+        "CirrOS never reached its login prompt within 240s. Last serial \
          output (<=4000 chars shown):\n{}",
         &last_seen[last_seen.len().saturating_sub(4000)..]
     );
