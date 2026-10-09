@@ -99,3 +99,14 @@ net-misc/curl ~amd64 ~arm64 ~riscv
 # =============================================================================
 # Not yet stabilized - accept both the live and versioned ebuilds as unstable
 app-emulation/horcrux ~amd64 ~arm64 ~riscv
+# The live (9999) ebuild has NO KEYWORDS at all (correct per Gentoo
+# devmanual for live ebuilds), which "~arch" above does NOT satisfy --
+# that only accepts testing-keyworded versions like 0.1.0. Without this
+# explicit "**" (accept-any-keyword) line, `emerge =app-emulation/horcrux-9999`
+# masks itself out and portage silently falls back to resolving the bare
+# `app-emulation/horcrux` atom to the version-pinned 0.1.0 ebuild instead
+# -- which is exactly how the CI Docker image kept building a frozen v0.1.0
+# checkout regardless of which commit the image was tagged with. See the
+# repo Dockerfile's emerge invocations, which now pin `=...-9999` explicitly
+# to make sure *this* line is what makes that resolve.
+=app-emulation/horcrux-9999 **

@@ -166,7 +166,10 @@ ENV EGIT_OVERRIDE_REPO_HORCRUX=/usr/src/horcrux
 # Manifest.gz-style DIST entries when SRC_URI points at real distfiles;
 # for this from-source dev build there's nothing to fetch, so an empty/
 # generated Manifest satisfies Portage's manifest-verification check)
-RUN ebuild /var/db/repos/horcrux-overlay/app-emulation/horcrux/horcrux-0.1.0.ebuild manifest --force
+# Manifest the LIVE (9999) ebuild specifically, not the version-pinned
+# 0.1.0 one -- see the emerge atom fix below for why this distinction is
+# load-bearing, not cosmetic.
+RUN ebuild /var/db/repos/horcrux-overlay/app-emulation/horcrux/horcrux-9999.ebuild manifest --force
 
 # Build and install via emerge, exactly like a real Gentoo host would.
 # --quiet-build=y suppresses Portage's per-package compiler noise (only
@@ -186,9 +189,9 @@ RUN ebuild /var/db/repos/horcrux-overlay/app-emulation/horcrux/horcrux-0.1.0.ebu
 # Use `;` so etc-update always runs regardless of this emerge call's
 # (expected-nonzero) exit code, applying the autounmask'd config so the
 # next emerge invocation actually builds.
-RUN emerge --verbose --quiet-build=y --autounmask-write app-emulation/horcrux; \
+RUN emerge --verbose --quiet-build=y --autounmask-write =app-emulation/horcrux-9999; \
     etc-update --automode -5 || true
-RUN emerge --verbose --quiet-build=y app-emulation/horcrux
+RUN emerge --verbose --quiet-build=y =app-emulation/horcrux-9999
 
 # --- Runtime stage --------------------------------------------------------
 # Still Gentoo — a slim stage3 with only the installed package and its
