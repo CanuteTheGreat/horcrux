@@ -61,12 +61,28 @@ jobs:
         uses: https://github.com/dtolnay/rust-toolchain@stable
 
       - name: Install build deps, CNI plugins, and net tools
+        # Ubuntu mirrors (esp. security.ubuntu.com) occasionally serve a
+        # stale/mismatched Packages.gz mid-sync, failing `apt-get update`
+        # with "File has unexpected size ... Mirror sync in progress?"
+        # (hit on run 251, 2026-10-09, re-run 252 on the same sha passed
+        # with no code change). Retry update+install a few times with a
+        # short backoff instead of failing the whole nightly run on a
+        # transient mirror hiccup.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential libvirt-dev \
-            containernetworking-plugins \
-            iproute2 iputils-ping curl jq
+          for attempt in 1 2 3; do
+            if sudo apt-get update && sudo apt-get install -y \
+              build-essential libvirt-dev \
+              containernetworking-plugins \
+              iproute2 iputils-ping curl jq; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then
+              echo "::error::apt-get update/install failed after $attempt attempts" >&2
+              exit 1
+            fi
+            echo "::warning::apt-get update/install failed (attempt $attempt/3), retrying after mirror hiccup backoff" >&2
+            sleep $((attempt * 5))
+          done
 
           if [ -d /usr/lib/cni ]; then
             echo "NIGHTLY_CNI_BIN_DIR=/usr/lib/cni" >> "$GITHUB_ENV"
