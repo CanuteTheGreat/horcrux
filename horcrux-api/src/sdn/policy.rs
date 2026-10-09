@@ -92,6 +92,9 @@ pub struct NetworkPolicyManager {
     pod_policies: HashMap<String, Vec<String>>,
     // Mapping from namespace to policies
     namespace_policies: HashMap<String, Vec<String>>,
+    // Mapping from pod ID to (namespace, labels), used to evaluate peer
+    // selectors (`from`/`to`) in is_connection_allowed()
+    pod_metadata: HashMap<String, (String, HashMap<String, String>)>,
 }
 
 impl Default for NetworkPolicyManager {
@@ -106,6 +109,7 @@ impl NetworkPolicyManager {
             policies: HashMap::new(),
             pod_policies: HashMap::new(),
             namespace_policies: HashMap::new(),
+            pod_metadata: HashMap::new(),
         }
     }
 
@@ -191,6 +195,8 @@ impl NetworkPolicyManager {
 
         self.pod_policies
             .insert(pod_id.to_string(), applicable_policies);
+        self.pod_metadata
+            .insert(pod_id.to_string(), (namespace.to_string(), pod_labels.clone()));
         tracing::debug!(
             "Updated policies for pod {}: {} policies",
             pod_id,
@@ -201,7 +207,7 @@ impl NetworkPolicyManager {
     /// Check if a connection is allowed by network policies
     pub fn is_connection_allowed(
         &self,
-        _src_pod: &str,
+        src_pod: &str,
         dst_pod: &str,
         protocol: &Protocol,
         port: u16,
@@ -231,19 +237,26 @@ impl NetworkPolicyManager {
 
                 match direction {
                     PolicyType::Ingress => {
-                        // Check ingress rules
+                        // Check ingress rules: both the port and the peer
+                        // selector (`from`) must match for the rule to grant
+                        // access -- previously `from` was never evaluated,
+                        // which meant any policy with a port-matching ingress
+                        // rule allowed traffic from every source regardless
+                        // of its configured peer selectors.
                         for rule in &policy.ingress {
-                            if self.matches_port(&rule.ports, protocol, port) {
-                                // For now, allow if ports match
-                                // In production, would also check peer selectors
+                            if self.matches_port(&rule.ports, protocol, port)
+                                && self.matches_peer(&rule.from, src_pod)
+                            {
                                 return true;
                             }
                         }
                     }
                     PolicyType::Egress => {
-                        // Check egress rules
+                        // Check egress rules (same peer-selector enforcement as ingress)
                         for rule in &policy.egress {
-                            if self.matches_port(&rule.ports, protocol, port) {
+                            if self.matches_port(&rule.ports, protocol, port)
+                                && self.matches_peer(&rule.to, src_pod)
+                            {
                                 return true;
                             }
                         }
@@ -403,6 +416,48 @@ impl NetworkPolicyManager {
         }
     }
 
+    /// Evaluate a rule's peer selector list (`from`/`to`) against the
+    /// connection's source pod. An empty peer list means "no restriction"
+    /// (matches Kubernetes NetworkPolicy semantics: a rule with no `from`/`to`
+    /// entries allows all sources/destinations). A non-empty list requires at
+    /// least one peer entry to match.
+    fn matches_peer(&self, peers: &[PeerSelector], src_pod: &str) -> bool {
+        if peers.is_empty() {
+            return true;
+        }
+
+        let src_meta = self.pod_metadata.get(src_pod);
+
+        for peer in peers {
+            match peer {
+                PeerSelector::PodSelector(selector) => {
+                    if let Some((_namespace, labels)) = src_meta {
+                        if self.matches_selector(selector, labels) {
+                            return true;
+                        }
+                    }
+                }
+                PeerSelector::NamespaceSelector(selector) => {
+                    // Without per-namespace label metadata we can only
+                    // evaluate the "select all namespaces" case (an empty
+                    // selector). A selector with actual label requirements
+                    // can't be evaluated yet, so treat it as a non-match
+                    // rather than silently allowing traffic -- a false deny
+                    // is safer than a false allow for a firewall rule.
+                    if selector.match_labels.is_empty() && selector.match_expressions.is_empty() {
+                        return true;
+                    }
+                }
+                PeerSelector::IpBlock { .. } => {
+                    // Source IP isn't threaded through to this layer yet, so
+                    // IP-block peers can't be evaluated here and never match.
+                }
+            }
+        }
+
+        false
+    }
+
     fn matches_port(&self, ports: &[NetworkPolicyPort], protocol: &Protocol, port: u16) -> bool {
         if ports.is_empty() {
             return true; // No port restriction = all ports
@@ -476,6 +531,72 @@ mod tests {
         assert!(manager.matches_port(&ports, &Protocol::TCP, 443));
         assert!(!manager.matches_port(&ports, &Protocol::TCP, 8080));
         assert!(!manager.matches_port(&ports, &Protocol::UDP, 80));
+    }
+
+    #[test]
+    fn test_is_connection_allowed_enforces_pod_selector_peers() {
+        let mut manager = NetworkPolicyManager::new();
+
+        let mut from_selector = LabelSelector::default();
+        from_selector
+            .match_labels
+            .insert("role".to_string(), "frontend".to_string());
+
+        let policy = NetworkPolicy {
+            id: "policy1".to_string(),
+            name: "allow-frontend-to-backend".to_string(),
+            namespace: "default".to_string(),
+            pod_selector: LabelSelector::default(),
+            policy_types: vec![PolicyType::Ingress],
+            ingress: vec![IngressRule {
+                from: vec![PeerSelector::PodSelector(from_selector)],
+                ports: vec![NetworkPolicyPort {
+                    protocol: Protocol::TCP,
+                    port: Some(8080),
+                    end_port: None,
+                }],
+            }],
+            egress: vec![],
+            enabled: true,
+        };
+        manager.create_policy(policy).unwrap();
+
+        let mut backend_labels = HashMap::new();
+        backend_labels.insert("role".to_string(), "backend".to_string());
+        manager.update_pod_policies("backend-1", &backend_labels, "default");
+
+        let mut frontend_labels = HashMap::new();
+        frontend_labels.insert("role".to_string(), "frontend".to_string());
+        manager.update_pod_policies("frontend-1", &frontend_labels, "default");
+
+        let mut other_labels = HashMap::new();
+        other_labels.insert("role".to_string(), "attacker".to_string());
+        manager.update_pod_policies("other-1", &other_labels, "default");
+
+        // Matching peer selector + matching port -> allowed
+        assert!(manager.is_connection_allowed(
+            "frontend-1",
+            "backend-1",
+            &Protocol::TCP,
+            8080,
+            &PolicyType::Ingress,
+        ));
+
+        // Port matches but peer selector does not -> must be denied (this is
+        // the bug: previously any port match was allowed regardless of `from`)
+        assert!(!manager.is_connection_allowed(
+            "other-1",
+            "backend-1",
+            &Protocol::TCP,
+            8080,
+            &PolicyType::Ingress,
+        ));
+    }
+
+    #[test]
+    fn test_matches_peer_empty_list_allows_all() {
+        let manager = NetworkPolicyManager::new();
+        assert!(manager.matches_peer(&[], "any-pod"));
     }
 
     #[test]
