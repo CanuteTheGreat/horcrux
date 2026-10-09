@@ -64,6 +64,47 @@ body {
     background: rgba(255,255,255,0.1);
 }
 
+/* Dropdown nav menus (Compute/Infrastructure/Operations/Monitoring) */
+.navbar-dropdown {
+    position: relative;
+    display: inline-block;
+}
+
+.dropdown-trigger {
+    cursor: pointer;
+    user-select: none;
+}
+
+.dropdown-content {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    background: white;
+    min-width: 200px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    border-radius: 4px;
+    padding: 0.5rem 0;
+    z-index: 100;
+    flex-direction: column;
+}
+
+.navbar-dropdown:hover .dropdown-content {
+    display: flex;
+}
+
+.dropdown-item {
+    display: block;
+    color: var(--dark);
+    text-decoration: none;
+    padding: 0.6rem 1.25rem;
+    white-space: nowrap;
+}
+
+.dropdown-item:hover {
+    background: var(--light);
+}
+
 /* Container */
 .container {
     max-width: 1400px;
