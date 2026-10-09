@@ -292,14 +292,26 @@ impl NetworkPolicyManager {
         // Ingress rules: peers in `from` restrict the *source* address.
         if policy.policy_types.contains(&PolicyType::Ingress) {
             for rule in &policy.ingress {
-                Self::push_iptables_port_rules(&mut rules, &chain_name, &rule.from, &rule.ports, true);
+                Self::push_iptables_port_rules(
+                    &mut rules,
+                    &chain_name,
+                    &rule.from,
+                    &rule.ports,
+                    true,
+                );
             }
         }
 
         // Egress rules: peers in `to` restrict the *destination* address.
         if policy.policy_types.contains(&PolicyType::Egress) {
             for rule in &policy.egress {
-                Self::push_iptables_port_rules(&mut rules, &chain_name, &rule.to, &rule.ports, false);
+                Self::push_iptables_port_rules(
+                    &mut rules,
+                    &chain_name,
+                    &rule.to,
+                    &rule.ports,
+                    false,
+                );
             }
         }
 
@@ -336,9 +348,12 @@ impl NetworkPolicyManager {
                 _ => None,
             })
             .collect();
-        let has_unresolvable_peer = peers
-            .iter()
-            .any(|p| matches!(p, PeerSelector::PodSelector(_) | PeerSelector::NamespaceSelector(_)));
+        let has_unresolvable_peer = peers.iter().any(|p| {
+            matches!(
+                p,
+                PeerSelector::PodSelector(_) | PeerSelector::NamespaceSelector(_)
+            )
+        });
 
         if has_unresolvable_peer {
             rules.push(format!(
@@ -400,7 +415,13 @@ impl NetworkPolicyManager {
         // Ingress rules: peers in `from` restrict the *source* address.
         if policy.policy_types.contains(&PolicyType::Ingress) {
             for rule in &policy.ingress {
-                Self::push_nftables_port_rules(&mut rules, policy_id, &rule.from, &rule.ports, true);
+                Self::push_nftables_port_rules(
+                    &mut rules,
+                    policy_id,
+                    &rule.from,
+                    &rule.ports,
+                    true,
+                );
             }
         }
 
@@ -438,9 +459,12 @@ impl NetworkPolicyManager {
                 _ => None,
             })
             .collect();
-        let has_unresolvable_peer = peers
-            .iter()
-            .any(|p| matches!(p, PeerSelector::PodSelector(_) | PeerSelector::NamespaceSelector(_)));
+        let has_unresolvable_peer = peers.iter().any(|p| {
+            matches!(
+                p,
+                PeerSelector::PodSelector(_) | PeerSelector::NamespaceSelector(_)
+            )
+        });
 
         if has_unresolvable_peer {
             rules.push(format!(
@@ -745,7 +769,10 @@ mod tests {
             .iter()
             .position(|r| r.contains("-s 10.0.0.0/8") && r.contains("-j ACCEPT"))
             .expect("expected an ACCEPT rule scoped to the allowed CIDR");
-        assert!(drop_idx < accept_idx, "exception must be evaluated before the broader accept");
+        assert!(
+            drop_idx < accept_idx,
+            "exception must be evaluated before the broader accept"
+        );
 
         // Must not contain an unrestricted accept for this port (the bug
         // this test guards against: port matched from any source).
