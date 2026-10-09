@@ -195,8 +195,10 @@ impl NetworkPolicyManager {
 
         self.pod_policies
             .insert(pod_id.to_string(), applicable_policies);
-        self.pod_metadata
-            .insert(pod_id.to_string(), (namespace.to_string(), pod_labels.clone()));
+        self.pod_metadata.insert(
+            pod_id.to_string(),
+            (namespace.to_string(), pod_labels.clone()),
+        );
         tracing::debug!(
             "Updated policies for pod {}: {} policies",
             pod_id,
