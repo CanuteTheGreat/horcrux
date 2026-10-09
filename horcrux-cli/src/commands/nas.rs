@@ -864,20 +864,18 @@ pub async fn handle_directory_command(
                 println!("{}", serde_json::to_string_pretty(&tickets)?);
             } else if output_format == "yaml" {
                 println!("{}", serde_yaml::to_string(&tickets)?);
+            } else if tickets.is_empty() {
+                println!("No active Kerberos tickets");
             } else {
-                if tickets.is_empty() {
-                    println!("No active Kerberos tickets");
-                } else {
-                    println!("{:<50} {:<25} {:<20}", "PRINCIPAL", "EXPIRES", "FLAGS");
-                    println!("{}", "-".repeat(100));
-                    for ticket in tickets {
-                        println!(
-                            "{:<50} {:<25} {:<20}",
-                            ticket.principal,
-                            ticket.expires,
-                            ticket.flags.join(",")
-                        );
-                    }
+                println!("{:<50} {:<25} {:<20}", "PRINCIPAL", "EXPIRES", "FLAGS");
+                println!("{}", "-".repeat(100));
+                for ticket in tickets {
+                    println!(
+                        "{:<50} {:<25} {:<20}",
+                        ticket.principal,
+                        ticket.expires,
+                        ticket.flags.join(",")
+                    );
                 }
             }
             Ok(true)
@@ -1098,16 +1096,14 @@ pub async fn handle_directory_command(
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else if output_format == "yaml" {
                 println!("{}", serde_yaml::to_string(&result)?);
+            } else if result.success {
+                output::print_success(&format!(
+                    "DC {} responded in {} ms",
+                    result.dc_name.unwrap_or_else(|| "unknown".to_string()),
+                    result.latency_ms
+                ));
             } else {
-                if result.success {
-                    output::print_success(&format!(
-                        "DC {} responded in {} ms",
-                        result.dc_name.unwrap_or_else(|| "unknown".to_string()),
-                        result.latency_ms
-                    ));
-                } else {
-                    println!("Failed to ping domain controller");
-                }
+                println!("Failed to ping domain controller");
             }
             Ok(true)
         }
