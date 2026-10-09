@@ -289,43 +289,17 @@ impl NetworkPolicyManager {
         // Create custom chain
         rules.push(format!("iptables -N {}", chain_name));
 
-        // Ingress rules
+        // Ingress rules: peers in `from` restrict the *source* address.
         if policy.policy_types.contains(&PolicyType::Ingress) {
             for rule in &policy.ingress {
-                for port_spec in &rule.ports {
-                    let protocol = match port_spec.protocol {
-                        Protocol::TCP => "tcp",
-                        Protocol::UDP => "udp",
-                        Protocol::SCTP => "sctp",
-                    };
-
-                    if let Some(port) = port_spec.port {
-                        rules.push(format!(
-                            "iptables -A {} -p {} --dport {} -j ACCEPT",
-                            chain_name, protocol, port
-                        ));
-                    }
-                }
+                Self::push_iptables_port_rules(&mut rules, &chain_name, &rule.from, &rule.ports, true);
             }
         }
 
-        // Egress rules
+        // Egress rules: peers in `to` restrict the *destination* address.
         if policy.policy_types.contains(&PolicyType::Egress) {
             for rule in &policy.egress {
-                for port_spec in &rule.ports {
-                    let protocol = match port_spec.protocol {
-                        Protocol::TCP => "tcp",
-                        Protocol::UDP => "udp",
-                        Protocol::SCTP => "sctp",
-                    };
-
-                    if let Some(port) = port_spec.port {
-                        rules.push(format!(
-                            "iptables -A {} -p {} --dport {} -j ACCEPT",
-                            chain_name, protocol, port
-                        ));
-                    }
-                }
+                Self::push_iptables_port_rules(&mut rules, &chain_name, &rule.to, &rule.ports, false);
             }
         }
 
@@ -333,6 +307,81 @@ impl NetworkPolicyManager {
         rules.push(format!("iptables -A {} -j DROP", chain_name));
 
         rules
+    }
+
+    /// Emit iptables rules for one ingress/egress rule's ports, honoring any
+    /// `IpBlock` peer selectors as a real `-s`/`-d` address restriction.
+    ///
+    /// Previously this translation silently dropped `from`/`to` entirely --
+    /// a policy scoped to a specific CIDR (e.g. "allow 8080 only from
+    /// 10.0.0.0/8") materialized into a rule that accepted the port from
+    /// *any* source, because only the port was ever checked. `IpBlock`
+    /// peers are concrete addresses we can enforce directly in the
+    /// generated rule; `PodSelector`/`NamespaceSelector` peers require
+    /// resolving pod IPs, which this layer doesn't have, so those are
+    /// called out with an explicit comment instead of being silently
+    /// ignored.
+    fn push_iptables_port_rules(
+        rules: &mut Vec<String>,
+        chain_name: &str,
+        peers: &[PeerSelector],
+        ports: &[NetworkPolicyPort],
+        is_ingress: bool,
+    ) {
+        let addr_flag = if is_ingress { "-s" } else { "-d" };
+        let ip_blocks: Vec<(&str, &[String])> = peers
+            .iter()
+            .filter_map(|p| match p {
+                PeerSelector::IpBlock { cidr, except } => Some((cidr.as_str(), except.as_slice())),
+                _ => None,
+            })
+            .collect();
+        let has_unresolvable_peer = peers
+            .iter()
+            .any(|p| matches!(p, PeerSelector::PodSelector(_) | PeerSelector::NamespaceSelector(_)));
+
+        if has_unresolvable_peer {
+            rules.push(format!(
+                "# WARNING: chain {} has a Pod/Namespace peer selector that cannot be resolved to concrete addresses at rule-generation time -- the rule(s) below are NOT restricted to that selector and allow the listed port(s) from any address",
+                chain_name
+            ));
+        }
+
+        for port_spec in ports {
+            let protocol = match port_spec.protocol {
+                Protocol::TCP => "tcp",
+                Protocol::UDP => "udp",
+                Protocol::SCTP => "sctp",
+            };
+
+            let Some(port) = port_spec.port else {
+                continue;
+            };
+
+            if ip_blocks.is_empty() {
+                // No IpBlock peers: either no peer restriction at all, or
+                // only unresolvable Pod/Namespace selectors (warned above).
+                rules.push(format!(
+                    "iptables -A {} -p {} --dport {} -j ACCEPT",
+                    chain_name, protocol, port
+                ));
+            } else {
+                for (cidr, except) in &ip_blocks {
+                    // Exclusions must be evaluated before the broader CIDR
+                    // accept, since iptables chains match top-down.
+                    for excluded in *except {
+                        rules.push(format!(
+                            "iptables -A {} {} {} -p {} --dport {} -j DROP",
+                            chain_name, addr_flag, excluded, protocol, port
+                        ));
+                    }
+                    rules.push(format!(
+                        "iptables -A {} {} {} -p {} --dport {} -j ACCEPT",
+                        chain_name, addr_flag, cidr, protocol, port
+                    ));
+                }
+            }
+        }
     }
 
     /// Generate nftables rules for a policy
@@ -348,23 +397,17 @@ impl NetworkPolicyManager {
         rules.push("nft add table inet horcrux".to_string());
         rules.push(format!("nft add chain inet horcrux policy_{}", policy_id));
 
-        // Ingress rules
+        // Ingress rules: peers in `from` restrict the *source* address.
         if policy.policy_types.contains(&PolicyType::Ingress) {
             for rule in &policy.ingress {
-                for port_spec in &rule.ports {
-                    let protocol = match port_spec.protocol {
-                        Protocol::TCP => "tcp",
-                        Protocol::UDP => "udp",
-                        Protocol::SCTP => "sctp",
-                    };
+                Self::push_nftables_port_rules(&mut rules, policy_id, &rule.from, &rule.ports, true);
+            }
+        }
 
-                    if let Some(port) = port_spec.port {
-                        rules.push(format!(
-                            "nft add rule inet horcrux policy_{} {} dport {} accept",
-                            policy_id, protocol, port
-                        ));
-                    }
-                }
+        // Egress rules: peers in `to` restrict the *destination* address.
+        if policy.policy_types.contains(&PolicyType::Egress) {
+            for rule in &policy.egress {
+                Self::push_nftables_port_rules(&mut rules, policy_id, &rule.to, &rule.ports, false);
             }
         }
 
@@ -375,6 +418,68 @@ impl NetworkPolicyManager {
         ));
 
         rules
+    }
+
+    /// nftables equivalent of `push_iptables_port_rules` -- same IpBlock
+    /// peer-selector enforcement (`saddr`/`daddr`), same honest warning for
+    /// peer selectors that can't be resolved to addresses at this layer.
+    fn push_nftables_port_rules(
+        rules: &mut Vec<String>,
+        policy_id: &str,
+        peers: &[PeerSelector],
+        ports: &[NetworkPolicyPort],
+        is_ingress: bool,
+    ) {
+        let addr_field = if is_ingress { "saddr" } else { "daddr" };
+        let ip_blocks: Vec<(&str, &[String])> = peers
+            .iter()
+            .filter_map(|p| match p {
+                PeerSelector::IpBlock { cidr, except } => Some((cidr.as_str(), except.as_slice())),
+                _ => None,
+            })
+            .collect();
+        let has_unresolvable_peer = peers
+            .iter()
+            .any(|p| matches!(p, PeerSelector::PodSelector(_) | PeerSelector::NamespaceSelector(_)));
+
+        if has_unresolvable_peer {
+            rules.push(format!(
+                "# WARNING: policy_{} has a Pod/Namespace peer selector that cannot be resolved to concrete addresses at rule-generation time -- the rule(s) below are NOT restricted to that selector and allow the listed port(s) from any address",
+                policy_id
+            ));
+        }
+
+        for port_spec in ports {
+            let protocol = match port_spec.protocol {
+                Protocol::TCP => "tcp",
+                Protocol::UDP => "udp",
+                Protocol::SCTP => "sctp",
+            };
+
+            let Some(port) = port_spec.port else {
+                continue;
+            };
+
+            if ip_blocks.is_empty() {
+                rules.push(format!(
+                    "nft add rule inet horcrux policy_{} {} dport {} accept",
+                    policy_id, protocol, port
+                ));
+            } else {
+                for (cidr, except) in &ip_blocks {
+                    for excluded in *except {
+                        rules.push(format!(
+                            "nft add rule inet horcrux policy_{} ip {} {} {} dport {} drop",
+                            policy_id, addr_field, excluded, protocol, port
+                        ));
+                    }
+                    rules.push(format!(
+                        "nft add rule inet horcrux policy_{} ip {} {} {} dport {} accept",
+                        policy_id, addr_field, cidr, protocol, port
+                    ));
+                }
+            }
+        }
     }
 
     // Helper methods
@@ -599,6 +704,123 @@ mod tests {
     fn test_matches_peer_empty_list_allows_all() {
         let manager = NetworkPolicyManager::new();
         assert!(manager.matches_peer(&[], "any-pod"));
+    }
+
+    #[test]
+    fn test_generate_iptables_rules_restricts_source_for_ip_block_peer() {
+        let mut manager = NetworkPolicyManager::new();
+
+        let policy = NetworkPolicy {
+            id: "policy1".to_string(),
+            name: "allow-subnet".to_string(),
+            namespace: "default".to_string(),
+            pod_selector: LabelSelector::default(),
+            policy_types: vec![PolicyType::Ingress],
+            ingress: vec![IngressRule {
+                from: vec![PeerSelector::IpBlock {
+                    cidr: "10.0.0.0/8".to_string(),
+                    except: vec!["10.0.1.0/24".to_string()],
+                }],
+                ports: vec![NetworkPolicyPort {
+                    protocol: Protocol::TCP,
+                    port: Some(8080),
+                    end_port: None,
+                }],
+            }],
+            egress: vec![],
+            enabled: true,
+        };
+        manager.create_policy(policy).unwrap();
+
+        let rules = manager.generate_iptables_rules("policy1");
+
+        // The except CIDR must be dropped before the broader CIDR is
+        // accepted, and both must carry the real source restriction --
+        // not just a bare port match.
+        let drop_idx = rules
+            .iter()
+            .position(|r| r.contains("-s 10.0.1.0/24") && r.contains("-j DROP"))
+            .expect("expected a DROP rule for the excepted CIDR");
+        let accept_idx = rules
+            .iter()
+            .position(|r| r.contains("-s 10.0.0.0/8") && r.contains("-j ACCEPT"))
+            .expect("expected an ACCEPT rule scoped to the allowed CIDR");
+        assert!(drop_idx < accept_idx, "exception must be evaluated before the broader accept");
+
+        // Must not contain an unrestricted accept for this port (the bug
+        // this test guards against: port matched from any source).
+        assert!(!rules
+            .iter()
+            .any(|r| r == "iptables -A HORCRUX-POL-POLICY1 -p tcp --dport 8080 -j ACCEPT"));
+    }
+
+    #[test]
+    fn test_generate_iptables_rules_warns_on_unresolvable_peer_selector() {
+        let mut manager = NetworkPolicyManager::new();
+
+        let mut from_selector = LabelSelector::default();
+        from_selector
+            .match_labels
+            .insert("role".to_string(), "frontend".to_string());
+
+        let policy = NetworkPolicy {
+            id: "policy2".to_string(),
+            name: "allow-frontend".to_string(),
+            namespace: "default".to_string(),
+            pod_selector: LabelSelector::default(),
+            policy_types: vec![PolicyType::Ingress],
+            ingress: vec![IngressRule {
+                from: vec![PeerSelector::PodSelector(from_selector)],
+                ports: vec![NetworkPolicyPort {
+                    protocol: Protocol::TCP,
+                    port: Some(443),
+                    end_port: None,
+                }],
+            }],
+            egress: vec![],
+            enabled: true,
+        };
+        manager.create_policy(policy).unwrap();
+
+        let rules = manager.generate_iptables_rules("policy2");
+
+        assert!(rules.iter().any(|r| r.starts_with("# WARNING:")));
+    }
+
+    #[test]
+    fn test_generate_nftables_rules_restricts_destination_for_egress_ip_block() {
+        let mut manager = NetworkPolicyManager::new();
+
+        let policy = NetworkPolicy {
+            id: "policy3".to_string(),
+            name: "restrict-egress".to_string(),
+            namespace: "default".to_string(),
+            pod_selector: LabelSelector::default(),
+            policy_types: vec![PolicyType::Egress],
+            ingress: vec![],
+            egress: vec![EgressRule {
+                to: vec![PeerSelector::IpBlock {
+                    cidr: "192.168.0.0/16".to_string(),
+                    except: vec![],
+                }],
+                ports: vec![NetworkPolicyPort {
+                    protocol: Protocol::TCP,
+                    port: Some(443),
+                    end_port: None,
+                }],
+            }],
+            enabled: true,
+        };
+        manager.create_policy(policy).unwrap();
+
+        let rules = manager.generate_nftables_rules("policy3");
+
+        assert!(rules
+            .iter()
+            .any(|r| r.contains("daddr 192.168.0.0/16") && r.contains("accept")));
+        assert!(!rules
+            .iter()
+            .any(|r| r == "nft add rule inet horcrux policy_policy3 tcp dport 443 accept"));
     }
 
     #[test]
