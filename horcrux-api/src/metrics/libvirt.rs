@@ -111,8 +111,11 @@ impl LibvirtManager {
         // Get network interface stats
         let (network_rx_bytes, network_tx_bytes) = self.get_network_stats(&domain);
 
-        // Calculate CPU usage percentage
-        let cpu_usage_percent = self.calculate_cpu_usage(vm_id, cpu_time).await;
+        // Calculate CPU usage percentage (normalized across all vCPUs)
+        let num_vcpus = info.nr_virt_cpu.max(1);
+        let cpu_usage_percent = self
+            .calculate_cpu_usage(vm_id, cpu_time, num_vcpus)
+            .await;
 
         // Store current metrics for next calculation
         let mut prev_metrics = self.previous_metrics.write().await;
@@ -140,9 +143,12 @@ impl LibvirtManager {
         })
     }
 
-    /// Calculate CPU usage percentage from CPU time delta
+    /// Calculate CPU usage percentage from CPU time delta, normalized to the
+    /// domain's vCPU count so usage is reported as a percentage of the VM's
+    /// total allotted CPU capacity (matching libvirt/virsh/top semantics),
+    /// not percentage of a single core.
     #[cfg(feature = "qemu")]
-    async fn calculate_cpu_usage(&self, vm_id: &str, current_cpu_time: u64) -> f64 {
+    async fn calculate_cpu_usage(&self, vm_id: &str, current_cpu_time: u64, num_vcpus: u32) -> f64 {
         let prev_metrics = self.previous_metrics.read().await;
 
         if let Some(prev) = prev_metrics.get(vm_id) {
@@ -153,10 +159,15 @@ impl LibvirtManager {
 
             let cpu_delta = current_cpu_time.saturating_sub(prev.cpu_time);
 
-            // CPU usage = (CPU time delta / real time delta) * 100 * num_cpus
-            // For now, assume 1 vCPU. In production, query domain vCPU count.
-            let usage = (cpu_delta as f64 / time_delta as f64) * 100.0;
-            usage.min(100.0) // Cap at 100%
+            // cpu_time accumulates across all vCPUs, so a fully-busy 4-vCPU
+            // domain reports ~4x the wall-clock time delta. Divide by vCPU
+            // count to get usage as a percentage of the domain's total
+            // allotted capacity (0-100%), rather than percentage of one core
+            // (which could read e.g. 400% for a 4-vCPU domain, or wrongly
+            // report 100% for a domain pegging only 1 of 4 vCPUs).
+            let usage =
+                (cpu_delta as f64 / time_delta as f64) * 100.0 / num_vcpus.max(1) as f64;
+            usage.clamp(0.0, 100.0)
         } else {
             0.0 // First sample, no previous data
         }
