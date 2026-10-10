@@ -365,6 +365,86 @@ mod tests {
         assert!(manager.previous_metrics.read().await.is_empty());
     }
 
+    /// Regression test for the vCPU-normalization fix (d9b25be): a 4-vCPU
+    /// domain fully pegging exactly 1 of its 4 cores should read ~25% (not
+    /// 100%), and a 4-vCPU domain fully busy on all 4 cores should read
+    /// ~100% (not 400% before clamping). Exercises calculate_cpu_usage()
+    /// directly since the prior code path had zero test coverage of the
+    /// actual math despite the bug being purely in that math.
+    #[tokio::test]
+    #[cfg(feature = "qemu")]
+    async fn test_calculate_cpu_usage_normalizes_by_vcpu_count() {
+        let manager = LibvirtManager::new();
+        let vm_id = "test-vm";
+        let num_vcpus = 4u32;
+
+        // Seed a previous sample so the second call has a delta to work with.
+        {
+            let mut prev = manager.previous_metrics.write().await;
+            prev.insert(
+                vm_id.to_string(),
+                PreviousVmMetrics {
+                    cpu_time: 0,
+                    // Backdate so elapsed() during the real call below is a
+                    // predictable, small positive duration rather than near-zero.
+                    timestamp: std::time::Instant::now()
+                        .checked_sub(std::time::Duration::from_secs(1))
+                        .unwrap(),
+                    disk_read_bytes: 0,
+                    disk_write_bytes: 0,
+                    network_rx_bytes: 0,
+                    network_tx_bytes: 0,
+                },
+            );
+        }
+
+        // ~1 core-second of cpu_time accumulated over ~1 wall-clock second on
+        // a 4-vCPU domain -> should normalize to ~25%, not 100%.
+        let one_core_second_ns = 1_000_000_000u64;
+        let usage_one_core_busy = manager
+            .calculate_cpu_usage(vm_id, one_core_second_ns, num_vcpus)
+            .await;
+        assert!(
+            (10.0..=40.0).contains(&usage_one_core_busy),
+            "expected ~25% for 1-of-4 vCPUs fully busy, got {}",
+            usage_one_core_busy
+        );
+
+        // Reseed, then simulate all 4 vCPUs fully busy for ~1 wall-clock
+        // second -> ~4 core-seconds of cpu_time -> should clamp to 100%,
+        // not report 400%.
+        {
+            let mut prev = manager.previous_metrics.write().await;
+            prev.insert(
+                vm_id.to_string(),
+                PreviousVmMetrics {
+                    cpu_time: 0,
+                    timestamp: std::time::Instant::now()
+                        .checked_sub(std::time::Duration::from_secs(1))
+                        .unwrap(),
+                    disk_read_bytes: 0,
+                    disk_write_bytes: 0,
+                    network_rx_bytes: 0,
+                    network_tx_bytes: 0,
+                },
+            );
+        }
+        let four_core_seconds_ns = 4_000_000_000u64;
+        let usage_all_cores_busy = manager
+            .calculate_cpu_usage(vm_id, four_core_seconds_ns, num_vcpus)
+            .await;
+        assert!(
+            usage_all_cores_busy <= 100.0,
+            "expected usage clamped to <=100%, got {}",
+            usage_all_cores_busy
+        );
+        assert!(
+            usage_all_cores_busy >= 60.0,
+            "expected close to 100% for 4-of-4 vCPUs fully busy, got {}",
+            usage_all_cores_busy
+        );
+    }
+
     #[tokio::test]
     #[cfg(feature = "qemu")]
     async fn test_libvirt_connection_test_uri() {
