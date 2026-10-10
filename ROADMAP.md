@@ -164,19 +164,22 @@
 ### 2.1 Code Quality Improvements
 
 #### High Priority
-- [ ] **Clean up compiler warnings** (1-2 days)
-  - Remove unused imports (46 auto-fixable)
-  - Fix unused variables
-  - Address unnecessary parentheses
-  - **Current**: 411 warnings
-  - **Target**: <50 warnings
+- [x] **Clean up compiler warnings** -- DONE (stale figures below were
+  never updated as the project evolved; corrected 2026-10-10)
+  - CI's `Check` job runs `cargo clippy -- -D warnings` (added in
+    commit 4c5554f), so zero warnings is a hard merge gate on `main`
+    now, not a backlog item.
+  - ~~**Current**: 411 warnings~~ / ~~**Target**: <50 warnings~~ (stale;
+    those numbers predate the `-D warnings` CI gate)
 
-- [ ] **Improve test coverage** (1 week)
-  - Add alert notification tests (SMTP/webhook mocking)
-  - Add storage backend integration tests
-  - Add SDN policy tests
-  - **Current**: 47 tests
-  - **Target**: 100+ tests
+- [x] **Improve test coverage** -- substantially ahead of the original
+  target (stale figures corrected 2026-10-10)
+  - ~~**Current**: 47 tests~~ -- actual count is 633 `#[test]`/
+    `#[tokio::test]` functions across the workspace as of 2026-10-10
+    (`grep -rc '#\[test\]\|#\[tokio::test\]'`)
+  - ~~**Target**: 100+ tests~~ -- already exceeded; remaining gaps
+    (SMTP/webhook mocking, broader SDN policy coverage) are still
+    worth targeted additions, just not against the old headline number
 
 - [ ] **Performance profiling** (1 week)
   - Identify bottlenecks
@@ -669,12 +672,12 @@ a per-node placement weight:
 2. Set up monitoring dashboards (Grafana)
 3. Performance benchmarking
 4. Fix any integration issues
-5. Clean up compiler warnings (411 → <50)
+5. ~~Clean up compiler warnings (411 → <50)~~ DONE -- CI now hard-gates on `cargo clippy -D warnings`
 
 ### Month 2: First Enhancement Cycle
 1. Address early feedback
 2. Performance optimizations based on profiling
-3. Expand test coverage (47 → 100+ tests)
+3. ~~Expand test coverage (47 → 100+ tests)~~ DONE -- 633 tests as of 2026-10-10
 4. Release v0.2.0
 
 ### Month 3: Planning Phase 3
