@@ -113,9 +113,7 @@ impl LibvirtManager {
 
         // Calculate CPU usage percentage (normalized across all vCPUs)
         let num_vcpus = info.nr_virt_cpu.max(1);
-        let cpu_usage_percent = self
-            .calculate_cpu_usage(vm_id, cpu_time, num_vcpus)
-            .await;
+        let cpu_usage_percent = self.calculate_cpu_usage(vm_id, cpu_time, num_vcpus).await;
 
         // Store current metrics for next calculation
         let mut prev_metrics = self.previous_metrics.write().await;
@@ -165,8 +163,7 @@ impl LibvirtManager {
             // allotted capacity (0-100%), rather than percentage of one core
             // (which could read e.g. 400% for a 4-vCPU domain, or wrongly
             // report 100% for a domain pegging only 1 of 4 vCPUs).
-            let usage =
-                (cpu_delta as f64 / time_delta as f64) * 100.0 / num_vcpus.max(1) as f64;
+            let usage = (cpu_delta as f64 / time_delta as f64) * 100.0 / num_vcpus.max(1) as f64;
             usage.clamp(0.0, 100.0)
         } else {
             0.0 // First sample, no previous data
