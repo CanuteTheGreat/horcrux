@@ -214,12 +214,18 @@ impl CniManager {
         })?;
 
         // Prepare CNI environment variables
+        let cni_bin_dir_str = self.cni_bin_dir.to_str().ok_or_else(|| {
+            horcrux_common::Error::System(format!(
+                "CNI bin dir path is not valid UTF-8: {:?}",
+                self.cni_bin_dir
+            ))
+        })?;
         let env_vars = vec![
             ("CNI_COMMAND", "ADD"),
             ("CNI_CONTAINERID", container_id),
             ("CNI_NETNS", netns_path),
             ("CNI_IFNAME", interface_name),
-            ("CNI_PATH", self.cni_bin_dir.to_str().unwrap()),
+            ("CNI_PATH", cni_bin_dir_str),
         ];
 
         // Call CNI plugin
@@ -332,12 +338,18 @@ impl CniManager {
         })?;
 
         // Prepare CNI environment variables
+        let cni_bin_dir_str = self.cni_bin_dir.to_str().ok_or_else(|| {
+            horcrux_common::Error::System(format!(
+                "CNI bin dir path is not valid UTF-8: {:?}",
+                self.cni_bin_dir
+            ))
+        })?;
         let env_vars = vec![
             ("CNI_COMMAND", "DEL"),
             ("CNI_CONTAINERID", container_id),
             ("CNI_NETNS", netns_path),
             ("CNI_IFNAME", interface_name),
-            ("CNI_PATH", self.cni_bin_dir.to_str().unwrap()),
+            ("CNI_PATH", cni_bin_dir_str),
         ];
 
         // Call CNI plugin
@@ -414,12 +426,18 @@ impl CniManager {
             horcrux_common::Error::System(format!("Network {} not found", network_name))
         })?;
 
+        let cni_bin_dir_str = self.cni_bin_dir.to_str().ok_or_else(|| {
+            horcrux_common::Error::System(format!(
+                "CNI bin dir path is not valid UTF-8: {:?}",
+                self.cni_bin_dir
+            ))
+        })?;
         let env_vars = vec![
             ("CNI_COMMAND", "CHECK"),
             ("CNI_CONTAINERID", container_id),
             ("CNI_NETNS", netns_path),
             ("CNI_IFNAME", interface_name),
-            ("CNI_PATH", self.cni_bin_dir.to_str().unwrap()),
+            ("CNI_PATH", cni_bin_dir_str),
         ];
 
         let plugin_path = self
