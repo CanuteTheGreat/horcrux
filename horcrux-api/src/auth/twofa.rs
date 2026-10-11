@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
+use subtle::ConstantTimeEq;
 
 /// 2FA manager for handling TOTP and backup codes
 pub struct TwoFactorManager {
@@ -90,8 +91,13 @@ impl TwoFactorManager {
             return Ok(true);
         }
 
-        // Try backup codes
-        if let Some(index) = secret.backup_codes.iter().position(|bc| bc == code) {
+        // Try backup codes (constant-time comparison to avoid leaking which
+        // backup code is "closest" to the submitted value via timing)
+        if let Some(index) = secret
+            .backup_codes
+            .iter()
+            .position(|bc| constant_time_str_eq(bc, code))
+        {
             // Remove used backup code
             secret.backup_codes.remove(index);
             return Ok(true);
@@ -179,7 +185,7 @@ impl TwoFactorManager {
             let step = (time_step as i64 + offset) as u64;
             let expected_code = Self::generate_totp(secret, step)?;
 
-            if code == expected_code {
+            if constant_time_str_eq(code, &expected_code) {
                 return Ok(true);
             }
         }
@@ -292,6 +298,19 @@ impl TwoFactorManager {
             user_id, secret
         )
     }
+}
+
+/// Compare two strings for equality in constant time (w.r.t. the string
+/// contents) to prevent timing side-channels when checking TOTP codes and
+/// backup codes. Falls back to `false` immediately on length mismatch,
+/// which does not leak secret-dependent information since code/backup-code
+/// lengths are fixed and public (6 and 8 digits respectively).
+fn constant_time_str_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    a.ct_eq(b).into()
 }
 
 /// 2FA setup information
