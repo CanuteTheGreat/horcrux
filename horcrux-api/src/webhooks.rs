@@ -343,20 +343,24 @@ impl WebhookManager {
         Ok(status_code)
     }
 
-    /// Generate HMAC signature for webhook payload
+    /// Generate a real HMAC-SHA256 signature for webhook payload, hex-encoded
+    /// with a `sha256=` prefix (matches the common GitHub/Stripe webhook
+    /// signature convention so receivers can verify with off-the-shelf
+    /// libraries). Previously this used `DefaultHasher`, which is not a
+    /// cryptographic hash and provided effectively no authenticity guarantee
+    /// despite being advertised to consumers as "HMAC".
     fn generate_hmac_signature(&self, secret: &str, payload: &str) -> String {
-        use base64::Engine;
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
 
-        // Simple hash-based signature (in production, use proper HMAC-SHA256)
-        let mut hasher = DefaultHasher::new();
-        secret.hash(&mut hasher);
-        payload.hash(&mut hasher);
-        let hash = hasher.finish();
+        type HmacSha256 = Hmac<Sha256>;
 
-        let digest = format!("{:x}", hash);
-        base64::engine::general_purpose::STANDARD.encode(digest)
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
+            .expect("HMAC can take a key of any size");
+        mac.update(payload.as_bytes());
+        let result = mac.finalize().into_bytes();
+
+        format!("sha256={}", hex::encode(result))
     }
 
     /// Get recent webhook deliveries
@@ -424,5 +428,34 @@ mod tests {
 
         let event_type = WebhookEventType::AlertTriggered;
         assert_eq!(event_type.as_str(), "alert.triggered");
+    }
+
+    #[test]
+    fn test_hmac_signature_is_real_hmac_sha256() {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+
+        let manager = WebhookManager::new();
+        let secret = "test-secret";
+        let payload = r#"{"event_type":"vm.created"}"#;
+
+        let signature = manager.generate_hmac_signature(secret, payload);
+
+        // Must use the documented `sha256=<hex>` convention.
+        assert!(signature.starts_with("sha256="));
+        let hex_digest = signature.strip_prefix("sha256=").unwrap();
+        assert_eq!(hex_digest.len(), 64, "SHA-256 hex digest must be 64 chars");
+
+        // Recompute independently and confirm it matches exactly (i.e. this
+        // is a real, reproducible HMAC-SHA256 and not a weak/non-crypto hash).
+        type HmacSha256 = Hmac<Sha256>;
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(payload.as_bytes());
+        let expected = hex::encode(mac.finalize().into_bytes());
+        assert_eq!(hex_digest, expected);
+
+        // Different secrets must produce different signatures.
+        let other = manager.generate_hmac_signature("different-secret", payload);
+        assert_ne!(signature, other);
     }
 }

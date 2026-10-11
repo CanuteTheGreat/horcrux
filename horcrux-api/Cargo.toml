@@ -81,6 +81,7 @@ subtle = "2.5"
 aes-gcm = "0.10"
 hex = "0.4"
 sha2 = "0.10"
+hmac = "0.12"
 
 # Docker API client
 bollard = "0.17"
