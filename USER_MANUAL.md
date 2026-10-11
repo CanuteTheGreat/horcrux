@@ -627,7 +627,7 @@ horcrux-cli backup provider add custom \
 - CLI: `horcrux-cli help <command>`
 - Community: https://community.horcrux.io
 - Documentation: https://docs.horcrux.io
-- GitHub Issues: https://github.com/yourusername/horcrux/issues
+- GitHub Issues: https://git.canutethegreat.com/CanuteTheGreat/horcrux/issues
 
 ---
 

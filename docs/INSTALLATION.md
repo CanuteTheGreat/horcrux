@@ -49,7 +49,7 @@ The easiest way to install Horcrux on Gentoo:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/horcrux.git
+git clone https://git.canutethegreat.com/CanuteTheGreat/horcrux.git
 cd horcrux
 
 # Run the installation script
@@ -97,7 +97,7 @@ dnf install gcc sqlite-devel openssl-devel pkgconfig
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/horcrux.git
+git clone https://git.canutethegreat.com/CanuteTheGreat/horcrux.git
 cd horcrux
 
 # Build release binaries
@@ -516,7 +516,7 @@ After installation:
 - **Logs**: `journalctl -u horcrux-api -f`
 - **CLI Help**: `horcrux --help`
 - **API Docs**: http://localhost:8006/api/docs
-- **Issues**: https://github.com/yourusername/horcrux/issues
+- **Issues**: https://git.canutethegreat.com/CanuteTheGreat/horcrux/issues
 
 ---
 
