@@ -355,8 +355,8 @@ impl WebhookManager {
 
         type HmacSha256 = Hmac<Sha256>;
 
-        let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-            .expect("HMAC can take a key of any size");
+        let mut mac =
+            HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take a key of any size");
         mac.update(payload.as_bytes());
         let result = mac.finalize().into_bytes();
 
