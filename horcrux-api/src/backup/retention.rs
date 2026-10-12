@@ -34,7 +34,17 @@ impl RetentionManager {
         let mut seen_years = HashMap::new();
 
         for backup in &sorted {
-            let dt = chrono::DateTime::from_timestamp(backup.timestamp, 0).unwrap();
+            let dt = match chrono::DateTime::from_timestamp(backup.timestamp, 0) {
+                Some(dt) => dt,
+                None => {
+                    tracing::warn!(
+                        backup_id = %backup.id,
+                        timestamp = backup.timestamp,
+                        "skipping backup with out-of-range timestamp during retention evaluation"
+                    );
+                    continue;
+                }
+            };
 
             // Hourly
             let hour_key = (dt.year(), dt.month(), dt.day(), dt.hour());
