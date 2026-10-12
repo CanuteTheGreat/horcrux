@@ -105,9 +105,20 @@ jobs:
         # it boots to a login prompt in seconds even under pure software
         # emulation, which is exactly what we need for a fast but genuine
         # boot test. Cached by exact version/checksum-bearing URL.
+        #
+        # download.cirros-cloud.net 302-redirects to a GitHub release
+        # asset served from release-assets.githubusercontent.com; seen
+        # 2026-10-12 failing nightly run #297 with "curl: (6) Could not
+        # resolve host: release-assets.githubusercontent.com" - a
+        # transient DNS blip in the runner container's network at the
+        # time, not a bad URL (the redirect chain resolves fine from
+        # other hosts). --retry-all-errors makes curl retry on that
+        # error class too (plain --retry only covers HTTP 5xx/timeouts),
+        # so a one-off DNS flake no longer fails the whole nightly run.
         run: |
           mkdir -p /tmp/horcrux-nightly
-          curl -fsSL -o /tmp/horcrux-nightly/cirros-disk.img \
+          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
+            -o /tmp/horcrux-nightly/cirros-disk.img \
             https://download.cirros-cloud.net/0.6.2/cirros-0.6.2-x86_64-disk.img
           echo "NIGHTLY_CIRROS_IMAGE=/tmp/horcrux-nightly/cirros-disk.img" >> "$GITHUB_ENV"
           ls -lh /tmp/horcrux-nightly/cirros-disk.img
