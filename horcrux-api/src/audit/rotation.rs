@@ -205,7 +205,9 @@ impl AuditRotator {
             Ok(())
         })
         .await
-        .map_err(|e| RotationError::CompressionError(format!("compression task panicked: {}", e)))?;
+        .map_err(|e| {
+            RotationError::CompressionError(format!("compression task panicked: {}", e))
+        })?;
 
         if let Err(e) = compress_result {
             // Best-effort cleanup of any partially-written .gz file so a
@@ -218,7 +220,10 @@ impl AuditRotator {
         // Compression succeeded -- remove the uncompressed original so we
         // don't keep both copies of every rotated archive on disk forever.
         if let Err(e) = fs::remove_file(archive_path).await {
-            warn!(error = %e, "failed to remove uncompressed archive after successful gzip compression");
+            warn!(
+                error = %e,
+                "failed to remove uncompressed archive after successful gzip compression"
+            );
         }
 
         Ok(compressed_path)
