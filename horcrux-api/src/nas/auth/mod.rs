@@ -754,33 +754,44 @@ impl AuthManager {
         Ok(groups)
     }
 
-    /// Verify a password (Unix auth)
+    /// Verify a password against the system shadow database (Unix auth).
+    ///
+    /// Previously this matched on username only and then *unconditionally*
+    /// returned `Ok(true)` ("Placeholder" for real verification), meaning
+    /// any password -- including an empty or wrong one -- authenticated
+    /// successfully for any user with a non-locked shadow entry. That's a
+    /// full authentication bypass for every NAS auth consumer wired to this
+    /// (SMB/NFS/FTP/WebDAV local-user auth). Verify the supplied password
+    /// against the real shadow hash using `pwhash`, which implements the
+    /// glibc crypt(3) formats (DES, MD5, SHA-256, SHA-512, bcrypt) in pure
+    /// Rust so this works without shelling out or relying on PAM being
+    /// configured.
     pub async fn verify_password(&self, username: &str, password: &str) -> Result<bool> {
-        // Use PAM for authentication if available, otherwise check shadow
-        // This is a simplified check using shadow file
         let shadow = tokio::fs::read_to_string("/etc/shadow").await;
 
         if let Ok(content) = shadow {
             for line in content.lines() {
                 let parts: Vec<&str> = line.split(':').collect();
                 if parts.len() >= 2 && parts[0] == username {
-                    let hash = parts[1];
+                    let hash = parts[1].to_string();
 
-                    // Empty hash means no password
-                    if hash.is_empty() || hash == "*" || hash == "!" || hash == "!!" {
+                    // Empty hash means no password set; "*"/"!"/"!!" mean the
+                    // account is locked. Neither should ever authenticate.
+                    if hash.is_empty() || hash.starts_with('*') || hash.starts_with('!') {
                         return Ok(false);
                     }
 
-                    // Use openssl to verify password
-                    // Format: $algorithm$salt$hash
-                    let output = Command::new("openssl")
-                        .args(["passwd", "-stdin", "-6", "-salt", ""])
-                        .output()
-                        .await;
+                    let password = password.to_string();
+                    // pwhash's crypt verification is CPU-bound (and the
+                    // slow hash formats are deliberately slow), so run it
+                    // off the async executor.
+                    let matches = tokio::task::spawn_blocking(move || {
+                        pwhash::unix::verify(password.as_bytes(), &hash)
+                    })
+                    .await
+                    .map_err(|e| Error::Internal(format!("Password verification task failed: {}", e)))?;
 
-                    // Simplified check - in production use proper PAM
-                    let _ = (password, output);
-                    return Ok(true); // Placeholder
+                    return Ok(matches);
                 }
             }
         }
@@ -897,5 +908,32 @@ mod tests {
         assert_eq!(group.name, "testgroup");
         assert_eq!(group.gid, 10001);
         assert!(group.members.is_empty());
+    }
+
+    /// Regression test for the auth-bypass bug where `verify_password`
+    /// accepted any password for any user whose shadow entry wasn't
+    /// explicitly locked, because the actual hash comparison was a
+    /// "Placeholder" that always returned `Ok(true)`. This exercises the
+    /// real `pwhash::unix::verify` codepath the fixed implementation now
+    /// relies on, against a known SHA-512 crypt ($6$) hash, confirming the
+    /// correct password matches and a wrong one is rejected.
+    #[test]
+    fn test_shadow_hash_verification_rejects_wrong_password() {
+        // $6$ (SHA-512 crypt) hash of "correct horse battery staple",
+        // generated with: openssl passwd -6 -salt testsalt123 -stdin
+        let hash = "$6$testsalt123$1zwNx3XV5YigpGUqv6iOXPdJH5Bi0QnMZIQDFEPIL5zM3tt1NzTBS7RmlU2hGD9rb4c4ZaKo6hvV6F7tWj4MZ/";
+        let correct = "correct horse battery staple";
+        let wrong = "wrong-password";
+
+        assert!(
+            pwhash::unix::verify(correct.as_bytes(), hash),
+            "correct password must verify against its own shadow hash"
+        );
+        assert!(
+            !pwhash::unix::verify(wrong.as_bytes(), hash),
+            "wrong password must never verify -- this is the exact bug that was fixed \
+             (previously verify_password() returned Ok(true) unconditionally once a \
+             matching, non-locked username was found, regardless of the password)"
+        );
     }
 }
