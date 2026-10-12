@@ -6,6 +6,9 @@
 //! - Maximum number of archived files
 
 use chrono::{DateTime, Datelike, Utc};
+use flate2::write::GzEncoder;
+use flate2::Compression;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::{error, info, warn};
@@ -174,29 +177,48 @@ impl AuditRotator {
     }
 
     /// Compress an archive file using gzip
+    ///
+    /// Implemented with the `flate2` crate so compression happens entirely
+    /// in-process. The previous implementation shelled out to a system
+    /// `gzip` binary, which (a) made audit log rotation silently depend on
+    /// an external executable being present on `PATH` -- on a minimal
+    /// Gentoo install with no `app-arch/gzip` merged, rotation would quietly
+    /// fall back to leaving every archive uncompressed forever, with only a
+    /// `warn!` log line and no operator-facing signal -- and (b) read the
+    /// original file into `_content` and then never used it, spawning a
+    /// subprocess against `archive_path` instead; the in-memory read was
+    /// pure dead work on every single rotation.
     async fn compress_archive(&self, archive_path: &Path) -> Result<PathBuf, RotationError> {
         let compressed_path = archive_path.with_extension("log.gz");
 
         // Read original file
-        let _content = fs::read(archive_path)
+        let content = fs::read(archive_path)
             .await
             .map_err(|e| RotationError::IoError(format!("Failed to read archive: {}", e)))?;
 
-        // Compress using flate2 (if available) or just rename for now
-        // For simplicity, we'll use a simple approach here
-        // In production, you'd want to use proper gzip compression
+        let compressed_path_for_blocking = compressed_path.clone();
+        let compress_result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+            let out_file = std::fs::File::create(&compressed_path_for_blocking)?;
+            let mut encoder = GzEncoder::new(out_file, Compression::default());
+            encoder.write_all(&content)?;
+            encoder.finish()?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| RotationError::CompressionError(format!("compression task panicked: {}", e)))?;
 
-        // Simple compression using system gzip
-        let output = tokio::process::Command::new("gzip")
-            .arg("-f")
-            .arg(archive_path)
-            .output()
-            .await
-            .map_err(|e| RotationError::CompressionError(format!("gzip failed: {}", e)))?;
-
-        if !output.status.success() {
-            warn!("gzip compression failed, keeping uncompressed archive");
+        if let Err(e) = compress_result {
+            // Best-effort cleanup of any partially-written .gz file so a
+            // failed compression doesn't leave a corrupt archive behind.
+            let _ = std::fs::remove_file(&compressed_path);
+            warn!(error = %e, "gzip compression failed, keeping uncompressed archive");
             return Ok(archive_path.to_path_buf());
+        }
+
+        // Compression succeeded -- remove the uncompressed original so we
+        // don't keep both copies of every rotated archive on disk forever.
+        if let Err(e) = fs::remove_file(archive_path).await {
+            warn!(error = %e, "failed to remove uncompressed archive after successful gzip compression");
         }
 
         Ok(compressed_path)
@@ -379,5 +401,52 @@ mod tests {
         // Simulate old rotation
         rotator.last_rotation = Utc::now() - Duration::hours(25);
         assert!(rotator.check_age_rotation(24));
+    }
+
+    #[tokio::test]
+    async fn test_compress_archive_produces_valid_gzip_and_removes_original() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let archive_path = dir.path().join("audit_test.log");
+        let original_content = b"line one\nline two\nline three\n".repeat(50);
+        tokio::fs::write(&archive_path, &original_content)
+            .await
+            .expect("write original archive");
+
+        let config = RotationConfig {
+            log_path: dir.path().join("audit.log"),
+            archive_dir: dir.path().to_path_buf(),
+            strategy: RotationStrategy::Size(1),
+            max_archives: 30,
+            compress: true,
+        };
+        let rotator = AuditRotator::new(config);
+
+        let compressed_path = rotator
+            .compress_archive(&archive_path)
+            .await
+            .expect("compress_archive should succeed");
+
+        assert_eq!(compressed_path, archive_path.with_extension("log.gz"));
+        assert!(
+            compressed_path.exists(),
+            "compressed .gz file should exist on disk"
+        );
+        assert!(
+            !archive_path.exists(),
+            "uncompressed original should be removed after successful compression"
+        );
+
+        // Decompress in-process (no external `gzip` binary involved) and
+        // confirm we get back exactly the original bytes -- this is the
+        // behavior that previously depended on a system `gzip` executable
+        // being present on PATH.
+        let compressed_bytes = tokio::fs::read(&compressed_path)
+            .await
+            .expect("read compressed archive");
+        let mut decoder = flate2::read::GzDecoder::new(&compressed_bytes[..]);
+        let mut decompressed = Vec::new();
+        std::io::Read::read_to_end(&mut decoder, &mut decompressed)
+            .expect("gzip stream should be valid and decode cleanly");
+        assert_eq!(decompressed, original_content);
     }
 }
