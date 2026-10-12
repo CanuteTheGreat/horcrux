@@ -789,7 +789,9 @@ impl AuthManager {
                         pwhash::unix::verify(password.as_bytes(), &hash)
                     })
                     .await
-                    .map_err(|e| Error::Internal(format!("Password verification task failed: {}", e)))?;
+                    .map_err(|e| {
+                        Error::Internal(format!("Password verification task failed: {}", e))
+                    })?;
 
                     return Ok(matches);
                 }
