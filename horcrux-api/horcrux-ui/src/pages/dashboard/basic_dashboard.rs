@@ -7,21 +7,31 @@ pub fn Dashboard() -> impl IntoView {
     let (cluster_nodes, set_cluster_nodes) = create_signal(Vec::<api::ClusterNode>::new());
     let (active_alerts, set_active_alerts) = create_signal(Vec::<api::ActiveAlert>::new());
     let (vm_count, set_vm_count) = create_signal(0);
+    // Tracks any fetch failure so the dashboard can't silently show a
+    // misleading all-zeros "connected" state when it actually isn't talking
+    // to the backend at all (2026-10-12: this is exactly how the broken
+    // hardcoded-localhost API URL went unnoticed here while surfacing loudly
+    // on the /vms page, which does report its fetch errors).
+    let (fetch_error, set_fetch_error) = create_signal(None::<String>);
 
     // Load data on mount
     create_effect(move |_| {
         spawn_local(async move {
-            if let Ok(metrics) = api::get_node_metrics().await {
-                set_node_metrics.set(Some(metrics));
+            match api::get_node_metrics().await {
+                Ok(metrics) => set_node_metrics.set(Some(metrics)),
+                Err(e) => set_fetch_error.set(Some(e.message)),
             }
-            if let Ok(nodes) = api::get_cluster_nodes().await {
-                set_cluster_nodes.set(nodes);
+            match api::get_cluster_nodes().await {
+                Ok(nodes) => set_cluster_nodes.set(nodes),
+                Err(e) => set_fetch_error.set(Some(e.message)),
             }
-            if let Ok(alerts) = api::get_active_alerts().await {
-                set_active_alerts.set(alerts);
+            match api::get_active_alerts().await {
+                Ok(alerts) => set_active_alerts.set(alerts),
+                Err(e) => set_fetch_error.set(Some(e.message)),
             }
-            if let Ok(vms) = api::get_vms().await {
-                set_vm_count.set(vms.len());
+            match api::get_vms().await {
+                Ok(vms) => set_vm_count.set(vms.len()),
+                Err(e) => set_fetch_error.set(Some(e.message)),
             }
         });
     });
@@ -29,6 +39,10 @@ pub fn Dashboard() -> impl IntoView {
     view! {
         <div class="dashboard">
             <h1>"Dashboard"</h1>
+
+            {move || fetch_error.get().map(|err| view! {
+                <p class="error">"Could not reach the backend for one or more panels: " {err}</p>
+            })}
 
             <div class="stats-grid">
                 <div class="stat-card">
