@@ -103,10 +103,12 @@ pub async fn cors_middleware(config: CorsConfig, request: Request<Body>, next: N
                     HeaderValue::from_static("*"),
                 );
             } else if !origin.is_empty() {
-                headers.insert(
-                    header::ACCESS_CONTROL_ALLOW_ORIGIN,
-                    HeaderValue::from_str(&origin).unwrap(),
-                );
+                if let Ok(value) = HeaderValue::from_str(&origin) {
+                    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, value);
+                }
+                // An Origin header that isn't a valid HTTP header value (e.g.
+                // contains control bytes) is silently dropped instead of
+                // panicking the whole request-handling task.
             }
 
             // Access-Control-Allow-Methods
@@ -116,23 +118,20 @@ pub async fn cors_middleware(config: CorsConfig, request: Request<Body>, next: N
                 .map(|m| m.as_str())
                 .collect::<Vec<_>>()
                 .join(", ");
-            headers.insert(
-                header::ACCESS_CONTROL_ALLOW_METHODS,
-                HeaderValue::from_str(&methods).unwrap(),
-            );
+            if let Ok(value) = HeaderValue::from_str(&methods) {
+                headers.insert(header::ACCESS_CONTROL_ALLOW_METHODS, value);
+            }
 
             // Access-Control-Allow-Headers
             let allowed_headers = config.allowed_headers.join(", ");
-            headers.insert(
-                header::ACCESS_CONTROL_ALLOW_HEADERS,
-                HeaderValue::from_str(&allowed_headers).unwrap(),
-            );
+            if let Ok(value) = HeaderValue::from_str(&allowed_headers) {
+                headers.insert(header::ACCESS_CONTROL_ALLOW_HEADERS, value);
+            }
 
             // Access-Control-Max-Age
-            headers.insert(
-                header::ACCESS_CONTROL_MAX_AGE,
-                HeaderValue::from_str(&config.max_age.to_string()).unwrap(),
-            );
+            if let Ok(value) = HeaderValue::from_str(&config.max_age.to_string()) {
+                headers.insert(header::ACCESS_CONTROL_MAX_AGE, value);
+            }
 
             // Access-Control-Allow-Credentials
             if config.allow_credentials {
@@ -159,19 +158,17 @@ pub async fn cors_middleware(config: CorsConfig, request: Request<Body>, next: N
                 HeaderValue::from_static("*"),
             );
         } else if !origin.is_empty() {
-            headers.insert(
-                header::ACCESS_CONTROL_ALLOW_ORIGIN,
-                HeaderValue::from_str(&origin).unwrap(),
-            );
+            if let Ok(value) = HeaderValue::from_str(&origin) {
+                headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, value);
+            }
         }
 
         // Access-Control-Expose-Headers
         if !config.exposed_headers.is_empty() {
             let exposed = config.exposed_headers.join(", ");
-            headers.insert(
-                header::ACCESS_CONTROL_EXPOSE_HEADERS,
-                HeaderValue::from_str(&exposed).unwrap(),
-            );
+            if let Ok(value) = HeaderValue::from_str(&exposed) {
+                headers.insert(header::ACCESS_CONTROL_EXPOSE_HEADERS, value);
+            }
         }
 
         // Access-Control-Allow-Credentials
