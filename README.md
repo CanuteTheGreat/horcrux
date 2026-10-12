@@ -93,7 +93,9 @@ See [docs/KUBERNETES.md](docs/KUBERNETES.md) for complete K8s documentation.
 - **Corosync/Pacemaker** - Enterprise clustering
 - **Multi-node support** - Unlimited nodes
 - **Quorum** - Split-brain prevention
-- **HA Framework** - Automatic failover
+- **HA Framework** - Automatic failover (IPMI, iLO/DRAC, SSH, libvirt,
+  watchdog, and SNMP-PDU fencing agents implemented; the `Hypervisor`
+  fencing agent type is a documented stub — see `horcrux-api/src/ha/fencing.rs`)
 - **Live Migration** - Move VMs between nodes
 - **Mixed-Architecture** - x86_64 + ARM64 + RISC-V in same cluster ⭐ **UNIQUE**
 
@@ -157,6 +159,24 @@ See [docs/KUBERNETES.md](docs/KUBERNETES.md) for complete K8s documentation.
   - Alert monitoring
   - Responsive design
   - No JavaScript required - pure Rust!
+
+### Mobile UI (`horcrux-mobile`)
+
+Touch-optimized mobile frontend (Rust/Yew/WASM), separate from the main
+desktop Web UI:
+
+- Dashboard, VM list/start/stop, cluster node view, login, user management,
+  backup scheduling
+- Storage and Network pages exist but are marked "coming soon" in-app —
+  not yet wired to real data
+
+### Terraform Provider (`terraform-provider-horcrux`)
+
+A Terraform provider for managing Horcrux resources as infrastructure-as-code:
+
+- Resources: `horcrux_vm`, `horcrux_container`, `horcrux_storage_pool`,
+  `horcrux_firewall_rule`
+- Talks to the Horcrux REST API via its own client
 
 ## 📦 Installation
 

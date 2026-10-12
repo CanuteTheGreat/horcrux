@@ -1,5 +1,11 @@
 # Missing Features Compared to Proxmox VE
 
+> ⚠️ **STALE DOCUMENT**: Written early in the project. Backup, Firewall,
+> and Auth/RBAC (listed below as "Not implemented") are now implemented —
+> see `horcrux-api/src/backup/`, `horcrux-api/src/firewall/`, and the
+> README's Security section. Treat this file as a historical snapshot,
+> not current status; it has not been updated to track real progress.
+
 This document tracks features that Proxmox VE has that Horcrux doesn't yet implement.
 
 ## Priority 1: Essential Features
