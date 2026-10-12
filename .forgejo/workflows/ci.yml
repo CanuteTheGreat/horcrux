@@ -402,7 +402,15 @@ jobs:
         # RUSTSEC-2023-0071 (rsa crate, Marvin Attack timing side-channel):
         # no fixed version exists upstream as of 2026-09-25. Re-evaluate and
         # drop this --ignore once RustCrypto/RSA ships a patched release.
-        run: cargo audit --ignore RUSTSEC-2023-0071
+        #
+        # RUSTSEC-2024-0449 (unsafe-libyaml, unmaintained -- repo archived,
+        # advisory assigned 2026-10-12): unsafe-libyaml is a transitive dep
+        # of the (already-deprecated) serde_yaml crate we still depend on.
+        # No vulnerability, just an unmaintained-crate warning; serde_yaml
+        # itself needs to be replaced (e.g. with serde_yaml_ng or similar)
+        # as a separate migration. Re-evaluate and drop this --ignore once
+        # that migration lands.
+        run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0449
 
   gentoo-docker-build:
     name: Gentoo Docker Build
