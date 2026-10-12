@@ -141,7 +141,23 @@ pub fn use_websocket(topics: Vec<String>) -> (ReadSignal<Option<WsEvent>>, ReadS
     let (connected, set_connected) = create_signal(false);
 
     create_effect(move |_| {
-        let ws = match WebSocket::new("ws://localhost:8006/api/ws") {
+        // Same-origin WS URL, derived from the page's own location - mirrors
+        // the fix in api.rs's resolve_api_url. A hardcoded `ws://localhost:8006`
+        // broke whenever the page wasn't served from that literal host:port
+        // (e.g. a tunneled QA run forwarding only the frontend's port).
+        let ws_url = web_sys::window()
+            .and_then(|w| w.location().origin().ok())
+            .map(|origin| {
+                let ws_origin = if origin.starts_with("https") {
+                    origin.replacen("https", "wss", 1)
+                } else {
+                    origin.replacen("http", "ws", 1)
+                };
+                format!("{}/api/ws", ws_origin)
+            })
+            .unwrap_or_else(|| "ws://localhost:8006/api/ws".to_string());
+
+        let ws = match WebSocket::new(&ws_url) {
             Ok(ws) => ws,
             Err(e) => {
                 logging::log!("Failed to create WebSocket: {:?}", e);

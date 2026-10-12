@@ -1,0 +1,13 @@
+[build]
+target = "index.html"
+
+# Proxies "/api/*" requests from the trunk dev server (default :8080) to the
+# real backend on :8006, so the frontend's relative "/api/..." URLs resolve
+# correctly during local development too - not just in production, where
+# horcrux-api serves horcrux-ui/dist itself on a single origin.
+[[proxy]]
+backend = "http://localhost:8006/api"
+rewrite = "/api"
+
+[watch]
+ignore = ["dist"]

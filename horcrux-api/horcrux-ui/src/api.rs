@@ -5,8 +5,35 @@
 use horcrux_common::VmConfig;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-const API_BASE: &str = "http://localhost:8006/api";
 const AUTH_TOKEN_KEY: &str = "horcrux_auth_token";
+
+/// Relative API base - see `resolve_api_url`'s doc comment for why this must
+/// never be an absolute `http://host:port` URL again.
+const API_BASE: &str = "/api";
+
+/// Resolve an API path (e.g. "/vms") to the URL actually used for the request.
+/// Always same-origin/relative by default, so this works regardless of what
+/// host:port the page itself was loaded from: production (horcrux-api serves
+/// horcrux-ui/dist itself on one port - see main.rs's ServeDir fallback), a
+/// local `trunk serve` dev server (proxied to the backend via Trunk.toml), or
+/// a remote/tunneled QA run that only forwards the frontend's port.
+///
+/// This used to be a hardcoded `http://localhost:8006` absolute URL, which
+/// broke as soon as the browser's own "localhost" wasn't literally the
+/// backend host - e.g. an SSM port-forward tunnel forwarding only the
+/// frontend's port, or any real split-host deployment. The backend also has
+/// no CorsLayer, so that cross-origin call failed before it even reached the
+/// network tab as a real HTTP response - it surfaced as a bare
+/// "TypeError: Failed to fetch" (2026-10-12 QA finding on the /vms page).
+fn resolve_api_url(path: &str) -> String {
+    if path.starts_with("http") {
+        path.to_string()
+    } else if path.starts_with("/api") {
+        path.to_string()
+    } else {
+        format!("/api{}", path)
+    }
+}
 
 /// Store the JWT auth token in browser localStorage after a successful login.
 pub fn set_auth_token(token: &str) {
@@ -40,13 +67,7 @@ fn with_auth(request: reqwasm::http::Request) -> reqwasm::http::Request {
 
 /// Generic JSON fetch helper
 pub async fn fetch_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> {
-    let url = if path.starts_with("http") {
-        path.to_string()
-    } else if path.starts_with("/api") {
-        format!("http://localhost:8006{}", path)
-    } else {
-        format!("{}{}", API_BASE, path)
-    };
+    let url = resolve_api_url(path);
 
     let response = with_auth(reqwasm::http::Request::get(&url))
         .send()
@@ -71,13 +92,7 @@ pub async fn post_json<T: DeserializeOwned, B: Serialize>(
     path: &str,
     body: &B,
 ) -> Result<T, ApiError> {
-    let url = if path.starts_with("http") {
-        path.to_string()
-    } else if path.starts_with("/api") {
-        format!("http://localhost:8006{}", path)
-    } else {
-        format!("{}{}", API_BASE, path)
-    };
+    let url = resolve_api_url(path);
 
     let response = with_auth(reqwasm::http::Request::post(&url))
         .header("Content-Type", "application/json")
@@ -104,13 +119,7 @@ pub async fn put_json<T: DeserializeOwned, B: Serialize>(
     path: &str,
     body: &B,
 ) -> Result<T, ApiError> {
-    let url = if path.starts_with("http") {
-        path.to_string()
-    } else if path.starts_with("/api") {
-        format!("http://localhost:8006{}", path)
-    } else {
-        format!("{}{}", API_BASE, path)
-    };
+    let url = resolve_api_url(path);
 
     let response = with_auth(reqwasm::http::Request::put(&url))
         .header("Content-Type", "application/json")
@@ -134,13 +143,7 @@ pub async fn put_json<T: DeserializeOwned, B: Serialize>(
 
 /// DELETE request helper
 pub async fn delete_json(path: &str) -> Result<(), ApiError> {
-    let url = if path.starts_with("http") {
-        path.to_string()
-    } else if path.starts_with("/api") {
-        format!("http://localhost:8006{}", path)
-    } else {
-        format!("{}{}", API_BASE, path)
-    };
+    let url = resolve_api_url(path);
 
     let response = with_auth(reqwasm::http::Request::delete(&url))
         .send()
@@ -160,13 +163,7 @@ pub async fn delete_json(path: &str) -> Result<(), ApiError> {
 
 /// POST without body helper
 pub async fn post_empty(path: &str) -> Result<(), ApiError> {
-    let url = if path.starts_with("http") {
-        path.to_string()
-    } else if path.starts_with("/api") {
-        format!("http://localhost:8006{}", path)
-    } else {
-        format!("{}{}", API_BASE, path)
-    };
+    let url = resolve_api_url(path);
 
     let response = with_auth(reqwasm::http::Request::post(&url))
         .send()
@@ -186,13 +183,7 @@ pub async fn post_empty(path: &str) -> Result<(), ApiError> {
 
 /// Generic text fetch helper
 pub async fn fetch_text(path: &str) -> Result<String, ApiError> {
-    let url = if path.starts_with("http") {
-        path.to_string()
-    } else if path.starts_with("/api") {
-        format!("http://localhost:8006{}", path)
-    } else {
-        format!("{}{}", API_BASE, path)
-    };
+    let url = resolve_api_url(path);
 
     let response = with_auth(reqwasm::http::Request::get(&url))
         .send()
@@ -227,98 +218,27 @@ impl std::error::Error for ApiError {}
 
 /// Get all VMs
 pub async fn get_vms() -> Result<Vec<VmConfig>, ApiError> {
-    let response = reqwasm::http::Request::get(&format!("{}/vms", API_BASE))
-        .send()
-        .await
-        .map_err(|e| ApiError {
-            message: e.to_string(),
-        })?;
-
-    if response.ok() {
-        response.json().await.map_err(|e| ApiError {
-            message: e.to_string(),
-        })
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
-    }
+    fetch_json("/vms").await
 }
 
 /// Create a new VM
 pub async fn create_vm(config: VmConfig) -> Result<VmConfig, ApiError> {
-    let response = reqwasm::http::Request::post(&format!("{}/vms", API_BASE))
-        .header("Content-Type", "application/json")
-        .body(serde_json::to_string(&config).unwrap())
-        .send()
-        .await
-        .map_err(|e| ApiError {
-            message: e.to_string(),
-        })?;
-
-    if response.ok() {
-        response.json().await.map_err(|e| ApiError {
-            message: e.to_string(),
-        })
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
-    }
+    post_json("/vms", &config).await
 }
 
 /// Start a VM
 pub async fn start_vm(vm_id: &str) -> Result<(), ApiError> {
-    let response = reqwasm::http::Request::post(&format!("{}/vms/{}/start", API_BASE, vm_id))
-        .send()
-        .await
-        .map_err(|e| ApiError {
-            message: e.to_string(),
-        })?;
-
-    if response.ok() {
-        Ok(())
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
-    }
+    post_empty(&format!("/vms/{}/start", vm_id)).await
 }
 
 /// Stop a VM
 pub async fn stop_vm(vm_id: &str) -> Result<(), ApiError> {
-    let response = reqwasm::http::Request::post(&format!("{}/vms/{}/stop", API_BASE, vm_id))
-        .send()
-        .await
-        .map_err(|e| ApiError {
-            message: e.to_string(),
-        })?;
-
-    if response.ok() {
-        Ok(())
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
-    }
+    post_empty(&format!("/vms/{}/stop", vm_id)).await
 }
 
 /// Delete a VM
 pub async fn delete_vm(vm_id: &str) -> Result<(), ApiError> {
-    let response = reqwasm::http::Request::delete(&format!("{}/vms/{}", API_BASE, vm_id))
-        .send()
-        .await
-        .map_err(|e| ApiError {
-            message: e.to_string(),
-        })?;
-
-    if response.ok() {
-        Ok(())
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
-    }
+    delete_json(&format!("/vms/{}", vm_id)).await
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
