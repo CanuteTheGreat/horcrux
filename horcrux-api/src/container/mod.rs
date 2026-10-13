@@ -1,10 +1,16 @@
+pub mod cnetwork;
 pub mod docker;
+pub mod image;
 pub mod incus;
 /// Container management module
 /// Handles LXC, LXD, Incus, Docker, and Podman container lifecycle
 pub mod lxc;
 pub mod lxd;
 pub mod podman;
+pub mod stack;
+pub mod volume;
+pub mod ws;
+pub mod ws_handlers;
 
 use crate::db::Database;
 use horcrux_common::{ContainerConfig, ContainerRuntime, ContainerStatus, Result};

@@ -123,6 +123,13 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
         .await?;
     }
 
+    run_migration(
+        pool,
+        "020_create_container_stacks_table",
+        MIGRATION_020_CREATE_CONTAINER_STACKS,
+    )
+    .await?;
+
     Ok(())
 }
 
@@ -964,4 +971,32 @@ CREATE TABLE nas_job_dependencies (
 
 CREATE INDEX idx_nas_job_deps_job ON nas_job_dependencies(job_id);
 CREATE INDEX idx_nas_job_deps_depends ON nas_job_dependencies(depends_on_job_id);
+";
+
+const MIGRATION_020_CREATE_CONTAINER_STACKS: &str = "
+-- Docker/Podman Compose-style 'stack' groupings. A stack is a lightweight
+-- named grouping of containers deployed together from a compose file - not
+-- a Swarm service (Horcrux is single-host, see PORTAINER_COMPARISON.md).
+CREATE TABLE container_stacks (
+    id TEXT PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL,
+    runtime TEXT NOT NULL,
+    compose_yaml TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX idx_container_stacks_name ON container_stacks(name);
+
+-- Maps each compose service to the Horcrux container it was deployed as.
+CREATE TABLE container_stack_services (
+    id TEXT PRIMARY KEY,
+    stack_id TEXT NOT NULL,
+    service_name TEXT NOT NULL,
+    container_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (stack_id) REFERENCES container_stacks(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_container_stack_services_stack ON container_stack_services(stack_id);
 ";

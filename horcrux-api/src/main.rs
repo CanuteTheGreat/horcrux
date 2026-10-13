@@ -109,6 +109,11 @@ struct AppState {
     clone_job_manager: Arc<vm::clone_progress::CloneJobManager>,
     replication_manager: Arc<vm::replication::ReplicationManager>,
     ws_state: Arc<websocket::WsState>,
+    image_manager: Arc<container::image::ImageManager>,
+    volume_manager: Arc<container::volume::VolumeManager>,
+    container_network_manager: Arc<container::cnetwork::ContainerNetworkManager>,
+    stack_manager: Arc<container::stack::StackManager>,
+    container_ws_manager: Arc<container::ws::ContainerWsManager>,
     #[cfg(feature = "kubernetes")]
     kubernetes_manager: Arc<kubernetes::KubernetesManager>,
 }
@@ -361,13 +366,17 @@ async fn main() -> anyhow::Result<()> {
         mgr
     };
 
+    let database_for_stacks = database.clone();
+    let shared_container_manager = Arc::new(container::ContainerManager::with_database(
+        database_for_stacks.clone(),
+    ));
     let state = Arc::new(AppState {
         config: horcrux_config.clone(),
         vm_manager: Arc::new(VmManager::with_database_and_storage_path(
             database.clone(),
             horcrux_config.paths.vm_storage.clone(),
         )),
-        container_manager: Arc::new(container::ContainerManager::with_database(database.clone())),
+        container_manager: shared_container_manager.clone(),
         backup_manager: Arc::new(BackupManager::with_restore_dir(
             horcrux_config.paths.restore.clone(),
         )),
@@ -404,6 +413,14 @@ async fn main() -> anyhow::Result<()> {
         clone_job_manager,
         replication_manager,
         ws_state: Arc::new(websocket::WsState::new()),
+        image_manager: Arc::new(container::image::ImageManager::new()),
+        volume_manager: Arc::new(container::volume::VolumeManager::new()),
+        container_network_manager: Arc::new(container::cnetwork::ContainerNetworkManager::new()),
+        stack_manager: Arc::new(container::stack::StackManager::new(
+            shared_container_manager,
+            database_for_stacks,
+        )),
+        container_ws_manager: Arc::new(container::ws::ContainerWsManager::new()),
         #[cfg(feature = "kubernetes")]
         kubernetes_manager,
     });
@@ -470,6 +487,11 @@ async fn main() -> anyhow::Result<()> {
     let protected_routes = Router::new()
         .merge(vm_routes())
         .merge(container_routes())
+        .merge(image_routes())
+        .merge(volume_routes())
+        .merge(container_network_routes())
+        .merge(stack_routes())
+        .merge(container_ws_ticket_routes())
         .merge(backup_routes())
         .merge(auth_protected_routes())
         .merge(storage_routes())
@@ -659,6 +681,20 @@ fn vm_routes() -> Router<Arc<AppState>> {
             "/api/console/ws/serial/:ticket_id",
             get(serial_websocket_handler),
         )
+        // Container logs/exec/events WebSocket endpoints (ticket-authenticated,
+        // same pattern as the VNC/serial console WebSockets above).
+        .route(
+            "/api/containers/ws/logs/:ticket_id",
+            get(container_logs_websocket_handler),
+        )
+        .route(
+            "/api/containers/ws/exec/:ticket_id",
+            get(container_exec_websocket_handler),
+        )
+        .route(
+            "/api/containers/ws/events/:ticket_id",
+            get(container_events_websocket_handler),
+        )
         // Migration endpoints
         .route("/api/migrate/:vm_id", post(migrate_vm))
         .route("/api/migrate/:vm_id/status", get(get_migration_status))
@@ -678,6 +714,82 @@ fn container_routes() -> Router<Arc<AppState>> {
         .route("/api/containers/:id/status", get(get_container_status))
         .route("/api/containers/:id/exec", post(exec_container_command))
         .route("/api/containers/:id/clone", post(clone_container))
+}
+
+/// Image management routes (Docker + Podman) - see container/image.rs.
+/// Runtime is selected via `?runtime=docker|podman` query param, defaulting
+/// to docker, consistent with Portainer's per-environment image view.
+fn image_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/api/images", get(list_images))
+        .route("/api/images/pull", post(pull_image))
+        .route("/api/images/:id", get(inspect_image))
+        .route("/api/images/:id", delete(remove_image))
+        .route("/api/images/:id/tag", post(tag_image))
+}
+
+/// Volume management routes - see container/volume.rs.
+fn volume_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/api/volumes", get(list_volumes))
+        .route("/api/volumes", post(create_container_volume))
+        .route("/api/volumes/:name", get(inspect_volume))
+        .route("/api/volumes/:name", delete(remove_volume))
+}
+
+/// Container-runtime network routes (docker/podman bridge networks - not
+/// Horcrux's own SDN/CNI, see container/cnetwork.rs).
+fn container_network_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/api/container-networks", get(list_container_networks))
+        .route("/api/container-networks", post(create_container_network))
+        .route(
+            "/api/container-networks/:id",
+            get(inspect_container_network),
+        )
+        .route(
+            "/api/container-networks/:id",
+            delete(remove_container_network),
+        )
+        .route(
+            "/api/container-networks/:id/connect",
+            post(connect_container_network),
+        )
+        .route(
+            "/api/container-networks/:id/disconnect",
+            post(disconnect_container_network),
+        )
+}
+
+/// Compose/stack deployment routes - see container/stack.rs.
+fn stack_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/api/stacks", get(list_stacks))
+        .route("/api/stacks", post(deploy_stack))
+        .route("/api/stacks/:id", get(get_stack))
+        .route("/api/stacks/:id", delete(remove_stack))
+        .route("/api/stacks/:id/start", post(start_stack))
+        .route("/api/stacks/:id/stop", post(stop_stack))
+}
+
+/// Ticket-issuing routes for the container WebSocket endpoints (logs,
+/// interactive exec, events feed). The actual WebSocket upgrade endpoints
+/// are registered directly on the app router (public, ticket-authenticated
+/// - see console's `/api/console/*/ws/:ticket` for the exact same pattern).
+fn container_ws_ticket_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route(
+            "/api/containers/:id/logs-ticket",
+            post(create_container_logs_ticket),
+        )
+        .route(
+            "/api/containers/:id/exec-ticket",
+            post(create_container_exec_ticket),
+        )
+        .route(
+            "/api/containers/events-ticket",
+            post(create_container_events_ticket),
+        )
 }
 
 /// Build backup-related routes (backups, templates, cloud-init)
@@ -7535,6 +7647,521 @@ async fn serial_websocket_handler(
         State(state.console_manager.clone()),
     )
     .await
+}
+
+async fn container_logs_websocket_handler(
+    ws: axum::extract::ws::WebSocketUpgrade,
+    Path(ticket_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> axum::response::Response {
+    container::ws_handlers::handle_logs_ws(
+        ws,
+        Path(ticket_id),
+        State(state.container_ws_manager.clone()),
+    )
+    .await
+}
+
+async fn container_exec_websocket_handler(
+    ws: axum::extract::ws::WebSocketUpgrade,
+    Path(ticket_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> axum::response::Response {
+    container::ws_handlers::handle_exec_ws(
+        ws,
+        Path(ticket_id),
+        State(state.container_ws_manager.clone()),
+    )
+    .await
+}
+
+async fn container_events_websocket_handler(
+    ws: axum::extract::ws::WebSocketUpgrade,
+    Path(ticket_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> axum::response::Response {
+    container::ws_handlers::handle_events_ws(
+        ws,
+        Path(ticket_id),
+        State(state.container_ws_manager.clone()),
+    )
+    .await
+}
+
+#[derive(serde::Deserialize)]
+struct RuntimeQuery {
+    #[serde(default)]
+    runtime: Option<String>,
+}
+
+fn parse_runtime(q: &Option<String>) -> horcrux_common::ContainerRuntime {
+    match q.as_deref() {
+        Some("podman") => horcrux_common::ContainerRuntime::Podman,
+        _ => horcrux_common::ContainerRuntime::Docker,
+    }
+}
+
+async fn list_images(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,
+) -> Result<Json<Vec<container::image::ImageInfo>>, ApiError> {
+    let images = match parse_runtime(&q.runtime) {
+        horcrux_common::ContainerRuntime::Podman => state.image_manager.podman.list_images().await,
+        _ => state.image_manager.docker.list_images().await,
+    }
+    .map_err(ApiError::from)?;
+    Ok(Json(images))
+}
+
+#[derive(serde::Deserialize)]
+struct PullImageRequest {
+    name: String,
+    #[serde(default = "default_tag")]
+    tag: String,
+    #[serde(default)]
+    runtime: Option<String>,
+}
+
+fn default_tag() -> String {
+    "latest".to_string()
+}
+
+#[derive(serde::Serialize)]
+struct PullImageResponse {
+    lines: Vec<container::image::PullProgress>,
+}
+
+/// Synchronous pull (collects every progress line and returns once done).
+/// For live streaming progress, the UI can instead use a logs-ticket-style
+/// WebSocket in a future iteration; this endpoint already surfaces full
+/// per-layer progress history to the caller, which covers the common case.
+async fn pull_image(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<PullImageRequest>,
+) -> Result<Json<PullImageResponse>, ApiError> {
+    let mut lines = Vec::new();
+    match parse_runtime(&req.runtime) {
+        horcrux_common::ContainerRuntime::Podman => {
+            state
+                .image_manager
+                .podman
+                .pull_image(&req.name, &req.tag, |p| lines.push(p))
+                .await
+        }
+        _ => {
+            state
+                .image_manager
+                .docker
+                .pull_image(&req.name, &req.tag, |p| lines.push(p))
+                .await
+        }
+    }
+    .map_err(ApiError::from)?;
+    Ok(Json(PullImageResponse { lines }))
+}
+
+async fn inspect_image(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let value = match parse_runtime(&q.runtime) {
+        horcrux_common::ContainerRuntime::Podman => {
+            state.image_manager.podman.inspect_image(&id).await
+        }
+        _ => state.image_manager.docker.inspect_image(&id).await,
+    }
+    .map_err(ApiError::from)?;
+    Ok(Json(value))
+}
+
+async fn remove_image(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,
+) -> Result<StatusCode, ApiError> {
+    match parse_runtime(&q.runtime) {
+        horcrux_common::ContainerRuntime::Podman => {
+            state.image_manager.podman.remove_image(&id, true).await
+        }
+        _ => state.image_manager.docker.remove_image(&id, true).await,
+    }
+    .map_err(ApiError::from)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(serde::Deserialize)]
+struct TagImageRequest {
+    repo: String,
+    tag: String,
+    #[serde(default)]
+    runtime: Option<String>,
+}
+
+async fn tag_image(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<TagImageRequest>,
+) -> Result<StatusCode, ApiError> {
+    match parse_runtime(&req.runtime) {
+        horcrux_common::ContainerRuntime::Podman => {
+            state
+                .image_manager
+                .podman
+                .tag_image(&id, &req.repo, &req.tag)
+                .await
+        }
+        _ => {
+            state
+                .image_manager
+                .docker
+                .tag_image(&id, &req.repo, &req.tag)
+                .await
+        }
+    }
+    .map_err(ApiError::from)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_volumes(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,
+) -> Result<Json<Vec<container::volume::VolumeInfo>>, ApiError> {
+    let volumes = match parse_runtime(&q.runtime) {
+        horcrux_common::ContainerRuntime::Podman => state.volume_manager.podman.list_volumes().await,
+        _ => state.volume_manager.docker.list_volumes().await,
+    }
+    .map_err(ApiError::from)?;
+    Ok(Json(volumes))
+}
+
+#[derive(serde::Deserialize)]
+struct CreateContainerVolumeRequest {
+    name: String,
+    #[serde(default)]
+    driver: Option<String>,
+    #[serde(default)]
+    runtime: Option<String>,
+}
+
+async fn create_container_volume(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateContainerVolumeRequest>,
+) -> Result<Json<container::volume::VolumeInfo>, ApiError> {
+    let v = match parse_runtime(&req.runtime) {
+        horcrux_common::ContainerRuntime::Podman => {
+            state
+                .volume_manager
+                .podman
+                .create_volume(&req.name, req.driver.as_deref())
+                .await
+        }
+        _ => {
+            state
+                .volume_manager
+                .docker
+                .create_volume(&req.name, req.driver.as_deref())
+                .await
+        }
+    }
+    .map_err(ApiError::from)?;
+    Ok(Json(v))
+}
+
+async fn inspect_volume(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let value = match parse_runtime(&q.runtime) {
+        horcrux_common::ContainerRuntime::Podman => {
+            state.volume_manager.podman.inspect_volume(&name).await
+        }
+        _ => state.volume_manager.docker.inspect_volume(&name).await,
+    }
+    .map_err(ApiError::from)?;
+    Ok(Json(value))
+}
+
+async fn remove_volume(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,
+) -> Result<StatusCode, ApiError> {
+    match parse_runtime(&q.runtime) {
+        horcrux_common::ContainerRuntime::Podman => {
+            state.volume_manager.podman.remove_volume(&name, true).await
+        }
+        _ => state.volume_manager.docker.remove_volume(&name, true).await,
+    }
+    .map_err(ApiError::from)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_container_networks(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,
+) -> Result<Json<Vec<container::cnetwork::NetworkInfo>>, ApiError> {
+    let nets = match parse_runtime(&q.runtime) {
+        horcrux_common::ContainerRuntime::Podman => {
+            state.container_network_manager.podman.list_networks().await
+        }
+        _ => state.container_network_manager.docker.list_networks().await,
+    }
+    .map_err(ApiError::from)?;
+    Ok(Json(nets))
+}
+
+#[derive(serde::Deserialize)]
+struct CreateContainerNetworkRequest {
+    name: String,
+    #[serde(default)]
+    driver: Option<String>,
+    #[serde(default)]
+    runtime: Option<String>,
+}
+
+async fn create_container_network(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateContainerNetworkRequest>,
+) -> Result<Json<String>, ApiError> {
+    let id = match parse_runtime(&req.runtime) {
+        horcrux_common::ContainerRuntime::Podman => {
+            state
+                .container_network_manager
+                .podman
+                .create_network(&req.name, req.driver.as_deref())
+                .await
+        }
+        _ => {
+            state
+                .container_network_manager
+                .docker
+                .create_network(&req.name, req.driver.as_deref())
+                .await
+        }
+    }
+    .map_err(ApiError::from)?;
+    Ok(Json(id))
+}
+
+async fn inspect_container_network(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let value = match parse_runtime(&q.runtime) {
+        horcrux_common::ContainerRuntime::Podman => {
+            state.container_network_manager.podman.inspect_network(&id).await
+        }
+        _ => state.container_network_manager.docker.inspect_network(&id).await,
+    }
+    .map_err(ApiError::from)?;
+    Ok(Json(value))
+}
+
+async fn remove_container_network(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,
+) -> Result<StatusCode, ApiError> {
+    match parse_runtime(&q.runtime) {
+        horcrux_common::ContainerRuntime::Podman => {
+            state.container_network_manager.podman.remove_network(&id).await
+        }
+        _ => state.container_network_manager.docker.remove_network(&id).await,
+    }
+    .map_err(ApiError::from)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(serde::Deserialize)]
+struct NetworkContainerRequest {
+    container_id: String,
+    #[serde(default)]
+    runtime: Option<String>,
+    #[serde(default)]
+    force: bool,
+}
+
+async fn connect_container_network(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<NetworkContainerRequest>,
+) -> Result<StatusCode, ApiError> {
+    match parse_runtime(&req.runtime) {
+        horcrux_common::ContainerRuntime::Podman => {
+            state
+                .container_network_manager
+                .podman
+                .connect_container(&id, &req.container_id)
+                .await
+        }
+        _ => {
+            state
+                .container_network_manager
+                .docker
+                .connect_container(&id, &req.container_id)
+                .await
+        }
+    }
+    .map_err(ApiError::from)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn disconnect_container_network(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<NetworkContainerRequest>,
+) -> Result<StatusCode, ApiError> {
+    match parse_runtime(&req.runtime) {
+        horcrux_common::ContainerRuntime::Podman => {
+            state
+                .container_network_manager
+                .podman
+                .disconnect_container(&id, &req.container_id, req.force)
+                .await
+        }
+        _ => {
+            state
+                .container_network_manager
+                .docker
+                .disconnect_container(&id, &req.container_id, req.force)
+                .await
+        }
+    }
+    .map_err(ApiError::from)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_stacks(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<container::stack::StackSummary>>, ApiError> {
+    Ok(Json(state.stack_manager.list_stacks().await?))
+}
+
+#[derive(serde::Deserialize)]
+struct DeployStackRequest {
+    name: String,
+    compose_yaml: String,
+    #[serde(default)]
+    runtime: Option<String>,
+}
+
+async fn deploy_stack(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<DeployStackRequest>,
+) -> Result<Json<container::stack::StackSummary>, ApiError> {
+    let runtime = parse_runtime(&req.runtime);
+    let summary = state
+        .stack_manager
+        .deploy_stack(&req.name, &req.compose_yaml, runtime)
+        .await?;
+    Ok(Json(summary))
+}
+
+async fn get_stack(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<container::stack::StackSummary>, ApiError> {
+    Ok(Json(state.stack_manager.get_stack(&id).await?))
+}
+
+async fn remove_stack(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.stack_manager.remove_stack(&id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn start_stack(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.stack_manager.start_stack(&id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn stop_stack(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.stack_manager.stop_stack(&id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(serde::Serialize)]
+struct WsTicketResponse {
+    ticket: String,
+    ws_path: String,
+}
+
+async fn create_container_logs_ticket(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,
+) -> Result<Json<WsTicketResponse>, ApiError> {
+    let ticket = state
+        .container_ws_manager
+        .create_ticket(
+            &id,
+            parse_runtime(&q.runtime),
+            container::ws::ContainerWsKind::Logs,
+            Vec::new(),
+        )
+        .await;
+    Ok(Json(WsTicketResponse {
+        ws_path: format!("/api/containers/ws/logs/{}", ticket.ticket_id),
+        ticket: ticket.ticket_id,
+    }))
+}
+
+#[derive(serde::Deserialize)]
+struct ExecTicketRequest {
+    #[serde(default)]
+    command: Vec<String>,
+    #[serde(default)]
+    runtime: Option<String>,
+}
+
+async fn create_container_exec_ticket(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<ExecTicketRequest>,
+) -> Result<Json<WsTicketResponse>, ApiError> {
+    let ticket = state
+        .container_ws_manager
+        .create_ticket(
+            &id,
+            parse_runtime(&req.runtime),
+            container::ws::ContainerWsKind::Exec,
+            req.command,
+        )
+        .await;
+    Ok(Json(WsTicketResponse {
+        ws_path: format!("/api/containers/ws/exec/{}", ticket.ticket_id),
+        ticket: ticket.ticket_id,
+    }))
+}
+
+async fn create_container_events_ticket(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,
+) -> Result<Json<WsTicketResponse>, ApiError> {
+    let ticket = state
+        .container_ws_manager
+        .create_ticket(
+            "*",
+            parse_runtime(&q.runtime),
+            container::ws::ContainerWsKind::Events,
+            Vec::new(),
+        )
+        .await;
+    Ok(Json(WsTicketResponse {
+        ws_path: format!("/api/containers/ws/events/{}", ticket.ticket_id),
+        ticket: ticket.ticket_id,
+    }))
 }
 
 // Cluster API handlers

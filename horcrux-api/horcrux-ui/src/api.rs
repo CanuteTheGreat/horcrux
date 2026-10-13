@@ -5218,3 +5218,216 @@ pub async fn get_available_backups() -> Result<Vec<AvailableBackup>, ApiError> {
 pub async fn get_available_backups_for_vm(vm_id: &str) -> Result<Vec<AvailableBackup>, ApiError> {
     fetch_json(&format!("/backups/available?vm_id={}", vm_id)).await
 }
+
+// ---------------------------------------------------------------------
+// Container images / volumes / networks / stacks / WebSocket tickets
+// (Portainer-parity container management - see PORTAINER_COMPARISON.md)
+// ---------------------------------------------------------------------
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ImageInfo {
+    pub id: String,
+    pub repo_tags: Vec<String>,
+    pub size: i64,
+    pub created: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VolumeInfo {
+    pub name: String,
+    pub driver: String,
+    pub mountpoint: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ContainerNetworkInfo {
+    pub id: String,
+    pub name: String,
+    pub driver: String,
+    pub scope: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StackServiceSummary {
+    pub service_name: String,
+    pub container_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StackSummary {
+    pub id: String,
+    pub name: String,
+    pub runtime: String,
+    pub services: Vec<StackServiceSummary>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    #[serde(default)]
+    pub unsupported_features: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WsTicketResponse {
+    pub ticket: String,
+    pub ws_path: String,
+}
+
+pub async fn get_images(runtime: &str) -> Result<Vec<ImageInfo>, ApiError> {
+    fetch_json(&format!("/images?runtime={}", runtime)).await
+}
+
+#[derive(Serialize)]
+struct PullImageBody<'a> {
+    name: &'a str,
+    tag: &'a str,
+    runtime: &'a str,
+}
+
+#[derive(Deserialize)]
+pub struct PullImageResponse {
+    pub lines: Vec<serde_json::Value>,
+}
+
+pub async fn pull_image(name: &str, tag: &str, runtime: &str) -> Result<(), ApiError> {
+    let _: PullImageResponse = post_json(
+        "/images/pull",
+        &PullImageBody { name, tag, runtime },
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn remove_image(id: &str, runtime: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/images/{}?runtime={}", id, runtime)).await
+}
+
+pub async fn get_volumes(runtime: &str) -> Result<Vec<VolumeInfo>, ApiError> {
+    fetch_json(&format!("/volumes?runtime={}", runtime)).await
+}
+
+#[derive(Serialize)]
+struct CreateVolumeBody<'a> {
+    name: &'a str,
+    runtime: &'a str,
+}
+
+pub async fn create_volume(name: &str, runtime: &str) -> Result<VolumeInfo, ApiError> {
+    post_json("/volumes", &CreateVolumeBody { name, runtime }).await
+}
+
+pub async fn remove_volume(name: &str, runtime: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/volumes/{}?runtime={}", name, runtime)).await
+}
+
+pub async fn get_container_networks(runtime: &str) -> Result<Vec<ContainerNetworkInfo>, ApiError> {
+    fetch_json(&format!("/container-networks?runtime={}", runtime)).await
+}
+
+#[derive(Serialize)]
+struct CreateNetworkBody<'a> {
+    name: &'a str,
+    runtime: &'a str,
+}
+
+pub async fn create_container_network(name: &str, runtime: &str) -> Result<String, ApiError> {
+    post_json(
+        "/container-networks",
+        &CreateNetworkBody { name, runtime },
+    )
+    .await
+}
+
+pub async fn remove_container_network(id: &str, runtime: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/container-networks/{}?runtime={}", id, runtime)).await
+}
+
+pub async fn get_stacks() -> Result<Vec<StackSummary>, ApiError> {
+    fetch_json("/stacks").await
+}
+
+#[derive(Serialize)]
+struct DeployStackBody<'a> {
+    name: &'a str,
+    compose_yaml: &'a str,
+    runtime: &'a str,
+}
+
+pub async fn deploy_stack(
+    name: &str,
+    compose_yaml: &str,
+    runtime: &str,
+) -> Result<StackSummary, ApiError> {
+    post_json(
+        "/stacks",
+        &DeployStackBody {
+            name,
+            compose_yaml,
+            runtime,
+        },
+    )
+    .await
+}
+
+pub async fn start_stack(id: &str) -> Result<(), ApiError> {
+    post_empty(&format!("/stacks/{}/start", id)).await
+}
+
+pub async fn stop_stack(id: &str) -> Result<(), ApiError> {
+    post_empty(&format!("/stacks/{}/stop", id)).await
+}
+
+pub async fn remove_stack(id: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/stacks/{}", id)).await
+}
+
+pub async fn get_container_logs_ticket(
+    container_id: &str,
+    runtime: &str,
+) -> Result<WsTicketResponse, ApiError> {
+    post_json(
+        &format!("/containers/{}/logs-ticket?runtime={}", container_id, runtime),
+        &(),
+    )
+    .await
+}
+
+#[derive(Serialize)]
+struct ExecTicketBody<'a> {
+    command: Vec<&'a str>,
+    runtime: &'a str,
+}
+
+pub async fn get_container_exec_ticket(
+    container_id: &str,
+    command: &str,
+    runtime: &str,
+) -> Result<WsTicketResponse, ApiError> {
+    let cmd: Vec<&str> = if command.trim().is_empty() {
+        vec!["/bin/sh"]
+    } else {
+        command.split_whitespace().collect()
+    };
+    post_json(
+        &format!("/containers/{}/exec-ticket", container_id),
+        &ExecTicketBody { command: cmd, runtime },
+    )
+    .await
+}
+
+pub async fn get_container_events_ticket(runtime: &str) -> Result<WsTicketResponse, ApiError> {
+    post_json(&format!("/containers/events-ticket?runtime={}", runtime), &()).await
+}
+
+/// Build an absolute `ws://`/`wss://` URL for a relative API path such as
+/// the `ws_path` returned by the ticket endpoints above - matching how the
+/// VM console page derives its WebSocket URL from the current page origin.
+pub fn resolve_ws_url(ws_path: &str) -> String {
+    let window = web_sys::window().expect("no window");
+    let location = window.location();
+    let protocol = if location.protocol().unwrap_or_default() == "https:" {
+        "wss:"
+    } else {
+        "ws:"
+    };
+    let host = location.host().unwrap_or_default();
+    format!("{protocol}//{host}{ws_path}")
+}
