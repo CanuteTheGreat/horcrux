@@ -5233,7 +5233,7 @@ pub struct ImageInfo {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct VolumeInfo {
+pub struct ContainerVolumeInfo {
     pub name: String,
     pub driver: String,
     pub mountpoint: String,
@@ -5300,7 +5300,7 @@ pub async fn remove_image(id: &str, runtime: &str) -> Result<(), ApiError> {
     delete_json(&format!("/images/{}?runtime={}", id, runtime)).await
 }
 
-pub async fn get_volumes(runtime: &str) -> Result<Vec<VolumeInfo>, ApiError> {
+pub async fn get_container_volumes(runtime: &str) -> Result<Vec<ContainerVolumeInfo>, ApiError> {
     fetch_json(&format!("/volumes?runtime={}", runtime)).await
 }
 
@@ -5310,7 +5310,7 @@ struct CreateVolumeBody<'a> {
     runtime: &'a str,
 }
 
-pub async fn create_volume(name: &str, runtime: &str) -> Result<VolumeInfo, ApiError> {
+pub async fn create_volume(name: &str, runtime: &str) -> Result<ContainerVolumeInfo, ApiError> {
     post_json("/volumes", &CreateVolumeBody { name, runtime }).await
 }
 

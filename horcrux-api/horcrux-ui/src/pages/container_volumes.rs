@@ -5,7 +5,7 @@ use leptos::*;
 #[component]
 pub fn VolumesPage() -> impl IntoView {
     let (runtime, set_runtime) = create_signal("docker".to_string());
-    let (volumes, set_volumes) = create_signal(Vec::<api::VolumeInfo>::new());
+    let (volumes, set_volumes) = create_signal(Vec::<api::ContainerVolumeInfo>::new());
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
     let (new_name, set_new_name) = create_signal(String::new());
@@ -14,7 +14,7 @@ pub fn VolumesPage() -> impl IntoView {
         let rt = runtime.get();
         spawn_local(async move {
             set_loading.set(true);
-            match api::get_volumes(&rt).await {
+            match api::get_container_volumes(&rt).await {
                 Ok(list) => {
                     set_volumes.set(list);
                     set_error.set(None);

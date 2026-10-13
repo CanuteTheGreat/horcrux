@@ -91,7 +91,7 @@ fn ContainerConsole(mode: ContainerWsMode) -> impl IntoView {
         });
     };
 
-    let send_input = move |_| {
+    let do_send = move || {
         if let Some(ws) = ws_handle.get() {
             let mut line = input_line.get();
             line.push('\n');
@@ -157,11 +157,11 @@ fn ContainerConsole(mode: ContainerWsMode) -> impl IntoView {
                                 on:input=move |ev| set_input_line.set(event_target_value(&ev))
                                 on:keydown=move |ev| {
                                     if ev.key() == "Enter" {
-                                        send_input(());
+                                        do_send();
                                     }
                                 }
                             />
-                            <button class="btn btn-sm btn-primary" on:click=send_input>"Send"</button>
+                            <button class="btn btn-sm btn-primary" on:click=move |_| do_send()>"Send"</button>
                         </div>
                     }.into_view()
                 } else {
