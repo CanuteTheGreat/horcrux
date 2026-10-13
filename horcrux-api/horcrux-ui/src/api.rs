@@ -26,9 +26,7 @@ const API_BASE: &str = "/api";
 /// network tab as a real HTTP response - it surfaced as a bare
 /// "TypeError: Failed to fetch" (2026-10-12 QA finding on the /vms page).
 fn resolve_api_url(path: &str) -> String {
-    if path.starts_with("http") {
-        path.to_string()
-    } else if path.starts_with("/api") {
+    if path.starts_with("http") || path.starts_with("/api") {
         path.to_string()
     } else {
         format!("/api{}", path)
