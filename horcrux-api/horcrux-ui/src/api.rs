@@ -179,6 +179,30 @@ pub async fn post_empty(path: &str) -> Result<(), ApiError> {
     }
 }
 
+/// POST with a JSON body for endpoints that reply with a bare status code
+/// (no JSON body) — `post_json` would wrongly report these as failures
+/// because it always tries to parse a JSON response.
+pub async fn post_json_no_response<B: Serialize>(path: &str, body: &B) -> Result<(), ApiError> {
+    let url = resolve_api_url(path);
+
+    let response = with_auth(reqwasm::http::Request::post(&url))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(body).unwrap())
+        .send()
+        .await
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
+
+    if response.ok() {
+        Ok(())
+    } else {
+        Err(ApiError {
+            message: format!("HTTP {}", response.status()),
+        })
+    }
+}
+
 /// Generic text fetch helper
 pub async fn fetch_text(path: &str) -> Result<String, ApiError> {
     let url = resolve_api_url(path);

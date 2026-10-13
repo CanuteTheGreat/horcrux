@@ -201,7 +201,7 @@ pub fn PromQLBuilderPage() -> impl IntoView {
         },
     ];
 
-    let promql_operators = vec![
+    let promql_operators = [
         "+", "-", "*", "/", "%", "^", "==", "!=", ">", "<", ">=", "<=", "and", "or", "unless",
     ];
 

@@ -1,6 +1,6 @@
 //! Storage Pool Management Page
 
-use crate::api::{delete_json, fetch_json};
+use crate::api::{delete_json, fetch_json, post_json};
 use leptos::*;
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +17,13 @@ pub struct StoragePool {
     pub status: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct AddStoragePoolReq {
+    name: String,
+    storage_type: String,
+    path: String,
+}
+
 /// Storage Management Page Component
 #[component]
 pub fn StorageManagement() -> impl IntoView {
@@ -25,11 +32,18 @@ pub fn StorageManagement() -> impl IntoView {
     let (error, set_error) = create_signal(None::<String>);
     let (show_create_modal, set_show_create_modal) = create_signal(false);
 
+    let name_ref: NodeRef<html::Input> = create_node_ref();
+    let type_ref: NodeRef<html::Select> = create_node_ref();
+    let path_ref: NodeRef<html::Input> = create_node_ref();
+
     // Fetch storage pools on mount
     create_effect(move |_| {
         spawn_local(async move {
             set_loading.set(true);
-            match fetch_json::<Vec<StoragePool>>("/api/storage").await {
+            // NOTE: the real backend route is /api/storage/pools (see
+            // horcrux-api/src/main.rs), not /api/storage — this page was
+            // silently 404ing on every load until fixed here.
+            match fetch_json::<Vec<StoragePool>>("/api/storage/pools").await {
                 Ok(data) => {
                     set_pools.set(data);
                     set_loading.set(false);
@@ -65,15 +79,55 @@ pub fn StorageManagement() -> impl IntoView {
     // Delete storage pool
     let delete_pool = move |pool_id: String| {
         spawn_local(async move {
-            let url = format!("/api/storage/{}", pool_id);
+            let url = format!("/api/storage/pools/{}", pool_id);
             match delete_json(&url).await {
                 Ok(()) => {
-                    if let Ok(data) = fetch_json::<Vec<StoragePool>>("/api/storage").await {
+                    if let Ok(data) = fetch_json::<Vec<StoragePool>>("/api/storage/pools").await {
                         set_pools.set(data);
                     }
                 }
                 Err(e) => {
                     set_error.set(Some(format!("Delete failed: {}", e.message)));
+                }
+            }
+        });
+    };
+
+    // Create storage pool (previously a dead button — the modal opened but
+    // its "Create" submit never called the API at all, so a Horcrux admin
+    // could never actually create a storage pool through the UI)
+    let create_pool = move |_| {
+        let name = name_ref.get().map(|el| el.value()).unwrap_or_default();
+        if name.is_empty() {
+            set_error.set(Some("Pool ID is required".to_string()));
+            return;
+        }
+        let storage_type = type_ref
+            .get()
+            .map(|el| el.value())
+            .unwrap_or_else(|| "Directory".to_string());
+        let path = path_ref.get().map(|el| el.value()).unwrap_or_default();
+        if path.is_empty() {
+            set_error.set(Some("Path / Pool name is required".to_string()));
+            return;
+        }
+
+        let req = AddStoragePoolReq {
+            name,
+            storage_type,
+            path,
+        };
+
+        spawn_local(async move {
+            match post_json::<StoragePool, AddStoragePoolReq>("/api/storage/pools", &req).await {
+                Ok(_) => {
+                    set_show_create_modal.set(false);
+                    if let Ok(data) = fetch_json::<Vec<StoragePool>>("/api/storage/pools").await {
+                        set_pools.set(data);
+                    }
+                }
+                Err(e) => {
+                    set_error.set(Some(format!("Create pool failed: {}", e.message)));
                 }
             }
         });
@@ -241,15 +295,11 @@ pub fn StorageManagement() -> impl IntoView {
                         <div class="modal-body">
                             <div class="form-group">
                                 <label>"Pool ID"</label>
-                                <input type="text" class="form-control" placeholder="local-zfs"/>
-                            </div>
-                            <div class="form-group">
-                                <label>"Display Name"</label>
-                                <input type="text" class="form-control" placeholder="Local ZFS Storage"/>
+                                <input node_ref=name_ref type="text" class="form-control" placeholder="local-zfs"/>
                             </div>
                             <div class="form-group">
                                 <label>"Type"</label>
-                                <select class="form-control">
+                                <select node_ref=type_ref class="form-control">
                                     <option value="Directory">"Directory"</option>
                                     <option value="Zfs">"ZFS"</option>
                                     <option value="Lvm">"LVM"</option>
@@ -260,14 +310,14 @@ pub fn StorageManagement() -> impl IntoView {
                             </div>
                             <div class="form-group">
                                 <label>"Path / Pool Name"</label>
-                                <input type="text" class="form-control" placeholder="/var/lib/horcrux/images"/>
+                                <input node_ref=path_ref type="text" class="form-control" placeholder="/var/lib/horcrux/images"/>
                             </div>
                         </div>
                         <div class="modal-footer">
                             <button class="btn btn-secondary" on:click=move |_| set_show_create_modal.set(false)>
                                 "Cancel"
                             </button>
-                            <button class="btn btn-primary">
+                            <button class="btn btn-primary" on:click=create_pool>
                                 "Create"
                             </button>
                         </div>
