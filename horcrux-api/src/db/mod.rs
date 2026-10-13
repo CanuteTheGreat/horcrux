@@ -751,3 +751,132 @@ pub mod audit {
         })
     }
 }
+
+/// Persistence for Docker/Podman Compose-style "stacks" - see migration
+/// 020 and `container::stack` for the deploy-time logic that calls these.
+pub mod stacks {
+    use super::*;
+    use sqlx::Row;
+
+    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+    pub struct StackRecord {
+        pub id: String,
+        pub name: String,
+        pub runtime: String,
+        pub compose_yaml: String,
+        pub created_at: i64,
+        pub updated_at: i64,
+    }
+
+    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+    pub struct StackServiceRecord {
+        pub id: String,
+        pub stack_id: String,
+        pub service_name: String,
+        pub container_id: String,
+    }
+
+    pub async fn create_stack(pool: &SqlitePool, stack: &StackRecord) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO container_stacks (id, name, runtime, compose_yaml, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&stack.id)
+        .bind(&stack.name)
+        .bind(&stack.runtime)
+        .bind(&stack.compose_yaml)
+        .bind(stack.created_at)
+        .bind(stack.updated_at)
+        .execute(pool)
+        .await
+        .map_err(|e| horcrux_common::Error::System(format!("Failed to create stack: {}", e)))?;
+        Ok(())
+    }
+
+    pub async fn add_stack_service(
+        pool: &SqlitePool,
+        svc: &StackServiceRecord,
+        created_at: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO container_stack_services (id, stack_id, service_name, container_id, created_at)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&svc.id)
+        .bind(&svc.stack_id)
+        .bind(&svc.service_name)
+        .bind(&svc.container_id)
+        .bind(created_at)
+        .execute(pool)
+        .await
+        .map_err(|e| horcrux_common::Error::System(format!("Failed to add stack service: {}", e)))?;
+        Ok(())
+    }
+
+    pub async fn list_stacks(pool: &SqlitePool) -> Result<Vec<StackRecord>> {
+        let rows = sqlx::query("SELECT * FROM container_stacks ORDER BY created_at DESC")
+            .fetch_all(pool)
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to list stacks: {}", e)))?;
+        Ok(rows
+            .into_iter()
+            .map(|row| StackRecord {
+                id: row.get("id"),
+                name: row.get("name"),
+                runtime: row.get("runtime"),
+                compose_yaml: row.get("compose_yaml"),
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+            })
+            .collect())
+    }
+
+    pub async fn get_stack(pool: &SqlitePool, id: &str) -> Result<Option<StackRecord>> {
+        let row = sqlx::query("SELECT * FROM container_stacks WHERE id = ? OR name = ?")
+            .bind(id)
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to get stack: {}", e)))?;
+        Ok(row.map(|row| StackRecord {
+            id: row.get("id"),
+            name: row.get("name"),
+            runtime: row.get("runtime"),
+            compose_yaml: row.get("compose_yaml"),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+        }))
+    }
+
+    pub async fn list_stack_services(
+        pool: &SqlitePool,
+        stack_id: &str,
+    ) -> Result<Vec<StackServiceRecord>> {
+        let rows = sqlx::query("SELECT * FROM container_stack_services WHERE stack_id = ?")
+            .bind(stack_id)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to list stack services: {}", e))
+            })?;
+        Ok(rows
+            .into_iter()
+            .map(|row| StackServiceRecord {
+                id: row.get("id"),
+                stack_id: row.get("stack_id"),
+                service_name: row.get("service_name"),
+                container_id: row.get("container_id"),
+            })
+            .collect())
+    }
+
+    pub async fn delete_stack(pool: &SqlitePool, id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM container_stacks WHERE id = ? OR name = ?")
+            .bind(id)
+            .bind(id)
+            .execute(pool)
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to delete stack: {}", e)))?;
+        Ok(())
+    }
+}
