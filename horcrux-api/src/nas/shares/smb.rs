@@ -2,7 +2,7 @@
 //!
 //! Manages Samba configuration and shares for Windows/cross-platform file sharing.
 
-use crate::nas::shares::{NasShare, SmbShareConfig};
+use crate::nas::shares::NasShare;
 use crate::nas::CaseSensitivity;
 use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -1310,6 +1310,7 @@ pub struct SmbUser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::nas::shares::SmbShareConfig;
 
     #[test]
     fn test_default_global_config() {
