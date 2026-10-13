@@ -374,3 +374,27 @@ impl ContainerNetworkManager {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn network_info_round_trips_through_json() {
+        let n = NetworkInfo {
+            id: "abc123".to_string(),
+            name: "mynet".to_string(),
+            driver: "bridge".to_string(),
+            scope: "local".to_string(),
+        };
+        let json = serde_json::to_string(&n).unwrap();
+        let back: NetworkInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.name, n.name);
+        assert_eq!(back.driver, n.driver);
+    }
+
+    #[test]
+    fn container_network_manager_constructs_both_backends() {
+        let _ = ContainerNetworkManager::new();
+    }
+}

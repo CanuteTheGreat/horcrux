@@ -368,6 +368,94 @@ impl StackManager {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SIMPLE_COMPOSE: &str = r#"
+services:
+  web:
+    image: nginx:latest
+    ports:
+      - "8080:80"
+    depends_on:
+      - db
+  db:
+    image: postgres:16
+    environment:
+      - POSTGRES_PASSWORD=secret
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+"#;
+
+    const UNSUPPORTED_COMPOSE: &str = r#"
+services:
+  app:
+    build: .
+    deploy:
+      replicas: 3
+"#;
+
+    #[test]
+    fn validates_simple_compose_with_no_unsupported_features() {
+        let (compose, unsupported) = StackManager::validate_compose(SIMPLE_COMPOSE).unwrap();
+        assert_eq!(compose.services.len(), 2);
+        assert!(unsupported.is_empty());
+    }
+
+    #[test]
+    fn flags_build_and_deploy_as_unsupported_without_failing() {
+        let (compose, unsupported) = StackManager::validate_compose(UNSUPPORTED_COMPOSE).unwrap();
+        assert_eq!(compose.services.len(), 1);
+        assert!(unsupported.iter().any(|u| u.contains("build")));
+        assert!(unsupported.iter().any(|u| u.contains("deploy")));
+    }
+
+    #[test]
+    fn rejects_empty_compose_file() {
+        let result = StackManager::validate_compose("services: {}\n");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_service_without_image_or_build() {
+        let bad = "services:\n  web:\n    ports:\n      - \"80:80\"\n";
+        let result = StackManager::validate_compose(bad);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn deploy_order_respects_depends_on() {
+        let (compose, _) = StackManager::validate_compose(SIMPLE_COMPOSE).unwrap();
+        let order = StackManager::deploy_order(&compose);
+        let web_pos = order.iter().position(|s| s == "web").unwrap();
+        let db_pos = order.iter().position(|s| s == "db").unwrap();
+        assert!(db_pos < web_pos, "db must start before web: {order:?}");
+    }
+
+    #[test]
+    fn service_to_container_config_maps_image_and_resources() {
+        let (compose, _) = StackManager::validate_compose(SIMPLE_COMPOSE).unwrap();
+        let svc = compose.services.get("db").unwrap();
+        let config = StackManager::service_to_container_config(
+            "mystack",
+            "db",
+            svc,
+            ContainerRuntime::Docker,
+        );
+        assert_eq!(config.rootfs, "postgres:16");
+        assert_eq!(config.name, "mystack_db");
+        assert_eq!(config.status, ContainerStatus::Stopped);
+    }
+
+    #[test]
+    fn parses_memory_limits() {
+        assert_eq!(parse_mem_limit_mb("512m"), Some(512));
+        assert_eq!(parse_mem_limit_mb("1g"), Some(1024));
+        assert_eq!(parse_mem_limit_mb("2G"), Some(2048));
+    }
+}
+
 fn parse_mem_limit_mb(s: &str) -> Option<u64> {
     let s = s.trim().to_lowercase();
     if let Some(num) = s.strip_suffix("g") {

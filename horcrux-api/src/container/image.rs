@@ -359,8 +359,32 @@ impl PodmanImageManager {
     }
 }
 
-/// Umbrella manager mirroring `ContainerManager`'s runtime dispatch so the
-/// API layer has a single entry point regardless of backend.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_info_round_trips_through_json() {
+        let info = ImageInfo {
+            id: "sha256:abc".to_string(),
+            repo_tags: vec!["nginx:latest".to_string()],
+            size: 12345,
+            created: 1700000000,
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let back: ImageInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.id, info.id);
+        assert_eq!(back.repo_tags, info.repo_tags);
+    }
+
+    #[test]
+    fn image_manager_constructs_both_backends() {
+        // Exercises the constructor path (may or may not find a live Docker
+        // socket in CI, but must never panic either way).
+        let _ = ImageManager::new();
+    }
+}
+
 pub struct ImageManager {
     pub docker: DockerImageManager,
     pub podman: PodmanImageManager,

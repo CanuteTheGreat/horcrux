@@ -276,3 +276,26 @@ impl VolumeManager {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn volume_info_round_trips_through_json() {
+        let v = VolumeInfo {
+            name: "myvol".to_string(),
+            driver: "local".to_string(),
+            mountpoint: "/var/lib/docker/volumes/myvol/_data".to_string(),
+        };
+        let json = serde_json::to_string(&v).unwrap();
+        let back: VolumeInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.name, v.name);
+        assert_eq!(back.driver, v.driver);
+    }
+
+    #[test]
+    fn volume_manager_constructs_both_backends() {
+        let _ = VolumeManager::new();
+    }
+}

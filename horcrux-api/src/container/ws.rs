@@ -104,3 +104,50 @@ impl ContainerWsManager {
             .retain(|_, t| t.expires_at >= now);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn ticket_round_trip_verifies_kind_and_container() {
+        let mgr = ContainerWsManager::new();
+        let ticket = mgr
+            .create_ticket(
+                "my-container",
+                ContainerRuntime::Docker,
+                ContainerWsKind::Logs,
+                Vec::new(),
+            )
+            .await;
+
+        let verified = mgr.verify_ticket(&ticket.ticket_id).await.unwrap();
+        assert_eq!(verified.container_id, "my-container");
+        assert_eq!(verified.kind, ContainerWsKind::Logs);
+    }
+
+    #[tokio::test]
+    async fn unknown_ticket_is_rejected() {
+        let mgr = ContainerWsManager::new();
+        assert!(mgr.verify_ticket("does-not-exist").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn expired_ticket_is_rejected() {
+        let mgr = ContainerWsManager::new();
+        let mut ticket = mgr
+            .create_ticket(
+                "c1",
+                ContainerRuntime::Podman,
+                ContainerWsKind::Exec,
+                vec!["/bin/sh".to_string()],
+            )
+            .await;
+        ticket.expires_at = chrono::Utc::now().timestamp() - 1;
+        mgr.active_tickets
+            .write()
+            .await
+            .insert(ticket.ticket_id.clone(), ticket.clone());
+        assert!(mgr.verify_ticket(&ticket.ticket_id).await.is_err());
+    }
+}
