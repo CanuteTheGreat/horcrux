@@ -12,13 +12,14 @@ mod websocket;
 
 use pages::{
     AlertCenterPage, Alerts, ApiKeysPage, BackupDashboard, BackupJobsPage, CloneList,
-    ClusterDashboard, ClusterManagementPage, ConfigMapsPage, ContainerList, Dashboard,
-    DashboardsPage, DeploymentsPage, GpuManagement, HaDashboard, HaGroupsPage, HelmChartsPage,
-    HelmReleasesPage, HelmRepositoriesPage, IngressesPage, KubernetesManagement, Login,
+    ClusterDashboard, ClusterManagementPage, ConfigMapsPage, ContainerEventsPage, ContainerExecPage,
+    ContainerList, ContainerLogsPage, ContainerNetworksPage, Dashboard, DashboardsPage,
+    DeploymentsPage, GpuManagement, HaDashboard, HaGroupsPage, HelmChartsPage, HelmReleasesPage,
+    HelmRepositoriesPage, ImagesPage, IngressesPage, KubernetesManagement, Login,
     MetricsExplorerPage, MigrationCenterPage, Monitoring, NetworkManagement, NotificationsPage,
     ObservabilityPage, PodsPage, ReplicationList, RetentionPoliciesPage, RolesPage, SecretsPage,
-    ServicesPage, SessionsPage, SnapshotList, SnapshotManagerPage, StorageManagement,
-    TemplateManagerPage, UsersPage, VmCreate, VmList,
+    ServicesPage, SessionsPage, SnapshotList, SnapshotManagerPage, StacksPage, StorageManagement,
+    TemplateManagerPage, UsersPage, VmCreate, VmList, VolumesPage,
 };
 
 #[component]
@@ -43,6 +44,11 @@ pub fn App() -> impl IntoView {
                         <div class="dropdown-content">
                             <A href="/vms" class="dropdown-item">"Virtual Machines"</A>
                             <A href="/containers" class="dropdown-item">"Containers"</A>
+                            <A href="/containers/images" class="dropdown-item">"Images"</A>
+                            <A href="/containers/volumes" class="dropdown-item">"Volumes"</A>
+                            <A href="/containers/networks" class="dropdown-item">"Container Networks"</A>
+                            <A href="/containers/stacks" class="dropdown-item">"Stacks (Compose)"</A>
+                            <A href="/containers/events" class="dropdown-item">"Container Events"</A>
                             <A href="/kubernetes" class="dropdown-item">"Kubernetes"</A>
                         </div>
                     </div>
@@ -93,6 +99,13 @@ pub fn App() -> impl IntoView {
                     <Route path="/vms" view=VmList/>
                     <Route path="/vms/create" view=VmCreate/>
                     <Route path="/containers" view=ContainerList/>
+                    <Route path="/containers/images" view=ImagesPage/>
+                    <Route path="/containers/volumes" view=VolumesPage/>
+                    <Route path="/containers/networks" view=ContainerNetworksPage/>
+                    <Route path="/containers/stacks" view=StacksPage/>
+                    <Route path="/containers/events" view=ContainerEventsPage/>
+                    <Route path="/containers/:id/logs" view=ContainerLogsPage/>
+                    <Route path="/containers/:id/exec" view=ContainerExecPage/>
                     <Route path="/kubernetes" view=KubernetesManagement/>
                     <Route path="/kubernetes/:cluster_id/dashboard" view=ClusterDashboard/>
                     <Route path="/kubernetes/:cluster_id/pods" view=PodsPage/>

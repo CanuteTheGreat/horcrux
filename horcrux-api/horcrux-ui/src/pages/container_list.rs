@@ -126,6 +126,8 @@ pub fn ContainerList() -> impl IntoView {
                                                         class="btn btn-sm btn-warning"
                                                         on:click=move |_| stop_container(container_id_stop.clone())
                                                     >"Stop"</button>
+                                                    <a class="btn btn-sm" href=format!("/containers/{}/logs", container.id)>"Logs"</a>
+                                                    <a class="btn btn-sm" href=format!("/containers/{}/exec", container.id)>"Terminal"</a>
                                                     <button
                                                         class="btn btn-sm btn-danger"
                                                         on:click=move |_| delete_container(container_id_delete.clone())
