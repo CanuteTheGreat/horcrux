@@ -58,7 +58,12 @@ async fn upgrade_for_kind(
             ws.on_upgrade(move |socket| handle_logs(socket, ticket.container_id, ticket.runtime))
         }
         ContainerWsKind::Exec => ws.on_upgrade(move |socket| {
-            handle_exec(socket, ticket.container_id, ticket.runtime, ticket.exec_command)
+            handle_exec(
+                socket,
+                ticket.container_id,
+                ticket.runtime,
+                ticket.exec_command,
+            )
         }),
         ContainerWsKind::Events => {
             ws.on_upgrade(move |socket| handle_events(socket, ticket.runtime))
@@ -286,7 +291,11 @@ async fn handle_exec_docker(ws_socket: WebSocket, container_id: String, cmd: Vec
             match chunk {
                 Ok(log) => {
                     let bytes = log.into_bytes();
-                    if ws_sender.send(Message::Binary(bytes.to_vec())).await.is_err() {
+                    if ws_sender
+                        .send(Message::Binary(bytes.to_vec()))
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -302,7 +311,10 @@ async fn handle_exec_docker(ws_socket: WebSocket, container_id: String, cmd: Vec
         _ = stdin_task => {}
         _ = stdout_task => {}
     }
-    info!("Interactive exec session closed for container {}", container_id);
+    info!(
+        "Interactive exec session closed for container {}",
+        container_id
+    );
 }
 
 /// Podman / CLI-fallback interactive exec. This uses `podman exec -i`

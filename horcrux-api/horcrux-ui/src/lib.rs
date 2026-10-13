@@ -12,10 +12,10 @@ mod websocket;
 
 use pages::{
     AlertCenterPage, Alerts, ApiKeysPage, BackupDashboard, BackupJobsPage, CloneList,
-    ClusterDashboard, ClusterManagementPage, ConfigMapsPage, ContainerEventsPage, ContainerExecPage,
-    ContainerList, ContainerLogsPage, ContainerNetworksPage, Dashboard, DashboardsPage,
-    DeploymentsPage, GpuManagement, HaDashboard, HaGroupsPage, HelmChartsPage, HelmReleasesPage,
-    HelmRepositoriesPage, ImagesPage, IngressesPage, KubernetesManagement, Login,
+    ClusterDashboard, ClusterManagementPage, ConfigMapsPage, ContainerEventsPage,
+    ContainerExecPage, ContainerList, ContainerLogsPage, ContainerNetworksPage, Dashboard,
+    DashboardsPage, DeploymentsPage, GpuManagement, HaDashboard, HaGroupsPage, HelmChartsPage,
+    HelmReleasesPage, HelmRepositoriesPage, ImagesPage, IngressesPage, KubernetesManagement, Login,
     MetricsExplorerPage, MigrationCenterPage, Monitoring, NetworkManagement, NotificationsPage,
     ObservabilityPage, PodsPage, ReplicationList, RetentionPoliciesPage, RolesPage, SecretsPage,
     ServicesPage, SessionsPage, SnapshotList, SnapshotManagerPage, StacksPage, StorageManagement,

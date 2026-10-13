@@ -47,7 +47,10 @@ pub fn VolumesPage() -> impl IntoView {
     let remove = move |name: String| {
         let rt = runtime.get();
         if web_sys::window()
-            .and_then(|w| w.confirm_with_message(&format!("Remove volume {}?", name)).ok())
+            .and_then(|w| {
+                w.confirm_with_message(&format!("Remove volume {}?", name))
+                    .ok()
+            })
             .unwrap_or(false)
         {
             spawn_local(async move {

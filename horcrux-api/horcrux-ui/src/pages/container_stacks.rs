@@ -63,7 +63,13 @@ pub fn StacksPage() -> impl IntoView {
     };
     let remove = move |id: String| {
         if web_sys::window()
-            .and_then(|w| w.confirm_with_message(&format!("Remove stack {}? This stops and deletes every container in it.", id)).ok())
+            .and_then(|w| {
+                w.confirm_with_message(&format!(
+                    "Remove stack {}? This stops and deletes every container in it.",
+                    id
+                ))
+                .ok()
+            })
             .unwrap_or(false)
         {
             spawn_local(async move {

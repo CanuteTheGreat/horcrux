@@ -127,10 +127,14 @@ impl StackManager {
         let mut unsupported = Vec::new();
         for (name, svc) in &compose.services {
             if svc.build.is_some() {
-                unsupported.push(format!("{name}.build (no image build pipeline; provide a pre-built `image` instead)"));
+                unsupported.push(format!(
+                    "{name}.build (no image build pipeline; provide a pre-built `image` instead)"
+                ));
             }
             if svc.deploy.is_some() {
-                unsupported.push(format!("{name}.deploy (Swarm-only; Horcrux is single-host)"));
+                unsupported.push(format!(
+                    "{name}.deploy (Swarm-only; Horcrux is single-host)"
+                ));
             }
             if svc.configs.is_some() {
                 unsupported.push(format!("{name}.configs (Swarm-only)"));
@@ -139,7 +143,9 @@ impl StackManager {
                 unsupported.push(format!("{name}.secrets (Swarm-only)"));
             }
             if svc.healthcheck.is_some() {
-                unsupported.push(format!("{name}.healthcheck (not yet applied to the container)"));
+                unsupported.push(format!(
+                    "{name}.healthcheck (not yet applied to the container)"
+                ));
             }
             if svc.image.is_none() && svc.build.is_none() {
                 return Err(horcrux_common::Error::Validation(format!(
@@ -198,7 +204,10 @@ impl StackManager {
         svc: &ComposeService,
         runtime: ContainerRuntime,
     ) -> ContainerConfig {
-        let id = format!("{stack_name}_{service_name}_{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let id = format!(
+            "{stack_name}_{service_name}_{}",
+            &uuid::Uuid::new_v4().to_string()[..8]
+        );
         let memory = svc
             .mem_limit
             .as_deref()
@@ -258,7 +267,8 @@ impl StackManager {
                 Some(s) => s,
                 None => continue,
             };
-            let config = Self::service_to_container_config(name, service_name, svc, runtime.clone());
+            let config =
+                Self::service_to_container_config(name, service_name, svc, runtime.clone());
             let created = self.container_manager.create_container(config).await?;
             self.container_manager.start_container(&created.id).await?;
 
@@ -318,7 +328,9 @@ impl StackManager {
     pub async fn get_stack(&self, id_or_name: &str) -> Result<StackSummary> {
         let r = db_stacks::get_stack(self.database.pool(), id_or_name)
             .await?
-            .ok_or_else(|| horcrux_common::Error::NotFound(format!("Stack {id_or_name} not found")))?;
+            .ok_or_else(|| {
+                horcrux_common::Error::NotFound(format!("Stack {id_or_name} not found"))
+            })?;
         let svcs = db_stacks::list_stack_services(self.database.pool(), &r.id).await?;
         Ok(StackSummary {
             id: r.id,
@@ -342,7 +354,10 @@ impl StackManager {
     pub async fn stop_stack(&self, id_or_name: &str) -> Result<()> {
         let stack = self.get_stack(id_or_name).await?;
         for svc in &stack.services {
-            let _ = self.container_manager.stop_container(&svc.container_id).await;
+            let _ = self
+                .container_manager
+                .stop_container(&svc.container_id)
+                .await;
         }
         Ok(())
     }
@@ -350,7 +365,10 @@ impl StackManager {
     pub async fn start_stack(&self, id_or_name: &str) -> Result<()> {
         let stack = self.get_stack(id_or_name).await?;
         for svc in &stack.services {
-            let _ = self.container_manager.start_container(&svc.container_id).await;
+            let _ = self
+                .container_manager
+                .start_container(&svc.container_id)
+                .await;
         }
         Ok(())
     }
@@ -360,8 +378,14 @@ impl StackManager {
     pub async fn remove_stack(&self, id_or_name: &str) -> Result<()> {
         let stack = self.get_stack(id_or_name).await?;
         for svc in &stack.services {
-            let _ = self.container_manager.stop_container(&svc.container_id).await;
-            let _ = self.container_manager.delete_container(&svc.container_id).await;
+            let _ = self
+                .container_manager
+                .stop_container(&svc.container_id)
+                .await;
+            let _ = self
+                .container_manager
+                .delete_container(&svc.container_id)
+                .await;
         }
         db_stacks::delete_stack(self.database.pool(), &stack.id).await?;
         Ok(())

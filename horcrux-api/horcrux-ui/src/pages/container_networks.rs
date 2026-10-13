@@ -51,7 +51,10 @@ pub fn ContainerNetworksPage() -> impl IntoView {
     let remove = move |id: String| {
         let rt = runtime.get();
         if web_sys::window()
-            .and_then(|w| w.confirm_with_message(&format!("Remove network {}?", id)).ok())
+            .and_then(|w| {
+                w.confirm_with_message(&format!("Remove network {}?", id))
+                    .ok()
+            })
             .unwrap_or(false)
         {
             spawn_local(async move {

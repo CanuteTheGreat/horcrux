@@ -6,9 +6,7 @@
 //! CLI-only, so image management follows the same precedent rather than
 //! inventing a bollard-over-podman-socket path that nothing else in this
 //! codebase relies on).
-use bollard::image::{
-    CreateImageOptions, ListImagesOptions, RemoveImageOptions, TagImageOptions,
-};
+use bollard::image::{CreateImageOptions, ListImagesOptions, RemoveImageOptions, TagImageOptions};
 use bollard::Docker;
 use futures::StreamExt;
 use horcrux_common::Result;
@@ -85,7 +83,12 @@ impl DockerImageManager {
 
     async fn list_images_cli(&self) -> Result<Vec<ImageInfo>> {
         let output = Command::new("docker")
-            .args(["images", "--no-trunc", "--format", "{{.ID}}|{{.Repository}}:{{.Tag}}|{{.Size}}"])
+            .args([
+                "images",
+                "--no-trunc",
+                "--format",
+                "{{.ID}}|{{.Repository}}:{{.Tag}}|{{.Size}}",
+            ])
             .output()
             .await
             .map_err(|e| horcrux_common::Error::System(format!("docker images: {e}")))?;
@@ -212,13 +215,7 @@ impl DockerImageManager {
     pub async fn tag_image(&self, id: &str, repo: &str, tag: &str) -> Result<()> {
         if let Some(docker) = &self.docker {
             docker
-                .tag_image(
-                    id,
-                    Some(TagImageOptions {
-                        repo,
-                        tag,
-                    }),
-                )
+                .tag_image(id, Some(TagImageOptions { repo, tag }))
                 .await
                 .map_err(|e| horcrux_common::Error::System(format!("docker tag: {e}")))?;
             return Ok(());
@@ -272,8 +269,7 @@ impl PodmanImageManager {
             #[serde(rename = "Created", default)]
             created: i64,
         }
-        let images: Vec<PodmanImage> =
-            serde_json::from_slice(&output.stdout).unwrap_or_default();
+        let images: Vec<PodmanImage> = serde_json::from_slice(&output.stdout).unwrap_or_default();
         Ok(images
             .into_iter()
             .map(|i| ImageInfo {
@@ -404,4 +400,3 @@ impl ImageManager {
         }
     }
 }
-

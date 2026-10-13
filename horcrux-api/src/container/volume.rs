@@ -143,10 +143,9 @@ impl DockerVolumeManager {
 
     pub async fn inspect_volume(&self, name: &str) -> Result<serde_json::Value> {
         if let Some(docker) = &self.docker {
-            let v = docker
-                .inspect_volume(name)
-                .await
-                .map_err(|e| horcrux_common::Error::System(format!("docker volume inspect: {e}")))?;
+            let v = docker.inspect_volume(name).await.map_err(|e| {
+                horcrux_common::Error::System(format!("docker volume inspect: {e}"))
+            })?;
             return Ok(serde_json::to_value(v).unwrap_or(serde_json::Value::Null));
         }
         let output = Command::new("docker")
@@ -275,7 +274,6 @@ impl VolumeManager {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -5288,11 +5288,8 @@ pub struct PullImageResponse {
 }
 
 pub async fn pull_image(name: &str, tag: &str, runtime: &str) -> Result<(), ApiError> {
-    let _: PullImageResponse = post_json(
-        "/images/pull",
-        &PullImageBody { name, tag, runtime },
-    )
-    .await?;
+    let _: PullImageResponse =
+        post_json("/images/pull", &PullImageBody { name, tag, runtime }).await?;
     Ok(())
 }
 
@@ -5329,11 +5326,7 @@ struct CreateNetworkBody<'a> {
 }
 
 pub async fn create_container_network(name: &str, runtime: &str) -> Result<String, ApiError> {
-    post_json(
-        "/container-networks",
-        &CreateNetworkBody { name, runtime },
-    )
-    .await
+    post_json("/container-networks", &CreateNetworkBody { name, runtime }).await
 }
 
 pub async fn remove_container_network(id: &str, runtime: &str) -> Result<(), ApiError> {
@@ -5384,7 +5377,10 @@ pub async fn get_container_logs_ticket(
     runtime: &str,
 ) -> Result<WsTicketResponse, ApiError> {
     post_json(
-        &format!("/containers/{}/logs-ticket?runtime={}", container_id, runtime),
+        &format!(
+            "/containers/{}/logs-ticket?runtime={}",
+            container_id, runtime
+        ),
         &(),
     )
     .await
@@ -5408,13 +5404,20 @@ pub async fn get_container_exec_ticket(
     };
     post_json(
         &format!("/containers/{}/exec-ticket", container_id),
-        &ExecTicketBody { command: cmd, runtime },
+        &ExecTicketBody {
+            command: cmd,
+            runtime,
+        },
     )
     .await
 }
 
 pub async fn get_container_events_ticket(runtime: &str) -> Result<WsTicketResponse, ApiError> {
-    post_json(&format!("/containers/events-ticket?runtime={}", runtime), &()).await
+    post_json(
+        &format!("/containers/events-ticket?runtime={}", runtime),
+        &(),
+    )
+    .await
 }
 
 /// Build an absolute `ws://`/`wss://` URL for a relative API path such as

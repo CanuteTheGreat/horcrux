@@ -7828,7 +7828,9 @@ async fn list_volumes(
     axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,
 ) -> Result<Json<Vec<container::volume::VolumeInfo>>, ApiError> {
     let volumes = match parse_runtime(&q.runtime) {
-        horcrux_common::ContainerRuntime::Podman => state.volume_manager.podman.list_volumes().await,
+        horcrux_common::ContainerRuntime::Podman => {
+            state.volume_manager.podman.list_volumes().await
+        }
         _ => state.volume_manager.docker.list_volumes().await,
     }
     .map_err(ApiError::from)?;
@@ -7952,9 +7954,19 @@ async fn inspect_container_network(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let value = match parse_runtime(&q.runtime) {
         horcrux_common::ContainerRuntime::Podman => {
-            state.container_network_manager.podman.inspect_network(&id).await
+            state
+                .container_network_manager
+                .podman
+                .inspect_network(&id)
+                .await
         }
-        _ => state.container_network_manager.docker.inspect_network(&id).await,
+        _ => {
+            state
+                .container_network_manager
+                .docker
+                .inspect_network(&id)
+                .await
+        }
     }
     .map_err(ApiError::from)?;
     Ok(Json(value))
@@ -7967,9 +7979,19 @@ async fn remove_container_network(
 ) -> Result<StatusCode, ApiError> {
     match parse_runtime(&q.runtime) {
         horcrux_common::ContainerRuntime::Podman => {
-            state.container_network_manager.podman.remove_network(&id).await
+            state
+                .container_network_manager
+                .podman
+                .remove_network(&id)
+                .await
         }
-        _ => state.container_network_manager.docker.remove_network(&id).await,
+        _ => {
+            state
+                .container_network_manager
+                .docker
+                .remove_network(&id)
+                .await
+        }
     }
     .map_err(ApiError::from)?;
     Ok(StatusCode::NO_CONTENT)

@@ -62,7 +62,12 @@ impl DockerNetworkManager {
                 .collect());
         }
         let output = Command::new("docker")
-            .args(["network", "ls", "--format", "{{.ID}}|{{.Name}}|{{.Driver}}|{{.Scope}}"])
+            .args([
+                "network",
+                "ls",
+                "--format",
+                "{{.ID}}|{{.Name}}|{{.Driver}}|{{.Scope}}",
+            ])
             .output()
             .await
             .map_err(|e| horcrux_common::Error::System(format!("docker network ls: {e}")))?;
@@ -93,7 +98,9 @@ impl DockerNetworkManager {
                     ..Default::default()
                 })
                 .await
-                .map_err(|e| horcrux_common::Error::System(format!("docker network create: {e}")))?;
+                .map_err(|e| {
+                    horcrux_common::Error::System(format!("docker network create: {e}"))
+                })?;
             return Ok(resp.id.unwrap_or_default());
         }
         let mut cmd = Command::new("docker");
@@ -101,11 +108,10 @@ impl DockerNetworkManager {
         if let Some(d) = driver {
             cmd.args(["--driver", d]);
         }
-        let output = cmd
-            .arg(name)
-            .output()
-            .await
-            .map_err(|e| horcrux_common::Error::System(format!("docker network create: {e}")))?;
+        let output =
+            cmd.arg(name).output().await.map_err(|e| {
+                horcrux_common::Error::System(format!("docker network create: {e}"))
+            })?;
         if !output.status.success() {
             return Err(horcrux_common::Error::System(format!(
                 "docker network create failed: {}",
@@ -142,7 +148,9 @@ impl DockerNetworkManager {
             let n = docker
                 .inspect_network::<String>(id, None)
                 .await
-                .map_err(|e| horcrux_common::Error::System(format!("docker network inspect: {e}")))?;
+                .map_err(|e| {
+                    horcrux_common::Error::System(format!("docker network inspect: {e}"))
+                })?;
             return Ok(serde_json::to_value(n).unwrap_or(serde_json::Value::Null));
         }
         let output = Command::new("docker")
@@ -166,7 +174,9 @@ impl DockerNetworkManager {
                     },
                 )
                 .await
-                .map_err(|e| horcrux_common::Error::System(format!("docker network connect: {e}")))?;
+                .map_err(|e| {
+                    horcrux_common::Error::System(format!("docker network connect: {e}"))
+                })?;
             return Ok(());
         }
         let output = Command::new("docker")
@@ -213,7 +223,9 @@ impl DockerNetworkManager {
             .args([network_id, container_id])
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("docker network disconnect: {e}")))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("docker network disconnect: {e}"))
+            })?;
         if !output.status.success() {
             return Err(horcrux_common::Error::System(format!(
                 "docker network disconnect failed: {}",
@@ -274,11 +286,10 @@ impl PodmanNetworkManager {
         if let Some(d) = driver {
             cmd.args(["--driver", d]);
         }
-        let output = cmd
-            .arg(name)
-            .output()
-            .await
-            .map_err(|e| horcrux_common::Error::System(format!("podman network create: {e}")))?;
+        let output =
+            cmd.arg(name).output().await.map_err(|e| {
+                horcrux_common::Error::System(format!("podman network create: {e}"))
+            })?;
         if !output.status.success() {
             return Err(horcrux_common::Error::System(format!(
                 "podman network create failed: {}",
@@ -344,7 +355,9 @@ impl PodmanNetworkManager {
             .args([network_id, container_id])
             .output()
             .await
-            .map_err(|e| horcrux_common::Error::System(format!("podman network disconnect: {e}")))?;
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("podman network disconnect: {e}"))
+            })?;
         if !output.status.success() {
             return Err(horcrux_common::Error::System(format!(
                 "podman network disconnect failed: {}",
