@@ -732,7 +732,7 @@ fn image_routes() -> Router<Arc<AppState>> {
 fn volume_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/volumes", get(list_volumes))
-        .route("/api/volumes", post(create_volume))
+        .route("/api/volumes", post(create_container_volume))
         .route("/api/volumes/:name", get(inspect_volume))
         .route("/api/volumes/:name", delete(remove_volume))
 }
@@ -7836,7 +7836,7 @@ async fn list_volumes(
 }
 
 #[derive(serde::Deserialize)]
-struct CreateVolumeRequest {
+struct CreateContainerVolumeRequest {
     name: String,
     #[serde(default)]
     driver: Option<String>,
@@ -7844,9 +7844,9 @@ struct CreateVolumeRequest {
     runtime: Option<String>,
 }
 
-async fn create_volume(
+async fn create_container_volume(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateVolumeRequest>,
+    Json(req): Json<CreateContainerVolumeRequest>,
 ) -> Result<Json<container::volume::VolumeInfo>, ApiError> {
     let v = match parse_runtime(&req.runtime) {
         horcrux_common::ContainerRuntime::Podman => {
