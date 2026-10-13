@@ -98,6 +98,24 @@ pub struct KerberosManager {
     keytab_path: String,
 }
 
+/// Reject strings containing characters that would let untrusted input break
+/// out of a single line of an interactive `ktutil`/`kadmin` stdin script
+/// (newline, carriage return, or NUL). Several functions below build
+/// multi-line command scripts for these tools by interpolating caller-
+/// supplied principal/password/path values with `format!` and feeding the
+/// result over stdin; without this check a value containing e.g. `"\n"`
+/// could inject arbitrary additional `ktutil`/`kadmin` commands (such as
+/// `write_kt <arbitrary path>` or `delete_entry`).
+fn reject_script_injection(field: &str, value: &str) -> Result<()> {
+    if value.contains('\n') || value.contains('\r') || value.contains('\0') {
+        return Err(Error::Internal(format!(
+            "invalid {}: must not contain newline, carriage return, or NUL bytes",
+            field
+        )));
+    }
+    Ok(())
+}
+
 impl KerberosManager {
     /// Create a new Kerberos manager
     pub fn new() -> Self {
@@ -308,6 +326,9 @@ impl KerberosManager {
         keytab: Option<&str>,
     ) -> Result<()> {
         let keytab_path = keytab.unwrap_or(&self.keytab_path);
+        reject_script_injection("principal", principal)?;
+        reject_script_injection("password", password)?;
+        reject_script_injection("keytab path", keytab_path)?;
 
         // Use ktutil to create keytab
         let ktutil_input = format!(
@@ -494,6 +515,13 @@ impl KerberosManager {
             enctypes.to_vec()
         };
 
+        reject_script_injection("principal", principal)?;
+        reject_script_injection("password", password)?;
+        reject_script_injection("keytab path", keytab_path)?;
+        for enctype in &enctypes {
+            reject_script_injection("encryption type", enctype)?;
+        }
+
         let mut ktutil_input = String::new();
         for enctype in &enctypes {
             ktutil_input.push_str(&format!(
@@ -622,6 +650,9 @@ impl KerberosManager {
         admin_principal: &str,
         admin_password: &str,
     ) -> Result<()> {
+        reject_script_injection("principal", principal)?;
+        reject_script_injection("keytab path", keytab)?;
+        reject_script_injection("admin password", admin_password)?;
         let kadmin_input = format!("ktadd -k {} {}\nquit\n", keytab, principal);
 
         let mut child = Command::new("kadmin")
@@ -770,4 +801,50 @@ pub struct TicketInfo {
     pub renew_until: Option<String>,
     pub flags: Vec<String>,
     pub encryption: String,
+}
+
+#[cfg(test)]
+mod injection_guard_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_newline_in_password() {
+        assert!(reject_script_injection("password", "normal-pass").is_ok());
+        assert!(
+            reject_script_injection("password", "pw\nwrite_kt /etc/cron.d/evil\nquit").is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_carriage_return_and_nul() {
+        assert!(reject_script_injection("principal", "host/foo\r\nquit").is_err());
+        assert!(reject_script_injection("principal", "host/foo\0bar").is_err());
+    }
+
+    #[tokio::test]
+    async fn create_keytab_rejects_malicious_password() {
+        let mgr = KerberosManager::new();
+        let result = mgr
+            .create_keytab(
+                "host/example.com@EXAMPLE.COM",
+                "pw\nwrite_kt /tmp/pwned.keytab\nquit",
+                Some("/tmp/does-not-matter.keytab"),
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn add_keytab_entry_rejects_malicious_principal() {
+        let mgr = KerberosManager::new();
+        let result = mgr
+            .add_keytab_entry(
+                "host/example.com@EXAMPLE.COM\nwrite_kt /tmp/pwned.keytab",
+                "normal-password",
+                Some("/tmp/does-not-matter.keytab"),
+                &[],
+            )
+            .await;
+        assert!(result.is_err());
+    }
 }
