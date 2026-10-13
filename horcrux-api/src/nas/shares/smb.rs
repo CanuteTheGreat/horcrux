@@ -2,12 +2,83 @@
 //!
 //! Manages Samba configuration and shares for Windows/cross-platform file sharing.
 
-use crate::nas::shares::NasShare;
+use crate::nas::shares::{NasShare, SmbShareConfig};
 use crate::nas::CaseSensitivity;
 use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::process::Command;
+
+/// Reject strings containing characters that would let untrusted share or
+/// global-config values break out of a single `key = value` line of the
+/// generated `smb.conf` (newline, carriage return, or NUL). The section
+/// generators below build smb.conf text by interpolating caller-supplied
+/// share names, paths, descriptions, user/group/host lists, and arbitrary
+/// extra parameters with `format!`; without this check a value containing
+/// e.g. `"\n"` could inject an entirely new `[section]` or additional
+/// directives into the generated config (and `testparm` would accept the
+/// result, since the injected text is itself syntactically valid smb.conf)
+/// instead of being treated as an opaque field value.
+fn reject_config_injection(field: &str, value: &str) -> Result<()> {
+    if value.contains('\n') || value.contains('\r') || value.contains('\0') {
+        return Err(Error::Internal(format!(
+            "invalid {}: must not contain newline, carriage return, or NUL bytes",
+            field
+        )));
+    }
+    Ok(())
+}
+
+/// Validate all user-controlled strings in a global config before they are
+/// interpolated into the generated `[global]` section.
+fn validate_global_config(g: &SmbGlobalConfig) -> Result<()> {
+    reject_config_injection("workgroup", &g.workgroup)?;
+    reject_config_injection("server_string", &g.server_string)?;
+    if let Some(ref netbios) = g.netbios_name {
+        reject_config_injection("netbios_name", netbios)?;
+    }
+    reject_config_injection("security", &g.security)?;
+    reject_config_injection("map_to_guest", &g.map_to_guest)?;
+    reject_config_injection("min_protocol", &g.min_protocol)?;
+    reject_config_injection("max_protocol", &g.max_protocol)?;
+    for (key, value) in &g.extra_parameters {
+        reject_config_injection("extra_parameters key", key)?;
+        reject_config_injection("extra_parameters value", value)?;
+    }
+    Ok(())
+}
+
+/// Validate all user-controlled strings in a share (and its SMB-specific
+/// config) before they are interpolated into a generated share section.
+fn validate_share(share: &NasShare) -> Result<()> {
+    reject_config_injection("share name", &share.name)?;
+    reject_config_injection("share path", &share.path)?;
+    if let Some(ref desc) = share.description {
+        reject_config_injection("share description", desc)?;
+    }
+    if let Some(ref smb_config) = share.smb_config {
+        for u in &smb_config.valid_users {
+            reject_config_injection("valid_users entry", u)?;
+        }
+        for group in &smb_config.valid_groups {
+            reject_config_injection("valid_groups entry", group)?;
+        }
+        for h in &smb_config.hosts_allow {
+            reject_config_injection("hosts_allow entry", h)?;
+        }
+        for h in &smb_config.hosts_deny {
+            reject_config_injection("hosts_deny entry", h)?;
+        }
+        for v in &smb_config.vfs_objects {
+            reject_config_injection("vfs_objects entry", v)?;
+        }
+        for (key, value) in &smb_config.extra_parameters {
+            reject_config_injection("extra_parameters key", key)?;
+            reject_config_injection("extra_parameters value", value)?;
+        }
+    }
+    Ok(())
+}
 
 /// SMB global configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,6 +195,8 @@ impl SmbManager {
 
     /// Add a share to Samba configuration
     pub async fn add_share(&self, share: &NasShare) -> Result<()> {
+        validate_share(share)?;
+
         // Read current config, add share, write back
         let mut config = self.read_config().await?;
 
@@ -151,7 +224,14 @@ impl SmbManager {
     }
 
     /// Generate complete smb.conf from shares
-    pub fn generate_config(&self, shares: &[NasShare]) -> String {
+    pub fn generate_config(&self, shares: &[NasShare]) -> Result<String> {
+        validate_global_config(&self.global_config)?;
+        for share in shares {
+            if share.enabled {
+                validate_share(share)?;
+            }
+        }
+
         let mut config = String::new();
 
         // Global section
@@ -164,7 +244,7 @@ impl SmbManager {
             }
         }
 
-        config
+        Ok(config)
     }
 
     /// Generate global section
@@ -719,7 +799,7 @@ impl Default for SmbManager {
 impl SmbManager {
     /// Write complete configuration to disk
     pub async fn write_full_config(&self, shares: &[NasShare]) -> Result<()> {
-        let config = self.generate_config(shares);
+        let config = self.generate_config(shares)?;
 
         // Backup existing config
         if tokio::fs::metadata(&self.config_path).await.is_ok() {
@@ -747,7 +827,12 @@ impl SmbManager {
         &self,
         share: &NasShare,
         zfs_dataset: Option<&str>,
-    ) -> String {
+    ) -> Result<String> {
+        validate_share(share)?;
+        if let Some(dataset) = zfs_dataset {
+            reject_config_injection("zfs_dataset", dataset)?;
+        }
+
         let mut section = self.generate_share_section(share);
 
         // Add ZFS shadow copy support if dataset is provided
@@ -762,7 +847,7 @@ impl SmbManager {
             section.push_str(&format!("   # ZFS dataset: {}\n", dataset));
         }
 
-        section
+        Ok(section)
     }
 
     /// Generate AD-integrated global configuration
@@ -1019,6 +1104,10 @@ impl SmbManager {
 
     /// Update a specific share parameter
     pub async fn update_share_param(&self, share_name: &str, key: &str, value: &str) -> Result<()> {
+        reject_config_injection("share_name", share_name)?;
+        reject_config_injection("param key", key)?;
+        reject_config_injection("param value", value)?;
+
         let config = self.read_config().await?;
         let mut result = String::new();
         let mut in_section = false;
@@ -1257,5 +1346,71 @@ mod tests {
         assert!(!result.contains("[share1]"));
         assert!(result.contains("[share2]"));
         assert!(result.contains("[global]"));
+    }
+
+    #[test]
+    fn test_reject_config_injection_detects_newline_and_nul() {
+        assert!(reject_config_injection("field", "normal value").is_ok());
+        assert!(reject_config_injection("field", "evil\n[rogue_share]").is_err());
+        assert!(reject_config_injection("field", "evil\r\ninjected").is_err());
+        assert!(reject_config_injection("field", "evil\0null").is_err());
+    }
+
+    #[test]
+    fn test_generate_config_rejects_share_name_injection() {
+        let manager = SmbManager::new();
+        let mut share = NasShare::new(
+            "id1".to_string(),
+            "legit]\n[global]\n   admin users = attacker\n[legit".to_string(),
+            "/mnt/legit".to_string(),
+        );
+        share.enabled = true;
+
+        let result = manager.generate_config(&[share]);
+        assert!(
+            result.is_err(),
+            "a share name containing a newline must not be accepted into smb.conf, \
+             since it would let it inject an arbitrary extra section/directive"
+        );
+    }
+
+    #[test]
+    fn test_generate_config_rejects_extra_parameter_injection() {
+        let mut share = NasShare::new(
+            "id2".to_string(),
+            "legit".to_string(),
+            "/mnt/legit".to_string(),
+        );
+        share.enabled = true;
+        let mut smb_config = SmbShareConfig::default();
+        smb_config.extra_parameters.insert(
+            "comment".to_string(),
+            "x\n   admin users = attacker".to_string(),
+        );
+        share.smb_config = Some(smb_config);
+
+        let manager = SmbManager::new();
+        let result = manager.generate_config(&[share]);
+        assert!(
+            result.is_err(),
+            "an extra_parameters value containing a newline must not be accepted"
+        );
+    }
+
+    #[test]
+    fn test_generate_config_accepts_benign_share() {
+        let mut share = NasShare::new(
+            "id3".to_string(),
+            "docs".to_string(),
+            "/mnt/docs".to_string(),
+        );
+        share.enabled = true;
+
+        let manager = SmbManager::new();
+        let config = manager
+            .generate_config(&[share])
+            .expect("benign share must still be accepted");
+        assert!(config.contains("[docs]"));
+        assert!(config.contains("path = /mnt/docs"));
     }
 }
