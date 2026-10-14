@@ -13,7 +13,7 @@ env:
 jobs:
   check:
     name: Check
-    runs-on: x86_64
+    runs-on: linux-cross-x86_64
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
@@ -73,7 +73,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: x86_64
+    runs-on: linux-cross-x86_64
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
@@ -203,7 +203,7 @@ jobs:
 
   build:
     name: Build
-    runs-on: x86_64
+    runs-on: linux-cross-x86_64
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
@@ -287,7 +287,7 @@ jobs:
 
   build-ui:
     name: Build Web UI
-    runs-on: x86_64
+    runs-on: linux-cross-x86_64
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
@@ -319,7 +319,7 @@ jobs:
         # prebuilt binary release instead - avoids building lightningcss
         # from source entirely, and is faster too.
         #
-        # This job is labeled `runs-on: x86_64`, but the beauxbatons runner
+        # This job is labeled `runs-on: linux-cross-x86_64`, but the beauxbatons runner
         # (the designated non-AWS fallback, see standing CI notes) is actual
         # Apple Silicon hardware and does not always honor an amd64 container
         # platform for this job -- confirmed 2026-10-02 via `rustc`'s own
@@ -373,7 +373,7 @@ jobs:
 
   security-audit:
     name: Security Audit
-    runs-on: x86_64
+    runs-on: linux-cross-x86_64
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
@@ -414,7 +414,7 @@ jobs:
 
   gentoo-docker-build:
     name: Gentoo Docker Build
-    runs-on: x86_64
+    runs-on: linux-cross-x86_64
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
