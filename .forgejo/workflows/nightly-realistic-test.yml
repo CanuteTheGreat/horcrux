@@ -24,7 +24,7 @@ jobs:
     # Linux host from inside this privileged container - not a sandboxed
     # fake. See the multi-arch tag note in ci.yml for why we use a tag
     # here too, not a single-platform digest.
-    runs-on: x86_64
+    runs-on: linux-cross-x86_64
     # Matches ci.yml's existing tag choice (see its comment): a multi-arch
     # tag, not a single-platform sha256 digest, so this works regardless
     # of which labeled runner/platform variant picks up the job. The

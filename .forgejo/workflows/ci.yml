@@ -13,7 +13,7 @@ env:
 jobs:
   check:
     name: Check
-    runs-on: x86_64
+    runs-on: linux-cross-x86_64
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
@@ -73,7 +73,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: x86_64
+    runs-on: linux-cross-x86_64
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
@@ -203,7 +203,7 @@ jobs:
 
   build:
     name: Build
-    runs-on: x86_64
+    runs-on: linux-cross-x86_64
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
@@ -287,7 +287,7 @@ jobs:
 
   build-ui:
     name: Build Web UI
-    runs-on: x86_64
+    runs-on: linux-cross-x86_64
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
@@ -319,13 +319,17 @@ jobs:
         # prebuilt binary release instead - avoids building lightningcss
         # from source entirely, and is faster too.
         #
-        # This job is labeled `runs-on: x86_64`, but the beauxbatons runner
-        # (the designated non-AWS fallback, see standing CI notes) is actual
-        # Apple Silicon hardware and does not always honor an amd64 container
-        # platform for this job -- confirmed 2026-10-02 via `rustc`'s own
-        # "default host tuple is aarch64-unknown-linux-gnu" in this job's log.
-        # A hardcoded x86_64 trunk binary then fails under Rosetta with
-        # "failed to open elf at /lib64/ld-linux-x86-64.so.2". Detect the
+        # HISTORICAL (fixed 2026-10-13): this job used to be labeled
+        # `runs-on: x86_64`, which routed to the beauxbatons runner (Apple
+        # Silicon hardware under Docker/QEMU amd64 emulation) and did not
+        # always honor an amd64 container platform for this job -- confirmed
+        # 2026-10-02 via `rustc`'s own "default host tuple is
+        # aarch64-unknown-linux-gnu" in this job's log. A hardcoded x86_64
+        # trunk binary then failed under Rosetta with "failed to open elf at
+        # /lib64/ld-linux-x86-64.so.2". Now migrated to
+        # `runs-on: linux-cross-x86_64` (real x86_64 Linux host, rw-man-02,
+        # no QEMU/Rosetta emulation at all), which removes this class of bug
+        # entirely rather than just detecting it. Detect the
         # actual container arch via `uname -m` and fetch the matching trunk
         # release so this works whether the job lands on a genuine x86_64
         # container or an arm64 one.
@@ -373,7 +377,7 @@ jobs:
 
   security-audit:
     name: Security Audit
-    runs-on: x86_64
+    runs-on: linux-cross-x86_64
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
@@ -414,7 +418,7 @@ jobs:
 
   gentoo-docker-build:
     name: Gentoo Docker Build
-    runs-on: x86_64
+    runs-on: linux-cross-x86_64
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
