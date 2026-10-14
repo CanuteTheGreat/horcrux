@@ -1,7 +1,16 @@
 # Compiler Warning Analysis
 
+> ⚠️ **STALE DOCUMENT**: Written 2025-10-12, listing 55 `cargo check` dead-code
+> warnings that existed at that time. CI's `cargo clippy --all-targets --all-features
+> -- -D warnings` job (`.forgejo/workflows/ci.yml`) has passed clean on every recent
+> push since, and spot-checks confirm most items below (e.g. `broadcast_vm_status`,
+> `list_containers_via_docker_api`, `metrics/mod.rs`'s module-level `#![allow(dead_code)]`)
+> are already wired up or suppressed. Treat this file as a historical snapshot, not
+> current warning status -- do not re-apply its suggested fixes without re-checking
+> whether the item is still actually unused.
+
 **Date**: 2025-10-12
-**Total Warnings**: 55
+**Total Warnings**: 55 (at time of writing; see staleness notice above)
 
 ---
 
