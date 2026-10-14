@@ -21,15 +21,17 @@ pub struct Network {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FirewallRule {
     pub id: String,
-    pub name: String,
+    pub enabled: bool,
     pub action: String,
     pub direction: String,
     pub protocol: Option<String>,
-    pub port: Option<u16>,
     pub source: Option<String>,
-    pub destination: Option<String>,
-    pub enabled: bool,
-    pub priority: i32,
+    pub dest: Option<String>,
+    pub sport: Option<String>,
+    pub dport: Option<String>,
+    pub comment: Option<String>,
+    pub log: bool,
+    pub position: i32,
 }
 
 /// Horcrux SDN CNI network (backed by /api/cni/networks — real backend in
@@ -198,8 +200,8 @@ pub fn NetworkManagement() -> impl IntoView {
     // "Add Rule" submit never called the API, even though POST
     // /api/firewall/rules is a real, working endpoint)
     let create_rule = move |_| {
-        let name = rule_name_ref.get().map(|el| el.value()).unwrap_or_default();
-        if name.is_empty() {
+        let comment = rule_name_ref.get().map(|el| el.value()).unwrap_or_default();
+        if comment.is_empty() {
             set_error.set(Some("Rule name is required".to_string()));
             return;
         }
@@ -209,19 +211,20 @@ pub fn NetworkManagement() -> impl IntoView {
             .unwrap_or(100);
         let action = rule_action_ref
             .get()
-            .map(|el| el.value())
-            .unwrap_or_else(|| "Accept".to_string());
+            .map(|el| el.value().to_uppercase())
+            .unwrap_or_else(|| "ACCEPT".to_string());
         let direction = rule_direction_ref
             .get()
             .map(|el| el.value())
             .unwrap_or_else(|| "in".to_string());
         let protocol = rule_protocol_ref
             .get()
+            .map(|el| el.value().to_lowercase())
+            .filter(|v| !v.is_empty());
+        let dport = rule_port_ref
+            .get()
             .map(|el| el.value())
             .filter(|v| !v.is_empty());
-        let port = rule_port_ref
-            .get()
-            .and_then(|el| el.value().parse::<u16>().ok());
         let source = rule_source_ref
             .get()
             .map(|el| el.value())
@@ -229,15 +232,17 @@ pub fn NetworkManagement() -> impl IntoView {
 
         let new_rule = FirewallRule {
             id: String::new(),
-            name,
+            enabled: true,
             action,
             direction,
             protocol,
-            port,
             source,
-            destination: None,
-            enabled: true,
-            priority,
+            dest: None,
+            sport: None,
+            dport,
+            comment: Some(comment),
+            log: false,
+            position: priority,
         };
 
         spawn_local(async move {
@@ -564,8 +569,8 @@ pub fn NetworkManagement() -> impl IntoView {
 
                                             view! {
                                                 <tr class={if !rule.enabled { "disabled" } else { "" }}>
-                                                    <td>{rule.priority}</td>
-                                                    <td>{&rule.name}</td>
+                                                    <td>{rule.position}</td>
+                                                    <td>{rule.comment.clone().unwrap_or_default()}</td>
                                                     <td>
                                                         <span class={format!("action-badge {}", rule.action.to_lowercase())}>
                                                             {&rule.action}
@@ -573,7 +578,7 @@ pub fn NetworkManagement() -> impl IntoView {
                                                     </td>
                                                     <td>{&rule.direction}</td>
                                                     <td>{rule.protocol.clone().unwrap_or_else(|| "Any".to_string())}</td>
-                                                    <td>{rule.port.map(|p| p.to_string()).unwrap_or_else(|| "Any".to_string())}</td>
+                                                    <td>{rule.dport.clone().unwrap_or_else(|| "Any".to_string())}</td>
                                                     <td><code>{rule.source.clone().unwrap_or_else(|| "Any".to_string())}</code></td>
                                                     <td>
                                                         {if rule.enabled {
