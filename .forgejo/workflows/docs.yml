@@ -11,7 +11,7 @@ on:
 jobs:
   build-docs:
     name: Build Documentation
-    runs-on: linux-cross-x86_64
+    runs-on: x86_64
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the

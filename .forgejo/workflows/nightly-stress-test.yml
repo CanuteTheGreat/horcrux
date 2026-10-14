@@ -29,7 +29,7 @@ jobs:
     # netns/veth/CNI) on beauxbatons, reached via the x86_64-labeled
     # Forgejo runner fleet - never ubuntu-latest (shared AWS ASG fleet,
     # see rustinion-ci-infra-map skill).
-    runs-on: linux-cross-x86_64
+    runs-on: x86_64
     container: catthehacker/ubuntu:act-latest
     timeout-minutes: 45
     steps:
