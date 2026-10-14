@@ -392,6 +392,19 @@ impl StackManager {
     }
 }
 
+fn parse_mem_limit_mb(s: &str) -> Option<u64> {
+    let s = s.trim().to_lowercase();
+    if let Some(num) = s.strip_suffix("g") {
+        num.parse::<f64>().ok().map(|v| (v * 1024.0) as u64)
+    } else if let Some(num) = s.strip_suffix("m") {
+        num.parse::<f64>().ok().map(|v| v as u64)
+    } else if let Some(num) = s.strip_suffix("k") {
+        num.parse::<f64>().ok().map(|v| (v / 1024.0) as u64)
+    } else {
+        s.parse::<u64>().ok().map(|b| b / 1024 / 1024)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -477,18 +490,5 @@ services:
         assert_eq!(parse_mem_limit_mb("512m"), Some(512));
         assert_eq!(parse_mem_limit_mb("1g"), Some(1024));
         assert_eq!(parse_mem_limit_mb("2G"), Some(2048));
-    }
-}
-
-fn parse_mem_limit_mb(s: &str) -> Option<u64> {
-    let s = s.trim().to_lowercase();
-    if let Some(num) = s.strip_suffix("g") {
-        num.parse::<f64>().ok().map(|v| (v * 1024.0) as u64)
-    } else if let Some(num) = s.strip_suffix("m") {
-        num.parse::<f64>().ok().map(|v| v as u64)
-    } else if let Some(num) = s.strip_suffix("k") {
-        num.parse::<f64>().ok().map(|v| (v / 1024.0) as u64)
-    } else {
-        s.parse::<u64>().ok().map(|b| b / 1024 / 1024)
     }
 }

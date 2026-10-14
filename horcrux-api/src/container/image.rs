@@ -355,6 +355,26 @@ impl PodmanImageManager {
     }
 }
 
+pub struct ImageManager {
+    pub docker: DockerImageManager,
+    pub podman: PodmanImageManager,
+}
+
+impl Default for ImageManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ImageManager {
+    pub fn new() -> Self {
+        Self {
+            docker: DockerImageManager::new(),
+            podman: PodmanImageManager::new(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,25 +398,5 @@ mod tests {
         // Exercises the constructor path (may or may not find a live Docker
         // socket in CI, but must never panic either way).
         let _ = ImageManager::new();
-    }
-}
-
-pub struct ImageManager {
-    pub docker: DockerImageManager,
-    pub podman: PodmanImageManager,
-}
-
-impl Default for ImageManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ImageManager {
-    pub fn new() -> Self {
-        Self {
-            docker: DockerImageManager::new(),
-            podman: PodmanImageManager::new(),
-        }
     }
 }
