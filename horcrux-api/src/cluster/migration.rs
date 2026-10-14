@@ -1174,8 +1174,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_network_connectivity_check_unresolvable_host() {
-        let check =
-            MigrationManager::check_network_connectivity("this-host-does-not-exist.invalid").await;
+        // Deliberately use a TEST-NET-1 address (RFC 5737, 192.0.2.0/24)
+        // instead of an ".invalid" hostname. Some CI/colo networks run
+        // resolvers that answer NXDOMAIN lookups with a wildcard/captive
+        // IP (e.g. a management host with sshd on :22), so asserting on
+        // DNS-resolution failure for a *hostname* is not portable across
+        // runner infra (observed on the rw-man-0* fleet: the ".invalid"
+        // TLD resolved and happened to hit an open port). A reserved,
+        // non-routable literal IP skips the resolver entirely and is
+        // guaranteed unreachable on every network, so the TCP-connect
+        // branch deterministically falls through to "not reachable".
+        let check = MigrationManager::check_network_connectivity("192.0.2.1").await;
         assert_eq!(check.check_name, "network_connectivity");
         assert!(!check.passed);
         assert!(check.blocking);
