@@ -45,7 +45,7 @@ fn current_timestamp_ns() -> u64 {
 fn calculate_cpu_percent(container_id: &str, current_cpu_ns: u64) -> f64 {
     let current_time_ns = current_timestamp_ns();
 
-    let mut samples = get_cpu_samples().lock().unwrap();
+    let mut samples = get_cpu_samples().lock().unwrap_or_else(|p| p.into_inner());
 
     let cpu_percent = if let Some(prev) = samples.get(container_id) {
         let cpu_delta = current_cpu_ns.saturating_sub(prev.cpu_usage_ns) as f64;

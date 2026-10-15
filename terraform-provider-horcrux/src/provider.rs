@@ -142,8 +142,8 @@ impl HorcruxProvider {
         }
 
         // Store configuration and client
-        *self.config.write().unwrap() = Some(config);
-        *self.client.write().unwrap() = Some(client);
+        *self.config.write().unwrap_or_else(|p| p.into_inner()) = Some(config);
+        *self.client.write().unwrap_or_else(|p| p.into_inner()) = Some(client);
 
         diagnostics
     }
@@ -152,7 +152,7 @@ impl HorcruxProvider {
     fn get_client(&self) -> Result<HorcruxClient, Diagnostic> {
         self.client
             .read()
-            .unwrap()
+            .unwrap_or_else(|p| p.into_inner())
             .clone()
             .ok_or_else(|| Diagnostic::error("Provider not configured"))
     }
