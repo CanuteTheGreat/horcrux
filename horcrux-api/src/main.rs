@@ -2401,13 +2401,50 @@ mod nas_handlers {
     }
     pub async fn nas_update_dataset(
         State(_state): State<Arc<AppState>>,
-        Path(_id): Path<String>,
-        Json(_body): Json<serde_json::Value>,
+        Path(id): Path<String>,
+        Json(body): Json<serde_json::Value>,
     ) -> Result<Json<serde_json::Value>, ApiError> {
-        // Dataset property updates would use `zfs set`
-        Err(ApiError::Internal(
-            "Dataset property updates not yet implemented".to_string(),
-        ))
+        use crate::nas::storage::datasets;
+
+        // Body is a flat map of ZFS property -> value, e.g. {"quota": "10G", "compression": "lz4"}
+        let properties = body.as_object().ok_or_else(|| {
+            ApiError::BadRequest(
+                "Expected a JSON object mapping property names to values".to_string(),
+            )
+        })?;
+
+        if properties.is_empty() {
+            return Err(ApiError::BadRequest(
+                "No properties provided to update".to_string(),
+            ));
+        }
+
+        for (property, value) in properties {
+            let value_str = match value {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                _ => {
+                    return Err(ApiError::BadRequest(format!(
+                        "Property '{}' must be a string, number, or boolean",
+                        property
+                    )))
+                }
+            };
+            datasets::set_property(&id, property, &value_str)
+                .await
+                .map_err(|e| {
+                    ApiError::Internal(format!(
+                        "Failed to set property '{}' on dataset '{}': {}",
+                        property, id, e
+                    ))
+                })?;
+        }
+
+        Ok(Json(serde_json::json!({
+            "dataset": id,
+            "updated_properties": properties.keys().collect::<Vec<_>>(),
+        })))
     }
     pub async fn nas_delete_dataset(
         State(_state): State<Arc<AppState>>,
