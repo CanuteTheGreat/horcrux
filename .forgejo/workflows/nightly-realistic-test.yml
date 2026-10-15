@@ -32,7 +32,14 @@ jobs:
     # (required for Docker-in-Docker / nested docker), so no per-job
     # container.options override is needed here.
     container: catthehacker/ubuntu:act-latest
-    timeout-minutes: 30
+    # Bumped from 30: test_real_qemu_vm_boot's own internal deadline
+    # was widened to 1000s (~16.7min) on 2026-10-15 after measuring the
+    # real CirrOS EC2-metadata-probe backoff on the rw-man-0x fallback
+    # runner (see nightly_realistic_tests.rs comment) - give the job as
+    # a whole enough headroom (compile + docker test + up to ~17min
+    # qemu wait + cleanup) that it isn't just trading a test-level
+    # timeout for a job-level one.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 

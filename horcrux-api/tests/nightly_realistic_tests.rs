@@ -123,20 +123,23 @@ async fn test_real_qemu_vm_boot() {
     running_vm.status = VmStatus::Running;
 
     let serial_log = vm.disk_path.with_extension("serial.log");
-    // 120s was tuned assuming KVM hardware acceleration. CI runners without
-    // a usable /dev/kvm (e.g. nested-virt-restricted containers) fall back
-    // to pure TCG software emulation in qemu.rs's start_vm(), which is
-    // considerably slower. On top of that, CirrOS's cloud-init datasource
-    // probe retries fetching http://169.254.169.254/... (not served by
-    // QEMU's SLIRP user-net backend, since this isn't real EC2) with
-    // exponential backoff before giving up and finally presenting the login
-    // prompt - by observation this alone can burn ~100s of guest-visible
-    // time under TCG, leaving no margin before a 120s wall-clock cutoff and
-    // causing flaky failures that have nothing to do with a real boot
-    // regression (seen repeatedly on the beauxbatons fallback runner, which
-    // has no /dev/kvm). Widen to 240s so a genuinely slow-but-working
-    // TCG boot has headroom; a true hang/crash still fails, just later.
-    let deadline = Instant::now() + Duration::from_secs(240);
+    // 120s, then 240s, were each tuned assuming the datasource-probe
+    // backoff would burn a bounded ~100s before giving up. Measured on the
+    // real rw-man-0x fallback runner (no /dev/kvm, so this is genuine
+    // TCG software emulation) on 2026-10-15: after a short initial burst
+    // of ~2s-spaced attempts, the retry interval settles into a
+    // *constant* ~49s per attempt (not exponential), and the datasource
+    // probe allows up to 20 attempts before giving up and continuing to
+    // the login prompt. Worst case that's roughly 4 quick attempts + 16
+    // more at ~49s = ~830s (~14min) of guest-visible time before CirrOS
+    // gives up on EC2 metadata entirely, independent of how fast the
+    // kernel itself boots. Widen to 1000s (~16.7min) so a genuinely
+    // slow-but-working TCG boot that has to exhaust every retry still
+    // has headroom; a true hang/crash still fails, just later. The
+    // workflow's job timeout-minutes was bumped accordingly (see
+    // nightly-realistic-test.yml) so this doesn't just trade a flaky
+    // test-level timeout for a flaky job-level one.
+    let deadline = Instant::now() + Duration::from_secs(1000);
     let boot_marker = "login as 'cirros' user";
     let mut last_seen = String::new();
     let mut booted = false;
@@ -162,7 +165,7 @@ async fn test_real_qemu_vm_boot() {
 
     assert!(
         booted,
-        "CirrOS never reached its login prompt within 240s. Last serial \
+        "CirrOS never reached its login prompt within 1000s. Last serial \
          output (<=4000 chars shown):\n{}",
         &last_seen[last_seen.len().saturating_sub(4000)..]
     );
