@@ -326,6 +326,34 @@ impl GlusterFsManager {
         Ok(snapshot_name.to_string())
     }
 
+    /// Restore a volume from a snapshot
+    pub async fn restore_snapshot(&self, volume_path: &str, snapshot_name: &str) -> Result<()> {
+        tracing::info!(
+            "Restoring volume {} to snapshot {}",
+            volume_path,
+            snapshot_name
+        );
+
+        // Apply (roll back to) a qcow2 internal snapshot created by `create_snapshot`
+        let output = AsyncCommand::new("qemu-img")
+            .args(["snapshot", "-a", snapshot_name, volume_path])
+            .output()
+            .await
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Snapshot restore failed: {}", e))
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(horcrux_common::Error::System(format!(
+                "Failed to restore snapshot: {}",
+                stderr
+            )));
+        }
+
+        Ok(())
+    }
+
     /// List GlusterFS volumes on server
     pub async fn list_volumes(server: &str) -> Result<Vec<String>> {
         let output = AsyncCommand::new("gluster")

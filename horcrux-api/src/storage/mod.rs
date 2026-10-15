@@ -427,9 +427,11 @@ impl StorageManager {
                 ))
             }
             StorageType::GlusterFs => {
-                return Err(horcrux_common::Error::InvalidConfig(
-                    "GlusterFS snapshot restore not yet implemented".to_string(),
-                ))
+                // GlusterFS restore takes volume_path and snapshot_name, mirroring create_snapshot
+                let volume_path = format!("{}/{}", pool.path, volume_name);
+                self.glusterfs
+                    .restore_snapshot(&volume_path, snapshot_name)
+                    .await?
             }
             StorageType::BtrFs => {
                 // BtrFS restore_snapshot takes snapshot_path and target_path
