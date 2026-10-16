@@ -415,7 +415,7 @@ mod tests {
         assert_eq!(claims.role, CLUSTER_NODE_ROLE);
         assert_eq!(claims.sub, "cluster-node:node1");
         assert_eq!(claims.exp - claims.iat, CLUSTER_NODE_TOKEN_TTL_SECS);
-        assert!(CLUSTER_NODE_TOKEN_TTL_SECS < 60);
+        assert_eq!(claims.exp - claims.iat, 30);
 
         use axum::http::Method;
         assert!(cluster_node_may_access(
