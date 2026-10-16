@@ -528,6 +528,24 @@ async fn test_sustained_concurrent_api_load() {
         .expect("login response should include a 'ticket' field (see LoginResponse)")
         .to_string();
 
+    // Clear `horcrux-stress-load*` containers left on this docker daemon by
+    // an EARLIER run (e.g. one whose in-flight `docker create` finished after
+    // that run's server was killed and its cleanup step had already run).
+    // Runners share a daemon across jobs, so without this the orphan check
+    // below blames this run for containers it never created (run 378 failed
+    // on five 8-hour-old `w*-207` containers from run 373).
+    let stale = docker_names_matching("horcrux-stress-load");
+    if !stale.is_empty() {
+        println!(
+            "removing {} stale horcrux-stress-load container(s) from an earlier run: {:?}",
+            stale.len(),
+            stale
+        );
+        let mut args = vec!["rm", "-f"];
+        args.extend(stale.iter().map(String::as_str));
+        run("docker", &args);
+    }
+
     let deadline = Instant::now() + duration;
     let health_url = format!("{api_base}/health");
     let health_base = api_base.clone();
