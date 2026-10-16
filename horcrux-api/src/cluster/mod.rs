@@ -8,12 +8,14 @@ pub mod membership;
 pub mod migration;
 pub mod node;
 pub mod state_sync;
+pub mod usage;
 
 use horcrux_common::Result;
 pub use node::{Node, NodeStatus};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+pub use usage::NodeUsage;
 
 /// Cluster configuration
 #[allow(dead_code)]
@@ -30,6 +32,10 @@ pub struct ClusterManager {
     nodes: Arc<RwLock<HashMap<String, Node>>>,
     corosync: corosync::CorosyncManager,
     local_node_name: Arc<RwLock<Option<String>>>,
+    /// This host's live usage sampler and its latest sample (served at
+    /// `GET /api/cluster/local-usage` for the other nodes' usage monitors).
+    usage_sampler: Arc<usage::LocalUsageSampler>,
+    local_usage: Arc<RwLock<Option<NodeUsage>>>,
 }
 
 #[allow(dead_code)]
@@ -46,7 +52,120 @@ impl ClusterManager {
             nodes: Arc::new(RwLock::new(HashMap::new())),
             corosync: corosync::CorosyncManager::new(),
             local_node_name: Arc::new(RwLock::new(None)),
+            usage_sampler: Arc::new(usage::LocalUsageSampler::new()),
+            local_usage: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// This host's latest live usage sample, taking one now if the usage
+    /// monitor hasn't produced one yet. `None` if procfs is unreadable.
+    pub async fn local_usage(&self) -> Option<NodeUsage> {
+        if let Some(sample) = self.local_usage.read().await.clone() {
+            return Some(sample);
+        }
+        let sample = self.usage_sampler.sample().await;
+        if let Some(ref s) = sample {
+            *self.local_usage.write().await = Some(s.clone());
+        }
+        sample
+    }
+
+    /// Start the background usage monitor: every [`usage::POLL_INTERVAL`]
+    /// it samples this host, then polls every registered node for its live
+    /// CPU/memory usage (this host directly, the rest over HTTP on
+    /// `api_port`) and records the result -- including online/offline
+    /// status -- on the node. This is the cluster's node heartbeat.
+    pub fn start_usage_monitor(self: &Arc<Self>, api_port: u16) {
+        let manager = Arc::clone(self);
+        tokio::spawn(async move {
+            let client = match reqwest::Client::builder()
+                .connect_timeout(usage::FETCH_TIMEOUT)
+                .timeout(usage::FETCH_TIMEOUT)
+                .build()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("Node usage monitor disabled: HTTP client: {}", e);
+                    return;
+                }
+            };
+            let mut ticker = tokio::time::interval(usage::POLL_INTERVAL);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            tracing::info!(
+                "Starting cluster node usage monitor (interval: {}s)",
+                usage::POLL_INTERVAL.as_secs()
+            );
+            loop {
+                ticker.tick().await;
+                manager.poll_node_usage_once(&client, api_port).await;
+            }
+        });
+    }
+
+    /// One usage-monitor round (see [`Self::start_usage_monitor`]).
+    pub async fn poll_node_usage_once(&self, client: &reqwest::Client, api_port: u16) {
+        let local_sample = self.usage_sampler.sample().await;
+        *self.local_usage.write().await = local_sample.clone();
+
+        let targets: Vec<Node> = self.nodes.read().await.values().cloned().collect();
+        if targets.is_empty() {
+            return;
+        }
+
+        let local_hostname = self.get_local_node_name().await.unwrap_or_default();
+        // Short-lived service token for the other nodes' local-usage
+        // endpoint. Nodes of one cluster share JWT_SECRET; a node that
+        // doesn't will answer 401, which is reported as "up, usage unknown".
+        let token = crate::middleware::auth::generate_jwt_token(
+            &format!("cluster-node:{}", local_hostname),
+            &format!("cluster-node:{}", local_hostname),
+            "cluster-node",
+        )
+        .ok();
+
+        let polls = targets.iter().map(|node| {
+            let local_sample = local_sample.clone();
+            let token = token.clone();
+            let local_hostname = local_hostname.clone();
+            async move {
+                let outcome = if usage::is_this_host(node, &local_hostname) {
+                    match local_sample {
+                        Some(sample) => usage::PollOutcome::Usage(sample),
+                        // We're obviously up; we just can't read procfs.
+                        None => usage::PollOutcome::ReachableNoUsage,
+                    }
+                } else {
+                    usage::fetch_remote_usage(client, &node.api_url(api_port), token.as_deref())
+                        .await
+                };
+                (node.name.clone(), outcome)
+            }
+        });
+        let results = futures::future::join_all(polls).await;
+
+        let now = chrono::Utc::now().timestamp();
+        let mut nodes = self.nodes.write().await;
+        for (name, outcome) in results {
+            // The node may have been removed while we were polling.
+            if let Some(node) = nodes.get_mut(&name) {
+                let was = node.status.clone();
+                usage::apply_poll(node, outcome, now);
+                if node.status != was {
+                    tracing::info!("Cluster node {} is now {:?}", name, node.status);
+                }
+            }
+        }
+    }
+
+    /// Cluster-wide summary for `GET /api/cluster/status`. Works whether or
+    /// not a Corosync cluster has been initialised: `name` is the Corosync
+    /// cluster name when there is one, and `has_quorum` is `None` when
+    /// quorum can't be determined (corosync-quorumtool not installed).
+    pub async fn status_report(&self, total_vms: usize) -> ClusterStatusReport {
+        let name = self._config.read().await.as_ref().map(|c| c.name.clone());
+        let nodes = self.list_nodes().await;
+        let has_quorum = self.corosync.check_quorum().await.ok();
+        ClusterStatusReport::from_nodes(name, &nodes, has_quorum, total_vms)
     }
 
     /// Get the local node name
@@ -161,11 +280,11 @@ impl ClusterManager {
         let mut nodes = self.nodes.write().await;
 
         let node = nodes.get(node_name).ok_or_else(|| {
-            horcrux_common::Error::InvalidConfig(format!("Node {} not found", node_name))
+            horcrux_common::Error::NotFound(format!("Node {} not found", node_name))
         })?;
 
         if node.is_local {
-            return Err(horcrux_common::Error::InvalidConfig(
+            return Err(horcrux_common::Error::Conflict(
                 "Cannot remove local node from cluster".to_string(),
             ));
         }
@@ -296,7 +415,7 @@ impl ClusterManager {
             .filter(|n| {
                 n.is_online()
                     && n.can_run_architecture(vm_arch)
-                    && n.memory_total >= required_memory
+                    && n.memory_available() >= required_memory
                     && n.cpu_cores >= required_cores
                     && n.priority >= min_priority.unwrap_or(0)
             })
@@ -320,10 +439,11 @@ impl ClusterManager {
                 _ => b.priority.cmp(&a.priority).then_with(|| {
                     // If both native or both emulated and equal priority,
                     // prefer more resources.
-                    let a_score = (a.memory_total / required_memory)
-                        + (a.cpu_cores as u64 / required_cores as u64);
-                    let b_score = (b.memory_total / required_memory)
-                        + (b.cpu_cores as u64 / required_cores as u64);
+                    // Free RAM is the live figure when the node reports it.
+                    let a_score = (a.memory_available() / required_memory.max(1))
+                        + (a.cpu_cores as u64 / required_cores.max(1) as u64);
+                    let b_score = (b.memory_available() / required_memory.max(1))
+                        + (b.cpu_cores as u64 / required_cores.max(1) as u64);
                     b_score.cmp(&a_score)
                 }),
             }
@@ -340,7 +460,7 @@ impl ClusterManager {
     pub async fn set_node_priority(&self, node_name: &str, priority: u32) -> Result<()> {
         let mut nodes = self.nodes.write().await;
         let node = nodes.get_mut(node_name).ok_or_else(|| {
-            horcrux_common::Error::InvalidConfig(format!("Node {} not found", node_name))
+            horcrux_common::Error::NotFound(format!("Node {} not found", node_name))
         })?;
         node.priority = priority;
         Ok(())
@@ -413,6 +533,54 @@ pub struct ClusterStatus {
     pub quorum_votes: u32,
 }
 
+/// Body of `GET /api/cluster/status`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ClusterStatusReport {
+    /// Corosync cluster name, `null` if no Corosync cluster is configured.
+    pub name: Option<String>,
+    pub total_nodes: usize,
+    pub online_nodes: usize,
+    /// Corosync quorum, `null` when it can't be determined.
+    pub has_quorum: Option<bool>,
+    /// VMs managed by the API server answering the request.
+    pub total_vms: usize,
+    /// Sum of `cpu_cores` over all nodes.
+    pub total_cpus: u32,
+    /// Sum of `memory_total` over all nodes, bytes.
+    pub total_memory: u64,
+    /// Sum of live `memory_used` over the nodes currently reporting usage,
+    /// bytes; `null` if no node is reporting.
+    pub memory_used: Option<u64>,
+    /// How many nodes are currently reporting live usage.
+    pub nodes_reporting_usage: usize,
+}
+
+impl ClusterStatusReport {
+    pub fn from_nodes(
+        name: Option<String>,
+        nodes: &[Node],
+        has_quorum: Option<bool>,
+        total_vms: usize,
+    ) -> Self {
+        let reporting: Vec<u64> = nodes.iter().filter_map(|n| n.memory_used).collect();
+        Self {
+            name,
+            total_nodes: nodes.len(),
+            online_nodes: nodes.iter().filter(|n| n.is_online()).count(),
+            has_quorum,
+            total_vms,
+            total_cpus: nodes.iter().map(|n| n.cpu_cores).sum(),
+            total_memory: nodes.iter().map(|n| n.memory_total).sum(),
+            memory_used: if reporting.is_empty() {
+                None
+            } else {
+                Some(reporting.iter().sum())
+            },
+            nodes_reporting_usage: reporting.len(),
+        }
+    }
+}
+
 /// Architecture summary for the cluster
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ArchitectureSummary {
@@ -420,4 +588,142 @@ pub struct ArchitectureSummary {
     pub aarch64_nodes: usize,
     pub other_nodes: usize,
     pub is_mixed: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use node::{AddNodeRequest, Architecture};
+
+    fn node(name: &str, cores: u32, mem_total: u64, mem_used: Option<u64>, online: bool) -> Node {
+        let req: AddNodeRequest = serde_json::from_value(serde_json::json!({
+            "address": "10.0.0.1",
+            "architecture": "x86_64",
+            "cpu_cores": cores,
+            "memory_total": mem_total,
+            "status": if online { "online" } else { "offline" },
+        }))
+        .unwrap();
+        let mut n = req.into_node(name.to_string(), 1);
+        n.memory_used = mem_used;
+        n.cpu_usage = mem_used.map(|_| 10.0);
+        n
+    }
+
+    #[test]
+    fn status_report_wire_shape() {
+        let nodes = vec![
+            node("a", 8, 16 << 30, Some(4 << 30), true),
+            node("b", 4, 8 << 30, None, false),
+        ];
+        let report = ClusterStatusReport::from_nodes(None, &nodes, None, 3);
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "name": null,
+                "total_nodes": 2,
+                "online_nodes": 1,
+                "has_quorum": null,
+                "total_vms": 3,
+                "total_cpus": 12,
+                "total_memory": 25769803776u64,
+                "memory_used": 4294967296u64,
+                "nodes_reporting_usage": 1
+            })
+        );
+    }
+
+    #[test]
+    fn status_report_memory_used_is_null_when_nobody_reports() {
+        let nodes = vec![node("a", 8, 16 << 30, None, true)];
+        let report = ClusterStatusReport::from_nodes(Some("c1".into()), &nodes, Some(true), 0);
+        assert_eq!(
+            report.memory_used, None,
+            "unknown must not be reported as 0"
+        );
+        assert_eq!(report.nodes_reporting_usage, 0);
+        assert_eq!(report.name.as_deref(), Some("c1"));
+        assert_eq!(report.has_quorum, Some(true));
+    }
+
+    #[tokio::test]
+    async fn remove_node_removes_and_reports_not_found() {
+        let mgr = ClusterManager::new();
+        mgr.add_node(node("gone", 2, 1 << 30, None, true))
+            .await
+            .unwrap();
+        mgr.remove_node("gone").await.unwrap();
+        assert!(mgr.list_nodes().await.is_empty());
+        match mgr.remove_node("gone").await {
+            Err(horcrux_common::Error::NotFound(_)) => {}
+            other => panic!("expected NotFound, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn remove_node_refuses_local_node() {
+        let mgr = ClusterManager::new();
+        let mut local = node("me", 2, 1 << 30, None, true);
+        local.is_local = true;
+        mgr.add_node(local).await.unwrap();
+        assert!(matches!(
+            mgr.remove_node("me").await,
+            Err(horcrux_common::Error::Conflict(_))
+        ));
+        assert_eq!(mgr.list_nodes().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn find_best_node_uses_live_free_memory() {
+        let mgr = ClusterManager::new();
+        // "big" has more total RAM but almost all of it is in use.
+        mgr.add_node(node("big", 8, 64 << 30, Some(62 << 30), true))
+            .await
+            .unwrap();
+        mgr.add_node(node("small", 8, 16 << 30, Some(2 << 30), true))
+            .await
+            .unwrap();
+        let picked = mgr
+            .find_best_node(&Architecture::X86_64, 4 << 30, 2, None)
+            .await
+            .unwrap();
+        assert_eq!(picked, "small");
+    }
+
+    #[tokio::test]
+    async fn poll_round_samples_this_host_and_marks_dead_nodes_offline() {
+        if !std::path::Path::new("/proc/stat").exists() {
+            return;
+        }
+        let mgr = ClusterManager::new();
+        let mut here = node("here", 0, 0, None, false);
+        here.ip = "127.0.0.1".into();
+        mgr.add_node(here).await.unwrap();
+        // TEST-NET-1 (RFC 5737) is never routed: unreachable -> offline.
+        let mut dead = node("dead", 2, 1 << 30, None, true);
+        dead.ip = "192.0.2.1".into();
+        mgr.add_node(dead).await.unwrap();
+
+        let client = reqwest::Client::new();
+        mgr.poll_node_usage_once(&client, 9).await;
+
+        let nodes: HashMap<String, Node> = mgr
+            .list_nodes()
+            .await
+            .into_iter()
+            .map(|n| (n.name.clone(), n))
+            .collect();
+        let here = &nodes["here"];
+        assert_eq!(here.status, NodeStatus::Online);
+        assert!(here.cpu_usage.is_some());
+        assert!(here.memory_used.is_some());
+        assert!(here.memory_total > 0 && here.cpu_cores > 0);
+        assert!(mgr.local_usage().await.is_some());
+
+        let dead = &nodes["dead"];
+        assert_eq!(dead.status, NodeStatus::Offline);
+        assert_eq!(dead.cpu_usage, None);
+        assert_eq!(dead.memory_used, None);
+    }
 }

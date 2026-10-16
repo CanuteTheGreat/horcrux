@@ -334,18 +334,78 @@ pub struct ClusterNode {
     pub cpu_cores: u32,
     /// Total RAM in bytes.
     pub memory_total: u64,
-    /// Live usage figures. The node API does not report these today, so
-    /// they stay at 0 unless a future API version adds them.
+    /// Live CPU utilisation in percent, reported by the node's own
+    /// heartbeat. `None` = unknown (unreachable / never reported) -- show it
+    /// as unknown, never as 0%.
     #[serde(default)]
-    pub memory_used: u64,
+    pub cpu_usage: Option<f64>,
+    /// Live RAM in use, bytes. `None` = unknown, same rules as `cpu_usage`.
     #[serde(default)]
-    pub cpu_usage: f64,
+    pub memory_used: Option<u64>,
+    /// Unix seconds of the node's last successful usage report.
     #[serde(default)]
-    pub memory_usage: f64,
+    pub last_seen: Option<i64>,
 }
 
 fn default_node_priority() -> u32 {
     100
+}
+
+impl ClusterNode {
+    /// Fraction (0.0-1.0) of RAM in use, when both figures are known.
+    pub fn memory_used_fraction(&self) -> Option<f64> {
+        match self.memory_used {
+            Some(used) if self.memory_total > 0 => Some(used as f64 / self.memory_total as f64),
+            _ => None,
+        }
+    }
+
+    /// Combined load score in 0.0-1.0 (mean of CPU and RAM utilisation);
+    /// `None` unless both live figures are known.
+    pub fn load_score(&self) -> Option<f64> {
+        let cpu = self.cpu_usage?.clamp(0.0, 100.0) / 100.0;
+        let mem = self.memory_used_fraction()?.clamp(0.0, 1.0);
+        Some((cpu + mem) / 2.0)
+    }
+
+    /// Human-readable live usage, e.g. "12.5% CPU, 3.2 / 16.0 GB RAM", with
+    /// each unknown figure spelled out as unknown rather than 0.
+    pub fn usage_label(&self) -> String {
+        const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+        let cpu = match self.cpu_usage {
+            Some(c) => format!("{:.1}% CPU", c),
+            None => "CPU unknown".to_string(),
+        };
+        let mem = match self.memory_used {
+            Some(used) if self.memory_total > 0 => format!(
+                "{:.1} / {:.1} GB RAM",
+                used as f64 / GIB,
+                self.memory_total as f64 / GIB
+            ),
+            Some(used) => format!("{:.1} GB RAM used", used as f64 / GIB),
+            None => "RAM unknown".to_string(),
+        };
+        format!("{}, {}", cpu, mem)
+    }
+}
+
+/// Pick a migration target: the online node (other than `source_node`)
+/// with the lowest combined CPU+RAM load, tie-broken by higher placement
+/// weight. Only nodes reporting real live usage are eligible -- a node whose
+/// usage is unknown is never auto-picked (the operator can still choose it
+/// by hand). Returns `None` when no node qualifies.
+pub fn pick_migration_target(nodes: &[ClusterNode], source_node: Option<&str>) -> Option<String> {
+    nodes
+        .iter()
+        .filter(|n| n.status == "online")
+        .filter(|n| source_node != Some(n.name.as_str()))
+        .filter_map(|n| n.load_score().map(|score| (n, score)))
+        .min_by(|(a, sa), (b, sb)| {
+            sa.partial_cmp(sb)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.priority.cmp(&a.priority))
+        })
+        .map(|(n, _)| n.name.clone())
 }
 
 /// Get cluster nodes
@@ -5397,6 +5457,99 @@ mod tests {
         assert!(n.is_local);
         assert_eq!(nodes[1].priority, 50);
         assert_eq!(nodes[1].cpu_cores, 4);
+    }
+
+    #[test]
+    fn cluster_node_usage_is_unknown_when_api_omits_or_nulls_it() {
+        let nodes: Vec<ClusterNode> = serde_json::from_str(NODES_JSON).unwrap();
+        assert_eq!(nodes[0].cpu_usage, None);
+        assert_eq!(nodes[0].memory_used, None);
+        assert_eq!(nodes[0].usage_label(), "CPU unknown, RAM unknown");
+        let n: ClusterNode = serde_json::from_str(
+            r#"{"name":"n","ip":"10.0.0.9","status":"online","architecture":"x86_64",
+                "cpu_cores":2,"memory_total":1073741824,
+                "cpu_usage":null,"memory_used":null,"last_seen":null}"#,
+        )
+        .unwrap();
+        assert_eq!(n.cpu_usage, None);
+        assert_eq!(n.load_score(), None);
+    }
+
+    #[test]
+    fn cluster_node_live_usage_deserializes() {
+        // horcrux-api `cluster::node::Node` with live usage filled in by the
+        // node heartbeat.
+        let n: ClusterNode = serde_json::from_str(
+            r#"{"id":3,"name":"n","ip":"10.0.0.9","status":"online","priority":100,
+                "is_local":false,"architecture":"x86_64","cpu_cores":8,
+                "memory_total":17179869184,"cpu_usage":12.5,
+                "memory_used":4294967296,"last_seen":1760000000}"#,
+        )
+        .unwrap();
+        assert_eq!(n.cpu_usage, Some(12.5));
+        assert_eq!(n.memory_used, Some(4_294_967_296));
+        assert_eq!(n.last_seen, Some(1_760_000_000));
+        assert_eq!(n.memory_used_fraction(), Some(0.25));
+        assert_eq!(n.usage_label(), "12.5% CPU, 4.0 / 16.0 GB RAM");
+    }
+
+    fn usage_node(name: &str, status: &str, cpu: Option<f64>, used_gb: Option<u64>) -> ClusterNode {
+        ClusterNode {
+            id: 0,
+            name: name.into(),
+            ip: "10.0.0.1".into(),
+            status: status.into(),
+            priority: 100,
+            is_local: false,
+            architecture: "x86_64".into(),
+            cpu_cores: 8,
+            memory_total: 16 << 30,
+            cpu_usage: cpu,
+            memory_used: used_gb.map(|g| g << 30),
+            last_seen: None,
+        }
+    }
+
+    #[test]
+    fn migration_target_is_least_loaded_reporting_node() {
+        let nodes = vec![
+            usage_node("busy", "online", Some(90.0), Some(14)),
+            usage_node("idle", "online", Some(5.0), Some(2)),
+            usage_node("mid", "online", Some(40.0), Some(8)),
+        ];
+        assert_eq!(pick_migration_target(&nodes, None).as_deref(), Some("idle"));
+        // Never the node the resource already lives on.
+        assert_eq!(
+            pick_migration_target(&nodes, Some("idle")).as_deref(),
+            Some("mid")
+        );
+    }
+
+    #[test]
+    fn migration_target_never_picks_unknown_or_offline_nodes() {
+        // The old picker treated missing usage as 0 and so always chose
+        // whichever node it knew nothing about.
+        let nodes = vec![
+            usage_node("unknown", "online", None, None),
+            usage_node("half-known", "online", Some(1.0), None),
+            usage_node("down", "offline", Some(0.0), Some(0)),
+            usage_node("loaded", "online", Some(70.0), Some(12)),
+        ];
+        assert_eq!(
+            pick_migration_target(&nodes, None).as_deref(),
+            Some("loaded")
+        );
+        let none_known = vec![usage_node("unknown", "online", None, None)];
+        assert_eq!(pick_migration_target(&none_known, None), None);
+    }
+
+    #[test]
+    fn migration_target_tie_breaks_on_placement_weight() {
+        let mut a = usage_node("a", "online", Some(10.0), Some(4));
+        let mut b = usage_node("b", "online", Some(10.0), Some(4));
+        a.priority = 100;
+        b.priority = 500;
+        assert_eq!(pick_migration_target(&[a, b], None).as_deref(), Some("b"));
     }
 
     #[test]

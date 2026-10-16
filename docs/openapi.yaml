@@ -627,6 +627,75 @@ paths:
                 items:
                   $ref: '#/components/schemas/ClusterNode'
 
+  /api/cluster/nodes/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Clustering]
+      summary: Add cluster node
+      description: Register a node. Only `address` (alias `ip`) is required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address]
+              properties:
+                address:
+                  type: string
+                  example: "192.168.1.11"
+                architecture:
+                  type: string
+                  example: "x86_64"
+                priority:
+                  type: integer
+                  example: 100
+      responses:
+        '201':
+          description: Node added
+    delete:
+      tags: [Clustering]
+      summary: Remove cluster node
+      responses:
+        '204':
+          description: Node removed
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The local node cannot be removed
+
+  /api/cluster/status:
+    get:
+      tags: [Clustering]
+      summary: Get cluster status
+      responses:
+        '200':
+          description: Cluster summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterStatus'
+
+  /api/cluster/local-usage:
+    get:
+      tags: [Clustering]
+      summary: This node's live CPU/memory usage
+      description: Polled by the other cluster nodes' heartbeat.
+      responses:
+        '200':
+          description: Live usage sample
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeUsage'
+        '503':
+          description: Host usage is not readable
+
   /api/cluster/architecture:
     get:
       tags: [Clustering]
@@ -1197,34 +1266,123 @@ components:
 
     ClusterNode:
       type: object
+      description: |
+        A cluster node (horcrux-api `cluster::node::Node`). `cpu_usage`,
+        `memory_used` and `last_seen` come from the node heartbeat (each
+        server polls every node's `/api/cluster/local-usage` every 10 s) and
+        are `null` when unknown -- never 0.
       properties:
         id:
-          type: string
-          example: "node1"
+          type: integer
+          example: 1
         name:
           type: string
           example: "node1"
-        ip_address:
+        ip:
           type: string
           example: "192.168.1.10"
-        architecture:
-          type: string
-          enum: [X86_64, Aarch64, Riscv64, Ppc64le]
-          example: "X86_64"
         status:
           type: string
           enum: [online, offline, unknown]
           example: "online"
-        vms_running:
+        priority:
           type: integer
-          example: 15
+          description: Placement/HA weight (0-1000, default 100)
+          example: 100
+        is_local:
+          type: boolean
+          example: false
+        architecture:
+          type: string
+          enum: [x86_64, aarch64, riscv64, ppc64le, unknown]
+          example: "x86_64"
         cpu_cores:
           type: integer
           example: 32
         memory_total:
           type: integer
+          format: int64
           description: Total memory in bytes
           example: 137438953472
+        cpu_usage:
+          type: number
+          nullable: true
+          description: Live CPU utilisation, percent (0-100); null = unknown
+          example: 12.5
+        memory_used:
+          type: integer
+          format: int64
+          nullable: true
+          description: Live memory in use, bytes; null = unknown
+          example: 34359738368
+        last_seen:
+          type: integer
+          format: int64
+          nullable: true
+          description: Unix time of the last successful usage report
+          example: 1760572800
+
+    NodeUsage:
+      type: object
+      description: A node's own live usage sample (`GET /api/cluster/local-usage`)
+      properties:
+        cpu_usage:
+          type: number
+          example: 12.5
+        memory_used:
+          type: integer
+          format: int64
+          example: 34359738368
+        memory_total:
+          type: integer
+          format: int64
+          example: 137438953472
+        cpu_cores:
+          type: integer
+          example: 32
+        architecture:
+          type: string
+          example: "x86_64"
+        timestamp:
+          type: integer
+          format: int64
+          example: 1760572800
+
+    ClusterStatus:
+      type: object
+      properties:
+        name:
+          type: string
+          nullable: true
+          description: Corosync cluster name; null if none is configured
+        total_nodes:
+          type: integer
+          example: 3
+        online_nodes:
+          type: integer
+          example: 2
+        has_quorum:
+          type: boolean
+          nullable: true
+          description: Corosync quorum; null when it can't be determined
+        total_vms:
+          type: integer
+          example: 12
+        total_cpus:
+          type: integer
+          example: 48
+        total_memory:
+          type: integer
+          format: int64
+          example: 274877906944
+        memory_used:
+          type: integer
+          format: int64
+          nullable: true
+          description: Sum of live usage over reporting nodes; null if none report
+        nodes_reporting_usage:
+          type: integer
+          example: 2
 
     ArchitectureSummary:
       type: object
@@ -1235,13 +1393,10 @@ components:
         aarch64_nodes:
           type: integer
           example: 1
-        riscv64_nodes:
+        other_nodes:
           type: integer
           example: 0
-        ppc64le_nodes:
-          type: integer
-          example: 0
-        mixed_architecture:
+        is_mixed:
           type: boolean
           example: true
 

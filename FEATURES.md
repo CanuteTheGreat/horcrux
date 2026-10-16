@@ -199,12 +199,14 @@ USE="lxc docker podman webui" emerge horcrux
 - `POST /api/storage/pools/{id}/volumes/{name}/restore` - Restore snapshot
 
 ### Cluster
-- `POST /api/cluster/create` - Initialize cluster
-- `POST /api/cluster/join` - Join cluster
-- `GET /api/cluster/nodes` - List cluster nodes
-- `POST /api/cluster/nodes` - Add node
-- `DELETE /api/cluster/nodes/{id}` - Remove node
+- `GET /api/cluster/nodes` - List cluster nodes (with live CPU/memory usage)
+- `POST /api/cluster/nodes/{name}` - Add node
+- `DELETE /api/cluster/nodes/{name}` - Remove node
+- `PATCH /api/cluster/nodes/{name}/priority` - Set placement/HA weight
 - `GET /api/cluster/status` - Get cluster status
+- `GET /api/cluster/local-usage` - This node's live CPU/memory usage
+- `GET /api/cluster/architecture` - Architecture summary
+- `POST /api/cluster/find-node` - Best node for a VM
 
 ## Comparison to Proxmox VE
 

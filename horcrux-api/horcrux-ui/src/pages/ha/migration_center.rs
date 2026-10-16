@@ -184,15 +184,12 @@ pub fn MigrationCenterPage() -> impl IntoView {
         }
     };
 
-    let get_optimal_target_node = move |resource_id: &str| {
-        // Simple logic to find best node based on resource usage
-        cluster_nodes
-            .get()
-            .iter()
-            .filter(|node| node.status == "online")
-            .min_by_key(|node| node.memory_used + node.cpu_usage as u64)
-            .map(|node| node.name.clone())
-            .unwrap_or_default()
+    // Pre-select the least-loaded online node (by the live CPU/RAM usage
+    // each node reports through the cluster heartbeat), never the node the
+    // resource is already on. Nodes with unknown usage are never auto-picked;
+    // if none report usage the selection is left empty for the operator.
+    let get_optimal_target_node = move |source_node: &str| {
+        pick_migration_target(&cluster_nodes.get(), Some(source_node)).unwrap_or_default()
     };
 
     // Auto-refresh with setInterval from web APIs
@@ -433,7 +430,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                                     disabled=!can_migrate
                                                     on:click=move |_| {
                                                         set_selected_resource.set(Some(("vm".to_string(), vm_clone.vmid.to_string())));
-                                                        set_target_node.set(get_optimal_target_node(&vm_clone.vmid.to_string()));
+                                                        set_target_node.set(get_optimal_target_node(&vm_clone.node));
                                                         set_show_migration_modal.set(true);
                                                     }
                                                 >
@@ -515,7 +512,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                                     disabled=!can_migrate
                                                     on:click=move |_| {
                                                         set_selected_resource.set(Some(("container".to_string(), container_clone.vmid.to_string())));
-                                                        set_target_node.set(get_optimal_target_node(&container_clone.vmid.to_string()));
+                                                        set_target_node.set(get_optimal_target_node(&container_clone.node));
                                                         set_show_migration_modal.set(true);
                                                     }
                                                 >
@@ -591,12 +588,10 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                         {cluster_nodes.get().into_iter().filter(|n| n.status == "online").map(|node| {
                                             let node_name = node.name.clone();
                                             let node_name_val = node.name.clone();
-                                            let cpu_usage = node.cpu_usage;
-                                            let memory_gb = format!("{:.1}", node.memory_used as f64 / 1024.0 / 1024.0 / 1024.0);
+                                            let usage = node.usage_label();
                                             view! {
                                                 <option value={node_name_val}>
-                                                    {node_name}" ("{cpu_usage}"% CPU, "
-                                                    {memory_gb}"GB used)"
+                                                    {node_name}" ("{usage}")"
                                                 </option>
                                             }
                                         }).collect::<Vec<_>>()}
@@ -719,10 +714,10 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                         {cluster_nodes.get().into_iter().filter(|n| n.status == "online").map(|node| {
                                             let node_name = node.name.clone();
                                             let node_name_val = node.name.clone();
-                                            let cpu_usage = node.cpu_usage;
+                                            let usage = node.usage_label();
                                             view! {
                                                 <option value={node_name_val}>
-                                                    {node_name}" ("{cpu_usage}"% CPU)"
+                                                    {node_name}" ("{usage}")"
                                                 </option>
                                             }
                                         }).collect::<Vec<_>>()}

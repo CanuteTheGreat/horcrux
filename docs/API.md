@@ -1609,28 +1609,109 @@ GET /metrics
 
 ### List Cluster Nodes
 
-Lists all nodes in the cluster.
+Lists all nodes in the cluster. `cpu_usage` (percent) and `memory_used`
+(bytes) are live figures from the node heartbeat: every 10 s each
+horcrux-api polls every registered node's `GET /api/cluster/local-usage`
+(this host is sampled directly from procfs) and updates the node's usage
+and `status` (`online` when it answers; `offline` after 30 s without an
+answer). They are `null` when unknown -- the node is unreachable, has never
+reported, or rejected the poll (nodes must share `JWT_SECRET`) -- and are
+never reported as 0 in that case. `last_seen` is the Unix time of the last
+successful report. `cpu_cores`, `memory_total` and an `unknown`
+architecture are filled in from the node's own report.
 
 ```http
 GET /api/cluster/nodes
-Authorization: Bearer <token>
+Authorization: Bearer ***
 ```
 
 **Response**:
 ```json
 [
   {
+    "id": 1,
     "name": "horcrux-node-1",
-    "address": "192.168.1.10",
-    "architecture": "x86_64",
+    "ip": "192.168.1.10",
     "status": "online",
+    "priority": 100,
+    "is_local": false,
+    "architecture": "x86_64",
     "cpu_cores": 8,
     "memory_total": 17179869184,
-    "vms_running": 5,
-    "joined_at": "2025-10-01T10:00:00Z"
+    "cpu_usage": 12.5,
+    "memory_used": 4294967296,
+    "last_seen": 1760572800
+  },
+  {
+    "id": 2,
+    "name": "horcrux-node-2",
+    "ip": "192.168.1.11",
+    "status": "offline",
+    "priority": 100,
+    "is_local": false,
+    "architecture": "aarch64",
+    "cpu_cores": 4,
+    "memory_total": 8589934592,
+    "cpu_usage": null,
+    "memory_used": null,
+    "last_seen": null
   }
 ]
 ```
+
+### Get Cluster Status
+
+Cluster-wide summary (`horcrux cluster status`). `name` is the Corosync
+cluster name (`null` if none is configured); `has_quorum` is `null` when
+quorum can't be determined (`corosync-quorumtool` unavailable).
+`total_vms` counts VMs managed by the answering server. `memory_used` sums
+the live usage of the `nodes_reporting_usage` nodes that report it and is
+`null` if none do.
+
+```http
+GET /api/cluster/status
+Authorization: Bearer ***
+```
+
+**Response**:
+```json
+{
+  "name": null,
+  "total_nodes": 2,
+  "online_nodes": 1,
+  "has_quorum": null,
+  "total_vms": 3,
+  "total_cpus": 12,
+  "total_memory": 25769803776,
+  "memory_used": 4294967296,
+  "nodes_reporting_usage": 1
+}
+```
+
+### Get This Node's Live Usage
+
+This server's own live usage, sampled from procfs (CPU is a real delta
+between consecutive `/proc/stat` reads; memory is MemTotal - MemAvailable).
+Polled by the other cluster nodes' heartbeat.
+
+```http
+GET /api/cluster/local-usage
+Authorization: Bearer ***
+```
+
+**Response**:
+```json
+{
+  "cpu_usage": 12.5,
+  "memory_used": 4294967296,
+  "memory_total": 17179869184,
+  "cpu_cores": 8,
+  "architecture": "x86_64",
+  "timestamp": 1760572800
+}
+```
+
+`503` if procfs can't be read.
 
 ### Add Cluster Node
 
@@ -1663,6 +1744,16 @@ Content-Type: application/json
 ```
 
 **Response**: `200 OK` (no body).
+
+### Remove Cluster Node
+
+```http
+DELETE /api/cluster/nodes/{name}
+Authorization: Bearer ***
+```
+
+**Response**: `204 No Content`; `404` if no such node; `409` for the local
+node.
 
 ### Get Cluster Architecture
 

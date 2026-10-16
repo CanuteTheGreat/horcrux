@@ -419,6 +419,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                                                 <div>{node.cpu_cores} " CPU cores"</div>
                                                                 <div>{format_memory(node.memory_total)} " RAM"</div>
                                                             </div>
+                                                            <div class="text-xs text-gray-700">{node.usage_label()}</div>
                                                             <div class="text-xs text-gray-500">{node.architecture.clone()}</div>
                                                         </td>
                                                         <td class="px-6 py-4 whitespace-nowrap">

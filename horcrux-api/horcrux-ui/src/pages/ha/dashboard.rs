@@ -332,6 +332,7 @@ pub fn HaDashboard() -> impl IntoView {
                                                 let mem = super::cluster_management::format_memory(node.memory_total);
                                                 let weight = node.priority;
                                                 let arch = node.architecture.clone();
+                                                let usage = node.usage_label();
                                                 view! {
                                                     <tr>
                                                         <td class="px-6 py-4 whitespace-nowrap">
@@ -350,6 +351,7 @@ pub fn HaDashboard() -> impl IntoView {
                                                                 <div>{cores} " CPU cores"</div>
                                                                 <div>{mem} " RAM"</div>
                                                             </div>
+                                                            <div class="text-xs text-gray-700">{usage}</div>
                                                         </td>
                                                         <td class="px-6 py-4 whitespace-nowrap">
                                                             <div class="text-sm font-medium text-gray-900">{weight}</div>

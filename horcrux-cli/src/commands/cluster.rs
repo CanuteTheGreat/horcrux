@@ -28,6 +28,12 @@ struct Node {
     /// failing deserialization.
     #[serde(default = "default_priority")]
     priority: u32,
+    /// Live CPU % / RAM in use (bytes) from the node heartbeat. `null` (or
+    /// absent on older servers) means unknown -- shown as "unknown", never 0.
+    #[serde(default)]
+    cpu_usage: Option<f64>,
+    #[serde(default)]
+    memory_used: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +57,10 @@ struct NodeRow {
     memory: String,
     cpus: u32,
     status: String,
+    #[tabled(rename = "cpu")]
+    cpu_usage: String,
+    #[tabled(rename = "mem used")]
+    memory_used: String,
     priority: u32,
 }
 
@@ -68,6 +78,14 @@ impl From<Node> for NodeRow {
                 NodeStatus::Unknown => "Unknown",
             }
             .to_string(),
+            cpu_usage: node
+                .cpu_usage
+                .map(|c| format!("{:.1}%", c))
+                .unwrap_or_else(|| "unknown".to_string()),
+            memory_used: node
+                .memory_used
+                .map(format_bytes)
+                .unwrap_or_else(|| "unknown".to_string()),
             priority: node.priority,
         }
     }
@@ -105,14 +123,37 @@ struct AddNodeRequest {
     address: String,
 }
 
+/// Mirrors horcrux-api's `cluster::ClusterStatusReport`
+/// (`GET /api/cluster/status`). That route didn't exist until this struct's
+/// shape was pinned to it, so `horcrux cluster status` always 404'd.
 #[derive(Debug, Serialize, Deserialize)]
 struct ClusterStatus {
+    /// Corosync cluster name; `null` when no Corosync cluster is set up.
+    #[serde(default)]
+    name: Option<String>,
     total_nodes: usize,
     online_nodes: usize,
+    /// `null` when quorum can't be determined.
+    #[serde(default)]
+    has_quorum: Option<bool>,
     total_vms: usize,
-    total_memory: u64,
     total_cpus: u32,
+    /// Bytes.
+    total_memory: u64,
+    /// Bytes in use across the nodes reporting usage; `null` if none do.
+    #[serde(default)]
+    memory_used: Option<u64>,
+    #[serde(default)]
+    nodes_reporting_usage: usize,
 }
+
+/// Path of the remove-node endpoint (`DELETE`), shared with the tests so the
+/// CLI and the server router can't silently drift apart again.
+fn node_path(name: &str) -> String {
+    format!("/api/cluster/nodes/{}", name)
+}
+
+const CLUSTER_STATUS_PATH: &str = "/api/cluster/status";
 
 // Mirrors horcrux-api's `cluster::ArchitectureSummary` (the documented
 // /api/cluster/architecture contract since the first commit). This used to
@@ -140,7 +181,7 @@ pub async fn handle_cluster_command(
             output::print_output(rows, format)?;
         }
         ClusterCommands::Status => {
-            let status: ClusterStatus = api.get("/api/cluster/status").await?;
+            let status: ClusterStatus = api.get(CLUSTER_STATUS_PATH).await?;
             let format = OutputFormat::from_str(output_format);
             output::print_single(&status, format)?;
         }
@@ -150,12 +191,11 @@ pub async fn handle_cluster_command(
                 address: address.clone(),
             };
 
-            api.post_empty(&format!("/api/cluster/nodes/{}", name), &request)
-                .await?;
+            api.post_empty(&node_path(&name), &request).await?;
             output::print_created("Node", &name, &address);
         }
         ClusterCommands::Remove { name } => {
-            api.delete(&format!("/api/cluster/nodes/{}", name)).await?;
+            api.delete(&node_path(&name)).await?;
             output::print_deleted("Node", &name);
         }
         ClusterCommands::SetPriority { name, priority } => {
@@ -249,10 +289,70 @@ mod tests {
             cpu_cores: 4,
             status: NodeStatus::Online,
             priority: 100,
+            cpu_usage: None,
+            memory_used: None,
         };
         let row = NodeRow::from(node);
         assert_eq!(row.memory, format_bytes(8 * 1024 * 1024 * 1024));
         assert_eq!(row.address, "10.0.0.1");
         assert_eq!(row.status, "Online");
+        assert_eq!(
+            row.cpu_usage, "unknown",
+            "unknown usage must not print as 0"
+        );
+        assert_eq!(row.memory_used, "unknown");
+    }
+
+    #[test]
+    fn node_live_usage_deserializes_and_renders() {
+        let json = r#"{
+            "id": 2, "name": "n2", "ip": "10.0.0.2", "status": "online",
+            "priority": 100, "is_local": false, "architecture": "aarch64",
+            "cpu_cores": 4, "memory_total": 8589934592,
+            "cpu_usage": 37.5, "memory_used": 2147483648, "last_seen": 1760000000
+        }"#;
+        let node: Node = serde_json::from_str(json).expect("must deserialize");
+        assert_eq!(node.cpu_usage, Some(37.5));
+        assert_eq!(node.memory_used, Some(2_147_483_648));
+        let row = NodeRow::from(node);
+        assert_eq!(row.cpu_usage, "37.5%");
+        assert_eq!(row.memory_used, format_bytes(2_147_483_648));
+
+        let unknown = r#"{
+            "id": 3, "name": "n3", "ip": "10.0.0.3", "status": "offline",
+            "architecture": "x86_64", "cpu_cores": 4, "memory_total": 1024,
+            "cpu_usage": null, "memory_used": null, "last_seen": null
+        }"#;
+        let node: Node = serde_json::from_str(unknown).unwrap();
+        assert_eq!(node.cpu_usage, None);
+        assert_eq!(NodeRow::from(node).cpu_usage, "unknown");
+    }
+
+    #[test]
+    fn cluster_status_deserializes_from_real_api_shape() {
+        // Real horcrux-api /api/cluster/status (ClusterStatusReport) body.
+        let json = r#"{
+            "name": null, "total_nodes": 2, "online_nodes": 1, "has_quorum": null,
+            "total_vms": 3, "total_cpus": 12, "total_memory": 25769803776,
+            "memory_used": 4294967296, "nodes_reporting_usage": 1
+        }"#;
+        let status: ClusterStatus = serde_json::from_str(json).expect("must deserialize");
+        assert_eq!(status.name, None);
+        assert_eq!(status.total_nodes, 2);
+        assert_eq!(status.online_nodes, 1);
+        assert_eq!(status.has_quorum, None);
+        assert_eq!(status.total_vms, 3);
+        assert_eq!(status.total_cpus, 12);
+        assert_eq!(status.total_memory, 25_769_803_776);
+        assert_eq!(status.memory_used, Some(4_294_967_296));
+        assert_eq!(status.nodes_reporting_usage, 1);
+    }
+
+    #[test]
+    fn cluster_paths_match_server_routes() {
+        // horcrux-api registers GET /api/cluster/status and
+        // POST|DELETE /api/cluster/nodes/:name (cluster_routes in main.rs).
+        assert_eq!(CLUSTER_STATUS_PATH, "/api/cluster/status");
+        assert_eq!(node_path("node-02"), "/api/cluster/nodes/node-02");
     }
 }

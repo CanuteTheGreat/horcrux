@@ -161,6 +161,23 @@ pub struct Node {
     pub architecture: Architecture, // CPU architecture
     pub cpu_cores: u32,             // Total CPU cores
     pub memory_total: u64,          // Total RAM in bytes
+    /// Live CPU utilisation in percent (0-100, averaged over the last
+    /// heartbeat interval), as last reported by the node itself via
+    /// `GET /api/cluster/local-usage` (see `cluster::usage`). `None` means
+    /// genuinely unknown -- the node has never reported, is unreachable, or
+    /// answered without usage data -- and must be shown as unknown, never
+    /// as 0%: a 0 here would make an unreachable node look like the idlest
+    /// migration target in the cluster.
+    #[serde(default)]
+    pub cpu_usage: Option<f64>,
+    /// Live memory in use, in bytes (MemTotal - MemAvailable). `None` means
+    /// unknown, same rules as `cpu_usage`.
+    #[serde(default)]
+    pub memory_used: Option<u64>,
+    /// Unix timestamp (seconds) of the last successful usage report from
+    /// this node; `None` if it has never reported.
+    #[serde(default)]
+    pub last_seen: Option<i64>,
 }
 
 /// Node status
@@ -184,6 +201,9 @@ impl Node {
             architecture: Architecture::detect(),
             cpu_cores: num_cpus::get() as u32,
             memory_total: Self::detect_memory(),
+            cpu_usage: None,
+            memory_used: None,
+            last_seen: None,
         }
     }
 
@@ -199,6 +219,9 @@ impl Node {
             architecture: Architecture::detect(),
             cpu_cores: num_cpus::get() as u32,
             memory_total: Self::detect_memory(),
+            cpu_usage: None,
+            memory_used: None,
+            last_seen: None,
         }
     }
 
@@ -224,9 +247,32 @@ impl Node {
         self.status == NodeStatus::Online
     }
 
-    /// Get node address for API communication
-    pub fn api_url(&self) -> String {
-        format!("https://{}:8006", self.ip)
+    /// Base URL of this node's Horcrux API. horcrux-api always listens on
+    /// plain HTTP (TLS, if any, is terminated in front of it), and every
+    /// node in a cluster runs on the same configured port. IPv6 literals
+    /// are bracketed.
+    pub fn api_url(&self, port: u16) -> String {
+        if self.ip.contains(':') && !self.ip.starts_with('[') {
+            format!("http://[{}]:{}", self.ip, port)
+        } else {
+            format!("http://{}:{}", self.ip, port)
+        }
+    }
+
+    /// Fraction (0.0-1.0) of this node's RAM in use, when both the live
+    /// figure and the total are known.
+    pub fn memory_used_fraction(&self) -> Option<f64> {
+        match self.memory_used {
+            Some(used) if self.memory_total > 0 => Some(used as f64 / self.memory_total as f64),
+            _ => None,
+        }
+    }
+
+    /// RAM currently free for new VMs: total minus the live in-use figure
+    /// when known, otherwise the total (the pre-usage-reporting behaviour).
+    pub fn memory_available(&self) -> u64 {
+        self.memory_total
+            .saturating_sub(self.memory_used.unwrap_or(0))
     }
 
     /// Check if this node can run a VM with the target architecture
@@ -300,6 +346,11 @@ impl AddNodeRequest {
             architecture: self.architecture.unwrap_or(Architecture::Unknown),
             cpu_cores: self.cpu_cores,
             memory_total: self.memory_total,
+            // Live usage is never accepted from the client: it is only ever
+            // filled in by the usage monitor from the node's own report.
+            cpu_usage: None,
+            memory_used: None,
+            last_seen: None,
         }
     }
 }
@@ -346,5 +397,69 @@ mod tests {
         assert_eq!(node.cpu_cores, 4);
         assert_eq!(node.memory_total, 8_589_934_592);
         assert_eq!(node.architecture, Architecture::X86_64);
+    }
+
+    #[test]
+    fn node_serializes_unknown_usage_as_null_not_zero() {
+        let req: AddNodeRequest =
+            serde_json::from_str(r#"{"address":"10.0.0.2","cpu_cores":4,"memory_total":1024}"#)
+                .unwrap();
+        let node = req.into_node("n2".into(), 2);
+        let json = serde_json::to_value(&node).unwrap();
+        assert!(json["cpu_usage"].is_null());
+        assert!(json["memory_used"].is_null());
+        assert!(json["last_seen"].is_null());
+        assert_eq!(node.memory_used_fraction(), None);
+        assert_eq!(node.memory_available(), 1024);
+    }
+
+    #[test]
+    fn node_serializes_live_usage() {
+        let req: AddNodeRequest =
+            serde_json::from_str(r#"{"address":"10.0.0.2","cpu_cores":4,"memory_total":1000}"#)
+                .unwrap();
+        let mut node = req.into_node("n2".into(), 2);
+        node.cpu_usage = Some(42.5);
+        node.memory_used = Some(250);
+        node.last_seen = Some(1_700_000_000);
+        let json = serde_json::to_value(&node).unwrap();
+        assert_eq!(json["cpu_usage"], serde_json::json!(42.5));
+        assert_eq!(json["memory_used"], serde_json::json!(250));
+        assert_eq!(json["last_seen"], serde_json::json!(1_700_000_000));
+        assert_eq!(node.memory_used_fraction(), Some(0.25));
+        assert_eq!(node.memory_available(), 750);
+    }
+
+    #[test]
+    fn node_without_usage_fields_still_deserializes() {
+        // Shape sent by servers that predate live usage reporting.
+        let node: Node = serde_json::from_str(
+            r#"{"id":1,"name":"n","ip":"10.0.0.1","status":"online","priority":100,
+                "is_local":false,"architecture":"x86_64","cpu_cores":4,"memory_total":1024}"#,
+        )
+        .unwrap();
+        assert_eq!(node.cpu_usage, None);
+        assert_eq!(node.memory_used, None);
+        assert_eq!(node.last_seen, None);
+    }
+
+    #[test]
+    fn add_node_request_ignores_client_supplied_usage() {
+        let req: AddNodeRequest = serde_json::from_str(
+            r#"{"address":"10.0.0.3","cpu_usage":0.0,"memory_used":0,"last_seen":1}"#,
+        )
+        .unwrap();
+        let node = req.into_node("n3".into(), 3);
+        assert_eq!(node.cpu_usage, None);
+        assert_eq!(node.memory_used, None);
+        assert_eq!(node.last_seen, None);
+    }
+
+    #[test]
+    fn api_url_is_plain_http_on_configured_port() {
+        let mut node = Node::new(1, "n".into(), "10.0.0.1".into());
+        assert_eq!(node.api_url(8006), "http://10.0.0.1:8006");
+        node.ip = "fd00::1".into();
+        assert_eq!(node.api_url(9000), "http://[fd00::1]:9000");
     }
 }

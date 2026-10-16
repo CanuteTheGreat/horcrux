@@ -9,16 +9,21 @@ use crate::components::{Card, Header, Loading};
 #[function_component(ClusterView)]
 pub fn cluster_view() -> Html {
     let cluster = use_state(|| None::<ClusterStatus>);
+    let nodes = use_state(Vec::<NodeInfo>::new);
     let loading = use_state(|| true);
 
     {
         let cluster = cluster.clone();
+        let nodes = nodes.clone();
         let loading = loading.clone();
 
         use_effect_with((), move |_| {
             spawn_local(async move {
                 if let Ok(status) = ApiClient::get_cluster_status().await {
                     cluster.set(Some(status))
+                }
+                if let Ok(list) = ApiClient::list_cluster_nodes().await {
+                    nodes.set(list)
                 }
                 loading.set(false);
             });
@@ -43,23 +48,23 @@ pub fn cluster_view() -> Html {
                                 <div class="detail-grid">
                                     <div class="detail-row">
                                         <span class="label">{"Name:"}</span>
-                                        <span class="value">{&cluster_status.name}</span>
+                                        <span class="value">{cluster_status.display_name()}</span>
                                     </div>
                                     <div class="detail-row">
                                         <span class="label">{"Nodes:"}</span>
-                                        <span class="value">{cluster_status.nodes.len()}</span>
+                                        <span class="value">{format!("{} / {} online", cluster_status.online_nodes, cluster_status.total_nodes)}</span>
                                     </div>
                                     <div class="detail-row">
                                         <span class="label">{"Quorum:"}</span>
-                                        <span class={if cluster_status.quorum { "value success" } else { "value error" }}>
-                                            {if cluster_status.quorum { "Yes" } else { "No" }}
+                                        <span class={cluster_status.quorum_display().1}>
+                                            {cluster_status.quorum_display().0}
                                         </span>
                                     </div>
                                 </div>
                             </Card>
 
                             <Card title="Nodes">
-                                {cluster_status.nodes.iter().map(|node| {
+                                {nodes.iter().map(|node| {
                                     html! { <NodeCard node={node.clone()} /> }
                                 }).collect::<Html>()}
                             </Card>
@@ -90,14 +95,15 @@ fn node_card(props: &NodeCardProps) -> Html {
         <div class="node-item">
             <div class="node-header">
                 <span class="node-name">{&node.name}</span>
-                <span class={if node.online { "status-badge status-running" } else { "status-badge status-stopped" }}>
-                    {if node.online { "Online" } else { "Offline" }}
+                <span class={if node.is_online() { "status-badge status-running" } else { "status-badge status-stopped" }}>
+                    {node.status.clone()}
                 </span>
             </div>
             <div class="node-details">
-                <span class="node-detail">{"ID: "}{&node.id}</span>
+                <span class="node-detail">{"ID: "}{node.id}</span>
                 <span class="node-detail">{"Arch: "}{&node.architecture}</span>
-                {if node.local {
+                <span class="node-detail">{node.usage_label()}</span>
+                {if node.is_local {
                     html! { <span class="node-badge">{"Local"}</span> }
                 } else {
                     html! {}

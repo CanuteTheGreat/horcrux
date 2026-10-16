@@ -457,6 +457,12 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(not(feature = "qemu"))]
     let libvirt_manager = None;
 
+    // Cluster node heartbeat: keeps every registered node's live CPU/memory
+    // usage and online/offline status current.
+    state
+        .cluster_manager
+        .start_usage_monitor(horcrux_config.server.port);
+
     // Start metrics collection background task
     metrics_collector::start_metrics_collector(
         state.ws_state.clone(),
@@ -942,8 +948,13 @@ fn monitoring_routes() -> Router<Arc<AppState>> {
 fn cluster_routes() -> Router<Arc<AppState>> {
     Router::new()
         // Cluster management
+        .route("/api/cluster/status", get(get_cluster_status))
+        .route("/api/cluster/local-usage", get(get_local_node_usage))
         .route("/api/cluster/nodes", get(list_cluster_nodes))
-        .route("/api/cluster/nodes/:name", post(add_cluster_node))
+        .route(
+            "/api/cluster/nodes/:name",
+            post(add_cluster_node).delete(remove_cluster_node),
+        )
         .route(
             "/api/cluster/nodes/:name/priority",
             axum::routing::patch(set_node_priority),
@@ -8249,6 +8260,40 @@ async fn add_cluster_node(
     let node = request.into_node(name, next_id);
     state.cluster_manager.add_node(node).await?;
     Ok(StatusCode::CREATED)
+}
+
+/// `DELETE /api/cluster/nodes/:name` -- 204, 404 for an unknown node, 409
+/// for the local node.
+async fn remove_cluster_node(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.cluster_manager.remove_node(&name).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /api/cluster/status` -- cluster-wide summary.
+async fn get_cluster_status(
+    State(state): State<Arc<AppState>>,
+) -> Json<cluster::ClusterStatusReport> {
+    let total_vms = state.vm_manager.list_vms().await.len();
+    Json(state.cluster_manager.status_report(total_vms).await)
+}
+
+/// `GET /api/cluster/local-usage` -- this host's live CPU/memory usage.
+/// Polled by the other nodes' usage monitors to fill in `cpu_usage` /
+/// `memory_used` on their `GET /api/cluster/nodes`.
+async fn get_local_node_usage(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<cluster::NodeUsage>, ApiError> {
+    state
+        .cluster_manager
+        .local_usage()
+        .await
+        .map(Json)
+        .ok_or_else(|| {
+            ApiError::ServiceUnavailable("Host CPU/memory usage is not readable".to_string())
+        })
 }
 
 async fn get_cluster_architecture(State(state): State<Arc<AppState>>) -> Json<ArchitectureSummary> {

@@ -74,16 +74,16 @@ pub fn dashboard() -> Html {
                             <div class="status-grid">
                                 <div class="status-item">
                                     <span class="label">{"Name:"}</span>
-                                    <span class="value">{&cluster_status.name}</span>
+                                    <span class="value">{cluster_status.display_name()}</span>
                                 </div>
                                 <div class="status-item">
                                     <span class="label">{"Nodes:"}</span>
-                                    <span class="value">{cluster_status.nodes.len()}</span>
+                                    <span class="value">{format!("{} / {} online", cluster_status.online_nodes, cluster_status.total_nodes)}</span>
                                 </div>
                                 <div class="status-item">
                                     <span class="label">{"Quorum:"}</span>
-                                    <span class={if cluster_status.quorum { "value success" } else { "value error" }}>
-                                        {if cluster_status.quorum { "Yes" } else { "No" }}
+                                    <span class={cluster_status.quorum_display().1}>
+                                        {cluster_status.quorum_display().0}
                                     </span>
                                 </div>
                             </div>

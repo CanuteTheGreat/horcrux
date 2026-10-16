@@ -262,6 +262,138 @@ async fn test_cluster_operations() {
     assert!(response.is_ok(), "Failed to get cluster architecture");
 }
 
+/// `GET /api/cluster/status`, `DELETE /api/cluster/nodes/:name` (used by
+/// `horcrux cluster status` / `cluster remove`, and unregistered until
+/// now) and the node heartbeat filling in live CPU/memory usage.
+#[tokio::test]
+async fn test_cluster_status_remove_and_live_usage() {
+    const NODE: &str = "ci-loopback-node";
+    let client = create_client();
+    let token = admin_token(&client).await;
+
+    // Status is a protected route.
+    let resp = client
+        .get(format!("{}/cluster/status", API_BASE))
+        .send()
+        .await
+        .expect("status request");
+    assert_eq!(resp.status(), 401, "cluster status must require auth");
+
+    let resp = client
+        .get(format!("{}/cluster/status", API_BASE))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .expect("status request");
+    assert_eq!(resp.status(), 200, "GET /api/cluster/status must exist");
+    let status: serde_json::Value = resp.json().await.expect("status json");
+    for field in [
+        "name",
+        "total_nodes",
+        "online_nodes",
+        "has_quorum",
+        "total_vms",
+        "total_cpus",
+        "total_memory",
+        "memory_used",
+        "nodes_reporting_usage",
+    ] {
+        assert!(
+            status.get(field).is_some(),
+            "status missing {field}: {status}"
+        );
+    }
+
+    // This server's own usage endpoint (what other nodes poll).
+    let resp = client
+        .get(format!("{}/cluster/local-usage", API_BASE))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .expect("local-usage request");
+    assert_eq!(resp.status(), 200);
+    let usage: serde_json::Value = resp.json().await.unwrap();
+    assert!(usage["memory_total"].as_u64().unwrap_or(0) > 0, "{usage}");
+    assert!(usage["memory_used"].as_u64().unwrap_or(0) > 0, "{usage}");
+    let cpu = usage["cpu_usage"].as_f64().expect("cpu_usage number");
+    assert!((0.0..=100.0).contains(&cpu), "{usage}");
+
+    // Register this host by loopback address, with no specs and no status:
+    // the heartbeat must mark it online and fill in real usage + hardware.
+    let resp = client
+        .post(format!("{}/cluster/nodes/{}", API_BASE, NODE))
+        .bearer_auth(&token)
+        .json(&json!({"address": "127.0.0.1"}))
+        .send()
+        .await
+        .expect("add node");
+    assert_eq!(resp.status(), 201);
+
+    let mut reported = None;
+    for _ in 0..40 {
+        let nodes: Vec<serde_json::Value> = client
+            .get(format!("{}/cluster/nodes", API_BASE))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let node = nodes
+            .into_iter()
+            .find(|n| n["name"] == NODE)
+            .expect("added node listed");
+        if !node["cpu_usage"].is_null() {
+            reported = Some(node);
+            break;
+        }
+        assert!(
+            node["memory_used"].is_null(),
+            "usage must be null (unknown) until reported, never 0: {node}"
+        );
+        wait_for_operation(1000).await;
+    }
+    let node = reported.expect("node heartbeat never reported usage within 40s");
+    assert_eq!(node["status"], "online", "{node}");
+    assert!(node["memory_used"].as_u64().unwrap_or(0) > 0, "{node}");
+    assert!(node["memory_total"].as_u64().unwrap_or(0) > 0, "{node}");
+    assert!(node["cpu_cores"].as_u64().unwrap_or(0) > 0, "{node}");
+    assert!(node["last_seen"].as_i64().is_some(), "{node}");
+
+    // Remove it: 204, gone from the list, second delete is 404.
+    let resp = client
+        .delete(format!("{}/cluster/nodes/{}", API_BASE, NODE))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .expect("delete node");
+    assert_eq!(
+        resp.status(),
+        204,
+        "DELETE /api/cluster/nodes/:name must exist"
+    );
+
+    let nodes: Vec<serde_json::Value> = client
+        .get(format!("{}/cluster/nodes", API_BASE))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(!nodes.iter().any(|n| n["name"] == NODE), "node not removed");
+
+    let resp = client
+        .delete(format!("{}/cluster/nodes/{}", API_BASE, NODE))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
 #[tokio::test]
 async fn test_storage_operations() {
     let client = create_client();
