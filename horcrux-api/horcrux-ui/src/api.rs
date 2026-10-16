@@ -456,6 +456,8 @@ pub struct Container {
     #[serde(default)]
     pub node: String,
     pub runtime: String,
+    /// The API's ContainerConfig carries the image name as `rootfs`.
+    #[serde(alias = "rootfs")]
     pub image: String,
     pub status: String,
     #[serde(default)]
