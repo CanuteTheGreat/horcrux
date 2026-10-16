@@ -29,6 +29,7 @@ mod vm_list;
 
 pub use alerts::Alerts;
 pub use clone_list::CloneList;
+pub use console::VmConsole;
 pub use container_console::{ContainerExecPage, ContainerLogsPage};
 pub use container_events::ContainerEventsPage;
 pub use container_images::ImagesPage;
@@ -46,7 +47,6 @@ pub use snapshot_list::SnapshotList;
 pub use storage::StorageManagement;
 pub use vm_create::VmCreate;
 pub use vm_list::VmList;
-// pub use console::ConsolePage;
 
 // Re-export auth components
 pub use auth::{ApiKeysPage, RolesPage, SessionsPage, UsersPage};

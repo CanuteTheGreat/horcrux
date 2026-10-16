@@ -19,7 +19,7 @@ use pages::{
     MetricsExplorerPage, MigrationCenterPage, Monitoring, NetworkManagement, NotificationsPage,
     ObservabilityPage, PodsPage, ReplicationList, RetentionPoliciesPage, RolesPage, SecretsPage,
     ServicesPage, SessionsPage, SnapshotList, SnapshotManagerPage, StacksPage, StorageManagement,
-    TemplateManagerPage, UsersPage, VmCreate, VmList, VolumesPage,
+    TemplateManagerPage, UsersPage, VmConsole, VmCreate, VmList, VolumesPage,
 };
 
 #[component]
@@ -98,6 +98,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/" view=Dashboard/>
                     <Route path="/vms" view=VmList/>
                     <Route path="/vms/create" view=VmCreate/>
+                    <Route path="/vms/:id/console" view=VmConsole/>
                     <Route path="/containers" view=ContainerList/>
                     <Route path="/containers/images" view=ImagesPage/>
                     <Route path="/containers/volumes" view=VolumesPage/>

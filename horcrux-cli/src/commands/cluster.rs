@@ -78,16 +78,24 @@ struct ArchRow {
     #[tabled(rename = "arch")]
     architecture: String,
     nodes: usize,
-    vms: usize,
 }
 
-impl From<ArchInfo> for ArchRow {
-    fn from(arch: ArchInfo) -> Self {
-        Self {
-            architecture: arch.architecture,
-            nodes: arch.node_count,
-            vms: arch.vm_count,
-        }
+impl ArchitectureSummary {
+    fn rows(&self) -> Vec<ArchRow> {
+        vec![
+            ArchRow {
+                architecture: "x86_64".to_string(),
+                nodes: self.x86_64_nodes,
+            },
+            ArchRow {
+                architecture: "aarch64".to_string(),
+                nodes: self.aarch64_nodes,
+            },
+            ArchRow {
+                architecture: "other".to_string(),
+                nodes: self.other_nodes,
+            },
+        ]
     }
 }
 
@@ -106,16 +114,17 @@ struct ClusterStatus {
     total_cpus: u32,
 }
 
+// Mirrors horcrux-api's `cluster::ArchitectureSummary` (the documented
+// /api/cluster/architecture contract since the first commit). This used to
+// expect an `architectures: [{architecture, node_count, vm_count}]` list the
+// API has never sent, so `horcrux cluster architecture` always failed to
+// deserialize.
 #[derive(Debug, Serialize, Deserialize)]
 struct ArchitectureSummary {
-    architectures: Vec<ArchInfo>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ArchInfo {
-    architecture: String,
-    node_count: usize,
-    vm_count: usize,
+    x86_64_nodes: usize,
+    aarch64_nodes: usize,
+    other_nodes: usize,
+    is_mixed: bool,
 }
 
 pub async fn handle_cluster_command(
@@ -164,12 +173,7 @@ pub async fn handle_cluster_command(
         ClusterCommands::Architecture => {
             let summary: ArchitectureSummary = api.get("/api/cluster/architecture").await?;
             let format = OutputFormat::from_str(output_format);
-            let rows: Vec<ArchRow> = summary
-                .architectures
-                .into_iter()
-                .map(ArchRow::from)
-                .collect();
-            output::print_output(rows, format)?;
+            output::print_output(summary.rows(), format)?;
         }
     }
     Ok(())
@@ -205,6 +209,20 @@ mod tests {
         assert_eq!(node.priority, 300);
         assert_eq!(node.cpu_cores, 8);
         assert_eq!(node.memory_total, 17179869184);
+    }
+
+    #[test]
+    fn architecture_summary_deserializes_from_real_api_shape() {
+        // Real horcrux-api /api/cluster/architecture response shape.
+        let json = r#"{"x86_64_nodes":2,"aarch64_nodes":1,"other_nodes":0,"is_mixed":true}"#;
+        let summary: ArchitectureSummary = serde_json::from_str(json).expect("must deserialize");
+        assert!(summary.is_mixed);
+        let rows = summary.rows();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].architecture, "x86_64");
+        assert_eq!(rows[0].nodes, 2);
+        assert_eq!(rows[1].nodes, 1);
+        assert_eq!(rows[2].nodes, 0);
     }
 
     #[test]

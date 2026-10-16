@@ -8234,8 +8234,19 @@ async fn list_cluster_nodes(State(state): State<Arc<AppState>>) -> Json<Vec<Node
 
 async fn add_cluster_node(
     State(state): State<Arc<AppState>>,
-    Json(node): Json<Node>,
+    Path(name): Path<String>,
+    Json(request): Json<cluster::node::AddNodeRequest>,
 ) -> Result<StatusCode, ApiError> {
+    let next_id = state
+        .cluster_manager
+        .list_nodes()
+        .await
+        .iter()
+        .map(|n| n.id)
+        .max()
+        .unwrap_or(0)
+        + 1;
+    let node = request.into_node(name, next_id);
     state.cluster_manager.add_node(node).await?;
     Ok(StatusCode::CREATED)
 }

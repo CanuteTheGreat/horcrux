@@ -1,9 +1,53 @@
+//! Cluster management (`/ha/cluster`).
+//!
+//! Everything here reads/writes exactly what horcrux-api's cluster
+//! endpoints send and accept:
+//! - `GET  /api/cluster/nodes`               -> `Vec<ClusterNode>`
+//! - `GET  /api/cluster/architecture`        -> `ClusterArchitecture`
+//! - `POST /api/cluster/nodes/:name`         <- `AddNodeRequest` (201, no body)
+//! - `PATCH /api/cluster/nodes/:name/priority` <- `{priority}`
+//! - `POST /api/cluster/find-node`           <- `FindNodeRequest` -> node name
 use crate::api::{
     add_cluster_node, find_best_node_for_vm, get_cluster_architecture, get_cluster_nodes, get_vms,
-    AddNodeRequest, ClusterArchitecture, ClusterNode, FindNodeRequest, NodeRecommendation,
+    set_node_priority, AddNodeRequest, ClusterArchitecture, ClusterNode, FindNodeRequest,
 };
 use horcrux_common::VmConfig;
 use leptos::*;
+
+/// Highest placement/HA weight the API/CLI convention allows.
+const MAX_NODE_WEIGHT: u32 = 1000;
+
+/// Human-readable size for a byte count (the node API reports RAM in bytes).
+pub(crate) fn format_memory(bytes: u64) -> String {
+    const MIB: f64 = 1024.0 * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    let b = bytes as f64;
+    if b >= GIB {
+        format!("{:.1} GB", b / GIB)
+    } else {
+        format!("{:.0} MB", b / MIB)
+    }
+}
+
+/// Parse a weight typed into the UI, enforcing the documented 0-1000 range.
+pub(crate) fn parse_weight(input: &str) -> Result<u32, String> {
+    match input.trim().parse::<u32>() {
+        Ok(w) if w <= MAX_NODE_WEIGHT => Ok(w),
+        _ => Err(format!(
+            "Weight must be a whole number from 0 to {}",
+            MAX_NODE_WEIGHT
+        )),
+    }
+}
+
+/// `VmArchitecture` -> the architecture string the find-node API expects
+/// ("x86_64", "aarch64", ...). Uses the type's own serde names.
+fn vm_arch_string(vm: &VmConfig) -> String {
+    serde_json::to_value(&vm.architecture)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_else(|| "x86_64".to_string())
+}
 
 #[component]
 pub fn ClusterManagementPage() -> impl IntoView {
@@ -21,14 +65,13 @@ pub fn ClusterManagementPage() -> impl IntoView {
     // Add node form state
     let (node_name, set_node_name) = create_signal(String::new());
     let (node_address, set_node_address) = create_signal(String::new());
-    let (node_ssh_key, set_node_ssh_key) = create_signal(String::new());
-    let (node_architecture, set_node_architecture) = create_signal("x86_64".to_string());
+    let (node_architecture, set_node_architecture) = create_signal(String::new());
+    let (node_weight, set_node_weight) = create_signal("100".to_string());
 
     // Node finder state
     let (selected_vm_id, set_selected_vm_id) = create_signal(String::new());
-    let (preferred_arch, set_preferred_arch) = create_signal(String::new());
-    let (node_recommendations, set_node_recommendations) =
-        create_signal(Vec::<NodeRecommendation>::new());
+    let (min_weight, set_min_weight) = create_signal(String::new());
+    let (recommended_node, set_recommended_node) = create_signal(None::<String>);
 
     let load_cluster_data = move || {
         set_loading.set(true);
@@ -59,26 +102,33 @@ pub fn ClusterManagementPage() -> impl IntoView {
         });
     };
 
+    let flash = move |msg: String| {
+        set_success_message.set(Some(msg));
+        set_timeout(
+            move || set_success_message.set(None),
+            std::time::Duration::from_secs(3),
+        );
+    };
+
     // Load data on mount
     create_effect(move |_| {
         load_cluster_data();
     });
 
     // Auto-refresh every 60 seconds
-    use leptos::set_interval;
     set_interval(load_cluster_data, std::time::Duration::from_secs(60));
 
     let filtered_nodes = move || {
         let query = search_query.get().to_lowercase();
+        let nodes = cluster_nodes.get();
         if query.is_empty() {
-            cluster_nodes.get()
+            nodes
         } else {
-            cluster_nodes
-                .get()
+            nodes
                 .into_iter()
                 .filter(|node| {
                     node.name.to_lowercase().contains(&query)
-                        || node.address.to_lowercase().contains(&query)
+                        || node.ip.to_lowercase().contains(&query)
                         || node.architecture.to_lowercase().contains(&query)
                 })
                 .collect()
@@ -88,100 +138,98 @@ pub fn ClusterManagementPage() -> impl IntoView {
     let reset_add_node_form = move || {
         set_node_name.set(String::new());
         set_node_address.set(String::new());
-        set_node_ssh_key.set(String::new());
-        set_node_architecture.set("x86_64".to_string());
+        set_node_architecture.set(String::new());
+        set_node_weight.set("100".to_string());
     };
 
     let add_node = move || {
-        let request = AddNodeRequest {
-            name: node_name.get(),
-            address: node_address.get(),
-            ssh_key: if node_ssh_key.get().is_empty() {
-                None
-            } else {
-                Some(node_ssh_key.get())
-            },
-            architecture: node_architecture.get(),
+        let priority = match parse_weight(&node_weight.get()) {
+            Ok(w) => w,
+            Err(e) => {
+                set_error.set(Some(e));
+                return;
+            }
         };
-
-        let name = node_name.get();
+        let arch = node_architecture.get();
+        let request = AddNodeRequest {
+            address: node_address.get().trim().to_string(),
+            architecture: if arch.is_empty() { None } else { Some(arch) },
+            priority: Some(priority),
+        };
+        let name = node_name.get().trim().to_string();
 
         spawn_local(async move {
-            match add_cluster_node(name.clone(), request).await {
-                Ok(_) => {
+            match add_cluster_node(&name, &request).await {
+                Ok(()) => {
                     set_show_add_node_modal.set(false);
                     reset_add_node_form();
                     load_cluster_data();
-                    set_success_message.set(Some(format!("Node '{}' added successfully", name)));
-                    set_timeout(
-                        move || set_success_message.set(None),
-                        std::time::Duration::from_secs(3),
-                    );
+                    flash(format!("Node '{}' added", name));
                 }
                 Err(e) => set_error.set(Some(format!("Failed to add node: {}", e))),
             }
         });
     };
 
-    let find_best_node = move || {
-        if let Some(selected_vm) = vms.get().iter().find(|vm| vm.id == selected_vm_id.get()) {
-            let request = FindNodeRequest {
-                vm_config: serde_json::json!({
-                    "memory": 4096,
-                    "vcpus": 2,
-                    "disk_size": 20
-                }),
-                preferred_architecture: if preferred_arch.get().is_empty() {
-                    None
-                } else {
-                    Some(preferred_arch.get())
-                },
-                exclude_nodes: Vec::new(),
-            };
-
-            spawn_local(async move {
-                match find_best_node_for_vm(request).await {
-                    Ok(recommendation) => {
-                        set_node_recommendations.set(vec![recommendation]);
-                    }
-                    Err(e) => set_error.set(Some(format!("Failed to find best node: {}", e))),
+    let save_weight = move |name: String, raw: String| match parse_weight(&raw) {
+        Err(e) => set_error.set(Some(e)),
+        Ok(weight) => spawn_local(async move {
+            match set_node_priority(&name, weight).await {
+                Ok(()) => {
+                    load_cluster_data();
+                    flash(format!("Node '{}' weight set to {}", name, weight));
                 }
-            });
-        }
+                Err(e) => set_error.set(Some(format!("Failed to set weight: {}", e))),
+            }
+        }),
     };
 
-    let get_node_status_color = move |status: &str| match status.to_lowercase().as_str() {
+    let find_best_node = move || {
+        let Some(vm) = vms
+            .get()
+            .into_iter()
+            .find(|vm| vm.id == selected_vm_id.get())
+        else {
+            return;
+        };
+        let min_priority = match min_weight.get().trim() {
+            "" => None,
+            raw => match parse_weight(raw) {
+                Ok(w) => Some(w),
+                Err(e) => {
+                    set_error.set(Some(e));
+                    return;
+                }
+            },
+        };
+        let request = FindNodeRequest {
+            architecture: vm_arch_string(&vm),
+            memory_mb: vm.memory.max(1),
+            cpu_cores: vm.cpus.max(1),
+            min_priority,
+        };
+        set_recommended_node.set(None);
+        spawn_local(async move {
+            match find_best_node_for_vm(&request).await {
+                Ok(node) => set_recommended_node.set(Some(node)),
+                Err(e) => set_error.set(Some(format!("Failed to find best node: {}", e))),
+            }
+        });
+    };
+
+    let node_status_color = |status: &str| match status.to_lowercase().as_str() {
         "online" => "bg-green-100 text-green-800",
         "offline" => "bg-red-100 text-red-800",
-        "maintenance" => "bg-yellow-100 text-yellow-800",
         _ => "bg-gray-100 text-gray-800",
-    };
-
-    let get_usage_color = move |usage: f64| {
-        if usage < 70.0 {
-            "text-green-600"
-        } else if usage < 85.0 {
-            "text-yellow-600"
-        } else {
-            "text-red-600"
-        }
-    };
-
-    let format_bytes = move |bytes: u64| {
-        if bytes < 1024 {
-            format!("{} MB", bytes)
-        } else {
-            format!("{:.1} GB", bytes as f64 / 1024.0)
-        }
     };
 
     view! {
         <div class="p-6">
             <div class="flex justify-between items-center mb-6">
                 <div>
-                    <h1 class="text-2xl font-bold">Cluster Management</h1>
+                    <h1 class="text-2xl font-bold">"Cluster Management"</h1>
                     <p class="text-gray-600">
-                        "Manage cluster nodes, monitor resources, and optimize VM placement"
+                        "Manage cluster nodes, placement weights, and VM placement"
                     </p>
                 </div>
                 <div class="flex space-x-3">
@@ -189,14 +237,12 @@ pub fn ClusterManagementPage() -> impl IntoView {
                         on:click=move |_| load_cluster_data()
                         class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg"
                     >
-                        <i class="fas fa-sync mr-2"></i>
                         "Refresh"
                     </button>
                     <button
                         on:click=move |_| set_show_node_finder_modal.set(true)
                         class="bg-purple-500 hover:bg-purple-600 text-white px-4 py-2 rounded-lg"
                     >
-                        <i class="fas fa-search mr-2"></i>
                         "Find Best Node"
                     </button>
                     <button
@@ -206,85 +252,79 @@ pub fn ClusterManagementPage() -> impl IntoView {
                         }
                         class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg"
                     >
-                        <i class="fas fa-plus mr-2"></i>
                         "Add Node"
                     </button>
                 </div>
             </div>
 
-            // Success message
             {move || success_message.get().map(|msg| view! {
                 <div class="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded mb-6">
-                    <i class="fas fa-check-circle mr-2"></i>
                     {msg}
                 </div>
             })}
 
-            // Error display
             {move || error.get().map(|e| view! {
                 <div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-6">
-                    <i class="fas fa-exclamation-triangle mr-2"></i>
                     {e}
                 </div>
             })}
 
-            // Cluster Architecture Overview
-            {move || cluster_architecture.get().map(|arch| view! {
-                <div class="bg-white rounded-lg shadow mb-6">
-                    <div class="p-6 border-b border-gray-200">
-                        <h2 class="text-lg font-semibold">Cluster Architecture Overview</h2>
-                    </div>
-                    <div class="p-6">
-                        <div class="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
-                            <div class="text-center">
-                                <div class="text-2xl font-semibold text-blue-600">{arch.total_nodes}</div>
-                                <div class="text-sm text-gray-500">"Total Nodes"</div>
-                            </div>
-                            <div class="text-center">
-                                <div class="text-2xl font-semibold text-green-600">{arch.online_nodes}</div>
-                                <div class="text-sm text-gray-500">"Online Nodes"</div>
-                            </div>
-                            <div class="text-center">
-                                <div class="text-2xl font-semibold text-purple-600">{arch.total_vms}</div>
-                                <div class="text-sm text-gray-500">"Total VMs"</div>
-                            </div>
-                            <div class="text-center">
-                                <div class="text-2xl font-semibold text-gray-600">{arch.architectures.len()}</div>
-                                <div class="text-sm text-gray-500">"Architectures"</div>
-                            </div>
+            // Cluster overview: architecture summary from the API plus real
+            // node/VM counts from the lists this page already loads.
+            {move || cluster_architecture.get().map(|arch| {
+                let online = cluster_nodes
+                    .get()
+                    .iter()
+                    .filter(|n| n.status.eq_ignore_ascii_case("online"))
+                    .count();
+                let total_vms = vms.get().len();
+                view! {
+                    <div class="bg-white rounded-lg shadow mb-6">
+                        <div class="p-6 border-b border-gray-200">
+                            <h2 class="text-lg font-semibold">"Cluster Architecture Overview"</h2>
                         </div>
-
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <div>
-                                <h3 class="font-medium text-gray-900 mb-3">"Load Balance Mode"</h3>
-                                <div class="bg-gray-50 p-3 rounded">
-                                    <span class="text-sm font-mono">{&arch.load_balance_mode}</span>
+                        <div class="p-6">
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
+                                <div class="text-center">
+                                    <div class="text-2xl font-semibold text-blue-600">{arch.total_nodes()}</div>
+                                    <div class="text-sm text-gray-500">"Total Nodes"</div>
+                                </div>
+                                <div class="text-center">
+                                    <div class="text-2xl font-semibold text-green-600">{online}</div>
+                                    <div class="text-sm text-gray-500">"Online Nodes"</div>
+                                </div>
+                                <div class="text-center">
+                                    <div class="text-2xl font-semibold text-purple-600">{total_vms}</div>
+                                    <div class="text-sm text-gray-500">"Total VMs"</div>
+                                </div>
+                                <div class="text-center">
+                                    <div class="text-2xl font-semibold text-gray-600">
+                                        {if arch.is_mixed { "Mixed" } else { "Uniform" }}
+                                    </div>
+                                    <div class="text-sm text-gray-500">"Architecture Mix"</div>
                                 </div>
                             </div>
-                            <div>
-                                <h3 class="font-medium text-gray-900 mb-3">"Architecture Distribution"</h3>
-                                <div class="space-y-2">
-                                    {arch.architectures.clone().into_iter().map(|arch_info| {
-                                        let name = arch_info.name.clone();
-                                        let node_count = arch_info.node_count;
-                                        let vm_count = arch_info.vm_count;
-                                        view! {
-                                            <div class="flex justify-between items-center text-sm">
-                                                <span class="font-medium">{name}</span>
-                                                <span class="text-gray-600">
-                                                    {node_count} " nodes, " {vm_count} " VMs"
-                                                </span>
-                                            </div>
-                                        }
-                                    }).collect::<Vec<_>>()}
+                            <h3 class="font-medium text-gray-900 mb-3">"Architecture Distribution"</h3>
+                            <div class="space-y-2">
+                                <div class="flex justify-between items-center text-sm">
+                                    <span class="font-medium">"x86_64"</span>
+                                    <span class="text-gray-600">{arch.x86_64_nodes} " nodes"</span>
+                                </div>
+                                <div class="flex justify-between items-center text-sm">
+                                    <span class="font-medium">"aarch64"</span>
+                                    <span class="text-gray-600">{arch.aarch64_nodes} " nodes"</span>
+                                </div>
+                                <div class="flex justify-between items-center text-sm">
+                                    <span class="font-medium">"other"</span>
+                                    <span class="text-gray-600">{arch.other_nodes} " nodes"</span>
                                 </div>
                             </div>
                         </div>
                     </div>
-                </div>
+                }
             })}
 
-            // Search and Controls
+            // Search
             <div class="bg-white rounded-lg shadow p-4 mb-6">
                 <div class="flex items-center space-x-4">
                     <div class="flex-1">
@@ -300,12 +340,12 @@ pub fn ClusterManagementPage() -> impl IntoView {
                     </div>
                     <div class="text-sm text-gray-600">
                         {move || {
-                            let filtered = filtered_nodes();
+                            let filtered = filtered_nodes().len();
                             let total = cluster_nodes.get().len();
-                            if filtered.len() == total {
+                            if filtered == total {
                                 format!("{} nodes", total)
                             } else {
-                                format!("{} of {} nodes", filtered.len(), total)
+                                format!("{} of {} nodes", filtered, total)
                             }
                         }}
                     </div>
@@ -313,389 +353,274 @@ pub fn ClusterManagementPage() -> impl IntoView {
             </div>
 
             // Cluster Nodes Table
-            {move || if loading.get() {
+            {move || if loading.get() && cluster_nodes.get().is_empty() {
                 view! {
                     <div class="bg-white rounded-lg shadow p-8 text-center">
-                        <i class="fas fa-spinner fa-spin text-2xl text-gray-400 mb-2"></i>
                         <p class="text-gray-600">"Loading cluster nodes..."</p>
                     </div>
-                }
+                }.into_view()
             } else {
                 view! {
                     <div class="bg-white rounded-lg shadow overflow-hidden">
                         <div class="p-6 border-b border-gray-200">
-                            <h2 class="text-lg font-semibold">Cluster Nodes</h2>
+                            <h2 class="text-lg font-semibold">"Cluster Nodes"</h2>
+                            <p class="text-sm text-gray-500">
+                                "Weight (0-1000, default 100): higher-weighted nodes are preferred for VM placement and HA failover."
+                            </p>
                         </div>
                         <div class="overflow-x-auto">
                             <table class="min-w-full divide-y divide-gray-200">
                                 <thead class="bg-gray-50">
                                     <tr>
-                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                            "Node"
-                                        </th>
-                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                            "Status"
-                                        </th>
-                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                            "Resources"
-                                        </th>
-                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                            "Usage"
-                                        </th>
-                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                            "VMs"
-                                        </th>
-                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                            "Actions"
-                                        </th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">"Node"</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">"Status"</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">"Resources"</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">"Weight / Priority"</th>
                                     </tr>
                                 </thead>
                                 <tbody class="bg-white divide-y divide-gray-200">
-                                    {move || if filtered_nodes().is_empty() {
-                                        if cluster_nodes.get().is_empty() {
+                                    {move || {
+                                        let nodes = filtered_nodes();
+                                        if nodes.is_empty() {
+                                            let msg = if cluster_nodes.get().is_empty() {
+                                                "No cluster nodes configured"
+                                            } else {
+                                                "No nodes match your search"
+                                            };
                                             view! {
                                                 <tr>
-                                                    <td colspan="6" class="px-6 py-8 text-center text-gray-500">
-                                                        <div>
-                                                            <i class="fas fa-server text-4xl mb-4"></i>
-                                                            <p class="text-lg mb-2">"No cluster nodes configured"</p>
-                                                            <p class="text-sm mb-4">"Add your first node to enable clustering and HA"</p>
-                                                            <button
-                                                                on:click=move |_| {
-                                                                    reset_add_node_form();
-                                                                    set_show_add_node_modal.set(true);
-                                                                }
-                                                                class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg"
-                                                            >
-                                                                "Add First Node"
-                                                            </button>
-                                                        </div>
-                                                    </td>
+                                                    <td colspan="4" class="px-6 py-8 text-center text-gray-500">{msg}</td>
                                                 </tr>
                                             }.into_view()
                                         } else {
-                                            view! {
-                                                <tr>
-                                                    <td colspan="6" class="px-6 py-8 text-center text-gray-500">
-                                                        <i class="fas fa-search text-4xl mb-4"></i>
-                                                        <p class="text-lg">"No nodes match your search"</p>
-                                                    </td>
-                                                </tr>
-                                            }.into_view()
-                                        }
-                                    } else {
-                                        filtered_nodes().into_iter().map(|node| {
-                                            let status_color = get_node_status_color(&node.status);
-                                            let cpu_color = get_usage_color(node.cpu_usage);
-                                            let memory_color = get_usage_color(node.memory_usage);
-                                            let disk_color = get_usage_color(node.disk_usage);
-                                            let node_name = node.name.clone();
-                                            let node_address = node.address.clone();
-                                            let node_version = node.version.clone();
-                                            let status_str = node.status.clone();
-                                                let last_seen = node.last_seen.map(|dt| dt.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_else(|| "Never".to_string());
-                                                let cpu_cores = node.resources.cpu_cores;
-                                                let memory_mb = node.resources.memory_mb;
-                                                let disk_gb = node.resources.disk_gb;
-                                                let architecture = node.architecture.clone();
-                                                let cpu_usage = format!("{:.1}%", node.cpu_usage);
-                                                let memory_usage = format!("{:.1}%", node.memory_usage);
-                                                let disk_usage = format!("{:.1}%", node.disk_usage);
-                                                let vm_count = node.vm_count;
-
+                                            nodes.into_iter().map(|node| {
+                                                let status_color = node_status_color(&node.status);
+                                                let (weight_input, set_weight_input) =
+                                                    create_signal(node.priority.to_string());
+                                                let name_for_save = node.name.clone();
                                                 view! {
                                                     <tr>
                                                         <td class="px-6 py-4 whitespace-nowrap">
-                                                            <div>
-                                                                <div class="text-sm font-medium text-gray-900">{node_name}</div>
-                                                                <div class="text-sm text-gray-500">{node_address}</div>
-                                                                <div class="text-xs text-gray-400">"v" {node_version}</div>
+                                                            <div class="text-sm font-medium text-gray-900">
+                                                                {node.name.clone()}
+                                                                {node.is_local.then(|| view! {
+                                                                    <span class="ml-2 text-xs text-blue-600">"(this node)"</span>
+                                                                })}
                                                             </div>
+                                                            <div class="text-sm text-gray-500">{node.ip.clone()}</div>
                                                         </td>
                                                         <td class="px-6 py-4 whitespace-nowrap">
-                                                            <div class="flex items-center">
-                                                                <span class=format!("px-2 py-1 text-xs font-medium rounded {}", status_color)>
-                                                                    {status_str}
-                                                                </span>
-                                                            </div>
-                                                            <div class="text-xs text-gray-500 mt-1">{last_seen}</div>
+                                                            <span class=format!("px-2 py-1 text-xs font-medium rounded {}", status_color)>
+                                                                {node.status.clone()}
+                                                            </span>
                                                         </td>
                                                         <td class="px-6 py-4 whitespace-nowrap">
                                                             <div class="text-sm text-gray-900">
-                                                                <div>{cpu_cores} " CPU cores"</div>
-                                                                <div>{format_bytes(memory_mb)} " RAM"</div>
-                                                                <div>{disk_gb} " GB disk"</div>
+                                                                <div>{node.cpu_cores} " CPU cores"</div>
+                                                                <div>{format_memory(node.memory_total)} " RAM"</div>
                                                             </div>
-                                                            <div class="text-xs text-gray-500">
-                                                                {architecture}
-                                                            </div>
+                                                            <div class="text-xs text-gray-500">{node.architecture.clone()}</div>
                                                         </td>
                                                         <td class="px-6 py-4 whitespace-nowrap">
-                                                            <div class="text-sm">
-                                                                <div class=format!("font-medium {}", cpu_color)>
-                                                                    "CPU: " {cpu_usage}
-                                                                </div>
-                                                                <div class=format!("font-medium {}", memory_color)>
-                                                                    "RAM: " {memory_usage}
-                                                                </div>
-                                                                <div class=format!("font-medium {}", disk_color)>
-                                                                    "Disk: " {disk_usage}
-                                                                </div>
-                                                            </div>
-                                                        </td>
-                                                        <td class="px-6 py-4 whitespace-nowrap">
-                                                            <div class="text-sm font-medium text-gray-900">{vm_count}</div>
-                                                            <div class="text-xs text-gray-500">"VMs running"</div>
-                                                        </td>
-                                                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                                            <div class="flex space-x-2">
+                                                            <div class="flex items-center space-x-2">
+                                                                <span class="text-sm font-semibold">{node.priority}</span>
+                                                                <input
+                                                                    type="number"
+                                                                    min="0"
+                                                                    max=MAX_NODE_WEIGHT.to_string()
+                                                                    class="w-24 px-2 py-1 border border-gray-300 rounded"
+                                                                    prop:value=move || weight_input.get()
+                                                                    on:input=move |ev| set_weight_input.set(event_target_value(&ev))
+                                                                />
                                                                 <button
                                                                     class="text-blue-600 hover:text-blue-900 px-2 py-1 rounded hover:bg-blue-50"
-                                                                    title="Node Details"
+                                                                    on:click=move |_| save_weight(name_for_save.clone(), weight_input.get())
                                                                 >
-                                                                    <i class="fas fa-eye"></i>
-                                                                </button>
-                                                                <button
-                                                                    class="text-yellow-600 hover:text-yellow-900 px-2 py-1 rounded hover:bg-yellow-50"
-                                                                    title="Maintenance Mode"
-                                                                >
-                                                                    <i class="fas fa-wrench"></i>
-                                                                </button>
-                                                                <button
-                                                                    class="text-red-600 hover:text-red-900 px-2 py-1 rounded hover:bg-red-50"
-                                                                    title="Remove Node"
-                                                                >
-                                                                    <i class="fas fa-times"></i>
+                                                                    "Set"
                                                                 </button>
                                                             </div>
                                                         </td>
                                                     </tr>
                                                 }
-                                        }).collect_view()
+                                            }).collect_view()
+                                        }
                                     }}
                                 </tbody>
                             </table>
                         </div>
                     </div>
-                }
+                }.into_view()
             }}
 
             // Add Node Modal
-            {move || if show_add_node_modal.get() {
-                view! {
-                    <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-                        <div class="bg-white rounded-lg w-full max-w-lg">
-                            <div class="p-6 border-b border-gray-200">
-                                <h2 class="text-xl font-semibold">"Add Cluster Node"</h2>
-                            </div>
-
-                            <div class="p-6 space-y-4">
-                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div>
-                                        <label class="block text-sm font-medium text-gray-700 mb-1">
-                                            "Node Name"
-                                        </label>
-                                        <input
-                                            type="text"
-                                            placeholder="node-02"
-                                            prop:value=move || node_name.get()
-                                            on:input=move |ev| set_node_name.set(event_target_value(&ev))
-                                            class="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label class="block text-sm font-medium text-gray-700 mb-1">
-                                            "IP Address"
-                                        </label>
-                                        <input
-                                            type="text"
-                                            placeholder="192.168.1.100"
-                                            prop:value=move || node_address.get()
-                                            on:input=move |ev| set_node_address.set(event_target_value(&ev))
-                                            class="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                                        />
-                                    </div>
-                                </div>
-
+            {move || show_add_node_modal.get().then(|| view! {
+                <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div class="bg-white rounded-lg w-full max-w-lg">
+                        <div class="p-6 border-b border-gray-200">
+                            <h2 class="text-xl font-semibold">"Add Cluster Node"</h2>
+                        </div>
+                        <div class="p-6 space-y-4">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">
-                                        "Architecture"
-                                    </label>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">"Node Name"</label>
+                                    <input
+                                        type="text"
+                                        placeholder="node-02"
+                                        prop:value=move || node_name.get()
+                                        on:input=move |ev| set_node_name.set(event_target_value(&ev))
+                                        class="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                                    />
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">"IP Address"</label>
+                                    <input
+                                        type="text"
+                                        placeholder="192.168.1.100"
+                                        prop:value=move || node_address.get()
+                                        on:input=move |ev| set_node_address.set(event_target_value(&ev))
+                                        class="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                                    />
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">"Architecture"</label>
                                     <select
                                         on:change=move |ev| set_node_architecture.set(event_target_value(&ev))
                                         class="w-full px-3 py-2 border border-gray-300 rounded-lg"
                                     >
-                                        <option value="x86_64" selected=move || node_architecture.get() == "x86_64">"x86_64"</option>
-                                        <option value="aarch64" selected=move || node_architecture.get() == "aarch64">"ARM64 (aarch64)"</option>
-                                        <option value="riscv64" selected=move || node_architecture.get() == "riscv64">"RISC-V 64"</option>
-                                    </select>
-                                </div>
-
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">
-                                        "SSH Public Key (Optional)"
-                                    </label>
-                                    <textarea
-                                        placeholder="ssh-rsa AAAAB3NzaC1yc2E..."
-                                        prop:value=move || node_ssh_key.get()
-                                        on:input=move |ev| set_node_ssh_key.set(event_target_value(&ev))
-                                        class="w-full px-3 py-2 border border-gray-300 rounded-lg font-mono text-sm"
-                                        rows="3"
-                                    />
-                                    <p class="text-xs text-gray-500 mt-1">
-                                        "SSH key for secure communication with the node"
-                                    </p>
-                                </div>
-
-                                <div class="bg-blue-50 border border-blue-200 rounded p-3">
-                                    <div class="flex items-start">
-                                        <i class="fas fa-info-circle text-blue-600 mt-1 mr-2"></i>
-                                        <div class="text-sm text-blue-800">
-                                            <p class="font-medium mb-1">"Prerequisites:"</p>
-                                            <ul class="list-disc list-inside space-y-1">
-                                                <li>"Node must have Horcrux agent installed"</li>
-                                                <li>"SSH access configured for cluster communication"</li>
-                                                <li>"Firewall ports opened for cluster traffic"</li>
-                                                <li>"Sufficient resources for VM workloads"</li>
-                                            </ul>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="p-6 border-t border-gray-200 flex justify-end space-x-3">
-                                <button
-                                    on:click=move |_| set_show_add_node_modal.set(false)
-                                    class="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
-                                >
-                                    "Cancel"
-                                </button>
-                                <button
-                                    on:click=move |_| add_node()
-                                    class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
-                                    disabled=move || node_name.get().is_empty() || node_address.get().is_empty()
-                                >
-                                    "Add Node"
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                }
-            } else {
-                view! { <div></div> }
-            }}
-
-            // Node Finder Modal
-            {move || if show_node_finder_modal.get() {
-                view! {
-                    <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-                        <div class="bg-white rounded-lg w-full max-w-lg">
-                            <div class="p-6 border-b border-gray-200">
-                                <h2 class="text-xl font-semibold">"Find Best Node for VM"</h2>
-                            </div>
-
-                            <div class="p-6 space-y-4">
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">
-                                        "Select VM"
-                                    </label>
-                                    <select
-                                        on:change=move |ev| set_selected_vm_id.set(event_target_value(&ev))
-                                        class="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                                    >
-                                        <option value="">"Select a VM..."</option>
-                                        {vms.get().into_iter().map(|vm| {
-                                            let vm_id = vm.id.clone();
-                                            let vm_status = format!("{:?}", vm.status);
-                                            let display = format!("{} ({})", vm.name, vm_status);
-                                            view! {
-                                                <option value={vm_id}>
-                                                    {display}
-                                                </option>
-                                            }
-                                        }).collect::<Vec<_>>()}
-                                    </select>
-                                </div>
-
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">
-                                        "Preferred Architecture (Optional)"
-                                    </label>
-                                    <select
-                                        on:change=move |ev| set_preferred_arch.set(event_target_value(&ev))
-                                        class="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                                    >
-                                        <option value="">"Any Architecture"</option>
+                                        <option value="" selected=move || node_architecture.get().is_empty()>"Unknown"</option>
                                         <option value="x86_64">"x86_64"</option>
                                         <option value="aarch64">"ARM64 (aarch64)"</option>
                                         <option value="riscv64">"RISC-V 64"</option>
+                                        <option value="ppc64le">"POWER (ppc64le)"</option>
                                     </select>
                                 </div>
-
-                                <button
-                                    on:click=move |_| find_best_node()
-                                    class="w-full bg-purple-500 hover:bg-purple-600 text-white px-4 py-2 rounded-lg"
-                                    disabled=move || selected_vm_id.get().is_empty()
-                                >
-                                    <i class="fas fa-search mr-2"></i>
-                                    "Find Best Node"
-                                </button>
-
-                                // Recommendations
-                                {move || if !node_recommendations.get().is_empty() {
-                                    view! {
-                                        <div class="mt-4 space-y-3">
-                                            <h3 class="font-medium text-gray-900">"Recommendations:"</h3>
-                                            {node_recommendations.get().into_iter().map(|rec| {
-                                                let node_name = rec.node_name.clone();
-                                                let score = format!("{:.1}", rec.score);
-                                                let reason = rec.reason.clone();
-                                                let cpu_cores = rec.resources_available.cpu_cores;
-                                                let memory_mb = rec.resources_available.memory_mb;
-                                                let disk_gb = rec.resources_available.disk_gb;
-                                                view! {
-                                                    <div class="border border-gray-200 rounded-lg p-4 bg-green-50">
-                                                        <div class="flex items-center justify-between mb-2">
-                                                            <h4 class="font-medium text-gray-900">{node_name}</h4>
-                                                            <span class="text-sm font-medium text-green-600">
-                                                                "Score: " {score}
-                                                            </span>
-                                                        </div>
-                                                        <p class="text-sm text-gray-700 mb-2">{reason}</p>
-                                                        <div class="text-xs text-gray-600">
-                                                            "Available: " {cpu_cores} " CPU, "
-                                                            {format_bytes(memory_mb)} " RAM, "
-                                                            {disk_gb} " GB disk"
-                                                        </div>
-                                                    </div>
-                                                }
-                                            }).collect::<Vec<_>>()}
-                                        </div>
-                                    }
-                                } else {
-                                    view! { <div></div> }
-                                }}
-                            </div>
-
-                            <div class="p-6 border-t border-gray-200 flex justify-end space-x-3">
-                                <button
-                                    on:click=move |_| {
-                                        set_show_node_finder_modal.set(false);
-                                        set_node_recommendations.set(Vec::new());
-                                        set_selected_vm_id.set(String::new());
-                                        set_preferred_arch.set(String::new());
-                                    }
-                                    class="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
-                                >
-                                    "Close"
-                                </button>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">"Weight (0-1000)"</label>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        max=MAX_NODE_WEIGHT.to_string()
+                                        prop:value=move || node_weight.get()
+                                        on:input=move |ev| set_node_weight.set(event_target_value(&ev))
+                                        class="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                                    />
+                                </div>
                             </div>
                         </div>
+                        <div class="p-6 border-t border-gray-200 flex justify-end space-x-3">
+                            <button
+                                on:click=move |_| set_show_add_node_modal.set(false)
+                                class="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+                            >
+                                "Cancel"
+                            </button>
+                            <button
+                                on:click=move |_| add_node()
+                                class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
+                                disabled=move || node_name.get().trim().is_empty() || node_address.get().trim().is_empty()
+                            >
+                                "Add Node"
+                            </button>
+                        </div>
                     </div>
-                }
-            } else {
-                view! { <div></div> }
-            }}
+                </div>
+            })}
+
+            // Node Finder Modal
+            {move || show_node_finder_modal.get().then(|| view! {
+                <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div class="bg-white rounded-lg w-full max-w-lg">
+                        <div class="p-6 border-b border-gray-200">
+                            <h2 class="text-xl font-semibold">"Find Best Node for VM"</h2>
+                        </div>
+                        <div class="p-6 space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">"Select VM"</label>
+                                <select
+                                    on:change=move |ev| set_selected_vm_id.set(event_target_value(&ev))
+                                    class="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                                >
+                                    <option value="">"Select a VM..."</option>
+                                    {vms.get().into_iter().map(|vm| {
+                                        let display = format!(
+                                            "{} ({}, {} vCPU, {} MB)",
+                                            vm.name,
+                                            vm_arch_string(&vm),
+                                            vm.cpus,
+                                            vm.memory
+                                        );
+                                        view! { <option value=vm.id.clone()>{display}</option> }
+                                    }).collect_view()}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">
+                                    "Minimum node weight (optional)"
+                                </label>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    max=MAX_NODE_WEIGHT.to_string()
+                                    placeholder="any"
+                                    prop:value=move || min_weight.get()
+                                    on:input=move |ev| set_min_weight.set(event_target_value(&ev))
+                                    class="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                                />
+                            </div>
+                            <button
+                                on:click=move |_| find_best_node()
+                                class="w-full bg-purple-500 hover:bg-purple-600 text-white px-4 py-2 rounded-lg"
+                                disabled=move || selected_vm_id.get().is_empty()
+                            >
+                                "Find Best Node"
+                            </button>
+                            {move || recommended_node.get().map(|node| view! {
+                                <div class="border border-gray-200 rounded-lg p-4 bg-green-50">
+                                    <p class="text-sm text-gray-700">"Recommended node:"</p>
+                                    <h4 class="font-medium text-gray-900">{node}</h4>
+                                </div>
+                            })}
+                        </div>
+                        <div class="p-6 border-t border-gray-200 flex justify-end space-x-3">
+                            <button
+                                on:click=move |_| {
+                                    set_show_node_finder_modal.set(false);
+                                    set_recommended_node.set(None);
+                                    set_selected_vm_id.set(String::new());
+                                    set_min_weight.set(String::new());
+                                }
+                                class="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+                            >
+                                "Close"
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            })}
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_memory_treats_api_value_as_bytes() {
+        assert_eq!(format_memory(8 * 1024 * 1024 * 1024), "8.0 GB");
+        assert_eq!(format_memory(512 * 1024 * 1024), "512 MB");
+        assert_eq!(format_memory(0), "0 MB");
+    }
+
+    #[test]
+    fn parse_weight_enforces_range() {
+        assert_eq!(parse_weight("0"), Ok(0));
+        assert_eq!(parse_weight(" 300 "), Ok(300));
+        assert_eq!(parse_weight("1000"), Ok(1000));
+        assert!(parse_weight("1001").is_err());
+        assert!(parse_weight("-1").is_err());
+        assert!(parse_weight("abc").is_err());
     }
 }

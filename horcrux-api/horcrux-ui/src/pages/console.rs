@@ -1,167 +1,132 @@
-//! VM Console page with noVNC integration
+//! VM console page. Route: `/vms/:id/console`.
 //!
-//! Provides browser-based VNC console access to virtual machines
-
+//! - **VNC** embeds the server-rendered noVNC page at
+//!   `/api/console/:vm_id/novnc`, which issues its own console ticket and
+//!   derives ws/wss + host:port from wherever it was loaded, so it works
+//!   behind TLS and from any client host (no `localhost:8006` assumptions).
+//!   It is also linked directly so it can be popped out into its own tab.
+//! - **Serial** gets a ticket from `POST /api/console/:vm_id/serial` and
+//!   talks to `/api/console/ws/serial/:ticket`, the WebSocket bridge to the
+//!   VM's QEMU serial socket.
 use crate::api;
-use horcrux_common::{VmConfig, VmStatus};
+use horcrux_common::VmConfig;
 use leptos::*;
+use leptos_router::*;
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
+use web_sys::{BinaryType, MessageEvent, WebSocket};
 
 /// Console access types
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(clippy::upper_case_acronyms)]
 pub enum ConsoleType {
-    VNC,
-    SPICE,
+    Vnc,
     Serial,
 }
 
-impl ConsoleType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ConsoleType::VNC => "vnc",
-            ConsoleType::SPICE => "spice",
-            ConsoleType::Serial => "serial",
-        }
-    }
-}
-
-/// VM Console component
+/// Console page for one VM.
 #[component]
 pub fn VmConsole() -> impl IntoView {
-    let params = leptos_router::use_params_map();
+    let params = use_params_map();
     let vm_id = move || params.get().get("id").cloned().unwrap_or_default();
 
-    let (console_type, set_console_type) = create_signal(ConsoleType::VNC);
-    let (is_connected, set_is_connected) = create_signal(false);
+    let (console_type, set_console_type) = create_signal(ConsoleType::Vnc);
+    let (vm, set_vm) = create_signal(None::<VmConfig>);
     let (error_message, set_error_message) = create_signal(None::<String>);
-    let (vm_name, set_vm_name) = create_signal(String::new());
-    let (console_url, set_console_url) = create_signal(None::<String>);
 
-    // Load VM info and console URL
     create_effect(move |_| {
         let id = vm_id();
         if id.is_empty() {
             return;
         }
-
         spawn_local(async move {
-            // Get VM info
-            match api::get_vm(&id).await {
-                Ok(vm) => {
-                    set_vm_name.set(vm.name.clone());
+            match api::fetch_json::<VmConfig>(&format!("/vms/{}", urlencoding::encode(&id))).await {
+                Ok(config) => {
+                    set_vm.set(Some(config));
+                    set_error_message.set(None);
                 }
-                Err(e) => {
-                    set_error_message.set(Some(format!("Failed to load VM: {}", e)));
-                }
-            }
-
-            // Get console URL
-            match api::get_console_url(&id, console_type.get().as_str()).await {
-                Ok(url) => {
-                    set_console_url.set(Some(url));
-                    set_is_connected.set(true);
-                }
-                Err(e) => {
-                    set_error_message.set(Some(format!("Failed to get console URL: {}", e)));
-                }
+                Err(e) => set_error_message.set(Some(format!("Failed to load VM: {}", e))),
             }
         });
     });
 
-    // Handle console type change
-    let on_type_change = move |new_type: ConsoleType| {
-        set_console_type.set(new_type);
-        set_is_connected.set(false);
-        set_console_url.set(None);
-    };
-
-    // Full screen handler
     let toggle_fullscreen = move |_| {
-        let document = web_sys::window().unwrap().document().unwrap();
-        if let Some(elem) = document.get_element_by_id("console-frame") {
+        if let Some(elem) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.get_element_by_id("console-frame"))
+        {
             let _ = elem.request_fullscreen();
-        }
-    };
-
-    // Send Ctrl+Alt+Del
-    let send_cad = move |_| {
-        if let Some(_url) = console_url.get() {
-            // Send key sequence via API
-            let vm = vm_id();
-            spawn_local(async move {
-                let _ = api::send_console_keys(&vm, &["ctrl", "alt", "delete"]).await;
-            });
         }
     };
 
     view! {
         <div class="console-page">
-            <div class="console-header">
-                <h1>"VM Console: " {move || vm_name.get()}</h1>
-
-                <div class="console-controls">
-                    <div class="console-type-selector">
-                        <label>"Console Type:"</label>
-                        <select on:change=move |ev| {
-                            let value = event_target_value(&ev);
-                            match value.as_str() {
-                                "vnc" => on_type_change(ConsoleType::VNC),
-                                "spice" => on_type_change(ConsoleType::SPICE),
-                                "serial" => on_type_change(ConsoleType::Serial),
-                                _ => {}
-                            }
-                        }>
-                            <option value="vnc" selected=move || console_type.get() == ConsoleType::VNC>
-                                "VNC"
-                            </option>
-                            <option value="spice" selected=move || console_type.get() == ConsoleType::SPICE>
-                                "SPICE"
-                            </option>
-                            <option value="serial" selected=move || console_type.get() == ConsoleType::Serial>
-                                "Serial"
-                            </option>
-                        </select>
-                    </div>
-
-                    <button class="btn btn-secondary" on:click=send_cad>
-                        "Ctrl+Alt+Del"
-                    </button>
-
-                    <button class="btn btn-secondary" on:click=toggle_fullscreen>
-                        "Fullscreen"
-                    </button>
-
-                    <span class=move || {
-                        if is_connected.get() {
-                            "connection-status connected"
-                        } else {
-                            "connection-status disconnected"
+            <div class="page-header console-header">
+                <h1>
+                    "Console: "
+                    {move || vm.get().map(|v| v.name).unwrap_or_else(vm_id)}
+                </h1>
+                <div class="header-actions console-controls">
+                    <A href="/vms" class="btn btn-secondary">"Back to VMs"</A>
+                    <select on:change=move |ev| {
+                        match event_target_value(&ev).as_str() {
+                            "serial" => set_console_type.set(ConsoleType::Serial),
+                            _ => set_console_type.set(ConsoleType::Vnc),
                         }
                     }>
-                        {move || if is_connected.get() { "Connected" } else { "Disconnected" }}
-                    </span>
+                        <option value="vnc" selected=move || console_type.get() == ConsoleType::Vnc>
+                            "VNC (graphical)"
+                        </option>
+                        <option value="serial" selected=move || console_type.get() == ConsoleType::Serial>
+                            "Serial"
+                        </option>
+                    </select>
+                    {move || (console_type.get() == ConsoleType::Vnc).then(|| view! {
+                        <button class="btn btn-secondary" on:click=toggle_fullscreen>
+                            "Fullscreen"
+                        </button>
+                        <a
+                            class="btn btn-secondary"
+                            href=api::novnc_page_url(&vm_id())
+                            target="_blank"
+                            rel="noopener"
+                        >
+                            "Open in new window"
+                        </a>
+                    })}
                 </div>
             </div>
 
             {move || error_message.get().map(|msg| view! {
-                <div class="error-banner">
-                    <span class="error-icon">"!"</span>
-                    {msg}
-                </div>
+                <div class="error-banner">{msg}</div>
+            })}
+
+            {move || vm.get().and_then(|v| {
+                (v.status != horcrux_common::VmStatus::Running).then(|| view! {
+                    <div class="error-banner">
+                        "This VM is " {v.status.to_string()}
+                        " - start it to get a live console."
+                    </div>
+                })
             })}
 
             <div class="console-container">
                 {move || {
+                    let id = vm_id();
+                    if id.is_empty() {
+                        return view! { <p>"No VM selected"</p> }.into_view();
+                    }
                     match console_type.get() {
-                        ConsoleType::VNC => view! {
-                            <NoVncConsole url=console_url.get() />
-                        }.into_view(),
-                        ConsoleType::SPICE => view! {
-                            <SpiceConsole url=console_url.get() />
-                        }.into_view(),
-                        ConsoleType::Serial => view! {
-                            <SerialConsole vm_id=vm_id() />
-                        }.into_view(),
+                        ConsoleType::Vnc => view! {
+                            <iframe
+                                id="console-frame"
+                                class="console-iframe"
+                                style="width:100%;height:75vh;border:0;background:#000;"
+                                src=api::novnc_page_url(&id)
+                                allowfullscreen=true
+                            />
+                        }
+                        .into_view(),
+                        ConsoleType::Serial => view! { <SerialConsole vm_id=id/> }.into_view(),
                     }
                 }}
             </div>
@@ -169,195 +134,118 @@ pub fn VmConsole() -> impl IntoView {
     }
 }
 
-/// noVNC Console component
-#[component]
-fn NoVncConsole(url: Option<String>) -> impl IntoView {
-    view! {
-        <div class="novnc-container">
-            {match url {
-                Some(url) => view! {
-                    <iframe
-                        id="console-frame"
-                        class="console-iframe"
-                        src=format!("/novnc/vnc.html?host=localhost&port=8006&path=api/vms/{}/vnc&autoconnect=true&resize=scale",
-                            url.split('/').next_back().unwrap_or(""))
-                        allowfullscreen=true
-                    />
-                }.into_view(),
-                None => view! {
-                    <div class="console-loading">
-                        <div class="spinner"></div>
-                        <p>"Connecting to VNC console..."</p>
-                    </div>
-                }.into_view(),
-            }}
-        </div>
-    }
-}
-
-/// SPICE Console component (placeholder)
-#[component]
-fn SpiceConsole(url: Option<String>) -> impl IntoView {
-    view! {
-        <div class="spice-container">
-            {match url {
-                Some(_) => view! {
-                    <div class="spice-info">
-                        <h3>"SPICE Console"</h3>
-                        <p>"SPICE console requires the virt-viewer application."</p>
-                        <a href=format!("/api/vms/{}/spice", url.as_deref().unwrap_or(""))
-                           class="btn btn-primary"
-                           download="console.vv">
-                            "Download .vv file"
-                        </a>
-                        <p class="hint">"Open the downloaded file with virt-viewer"</p>
-                    </div>
-                }.into_view(),
-                None => view! {
-                    <div class="console-loading">
-                        <div class="spinner"></div>
-                        <p>"Loading SPICE console..."</p>
-                    </div>
-                }.into_view(),
-            }}
-        </div>
-    }
-}
-
-/// Serial Console component
+/// Serial console over the ticket-authenticated WebSocket bridge.
 #[component]
 fn SerialConsole(vm_id: String) -> impl IntoView {
     let (output, set_output) = create_signal(String::new());
     let (input, set_input) = create_signal(String::new());
+    let (connected, set_connected) = create_signal(false);
+    let (status, set_status) = create_signal("Connecting...".to_string());
+    let (ws_handle, set_ws_handle) = create_signal(None::<WebSocket>);
 
-    // Connect to serial console WebSocket
-    let vm_id_copy = vm_id.clone();
-    create_effect(move |_| {
-        let _vm = vm_id_copy.clone();
+    let connect = move |vm: String| {
+        if let Some(old) = ws_handle.get_untracked() {
+            let _ = old.close();
+        }
+        set_status.set("Connecting...".to_string());
         spawn_local(async move {
-            // In production, this would connect to a WebSocket for serial I/O
-            set_output.set(
-                "Serial console connected.\r\nPress Enter to activate console.\r\n".to_string(),
-            );
-        });
-    });
-
-    let on_input = move |ev: web_sys::KeyboardEvent| {
-        if ev.key() == "Enter" {
-            let cmd = input.get();
-            set_output.update(|o| {
-                o.push_str(&format!("\r\n$ {}\r\n", cmd));
-            });
-            set_input.set(String::new());
-
-            // Send command to serial console
-            let vm = vm_id.clone();
-            let command = cmd.clone();
-            spawn_local(async move {
-                match api::send_serial_input(&vm, &command).await {
-                    Ok(response) => {
-                        set_output.update(|o| {
-                            o.push_str(&response);
-                        });
-                    }
-                    Err(e) => {
-                        set_output.update(|o| {
-                            o.push_str(&format!("Error: {}\r\n", e));
-                        });
-                    }
+            let info = match api::create_serial_console(&vm).await {
+                Ok(info) => info,
+                Err(e) => {
+                    set_status.set(format!("Failed to open serial console: {}", e));
+                    return;
                 }
-            });
+            };
+            let url = api::resolve_ws_url(&api::serial_console_ws_path(&info.ticket));
+            let ws = match WebSocket::new(&url) {
+                Ok(ws) => ws,
+                Err(e) => {
+                    set_status.set(format!("Failed to open WebSocket: {:?}", e));
+                    return;
+                }
+            };
+            // The bridge sends raw serial bytes as binary frames.
+            ws.set_binary_type(BinaryType::Arraybuffer);
+
+            let onopen = Closure::wrap(Box::new(move |_: JsValue| {
+                set_connected.set(true);
+                set_status.set("Connected".to_string());
+            }) as Box<dyn FnMut(JsValue)>);
+            ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
+            onopen.forget();
+
+            let onmessage = Closure::wrap(Box::new(move |e: MessageEvent| {
+                let data = e.data();
+                let chunk = if let Ok(buf) = data.clone().dyn_into::<js_sys::ArrayBuffer>() {
+                    String::from_utf8_lossy(&js_sys::Uint8Array::new(&buf).to_vec()).into_owned()
+                } else if let Some(text) = data.as_string() {
+                    text
+                } else {
+                    return;
+                };
+                set_output.update(|o| o.push_str(&chunk));
+            }) as Box<dyn FnMut(MessageEvent)>);
+            ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
+            onmessage.forget();
+
+            let onclose = Closure::wrap(Box::new(move |_: JsValue| {
+                set_connected.set(false);
+                set_status.set("Disconnected".to_string());
+            }) as Box<dyn FnMut(JsValue)>);
+            ws.set_onclose(Some(onclose.as_ref().unchecked_ref()));
+            onclose.forget();
+
+            set_ws_handle.set(Some(ws));
+        });
+    };
+
+    connect(vm_id.clone());
+
+    let send_line = move || {
+        if let Some(ws) = ws_handle.get_untracked() {
+            let mut line = input.get_untracked();
+            line.push('\r');
+            let _ = ws.send_with_str(&line);
+            set_input.set(String::new());
         }
     };
 
-    view! {
-        <div class="serial-container">
-            <pre class="serial-output">{move || output.get()}</pre>
-            <div class="serial-input-container">
-                <span class="prompt">"$ "</span>
-                <input
-                    type="text"
-                    class="serial-input"
-                    prop:value=move || input.get()
-                    on:input=move |ev| set_input.set(event_target_value(&ev))
-                    on:keydown=on_input
-                    placeholder="Enter command..."
-                />
-            </div>
-        </div>
-    }
-}
-
-/// Console page for multiple VMs
-#[component]
-pub fn ConsolePage() -> impl IntoView {
-    let (vms, set_vms) = create_signal(Vec::<VmConfig>::new());
-    let (_selected_vm, _set_selected_vm) = create_signal(None::<String>);
-
-    // Load VMs
-    create_effect(move |_| {
-        spawn_local(async move {
-            if let Ok(vm_list) = api::get_vms().await {
-                set_vms.set(vm_list);
-            }
-        });
+    on_cleanup(move || {
+        if let Some(ws) = ws_handle.get_untracked() {
+            let _ = ws.close();
+        }
     });
 
     view! {
-        <div class="console-list-page">
-            <h1>"VM Console Access"</h1>
-
-            <div class="vm-console-grid">
-                {move || {
-                    let vm_list = vms.get();
-                    if vm_list.is_empty() {
-                        view! {
-                            <p class="no-vms">"No virtual machines found"</p>
-                        }.into_view()
-                    } else {
-                        view! {
-                            <div class="vm-cards">
-                                {vm_list.into_iter().map(|vm| {
-                                    let vm_id = vm.id.clone();
-                                    let status_class = match vm.status {
-                                        VmStatus::Running => "status-running",
-                                        VmStatus::Stopped => "status-stopped",
-                                        _ => "status-unknown",
-                                    };
-                                    view! {
-                                        <div class="vm-card">
-                                            <div class="vm-card-header">
-                                                <h3>{&vm.name}</h3>
-                                                <span class=format!("vm-status {}", status_class)>
-                                                    {vm.status.to_string()}
-                                                </span>
-                                            </div>
-                                            <div class="vm-card-body">
-                                                <p>"ID: " {&vm.id}</p>
-                                                <p>"CPUs: " {vm.cpus} " | Memory: " {vm.memory / 1024} " GB"</p>
-                                            </div>
-                                            <div class="vm-card-actions">
-                                                {if vm.status == VmStatus::Running {
-                                                    view! {
-                                                        <a href=format!("/console/{}", vm_id) class="btn btn-primary">
-                                                            "Open Console"
-                                                        </a>
-                                                    }.into_view()
-                                                } else {
-                                                    view! {
-                                                        <button class="btn btn-disabled" disabled=true>
-                                                            "VM not running"
-                                                        </button>
-                                                    }.into_view()
-                                                }}
-                                            </div>
-                                        </div>
-                                    }
-                                }).collect_view()}
-                            </div>
-                        }.into_view()
+        <div class="serial-container">
+            <div class="console-controls">
+                <span>{move || status.get()}</span>
+                <button class="btn btn-sm btn-secondary" on:click=move |_| connect(vm_id.clone())>
+                    "Reconnect"
+                </button>
+            </div>
+            <pre
+                class="serial-output"
+                style="background:#111;color:#0f0;padding:1em;height:60vh;overflow:auto;white-space:pre-wrap;"
+            >
+                {move || output.get()}
+            </pre>
+            <div class="serial-input-container">
+                <input
+                    type="text"
+                    class="serial-input"
+                    style="width:80%"
+                    prop:value=move || input.get()
+                    on:input=move |ev| set_input.set(event_target_value(&ev))
+                    on:keydown=move |ev| {
+                        if ev.key() == "Enter" {
+                            send_line();
+                        }
                     }
-                }}
+                    disabled=move || !connected.get()
+                    placeholder="Type a line and press Enter"
+                />
+                <button class="btn btn-sm btn-primary" on:click=move |_| send_line()>"Send"</button>
             </div>
         </div>
     }

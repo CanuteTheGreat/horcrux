@@ -248,3 +248,103 @@ impl Node {
         self
     }
 }
+
+fn default_node_priority() -> u32 {
+    100
+}
+
+/// Body of `POST /api/cluster/nodes/:name`.
+///
+/// Every client of this endpoint (the web UI's "Add Node" form, the CLI's
+/// `cluster add`, the Python example client) sends only what an operator
+/// actually knows when joining a node -- its address and, optionally, its
+/// architecture -- while the handler used to demand a fully-populated
+/// [`Node`] (id, status, is_local, cpu_cores, memory_total, ...), so every
+/// one of those clients got a 422. Only `ip` (or its `address` alias) is
+/// required; the rest default to "not yet known" values and a full `Node`
+/// body is still accepted unchanged.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AddNodeRequest {
+    /// Node id; assigned by the server when omitted.
+    #[serde(default)]
+    pub id: Option<u32>,
+    #[serde(alias = "address")]
+    pub ip: String,
+    /// Unknown until the node reports in, unless the operator says so.
+    #[serde(default)]
+    pub architecture: Option<Architecture>,
+    #[serde(default)]
+    pub status: Option<NodeStatus>,
+    #[serde(default = "default_node_priority")]
+    pub priority: u32,
+    #[serde(default)]
+    pub is_local: bool,
+    #[serde(default)]
+    pub cpu_cores: u32,
+    /// Total RAM in bytes.
+    #[serde(default)]
+    pub memory_total: u64,
+}
+
+impl AddNodeRequest {
+    /// Build the [`Node`] to register. `name` comes from the URL path;
+    /// `next_id` is used when the request didn't pin an id.
+    pub fn into_node(self, name: String, next_id: u32) -> Node {
+        Node {
+            id: self.id.unwrap_or(next_id),
+            name,
+            ip: self.ip,
+            status: self.status.unwrap_or(NodeStatus::Unknown),
+            priority: self.priority,
+            is_local: self.is_local,
+            architecture: self.architecture.unwrap_or(Architecture::Unknown),
+            cpu_cores: self.cpu_cores,
+            memory_total: self.memory_total,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_node_request_accepts_minimal_ui_and_cli_body() {
+        // What the web UI's Add Node form and `horcrux cluster add` send.
+        let req: AddNodeRequest = serde_json::from_str(
+            r#"{"name":"node-02","address":"192.168.1.100","ssh_key":null,"architecture":"aarch64"}"#,
+        )
+        .expect("minimal add-node body must deserialize");
+        let node = req.into_node("node-02".into(), 7);
+        assert_eq!(node.id, 7);
+        assert_eq!(node.name, "node-02");
+        assert_eq!(node.ip, "192.168.1.100");
+        assert_eq!(node.architecture, Architecture::Aarch64);
+        assert_eq!(node.status, NodeStatus::Unknown);
+        assert_eq!(node.priority, 100);
+        assert!(!node.is_local);
+
+        let req: AddNodeRequest =
+            serde_json::from_str(r#"{"name":"n3","address":"10.0.0.3"}"#).unwrap();
+        assert_eq!(
+            req.into_node("n3".into(), 1).architecture,
+            Architecture::Unknown
+        );
+    }
+
+    #[test]
+    fn add_node_request_still_accepts_full_node_body() {
+        let req: AddNodeRequest = serde_json::from_str(
+            r#"{"id":1,"name":"n","ip":"192.168.1.100","status":"online","priority":300,
+                "is_local":false,"architecture":"x86_64","cpu_cores":4,"memory_total":8589934592}"#,
+        )
+        .unwrap();
+        let node = req.into_node("n".into(), 99);
+        assert_eq!(node.id, 1);
+        assert_eq!(node.status, NodeStatus::Online);
+        assert_eq!(node.priority, 300);
+        assert_eq!(node.cpu_cores, 4);
+        assert_eq!(node.memory_total, 8_589_934_592);
+        assert_eq!(node.architecture, Architecture::X86_64);
+    }
+}

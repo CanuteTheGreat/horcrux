@@ -1634,79 +1634,76 @@ Authorization: Bearer <token>
 
 ### Add Cluster Node
 
-Adds a new node to the cluster.
+Adds a new node to the cluster. The node name comes from the path. Only
+`address` (alias `ip`) is required; `architecture` defaults to `unknown`,
+`priority` (placement/HA weight, 0-1000) to 100, and `cpu_cores` /
+`memory_total` (bytes) to 0 until known.
 
 ```http
 POST /api/cluster/nodes/{name}
-Authorization: Bearer <token>
+Authorization: Bearer ***
 Content-Type: application/json
 
 {
   "address": "192.168.1.11",
-  "architecture": "x86_64"
+  "architecture": "x86_64",
+  "priority": 100
 }
 ```
 
-**Response**:
-```json
-{
-  "name": "horcrux-node-2",
-  "status": "online",
-  "message": "Node added to cluster successfully"
-}
+**Response**: `201 Created` (no body).
+
+### Set Node Weight
+
+```http
+PATCH /api/cluster/nodes/{name}/priority
+Content-Type: application/json
+
+{ "priority": 300 }
 ```
+
+**Response**: `200 OK` (no body).
 
 ### Get Cluster Architecture
 
-Gets the architecture topology of the cluster.
+Node counts per CPU architecture.
 
 ```http
 GET /api/cluster/architecture
-Authorization: Bearer <token>
+Authorization: Bearer ***
 ```
 
 **Response**:
 ```json
 {
-  "total_nodes": 3,
-  "architectures": {
-    "x86_64": 2,
-    "aarch64": 1
-  },
-  "nodes": [
-    {
-      "name": "horcrux-node-1",
-      "architecture": "x86_64",
-      "compatible_architectures": ["x86_64"]
-    }
-  ]
+  "x86_64_nodes": 2,
+  "aarch64_nodes": 1,
+  "other_nodes": 0,
+  "is_mixed": true
 }
 ```
 
 ### Find Best Node for VM
 
-Finds the optimal node for VM placement.
+Picks the best online node that can run the architecture and has the
+requested resources, preferring native architecture, then higher weight.
 
 ```http
 POST /api/cluster/find-node
-Authorization: Bearer <token>
+Authorization: Bearer ***
 Content-Type: application/json
 
 {
-  "memory": 4096,
-  "cpus": 2,
-  "architecture": "x86_64"
+  "architecture": "x86_64",
+  "memory_mb": 4096,
+  "cpu_cores": 2,
+  "min_priority": 100
 }
 ```
 
-**Response**:
-```json
-{
-  "recommended_node": "horcrux-node-2",
-  "score": 85,
-  "reason": "Lowest CPU usage, sufficient resources"
-}
-```
+`min_priority` is optional.
+
+**Response**: the node name as a JSON string, e.g. `"horcrux-node-2"`.
 
 ---
 

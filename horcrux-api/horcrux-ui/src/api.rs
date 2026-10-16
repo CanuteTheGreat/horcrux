@@ -309,59 +309,60 @@ pub async fn get_active_alerts() -> Result<Vec<ActiveAlert>, ApiError> {
     fetch_json("/alerts/active").await
 }
 
+/// A cluster node exactly as `GET /api/cluster/nodes` returns it
+/// (horcrux-api `cluster::node::Node`). `memory_total` is in **bytes**.
+///
+/// This used to carry a nested `resources` object (cpu_cores/memory_mb/
+/// disk_gb) that the API has never sent; with `#[serde(default)]` it
+/// silently zeroed out, so every node on /ha/cluster showed
+/// "0 CPU cores / 0 MB RAM".
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ClusterNode {
+    #[serde(default)]
+    pub id: u32,
     pub name: String,
     pub ip: String,
-    #[serde(default)]
-    pub address: String,
+    /// "online" | "offline" | "unknown"
     pub status: String,
+    /// Placement/HA weight (0-1000, default 100): higher-weighted nodes are
+    /// preferred for placement and HA failover.
+    #[serde(default = "default_node_priority")]
+    pub priority: u32,
+    #[serde(default)]
+    pub is_local: bool,
     pub architecture: String,
     pub cpu_cores: u32,
+    /// Total RAM in bytes.
     pub memory_total: u64,
+    /// Live usage figures. The node API does not report these today, so
+    /// they stay at 0 unless a future API version adds them.
     #[serde(default)]
     pub memory_used: u64,
     #[serde(default)]
     pub cpu_usage: f64,
     #[serde(default)]
     pub memory_usage: f64,
-    #[serde(default)]
-    pub disk_usage: f64,
-    #[serde(default)]
-    pub vm_count: u32,
-    #[serde(default)]
-    pub version: String,
-    #[serde(default)]
-    pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
-    #[serde(default)]
-    pub resources: ClusterNodeResources,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct ClusterNodeResources {
-    #[serde(default)]
-    pub cpu_count: u32,
-    #[serde(default)]
-    pub cpu_cores: u32,
-    #[serde(default)]
-    pub cpu_allocated: u32,
-    #[serde(default)]
-    pub memory_total: u64,
-    #[serde(default)]
-    pub memory_mb: u64,
-    #[serde(default)]
-    pub memory_allocated: u64,
-    #[serde(default)]
-    pub storage_total: u64,
-    #[serde(default)]
-    pub disk_gb: u64,
-    #[serde(default)]
-    pub storage_used: u64,
+fn default_node_priority() -> u32 {
+    100
 }
 
 /// Get cluster nodes
 pub async fn get_cluster_nodes() -> Result<Vec<ClusterNode>, ApiError> {
-    let response = reqwasm::http::Request::get(&format!("{}/cluster/nodes", API_BASE))
+    fetch_json("/cluster/nodes").await
+}
+
+/// Set a node's placement/HA weight (0-1000).
+pub async fn set_node_priority(name: &str, priority: u32) -> Result<(), ApiError> {
+    #[derive(Serialize)]
+    struct Body {
+        priority: u32,
+    }
+    let url = resolve_api_url(&format!("/cluster/nodes/{}/priority", name));
+    let response = with_auth(reqwasm::http::Request::patch(&url))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&Body { priority }).unwrap())
         .send()
         .await
         .map_err(|e| ApiError {
@@ -369,12 +370,15 @@ pub async fn get_cluster_nodes() -> Result<Vec<ClusterNode>, ApiError> {
         })?;
 
     if response.ok() {
-        response.json().await.map_err(|e| ApiError {
-            message: e.to_string(),
-        })
+        Ok(())
     } else {
+        let body = response.text().await.unwrap_or_default();
         Err(ApiError {
-            message: format!("HTTP {}", response.status()),
+            message: if body.is_empty() {
+                format!("HTTP {}", response.status())
+            } else {
+                format!("HTTP {}: {}", response.status(), body)
+            },
         })
     }
 }
@@ -702,14 +706,43 @@ pub async fn delete_replication(job_id: &str) -> Result<(), ApiError> {
 // Console APIs
 // =============================================================================
 
-/// VM representation for console page
+/// `POST /api/console/:vm_id/{vnc,serial}` response (horcrux-api
+/// `console::ConsoleInfo`). Only the one-time `ticket` matters to the
+/// browser: it authenticates the console WebSocket.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Vm {
-    pub id: String,
-    pub name: String,
-    pub status: String,
-    pub cpus: u32,
-    pub memory: u64,
+pub struct ConsoleInfo {
+    pub vm_id: String,
+    pub console_type: String,
+    #[serde(default)]
+    pub host: String,
+    #[serde(default)]
+    pub port: u16,
+    pub ticket: String,
+    #[serde(default)]
+    pub ws_port: u16,
+}
+
+/// Server-rendered noVNC page for a VM. It creates its own console ticket
+/// and derives ws/wss + host:port from wherever it is loaded, so it works
+/// both embedded in an iframe and opened in its own tab.
+pub fn novnc_page_url(vm_id: &str) -> String {
+    format!("{}/console/{}/novnc", API_BASE, urlencoding::encode(vm_id))
+}
+
+/// Create a serial console session; returns the ticket for
+/// [`serial_console_ws_path`].
+pub async fn create_serial_console(vm_id: &str) -> Result<ConsoleInfo, ApiError> {
+    post_json(
+        &format!("/console/{}/serial", urlencoding::encode(vm_id)),
+        &(),
+    )
+    .await
+}
+
+/// Path of the serial-console WebSocket for a ticket (pass it through
+/// [`resolve_ws_url`]).
+pub fn serial_console_ws_path(ticket: &str) -> String {
+    format!("{}/console/ws/serial/{}", API_BASE, ticket)
 }
 
 /// Extended VM information for backup and template operations
@@ -819,113 +852,6 @@ pub struct QueryValidationResult {
     pub warnings: Vec<String>,
     #[serde(default)]
     pub suggestions: Vec<String>,
-}
-
-/// Get a single VM
-pub async fn get_vm(vm_id: &str) -> Result<Vm, ApiError> {
-    let response = reqwasm::http::Request::get(&format!("{}/vms/{}", API_BASE, vm_id))
-        .send()
-        .await
-        .map_err(|e| ApiError {
-            message: e.to_string(),
-        })?;
-
-    if response.ok() {
-        response.json().await.map_err(|e| ApiError {
-            message: e.to_string(),
-        })
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
-    }
-}
-
-/// Get console URL for a VM
-pub async fn get_console_url(vm_id: &str, console_type: &str) -> Result<String, ApiError> {
-    let response = reqwasm::http::Request::get(&format!(
-        "{}/vms/{}/console?type={}",
-        API_BASE, vm_id, console_type
-    ))
-    .send()
-    .await
-    .map_err(|e| ApiError {
-        message: e.to_string(),
-    })?;
-
-    if response.ok() {
-        #[derive(Deserialize)]
-        struct ConsoleResponse {
-            url: String,
-        }
-        let resp: ConsoleResponse = response.json().await.map_err(|e| ApiError {
-            message: e.to_string(),
-        })?;
-        Ok(resp.url)
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
-    }
-}
-
-/// Send keys to console (e.g., Ctrl+Alt+Del)
-pub async fn send_console_keys(vm_id: &str, keys: &[&str]) -> Result<(), ApiError> {
-    #[derive(Serialize)]
-    struct KeysRequest<'a> {
-        keys: &'a [&'a str],
-    }
-
-    let response =
-        reqwasm::http::Request::post(&format!("{}/vms/{}/console/keys", API_BASE, vm_id))
-            .header("Content-Type", "application/json")
-            .body(serde_json::to_string(&KeysRequest { keys }).unwrap())
-            .send()
-            .await
-            .map_err(|e| ApiError {
-                message: e.to_string(),
-            })?;
-
-    if response.ok() {
-        Ok(())
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
-    }
-}
-
-/// Send input to serial console
-pub async fn send_serial_input(vm_id: &str, input: &str) -> Result<String, ApiError> {
-    #[derive(Serialize)]
-    struct SerialInput<'a> {
-        input: &'a str,
-    }
-
-    let response =
-        reqwasm::http::Request::post(&format!("{}/vms/{}/console/serial", API_BASE, vm_id))
-            .header("Content-Type", "application/json")
-            .body(serde_json::to_string(&SerialInput { input }).unwrap())
-            .send()
-            .await
-            .map_err(|e| ApiError {
-                message: e.to_string(),
-            })?;
-
-    if response.ok() {
-        #[derive(Deserialize)]
-        struct SerialOutput {
-            output: String,
-        }
-        let resp: SerialOutput = response.json().await.map_err(|e| ApiError {
-            message: e.to_string(),
-        })?;
-        Ok(resp.output)
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
-    }
 }
 
 // =============================================================================
@@ -2627,59 +2553,45 @@ pub async fn clone_template(id: &str, name: String) -> Result<(), ApiError> {
 
 // Duplicate removed - using the first ClusterNode definition
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum NodeStatus {
-    Online,
-    Offline,
-    Maintenance,
-    Unknown,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NodeResources {
-    pub cpu_cores: u32,
-    pub memory_mb: u64,
-    pub disk_gb: u64,
-    pub network_interfaces: Vec<String>,
-}
-
+/// Body of `POST /api/cluster/nodes/:name`. Only the address is required;
+/// the server fills in the rest (architecture defaults to "unknown").
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddNodeRequest {
-    pub name: String,
     pub address: String,
-    pub ssh_key: Option<String>,
-    pub architecture: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub architecture: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// `GET /api/cluster/architecture` exactly as horcrux-api sends it
+/// (`cluster::ArchitectureSummary`). This is the original, documented
+/// contract (openapi.yaml, CLI); the UI previously expected an invented
+/// `{total_nodes, online_nodes, total_vms, architectures, load_balance_mode}`
+/// shape and failed with "missing field `total_nodes`".
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClusterArchitecture {
-    pub total_nodes: u32,
-    pub online_nodes: u32,
-    pub total_vms: u32,
-    pub architectures: Vec<ArchitectureInfo>,
-    pub load_balance_mode: String,
+    pub x86_64_nodes: u32,
+    pub aarch64_nodes: u32,
+    pub other_nodes: u32,
+    pub is_mixed: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ArchitectureInfo {
-    pub name: String,
-    pub node_count: u32,
-    pub vm_count: u32,
+impl ClusterArchitecture {
+    pub fn total_nodes(&self) -> u32 {
+        self.x86_64_nodes + self.aarch64_nodes + self.other_nodes
+    }
 }
 
+/// Body of `POST /api/cluster/find-node`; the response is the chosen
+/// node's name as a bare JSON string.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FindNodeRequest {
-    pub vm_config: serde_json::Value,
-    pub preferred_architecture: Option<String>,
-    pub exclude_nodes: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NodeRecommendation {
-    pub node_name: String,
-    pub score: f64,
-    pub reason: String,
-    pub resources_available: NodeResources,
+    pub architecture: String,
+    pub memory_mb: u64,
+    pub cpu_cores: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_priority: Option<u32>,
 }
 
 // Removed duplicate HA/Migration structs - using first definitions
@@ -2783,12 +2695,9 @@ pub struct MigrationRequest {
 
 // Cluster Management API Functions (duplicate get_cluster_nodes removed)
 
-/// Add a new node to the cluster
-pub async fn add_cluster_node(
-    name: String,
-    request: AddNodeRequest,
-) -> Result<ClusterNode, ApiError> {
-    post_json(&format!("/cluster/nodes/{}", name), &request).await
+/// Add a new node to the cluster (server replies 201 with no body).
+pub async fn add_cluster_node(name: &str, request: &AddNodeRequest) -> Result<(), ApiError> {
+    post_json_no_response(&format!("/cluster/nodes/{}", name), request).await
 }
 
 /// Get cluster architecture information
@@ -2796,11 +2705,9 @@ pub async fn get_cluster_architecture() -> Result<ClusterArchitecture, ApiError>
     fetch_json("/cluster/architecture").await
 }
 
-/// Find the best node for a VM
-pub async fn find_best_node_for_vm(
-    request: FindNodeRequest,
-) -> Result<NodeRecommendation, ApiError> {
-    post_json("/cluster/find-node", &request).await
+/// Find the best node for a VM; returns the node name.
+pub async fn find_best_node_for_vm(request: &FindNodeRequest) -> Result<String, ApiError> {
+    post_json("/cluster/find-node", request).await
 }
 
 // HA Management API Functions
@@ -5457,4 +5364,121 @@ pub fn resolve_ws_url(ws_path: &str) -> String {
     };
     let host = location.host().unwrap_or_default();
     format!("{protocol}//{host}{ws_path}")
+}
+
+#[cfg(test)]
+mod tests {
+    //! Contract tests: the UI structs must deserialize the JSON horcrux-api
+    //! actually sends. Each sample below is the real serialized shape of the
+    //! named server type.
+    use super::*;
+
+    /// horcrux-api `cluster::node::Node` (GET /api/cluster/nodes).
+    const NODES_JSON: &str = r#"[
+        {"id":1,"name":"node-primary","ip":"10.0.0.1","status":"online","priority":300,
+         "is_local":true,"architecture":"x86_64","cpu_cores":8,"memory_total":17179869184},
+        {"id":2,"name":"node-arm","ip":"10.0.0.2","status":"offline","priority":50,
+         "is_local":false,"architecture":"aarch64","cpu_cores":4,"memory_total":4294967296}
+    ]"#;
+
+    #[test]
+    fn cluster_nodes_deserialize_from_real_api_shape() {
+        let nodes: Vec<ClusterNode> = serde_json::from_str(NODES_JSON).expect("must deserialize");
+        assert_eq!(nodes.len(), 2);
+        let n = &nodes[0];
+        assert_eq!(n.name, "node-primary");
+        assert_eq!(n.ip, "10.0.0.1");
+        assert_eq!(n.status, "online");
+        assert_eq!(n.architecture, "x86_64");
+        // Top-level fields, not a nested `resources` object the API never sends.
+        assert_eq!(n.cpu_cores, 8);
+        assert_eq!(n.memory_total, 17_179_869_184);
+        assert_eq!(n.priority, 300);
+        assert!(n.is_local);
+        assert_eq!(nodes[1].priority, 50);
+        assert_eq!(nodes[1].cpu_cores, 4);
+    }
+
+    #[test]
+    fn cluster_node_priority_defaults_for_older_servers() {
+        let n: ClusterNode = serde_json::from_str(
+            r#"{"name":"n","ip":"10.0.0.9","status":"unknown","architecture":"x86_64",
+                "cpu_cores":2,"memory_total":1073741824}"#,
+        )
+        .unwrap();
+        assert_eq!(n.priority, 100);
+    }
+
+    #[test]
+    fn cluster_architecture_deserializes_from_real_api_shape() {
+        // horcrux-api `cluster::ArchitectureSummary` (GET /api/cluster/architecture).
+        let json = r#"{"x86_64_nodes":2,"aarch64_nodes":1,"other_nodes":1,"is_mixed":true}"#;
+        let arch: ClusterArchitecture = serde_json::from_str(json).expect("must deserialize");
+        assert_eq!(arch.x86_64_nodes, 2);
+        assert_eq!(arch.aarch64_nodes, 1);
+        assert_eq!(arch.other_nodes, 1);
+        assert!(arch.is_mixed);
+        assert_eq!(arch.total_nodes(), 4);
+    }
+
+    #[test]
+    fn add_node_request_serializes_what_the_api_accepts() {
+        let body = serde_json::to_value(AddNodeRequest {
+            address: "192.168.1.100".into(),
+            architecture: Some("aarch64".into()),
+            priority: Some(200),
+        })
+        .unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({"address":"192.168.1.100","architecture":"aarch64","priority":200})
+        );
+        let body = serde_json::to_value(AddNodeRequest {
+            address: "10.0.0.5".into(),
+            architecture: None,
+            priority: None,
+        })
+        .unwrap();
+        assert_eq!(body, serde_json::json!({"address":"10.0.0.5"}));
+    }
+
+    #[test]
+    fn find_node_request_serializes_what_the_api_accepts() {
+        // horcrux-api main.rs `FindNodeRequest {architecture, memory_mb, cpu_cores, min_priority}`.
+        let body = serde_json::to_value(FindNodeRequest {
+            architecture: "x86_64".into(),
+            memory_mb: 2048,
+            cpu_cores: 2,
+            min_priority: Some(150),
+        })
+        .unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({"architecture":"x86_64","memory_mb":2048,"cpu_cores":2,"min_priority":150})
+        );
+        // The response is the node name as a bare JSON string.
+        let node: String = serde_json::from_str(r#""node-primary""#).unwrap();
+        assert_eq!(node, "node-primary");
+    }
+
+    #[test]
+    fn console_info_deserializes_from_real_api_shape() {
+        // horcrux-api `console::ConsoleInfo` (POST /api/console/:vm_id/serial).
+        let json = r#"{"vm_id":"vm-100","console_type":"serial","host":"127.0.0.1",
+                       "port":0,"ticket":"abc123","ws_port":0}"#;
+        let info: ConsoleInfo = serde_json::from_str(json).expect("must deserialize");
+        assert_eq!(info.ticket, "abc123");
+        assert_eq!(info.console_type, "serial");
+    }
+
+    #[test]
+    fn console_urls_point_at_real_server_routes() {
+        // Routes registered in horcrux-api main.rs:
+        //   GET /api/console/:vm_id/novnc and GET /api/console/ws/serial/:ticket_id
+        assert_eq!(novnc_page_url("vm-100"), "/api/console/vm-100/novnc");
+        assert_eq!(novnc_page_url("a b"), "/api/console/a%20b/novnc");
+        assert_eq!(serial_console_ws_path("t1"), "/api/console/ws/serial/t1");
+        // No hardcoded host/port: the noVNC page derives them from its origin.
+        assert!(!novnc_page_url("vm-100").contains("localhost"));
+    }
 }

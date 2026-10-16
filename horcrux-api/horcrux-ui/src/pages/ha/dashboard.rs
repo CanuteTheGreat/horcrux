@@ -299,10 +299,10 @@ pub fn HaDashboard() -> impl IntoView {
                                                 "Status"
                                             </th>
                                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                "Resource Usage"
+                                                "Resources"
                                             </th>
                                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                "VMs"
+                                                "Weight"
                                             </th>
                                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                                 "Architecture"
@@ -326,12 +326,11 @@ pub fn HaDashboard() -> impl IntoView {
                                             cluster_nodes.get().into_iter().take(5).map(|node| {
                                                 let status_color = get_node_status_color(&node.status);
                                                 let node_name = node.name.clone();
-                                                let node_address = node.address.clone();
+                                                let node_address = node.ip.clone();
                                                 let status_str = node.status.clone();
-                                                let cpu = format!("{:.1}%", node.cpu_usage);
-                                                let mem = format!("{:.1}%", node.memory_usage);
-                                                let disk = format!("{:.1}%", node.disk_usage);
-                                                let vm_count = node.vm_count;
+                                                let cores = node.cpu_cores;
+                                                let mem = super::cluster_management::format_memory(node.memory_total);
+                                                let weight = node.priority;
                                                 let arch = node.architecture.clone();
                                                 view! {
                                                     <tr>
@@ -348,13 +347,12 @@ pub fn HaDashboard() -> impl IntoView {
                                                         </td>
                                                         <td class="px-6 py-4 whitespace-nowrap">
                                                             <div class="text-sm text-gray-900">
-                                                                <div>"CPU: " {cpu}</div>
-                                                                <div>"Memory: " {mem}</div>
-                                                                <div>"Disk: " {disk}</div>
+                                                                <div>{cores} " CPU cores"</div>
+                                                                <div>{mem} " RAM"</div>
                                                             </div>
                                                         </td>
                                                         <td class="px-6 py-4 whitespace-nowrap">
-                                                            <div class="text-sm font-medium text-gray-900">{vm_count}</div>
+                                                            <div class="text-sm font-medium text-gray-900">{weight}</div>
                                                         </td>
                                                         <td class="px-6 py-4 whitespace-nowrap">
                                                             <div class="text-sm text-gray-900">{arch}</div>
