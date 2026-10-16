@@ -29,6 +29,7 @@ mod prometheus;
 mod sdn;
 mod secrets;
 mod shutdown;
+mod static_ui;
 mod storage;
 mod template;
 mod tls;
@@ -472,8 +473,20 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Static files serving for the frontend
-    let serve_dir = ServeDir::new("horcrux-ui/dist")
-        .not_found_service(ServeFile::new("horcrux-ui/dist/index.html"));
+    // (see static_ui.rs for why this is no longer a fixed relative path)
+    let (ui_dir, ui_found) = static_ui::ui_dir();
+    if ui_found {
+        info!("Serving web UI from {}", ui_dir.display());
+    } else {
+        tracing::warn!(
+            "Web UI not found (no index.html in {} or any of {:?}); the API still works but UI requests will 404. Set {} to the trunk dist/ directory.",
+            ui_dir.display(),
+            static_ui::UI_DIR_CANDIDATES,
+            static_ui::UI_DIR_ENV
+        );
+    }
+    let serve_dir =
+        ServeDir::new(&ui_dir).not_found_service(ServeFile::new(ui_dir.join("index.html")));
 
     // Build auth router with strict rate limiting (login/register)
     let auth_router = Router::new()

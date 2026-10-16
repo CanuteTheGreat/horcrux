@@ -11,8 +11,11 @@ pidfile="/run/${RC_SVCNAME}.pid"
 output_log="/var/log/horcrux/horcrux.log"
 error_log="/var/log/horcrux/horcrux-error.log"
 
-# Working directory
-directory="/opt/horcrux"
+# Working directory. /opt/horcrux only exists with USE=webui, so chdir
+# there failed on -webui installs; /var/lib/horcrux always exists (the
+# ebuild creates it and start_pre checkpaths it). The web UI is located by
+# absolute path (see horcrux-api/src/static_ui.rs), not relative to this.
+directory="/var/lib/horcrux"
 
 # Resource limits
 RC_ULIMIT="-n 1048576 -u 512"

@@ -8,7 +8,10 @@ Wants=network-online.target
 Type=simple
 User=root
 Group=root
-WorkingDirectory=/usr/share/horcrux
+# /usr/share/horcrux was never created by any installer, which made
+# systemd refuse to start the unit (status=200/CHDIR). /var/lib/horcrux is
+# created by the ebuild and is already writable below.
+WorkingDirectory=/var/lib/horcrux
 Environment="HORCRUX_CONFIG=/etc/horcrux/config.toml"
 Environment="HORCRUX_DB=/var/lib/horcrux/horcrux.db"
 Environment="RUST_LOG=info"
