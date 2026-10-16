@@ -7644,8 +7644,10 @@ async fn get_novnc_page(
         .create_console(&vm_id, ConsoleType::Vnc)
         .await?;
 
-    // Generate the WebSocket URL
-    let ws_url = format!("ws://localhost:8006/api/console/ws/{}", info.ticket);
+    // Path-only WebSocket URL; the noVNC page resolves it against its own
+    // origin (ws/wss + host:port). A hardcoded `ws://localhost:8006` broke the
+    // console for every browser not running on the API host itself.
+    let ws_url = format!("/api/console/ws/{}", info.ticket);
 
     // Get the noVNC HTML page
     let html = console::novnc::get_novnc_html(&info.ticket, &ws_url);

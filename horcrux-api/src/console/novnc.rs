@@ -327,9 +327,18 @@ pub fn get_novnc_html(_ticket_id: &str, ws_url: &str) -> String {
             }}
         }};
 
+        // Resolve the WebSocket URL. A path-only target ("/api/...") is made
+        // absolute against the page's own origin (ws:// or wss:// to match
+        // http/https), so the console works from any host/port/proxy the page
+        // was actually loaded through instead of a fixed hardcoded host.
+        const wsTarget = '{ws_url}';
+        const wsUrl = wsTarget.startsWith('/')
+            ? (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host + wsTarget
+            : wsTarget;
+
         // Initialize noVNC
         try {{
-            rfb = new RFB(screen, '{ws_url}', {{
+            rfb = new RFB(screen, wsUrl, {{
                 credentials: {{}}  // No credentials by default
             }});
 
@@ -391,5 +400,16 @@ mod tests {
         assert!(html.contains("<!DOCTYPE html>"));
         assert!(html.contains("ws://localhost:6080/test-ticket"));
         assert!(html.contains("Horcrux Console"));
+    }
+
+    #[test]
+    fn test_novnc_html_relative_ws_path_resolved_client_side() {
+        // The API passes a path-only URL; the page must resolve it against
+        // window.location rather than embedding a hardcoded host.
+        let html = get_novnc_html("t", "/api/console/ws/t");
+        assert!(html.contains("const wsTarget = '/api/console/ws/t';"));
+        assert!(html.contains("window.location.host + wsTarget"));
+        assert!(html.contains("new RFB(screen, wsUrl,"));
+        assert!(!html.contains("localhost"));
     }
 }
