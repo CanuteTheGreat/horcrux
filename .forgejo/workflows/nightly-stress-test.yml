@@ -102,6 +102,25 @@ jobs:
           docker pull nginx:alpine
           docker pull alpine:latest
 
+      - name: Remove stale stress containers left by earlier runs
+        # The runner's docker daemon is shared and persists across jobs, so
+        # anything an earlier run leaked is still there. Run 378
+        # (2026-10-16 18:04Z) failed its orphan check on
+        # horcrux-stress-load-w{0,2,3,4,5}-207: `docker ps -a` showed them
+        # "Created 8 hours ago", i.e. run 373 (10:12Z). Its server-side
+        # `docker create` calls were still in flight when the test ended.
+        # They finished after that run's backstop cleanup, so this run
+        # counted them against itself. Start from a clean slate. Each
+        # leftover is reported, not hidden.
+        run: |
+          stale=$(docker ps -a --filter "name=horcrux-stress" --format '{{.Names}}' || true)
+          if [ -n "$stale" ]; then
+            echo "::warning::removing stale stress containers from an earlier run: $(echo $stale)"
+            for c in $stale; do docker rm -f "$c"; done
+          else
+            echo "no stale horcrux-stress containers"
+          fi
+
       - name: Verify tool versions (docker, CNI)
         run: |
           docker version
@@ -259,6 +278,14 @@ jobs:
           if [ -f /tmp/horcrux-stress-api.pid ]; then
             kill "$(cat /tmp/horcrux-stress-api.pid)" 2>/dev/null || true
           fi
+          # Killing the server does not kill the `docker create`/`docker rm`
+          # children it already spawned. Wait for them, so the backstop
+          # cleanup below sees every container they produce (run 373 leaked
+          # five containers this way).
+          for i in $(seq 1 30); do
+            pgrep -f 'docker (create|rm) .*horcrux-stress' >/dev/null 2>&1 || break
+            sleep 1
+          done
 
       - name: Diagnostics on failure
         if: failure()
