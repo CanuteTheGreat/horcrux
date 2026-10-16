@@ -105,13 +105,18 @@ jobs:
         run: cargo install trunk
 
       - name: Build UI
-        working-directory: horcrux-ui
+        # The real web UI is the workspace member horcrux-api/horcrux-ui (the
+        # one ci.yml's "Build Web UI" job and the Gentoo ebuilds build). The
+        # top-level horcrux-ui/ directory is a stale, non-workspace copy last
+        # touched in 133e8a0 -- it still hardcodes ws://localhost:8006 and
+        # lacks every UI fix since, so releases must not package it.
+        working-directory: horcrux-api/horcrux-ui
         run: trunk build --release
 
       - name: Create archive
         run: |
-          cd horcrux-ui/dist
-          tar -czvf ../../horcrux-ui-${{ github.ref_name }}.tar.gz *
+          cd horcrux-api/horcrux-ui/dist
+          tar -czvf ../../../horcrux-ui-${{ github.ref_name }}.tar.gz *
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
