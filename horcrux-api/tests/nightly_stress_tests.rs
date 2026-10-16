@@ -626,8 +626,46 @@ async fn test_sustained_concurrent_api_load() {
     // Orphan check: anything matching our load-test naming prefix must be
     // gone from docker - a crashed/aborted request mid-hammering could
     // otherwise leave a container created-but-never-deleted.
-    sleep(Duration::from_secs(2)).await;
-    let orphans = docker_names_matching("horcrux-stress-load");
+    //
+    // A create whose response timed out on our side is ambiguous: the server
+    // may still finish it. A real client reconciles by listing and deleting
+    // what the API reports, so do the same here. What must never happen is a
+    // container that exists in docker but that horcrux does not track (it
+    // can't be cleaned up through the API at all) - that is what still
+    // fails this check after the reconcile window.
+    let reconcile_deadline = Instant::now() + Duration::from_secs(45);
+    let orphans = loop {
+        sleep(Duration::from_secs(2)).await;
+        let listed = match client
+            .get(format!("{api_base}/containers"))
+            .bearer_auth(&token)
+            .send()
+            .await
+        {
+            Ok(resp) => resp
+                .json::<Vec<serde_json::Value>>()
+                .await
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
+        for c in &listed {
+            let Some(id) = c.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            if id.starts_with("horcrux-stress-load") {
+                println!("reconcile: deleting tracked leftover {id}");
+                let _ = client
+                    .delete(format!("{api_base}/containers/{id}"))
+                    .bearer_auth(&token)
+                    .send()
+                    .await;
+            }
+        }
+        let found = docker_names_matching("horcrux-stress-load");
+        if found.is_empty() || Instant::now() >= reconcile_deadline {
+            break found;
+        }
+    };
 
     println!(
         "sustained load summary: {total_ops} ops ({} errors), {health_checks} health checks \

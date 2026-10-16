@@ -14,8 +14,8 @@ pub mod ws_handlers;
 
 use crate::db::Database;
 use horcrux_common::{ContainerConfig, ContainerRuntime, ContainerStatus, Result};
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
 
 /// Container instance (runtime-agnostic)
@@ -44,9 +44,41 @@ impl Container {
     }
 }
 
+/// Claim on a container id whose runtime create is in flight. Released on
+/// drop, so an early return / error path can never leave the id stuck.
+struct CreateReservation {
+    set: Arc<Mutex<HashSet<String>>>,
+    id: String,
+}
+
+impl CreateReservation {
+    /// Returns None if `id` is already being created.
+    fn try_new(set: &Arc<Mutex<HashSet<String>>>, id: &str) -> Option<Self> {
+        let mut guard = set.lock().unwrap_or_else(|e| e.into_inner());
+        if !guard.insert(id.to_string()) {
+            return None;
+        }
+        Some(Self {
+            set: set.clone(),
+            id: id.to_string(),
+        })
+    }
+}
+
+impl Drop for CreateReservation {
+    fn drop(&mut self) {
+        self.set
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.id);
+    }
+}
+
 /// Container manager
 pub struct ContainerManager {
     containers: Arc<RwLock<HashMap<String, Container>>>,
+    /// Ids with a runtime create in flight (see `create_container`).
+    creating: Arc<Mutex<HashSet<String>>>,
     lxc_manager: lxc::LxcManager,
     lxd_manager: lxd::LxdContainerManager,
     incus_manager: incus::IncusContainerManager,
@@ -65,6 +97,7 @@ impl ContainerManager {
     pub fn new() -> Self {
         Self {
             containers: Arc::new(RwLock::new(HashMap::new())),
+            creating: Arc::new(Mutex::new(HashSet::new())),
             lxc_manager: lxc::LxcManager::new(),
             lxd_manager: lxd::LxdContainerManager::new(),
             incus_manager: incus::IncusContainerManager::new(),
@@ -78,6 +111,7 @@ impl ContainerManager {
     pub fn with_database(db: Arc<Database>) -> Self {
         Self {
             containers: Arc::new(RwLock::new(HashMap::new())),
+            creating: Arc::new(Mutex::new(HashSet::new())),
             lxc_manager: lxc::LxcManager::new(),
             lxd_manager: lxd::LxdContainerManager::new(),
             incus_manager: incus::IncusContainerManager::new(),
@@ -104,15 +138,27 @@ impl ContainerManager {
 
     /// Create a new container
     pub async fn create_container(&self, config: ContainerConfig) -> Result<ContainerConfig> {
-        let mut containers = self.containers.write().await;
-
-        // Check if container with this ID already exists
-        if containers.contains_key(&config.id) {
-            return Err(horcrux_common::Error::InvalidConfig(format!(
-                "Container with ID {} already exists",
-                config.id
-            )));
-        }
+        // Reserve the id under the map lock, then run the runtime call
+        // (`docker create`, `lxc-create`, ...) WITHOUT holding it. This used
+        // to hold the global write lock across the runtime call, which
+        // serialized every container create/delete/list/get on the host
+        // behind one slow CLI invocation - under concurrent load requests
+        // queued past client timeouts (nightly stress test, 2026-10-16).
+        let reservation = {
+            let containers = self.containers.read().await;
+            if containers.contains_key(&config.id) {
+                return Err(horcrux_common::Error::InvalidConfig(format!(
+                    "Container with ID {} already exists",
+                    config.id
+                )));
+            }
+            CreateReservation::try_new(&self.creating, &config.id).ok_or_else(|| {
+                horcrux_common::Error::InvalidConfig(format!(
+                    "Container with ID {} is already being created",
+                    config.id
+                ))
+            })?
+        };
 
         // Create the container based on runtime
         let container = match config.runtime {
@@ -124,7 +170,12 @@ impl ContainerManager {
         };
 
         let container_config = container.to_config();
+        let mut containers = self.containers.write().await;
         containers.insert(config.id.clone(), container);
+        // Release the reservation while still holding the write lock, so a
+        // concurrent create of the same id (which checks map + reservation
+        // under the read lock) can never see neither.
+        drop(reservation);
         Ok(container_config)
     }
 
@@ -195,24 +246,35 @@ impl ContainerManager {
 
     /// Delete a container
     pub async fn delete_container(&self, id: &str) -> Result<()> {
-        let mut containers = self.containers.write().await;
+        // Claim the entry under a short lock (a concurrent delete of the same
+        // id gets NotFound), then call the runtime without holding the lock.
+        let container = self
+            .containers
+            .write()
+            .await
+            .remove(id)
+            .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?;
 
-        if let Some(container) = containers.remove(id) {
-            match container.runtime {
-                ContainerRuntime::Lxc => self.lxc_manager.delete_container(&container).await?,
-                ContainerRuntime::Lxd => self.lxd_manager.delete_container(&container).await?,
-                ContainerRuntime::Incus => self.incus_manager.delete_container(&container).await?,
-                ContainerRuntime::Docker => {
-                    self.docker_manager.delete_container(&container).await?
-                }
-                ContainerRuntime::Podman => {
-                    self.podman_manager.delete_container(&container).await?
-                }
-            }
-            Ok(())
-        } else {
-            Err(horcrux_common::Error::ContainerNotFound(id.to_string()))
+        let result = match container.runtime {
+            ContainerRuntime::Lxc => self.lxc_manager.delete_container(&container).await,
+            ContainerRuntime::Lxd => self.lxd_manager.delete_container(&container).await,
+            ContainerRuntime::Incus => self.incus_manager.delete_container(&container).await,
+            ContainerRuntime::Docker => self.docker_manager.delete_container(&container).await,
+            ContainerRuntime::Podman => self.podman_manager.delete_container(&container).await,
+        };
+
+        if let Err(e) = result {
+            // The runtime still has it: keep tracking it instead of silently
+            // forgetting a container that exists (previously it was dropped
+            // from the map before the runtime call, success or not).
+            self.containers
+                .write()
+                .await
+                .entry(id.to_string())
+                .or_insert(container);
+            return Err(e);
         }
+        Ok(())
     }
 
     /// Pause a container
@@ -408,5 +470,32 @@ impl ContainerManager {
         };
 
         Ok(cloned_config)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_reservation_is_exclusive_and_released_on_drop() {
+        let set = Arc::new(Mutex::new(HashSet::new()));
+        let first = CreateReservation::try_new(&set, "ct-1").expect("first claim");
+        assert!(CreateReservation::try_new(&set, "ct-1").is_none());
+        // Other ids are independent.
+        let other = CreateReservation::try_new(&set, "ct-2").expect("other id");
+        drop(first);
+        assert!(CreateReservation::try_new(&set, "ct-1").is_some());
+        drop(other);
+        assert!(set.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_unknown_container_is_not_found() {
+        let mgr = ContainerManager::new();
+        match mgr.delete_container("does-not-exist").await {
+            Err(horcrux_common::Error::ContainerNotFound(id)) => assert_eq!(id, "does-not-exist"),
+            other => panic!("expected ContainerNotFound, got {other:?}"),
+        }
     }
 }

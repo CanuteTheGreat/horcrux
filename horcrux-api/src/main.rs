@@ -6685,7 +6685,14 @@ async fn create_container(
     State(state): State<Arc<AppState>>,
     Json(config): Json<horcrux_common::ContainerConfig>,
 ) -> Result<Json<horcrux_common::ContainerConfig>, ApiError> {
-    let container = state.container_manager.create_container(config).await?;
+    // Run on its own task: if the client disconnects/times out mid-request,
+    // dropping this handler must not abandon a create that the runtime has
+    // already performed (that left containers in docker that horcrux never
+    // registered - untracked orphans).
+    let manager = state.container_manager.clone();
+    let container = tokio::spawn(async move { manager.create_container(config).await })
+        .await
+        .map_err(|e| ApiError::Internal(format!("container create task failed: {e}")))??;
 
     // Broadcast container created event
     state
@@ -6713,7 +6720,12 @@ async fn delete_container(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    state.container_manager.delete_container(&id).await?;
+    // Own task for the same reason as create_container.
+    let manager = state.container_manager.clone();
+    let del_id = id.clone();
+    tokio::spawn(async move { manager.delete_container(&del_id).await })
+        .await
+        .map_err(|e| ApiError::Internal(format!("container delete task failed: {e}")))??;
 
     // Broadcast container deleted event
     state
