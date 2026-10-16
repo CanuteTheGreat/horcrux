@@ -44,7 +44,10 @@ where
     if let Some(dir) = override_dir.map(str::trim).filter(|d| !d.is_empty()) {
         return Some(PathBuf::from(dir));
     }
-    candidates.iter().map(PathBuf::from).find(|dir| has_index(dir))
+    candidates
+        .iter()
+        .map(PathBuf::from)
+        .find(|dir| has_index(dir))
 }
 
 /// Resolve the UI directory from the real environment and filesystem.
