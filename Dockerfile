@@ -193,6 +193,12 @@ RUN emerge --verbose --quiet-build=y --autounmask-write =app-emulation/horcrux-9
     etc-update --automode -5 || true
 RUN emerge --verbose --quiet-build=y =app-emulation/horcrux-9999
 
+# USE=webui installs the UI bundle to /opt/horcrux/horcrux-ui (the first
+# path horcrux-api/src/static_ui.rs probes). With -webui that directory is
+# never created, and a COPY --from of a missing path fails the build, so
+# make sure it exists (empty) either way.
+RUN mkdir -p /opt/horcrux
+
 # --- Runtime stage --------------------------------------------------------
 # Still Gentoo — a slim stage3 with only the installed package and its
 # runtime deps carried over, so USE-flag-gated components remain accurate.
@@ -203,10 +209,14 @@ FROM gentoo/stage3:${TARGETARCH}-systemd
 COPY --from=builder /usr/bin/horcrux-api /usr/local/bin/horcrux-api
 COPY --from=builder /etc/horcrux /etc/horcrux
 COPY --from=builder /var/lib/horcrux /var/lib/horcrux
+# Without this the image shipped no web UI at all: every UI request 404'd
+# even when built with USE=webui. Empty dir on -webui builds.
+COPY --from=builder /opt/horcrux /opt/horcrux
 
 RUN useradd -m -u 1000 -s /bin/bash horcrux 2>/dev/null || \
     (groupadd horcrux && useradd -m -u 1000 -g horcrux -s /bin/bash horcrux) && \
-    chown -R horcrux:horcrux /var/lib/horcrux /etc/horcrux
+    mkdir -p /var/log/horcrux && \
+    chown -R horcrux:horcrux /var/lib/horcrux /etc/horcrux /var/log/horcrux
 
 USER horcrux
 EXPOSE 8006
