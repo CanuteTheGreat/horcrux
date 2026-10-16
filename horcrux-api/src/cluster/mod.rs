@@ -116,12 +116,10 @@ impl ClusterManager {
         // Short-lived service token for the other nodes' local-usage
         // endpoint. Nodes of one cluster share JWT_SECRET; a node that
         // doesn't will answer 401, which is reported as "up, usage unknown".
-        let token = crate::middleware::auth::generate_jwt_token(
-            &format!("cluster-node:{}", local_hostname),
-            &format!("cluster-node:{}", local_hostname),
-            "cluster-node",
-        )
-        .ok();
+        // The token is route-scoped (GET /api/cluster/local-usage only, see
+        // middleware::auth) and expires in seconds, since it is sent to every
+        // registered peer address.
+        let token = crate::middleware::auth::generate_cluster_node_token(&local_hostname).ok();
 
         let polls = targets.iter().map(|node| {
             let local_sample = local_sample.clone();

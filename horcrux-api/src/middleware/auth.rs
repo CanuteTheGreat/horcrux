@@ -72,6 +72,16 @@ pub async fn auth_middleware(
                 // Validate JWT token with signature verification
                 match validate_jwt_token(token) {
                     Ok(claims) => {
+                        // A node-to-node service token is scoped to the
+                        // usage endpoint only; refuse it everywhere else.
+                        if claims.role == CLUSTER_NODE_ROLE
+                            && !cluster_node_may_access(request.method(), request.uri().path())
+                        {
+                            return Err(AuthError {
+                                error: "insufficient_scope".to_string(),
+                                message: "cluster-node service tokens are only valid for GET /api/cluster/local-usage".to_string(),
+                            });
+                        }
                         // Add user info to request extensions
                         let auth_user = AuthUser {
                             user_id: claims.sub,
@@ -204,10 +214,55 @@ fn validate_jwt_token(token: &str) -> Result<Claims, String> {
     Ok(token_data.claims)
 }
 
+/// Role carried by the node-to-node service token the cluster usage monitor
+/// sends to its peers. It is NOT a user role: a token with this role may only
+/// call [`CLUSTER_NODE_ALLOWED_PATH`] (see [`cluster_node_may_access`]).
+pub const CLUSTER_NODE_ROLE: &str = "cluster-node";
+
+/// The one route a `cluster-node` service token is accepted on.
+pub const CLUSTER_NODE_ALLOWED_PATH: &str = "/api/cluster/local-usage";
+
+/// Lifetime of a `cluster-node` service token. The usage monitor mints a
+/// fresh one every poll round (10s), so this only has to cover one round
+/// trip; keep it short so a token captured off the wire is near-useless.
+pub const CLUSTER_NODE_TOKEN_TTL_SECS: usize = 30;
+
+/// Lifetime of a normal user login token.
+const USER_TOKEN_TTL_SECS: usize = 86400; // 24 hours
+
+/// Whether a request authenticated by a `cluster-node` service token may
+/// proceed. Only a read of this node's own usage is allowed -- the token
+/// travels to every registered peer address (possibly over plain HTTP), so
+/// it must never grant general API access.
+pub fn cluster_node_may_access(method: &axum::http::Method, path: &str) -> bool {
+    method == axum::http::Method::GET && path == CLUSTER_NODE_ALLOWED_PATH
+}
+
+/// Generate the short-lived, route-scoped service token a node sends to its
+/// peers' `local-usage` endpoint.
+pub fn generate_cluster_node_token(local_hostname: &str) -> Result<String, String> {
+    let subject = format!("{}:{}", CLUSTER_NODE_ROLE, local_hostname);
+    generate_jwt_token_with_ttl(
+        &subject,
+        &subject,
+        CLUSTER_NODE_ROLE,
+        CLUSTER_NODE_TOKEN_TTL_SECS,
+    )
+}
+
 /// Generate JWT token for a user with proper HMAC-SHA256 signature
 pub fn generate_jwt_token(user_id: &str, username: &str, role: &str) -> Result<String, String> {
+    generate_jwt_token_with_ttl(user_id, username, role, USER_TOKEN_TTL_SECS)
+}
+
+fn generate_jwt_token_with_ttl(
+    user_id: &str,
+    username: &str,
+    role: &str,
+    ttl_secs: usize,
+) -> Result<String, String> {
     let now = chrono::Utc::now().timestamp() as usize;
-    let expiration = now + 86400; // 24 hours
+    let expiration = now + ttl_secs;
 
     let claims = Claims {
         sub: user_id.to_string(),
@@ -351,6 +406,42 @@ mod tests {
         assert_eq!(claims.sub, "user123");
         assert_eq!(claims.username, "admin");
         assert_eq!(claims.role, "admin");
+    }
+
+    #[test]
+    fn test_cluster_node_token_is_short_lived_and_scoped() {
+        let token = generate_cluster_node_token("node1").unwrap();
+        let claims = validate_jwt_token(&token).unwrap();
+        assert_eq!(claims.role, CLUSTER_NODE_ROLE);
+        assert_eq!(claims.sub, "cluster-node:node1");
+        assert_eq!(claims.exp - claims.iat, CLUSTER_NODE_TOKEN_TTL_SECS);
+        assert!(CLUSTER_NODE_TOKEN_TTL_SECS < 60);
+
+        use axum::http::Method;
+        assert!(cluster_node_may_access(
+            &Method::GET,
+            "/api/cluster/local-usage"
+        ));
+        assert!(!cluster_node_may_access(
+            &Method::POST,
+            "/api/cluster/local-usage"
+        ));
+        assert!(!cluster_node_may_access(&Method::GET, "/api/users"));
+        assert!(!cluster_node_may_access(
+            &Method::POST,
+            "/api/cluster/nodes/x"
+        ));
+        assert!(!cluster_node_may_access(
+            &Method::DELETE,
+            "/api/cluster/nodes/x"
+        ));
+    }
+
+    #[test]
+    fn test_user_token_keeps_24h_lifetime() {
+        let token = generate_jwt_token("u", "admin", "admin").unwrap();
+        let claims = validate_jwt_token(&token).unwrap();
+        assert_eq!(claims.exp - claims.iat, 86400);
     }
 
     #[test]
