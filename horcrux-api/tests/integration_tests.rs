@@ -93,6 +93,14 @@ async fn login_with_retry(
     }
 }
 
+/// Admin login through `login_with_retry` (waits out the 5/min login limit
+/// that every test binary in CI shares from 127.0.0.1).
+async fn login_admin(client: &Client) -> reqwest::Response {
+    login_with_retry(client, "admin", "admin")
+        .await
+        .expect("Failed to reach server for admin login")
+}
+
 /// Log in as admin/admin and return the bearer token (JWT), panicking on
 /// failure. All protected endpoints require Bearer/session/API-key auth.
 ///
@@ -103,33 +111,20 @@ async fn admin_token(client: &Client) -> String {
     static TOKEN: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
     TOKEN
         .get_or_init(|| async {
-            let mut attempt = 0;
-            loop {
-                let response = client
-                    .post(format!("{}/auth/login", API_BASE))
-                    .json(&json!({"username": "admin", "password": "admin"}))
-                    .send()
-                    .await
-                    .expect("Failed to reach server for admin login");
-                if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < 10 {
-                    attempt += 1;
-                    sleep(Duration::from_millis(500)).await;
-                    continue;
-                }
-                assert!(
-                    response.status().is_success(),
-                    "Admin login failed: {}",
-                    response.status()
-                );
-                let body: serde_json::Value = response
-                    .json()
-                    .await
-                    .expect("Failed to parse login response");
-                break body["ticket"]
-                    .as_str()
-                    .expect("Login response missing ticket")
-                    .to_string();
-            }
+            let response = login_admin(client).await;
+            assert!(
+                response.status().is_success(),
+                "Admin login failed: {}",
+                response.status()
+            );
+            let body: serde_json::Value = response
+                .json()
+                .await
+                .expect("Failed to parse login response");
+            body["ticket"]
+                .as_str()
+                .expect("Login response missing ticket")
+                .to_string()
         })
         .await
         .clone()
@@ -800,18 +795,7 @@ async fn test_authentication() {
     let client = create_client();
 
     // 1. Login with valid credentials
-    let login_request = json!({
-        "username": "admin",
-        "password": "admin"
-    });
-
-    let response = client
-        .post(format!("{}/auth/login", API_BASE))
-        .json(&login_request)
-        .send()
-        .await;
-
-    let response = expect_2xx(response, "Failed to login").await;
+    let response = expect_2xx(Ok(login_admin(&client).await), "Failed to login").await;
     let token_response: serde_json::Value = response
         .unwrap()
         .json()
@@ -1388,22 +1372,13 @@ async fn test_api_token_generation() {
     let client = create_client();
 
     // 1. Login first
-    let login_request = json!({
-        "username": "admin",
-        "password": "admin"
-    });
-
-    let response = client
-        .post(format!("{}/auth/login", API_BASE))
-        .json(&login_request)
-        .send()
-        .await;
-
-    if response.is_err() {
-        return; // Skip if server not running
-    }
-
-    let token_response: serde_json::Value = response.unwrap().json().await.unwrap();
+    let response = login_admin(&client).await;
+    assert!(
+        response.status().is_success(),
+        "login: {}",
+        response.status()
+    );
+    let token_response: serde_json::Value = response.json().await.unwrap();
     let jwt_token = token_response["ticket"].as_str().unwrap();
 
     // 2. Create API key

@@ -25,49 +25,61 @@ use tokio::net::TcpStream;
 const API: &str = "http://localhost:8006/api";
 const WS: &str = "ws://localhost:8006";
 
-async fn token(c: &reqwest::Client) -> String {
-    for _ in 0..30 {
-        if let Ok(r) = c
-            .post(format!("{API}/auth/login"))
-            .json(&json!({"username": "admin", "password": "admin"}))
-            .send()
-            .await
-        {
-            if r.status().is_success() {
-                let v: Value = r.json().await.unwrap();
-                return v["ticket"].as_str().unwrap().to_string();
+/// One admin login for the whole binary: (bearer token, `session_id=...`
+/// cookie). The login endpoint allows 5 attempts/minute per IP and every
+/// CI test binary logs in from 127.0.0.1, so log in once and wait out a
+/// 429 (`retry_after`) instead of burning the next suite's budget.
+async fn login() -> &'static (String, String) {
+    static LOGIN: tokio::sync::OnceCell<(String, String)> = tokio::sync::OnceCell::const_new();
+    LOGIN
+        .get_or_init(|| async {
+            let c = reqwest::Client::new();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(150);
+            loop {
+                let r = c
+                    .post(format!("{API}/auth/login"))
+                    .json(&json!({"username": "admin", "password": "admin"}))
+                    .send()
+                    .await;
+                let wait = match r {
+                    Ok(r) if r.status().is_success() => {
+                        let cookie = r
+                            .headers()
+                            .get_all(reqwest::header::SET_COOKIE)
+                            .iter()
+                            .filter_map(|v| v.to_str().ok())
+                            .find(|v| v.starts_with("session_id="))
+                            .expect("login sets the session_id cookie")
+                            .split(';')
+                            .next()
+                            .unwrap()
+                            .to_string();
+                        let v: Value = r.json().await.unwrap();
+                        return (v["ticket"].as_str().unwrap().to_string(), cookie);
+                    }
+                    Ok(r) if r.status() == 429 => {
+                        let v: Value = r.json().await.unwrap_or_default();
+                        v["retry_after"].as_u64().unwrap_or(5).clamp(1, 61)
+                    }
+                    _ => 1, // server still starting
+                };
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "admin login kept failing"
+                );
+                tokio::time::sleep(Duration::from_secs(wait)).await;
             }
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-    panic!("login failed");
+        })
+        .await
 }
 
-/// Log in like the browser does and return the `session_id=...` cookie.
-async fn session_cookie(c: &reqwest::Client) -> String {
-    for _ in 0..30 {
-        let r = c
-            .post(format!("{API}/auth/login"))
-            .json(&json!({"username": "admin", "password": "admin"}))
-            .send()
-            .await
-            .unwrap();
-        if r.status().is_success() {
-            return r
-                .headers()
-                .get_all(reqwest::header::SET_COOKIE)
-                .iter()
-                .filter_map(|v| v.to_str().ok())
-                .find(|v| v.starts_with("session_id="))
-                .expect("login sets the session_id cookie")
-                .split(';')
-                .next()
-                .unwrap()
-                .to_string();
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-    panic!("login for session cookie kept failing");
+async fn token(_c: &reqwest::Client) -> String {
+    login().await.0.clone()
+}
+
+/// The browser's session cookie (the UI downloads the .vv with it).
+async fn session_cookie(_c: &reqwest::Client) -> String {
+    login().await.1.clone()
 }
 
 async fn call(
