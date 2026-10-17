@@ -39,6 +39,10 @@ API = os.environ.get("API", "https://127.0.0.1:8006/api")
 # (HORCRUX_CA_FILE), otherwise accept the self-signed certificate.
 _CA = os.environ.get("HORCRUX_CA_FILE")
 SSL_CTX = ssl.create_default_context(cafile=_CA) if _CA else ssl._create_unverified_context()
+if _CA:
+    # Strict RFC 5280 checks, as Python >= 3.13 does by default (the node
+    # CA's leaf must carry an Authority Key Identifier).
+    SSL_CTX.verify_flags |= ssl.VERIFY_X509_STRICT
 MODE = os.environ.get("MODE", "ct")
 CT = "hx-incus-ct"
 VM = "hx-incus-vm"

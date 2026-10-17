@@ -118,6 +118,23 @@ pub fn certificate_info(cert_pem: &str) -> Result<CertificateInfo> {
     })
 }
 
+/// Whether the first certificate of a PEM chain carries an Authority Key
+/// Identifier extension.
+pub fn has_authority_key_id(cert_pem: &str) -> bool {
+    let Some(Ok(der)) = rustls_pemfile::certs(&mut cert_pem.as_bytes()).next() else {
+        return false;
+    };
+    let Ok((_, cert)) = x509_parser::parse_x509_certificate(der.as_ref()) else {
+        return false;
+    };
+    cert.extensions().iter().any(|e| {
+        matches!(
+            e.parsed_extension(),
+            x509_parser::extensions::ParsedExtension::AuthorityKeyIdentifier(_)
+        )
+    })
+}
+
 /// Hands rustls the current certificate on every handshake.
 #[derive(Debug)]
 pub struct CertResolver {
@@ -198,6 +215,7 @@ pub fn ensure_local_ca(dir: &Path) -> std::io::Result<(String, String)> {
         .distinguished_name
         .push(rcgen::DnType::OrganizationName, "Horcrux");
     params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    params.use_authority_key_identifier_extension = true;
     params.key_usages = vec![
         rcgen::KeyUsagePurpose::KeyCertSign,
         rcgen::KeyUsagePurpose::CrlSign,
@@ -242,6 +260,10 @@ pub fn issue_from_local_ca(
         .distinguished_name
         .push(rcgen::DnType::OrganizationName, "Horcrux");
     params.is_ca = rcgen::IsCa::ExplicitNoCa;
+    // RFC 5280 4.2.1.1: required in every certificate a CA issues. Strict
+    // verifiers refuse a chain without it (Python >= 3.13's default
+    // VERIFY_X509_STRICT: "Missing Authority Key Identifier").
+    params.use_authority_key_identifier_extension = true;
     params.key_usages = vec![
         rcgen::KeyUsagePurpose::DigitalSignature,
         rcgen::KeyUsagePurpose::KeyEncipherment,
@@ -371,7 +393,22 @@ impl TlsManager {
                 return Ok(info);
             }
         }
-        self.reload()
+        let info = self.reload()?;
+        // Leaf certificates issued by the local CA before it set the
+        // Authority Key Identifier fail strict verification: reissue them
+        // (same names) once.
+        if info.source == "local-ca"
+            && !std::fs::read_to_string(self.paths().0)
+                .map(|pem| has_authority_key_id(&pem))
+                .unwrap_or(true)
+        {
+            let info = self.issue_local(&info.san, 3650)?;
+            tracing::info!(
+                "Reissued the local-CA HTTPS certificate with an Authority Key Identifier"
+            );
+            return Ok(info);
+        }
+        Ok(info)
     }
 
     /// Directory holding the local CA (next to the certificate).
@@ -565,6 +602,54 @@ mod tests {
             m2.ensure_certificate().unwrap().fingerprint_sha256,
             info2.fingerprint_sha256
         );
+    }
+
+    #[test]
+    fn local_ca_leaf_has_an_authority_key_id_and_old_leaves_are_reissued() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = TlsManager::with_paths(
+            dir.path().join("ssl/cert.pem"),
+            dir.path().join("ssl/key.pem"),
+            dir.path().join("fallback"),
+        );
+        let info = m.ensure_certificate().unwrap();
+        let cert_path = dir.path().join("ssl/cert.pem");
+        let leaf = std::fs::read_to_string(&cert_path).unwrap();
+        assert!(has_authority_key_id(&leaf), "leaf lacks the AKI extension");
+
+        // A leaf from before the fix: same CA, no AKI. The next start
+        // replaces it (same names) with one that has it.
+        let (ca, ca_key) = ensure_local_ca(&m.ca_dir()).unwrap();
+        let issuer =
+            rcgen::Issuer::from_ca_cert_pem(&ca, rcgen::KeyPair::from_pem(&ca_key).unwrap())
+                .unwrap();
+        let mut params = rcgen::CertificateParams::new(info.san.clone()).unwrap();
+        params.is_ca = rcgen::IsCa::ExplicitNoCa;
+        let key = rcgen::KeyPair::generate().unwrap();
+        let old = params.signed_by(&key, &issuer).unwrap();
+        std::fs::write(&cert_path, format!("{}{}", old.pem(), ca)).unwrap();
+        std::fs::write(dir.path().join("ssl/key.pem"), key.serialize_pem()).unwrap();
+        assert!(!has_authority_key_id(
+            &std::fs::read_to_string(&cert_path).unwrap()
+        ));
+
+        let m2 = TlsManager::with_paths(
+            cert_path.clone(),
+            dir.path().join("ssl/key.pem"),
+            dir.path().join("fallback"),
+        );
+        let info2 = m2.ensure_certificate().unwrap();
+        assert!(has_authority_key_id(
+            &std::fs::read_to_string(&cert_path).unwrap()
+        ));
+        assert_eq!(info2.source, "local-ca");
+        for n in &info.san {
+            assert!(
+                info2.san.contains(n),
+                "reissued cert keeps {n}: {:?}",
+                info2.san
+            );
+        }
     }
 
     #[test]
