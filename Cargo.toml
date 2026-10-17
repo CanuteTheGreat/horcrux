@@ -89,8 +89,19 @@ kube = { version = "0.98", features = ["runtime", "derive", "ws"] }
 k8s-openapi = { version = "0.24", features = ["v1_32"] }
 http = { version = "1.0" }
 
-# Optimized release profile for WASM
+# Release builds (CI, release.yml, the Gentoo ebuild). Size-optimised as
+# before, but thin LTO with parallel codegen units: fat LTO with one
+# codegen unit (meant for the WASM UI, see below) made the final
+# horcrux-api link a single ~6 GB rustc process; thin LTO peaks around
+# 2 GB for the same build.
 [profile.release]
+opt-level = "z"
+lto = "thin"
+
+# The WASM web UI keeps the smallest-download settings: trunk builds it
+# with this profile (data-cargo-profile-release in horcrux-ui/index.html).
+[profile.wasm-release]
+inherits = "release"
 opt-level = "z"
 lto = true
 codegen-units = 1
