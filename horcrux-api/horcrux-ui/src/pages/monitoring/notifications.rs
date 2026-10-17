@@ -14,6 +14,7 @@ pub fn NotificationsPage() -> impl IntoView {
     let (show_test_modal, set_show_test_modal) = create_signal(false);
     let (loading, set_loading) = create_signal(false);
     let (error_message, set_error_message) = create_signal(None::<String>);
+    let (notice, set_notice) = create_signal(None::<String>);
     let (active_tab, set_active_tab) = create_signal("channels".to_string());
 
     // Channel form
@@ -303,16 +304,26 @@ pub fn NotificationsPage() -> impl IntoView {
             set_loading.set(true);
             set_error_message.set(None);
 
+            let name = selected_channel
+                .get_untracked()
+                .map(|c| c.name)
+                .unwrap_or_default();
             match test_notification_channel(channel_id).await {
                 Ok(_) => {
                     set_show_test_modal.set(false);
-                    // Show success message
+                    set_notice.set(Some(format!("Test notification delivered via '{}'", name)));
                 }
-                Err(e) => set_error_message
-                    .set(Some(format!("Failed to test notification channel: {}", e))),
+                Err(e) => {
+                    set_show_test_modal.set(false);
+                    set_notice.set(None);
+                    set_error_message
+                        .set(Some(format!("Failed to test notification channel: {}", e)))
+                }
             }
 
             set_loading.set(false);
+            // The card's success/failure counters and last-used time changed.
+            load_data.dispatch(());
         }
     });
 
@@ -431,6 +442,9 @@ pub fn NotificationsPage() -> impl IntoView {
                 </div>
             </div>
 
+            {move || notice.get().map(|msg| view! {
+                <div class="alert alert-success" id="notifications-notice">{msg}</div>
+            })}
             {move || error_message.get().map(|msg| view! {
                 <div class="alert alert-error">{msg}</div>
             })}
@@ -478,8 +492,9 @@ pub fn NotificationsPage() -> impl IntoView {
                                                 let last_used = channel.last_used;
                                                 let config = channel.config.clone();
 
+                                                let card_name = channel.name.clone();
                                                 view! {
-                                                    <div class="channel-card">
+                                                    <div class="channel-card" data-channel-name=card_name>
                                                         <div class="card-header">
                                                             <div class="channel-info">
                                                                 <div class="channel-title">
@@ -622,9 +637,41 @@ pub fn NotificationsPage() -> impl IntoView {
 
                         "webhooks" => view! {
                             <div class="webhooks-section">
-                                <div class="coming-soon">
-                                    "Advanced webhook configuration coming soon"
-                                </div>
+                                <p class="section-help">
+                                    "Event webhooks (VM/container lifecycle events) configured through /api/webhooks, with their delivery counters."
+                                </p>
+                                {move || if webhook_configs.get().is_empty() {
+                                    view! { <div class="empty-state">"No event webhooks configured"</div> }.into_view()
+                                } else {
+                                    view! {
+                                        <table class="data-table" id="event-webhooks">
+                                            <thead>
+                                                <tr>
+                                                    <th>"Name"</th>
+                                                    <th>"URL"</th>
+                                                    <th>"Events"</th>
+                                                    <th>"Enabled"</th>
+                                                    <th>"Delivered"</th>
+                                                    <th>"Failed"</th>
+                                                    <th>"Last triggered"</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {webhook_configs.get().into_iter().map(|w| view! {
+                                                    <tr>
+                                                        <td>{w.name}</td>
+                                                        <td>{w.url}</td>
+                                                        <td>{w.events.join(", ")}</td>
+                                                        <td>{if w.enabled { "yes" } else { "no" }}</td>
+                                                        <td>{w.success_count}</td>
+                                                        <td>{w.failure_count}</td>
+                                                        <td>{w.last_triggered.map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or_else(|| "never".to_string())}</td>
+                                                    </tr>
+                                                }).collect::<Vec<_>>()}
+                                            </tbody>
+                                        </table>
+                                    }.into_view()
+                                }}
                             </div>
                         }.into_view(),
 

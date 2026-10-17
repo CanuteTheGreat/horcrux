@@ -240,7 +240,7 @@ pub fn MetricsExplorerPage() -> impl IntoView {
                     <button
                         class="btn btn-primary"
                         on:click=move |_| execute_query.dispatch(())
-                        disabled=loading.get() || current_query.get().is_empty()
+                        disabled=move || loading.get() || current_query.get().is_empty()
                     >
                         "Execute Query"
                     </button>
@@ -466,8 +466,6 @@ pub fn MetricsExplorerPage() -> impl IntoView {
                                         <option value="min">"min() - Minimum"</option>
                                         <option value="max">"max() - Maximum"</option>
                                         <option value="count">"count() - Count"</option>
-                                        <option value="rate">"rate() - Rate"</option>
-                                        <option value="increase">"increase() - Increase"</option>
                                     </select>
 
                                     {move || if aggregation_function.get() != "none" {
@@ -543,9 +541,9 @@ pub fn MetricsExplorerPage() -> impl IntoView {
                             ></textarea>
                             <div class="query-help">
                                 <span>"Examples: "</span>
-                                <button class="query-example" on:click=move |_| set_current_query.set("up".to_string())>"up"</button>
-                                <button class="query-example" on:click=move |_| set_current_query.set("rate(cpu_usage_total[5m])".to_string())>"rate(cpu_usage_total[5m])"</button>
-                                <button class="query-example" on:click=move |_| set_current_query.set("avg(memory_usage) by (instance)".to_string())>"avg(memory_usage) by (instance)"</button>
+                                <button class="query-example" on:click=move |_| set_current_query.set("horcrux_node_load1".to_string())>"horcrux_node_load1"</button>
+                                <button class="query-example" on:click=move |_| set_current_query.set("avg(horcrux_node_cpu_usage_percent)".to_string())>"avg(horcrux_node_cpu_usage_percent)"</button>
+                                <button class="query-example" on:click=move |_| set_current_query.set("max(horcrux_vm_cpu_usage_percent) by (name)".to_string())>"max(horcrux_vm_cpu_usage_percent) by (name)"</button>
                             </div>
                         </div>
                     }.into_view()
@@ -630,11 +628,10 @@ pub fn MetricsExplorerPage() -> impl IntoView {
                                         }.into_view()
                                     } else {
                                         let chart_data = results_for_chart.clone();
+                                        let svg = render_chart_svg(&chart_data, &chart_type.get());
                                         view! {
                                             <div class="chart-container">
-                                                <div class="chart-placeholder" id="metrics-chart">
-                                                    "Chart will be rendered here - "{chart_type.get()}" chart for "{chart_data.len()}" series"
-                                                </div>
+                                                <div class="metrics-chart" id="metrics-chart" inner_html=svg></div>
                                             </div>
                                         }.into_view()
                                     }}
@@ -662,4 +659,133 @@ pub fn MetricsExplorerPage() -> impl IntoView {
             }}
         </div>
     }
+}
+
+/// Inline SVG chart of query results: one polyline (line/area) or bar set per
+/// label set, time on X, value on Y, with min/max/first/last axis labels.
+fn render_chart_svg(results: &[MetricResult], chart_type: &str) -> String {
+    use std::collections::BTreeMap;
+    const W: f64 = 800.0;
+    const H: f64 = 260.0;
+    const PAD_L: f64 = 70.0;
+    const PAD_B: f64 = 30.0;
+    const COLORS: [&str; 6] = [
+        "#2563eb", "#dc2626", "#16a34a", "#d97706", "#7c3aed", "#0891b2",
+    ];
+
+    let mut series: BTreeMap<String, Vec<(i64, f64)>> = BTreeMap::new();
+    for r in results {
+        for p in &r.values {
+            let mut key: Vec<String> = p
+                .labels
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect();
+            key.sort();
+            series
+                .entry(key.join(", "))
+                .or_default()
+                .push((p.timestamp.timestamp(), p.value));
+        }
+    }
+    let points: Vec<(i64, f64)> = series.values().flatten().cloned().collect();
+    if points.is_empty() {
+        return "<p>No data points in this range</p>".to_string();
+    }
+    let (t0, t1) = points.iter().fold((i64::MAX, i64::MIN), |(a, b), (t, _)| {
+        (a.min(*t), b.max(*t))
+    });
+    let (mut v0, mut v1) = points.iter().fold((f64::MAX, f64::MIN), |(a, b), (_, v)| {
+        (a.min(*v), b.max(*v))
+    });
+    if chart_type == "bar" || chart_type == "area" {
+        v0 = v0.min(0.0);
+    }
+    if (v1 - v0).abs() < f64::EPSILON {
+        v1 = v0 + 1.0;
+    }
+    let span = (t1 - t0).max(1) as f64;
+    let x = |t: i64| PAD_L + (t - t0) as f64 / span * (W - PAD_L - 10.0);
+    let y = |v: f64| 10.0 + (1.0 - (v - v0) / (v1 - v0)) * (H - PAD_B - 10.0);
+    let fmt_t = |t: i64| {
+        chrono::DateTime::from_timestamp(t, 0)
+            .map(|d| d.format("%H:%M:%S").to_string())
+            .unwrap_or_default()
+    };
+    let mut svg = format!(
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {W} {H}' width='100%' role='img' class='metrics-svg'>\
+         <line x1='{PAD_L}' y1='{b}' x2='{W}' y2='{b}' stroke='#9ca3af'/>\
+         <line x1='{PAD_L}' y1='10' x2='{PAD_L}' y2='{b}' stroke='#9ca3af'/>\
+         <text x='{lx}' y='16' font-size='11' text-anchor='end'>{v1:.2}</text>\
+         <text x='{lx}' y='{b}' font-size='11' text-anchor='end'>{v0:.2}</text>\
+         <text x='{PAD_L}' y='{tb}' font-size='11'>{ft0}</text>\
+         <text x='{W}' y='{tb}' font-size='11' text-anchor='end'>{ft1}</text>",
+        b = H - PAD_B,
+        lx = PAD_L - 6.0,
+        tb = H - 10.0,
+        ft0 = fmt_t(t0),
+        ft1 = fmt_t(t1),
+    );
+    let n = series.len().max(1) as f64;
+    for (i, (name, pts)) in series.iter().enumerate() {
+        let color = COLORS[i % COLORS.len()];
+        let mut pts = pts.clone();
+        pts.sort_by_key(|p| p.0);
+        let name = name
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('\'', "&#39;");
+        if chart_type == "bar" {
+            let bw = ((W - PAD_L) / (pts.len().max(1) as f64 * n)).clamp(1.0, 20.0);
+            for (t, v) in &pts {
+                let x0 = x(*t) + i as f64 * bw;
+                svg.push_str(&format!(
+                    "<rect class='series' data-series='{name}' x='{x0:.1}' y='{:.1}' width='{bw:.1}' height='{:.1}' fill='{color}'><title>{name} {v}</title></rect>",
+                    y(*v),
+                    (y(v0) - y(*v)).max(0.0)
+                ));
+            }
+        } else {
+            let line: Vec<String> = pts
+                .iter()
+                .map(|(t, v)| format!("{:.1},{:.1}", x(*t), y(*v)))
+                .collect();
+            if chart_type == "area" {
+                let first = pts.first().map(|p| x(p.0)).unwrap_or(PAD_L);
+                let last = pts.last().map(|p| x(p.0)).unwrap_or(PAD_L);
+                svg.push_str(&format!(
+                    "<polygon points='{first:.1},{b:.1} {} {last:.1},{b:.1}' fill='{color}' fill-opacity='0.2'/>",
+                    line.join(" "),
+                    b = y(v0)
+                ));
+            }
+            svg.push_str(&format!(
+                "<polyline class='series' data-series='{name}' data-points='{}' points='{}' fill='none' stroke='{color}' stroke-width='2'><title>{name}</title></polyline>",
+                pts.len(),
+                line.join(" ")
+            ));
+            // Sample markers (a lone sample has no line segment to show).
+            if pts.len() <= 120 {
+                for (t, v) in &pts {
+                    svg.push_str(&format!(
+                        "<circle cx='{:.1}' cy='{:.1}' r='3' fill='{color}'><title>{v}</title></circle>",
+                        x(*t),
+                        y(*v)
+                    ));
+                }
+            }
+        }
+        svg.push_str(&format!(
+            "<text x='{:.1}' y='{:.1}' font-size='11' fill='{color}'>{}</text>",
+            PAD_L + 6.0,
+            24.0 + i as f64 * 14.0,
+            if name.is_empty() {
+                "value".to_string()
+            } else {
+                name.clone()
+            }
+        ));
+    }
+    svg.push_str("</svg>");
+    svg
 }

@@ -15,12 +15,17 @@ Covers the daily-QA findings:
   * stack services had no shared network / DNS; ports were dropped;
     removed stacks lingered until a manual refresh
   * /favicon.ico 404 on every page
+  * Monitoring > Notifications and Metrics Explorer called routes that did
+    not exist (a channel test must really reach a webhook receiver; the
+    explorer must chart real samples)
 """
+import http.server
 import json
 import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -36,6 +41,7 @@ REP_VM = "e2e-rep-vm"
 BK_VM = "e2e-bk-restored"
 BK_JOB = "e2e-bk-job"
 DISP_VM = "e2e-display-vm"
+NOTIFY = "e2e-notify-hook"
 _TOKEN = []
 
 
@@ -110,6 +116,9 @@ def cleanup():
         _req("DELETE", f"/api/vms/{REP_VM}-clone", tok)
         _req("DELETE", f"/api/vms/{REP_VM}", tok)
         _req("DELETE", f"/api/cni/networks/{SDN_NET}", tok)
+        for ch in api_get("/api/notifications/channels", tok) or []:
+            if ch.get("name") == NOTIFY:
+                _req("DELETE", f"/api/notifications/channels/{ch['id']}", tok)
         for v in api_get("/api/vms", tok) or []:
             if v.get("name") == DISP_VM:
                 try:
@@ -151,6 +160,52 @@ def main():
         cpu = page.locator(".stat-card", has_text="CPU Usage").locator(".stat-value")
         expect(cpu).to_have_text(re.compile(r"^\d+(\.\d)?%$"), timeout=45000)
         expect(page.get_by_text("Could not reach the backend")).to_have_count(0)
+
+        # ---- Monitoring > Notifications: create a webhook channel, Test it --
+        # A local receiver stands in for the webhook target; the test message
+        # must really arrive and the card's counter must go up.
+        received = []
+
+        class Hook(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                received.append(json.loads(self.rfile.read(n) or b"null"))
+                self.send_response(204)
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+
+        hook = http.server.HTTPServer(("127.0.0.1", 0), Hook)
+        threading.Thread(target=hook.serve_forever, daemon=True).start()
+        page.goto(f"{BASE}/monitoring/notifications")
+        page.get_by_role("button", name="Create Channel").first.click()
+        page.get_by_placeholder("Enter channel name").fill(NOTIFY)
+        page.locator(".modal-content select").first.select_option("webhook")
+        page.get_by_placeholder("https://api.example.com/webhooks/alerts").fill(
+            f"http://127.0.0.1:{hook.server_port}/e2e")
+        page.locator(".modal-content .modal-footer").get_by_role("button", name="Create Channel").click()
+        card = page.locator(f".channel-card[data-channel-name='{NOTIFY}']")
+        expect(card).to_be_visible(timeout=30000)
+        card.get_by_role("button", name="Test").click()
+        page.get_by_role("button", name="Send Test Notification").click()
+        expect(page.locator("#notifications-notice")).to_contain_text(NOTIFY, timeout=30000)
+        assert wait_for(lambda: received, "webhook test delivery"), received
+        assert received[0]["event"] == "test", received
+        expect(card.locator(".stat-value.success")).to_have_text("1", timeout=30000)
+        hook.shutdown()
+
+        # ---- Monitoring > Metrics Explorer: real samples, real chart --------
+        page.goto(f"{BASE}/monitoring/metrics")
+        metric = page.locator(".metric-selector select")
+        expect(metric.locator("option[value='horcrux_node_load1']")).to_have_count(1, timeout=30000)
+        metric.select_option("horcrux_node_load1")
+        page.get_by_role("button", name="Execute Query").click()
+        # avg(...) of the node series = one plotted series with real points
+        expect(page.locator("#metrics-chart svg .series")).to_have_count(1, timeout=30000)
+        assert int(page.locator("#metrics-chart svg .series").get_attribute("data-points")) >= 1
+        expect(page.get_by_text(re.compile(r"Data Points: [1-9]"))).to_be_visible()
+        expect(page.get_by_text("Query failed")).to_have_count(0)
 
         # ---- Create Container button -> form -> real container -------------
         page.goto(f"{BASE}/containers")
