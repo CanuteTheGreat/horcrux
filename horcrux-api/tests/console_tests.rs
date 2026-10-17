@@ -918,3 +918,40 @@ async fn video_cards_are_really_attached() {
     }
     cleanup(&c, &t, id).await;
 }
+
+/// Without `-nic none` QEMU adds a user-mode (SLIRP) e1000 NIC that NATs
+/// the guest through the host: on a cloud host the guest could read the
+/// host's instance metadata and credentials. A VM with no network
+/// configured must have no NIC and no network backend, checked in QEMU.
+#[tokio::test]
+async fn vm_without_network_has_no_nic() {
+    let c = http();
+    let t = token(&c).await;
+    let id = "console-nonet";
+    fresh_vm(&c, &t, id, None).await;
+    let ids = pci_ids(&c, &t, id).await;
+    // e1000 (QEMU's implicit NIC on x86 pc), virtio-net, rtl8139.
+    for nic in [
+        (0x8086u64, 0x100eu64),
+        (0x1af4, 0x1000),
+        (0x1af4, 0x1041),
+        (0x10ec, 0x8139),
+    ] {
+        assert!(!ids.contains(&nic), "VM has a NIC {nic:x?}: {ids:x?}");
+    }
+    let net = qmp(
+        &c,
+        &t,
+        id,
+        json!({"execute": "human-monitor-command",
+               "arguments": {"command-line": "info network"}}),
+    )
+    .await;
+    let net = net.as_str().unwrap_or_default().to_string();
+    assert!(
+        !net.contains("user") && !net.contains("e1000"),
+        "QEMU has a network backend/NIC: {net:?}"
+    );
+    eprintln!("info network on a VM without network: {net:?}");
+    cleanup(&c, &t, id).await;
+}

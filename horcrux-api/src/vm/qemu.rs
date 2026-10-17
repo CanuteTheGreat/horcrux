@@ -159,6 +159,16 @@ pub fn qemu_command(
         ]);
     }
 
+    // Networking. Without any -nic/-netdev QEMU silently adds a default
+    // user-mode (SLIRP) NIC, which NATs the guest through the HOST's own
+    // network stack: on a cloud host the guest could then read the host's
+    // instance metadata service (169.254.169.254) and its IAM role
+    // credentials. Horcrux QEMU VMs have no NIC configuration yet, so a VM
+    // gets no network at all; future NIC support must emit explicit
+    // -netdev/-device pairs in `network_args` instead. Only the implicit
+    // NIC is removed - no -nodefaults, so QEMU's other default devices stay.
+    args.extend(network_args(vm));
+
     // Serial console, QMP, display protocol, video and sound.
     args.extend(super::display::qemu_args(
         &vm.display,
@@ -169,6 +179,13 @@ pub fn qemu_command(
     // Run detached; the pidfile is how stop/status find the process.
     args.extend(["-daemonize".into(), "-pidfile".into(), pidfile(&vm.id)]);
     (binary, args)
+}
+
+/// Network arguments for `vm`. No NIC is configurable for QEMU VMs yet, so
+/// this always disables QEMU's implicit default user-mode NIC (see the
+/// comment in `qemu_command`).
+fn network_args(_vm: &QemuVm) -> Vec<String> {
+    vec!["-nic".into(), "none".into()]
 }
 
 /// QEMU manager for VM operations
@@ -575,6 +592,36 @@ mod tests {
             a.ends_with("-daemonize -pidfile /var/run/horcrux-vm-t1.pid"),
             "{a}"
         );
+    }
+
+    /// QEMU's implicit default NIC is user-mode networking through the
+    /// host's own stack (a guest on a cloud host could read the host's
+    /// instance metadata). Every generated command line must disable it,
+    /// on every guest architecture, without -nodefaults (which would also
+    /// drop QEMU's other default devices).
+    #[test]
+    fn no_implicit_user_mode_nic() {
+        for arch in [
+            VmArchitecture::X86_64,
+            VmArchitecture::Aarch64,
+            VmArchitecture::Riscv64,
+        ] {
+            let v = vm(arch.clone(), VmDisplay::default());
+            let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
+            let (_, args) = qemu_command(&v, &rt, true);
+            let nic = args
+                .windows(2)
+                .filter(|w| w[0] == "-nic" || w[0] == "-net" || w[0] == "-netdev")
+                .map(|w| format!("{} {}", w[0], w[1]))
+                .collect::<Vec<_>>();
+            assert_eq!(nic, vec!["-nic none".to_string()], "{arch:?}: {args:?}");
+            assert!(
+                !args
+                    .iter()
+                    .any(|a| a == "-nodefaults" || a.contains("user")),
+                "{arch:?}: {args:?}"
+            );
+        }
     }
 
     #[test]
