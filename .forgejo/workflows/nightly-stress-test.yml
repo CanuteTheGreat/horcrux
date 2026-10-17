@@ -184,18 +184,18 @@ jobs:
 
       - name: Run concurrent container fleet test
         run: |
-          cargo test --test nightly_stress_tests -p horcrux-api \
+          cargo test --test it -p horcrux-api \
             -- --ignored --test-threads=1 --nocapture \
-            test_concurrent_container_fleet
+            nightly_stress_tests::test_concurrent_container_fleet
 
       - name: Run CNI cross-network isolation test
         if: env.NIGHTLY_NETNS_OK == 'true'
         env:
           NIGHTLY_CNI_CONF_DIR: /tmp/horcrux-stress/cni-conf
         run: |
-          cargo test --test nightly_stress_tests -p horcrux-api \
+          cargo test --test it -p horcrux-api \
             -- --ignored --test-threads=1 --nocapture \
-            test_cni_network_partition_isolation
+            nightly_stress_tests::test_cni_network_partition_isolation
 
       - name: Skip notice - CNI cross-network isolation test
         if: env.NIGHTLY_NETNS_OK != 'true'
@@ -204,9 +204,9 @@ jobs:
 
       - name: Run failure-injection / reconciliation test
         run: |
-          cargo test --test nightly_stress_tests -p horcrux-api \
+          cargo test --test it -p horcrux-api \
             -- --ignored --test-threads=1 --nocapture \
-            test_failure_injection_and_reconciliation
+            nightly_stress_tests::test_failure_injection_and_reconciliation
 
       - name: Build horcrux-api server (for load + serial-console-gap tests)
         run: cargo build --all-features -p horcrux-api --bin horcrux-api
@@ -256,9 +256,9 @@ jobs:
           NIGHTLY_STRESS_LOAD_SECONDS: "150"
           NIGHTLY_STRESS_LOAD_CONCURRENCY: "6"
         run: |
-          cargo test --test nightly_stress_tests -p horcrux-api \
+          cargo test --test it -p horcrux-api \
             -- --ignored --test-threads=1 --nocapture \
-            test_sustained_concurrent_api_load
+            nightly_stress_tests::test_sustained_concurrent_api_load
 
       - name: Dump horcrux-api server log
         if: always()

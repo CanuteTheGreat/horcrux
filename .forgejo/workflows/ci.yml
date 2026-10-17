@@ -9,6 +9,18 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Build memory (target: every job <= 6 GB). CI builds are throwaway:
+  # no incremental state; line-tables-only keeps file:line in backtraces
+  # but drops the full DWARF that dominated rustc/linker memory; mold
+  # (via clang) links in a fraction of ld.bfd's time and memory. Host
+  # target only, so wasm32 (trunk) keeps rust-lld. Changing these flags
+  # invalidates cached target dirs: bump the "-vN-" in the cache keys.
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+  CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: clang
+  CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
 
 # Concurrency (2026-10-17, ctg-infrastructure ollivanders/forgejo/ci-supersede-sweeper):
 # other branches and PRs: a new push cancels the older run. main: runs queue behind each
@@ -50,7 +62,7 @@ jobs:
       - name: Install build tools
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
-          sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
+          sudo apt-get update && sudo apt-get install -y build-essential clang mold libvirt-dev libpam0g-dev
 
       - name: Ensure Node.js is present (self-heal)
         # catthehacker/ubuntu:act-latest job containers on the beauxbatons
@@ -77,9 +89,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-check-v2-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-check-v2-
 
       - name: Check formatting
         run: |
@@ -124,7 +136,6 @@ jobs:
     # one profile and nothing is rebuilt between steps.
     env:
       CARGO_BUILD_JOBS: "4"
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@v4
 
@@ -153,7 +164,7 @@ jobs:
           if apt-cache show qemu-system-modules-spice >/dev/null 2>&1; then
             spice_mods="qemu-system-modules-spice"
           fi
-          sudo apt-get install -y build-essential libvirt-dev libpam0g-dev qemu-system-x86 qemu-system-arm qemu-utils zstd $spice_mods
+          sudo apt-get install -y build-essential clang mold libvirt-dev libpam0g-dev qemu-system-x86 qemu-system-arm qemu-utils zstd $spice_mods
           # Fail here, not deep in a test, if this QEMU can't do SPICE.
           qemu-system-x86_64 --version
           qemu-system-x86_64 -audiodev help | grep -qx spice || { echo "qemu-system-x86_64 lacks SPICE (no spice audiodev)" >&2; exit 1; }
@@ -183,9 +194,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-test-v2-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-test-v2-
 
       - name: Build horcrux-api server (for integration tests)
         run: |
@@ -282,9 +293,14 @@ jobs:
           # The server was started with the same URL; the contract test
           # receives the PagerDuty Events v2 call there.
           HORCRUX_PAGERDUTY_EVENTS_URL: http://127.0.0.1:18765/v2/enqueue
+        # horcrux-api's integration tests are one binary (tests/it); its
+        # suites run one at a time like the separate binaries they were.
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Run tests"
-          cargo test --all-features --workspace
+          cargo test --all-features --workspace --exclude horcrux-api
+          cargo test --all-features -p horcrux-api --lib --bins --test nightly_realistic_tests
+          cargo test --all-features -p horcrux-api --doc
+          bash ci/run-it-suites.sh --all-features
 
       - name: Auth realms + ACME (OpenLDAP, Dex, PAM, Pebble)
         # Real servers in sibling containers on a private network: LDAP
@@ -293,12 +309,12 @@ jobs:
         # HTTP-01 and then served by the live listener.
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Auth realms + ACME (OpenLDAP, Dex, PAM, Pebble)"
-          cargo test --all-features -p horcrux-api --test auth_realms_e2e --no-run --message-format=json > /tmp/realms-build.json
+          cargo test --all-features -p horcrux-api --test it --no-run --message-format=json > /tmp/realms-build.json
           TESTBIN=$(python3 -c 'import json,sys
           for l in open("/tmp/realms-build.json"):
               try: m=json.loads(l)
               except Exception: continue
-              if m.get("reason")=="compiler-artifact" and m.get("executable") and m["target"]["name"]=="auth_realms_e2e": print(m["executable"])')
+              if m.get("reason")=="compiler-artifact" and m.get("executable") and m["target"]["name"]=="it": print(m["executable"])')
           test -x "$TESTBIN"
           bash horcrux-api/tests/auth_realms_e2e.sh target/debug/horcrux-api "$TESTBIN"
 
@@ -422,7 +438,7 @@ jobs:
       - name: Install build tools
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
-          sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
+          sudo apt-get update && sudo apt-get install -y build-essential clang mold libvirt-dev libpam0g-dev
 
       - name: Ensure Node.js is present (self-heal)
         # catthehacker/ubuntu:act-latest job containers on the beauxbatons
@@ -449,9 +465,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-build-${{ matrix.features }}-v2-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-${{ matrix.target }}-
+            ${{ runner.os }}-cargo-build-${{ matrix.features }}-v2-
 
       - name: Build (features=${{ matrix.features }})
         # Deliberately NOT passing --target here even though the matrix
@@ -510,7 +526,7 @@ jobs:
       - name: Install build tools
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
-          sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
+          sudo apt-get update && sudo apt-get install -y build-essential clang mold libvirt-dev libpam0g-dev
 
       - name: Install trunk
         # `cargo install trunk` from source hits a real dependency conflict:
@@ -565,9 +581,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-wasm-v2-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-wasm-
+            ${{ runner.os }}-cargo-wasm-v2-
 
       - name: Build UI
         working-directory: horcrux-api/horcrux-ui
@@ -606,7 +622,7 @@ jobs:
       - name: Install build tools
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
-          sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
+          sudo apt-get update && sudo apt-get install -y build-essential clang mold libvirt-dev libpam0g-dev
 
       - name: Install cargo-audit
         run: |
@@ -774,7 +790,7 @@ jobs:
       - name: Install build tools
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
-          sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
+          sudo apt-get update && sudo apt-get install -y build-essential clang mold libvirt-dev libpam0g-dev
 
       - name: Ensure Node.js is present (self-heal)
         run: |
@@ -793,9 +809,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-features-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-features-v2-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-features-
+            ${{ runner.os }}-cargo-features-v2-
 
       - name: Every ebuild USE flag maps to a Cargo feature
         # src_configure() turns USE flags into --features; a USE flag whose
@@ -876,7 +892,7 @@ jobs:
           if apt-cache show qemu-system-modules-spice >/dev/null 2>&1; then
             spice_mods="qemu-system-modules-spice"
           fi
-          sudo apt-get install -y build-essential libvirt-dev python3-venv libpam0g-dev libnss3-tools qemu-utils zstd qemu-system-x86 $spice_mods
+          sudo apt-get install -y build-essential clang mold libvirt-dev python3-venv libpam0g-dev libnss3-tools qemu-utils zstd qemu-system-x86 $spice_mods
 
       - name: Install trunk
         # Same prebuilt-binary install as the Build Web UI job.
@@ -907,9 +923,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-e2e-v2-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-e2e-
+            ${{ runner.os }}-cargo-e2e-v2-
 
       - name: Build web UI and API
         run: |

@@ -16,12 +16,10 @@
 //! HORCRUX_DEPTH_IMAGE pointing at a CirrOS qcow2. Set
 //! HORCRUX_DEPTH_REQUIRE_KVM=1 to fail unless the guest really ran on KVM.
 
-mod support;
-
+use crate::support::*;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use support::*;
 
 fn sock(disk: &Path, ext: &str) -> PathBuf {
     disk.with_extension(ext)

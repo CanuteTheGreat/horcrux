@@ -134,7 +134,7 @@ docker exec \
   -e DEX_ISSUER=http://dex:5556/dex \
   -e PAM_USER=pamtester -e PAM_PASSWORD=pam-host-pass-1 \
   -e ACME_DIR=https://pebble:14000/dir -e ACME_CA=/etc/pebble-ca.pem -e ACME_DOMAIN=horcrux.test \
-  "$ID-run" auth-realms-e2e --ignored --test-threads=1 --nocapture
+  "$ID-run" auth-realms-e2e auth_realms_e2e:: --ignored --test-threads=1 --nocapture
 
 echo "== the HTTPS listener presents the ACME certificate"
 issuer=$(docker exec "$ID-run" bash -c 'echo | openssl s_client -connect localhost:8006 -servername horcrux.test 2>/dev/null | openssl x509 -noout -issuer')

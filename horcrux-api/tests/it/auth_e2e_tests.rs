@@ -135,9 +135,12 @@ async fn make_user(
 /// Every `.route(...)` the server registers, with its methods.
 fn registered_routes() -> Vec<(String, String)> {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut files = vec![src.join("main.rs")];
-    for e in std::fs::read_dir(src.join("api")).unwrap().flatten() {
-        files.push(e.path());
+    // The router and handlers: src/app/ (formerly main.rs) and src/api/.
+    let mut files = vec![];
+    for dir in ["app", "api"] {
+        for e in std::fs::read_dir(src.join(dir)).unwrap().flatten() {
+            files.push(e.path());
+        }
     }
     let route = regex::Regex::new(r#"\.route\(\s*"([^"]+)",\s*((?:[^()]|\([^()]*\))*)\)"#).unwrap();
     let method = regex::Regex::new(r"\b(get|post|put|delete|patch)\(").unwrap();

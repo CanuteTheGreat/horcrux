@@ -35,7 +35,7 @@ cargo test --lib
 echo ""
 echo "Running integration tests..."
 echo "========================================"
-cargo test --test integration_tests -- --test-threads=1
+cargo test -p horcrux-api --test it -- integration_tests:: --test-threads=1
 
 echo ""
 echo -e "${GREEN}========================================"

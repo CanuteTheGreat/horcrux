@@ -15,13 +15,11 @@
 //! disk-full test mounts a small tmpfs (root/CAP_SYS_ADMIN, as in the
 //! privileged kvm-x86_64 CI job).
 
-mod support;
-
+use crate::support::*;
 use nix::sys::signal::Signal;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use support::*;
 
 async fn create_vm(a: &Api, id: &str, disk_gb: u64) -> PathBuf {
     let (s, b) = a

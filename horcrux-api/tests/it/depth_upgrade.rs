@@ -9,11 +9,9 @@
 //! key authenticates, the VM's disk is intact and the VM boots), and a
 //! second HEAD start must be a no-op for the migrations.
 
-mod support;
-
+use crate::support::*;
 use serde_json::json;
 use std::path::PathBuf;
-use support::*;
 
 #[tokio::test]
 #[ignore = "nightly depth suite: needs HORCRUX_DEPTH_OLD_BIN (previous release binary)"]

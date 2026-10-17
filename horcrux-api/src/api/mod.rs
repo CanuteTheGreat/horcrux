@@ -1,5 +1,5 @@
 //! HTTP route modules, one per work lane, each merged into the protected
-//! router by a single line in main.rs.
+//! router by a single line in app/mod.rs (the router, formerly main.rs).
 
 pub mod alert_rules;
 pub mod auth;
@@ -19,7 +19,7 @@ use crate::AppState;
 use axum::Router;
 use std::sync::Arc;
 
-/// Access control + certificate routes that need a login (main.rs wraps
+/// Access control + certificate routes that need a login (app/mod.rs wraps
 /// them in the auth and RBAC middleware with every other protected route).
 pub fn access_routes() -> Router<Arc<AppState>> {
     auth::protected_routes().merge(tls::routes())
