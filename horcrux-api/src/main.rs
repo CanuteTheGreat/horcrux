@@ -46,11 +46,6 @@ mod vm_console_api;
 mod webhooks;
 mod websocket;
 
-// Lane D: backup/restore API (see src/api/backup.rs).
-#[cfg(feature = "backup")]
-#[path = "api/backup.rs"]
-mod api_backup;
-
 #[cfg(feature = "kubernetes")]
 mod kubernetes;
 
@@ -572,7 +567,7 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(any(feature = "docker", feature = "podman"))]
     let protected_routes = protected_routes.merge(oci_routes());
     #[cfg(feature = "backup")]
-    let protected_routes = protected_routes.merge(api_backup::routes(&state));
+    let protected_routes = protected_routes.merge(api::backup::routes(&state));
     #[cfg(feature = "cluster")]
     let protected_routes = protected_routes.merge(cluster_routes());
 

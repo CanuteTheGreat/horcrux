@@ -139,11 +139,8 @@ async fn job_finished(state: Arc<AppState>, job: BackupJob, report: JobRunReport
         acknowledged_at: None,
         acknowledged_by: None,
     };
-    for channel in state.alert_manager.list_notification_channels().await {
-        if let Err(e) = crate::alerts::notifications::send_notification(&channel, &alert).await {
-            tracing::warn!("backup job {} notification failed: {e}", job.id);
-        }
-    }
+    // Legacy alert channels and the Monitoring > Notifications channels.
+    state.alert_manager.send_notifications(&alert).await;
 }
 
 #[derive(Deserialize)]

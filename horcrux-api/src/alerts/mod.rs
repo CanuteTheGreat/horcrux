@@ -333,8 +333,8 @@ impl AlertManager {
         channels.clone()
     }
 
-    /// Send notifications for an alert
-    async fn send_notifications(&self, alert: &Alert) {
+    /// Send notifications for an alert (also used for backup job results)
+    pub async fn send_notifications(&self, alert: &Alert) {
         if let Some(store) = self.channel_store.get() {
             store
                 .dispatch(&crate::notification_channels::Message::from_alert(alert))
