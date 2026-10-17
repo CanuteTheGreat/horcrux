@@ -699,6 +699,10 @@ def access_control_checks(context, page):
     assert status == [403], status
     ui_logout(page)
     _req("DELETE", f"/api/users/{TFA_USER}", tok)
+    # The checks after this one run as the administrator again.
+    ui_login(page, "admin", "admin")
+    page.wait_for_url(f"{BASE}/", timeout=30000)
+    expect(page.locator("#navbar-user")).to_contain_text("admin", timeout=30000)
     print("UI E2E: login, TOTP + security key 2FA, permissions, realms, certificates passed")
 
 
