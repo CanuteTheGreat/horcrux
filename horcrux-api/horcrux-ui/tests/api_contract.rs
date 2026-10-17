@@ -547,7 +547,7 @@ async fn ui_types_read_real_api_responses() {
         serde_json::to_value(api::CreateUserRequest {
             username: "contract-user".into(),
             password: "contract-pass-1".into(),
-            email: "contract@example.com".into(),
+            email: "contract@errant.solutions".into(),
             role: "user".into(),
             realm: "local".into(),
             enabled: true,
@@ -599,6 +599,34 @@ async fn ui_types_read_real_api_responses() {
     )
     .await;
     assert_eq!(status, 200, "toggle: {body}");
+    // The Users page's enable switch (POST /users/:id/toggle) really
+    // disables the account: listed as disabled and its login is refused.
+    let users: Vec<api::User> = fetch(&c, &token, "/users").await;
+    assert!(
+        !users.iter().find(|u| u.id == created.id).unwrap().enabled,
+        "toggle {{enabled:false}} disabled the user"
+    );
+    let r = c
+        .post(format!("{}/auth/login", api_base()))
+        .json(&json!({"username": "contract-user", "password": "contract-pass-1"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        r.status().is_client_error(),
+        "a disabled user can't log in: {}",
+        r.status()
+    );
+    let (status, body) = post(
+        &c,
+        &token,
+        &format!("/users/{}/toggle", created.id),
+        json!({"enabled": true}),
+    )
+    .await;
+    assert_eq!(status, 200, "re-enable: {body}");
+    let users: Vec<api::User> = fetch(&c, &token, "/users").await;
+    assert!(users.iter().find(|u| u.id == created.id).unwrap().enabled);
     let (status, body) = post(
         &c,
         &token,
@@ -648,6 +676,45 @@ async fn ui_types_read_real_api_responses() {
         .await
         .unwrap();
     assert_eq!(r.status(), 422, "built-in roles are read-only");
+    // Custom role: create, then edit it the way the Roles page's edit
+    // modal does (api::update_role -> POST /roles/:name), and read it back.
+    delete(&c, &token, "/roles/contract-role").await;
+    let role = |desc: &str, privs: &[&str]| api::Role {
+        name: "contract-role".into(),
+        description: desc.into(),
+        permissions: vec![api::Permission {
+            path: "/".into(),
+            privileges: privs.iter().map(|p| p.to_string()).collect(),
+        }],
+    };
+    let (status, body) = post(
+        &c,
+        &token,
+        "/roles",
+        serde_json::to_value(role("contract", &["VM.Audit"])).unwrap(),
+    )
+    .await;
+    assert_eq!(status, 201, "create role: {body}");
+    let (status, body) = post(
+        &c,
+        &token,
+        "/roles/contract-role",
+        serde_json::to_value(role("edited", &["VM.Audit", "VM.PowerMgmt"])).unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200, "edit role: {body}");
+    let edited: api::Role = fetch(&c, &token, "/roles/contract-role").await;
+    assert_eq!(edited.description, "edited");
+    let privs: Vec<&str> = edited
+        .permissions
+        .iter()
+        .flat_map(|p| p.privileges.iter().map(String::as_str))
+        .collect();
+    assert!(
+        privs.contains(&"VM.Audit") && privs.contains(&"VM.PowerMgmt"),
+        "edited privileges persisted: {privs:?}"
+    );
+    delete(&c, &token, "/roles/contract-role").await;
     let tls: api::TlsStatus = fetch(&c, &token, "/tls/status").await;
     assert!(!tls.certificate.fingerprint_sha256.is_empty(), "{tls:?}");
     delete(&c, &token, "/access/realms/contract-ldap").await;

@@ -1677,20 +1677,7 @@ async fn payload(path: &Path, kind: &str) -> Result<ArchiveFile> {
     })
 }
 
-/// Whether `pid` is a live process. A zombie (exited, not yet reaped -
-/// e.g. a daemonized QEMU whose parent is a container's non-reaping PID 1)
-/// has stopped writing its disks and counts as exited.
-fn pid_alive(pid: u32) -> bool {
-    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-        // Format: "pid (comm) S ...": the state follows the last ')'.
-        Ok(stat) => stat
-            .rsplit_once(')')
-            .and_then(|(_, rest)| rest.split_whitespace().next())
-            .map(|state| state != "Z" && state != "X")
-            .unwrap_or(true),
-        Err(_) => false,
-    }
-}
+use crate::vm::qemu::pid_alive;
 
 /// Stop a running QEMU VM and wait for its process to exit, so its disk
 /// is no longer being written.

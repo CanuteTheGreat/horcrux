@@ -206,6 +206,74 @@ async fn test_vm_lifecycle() {
     let vm: VmConfig = response.unwrap().json().await.expect("Failed to parse VM");
     assert_eq!(vm.status, VmStatus::Running, "VM should be running");
 
+    // 3b. QEMU exits behind the API's back (guest poweroff / crash / kill).
+    // The VM must then read as stopped - also while the dead QEMU is still
+    // an unreaped zombie, which is what it stays in a CI container whose
+    // PID 1 doesn't reap - and be startable again.
+    let pidfile = format!("/var/run/horcrux-vm-{TEST_VM_ID}.pid");
+    let pid = std::fs::read_to_string(&pidfile)
+        .unwrap_or_else(|e| panic!("QEMU pidfile {pidfile}: {e}"))
+        .trim()
+        .to_string();
+    let killed = std::process::Command::new("kill")
+        .args(["-9", &pid])
+        .status()
+        .expect("run kill");
+    assert!(killed.success(), "kill -9 {pid}");
+    let mut status = VmStatus::Running;
+    for _ in 0..50 {
+        let vm: VmConfig = client
+            .get(format!("{}/vms/{}", API_BASE, TEST_VM_ID))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .expect("get VM")
+            .json()
+            .await
+            .expect("parse VM");
+        status = vm.status;
+        if status == VmStatus::Stopped {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert_eq!(
+        status,
+        VmStatus::Stopped,
+        "killed QEMU must read as stopped"
+    );
+    let listed: Vec<VmConfig> = client
+        .get(format!("{}/vms", API_BASE))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .expect("list VMs")
+        .json()
+        .await
+        .expect("parse VM list");
+    let row = listed
+        .iter()
+        .find(|v| v.id == TEST_VM_ID)
+        .expect("VM listed");
+    assert_eq!(row.status, VmStatus::Stopped, "list shows the real state");
+    let response = client
+        .post(format!("{}/vms/{}/start", API_BASE, TEST_VM_ID))
+        .bearer_auth(&token)
+        .send()
+        .await;
+    let _ = expect_2xx(response, "Failed to restart VM after its QEMU died").await;
+    wait_for_operation(2000).await;
+    let vm: VmConfig = client
+        .get(format!("{}/vms/{}", API_BASE, TEST_VM_ID))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .expect("get VM")
+        .json()
+        .await
+        .expect("parse VM");
+    assert_eq!(vm.status, VmStatus::Running, "restarted VM is running");
+
     // 4. Stop VM
     let response = client
         .post(format!("{}/vms/{}/stop", API_BASE, TEST_VM_ID))

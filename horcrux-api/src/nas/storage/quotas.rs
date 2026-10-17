@@ -2,6 +2,7 @@
 //!
 //! Handles user and group quotas on NAS shares.
 
+#[cfg(feature = "nas-zfs")]
 use crate::nas::QuotaLimit;
 use horcrux_common::{Error, Result};
 use tokio::process::Command;

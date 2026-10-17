@@ -295,7 +295,7 @@ fi
 
 echo ""
 echo "  3. Access the Web UI:"
-echo "     http://localhost:8006"
+echo "     https://localhost:8006"
 echo ""
 echo "  4. Use the CLI:"
 echo "     horcrux-cli vm list"

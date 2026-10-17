@@ -8,6 +8,7 @@ use chrono::Datelike;
 use horcrux_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+#[cfg(any(feature = "nas-btrfs", feature = "nas-lvm"))]
 use std::path::Path;
 use tokio::process::Command;
 
@@ -222,6 +223,11 @@ impl Default for SnapshotManager {
 }
 
 /// List snapshots for a dataset
+// With no snapshot-capable storage feature the dataset is not consulted.
+#[cfg_attr(
+    not(any(feature = "nas-zfs", feature = "nas-btrfs", feature = "nas-lvm")),
+    allow(unused_variables)
+)]
 pub async fn list_snapshots(dataset: &str) -> Result<Vec<NasSnapshot>> {
     // Try ZFS first
     #[cfg(feature = "nas-zfs")]
@@ -258,6 +264,8 @@ pub async fn list_snapshots(dataset: &str) -> Result<Vec<NasSnapshot>> {
 
 /// List all snapshots (recursive)
 pub async fn list_all_snapshots() -> Result<Vec<NasSnapshot>> {
+    // Filled only by the storage backends compiled in.
+    #[allow(unused_mut)]
     let mut all_snapshots = Vec::new();
 
     #[cfg(feature = "nas-zfs")]

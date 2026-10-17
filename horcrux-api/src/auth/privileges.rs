@@ -121,6 +121,7 @@ pub const KNOWN_AREAS: &[&str] = &[
     "system",
     "nodes",
     "tasks",
+    "lxc",
 ];
 
 /// The requirement for `method` on `path` (the full request path, e.g.
@@ -314,6 +315,12 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
             _ => read_write(m, P::DatastoreAudit, P::DatastoreAllocate, "/storage"),
         },
 
+        // LXC host capabilities, and the template store (Proxmox pveam):
+        // downloaded templates take space on the node's storage.
+        "lxc" => match arg(1) {
+            "templates" => read_write(m, P::DatastoreAudit, P::DatastoreAllocateSpace, "/storage"),
+            _ => read_write(m, P::SysAudit, P::SysModify, "/nodes"),
+        },
         "gpu" | "system" | "nodes" => read_write(m, P::SysAudit, P::SysModify, "/nodes"),
         "tls" => match arg(1) {
             // the node's CA certificate: public, needed before logging in

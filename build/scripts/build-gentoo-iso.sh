@@ -1192,7 +1192,7 @@ start_pre() {
 }
 
 start_post() {
-    einfo "Horcrux API available at http://localhost:8006"
+    einfo "Horcrux API available at https://localhost:8006"
 }
 INITSCRIPT
     chmod +x "$ROOTFS_DIR/etc/init.d/horcrux"
@@ -1390,7 +1390,7 @@ OSREL
   INSTALL TO DISK:  Run 'horcrux-installer' as root
   =====================================================
 
-  Web UI:    http://localhost:8006
+  Web UI:    https://localhost:8006
   CLI:       horcrux --help
   Docs:      /usr/share/horcrux/docs
 

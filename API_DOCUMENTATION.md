@@ -1,7 +1,7 @@
 # Horcrux API Documentation
 
 Version: 0.1.0
-Base URL: `http://localhost:8006/api`
+Base URL: `https://localhost:8006/api`
 Authentication: Bearer tokens
 
 ## Table of Contents

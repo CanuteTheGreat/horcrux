@@ -19,6 +19,10 @@ services:
     environment:
       - RUST_LOG=info
       - DATABASE_URL=sqlite:///var/lib/horcrux/horcrux.db
+      # HTTPS on 8006 from the node-local CA, kept on the shared data volume
+      # so the CLI container can trust it; also valid for the service name.
+      - HORCRUX_SSL_DIR=/var/lib/horcrux/ssl
+      - HORCRUX_TLS_SAN=horcrux-api
     networks:
       - horcrux-net
     privileged: true  # Required for KVM/QEMU
@@ -76,7 +80,8 @@ services:
     volumes:
       - horcrux-data:/var/lib/horcrux
     environment:
-      - HORCRUX_SERVER=http://horcrux-api:8006
+      - HORCRUX_SERVER=https://horcrux-api:8006
+      - HORCRUX_CA_CERT=/var/lib/horcrux/ssl/ca.pem
     networks:
       - horcrux-net
     profiles:

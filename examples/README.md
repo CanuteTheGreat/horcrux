@@ -227,7 +227,7 @@ horcrux-api &
 sleep 2
 
 # Check health
-curl http://localhost:8006/api/health
+curl -k https://localhost:8006/api/health
 
 # Create test VM
 horcrux-cli vm create \

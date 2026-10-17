@@ -22,8 +22,49 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-const API: &str = "http://localhost:8006/api";
-const WS: &str = "ws://localhost:8006";
+const API: &str = "https://localhost:8006/api";
+const WS: &str = "wss://localhost:8006";
+
+/// The API serves HTTPS with a certificate from the node-local CA.
+fn http() -> reqwest::Client {
+    reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap()
+}
+
+/// TLS for the console WebSockets, trusting the node's own CA
+/// (`/api/tls/ca.pem`) the way an operator's browser does after importing it.
+async fn wss_connector() -> tokio_tungstenite::Connector {
+    static CFG: tokio::sync::OnceCell<std::sync::Arc<rustls::ClientConfig>> =
+        tokio::sync::OnceCell::const_new();
+    let cfg = CFG
+        .get_or_init(|| async {
+            let pem = http()
+                .get(format!("{API}/tls/ca.pem"))
+                .send()
+                .await
+                .expect("GET /api/tls/ca.pem")
+                .bytes()
+                .await
+                .unwrap();
+            let mut roots = rustls::RootCertStore::empty();
+            for cert in rustls_pemfile::certs(&mut &pem[..]) {
+                roots.add(cert.expect("CA PEM")).unwrap();
+            }
+            assert!(!roots.is_empty(), "/api/tls/ca.pem returned no certificate");
+            let cfg = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+            std::sync::Arc::new(cfg)
+        })
+        .await;
+    tokio_tungstenite::Connector::Rustls(cfg.clone())
+}
 
 /// One admin login for the whole binary: (bearer token, `session_id=...`
 /// cookie). The login endpoint allows 5 attempts/minute per IP and every
@@ -33,7 +74,7 @@ async fn login() -> &'static (String, String) {
     static LOGIN: tokio::sync::OnceCell<(String, String)> = tokio::sync::OnceCell::const_new();
     LOGIN
         .get_or_init(|| async {
-            let c = reqwest::Client::new();
+            let c = http();
             let deadline = tokio::time::Instant::now() + Duration::from_secs(150);
             loop {
                 let r = c
@@ -258,7 +299,7 @@ async fn ws_connect(
     let mut req = format!("{WS}{path}").into_client_request().unwrap();
     req.headers_mut()
         .insert("Authorization", format!("Bearer {t}").parse().unwrap());
-    tokio_tungstenite::connect_async(req)
+    tokio_tungstenite::connect_async_tls_with_config(req, None, false, Some(wss_connector().await))
         .await
         .expect("ws connect")
         .0
@@ -266,7 +307,7 @@ async fn ws_connect(
 
 #[tokio::test]
 async fn vnc_and_serial_consoles_are_real() {
-    let c = reqwest::Client::new();
+    let c = http();
     let t = token(&c).await;
     let id = "console-vnc";
     fresh_vm(&c, &t, id, None).await;
@@ -493,7 +534,7 @@ async fn spice_channels(port: u16, password: &str) -> Result<Vec<(u8, u8)>, Stri
 
 #[tokio::test]
 async fn spice_console_carries_audio_and_usbredir() {
-    let c = reqwest::Client::new();
+    let c = http();
     let t = token(&c).await;
     let id = "console-spice";
     // Sound needs SPICE: rejected on a VNC VM.
@@ -722,7 +763,7 @@ async fn serial_until(
 
 #[tokio::test]
 async fn headless_vm_serial_console_is_interactive() {
-    let c = reqwest::Client::new();
+    let c = http();
     let t = token(&c).await;
     let id = "console-serial";
     let _ = call(
@@ -823,7 +864,7 @@ async fn headless_vm_serial_console_is_interactive() {
 
 #[tokio::test]
 async fn video_cards_are_really_attached() {
-    let c = reqwest::Client::new();
+    let c = http();
     let t = token(&c).await;
     let id = "console-video";
     // (video, PCI id QEMU must expose); VNC must serve each of them.

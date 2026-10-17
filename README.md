@@ -8,7 +8,7 @@
 [![Built with Rust](https://img.shields.io/badge/Built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![Platform: Gentoo](https://img.shields.io/badge/Platform-Gentoo-purple.svg)](https://www.gentoo.org/)
 
-**[🌐 Visit the Website](https://canutethegreat.github.io/horcrux/)** | **[📚 Documentation](docs/)** | **[📖 API Docs](http://localhost:8006/api/docs)** | **[🐳 Docker Guide](docs/DOCKER.md)**
+**[🌐 Visit the Website](https://canutethegreat.github.io/horcrux/)** | **[📚 Documentation](docs/)** | **[📖 API Docs](https://localhost:8006/api/docs)** | **[🐳 Docker Guide](docs/DOCKER.md)**
 
 ## 🎯 What is Horcrux?
 
@@ -101,16 +101,33 @@ See [docs/KUBERNETES.md](docs/KUBERNETES.md) for complete K8s documentation.
 
 ### Security
 
-- **Authentication:**
-  - PAM (Linux system auth)
-  - LDAP (directory services)
-  - Active Directory support
-  - API tokens for automation
+- **Authentication realms** (Proxmox VE model, `user@realm`):
+  - Local users (database-backed)
+  - PAM (host accounts, USE=pam)
+  - LDAP (search-then-bind; plain, StartTLS or LDAPS)
+  - Active Directory
+  - OpenID Connect (authorization code flow with PKCE, state and nonce)
+  - API keys acting with their owner's rights
+
+- **Second factors:** authenticator apps (TOTP), security keys and passkeys
+  (WebAuthn), one-time recovery codes; required per user, per realm or for
+  everyone
 
 - **RBAC (Role-Based Access Control):**
-  - Administrator, PVEAdmin, PVEVMUser roles
-  - Fine-grained path-based permissions
-  - User and group management
+  - Proxmox-style privileges (`VM.Audit`, `VM.PowerMgmt`, `Datastore.Allocate`,
+    `Sys.Modify`, ...) checked on every API route
+  - Built-in roles (`Administrator`, `NoAccess`, `Auditor`, `VMAdmin`, `VMUser`,
+    `DatastoreAdmin`, `DatastoreUser`, `UserAdmin`, `SysAdmin`, `SDNAdmin`) and
+    custom roles
+  - ACL grants of a role on a path (`/vms/<id>`, `/storage/<pool>`, ...) to
+    users or groups, with propagation; lists are filtered to what you may see
+
+- **HTTPS by default:** port 8006 serves TLS from a node-local CA (import
+  `https://<host>:8006/api/tls/ca.pem` once); plain HTTP is redirected (308).
+  Upload your own certificate or use ACME (Let's Encrypt, HTTP-01) with
+  automatic renewal
+
+See **[docs/ACCESS_CONTROL.md](docs/ACCESS_CONTROL.md)**.
 
 - **Distributed Firewall:**
   - nftables-based
@@ -145,11 +162,15 @@ See [docs/KUBERNETES.md](docs/KUBERNETES.md) for complete K8s documentation.
   - Notification channels
   - Alert history and acknowledgment
 
-- **Console Access:**
-  - VNC with noVNC client
-  - WebSocket proxy
-  - Ticket-based authentication
-  - Serial console support
+- **Console Access** (per-VM display settings):
+  - VNC (QEMU listens on 127.0.0.1 only, per-start password, noVNC in the
+    browser through the WebSocket proxy)
+  - SPICE (password set via QEMU, `.vv` file download for remote-viewer)
+  - Headless VMs
+  - Serial console on every QEMU VM
+  - Video: `std`, `virtio`, `qxl`, `none`
+  - Sound: `intel-hda`, `ich9-intel-hda`, `ac97` (SPICE, x86)
+  - SPICE USB redirection; clipboard sharing needs `spice-vdagent` in the guest
 
 ### Web Interface
 
@@ -210,7 +231,16 @@ This will:
 - ✅ Initialize database
 - ✅ Generate shell completions
 
-**Access the Web UI**: http://localhost:8006
+**Access the Web UI**: https://localhost:8006
+
+> **Changed:** Horcrux now serves HTTPS on port 8006 by default (plain
+> `http://` is redirected with 308; `/api/health` still answers on plain HTTP
+> for probes) and there is **no `admin`/`admin` default** any more. On the
+> first start the `admin` password comes from `ADMIN_PASSWORD` or is
+> generated into `/var/lib/horcrux/initial-admin-password` (deleted when you
+> change it). Self-registration is off. Scripts calling `http://host:8006`
+> must switch to `https://` (trust the node CA from `/api/tls/ca.pem`, or use
+> the CLI's `--ca-cert`). Details: [docs/ACCESS_CONTROL.md](docs/ACCESS_CONTROL.md).
 
 See **[docs/INSTALLATION.md](docs/INSTALLATION.md)** for complete installation guide.
 
@@ -226,8 +256,9 @@ git clone https://github.com/CanuteTheGreat/horcrux.git
 cd horcrux
 docker-compose up -d
 
-# API running at http://localhost:8006
-curl http://localhost:8006/api/health
+# API running at https://localhost:8006 (node-local CA)
+curl -k https://localhost:8006/api/tls/ca.pem -o horcrux-ca.pem
+curl --cacert horcrux-ca.pem https://localhost:8006/api/health
 
 # Create your first VM
 docker-compose --profile cli run horcrux-cli vm create \
@@ -296,9 +327,14 @@ session_timeout = 7200  # 2 hours
 ### Firewall
 
 ```bash
-# Create firewall rule
-curl -X POST http://localhost:8006/api/firewall/rules \
+# Log in (TOKEN = the "ticket" field)
+TOKEN=$(curl -s --cacert horcrux-ca.pem -X POST https://localhost:8006/api/auth/login \
   -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "<your admin password>"}' | jq -r .ticket)
+
+# Create firewall rule
+curl --cacert horcrux-ca.pem -X POST https://localhost:8006/api/firewall/rules \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{
     "name": "allow-ssh",
     "action": "Accept",
@@ -308,7 +344,8 @@ curl -X POST http://localhost:8006/api/firewall/rules \
   }'
 
 # Apply rules
-curl -X POST http://localhost:8006/api/firewall/apply
+curl --cacert horcrux-ca.pem -X POST https://localhost:8006/api/firewall/apply \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ## 📚 Documentation
@@ -317,8 +354,8 @@ curl -X POST http://localhost:8006/api/firewall/apply
 
 Horcrux provides **interactive API documentation** powered by Swagger UI:
 
-- 🌐 **Swagger UI**: http://localhost:8006/api/docs
-- 📄 **OpenAPI Spec**: http://localhost:8006/api/openapi.yaml
+- 🌐 **Swagger UI**: https://localhost:8006/api/docs
+- 📄 **OpenAPI Spec**: https://localhost:8006/api/openapi.yaml
 - 📖 **API Guide**: [docs/API_DOCS.md](docs/API_DOCS.md)
 
 Test all 150+ API endpoints directly in your browser with authentication and example payloads!

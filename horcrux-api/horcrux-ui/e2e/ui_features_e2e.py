@@ -15,12 +15,17 @@ Runs in CI's "UI E2E" job twice:
 """
 import json
 import os
+import ssl
 import sys
 import urllib.request
 
 from playwright.sync_api import expect, sync_playwright
 
-BASE = os.environ.get("BASE_URL", "http://127.0.0.1:8006")
+BASE = os.environ.get("BASE_URL", "https://localhost:8006")
+# The API serves HTTPS from the node-local CA: trust that CA when given
+# (HORCRUX_CA_FILE), otherwise accept the self-signed certificate.
+_CA = os.environ.get("HORCRUX_CA_FILE")
+SSL_CTX = ssl.create_default_context(cafile=_CA) if _CA else ssl._create_unverified_context()
 MODE = os.environ.get("MODE", "full")
 
 GATED_NAV = {
@@ -49,7 +54,7 @@ ALWAYS_NAV = ["Virtual Machines", "Containers", "Storage", "Snapshots"]
 
 
 def server_features():
-    with urllib.request.urlopen(f"{BASE}/api/features") as r:
+    with urllib.request.urlopen(f"{BASE}/api/features", context=SSL_CTX) as r:
         return set(json.load(r)["features"])
 
 
@@ -68,7 +73,8 @@ def main():
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        page = browser.new_page()
+        # TLS trust in the browser is covered by ui_e2e.py; here only the pages matter.
+        page = browser.new_page(ignore_https_errors=True)
         page.goto(f"{BASE}/login")
         page.locator("input[type=text], input:not([type])").first.fill("admin")
         page.locator("input[type=password]").fill("admin")

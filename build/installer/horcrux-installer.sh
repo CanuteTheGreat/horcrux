@@ -751,7 +751,7 @@ show_completion() {
     echo "  4. Access the web UI at: http://<your-ip>:8006"
     echo ""
     echo -e "${WHITE}Default Services:${NC}"
-    echo "  - Horcrux API:   http://localhost:8006"
+    echo "  - Horcrux API:   https://localhost:8006"
     echo "  - SSH:           Port 22"
     echo "  - Libvirt:       Running"
     echo "  - Docker:        Running"

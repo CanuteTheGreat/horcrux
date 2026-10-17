@@ -209,6 +209,8 @@ async fn check_services() -> Result<Vec<ServiceHealth>> {
 
 /// Check all storage pools
 async fn check_pools() -> Result<Vec<PoolHealthInfo>> {
+    // Filled only by the storage backends compiled in.
+    #[allow(unused_mut)]
     let mut results = Vec::new();
 
     // Get ZFS pools if available
@@ -290,6 +292,8 @@ fn determine_overall_status(
 
 /// Collect NAS metrics
 pub async fn collect_metrics() -> Result<NasMetrics> {
+    // Updated only by the share protocols compiled in.
+    #[allow(unused_mut)]
     let mut metrics = NasMetrics::default();
 
     // Get SMB connections

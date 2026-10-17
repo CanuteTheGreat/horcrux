@@ -47,7 +47,7 @@ default_pool = "local"
 ### 3. Start Service
 ```bash
 sudo systemctl enable --now horcrux
-curl http://localhost:8006/api/health
+curl -k https://localhost:8006/api/health
 ```
 
 ## Clustered Deployment

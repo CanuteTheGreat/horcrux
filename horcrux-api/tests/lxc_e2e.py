@@ -9,7 +9,7 @@ cgroup values read inside the running container, the guest's network
 snapshots, the PTY web terminal and the console log WebSockets.
 
 Environment:
-  API (default http://127.0.0.1:8006/api), LXC_PATH (/var/lib/lxc),
+  API (default https://127.0.0.1:8006/api), HORCRUX_CA_FILE, LXC_PATH (/var/lib/lxc),
   KEYCTL_PROBE: path (inside the bind-mount source) of a static binary that
   prints the errno of keyctl(KEYCTL_GET_KEYRING_ID) (0 = allowed).
 """
@@ -18,13 +18,18 @@ import json
 import os
 import re
 import socket
+import ssl
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
 
-API = os.environ.get("API", "http://127.0.0.1:8006/api")
+API = os.environ.get("API", "https://127.0.0.1:8006/api")
+# The API serves HTTPS from the node-local CA: trust that CA when given
+# (HORCRUX_CA_FILE), otherwise accept the self-signed certificate.
+_CA = os.environ.get("HORCRUX_CA_FILE")
+SSL_CTX = ssl.create_default_context(cafile=_CA) if _CA else ssl._create_unverified_context()
 LXC_PATH = os.environ.get("LXC_PATH", "/var/lib/lxc")
 BIND_SRC = "/srv/e2e-bind"
 STEP = [0]
@@ -67,7 +72,7 @@ def req(method, path, body=None, expect=200, timeout=900):
     if TOKEN[0]:
         r.add_header("Authorization", "Bearer " + TOKEN[0])
     try:
-        with urllib.request.urlopen(r, timeout=timeout) as resp:
+        with urllib.request.urlopen(r, timeout=timeout, context=SSL_CTX) as resp:
             status, text = resp.status, resp.read().decode()
     except urllib.error.HTTPError as e:
         status, text = e.code, e.read().decode()
@@ -113,8 +118,10 @@ def lxc_state(name):
 
 # ---- minimal WebSocket client (stdlib only) ----------------------------
 def ws_connect(path):
-    host, port = re.match(r"http://([^:/]+):(\d+)", API).groups()
+    scheme, host, port = re.match(r"(https?)://([^:/]+):(\d+)", API).groups()
     s = socket.create_connection((host, int(port)), timeout=30)
+    if scheme == "https":
+        s = SSL_CTX.wrap_socket(s, server_hostname=host)
     key = base64.b64encode(os.urandom(16)).decode()
     s.sendall(
         (

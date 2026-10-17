@@ -3,9 +3,14 @@
 //! Handles creation, destruction, and management of storage pools
 //! (ZFS pools, Btrfs volumes, mdraid arrays).
 
-use crate::nas::storage::{command_exists, NasPool, PoolHealth, RaidLevel, StorageType};
+use crate::nas::storage::{command_exists, PoolHealth, StorageType};
+#[cfg(feature = "nas-zfs")]
+use crate::nas::storage::{NasPool, RaidLevel};
+#[cfg(feature = "nas-zfs")]
 use horcrux_common::{Error, Result};
+#[cfg(feature = "nas-zfs")]
 use std::collections::HashMap;
+#[cfg(feature = "nas-zfs")]
 use tokio::process::Command;
 
 /// Detect which storage backends this host can actually use, in the

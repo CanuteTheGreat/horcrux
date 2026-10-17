@@ -419,20 +419,22 @@ impl ContainerManager {
         };
 
         // Create the container based on runtime
+        // Result-valued match + `?` (not `return` in the fallback arm), so
+        // builds without any container runtime have no unreachable code.
         let container: Container = match config.runtime {
             #[cfg(feature = "lxc")]
-            ContainerRuntime::Lxc => self.lxc_manager.create_container(&config).await?,
+            ContainerRuntime::Lxc => self.lxc_manager.create_container(&config).await,
             #[cfg(feature = "lxd")]
-            ContainerRuntime::Lxd => self.lxd_manager.create_container(&config).await?,
+            ContainerRuntime::Lxd => self.lxd_manager.create_container(&config).await,
             #[cfg(feature = "incus")]
-            ContainerRuntime::Incus => self.incus_manager.create_container(&config).await?,
+            ContainerRuntime::Incus => self.incus_manager.create_container(&config).await,
             #[cfg(feature = "docker")]
-            ContainerRuntime::Docker => self.docker_manager.create_container(&config).await?,
+            ContainerRuntime::Docker => self.docker_manager.create_container(&config).await,
             #[cfg(feature = "podman")]
-            ContainerRuntime::Podman => self.podman_manager.create_container(&config).await?,
+            ContainerRuntime::Podman => self.podman_manager.create_container(&config).await,
             #[allow(unreachable_patterns)]
-            _ => return Err(crate::features::runtime_not_compiled(&config.runtime)),
-        };
+            _ => Err(crate::features::runtime_not_compiled(&config.runtime)),
+        }?;
 
         let container_config = container.to_config();
         let mut containers = self.containers.write().await;
@@ -491,20 +493,22 @@ impl ContainerManager {
                 .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?
         };
 
+        // Result-valued match + `?` (not `return` in the fallback arm), so
+        // builds without any container runtime have no unreachable code.
         match container.runtime {
             #[cfg(feature = "lxc")]
-            ContainerRuntime::Lxc => self.lxc_manager.start_container(&container).await?,
+            ContainerRuntime::Lxc => self.lxc_manager.start_container(&container).await,
             #[cfg(feature = "lxd")]
-            ContainerRuntime::Lxd => self.lxd_manager.start_container(&container).await?,
+            ContainerRuntime::Lxd => self.lxd_manager.start_container(&container).await,
             #[cfg(feature = "incus")]
-            ContainerRuntime::Incus => self.incus_manager.start_container(&container).await?,
+            ContainerRuntime::Incus => self.incus_manager.start_container(&container).await,
             #[cfg(feature = "docker")]
-            ContainerRuntime::Docker => self.docker_manager.start_container(&container).await?,
+            ContainerRuntime::Docker => self.docker_manager.start_container(&container).await,
             #[cfg(feature = "podman")]
-            ContainerRuntime::Podman => self.podman_manager.start_container(&container).await?,
+            ContainerRuntime::Podman => self.podman_manager.start_container(&container).await,
             #[allow(unreachable_patterns)]
-            _ => return Err(crate::features::runtime_not_compiled(&container.runtime)),
-        }
+            _ => Err(crate::features::runtime_not_compiled(&container.runtime)),
+        }?;
 
         let mut containers = self.containers.write().await;
         if let Some(stored) = containers.get_mut(id) {
@@ -526,20 +530,22 @@ impl ContainerManager {
                 .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?
         };
 
+        // Result-valued match + `?` (not `return` in the fallback arm), so
+        // builds without any container runtime have no unreachable code.
         match container.runtime {
             #[cfg(feature = "lxc")]
-            ContainerRuntime::Lxc => self.lxc_manager.stop_container(&container).await?,
+            ContainerRuntime::Lxc => self.lxc_manager.stop_container(&container).await,
             #[cfg(feature = "lxd")]
-            ContainerRuntime::Lxd => self.lxd_manager.stop_container(&container).await?,
+            ContainerRuntime::Lxd => self.lxd_manager.stop_container(&container).await,
             #[cfg(feature = "incus")]
-            ContainerRuntime::Incus => self.incus_manager.stop_container(&container).await?,
+            ContainerRuntime::Incus => self.incus_manager.stop_container(&container).await,
             #[cfg(feature = "docker")]
-            ContainerRuntime::Docker => self.docker_manager.stop_container(&container).await?,
+            ContainerRuntime::Docker => self.docker_manager.stop_container(&container).await,
             #[cfg(feature = "podman")]
-            ContainerRuntime::Podman => self.podman_manager.stop_container(&container).await?,
+            ContainerRuntime::Podman => self.podman_manager.stop_container(&container).await,
             #[allow(unreachable_patterns)]
-            _ => return Err(crate::features::runtime_not_compiled(&container.runtime)),
-        }
+            _ => Err(crate::features::runtime_not_compiled(&container.runtime)),
+        }?;
 
         let mut containers = self.containers.write().await;
         if let Some(stored) = containers.get_mut(id) {
@@ -606,20 +612,22 @@ impl ContainerManager {
                 .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?
         };
 
+        // Result-valued match + `?` (not `return` in the fallback arm), so
+        // builds without any container runtime have no unreachable code.
         match container.runtime {
             #[cfg(feature = "lxc")]
-            ContainerRuntime::Lxc => self.lxc_manager.pause_container(&container).await?,
+            ContainerRuntime::Lxc => self.lxc_manager.pause_container(&container).await,
             #[cfg(feature = "lxd")]
-            ContainerRuntime::Lxd => self.lxd_manager.pause_container(&container).await?,
+            ContainerRuntime::Lxd => self.lxd_manager.pause_container(&container).await,
             #[cfg(feature = "incus")]
-            ContainerRuntime::Incus => self.incus_manager.pause_container(&container).await?,
+            ContainerRuntime::Incus => self.incus_manager.pause_container(&container).await,
             #[cfg(feature = "docker")]
-            ContainerRuntime::Docker => self.docker_manager.pause_container(&container).await?,
+            ContainerRuntime::Docker => self.docker_manager.pause_container(&container).await,
             #[cfg(feature = "podman")]
-            ContainerRuntime::Podman => self.podman_manager.pause_container(&container).await?,
+            ContainerRuntime::Podman => self.podman_manager.pause_container(&container).await,
             #[allow(unreachable_patterns)]
-            _ => return Err(crate::features::runtime_not_compiled(&container.runtime)),
-        }
+            _ => Err(crate::features::runtime_not_compiled(&container.runtime)),
+        }?;
 
         let mut containers = self.containers.write().await;
         if let Some(stored) = containers.get_mut(id) {
@@ -641,20 +649,22 @@ impl ContainerManager {
                 .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?
         };
 
+        // Result-valued match + `?` (not `return` in the fallback arm), so
+        // builds without any container runtime have no unreachable code.
         match container.runtime {
             #[cfg(feature = "lxc")]
-            ContainerRuntime::Lxc => self.lxc_manager.resume_container(&container).await?,
+            ContainerRuntime::Lxc => self.lxc_manager.resume_container(&container).await,
             #[cfg(feature = "lxd")]
-            ContainerRuntime::Lxd => self.lxd_manager.resume_container(&container).await?,
+            ContainerRuntime::Lxd => self.lxd_manager.resume_container(&container).await,
             #[cfg(feature = "incus")]
-            ContainerRuntime::Incus => self.incus_manager.resume_container(&container).await?,
+            ContainerRuntime::Incus => self.incus_manager.resume_container(&container).await,
             #[cfg(feature = "docker")]
-            ContainerRuntime::Docker => self.docker_manager.resume_container(&container).await?,
+            ContainerRuntime::Docker => self.docker_manager.resume_container(&container).await,
             #[cfg(feature = "podman")]
-            ContainerRuntime::Podman => self.podman_manager.resume_container(&container).await?,
+            ContainerRuntime::Podman => self.podman_manager.resume_container(&container).await,
             #[allow(unreachable_patterns)]
-            _ => return Err(crate::features::runtime_not_compiled(&container.runtime)),
-        }
+            _ => Err(crate::features::runtime_not_compiled(&container.runtime)),
+        }?;
 
         let mut containers = self.containers.write().await;
         if let Some(stored) = containers.get_mut(id) {
@@ -673,85 +683,93 @@ impl ContainerManager {
             .get(id)
             .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?;
 
+        // Result-valued match + `?` (not `return` in the fallback arm), so
+        // builds without any container runtime have no unreachable code.
         let status: ContainerStatus = match container.runtime {
             #[cfg(feature = "lxc")]
-            ContainerRuntime::Lxc => {
-                self.lxc_manager
-                    .get_container_status(&container.name)
-                    .await?
-            }
+            ContainerRuntime::Lxc => self.lxc_manager.get_container_status(&container.name).await,
             #[cfg(feature = "lxd")]
-            ContainerRuntime::Lxd => {
-                self.lxd_manager
-                    .get_container_status(&container.name)
-                    .await?
-            }
+            ContainerRuntime::Lxd => self.lxd_manager.get_container_status(&container.name).await,
             #[cfg(feature = "incus")]
             ContainerRuntime::Incus => {
                 self.incus_manager
                     .get_container_status(&container.name)
-                    .await?
+                    .await
             }
             #[cfg(feature = "docker")]
             ContainerRuntime::Docker => {
                 self.docker_manager
                     .get_container_status(&container.name)
-                    .await?
+                    .await
             }
             #[cfg(feature = "podman")]
             ContainerRuntime::Podman => {
                 self.podman_manager
                     .get_container_status(&container.name)
-                    .await?
+                    .await
             }
             #[allow(unreachable_patterns)]
-            _ => return Err(crate::features::runtime_not_compiled(&container.runtime)),
-        };
+            _ => Err(crate::features::runtime_not_compiled(&container.runtime)),
+        }?;
 
         Ok(status)
     }
 
     /// Execute command in container
+    // Without any container runtime compiled in, every arm is the
+    // "not compiled in" error and the arguments go unused.
+    #[cfg_attr(
+        not(any(
+            feature = "lxc",
+            feature = "lxd",
+            feature = "incus",
+            feature = "docker",
+            feature = "podman"
+        )),
+        allow(unused_variables)
+    )]
     pub async fn exec_command(&self, id: &str, command: Vec<String>) -> Result<String> {
         let containers = self.containers.read().await;
         let container = containers
             .get(id)
             .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?;
 
+        // Result-valued match + `?` (not `return` in the fallback arm), so
+        // builds without any container runtime have no unreachable code.
         let output: String = match container.runtime {
             #[cfg(feature = "lxc")]
             ContainerRuntime::Lxc => {
                 self.lxc_manager
                     .exec_command(&container.name, &command)
-                    .await?
+                    .await
             }
             #[cfg(feature = "lxd")]
             ContainerRuntime::Lxd => {
                 self.lxd_manager
                     .exec_command(&container.name, &command)
-                    .await?
+                    .await
             }
             #[cfg(feature = "incus")]
             ContainerRuntime::Incus => {
                 self.incus_manager
                     .exec_command(&container.name, &command)
-                    .await?
+                    .await
             }
             #[cfg(feature = "docker")]
             ContainerRuntime::Docker => {
                 self.docker_manager
                     .exec_command(&container.name, &command)
-                    .await?
+                    .await
             }
             #[cfg(feature = "podman")]
             ContainerRuntime::Podman => {
                 self.podman_manager
                     .exec_command(&container.name, &command)
-                    .await?
+                    .await
             }
             #[allow(unreachable_patterns)]
-            _ => return Err(crate::features::runtime_not_compiled(&container.runtime)),
-        };
+            _ => Err(crate::features::runtime_not_compiled(&container.runtime)),
+        }?;
 
         Ok(output)
     }
@@ -764,6 +782,18 @@ impl ContainerManager {
     /// image, after which a real container is created from that image (it
     /// used to stop at the commit, so the "clone" never existed as a
     /// container and nothing appeared in the UI).
+    // Without any container runtime compiled in, every arm is the
+    // "not compiled in" error and the arguments go unused.
+    #[cfg_attr(
+        not(any(
+            feature = "lxc",
+            feature = "lxd",
+            feature = "incus",
+            feature = "docker",
+            feature = "podman"
+        )),
+        allow(unused_variables)
+    )]
     pub async fn clone_container(
         &self,
         source_id: &str,
@@ -802,26 +832,28 @@ impl ContainerManager {
             }
             #[allow(unreachable_patterns)]
             ContainerRuntime::Lxc | ContainerRuntime::Lxd | ContainerRuntime::Incus => {
-                match source_container.runtime {
+                // A Result rather than `return` in the fallback arm: with
+                // neither lxd nor incus compiled in, the code below must not
+                // become unreachable (USE-flag builds use -D warnings).
+                let cloned: Result<()> = match source_container.runtime {
                     #[cfg(feature = "lxd")]
                     ContainerRuntime::Lxd => {
                         self.lxd_manager
                             .clone_container(&source_container.name, target_name, snapshot)
-                            .await?
+                            .await
                     }
                     #[cfg(feature = "incus")]
                     ContainerRuntime::Incus => {
                         self.incus_manager
                             .clone_container(&source_container.name, target_name, snapshot)
-                            .await?
+                            .await
                     }
                     #[allow(unreachable_patterns)]
-                    _ => {
-                        return Err(crate::features::runtime_not_compiled(
-                            &source_container.runtime,
-                        ))
-                    }
-                }
+                    _ => Err(crate::features::runtime_not_compiled(
+                        &source_container.runtime,
+                    )),
+                };
+                cloned?;
                 Container {
                     id: target_id.to_string(),
                     name: target_name.to_string(),
@@ -844,26 +876,29 @@ impl ContainerManager {
                 }
             }
             ContainerRuntime::Docker | ContainerRuntime::Podman => {
-                match source_container.runtime {
+                let cloned: Result<()> = match source_container.runtime {
                     #[cfg(feature = "docker")]
                     ContainerRuntime::Docker => {
                         self.docker_manager
                             .clone_container(&source_container.name, target_name, snapshot)
-                            .await?;
+                            .await
                     }
                     #[cfg(feature = "podman")]
                     ContainerRuntime::Podman => {
                         self.podman_manager
                             .clone_container(&source_container.name, target_name, snapshot)
-                            .await?;
+                            .await
                     }
                     #[allow(unreachable_patterns)]
-                    _ => {
-                        return Err(crate::features::runtime_not_compiled(
-                            &source_container.runtime,
-                        ))
-                    }
-                }
+                    _ => Err(crate::features::runtime_not_compiled(
+                        &source_container.runtime,
+                    )),
+                };
+                cloned?;
+                #[cfg_attr(
+                    not(any(feature = "docker", feature = "podman")),
+                    allow(unused_variables)
+                )]
                 let config = ContainerConfig {
                     id: target_id.to_string(),
                     name: target_name.to_string(),
@@ -882,20 +917,14 @@ impl ContainerManager {
                 };
                 match source_container.runtime {
                     #[cfg(feature = "docker")]
-                    ContainerRuntime::Docker => {
-                        self.docker_manager.create_container(&config).await?
-                    }
+                    ContainerRuntime::Docker => self.docker_manager.create_container(&config).await,
                     #[cfg(feature = "podman")]
-                    ContainerRuntime::Podman => {
-                        self.podman_manager.create_container(&config).await?
-                    }
+                    ContainerRuntime::Podman => self.podman_manager.create_container(&config).await,
                     #[allow(unreachable_patterns)]
-                    _ => {
-                        return Err(crate::features::runtime_not_compiled(
-                            &source_container.runtime,
-                        ))
-                    }
-                }
+                    _ => Err(crate::features::runtime_not_compiled(
+                        &source_container.runtime,
+                    )),
+                }?
             }
         };
 

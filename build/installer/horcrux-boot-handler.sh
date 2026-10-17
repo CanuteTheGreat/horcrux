@@ -102,7 +102,7 @@ start_live_mode() {
     Username: root
     Password: horcrux
 
-  Web UI: http://localhost:8006
+  Web UI: https://localhost:8006
 
   Type 'horcrux --help' for CLI usage.
 

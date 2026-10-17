@@ -14,8 +14,13 @@ pub mod smb;
 #[cfg(feature = "webdav")]
 pub mod webdav;
 
-use crate::nas::{AccessLevel, CaseSensitivity, Protocol, QuotaConfig};
+#[cfg(feature = "nfs-server")]
+use crate::nas::AccessLevel;
+#[cfg(feature = "smb")]
+use crate::nas::CaseSensitivity;
+use crate::nas::{Protocol, QuotaConfig};
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "smb")]
 use std::collections::HashMap;
 
 /// NAS Share definition

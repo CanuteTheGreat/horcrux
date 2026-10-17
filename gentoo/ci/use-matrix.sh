@@ -31,21 +31,26 @@ route_status() {
     local data
     data=$(mktemp -d)
     HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8099 HORCRUX_DATA_DIR="$data" \
-    HORCRUX_DATABASE_URL="sqlite://$data/horcrux.db" ADMIN_PASSWORD=admin \
+    HORCRUX_DATABASE_URL="sqlite://$data/horcrux.db" ADMIN_PASSWORD=admin HORCRUX_SSL_DIR="$data/ssl" \
     HORCRUX_UI_DIR="$IMAGE/opt/horcrux/horcrux-ui" RUST_LOG=warn \
         "$IMAGE/usr/bin/horcrux-api" > "$data/api.log" 2>&1 &
     local pid=$!
-    python3 - "$@" <<'PY' || { cat "$data/api.log"; kill $pid; return 1; }
-import json, sys, time, urllib.request, urllib.error
-base = "http://127.0.0.1:8099"
+    HX_SSL_DIR="$data/ssl" python3 - "$@" <<'PY' || { cat "$data/api.log"; kill $pid; return 1; }
+import json, os, ssl, sys, time, urllib.request, urllib.error
+# The API serves HTTPS from its node-local CA; plain HTTP is redirected.
+base = "https://127.0.0.1:8099"
 for _ in range(90):
     try:
-        urllib.request.urlopen(base + "/api/health", timeout=2)
+        urllib.request.urlopen(base + "/api/health", timeout=2, context=ssl._create_unverified_context())
         break
     except Exception:
         time.sleep(1)
 else:
     sys.exit("installed horcrux-api never became healthy")
+# From here on, validate the certificate against the CA the node created.
+ctx = ssl.create_default_context(cafile=os.path.join(os.environ["HX_SSL_DIR"], "ca.pem"))
+https = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
+urllib.request.install_opener(https)
 feats = json.load(urllib.request.urlopen(base + "/api/features"))
 print("FEATURES " + " ".join(sorted(feats["features"])))
 req = urllib.request.Request(base + "/api/auth/login",

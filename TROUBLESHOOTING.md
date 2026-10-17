@@ -601,7 +601,7 @@ horcrux-cli vm status <vm-name>
 **Diagnosis:**
 ```bash
 # Check API server load
-curl -w "@-" -o /dev/null -s http://localhost:8006/api/health <<'EOF'
+curl -k -w "@-" -o /dev/null -s https://localhost:8006/api/health <<'EOF'
     time_namelookup:  %{time_namelookup}\n
        time_connect:  %{time_connect}\n
     time_appconnect:  %{time_appconnect}\n
@@ -676,7 +676,7 @@ horcrux-cli user list
 sudo journalctl -u horcrux | grep auth
 
 # Test authentication manually
-curl -X POST http://localhost:8006/api/auth/login \
+curl -k -X POST https://localhost:8006/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"admin"}'
 ```
@@ -762,19 +762,19 @@ chmod +x /tmp/horcrux-diag.sh
 
 ```bash
 # Health check
-curl -v http://localhost:8006/api/health
+curl -kv https://localhost:8006/api/health
 
 # List VMs
-curl http://localhost:8006/api/vms
+curl -k https://localhost:8006/api/vms
 
 # Check with authentication
-TOKEN=$(curl -s -X POST http://localhost:8006/api/auth/login \
+TOKEN=$(curl -sk -X POST https://localhost:8006/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"admin"}' \
   | jq -r '.token')
 
 curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8006/api/vms
+  https://localhost:8006/api/vms
 ```
 
 ## Getting Help

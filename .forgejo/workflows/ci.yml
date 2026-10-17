@@ -822,18 +822,25 @@ jobs:
         run: /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/ui_e2e.py
 
       - name: UI offers every USE-flag feature of an all-features build
+        env:
+          BASE_URL: https://localhost:8006
+          HORCRUX_CA_FILE: /tmp/horcrux-ca.pem
         run: MODE=full /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/ui_features_e2e.py
 
       - name: LXC browser E2E (real nested LXC behind the UI)
-        # The API + this build's UI run in a privileged LXC sibling sharing
-        # this job's network namespace (lxc_e2e.sh serve); the browser then
-        # downloads a template, creates an LXC container from the form,
-        # manages it (settings, snapshot, shutdown, delete) and checks the
-        # results on the page.
+        # The API + this build's UI run in a privileged LXC sibling on this
+        # job's docker network (lxc_e2e.sh serve writes its HTTPS URL and CA);
+        # the browser then downloads a template, creates an LXC container
+        # from the form, manages it (settings, snapshot, shutdown, delete)
+        # and checks the results on the page.
+        if: ${{ !cancelled() }}
         run: |
-          bash horcrux-api/tests/lxc_e2e.sh serve target/debug/horcrux-api horcrux-api/horcrux-ui/dist 8007
           rc=0
-          BASE_URL=http://127.0.0.1:8007 /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/lxc_ui_e2e.py || rc=$?
+          bash horcrux-api/tests/lxc_e2e.sh serve target/debug/horcrux-api horcrux-api/horcrux-ui/dist 8007 || rc=$?
+          if [ $rc -eq 0 ]; then
+            BASE_URL=$(cat /tmp/horcrux-lxc-e2e.url) HORCRUX_CA_FILE=/tmp/horcrux-lxc-e2e-ca.pem \
+              /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/lxc_ui_e2e.py || rc=$?
+          fi
           bash horcrux-api/tests/lxc_e2e.sh stop
           exit $rc
 
@@ -859,18 +866,18 @@ jobs:
           rm -rf /tmp/e2e-reduced && mkdir -p /tmp/e2e-reduced
           HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8017 HORCRUX_DATA_DIR=/tmp/e2e-reduced \
           HORCRUX_DATABASE_URL="sqlite:///tmp/e2e-reduced/horcrux.db" \
-          HORCRUX_UI_DIR="$PWD/horcrux-api/horcrux-ui/dist" \
+          HORCRUX_UI_DIR="$PWD/horcrux-api/horcrux-ui/dist" HORCRUX_SSL_DIR=/tmp/e2e-reduced/ssl \
           ADMIN_PASSWORD=admin RATE_LIMIT_MAX_REQUESTS=100000 AUTH_RATE_LIMIT_MAX_REQUESTS=1000 RUST_LOG=info \
           nohup /tmp/horcrux-api-reduced > /tmp/horcrux-reduced.log 2>&1 &
           echo $! > /tmp/horcrux-reduced.pid
           for i in $(seq 1 60); do
-            curl -sf http://127.0.0.1:8017/api/health >/dev/null && break
+            curl -sfk https://127.0.0.1:8017/api/health >/dev/null && break
             sleep 1
           done
-          curl -sf http://127.0.0.1:8017/api/features
+          curl -sfk https://127.0.0.1:8017/api/features
           echo
           set +e
-          BASE_URL=http://127.0.0.1:8017 MODE=reduced /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/ui_features_e2e.py
+          BASE_URL=https://127.0.0.1:8017 MODE=reduced /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/ui_features_e2e.py
           rc=$?
           kill "$(cat /tmp/horcrux-reduced.pid)" 2>/dev/null
           [ $rc -eq 0 ] || { tail -100 /tmp/horcrux-reduced.log; exit $rc; }

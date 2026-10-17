@@ -255,25 +255,31 @@ horcrux --version
 
 Open your browser and navigate to:
 ```
-http://localhost:8006
+https://localhost:8006
 ```
 
 You should see the Horcrux dashboard.
 
-### 3. Create Admin User
+### 3. Admin Password
+
+There is no default password. On the first start Horcrux creates the user
+`admin`; its password is `ADMIN_PASSWORD` if that was set, otherwise it is
+generated into `/var/lib/horcrux/initial-admin-password` (mode 0600, removed
+once you change the password):
 
 ```bash
-# Register first user (will be admin)
-horcrux auth register
+sudo cat /var/lib/horcrux/initial-admin-password
+```
 
-# Or via API
-curl -X POST http://localhost:8006/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{
-    "username": "admin",
-    "password": "your_secure_password",
-    "email": "admin@example.com"
-  }'
+Self-registration is off by default. Create further users under
+*Administration > Users* and grant them roles on paths (see
+[ACCESS_CONTROL.md](ACCESS_CONTROL.md)).
+
+The API and UI are served over HTTPS from a node-local CA. Download it once
+and trust it in your browser / tools:
+
+```bash
+curl -k https://localhost:8006/api/tls/ca.pem -o horcrux-ca.pem
 ```
 
 ### 4. Login
@@ -283,11 +289,11 @@ curl -X POST http://localhost:8006/api/auth/register \
 horcrux auth login
 
 # Or via API
-curl -X POST http://localhost:8006/api/auth/login \
+curl --cacert horcrux-ca.pem -X POST https://localhost:8006/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{
     "username": "admin",
-    "password": "your_secure_password"
+    "password": "<admin password>"
   }'
 ```
 
@@ -515,7 +521,7 @@ After installation:
 - **Documentation**: `/usr/share/doc/horcrux/` or `docs/` directory
 - **Logs**: `journalctl -u horcrux-api -f`
 - **CLI Help**: `horcrux --help`
-- **API Docs**: http://localhost:8006/api/docs
+- **API Docs**: https://localhost:8006/api/docs
 - **Issues**: https://git.canutethegreat.com/CanuteTheGreat/horcrux/issues
 
 ---

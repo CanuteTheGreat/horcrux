@@ -2,9 +2,13 @@
 //!
 //! Handles ZFS datasets, Btrfs subvolumes, and LVM volumes.
 
-use crate::nas::storage::{DatasetType, NasDataset};
+#[cfg(feature = "nas-zfs")]
+use crate::nas::storage::DatasetType;
+use crate::nas::storage::NasDataset;
 use horcrux_common::{Error, Result};
+#[cfg(feature = "nas-zfs")]
 use std::collections::HashMap;
+#[cfg(feature = "nas-zfs")]
 use tokio::process::Command;
 
 /// List datasets in a pool

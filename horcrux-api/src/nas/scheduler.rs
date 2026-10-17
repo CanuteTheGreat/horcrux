@@ -886,7 +886,7 @@ impl NasScheduler {
     }
 
     #[cfg(not(feature = "nas-zfs"))]
-    async fn run_scrub_job(job: &ScheduledJob) -> Result<Option<serde_json::Value>> {
+    async fn run_scrub_job(_job: &ScheduledJob) -> Result<Option<serde_json::Value>> {
         Err(Error::Internal("ZFS not enabled".to_string()))
     }
 

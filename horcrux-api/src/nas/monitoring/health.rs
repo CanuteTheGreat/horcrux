@@ -1,6 +1,8 @@
 //! NAS health check module
 
+#[cfg(any(feature = "smb", feature = "nas-zfs", feature = "nfs-server"))]
 use crate::nas::monitoring::HealthStatus;
+#[cfg(any(feature = "smb", feature = "nas-zfs", feature = "nfs-server"))]
 use horcrux_common::Result;
 
 /// Check SMB health

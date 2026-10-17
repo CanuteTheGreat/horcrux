@@ -64,6 +64,41 @@ pub fn pidfile(vm_id: &str) -> String {
     format!("/var/run/horcrux-vm-{vm_id}.pid")
 }
 
+/// Whether `pid` is a live process. A zombie (exited, not yet reaped -
+/// e.g. a daemonized QEMU whose parent is a container's non-reaping PID 1)
+/// no longer runs the guest or writes its disks, so it counts as exited.
+pub fn pid_alive(pid: u32) -> bool {
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        // Format: "pid (comm) S ...": the state follows the last ')'.
+        Ok(stat) => stat
+            .rsplit_once(')')
+            .and_then(|(_, rest)| rest.split_whitespace().next())
+            .map(|state| state != "Z" && state != "X")
+            .unwrap_or(true),
+        Err(_) => false,
+    }
+}
+
+/// Whether the pid in a VM's pidfile is a live QEMU process: not a zombie,
+/// and still QEMU (a stale pidfile's pid may have been reused by anything).
+fn qemu_running_from_pidfile(path: &std::path::Path) -> bool {
+    let Some(pid) = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+    else {
+        return false;
+    };
+    if !pid_alive(pid) {
+        return false;
+    }
+    std::fs::read(format!("/proc/{pid}/cmdline"))
+        .map(|cmd| {
+            let argv0 = cmd.split(|b| *b == 0).next().unwrap_or_default();
+            String::from_utf8_lossy(argv0).contains("qemu")
+        })
+        .unwrap_or(false)
+}
+
 /// The complete QEMU command line for `vm`: binary plus every argument.
 ///
 /// This is the ONE place QEMU arguments are assembled; `start_vm` only
@@ -232,11 +267,7 @@ impl QemuManager {
 
     /// Whether the QEMU process for `vm_id` (per its pidfile) is alive.
     pub fn process_running(vm_id: &str) -> bool {
-        std::fs::read_to_string(pidfile(vm_id))
-            .ok()
-            .and_then(|s| s.trim().parse::<u32>().ok())
-            .map(|pid| std::path::Path::new(&format!("/proc/{pid}")).exists())
-            .unwrap_or(false)
+        qemu_running_from_pidfile(std::path::Path::new(&pidfile(vm_id)))
     }
 
     /// Start a QEMU virtual machine
@@ -390,6 +421,74 @@ impl QemuManager {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn exited_unreaped_qemu_is_not_running() {
+        use std::os::unix::process::CommandExt;
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("vm.pid");
+        // No pidfile / garbage pidfile.
+        assert!(!qemu_running_from_pidfile(&pidfile));
+        std::fs::write(&pidfile, "not-a-pid").unwrap();
+        assert!(!qemu_running_from_pidfile(&pidfile));
+
+        // A live process that is QEMU (argv[0] as QEMU sets it) is running.
+        let mut live = std::process::Command::new("sleep")
+            .arg0("qemu-system-x86_64")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        // spawn() returns once the child's close-on-exec fds are closed,
+        // which happens inside execve before the kernel has set up the new
+        // argv; /proc/<pid>/cmdline reads empty for that instant. Wait for
+        // the exec to finish (a real QEMU writes its pidfile long after).
+        for _ in 0..250 {
+            if std::fs::read(format!("/proc/{}/cmdline", live.id()))
+                .map(|c| !c.is_empty())
+                .unwrap_or(false)
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        std::fs::write(&pidfile, format!("{}\n", live.id())).unwrap();
+        assert!(qemu_running_from_pidfile(&pidfile), "live QEMU is running");
+
+        // The same QEMU after it exited but before anyone reaped it: a
+        // zombie, which must count as stopped.
+        live.kill().unwrap();
+        let zpid = live.id();
+        for _ in 0..250 {
+            if !pid_alive(zpid) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            std::fs::read_to_string(format!("/proc/{zpid}/stat")).is_ok(),
+            "still unreaped (a zombie) at this point"
+        );
+        assert!(!pid_alive(zpid), "zombie is not alive");
+        assert!(
+            !qemu_running_from_pidfile(&pidfile),
+            "exited-but-unreaped QEMU is not running"
+        );
+        live.wait().unwrap();
+        assert!(!qemu_running_from_pidfile(&pidfile), "reaped QEMU is gone");
+
+        // A stale pidfile whose pid now belongs to something else.
+        let mut other = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        std::fs::write(&pidfile, other.id().to_string()).unwrap();
+        assert!(
+            !qemu_running_from_pidfile(&pidfile),
+            "a reused pid that is not QEMU is not the VM"
+        );
+        other.kill().unwrap();
+        other.wait().unwrap();
+    }
+
     use super::*;
     use horcrux_common::{DisplayProtocol, SoundDevice, VideoDevice, VmArchitecture, VmDisplay};
 

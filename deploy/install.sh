@@ -302,8 +302,8 @@ print_info() {
     echo -e "${GREEN}  Horcrux Installation Complete!${NC}"
     echo -e "${GREEN}═══════════════════════════════════════════════════${NC}"
     echo
-    echo -e "${BLUE}Web UI:${NC}      http://localhost:8006"
-    echo -e "${BLUE}API Docs:${NC}    http://localhost:8006/api/docs"
+    echo -e "${BLUE}Web UI:${NC}      https://localhost:8006"
+    echo -e "${BLUE}API Docs:${NC}    https://localhost:8006/api/docs"
     echo -e "${BLUE}Metrics:${NC}     http://localhost:9090/metrics"
     echo
     echo -e "${BLUE}Configuration:${NC} $CONFIG_DIR/horcrux.toml"

@@ -10,6 +10,7 @@ container).
 """
 import json
 import os
+import ssl
 import re
 import time
 import urllib.error
@@ -17,7 +18,11 @@ import urllib.request
 
 from playwright.sync_api import expect, sync_playwright
 
-BASE = os.environ.get("BASE_URL", "http://127.0.0.1:8007")
+BASE = os.environ.get("BASE_URL", "https://127.0.0.1:8007")
+# The API serves HTTPS from the node-local CA: trust that CA when given
+# (HORCRUX_CA_FILE), otherwise accept the self-signed certificate.
+_CA = os.environ.get("HORCRUX_CA_FILE")
+SSL_CTX = ssl.create_default_context(cafile=_CA) if _CA else ssl._create_unverified_context()
 CT = "e2e-lxc"
 _TOKEN = []
 
@@ -29,7 +34,7 @@ def token():
             data=json.dumps({"username": "admin", "password": "admin"}).encode(),
             headers={"Content-Type": "application/json"},
         )
-        body = json.load(urllib.request.urlopen(r, timeout=30))
+        body = json.load(urllib.request.urlopen(r, timeout=30, context=SSL_CTX))
         _TOKEN.append(body.get("ticket") or body.get("token"))
     return _TOKEN[0]
 
@@ -42,7 +47,7 @@ def api(method, path, body=None, timeout=600):
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {token()}"},
     )
     try:
-        with urllib.request.urlopen(r, timeout=timeout) as resp:
+        with urllib.request.urlopen(r, timeout=timeout, context=SSL_CTX) as resp:
             text = resp.read().decode()
             return resp.status, (json.loads(text) if text else None)
     except urllib.error.HTTPError as e:
@@ -78,7 +83,8 @@ def main():
     console_errors = []
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        page = browser.new_page()
+        # TLS trust in the browser is covered by ui_e2e.py; here only the pages matter.
+        page = browser.new_page(ignore_https_errors=True)
         page.on("console", lambda m: m.type == "error" and console_errors.append(m.text))
         page.on("dialog", lambda d: d.accept())
 
@@ -116,7 +122,12 @@ def main():
         page.fill("#lxc-mounts", "mp=/data")
         page.locator("#lxc-nesting").check()
         page.locator("#ct-submit").click()
-        page.wait_for_url(f"{BASE}/containers", timeout=300000)
+        try:
+            page.wait_for_url(f"{BASE}/containers", timeout=180000)
+        except Exception:
+            err = page.locator("#create-container-error")
+            print("[lxc-ui-e2e] create form error:", err.inner_text() if err.count() else "<none>")
+            raise
         row = page.locator(f"tr[data-container-id='{CT}']")
         expect(row).to_contain_text("lxc", timeout=30000)
         expect(row).to_contain_text("running", timeout=60000)
@@ -189,5 +200,24 @@ def main():
     print("LXC UI E2E: all checks passed")
 
 
+def dump_server_log():
+    import subprocess
+    try:
+        name = open("/tmp/horcrux-lxc-e2e.name").read().strip()
+        out = subprocess.run(
+            ["docker", "exec", name, "sh", "-c",
+             "grep -v 'Failed to broadcast' /tmp/api.log | tail -40; "
+             "for f in $(cat /tmp/lxcpath)/*/start.log; do echo == $f; tail -10 $f; done"],
+            capture_output=True, text=True, timeout=60,
+        )
+        print("[lxc-ui-e2e] server log:\n" + out.stdout + out.stderr)
+    except Exception as e:  # noqa: BLE001
+        print(f"[lxc-ui-e2e] could not read the server log: {e}")
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BaseException:
+        dump_server_log()
+        raise

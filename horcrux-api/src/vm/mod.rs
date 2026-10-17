@@ -41,6 +41,19 @@ impl Default for VmManager {
     }
 }
 
+/// Report a QEMU VM's real state: the stored status is whatever the last
+/// start/stop wrote, but QEMU can exit on its own (guest poweroff, crash,
+/// kill) and then the VM is stopped no matter what the database says. An
+/// exited-but-unreaped QEMU (a zombie) counts as exited.
+fn live_status(vm: &mut VmConfig) {
+    if vm.hypervisor == VmHypervisor::Qemu
+        && matches!(vm.status, VmStatus::Running | VmStatus::Paused)
+        && !QemuManager::process_running(&vm.id)
+    {
+        vm.status = VmStatus::Stopped;
+    }
+}
+
 impl VmManager {
     pub fn new() -> Self {
         Self {
@@ -87,21 +100,29 @@ impl VmManager {
     pub async fn list_vms(&self) -> Vec<VmConfig> {
         // Try database first if available
         if let Some(db) = &self.db {
-            if let Ok(vms) = db.list_vms().await {
+            if let Ok(mut vms) = db.list_vms().await {
+                vms.iter_mut().for_each(live_status);
                 return vms;
             }
         }
 
         // Fallback to in-memory
         let vms = self.vms.read().await;
-        vms.values().map(|vm| vm.to_config()).collect()
+        vms.values()
+            .map(|vm| {
+                let mut c = vm.to_config();
+                live_status(&mut c);
+                c
+            })
+            .collect()
     }
 
     /// Get a specific VM by ID
     pub async fn get_vm(&self, id: &str) -> Result<VmConfig> {
         // Try database first if available
         if let Some(db) = &self.db {
-            if let Ok(vm) = db.get_vm(id).await {
+            if let Ok(mut vm) = db.get_vm(id).await {
+                live_status(&mut vm);
                 return Ok(vm);
             }
         }
@@ -109,7 +130,11 @@ impl VmManager {
         // Fallback to in-memory
         let vms = self.vms.read().await;
         vms.get(id)
-            .map(|vm| vm.to_config())
+            .map(|vm| {
+                let mut c = vm.to_config();
+                live_status(&mut c);
+                c
+            })
             .ok_or_else(|| horcrux_common::Error::VmNotFound(id.to_string()))
     }
 
@@ -137,32 +162,37 @@ impl VmManager {
         // A hypervisor whose USE flag was off at build time is refused
         // (its backend module is not compiled into this binary).
         crate::features::require_vm_hypervisor(&config.hypervisor)?;
-        let vm: qemu::QemuVm = match config.hypervisor {
+        // Evaluate to a Result (instead of `return` in the fallback arm) so
+        // a build without any hypervisor feature has no unreachable code.
+        let created: Result<qemu::QemuVm> = match config.hypervisor {
             #[cfg(feature = "qemu")]
-            VmHypervisor::Qemu => self.qemu.create_vm(&config).await?,
+            VmHypervisor::Qemu => self.qemu.create_vm(&config).await,
             #[cfg(feature = "lxd")]
             VmHypervisor::Lxd => {
                 if !lxd::LxdManager::check_lxd_available() {
-                    return Err(horcrux_common::Error::Validation(
+                    Err(horcrux_common::Error::Validation(
                         "LXD is not installed on this host (USE=lxd needs app-containers/lxd)"
                             .to_string(),
-                    ));
+                    ))
+                } else {
+                    self.lxd.create_vm(&config).await
                 }
-                self.lxd.create_vm(&config).await?
             }
             #[cfg(feature = "incus")]
             VmHypervisor::Incus => {
                 if !incus::IncusManager::check_incus_available() {
-                    return Err(horcrux_common::Error::Validation(
+                    Err(horcrux_common::Error::Validation(
                         "Incus is not installed on this host (USE=incus needs app-containers/incus)"
                             .to_string(),
-                    ));
+                    ))
+                } else {
+                    self.incus.create_vm(&config).await
                 }
-                self.incus.create_vm(&config).await?
             }
             #[allow(unreachable_patterns)]
-            _ => return Err(crate::features::hypervisor_not_compiled(&config.hypervisor)),
+            _ => Err(crate::features::hypervisor_not_compiled(&config.hypervisor)),
         };
+        let vm = created?;
         let vm_config = vm.to_config();
 
         // Save to database if available
@@ -255,16 +285,26 @@ impl VmManager {
             .get_mut(id)
             .ok_or_else(|| horcrux_common::Error::VmNotFound(id.to_string()))?;
 
-        match vm.hypervisor {
-            #[cfg(feature = "qemu")]
-            VmHypervisor::Qemu => self.qemu.start_vm(vm).await?,
-            #[cfg(feature = "lxd")]
-            VmHypervisor::Lxd => self.lxd.start_vm(vm).await?,
-            #[cfg(feature = "incus")]
-            VmHypervisor::Incus => self.incus.start_vm(vm).await?,
-            #[allow(unreachable_patterns)]
-            _ => return Err(crate::features::hypervisor_not_compiled(&vm.hypervisor)),
+        // The stored status says "running" but its QEMU is gone (the guest
+        // powered off, QEMU crashed or was killed): it is stopped, and must
+        // be startable again instead of "already running" forever.
+        if vm.hypervisor == VmHypervisor::Qemu
+            && matches!(vm.status, VmStatus::Running | VmStatus::Paused)
+            && !QemuManager::process_running(&vm.id)
+        {
+            vm.status = VmStatus::Stopped;
         }
+        let started: Result<()> = match vm.hypervisor {
+            #[cfg(feature = "qemu")]
+            VmHypervisor::Qemu => self.qemu.start_vm(vm).await,
+            #[cfg(feature = "lxd")]
+            VmHypervisor::Lxd => self.lxd.start_vm(vm).await,
+            #[cfg(feature = "incus")]
+            VmHypervisor::Incus => self.incus.start_vm(vm).await,
+            #[allow(unreachable_patterns)]
+            _ => Err(crate::features::hypervisor_not_compiled(&vm.hypervisor)),
+        };
+        started?;
         vm.status = VmStatus::Running;
         let config = vm.to_config();
 
@@ -284,15 +324,16 @@ impl VmManager {
             .get_mut(id)
             .ok_or_else(|| horcrux_common::Error::VmNotFound(id.to_string()))?;
 
-        match vm.hypervisor {
-            VmHypervisor::Qemu => self.qemu.stop_vm(vm).await?,
+        let stopped: Result<()> = match vm.hypervisor {
+            VmHypervisor::Qemu => self.qemu.stop_vm(vm).await,
             #[cfg(feature = "lxd")]
-            VmHypervisor::Lxd => self.lxd.stop_vm(vm).await?,
+            VmHypervisor::Lxd => self.lxd.stop_vm(vm).await,
             #[cfg(feature = "incus")]
-            VmHypervisor::Incus => self.incus.stop_vm(vm).await?,
+            VmHypervisor::Incus => self.incus.stop_vm(vm).await,
             #[allow(unreachable_patterns)]
-            _ => return Err(crate::features::hypervisor_not_compiled(&vm.hypervisor)),
-        }
+            _ => Err(crate::features::hypervisor_not_compiled(&vm.hypervisor)),
+        };
+        stopped?;
         vm.status = VmStatus::Stopped;
         let config = vm.to_config();
 
@@ -363,6 +404,28 @@ mod tests {
             disks: Vec::new(),
             display: Default::default(),
         }
+    }
+
+    #[test]
+    fn stored_running_without_qemu_reads_stopped() {
+        // No QEMU process (no pidfile) behind a VM stored as running or
+        // paused: it is stopped. Stopped stays stopped; other hypervisors
+        // report their own state and are left alone.
+        let id = format!("live-status-{}", std::process::id());
+        for stored in [VmStatus::Running, VmStatus::Paused] {
+            let mut vm = create_test_vm_config(&id, "live");
+            vm.status = stored;
+            live_status(&mut vm);
+            assert_eq!(vm.status, VmStatus::Stopped);
+        }
+        let mut vm = create_test_vm_config(&id, "live");
+        live_status(&mut vm);
+        assert_eq!(vm.status, VmStatus::Stopped);
+        let mut lxd = create_test_vm_config(&id, "lxd");
+        lxd.hypervisor = VmHypervisor::Lxd;
+        lxd.status = VmStatus::Running;
+        live_status(&mut lxd);
+        assert_eq!(lxd.status, VmStatus::Running);
     }
 
     #[tokio::test]
