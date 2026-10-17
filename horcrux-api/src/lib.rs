@@ -16,6 +16,16 @@ pub mod validation;
 pub mod state;
 pub use state::AppState;
 
+// The API server (startup, router, HTTP handlers) and route modules
+pub mod api;
+pub mod app;
+#[cfg(feature = "lxc")]
+#[path = "api/lxc.rs"]
+pub mod lxc_api;
+pub mod persistence;
+pub mod static_ui;
+pub mod vm_console_api;
+
 // Authentication & Authorization
 pub mod audit;
 pub mod auth;
