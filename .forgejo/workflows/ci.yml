@@ -297,10 +297,13 @@ jobs:
         # suites run one at a time like the separate binaries they were.
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Run tests"
-          cargo test --all-features --workspace --exclude horcrux-api
-          cargo test --all-features -p horcrux-api --lib --bins --test nightly_realistic_tests
-          cargo test --all-features -p horcrux-api --doc
+          # Same order as one `cargo test --workspace`: horcrux-api first,
+          # then the other packages (horcrux-ui's api_contract is last).
+          cargo test --all-features -p horcrux-api --lib --bins
           bash ci/run-it-suites.sh --all-features
+          cargo test --all-features -p horcrux-api --test nightly_realistic_tests
+          cargo test --all-features --workspace --exclude horcrux-api
+          cargo test --all-features -p horcrux-api --doc
 
       - name: Auth realms + ACME (OpenLDAP, Dex, PAM, Pebble)
         # Real servers in sibling containers on a private network: LDAP

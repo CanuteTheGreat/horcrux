@@ -1581,8 +1581,12 @@ async fn mfa_users(State(state): St) -> ApiResult<Json<Vec<Value>>> {
     let pool = state.database.pool();
     let mut out = vec![];
     for u in store::list_user_records(pool).await? {
+        // An account deleted after the listing is simply no longer part of
+        // the list (this used to fail the whole request with a 404).
+        let Some(user) = store::find_user(pool, &u.id).await? else {
+            continue;
+        };
         let factors = store::list_tfa(pool, &u.id).await?;
-        let user = resolve_user(&state, &u.id).await?;
         let required = tfa_required(&state, &user).await?;
         out.push(json!({
             "user_id": u.id,
