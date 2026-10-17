@@ -4,6 +4,8 @@ mod retention;
 /// Provides VM and container backup with scheduling and retention
 mod scheduler;
 
+use crate::db::config_store::{self, kinds, ConfigStore};
+use crate::db::Database;
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -102,6 +104,8 @@ pub struct BackupManager {
     lvm_backend: Option<Arc<crate::storage::lvm::LvmManager>>,
     /// Directory for restore operations
     restore_dir: PathBuf,
+    /// Durable copy of the backup catalog and jobs; `None` = in-memory.
+    store: Option<ConfigStore>,
 }
 
 impl Default for BackupManager {
@@ -121,6 +125,7 @@ impl BackupManager {
             ceph_backend: None,
             lvm_backend: None,
             restore_dir: PathBuf::from("/var/lib/horcrux/restore"),
+            store: None,
         }
     }
 
@@ -135,7 +140,41 @@ impl BackupManager {
             ceph_backend: None,
             lvm_backend: None,
             restore_dir,
+            store: None,
         }
+    }
+
+    /// Database-backed BackupManager: loads the persisted backup catalog and
+    /// backup jobs (re-registering enabled jobs with the scheduler) and
+    /// writes every change through, so both survive a restart.
+    pub async fn with_database(db: Arc<Database>, restore_dir: PathBuf) -> Result<Self> {
+        let store = ConfigStore::new(&db);
+        let mut mgr = Self::with_restore_dir(restore_dir);
+        {
+            let mut backups = mgr.backups.write().await;
+            for b in store.load_values::<Backup>(kinds::BACKUP).await? {
+                if !b.path.exists() {
+                    tracing::warn!("Backup {} archive {} is missing", b.id, b.path.display());
+                }
+                backups.insert(b.id.clone(), b);
+            }
+            let mut jobs = mgr.jobs.write().await;
+            for job in store.load_values::<BackupJob>(kinds::BACKUP_JOB).await? {
+                if job.enabled {
+                    if let Err(e) = mgr.scheduler.schedule_job(&job).await {
+                        tracing::warn!("Failed to schedule backup job {}: {}", job.id, e);
+                    }
+                }
+                jobs.insert(job.id.clone(), job);
+            }
+            tracing::info!(
+                "Loaded {} backup(s) and {} backup job(s) from database",
+                backups.len(),
+                jobs.len()
+            );
+        }
+        mgr.store = Some(store);
+        Ok(mgr)
     }
 
     /// Create BackupManager with storage backends
@@ -153,6 +192,7 @@ impl BackupManager {
             ceph_backend: ceph,
             lvm_backend: lvm,
             restore_dir: PathBuf::from("/var/lib/horcrux/restore"),
+            store: None,
         }
     }
 
@@ -201,6 +241,12 @@ impl BackupManager {
         };
 
         let mut backups = self.backups.write().await;
+        if let Err(e) = config_store::put_opt(&self.store, kinds::BACKUP, &backup_id, &backup).await
+        {
+            // An archive nobody can list or delete is worse than no backup.
+            tokio::fs::remove_file(&backup.path).await.ok();
+            return Err(e);
+        }
         backups.insert(backup_id, backup.clone());
 
         tracing::info!("Backup created successfully: {}", backup.id);
@@ -251,6 +297,9 @@ impl BackupManager {
     pub async fn delete_backup(&self, backup_id: &str) -> Result<()> {
         let mut backups = self.backups.write().await;
 
+        if backups.contains_key(backup_id) {
+            config_store::delete_opt(&self.store, kinds::BACKUP, backup_id).await?;
+        }
         if let Some(backup) = backups.remove(backup_id) {
             // Delete the backup file
             tokio::fs::remove_file(&backup.path).await.ok();
@@ -280,6 +329,12 @@ impl BackupManager {
             self.scheduler.schedule_job(&job).await?;
         }
 
+        if let Err(e) = config_store::put_opt(&self.store, kinds::BACKUP_JOB, &job.id, &job).await {
+            if job.enabled {
+                self.scheduler.unschedule_job(&job.id).await.ok();
+            }
+            return Err(e);
+        }
         jobs.insert(job.id.clone(), job);
         Ok(())
     }
@@ -287,7 +342,12 @@ impl BackupManager {
     /// Delete a backup job (and drop it from the scheduler). Existing
     /// backups the job produced are kept.
     pub async fn delete_job(&self, job_id: &str) -> Result<()> {
-        let removed = self.jobs.write().await.remove(job_id);
+        let mut jobs = self.jobs.write().await;
+        if jobs.contains_key(job_id) {
+            config_store::delete_opt(&self.store, kinds::BACKUP_JOB, job_id).await?;
+        }
+        let removed = jobs.remove(job_id);
+        drop(jobs);
         match removed {
             Some(_) => {
                 self.scheduler.unschedule_job(job_id).await?;

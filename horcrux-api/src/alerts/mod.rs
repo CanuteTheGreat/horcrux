@@ -3,6 +3,8 @@ pub mod notifications;
 /// Provides threshold-based monitoring alerts with email and webhook notifications
 pub mod rules;
 
+use crate::db::config_store::{self, kinds, ConfigStore};
+use crate::db::Database;
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -56,6 +58,8 @@ pub struct AlertManager {
     alert_history: Arc<RwLock<Vec<Alert>>>,
     notification_channels: Arc<RwLock<Vec<NotificationChannel>>>,
     max_history: usize,
+    /// Durable copy of rules and notification channels; `None` = in-memory.
+    store: Option<ConfigStore>,
 }
 
 impl Default for AlertManager {
@@ -72,6 +76,40 @@ impl AlertManager {
             alert_history: Arc::new(RwLock::new(Vec::new())),
             notification_channels: Arc::new(RwLock::new(Vec::new())),
             max_history: 1000, // Keep last 1000 alerts
+            store: None,
+        }
+    }
+
+    /// Alert manager backed by the database: loads persisted alert rules and
+    /// notification channels and writes every change through.
+    pub async fn with_database(db: Arc<Database>) -> Result<Self> {
+        let store = ConfigStore::new(&db);
+        let mut mgr = Self::new();
+        {
+            let mut rules = mgr.rules.write().await;
+            for rule in store.load_values::<AlertRule>(kinds::ALERT_RULE).await? {
+                rules.insert(rule.id.clone(), rule);
+            }
+            let mut channels = mgr.notification_channels.write().await;
+            *channels = store
+                .load_values::<NotificationChannel>(kinds::NOTIFICATION_CHANNEL)
+                .await?;
+            tracing::info!(
+                "Loaded {} alert rule(s) and {} notification channel(s) from database",
+                rules.len(),
+                channels.len()
+            );
+        }
+        mgr.store = Some(store);
+        Ok(mgr)
+    }
+
+    /// Name of a notification channel (its identity for persistence).
+    fn channel_name(channel: &NotificationChannel) -> &str {
+        match channel {
+            NotificationChannel::Email { name, .. }
+            | NotificationChannel::Webhook { name, .. }
+            | NotificationChannel::Syslog { name, .. } => name,
         }
     }
 
@@ -86,6 +124,7 @@ impl AlertManager {
             )));
         }
 
+        config_store::put_opt(&self.store, kinds::ALERT_RULE, &rule.id, &rule).await?;
         rules.insert(rule.id.clone(), rule);
         Ok(())
     }
@@ -93,9 +132,14 @@ impl AlertManager {
     /// Remove an alert rule
     pub async fn remove_rule(&self, rule_id: &str) -> Result<()> {
         let mut rules = self.rules.write().await;
-        rules.remove(rule_id).ok_or_else(|| {
-            horcrux_common::Error::System(format!("Alert rule {} not found", rule_id))
-        })?;
+        if !rules.contains_key(rule_id) {
+            return Err(horcrux_common::Error::System(format!(
+                "Alert rule {} not found",
+                rule_id
+            )));
+        }
+        config_store::delete_opt(&self.store, kinds::ALERT_RULE, rule_id).await?;
+        rules.remove(rule_id);
         Ok(())
     }
 
@@ -258,6 +302,15 @@ impl AlertManager {
     /// Add a notification channel
     pub async fn add_notification_channel(&self, channel: NotificationChannel) -> Result<()> {
         let mut channels = self.notification_channels.write().await;
+        let name = Self::channel_name(&channel).to_string();
+        // The name identifies a channel (and is its persistence key).
+        if channels.iter().any(|c| Self::channel_name(c) == name) {
+            return Err(horcrux_common::Error::InvalidConfig(format!(
+                "Notification channel {} already exists",
+                name
+            )));
+        }
+        config_store::put_opt(&self.store, kinds::NOTIFICATION_CHANNEL, &name, &channel).await?;
         channels.push(channel);
         Ok(())
     }

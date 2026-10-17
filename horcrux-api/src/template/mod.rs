@@ -1,5 +1,7 @@
 //! VM template management
 //! Provides template creation, cloning (full and linked/COW)
+use crate::db::config_store::{self, kinds, ConfigStore};
+use crate::db::Database;
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -69,6 +71,8 @@ pub struct TemplateManager {
     /// Directory-storage VM disks live here; template copies go in
     /// `<vm_storage>/templates`.
     vm_storage: PathBuf,
+    /// Durable copy of `templates`; `None` = in-memory only.
+    store: Option<ConfigStore>,
 }
 
 impl Default for TemplateManager {
@@ -85,6 +89,7 @@ impl TemplateManager {
             ceph_backend: None,
             lvm_backend: None,
             vm_storage: PathBuf::from("/var/lib/horcrux/vms"),
+            store: None,
         }
     }
 
@@ -96,6 +101,31 @@ impl TemplateManager {
             vm_storage,
             ..Self::new()
         }
+    }
+
+    /// Database-backed template manager (directory-storage disks under
+    /// `vm_storage`): loads persisted template metadata and writes every
+    /// create/delete through, so templates survive a restart. The template
+    /// disk copies already live on disk under `<vm_storage>/templates`.
+    pub async fn with_database(db: Arc<Database>, vm_storage: PathBuf) -> Result<Self> {
+        let store = ConfigStore::new(&db);
+        let mut mgr = Self::with_vm_storage(vm_storage);
+        {
+            let mut templates = mgr.templates.write().await;
+            for t in store.load_values::<Template>(kinds::TEMPLATE).await? {
+                if t.storage_type == StorageType::Directory && !t.disk_path.exists() {
+                    tracing::warn!(
+                        "Template {} disk {} is missing; clones of it will fail",
+                        t.id,
+                        t.disk_path.display()
+                    );
+                }
+                templates.insert(t.id.clone(), t);
+            }
+            tracing::info!("Loaded {} template(s) from database", templates.len());
+        }
+        mgr.store = Some(store);
+        Ok(mgr)
     }
 
     /// Where a cloned VM's disk is written for directory storage.
@@ -114,6 +144,7 @@ impl TemplateManager {
             ceph_backend: ceph,
             lvm_backend: lvm,
             vm_storage: PathBuf::from("/var/lib/horcrux/vms"),
+            store: None,
         }
     }
 
@@ -176,6 +207,16 @@ impl TemplateManager {
 
         // Store template metadata
         let mut templates = self.templates.write().await;
+        if let Err(e) =
+            config_store::put_opt(&self.store, kinds::TEMPLATE, &template_id, &template).await
+        {
+            // Don't leave an orphaned disk copy behind a template that
+            // doesn't exist.
+            if storage_type == StorageType::Directory {
+                tokio::fs::remove_file(&disk_path).await.ok();
+            }
+            return Err(e);
+        }
         templates.insert(template_id.clone(), template.clone());
 
         tracing::info!("Template created: {} ({})", name, template_id);
@@ -243,6 +284,9 @@ impl TemplateManager {
     pub async fn delete_template(&self, template_id: &str) -> Result<()> {
         let mut templates = self.templates.write().await;
 
+        if templates.contains_key(template_id) {
+            config_store::delete_opt(&self.store, kinds::TEMPLATE, template_id).await?;
+        }
         if let Some(template) = templates.remove(template_id) {
             // Delete the template's own disk copy (directory storage). Never
             // touch a path outside <vm_storage>/templates: for ZFS/Ceph/LVM

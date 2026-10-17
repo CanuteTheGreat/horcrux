@@ -3,6 +3,8 @@
 mod nftables;
 mod security_groups;
 
+use crate::db::config_store::{self, kinds, ConfigStore};
+use crate::db::Database;
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -71,6 +73,44 @@ pub enum FirewallScope {
     Container(String),
 }
 
+impl FirewallScope {
+    /// Stable string form used as the persisted scope key
+    /// (`datacenter`, `node:<name>`, `vm:<id>`, `container:<id>`).
+    pub fn key(&self) -> String {
+        match self {
+            FirewallScope::Datacenter => "datacenter".to_string(),
+            FirewallScope::Node(n) => format!("node:{}", n),
+            FirewallScope::Vm(id) => format!("vm:{}", id),
+            FirewallScope::Container(id) => format!("container:{}", id),
+        }
+    }
+
+    /// Inverse of [`FirewallScope::key`].
+    pub fn from_key(key: &str) -> Option<Self> {
+        if key == "datacenter" {
+            return Some(FirewallScope::Datacenter);
+        }
+        let (kind, id) = key.split_once(':')?;
+        match kind {
+            "node" => Some(FirewallScope::Node(id.to_string())),
+            "vm" => Some(FirewallScope::Vm(id.to_string())),
+            "container" => Some(FirewallScope::Container(id.to_string())),
+            _ => None,
+        }
+    }
+}
+
+/// Persisted form of one rule: the rule plus the scope it belongs to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredRule {
+    scope: String,
+    rule: FirewallRule,
+}
+
+fn stored_rule_id(scope: &FirewallScope, rule_id: &str) -> String {
+    format!("{}/{}", scope.key(), rule_id)
+}
+
 /// Firewall manager
 pub struct FirewallManager {
     datacenter_rules: Arc<RwLock<Vec<FirewallRule>>>,
@@ -79,6 +119,8 @@ pub struct FirewallManager {
     container_rules: Arc<RwLock<HashMap<String, Vec<FirewallRule>>>>,
     security_groups: Arc<RwLock<HashMap<String, SecurityGroup>>>,
     nftables: nftables::NftablesManager,
+    /// Durable copy of rules and security groups; `None` = in-memory only.
+    store: Option<ConfigStore>,
 }
 
 impl Default for FirewallManager {
@@ -96,11 +138,128 @@ impl FirewallManager {
             container_rules: Arc::new(RwLock::new(HashMap::new())),
             security_groups: Arc::new(RwLock::new(HashMap::new())),
             nftables: nftables::NftablesManager::new(),
+            store: None,
+        }
+    }
+
+    /// Firewall manager backed by the database: loads persisted rules and
+    /// security groups and writes every change through.
+    ///
+    /// Call [`FirewallManager::reapply_guest_rules`] after construction to
+    /// reinstall VM/container chains into nftables: those rules take effect
+    /// as soon as they are added, so after a host reboot the kernel ruleset
+    /// must be rebuilt from the stored copy. Datacenter/node rules are only
+    /// installed by an explicit apply, exactly as before.
+    pub async fn with_database(db: Arc<Database>) -> Result<Self> {
+        let store = ConfigStore::new(&db);
+        let mut mgr = Self::new();
+        let mut count = 0usize;
+        for (id, stored) in store.load::<StoredRule>(kinds::FIREWALL_RULE).await? {
+            let Some(scope) = FirewallScope::from_key(&stored.scope) else {
+                tracing::warn!("Skipping firewall rule {} with unknown scope", id);
+                continue;
+            };
+            mgr.push_rule(&scope, stored.rule).await;
+            count += 1;
+        }
+        {
+            let mut groups = mgr.security_groups.write().await;
+            for group in store
+                .load_values::<SecurityGroup>(kinds::SECURITY_GROUP)
+                .await?
+            {
+                groups.insert(group.name.clone(), group);
+            }
+            tracing::info!(
+                "Loaded {} firewall rule(s) and {} security group(s) from database",
+                count,
+                groups.len()
+            );
+        }
+        mgr.store = Some(store);
+        Ok(mgr)
+    }
+
+    /// Reinstall every stored VM/container rule set into nftables. Failures
+    /// (e.g. no nft binary or no CAP_NET_ADMIN) are logged, not fatal.
+    pub async fn reapply_guest_rules(&self) {
+        let mut scopes: Vec<FirewallScope> = Vec::new();
+        for (id, rules) in self.vm_rules.read().await.iter() {
+            if !rules.is_empty() {
+                scopes.push(FirewallScope::Vm(id.clone()));
+            }
+        }
+        for (id, rules) in self.container_rules.read().await.iter() {
+            if !rules.is_empty() {
+                scopes.push(FirewallScope::Container(id.clone()));
+            }
+        }
+        for scope in scopes {
+            if let Err(e) = self.apply_rules(scope.clone()).await {
+                tracing::warn!(
+                    "Failed to reapply firewall rules for {}: {}",
+                    scope.key(),
+                    e
+                );
+            }
+        }
+    }
+
+    /// Append a rule to the in-memory list for a scope (no nftables, no DB).
+    async fn push_rule(&self, scope: &FirewallScope, rule: FirewallRule) {
+        match scope {
+            FirewallScope::Datacenter => self.datacenter_rules.write().await.push(rule),
+            FirewallScope::Node(n) => self
+                .node_rules
+                .write()
+                .await
+                .entry(n.clone())
+                .or_default()
+                .push(rule),
+            FirewallScope::Vm(id) => self
+                .vm_rules
+                .write()
+                .await
+                .entry(id.clone())
+                .or_default()
+                .push(rule),
+            FirewallScope::Container(id) => self
+                .container_rules
+                .write()
+                .await
+                .entry(id.clone())
+                .or_default()
+                .push(rule),
         }
     }
 
     /// Add a firewall rule
     pub async fn add_rule(&self, scope: FirewallScope, rule: FirewallRule) -> Result<()> {
+        // Rule ids are the handle for delete and the persistence key, so they
+        // must be unique within a scope (a duplicate used to be appended
+        // silently and then removed together with the original).
+        if self
+            .list_rules(scope.clone())
+            .await
+            .iter()
+            .any(|r| r.id == rule.id)
+        {
+            return Err(horcrux_common::Error::InvalidConfig(format!(
+                "Firewall rule {} already exists in scope {}",
+                rule.id,
+                scope.key()
+            )));
+        }
+        config_store::put_opt(
+            &self.store,
+            kinds::FIREWALL_RULE,
+            &stored_rule_id(&scope, &rule.id),
+            &StoredRule {
+                scope: scope.key(),
+                rule: rule.clone(),
+            },
+        )
+        .await?;
         match scope {
             FirewallScope::Datacenter => {
                 let mut rules = self.datacenter_rules.write().await;
@@ -140,6 +299,12 @@ impl FirewallManager {
 
     /// Remove a firewall rule
     pub async fn remove_rule(&self, scope: FirewallScope, rule_id: &str) -> Result<()> {
+        config_store::delete_opt(
+            &self.store,
+            kinds::FIREWALL_RULE,
+            &stored_rule_id(&scope, rule_id),
+        )
+        .await?;
         match scope {
             FirewallScope::Datacenter => {
                 let mut rules = self.datacenter_rules.write().await;
@@ -207,6 +372,7 @@ impl FirewallManager {
             )));
         }
 
+        config_store::put_opt(&self.store, kinds::SECURITY_GROUP, &group.name, &group).await?;
         groups.insert(group.name.clone(), group);
         Ok(())
     }

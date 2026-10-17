@@ -135,6 +135,17 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     // (templates, backups and clones all failed with "VM has no disk").
     run_migration(pool, "021_add_vm_disks_column", MIGRATION_021_ADD_VM_DISKS).await?;
 
+    // Durable copy of manager-owned configuration (storage pools, firewall,
+    // HA, templates, alerts, replication, snapshot schedules, cluster nodes,
+    // backup jobs + catalog) - see db/config_store.rs. Before this, all of it
+    // lived only in memory and was lost on every restart.
+    run_migration(
+        pool,
+        "022_create_config_objects_table",
+        MIGRATION_022_CREATE_CONFIG_OBJECTS,
+    )
+    .await?;
+
     Ok(())
 }
 
@@ -1009,3 +1020,14 @@ CREATE INDEX idx_container_stack_services_stack ON container_stack_services(stac
 const MIGRATION_021_ADD_VM_DISKS: &str = r#"
 ALTER TABLE vms ADD COLUMN disks TEXT NOT NULL DEFAULT '[]';
 "#;
+
+const MIGRATION_022_CREATE_CONFIG_OBJECTS: &str = "
+CREATE TABLE config_objects (
+    kind TEXT NOT NULL,
+    id TEXT NOT NULL,
+    data TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (kind, id)
+);
+";

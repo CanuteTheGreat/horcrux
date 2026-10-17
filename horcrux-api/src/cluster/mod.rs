@@ -10,6 +10,8 @@ pub mod node;
 pub mod state_sync;
 pub mod usage;
 
+use crate::db::config_store::{self, kinds, ConfigStore};
+use crate::db::Database;
 use horcrux_common::Result;
 pub use node::{Node, NodeStatus};
 use std::collections::HashMap;
@@ -19,7 +21,7 @@ pub use usage::NodeUsage;
 
 /// Cluster configuration
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ClusterConfig {
     pub name: String,
     pub nodes: Vec<Node>,
@@ -36,7 +38,12 @@ pub struct ClusterManager {
     /// `GET /api/cluster/local-usage` for the other nodes' usage monitors).
     usage_sampler: Arc<usage::LocalUsageSampler>,
     local_usage: Arc<RwLock<Option<NodeUsage>>>,
+    /// Durable copy of the node list and cluster config; `None` = in-memory.
+    store: Option<ConfigStore>,
 }
+
+/// Id of the single persisted cluster config document.
+const CLUSTER_CONFIG_ID: &str = "local";
 
 #[allow(dead_code)]
 impl Default for ClusterManager {
@@ -54,7 +61,47 @@ impl ClusterManager {
             local_node_name: Arc::new(RwLock::new(None)),
             usage_sampler: Arc::new(usage::LocalUsageSampler::new()),
             local_usage: Arc::new(RwLock::new(None)),
+            store: None,
         }
+    }
+
+    /// Cluster manager backed by the database: loads the persisted node list
+    /// (and cluster config, if a cluster was created/joined) and writes every
+    /// change through. Live fields (status, CPU/memory usage) are reset to
+    /// unknown on load; the usage monitor refills them from the nodes.
+    pub async fn with_database(db: Arc<Database>) -> Result<Self> {
+        let store = ConfigStore::new(&db);
+        let mut mgr = Self::new();
+        {
+            let mut nodes = mgr.nodes.write().await;
+            for mut node in store.load_values::<Node>(kinds::CLUSTER_NODE).await? {
+                node.status = NodeStatus::Unknown;
+                node.cpu_usage = None;
+                node.memory_used = None;
+                nodes.insert(node.name.clone(), node);
+            }
+            if let Some(cfg) = store
+                .load_values::<ClusterConfig>(kinds::CLUSTER_CONFIG)
+                .await?
+                .into_iter()
+                .next()
+            {
+                *mgr._config.write().await = Some(cfg);
+            }
+            tracing::info!("Loaded {} cluster node(s) from database", nodes.len());
+        }
+        mgr.store = Some(store);
+        Ok(mgr)
+    }
+
+    async fn persist_config(&self, config: &ClusterConfig) -> Result<()> {
+        config_store::put_opt(
+            &self.store,
+            kinds::CLUSTER_CONFIG,
+            CLUSTER_CONFIG_ID,
+            config,
+        )
+        .await
     }
 
     /// This host's latest live usage sample, taking one now if the usage
@@ -207,13 +254,21 @@ impl ClusterManager {
         let mut nodes = HashMap::new();
         nodes.insert(node_name.clone(), node.clone());
 
-        *config = Some(ClusterConfig {
+        let new_config = ClusterConfig {
             name: cluster_name,
-            nodes: vec![node],
+            nodes: vec![node.clone()],
             quorum_votes: 1,
-        });
+        };
+        self.persist_config(&new_config).await?;
+        *config = Some(new_config);
 
         let mut nodes_map = self.nodes.write().await;
+        if let Some(store) = &self.store {
+            for old in nodes_map.keys() {
+                store.delete(kinds::CLUSTER_NODE, old).await?;
+            }
+            store.put(kinds::CLUSTER_NODE, &node.name, &node).await?;
+        }
         *nodes_map = nodes;
 
         Ok(())
@@ -245,11 +300,13 @@ impl ClusterManager {
         // Fetch cluster configuration from master
         // (In a real implementation, this would be an API call to the master node)
         let mut config = self._config.write().await;
-        *config = Some(ClusterConfig {
+        let new_config = ClusterConfig {
             name: cluster_name,
             nodes: vec![],
             quorum_votes: 1,
-        });
+        };
+        self.persist_config(&new_config).await?;
+        *config = Some(new_config);
 
         Ok(())
     }
@@ -268,6 +325,7 @@ impl ClusterManager {
         // Add to Corosync
         self.corosync.add_node(&node).await?;
 
+        config_store::put_opt(&self.store, kinds::CLUSTER_NODE, &node.name, &node).await?;
         nodes.insert(node.name.clone(), node);
 
         Ok(())
@@ -290,6 +348,7 @@ impl ClusterManager {
         // Remove from Corosync
         self.corosync.remove_node(node).await?;
 
+        config_store::delete_opt(&self.store, kinds::CLUSTER_NODE, node_name).await?;
         nodes.remove(node_name);
 
         Ok(())
@@ -460,6 +519,9 @@ impl ClusterManager {
         let node = nodes.get_mut(node_name).ok_or_else(|| {
             horcrux_common::Error::NotFound(format!("Node {} not found", node_name))
         })?;
+        let mut updated = node.clone();
+        updated.priority = priority;
+        config_store::put_opt(&self.store, kinds::CLUSTER_NODE, node_name, &updated).await?;
         node.priority = priority;
         Ok(())
     }

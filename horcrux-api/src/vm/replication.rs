@@ -6,6 +6,8 @@
 //! - Bandwidth throttling
 //! - Progress tracking
 //! - Automatic cleanup of old replicas
+use crate::db::config_store::{self, kinds, ConfigStore};
+use crate::db::Database;
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -73,6 +75,8 @@ pub enum ReplicationStatus {
 pub struct ReplicationManager {
     jobs: Arc<RwLock<HashMap<String, ReplicationJob>>>,
     active_replications: Arc<RwLock<HashMap<String, ReplicationState>>>,
+    /// Durable copy of `jobs`; `None` = in-memory only.
+    store: Option<ConfigStore>,
 }
 
 impl Default for ReplicationManager {
@@ -86,7 +90,27 @@ impl ReplicationManager {
         Self {
             jobs: Arc::new(RwLock::new(HashMap::new())),
             active_replications: Arc::new(RwLock::new(HashMap::new())),
+            store: None,
         }
+    }
+
+    /// Replication manager backed by the database: loads persisted jobs
+    /// (including last/next run times) and writes every change through.
+    pub async fn with_database(db: Arc<Database>) -> Result<Self> {
+        let store = ConfigStore::new(&db);
+        let mut mgr = Self::new();
+        {
+            let mut jobs = mgr.jobs.write().await;
+            for job in store
+                .load_values::<ReplicationJob>(kinds::REPLICATION_JOB)
+                .await?
+            {
+                jobs.insert(job.id.clone(), job);
+            }
+            info!("Loaded {} replication job(s) from database", jobs.len());
+        }
+        mgr.store = Some(store);
+        Ok(mgr)
     }
 
     /// Create a new replication job
@@ -104,6 +128,7 @@ impl ReplicationManager {
             )));
         }
 
+        config_store::put_opt(&self.store, kinds::REPLICATION_JOB, &job.id, &job).await?;
         jobs.insert(job.id.clone(), job.clone());
         info!("Created replication job: {}", job.name);
 
@@ -126,12 +151,14 @@ impl ReplicationManager {
     pub async fn delete_job(&self, job_id: &str) -> Result<()> {
         let mut jobs = self.jobs.write().await;
 
-        if jobs.remove(job_id).is_none() {
+        if !jobs.contains_key(job_id) {
             return Err(horcrux_common::Error::System(format!(
                 "Replication job {} not found",
                 job_id
             )));
         }
+        config_store::delete_opt(&self.store, kinds::REPLICATION_JOB, job_id).await?;
+        jobs.remove(job_id);
 
         info!("Deleted replication job: {}", job_id);
         Ok(())
@@ -234,6 +261,15 @@ impl ReplicationManager {
             let now = chrono::Utc::now().timestamp();
             job_mut.last_run = Some(now);
             job_mut.next_run = Self::calculate_next_run(&job_mut.schedule, now);
+            if let Err(e) =
+                config_store::put_opt(&self.store, kinds::REPLICATION_JOB, &job_mut.id, job_mut)
+                    .await
+            {
+                warn!(
+                    "Failed to persist replication job {} run time: {}",
+                    job.id, e
+                );
+            }
         }
 
         info!("Replication completed: {}", job.name);
@@ -593,6 +629,7 @@ impl Clone for ReplicationManager {
         Self {
             jobs: Arc::clone(&self.jobs),
             active_replications: Arc::clone(&self.active_replications),
+            store: self.store.clone(),
         }
     }
 }

@@ -25,6 +25,7 @@ mod migration;
 mod monitoring;
 mod observability;
 mod openapi;
+mod persistence;
 mod prometheus;
 mod sdn;
 mod secrets;
@@ -324,10 +325,15 @@ async fn main() -> anyhow::Result<()> {
     let snapshot_manager = Arc::new(tokio::sync::RwLock::new(snapshot_manager));
     info!("VM Snapshot manager initialized");
 
-    // Initialize Snapshot Scheduler
-    let snapshot_scheduler = Arc::new(vm::snapshot_scheduler::SnapshotScheduler::new(
-        snapshot_manager.clone(),
-    ));
+    // Initialize Snapshot Scheduler (schedules persisted in the database)
+    let snapshot_scheduler = Arc::new(
+        vm::snapshot_scheduler::SnapshotScheduler::with_database(
+            snapshot_manager.clone(),
+            database.clone(),
+        )
+        .await
+        .expect("Failed to load snapshot schedules"),
+    );
     info!("Snapshot scheduler initialized");
 
     // Initialize Snapshot Quota manager
@@ -348,9 +354,19 @@ async fn main() -> anyhow::Result<()> {
     let clone_job_manager = Arc::new(vm::clone_progress::CloneJobManager::new());
     info!("Clone Job manager initialized");
 
-    // Initialize Replication manager
-    let replication_manager = Arc::new(vm::replication::ReplicationManager::new());
+    // Initialize Replication manager (jobs persisted in the database)
+    let replication_manager = Arc::new(
+        vm::replication::ReplicationManager::with_database(database.clone())
+            .await
+            .expect("Failed to load replication jobs"),
+    );
     info!("Replication manager initialized");
+
+    // Configuration managers backed by the database (config_objects table):
+    // each loads its persisted objects here and writes every change through,
+    // so storage pools, firewall rules, HA, templates, alert rules, cluster
+    // nodes and backup jobs/catalog survive a restart.
+    let persisted = persistence::load_persisted_managers(&database, &horcrux_config).await;
 
     // Initialize Kubernetes manager (if feature enabled)
     #[cfg(feature = "kubernetes")]
@@ -378,21 +394,17 @@ async fn main() -> anyhow::Result<()> {
             horcrux_config.paths.vm_storage.clone(),
         )),
         container_manager: shared_container_manager.clone(),
-        backup_manager: Arc::new(BackupManager::with_restore_dir(
-            horcrux_config.paths.restore.clone(),
-        )),
+        backup_manager: persisted.backup,
         cloudinit_manager: Arc::new(CloudInitManager::new(
             horcrux_config.paths.cloudinit.clone(),
         )),
-        template_manager: Arc::new(TemplateManager::with_vm_storage(
-            horcrux_config.paths.vm_storage.clone(),
-        )),
+        template_manager: persisted.template,
         auth_manager: Arc::new(AuthManager::new()),
-        firewall_manager: Arc::new(FirewallManager::new()),
+        firewall_manager: persisted.firewall,
         monitoring_manager,
         console_manager: Arc::new(ConsoleManager::new()),
-        cluster_manager: Arc::new(ClusterManager::new()),
-        alert_manager: Arc::new(AlertManager::new()),
+        cluster_manager: persisted.cluster,
+        alert_manager: persisted.alert,
         otel_manager: Arc::new(OtelManager::new()),
         tls_manager: Arc::new(TlsManager::new()),
         vault_manager: Arc::new(VaultManager::new()),
@@ -401,8 +413,8 @@ async fn main() -> anyhow::Result<()> {
         ))),
         database,
         _rate_limiter: rate_limiter.clone(),
-        storage_manager: Arc::new(storage::StorageManager::new()),
-        ha_manager: Arc::new(ha::HaManager::new()),
+        storage_manager: persisted.storage,
+        ha_manager: persisted.ha,
         migration_manager: Arc::new(migration::MigrationManager::new()),
         gpu_manager,
         prometheus_manager,

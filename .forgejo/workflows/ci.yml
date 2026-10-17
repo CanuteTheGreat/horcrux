@@ -159,7 +159,13 @@ jobs:
         # not test-owned throwaway ones), so those two directories need to
         # actually exist and be writable by the runner user - create and
         # chown them with sudo rather than editing the test file.
+        #
+        # Start from an empty data dir: configuration (pools, firewall, HA,
+        # jobs...) is persisted in the database now, and job containers can
+        # be reused between runs, so a leftover DB would hand this run the
+        # previous run's objects.
         run: |
+          rm -rf /tmp/horcrux-ci-data
           mkdir -p /tmp/horcrux-ci-data
           mkdir -p /tmp/horcrux-ci-cni/bin /tmp/horcrux-ci-cni/conf.d
           sudo mkdir -p /var/lib/horcrux/backups /var/lib/horcrux/storage/snapshot-test

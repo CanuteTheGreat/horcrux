@@ -10,6 +10,8 @@ use crate::cluster::balancer::{ClusterBalancer, NodeResources, VmResources};
 use crate::cluster::node::{
     passthrough_devices_satisfied, Architecture, PassthroughDeviceRequirement,
 };
+use crate::db::config_store::{self, kinds, ConfigStore};
+use crate::db::Database;
 use chrono::{DateTime, Utc};
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
@@ -115,7 +117,18 @@ pub struct HaManager {
     /// resource- and architecture-aware failover target selection.
     /// Keyed by node name. Populated via `update_node_resources`.
     node_resources: Arc<RwLock<HashMap<String, NodeResources>>>,
+    /// Durable copy of resources, groups and the enabled flag; `None` =
+    /// in-memory only.
+    store: Option<ConfigStore>,
 }
+
+/// Persisted HA-wide settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct HaSettings {
+    enabled: bool,
+}
+
+const HA_SETTINGS_ID: &str = "global";
 
 impl Default for HaManager {
     fn default() -> Self {
@@ -131,6 +144,70 @@ impl HaManager {
             events: Arc::new(RwLock::new(Vec::new())),
             enabled: Arc::new(RwLock::new(false)),
             node_resources: Arc::new(RwLock::new(HashMap::new())),
+            store: None,
+        }
+    }
+
+    /// HA manager backed by the database: loads persisted groups, resources
+    /// (including their last known state/node/counters) and the enabled
+    /// flag, and writes every change through.
+    pub async fn with_database(db: Arc<Database>) -> Result<Self> {
+        let store = ConfigStore::new(&db);
+        let mut mgr = Self::new();
+        {
+            let mut groups = mgr.groups.write().await;
+            for g in store.load_values::<HaGroup>(kinds::HA_GROUP).await? {
+                groups.insert(g.name.clone(), g);
+            }
+            let mut resources = mgr.resources.write().await;
+            for r in store.load_values::<HaResource>(kinds::HA_RESOURCE).await? {
+                resources.insert(r.vm_id.clone(), r);
+            }
+            if let Some(settings) = store
+                .load_values::<HaSettings>(kinds::HA_SETTINGS)
+                .await?
+                .into_iter()
+                .next()
+            {
+                *mgr.enabled.write().await = settings.enabled;
+            }
+            tracing::info!(
+                "Loaded {} HA group(s) and {} HA resource(s) from database",
+                groups.len(),
+                resources.len()
+            );
+        }
+        mgr.store = Some(store);
+        Ok(mgr)
+    }
+
+    /// Write the current in-memory state of one resource (or its absence)
+    /// to the database. Used after HA state transitions; a DB failure is
+    /// logged rather than undoing a transition that already happened.
+    async fn sync_resource(&self, vm_id: &str) {
+        if self.store.is_none() {
+            return;
+        }
+        let current = self.resources.read().await.get(vm_id).cloned();
+        let res = match current {
+            Some(r) => config_store::put_opt(&self.store, kinds::HA_RESOURCE, vm_id, &r).await,
+            None => config_store::delete_opt(&self.store, kinds::HA_RESOURCE, vm_id).await,
+        };
+        if let Err(e) = res {
+            tracing::error!("Failed to persist HA resource {}: {}", vm_id, e);
+        }
+    }
+
+    async fn persist_enabled(&self, enabled: bool) {
+        if let Err(e) = config_store::put_opt(
+            &self.store,
+            kinds::HA_SETTINGS,
+            HA_SETTINGS_ID,
+            &HaSettings { enabled },
+        )
+        .await
+        {
+            tracing::error!("Failed to persist HA enabled flag: {}", e);
         }
     }
 
@@ -154,6 +231,7 @@ impl HaManager {
     pub async fn enable(&self) {
         let mut enabled = self.enabled.write().await;
         *enabled = true;
+        self.persist_enabled(true).await;
         tracing::info!("HA management enabled");
     }
 
@@ -161,6 +239,7 @@ impl HaManager {
     pub async fn disable(&self) {
         let mut enabled = self.enabled.write().await;
         *enabled = false;
+        self.persist_enabled(false).await;
         tracing::info!("HA management disabled");
     }
 
@@ -185,6 +264,7 @@ impl HaManager {
             group.name,
             group.nodes
         );
+        config_store::put_opt(&self.store, kinds::HA_GROUP, &group.name, &group).await?;
         groups.insert(group.name.clone(), group);
         Ok(())
     }
@@ -205,12 +285,14 @@ impl HaManager {
         drop(resources);
 
         let mut groups = self.groups.write().await;
-        if groups.remove(name).is_none() {
+        if !groups.contains_key(name) {
             return Err(horcrux_common::Error::NotFound(format!(
                 "HA group {} not found",
                 name
             )));
         }
+        config_store::delete_opt(&self.store, kinds::HA_GROUP, name).await?;
+        groups.remove(name);
 
         tracing::info!("Removed HA group: {}", name);
         Ok(())
@@ -221,6 +303,7 @@ impl HaManager {
         let mut groups = self.groups.write().await;
         match groups.get_mut(&group.name) {
             Some(existing) => {
+                config_store::put_opt(&self.store, kinds::HA_GROUP, &group.name, &group).await?;
                 *existing = group;
                 Ok(())
             }
@@ -278,6 +361,7 @@ impl HaManager {
             config.vm_id,
             config.group
         );
+        config_store::put_opt(&self.store, kinds::HA_RESOURCE, &config.vm_id, &resource).await?;
         resources.insert(config.vm_id.clone(), resource);
 
         Ok(())
@@ -287,6 +371,9 @@ impl HaManager {
     pub async fn remove_resource(&self, vm_id: &str) -> Result<()> {
         let mut resources = self.resources.write().await;
 
+        if resources.contains_key(vm_id) {
+            config_store::delete_opt(&self.store, kinds::HA_RESOURCE, vm_id).await?;
+        }
         if resources.remove(vm_id).is_some() {
             tracing::info!("Removed HA resource: VM {}", vm_id);
             Ok(())
@@ -310,6 +397,17 @@ impl HaManager {
 
     /// Handle node failure - migrate all VMs from failed node
     pub async fn handle_node_failure(&self, failed_node: &str) -> Result<Vec<String>> {
+        let result = self.handle_node_failure_inner(failed_node).await;
+        // Persist every resource that was on the failed node (state,
+        // relocate counters) whether or not relocation succeeded.
+        let affected: Vec<String> = self.resources.read().await.keys().cloned().collect();
+        for vm_id in affected {
+            self.sync_resource(&vm_id).await;
+        }
+        result
+    }
+
+    async fn handle_node_failure_inner(&self, failed_node: &str) -> Result<Vec<String>> {
         if !self.is_enabled().await {
             return Ok(Vec::new());
         }
@@ -370,6 +468,12 @@ impl HaManager {
 
     /// Handle VM failure - attempt restart or migration
     pub async fn handle_vm_failure(&self, vm_id: &str, node: &str) -> Result<HaAction> {
+        let result = self.handle_vm_failure_inner(vm_id, node).await;
+        self.sync_resource(vm_id).await;
+        result
+    }
+
+    async fn handle_vm_failure_inner(&self, vm_id: &str, node: &str) -> Result<HaAction> {
         if !self.is_enabled().await {
             return Ok(HaAction::None);
         }
@@ -634,6 +738,8 @@ impl HaManager {
             new_state
         );
 
+        drop(resources);
+        self.sync_resource(vm_id).await;
         Ok(())
     }
 }

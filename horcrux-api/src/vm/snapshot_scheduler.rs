@@ -7,6 +7,8 @@
 //! - Background task execution
 //! - Failure handling and retry logic
 use super::snapshot::{VmSnapshot, VmSnapshotManager};
+use crate::db::config_store::{self, kinds, ConfigStore};
+use crate::db::Database;
 use chrono::Datelike;
 use horcrux_common::{Result, VmConfig};
 use serde::{Deserialize, Serialize};
@@ -138,6 +140,8 @@ impl ScheduleFrequency {
 pub struct SnapshotScheduler {
     schedules: Arc<RwLock<HashMap<String, SnapshotSchedule>>>,
     snapshot_manager: Arc<RwLock<VmSnapshotManager>>,
+    /// Durable copy of `schedules`; `None` = in-memory only.
+    store: Option<ConfigStore>,
 }
 
 impl SnapshotScheduler {
@@ -145,7 +149,35 @@ impl SnapshotScheduler {
         Self {
             schedules: Arc::new(RwLock::new(HashMap::new())),
             snapshot_manager,
+            store: None,
         }
+    }
+
+    /// Scheduler backed by the database: loads persisted schedules (with
+    /// their last/next run times, so a schedule that came due while the
+    /// process was down runs on the first tick) and writes every change
+    /// through.
+    pub async fn with_database(
+        snapshot_manager: Arc<RwLock<VmSnapshotManager>>,
+        db: Arc<Database>,
+    ) -> Result<Self> {
+        let store = ConfigStore::new(&db);
+        let mut sched = Self::new(snapshot_manager);
+        {
+            let mut schedules = sched.schedules.write().await;
+            for s in store
+                .load_values::<SnapshotSchedule>(kinds::SNAPSHOT_SCHEDULE)
+                .await?
+            {
+                schedules.insert(s.id.clone(), s);
+            }
+            info!(
+                "Loaded {} snapshot schedule(s) from database",
+                schedules.len()
+            );
+        }
+        sched.store = Some(store);
+        Ok(sched)
     }
 
     /// Add a new snapshot schedule
@@ -158,17 +190,24 @@ impl SnapshotScheduler {
         }
 
         let schedule_id = schedule.id.clone();
-        self.schedules
-            .write()
-            .await
-            .insert(schedule_id.clone(), schedule);
+        let mut schedules = self.schedules.write().await;
+        config_store::put_opt(
+            &self.store,
+            kinds::SNAPSHOT_SCHEDULE,
+            &schedule_id,
+            &schedule,
+        )
+        .await?;
+        schedules.insert(schedule_id.clone(), schedule);
         info!("Added snapshot schedule: {}", schedule_id);
         Ok(())
     }
 
     /// Remove a snapshot schedule
     pub async fn remove_schedule(&self, schedule_id: &str) -> Result<()> {
-        self.schedules.write().await.remove(schedule_id);
+        let mut schedules = self.schedules.write().await;
+        config_store::delete_opt(&self.store, kinds::SNAPSHOT_SCHEDULE, schedule_id).await?;
+        schedules.remove(schedule_id);
         info!("Removed snapshot schedule: {}", schedule_id);
         Ok(())
     }
@@ -183,10 +222,27 @@ impl SnapshotScheduler {
         self.schedules.read().await.get(schedule_id).cloned()
     }
 
-    /// Update a schedule
+    /// Update an existing schedule. Unknown ids are rejected: the background
+    /// loop updates run times from a snapshot of the schedule list, and an
+    /// upsert here would resurrect (and persist) a schedule deleted while a
+    /// snapshot was being taken.
     pub async fn update_schedule(&self, schedule: SnapshotSchedule) -> Result<()> {
         let schedule_id = schedule.id.clone();
-        self.schedules.write().await.insert(schedule_id, schedule);
+        let mut schedules = self.schedules.write().await;
+        if !schedules.contains_key(&schedule_id) {
+            return Err(horcrux_common::Error::NotFound(format!(
+                "Snapshot schedule {} not found",
+                schedule_id
+            )));
+        }
+        config_store::put_opt(
+            &self.store,
+            kinds::SNAPSHOT_SCHEDULE,
+            &schedule_id,
+            &schedule,
+        )
+        .await?;
+        schedules.insert(schedule_id, schedule);
         Ok(())
     }
 

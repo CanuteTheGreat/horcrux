@@ -1,6 +1,7 @@
 //! Database layer using SQLite
 //!
 //! Provides persistent storage for VMs, users, sessions, audit logs, etc.
+pub mod config_store;
 pub mod migrations;
 
 use horcrux_common::Result;

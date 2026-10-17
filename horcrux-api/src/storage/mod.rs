@@ -13,6 +13,8 @@ pub mod thin_provision;
 /// Supports ZFS, Ceph, LVM, iSCSI, directory-based, GlusterFS, BtrFS, and S3 storage
 pub mod zfs;
 
+use crate::db::config_store::{self, kinds, ConfigStore};
+use crate::db::Database;
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -73,6 +75,8 @@ pub struct StorageManager {
     s3: s3::S3Manager,
     // Track next LUN ID for each iSCSI target
     iscsi_lun_counters: Arc<RwLock<HashMap<String, u32>>>,
+    /// Durable copy of `pools`; `None` for a purely in-memory manager.
+    store: Option<ConfigStore>,
 }
 
 impl Default for StorageManager {
@@ -96,6 +100,42 @@ impl StorageManager {
             btrfs: btrfs::BtrFsManager::new(),
             s3: s3::S3Manager::new(),
             iscsi_lun_counters: Arc::new(RwLock::new(HashMap::new())),
+            store: None,
+        }
+    }
+
+    /// Storage manager backed by the database: loads the persisted pool
+    /// definitions and writes every add/remove through, so pools survive a
+    /// restart. Stored pools are not re-validated (a remote mount may be
+    /// briefly unavailable at boot); filesystem capacity is re-measured.
+    pub async fn with_database(db: Arc<Database>) -> Result<Self> {
+        let store = ConfigStore::new(&db);
+        let mut mgr = Self::new();
+        {
+            let mut pools = mgr.pools.write().await;
+            for mut pool in store
+                .load_values::<StoragePool>(kinds::STORAGE_POOL)
+                .await?
+            {
+                Self::refresh_capacity(&mut pool);
+                pools.insert(pool.id.clone(), pool);
+            }
+            tracing::info!("Loaded {} storage pool(s) from database", pools.len());
+        }
+        mgr.store = Some(store);
+        Ok(mgr)
+    }
+
+    /// Measure real capacity for filesystem-backed pools.
+    fn refresh_capacity(pool: &mut StoragePool) {
+        if matches!(
+            pool.storage_type,
+            StorageType::Directory | StorageType::Nfs | StorageType::Cifs | StorageType::BtrFs
+        ) {
+            if let Some((total, available)) = fs_capacity_gb(&pool.path) {
+                pool.total = total;
+                pool.available = available;
+            }
         }
     }
 
@@ -177,16 +217,9 @@ impl StorageManager {
         // was), so every volume create in a directory pool failed with
         // "Not enough space ... Available: 0GB".
         let mut pool = pool;
-        if matches!(
-            pool.storage_type,
-            StorageType::Directory | StorageType::Nfs | StorageType::Cifs | StorageType::BtrFs
-        ) {
-            if let Some((total, available)) = fs_capacity_gb(&pool.path) {
-                pool.total = total;
-                pool.available = available;
-            }
-        }
+        Self::refresh_capacity(&mut pool);
 
+        config_store::put_opt(&self.store, kinds::STORAGE_POOL, &pool.id, &pool).await?;
         let pool_clone = pool.clone();
         pools.insert(pool.id.clone(), pool);
         Ok(pool_clone)
@@ -196,12 +229,14 @@ impl StorageManager {
     pub async fn remove_pool(&self, id: &str) -> Result<()> {
         let mut pools = self.pools.write().await;
 
-        if pools.remove(id).is_none() {
+        if !pools.contains_key(id) {
             return Err(horcrux_common::Error::System(format!(
                 "Storage pool {} not found",
                 id
             )));
         }
+        config_store::delete_opt(&self.store, kinds::STORAGE_POOL, id).await?;
+        pools.remove(id);
 
         Ok(())
     }
