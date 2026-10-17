@@ -4,6 +4,8 @@ name: Mutation testing (weekly)
 # storage). Each surviving mutant is a behaviour no test checks. Scores per
 # module group must stay at or above the floors in ci/mutants-floors.json,
 # which only ever go up (the job prints when a floor can be raised).
+# One job per group (a single job over all ~520 mutants needs ~10 h:
+# every mutant rebuilds the horcrux-api crate).
 on:
   workflow_dispatch: {}
   schedule:
@@ -16,7 +18,13 @@ env:
 
 jobs:
   mutants:
-    name: cargo-mutants (vm, backup, storage)
+    name: cargo-mutants (${{ matrix.group }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep in sync with the group names in ci/mutants-floors.json
+        # (mutants_floor.py fails on a group with no mutants tested).
+        group: [vm-snapshot, vm-runtime, backup, storage]
     runs-on: linux-cross-x86_64
     container: catthehacker/ubuntu:act-latest
     timeout-minutes: 360
@@ -46,7 +54,7 @@ jobs:
             ~/.cargo/git
             ~/.cargo/bin/cargo-mutants
             target
-          key: ${{ runner.os }}-cargo-mutants-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-mutants-${{ matrix.group }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-mutants-
             ${{ runner.os }}-cargo-
@@ -54,18 +62,20 @@ jobs:
       - name: Install cargo-mutants
         run: command -v cargo-mutants || cargo install cargo-mutants --locked
 
-      - name: Run cargo-mutants on the core modules
+      - name: Run cargo-mutants on ${{ matrix.group }}
         run: |
-          files=$(python3 -c 'import json; d=json.load(open("ci/mutants-floors.json")); print(" ".join("--file horcrux-api/"+f for g in d.values() for f in g["files"]))')
+          files=$(python3 -c 'import json,sys; g=json.load(open("ci/mutants-floors.json"))[sys.argv[1]]; print(" ".join("--file horcrux-api/"+f for f in g["files"]))' "${{ matrix.group }}")
           echo "mutating: $files"
           # Library unit tests are the oracle (the HTTP/QEMU suites need a
-          # live server). --no-shuffle keeps runs comparable week to week.
+          # live server); --cargo-arg=--lib builds only the lib target for
+          # each mutant (not the 10k-line binary that compiles the same
+          # modules again). --no-shuffle keeps runs comparable week to week.
           cargo mutants -p horcrux-api --all-features $files --jobs 2 --no-shuffle \
-            --timeout-multiplier 3 --output /tmp/mutants -- --lib || true
+            --cargo-arg=--lib --timeout-multiplier 3 --output /tmp/mutants || true
           test -f /tmp/mutants/mutants.out/outcomes.json
 
-      - name: Enforce mutation score floors
-        run: python3 ci/mutants_floor.py /tmp/mutants/mutants.out ci/mutants-floors.json
+      - name: Enforce mutation score floor
+        run: python3 ci/mutants_floor.py /tmp/mutants/mutants.out ci/mutants-floors.json "${{ matrix.group }}"
 
       - name: Missed mutants
         if: always()

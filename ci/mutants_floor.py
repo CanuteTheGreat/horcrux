@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Mutation-score floors for cargo-mutants (weekly mutation workflow).
 
-Usage: mutants_floor.py <mutants.out dir> <floors.json>
+Usage: mutants_floor.py <mutants.out dir> <floors.json> [group]
+
+With a group, only that group is scored (one CI job per group).
 
 floors.json maps a module group name to {"files": [...], "floor": <percent>}.
 For each group the score is caught / (caught + missed) over the mutants in
@@ -22,6 +24,8 @@ def main() -> int:
         outcomes = json.load(f)
     with open(floors_path) as f:
         floors = json.load(f)
+    if len(sys.argv) > 3:
+        floors = {sys.argv[3]: floors[sys.argv[3]]}
 
     stats = defaultdict(lambda: {"caught": 0, "missed": 0, "timeout": 0, "unviable": 0})
     missed = defaultdict(list)

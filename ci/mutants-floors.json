@@ -1,6 +1,10 @@
 {
-  "vm": {
-    "files": ["src/vm/snapshot.rs", "src/vm/qemu.rs", "src/vm/hold.rs"],
+  "vm-snapshot": {
+    "files": ["src/vm/snapshot.rs"],
+    "floor": 0
+  },
+  "vm-runtime": {
+    "files": ["src/vm/qemu.rs", "src/vm/hold.rs"],
     "floor": 0
   },
   "backup": {
