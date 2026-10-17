@@ -13,8 +13,8 @@ on:
   workflow_dispatch: {}
   schedule:
     # 10:00 UTC == ~03:00 America/Los_Angeles, an hour after
-    # nightly-realistic-test.yml's 09:00 UTC slot so they don't fight over
-    # the same Docker Desktop daemon / CNI bridge devices on beauxbatons.
+    # nightly-realistic-test.yml's 09:00 UTC slot (both use the capacity-1
+    # kvm-x86_64 runner, so they queue rather than overlap anyway).
     - cron: '0 10 * * *'
 
 env:
@@ -24,12 +24,11 @@ env:
 jobs:
   stress-test:
     name: Concurrent VM/container fleet + isolation + failure-injection + load test
-    # Same dedicated runner as nightly-realistic-test.yml and for the same
-    # reason: real Docker Desktop daemon (genuine Linux kernel, real
-    # netns/veth/CNI) on beauxbatons, reached via the x86_64-labeled
-    # Forgejo runner fleet - never ubuntu-latest (shared AWS ASG fleet,
-    # see rustinion-ci-infra-map skill).
-    runs-on: linux-cross-x86_64
+    # Same dedicated runner as nightly-realistic-test.yml: kvm-x86_64 (rw-man-01,
+    # /dev/kvm + privileged containers; ctg-infrastructure ci-runners/rw-man-kvm),
+    # so VMs boot with KVM and the CNI isolation scenario's `ip netns` works
+    # (it was skipped every night on the unprivileged linux-cross pool).
+    runs-on: kvm-x86_64
     container: catthehacker/ubuntu:act-latest
     timeout-minutes: 45
     steps:
@@ -180,7 +179,7 @@ jobs:
             echo "mount-namespace capability available"
           else
             echo "NIGHTLY_NETNS_OK=false" >> "$GITHUB_ENV"
-            echo "::warning::unshare --mount is blocked on this runner ($(tr -d '\n' < /tmp/unshare-probe.err)) - CLONE_NEWNS is denied for job containers on beauxbatons (Docker Desktop Enhanced Container Isolation or equivalent). The CNI cross-network isolation test needs 'ip netns' and cannot run here until the host/runner config is changed by the owner; it will be skipped (not faked as a pass) this run. All other stress scenarios are unaffected and will still run."
+            echo "::error::unshare --mount is blocked on this runner ($(tr -d '\n' < /tmp/unshare-probe.err)). kvm-x86_64 job containers are privileged (ctg-infrastructure ci-runners/rw-man-kvm), so this means the runner config regressed. The CNI test cannot run; the other scenarios still run below and the job fails at the end instead of passing with a skipped test."
           fi
 
       - name: Run concurrent container fleet test
@@ -309,3 +308,9 @@ jobs:
           ip link del hcx-stress-brA 2>/dev/null || true
           ip link del hcx-stress-brB 2>/dev/null || true
           df -h / || true
+
+      - name: Fail if the CNI scenario could not run
+        if: always() && env.NIGHTLY_NETNS_OK != 'true'
+        run: |
+          echo "::error::test_cni_network_partition_isolation did not run (no mount-namespace capability) - not reporting this nightly as green." >&2
+          exit 1

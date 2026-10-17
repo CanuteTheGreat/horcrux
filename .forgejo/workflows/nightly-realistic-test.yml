@@ -17,28 +17,16 @@ env:
 jobs:
   realistic-test:
     name: Realistic VM + Container + CNI test
-    # Pinned to the beauxbatons runner specifically: it's the one with a
-    # real Docker Desktop daemon (automounted into job containers) sitting
-    # on a genuine Linux kernel (Docker Desktop's LinuxKit VM), so
-    # qemu-system-x86_64, docker, and ip-netns/CNI all behave like a real
-    # Linux host from inside this privileged container - not a sandboxed
-    # fake. See the multi-arch tag note in ci.yml for why we use a tag
-    # here too, not a single-platform digest.
-    runs-on: linux-cross-x86_64
-    # Matches ci.yml's existing tag choice (see its comment): a multi-arch
-    # tag, not a single-platform sha256 digest, so this works regardless
-    # of which labeled runner/platform variant picks up the job. The
-    # runner's own config.yaml already sets `privileged: true` globally
-    # (required for Docker-in-Docker / nested docker), so no per-job
-    # container.options override is needed here.
+    # kvm-x86_64 = rw-man-01's dedicated VM-test runner (ctg-infrastructure
+    # ci-runners/rw-man-kvm): /dev/kvm, so horcrux's QemuManager boots the
+    # guest with accel=kvm (its real production path) instead of TCG, and
+    # privileged job containers, so the CNI test's `unshare --mount` /
+    # `ip netns` work. On the unprivileged linux-cross-x86_64 pool that test
+    # was silently skipped every night and the VM boot ran under TCG.
+    runs-on: kvm-x86_64
     container: catthehacker/ubuntu:act-latest
-    # Bumped from 30: test_real_qemu_vm_boot's own internal deadline
-    # was widened to 1000s (~16.7min) on 2026-10-15 after measuring the
-    # real CirrOS EC2-metadata-probe backoff on the rw-man-0x fallback
-    # runner (see nightly_realistic_tests.rs comment) - give the job as
-    # a whole enough headroom (compile + docker test + up to ~17min
-    # qemu wait + cleanup) that it isn't just trading a test-level
-    # timeout for a job-level one.
+    # Covers compile + docker test + the (TCG-sized) qemu boot deadline in
+    # nightly_realistic_tests.rs + cleanup; KVM boots take seconds.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -186,7 +174,7 @@ jobs:
             echo "mount-namespace capability available"
           else
             echo "NIGHTLY_NETNS_OK=false" >> "$GITHUB_ENV"
-            echo "::warning::unshare --mount is blocked on this runner ($(cat /tmp/unshare-probe.err | tr -d '\n')). This is almost certainly Docker Desktop's Enhanced Container Isolation (or an equivalent seccomp/AppArmor profile) denying CLONE_NEWNS for job containers on beauxbatons. It must be disabled/exempted for this runner at the Docker Desktop / forgejo-runner config level on the host - no workflow-level or in-container fix can work around a host-enforced syscall denial. test_real_cni_networking will be skipped (not faked as a pass) this run; test_real_qemu_vm_boot and test_real_docker_container_lifecycle are unaffected and still run below."
+            echo "::error::unshare --mount is blocked on this runner ($(tr -d '\n' < /tmp/unshare-probe.err)). kvm-x86_64 job containers are privileged (ctg-infrastructure ci-runners/rw-man-kvm), so this means the runner config regressed. The CNI test cannot run; the other scenarios still run below and the job fails at the end instead of passing with a skipped test."
           fi
 
       - name: Cache cargo registry
@@ -283,3 +271,9 @@ jobs:
           done
           ip link del hcx-nightly0 2>/dev/null || true
           df -h / || true
+
+      - name: Fail if the CNI scenario could not run
+        if: always() && env.NIGHTLY_NETNS_OK != 'true'
+        run: |
+          echo "::error::test_real_cni_networking did not run (no mount-namespace capability) - not reporting this nightly as green." >&2
+          exit 1
