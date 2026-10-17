@@ -8,6 +8,16 @@ on:
       - 'horcrux-api/src/**'
       - '.forgejo/workflows/docs.yml'
 
+# Concurrency (2026-10-17, ctg-infrastructure ollivanders/forgejo/ci-supersede-sweeper):
+# other branches and PRs: a new push cancels the older run. main: runs queue behind each
+# other instead, so a run that has started is never cancelled by a later push, and the
+# sweeper cancels superseded runs that never started (keeps the newest, plus the oldest
+# while nothing in the group runs, so constant pushes can't keep main at the back of
+# the shared runner queue). Forgejo 17 ignores jobs.<id>.concurrency; only this block counts.
+concurrency:
+  group: "latest:${{ github.workflow }}@${{ github.ref }}"
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   build-docs:
     name: Build Documentation

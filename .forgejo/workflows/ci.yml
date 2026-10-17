@@ -10,14 +10,14 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# Concurrency (2026-10-17, ctg-infrastructure ollivanders/forgejo/ci-supersede-sweeper):
+# other branches and PRs: a new push cancels the older run. main: runs queue behind each
+# other instead, so a run that has started is never cancelled by a later push, and the
+# sweeper cancels superseded runs that never started (keeps the newest, plus the oldest
+# while nothing in the group runs, so constant pushes can't keep main at the back of
+# the shared runner queue). Forgejo 17 ignores jobs.<id>.concurrency; only this block counts.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  # Branches/PRs: a new push cancels the older run. main: runs queue and
-  # each one finishes. With several agents pushing to main every ~40 min
-  # and the shared runners' queue longer than that, cancelling on main
-  # meant no CI run on main ever started (six in a row cancelled while
-  # still waiting for a runner, 2026-10-17). Only one main run executes
-  # at a time either way, so this adds no concurrent load.
+  group: "latest:${{ github.workflow }}@${{ github.ref }}"
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:

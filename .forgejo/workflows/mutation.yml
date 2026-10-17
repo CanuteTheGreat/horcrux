@@ -25,7 +25,9 @@ jobs:
         # Keep in sync with the group names in ci/mutants-floors.json
         # (mutants_floor.py fails on a group with no mutants tested).
         group: [vm-snapshot, vm-runtime, backup, storage]
-    runs-on: linux-cross-x86_64
+    # Heavy scheduled/on-demand work runs on its own low-priority lane (nightly-x86_64, ctg-infrastructure
+    # ci-runners/rw-man-nightly) so it never holds the per-push runners for hours.
+    runs-on: nightly-x86_64
     container: catthehacker/ubuntu:act-latest
     timeout-minutes: 360
     steps:
