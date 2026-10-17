@@ -39,13 +39,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Memory probe start
+        run: bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" start
+
       - name: Install Rust toolchain
         uses: https://github.com/dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
+          sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
 
       - name: Ensure Node.js is present (self-heal)
         # catthehacker/ubuntu:act-latest job containers on the beauxbatons
@@ -57,6 +62,7 @@ jobs:
         # cause is the runner's container lifecycle (outside this repo);
         # self-heal cheaply here rather than fail the whole job.
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Ensure Node.js is present (self-heal)"
           if ! command -v node >/dev/null 2>&1; then
             echo "::warning::node missing from job container PATH - reinstalling"
             sudo apt-get update -qq
@@ -76,10 +82,18 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Check formatting"
+          cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Run clippy"
+          cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Memory probe report
+        if: always()
+        run: bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" report
 
   test:
     name: Test
@@ -114,6 +128,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Memory probe start
+        run: bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" start
+
       - name: Install Rust toolchain
         uses: https://github.com/dtolnay/rust-toolchain@stable
 
@@ -130,6 +147,7 @@ jobs:
         # (built into qemu-system-x86 on older releases), and qxl needs
         # its VGA BIOS from the qemu firmware packages.
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
           sudo apt-get update
           spice_mods=""
           if apt-cache show qemu-system-modules-spice >/dev/null 2>&1; then
@@ -150,6 +168,7 @@ jobs:
         # cause is the runner's container lifecycle (outside this repo);
         # self-heal cheaply here rather than fail the whole job.
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Ensure Node.js is present (self-heal)"
           if ! command -v node >/dev/null 2>&1; then
             echo "::warning::node missing from job container PATH - reinstalling"
             sudo apt-get update -qq
@@ -169,7 +188,9 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build horcrux-api server (for integration tests)
-        run: cargo build --all-features -p horcrux-api --bin horcrux-api
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Build horcrux-api server (for integration tests)"
+          cargo build --all-features -p horcrux-api --bin horcrux-api
 
       - name: Start horcrux-api server
         # integration_tests.rs (horcrux-api/tests/) is a real end-to-end
@@ -200,6 +221,7 @@ jobs:
         # be reused between runs, so a leftover DB would hand this run the
         # previous run's objects.
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Start horcrux-api server"
           rm -rf /tmp/horcrux-ci-data
           mkdir -p /tmp/horcrux-ci-data
           mkdir -p /tmp/horcrux-ci-cni/bin /tmp/horcrux-ci-cni/conf.d
@@ -240,6 +262,7 @@ jobs:
         # contract test drive the runner host's real Docker daemon; fail
         # loudly here instead of letting them silently test nothing.
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Verify Docker access (container tests use the real daemon)"
           docker info --format 'docker {{.ServerVersion}} on {{.OperatingSystem}}'
           docker pull -q busybox:latest
 
@@ -248,7 +271,9 @@ jobs:
         # against a real cluster: a throwaway k3s sibling container plus a
         # local chart repository (see the script). Installs helm for the
         # API server, which runs the helm CLI.
-        run: bash horcrux-api/tests/k8s_helm_setup.sh
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Start k3s + local chart repo (Helm contract test)"
+          bash horcrux-api/tests/k8s_helm_setup.sh
 
       - name: Run tests
         env:
@@ -257,7 +282,9 @@ jobs:
           # The server was started with the same URL; the contract test
           # receives the PagerDuty Events v2 call there.
           HORCRUX_PAGERDUTY_EVENTS_URL: http://127.0.0.1:18765/v2/enqueue
-        run: cargo test --all-features --workspace
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Run tests"
+          cargo test --all-features --workspace
 
       - name: Auth realms + ACME (OpenLDAP, Dex, PAM, Pebble)
         # Real servers in sibling containers on a private network: LDAP
@@ -265,6 +292,7 @@ jobs:
         # host account, and an ACME certificate from Pebble validated over
         # HTTP-01 and then served by the live listener.
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Auth realms + ACME (OpenLDAP, Dex, PAM, Pebble)"
           cargo test --all-features -p horcrux-api --test auth_realms_e2e --no-run --message-format=json > /tmp/realms-build.json
           TESTBIN=$(python3 -c 'import json,sys
           for l in open("/tmp/realms-build.json"):
@@ -278,7 +306,9 @@ jobs:
         # The Test container is unprivileged; this runs the built API in a
         # throwaway NET_ADMIN sibling container and checks an applied rule
         # really lands in the kernel's nftables ruleset.
-        run: bash horcrux-api/tests/firewall_nft_e2e.sh target/debug/horcrux-api
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Firewall apply (real nftables)"
+          bash horcrux-api/tests/firewall_nft_e2e.sh target/debug/horcrux-api
 
       - name: LXC containers (real nested LXC, Proxmox pct parity)
         # The Test container can't run LXC, so lxc_e2e.sh runs the built API
@@ -291,6 +321,7 @@ jobs:
         # each effect inside the real container. It then runs the UI
         # contract test's LXC part against that server.
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "LXC containers (real nested LXC, Proxmox pct parity)"
           contract=$(cargo test --all-features --workspace --no-run --message-format=json 2>/dev/null \
             | python3 -c 'import json,sys
           for l in sys.stdin:
@@ -310,6 +341,7 @@ jobs:
         # reply may tell the user to use a CLI console. Then the UI contract
         # test's console-ticket part runs against that server.
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Incus containers (real nested Incus, in-browser consoles)"
           contract=$(cargo test --all-features --workspace --no-run --message-format=json 2>/dev/null \
             | python3 -c 'import json,sys
           for l in sys.stdin:
@@ -325,22 +357,33 @@ jobs:
         # need the server, which is the --all-features build started above;
         # they already ran once in "Run tests" (running them a second time
         # against the same server only collided with their own leftovers).
-        run: cargo test --no-default-features -p horcrux-api --lib --bins
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Run tests (no default features)"
+          cargo test --no-default-features -p horcrux-api --lib --bins
 
       - name: Dump horcrux-api server log
         if: always()
-        run: cat /tmp/horcrux-api.log || true
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Dump horcrux-api server log"
+          cat /tmp/horcrux-api.log || true
 
       - name: Remove k3s + chart repo
         if: always()
-        run: bash horcrux-api/tests/k8s_helm_setup.sh --cleanup
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Remove k3s + chart repo"
+          bash horcrux-api/tests/k8s_helm_setup.sh --cleanup
 
       - name: Stop horcrux-api server
         if: always()
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Stop horcrux-api server"
           if [ -f /tmp/horcrux-api.pid ]; then
             kill "$(cat /tmp/horcrux-api.pid)" 2>/dev/null || true
           fi
+
+      - name: Memory probe report
+        if: always()
+        run: bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" report
 
   build:
     name: Build
@@ -368,13 +411,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Memory probe start
+        run: bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" start
+
       - name: Install Rust toolchain
         uses: https://github.com/dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
+          sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
 
       - name: Ensure Node.js is present (self-heal)
         # catthehacker/ubuntu:act-latest job containers on the beauxbatons
@@ -386,6 +434,7 @@ jobs:
         # cause is the runner's container lifecycle (outside this repo);
         # self-heal cheaply here rather than fail the whole job.
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Ensure Node.js is present (self-heal)"
           if ! command -v node >/dev/null 2>&1; then
             echo "::warning::node missing from job container PATH - reinstalling"
             sudo apt-get update -qq
@@ -420,11 +469,16 @@ jobs:
         # without --target and passes; do the same here instead of
         # fighting cc-rs's cross-compile flag selection.
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Build (features= matrix.features )"
           if [ "${{ matrix.features }}" = "full" ]; then
             cargo build --release --all-features
           else
             cargo build --release
           fi
+
+      - name: Memory probe report
+        if: always()
+        run: bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" report
 
   build-ui:
     name: Build Web UI
@@ -445,13 +499,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Memory probe start
+        run: bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" start
+
       - name: Install Rust toolchain
         uses: https://github.com/dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
+          sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
 
       - name: Install trunk
         # `cargo install trunk` from source hits a real dependency conflict:
@@ -471,6 +530,7 @@ jobs:
         # release so this works whether the job lands on a genuine x86_64
         # container or an arm64 one.
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install trunk"
           case "$(uname -m)" in
             x86_64) TRUNK_ARCH=x86_64-unknown-linux-gnu ;;
             aarch64|arm64) TRUNK_ARCH=aarch64-unknown-linux-gnu ;;
@@ -490,6 +550,7 @@ jobs:
         # cause is the runner's container lifecycle (outside this repo);
         # self-heal cheaply here rather than fail the whole job.
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Ensure Node.js is present (self-heal)"
           if ! command -v node >/dev/null 2>&1; then
             echo "::warning::node missing from job container PATH - reinstalling"
             sudo apt-get update -qq
@@ -510,7 +571,13 @@ jobs:
 
       - name: Build UI
         working-directory: horcrux-api/horcrux-ui
-        run: trunk build --release
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Build UI"
+          trunk build --release
+
+      - name: Memory probe report
+        if: always()
+        run: bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" report
 
   security-audit:
     name: Security Audit
@@ -530,14 +597,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Memory probe start
+        run: bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" start
+
       - name: Install Rust toolchain
         uses: https://github.com/dtolnay/rust-toolchain@stable
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
+          sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install cargo-audit"
+          cargo install cargo-audit
 
       - name: Run security audit
         # RUSTSEC-2023-0071 (rsa crate, Marvin Attack timing side-channel):
@@ -551,7 +625,13 @@ jobs:
         # itself needs to be replaced (e.g. with serde_yaml_ng or similar)
         # as a separate migration. Re-evaluate and drop this --ignore once
         # that migration lands.
-        run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0449
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Run security audit"
+          cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0449
+
+      - name: Memory probe report
+        if: always()
+        run: bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" report
 
   gentoo-docker-build:
     name: Gentoo Docker Build
@@ -685,14 +765,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Memory probe start
+        run: bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" start
+
       - name: Install Rust toolchain
         uses: https://github.com/dtolnay/rust-toolchain@stable
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
+          sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
 
       - name: Ensure Node.js is present (self-heal)
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Ensure Node.js is present (self-heal)"
           if ! command -v node >/dev/null 2>&1; then
             echo "::warning::node missing from job container PATH - reinstalling"
             sudo apt-get update -qq
@@ -716,6 +802,7 @@ jobs:
         # feature doesn't exist breaks `emerge`, and a Cargo feature with
         # no USE flag can never be selected by a Gentoo user.
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Every ebuild USE flag maps to a Cargo feature"
           eb=gentoo/app-emulation/horcrux/horcrux-9999.ebuild
           mapped=$(grep -oE 'usex [a-z0-9-]+ "[a-z0-9-]+"' "$eb" | awk '{print $3}' | tr -d '"' | sort -u)
           declared=$(sed -n '/^\[features\]/,/^\[/p' horcrux-api/Cargo.toml | grep -oE '^[a-z0-9-]+' | sort -u)
@@ -743,6 +830,7 @@ jobs:
         # (no defaults). Features with no cfg gate compile identical code,
         # so they are checked together in one build.
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Build each USE-flag feature on its own"
           gated=$(grep -rhoE 'feature *= *"[a-z0-9-]+"' horcrux-api/src horcrux-api/tests | grep -oE '"[a-z0-9-]+"' | tr -d '"' | sort -u)
           all=$(sed -n '/^\[features\]/,/^\[/p' horcrux-api/Cargo.toml | grep -oE '^[a-z0-9-]+' | grep -v '^default$' | sort -u)
           plain=$(comm -13 <(echo "$gated") <(echo "$all") | grep -vE '^nas-(full|basic|apple|enterprise)$' | tr '\n' ',' | sed 's/,$//')
@@ -757,6 +845,10 @@ jobs:
           [ -z "$failed" ] || { echo "Features that fail to build alone:$failed"; exit 1; }
           echo "All $(echo $gated | wc -w) gated features + [$plain] build on their own"
 
+      - name: Memory probe report
+        if: always()
+        run: bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" report
+
   ui-e2e:
     name: UI E2E (browser)
     runs-on: linux-cross-x86_64
@@ -765,6 +857,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+
+      - name: Memory probe start
+        run: bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" start
 
       - name: Install Rust toolchain
         uses: https://github.com/dtolnay/rust-toolchain@stable
@@ -775,6 +870,7 @@ jobs:
         # qemu-system-x86 (+ SPICE modules on Ubuntu 24.04+): the console
         # checks start a real VM and connect noVNC / fetch its SPICE .vv.
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
           sudo apt-get update
           spice_mods=""
           if apt-cache show qemu-system-modules-spice >/dev/null 2>&1; then
@@ -785,6 +881,7 @@ jobs:
       - name: Install trunk
         # Same prebuilt-binary install as the Build Web UI job.
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install trunk"
           case "$(uname -m)" in
             x86_64) TRUNK_ARCH=x86_64-unknown-linux-gnu ;;
             aarch64|arm64) TRUNK_ARCH=aarch64-unknown-linux-gnu ;;
@@ -795,6 +892,7 @@ jobs:
 
       - name: Ensure Node.js is present (self-heal)
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Ensure Node.js is present (self-heal)"
           if ! command -v node >/dev/null 2>&1; then
             echo "::warning::node missing from job container PATH - reinstalling"
             sudo apt-get update -qq
@@ -815,11 +913,13 @@ jobs:
 
       - name: Build web UI and API
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Build web UI and API"
           (cd horcrux-api/horcrux-ui && trunk build)
           cargo build --all-features -p horcrux-api --bin horcrux-api
 
       - name: Install Playwright + Chromium
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install Playwright + Chromium"
           python3 -m venv /tmp/pw
           /tmp/pw/bin/pip install -q playwright
           sudo /tmp/pw/bin/playwright install-deps chromium
@@ -827,6 +927,7 @@ jobs:
 
       - name: Start horcrux-api serving the built UI
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Start horcrux-api serving the built UI"
           docker info --format 'docker {{.ServerVersion}}'
           mkdir -p /tmp/e2e-data /tmp/e2e-cni/bin /tmp/e2e-cni/conf.d
           HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 \
@@ -858,13 +959,17 @@ jobs:
         env:
           BASE_URL: https://localhost:8006
           HORCRUX_CA_FILE: /tmp/horcrux-ca.pem
-        run: /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/ui_e2e.py
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Run browser E2E"
+          /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/ui_e2e.py
 
       - name: UI offers every USE-flag feature of an all-features build
         env:
           BASE_URL: https://localhost:8006
           HORCRUX_CA_FILE: /tmp/horcrux-ca.pem
-        run: MODE=full /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/ui_features_e2e.py
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "UI offers every USE-flag feature of an all-features build"
+          MODE=full /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/ui_features_e2e.py
 
       - name: LXC browser E2E (real nested LXC behind the UI)
         # The API + this build's UI run in a privileged LXC sibling on this
@@ -874,6 +979,7 @@ jobs:
         # and checks the results on the page.
         if: ${{ !cancelled() }}
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "LXC browser E2E (real nested LXC behind the UI)"
           rc=0
           bash horcrux-api/tests/lxc_e2e.sh serve target/debug/horcrux-api horcrux-api/horcrux-ui/dist 8007 || rc=$?
           if [ $rc -eq 0 ]; then
@@ -890,6 +996,7 @@ jobs:
         # runs a command) and the Terminal (exec PTY).
         if: ${{ !cancelled() }}
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Incus browser E2E (container console + terminal)"
           rc=0
           bash horcrux-api/tests/incus_e2e.sh serve target/debug/horcrux-api horcrux-api/horcrux-ui/dist 8008 || rc=$?
           if [ $rc -eq 0 ]; then
@@ -901,11 +1008,15 @@ jobs:
 
       - name: Dump horcrux-api log
         if: always()
-        run: tail -200 /tmp/horcrux-e2e.log || true
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Dump horcrux-api log"
+          tail -200 /tmp/horcrux-e2e.log || true
 
       - name: Stop horcrux-api
         if: always()
-        run: kill "$(cat /tmp/horcrux-e2e.pid)" 2>/dev/null || true
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Stop horcrux-api"
+          kill "$(cat /tmp/horcrux-e2e.pid)" 2>/dev/null || true
 
       - name: UI hides features a reduced USE set did not compile in
         # Independent of the steps above (own binary, own port), so it
@@ -916,6 +1027,7 @@ jobs:
         # compiles): menus, pages and form options of everything else must
         # be hidden / marked "not compiled in" (horcrux-ui/src/features.rs).
         run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "UI hides features a reduced USE set did not compile in"
           cargo build -p horcrux-api --bin horcrux-api --no-default-features --features lxc
           cp target/debug/horcrux-api /tmp/horcrux-api-reduced
           rm -rf /tmp/e2e-reduced && mkdir -p /tmp/e2e-reduced
@@ -936,6 +1048,10 @@ jobs:
           rc=$?
           kill "$(cat /tmp/horcrux-reduced.pid)" 2>/dev/null
           [ $rc -eq 0 ] || { tail -100 /tmp/horcrux-reduced.log; exit $rc; }
+
+      - name: Memory probe report
+        if: always()
+        run: bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" report
 
   gentoo-use-matrix:
     name: Gentoo USE-flag matrix (ebuild install)
