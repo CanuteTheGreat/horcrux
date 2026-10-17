@@ -48,7 +48,7 @@ jobs:
       - name: Install QEMU and tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libvirt-dev qemu-system-x86 qemu-utils zstd jq curl genisoimage
+          sudo apt-get install -y build-essential libvirt-dev libpam0g-dev qemu-system-x86 qemu-utils zstd jq curl genisoimage
           qemu-system-x86_64 --version
           ls -l /dev/kvm
           test -c /dev/kvm || { echo "::error::no /dev/kvm on the kvm-x86_64 runner"; exit 1; }

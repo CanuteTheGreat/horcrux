@@ -36,7 +36,7 @@ jobs:
         # qemu-img backs the snapshot/backup unit tests.
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libvirt-dev qemu-utils zstd python3
+          sudo apt-get install -y build-essential libvirt-dev libpam0g-dev qemu-utils zstd python3
 
       - name: Cache cargo
         uses: actions/cache@v4
