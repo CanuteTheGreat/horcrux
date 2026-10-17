@@ -386,6 +386,29 @@ impl KubernetesManager {
         Ok(updated_cluster)
     }
 
+    /// Re-create the API clients of every registered cluster after a
+    /// restart, in the background. Without this the clusters loaded from the
+    /// database showed their last status ("connected") while every workload,
+    /// node and config page failed with "cluster not connected" until someone
+    /// pressed Reconnect.
+    pub fn reconnect_all_in_background(self: &Arc<Self>) {
+        let mgr = self.clone();
+        tokio::spawn(async move {
+            let ids: Vec<String> = mgr.clusters.read().await.keys().cloned().collect();
+            for id in ids {
+                match mgr.reconnect_cluster(&id).await {
+                    Ok(c) => tracing::info!("Kubernetes cluster '{}' reconnected", c.name),
+                    Err(e) => {
+                        tracing::warn!("Kubernetes cluster {} not reachable at startup: {}", id, e);
+                        if let Some(c) = mgr.clusters.write().await.get_mut(&id) {
+                            c.status = ClusterStatus::Disconnected;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     /// Get cluster by ID
     pub async fn get_cluster(&self, cluster_id: &str) -> K8sResult<K8sCluster> {
         let clusters = self.clusters.read().await;

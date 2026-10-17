@@ -391,6 +391,7 @@ async fn main() -> anyhow::Result<()> {
             tracing::warn!("Failed to initialize Kubernetes manager: {}", e);
         } else {
             info!("Kubernetes manager initialized");
+            mgr.reconnect_all_in_background();
         }
         mgr
     };
