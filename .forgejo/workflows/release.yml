@@ -1,9 +1,17 @@
 name: Release
 
+# Release binaries for the "also runs on any modern distro" path. Gentoo
+# (gentoo/app-emulation/horcrux, USE flags) remains the primary install.
+#
+# A v* tag builds every target and attaches the tarballs to that tag's
+# Forgejo release (.forgejo/scripts/publish-release-assets.sh). A manual
+# workflow_dispatch run builds and packages everything without publishing:
+# use it to prove a release would build before tagging.
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -12,39 +20,31 @@ jobs:
   build-release:
     name: Build Release
     runs-on: linux-cross-x86_64
+    # Same multi-arch job image as ci.yml (the runner default is not pinned).
+    container: catthehacker/ubuntu:act-latest
     strategy:
+      fail-fast: false
       matrix:
+        # *-gnu: CLI + server (all features). The server links libvirt
+        # (feature qemu) and libpam (feature pam); release-build.sh installs
+        # them for the target architecture (Ubuntu multiarch + cross gcc).
+        # *-musl: static CLI only - glibc's libvirt/libpam can't be linked
+        # into a musl binary, and the server without them has no QEMU VMs.
         include:
           - target: x86_64-unknown-linux-gnu
-            archive: tar.gz
-            cross: false
-          - target: x86_64-unknown-linux-musl
-            archive: tar.gz
-            cross: false
           - target: aarch64-unknown-linux-gnu
-            archive: tar.gz
-            cross: true
-          - target: aarch64-unknown-linux-musl
-            archive: tar.gz
-            cross: true
           - target: riscv64gc-unknown-linux-gnu
-            archive: tar.gz
-            cross: true
+          - target: x86_64-unknown-linux-musl
+          - target: aarch64-unknown-linux-musl
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Rust toolchain
         uses: https://github.com/dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
-      - name: Install musl tools
-        if: contains(matrix.target, 'musl') && !matrix.cross
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-
-      - name: Install cross
-        if: matrix.cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -57,44 +57,38 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-release-${{ matrix.target }}-
 
-      - name: Build CLI
-        run: |
-          if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }} -p horcrux-cli
-          else
-            cargo build --release --target ${{ matrix.target }} -p horcrux-cli
-          fi
-
-      - name: Build API server
-        run: |
-          if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }} -p horcrux-api --all-features
-          else
-            cargo build --release --target ${{ matrix.target }} -p horcrux-api --all-features
-          fi
+      - name: Build CLI + API server
+        run: bash .forgejo/scripts/release-build.sh ${{ matrix.target }}
 
       - name: Create archive
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/horcrux dist/
-          cp target/${{ matrix.target }}/release/horcrux-api dist/
+          # musl targets ship the CLI only (see the matrix comment).
+          if [ -f target/${{ matrix.target }}/release/horcrux-api ]; then
+            cp target/${{ matrix.target }}/release/horcrux-api dist/
+          fi
           cp README.md LICENSE dist/ 2>/dev/null || true
           cp -r docs dist/ 2>/dev/null || true
           cp config.example.toml dist/ 2>/dev/null || true
           cd dist
-          tar -czvf ../horcrux-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }} *
+          tar -czvf ../horcrux-${{ github.ref_name }}-${{ matrix.target }}.tar.gz *
+          ls -l ../horcrux-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: horcrux-${{ matrix.target }}
-          path: horcrux-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash .forgejo/scripts/publish-release-assets.sh horcrux-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
 
   build-ui-release:
     name: Build Web UI Release
     runs-on: linux-cross-x86_64
+    container: catthehacker/ubuntu:act-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Rust toolchain
         uses: https://github.com/dtolnay/rust-toolchain@stable
@@ -102,7 +96,13 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install trunk
-        run: cargo install trunk
+        # Prebuilt binary: `cargo install trunk` fails to compile
+        # (lightningcss pulls two incompatible cssparser versions; see the
+        # same step in ci.yml).
+        run: |
+          curl -fsSL "https://github.com/trunk-rs/trunk/releases/latest/download/trunk-x86_64-unknown-linux-gnu.tar.gz" | tar xzf -
+          sudo mv trunk /usr/local/bin/trunk
+          trunk --version
 
       - name: Build UI
         # The real web UI is the workspace member horcrux-api/horcrux-ui (the
@@ -118,37 +118,8 @@ jobs:
           cd horcrux-api/horcrux-ui/dist
           tar -czvf ../../../horcrux-ui-${{ github.ref_name }}.tar.gz *
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: horcrux-ui
-          path: horcrux-ui-${{ github.ref_name }}.tar.gz
-
-  create-release:
-    name: Create Release
-    runs-on: linux-cross-x86_64
-    needs: [build-release, build-ui-release]
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Generate changelog
-        id: changelog
-        run: |
-          echo "## Changes" > CHANGELOG.md
-          git log --pretty=format:"- %s" $(git describe --tags --abbrev=0 HEAD^)..HEAD >> CHANGELOG.md 2>/dev/null || echo "- Initial release" >> CHANGELOG.md
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          body_path: CHANGELOG.md
-          files: |
-            artifacts/**/*.tar.gz
-          draft: false
-          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash .forgejo/scripts/publish-release-assets.sh horcrux-ui-${{ github.ref_name }}.tar.gz

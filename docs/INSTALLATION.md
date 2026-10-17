@@ -77,8 +77,9 @@ This script will:
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source $HOME/.cargo/env
 
-# Install system dependencies
-emerge -av dev-db/sqlite dev-libs/openssl sys-apps/systemd
+# Install system dependencies (libvirt and PAM are linked by the default
+# qemu and pam features)
+emerge -av dev-db/sqlite dev-libs/openssl sys-apps/systemd app-emulation/libvirt sys-libs/pam
 
 # Optional: Install virtualization tools
 emerge -av app-emulation/qemu app-containers/lxc
@@ -87,11 +88,18 @@ emerge -av app-emulation/qemu app-containers/lxc
 **Other Distributions:**
 ```bash
 # Ubuntu/Debian
-apt-get install build-essential libsqlite3-dev libssl-dev pkg-config
+apt-get install build-essential libsqlite3-dev libssl-dev pkg-config libvirt-dev libpam0g-dev
 
 # Fedora/RHEL
-dnf install gcc sqlite-devel openssl-devel pkgconfig
+dnf install gcc sqlite-devel openssl-devel pkgconfig libvirt-devel pam-devel
 ```
+
+**Prebuilt binaries:** each `v*` release has tarballs for x86_64, aarch64
+and riscv64 (`*-linux-gnu`: `horcrux-api` server + `horcrux` CLI, built with
+all features; they need the distribution's libvirt and PAM libraries, e.g.
+`libvirt0 libpam0g` on Debian/Ubuntu) and static `*-linux-musl` tarballs that
+contain only the `horcrux` CLI (the server links glibc's libvirt and libpam,
+which a static musl binary can't).
 
 ### Step 2: Build Horcrux
 

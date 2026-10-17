@@ -270,6 +270,18 @@ setup_rust_target() {
 build_binaries() {
     log_info "Building Horcrux binaries for $ARCH..."
 
+    # CI builds them first with .forgejo/scripts/release-build.sh (which
+    # installs libvirt/libpam for the target; horcrux-api links both).
+    if [[ "${PREBUILT_BINARIES:-false}" == "true" ]]; then
+        local prebuilt="$PROJECT_ROOT/target/$RUST_TARGET/release"
+        if [[ ! -x "$prebuilt/horcrux" || ! -x "$prebuilt/horcrux-api" ]]; then
+            log_error "PREBUILT_BINARIES=true but $prebuilt/horcrux{,-api} are missing"
+            exit 1
+        fi
+        log_success "Using prebuilt binaries from $prebuilt"
+        return
+    fi
+
     cd "$PROJECT_ROOT"
 
     # Set cross-compilation environment if needed
@@ -767,7 +779,7 @@ EOF
 
     # Copy kernel modules needed for CD-ROM boot
     local kver
-    kver=$(uname -r)
+    kver="${KERNEL_VERSION:-$(uname -r)}"
     local mod_dir="/lib/modules/$kver"
     if [[ -d "$mod_dir" ]]; then
         log_info "Copying kernel modules for CD-ROM support..."
@@ -793,7 +805,16 @@ EOF
                 if [[ -f "${mod_path}${ext}" ]]; then
                     local dest_dir="$initramfs_dir/lib/modules/$kver/$(dirname "$mod")"
                     mkdir -p "$dest_dir"
-                    cp "${mod_path}${ext}" "$dest_dir/"
+                    # The initramfs loads them with busybox insmod, which
+                    # can't read compressed modules (Ubuntu/Debian ship
+                    # .ko.zst): store them uncompressed.
+                    local dest="$dest_dir/$(basename "$mod")"
+                    case "$ext" in
+                        "") cp "$mod_path" "$dest" ;;
+                        .xz) xz -dc "${mod_path}${ext}" >"$dest" ;;
+                        .gz) gzip -dc "${mod_path}${ext}" >"$dest" ;;
+                        .zst) zstd -qdc "${mod_path}${ext}" >"$dest" ;;
+                    esac
                     break
                 fi
             done
@@ -867,7 +888,19 @@ setup_kernel() {
 
     # Copy kernel to work directory
     cp "$kernel_src" "$WORK_DIR/vmlinuz"
-    log_success "Kernel ready: $kernel_src"
+
+    # The initramfs needs THIS kernel's modules (CD-ROM, isofs, squashfs),
+    # which are not necessarily the running kernel's: in a CI container
+    # `uname -r` is the host's kernel while /boot holds the image the
+    # workflow installed.
+    local kname
+    kname="$(basename "$(readlink -f "$kernel_src")")"
+    KERNEL_VERSION="${kname#vmlinuz-}"
+    KERNEL_VERSION="${KERNEL_VERSION#kernel-}"
+    if [[ ! -d "/lib/modules/$KERNEL_VERSION" ]]; then
+        KERNEL_VERSION="$(uname -r)"
+    fi
+    log_success "Kernel ready: $kernel_src (modules: /lib/modules/$KERNEL_VERSION)"
 }
 
 # Setup GRUB bootloader files
