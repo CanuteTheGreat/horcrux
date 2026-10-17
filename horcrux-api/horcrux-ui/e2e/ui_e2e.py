@@ -670,7 +670,13 @@ def access_control_checks(context, page):
         "hasUserVerification": True, "isUserVerified": True}})
     page.fill("#mfa-factor-name", "virtual key")
     page.locator("#mfa-add-webauthn").click()
-    expect(page.locator("#mfa-notice")).to_contain_text("Security key added", timeout=30000)
+    try:
+        expect(page.locator("#mfa-notice")).to_contain_text("Security key added", timeout=30000)
+    except AssertionError:
+        # Say WHY (the page shows the API/browser error in #mfa-error).
+        err = page.locator("#mfa-error")
+        detail = err.inner_text() if err.count() else "(no #mfa-error shown)"
+        raise AssertionError(f"security key registration failed: {detail}") from None
     expect(page.locator("#mfa-methods")).to_contain_text("virtual key")
 
     # ---- next login asks for the second factor: code ---------------------

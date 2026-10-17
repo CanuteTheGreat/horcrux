@@ -58,7 +58,9 @@ impl Server {
     }
 
     fn base(&self) -> String {
-        format!("http://127.0.0.1:{}/api", self.port)
+        // The API serves HTTPS (self-issued node certificate); plain HTTP
+        // only answers with a 308 redirect.
+        format!("https://127.0.0.1:{}/api", self.port)
     }
 
     async fn wait_healthy(&self, c: &Client) {
@@ -127,6 +129,7 @@ async fn kubernetes_and_channels_work_after_restart() {
     let dir = tmp.path();
     let c = Client::builder()
         .timeout(Duration::from_secs(120))
+        .danger_accept_invalid_certs(true)
         .build()
         .unwrap();
     let port = free_port();
