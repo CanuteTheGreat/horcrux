@@ -266,7 +266,9 @@ impl StackManager {
     }
 
     /// Create the stack network (idempotent: an existing one is reused).
-    async fn ensure_stack_network(runtime: &str, network: &str, stack_name: &str) -> Result<()> {
+    /// Returns whether this call created it, so a failed deploy only
+    /// removes a network it made itself.
+    async fn ensure_stack_network(runtime: &str, network: &str, stack_name: &str) -> Result<bool> {
         let exists = tokio::process::Command::new(runtime)
             .args(["network", "inspect", network])
             .output()
@@ -274,7 +276,7 @@ impl StackManager {
             .map(|o| o.status.success())
             .unwrap_or(false);
         if exists {
-            return Ok(());
+            return Ok(false);
         }
         let out = tokio::process::Command::new(runtime)
             .args([
@@ -297,7 +299,7 @@ impl StackManager {
                 String::from_utf8_lossy(&out.stderr).trim()
             )));
         }
-        Ok(())
+        Ok(true)
     }
 
     async fn remove_stack_network(runtime: &str, network: &str) {
@@ -342,10 +344,21 @@ impl StackManager {
             }
         };
 
-        let network = Self::stack_network_name(name);
-        Self::ensure_stack_network(runtime_str, &network, name).await?;
+        // A second deploy under an existing name would share (and, if it
+        // failed, tear down) the first stack's network: refuse it up front.
+        if db_stacks::get_stack(self.database.pool(), name)
+            .await?
+            .is_some()
+        {
+            return Err(horcrux_common::Error::AlreadyExists(format!(
+                "Stack '{name}' already exists"
+            )));
+        }
 
-        db_stacks::create_stack(
+        let network = Self::stack_network_name(name);
+        let created_network = Self::ensure_stack_network(runtime_str, &network, name).await?;
+
+        if let Err(e) = db_stacks::create_stack(
             self.database.pool(),
             &db_stacks::StackRecord {
                 id: stack_id.clone(),
@@ -356,35 +369,40 @@ impl StackManager {
                 updated_at: now,
             },
         )
-        .await?;
+        .await
+        {
+            if created_network {
+                Self::remove_stack_network(runtime_str, &network).await;
+            }
+            return Err(e);
+        }
 
         let mut services = Vec::new();
-        for service_name in &order {
-            let svc = match compose.services.get(service_name) {
-                Some(s) => s,
-                None => continue,
-            };
-            let config =
-                Self::service_to_container_config(name, service_name, svc, runtime.clone());
-            let created = self.container_manager.create_container(config).await?;
-            self.container_manager.start_container(&created.id).await?;
-
-            db_stacks::add_stack_service(
-                self.database.pool(),
-                &db_stacks::StackServiceRecord {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    stack_id: stack_id.clone(),
-                    service_name: service_name.clone(),
-                    container_id: created.id.clone(),
-                },
+        if let Err(e) = self
+            .deploy_services(
+                &stack_id,
+                name,
+                &order,
+                &compose,
+                runtime,
                 now,
+                &mut services,
             )
-            .await?;
-
-            services.push(StackServiceSummary {
-                service_name: service_name.clone(),
-                container_id: created.id,
-            });
+            .await
+        {
+            // All-or-nothing. A half-deployed stack used to keep its row with
+            // only the services recorded before the failure, so the container
+            // whose start failed (and the network) were never part of the
+            // stack and `DELETE /api/stacks/<name>` left them behind.
+            tracing::warn!("Deploying stack {name} failed, rolling back: {e}");
+            self.teardown_services(&services).await;
+            if created_network {
+                Self::remove_stack_network(runtime_str, &network).await;
+            }
+            if let Err(del) = db_stacks::delete_stack(self.database.pool(), &stack_id).await {
+                tracing::error!("Rolling back stack {name}: deleting its row failed: {del}");
+            }
+            return Err(e);
         }
 
         Ok(StackSummary {
@@ -396,6 +414,79 @@ impl StackManager {
             updated_at: now,
             unsupported_features: unsupported,
         })
+    }
+
+    /// Create, record and start each service in dependency order. Every
+    /// created container is pushed to `services` before anything else can
+    /// fail, so on error the caller knows exactly which containers exist.
+    #[allow(clippy::too_many_arguments)]
+    async fn deploy_services(
+        &self,
+        stack_id: &str,
+        name: &str,
+        order: &[String],
+        compose: &ComposeFile,
+        runtime: ContainerRuntime,
+        now: i64,
+        services: &mut Vec<StackServiceSummary>,
+    ) -> Result<()> {
+        for service_name in order {
+            let svc = match compose.services.get(service_name) {
+                Some(s) => s,
+                None => continue,
+            };
+            let config =
+                Self::service_to_container_config(name, service_name, svc, runtime.clone());
+            let created = self.container_manager.create_container(config).await?;
+            services.push(StackServiceSummary {
+                service_name: service_name.clone(),
+                container_id: created.id.clone(),
+            });
+            db_stacks::add_stack_service(
+                self.database.pool(),
+                &db_stacks::StackServiceRecord {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    stack_id: stack_id.to_string(),
+                    service_name: service_name.clone(),
+                    container_id: created.id.clone(),
+                },
+                now,
+            )
+            .await?;
+            self.container_manager
+                .start_container(&created.id)
+                .await
+                .map_err(|e| {
+                    horcrux_common::Error::System(format!(
+                        "Service '{service_name}' failed to start: {e}"
+                    ))
+                })?;
+        }
+        Ok(())
+    }
+
+    /// Stop + delete containers concurrently (like `compose down`): a
+    /// service whose PID 1 ignores SIGTERM takes the runtime's full stop
+    /// grace period, so doing them one after another took ~10 s each.
+    async fn teardown_services(&self, services: &[StackServiceSummary]) {
+        futures::future::join_all(services.iter().map(|svc| async move {
+            let _ = self
+                .container_manager
+                .stop_container(&svc.container_id)
+                .await;
+            if let Err(e) = self
+                .container_manager
+                .delete_container(&svc.container_id)
+                .await
+            {
+                tracing::warn!(
+                    "Removing stack service {} ({}) failed: {e}",
+                    svc.service_name,
+                    svc.container_id
+                );
+            }
+        }))
+        .await;
     }
 
     pub async fn list_stacks(&self) -> Result<Vec<StackSummary>> {
@@ -479,21 +570,7 @@ impl StackManager {
     /// record (service rows cascade via the FK).
     pub async fn remove_stack(&self, id_or_name: &str) -> Result<()> {
         let stack = self.get_stack(id_or_name).await?;
-        // Tear the services down concurrently (like `compose down`): a
-        // service whose PID 1 ignores SIGTERM takes the runtime's full stop
-        // grace period, and doing them one after another made removing a
-        // two-service stack take 30s+ (CI's stack test timed out on it).
-        futures::future::join_all(stack.services.iter().map(|svc| async move {
-            let _ = self
-                .container_manager
-                .stop_container(&svc.container_id)
-                .await;
-            let _ = self
-                .container_manager
-                .delete_container(&svc.container_id)
-                .await;
-        }))
-        .await;
+        self.teardown_services(&stack.services).await;
         Self::remove_stack_network(&stack.runtime, &Self::stack_network_name(&stack.name)).await;
         db_stacks::delete_stack(self.database.pool(), &stack.id).await?;
         Ok(())

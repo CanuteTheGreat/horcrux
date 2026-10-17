@@ -2221,6 +2221,112 @@ async fn test_stack_stop_is_concurrent() {
     }
 }
 
+/// A deploy that fails part-way leaves nothing behind. Service `bad` is
+/// created fine but can't start (its command doesn't exist): the stack used
+/// to keep its row with only `good` recorded, so `bad`'s container (and,
+/// on other failures, later ones) survived `DELETE /api/stacks/<name>`.
+#[tokio::test]
+async fn test_failed_stack_deploy_rolls_back() {
+    let client = create_client();
+    let token = admin_token(&client).await;
+    let name = "itfailstack";
+    let services = ["good", "bad"];
+    purge_stack(&client, &token, name, &services).await;
+
+    let compose = "services:\n  good:\n    image: busybox:latest\n    command: [\"sleep\", \"600\"]\n  bad:\n    image: busybox:latest\n    command: [\"/no/such/binary\"]\n    depends_on: [good]\n";
+    let r = client
+        .post(format!("{}/stacks", API_BASE))
+        .bearer_auth(&token)
+        .json(&json!({"name": name, "compose_yaml": compose, "runtime": "docker"}))
+        .send()
+        .await
+        .unwrap();
+    let status = r.status();
+    let body = r.text().await.unwrap_or_default();
+    assert!(!status.is_success(), "deploy must fail ({status}): {body}");
+    assert!(
+        body.contains("bad"),
+        "error names the failing service: {body}"
+    );
+
+    for svc in services {
+        assert!(
+            docker_state(&format!("{name}_{svc}")).is_none(),
+            "{svc}'s container must be rolled back"
+        );
+    }
+    assert!(
+        !docker(&["network", "inspect", &format!("{name}_default")])
+            .status
+            .success(),
+        "stack network must be rolled back"
+    );
+    let r = client
+        .get(format!("{}/stacks/{}", API_BASE, name))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404, "no stack row after a failed deploy");
+    let r = client
+        .get(format!("{}/containers", API_BASE))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    let list: serde_json::Value = r.json().await.unwrap();
+    assert!(
+        !list
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["name"].as_str().unwrap_or("").starts_with(name)),
+        "no stack container left in /api/containers: {list}"
+    );
+
+    // The name is free again, and a duplicate deploy is refused without
+    // touching the first stack.
+    let good_only =
+        "services:\n  good:\n    image: busybox:latest\n    command: [\"sleep\", \"600\"]\n";
+    let r = client
+        .post(format!("{}/stacks", API_BASE))
+        .bearer_auth(&token)
+        .json(&json!({"name": name, "compose_yaml": good_only, "runtime": "docker"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        200,
+        "redeploy: {}",
+        r.text().await.unwrap_or_default()
+    );
+    let r = client
+        .post(format!("{}/stacks", API_BASE))
+        .bearer_auth(&token)
+        .json(&json!({"name": name, "compose_yaml": compose, "runtime": "docker"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 409, "duplicate stack name");
+    assert_eq!(
+        docker_state(&format!("{name}_good")).as_deref(),
+        Some("running")
+    );
+    assert!(docker(&["network", "inspect", &format!("{name}_default")])
+        .status
+        .success());
+
+    let r = client
+        .delete(format!("{}/stacks/{}", API_BASE, name))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success(), "remove: {}", r.status());
+    assert!(docker_state(&format!("{name}_good")).is_none());
+}
+
 #[tokio::test]
 async fn test_snapshot_scheduling() {
     let client = create_client();
