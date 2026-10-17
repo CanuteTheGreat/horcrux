@@ -2142,6 +2142,85 @@ async fn test_stack_networking_and_options() {
         .success());
 }
 
+/// Remove a stack through the API and any leftovers straight from docker.
+async fn purge_stack(client: &Client, token: &str, name: &str, services: &[&str]) {
+    let _ = client
+        .delete(format!("{}/stacks/{}", API_BASE, name))
+        .bearer_auth(token)
+        .send()
+        .await;
+    for svc in services {
+        docker(&["rm", "-f", &format!("{name}_{svc}")]);
+    }
+    docker(&["network", "rm", &format!("{name}_default")]);
+}
+
+/// Stopping a stack stops its services concurrently. Each busybox `sleep`
+/// ignores SIGTERM, so docker waits out its 10 s grace period per service:
+/// stopping three of them one after another took ~30 s, and the dashboard /
+/// any client with a 30 s timeout (this one) failed.
+#[tokio::test]
+async fn test_stack_stop_is_concurrent() {
+    let client = create_client();
+    let token = admin_token(&client).await;
+    let name = "itstopstack";
+    let services = ["a", "b", "c"];
+    purge_stack(&client, &token, name, &services).await;
+
+    let compose = "services:\n  a:\n    image: busybox:latest\n    command: [\"sleep\", \"600\"]\n  b:\n    image: busybox:latest\n    command: [\"sleep\", \"600\"]\n  c:\n    image: busybox:latest\n    command: [\"sleep\", \"600\"]\n";
+    let r = client
+        .post(format!("{}/stacks", API_BASE))
+        .bearer_auth(&token)
+        .json(&json!({"name": name, "compose_yaml": compose, "runtime": "docker"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        200,
+        "deploy: {}",
+        r.text().await.unwrap_or_default()
+    );
+    for svc in services {
+        assert_eq!(
+            docker_state(&format!("{name}_{svc}")).as_deref(),
+            Some("running")
+        );
+    }
+
+    let started = std::time::Instant::now();
+    let r = client
+        .post(format!("{}/stacks/{}/stop", API_BASE, name))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .expect("stopping a 3-service stack must answer within the 30 s client timeout");
+    let took = started.elapsed();
+    assert!(r.status().is_success(), "stop: {}", r.status());
+    assert!(
+        took < Duration::from_secs(22),
+        "3 services must stop concurrently (~10 s), took {took:?}"
+    );
+    for svc in services {
+        assert_eq!(
+            docker_state(&format!("{name}_{svc}")).as_deref(),
+            Some("exited"),
+            "{svc} stopped"
+        );
+    }
+
+    let r = client
+        .delete(format!("{}/stacks/{}", API_BASE, name))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success(), "remove: {}", r.status());
+    for svc in services {
+        assert!(docker_state(&format!("{name}_{svc}")).is_none());
+    }
+}
+
 #[tokio::test]
 async fn test_snapshot_scheduling() {
     let client = create_client();

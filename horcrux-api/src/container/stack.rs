@@ -448,14 +448,19 @@ impl StackManager {
 
     /// Stop every container belonging to a stack (the stack record and its
     /// container mapping are kept, so it can be started again / removed).
+    /// The services are stopped concurrently: each can take the runtime's
+    /// full stop grace period (~10 s for a PID 1 that ignores SIGTERM), and
+    /// stopping them in turn made a 3-service stack take 30 s, past typical
+    /// client timeouts.
     pub async fn stop_stack(&self, id_or_name: &str) -> Result<()> {
         let stack = self.get_stack(id_or_name).await?;
-        for svc in &stack.services {
+        futures::future::join_all(stack.services.iter().map(|svc| async move {
             let _ = self
                 .container_manager
                 .stop_container(&svc.container_id)
                 .await;
-        }
+        }))
+        .await;
         Ok(())
     }
 
