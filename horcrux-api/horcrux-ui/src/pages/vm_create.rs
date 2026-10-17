@@ -28,6 +28,7 @@ pub fn VmCreate() -> impl IntoView {
     let (error, set_error) = create_signal(None::<String>);
 
     let navigate = use_navigate();
+    let is_instance = move || matches!(hypervisor.get(), VmHypervisor::Lxd | VmHypervisor::Incus);
 
     let features = crate::features::use_features();
     create_effect(move |_| {
@@ -64,19 +65,26 @@ pub fn VmCreate() -> impl IntoView {
 
         let navigate = navigate.clone();
         let image = image.get().trim().to_string();
+        // LXD/Incus VMs are created from an instance image; QEMU VMs get a
+        // disk image imported after creation.
+        let instance = matches!(config.hypervisor, VmHypervisor::Lxd | VmHypervisor::Incus);
         spawn_local(async move {
-            let created =
-                match api::create_vm(config).await {
-                    Ok(vm) if !image.is_empty() => api::import_vm_disk(&vm.id, &image)
-                        .await
-                        .map_err(|e| api::ApiError {
-                            message: format!(
-                                "VM {} created, but importing its disk failed: {}",
-                                vm.id, e.message
-                            ),
-                        }),
-                    other => other,
-                };
+            let result = if instance && !image.is_empty() {
+                api::create_vm_from_image(config, &image).await
+            } else {
+                api::create_vm(config).await
+            };
+            let created = match result {
+                Ok(vm) if !image.is_empty() && !instance => api::import_vm_disk(&vm.id, &image)
+                    .await
+                    .map_err(|e| api::ApiError {
+                        message: format!(
+                            "VM {} created, but importing its disk failed: {}",
+                            vm.id, e.message
+                        ),
+                    }),
+                other => other,
+            };
             match created {
                 Ok(_) => {
                     navigate("/vms", Default::default());
@@ -185,14 +193,27 @@ pub fn VmCreate() -> impl IntoView {
                 </div>
 
                 <div class="form-group">
-                    <label>"Boot disk from image (optional)"</label>
+                    {move || if is_instance() {
+                        view! { <label>"Image (optional)"</label> }
+                    } else {
+                        view! { <label>"Boot disk from image (optional)"</label> }
+                    }}
                     <input
+                        id="vm-image"
                         type="text"
-                        placeholder="https://.../cloud-image.qcow2 or a file in the images directory"
+                        placeholder=move || if is_instance() {
+                            "debian/12, images:alpine/3.20 or a local image alias"
+                        } else {
+                            "https://.../cloud-image.qcow2 or a file in the images directory"
+                        }
                         on:input=move |ev| set_image.set(event_target_value(&ev))
                         prop:value=image
                     />
-                    <small>"A cloud image or disk image (qcow2, raw, vmdk, vdi, vhdx) becomes the VM's disk, grown to the disk size above."</small>
+                    {move || if is_instance() {
+                        view! { <small>"The LXD/Incus image the VM is created from (the images: remote, another remote, or a local alias). Empty means Ubuntu 22.04."</small> }
+                    } else {
+                        view! { <small>"A cloud image or disk image (qcow2, raw, vmdk, vdi, vhdx) becomes the VM's disk, grown to the disk size above."</small> }
+                    }}
                 </div>
 
                 <super::vm_display::DisplaySettingsFields display=display/>

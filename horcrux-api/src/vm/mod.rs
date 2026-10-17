@@ -198,6 +198,28 @@ impl VmManager {
 
     /// Create a new virtual machine
     pub async fn create_vm(&self, config: VmConfig) -> Result<VmConfig> {
+        self.create_vm_from_image(config, None).await
+    }
+
+    /// Create a VM; `image` is the instance image of an LXD/Incus VM
+    /// (`distro/release`, `remote:alias` or a local alias). QEMU VMs take
+    /// a disk image through `import-disk` instead.
+    pub async fn create_vm_from_image(
+        &self,
+        config: VmConfig,
+        image: Option<String>,
+    ) -> Result<VmConfig> {
+        let image = image
+            .map(|i| i.trim().to_string())
+            .filter(|i| !i.is_empty());
+        if image.is_some() && !matches!(config.hypervisor, VmHypervisor::Lxd | VmHypervisor::Incus)
+        {
+            return Err(horcrux_common::Error::Validation(
+                "image is for LXD/Incus VMs; give a QEMU VM a disk image with \
+                 POST /api/vms/<id>/import-disk"
+                    .to_string(),
+            ));
+        }
         let mut vms = self.vms.write().await;
 
         // Check if VM with this ID already exists
@@ -233,7 +255,7 @@ impl VmManager {
                             .to_string(),
                     ))
                 } else {
-                    self.lxd.create_vm(&config).await
+                    self.lxd.create_vm(&config, image.as_deref()).await
                 }
             }
             #[cfg(feature = "incus")]
@@ -244,7 +266,7 @@ impl VmManager {
                             .to_string(),
                     ))
                 } else {
-                    self.incus.create_vm(&config).await
+                    self.incus.create_vm(&config, image.as_deref()).await
                 }
             }
             #[allow(unreachable_patterns)]

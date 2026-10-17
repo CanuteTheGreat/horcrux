@@ -314,6 +314,16 @@ pub async fn create_vm(config: VmConfig) -> Result<VmConfig, ApiError> {
     post_json("/vms", &config).await
 }
 
+/// Create an LXD/Incus VM from an instance image (`debian/12`,
+/// `images:alpine/3.20`, or a local alias).
+pub async fn create_vm_from_image(config: VmConfig, image: &str) -> Result<VmConfig, ApiError> {
+    let mut body = serde_json::to_value(&config).map_err(|e| ApiError {
+        message: e.to_string(),
+    })?;
+    body["image"] = serde_json::Value::String(image.to_string());
+    post_json("/vms", &body).await
+}
+
 /// Replace a stopped VM's disk with a cloud/disk image (URL or a file in
 /// the server's images directory / a storage pool).
 pub async fn import_vm_disk(vm_id: &str, source: &str) -> Result<VmConfig, ApiError> {

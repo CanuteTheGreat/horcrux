@@ -17,6 +17,7 @@ on:
       - 'horcrux-api/src/vm/lxd.rs'
       - 'horcrux-api/src/vm/mod.rs'
       - 'horcrux-api/horcrux-ui/src/pages/console.rs'
+      - 'horcrux-api/horcrux-ui/src/pages/vm_create.rs'
       - 'horcrux-api/tests/incus_e2e.*'
       - 'horcrux-api/horcrux-ui/e2e/incus_ui_e2e.py'
       - '.forgejo/workflows/incus-vm-console.yml'

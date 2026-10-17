@@ -162,19 +162,35 @@ def run_ct(page):
 
 
 def run_vm(page):
-    api("DELETE", f"/vms/{VM}")
-    st, body = api("POST", "/vms", {
-        "id": VM, "name": VM, "hypervisor": "incus", "memory": 1024, "cpus": 1,
-        "disk_size": 10, "status": "stopped", "architecture": "x86_64",
-    })
-    assert st == 201, body
-    st, body = api("POST", f"/vms/{VM}/start")
+    for v in (api("GET", "/vms")[1] or []):
+        if isinstance(v, dict) and v.get("name") == VM:
+            api("DELETE", f"/vms/{v['id']}")
+    sibling(f"incus delete -f {VM}")
+    # Create VM form: Incus hypervisor + an image other than the old
+    # hardcoded default (ubuntu/22.04).
+    page.goto(f"{BASE}/vms/create")
+    page.locator(".form-group", has_text="VM Name").locator("input").fill(VM)
+    page.locator("#vm-hypervisor").select_option("incus")
+    page.locator(".form-group", has_text="Memory (MB)").locator("input").fill("1024")
+    page.locator(".form-group", has_text="Disk Size (GB)").locator("input").fill("10")
+    # The image field switches to LXD/Incus instance images.
+    expect(page.locator("#vm-image")).to_have_attribute("placeholder", re.compile("debian/12"))
+    page.fill("#vm-image", "ubuntu/24.04")
+    page.locator("button[type=submit]").click()
+    page.wait_for_url(f"{BASE}/vms", timeout=600000)
+    vm = next(v for v in api("GET", "/vms")[1] if v["name"] == VM)
+    vid = vm["id"]
+    assert vm["hypervisor"] == "incus", vm
+    st, body = api("POST", f"/vms/{vid}/start")
     assert st == 200, body
     wait_for(lambda: sibling(f"incus exec {VM} -- true")[0] == 0, "VM agent", 300)
+    rc, rel = sibling(f"incus exec {VM} -- sh -c '. /etc/os-release; echo $VERSION_ID'")
+    assert rc == 0 and "24.04" in rel.split(), f"VM runs the image chosen in the form (ubuntu 24.04), got {rel!r}"
+    log("ok: Incus VM created from the Create VM form runs the chosen image (ubuntu 24.04)")
     rc, out = sibling(f"incus exec {VM} -- passwd -d root")
     assert rc == 0, out
 
-    page.goto(f"{BASE}/vms/{VM}/console")
+    page.goto(f"{BASE}/vms/{vid}/console")
     sel = page.locator("#console-type")
     expect(sel).to_have_value("serial", timeout=30000)
     assert sel.locator("option[value='vnc']").count() == 0, "VNC offered for an Incus VM"
@@ -191,8 +207,8 @@ def run_vm(page):
     log("ok: SPICE panel shows the relay and the .vv downloads")
     no_cli_hint(page, "VM SPICE console page")
 
-    api("POST", f"/vms/{VM}/stop")
-    api("DELETE", f"/vms/{VM}")
+    api("POST", f"/vms/{vid}/stop")
+    api("DELETE", f"/vms/{vid}")
 
 
 def main():

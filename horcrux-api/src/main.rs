@@ -5762,13 +5762,25 @@ async fn get_vm(
     Ok(Json(vm))
 }
 
+/// `POST /api/vms`: a VmConfig plus, for LXD/Incus VMs, the instance image.
+#[derive(serde::Deserialize)]
+struct CreateVmRequest {
+    #[serde(flatten)]
+    config: VmConfig,
+    #[serde(default)]
+    image: Option<String>,
+}
+
 async fn create_vm(
     State(state): State<Arc<AppState>>,
     auth_user: Option<axum::Extension<middleware::auth::AuthUser>>,
-    Json(payload): Json<VmConfig>,
+    Json(payload): Json<CreateVmRequest>,
 ) -> Result<(StatusCode, Json<VmConfig>), ApiError> {
-    let vm_name = payload.name.clone();
-    let vm = state.vm_manager.create_vm(payload).await?;
+    let vm_name = payload.config.name.clone();
+    let vm = state
+        .vm_manager
+        .create_vm_from_image(payload.config, payload.image)
+        .await?;
 
     // Broadcast VM created event
     let username = auth_user

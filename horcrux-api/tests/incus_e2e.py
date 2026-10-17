@@ -388,11 +388,21 @@ def run_vm():
     step("create an Incus VM through the API and start it")
     req("DELETE", f"/vms/{VM}", expect=None)
     incus(f"delete -f {VM}", check_rc=False)
+    step("an image for a QEMU VM is refused (QEMU takes disk images via import-disk)")
+    st, body = req("POST", "/vms", {
+        "id": VM + "-q", "name": VM + "-q", "hypervisor": "qemu", "memory": 512, "cpus": 1,
+        "disk_size": 10, "status": "stopped", "architecture": "x86_64", "image": "debian/12",
+    }, expect=None, raw=True)
+    check(st == 422 and "import-disk" in body, f"qemu + image: {st} {body[:160]}")
     req("POST", "/vms", {
         "id": VM, "name": VM, "hypervisor": "incus", "memory": 1024, "cpus": 1,
         "disk_size": 10, "status": "stopped", "architecture": "x86_64",
+        # Not the old hardcoded default (ubuntu/22.04).
+        "image": "ubuntu/24.04",
     }, expect=201)
     check(incus(f"list {VM} -c t --format csv") == "VIRTUAL-MACHINE", "instance is an Incus VM")
+    rel = incus(f"config get {VM} image.release")
+    check(rel in ("noble", "24.04"), f"VM was created from the requested image (ubuntu 24.04 'noble'), got {rel!r}")
 
     step("console of a stopped VM: clear message, no CLI pointer")
     st, body = req("POST", f"/console/{VM}/serial", expect=None, raw=True)

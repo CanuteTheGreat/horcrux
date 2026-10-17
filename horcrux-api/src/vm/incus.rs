@@ -22,22 +22,36 @@ impl IncusManager {
         Self {}
     }
 
-    /// Create a new Incus virtual machine
-    pub async fn create_vm(&self, config: &VmConfig) -> Result<QemuVm> {
-        info!("Creating Incus VM: {} (ID: {})", config.name, config.id);
+    /// `incus init` arguments for a VM: the chosen image (`distro/release`
+    /// from the public `images:` remote, `remote:alias`, or a local alias /
+    /// fingerprint - the same rules as the container form), Ubuntu 22.04
+    /// when none was given.
+    pub fn init_args(config: &VmConfig, image: Option<&str>) -> Vec<String> {
+        vec![
+            "init".to_string(),
+            "--vm".to_string(),
+            crate::container::instance_image(image.unwrap_or("")),
+            config.name.clone(),
+            "-c".to_string(),
+            format!("limits.cpu={}", config.cpus),
+            "-c".to_string(),
+            format!("limits.memory={}MB", config.memory),
+            "-d".to_string(),
+            format!("root,size={}GB", config.disk_size),
+        ]
+    }
 
-        // Launch VM instance with Incus
+    /// Create a new Incus virtual machine from `image` (see `init_args`).
+    pub async fn create_vm(&self, config: &VmConfig, image: Option<&str>) -> Result<QemuVm> {
+        info!(
+            "Creating Incus VM: {} (ID: {}) from {}",
+            config.name,
+            config.id,
+            crate::container::instance_image(image.unwrap_or(""))
+        );
+
         let output = Command::new("incus")
-            .arg("init")
-            .arg("--vm")
-            .arg("images:ubuntu/22.04") // Default image
-            .arg(&config.name)
-            .arg("-c")
-            .arg(format!("limits.cpu={}", config.cpus))
-            .arg("-c")
-            .arg(format!("limits.memory={}MB", config.memory))
-            .arg("-d")
-            .arg(format!("root,size={}GB", config.disk_size))
+            .args(Self::init_args(config, image))
             .output()
             .await
             .map_err(|e| {
@@ -196,5 +210,42 @@ impl IncusManager {
 
         let version = String::from_utf8_lossy(&output.stdout);
         Ok(version.trim().to_string())
+    }
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+
+    fn cfg() -> VmConfig {
+        VmConfig {
+            id: "vm-1".into(),
+            name: "vm1".into(),
+            hypervisor: horcrux_common::VmHypervisor::Incus,
+            memory: 1024,
+            cpus: 2,
+            disk_size: 10,
+            status: VmStatus::Stopped,
+            architecture: Default::default(),
+            disks: Vec::new(),
+            display: Default::default(),
+        }
+    }
+
+    #[test]
+    fn vm_uses_the_chosen_image() {
+        let m = IncusManager::init_args;
+        assert_eq!(m(&cfg(), Some("debian/12"))[2], "images:debian/12");
+        assert_eq!(
+            m(&cfg(), Some("images:alpine/3.20"))[2],
+            "images:alpine/3.20"
+        );
+        assert_eq!(m(&cfg(), Some("my-local-image"))[2], "my-local-image");
+        assert_eq!(m(&cfg(), None)[2], "images:ubuntu/22.04");
+        assert_eq!(m(&cfg(), Some("  "))[2], "images:ubuntu/22.04");
+        let args = m(&cfg(), Some("debian/12"));
+        assert_eq!(&args[..2], &["init", "--vm"]);
+        assert_eq!(args[3], "vm1");
+        assert!(args.contains(&"limits.memory=1024MB".to_string()));
     }
 }
