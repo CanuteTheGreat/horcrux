@@ -2,11 +2,13 @@
 //! upgrade, cluster/HA, RBAC matrix): runs the real `horcrux-api` binary
 //! on its own port and data directory and talks to it over HTTP(S).
 //!
-//! Transport comes from the environment so the suites keep working when
-//! the server switches to HTTPS by default:
-//! - `HORCRUX_DEPTH_SCHEME` (`http` default, or `https`);
+//! Transport (the API serves HTTPS by default from a node-local CA):
+//! - `HORCRUX_DEPTH_SCHEME` (`https` default; `http` for a server built or
+//!   configured without TLS);
 //! - `HORCRUX_DEPTH_CA`: PEM CA to trust; `{ssl}` in it is replaced by the
-//!   spawned server's SSL directory (its node-local CA lives there);
+//!   spawned server's SSL directory. Default: `{ssl}/ca.pem`, the node-local
+//!   CA the server creates on first start (certificate verified for real,
+//!   never `danger_accept_invalid_certs`);
 //! - `HORCRUX_DEPTH_ADMIN_PASSWORD` (default `admin`, passed to the server
 //!   as `ADMIN_PASSWORD`).
 #![allow(dead_code)]
@@ -25,11 +27,13 @@ pub struct Server {
     pub dir: PathBuf,
     pub bin: PathBuf,
     pub extra_env: Vec<(String, String)>,
+    /// `https` (default, see `scheme()`) or `http` (e.g. an old release).
+    pub scheme: String,
     run: u32,
 }
 
 pub fn scheme() -> String {
-    std::env::var("HORCRUX_DEPTH_SCHEME").unwrap_or_else(|_| "http".into())
+    std::env::var("HORCRUX_DEPTH_SCHEME").unwrap_or_else(|_| "https".into())
 }
 
 pub fn admin_password() -> String {
@@ -39,11 +43,14 @@ pub fn admin_password() -> String {
 /// HTTP client trusting `HORCRUX_DEPTH_CA` (with `{ssl}` -> `ssl_dir`).
 pub fn http_client(ssl_dir: Option<&Path>, timeout: Duration) -> reqwest::Client {
     let mut b = reqwest::Client::builder().timeout(timeout);
-    if let Ok(ca) = std::env::var("HORCRUX_DEPTH_CA") {
-        let ca = match ssl_dir {
-            Some(d) => ca.replace("{ssl}", &d.to_string_lossy()),
-            None => ca,
-        };
+    let ca = std::env::var("HORCRUX_DEPTH_CA").unwrap_or_else(|_| "{ssl}/ca.pem".into());
+    let ca = match ssl_dir {
+        Some(d) => Some(ca.replace("{ssl}", &d.to_string_lossy())),
+        None if !ca.contains("{ssl}") => Some(ca),
+        None => None,
+    };
+    if let Some(ca) = ca {
+        // Missing until the server has created its CA on first start.
         if let Ok(pem) = std::fs::read(&ca) {
             let cert =
                 reqwest::Certificate::from_pem(&pem).unwrap_or_else(|e| panic!("CA {ca}: {e}"));
@@ -85,6 +92,7 @@ impl Server {
             dir: dir.to_path_buf(),
             bin,
             extra_env: Vec::new(),
+            scheme: scheme(),
             run: 0,
         }
     }
@@ -137,7 +145,7 @@ impl Server {
     }
 
     pub fn base(&self) -> String {
-        format!("{}://127.0.0.1:{}/api", scheme(), self.port)
+        format!("{}://127.0.0.1:{}/api", self.scheme, self.port)
     }
 
     pub fn client(&self) -> reqwest::Client {
@@ -150,8 +158,9 @@ impl Server {
     }
 
     pub async fn wait_healthy(&mut self) {
-        let c = self.client();
         for _ in 0..240 {
+            // Rebuilt each time: the CA file appears once the server is up.
+            let c = self.client();
             if let Some(status) = self.child.as_mut().unwrap().try_wait().unwrap() {
                 panic!("horcrux-api exited early ({status}):\n{}", self.log_text());
             }

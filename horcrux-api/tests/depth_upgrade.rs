@@ -31,6 +31,8 @@ async fn previous_release_data_survives_upgrade_to_head() {
 
     // ---- previous release ------------------------------------------------
     let mut old = Server::with_bin(&dir, old_bin);
+    // v0.1.0 serves plain HTTP only.
+    old.scheme = "http".into();
     old.start();
     old.wait_healthy().await;
     let a = Api::login_with(old.client(), &old.base(), "admin", &admin_password()).await;
