@@ -81,6 +81,26 @@ if [ -z "$net" ]; then
 fi
 [ -n "$net" ] || { echo "could not find this container's Docker network (set K3S_NETWORK)" >&2; exit 1; }
 
+# A job that was killed (runner restart, host reboot, OOM) never reaches
+# its `--cleanup` step and leaves its k3s running with 2 GB reserved.
+# Such a leftover is the last container on its job's network (the job
+# container is gone): remove those. k3s of live jobs share their network
+# with that job's container and are left alone.
+for c in $(docker ps -aq --filter name=horcrux-ci-k3s-); do
+    cname=$(docker inspect -f '{{.Name}}' "$c" 2>/dev/null | tr -d /) || continue
+    [ -n "$cname" ] || continue
+    orphan=1
+    for n in $(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$c" 2>/dev/null || true); do
+        others=$(docker network inspect "$n" -f '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null |
+            tr ' ' '\n' | { grep -v -x -e "$cname" -e '' || true; } | wc -l)
+        [ "$others" -gt 0 ] && orphan=0
+    done
+    if [ "$orphan" = 1 ]; then
+        echo "removing k3s left behind by a killed job: $cname"
+        docker rm -f "$c" >/dev/null || true
+    fi
+done
+
 name="horcrux-ci-k3s-$$"
 docker run -d --name "$name" --privileged --network "$net" --memory 2g \
     --tmpfs /run --tmpfs /var/run \
