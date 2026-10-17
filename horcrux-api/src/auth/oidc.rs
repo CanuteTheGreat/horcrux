@@ -263,7 +263,12 @@ impl OidcProvider {
         code_verifier: &str,
     ) -> Result<TokenResponse> {
         let config = self.config.read().await.clone();
-        let discovery = match self.discovery.read().await.clone() {
+        // Bind the cached copy first: a guard taken in the match scrutinee
+        // lives until the end of the match, and load_discovery() takes the
+        // write lock - every OpenID login on a fresh provider (the callback
+        // builds one per request) hung there forever.
+        let cached = self.discovery.read().await.clone();
+        let discovery = match cached {
             Some(d) => d,
             None => self.load_discovery().await?,
         };
@@ -762,6 +767,52 @@ impl OidcSession {
 
 #[cfg(test)]
 mod tests {
+    /// A fresh provider (no discovery cached) exchanges a code without
+    /// deadlocking on its own discovery lock.
+    #[tokio::test]
+    async fn exchange_code_pkce_on_a_fresh_provider_completes() {
+        use axum::{routing::get, routing::post, Json, Router};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let disc = serde_json::json!({
+            "issuer": base,
+            "authorization_endpoint": format!("{base}/auth"),
+            "token_endpoint": format!("{base}/token"),
+            "jwks_uri": format!("{base}/keys"),
+        });
+        let app = Router::new()
+            .route(
+                "/.well-known/openid-configuration",
+                get(move || {
+                    let d = disc.clone();
+                    async move { Json(d) }
+                }),
+            )
+            .route(
+                "/token",
+                post(|| async {
+                    Json(serde_json::json!({
+                        "access_token": "at", "token_type": "Bearer", "id_token": "it"
+                    }))
+                }),
+            );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let provider = super::OidcProvider::new(super::OidcConfig {
+            enabled: true,
+            issuer_url: base,
+            client_id: "horcrux".into(),
+            ..Default::default()
+        });
+        let tokens = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            provider.exchange_code_pkce("code", "verifier"),
+        )
+        .await
+        .expect("exchange_code_pkce deadlocked")
+        .unwrap();
+        assert_eq!(tokens.id_token.as_deref(), Some("it"));
+    }
+
     use super::*;
 
     #[test]
