@@ -42,7 +42,6 @@ pub fn App() -> impl IntoView {
     let features = provide_features();
 
     view! {
-        <Stylesheet id="leptos" href="/pkg/horcrux-ui.css"/>
         <Title text="Horcrux - Virtualization Management"/>
         <Meta name="description" content="Horcrux Virtualization Management Platform"/>
 

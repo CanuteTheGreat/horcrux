@@ -80,7 +80,6 @@ use std::sync::Arc;
 use template::{CloneRequest, OsType, StorageType, Template, TemplateManager};
 use tls::TlsManager;
 use tokio::net::TcpListener;
-use tower_http::services::{ServeDir, ServeFile};
 use tracing::{error, info};
 use vm::VmManager;
 
@@ -528,8 +527,9 @@ async fn main() -> anyhow::Result<()> {
             static_ui::UI_DIR_ENV
         );
     }
-    let serve_dir =
-        ServeDir::new(&ui_dir).not_found_service(ServeFile::new(ui_dir.join("index.html")));
+    // Real files, the SPA shell with 200 for client-side routes (deep links
+    // like /vms used to come back 404), real 404s for missing assets.
+    let serve_dir = static_ui::ui_service(&ui_dir);
 
     // Build auth router with strict rate limiting (login/register)
     let auth_router =

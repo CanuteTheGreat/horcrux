@@ -10,10 +10,78 @@
 //! system every UI request therefore fell through to a missing
 //! `index.html` and returned 404.
 
+use axum::body::Body;
+use axum::http::{header, Method, Request, Response, StatusCode};
+use std::convert::Infallible;
 use std::path::{Path, PathBuf};
+use tower_http::services::ServeDir;
 
 /// Environment variable that overrides UI directory discovery.
 pub const UI_DIR_ENV: &str = "HORCRUX_UI_DIR";
+
+/// File extensions of real build assets. A request for one of these that
+/// matches no file is a genuine 404 (a missing stylesheet must not be
+/// answered with the HTML shell); anything else is a client-side route.
+const ASSET_EXTENSIONS: &[&str] = &[
+    "css", "js", "mjs", "wasm", "map", "ico", "png", "jpg", "jpeg", "gif", "svg", "webp", "woff",
+    "woff2", "ttf", "json", "txt", "html",
+];
+
+/// Whether a request that matched no file under the UI directory is a
+/// client-side (SPA) route that should get `index.html` with 200.
+/// `/api/...` never does: an unknown API route is a 404.
+pub fn serves_spa_shell(path: &str) -> bool {
+    if path == "/api" || path.starts_with("/api/") {
+        return false;
+    }
+    let last = path.rsplit('/').next().unwrap_or("");
+    match last.rsplit_once('.') {
+        Some((_, ext)) => !ASSET_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()),
+        None => true,
+    }
+}
+
+/// Fallback behind the UI's `ServeDir`.
+pub type SpaFallback = tower::util::BoxCloneService<Request<Body>, Response<Body>, Infallible>;
+
+/// Answers deep links (`/vms`, `/backup/jobs`, `/login`...) with the SPA
+/// shell and **200**. This used to be `ServeDir::not_found_service`, which
+/// keeps the 404 status: pages rendered, but every full page load was a 404
+/// (browser console error, monitoring/crawlers see a broken site).
+fn spa_shell(index: PathBuf) -> SpaFallback {
+    tower::util::BoxCloneService::new(tower::service_fn(move |req: Request<Body>| {
+        let index = index.clone();
+        async move {
+            let not_found = || {
+                Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                    .body(Body::from("Not Found"))
+                    .unwrap()
+            };
+            let page = matches!(*req.method(), Method::GET | Method::HEAD)
+                && serves_spa_shell(req.uri().path());
+            if !page {
+                return Ok(not_found());
+            }
+            Ok(match tokio::fs::read(&index).await {
+                Ok(html) => Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+                    .header(header::CACHE_CONTROL, "no-cache")
+                    .body(Body::from(html))
+                    .unwrap(),
+                Err(_) => not_found(),
+            })
+        }
+    }))
+}
+
+/// The service serving the web UI: real files from `ui_dir`, the SPA shell
+/// (200) for client-side routes, 404 for missing assets and API paths.
+pub fn ui_service(ui_dir: &Path) -> ServeDir<SpaFallback> {
+    ServeDir::new(ui_dir).fallback(spa_shell(ui_dir.join("index.html")))
+}
 
 /// Candidate locations, most specific (packaged install) first.
 pub const UI_DIR_CANDIDATES: &[&str] = &[
@@ -113,5 +181,61 @@ mod tests {
     #[test]
     fn nothing_found() {
         assert_eq!(resolve_ui_dir(None, UI_DIR_CANDIDATES, |_| false), None);
+    }
+
+    /// GET `path` through the UI service mounted the way main.rs mounts it.
+    async fn get(dir: &Path, path: &str) -> (StatusCode, String, String) {
+        use tower::ServiceExt;
+        let app = axum::Router::new().fallback_service(ui_service(dir));
+        let res = app
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = res.status();
+        let ctype = res
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .map(|v| v.to_str().unwrap().to_string())
+            .unwrap_or_default();
+        let body = axum::body::to_bytes(res.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        (status, ctype, String::from_utf8_lossy(&body).into_owned())
+    }
+
+    #[tokio::test]
+    async fn spa_deep_links_get_the_shell_with_200() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "<html>shell</html>").unwrap();
+        std::fs::write(dir.path().join("main-abc.css"), "body{}").unwrap();
+        for path in [
+            "/",
+            "/login",
+            "/vms",
+            "/vms/vm-1/console",
+            "/backup/jobs",
+            "/monitoring/alerts",
+            "/vms/my.vm",
+        ] {
+            let (status, ctype, body) = get(dir.path(), path).await;
+            assert_eq!(status, StatusCode::OK, "{path}");
+            assert!(ctype.starts_with("text/html"), "{path}: {ctype}");
+            assert_eq!(body, "<html>shell</html>", "{path}");
+        }
+        // Real files are served as themselves.
+        let (status, ctype, body) = get(dir.path(), "/main-abc.css").await;
+        assert_eq!((status, body.as_str()), (StatusCode::OK, "body{}"));
+        assert!(ctype.starts_with("text/css"), "{ctype}");
+        // Missing assets and unknown API paths stay real 404s, not HTML.
+        for path in [
+            "/pkg/horcrux-ui.css",
+            "/missing.wasm",
+            "/favicon.ico",
+            "/api/nope",
+        ] {
+            let (status, _, body) = get(dir.path(), path).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+            assert!(!body.contains("shell"), "{path}: {body}");
+        }
     }
 }

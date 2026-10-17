@@ -174,12 +174,33 @@ def main():
     with urlopen(f"{BASE}/favicon.png") as r:
         assert r.headers.get_content_type() == "image/png", r.headers
 
+    # SPA deep links are served with 200 (they used to be 404 + index.html),
+    # while a missing asset is still a real 404 and not the HTML shell.
+    for path in ("/login", "/vms", "/backup/jobs", "/monitoring/alerts"):
+        with urlopen(f"{BASE}{path}") as r:
+            assert r.status == 200 and r.headers.get_content_type() == "text/html", (path, r.status)
+    try:
+        urlopen(f"{BASE}/pkg/horcrux-ui.css")
+        raise AssertionError("/pkg/horcrux-ui.css: expected 404")
+    except urllib.error.HTTPError as e:
+        assert e.code == 404, e.code
+    # Every page load must fetch only resources that exist (the UI used to
+    # request /pkg/horcrux-ui.css, a cargo-leptos path trunk never builds).
+    missing_resources = []
+
     console_errors = []
     with sync_playwright() as p:
         browser = p.chromium.launch()
         context = browser.new_context()
         page = context.new_page()
         page.on("console", lambda m: m.type == "error" and console_errors.append(m.text))
+        page.on(
+            "response",
+            lambda r: r.status == 404
+            and r.request.resource_type in ("document", "stylesheet", "script", "image", "font")
+            and r.url.startswith(BASE)
+            and missing_resources.append(r.url),
+        )
         page.on("dialog", lambda d: d.accept(d.default_value) if d.type == "prompt" else d.accept())
 
         # ---- login ---------------------------------------------------------
@@ -494,6 +515,7 @@ def main():
 
     bad = [e for e in console_errors if "favicon" in e or "missing field" in e]
     assert not bad, f"console errors: {bad}"
+    assert not missing_resources, f"page loads fetched missing resources (404): {sorted(set(missing_resources))}"
     print("UI E2E: all checks passed")
 
 
