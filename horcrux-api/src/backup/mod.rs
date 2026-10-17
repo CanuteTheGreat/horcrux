@@ -1668,6 +1668,21 @@ async fn payload(path: &Path, kind: &str) -> Result<ArchiveFile> {
     })
 }
 
+/// Whether `pid` is a live process. A zombie (exited, not yet reaped -
+/// e.g. a daemonized QEMU whose parent is a container's non-reaping PID 1)
+/// has stopped writing its disks and counts as exited.
+fn pid_alive(pid: u32) -> bool {
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        // Format: "pid (comm) S ...": the state follows the last ')'.
+        Ok(stat) => stat
+            .rsplit_once(')')
+            .and_then(|(_, rest)| rest.split_whitespace().next())
+            .map(|state| state != "Z" && state != "X")
+            .unwrap_or(true),
+        Err(_) => false,
+    }
+}
+
 /// Stop a running QEMU VM and wait for its process to exit, so its disk
 /// is no longer being written.
 async fn stop_vm_and_wait(rt: &BackupRuntime, id: &str) -> Result<()> {
@@ -1677,9 +1692,8 @@ async fn stop_vm_and_wait(rt: &BackupRuntime, id: &str) -> Result<()> {
         .and_then(|s| s.trim().parse().ok());
     rt.vm_manager.stop_vm(id).await?;
     if let Some(pid) = pid {
-        let proc_dir = PathBuf::from(format!("/proc/{pid}"));
         for _ in 0..600 {
-            if !proc_dir.exists() {
+            if !pid_alive(pid) {
                 return Ok(());
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1688,6 +1702,7 @@ async fn stop_vm_and_wait(rt: &BackupRuntime, id: &str) -> Result<()> {
             "VM {id} (pid {pid}) did not exit within 60s of being stopped; backup aborted"
         )));
     }
+
     Ok(())
 }
 
@@ -1789,6 +1804,27 @@ async fn rewrite_lxc_config(cfg: &Path, lxc_path: &Path, old: &str, new: &str) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pid_liveness() {
+        assert!(pid_alive(std::process::id()));
+        // A reaped child is gone.
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let cpid = child.id();
+        child.wait().unwrap();
+        assert!(!pid_alive(cpid));
+        // An exited but unreaped child is a zombie: treated as exited.
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let zpid = child.id();
+        for _ in 0..100 {
+            if !pid_alive(zpid) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(!pid_alive(zpid), "zombie counts as exited");
+        child.wait().unwrap();
+    }
 
     #[test]
     fn guest_ids() {
