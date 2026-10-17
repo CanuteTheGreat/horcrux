@@ -122,20 +122,145 @@ pub(crate) fn is_valid_oci_name(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
 }
 
+/// Container ids with a runtime create/delete/clone in flight, plus a log
+/// of which ids (and names) were added to / removed from the map, numbered
+/// by a counter.
+///
+/// The reconcilers list the runtime, then fix the map. A create or delete
+/// that completes between the listing and the map update makes the listing
+/// stale for that container: one created meanwhile is missing from it (and
+/// used to be dropped from the map - a failed stack deploy then could not
+/// roll back the service it had just started), one deleted meanwhile is
+/// still in it (and used to be re-adopted as a ghost). A reconciler leaves
+/// every id/name touched since it started listing alone.
+#[derive(Default)]
+struct InFlight {
+    ids: HashSet<String>,
+    epoch: u64,
+    log: std::collections::VecDeque<(u64, String)>,
+}
+
+/// Bounded: a reconcile that started more than this many changes ago
+/// treats every entry as touched.
+const IN_FLIGHT_LOG: usize = 4096;
+
+impl InFlight {
+    fn touch(&mut self, key: &str) {
+        self.epoch += 1;
+        self.log.push_back((self.epoch, key.to_string()));
+        while self.log.len() > IN_FLIGHT_LOG {
+            self.log.pop_front();
+        }
+    }
+
+    #[cfg_attr(
+        not(any(
+            feature = "docker",
+            feature = "lxc",
+            feature = "lxd",
+            feature = "incus"
+        )),
+        allow(dead_code)
+    )]
+    /// Ids/names touched after `since`; None if the log no longer reaches
+    /// back that far.
+    fn touched_since(&self, since: u64) -> Option<HashSet<String>> {
+        if self.epoch == since {
+            return Some(HashSet::new());
+        }
+        match self.log.front() {
+            Some((first, _)) if *first <= since + 1 => Some(
+                self.log
+                    .iter()
+                    .filter(|(e, _)| *e > since)
+                    .map(|(_, k)| k.clone())
+                    .collect(),
+            ),
+            _ => None,
+        }
+    }
+}
+
+/// What a reconciler must leave alone: ids in flight now, and ids/names
+/// whose map membership changed while it was listing (`None` = all).
+#[cfg_attr(
+    not(any(
+        feature = "docker",
+        feature = "lxc",
+        feature = "lxd",
+        feature = "incus"
+    )),
+    allow(dead_code)
+)]
+struct InFlightSnapshot {
+    ids: HashSet<String>,
+    touched: Option<HashSet<String>>,
+}
+
+#[cfg_attr(
+    not(any(
+        feature = "docker",
+        feature = "lxc",
+        feature = "lxd",
+        feature = "incus"
+    )),
+    allow(dead_code)
+)]
+impl InFlightSnapshot {
+    fn skip(&self, key: &str) -> bool {
+        self.ids.contains(key) || self.touched.as_ref().is_none_or(|t| t.contains(key))
+    }
+}
+
+#[cfg_attr(
+    not(any(
+        feature = "docker",
+        feature = "lxc",
+        feature = "lxd",
+        feature = "incus"
+    )),
+    allow(dead_code)
+)]
+fn in_flight_snapshot(set: &Mutex<InFlight>, since: u64) -> InFlightSnapshot {
+    let g = set.lock().unwrap_or_else(|e| e.into_inner());
+    InFlightSnapshot {
+        ids: g.ids.clone(),
+        touched: g.touched_since(since),
+    }
+}
+
+#[cfg_attr(
+    not(any(
+        feature = "docker",
+        feature = "lxc",
+        feature = "lxd",
+        feature = "incus"
+    )),
+    allow(dead_code)
+)]
+fn in_flight_epoch(set: &Mutex<InFlight>) -> u64 {
+    set.lock().unwrap_or_else(|e| e.into_inner()).epoch
+}
+
+fn in_flight_touch(set: &Mutex<InFlight>, key: &str) {
+    set.lock().unwrap_or_else(|e| e.into_inner()).touch(key);
+}
+
 /// Claim on a container id whose runtime create is in flight. Released on
 /// drop, so an early return / error path can never leave the id stuck.
 struct CreateReservation {
-    set: Arc<Mutex<HashSet<String>>>,
+    set: Arc<Mutex<InFlight>>,
     id: String,
 }
 
 impl CreateReservation {
     /// Returns None if `id` is already being created.
-    fn try_new(set: &Arc<Mutex<HashSet<String>>>, id: &str) -> Option<Self> {
+    fn try_new(set: &Arc<Mutex<InFlight>>, id: &str) -> Option<Self> {
         let mut guard = set.lock().unwrap_or_else(|e| e.into_inner());
-        if !guard.insert(id.to_string()) {
+        if !guard.ids.insert(id.to_string()) {
             return None;
         }
+        guard.touch(id);
         Some(Self {
             set: set.clone(),
             id: id.to_string(),
@@ -145,10 +270,10 @@ impl CreateReservation {
 
 impl Drop for CreateReservation {
     fn drop(&mut self) {
-        self.set
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&self.id);
+        let mut guard = self.set.lock().unwrap_or_else(|e| e.into_inner());
+        guard.ids.remove(&self.id);
+        let id = std::mem::take(&mut self.id);
+        guard.touch(&id);
     }
 }
 
@@ -172,7 +297,7 @@ pub fn instance_image(rootfs: &str) -> String {
 pub struct ContainerManager {
     containers: Arc<RwLock<HashMap<String, Container>>>,
     /// Ids with a runtime create in flight (see `create_container`).
-    creating: Arc<Mutex<HashSet<String>>>,
+    creating: Arc<Mutex<InFlight>>,
     #[cfg(feature = "lxc")]
     lxc_manager: lxc::LxcManager,
     #[cfg(feature = "lxd")]
@@ -196,7 +321,7 @@ impl ContainerManager {
     pub fn new() -> Self {
         Self {
             containers: Arc::new(RwLock::new(HashMap::new())),
-            creating: Arc::new(Mutex::new(HashSet::new())),
+            creating: Arc::new(Mutex::new(InFlight::default())),
             #[cfg(feature = "lxc")]
             lxc_manager: lxc::LxcManager::new(),
             #[cfg(feature = "lxd")]
@@ -215,7 +340,7 @@ impl ContainerManager {
     pub fn with_database(db: Arc<Database>) -> Self {
         Self {
             containers: Arc::new(RwLock::new(HashMap::new())),
-            creating: Arc::new(Mutex::new(HashSet::new())),
+            creating: Arc::new(Mutex::new(InFlight::default())),
             #[cfg(feature = "lxc")]
             lxc_manager: lxc::LxcManager::new(),
             #[cfg(feature = "lxd")]
@@ -260,6 +385,7 @@ impl ContainerManager {
     /// A no-op when the Docker API is unreachable (no daemon on this host).
     #[cfg(feature = "docker")]
     pub async fn reconcile_docker(&self) {
+        let listed_at = in_flight_epoch(&self.creating);
         let live = match self.docker_manager.list_containers_api().await {
             Ok(live) => live,
             Err(_) => return,
@@ -267,18 +393,13 @@ impl ContainerManager {
         // Ids with a create/delete/clone in flight are left alone: the
         // runtime may already (or still) have the container while the map
         // does not (yet/any more), and the in-flight call fixes the map.
-        let in_flight: HashSet<String> = self
-            .creating
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-
         let mut containers = self.containers.write().await;
+        let skip = in_flight_snapshot(&self.creating, listed_at);
         let mut seen_names = HashSet::new();
         for c in &live {
             seen_names.insert(c.name.clone());
             let hid = c.horcrux_id.clone().unwrap_or_else(|| c.name.clone());
-            if in_flight.contains(&hid) {
+            if skip.skip(&hid) || skip.skip(&c.name) {
                 continue;
             }
             if let Some(tracked) = containers
@@ -314,7 +435,8 @@ impl ContainerManager {
         containers.retain(|id, t| {
             t.runtime != ContainerRuntime::Docker
                 || seen_names.contains(&t.name)
-                || in_flight.contains(id)
+                || skip.skip(id)
+                || skip.skip(&t.name)
         });
     }
 
@@ -327,6 +449,7 @@ impl ContainerManager {
     /// them in horcrux.json) and ones created with lxc-create show up.
     #[cfg(feature = "lxc")]
     pub async fn reconcile_lxc(&self) {
+        let listed_at = in_flight_epoch(&self.creating);
         let live = match self.lxc_manager.discover().await {
             Ok(l) => l,
             Err(e) => {
@@ -334,16 +457,12 @@ impl ContainerManager {
                 return;
             }
         };
-        let in_flight: HashSet<String> = self
-            .creating
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
         let mut containers = self.containers.write().await;
+        let skip = in_flight_snapshot(&self.creating, listed_at);
         let mut seen = HashSet::new();
         for c in live {
             seen.insert(c.name.clone());
-            if in_flight.contains(&c.id) {
+            if skip.skip(&c.id) || skip.skip(&c.name) {
                 continue;
             }
             if let Some(t) = containers
@@ -364,7 +483,10 @@ impl ContainerManager {
             containers.insert(c.id.clone(), c);
         }
         containers.retain(|id, t| {
-            t.runtime != ContainerRuntime::Lxc || seen.contains(&t.name) || in_flight.contains(id)
+            t.runtime != ContainerRuntime::Lxc
+                || seen.contains(&t.name)
+                || skip.skip(id)
+                || skip.skip(&t.name)
         });
     }
 
@@ -390,6 +512,7 @@ impl ContainerManager {
             if !client.available() {
                 continue;
             }
+            let listed_at = in_flight_epoch(&self.creating);
             let live = match client.containers().await {
                 Ok(l) => l,
                 Err(e) => {
@@ -397,12 +520,8 @@ impl ContainerManager {
                     continue;
                 }
             };
-            let in_flight: HashSet<String> = self
-                .creating
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone();
             let mut containers = self.containers.write().await;
+            let skip = in_flight_snapshot(&self.creating, listed_at);
             let mut seen = HashSet::new();
             for c in live {
                 seen.insert(c.name.clone());
@@ -419,7 +538,7 @@ impl ContainerManager {
                     t.status = status;
                     continue;
                 }
-                if containers.contains_key(&c.name) || in_flight.contains(&c.name) {
+                if containers.contains_key(&c.name) || skip.skip(&c.name) {
                     continue;
                 }
                 containers.insert(
@@ -439,7 +558,10 @@ impl ContainerManager {
                 );
             }
             containers.retain(|id, t| {
-                t.runtime != runtime || seen.contains(&t.name) || in_flight.contains(id)
+                t.runtime != runtime
+                    || seen.contains(&t.name)
+                    || skip.skip(id)
+                    || skip.skip(&t.name)
             });
         }
     }
@@ -544,6 +666,7 @@ impl ContainerManager {
 
         let container_config = container.to_config();
         let mut containers = self.containers.write().await;
+        in_flight_touch(&self.creating, &config.name);
         containers.insert(config.id.clone(), container);
         // Release the reservation while still holding the write lock, so a
         // concurrent create of the same id (which checks map + reservation
@@ -577,6 +700,8 @@ impl ContainerManager {
         };
         let out = container.to_config();
         containers.insert(config.id.clone(), container);
+        in_flight_touch(&self.creating, &config.id);
+        in_flight_touch(&self.creating, &config.name);
         Ok(out)
     }
 
@@ -676,6 +801,7 @@ impl ContainerManager {
             // reconcile doesn't re-adopt the container while `docker rm`
             // is still running.
             let in_flight = CreateReservation::try_new(&self.creating, id);
+            in_flight_touch(&self.creating, &container.name);
             (container, in_flight)
         };
 
@@ -693,6 +819,9 @@ impl ContainerManager {
             #[allow(unreachable_patterns)]
             _ => Err(crate::features::runtime_not_compiled(&container.runtime)),
         };
+        // Its name is gone from (or back in) the runtime now: a reconcile
+        // that listed before this point must not act on it.
+        in_flight_touch(&self.creating, &container.name);
 
         if let Err(e) = result {
             // The runtime still has it: keep tracking it instead of silently
@@ -1203,7 +1332,7 @@ mod tests {
 
     #[test]
     fn create_reservation_is_exclusive_and_released_on_drop() {
-        let set = Arc::new(Mutex::new(HashSet::new()));
+        let set = Arc::new(Mutex::new(InFlight::default()));
         let first = CreateReservation::try_new(&set, "ct-1").expect("first claim");
         assert!(CreateReservation::try_new(&set, "ct-1").is_none());
         // Other ids are independent.
@@ -1211,7 +1340,30 @@ mod tests {
         drop(first);
         assert!(CreateReservation::try_new(&set, "ct-1").is_some());
         drop(other);
-        assert!(set.lock().unwrap().is_empty());
+        assert!(set.lock().unwrap().ids.is_empty());
+    }
+
+    #[test]
+    fn in_flight_log_reports_ids_touched_since_a_listing() {
+        let set = Arc::new(Mutex::new(InFlight::default()));
+        let before = in_flight_epoch(&set);
+        // Nothing happened: nothing to skip.
+        assert!(!in_flight_snapshot(&set, before).skip("a"));
+        // A create that started and finished while a reconcile was listing.
+        drop(CreateReservation::try_new(&set, "stack_good").unwrap());
+        in_flight_touch(&set, "stack_good_name");
+        let snap = in_flight_snapshot(&set, before);
+        assert!(snap.skip("stack_good"), "created during the listing");
+        assert!(snap.skip("stack_good_name"));
+        assert!(!snap.skip("other"), "untouched ids are reconciled");
+        // A later reconcile starts after the create: nothing to skip.
+        let after = in_flight_epoch(&set);
+        assert!(!in_flight_snapshot(&set, after).skip("stack_good"));
+        // A listing older than the bounded log skips everything.
+        for i in 0..(IN_FLIGHT_LOG + 5) {
+            in_flight_touch(&set, &format!("c{i}"));
+        }
+        assert!(in_flight_snapshot(&set, after).skip("anything"));
     }
 
     #[tokio::test]
