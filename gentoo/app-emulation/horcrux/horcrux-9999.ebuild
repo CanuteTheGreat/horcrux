@@ -68,6 +68,10 @@ REQUIRED_USE="
 # Runtime dependencies
 # Note: All storage backends, networking, SSL, LDAP are always available at runtime
 # These are suggested dependencies that can be installed as needed
+# NOTE: no "#" comments inside dependency strings -- PMS parses them as
+# atoms ("Invalid atom (#)") and the whole ebuild fails metadata.
+# kubernetes? pulls app-admin/helm: Helm repositories/charts/releases are
+# driven through the helm CLI.
 RDEPEND="
 	qemu? (
 		app-emulation/qemu[spice,usbredir,virtfs,vnc]
@@ -88,7 +92,6 @@ RDEPEND="
 		sys-cluster/corosync
 		sys-cluster/pacemaker
 	)
-	# Helm repositories/charts/releases are driven through the helm CLI
 	kubernetes? ( app-admin/helm )
 	dev-libs/openssl:0=
 	net-misc/bridge-utils
