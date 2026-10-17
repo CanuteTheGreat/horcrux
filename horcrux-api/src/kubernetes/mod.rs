@@ -91,10 +91,76 @@ impl KubernetesManager {
         }
     }
 
+    /// Database + Vault, with kubeconfigs that fall back to the database
+    /// encrypted (AES-256-GCM) under a host key kept in `key_file` (created
+    /// with mode 0600 on first start). Kubeconfigs carry cluster-admin
+    /// credentials; they used to be written to the database in plaintext
+    /// because no encryption manager was ever passed to the store.
+    pub async fn with_encrypted_store(
+        db: Arc<Database>,
+        vault: Arc<VaultManager>,
+        key_file: &std::path::Path,
+    ) -> K8sResult<Self> {
+        use crate::encryption::{EncryptionConfig, EncryptionManager};
+        if !key_file.exists() {
+            if let Some(dir) = key_file.parent() {
+                std::fs::create_dir_all(dir)
+                    .map_err(|e| K8sError::Internal(format!("{}: {}", dir.display(), e)))?;
+            }
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(key_file)
+                .map_err(|e| K8sError::Internal(format!("{}: {}", key_file.display(), e)))?;
+            f.write_all(EncryptionManager::generate_key_hex().as_bytes())
+                .map_err(|e| K8sError::Internal(format!("{}: {}", key_file.display(), e)))?;
+            tracing::info!("Created kubeconfig encryption key {}", key_file.display());
+        }
+        let enc = Arc::new(EncryptionManager::new());
+        enc.initialize(EncryptionConfig {
+            master_key: None,
+            key_file: Some(key_file.to_string_lossy().to_string()),
+            auto_generate: false,
+        })
+        .await
+        .map_err(|e| K8sError::Internal(format!("kubeconfig encryption key: {}", e)))?;
+        Ok(Self {
+            clusters: Arc::new(RwLock::new(HashMap::new())),
+            clients: Arc::new(RwLock::new(HashMap::new())),
+            kubeconfig_store: KubeconfigStore::with_encryption(
+                Some(db.clone()),
+                Some(vault.clone()),
+                Some(enc),
+            ),
+            db: Some(db),
+            vault: Some(vault),
+        })
+    }
+
     /// Initialize manager and load clusters from database
     pub async fn initialize(&self) -> K8sResult<()> {
         if let Some(db) = &self.db {
             let clusters = config::db::list_clusters(db.pool()).await?;
+            // Re-store kubeconfigs that an older version wrote in plaintext,
+            // so they end up encrypted at rest.
+            for cluster in &clusters {
+                let raw: Option<(Option<String>,)> =
+                    sqlx::query_as("SELECT kubeconfig_encrypted FROM k8s_clusters WHERE id = ?")
+                        .bind(&cluster.id)
+                        .fetch_optional(db.pool())
+                        .await
+                        .map_err(|e| K8sError::Internal(e.to_string()))?;
+                if let Some((Some(text),)) = raw {
+                    if kube::config::Kubeconfig::from_yaml(&text).is_ok() {
+                        if let Err(e) = self.kubeconfig_store.store(&cluster.id, &text).await {
+                            tracing::warn!("re-encrypting kubeconfig of {}: {}", cluster.id, e);
+                        }
+                    }
+                }
+            }
             let mut clusters_map = self.clusters.write().await;
 
             for cluster in clusters {
@@ -445,5 +511,77 @@ users:
             Some("k3s-ctx")
         );
         assert_eq!(usable_context(KUBECONFIG, "default"), None);
+    }
+}
+
+#[cfg(test)]
+mod kubeconfig_encryption_tests {
+    use super::*;
+
+    const KC: &str = "apiVersion: v1\nkind: Config\nclusters:\n- name: c\n  cluster:\n    server: https://127.0.0.1:6443\ncontexts:\n- name: x\n  context:\n    cluster: c\n    user: u\ncurrent-context: x\nusers:\n- name: u\n  user:\n    token: s3cret-admin-token\n";
+
+    #[tokio::test]
+    async fn kubeconfig_is_encrypted_at_rest_and_plaintext_rows_get_reencrypted() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}/h.db?mode=rwc", dir.path().display());
+        let db = Arc::new(Database::new(&url).await.unwrap());
+        db.migrate().await.unwrap();
+        let key = dir.path().join("secrets/kubeconfig.key");
+        let mgr = KubernetesManager::with_encrypted_store(
+            db.clone(),
+            Arc::new(VaultManager::new()),
+            &key,
+        )
+        .await
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&key).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let now = chrono::Utc::now().timestamp();
+        let cluster = K8sCluster {
+            id: "c1".into(),
+            name: "c1".into(),
+            context: "x".into(),
+            api_server: "https://127.0.0.1:6443".into(),
+            version: None,
+            status: ClusterStatus::Connected,
+            node_count: 1,
+            provider: types::ClusterProvider::External,
+            created_at: now,
+            updated_at: now,
+        };
+        config::db::create_cluster(db.pool(), &cluster)
+            .await
+            .unwrap();
+        // An older version stored it in plaintext.
+        sqlx::query("UPDATE k8s_clusters SET kubeconfig_encrypted = ? WHERE id = 'c1'")
+            .bind(KC)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        mgr.initialize().await.unwrap();
+        let (raw,): (String,) =
+            sqlx::query_as("SELECT kubeconfig_encrypted FROM k8s_clusters WHERE id = 'c1'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert!(
+            !raw.contains("s3cret-admin-token"),
+            "kubeconfig still plaintext"
+        );
+        assert_eq!(mgr.kubeconfig_store.get("c1").await.unwrap(), KC);
+        // A second manager (restart) with the same key file reads it back.
+        let again =
+            KubernetesManager::with_encrypted_store(db, Arc::new(VaultManager::new()), &key)
+                .await
+                .unwrap();
+        assert_eq!(again.kubeconfig_store.get("c1").await.unwrap(), KC);
+        let target = {
+            again.initialize().await.unwrap();
+            again.helm_target("c1").await.unwrap()
+        };
+        assert_eq!(std::fs::read_to_string(target.path()).unwrap(), KC);
     }
 }

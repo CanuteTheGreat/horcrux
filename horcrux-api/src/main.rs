@@ -379,10 +379,14 @@ async fn main() -> anyhow::Result<()> {
     // Initialize Kubernetes manager (if feature enabled)
     #[cfg(feature = "kubernetes")]
     let kubernetes_manager = {
-        let mgr = Arc::new(kubernetes::KubernetesManager::with_database_and_vault(
-            database.clone(),
-            Arc::new(VaultManager::new()),
-        ));
+        let mgr = Arc::new(
+            kubernetes::KubernetesManager::with_encrypted_store(
+                database.clone(),
+                Arc::new(VaultManager::new()),
+                &horcrux_config.paths.data_dir.join("secrets/kubeconfig.key"),
+            )
+            .await?,
+        );
         if let Err(e) = mgr.initialize().await {
             tracing::warn!("Failed to initialize Kubernetes manager: {}", e);
         } else {
