@@ -14,7 +14,7 @@ use crate::middleware::auth::{
 };
 use crate::AppState;
 use axum::{
-    extract::{ConnectInfo, Host, Path, Query, State},
+    extract::{ConnectInfo, FromRequestParts, Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Redirect, Response},
     routing::{delete, get, post, put},
@@ -487,6 +487,43 @@ struct LoginBody {
 
 /// A real Argon2 hash of a random string, so unknown users cost the same
 /// time as wrong passwords (no user enumeration by timing).
+/// `host[:port]` the browser connected to, for the WebAuthn origin / RP ID
+/// and the OIDC redirect URI. axum's `Host` extractor falls back to
+/// `uri.host()` when there is no Host header - which is every HTTP/2
+/// request (browsers speak h2 over TLS; the authority travels in
+/// `:authority`) - and so dropped the port: the expected WebAuthn origin
+/// became `https://host` instead of `https://host:8006` and every security
+/// key registration and login was rejected. Same precedence as axum
+/// otherwise: X-Forwarded-Host (reverse proxy), Host, then the URI
+/// authority including its port.
+pub struct ClientHost(pub String);
+
+pub fn client_host(headers: &HeaderMap, uri: &axum::http::Uri) -> String {
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.split(',').next().unwrap_or(v).trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    header("x-forwarded-host")
+        .or_else(|| header(header::HOST.as_str()))
+        .or_else(|| uri.authority().map(|a| a.as_str().to_string()))
+        .unwrap_or_default()
+}
+
+#[axum::async_trait]
+impl<S: Send + Sync> FromRequestParts<S> for ClientHost {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(ClientHost(client_host(&parts.headers, &parts.uri)))
+    }
+}
+
 fn dummy_hash() -> &'static str {
     static H: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     H.get_or_init(|| password::hash_password(&crate::auth::random_token(24)).unwrap_or_default())
@@ -494,7 +531,7 @@ fn dummy_hash() -> &'static str {
 
 async fn login(
     State(state): St,
-    Host(host): Host,
+    ClientHost(host): ClientHost,
     ci: Option<ConnectInfo<SocketAddr>>,
     headers: HeaderMap,
     Json(req): Json<LoginBody>,
@@ -845,7 +882,7 @@ fn default_redirect_uri(host: &str) -> String {
 
 async fn oidc_login(
     State(state): St,
-    Host(host): Host,
+    ClientHost(host): ClientHost,
     Path(realm): Path<String>,
     Query(q): Query<OidcLoginQuery>,
 ) -> ApiResult<Response> {
@@ -1336,7 +1373,7 @@ struct WebauthnStartBody {
 
 async fn webauthn_register_start(
     State(state): St,
-    Host(host): Host,
+    ClientHost(host): ClientHost,
     u: Option<Extension<AuthUser>>,
     body: Option<Json<WebauthnStartBody>>,
 ) -> ApiResult<Json<Value>> {
@@ -2741,4 +2778,33 @@ async fn test_realm(
 #[allow(dead_code)]
 pub fn describe(method: &str, path: &str) -> String {
     format!("{:?}", privileges::requirement(method, path))
+}
+
+#[cfg(test)]
+mod client_host_tests {
+    use super::client_host;
+    use axum::http::{HeaderMap, HeaderValue, Uri};
+
+    #[test]
+    fn http2_authority_keeps_the_port() {
+        // HTTP/2: no Host header, the authority is in the URI.
+        let uri: Uri = "https://localhost:8006/api/auth/mfa/webauthn/register"
+            .parse()
+            .unwrap();
+        assert_eq!(client_host(&HeaderMap::new(), &uri), "localhost:8006");
+    }
+
+    #[test]
+    fn host_header_and_proxy_header_win() {
+        let uri: Uri = "/api/auth/login".parse().unwrap();
+        let mut h = HeaderMap::new();
+        h.insert("host", HeaderValue::from_static("node1.example:8006"));
+        assert_eq!(client_host(&h, &uri), "node1.example:8006");
+        h.insert(
+            "x-forwarded-host",
+            HeaderValue::from_static("horcrux.example, proxy.internal"),
+        );
+        assert_eq!(client_host(&h, &uri), "horcrux.example");
+        assert_eq!(client_host(&HeaderMap::new(), &uri), "");
+    }
 }
