@@ -12,7 +12,13 @@ env:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Branches/PRs: a new push cancels the older run. main: runs queue and
+  # each one finishes. With several agents pushing to main every ~40 min
+  # and the shared runners' queue longer than that, cancelling on main
+  # meant no CI run on main ever started (six in a row cancelled while
+  # still waiting for a runner, 2026-10-17). Only one main run executes
+  # at a time either way, so this adds no concurrent load.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   check:
