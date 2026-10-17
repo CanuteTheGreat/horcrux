@@ -3,7 +3,7 @@
     "files": [
       "src/vm/snapshot.rs"
     ],
-    "floor": 0
+    "floor": 27
   },
   "vm-runtime": {
     "files": [

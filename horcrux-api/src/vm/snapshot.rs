@@ -1142,4 +1142,117 @@ mod tests {
         // Clean up
         let _ = fs::remove_dir_all(test_dir).await;
     }
+    fn sh(prog: &str, args: &[&str]) -> String {
+        let out = std::process::Command::new(prog)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{prog} {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).to_string()
+    }
+
+    /// The byte pattern at offset 0 of a qcow2 image (via qemu-io).
+    fn pattern_at_0(img: &str, byte: u8) -> bool {
+        std::process::Command::new("qemu-io")
+            .args(["-f", "qcow2", "-c", &format!("read -P {byte} 0 64k"), img])
+            .output()
+            .map(|o| {
+                o.status.success()
+                    && !String::from_utf8_lossy(&o.stdout).contains("Pattern verification failed")
+            })
+            .unwrap_or(false)
+    }
+
+    /// Offline (stopped VM) qcow2 snapshots for real: internal snapshots in
+    /// the image, rollback restores the data, delete removes it from the
+    /// image, the parent chain / current marker, and metadata reload.
+    #[tokio::test]
+    async fn qcow2_snapshot_rollback_delete_and_reload_for_real() {
+        let dir = std::env::temp_dir().join(format!("hx-snap-real-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("real-vm.qcow2");
+        let img_s = img.to_string_lossy().to_string();
+        sh("qemu-img", &["create", "-q", "-f", "qcow2", &img_s, "16M"]);
+        sh(
+            "qemu-io",
+            &["-f", "qcow2", "-c", "write -P 0x11 0 64k", &img_s],
+        );
+        assert!(pattern_at_0(&img_s, 0x11));
+
+        let meta = dir.join("meta").to_string_lossy().to_string();
+        let mut m = VmSnapshotManager::new(meta.clone());
+        let mut vm = create_test_vm_config();
+        vm.id = format!("snap-real-{}", std::process::id());
+        vm.status = VmStatus::Stopped;
+        vm.disks = vec![horcrux_common::VmDisk {
+            path: img_s.clone(),
+            size_gb: 1,
+            disk_type: "virtio".into(),
+            cache: "none".into(),
+        }];
+
+        let s1 = m
+            .create_snapshot(&vm, "s1".into(), None, false)
+            .await
+            .unwrap();
+        assert_eq!(s1.vm_state, VmSnapshotState::Stopped);
+        assert_eq!(s1.parent_snapshot, None);
+        assert_eq!(s1.disk_snapshots.len(), 1);
+        let ds = &s1.disk_snapshots[0];
+        assert_eq!(ds.storage_type, StorageType::Qcow2);
+        assert_eq!(ds.size_bytes, std::fs::metadata(&img).unwrap().len());
+        assert!(ds.size_bytes > 0);
+        let list = sh("qemu-img", &["snapshot", "-l", &img_s]);
+        assert!(list.contains(&ds.snapshot_name), "{list}");
+
+        // Change the disk, take s2 (child of s1), then roll back to s1.
+        sh(
+            "qemu-io",
+            &["-f", "qcow2", "-c", "write -P 0x22 0 64k", &img_s],
+        );
+        let s2 = m
+            .create_snapshot(&vm, "s2".into(), None, false)
+            .await
+            .unwrap();
+        assert_eq!(s2.parent_snapshot.as_deref(), Some(s1.id.as_str()));
+        assert!(!m.is_current_snapshot(&s1.id), "s1 has a child");
+        assert!(m.is_current_snapshot(&s2.id), "s2 is the head");
+        assert!(!m.is_current_snapshot("no-such-snapshot"));
+        let tree = m.build_snapshot_tree(&vm.id);
+        assert_eq!(tree.len(), 1, "one root");
+        assert_eq!(tree[0].snapshot.id, s1.id);
+        assert!(!tree[0].is_current);
+        assert_eq!(tree[0].children.len(), 1);
+        assert_eq!(tree[0].children[0].snapshot.id, s2.id);
+        assert!(tree[0].children[0].is_current);
+        assert!(m.build_snapshot_tree("other-vm").is_empty());
+
+        m.restore_snapshot(&s1.id, false).await.unwrap();
+        assert!(pattern_at_0(&img_s, 0x11), "rolled back to s1's data");
+        m.restore_snapshot(&s2.id, false).await.unwrap();
+        assert!(pattern_at_0(&img_s, 0x22), "forward to s2's data");
+        assert!(m.restore_snapshot("no-such-snapshot", false).await.is_err());
+
+        // Metadata reloads into a fresh manager (API restart).
+        let mut again = VmSnapshotManager::new(meta.clone());
+        again.load_snapshots().await.unwrap();
+        assert_eq!(again.list_snapshots(&vm.id).len(), 2);
+        assert_eq!(again.get_snapshot(&s2.id).unwrap().name, "s2");
+
+        // Delete s2: gone from the image and from the manager.
+        let s2_disk = s2.disk_snapshots[0].snapshot_name.clone();
+        m.delete_snapshot(&s2.id).await.unwrap();
+        let list = sh("qemu-img", &["snapshot", "-l", &img_s]);
+        assert!(!list.contains(&s2_disk), "{list}");
+        assert!(list.contains(&ds.snapshot_name), "s1 kept: {list}");
+        assert!(m.get_snapshot(&s2.id).is_none());
+        assert!(m.is_current_snapshot(&s1.id), "s1 is the head again");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
