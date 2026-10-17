@@ -93,17 +93,20 @@ jobs:
           HORCRUX_DEPTH_IMAGE: /tmp/hcx-depth/cirros.qcow2
           HORCRUX_DEPTH_REQUIRE_KVM: "1"
           HORCRUX_DEPTH_DIR: /tmp/hcx-depth
-        run: cargo test --all-features -p horcrux-api --test it -- depth_vm_journey:: --ignored --nocapture --test-threads=1
+        run: |
+          cargo test --all-features -p horcrux-api --test it -- depth_vm_journey:: --ignored --nocapture --test-threads=1
 
       - name: Restart survival + crash consistency + disk full
         env:
           HORCRUX_DEPTH_DIR: /tmp/hcx-depth
-        run: cargo test --all-features -p horcrux-api --test it -- depth_restart_crash:: --ignored --nocapture --test-threads=1
+        run: |
+          cargo test --all-features -p horcrux-api --test it -- depth_restart_crash:: --ignored --nocapture --test-threads=1
 
       - name: Upgrade from the previous release
         env:
           HORCRUX_DEPTH_DIR: /tmp/hcx-depth
-        run: cargo test --all-features -p horcrux-api --test it -- depth_upgrade:: --ignored --nocapture --test-threads=1
+        run: |
+          cargo test --all-features -p horcrux-api --test it -- depth_upgrade:: --ignored --nocapture --test-threads=1
 
       - name: Server logs on failure
         if: failure()
