@@ -814,6 +814,9 @@ jobs:
         run: kill "$(cat /tmp/horcrux-e2e.pid)" 2>/dev/null || true
 
       - name: UI hides features a reduced USE set did not compile in
+        # Independent of the steps above (own binary, own port), so it
+        # still reports when an earlier E2E step failed.
+        if: ${{ !cancelled() }}
         # Same UI bundle, server built with only the lxc feature (what
         # USE="lxc -docker -podman -qemu -backup -cluster -nas -kubernetes"
         # compiles): menus, pages and form options of everything else must
@@ -822,20 +825,20 @@ jobs:
           cargo build -p horcrux-api --bin horcrux-api --no-default-features --features lxc
           cp target/debug/horcrux-api /tmp/horcrux-api-reduced
           rm -rf /tmp/e2e-reduced && mkdir -p /tmp/e2e-reduced
-          HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8007 HORCRUX_DATA_DIR=/tmp/e2e-reduced \
+          HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8017 HORCRUX_DATA_DIR=/tmp/e2e-reduced \
           HORCRUX_DATABASE_URL="sqlite:///tmp/e2e-reduced/horcrux.db" \
           HORCRUX_UI_DIR="$PWD/horcrux-api/horcrux-ui/dist" \
           ADMIN_PASSWORD=admin RATE_LIMIT_MAX_REQUESTS=100000 AUTH_RATE_LIMIT_MAX_REQUESTS=1000 RUST_LOG=info \
           nohup /tmp/horcrux-api-reduced > /tmp/horcrux-reduced.log 2>&1 &
           echo $! > /tmp/horcrux-reduced.pid
           for i in $(seq 1 60); do
-            curl -sf http://127.0.0.1:8007/api/health >/dev/null && break
+            curl -sf http://127.0.0.1:8017/api/health >/dev/null && break
             sleep 1
           done
-          curl -sf http://127.0.0.1:8007/api/features
+          curl -sf http://127.0.0.1:8017/api/features
           echo
           set +e
-          BASE_URL=http://127.0.0.1:8007 MODE=reduced /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/ui_features_e2e.py
+          BASE_URL=http://127.0.0.1:8017 MODE=reduced /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/ui_features_e2e.py
           rc=$?
           kill "$(cat /tmp/horcrux-reduced.pid)" 2>/dev/null
           [ $rc -eq 0 ] || { tail -100 /tmp/horcrux-reduced.log; exit $rc; }
