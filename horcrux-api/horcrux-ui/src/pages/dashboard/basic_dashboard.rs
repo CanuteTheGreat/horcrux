@@ -103,7 +103,7 @@ pub fn Dashboard() -> impl IntoView {
                                     <li class={format!("alert-item severity-{}", alert.severity.to_lowercase())}>
                                         <strong>{&alert.rule_name}</strong>
                                         " - "
-                                        {&alert.metric}
+                                        {&alert.target}
                                         " - "
                                         {&alert.message}
                                     </li>

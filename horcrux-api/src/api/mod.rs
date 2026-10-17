@@ -1,6 +1,7 @@
 //! HTTP route modules, one per work lane, each merged into the protected
 //! router by a single line in main.rs.
 
+pub mod alert_rules;
 pub mod auth;
 #[cfg(feature = "backup")]
 pub mod backup;

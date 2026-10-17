@@ -470,6 +470,7 @@ async fn ui_types_read_real_api_responses() {
     check!("/replication/jobs", Vec<api::ReplicationJob>);
     check!("/alerts/active", Vec<api::ActiveAlert>);
     check!("/alerts/rules", Vec<api::AlertRule>);
+    check!("/alerts/history", Vec<api::ActiveAlert>);
     check!("/cluster/nodes", Vec<api::ClusterNode>);
     check!("/cluster/architecture", api::ClusterArchitecture);
     check!("/users", Vec<api::User>);
@@ -994,6 +995,7 @@ fn channel(
 #[tokio::test]
 async fn notification_channels_deliver_for_real() {
     use reqwest::Method;
+    let _serial = CHANNEL_TESTS.lock().await;
     let c = client();
     let token = login(&c).await;
     let (hook_addr, mut hooks) = http_receiver("127.0.0.1:0", 200).await;
@@ -1272,6 +1274,202 @@ async fn notification_channels_deliver_for_real() {
     }
     let (status, _) = get_raw(&c, &token, &format!("/notifications/channels/{}", wh.id)).await;
     assert_eq!(status, 404, "deleted channel still readable");
+}
+
+/// Serializes the tests that create notification channels or fire alerts:
+/// a fired alert goes to EVERY enabled channel, so running them together
+/// would put unexpected messages into each other's receivers / counters.
+static CHANNEL_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Monitoring > Alert Center against the real server: the UI's own
+/// `AlertRule` / `ActiveAlert` types must read what the API returns for a
+/// real rule (the old UI type expected `condition` to be a string, so the
+/// page showed "invalid type: map, expected a string" for any rule), every
+/// action the page offers must work, and a rule must really fire from the
+/// node's metrics and be delivered to a notification channel.
+#[tokio::test]
+async fn alert_center_rules_fire_for_real() {
+    use reqwest::Method;
+    let _serial = CHANNEL_TESTS.lock().await;
+    let c = client();
+    let token = login(&c).await;
+    let (hook_addr, mut hooks) = http_receiver("127.0.0.1:0", 200).await;
+
+    let (status, body) = send_json(
+        &c,
+        &token,
+        Method::POST,
+        "/notifications/channels",
+        Some(
+            serde_json::to_value(channel(
+                "contract-alert-hook",
+                "webhook",
+                api::NotificationChannelConfig::Webhook {
+                    url: format!("http://{hook_addr}/alert"),
+                    method: "POST".into(),
+                    headers: Default::default(),
+                    auth: None,
+                },
+            ))
+            .unwrap(),
+        ),
+    )
+    .await;
+    assert!(
+        status == 200 || status == 201,
+        "create channel: {status} {body}"
+    );
+    let hook: api::NotificationChannel = decode("POST /notifications/channels", &body);
+
+    // A rule the node always satisfies (load average > -1), firing at once.
+    let rule = api::AlertRule {
+        id: format!("contract-rule-{}", chrono::Utc::now().timestamp_millis()),
+        name: "contract any load".into(),
+        description: "contract test".into(),
+        severity: "info".into(),
+        enabled: true,
+        condition: api::AlertCondition {
+            metric_type: "node_load".into(),
+            operator: "greaterthan".into(),
+            threshold: -1.0,
+            target_pattern: "*".into(),
+            duration_seconds: 0,
+        },
+    };
+    let rule_path = format!("/alerts/rules/{}", rule.id);
+    let (status, body) = send_json(
+        &c,
+        &token,
+        Method::POST,
+        "/alerts/rules",
+        Some(serde_json::to_value(&rule).unwrap()),
+    )
+    .await;
+    assert_eq!(status, 201, "create rule: {body}");
+    let rules: Vec<api::AlertRule> = fetch(&c, &token, "/alerts/rules").await;
+    assert_eq!(
+        rules.iter().find(|r| r.id == rule.id),
+        Some(&rule),
+        "listed rule round-trips through the UI type"
+    );
+
+    // Edit (the page's Save Changes).
+    let mut edited = rule.clone();
+    edited.name = "contract any load (edited)".into();
+    edited.severity = "warning".into();
+    let (status, body) = send_json(
+        &c,
+        &token,
+        Method::PUT,
+        &rule_path,
+        Some(serde_json::to_value(&edited).unwrap()),
+    )
+    .await;
+    assert_eq!(status, 200, "update rule: {body}");
+    assert_eq!(
+        decode::<api::AlertRule>("PUT /alerts/rules/:id", &body),
+        edited
+    );
+    let rules: Vec<api::AlertRule> = fetch(&c, &token, "/alerts/rules").await;
+    assert_eq!(rules.iter().find(|r| r.id == rule.id), Some(&edited));
+
+    // Test button: a test alert reaches the channel.
+    let (status, body) = send_json(
+        &c,
+        &token,
+        Method::POST,
+        &format!("{rule_path}/test"),
+        Some(Value::Null),
+    )
+    .await;
+    assert_eq!(status, 200, "test rule: {body}");
+    let res: api::AlertRuleTestResult = decode("POST /alerts/rules/:id/test", &body);
+    assert!(res.channels >= 1 && res.delivered >= 1, "{res:?}");
+
+    // The evaluator (every 15 s) fires the rule from real node metrics.
+    let mut fired: Option<api::ActiveAlert> = None;
+    for _ in 0..60 {
+        let active: Vec<api::ActiveAlert> = fetch(&c, &token, "/alerts/active").await;
+        if let Some(a) = active.into_iter().find(|a| a.rule_id == rule.id) {
+            fired = Some(a);
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    let fired = fired.expect("rule never fired from the node's metrics");
+    assert_eq!(fired.status, "firing");
+    assert_eq!(fired.severity, "warning");
+    assert_eq!(fired.rule_name, edited.name);
+    assert!(
+        !fired.target.is_empty() && fired.metric_value > -1.0,
+        "{fired:?}"
+    );
+
+    // Both the test alert and the real one were delivered to the webhook.
+    let mut events = std::collections::HashSet::new();
+    while !(events.contains("alert_test") && events.contains("alert")) {
+        let got = next(&mut hooks, "alert delivery").await;
+        assert_eq!(got.path, "/alert");
+        events.insert(got.json()["event"].as_str().unwrap_or("").to_string());
+    }
+
+    // Acknowledge (the page's button sends the logged-in user).
+    let (status, body) = send_json(
+        &c,
+        &token,
+        Method::POST,
+        &format!("/alerts/{}/{}/acknowledge", rule.id, fired.target),
+        Some(json!({"user": "admin"})),
+    )
+    .await;
+    assert_eq!(status, 200, "acknowledge: {body}");
+    let active: Vec<api::ActiveAlert> = fetch(&c, &token, "/alerts/active").await;
+    let acked = active
+        .iter()
+        .find(|a| a.rule_id == rule.id)
+        .expect("still active");
+    assert_eq!(acked.status, "acknowledged");
+    assert_eq!(acked.acknowledged_by.as_deref(), Some("admin"));
+
+    // Disable: the alert resolves and lands in the history.
+    let (status, body) = send_json(
+        &c,
+        &token,
+        Method::PUT,
+        &format!("{rule_path}/toggle"),
+        Some(json!({"enabled": false})),
+    )
+    .await;
+    assert_eq!(status, 200, "toggle: {body}");
+    assert!(!decode::<api::AlertRule>("PUT /alerts/rules/:id/toggle", &body).enabled);
+    let active: Vec<api::ActiveAlert> = fetch(&c, &token, "/alerts/active").await;
+    assert!(
+        active.iter().all(|a| a.rule_id != rule.id),
+        "resolved on disable"
+    );
+    let history: Vec<api::ActiveAlert> = fetch(&c, &token, "/alerts/history?limit=200").await;
+    assert!(
+        history
+            .iter()
+            .any(|a| a.rule_id == rule.id && a.status == "resolved" && a.resolved_at.is_some()),
+        "resolved alert in history"
+    );
+
+    let (status, _) = send_json(&c, &token, Method::DELETE, &rule_path, None).await;
+    assert_eq!(status, 204, "delete rule");
+    let (status, _) = send_json(&c, &token, Method::DELETE, &rule_path, None).await;
+    assert_eq!(status, 404, "deleting a missing rule is a 404, not a 500");
+    let rules: Vec<api::AlertRule> = fetch(&c, &token, "/alerts/rules").await;
+    assert!(rules.iter().all(|r| r.id != rule.id));
+    let (status, _) = send_json(
+        &c,
+        &token,
+        Method::DELETE,
+        &format!("/notifications/channels/{}", hook.id),
+        None,
+    )
+    .await;
+    assert_eq!(status, 204);
 }
 
 #[tokio::test]

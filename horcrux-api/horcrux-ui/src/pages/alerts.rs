@@ -38,11 +38,11 @@ pub fn Alerts() -> impl IntoView {
                                                 <h3>{&alert.rule_name}</h3>
                                                 <span class="alert-status">{&alert.status}</span>
                                             </div>
-                                            <p class="alert-target"><strong>"Metric:"</strong> " " {&alert.metric}</p>
+                                            <p class="alert-target"><strong>"Target:"</strong> " " {&alert.target}</p>
                                             <p class="alert-message">{&alert.message}</p>
                                             <p class="alert-time">
-                                                "Started at: "
-                                                {alert.started_at.to_rfc2822()}
+                                                "Fired at: "
+                                                {api::format_unix_time(alert.fired_at)}
                                             </p>
                                         </div>
                                     }

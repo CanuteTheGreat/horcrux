@@ -61,6 +61,9 @@ pub struct AlertManager {
     /// notification_channels.rs); every fired alert is delivered to them too.
     channel_store: std::sync::OnceLock<Arc<crate::notification_channels::NotificationChannelStore>>,
     max_history: usize,
+    /// `rule_id:target` -> unix time the condition first held, for rules
+    /// with a `duration_seconds` that has not elapsed yet.
+    pending: Arc<RwLock<HashMap<String, i64>>>,
     /// Durable copy of rules and notification channels; `None` = in-memory.
     store: Option<ConfigStore>,
 }
@@ -80,6 +83,7 @@ impl AlertManager {
             notification_channels: Arc::new(RwLock::new(Vec::new())),
             channel_store: std::sync::OnceLock::new(),
             max_history: 1000, // Keep last 1000 alerts
+            pending: Arc::new(RwLock::new(HashMap::new())),
             store: None,
         }
     }
@@ -141,18 +145,85 @@ impl AlertManager {
         Ok(())
     }
 
-    /// Remove an alert rule
+    /// Remove an alert rule (its active alerts are resolved).
     pub async fn remove_rule(&self, rule_id: &str) -> Result<()> {
         let mut rules = self.rules.write().await;
         if !rules.contains_key(rule_id) {
-            return Err(horcrux_common::Error::System(format!(
+            return Err(horcrux_common::Error::NotFound(format!(
                 "Alert rule {} not found",
                 rule_id
             )));
         }
         config_store::delete_opt(&self.store, kinds::ALERT_RULE, rule_id).await?;
         rules.remove(rule_id);
+        drop(rules);
+        self.resolve_rule_alerts(rule_id).await;
         Ok(())
+    }
+
+    /// Replace an existing rule (the id in the path wins over the body's).
+    /// Its active alerts are resolved: they were raised under the old
+    /// condition and will re-fire on the next evaluation if still true.
+    pub async fn update_rule(&self, rule_id: &str, mut rule: AlertRule) -> Result<AlertRule> {
+        rule.id = rule_id.to_string();
+        let mut rules = self.rules.write().await;
+        if !rules.contains_key(rule_id) {
+            return Err(horcrux_common::Error::NotFound(format!(
+                "Alert rule {} not found",
+                rule_id
+            )));
+        }
+        config_store::put_opt(&self.store, kinds::ALERT_RULE, rule_id, &rule).await?;
+        rules.insert(rule_id.to_string(), rule.clone());
+        drop(rules);
+        self.resolve_rule_alerts(rule_id).await;
+        Ok(rule)
+    }
+
+    /// Enable or disable a rule. Disabling resolves its active alerts
+    /// (a disabled rule is never evaluated, so they would stay firing).
+    pub async fn set_rule_enabled(&self, rule_id: &str, enabled: bool) -> Result<AlertRule> {
+        let rule = {
+            let mut rules = self.rules.write().await;
+            let rule = rules.get_mut(rule_id).ok_or_else(|| {
+                horcrux_common::Error::NotFound(format!("Alert rule {} not found", rule_id))
+            })?;
+            let mut updated = rule.clone();
+            updated.enabled = enabled;
+            config_store::put_opt(&self.store, kinds::ALERT_RULE, rule_id, &updated).await?;
+            *rule = updated.clone();
+            updated
+        };
+        if !enabled {
+            self.resolve_rule_alerts(rule_id).await;
+        }
+        Ok(rule)
+    }
+
+    /// Resolve every active alert raised by a rule.
+    async fn resolve_rule_alerts(&self, rule_id: &str) {
+        let targets: Vec<String> = self
+            .active_alerts
+            .read()
+            .await
+            .values()
+            .filter(|a| a.rule_id == rule_id)
+            .map(|a| a.target.clone())
+            .collect();
+        for target in targets {
+            self.resolve_alert(rule_id, &target).await;
+        }
+        self.pending
+            .write()
+            .await
+            .retain(|key, _| !key.starts_with(&format!("{rule_id}:")));
+    }
+
+    /// The persisted Monitoring > Notifications channels, once attached.
+    pub fn channel_store(
+        &self,
+    ) -> Option<&Arc<crate::notification_channels::NotificationChannelStore>> {
+        self.channel_store.get()
     }
 
     /// Get all alert rules
@@ -167,11 +238,25 @@ impl AlertManager {
         rules.get(rule_id).cloned()
     }
 
-    /// Evaluate metric against all rules
+    /// Evaluate metric against all rules. A rule fires once its condition
+    /// has held for `duration_seconds` (0 = on the first matching sample)
+    /// and resolves on the first sample where it no longer holds.
     pub async fn evaluate_metric(&self, metric_type: MetricType, target: &str, value: f64) {
-        let rules = self.rules.read().await;
+        self.evaluate_metric_at(metric_type, target, value, chrono::Utc::now().timestamp())
+            .await
+    }
 
-        for rule in rules.values() {
+    /// [`Self::evaluate_metric`] with an explicit clock (unix seconds).
+    pub async fn evaluate_metric_at(
+        &self,
+        metric_type: MetricType,
+        target: &str,
+        value: f64,
+        now: i64,
+    ) {
+        let rules: Vec<AlertRule> = self.rules.read().await.values().cloned().collect();
+
+        for rule in &rules {
             if !rule.enabled {
                 continue;
             }
@@ -185,12 +270,14 @@ impl AlertManager {
                 continue;
             }
 
-            // Evaluate condition
-            let triggered = rule.condition.evaluate(value);
-
-            if triggered {
-                self.fire_alert(rule, target, value).await;
+            let key = format!("{}:{}", rule.id, target);
+            if rule.condition.evaluate(value) {
+                let since = *self.pending.write().await.entry(key).or_insert(now);
+                if now - since >= rule.condition.duration_seconds as i64 {
+                    self.fire_alert(rule, target, value).await;
+                }
             } else {
+                self.pending.write().await.remove(&key);
                 self.resolve_alert(&rule.id, target).await;
             }
         }
@@ -202,11 +289,22 @@ impl AlertManager {
 
         let mut active_alerts = self.active_alerts.write().await;
 
-        // Check if alert already exists and is firing
-        if let Some(existing) = active_alerts.get(&alert_key) {
-            if existing.status == AlertStatus::Firing {
-                return; // Alert already firing, don't duplicate
-            }
+        // Already firing (or acknowledged - it stays quiet until it
+        // resolves): don't duplicate it or re-notify on every sample.
+        if active_alerts.contains_key(&alert_key) {
+            return;
+        }
+        // The caller evaluated a snapshot of the rules: don't fire for a rule
+        // that has been disabled or deleted since (its alert would never be
+        // resolved again).
+        if !self
+            .rules
+            .read()
+            .await
+            .get(&rule.id)
+            .is_some_and(|r| r.enabled)
+        {
+            return;
         }
 
         let alert = Alert {
@@ -429,6 +527,126 @@ mod tests {
         assert!(!AlertManager::should_notify(
             &AlertSeverity::Critical,
             &AlertSeverity::Warning
+        ));
+    }
+
+    fn cpu_rule(id: &str, threshold: f64, duration_seconds: u64) -> AlertRule {
+        AlertRule {
+            id: id.to_string(),
+            name: format!("{id} cpu"),
+            description: String::new(),
+            severity: AlertSeverity::Warning,
+            enabled: true,
+            condition: AlertCondition {
+                metric_type: MetricType::CpuUsage,
+                operator: ComparisonOperator::GreaterThan,
+                threshold,
+                target_pattern: "vm-*".to_string(),
+                duration_seconds,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn rule_fires_only_after_its_duration_and_resolves() {
+        let mgr = AlertManager::new();
+        mgr.add_rule(cpu_rule("r1", 80.0, 60)).await.unwrap();
+
+        mgr.evaluate_metric_at(MetricType::CpuUsage, "vm-1", 95.0, 1000)
+            .await;
+        assert!(
+            mgr.get_active_alerts().await.is_empty(),
+            "pending, not firing"
+        );
+        mgr.evaluate_metric_at(MetricType::CpuUsage, "vm-1", 95.0, 1059)
+            .await;
+        assert!(mgr.get_active_alerts().await.is_empty());
+        mgr.evaluate_metric_at(MetricType::CpuUsage, "vm-1", 95.0, 1060)
+            .await;
+        let active = mgr.get_active_alerts().await;
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].target, "vm-1");
+        assert_eq!(active[0].metric_value, 95.0);
+        // Other metrics / targets outside the pattern don't touch it.
+        mgr.evaluate_metric_at(MetricType::MemoryUsage, "vm-1", 1.0, 1070)
+            .await;
+        mgr.evaluate_metric_at(MetricType::CpuUsage, "ct-1", 99.0, 1070)
+            .await;
+        assert_eq!(mgr.get_active_alerts().await.len(), 1);
+
+        // A dip below the threshold resolves it and restarts the clock.
+        mgr.evaluate_metric_at(MetricType::CpuUsage, "vm-1", 10.0, 1080)
+            .await;
+        assert!(mgr.get_active_alerts().await.is_empty());
+        assert_eq!(
+            mgr.get_alert_history(None).await[0].status,
+            AlertStatus::Resolved
+        );
+        mgr.evaluate_metric_at(MetricType::CpuUsage, "vm-1", 95.0, 1090)
+            .await;
+        assert!(mgr.get_active_alerts().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn acknowledged_alert_is_not_refired() {
+        let mgr = AlertManager::new();
+        mgr.add_rule(cpu_rule("r1", 80.0, 0)).await.unwrap();
+        mgr.evaluate_metric_at(MetricType::CpuUsage, "vm-1", 95.0, 1000)
+            .await;
+        mgr.acknowledge_alert("r1", "vm-1", "admin").await.unwrap();
+        mgr.evaluate_metric_at(MetricType::CpuUsage, "vm-1", 96.0, 1010)
+            .await;
+        let active = mgr.get_active_alerts().await;
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].status, AlertStatus::Acknowledged);
+        assert_eq!(active[0].acknowledged_by.as_deref(), Some("admin"));
+        assert_eq!(mgr.get_alert_history(None).await.len(), 1, "fired once");
+    }
+
+    #[tokio::test]
+    async fn update_toggle_and_remove_rules() {
+        let mgr = AlertManager::new();
+        mgr.add_rule(cpu_rule("r1", 80.0, 0)).await.unwrap();
+        mgr.evaluate_metric_at(MetricType::CpuUsage, "vm-1", 95.0, 1000)
+            .await;
+        assert_eq!(mgr.get_active_alerts().await.len(), 1);
+
+        // Disabling resolves its alert; the rule is no longer evaluated.
+        let r = mgr.set_rule_enabled("r1", false).await.unwrap();
+        assert!(!r.enabled);
+        assert!(mgr.get_active_alerts().await.is_empty());
+        mgr.evaluate_metric_at(MetricType::CpuUsage, "vm-1", 95.0, 1010)
+            .await;
+        assert!(mgr.get_active_alerts().await.is_empty());
+        mgr.set_rule_enabled("r1", true).await.unwrap();
+
+        // Update replaces the condition; the path id wins over the body's.
+        let mut changed = cpu_rule("ignored", 99.0, 0);
+        changed.name = "renamed".into();
+        let r = mgr.update_rule("r1", changed).await.unwrap();
+        assert_eq!(r.id, "r1");
+        let stored = mgr.get_rule("r1").await.unwrap();
+        assert_eq!(stored.name, "renamed");
+        assert_eq!(stored.condition.threshold, 99.0);
+        mgr.evaluate_metric_at(MetricType::CpuUsage, "vm-1", 95.0, 1020)
+            .await;
+        assert!(
+            mgr.get_active_alerts().await.is_empty(),
+            "95 < new threshold"
+        );
+
+        assert!(matches!(
+            mgr.update_rule("nope", cpu_rule("nope", 1.0, 0)).await,
+            Err(horcrux_common::Error::NotFound(_))
+        ));
+        assert!(matches!(
+            mgr.set_rule_enabled("nope", true).await,
+            Err(horcrux_common::Error::NotFound(_))
+        ));
+        mgr.remove_rule("r1").await.unwrap();
+        assert!(matches!(
+            mgr.remove_rule("r1").await,
+            Err(horcrux_common::Error::NotFound(_))
         ));
     }
 }

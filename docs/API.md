@@ -2616,13 +2616,18 @@ Authorization: Bearer <token>
 
 ### Alerts
 
-#### List Alert Rules
+Alert rules are evaluated by the server every 15 s against the node's
+metrics (target = the node's hostname). A rule fires once its condition has
+held for `duration_seconds`, is delivered to every enabled channel under
+Monitoring > Notifications (`/api/notifications/channels`), and resolves on
+the first sample where it no longer holds. The web UI page is
+Monitoring > Alert Center (`/monitoring/alerts`).
 
-Lists all alert rules.
+#### List Alert Rules
 
 ```http
 GET /api/alerts/rules
-Authorization: Bearer <token>
+Authorization: Bearer ***
 ```
 
 **Response**:
@@ -2631,105 +2636,97 @@ Authorization: Bearer <token>
   {
     "id": "rule-1",
     "name": "High CPU Usage",
-    "condition": "cpu_usage > 90",
-    "duration": 300,
+    "description": "",
     "severity": "warning",
     "enabled": true,
-    "notification_channels": ["slack", "email"]
+    "condition": {
+      "metric_type": "cpu_usage",
+      "operator": "greaterthan",
+      "threshold": 90.0,
+      "target_pattern": "*",
+      "duration_seconds": 300
+    }
   }
 ]
 ```
+
+- `severity`: `info`, `warning`, `critical`
+- `condition.metric_type`: `cpu_usage`, `memory_usage`, `disk_usage` (data
+  directory), `node_load` (1-minute load average), `vm_count` - evaluated;
+  `disk_io` and `network_io` are accepted but have no node-level source yet
+- `condition.operator`: `greaterthan`, `lessthan`, `equal`, `notequal`
+- `condition.target_pattern`: `*`, a prefix such as `node-*`, or an exact name
 
 #### Create Alert Rule
 
-Creates a new alert rule.
-
 ```http
 POST /api/alerts/rules
-Authorization: Bearer <token>
+Authorization: Bearer ***
 Content-Type: application/json
 
-{
-  "name": "High Memory Usage",
-  "condition": "memory_usage > 90",
-  "duration": 300,
-  "severity": "warning",
-  "notification_channels": ["slack"]
-}
+{ "id": "rule-2", "name": "High Memory Usage", "description": "",
+  "severity": "warning", "enabled": true,
+  "condition": { "metric_type": "memory_usage", "operator": "greaterthan",
+                 "threshold": 90.0, "target_pattern": "*", "duration_seconds": 300 } }
 ```
 
-**Severities**: `info`, `warning`, `critical`
+**Response**: `201 Created` (no body).
 
-**Response**:
-```json
-{
-  "id": "rule-2",
-  "message": "Alert rule created successfully"
-}
-```
-
-#### Delete Alert Rule
-
-Deletes an alert rule.
+#### Update / Enable-Disable / Test / Delete an Alert Rule
 
 ```http
-DELETE /api/alerts/rules/{rule_id}
-Authorization: Bearer <token>
+PUT  /api/alerts/rules/{rule_id}          (body: the full rule; returns it)
+PUT  /api/alerts/rules/{rule_id}/toggle   {"enabled": false}  (returns the rule)
+POST /api/alerts/rules/{rule_id}/test     -> {"channels": 1, "delivered": 1, "failed": 0}
+DELETE /api/alerts/rules/{rule_id}        -> 204 (404 when it doesn't exist)
 ```
 
-#### List Active Alerts
+Updating, disabling or deleting a rule resolves its active alerts. `test`
+sends a test alert for the rule to every enabled notification channel.
 
-Lists currently active alerts.
+#### List Active Alerts / Alert History
 
 ```http
 GET /api/alerts/active
-Authorization: Bearer <token>
+GET /api/alerts/history?limit=100
+Authorization: Bearer ***
 ```
 
-**Response**:
+**Response** (history is newest first and includes resolved alerts):
 ```json
 [
   {
-    "alert_id": "alert-1",
+    "id": "6f1c...",
     "rule_id": "rule-1",
     "rule_name": "High CPU Usage",
-    "target": "horcrux-node-1",
     "severity": "warning",
-    "triggered_at": "2025-10-09T10:30:45Z",
-    "acknowledged": false
+    "status": "firing",
+    "message": "High CPU Usage - CPU usage > threshold 90 (current: 97.5)",
+    "target": "horcrux-node-1",
+    "metric_value": 97.5,
+    "threshold": 90.0,
+    "fired_at": 1760700000,
+    "resolved_at": null,
+    "acknowledged_at": null,
+    "acknowledged_by": null
   }
 ]
 ```
 
-#### Get Alert History
-
-Gets historical alerts.
-
-```http
-GET /api/alerts/history
-Authorization: Bearer <token>
-```
-
-**Query Parameters**:
-- `start` - Start timestamp
-- `end` - End timestamp
-- `severity` - Filter by severity
+`status`: `firing`, `acknowledged`, `resolved`. Times are unix seconds.
 
 #### Acknowledge Alert
 
-Acknowledges an active alert.
-
 ```http
 POST /api/alerts/{rule_id}/{target}/acknowledge
-Authorization: Bearer <token>
+Authorization: Bearer ***
+Content-Type: application/json
+
+{"user": "admin"}
 ```
 
-**Response**:
-```json
-{
-  "message": "Alert acknowledged"
-}
-```
+**Response**: `200 OK`. An acknowledged alert stays active (and is not
+re-notified) until its condition clears.
 
 #### List Notification Channels
 

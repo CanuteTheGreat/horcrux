@@ -24,7 +24,10 @@ pub async fn routes(state: &Arc<AppState>) -> anyhow::Result<Router<Arc<AppState
 
     let router = Router::new()
         .merge(super::notifications::routes(channels))
-        .merge(super::metrics::routes(metrics));
+        .merge(super::metrics::routes(metrics))
+        // Monitoring > Alert Center: rule edit/toggle/test + rule evaluation.
+        .merge(super::alert_rules::routes());
+    super::alert_rules::start_evaluator(state.clone());
     #[cfg(feature = "kubernetes")]
     let router = router
         .merge(super::helm::routes(state))

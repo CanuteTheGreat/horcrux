@@ -3702,43 +3702,99 @@ pub async fn create_bulk_migration_job(
 // Monitoring & Alerting Data Structures
 // ============================================================================
 
+/// An alert rule exactly as `GET /api/alerts/rules` returns it
+/// (horcrux-api `alerts::rules::AlertRule`).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct AlertRule {
     pub id: String,
     pub name: String,
-    pub description: Option<String>,
-    pub metric: String,
-    pub condition: String, // greater_than, less_than, equal_to, not_equal_to
-    pub threshold: f64,
-    pub duration_seconds: u32,
-    pub severity: String, // info, warning, critical
+    pub description: String,
+    /// info / warning / critical
+    pub severity: String,
     pub enabled: bool,
-    pub labels: std::collections::HashMap<String, String>,
-    pub annotations: std::collections::HashMap<String, String>,
-    pub notification_channels: Vec<String>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub last_triggered: Option<chrono::DateTime<chrono::Utc>>,
-    pub trigger_count: u32,
+    pub condition: AlertCondition,
 }
 
+/// horcrux-api `alerts::rules::AlertCondition`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AlertCondition {
+    /// cpu_usage / memory_usage / disk_usage / disk_io / network_io /
+    /// node_load / vm_count (see [`ALERT_METRIC_TYPES`])
+    pub metric_type: String,
+    /// greaterthan / lessthan / equal / notequal (see [`ALERT_OPERATORS`])
+    pub operator: String,
+    pub threshold: f64,
+    /// Which node / VM / container ids it applies to: `*`, `vm-*`, `vm-100`
+    pub target_pattern: String,
+    /// How long the condition must hold before the alert fires
+    pub duration_seconds: u64,
+}
+
+/// (value, label) of every metric type the API evaluates.
+pub const ALERT_METRIC_TYPES: &[(&str, &str)] = &[
+    ("cpu_usage", "CPU usage %"),
+    ("memory_usage", "Memory usage %"),
+    ("disk_usage", "Disk usage % (node data directory)"),
+    ("disk_io", "Disk I/O (bytes/s, VMs and containers)"),
+    ("network_io", "Network I/O (bytes/s, VMs and containers)"),
+    ("node_load", "Node load average (1 min)"),
+    ("vm_count", "VM count"),
+];
+
+/// (value, symbol) of every comparison operator the API accepts.
+pub const ALERT_OPERATORS: &[(&str, &str)] = &[
+    ("greaterthan", ">"),
+    ("lessthan", "<"),
+    ("equal", "=="),
+    ("notequal", "!="),
+];
+
+/// Human label of a metric type value (falls back to the raw value).
+pub fn alert_metric_label(metric_type: &str) -> &str {
+    ALERT_METRIC_TYPES
+        .iter()
+        .find(|(v, _)| *v == metric_type)
+        .map(|(_, l)| *l)
+        .unwrap_or(metric_type)
+}
+
+/// Symbol of an operator value (falls back to the raw value).
+pub fn alert_operator_symbol(operator: &str) -> &str {
+    ALERT_OPERATORS
+        .iter()
+        .find(|(v, _)| *v == operator)
+        .map(|(_, s)| *s)
+        .unwrap_or(operator)
+}
+
+/// A fired alert exactly as `GET /api/alerts/active` and
+/// `GET /api/alerts/history` return it (horcrux-api `alerts::Alert`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ActiveAlert {
     pub id: String,
     pub rule_id: String,
     pub rule_name: String,
-    pub metric: String,
-    pub condition: String,
-    pub threshold: f64,
-    pub current_value: f64,
+    /// info / warning / critical
     pub severity: String,
-    pub status: String, // firing, pending, resolved, silenced
+    /// firing / resolved / acknowledged
+    pub status: String,
     pub message: String,
-    pub labels: std::collections::HashMap<String, String>,
-    pub annotations: std::collections::HashMap<String, String>,
-    pub started_at: chrono::DateTime<chrono::Utc>,
-    pub resolved_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub acknowledged_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub silenced_until: Option<chrono::DateTime<chrono::Utc>>,
+    /// The node, VM or container id the alert is about
+    pub target: String,
+    pub metric_value: f64,
+    pub threshold: f64,
+    /// Unix seconds
+    pub fired_at: i64,
+    pub resolved_at: Option<i64>,
+    pub acknowledged_at: Option<i64>,
+    pub acknowledged_by: Option<String>,
+}
+
+/// Format unix seconds as `YYYY-MM-DD HH:MM UTC`.
+pub fn format_unix_time(ts: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
+        .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|| ts.to_string())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -3894,29 +3950,6 @@ pub struct CreateQueryTemplateRequest {
     pub variables: Vec<QueryVariable>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AlertPreview {
-    pub query_valid: bool,
-    pub current_value: Option<f64>,
-    pub would_trigger: bool,
-    pub sample_data: Vec<MetricSample>,
-    pub error_message: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CreateAlertRuleRequest {
-    pub name: String,
-    pub description: String,
-    pub query: String,
-    pub condition: String,
-    pub threshold: f64,
-    pub duration: String,
-    pub severity: String,
-    pub labels: std::collections::HashMap<String, String>,
-    pub annotations: std::collections::HashMap<String, String>,
-    pub notification_channels: Vec<String>,
-}
-
 // Metrics API Functions
 pub async fn get_metrics_catalog() -> Result<Vec<MetricDefinition>, ApiError> {
     fetch_json("/metrics/catalog").await
@@ -3963,8 +3996,9 @@ pub async fn get_alert_rules() -> Result<Vec<AlertRule>, ApiError> {
     fetch_json("/alerts/rules").await
 }
 
-pub async fn create_alert_rule(rule: AlertRule) -> Result<AlertRule, ApiError> {
-    post_json("/alerts/rules", &rule).await
+/// `POST /api/alerts/rules` answers 201 with no body.
+pub async fn create_alert_rule(rule: AlertRule) -> Result<(), ApiError> {
+    post_json_no_response("/alerts/rules", &rule).await
 }
 
 pub async fn update_alert_rule(rule: AlertRule) -> Result<AlertRule, ApiError> {
@@ -3975,7 +4009,7 @@ pub async fn delete_alert_rule(rule_id: String) -> Result<(), ApiError> {
     delete_json(&format!("/alerts/rules/{}", rule_id)).await
 }
 
-pub async fn toggle_alert_rule(rule_id: String, enabled: bool) -> Result<(), ApiError> {
+pub async fn toggle_alert_rule(rule_id: String, enabled: bool) -> Result<AlertRule, ApiError> {
     put_json(
         &format!("/alerts/rules/{}/toggle", rule_id),
         &serde_json::json!({"enabled": enabled}),
@@ -3983,17 +4017,18 @@ pub async fn toggle_alert_rule(rule_id: String, enabled: bool) -> Result<(), Api
     .await
 }
 
-pub async fn preview_alert_rule(
-    query: String,
-    condition: String,
-    threshold: f64,
-) -> Result<AlertPreview, ApiError> {
-    let request = serde_json::json!({
-        "query": query,
-        "condition": condition,
-        "threshold": threshold
-    });
-    post_json("/alerts/preview", &request).await
+/// Reply of `POST /api/alerts/rules/:id/test`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AlertRuleTestResult {
+    /// Enabled notification channels the test alert was sent to
+    pub channels: usize,
+    pub delivered: usize,
+    pub failed: usize,
+}
+
+/// Fired alerts, newest first (`GET /api/alerts/history`).
+pub async fn get_alert_history(limit: usize) -> Result<Vec<ActiveAlert>, ApiError> {
+    fetch_json(&format!("/alerts/history?limit={}", limit)).await
 }
 
 pub async fn get_notification_channels() -> Result<Vec<NotificationChannel>, ApiError> {
@@ -4027,20 +4062,22 @@ pub async fn test_notification_channel(channel_id: String) -> Result<(), ApiErro
     post_json(&format!("/notifications/channels/{}/test", channel_id), &()).await
 }
 
-/// Test alert rule
-pub async fn test_alert_rule(rule_id: String) -> Result<(), ApiError> {
+/// Send a test alert for a rule to every enabled notification channel.
+pub async fn test_alert_rule(rule_id: String) -> Result<AlertRuleTestResult, ApiError> {
     post_json(&format!("/alerts/rules/{}/test", rule_id), &()).await
 }
 
-/// Acknowledge alert
-pub async fn acknowledge_alert(alert_id: String) -> Result<(), ApiError> {
-    post_json(&format!("/alerts/{}/acknowledge", alert_id), &()).await
-}
-
-/// Silence alert for a duration
-pub async fn silence_alert(alert_id: String, duration_seconds: u32) -> Result<(), ApiError> {
-    let body = serde_json::json!({ "duration_seconds": duration_seconds });
-    post_json(&format!("/alerts/{}/silence", alert_id), &body).await
+/// Acknowledge a firing alert (`POST /api/alerts/:rule_id/:target/acknowledge`).
+pub async fn acknowledge_alert(alert: &ActiveAlert, user: &str) -> Result<(), ApiError> {
+    post_json_no_response(
+        &format!(
+            "/alerts/{}/{}/acknowledge",
+            urlencoding::encode(&alert.rule_id),
+            urlencoding::encode(&alert.target)
+        ),
+        &serde_json::json!({ "user": user }),
+    )
+    .await
 }
 
 /// Create notification channel

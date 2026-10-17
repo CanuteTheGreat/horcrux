@@ -538,8 +538,9 @@ impl NotificationChannelStore {
         Ok(result)
     }
 
-    /// Deliver a fired alert to every enabled channel.
-    pub async fn dispatch(&self, msg: &Message) {
+    /// Deliver a fired alert to every enabled channel. Returns
+    /// (delivered, failed) channel counts.
+    pub async fn dispatch(&self, msg: &Message) -> (usize, usize) {
         let channels: Vec<NotificationChannel> = self
             .channels
             .read()
@@ -548,13 +549,18 @@ impl NotificationChannelStore {
             .filter(|c| c.enabled)
             .cloned()
             .collect();
+        let (mut delivered, mut failed) = (0, 0);
         for c in channels {
             let result = deliver(&self.http, &c, msg).await;
             if let Err(e) = &result {
                 tracing::warn!("notification via '{}' ({}) failed: {}", c.name, c.id, e);
+                failed += 1;
+            } else {
+                delivered += 1;
             }
             self.record(&c.id, result.is_ok()).await;
         }
+        (delivered, failed)
     }
 }
 

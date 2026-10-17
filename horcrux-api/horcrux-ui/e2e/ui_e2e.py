@@ -72,6 +72,7 @@ BK_VM = "e2e-bk-restored"
 BK_JOB = "e2e-bk-job"
 DISP_VM = "e2e-display-vm"
 NOTIFY = "e2e-notify-hook"
+ALERT_RULE = "e2e-alert-rule"
 _TOKEN = []
 
 
@@ -149,6 +150,9 @@ def cleanup():
         for ch in api_get("/api/notifications/channels", tok) or []:
             if ch.get("name") == NOTIFY:
                 _req("DELETE", f"/api/notifications/channels/{ch['id']}", tok)
+        for r in api_get("/api/alerts/rules", tok) or []:
+            if r.get("name") == ALERT_RULE:
+                _req("DELETE", f"/api/alerts/rules/{r['id']}", tok)
         for v in api_get("/api/vms", tok) or []:
             if v.get("name") == DISP_VM:
                 try:
@@ -248,6 +252,78 @@ def main():
         assert wait_for(lambda: received, "webhook test delivery"), received
         assert received[0]["event"] == "test", received
         expect(card.locator(".stat-value.success")).to_have_text("1", timeout=30000)
+
+        # ---- Monitoring > Alert Center: a rule made in the form really fires
+        # (the page used to fail with "invalid type: map, expected a string"
+        # for any rule, and rules were never evaluated at all).
+        def events(kind):
+            return [m for m in received if isinstance(m, dict) and m.get("event") == kind]
+
+        page.goto(f"{BASE}/monitoring/alerts")
+        page.get_by_role("button", name="Create Alert Rule").first.click()
+        page.fill("#rule-name", ALERT_RULE)
+        page.locator("#rule-metric").select_option("node_load")
+        page.locator("#rule-operator").select_option("greaterthan")
+        page.fill("#rule-threshold", "-1")
+        page.fill("#rule-duration", "0")
+        page.locator("#rule-severity").select_option("critical")
+        page.locator("#rule-submit").click()
+        rcard = page.locator(f".alert-rule-card[data-rule-name='{ALERT_RULE}']")
+        expect(rcard).to_be_visible(timeout=30000)
+        expect(rcard).to_contain_text("Node load average (1 min) > -1")
+        expect(page.locator("#alert-center-error")).to_have_count(0)
+        rule = next(r for r in api_get("/api/alerts/rules", token()) if r["name"] == ALERT_RULE)
+        assert rule["severity"] == "critical" and rule["enabled"], rule
+        assert rule["condition"] == {"metric_type": "node_load", "operator": "greaterthan",
+                                     "threshold": -1.0, "target_pattern": "*",
+                                     "duration_seconds": 0}, rule
+
+        rcard.get_by_role("button", name="Test").click()
+        page.get_by_role("button", name="Send Test Alert").click()
+        expect(page.locator("#alert-center-notice")).to_contain_text(
+            re.compile(r"[1-9]\d* delivered"), timeout=30000)
+        assert wait_for(lambda: events("alert_test"), "test alert delivery"), received
+
+        # The server's evaluator (every 15 s) fires it from the node's load.
+        page.get_by_role("button", name=re.compile(r"^Active Alerts")).click()
+        active = page.locator(f".active-alert-card[data-rule-name='{ALERT_RULE}']")
+
+        def fired():
+            page.get_by_role("button", name="Refresh").click()
+            page.wait_for_timeout(500)
+            return active.count() > 0
+
+        wait_for(fired, "rule to fire", timeout=90)
+        expect(active).to_contain_text("firing")
+        assert wait_for(lambda: events("alert"), "fired alert delivery"), received
+        active.get_by_role("button", name="Acknowledge").click()
+        expect(active).to_contain_text("acknowledged", timeout=30000)
+        expect(active).to_contain_text("admin")
+
+        # Edit: an unreachable threshold resolves the alert into the history.
+        page.get_by_role("button", name=re.compile(r"^Alert Rules")).click()
+        rcard.get_by_role("button", name="Edit").click()
+        expect(page.locator("#rule-name")).to_have_value(ALERT_RULE)
+        page.fill("#rule-threshold", "1000000")
+        page.locator("#rule-submit").click()
+        expect(page.locator("#alert-center-notice")).to_contain_text("updated", timeout=30000)
+        expect(rcard).to_contain_text("> 1000000")
+        rule = next(r for r in api_get("/api/alerts/rules", token()) if r["name"] == ALERT_RULE)
+        assert rule["condition"]["threshold"] == 1000000, rule
+        assert not [a for a in api_get("/api/alerts/active", token()) if a["rule_id"] == rule["id"]]
+        page.get_by_role("button", name="Alert History").click()
+        hist = page.locator(".alert-history-table tbody tr", has_text=ALERT_RULE)
+        expect(hist.filter(has_text="resolved").first).to_be_visible(timeout=30000)
+
+        # Disable, then Delete.
+        page.get_by_role("button", name=re.compile(r"^Alert Rules")).click()
+        rcard.get_by_role("button", name="Disable").click()
+        expect(rcard.locator(".status-disabled")).to_be_visible(timeout=30000)
+        assert not next(r for r in api_get("/api/alerts/rules", token())
+                        if r["name"] == ALERT_RULE)["enabled"]
+        rcard.get_by_role("button", name="Delete").click()
+        expect(rcard).to_have_count(0, timeout=30000)
+        assert not [r for r in api_get("/api/alerts/rules", token()) if r["name"] == ALERT_RULE]
         hook.shutdown()
 
         # ---- Monitoring > Metrics Explorer: real samples, real chart --------
