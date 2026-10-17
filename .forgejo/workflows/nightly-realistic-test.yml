@@ -76,7 +76,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential libvirt-dev \
+            build-essential libvirt-dev libpam0g-dev \
             qemu-system-x86 qemu-utils \
             containernetworking-plugins \
             iproute2 iputils-ping curl

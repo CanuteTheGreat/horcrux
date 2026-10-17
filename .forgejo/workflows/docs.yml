@@ -45,7 +45,8 @@ jobs:
         # build fails outright. Missing libvirt-dev here (while every other
         # workflow job that touches --all-features installs it) was the
         # actual root cause of this job's recurring failures.
-        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev
+        # libpam0g-dev: the default `pam` feature (PAM realm) links libpam.
+        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
 
       - name: Ensure Node.js is present (self-heal)
         # Same root cause as ci.yml's identical step (added in fb065bd):
