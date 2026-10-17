@@ -578,6 +578,9 @@ pub struct CreateContainerRequest {
     pub volumes: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub command: Vec<String>,
+    /// LXC settings (runtime "lxc" only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lxc: Option<horcrux_common::LxcOptions>,
 }
 
 /// Create a container
@@ -606,6 +609,206 @@ pub async fn stop_container(container_id: &str) -> Result<(), ApiError> {
 /// Delete a container
 pub async fn delete_container(container_id: &str) -> Result<(), ApiError> {
     delete_json(&format!("/containers/{}", container_id)).await
+}
+
+// ---- LXC (lane J: pct/pveam parity) -----------------------------------
+// Types shared with the API come from horcrux_common (LxcOptions,
+// LxcTemplate, LxcCatalogEntry, LxcSnapshot), so they can't drift.
+
+pub use horcrux_common::{LxcCatalogEntry, LxcOptions, LxcSnapshot, LxcTemplate};
+
+/// GET /api/containers/:id (full config, including `lxc`).
+pub async fn get_container_config(id: &str) -> Result<horcrux_common::ContainerConfig, ApiError> {
+    fetch_json(&format!("/containers/{}", urlencoding::encode(id))).await
+}
+
+/// `horcrux-api` container::lxc::LxcBridge.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LxcBridge {
+    pub name: String,
+    pub vlan_aware: bool,
+}
+
+/// GET /api/lxc/host (container::lxc::LxcHostInfo).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LxcHostInfo {
+    pub available: bool,
+    pub version: Option<String>,
+    pub arch: String,
+    pub lxc_path: String,
+    pub template_dir: String,
+    pub apparmor: bool,
+    pub bridges: Vec<LxcBridge>,
+}
+
+/// GET/PUT /api/containers/:id/lxc/config (container::lxc::LxcConfigView).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LxcConfigView {
+    pub id: String,
+    pub name: String,
+    pub memory: u64,
+    pub cpus: u32,
+    pub template: String,
+    pub distro: String,
+    pub arch: String,
+    pub rootfs_kind: String,
+    pub lxc: LxcOptions,
+    pub pending: Vec<String>,
+    pub raw_config: String,
+}
+
+pub async fn get_lxc_host() -> Result<LxcHostInfo, ApiError> {
+    fetch_json("/lxc/host").await
+}
+
+pub fn lxc_catalog_path(arch: Option<&str>, refresh: bool) -> String {
+    let mut p = format!("/lxc/templates/catalog?refresh={refresh}");
+    if let Some(a) = arch {
+        p.push_str(&format!("&arch={}", urlencoding::encode(a)));
+    }
+    p
+}
+
+pub async fn get_lxc_catalog(
+    arch: Option<&str>,
+    refresh: bool,
+) -> Result<Vec<LxcCatalogEntry>, ApiError> {
+    fetch_json(&lxc_catalog_path(arch, refresh)).await
+}
+
+pub async fn get_lxc_templates() -> Result<Vec<LxcTemplate>, ApiError> {
+    fetch_json("/lxc/templates").await
+}
+
+pub async fn download_lxc_template(e: &LxcCatalogEntry) -> Result<LxcTemplate, ApiError> {
+    post_json(
+        "/lxc/templates",
+        &serde_json::json!({
+            "distro": e.distro, "release": e.release, "arch": e.arch, "variant": e.variant
+        }),
+    )
+    .await
+}
+
+/// DELETE /api/lxc/templates/<distro>/<release>/<arch>/<variant>
+pub fn lxc_template_path(id: &str) -> String {
+    format!(
+        "/lxc/templates/{}",
+        id.split('/')
+            .map(|c| urlencoding::encode(c).into_owned())
+            .collect::<Vec<_>>()
+            .join("/")
+    )
+}
+
+pub async fn delete_lxc_template(id: &str) -> Result<(), ApiError> {
+    delete_json(&lxc_template_path(id)).await
+}
+
+fn ct_path(id: &str, rest: &str) -> String {
+    format!("/containers/{}{}", urlencoding::encode(id), rest)
+}
+
+pub async fn shutdown_container(
+    id: &str,
+    timeout: Option<u32>,
+    force: bool,
+) -> Result<horcrux_common::ContainerConfig, ApiError> {
+    post_json(
+        &ct_path(id, "/shutdown"),
+        &serde_json::json!({"timeout": timeout, "force": force}),
+    )
+    .await
+}
+
+pub async fn reboot_container(id: &str) -> Result<horcrux_common::ContainerConfig, ApiError> {
+    post_json(&ct_path(id, "/reboot"), &serde_json::json!({})).await
+}
+
+pub async fn pause_container(id: &str) -> Result<horcrux_common::ContainerConfig, ApiError> {
+    post_json(&ct_path(id, "/pause"), &serde_json::json!({})).await
+}
+
+pub async fn resume_container(id: &str) -> Result<horcrux_common::ContainerConfig, ApiError> {
+    post_json(&ct_path(id, "/resume"), &serde_json::json!({})).await
+}
+
+pub async fn kill_container(id: &str) -> Result<horcrux_common::ContainerConfig, ApiError> {
+    post_json(&ct_path(id, "/stop"), &serde_json::json!({})).await
+}
+
+pub async fn get_lxc_config(id: &str) -> Result<LxcConfigView, ApiError> {
+    fetch_json(&ct_path(id, "/lxc/config")).await
+}
+
+pub async fn update_lxc_config(
+    id: &str,
+    memory: Option<u64>,
+    cpus: Option<u32>,
+    lxc: &LxcOptions,
+) -> Result<LxcConfigView, ApiError> {
+    put_json(
+        &ct_path(id, "/lxc/config"),
+        &serde_json::json!({"memory": memory, "cpus": cpus, "lxc": lxc}),
+    )
+    .await
+}
+
+pub async fn resize_container_disk(id: &str, disk_gb: u64) -> Result<LxcConfigView, ApiError> {
+    post_json(
+        &ct_path(id, "/resize"),
+        &serde_json::json!({ "disk_gb": disk_gb }),
+    )
+    .await
+}
+
+pub async fn get_container_snapshots(id: &str) -> Result<Vec<LxcSnapshot>, ApiError> {
+    fetch_json(&ct_path(id, "/snapshots")).await
+}
+
+pub async fn create_container_snapshot(
+    id: &str,
+    name: &str,
+    comment: Option<String>,
+) -> Result<LxcSnapshot, ApiError> {
+    post_json(
+        &ct_path(id, "/snapshots"),
+        &serde_json::json!({"name": name, "comment": comment}),
+    )
+    .await
+}
+
+pub async fn rollback_container_snapshot(
+    id: &str,
+    snap: &str,
+) -> Result<horcrux_common::ContainerConfig, ApiError> {
+    post_json(
+        &ct_path(
+            id,
+            &format!("/snapshots/{}/rollback", urlencoding::encode(snap)),
+        ),
+        &serde_json::json!({}),
+    )
+    .await
+}
+
+pub async fn delete_container_snapshot(id: &str, snap: &str) -> Result<(), ApiError> {
+    delete_json(&ct_path(
+        id,
+        &format!("/snapshots/{}", urlencoding::encode(snap)),
+    ))
+    .await
+}
+
+pub async fn clone_container(
+    id: &str,
+    target: &str,
+) -> Result<horcrux_common::ContainerConfig, ApiError> {
+    post_json(
+        &ct_path(id, "/clone"),
+        &serde_json::json!({"target_id": target, "target_name": target, "snapshot": false}),
+    )
+    .await
 }
 
 // Snapshot Management APIs

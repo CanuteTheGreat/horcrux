@@ -107,6 +107,10 @@ async fn handle_logs(ws_socket: WebSocket, container_id: String, runtime: Contai
     tokio::spawn(async move { while ws_receiver.next().await.is_some() {} });
 
     match runtime {
+        #[cfg(feature = "lxc")]
+        ContainerRuntime::Lxc => {
+            stream_lxc_console_log(&mut ws_sender, &container_id).await;
+        }
         ContainerRuntime::Docker => {
             let docker = match Docker::connect_with_local_defaults() {
                 Ok(d) => d,
@@ -208,8 +212,216 @@ async fn handle_exec(
 
     match runtime {
         ContainerRuntime::Docker => handle_exec_docker(ws_socket, container_id, cmd).await,
+        #[cfg(feature = "lxc")]
+        ContainerRuntime::Lxc => handle_exec_lxc(ws_socket, container_id, cmd).await,
         _ => handle_exec_cli(ws_socket, container_id, cmd, runtime).await,
     }
+}
+
+/// LXC console log (`lxc.console.logfile`): the last 64 KiB, then follow.
+#[cfg(feature = "lxc")]
+async fn stream_lxc_console_log(
+    ws_sender: &mut futures::stream::SplitSink<WebSocket, Message>,
+    container_id: &str,
+) {
+    use tokio::io::AsyncSeekExt;
+    let mgr = super::lxc::LxcManager::new();
+    let name = mgr.resolve_name(container_id);
+    let path = mgr.console_log_path(&name);
+    let mut pos: u64 = match tokio::fs::metadata(&path).await {
+        Ok(m) => m.len().saturating_sub(64 * 1024),
+        Err(_) => {
+            let _ = ws_sender
+                .send(Message::Text(format!(
+                    "[no console output yet for {name}: {} does not exist]\n",
+                    path.display()
+                )))
+                .await;
+            0
+        }
+    };
+    loop {
+        if let Ok(mut f) = tokio::fs::File::open(&path).await {
+            let len = f.metadata().await.map(|m| m.len()).unwrap_or(0);
+            if len < pos {
+                // Rotated/truncated (lxc.console.size): start over.
+                pos = 0;
+            }
+            if len > pos && f.seek(std::io::SeekFrom::Start(pos)).await.is_ok() {
+                let mut buf = Vec::new();
+                if f.read_to_end(&mut buf).await.is_ok() {
+                    pos += buf.len() as u64;
+                    let text = String::from_utf8_lossy(&buf).to_string();
+                    if ws_sender.send(Message::Text(text)).await.is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // A closed socket fails the ping; stop following.
+        if ws_sender.send(Message::Ping(Vec::new())).await.is_err() {
+            return;
+        }
+    }
+}
+
+/// Interactive shell in an LXC container (`pct enter`): `lxc-attach` on a
+/// real PTY, so job control, prompts and curses programs work.
+#[cfg(feature = "lxc")]
+async fn handle_exec_lxc(ws_socket: WebSocket, container_id: String, cmd: Vec<String>) {
+    let mgr = super::lxc::LxcManager::new();
+    let name = mgr.resolve_name(&container_id);
+    let argv = mgr.attach_argv(&name, &cmd);
+    let (mut ws_sender, mut ws_receiver) = ws_socket.split();
+
+    let pty = match nix::pty::openpty(
+        Some(&nix::pty::Winsize {
+            ws_row: 40,
+            ws_col: 120,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        }),
+        None,
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = ws_sender
+                .send(Message::Text(format!("[error] openpty: {e}\r\n")))
+                .await;
+            return;
+        }
+    };
+    let slave = std::fs::File::from(pty.slave);
+    let stdio = |f: &std::fs::File| f.try_clone().map(std::process::Stdio::from);
+    let (sin, sout, serr) = match (stdio(&slave), stdio(&slave), stdio(&slave)) {
+        (Ok(a), Ok(b), Ok(c)) => (a, b, c),
+        _ => {
+            let _ = ws_sender
+                .send(Message::Text("[error] pty setup failed\r\n".into()))
+                .await;
+            return;
+        }
+    };
+    let mut command = std::process::Command::new(&argv[0]);
+    command
+        .args(&argv[1..])
+        .stdin(sin)
+        .stdout(sout)
+        .stderr(serr);
+    // New session with the PTY (stdin) as controlling terminal.
+    // SAFETY: only async-signal-safe calls (setsid, ioctl) between fork and exec.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        command.pre_exec(|| {
+            nix::unistd::setsid().map_err(std::io::Error::from)?;
+            if nix::libc::ioctl(0, nix::libc::TIOCSCTTY as _, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = match tokio::process::Command::from(command).spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = ws_sender
+                .send(Message::Text(format!("[error] lxc-attach: {e}\r\n")))
+                .await;
+            return;
+        }
+    };
+    drop(slave);
+    let master = std::fs::File::from(pty.master);
+    let master_w = match master.try_clone() {
+        Ok(m) => tokio::fs::File::from_std(m),
+        Err(_) => return,
+    };
+    // Third handle: answers terminal queries the plain-text web terminal
+    // can't (busybox/readline ask for the cursor position with ESC[6n and
+    // stall line editing until they get a reply).
+    let mut master_q = match master.try_clone() {
+        Ok(m) => tokio::fs::File::from_std(m),
+        Err(_) => return,
+    };
+    // Kept to find the shell's process group when the session ends.
+    let master_ctl = match master.try_clone() {
+        Ok(m) => m,
+        Err(_) => return,
+    };
+    let mut master_r = tokio::fs::File::from_std(master);
+
+    let stdin_task = tokio::spawn(async move {
+        let mut w = master_w;
+        while let Some(msg) = ws_receiver.next().await {
+            let data = match msg {
+                Ok(Message::Binary(d)) => d,
+                Ok(Message::Text(t)) => t.into_bytes(),
+                Ok(Message::Close(_)) | Err(_) => break,
+                Ok(_) => continue,
+            };
+            if w.write_all(&data).await.is_err() || w.flush().await.is_err() {
+                break;
+            }
+        }
+    });
+    let stdout_task = tokio::spawn(async move {
+        let mut buf = vec![0u8; 4096];
+        loop {
+            match master_r.read(&mut buf).await {
+                // EIO once the shell exits and the slave side closes.
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let chunk = &buf[..n];
+                    if chunk.windows(4).any(|w| w == b"\x1b[6n") {
+                        let _ = master_q.write_all(b"\x1b[1;1R").await;
+                        let _ = master_q.flush().await;
+                    }
+                    if ws_sender
+                        .send(Message::Binary(chunk.to_vec()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+        let _ = ws_sender.close().await;
+    });
+    let (stdin_abort, stdout_abort) = (stdin_task.abort_handle(), stdout_task.abort_handle());
+    tokio::select! {
+        _ = stdin_task => {}
+        _ = stdout_task => {}
+        _ = child.wait() => {}
+    }
+    // Hang up the shell (as closing a terminal does) so it exits and
+    // lxc-attach, its parent, reaps it. SIGKILLing lxc-attach first would
+    // orphan the shell, and an orphan nobody reaps keeps the container's
+    // pid namespace alive (lxc-stop then never completes).
+    stdin_abort.abort();
+    stdout_abort.abort();
+    {
+        use std::os::fd::AsRawFd;
+        let mut pgid: nix::libc::pid_t = 0;
+        // SAFETY: valid fd; TIOCGPGRP writes one pid_t.
+        let rc = unsafe {
+            nix::libc::ioctl(master_ctl.as_raw_fd(), nix::libc::TIOCGPGRP as _, &mut pgid)
+        };
+        if rc == 0 && pgid > 1 {
+            let _ = nix::sys::signal::killpg(
+                nix::unistd::Pid::from_raw(pgid),
+                nix::sys::signal::Signal::SIGHUP,
+            );
+        }
+    }
+    drop(master_ctl);
+    if tokio::time::timeout(std::time::Duration::from_secs(5), child.wait())
+        .await
+        .is_err()
+    {
+        let _ = child.kill().await;
+    }
+    info!("LXC terminal session closed for {}", name);
 }
 
 async fn handle_exec_docker(ws_socket: WebSocket, container_id: String, cmd: Vec<String>) {

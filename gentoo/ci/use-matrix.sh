@@ -102,7 +102,7 @@ PROBES=(
     /api/nas/shares /api/k8s/clusters /api/containers /api/templates
     /api/backups /api/backup-jobs /api/cluster/status /api/cluster/nodes /api/ha/status
     /api/ha/groups "/api/images?runtime=podman" "/api/images?runtime=docker"
-    /api/volumes /api/container-networks /api/stacks
+    /api/volumes /api/container-networks /api/stacks /api/lxc/host
     'POST /api/containers {"id":"um-ct","name":"um-ct","runtime":"docker","rootfs":"busybox:latest","memory":64,"cpus":1,"status":"stopped"}'
     'POST /api/vms {"id":"um-vm","name":"um-vm","hypervisor":"qemu","memory":64,"cpus":1,"disk_size":1,"status":"stopped","architecture":"x86_64"}'
     'POST /api/vms {"id":"um-vm2","name":"um-vm2","hypervisor":"incus","memory":64,"cpus":1,"disk_size":1,"status":"stopped","architecture":"x86_64"}'
@@ -133,6 +133,7 @@ expect '^GET /api/nas/shares 200' "USE=nas: /api/nas/shares not served"
 expect '^GET /api/k8s/clusters 200' "USE=kubernetes: /api/k8s/clusters not served"
 expect '^GET /api/containers 200' "/api/containers not served"
 expect '^GET /api/templates 200' "/api/templates not served"
+expect '^GET /api/lxc/host 200' "USE=lxc: LXC routes (/api/lxc/host) not served"
 expect '^GET /api/backups 200' "USE=backup: /api/backups not served"
 expect '^GET /api/backup-jobs 200' "USE=backup: /api/backup-jobs not served"
 expect '^GET /api/cluster/nodes 200' "USE=cluster: /api/cluster/nodes not served"
@@ -161,6 +162,7 @@ hasnt var/lib/horcrux/nas
 out=$(route_status "${PROBES[@]}")
 echo "$out"
 features_are "lxc"
+expect '^GET /api/lxc/host 200' "USE=lxc: LXC routes (/api/lxc/host) not served"
 expect '^GET /api/nas/shares 404' "USE=-nas: NAS routes still compiled in"
 expect '^GET /api/k8s/clusters 404' "USE=-kubernetes: k8s routes still compiled in"
 expect '^GET /api/containers 200' "/api/containers not served"
@@ -185,6 +187,7 @@ run_set podman-cluster "podman cluster -docker -lxc -lxd -incus -qemu -systemd \
 out=$(route_status "${PROBES[@]}")
 echo "$out"
 features_are "cluster podman"
+expect '^GET /api/lxc/host 404' "USE=-lxc: LXC routes still compiled in"
 expect '^GET /api/cluster/nodes 200' "USE=cluster: /api/cluster/nodes not served"
 expect '^GET /api/ha/status 200' "USE=cluster: /api/ha/status not served"
 expect '^GET /api/backups 404' "USE=-backup: /api/backups still compiled in"

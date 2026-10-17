@@ -242,6 +242,27 @@ jobs:
         # really lands in the kernel's nftables ruleset.
         run: bash horcrux-api/tests/firewall_nft_e2e.sh target/debug/horcrux-api
 
+      - name: LXC containers (real nested LXC, Proxmox pct parity)
+        # The Test container can't run LXC, so lxc_e2e.sh runs the built API
+        # in a privileged sibling container with LXC installed, a VLAN-aware
+        # bridge, a VLAN gateway and dnsmasq, and drives templates, create
+        # (unprivileged/idmap, disk size, VLAN+static and DHCP NICs, bind
+        # and volume mounts, nesting/keyctl/fuse), cgroup limits, pct set,
+        # reboot, online resize, snapshots/rollback, shutdown, clone, the PTY
+        # terminal and console-log WebSockets through the HTTP API, checking
+        # each effect inside the real container. It then runs the UI
+        # contract test's LXC part against that server.
+        run: |
+          contract=$(cargo test --all-features --workspace --no-run --message-format=json 2>/dev/null \
+            | python3 -c 'import json,sys
+          for l in sys.stdin:
+              m = json.loads(l)
+              if m.get("reason") == "compiler-artifact" and m.get("executable") and "/api_contract-" in m["executable"]:
+                  print(m["executable"])' | tail -1)
+          echo "UI contract test binary: ${contract:-<none>}"
+          test -n "$contract"
+          bash horcrux-api/tests/lxc_e2e.sh test target/debug/horcrux-api "$contract"
+
       - name: Run tests (no default features)
         # Unit tests of the minimal build. The integration/contract tests
         # need the server, which is the --all-features build started above;
@@ -770,6 +791,19 @@ jobs:
 
       - name: UI offers every USE-flag feature of an all-features build
         run: MODE=full /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/ui_features_e2e.py
+
+      - name: LXC browser E2E (real nested LXC behind the UI)
+        # The API + this build's UI run in a privileged LXC sibling sharing
+        # this job's network namespace (lxc_e2e.sh serve); the browser then
+        # downloads a template, creates an LXC container from the form,
+        # manages it (settings, snapshot, shutdown, delete) and checks the
+        # results on the page.
+        run: |
+          bash horcrux-api/tests/lxc_e2e.sh serve target/debug/horcrux-api horcrux-api/horcrux-ui/dist 8007
+          rc=0
+          BASE_URL=http://127.0.0.1:8007 /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/lxc_ui_e2e.py || rc=$?
+          bash horcrux-api/tests/lxc_e2e.sh stop
+          exit $rc
 
       - name: Dump horcrux-api log
         if: always()

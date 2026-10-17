@@ -10,6 +10,10 @@ pub mod incus;
 /// Handles LXC, LXD, Incus, Docker, and Podman container lifecycle
 #[cfg(feature = "lxc")]
 pub mod lxc;
+#[cfg(feature = "lxc")]
+pub mod lxc_config;
+#[cfg(feature = "lxc")]
+pub mod lxc_template;
 #[cfg(feature = "lxd")]
 pub mod lxd;
 #[cfg(feature = "podman")]
@@ -18,14 +22,14 @@ pub mod podman;
 pub mod stack;
 #[cfg(any(feature = "docker", feature = "podman"))]
 pub mod volume;
-#[cfg(any(feature = "docker", feature = "podman"))]
+#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
 pub mod ws;
-#[cfg(any(feature = "docker", feature = "podman"))]
+#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
 pub mod ws_handlers;
 
 use crate::db::Database;
 use horcrux_common::{
-    ContainerConfig, ContainerOptions, ContainerRuntime, ContainerStatus, Result,
+    ContainerConfig, ContainerOptions, ContainerRuntime, ContainerStatus, LxcOptions, Result,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -46,6 +50,8 @@ pub struct Container {
     /// RFC 3339 creation time (set by Horcrux on create, or taken from
     /// the runtime for containers discovered on the host).
     pub created_at: Option<String>,
+    /// LXC settings (LXC containers created by Horcrux only).
+    pub lxc: Option<LxcOptions>,
 }
 
 impl Container {
@@ -60,6 +66,7 @@ impl Container {
             status: self.status.clone(),
             options: self.options.clone(),
             created_at: self.created_at.clone(),
+            lxc: self.lxc.clone(),
         }
     }
 }
@@ -206,6 +213,7 @@ impl ContainerManager {
     /// are adopted so they can be managed from the UI.
     pub async fn list_containers(&self) -> Vec<ContainerConfig> {
         self.reconcile_docker().await;
+        self.reconcile_lxc().await;
         let containers = self.containers.read().await;
         let mut list: Vec<ContainerConfig> = containers.values().map(|c| c.to_config()).collect();
         list.sort_by(|a, b| a.id.cmp(&b.id));
@@ -270,6 +278,7 @@ impl ContainerManager {
                     status: c.status.clone(),
                     options: ContainerOptions::default(),
                     created_at: c.created_at.clone(),
+                    lxc: None,
                 },
             );
         }
@@ -280,9 +289,60 @@ impl ContainerManager {
         });
     }
 
+    /// Without LXC compiled in there is nothing to reconcile.
+    #[cfg(not(feature = "lxc"))]
+    pub async fn reconcile_lxc(&self) {}
+
+    /// Bring the LXC part of the map in line with the host's lxcpath, so
+    /// LXC containers survive API restarts (their settings live next to
+    /// them in horcrux.json) and ones created with lxc-create show up.
+    #[cfg(feature = "lxc")]
+    pub async fn reconcile_lxc(&self) {
+        let live = match self.lxc_manager.discover().await {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::debug!("LXC reconcile skipped: {e}");
+                return;
+            }
+        };
+        let in_flight: HashSet<String> = self
+            .creating
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let mut containers = self.containers.write().await;
+        let mut seen = HashSet::new();
+        for c in live {
+            seen.insert(c.name.clone());
+            if in_flight.contains(&c.id) {
+                continue;
+            }
+            if let Some(t) = containers
+                .values_mut()
+                .find(|t| t.runtime == ContainerRuntime::Lxc && t.name == c.name)
+            {
+                t.status = c.status.clone();
+                if c.lxc.is_some() {
+                    t.lxc = c.lxc.clone();
+                    t.memory = c.memory;
+                    t.cpus = c.cpus;
+                }
+                continue;
+            }
+            if containers.contains_key(&c.id) {
+                continue;
+            }
+            containers.insert(c.id.clone(), c);
+        }
+        containers.retain(|id, t| {
+            t.runtime != ContainerRuntime::Lxc || seen.contains(&t.name) || in_flight.contains(id)
+        });
+    }
+
     /// Get a specific container by ID
     pub async fn get_container(&self, id: &str) -> Result<ContainerConfig> {
         self.reconcile_docker().await;
+        self.reconcile_lxc().await;
         let containers = self.containers.read().await;
         containers
             .get(id)
@@ -308,6 +368,11 @@ impl ContainerManager {
             .map_err(horcrux_common::Error::Validation)?;
         match config.runtime {
             ContainerRuntime::Docker | ContainerRuntime::Podman => {
+                if config.lxc.is_some() {
+                    return Err(horcrux_common::Error::Validation(
+                        "lxc settings are only valid with the lxc runtime".to_string(),
+                    ));
+                }
                 if !is_valid_oci_name(&config.name) {
                     return Err(horcrux_common::Error::Validation(format!(
                         "Invalid container name '{}': use letters, digits, '_', '.' or '-' \
@@ -317,6 +382,11 @@ impl ContainerManager {
                 }
             }
             _ => {
+                if config.lxc.is_some() && config.runtime != ContainerRuntime::Lxc {
+                    return Err(horcrux_common::Error::Validation(
+                        "lxc settings are only valid with the lxc runtime".to_string(),
+                    ));
+                }
                 if !config.options.is_empty() {
                     return Err(horcrux_common::Error::Validation(
                         "env/ports/volumes/command/network are only supported for the \
@@ -395,6 +465,7 @@ impl ContainerManager {
             status: config.status.clone(),
             options: config.options.clone(),
             created_at: config.created_at.clone(),
+            lxc: config.lxc.clone(),
         };
         let out = container.to_config();
         containers.insert(config.id.clone(), container);
@@ -723,14 +794,15 @@ impl ContainerManager {
 
         crate::features::require_container_runtime(&source_container.runtime)?;
         let clone: Container = match source_container.runtime {
+            #[cfg(feature = "lxc")]
+            ContainerRuntime::Lxc => {
+                self.lxc_manager
+                    .clone_container(&source_container.name, target_id, target_name, snapshot)
+                    .await?
+            }
+            #[allow(unreachable_patterns)]
             ContainerRuntime::Lxc | ContainerRuntime::Lxd | ContainerRuntime::Incus => {
                 match source_container.runtime {
-                    #[cfg(feature = "lxc")]
-                    ContainerRuntime::Lxc => {
-                        self.lxc_manager
-                            .clone_container(&source_container.name, target_name, snapshot)
-                            .await?
-                    }
                     #[cfg(feature = "lxd")]
                     ContainerRuntime::Lxd => {
                         self.lxd_manager
@@ -768,6 +840,7 @@ impl ContainerManager {
                     status: ContainerStatus::Stopped,
                     options: source_container.options.clone(),
                     created_at: Some(chrono::Utc::now().to_rfc3339()),
+                    lxc: None,
                 }
             }
             ContainerRuntime::Docker | ContainerRuntime::Podman => {
@@ -805,6 +878,7 @@ impl ContainerManager {
                         ..source_container.options.clone()
                     },
                     created_at: None,
+                    lxc: None,
                 };
                 match source_container.runtime {
                     #[cfg(feature = "docker")]
@@ -831,6 +905,146 @@ impl ContainerManager {
             .await
             .insert(target_id.to_string(), clone);
         Ok(cfg)
+    }
+}
+
+/// LXC-only operations (pct shutdown/reboot/set/resize/snapshot).
+#[cfg(feature = "lxc")]
+impl ContainerManager {
+    /// The LXC backend (templates, host info, web terminal argv).
+    pub fn lxc(&self) -> &lxc::LxcManager {
+        &self.lxc_manager
+    }
+
+    /// Look up an LXC container by id (after reconciling with the host).
+    pub async fn lxc_container(&self, id: &str) -> Result<Container> {
+        self.reconcile_lxc().await;
+        let c = self
+            .containers
+            .read()
+            .await
+            .get(id)
+            .cloned()
+            .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?;
+        if c.runtime != ContainerRuntime::Lxc {
+            return Err(horcrux_common::Error::Validation(format!(
+                "container {id} uses the {:?} runtime; this operation is for LXC containers",
+                c.runtime
+            )));
+        }
+        Ok(c)
+    }
+
+    async fn set_status(&self, id: &str, status: ContainerStatus) -> Option<ContainerConfig> {
+        let mut containers = self.containers.write().await;
+        containers.get_mut(id).map(|c| {
+            c.status = status;
+            c.to_config()
+        })
+    }
+
+    async fn refresh_lxc_entry(&self, id: &str, meta: &lxc::LxcMeta) {
+        if let Some(c) = self.containers.write().await.get_mut(id) {
+            c.memory = meta.memory;
+            c.cpus = meta.cpus;
+            c.lxc = Some(meta.lxc.clone());
+        }
+    }
+
+    /// Clean shutdown (`pct shutdown`).
+    pub async fn shutdown_container(
+        &self,
+        id: &str,
+        timeout: u32,
+        force: bool,
+    ) -> Result<ContainerConfig> {
+        let c = self.lxc_container(id).await?;
+        self.lxc_manager
+            .shutdown_container(&c.name, timeout, force)
+            .await?;
+        Ok(self
+            .set_status(id, ContainerStatus::Stopped)
+            .await
+            .unwrap_or_else(|| c.to_config()))
+    }
+
+    /// Reboot (`pct reboot`), applying pending configuration.
+    pub async fn reboot_container(&self, id: &str, timeout: u32) -> Result<ContainerConfig> {
+        let c = self.lxc_container(id).await?;
+        self.lxc_manager.reboot_container(&c, timeout).await?;
+        Ok(self
+            .set_status(id, ContainerStatus::Running)
+            .await
+            .unwrap_or_else(|| c.to_config()))
+    }
+
+    pub async fn lxc_config(&self, id: &str) -> Result<lxc::LxcConfigView> {
+        let c = self.lxc_container(id).await?;
+        let meta = self.lxc_manager.read_meta(&c.name)?;
+        Ok(self.lxc_manager.config_view(&meta))
+    }
+
+    /// Change settings (`pct set`).
+    pub async fn update_lxc_config(
+        &self,
+        id: &str,
+        memory: Option<u64>,
+        cpus: Option<u32>,
+        opts: LxcOptions,
+    ) -> Result<lxc::LxcConfigView> {
+        let c = self.lxc_container(id).await?;
+        let meta = self
+            .lxc_manager
+            .update_config(&c.name, memory, cpus, opts)
+            .await?;
+        self.refresh_lxc_entry(id, &meta).await;
+        Ok(self.lxc_manager.config_view(&meta))
+    }
+
+    /// Grow the root disk (`pct resize`).
+    pub async fn resize_container(&self, id: &str, disk_gb: u64) -> Result<lxc::LxcConfigView> {
+        let c = self.lxc_container(id).await?;
+        let meta = self.lxc_manager.resize(&c.name, disk_gb).await?;
+        self.refresh_lxc_entry(id, &meta).await;
+        Ok(self.lxc_manager.config_view(&meta))
+    }
+
+    pub async fn list_snapshots(&self, id: &str) -> Result<Vec<horcrux_common::LxcSnapshot>> {
+        let c = self.lxc_container(id).await?;
+        self.lxc_manager.list_snapshots(&c.name).await
+    }
+
+    pub async fn create_snapshot(
+        &self,
+        id: &str,
+        name: &str,
+        comment: Option<String>,
+    ) -> Result<horcrux_common::LxcSnapshot> {
+        let c = self.lxc_container(id).await?;
+        self.lxc_manager
+            .create_snapshot(&c.name, name, comment)
+            .await
+    }
+
+    pub async fn rollback_snapshot(&self, id: &str, name: &str) -> Result<ContainerConfig> {
+        let c = self.lxc_container(id).await?;
+        self.lxc_manager.rollback_snapshot(&c, name).await?;
+        let meta = self.lxc_manager.read_meta(&c.name)?;
+        self.refresh_lxc_entry(id, &meta).await;
+        let status = self
+            .lxc_manager
+            .get_container_status(&c.name)
+            .await
+            .unwrap_or(ContainerStatus::Unknown);
+        Ok(self
+            .set_status(id, status)
+            .await
+            .unwrap_or_else(|| c.to_config()))
+    }
+
+    pub async fn delete_snapshot(&self, id: &str, name: &str) -> Result<()> {
+        let c = self.lxc_container(id).await?;
+        self.lxc_manager.delete_snapshot(&c.name, name).await
     }
 }
 

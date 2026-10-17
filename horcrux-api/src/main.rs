@@ -22,6 +22,9 @@ mod gpu;
 mod ha;
 mod health;
 mod logging;
+#[cfg(feature = "lxc")]
+#[path = "api/lxc.rs"]
+mod lxc_api;
 mod metrics;
 mod metrics_collector;
 mod metrics_explorer;
@@ -129,7 +132,7 @@ struct AppState {
     container_network_manager: Arc<container::cnetwork::ContainerNetworkManager>,
     #[cfg(any(feature = "docker", feature = "podman"))]
     stack_manager: Arc<container::stack::StackManager>,
-    #[cfg(any(feature = "docker", feature = "podman"))]
+    #[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
     container_ws_manager: Arc<container::ws::ContainerWsManager>,
     #[cfg(feature = "kubernetes")]
     kubernetes_manager: Arc<kubernetes::KubernetesManager>,
@@ -474,7 +477,7 @@ async fn main() -> anyhow::Result<()> {
             shared_container_manager,
             database_for_stacks,
         )),
-        #[cfg(any(feature = "docker", feature = "podman"))]
+        #[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
         container_ws_manager: Arc::new(container::ws::ContainerWsManager::new()),
         #[cfg(feature = "kubernetes")]
         kubernetes_manager,
@@ -579,6 +582,10 @@ async fn main() -> anyhow::Result<()> {
     let protected_routes = protected_routes.merge(api::backup::routes(&state));
     #[cfg(feature = "cluster")]
     let protected_routes = protected_routes.merge(cluster_routes());
+
+    // LXC parity routes (templates, shutdown/reboot, pct set, resize, snapshots)
+    #[cfg(feature = "lxc")]
+    let protected_routes = protected_routes.merge(lxc_api::lxc_routes());
 
     // Add Kubernetes routes if feature is enabled
     #[cfg(feature = "kubernetes")]
@@ -849,7 +856,7 @@ fn stack_routes() -> Router<Arc<AppState>> {
 /// interactive exec, events feed). The actual WebSocket upgrade endpoints
 /// are registered directly on the app router (public, ticket-authenticated
 /// - see console's `/api/console/*/ws/:ticket` for the exact same pattern).
-#[cfg(any(feature = "docker", feature = "podman"))]
+#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
 fn container_ws_ticket_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(
@@ -7742,7 +7749,7 @@ async fn serial_websocket_handler(
     .await
 }
 
-#[cfg(any(feature = "docker", feature = "podman"))]
+#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
 async fn container_logs_websocket_handler(
     ws: axum::extract::ws::WebSocketUpgrade,
     Path(ticket_id): Path<String>,
@@ -7756,7 +7763,7 @@ async fn container_logs_websocket_handler(
     .await
 }
 
-#[cfg(any(feature = "docker", feature = "podman"))]
+#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
 async fn container_exec_websocket_handler(
     ws: axum::extract::ws::WebSocketUpgrade,
     Path(ticket_id): Path<String>,
@@ -7770,7 +7777,7 @@ async fn container_exec_websocket_handler(
     .await
 }
 
-#[cfg(any(feature = "docker", feature = "podman"))]
+#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
 async fn container_events_websocket_handler(
     ws: axum::extract::ws::WebSocketUpgrade,
     Path(ticket_id): Path<String>,
@@ -7784,17 +7791,18 @@ async fn container_events_websocket_handler(
     .await
 }
 
-#[cfg(any(feature = "docker", feature = "podman"))]
+#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
 #[derive(serde::Deserialize)]
 struct RuntimeQuery {
     #[serde(default)]
     runtime: Option<String>,
 }
 
-#[cfg(any(feature = "docker", feature = "podman"))]
+#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
 fn parse_runtime(q: &Option<String>) -> horcrux_common::ContainerRuntime {
     match q.as_deref() {
         Some("podman") => horcrux_common::ContainerRuntime::Podman,
+        Some("lxc") => horcrux_common::ContainerRuntime::Lxc,
         Some("docker") => horcrux_common::ContainerRuntime::Docker,
         // No runtime named: whichever of docker/podman this build has
         // (features::oci_runtime_gate already refused a disabled one).
@@ -8243,14 +8251,14 @@ async fn stop_stack(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[cfg(any(feature = "docker", feature = "podman"))]
+#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
 #[derive(serde::Serialize)]
 struct WsTicketResponse {
     ticket: String,
     ws_path: String,
 }
 
-#[cfg(any(feature = "docker", feature = "podman"))]
+#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
 async fn create_container_logs_ticket(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -8271,7 +8279,7 @@ async fn create_container_logs_ticket(
     }))
 }
 
-#[cfg(any(feature = "docker", feature = "podman"))]
+#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
 #[derive(serde::Deserialize)]
 struct ExecTicketRequest {
     #[serde(default)]
@@ -8280,7 +8288,7 @@ struct ExecTicketRequest {
     runtime: Option<String>,
 }
 
-#[cfg(any(feature = "docker", feature = "podman"))]
+#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
 async fn create_container_exec_ticket(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -8301,7 +8309,7 @@ async fn create_container_exec_ticket(
     }))
 }
 
-#[cfg(any(feature = "docker", feature = "podman"))]
+#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
 async fn create_container_events_ticket(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,

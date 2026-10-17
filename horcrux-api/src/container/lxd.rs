@@ -60,6 +60,7 @@ impl LxdContainerManager {
             status: ContainerStatus::Stopped,
             options: config.options.clone(),
             created_at: Some(chrono::Utc::now().to_rfc3339()),
+            lxc: None,
         })
     }
 

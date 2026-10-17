@@ -79,7 +79,11 @@ RDEPEND="
 		app-emulation/qemu[spice,usbredir,virtfs,vnc]
 		app-emulation/libvirt
 	)
-	lxc? ( app-emulation/lxc )
+	lxc? (
+		app-containers/lxc
+		sys-apps/shadow
+		sys-fs/e2fsprogs
+	)
 	lxd? ( app-containers/lxd )
 	incus? ( app-containers/incus )
 	docker? ( app-containers/docker )
@@ -369,7 +373,10 @@ pkg_postinst() {
 	elog "  • Networking: CONFIG_TUN=m, CONFIG_BRIDGE=m, CONFIG_VXLAN=m, CONFIG_VLAN_8021Q=m"
 
 	if use lxc; then
-		elog "  • LXC: CONFIG_CGROUPS=y, CONFIG_NAMESPACES=y"
+		elog "  • LXC: CONFIG_CGROUPS=y, CONFIG_NAMESPACES=y, CONFIG_USER_NS=y, CONFIG_VETH=m,"
+		elog "    CONFIG_BRIDGE_VLAN_FILTERING=y (VLAN tags on container NICs), CONFIG_BLK_DEV_LOOP=m (sized disks)"
+		elog "  • Unprivileged LXC containers map root to host uid 100000+; Horcrux adds"
+		elog "    root:100000:65536 to /etc/subuid and /etc/subgid when it creates one."
 	fi
 
 	elog ""

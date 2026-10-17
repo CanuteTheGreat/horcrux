@@ -81,7 +81,7 @@ source $HOME/.cargo/env
 emerge -av dev-db/sqlite dev-libs/openssl sys-apps/systemd
 
 # Optional: Install virtualization tools
-emerge -av app-emulation/qemu app-emulation/lxc
+emerge -av app-emulation/qemu app-containers/lxc
 ```
 
 **Other Distributions:**

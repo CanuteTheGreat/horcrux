@@ -1,4 +1,5 @@
 use crate::api;
+use crate::features::IfFeature;
 use leptos::*;
 
 #[component]
@@ -76,6 +77,9 @@ pub fn ContainerList() -> impl IntoView {
                 <h1>"Containers"</h1>
                 <div class="header-actions">
                     <a href="/containers/create" class="btn btn-primary" id="create-container-btn">"Create Container"</a>
+                    <IfFeature feature="lxc">
+                        <a href="/containers/lxc/templates" class="btn" id="lxc-templates-btn">"LXC Templates"</a>
+                    </IfFeature>
                 </div>
             </div>
 
@@ -142,8 +146,11 @@ pub fn ContainerList() -> impl IntoView {
                                                         class="btn btn-sm btn-warning"
                                                         on:click=move |_| stop_container(container_id_stop.clone())
                                                     >"Stop"</button>
-                                                    <a class="btn btn-sm" href=format!("/containers/{}/logs", container.id)>"Logs"</a>
-                                                    <a class="btn btn-sm" href=format!("/containers/{}/exec", container.id)>"Terminal"</a>
+                                                    {(container.runtime == "lxc").then(|| view! {
+                                                        <a class="btn btn-sm btn-primary lxc-manage" href=format!("/containers/{}/lxc", container.id)>"Manage"</a>
+                                                    })}
+                                                    <a class="btn btn-sm" href=format!("/containers/{}/logs?runtime={}", container.id, container.runtime)>"Logs"</a>
+                                                    <a class="btn btn-sm" href=format!("/containers/{}/exec?runtime={}", container.id, container.runtime)>"Terminal"</a>
                                                     <button
                                                         class="btn btn-sm btn-danger"
                                                         on:click=move |_| delete_container(container_id_delete.clone())

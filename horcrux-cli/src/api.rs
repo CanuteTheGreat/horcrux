@@ -111,6 +111,28 @@ impl ApiClient {
         Ok(())
     }
 
+    pub async fn put<T: DeserializeOwned, B: serde::Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T> {
+        let response = self
+            .build_request(reqwest::Method::PUT, path)
+            .await
+            .json(body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            anyhow::bail!("API request failed: {} - {}", status, error_text);
+        }
+
+        let data = response.json().await?;
+        Ok(data)
+    }
+
     pub async fn delete(&self, path: &str) -> Result<()> {
         let response = self
             .build_request(reqwest::Method::DELETE, path)

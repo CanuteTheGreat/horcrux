@@ -25,11 +25,11 @@ use pages::{
     ContainerEventsPage, ContainerExecPage, ContainerList, ContainerLogsPage,
     ContainerNetworksPage, Dashboard, DashboardsPage, DeploymentsPage, GpuManagement, HaDashboard,
     HaGroupsPage, HelmChartsPage, HelmReleasesPage, HelmRepositoriesPage, ImagesPage,
-    IngressesPage, KubernetesManagement, Login, MetricsExplorerPage, MigrationCenterPage,
-    Monitoring, NetworkManagement, NotificationsPage, ObservabilityPage, PodsPage, ReplicationList,
-    RetentionPoliciesPage, RolesPage, SecretsPage, ServicesPage, SessionsPage, SnapshotList,
-    SnapshotManagerPage, StacksPage, StorageManagement, TemplateManagerPage, UsersPage, VmConsole,
-    VmCreate, VmList, VolumesPage,
+    IngressesPage, KubernetesManagement, Login, LxcContainerPage, LxcTemplatesPage,
+    MetricsExplorerPage, MigrationCenterPage, Monitoring, NetworkManagement, NotificationsPage,
+    ObservabilityPage, PodsPage, ReplicationList, RetentionPoliciesPage, RolesPage, SecretsPage,
+    ServicesPage, SessionsPage, SnapshotList, SnapshotManagerPage, StacksPage, StorageManagement,
+    TemplateManagerPage, UsersPage, VmConsole, VmCreate, VmList, VolumesPage,
 };
 
 #[component]
@@ -150,8 +150,10 @@ pub fn App() -> impl IntoView {
                     <Route path="/containers/networks" view=|| view! { <Gated feature="docker|podman"><ContainerNetworksPage/></Gated> }/>
                     <Route path="/containers/stacks" view=|| view! { <Gated feature="docker|podman"><StacksPage/></Gated> }/>
                     <Route path="/containers/events" view=|| view! { <Gated feature="docker|podman"><ContainerEventsPage/></Gated> }/>
-                    <Route path="/containers/:id/logs" view=|| view! { <Gated feature="docker|podman"><ContainerLogsPage/></Gated> }/>
-                    <Route path="/containers/:id/exec" view=|| view! { <Gated feature="docker|podman"><ContainerExecPage/></Gated> }/>
+                    <Route path="/containers/:id/logs" view=|| view! { <Gated feature="docker|podman|lxc"><ContainerLogsPage/></Gated> }/>
+                    <Route path="/containers/:id/exec" view=|| view! { <Gated feature="docker|podman|lxc"><ContainerExecPage/></Gated> }/>
+                    <Route path="/containers/lxc/templates" view=|| view! { <Gated feature="lxc"><LxcTemplatesPage/></Gated> }/>
+                    <Route path="/containers/:id/lxc" view=|| view! { <Gated feature="lxc"><LxcContainerPage/></Gated> }/>
                     <Route path="/kubernetes" view=|| view! { <Gated feature="kubernetes"><KubernetesManagement/></Gated> }/>
                     <Route path="/kubernetes/:cluster_id/dashboard" view=|| view! { <Gated feature="kubernetes"><ClusterDashboard/></Gated> }/>
                     <Route path="/kubernetes/:cluster_id/pods" view=|| view! { <Gated feature="kubernetes"><PodsPage/></Gated> }/>

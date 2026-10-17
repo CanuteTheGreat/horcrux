@@ -470,7 +470,7 @@ enum ContainerCommands {
     List,
     /// Show container details
     Show { id: String },
-    /// Create a new container
+    /// Create a new container (`pct create` for --runtime lxc)
     Create {
         /// Container name
         #[arg(short, long)]
@@ -478,20 +478,35 @@ enum ContainerCommands {
         /// Container runtime (lxc, docker, podman, lxd, incus)
         #[arg(short, long, default_value = "docker")]
         runtime: String,
-        /// Container image
+        /// Image (docker/podman) or LXC template: distro/release[/variant]
+        /// (e.g. alpine/3.22, debian/bookworm) or a local rootfs tarball path
         #[arg(short, long)]
         image: String,
         /// Memory in MB
-        #[arg(short, long)]
-        memory: Option<u64>,
+        #[arg(short, long, default_value_t = 512)]
+        memory: u64,
         /// Number of CPUs
-        #[arg(short, long)]
-        cpus: Option<u32>,
+        #[arg(short, long, default_value_t = 1)]
+        cpus: u32,
+        #[command(flatten)]
+        lxc: LxcCreateArgs,
     },
     /// Start a container
     Start { id: String },
-    /// Stop a container
+    /// Stop a container (LXC: immediate, like `pct stop`)
     Stop { id: String },
+    /// Clean shutdown of an LXC container (`pct shutdown`)
+    Shutdown {
+        id: String,
+        /// Seconds to wait for a clean power-off
+        #[arg(long, default_value_t = 60)]
+        timeout: u32,
+        /// Kill the container if it is still running after the timeout
+        #[arg(long)]
+        force: bool,
+    },
+    /// Reboot an LXC container, applying pending settings (`pct reboot`)
+    Reboot { id: String },
     /// Delete a container
     Delete { id: String },
     /// Execute command in container
@@ -501,6 +516,115 @@ enum ContainerCommands {
         /// Command to execute
         command: Vec<String>,
     },
+    /// Show an LXC container's settings and generated config (`pct config`)
+    Config { id: String },
+    /// Change an LXC container's settings (`pct set`)
+    Set {
+        id: String,
+        #[arg(long)]
+        memory: Option<u64>,
+        #[arg(long)]
+        cpus: Option<u32>,
+        #[arg(long)]
+        swap: Option<u64>,
+        /// CPU cap in cores (e.g. 0.5)
+        #[arg(long)]
+        cpu_limit: Option<f64>,
+        #[arg(long)]
+        hostname: Option<String>,
+        /// Replace the NICs: repeat --net name=eth0,bridge=vmbr0,tag=20,ip=dhcp
+        #[arg(long = "net")]
+        nets: Vec<String>,
+        /// Replace the mount points: repeat --mp mp=/srv,source=/host/dir[,ro=1]
+        #[arg(long = "mp")]
+        mounts: Vec<String>,
+        /// nesting=1,keyctl=1,fuse=1
+        #[arg(long)]
+        features: Option<String>,
+        #[arg(long)]
+        onboot: Option<bool>,
+    },
+    /// Grow an LXC container's root disk (`pct resize`)
+    Resize {
+        id: String,
+        /// New size in GB
+        disk_gb: u64,
+    },
+    /// Take a snapshot of an LXC container (`pct snapshot`)
+    Snapshot {
+        id: String,
+        name: String,
+        #[arg(long)]
+        comment: Option<String>,
+    },
+    /// List an LXC container's snapshots (`pct listsnapshot`)
+    Snapshots { id: String },
+    /// Roll back to a snapshot (`pct rollback`)
+    Rollback { id: String, name: String },
+    /// Delete a snapshot (`pct delsnapshot`)
+    DelSnapshot { id: String, name: String },
+    /// Full clone of a container (`pct clone --full`)
+    Clone { id: String, target: String },
+    /// LXC templates (`pveam`)
+    Template {
+        #[command(subcommand)]
+        command: TemplateCommands,
+    },
+}
+
+/// LXC options for `container create --runtime lxc`.
+#[derive(clap::Args, Debug, Default)]
+pub struct LxcCreateArgs {
+    /// Run privileged (no user namespace); default is unprivileged
+    #[arg(long)]
+    pub privileged: bool,
+    /// Root disk size in GB (ext4 image; default: directory, no limit)
+    #[arg(long)]
+    pub disk: Option<u64>,
+    /// Swap in MB
+    #[arg(long, default_value_t = 0)]
+    pub swap: u64,
+    /// CPU cap in cores (e.g. 0.5)
+    #[arg(long)]
+    pub cpu_limit: Option<f64>,
+    #[arg(long)]
+    pub hostname: Option<String>,
+    /// NIC, repeatable: name=eth0,bridge=vmbr0,tag=20,ip=dhcp|10.0.0.5/24,gw=10.0.0.1
+    #[arg(long = "net")]
+    pub nets: Vec<String>,
+    /// Mount point, repeatable: mp=/srv,source=/host/dir[,ro=1] or mp=/data
+    #[arg(long = "mp")]
+    pub mounts: Vec<String>,
+    /// nesting=1,keyctl=1,fuse=1
+    #[arg(long)]
+    pub features: Option<String>,
+    /// Start when the host boots
+    #[arg(long)]
+    pub onboot: bool,
+    /// DNS server(s)
+    #[arg(long)]
+    pub nameserver: Option<String>,
+    /// Root SSH public key, repeatable
+    #[arg(long = "ssh-key")]
+    pub ssh_keys: Vec<String>,
+}
+
+#[derive(Subcommand)]
+enum TemplateCommands {
+    /// Downloaded templates (`pveam list`)
+    List,
+    /// Templates on images.linuxcontainers.org (`pveam available`)
+    Available {
+        #[arg(long)]
+        distro: Option<String>,
+        /// amd64, arm64, ... or "all" (default: this host's)
+        #[arg(long)]
+        arch: Option<String>,
+    },
+    /// Download a template: distro/release[/variant] (`pveam download`)
+    Download { template: String },
+    /// Delete a downloaded template (distro/release/arch/variant)
+    Delete { id: String },
 }
 
 #[derive(Subcommand)]

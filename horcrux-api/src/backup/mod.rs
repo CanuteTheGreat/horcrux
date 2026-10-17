@@ -895,6 +895,11 @@ impl BackupManager {
                     vec![
                         "--numeric-owner".into(),
                         "--xattrs".into(),
+                        // rootfs.raw (sized LXC disks) is a sparse image.
+                        "--sparse".into(),
+                        // Snapshots aren't part of a backup (as vzdump).
+                        "--exclude=./horcrux-snaps".into(),
+                        "--exclude=./.setup-mnt".into(),
                         "-cpf".into(),
                         rootfs.to_string_lossy().into(),
                         "-C".into(),
@@ -1266,6 +1271,10 @@ impl BackupManager {
                     .unwrap_or(&m.target_id)
                     .to_string();
                 rewrite_lxc_config(&dest.join("config"), &rt.lxc_path, &old_name, &name).await?;
+                // Horcrux-managed LXC containers carry their settings in
+                // horcrux.json: record the new id and re-render the config.
+                #[cfg(feature = "lxc")]
+                cm.lxc().adopt_restored(&name, &config.id)?;
                 let registered = cm.register_existing(config).await?;
                 if req.start {
                     cm.start_container(target).await?;

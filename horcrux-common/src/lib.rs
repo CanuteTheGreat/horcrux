@@ -1,6 +1,11 @@
 //! Common types and utilities shared between horcrux-api and horcrux-ui
 
 pub mod auth;
+pub mod lxc;
+
+pub use lxc::{
+    LxcCatalogEntry, LxcFeatures, LxcMount, LxcNet, LxcOptions, LxcSnapshot, LxcTemplate,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -274,6 +279,10 @@ pub struct ContainerConfig {
     /// RFC 3339 creation time, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    /// LXC settings (network, mounts, idmap, features, limits); only valid
+    /// with the `lxc` runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lxc: Option<LxcOptions>,
 }
 
 /// Container status

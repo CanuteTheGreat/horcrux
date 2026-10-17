@@ -1727,3 +1727,246 @@ async fn features_endpoint_matches_ui_type() {
         assert!(set.has(name), "{name} missing from {body}");
     }
 }
+
+async fn lxc_send(
+    c: &reqwest::Client,
+    token: &str,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<Value>,
+) -> (u16, String) {
+    let mut r = c
+        .request(method, format!("{}{}", api_base(), path))
+        .bearer_auth(token);
+    if let Some(b) = body {
+        r = r.json(&b);
+    }
+    let r = r.send().await.unwrap();
+    (r.status().as_u16(), r.text().await.unwrap_or_default())
+}
+
+fn lxc_decode<T: DeserializeOwned>(what: &str, status: u16, body: &str) -> T {
+    assert!(
+        (200..300).contains(&status),
+        "{what} -> {status}: {}",
+        &body[..body.len().min(800)]
+    );
+    serde_json::from_str(body).unwrap_or_else(|e| {
+        panic!(
+            "UI type {} cannot read {what}: {e}\nbody: {}",
+            std::any::type_name::<T>(),
+            &body[..body.len().min(800)]
+        )
+    })
+}
+
+/// LXC (lane J) routes: every one the UI calls, read into the UI's types.
+/// In CI's Test job (no LXC there) the host/template routes and the error
+/// paths are checked; lxc_e2e.sh runs this again inside a privileged
+/// container with LXC (HORCRUX_CONTRACT_LXC=1) to exercise them all against
+/// a real container.
+#[tokio::test]
+async fn lxc_ui_types_read_real_lxc_responses() {
+    use reqwest::Method;
+    let c = client();
+    let token = login(&c).await;
+    let host: api::LxcHostInfo = fetch(&c, &token, "/lxc/host").await;
+    let _templates: Vec<api::LxcTemplate> = fetch(&c, &token, "/lxc/templates").await;
+    // Routes exist (a missing route would be an empty 404 / 405).
+    let (status, body) = get_raw(&c, &token, "/containers/no-such-ct/lxc/config").await;
+    assert_eq!(status, 404, "{body}");
+    assert!(body.contains("not found"), "{body}");
+    let (status, _) = get_raw(&c, &token, "/containers/no-such-ct/snapshots").await;
+    assert_eq!(status, 404);
+    let (status, _) = lxc_send(&c, &token, Method::DELETE, "/lxc/templates/a/b/c/d", None).await;
+    assert_eq!(status, 404, "template delete route");
+
+    if std::env::var("HORCRUX_CONTRACT_LXC").ok().as_deref() != Some("1") {
+        eprintln!("HORCRUX_CONTRACT_LXC!=1: LXC host here has available={}; full LXC contract runs in lxc_e2e.sh", host.available);
+        return;
+    }
+    assert!(
+        host.available,
+        "LXC must be installed for the LXC contract run"
+    );
+
+    let catalog: Vec<api::LxcCatalogEntry> =
+        fetch(&c, &token, &api::lxc_catalog_path(Some("amd64"), false)).await;
+    let entry = catalog
+        .iter()
+        .filter(|e| e.distro == "alpine" && e.variant == "default" && e.release.contains('.'))
+        .max_by_key(|e| {
+            e.release
+                .split('.')
+                .map(|x| x.parse::<u32>().unwrap_or(0))
+                .collect::<Vec<_>>()
+        })
+        .expect("alpine in catalog")
+        .clone();
+    let (st, b) = lxc_send(&c,
+        &token,
+        Method::POST,
+        "/lxc/templates",
+        Some(json!({"distro": entry.distro, "release": entry.release, "arch": entry.arch, "variant": entry.variant})),
+    )
+    .await;
+    let tmpl: api::LxcTemplate = lxc_decode("POST /lxc/templates", st, &b);
+    let listed: Vec<api::LxcTemplate> = fetch(&c, &token, "/lxc/templates").await;
+    assert!(listed.iter().any(|t| t.id == tmpl.id));
+
+    // Create through the exact body the UI form sends.
+    let ct = "contract-lxc";
+    let form = horcrux_common::LxcOptions {
+        disk_gb: Some(1),
+        nets: host
+            .bridges
+            .first()
+            .map(|b| {
+                vec![horcrux_common::LxcNet {
+                    bridge: b.name.clone(),
+                    ip: Some("dhcp".into()),
+                    ..Default::default()
+                }]
+            })
+            .unwrap_or_default(),
+        mounts: vec![horcrux_common::LxcMount {
+            path: "/data".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let req = api::CreateContainerRequest {
+        id: ct.into(),
+        name: ct.into(),
+        runtime: "lxc".into(),
+        memory: 128,
+        cpus: 1,
+        rootfs: format!("{}/{}", entry.distro, entry.release),
+        status: "stopped".into(),
+        lxc: Some(form),
+        ..Default::default()
+    };
+    let (st, b) = lxc_send(
+        &c,
+        &token,
+        Method::POST,
+        "/containers",
+        Some(serde_json::to_value(&req).unwrap()),
+    )
+    .await;
+    let created: api::Container = lxc_decode("POST /containers (lxc)", st, &b);
+    assert_eq!(created.runtime, "lxc");
+    let list: Vec<api::Container> = fetch(&c, &token, "/containers").await;
+    assert!(list.iter().any(|x| x.id == ct && x.runtime == "lxc"));
+    let full: horcrux_common::ContainerConfig =
+        fetch(&c, &token, &format!("/containers/{ct}")).await;
+    assert!(full.lxc.is_some());
+
+    let view: api::LxcConfigView = fetch(&c, &token, &format!("/containers/{ct}/lxc/config")).await;
+    assert!(view.raw_config.contains("lxc.cgroup2.cpu.max"));
+    let mut opts = view.lxc.clone();
+    opts.swap_mb = 32;
+    let (st, b) = lxc_send(
+        &c,
+        &token,
+        Method::PUT,
+        &format!("/containers/{ct}/lxc/config"),
+        Some(json!({"memory": 160, "cpus": null, "lxc": opts})),
+    )
+    .await;
+    let view: api::LxcConfigView = lxc_decode("PUT lxc/config", st, &b);
+    assert_eq!((view.memory, view.lxc.swap_mb), (160, 32));
+
+    for (path, what) in [("start", "start"), ("pause", "pause"), ("resume", "resume")] {
+        let (st, b) = lxc_send(
+            &c,
+            &token,
+            Method::POST,
+            &format!("/containers/{ct}/{path}"),
+            Some(json!({})),
+        )
+        .await;
+        let _: horcrux_common::ContainerConfig = lxc_decode(what, st, &b);
+    }
+    let (st, b) = lxc_send(
+        &c,
+        &token,
+        Method::POST,
+        &format!("/containers/{ct}/snapshots"),
+        Some(json!({"name": "c1", "comment": null})),
+    )
+    .await;
+    let snap: api::LxcSnapshot = lxc_decode("POST snapshots", st, &b);
+    let snaps: Vec<api::LxcSnapshot> =
+        fetch(&c, &token, &format!("/containers/{ct}/snapshots")).await;
+    assert!(snaps.iter().any(|s| s.name == snap.name));
+    let (st, b) = lxc_send(
+        &c,
+        &token,
+        Method::POST,
+        &format!("/containers/{ct}/snapshots/c1/rollback"),
+        Some(json!({})),
+    )
+    .await;
+    let _: horcrux_common::ContainerConfig = lxc_decode("rollback", st, &b);
+    let (st, b) = lxc_send(
+        &c,
+        &token,
+        Method::DELETE,
+        &format!("/containers/{ct}/snapshots/c1"),
+        None,
+    )
+    .await;
+    assert_eq!(st, 204, "{b}");
+    let (st, b) = lxc_send(
+        &c,
+        &token,
+        Method::POST,
+        &format!("/containers/{ct}/reboot"),
+        Some(json!({})),
+    )
+    .await;
+    let _: horcrux_common::ContainerConfig = lxc_decode("reboot", st, &b);
+    let (st, b) = lxc_send(
+        &c,
+        &token,
+        Method::POST,
+        &format!("/containers/{ct}/resize"),
+        Some(json!({"disk_gb": 2})),
+    )
+    .await;
+    let view: api::LxcConfigView = lxc_decode("resize", st, &b);
+    assert_eq!(view.lxc.disk_gb, Some(2));
+    let (st, b) = lxc_send(
+        &c,
+        &token,
+        Method::POST,
+        &format!("/containers/{ct}/shutdown"),
+        Some(json!({"timeout": 30, "force": true})),
+    )
+    .await;
+    let stopped: horcrux_common::ContainerConfig = lxc_decode("shutdown", st, &b);
+    assert_eq!(stopped.status, horcrux_common::ContainerStatus::Stopped);
+    let (st, b) = lxc_send(&c, &token, Method::POST, &format!("/containers/{ct}/clone"), Some(json!({"target_id": "contract-lxc2", "target_name": "contract-lxc2", "snapshot": false}))).await;
+    let _: horcrux_common::ContainerConfig = lxc_decode("clone", st, &b);
+    for id in [ct, "contract-lxc2"] {
+        let (st, b) = lxc_send(
+            &c,
+            &token,
+            Method::DELETE,
+            &format!("/containers/{id}"),
+            None,
+        )
+        .await;
+        assert_eq!(st, 204, "delete {id}: {b}");
+    }
+    let (st, b) = lxc_send(
+        &c,
+        &token,
+        Method::DELETE,
+        &api::lxc_template_path(&tmpl.id),
+        None,
+    )
+    .await;
+    assert_eq!(st, 204, "delete template: {b}");
+}

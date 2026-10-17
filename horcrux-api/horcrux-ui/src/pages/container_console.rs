@@ -32,6 +32,13 @@ fn ContainerConsole(mode: ContainerWsMode) -> impl IntoView {
     let container_id = move || params.get().get("id").cloned().unwrap_or_default();
 
     let (runtime, set_runtime) = create_signal("docker".to_string());
+    // The container list links here with ?runtime=<runtime>.
+    let query = leptos_router::use_query_map();
+    create_effect(move |_| {
+        if let Some(rt) = query.get().get("runtime") {
+            set_runtime.set(rt.clone());
+        }
+    });
     let (exec_command, set_exec_command) = create_signal("/bin/sh".to_string());
     let (output, set_output) = create_signal(String::new());
     let (connected, set_connected) = create_signal(false);
@@ -72,11 +79,20 @@ fn ContainerConsole(mode: ContainerWsMode) -> impl IntoView {
             ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
             onopen.forget();
 
+            // Exec output arrives as binary frames (PTY / exec stream bytes);
+            // they used to be dropped, so the terminal never showed output.
+            ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
             let onmessage = Closure::wrap(Box::new(move |e: MessageEvent| {
-                if let Ok(txt) = e.data().dyn_into::<js_sys::JsString>() {
-                    let chunk = String::from(txt);
-                    set_output.update(|o| o.push_str(&chunk));
-                }
+                let data = e.data();
+                let chunk = if let Some(txt) = data.as_string() {
+                    txt
+                } else if let Ok(buf) = data.dyn_into::<js_sys::ArrayBuffer>() {
+                    String::from_utf8_lossy(&js_sys::Uint8Array::new(&buf).to_vec()).to_string()
+                } else {
+                    return;
+                };
+                let chunk = crate::pages::lxc::spec::strip_ansi(&chunk);
+                set_output.update(|o| o.push_str(&chunk));
             }) as Box<dyn FnMut(MessageEvent)>);
             ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
             onmessage.forget();
@@ -116,9 +132,10 @@ fn ContainerConsole(mode: ContainerWsMode) -> impl IntoView {
             <div class="page-header">
                 <h1>{title} " — " {container_id}</h1>
                 <div class="header-actions">
-                    <select on:change=move |ev| set_runtime.set(event_target_value(&ev))>
-                        <option value="docker">"Docker"</option>
-                        <option value="podman">"Podman"</option>
+                    <select id="console-runtime" prop:value=runtime on:change=move |ev| set_runtime.set(event_target_value(&ev))>
+                        <option value="docker" selected=move || runtime.get() == "docker">"Docker"</option>
+                        <option value="podman" selected=move || runtime.get() == "podman">"Podman"</option>
+                        <option value="lxc" selected=move || runtime.get() == "lxc">"LXC"</option>
                     </select>
                     {move || {
                         if mode == ContainerWsMode::Exec {

@@ -261,6 +261,7 @@ impl StackManager {
                 network_aliases: vec![service_name.to_string()],
             },
             created_at: None,
+            lxc: None,
         }
     }
 
