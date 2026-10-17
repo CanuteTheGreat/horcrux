@@ -97,6 +97,20 @@ jobs:
     # pull the variant matching whatever platform it actually requests.
     container: catthehacker/ubuntu:act-latest
     needs: check
+    # Memory (2026-10-17): linux-cross job containers are capped at 9g
+    # (rw-man-0x forgejo-runner-crosscompile, capacity 2 x 9g). Run 478's
+    # `cargo test --all-features --workspace` hit that cgroup limit: the
+    # kernel OOM-killed rustc building the horcrux-api test binary
+    # (3.7 GB RSS, debuginfo=2) while 7 other crates compiled beside it
+    # and the API server was already running in the same container.
+    # line-tables-only keeps file:line in panic backtraces but drops the
+    # full DWARF that dominates rustc/linker memory for this crate; 4
+    # parallel rustc processes leave headroom under the cap. Job-level so
+    # the server build, the test build and the --no-run lookups all share
+    # one profile and nothing is rebuilt between steps.
+    env:
+      CARGO_BUILD_JOBS: "4"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@v4
 
