@@ -50,7 +50,7 @@ async fn test_migration_types() {
 #[tokio::test]
 async fn test_migration_config_serialization() {
     let config = MigrationConfig {
-        vm_id: 100,
+        vm_id: "100".to_string(),
         target_node: "node2".to_string(),
         migration_type: MigrationType::Live,
         bandwidth_limit: Some(100),

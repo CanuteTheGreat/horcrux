@@ -159,9 +159,9 @@ pub fn BackupDashboard() -> impl IntoView {
                                                 <i class="fas fa-chart-pie text-2xl text-yellow-500"></i>
                                             </div>
                                             <div class="ml-4">
-                                                <p class="text-sm font-medium text-gray-500">"Total Snapshots"</p>
-                                                <p class="text-2xl font-semibold text-gray-900">{summary.total_snapshots}</p>
-                                                <p class="text-xs text-gray-500">{format_bytes(summary.total_size)}</p>
+                                                <p class="text-sm font-medium text-gray-500">"Snapshot Storage"</p>
+                                                <p class="text-2xl font-semibold text-gray-900">{format_bytes(summary.total_size_bytes)}</p>
+                                                <p class="text-xs text-gray-500">{format!("{:.1}% of quota", summary.overall_usage_percent)}</p>
                                             </div>
                                         </div>
                                     </div>
@@ -355,7 +355,7 @@ pub fn BackupDashboard() -> impl IntoView {
                                 <div class="px-6 py-4 border-b border-gray-200">
                                     <div class="flex justify-between items-center">
                                         <h2 class="text-lg font-semibold">Quota Overview</h2>
-                                        <a href="/backup/quotas" class="text-blue-600 hover:text-blue-800 text-sm font-medium">
+                                        <a href="/backup/snapshots" class="text-blue-600 hover:text-blue-800 text-sm font-medium">
                                             "Manage Quotas"
                                         </a>
                                     </div>
@@ -367,18 +367,18 @@ pub fn BackupDashboard() -> impl IntoView {
                                             <div class="text-sm text-gray-500">"Total Quotas"</div>
                                         </div>
                                         <div class="text-center">
-                                            <div class="text-2xl font-semibold text-green-600">{summary.active_quotas}</div>
+                                            <div class="text-2xl font-semibold text-green-600">{summary.healthy_quotas + summary.warning_quotas}</div>
                                             <div class="text-sm text-gray-500">"Active Quotas"</div>
                                         </div>
                                         <div class="text-center">
                                             <div class=format!("text-2xl font-semibold {}",
-                                                if summary.quotas_exceeded > 0 { "text-red-600" } else { "text-green-600" })>
-                                                {summary.quotas_exceeded}
+                                                if summary.exceeded_quotas > 0 { "text-red-600" } else { "text-green-600" })>
+                                                {summary.exceeded_quotas}
                                             </div>
                                             <div class="text-sm text-gray-500">"Quotas Exceeded"</div>
                                         </div>
                                     </div>
-                                    {if summary.quotas_exceeded > 0 {
+                                    {if summary.exceeded_quotas > 0 {
                                         view! {
                                             <div class="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
                                                 <div class="flex items-center">

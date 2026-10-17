@@ -8,8 +8,10 @@
 //!   returns a warning list naming every skipped key): Swarm `deploy:`
 //!   keys (replicas, placement, update_config, rollback_config), `build:`
 //!   (would need a full image build pipeline Horcrux doesn't have),
-//!   `configs:`/`secrets:` (Swarm-only distribution objects), networks
-//!   beyond the default bridge, and healthchecks.
+//!   `configs:`/`secrets:` (Swarm-only distribution objects), and
+//!   healthchecks. Every service joins one per-stack network
+//!   (`<stack>_default`, like compose) with its service name as a DNS
+//!   alias; custom `networks:` beyond that are not applied.
 //!
 //! A "stack" is a lightweight, named grouping: each compose service becomes
 //! one Horcrux container (via the existing `ContainerManager`), and the
@@ -19,7 +21,9 @@
 //! rather than inventing a new storage layer.
 use crate::container::ContainerManager;
 use crate::db::{stacks as db_stacks, Database};
-use horcrux_common::{ContainerConfig, ContainerRuntime, ContainerStatus, Result};
+use horcrux_common::{
+    ContainerConfig, ContainerOptions, ContainerRuntime, ContainerStatus, Result,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -198,6 +202,12 @@ impl StackManager {
         order
     }
 
+    /// Name of the per-stack network every service joins (compose's
+    /// `<project>_default`), giving services name-based DNS to each other.
+    fn stack_network_name(stack_name: &str) -> String {
+        format!("{stack_name}_default")
+    }
+
     fn service_to_container_config(
         stack_name: &str,
         service_name: &str,
@@ -214,6 +224,26 @@ impl StackManager {
             .and_then(parse_mem_limit_mb)
             .unwrap_or(512);
         let cpus = svc.cpus.unwrap_or(1.0).max(1.0) as u32;
+        let env = match &svc.environment {
+            Some(ComposeEnv::List(l)) => l.clone(),
+            Some(ComposeEnv::Map(m)) => {
+                let mut v: Vec<String> = m
+                    .iter()
+                    .map(|(k, val)| match val {
+                        Some(val) => format!("{k}={val}"),
+                        None => k.clone(),
+                    })
+                    .collect();
+                v.sort();
+                v
+            }
+            None => Vec::new(),
+        };
+        let command = match &svc.command {
+            Some(ComposeCommand::Exec(argv)) => argv.clone(),
+            Some(ComposeCommand::Shell(s)) => s.split_whitespace().map(str::to_string).collect(),
+            None => Vec::new(),
+        };
         ContainerConfig {
             id,
             name: format!("{stack_name}_{service_name}"),
@@ -222,7 +252,58 @@ impl StackManager {
             cpus,
             rootfs: svc.image.clone().unwrap_or_default(),
             status: ContainerStatus::Stopped,
+            options: ContainerOptions {
+                env,
+                ports: svc.ports.clone(),
+                volumes: svc.volumes.clone(),
+                command,
+                network: Some(Self::stack_network_name(stack_name)),
+                network_aliases: vec![service_name.to_string()],
+            },
+            created_at: None,
         }
+    }
+
+    /// Create the stack network (idempotent: an existing one is reused).
+    async fn ensure_stack_network(runtime: &str, network: &str, stack_name: &str) -> Result<()> {
+        let exists = tokio::process::Command::new(runtime)
+            .args(["network", "inspect", network])
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if exists {
+            return Ok(());
+        }
+        let out = tokio::process::Command::new(runtime)
+            .args([
+                "network",
+                "create",
+                "--label",
+                &format!("horcrux.stack={stack_name}"),
+                network,
+            ])
+            .output()
+            .await
+            .map_err(|e| {
+                horcrux_common::Error::System(format!(
+                    "Failed to run {runtime} network create: {e}"
+                ))
+            })?;
+        if !out.status.success() {
+            return Err(horcrux_common::Error::System(format!(
+                "Failed to create stack network {network}: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        Ok(())
+    }
+
+    async fn remove_stack_network(runtime: &str, network: &str) {
+        let _ = tokio::process::Command::new(runtime)
+            .args(["network", "rm", network])
+            .output()
+            .await;
     }
 
     /// Deploy a named stack: parse compose YAML, create+start one container
@@ -234,6 +315,18 @@ impl StackManager {
         runtime: ContainerRuntime,
     ) -> Result<StackSummary> {
         let (compose, unsupported) = Self::validate_compose(compose_yaml)?;
+        if !crate::container::is_valid_oci_name(name) {
+            return Err(horcrux_common::Error::Validation(format!(
+                "Invalid stack name '{name}': use letters, digits, '_', '.' or '-'"
+            )));
+        }
+        for service_name in compose.services.keys() {
+            if !crate::container::is_valid_oci_name(service_name) {
+                return Err(horcrux_common::Error::Validation(format!(
+                    "Invalid service name '{service_name}'"
+                )));
+            }
+        }
         let order = Self::deploy_order(&compose);
 
         let now = chrono::Utc::now().timestamp();
@@ -247,6 +340,9 @@ impl StackManager {
                 ))
             }
         };
+
+        let network = Self::stack_network_name(name);
+        Self::ensure_stack_network(runtime_str, &network, name).await?;
 
         db_stacks::create_stack(
             self.database.pool(),
@@ -387,6 +483,7 @@ impl StackManager {
                 .delete_container(&svc.container_id)
                 .await;
         }
+        Self::remove_stack_network(&stack.runtime, &Self::stack_network_name(&stack.name)).await;
         db_stacks::delete_stack(self.database.pool(), &stack.id).await?;
         Ok(())
     }
@@ -483,6 +580,24 @@ services:
         assert_eq!(config.rootfs, "postgres:16");
         assert_eq!(config.name, "mystack_db");
         assert_eq!(config.status, ContainerStatus::Stopped);
+        // environment / volumes / network must reach the container config
+        // (they used to be parsed and then silently dropped).
+        assert_eq!(config.options.env, vec!["POSTGRES_PASSWORD=secret"]);
+        assert_eq!(
+            config.options.volumes,
+            vec!["dbdata:/var/lib/postgresql/data"]
+        );
+        assert_eq!(config.options.network.as_deref(), Some("mystack_default"));
+        assert_eq!(config.options.network_aliases, vec!["db"]);
+        assert!(config.options.validate().is_ok());
+
+        let web = StackManager::service_to_container_config(
+            "mystack",
+            "web",
+            compose.services.get("web").unwrap(),
+            ContainerRuntime::Docker,
+        );
+        assert_eq!(web.options.ports, vec!["8080:80"]);
     }
 
     #[test]

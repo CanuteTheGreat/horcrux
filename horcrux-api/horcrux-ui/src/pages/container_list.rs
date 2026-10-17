@@ -7,10 +7,12 @@ pub fn ContainerList() -> impl IntoView {
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
 
-    // Load containers
-    create_effect(move |_| {
+    let (action_error, set_action_error) = create_signal(None::<String>);
+
+    // Load (and, after every action, re-load) the container list so the
+    // table always shows the real post-action state.
+    let reload = move || {
         spawn_local(async move {
-            set_loading.set(true);
             match api::get_containers().await {
                 Ok(container_list) => {
                     set_containers.set(container_list);
@@ -22,21 +24,29 @@ pub fn ContainerList() -> impl IntoView {
             }
             set_loading.set(false);
         });
-    });
+    };
+
+    create_effect(move |_| reload());
 
     let start_container = move |container_id: String| {
         spawn_local(async move {
-            if let Err(e) = api::start_container(&container_id).await {
-                logging::log!("Error starting container: {}", e.message);
+            match api::start_container(&container_id).await {
+                Ok(()) => set_action_error.set(None),
+                Err(e) => {
+                    set_action_error.set(Some(format!("Start {container_id}: {}", e.message)))
+                }
             }
+            reload();
         });
     };
 
     let stop_container = move |container_id: String| {
         spawn_local(async move {
-            if let Err(e) = api::stop_container(&container_id).await {
-                logging::log!("Error stopping container: {}", e.message);
+            match api::stop_container(&container_id).await {
+                Ok(()) => set_action_error.set(None),
+                Err(e) => set_action_error.set(Some(format!("Stop {container_id}: {}", e.message))),
             }
+            reload();
         });
     };
 
@@ -49,9 +59,13 @@ pub fn ContainerList() -> impl IntoView {
             .unwrap_or(false)
         {
             spawn_local(async move {
-                if let Err(e) = api::delete_container(&container_id).await {
-                    logging::log!("Error deleting container: {}", e.message);
+                match api::delete_container(&container_id).await {
+                    Ok(()) => set_action_error.set(None),
+                    Err(e) => {
+                        set_action_error.set(Some(format!("Delete {container_id}: {}", e.message)))
+                    }
                 }
+                reload();
             });
         }
     };
@@ -61,9 +75,11 @@ pub fn ContainerList() -> impl IntoView {
             <div class="page-header">
                 <h1>"Containers"</h1>
                 <div class="header-actions">
-                    <button class="btn btn-primary">"Create Container"</button>
+                    <a href="/containers/create" class="btn btn-primary" id="create-container-btn">"Create Container"</a>
                 </div>
             </div>
+
+            {move || action_error.get().map(|e| view! { <div class="alert alert-error">{e}</div> })}
 
             {move || {
                 if loading.get() {
@@ -106,7 +122,7 @@ pub fn ContainerList() -> impl IntoView {
                                         };
 
                                         view! {
-                                            <tr>
+                                            <tr data-container-id=container.id.clone()>
                                                 <td>{&container.id}</td>
                                                 <td><strong>{&container.name}</strong></td>
                                                 <td>
@@ -115,7 +131,7 @@ pub fn ContainerList() -> impl IntoView {
                                                 <td><code>{&container.image}</code></td>
                                                 <td><span class={status_class}>{&container.status}</span></td>
                                                 <td>
-                                                    {container.created_at.as_ref().map(|t| t.to_string()).unwrap_or_else(|| "N/A".to_string())}
+                                                    {container.created_at.as_deref().map(crate::utils::format_rfc3339).unwrap_or_else(|| "N/A".to_string())}
                                                 </td>
                                                 <td class="actions">
                                                     <button

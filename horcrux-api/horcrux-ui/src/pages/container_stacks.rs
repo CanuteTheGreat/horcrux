@@ -9,6 +9,7 @@ pub fn StacksPage() -> impl IntoView {
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
     let (name, set_name) = create_signal(String::new());
+    let (action_error, set_action_error) = create_signal(None::<String>);
     let (compose, set_compose) = create_signal(
         "services:\n  web:\n    image: nginx:latest\n    ports:\n      - \"8080:80\"\n".to_string(),
     );
@@ -40,9 +41,10 @@ pub fn StacksPage() -> impl IntoView {
             match api::deploy_stack(&n, &yaml, &rt).await {
                 Ok(_) => {
                     set_name.set(String::new());
+                    set_action_error.set(None);
                     reload();
                 }
-                Err(e) => logging::log!("Error deploying stack: {}", e.message),
+                Err(e) => set_action_error.set(Some(format!("Deploy failed: {}", e.message))),
             }
         });
     };
@@ -50,15 +52,17 @@ pub fn StacksPage() -> impl IntoView {
     let start = move |id: String| {
         spawn_local(async move {
             if let Err(e) = api::start_stack(&id).await {
-                logging::log!("Error starting stack: {}", e.message);
+                set_action_error.set(Some(format!("Start failed: {}", e.message)));
             }
+            reload();
         });
     };
     let stop = move |id: String| {
         spawn_local(async move {
             if let Err(e) = api::stop_stack(&id).await {
-                logging::log!("Error stopping stack: {}", e.message);
+                set_action_error.set(Some(format!("Stop failed: {}", e.message)));
             }
+            reload();
         });
     };
     let remove = move |id: String| {
@@ -74,8 +78,11 @@ pub fn StacksPage() -> impl IntoView {
         {
             spawn_local(async move {
                 if let Err(e) = api::remove_stack(&id).await {
-                    logging::log!("Error removing stack: {}", e.message);
+                    set_action_error.set(Some(format!("Remove failed: {}", e.message)));
                 }
+                // Re-read the list so the removed stack disappears at once
+                // (it used to linger until a manual page refresh).
+                reload();
             });
         }
     };
@@ -86,9 +93,11 @@ pub fn StacksPage() -> impl IntoView {
                 <h1>"Stacks (Compose)"</h1>
                 <p class="subtitle">
                     "Deploys common docker-compose.yml services as one named group of containers. "
-                    "Swarm `deploy:` keys and `build:` contexts are not applied - see PORTAINER_COMPARISON.md."
+                    "Services share a per-stack network and reach each other by service name; ports, environment, volumes and command are applied. Swarm `deploy:` keys and `build:` contexts are not applied."
                 </p>
             </div>
+
+            {move || action_error.get().map(|e| view! { <div class="alert alert-error">{e}</div> })}
 
             <div class="form-section">
                 <select on:change=move |ev| set_runtime.set(event_target_value(&ev))>

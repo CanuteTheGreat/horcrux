@@ -78,6 +78,8 @@ impl LxdManager {
             disk_size: config.disk_size,
             status: VmStatus::Stopped,
             _pid: None,
+            hypervisor: horcrux_common::VmHypervisor::Lxd,
+            architecture: config.architecture.clone(),
         })
     }
 

@@ -76,6 +76,8 @@ impl LxcManager {
                 .to_string_lossy()
                 .to_string(),
             status: ContainerStatus::Stopped,
+            options: config.options.clone(),
+            created_at: Some(chrono::Utc::now().to_rfc3339()),
         })
     }
 

@@ -10,6 +10,10 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     name: Check
@@ -99,7 +103,7 @@ jobs:
         # creation (qemu-img), storage-pool/snapshot validation, and
         # VM start (needed for the console/VNC tests) all fail even
         # though the server itself starts fine.
-        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev qemu-system-x86 qemu-utils
+        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev qemu-system-x86 qemu-system-arm qemu-utils zstd
 
       - name: Ensure Node.js is present (self-heal)
         # catthehacker/ubuntu:act-latest job containers on the beauxbatons
@@ -184,8 +188,24 @@ jobs:
           cat /tmp/horcrux-api.log >&2
           exit 1
 
+      - name: Verify Docker access (container tests use the real daemon)
+        # Container create/list/reconcile, stack networking and the UI
+        # contract test drive the runner host's real Docker daemon; fail
+        # loudly here instead of letting them silently test nothing.
+        run: |
+          docker info --format 'docker {{.ServerVersion}} on {{.OperatingSystem}}'
+          docker pull -q busybox:latest
+
       - name: Run tests
+        env:
+          HORCRUX_TEST_REQUIRE_DOCKER: "1"
         run: cargo test --all-features --workspace
+
+      - name: Firewall apply (real nftables)
+        # The Test container is unprivileged; this runs the built API in a
+        # throwaway NET_ADMIN sibling container and checks an applied rule
+        # really lands in the kernel's nftables ruleset.
+        run: bash horcrux-api/tests/firewall_nft_e2e.sh target/debug/horcrux-api
 
       - name: Run tests (no default features)
         run: cargo test --no-default-features -p horcrux-api
@@ -535,3 +555,197 @@ jobs:
           file /tmp/horcrux-api-smoke | grep -qi 'ELF'
           test -x /tmp/horcrux-api-smoke
           echo "horcrux-api binary present, non-empty, executable ELF -- smoke test OK"
+
+  use-features:
+    name: USE-flag feature builds
+    runs-on: linux-cross-x86_64
+    container: catthehacker/ubuntu:act-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@stable
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev
+
+      - name: Ensure Node.js is present (self-heal)
+        run: |
+          if ! command -v node >/dev/null 2>&1; then
+            echo "::warning::node missing from job container PATH - reinstalling"
+            sudo apt-get update -qq
+            sudo apt-get install -y nodejs
+          fi
+          node --version
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-features-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-features-
+
+      - name: Every ebuild USE flag maps to a Cargo feature
+        # src_configure() turns USE flags into --features; a USE flag whose
+        # feature doesn't exist breaks `emerge`, and a Cargo feature with
+        # no USE flag can never be selected by a Gentoo user.
+        run: |
+          eb=gentoo/app-emulation/horcrux/horcrux-9999.ebuild
+          mapped=$(grep -oE 'usex [a-z0-9-]+ "[a-z0-9-]+"' "$eb" | awk '{print $3}' | tr -d '"' | sort -u)
+          declared=$(sed -n '/^\[features\]/,/^\[/p' horcrux-api/Cargo.toml | grep -oE '^[a-z0-9-]+' | sort -u)
+          missing=$(comm -23 <(echo "$mapped") <(echo "$declared"))
+          [ -z "$missing" ] || { echo "USE flags mapped to undefined Cargo features: $missing"; exit 1; }
+          # Bundles/defaults/internal features are not USE flags.
+          unmapped=$(comm -13 <(echo "$mapped") <(echo "$declared") | grep -vE '^(default|nas-full|nas-basic|nas-apple|nas-enterprise|nas-auth)$' || true)
+          [ -z "$unmapped" ] || { echo "Cargo features with no USE flag in $eb: $unmapped"; exit 1; }
+          for f in gentoo/app-emulation/horcrux/horcrux-*.ebuild deploy/gentoo/horcrux-*.ebuild; do
+            diff <(grep -oE 'usex [a-z0-9-]+ "[a-z0-9-]+"' "$eb") <(grep -oE 'usex [a-z0-9-]+ "[a-z0-9-]+"' "$f") \
+              || { echo "$f maps USE flags differently from $eb"; exit 1; }
+          done
+          echo "USE flags <-> Cargo features consistent:"; echo $mapped
+
+      - name: Build each USE-flag feature on its own
+        # The Test job builds --all-features, which hides code that only
+        # compiles when some *other* feature is also on. A Gentoo user can
+        # pick any single flag, so each cfg-gated feature must build alone
+        # (no defaults). Features with no cfg gate compile identical code,
+        # so they are checked together in one build.
+        run: |
+          gated=$(grep -rhoE 'feature *= *"[a-z0-9-]+"' horcrux-api/src horcrux-api/tests | grep -oE '"[a-z0-9-]+"' | tr -d '"' | sort -u)
+          all=$(sed -n '/^\[features\]/,/^\[/p' horcrux-api/Cargo.toml | grep -oE '^[a-z0-9-]+' | grep -v '^default$' | sort -u)
+          plain=$(comm -13 <(echo "$gated") <(echo "$all") | grep -vE '^nas-(full|basic|apple|enterprise)$' | tr '\n' ',' | sed 's/,$//')
+          failed=""
+          for f in $gated "$plain"; do
+            echo "::group::cargo check --no-default-features --features $f"
+            if ! cargo check -p horcrux-api --no-default-features --features "$f" --all-targets; then
+              failed="$failed $f"
+            fi
+            echo "::endgroup::"
+          done
+          [ -z "$failed" ] || { echo "Features that fail to build alone:$failed"; exit 1; }
+          echo "All $(echo $gated | wc -w) gated features + [$plain] build on their own"
+
+  ui-e2e:
+    name: UI E2E (browser)
+    runs-on: linux-cross-x86_64
+    container: catthehacker/ubuntu:act-latest
+    needs: check
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev python3-venv qemu-utils
+
+      - name: Install trunk
+        # Same prebuilt-binary install as the Build Web UI job.
+        run: |
+          case "$(uname -m)" in
+            x86_64) TRUNK_ARCH=x86_64-unknown-linux-gnu ;;
+            aarch64|arm64) TRUNK_ARCH=aarch64-unknown-linux-gnu ;;
+            *) echo "Unsupported arch: $(uname -m)" >&2; exit 1 ;;
+          esac
+          curl -L "https://github.com/trunk-rs/trunk/releases/latest/download/trunk-${TRUNK_ARCH}.tar.gz" | tar xzf -
+          sudo mv trunk /usr/local/bin/trunk
+
+      - name: Ensure Node.js is present (self-heal)
+        run: |
+          if ! command -v node >/dev/null 2>&1; then
+            echo "::warning::node missing from job container PATH - reinstalling"
+            sudo apt-get update -qq
+            sudo apt-get install -y nodejs
+          fi
+          node --version
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-e2e-
+
+      - name: Build web UI and API
+        run: |
+          (cd horcrux-api/horcrux-ui && trunk build)
+          cargo build --all-features -p horcrux-api --bin horcrux-api
+
+      - name: Install Playwright + Chromium
+        run: |
+          python3 -m venv /tmp/pw
+          /tmp/pw/bin/pip install -q playwright
+          sudo /tmp/pw/bin/playwright install-deps chromium
+          /tmp/pw/bin/playwright install chromium
+
+      - name: Start horcrux-api serving the built UI
+        run: |
+          docker info --format 'docker {{.ServerVersion}}'
+          mkdir -p /tmp/e2e-data /tmp/e2e-cni/bin /tmp/e2e-cni/conf.d
+          HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 \
+          HORCRUX_DATA_DIR=/tmp/e2e-data \
+          HORCRUX_CNI_BIN_DIR=/tmp/e2e-cni/bin HORCRUX_CNI_CONF_DIR=/tmp/e2e-cni/conf.d \
+          HORCRUX_DATABASE_URL="sqlite:///tmp/e2e-data/horcrux.db" \
+          HORCRUX_UI_DIR="$PWD/horcrux-api/horcrux-ui/dist" \
+          ADMIN_PASSWORD=admin RATE_LIMIT_MAX_REQUESTS=100000 RUST_LOG=info \
+          nohup ./target/debug/horcrux-api > /tmp/horcrux-e2e.log 2>&1 &
+          echo $! > /tmp/horcrux-e2e.pid
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8006/api/health >/dev/null && exit 0
+            sleep 1
+          done
+          cat /tmp/horcrux-e2e.log; exit 1
+
+      - name: Run browser E2E
+        run: /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/ui_e2e.py
+
+      - name: Dump horcrux-api log
+        if: always()
+        run: tail -200 /tmp/horcrux-e2e.log || true
+
+      - name: Stop horcrux-api
+        if: always()
+        run: kill "$(cat /tmp/horcrux-e2e.pid)" 2>/dev/null || true
+
+  gentoo-use-matrix:
+    name: Gentoo USE-flag matrix (ebuild install)
+    runs-on: linux-cross-x86_64
+    container: catthehacker/ubuntu:act-latest
+    # Runs after the main Gentoo build so the shared builder-stage layers
+    # (stage3, emerge-webrsync, rust-bin) are already in the daemon's cache.
+    needs: gentoo-docker-build
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ebuild phases for contrasting USE sets
+        # See gentoo/ci/use-matrix.sh: runs `ebuild horcrux-9999.ebuild
+        # install` with everything-on (OpenRC, webui, NAS, kubernetes) and a
+        # minimal systemd set, checks the installed files, and starts the
+        # installed horcrux-api to confirm USE-disabled features' routes
+        # are really absent and enabled ones are served.
+        run: |
+          daemon_arch="$(docker info --format '{{.Architecture}}' 2>/dev/null || true)"
+          case "$daemon_arch" in
+            x86_64|amd64) target_arch=amd64 ;;
+            aarch64|arm64) target_arch=arm64 ;;
+            *) echo "Unrecognized Docker daemon architecture: '$daemon_arch'" >&2; exit 1 ;;
+          esac
+          docker build \
+            --target use-matrix \
+            --build-arg TARGETARCH="$target_arch" \
+            --build-arg HORCRUX_USE="cli systemd docker -qemu -monitoring -webui" \
+            -t horcrux/use-matrix:${{ github.sha }} .
+          docker rmi horcrux/use-matrix:${{ github.sha }} || true

@@ -9,6 +9,13 @@ pub fn SnapshotList() -> impl IntoView {
     let (loading, set_loading) = create_signal(false);
     let (error, set_error) = create_signal(None::<String>);
     let (show_create_dialog, set_show_create_dialog) = create_signal(false);
+    let (notice, set_notice) = create_signal(None::<String>);
+    let (refresh, set_refresh) = create_signal(0u32);
+    let (snap_name, set_snap_name) = create_signal(String::new());
+    let (snap_desc, set_snap_desc) = create_signal(String::new());
+    let (snap_memory, set_snap_memory) = create_signal(false);
+    let (creating, set_creating) = create_signal(false);
+    let (create_error, set_create_error) = create_signal(None::<String>);
 
     // Load VMs for dropdown
     create_effect(move |_| {
@@ -27,6 +34,7 @@ pub fn SnapshotList() -> impl IntoView {
     // Load snapshots when VM is selected
     create_effect(move |_| {
         let vm_id = selected_vm.get();
+        let _ = refresh.get();
         if !vm_id.is_empty() {
             spawn_local(async move {
                 set_loading.set(true);
@@ -56,11 +64,11 @@ pub fn SnapshotList() -> impl IntoView {
             .unwrap_or(false)
         {
             spawn_local(async move {
-                if let Err(e) = api::restore_snapshot(&vm_id, &snapshot_id).await {
-                    logging::log!("Error restoring snapshot: {}", e.message);
-                } else {
-                    logging::log!("Snapshot restored successfully");
+                match api::restore_snapshot(&vm_id, &snapshot_id).await {
+                    Ok(_) => set_notice.set(Some(format!("Snapshot {} restored", snapshot_id))),
+                    Err(e) => set_error.set(Some(format!("Restore failed: {}", e.message))),
                 }
+                set_refresh.update(|n| *n += 1);
             });
         }
     };
@@ -75,14 +83,44 @@ pub fn SnapshotList() -> impl IntoView {
         {
             spawn_local(async move {
                 if let Err(e) = api::delete_snapshot(&vm_id, &snapshot_id).await {
-                    logging::log!("Error deleting snapshot: {}", e.message);
+                    set_error.set(Some(format!("Delete failed: {}", e.message)));
                 }
+                set_refresh.update(|n| *n += 1);
             });
         }
     };
 
+    let submit_create = move |ev: ev::SubmitEvent| {
+        ev.prevent_default();
+        let vm_id = selected_vm.get();
+        let name = snap_name.get().trim().to_string();
+        if name.is_empty() {
+            set_create_error.set(Some("Snapshot name is required".to_string()));
+            return;
+        }
+        let desc = snap_desc.get();
+        let desc = (!desc.trim().is_empty()).then_some(desc);
+        let memory = snap_memory.get();
+        set_creating.set(true);
+        spawn_local(async move {
+            match api::create_snapshot(&vm_id, &name, desc, memory).await {
+                Ok(_) => {
+                    set_show_create_dialog.set(false);
+                    set_create_error.set(None);
+                    set_snap_name.set(String::new());
+                    set_snap_desc.set(String::new());
+                    set_notice.set(Some(format!("Snapshot {} created", name)));
+                    set_refresh.update(|n| *n += 1);
+                }
+                Err(e) => set_create_error.set(Some(e.message)),
+            }
+            set_creating.set(false);
+        });
+    };
+
     view! {
         <div class="snapshot-list">
+            {move || notice.get().map(|n| view! { <div class="alert alert-success" id="snapshot-notice">{n}</div> })}
             <div class="page-header">
                 <h1>"VM Snapshots"</h1>
                 <div class="header-actions">
@@ -195,11 +233,33 @@ pub fn SnapshotList() -> impl IntoView {
                         <div class="modal">
                             <div class="modal-content">
                                 <h2>"Create Snapshot"</h2>
-                                <p>"Snapshot creation form would go here"</p>
-                                <button
-                                    class="btn btn-secondary"
-                                    on:click=move |_| set_show_create_dialog.set(false)
-                                >"Close"</button>
+                                <form id="create-snapshot-form" on:submit=submit_create>
+                                    {move || create_error.get().map(|e| view! { <div class="alert alert-error" id="create-snapshot-error">{e}</div> })}
+                                    <div class="form-group">
+                                        <label for="snap-name">"Name"</label>
+                                        <input id="snap-name" type="text" required prop:value=snap_name
+                                            on:input=move |ev| set_snap_name.set(event_target_value(&ev))/>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="snap-desc">"Description"</label>
+                                        <input id="snap-desc" type="text" prop:value=snap_desc
+                                            on:input=move |ev| set_snap_desc.set(event_target_value(&ev))/>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>
+                                            <input id="snap-memory" type="checkbox" prop:checked=snap_memory
+                                                on:change=move |ev| set_snap_memory.set(event_target_checked(&ev))/>
+                                            " Include memory (running VMs only)"
+                                        </label>
+                                    </div>
+                                    <div class="form-actions">
+                                        <button type="button" class="btn btn-secondary"
+                                            on:click=move |_| set_show_create_dialog.set(false)>"Cancel"</button>
+                                        <button id="snap-submit" type="submit" class="btn btn-primary" disabled=creating>
+                                            {move || if creating.get() { "Creating..." } else { "Create" }}
+                                        </button>
+                                    </div>
+                                </form>
                             </div>
                         </div>
                     }.into_view()

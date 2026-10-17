@@ -31,6 +31,38 @@ fn create_client() -> Client {
         .expect("Failed to create HTTP client")
 }
 
+/// Assert the request reached the server AND got a 2xx status (printing the
+/// body on failure). `response.is_ok()` alone only proves *some* HTTP
+/// response came back - a 401/404/500 passed, which is how most of this
+/// suite used to "pass" without exercising anything.
+async fn expect_2xx(
+    response: reqwest::Result<reqwest::Response>,
+    what: &str,
+) -> reqwest::Result<reqwest::Response> {
+    let response = response.unwrap_or_else(|e| panic!("{what}: request failed: {e}"));
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        panic!("{what}: HTTP {status}: {body}");
+    }
+    Ok(response)
+}
+
+/// A client whose every request carries the shared admin bearer token.
+async fn authed_client() -> Client {
+    let token = admin_token(&create_client()).await;
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        format!("Bearer {token}").parse().unwrap(),
+    );
+    Client::builder()
+        .timeout(Duration::from_secs(60))
+        .default_headers(headers)
+        .build()
+        .expect("Failed to create HTTP client")
+}
+
 /// Test helper to wait for async operations to complete
 async fn wait_for_operation(duration_ms: u64) {
     sleep(Duration::from_millis(duration_ms)).await;
@@ -134,7 +166,7 @@ async fn test_vm_lifecycle() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to create VM");
+    let response = expect_2xx(response, "Failed to create VM").await;
     let response = response.unwrap();
     assert_eq!(
         response.status(),
@@ -149,7 +181,7 @@ async fn test_vm_lifecycle() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to get VM");
+    let response = expect_2xx(response, "Failed to get VM").await;
     let vm: VmConfig = response.unwrap().json().await.expect("Failed to parse VM");
     assert_eq!(vm.id, TEST_VM_ID);
     assert_eq!(vm.name, "Integration Test VM");
@@ -163,7 +195,7 @@ async fn test_vm_lifecycle() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to start VM");
+    let _ = expect_2xx(response, "Failed to start VM").await;
     wait_for_operation(2000).await;
 
     // Verify VM is running
@@ -183,7 +215,7 @@ async fn test_vm_lifecycle() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to stop VM");
+    let _ = expect_2xx(response, "Failed to stop VM").await;
     wait_for_operation(2000).await;
 
     // 5. Delete VM
@@ -193,7 +225,7 @@ async fn test_vm_lifecycle() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to delete VM");
+    let _ = expect_2xx(response, "Failed to delete VM").await;
 
     // Verify VM is deleted
     let response = client
@@ -230,7 +262,7 @@ async fn test_cluster_operations() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to add cluster node");
+    let _ = expect_2xx(response, "Failed to add cluster node").await;
     wait_for_operation(500).await;
 
     // 2. Get node list
@@ -240,7 +272,7 @@ async fn test_cluster_operations() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to get node list");
+    let response = expect_2xx(response, "Failed to get node list").await;
     let nodes: Vec<serde_json::Value> = response
         .unwrap()
         .json()
@@ -259,7 +291,7 @@ async fn test_cluster_operations() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to get cluster architecture");
+    let _ = expect_2xx(response, "Failed to get cluster architecture").await;
 }
 
 /// `GET /api/cluster/status`, `DELETE /api/cluster/nodes/:name` (used by
@@ -396,7 +428,7 @@ async fn test_cluster_status_remove_and_live_usage() {
 
 #[tokio::test]
 async fn test_storage_operations() {
-    let client = create_client();
+    let client = authed_client().await;
 
     // 1. List storage pools
     let response = client
@@ -404,7 +436,7 @@ async fn test_storage_operations() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to get storage pools");
+    let _ = expect_2xx(response, "Failed to get storage pools").await;
 
     // 2. Create ZFS storage pool
     let zfs_pool = json!({
@@ -445,11 +477,15 @@ async fn test_storage_operations() {
         wait_for_operation(500).await;
     }
 
-    // 4. Create Directory storage pool
+    // 4. Create Directory storage pool (the server runs on this host in CI,
+    // so the test owns the backing directory and can check what lands in it)
+    let dir_path = std::env::temp_dir().join("horcrux-it-dir-pool");
+    let _ = std::fs::remove_dir_all(&dir_path);
+    std::fs::create_dir_all(&dir_path).unwrap();
     let dir_pool = json!({
         "name": "dir-test-pool",
         "storage_type": "directory",
-        "path": "/var/lib/horcrux/storage/test"
+        "path": dir_path.to_string_lossy()
     });
 
     let response = client
@@ -458,11 +494,12 @@ async fn test_storage_operations() {
         .send()
         .await;
 
-    let dir_pool_created = response.is_ok() && response.as_ref().unwrap().status().is_success();
+    // A directory pool needs nothing but a writable path: it must work.
+    let response = expect_2xx(response, "Failed to create directory storage pool").await;
     #[allow(unused_assignments)]
     let mut test_pool_id = String::new();
 
-    if dir_pool_created {
+    {
         let pool_response: serde_json::Value = response
             .unwrap()
             .json()
@@ -477,12 +514,12 @@ async fn test_storage_operations() {
             .send()
             .await;
 
-        assert!(response.is_ok(), "Failed to get pool details");
+        let _ = expect_2xx(response, "Failed to get pool details").await;
 
         // 6. Create volume in pool
         let volume_request = json!({
             "name": "test-volume",
-            "size": 10  // 10 GB
+            "size": 1  // GB (qcow2, sparse)
         });
 
         let response = client
@@ -494,9 +531,10 @@ async fn test_storage_operations() {
             .send()
             .await;
 
-        if response.is_ok() {
-            wait_for_operation(1000).await;
-        }
+        let _ = expect_2xx(response, "Failed to create volume in directory pool").await;
+        // The volume is a real image file in the pool's backing directory.
+        let vol = dir_path.join("test-volume.qcow2");
+        assert!(vol.is_file(), "volume file missing: {}", vol.display());
 
         // 7. Delete the test pool
         let response = client
@@ -504,7 +542,7 @@ async fn test_storage_operations() {
             .send()
             .await;
 
-        assert!(response.is_ok(), "Failed to delete storage pool");
+        let _ = expect_2xx(response, "Failed to delete storage pool").await;
     }
 
     // 8. Test Ceph pool creation (will likely fail without Ceph cluster)
@@ -582,7 +620,7 @@ async fn test_backup_operations() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to create backup");
+    let response = expect_2xx(response, "Failed to create backup").await;
     let backup: serde_json::Value = response
         .unwrap()
         .json()
@@ -602,7 +640,7 @@ async fn test_backup_operations() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to list backups");
+    let response = expect_2xx(response, "Failed to list backups").await;
     let backups: Vec<serde_json::Value> = response
         .unwrap()
         .json()
@@ -617,7 +655,7 @@ async fn test_backup_operations() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to get backup info");
+    let _ = expect_2xx(response, "Failed to get backup info").await;
 
     // 4. Restore from backup
     let restore_request = json!({
@@ -631,7 +669,7 @@ async fn test_backup_operations() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to restore backup");
+    let _ = expect_2xx(response, "Failed to restore backup").await;
 
     // Cleanup
     let _ = client
@@ -658,7 +696,7 @@ async fn test_monitoring_and_alerts() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to get node metrics");
+    let response = expect_2xx(response, "Failed to get node metrics").await;
     let metrics: Option<serde_json::Value> = response
         .unwrap()
         .json()
@@ -694,7 +732,7 @@ async fn test_monitoring_and_alerts() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to create alert rule");
+    let _ = expect_2xx(response, "Failed to create alert rule").await;
 
     // 3. List alert rules
     let response = client
@@ -703,7 +741,7 @@ async fn test_monitoring_and_alerts() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to list alert rules");
+    let response = expect_2xx(response, "Failed to list alert rules").await;
     let rules: Vec<serde_json::Value> = response
         .unwrap()
         .json()
@@ -718,7 +756,7 @@ async fn test_monitoring_and_alerts() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to get active alerts");
+    let response = expect_2xx(response, "Failed to get active alerts").await;
     let _alerts: Vec<serde_json::Value> = response
         .unwrap()
         .json()
@@ -732,7 +770,7 @@ async fn test_monitoring_and_alerts() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to get alert history");
+    let _ = expect_2xx(response, "Failed to get alert history").await;
 
     // Cleanup
     let _ = client
@@ -758,7 +796,7 @@ async fn test_authentication() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to login");
+    let response = expect_2xx(response, "Failed to login").await;
     let token_response: serde_json::Value = response
         .unwrap()
         .json()
@@ -777,7 +815,14 @@ async fn test_authentication() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Token verification failed");
+    let verified: serde_json::Value = expect_2xx(response, "Token verification failed")
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(verified["valid"], true, "{verified}");
+    assert_eq!(verified["username"], "admin", "{verified}");
 
     // 3. Test invalid credentials
     let bad_login = json!({
@@ -813,7 +858,7 @@ async fn test_firewall_rules() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to get firewall rules");
+    let _ = expect_2xx(response, "Failed to get firewall rules").await;
 
     // 2. Create firewall rule
     let rule_id = "test-http-allow";
@@ -839,7 +884,7 @@ async fn test_firewall_rules() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to create firewall rule");
+    let _ = expect_2xx(response, "Failed to create firewall rule").await;
 
     // 3. Confirm the rule appears in the list
     let response = client
@@ -848,7 +893,7 @@ async fn test_firewall_rules() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to list firewall rules");
+    let response = expect_2xx(response, "Failed to list firewall rules").await;
     let rules: Vec<serde_json::Value> = response
         .unwrap()
         .json()
@@ -866,7 +911,17 @@ async fn test_firewall_rules() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to apply firewall rules");
+    // Applying needs nft + CAP_NET_ADMIN. CI's unprivileged Test container
+    // has neither, so here the endpoint must either apply or fail with a
+    // clear nftables error; the real apply (rules visible in `nft list
+    // ruleset`) is proven by the "Firewall apply (real nftables)" CI step.
+    let response = response.expect("apply request failed");
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    assert!(
+        status.is_success() || (status.as_u16() == 500 && body.contains("nftables")),
+        "apply firewall rules: {status} {body}"
+    );
 
     // 5. Delete test rule
     let response = client
@@ -875,50 +930,153 @@ async fn test_firewall_rules() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to delete firewall rule");
+    let _ = expect_2xx(response, "Failed to delete firewall rule").await;
 }
 
 #[tokio::test]
 async fn test_template_operations() {
-    let client = create_client();
-
-    // 1. List templates
-    let response = client.get(format!("{}/templates", API_BASE)).send().await;
-
-    assert!(response.is_ok(), "Failed to list templates");
-
-    // 2. Create template from VM
-    let template_request = json!({
-        "vm_id": "base-vm",
-        "template_name": "test-template",
-        "description": "Test template for integration tests"
-    });
-
-    let response = client
-        .post(format!("{}/templates/create", API_BASE))
-        .json(&template_request)
-        .send()
-        .await;
-
-    // May fail if base VM doesn't exist - that's ok
-    if response.is_ok() {
-        wait_for_operation(2000).await;
-
-        // 3. Deploy from template
-        let deploy_request = json!({
-            "template_id": "test-template",
-            "vm_name": "from-template-vm",
-            "cpus": 2,
-            "memory": 2048
-        });
-
-        let response = client
-            .post(format!("{}/templates/deploy", API_BASE))
-            .json(&deploy_request)
+    let client = authed_client().await;
+    let base = "tpl-base-vm";
+    for id in [base, "tpl-clone-full", "tpl-clone-linked"] {
+        let _ = client
+            .delete(format!("{}/vms/{}", API_BASE, id))
             .send()
             .await;
+    }
 
-        assert!(response.is_ok(), "Failed to deploy from template");
+    let r = client.get(format!("{}/templates", API_BASE)).send().await;
+    let _ = expect_2xx(r, "Failed to list templates").await;
+
+    // 1. A real VM to turn into a template.
+    let r = client
+        .post(format!("{}/vms", API_BASE))
+        .json(&json!({"id": base, "name": base, "hypervisor": "qemu",
+                      "architecture": "x86_64", "cpus": 2, "memory": 512,
+                      "disk_size": 1, "status": "stopped"}))
+        .send()
+        .await;
+    let _ = expect_2xx(r, "create base VM").await;
+
+    // Unknown VM -> 404; a path that isn't the VM's disk -> 422.
+    let r = client
+        .post(format!("{}/templates", API_BASE))
+        .json(&json!({"vm_id": "no-such-vm", "name": "x"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
+    let r = client
+        .post(format!("{}/templates", API_BASE))
+        .json(&json!({"vm_id": base, "name": "x", "disk_path": "/etc/passwd"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 422);
+
+    // 2. Create the template.
+    let r = client
+        .post(format!("{}/templates", API_BASE))
+        .json(&json!({"vm_id": base, "name": "it-template", "description": "integration"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        201,
+        "create template: {}",
+        r.text().await.unwrap_or_default()
+    );
+    let tpl: serde_json::Value = r.json().await.unwrap();
+    let tpl_id = tpl["id"].as_str().unwrap().to_string();
+    assert_eq!(tpl["memory"], 512);
+    assert_eq!(tpl["cpus"], 2);
+    let list: Vec<serde_json::Value> = client
+        .get(format!("{}/templates", API_BASE))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(list.iter().any(|t| t["id"] == tpl_id.as_str()));
+
+    // 3. Deploy (full + linked) -> real VMs that are listed and startable.
+    for (id, kind) in [("tpl-clone-full", "full"), ("tpl-clone-linked", "linked")] {
+        let r = client
+            .post(format!("{}/templates/{}/clone", API_BASE, tpl_id))
+            .json(
+                &json!({"new_vm_id": id, "new_vm_name": id, "clone_type": kind,
+                          "storage_pool": null, "cloudinit_config": null}),
+            )
+            .send()
+            .await;
+        let r = expect_2xx(r, "clone template").await.unwrap();
+        let body: serde_json::Value = r.json().await.unwrap();
+        assert_eq!(body["new_vm_id"], id);
+        let r = client.get(format!("{}/vms/{}", API_BASE, id)).send().await;
+        let vm: serde_json::Value = expect_2xx(r, "cloned VM is registered")
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(vm["memory"], 512);
+        assert!(std::path::Path::new(vm["disks"][0]["path"].as_str().unwrap()).is_file());
+    }
+    let r = client
+        .post(format!("{}/vms/tpl-clone-linked/start", API_BASE))
+        .send()
+        .await;
+    let _ = expect_2xx(r, "start VM deployed from template").await;
+    let r = client
+        .post(format!("{}/vms/tpl-clone-linked/stop", API_BASE))
+        .send()
+        .await;
+    let _ = expect_2xx(r, "stop VM deployed from template").await;
+
+    // Same id again -> 409; unknown template -> 404.
+    let r = client
+        .post(format!("{}/templates/{}/clone", API_BASE, tpl_id))
+        .json(
+            &json!({"new_vm_id": "tpl-clone-full", "new_vm_name": "x", "clone_type": "full",
+                      "storage_pool": null, "cloudinit_config": null}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 409);
+    let r = client
+        .post(format!("{}/templates/nope/clone", API_BASE))
+        .json(
+            &json!({"new_vm_id": "x", "new_vm_name": "x", "clone_type": "full",
+                      "storage_pool": null, "cloudinit_config": null}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
+
+    // 4. Deleting the template leaves the base VM's disk alone.
+    let r = client
+        .delete(format!("{}/templates/{}", API_BASE, tpl_id))
+        .send()
+        .await;
+    let _ = expect_2xx(r, "delete template").await;
+    let base_vm: serde_json::Value = client
+        .get(format!("{}/vms/{}", API_BASE, base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(std::path::Path::new(base_vm["disks"][0]["path"].as_str().unwrap()).is_file());
+
+    for id in ["tpl-clone-linked", "tpl-clone-full", base] {
+        let _ = client
+            .delete(format!("{}/vms/{}", API_BASE, id))
+            .send()
+            .await;
     }
 }
 
@@ -962,7 +1120,7 @@ async fn test_console_access() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to get VNC console URL");
+    let response = expect_2xx(response, "Failed to get VNC console URL").await;
     let console_info: serde_json::Value = response
         .unwrap()
         .json()
@@ -1008,7 +1166,7 @@ async fn test_api_health() {
     // Test health endpoint
     let response = client.get(format!("{}/health", API_BASE)).send().await;
 
-    assert!(response.is_ok(), "Health check failed");
+    let response = expect_2xx(response, "Health check failed").await;
     assert_eq!(
         response.unwrap().status(),
         200,
@@ -1067,7 +1225,7 @@ async fn test_session_management() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to access with session cookie");
+    let response = expect_2xx(response, "Failed to access with session cookie").await;
     assert_eq!(response.unwrap().status(), 200);
 
     // 3. Logout (destroy session)
@@ -1077,7 +1235,7 @@ async fn test_session_management() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Logout failed");
+    let _ = expect_2xx(response, "Logout failed").await;
 
     // 4. Verify session is invalid after logout (retry on rate limit, same
     // pattern as every other endpoint in this suite -- /vms shares the
@@ -1184,7 +1342,7 @@ async fn test_password_change() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Password change failed");
+    let _ = expect_2xx(response, "Password change failed").await;
 
     // 3. Verify old password doesn't work
     let response = login_with_retry(&client, &username, "testpass123").await;
@@ -1200,7 +1358,7 @@ async fn test_password_change() {
     // 4. Verify new password works
     let response = login_with_retry(&client, &username, "newpass456").await;
 
-    assert!(response.is_ok(), "New password should work");
+    let _ = expect_2xx(response, "New password should work").await;
 
     // Cleanup
     let _ = client
@@ -1246,7 +1404,7 @@ async fn test_api_token_generation() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to create API key");
+    let response = expect_2xx(response, "Failed to create API key").await;
     let api_key_response: serde_json::Value = response.unwrap().json().await.unwrap();
 
     assert!(
@@ -1268,7 +1426,7 @@ async fn test_api_token_generation() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to use API key");
+    let response = expect_2xx(response, "Failed to use API key").await;
     assert_eq!(response.unwrap().status(), 200);
 
     // 4. List user's API keys
@@ -1278,7 +1436,7 @@ async fn test_api_token_generation() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to list API keys");
+    let response = expect_2xx(response, "Failed to list API keys").await;
     let keys: Vec<serde_json::Value> = response.unwrap().json().await.unwrap();
     assert!(!keys.is_empty(), "Should have at least one API key");
 }
@@ -1353,7 +1511,7 @@ async fn test_rbac_permissions() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "VmUser should be able to view VMs");
+    let _ = expect_2xx(response, "VmUser should be able to view VMs").await;
 
     // 4. VmUser can start/stop VMs (VmPowerMgmt privilege)
     let response = client
@@ -1453,7 +1611,7 @@ async fn test_cni_network_operations() {
         return; // Skip if server not running
     }
 
-    assert!(response.is_ok(), "Failed to create CNI network");
+    let _ = expect_2xx(response, "Failed to create CNI network").await;
 
     // 2. List CNI networks
     let response = client
@@ -1462,7 +1620,7 @@ async fn test_cni_network_operations() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to list CNI networks");
+    let response = expect_2xx(response, "Failed to list CNI networks").await;
     let networks: Vec<serde_json::Value> = response.unwrap().json().await.unwrap();
     let test_network = networks.iter().find(|n| n["name"] == "test-bridge");
     assert!(test_network.is_some(), "Test network should exist");
@@ -1474,7 +1632,7 @@ async fn test_cni_network_operations() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to delete CNI network");
+    let _ = expect_2xx(response, "Failed to delete CNI network").await;
 }
 
 #[tokio::test]
@@ -1508,7 +1666,7 @@ async fn test_network_policy_enforcement() {
         return;
     }
 
-    assert!(response.is_ok(), "Failed to create network policy");
+    let _ = expect_2xx(response, "Failed to create network policy").await;
 
     // 2. List network policies
     let response = client
@@ -1517,7 +1675,7 @@ async fn test_network_policy_enforcement() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to list network policies");
+    let response = expect_2xx(response, "Failed to list network policies").await;
     let policies: Vec<serde_json::Value> = response.unwrap().json().await.unwrap();
     assert!(!policies.is_empty(), "Should have at least one policy");
 
@@ -1531,7 +1689,7 @@ async fn test_network_policy_enforcement() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to get iptables rules");
+    let response = expect_2xx(response, "Failed to get iptables rules").await;
     let rules: Vec<String> = response.unwrap().json().await.unwrap();
     assert!(!rules.is_empty(), "Should generate iptables rules");
 
@@ -1542,100 +1700,77 @@ async fn test_network_policy_enforcement() {
         .send()
         .await;
 
-    assert!(response.is_ok(), "Failed to delete network policy");
+    let _ = expect_2xx(response, "Failed to delete network policy").await;
 }
 
 #[tokio::test]
 async fn test_vm_migration() {
     let client = create_client();
     let token = admin_token(&client).await;
-
-    // First, create a test VM for migration
-    let vm_config = json!({
-        "id": "migration-test-vm",
-        "name": "Migration Test VM",
-        "hypervisor": "qemu",
-        "architecture": "x86_64",
-        "cpus": 1,
-        "memory": 1024,
-        "disk_size": 10,
-        "status": "stopped"
-    });
+    let vm = "migration-test-vm";
+    let _ = client
+        .delete(format!("{}/vms/{}", API_BASE, vm))
+        .bearer_auth(&token)
+        .send()
+        .await;
 
     let response = client
         .post(format!("{}/vms", API_BASE))
         .bearer_auth(&token)
-        .json(&vm_config)
+        .json(&json!({
+            "id": vm, "name": "Migration Test VM", "hypervisor": "qemu",
+            "architecture": "x86_64", "cpus": 1, "memory": 256, "disk_size": 1,
+            "status": "stopped"
+        }))
         .send()
         .await;
+    let _ = expect_2xx(response, "Failed to create VM for migration").await;
 
-    if response.is_err() {
-        return; // Skip if server not available
-    }
+    // Unknown VM -> 404; unknown migration type -> 400 (both used to be 500s,
+    // and every *real* VM id was rejected as "Invalid VM ID" because the
+    // migration code only accepted numeric ids).
+    let r = client
+        .post(format!("{}/migrate/no-such-vm", API_BASE))
+        .bearer_auth(&token)
+        .json(&json!({"target_node": "node2", "migration_type": "offline"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
+    let r = client
+        .post(format!("{}/migrate/{}", API_BASE, vm))
+        .bearer_auth(&token)
+        .json(&json!({"target_node": "node2", "migration_type": "teleport"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 400);
 
-    wait_for_operation(1000).await;
-
-    // 1. Test offline migration
-    let migrate_request = json!({
-        "target_node": "node2",
-        "online": false,
-        "migration_type": "offline"
-    });
-
+    // A real VM id is accepted and produces a trackable job.
     let response = client
-        .post(format!("{}/migrate/migration-test-vm", API_BASE))
+        .post(format!("{}/migrate/{}", API_BASE, vm))
         .bearer_auth(&token)
-        .json(&migrate_request)
+        .json(&json!({"target_node": "node2", "online": false, "migration_type": "offline"}))
         .send()
         .await;
+    let response = expect_2xx(response, "Failed to start migration").await;
+    let job_id: serde_json::Value = response.unwrap().json().await.unwrap();
+    assert!(job_id.is_string(), "migration returns a job id: {job_id}");
 
-    // Migration will likely fail in test environment (no cluster), but API should respond
-    if response.is_ok() {
-        let response = response.unwrap();
-        if response.status().is_success() {
-            let job_id: serde_json::Value = response.json().await.unwrap();
-            assert!(job_id.is_string(), "Should receive migration job ID");
-
-            let _job_id_str = job_id.as_str().unwrap();
-
-            // 2. Check migration status
-            wait_for_operation(500).await;
-
-            let response = client
-                .get(format!("{}/migrate/migration-test-vm/status", API_BASE))
-                .bearer_auth(&token)
-                .send()
-                .await;
-
-            if response.is_ok() {
-                let status: serde_json::Value = response.unwrap().json().await.unwrap();
-                assert!(
-                    status.get("state").is_some(),
-                    "Migration status should include state"
-                );
-            }
-        }
-    }
-
-    // 3. Test live migration request
-    let live_migrate_request = json!({
-        "target_node": "node3",
-        "online": true,
-        "migration_type": "live"
-    });
-
-    let _ = client
-        .post(format!("{}/migrate/migration-test-vm", API_BASE))
+    wait_for_operation(500).await;
+    let response = client
+        .get(format!("{}/migrate/{}/status", API_BASE, vm))
         .bearer_auth(&token)
-        .json(&live_migrate_request)
         .send()
         .await;
-    // Don't assert - cluster might not be available
+    let response = expect_2xx(response, "Failed to get migration status").await;
+    let status: serde_json::Value = response.unwrap().json().await.unwrap();
+    assert_eq!(status["vm_id"], vm);
+    assert_eq!(status["id"], job_id);
+    assert!(status.get("state").is_some(), "{status}");
 
-    // Cleanup
-    wait_for_operation(1000).await;
     let _ = client
-        .delete(format!("{}/vms/migration-test-vm", API_BASE))
+        .delete(format!("{}/vms/{}", API_BASE, vm))
         .bearer_auth(&token)
         .send()
         .await;
@@ -1708,133 +1843,292 @@ async fn test_storage_snapshots() {
         .await;
 }
 
+fn docker(args: &[&str]) -> std::process::Output {
+    std::process::Command::new("docker")
+        .args(args)
+        .output()
+        .expect("docker CLI must be installed for the container tests")
+}
+
+fn docker_state(name: &str) -> Option<String> {
+    let out = docker(&["inspect", "--format", "{{.State.Status}}", name]);
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+fn docker_inspect(name: &str) -> serde_json::Value {
+    let out = docker(&["inspect", name]);
+    assert!(out.status.success(), "docker inspect {name} failed");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    v[0].clone()
+}
+
+/// Full Docker container lifecycle through the HTTP API, verified against
+/// the real daemon after every step (the old version of this test sent
+/// unauthenticated requests and only checked that *some* HTTP response
+/// came back, so it passed on 401s).
 #[tokio::test]
 async fn test_container_lifecycle() {
     let client = create_client();
-
-    // 1. Create LXC container
-    let container_config = json!({
-        "id": "test-container-1",
-        "name": "Test Container",
-        "container_type": "lxc",
-        "image": "ubuntu:22.04",
-        "memory": 512,
-        "cpus": 1,
-        "status": "stopped"
-    });
-
-    let response = client
-        .post(format!("{}/containers", API_BASE))
-        .json(&container_config)
-        .send()
-        .await;
-
-    if response.is_err() {
-        return; // Skip if server not available
-    }
-
-    assert!(response.is_ok(), "Failed to create container");
-    wait_for_operation(1000).await;
-
-    // 2. Get container details
-    let response = client
-        .get(format!("{}/containers/test-container-1", API_BASE))
-        .send()
-        .await;
-
-    assert!(response.is_ok(), "Failed to get container");
-
-    // 3. Start container
-    let response = client
-        .post(format!("{}/containers/test-container-1/start", API_BASE))
-        .send()
-        .await;
-
-    if response.is_ok() {
-        wait_for_operation(2000).await;
-
-        // 4. Check container status
-        let response = client
-            .get(format!("{}/containers/test-container-1/status", API_BASE))
-            .send()
-            .await;
-
-        assert!(response.is_ok(), "Failed to get container status");
-
-        // 5. Pause container (if supported)
-        let response = client
-            .post(format!("{}/containers/test-container-1/pause", API_BASE))
-            .send()
-            .await;
-
-        if response.is_ok() {
-            wait_for_operation(500).await;
-
-            // 6. Resume container
-            let _ = client
-                .post(format!("{}/containers/test-container-1/resume", API_BASE))
-                .send()
-                .await;
-
-            wait_for_operation(500).await;
-        }
-
-        // 7. Execute command in container
-        let exec_request = json!({
-            "command": ["echo", "hello"],
-            "workdir": "/tmp"
-        });
-
-        let response = client
-            .post(format!("{}/containers/test-container-1/exec", API_BASE))
-            .json(&exec_request)
-            .send()
-            .await;
-
-        // Command execution may not be supported in test environment
-        if response.is_ok() {
-            wait_for_operation(500).await;
-        }
-
-        // 8. Stop container
-        let response = client
-            .post(format!("{}/containers/test-container-1/stop", API_BASE))
-            .send()
-            .await;
-
-        assert!(response.is_ok(), "Failed to stop container");
-        wait_for_operation(2000).await;
-    }
-
-    // 9. Clone container
-    let clone_request = json!({
-        "name": "Test Container Clone",
-        "id": "test-container-2"
-    });
-
-    let response = client
-        .post(format!("{}/containers/test-container-1/clone", API_BASE))
-        .json(&clone_request)
-        .send()
-        .await;
-
-    if response.is_ok() {
-        wait_for_operation(2000).await;
-
-        // Cleanup clone
+    let token = admin_token(&client).await;
+    let id = "it-ct-1";
+    let clone_id = "it-ct-1-clone";
+    for n in [id, clone_id] {
         let _ = client
-            .delete(format!("{}/containers/test-container-2", API_BASE))
+            .delete(format!("{}/containers/{}", API_BASE, n))
+            .bearer_auth(&token)
             .send()
             .await;
+        docker(&["rm", "-f", n]);
+    }
+    docker(&["rmi", "-f", "it-ct-1-clone-image"]);
+
+    // Unauthenticated access is refused.
+    let r = client
+        .get(format!("{}/containers", API_BASE))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 401);
+
+    // 1. Create with env/ports/command (what the UI form sends).
+    let r = client
+        .post(format!("{}/containers", API_BASE))
+        .bearer_auth(&token)
+        .json(&json!({
+            "id": id, "name": id, "runtime": "docker", "memory": 64, "cpus": 1,
+            "rootfs": "busybox:latest", "status": "stopped",
+            "env": ["IT=1"], "ports": ["8080"],
+            "command": ["httpd", "-f", "-p", "8080"]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        200,
+        "create: {}",
+        r.text().await.unwrap_or_default()
+    );
+    let created: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(created["rootfs"], "busybox:latest");
+    assert!(created["created_at"].is_string(), "{created}");
+    assert_eq!(docker_state(id).as_deref(), Some("created"));
+    let info = docker_inspect(id);
+    assert!(info["Config"]["Env"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e == "IT=1"));
+    assert_eq!(info["Config"]["Labels"]["horcrux.id"], id);
+    assert!(info["HostConfig"]["PortBindings"]["8080/tcp"].is_array());
+
+    // Duplicate id -> 422; invalid input -> 422 (not a docker error / 500).
+    for bad in [
+        json!({"id": id, "name": id, "runtime": "docker", "memory": 64, "cpus": 1,
+               "rootfs": "busybox:latest", "status": "stopped"}),
+        json!({"id": "it-bad", "name": "bad name", "runtime": "docker", "memory": 64,
+               "cpus": 1, "rootfs": "busybox:latest", "status": "stopped"}),
+        json!({"id": "it-bad", "name": "it-bad", "runtime": "docker", "memory": 64,
+               "cpus": 1, "rootfs": "busybox:latest", "status": "stopped",
+               "ports": ["http"]}),
+    ] {
+        let r = client
+            .post(format!("{}/containers", API_BASE))
+            .bearer_auth(&token)
+            .json(&bad)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 422, "expected 422 for {bad}");
     }
 
-    // 10. Delete container
-    let response = client
-        .delete(format!("{}/containers/test-container-1", API_BASE))
+    // 2. Get
+    let r = client
+        .get(format!("{}/containers/{}", API_BASE, id))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+
+    // 3. Start -> really running
+    let r = client
+        .post(format!("{}/containers/{}/start", API_BASE, id))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        200,
+        "start: {}",
+        r.text().await.unwrap_or_default()
+    );
+    assert_eq!(docker_state(id).as_deref(), Some("running"));
+
+    // 4. Live status
+    let r = client
+        .get(format!("{}/containers/{}/status", API_BASE, id))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert!(r.text().await.unwrap().contains("running"));
+
+    // 5. Pause / resume
+    for (action, want) in [("pause", "paused"), ("resume", "running")] {
+        let r = client
+            .post(format!("{}/containers/{}/{}", API_BASE, id, action))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 200, "{action}");
+        assert_eq!(docker_state(id).as_deref(), Some(want), "after {action}");
+    }
+
+    // 6. Exec returns the command's real output
+    let r = client
+        .post(format!("{}/containers/{}/exec", API_BASE, id))
+        .bearer_auth(&token)
+        .json(&json!({"command": ["echo", "hello-from-exec"]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert!(r.text().await.unwrap().contains("hello-from-exec"));
+
+    // 7. Out-of-band stop is reflected by the list (reconciliation)
+    assert!(docker(&["stop", "-t", "1", id]).status.success());
+    let list: Vec<serde_json::Value> = client
+        .get(format!("{}/containers", API_BASE))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mine = list.iter().find(|c| c["id"] == id).expect("listed");
+    assert_eq!(mine["status"], "stopped");
+
+    // 8. Clone -> a real, registered container built from a commit
+    let r = client
+        .post(format!("{}/containers/{}/clone", API_BASE, id))
+        .bearer_auth(&token)
+        .json(&json!({"target_id": clone_id, "target_name": clone_id}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        200,
+        "clone: {}",
+        r.text().await.unwrap_or_default()
+    );
+    assert!(docker_state(clone_id).is_some(), "clone exists in docker");
+    let r = client
+        .get(format!("{}/containers/{}", API_BASE, clone_id))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200, "clone is tracked");
+
+    // 9. Delete both -> gone from docker and from the API
+    for n in [clone_id, id] {
+        let r = client
+            .delete(format!("{}/containers/{}", API_BASE, n))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 204, "delete {n}");
+        assert!(docker_state(n).is_none(), "{n} removed from docker");
+        let r = client
+            .get(format!("{}/containers/{}", API_BASE, n))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 404);
+    }
+    docker(&["rmi", "-f", "it-ct-1-clone-image"]);
+}
+
+/// Compose stack through the API: services share a per-stack network with
+/// service-name DNS, and ports/env/command reach the containers (they used
+/// to be parsed and silently dropped).
+#[tokio::test]
+async fn test_stack_networking_and_options() {
+    let client = create_client();
+    let token = admin_token(&client).await;
+    let name = "itstack";
+    let _ = client
+        .delete(format!("{}/stacks/{}", API_BASE, name))
+        .bearer_auth(&token)
         .send()
         .await;
+    for n in ["itstack_web", "itstack_db"] {
+        docker(&["rm", "-f", n]);
+    }
+    docker(&["network", "rm", "itstack_default"]);
 
-    assert!(response.is_ok(), "Failed to delete container");
+    let compose = "services:\n  db:\n    image: busybox:latest\n    command: [\"sleep\", \"600\"]\n    environment:\n      ROLE: db\n  web:\n    image: busybox:latest\n    command: httpd -f -p 80\n    ports:\n      - \"80\"\n    depends_on: [db]\n";
+    let r = client
+        .post(format!("{}/stacks", API_BASE))
+        .bearer_auth(&token)
+        .json(&json!({"name": name, "compose_yaml": compose, "runtime": "docker"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        200,
+        "deploy: {}",
+        r.text().await.unwrap_or_default()
+    );
+
+    assert_eq!(docker_state("itstack_web").as_deref(), Some("running"));
+    assert_eq!(docker_state("itstack_db").as_deref(), Some("running"));
+    let web = docker_inspect("itstack_web");
+    assert!(
+        web["NetworkSettings"]["Networks"]["itstack_default"].is_object(),
+        "{}",
+        web["NetworkSettings"]["Networks"]
+    );
+    assert!(web["HostConfig"]["PortBindings"]["80/tcp"].is_array());
+    assert_eq!(web["Config"]["Cmd"], json!(["httpd", "-f", "-p", "80"]));
+    let db = docker_inspect("itstack_db");
+    assert!(db["Config"]["Env"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e == "ROLE=db"));
+    // busybox nslookup only tries `db.<host search domain>`; ping resolves
+    // through the normal resolver path (Docker's embedded DNS).
+    let dns = docker(&["exec", "itstack_web", "ping", "-c", "1", "-W", "3", "db"]);
+    assert!(
+        dns.status.success(),
+        "service 'db' must resolve from 'web': {}",
+        String::from_utf8_lossy(&dns.stdout)
+    );
+
+    let r = client
+        .delete(format!("{}/stacks/{}", API_BASE, name))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success(), "remove: {}", r.status());
+    assert!(docker_state("itstack_web").is_none());
+    assert!(docker_state("itstack_db").is_none());
+    assert!(!docker(&["network", "inspect", "itstack_default"])
+        .status
+        .success());
 }
 
 #[tokio::test]
@@ -1901,7 +2195,7 @@ async fn test_snapshot_scheduling() {
             .send()
             .await;
 
-        assert!(response.is_ok(), "Failed to list snapshot schedules");
+        let _ = expect_2xx(response, "Failed to list snapshot schedules").await;
 
         // 3. Get specific schedule
         let response = client
@@ -1910,7 +2204,7 @@ async fn test_snapshot_scheduling() {
             .send()
             .await;
 
-        assert!(response.is_ok(), "Failed to get snapshot schedule");
+        let _ = expect_2xx(response, "Failed to get snapshot schedule").await;
 
         // 4. Update schedule (disable it)
         let update = json!({
@@ -1935,7 +2229,7 @@ async fn test_snapshot_scheduling() {
             .send()
             .await;
 
-        assert!(response.is_ok(), "Failed to delete snapshot schedule");
+        let _ = expect_2xx(response, "Failed to delete snapshot schedule").await;
     }
 
     // Cleanup VM
@@ -1949,181 +2243,258 @@ async fn test_snapshot_scheduling() {
 
 #[tokio::test]
 async fn test_high_availability() {
-    let client = create_client();
-
-    // Create a test VM for HA
-    let vm_config = json!({
-        "id": "ha-test-vm",
-        "name": "HA Test VM",
-        "hypervisor": "Qemu",
-        "architecture": "X86_64",
-        "cpus": 1,
-        "memory": 1024,
-        "disk_size": 10,
-        "status": "Stopped"
-    });
-
-    let response = client
-        .post(format!("{}/vms", API_BASE))
-        .json(&vm_config)
-        .send()
-        .await;
-
-    if response.is_err() {
-        return; // Skip if server not available
-    }
-
-    wait_for_operation(1000).await;
-
-    // 1. Create HA group
-    let ha_group = json!({
-        "name": "critical-services",
-        "nodes": ["node1", "node2"],
-        "nofailback": false
-    });
-
-    let response = client
-        .post(format!("{}/ha/groups", API_BASE))
-        .json(&ha_group)
-        .send()
-        .await;
-
-    if response.is_ok() {
-        wait_for_operation(500).await;
-
-        // 2. List HA groups
-        let response = client.get(format!("{}/ha/groups", API_BASE)).send().await;
-
-        assert!(response.is_ok(), "Failed to list HA groups");
-    }
-
-    // 3. Add VM to HA management
-    let ha_resource = json!({
-        "vm_id": "ha-test-vm",
-        "priority": 100,
-        "group": "critical-services",
-        "preferred_node": "node1"
-    });
-
-    let response = client
-        .post(format!("{}/ha/resources", API_BASE))
-        .json(&ha_resource)
-        .send()
-        .await;
-
-    if response.is_ok() {
-        wait_for_operation(500).await;
-
-        // 4. List HA resources
-        let response = client
-            .get(format!("{}/ha/resources", API_BASE))
-            .send()
-            .await;
-
-        assert!(response.is_ok(), "Failed to list HA resources");
-
-        // 5. Get HA status
-        let response = client.get(format!("{}/ha/status", API_BASE)).send().await;
-
-        assert!(response.is_ok(), "Failed to get HA status");
-
-        // 6. Remove VM from HA
-        let response = client
-            .delete(format!("{}/ha/resources/ha-test-vm", API_BASE))
-            .send()
-            .await;
-
-        assert!(response.is_ok(), "Failed to remove HA resource");
-    }
-
-    // Cleanup VM
-    wait_for_operation(1000).await;
+    let client = authed_client().await;
+    let vm = "ha-test-vm";
     let _ = client
-        .delete(format!("{}/vms/ha-test-vm", API_BASE))
+        .delete(format!("{}/ha/resources/{}", API_BASE, vm))
+        .send()
+        .await;
+    let _ = client
+        .delete(format!("{}/ha/groups/critical-services", API_BASE))
+        .send()
+        .await;
+    let _ = client
+        .delete(format!("{}/vms/{}", API_BASE, vm))
+        .send()
+        .await;
+
+    let r = client
+        .post(format!("{}/vms", API_BASE))
+        .json(
+            &json!({"id": vm, "name": "HA Test VM", "hypervisor": "qemu",
+                      "architecture": "x86_64", "cpus": 1, "memory": 256,
+                      "disk_size": 1, "status": "stopped"}),
+        )
+        .send()
+        .await;
+    let _ = expect_2xx(r, "create HA test VM").await;
+
+    // 1. HA group
+    let r = client
+        .post(format!("{}/ha/groups", API_BASE))
+        .json(&json!({"name": "critical-services", "nodes": ["node1", "node2"]}))
+        .send()
+        .await;
+    let _ = expect_2xx(r, "create HA group").await;
+    let groups: Vec<serde_json::Value> = client
+        .get(format!("{}/ha/groups", API_BASE))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        groups.iter().any(|g| g["name"] == "critical-services"),
+        "{groups:?}"
+    );
+
+    // 2. Put a real VM (string id) under HA. HA used to take numeric ids
+    //    only, so no VM created through the API could ever be managed.
+    let r = client
+        .post(format!("{}/ha/resources", API_BASE))
+        .json(&json!({"vm_id": vm, "priority": 5, "group": "critical-services"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        201,
+        "add HA resource: {}",
+        r.text().await.unwrap_or_default()
+    );
+    let r = client
+        .post(format!("{}/ha/resources", API_BASE))
+        .json(&json!({"vm_id": vm, "priority": 5, "group": "critical-services"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 409, "duplicate HA resource");
+    let r = client
+        .post(format!("{}/ha/resources", API_BASE))
+        .json(&json!({"vm_id": "no-such-vm", "priority": 5, "group": "critical-services"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404, "HA for a VM that doesn't exist");
+
+    let resources: Vec<serde_json::Value> = client
+        .get(format!("{}/ha/resources", API_BASE))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(resources.iter().any(|r| r["vm_id"] == vm), "{resources:?}");
+    let status: serde_json::Value = client
+        .get(format!("{}/ha/status", API_BASE))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(status["total_resources"].as_u64().unwrap() >= 1, "{status}");
+
+    // 3. Remove, then removing again is a 404.
+    let r = client
+        .delete(format!("{}/ha/resources/{}", API_BASE, vm))
+        .send()
+        .await;
+    let _ = expect_2xx(r, "remove HA resource").await;
+    let r = client
+        .delete(format!("{}/ha/resources/{}", API_BASE, vm))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
+
+    // 4. Group assignment endpoint (UI "assign to group") + group update/delete.
+    let r = client
+        .post(format!(
+            "{}/ha/groups/critical-services/resources",
+            API_BASE
+        ))
+        .json(&json!({"resource_id": vm, "priority": 2}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 201, "assign via group");
+    let r = client
+        .delete(format!("{}/ha/groups/critical-services", API_BASE))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 409, "group still in use");
+    let r = client
+        .delete(format!("{}/ha/resources/{}", API_BASE, vm))
+        .send()
+        .await;
+    let _ = expect_2xx(r, "remove HA resource (2)").await;
+    let r = client
+        .put(format!("{}/ha/groups/critical-services", API_BASE))
+        .json(&json!({"nodes": ["node3"]}))
+        .send()
+        .await;
+    let _ = expect_2xx(r, "update HA group").await;
+    let groups: Vec<serde_json::Value> = client
+        .get(format!("{}/ha/groups", API_BASE))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let g = groups
+        .iter()
+        .find(|g| g["name"] == "critical-services")
+        .unwrap();
+    assert_eq!(g["nodes"], json!(["node3"]));
+    let r = client
+        .delete(format!("{}/ha/groups/critical-services", API_BASE))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 204);
+
+    let _ = client
+        .delete(format!("{}/vms/{}", API_BASE, vm))
         .send()
         .await;
 }
 
 #[tokio::test]
 async fn test_multi_hypervisor_support() {
-    let client = create_client();
-
-    // Test creating VMs with different hypervisors
-
-    // 1. QEMU/KVM VM
-    let qemu_vm = json!({
-        "id": "qemu-test",
-        "name": "QEMU Test VM",
-        "hypervisor": "Qemu",
-        "architecture": "X86_64",
-        "cpus": 1,
-        "memory": 1024,
-        "disk_size": 10,
-        "status": "Stopped"
-    });
-
-    let response = client
-        .post(format!("{}/vms", API_BASE))
-        .json(&qemu_vm)
-        .send()
-        .await;
-
-    if response.is_ok() {
-        wait_for_operation(500).await;
+    let client = authed_client().await;
+    let create = |id: &str, hv: &str, arch: &str| {
+        json!({"id": id, "name": id, "hypervisor": hv, "architecture": arch,
+               "cpus": 1, "memory": 256, "disk_size": 1, "status": "stopped"})
+    };
+    for id in ["mh-qemu", "mh-arm", "mh-lxd", "mh-incus"] {
         let _ = client
-            .delete(format!("{}/vms/qemu-test", API_BASE))
+            .delete(format!("{}/vms/{}", API_BASE, id))
             .send()
             .await;
     }
 
-    // 2. LXD VM (if available)
-    let lxd_vm = json!({
-        "id": "lxd-test",
-        "name": "LXD Test VM",
-        "hypervisor": "Lxd",
-        "architecture": "X86_64",
-        "cpus": 1,
-        "memory": 1024,
-        "disk_size": 10,
-        "status": "Stopped"
-    });
-
-    let response = client
+    // 1. QEMU VM keeps its hypervisor/architecture.
+    let r = client
         .post(format!("{}/vms", API_BASE))
-        .json(&lxd_vm)
+        .json(&create("mh-qemu", "qemu", "x86_64"))
         .send()
         .await;
+    let vm: serde_json::Value = expect_2xx(r, "create qemu vm")
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(vm["hypervisor"], "qemu");
+    assert_eq!(vm["architecture"], "x86_64");
 
-    if response.is_ok() {
-        wait_for_operation(500).await;
-        let _ = client
-            .delete(format!("{}/vms/lxd-test", API_BASE))
+    // 2. An aarch64 guest is stored as aarch64 and boots under
+    //    qemu-system-aarch64 (both used to silently become x86_64).
+    let r = client
+        .post(format!("{}/vms", API_BASE))
+        .json(&create("mh-arm", "qemu", "aarch64"))
+        .send()
+        .await;
+    let vm: serde_json::Value = expect_2xx(r, "create aarch64 vm")
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(vm["architecture"], "aarch64");
+    let r = client
+        .post(format!("{}/vms/mh-arm/start", API_BASE))
+        .send()
+        .await;
+    let _ = expect_2xx(r, "start aarch64 vm").await;
+    let pid = std::fs::read_to_string("/var/run/horcrux-vm-mh-arm.pid").expect("pidfile");
+    let cmdline = std::fs::read(format!("/proc/{}/cmdline", pid.trim())).unwrap_or_default();
+    assert!(
+        String::from_utf8_lossy(&cmdline).contains("qemu-system-aarch64"),
+        "aarch64 VM must run under qemu-system-aarch64"
+    );
+    let r = client
+        .post(format!("{}/vms/mh-arm/stop", API_BASE))
+        .send()
+        .await;
+    let _ = expect_2xx(r, "stop aarch64 vm").await;
+
+    // 3. LXD / Incus VMs go to their own backend; on a host without them
+    //    that is a clear 422, never a QEMU VM wearing an "lxd" label.
+    for (id, hv, bin) in [("mh-lxd", "lxd", "lxc"), ("mh-incus", "incus", "incus")] {
+        let installed = std::process::Command::new(bin)
+            .arg("version")
+            .output()
+            .is_ok();
+        let r = client
+            .post(format!("{}/vms", API_BASE))
+            .json(&create(id, hv, "x86_64"))
             .send()
-            .await;
+            .await
+            .unwrap();
+        if installed {
+            assert!(r.status().is_success(), "{hv}: {}", r.status());
+            let vm: serde_json::Value = r.json().await.unwrap();
+            assert_eq!(vm["hypervisor"], hv);
+        } else {
+            assert_eq!(r.status(), 422, "{hv} VM without {hv} installed");
+            let r = client
+                .get(format!("{}/vms/{}", API_BASE, id))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(r.status(), 404, "no {hv} VM may be recorded");
+        }
     }
 
-    // 3. Incus VM (if available)
-    let incus_vm = json!({
-        "id": "incus-test",
-        "name": "Incus Test VM",
-        "hypervisor": "Incus",
-        "architecture": "X86_64",
-        "cpus": 1,
-        "memory": 1024,
-        "disk_size": 10,
-        "status": "Stopped"
-    });
-
-    let response = client
-        .post(format!("{}/vms", API_BASE))
-        .json(&incus_vm)
-        .send()
-        .await;
-
-    if response.is_ok() {
-        wait_for_operation(500).await;
+    for id in ["mh-qemu", "mh-arm", "mh-lxd", "mh-incus"] {
         let _ = client
-            .delete(format!("{}/vms/incus-test", API_BASE))
+            .delete(format!("{}/vms/{}", API_BASE, id))
             .send()
             .await;
     }

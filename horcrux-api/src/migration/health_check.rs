@@ -109,7 +109,7 @@ impl HealthCheck {
 /// Health check report
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthCheckReport {
-    pub vm_id: u32,
+    pub vm_id: String,
     pub migration_job_id: String,
     pub target_node: String,
     pub checks: Vec<HealthCheck>,
@@ -120,7 +120,7 @@ pub struct HealthCheckReport {
 }
 
 impl HealthCheckReport {
-    pub fn new(vm_id: u32, migration_job_id: String, target_node: String) -> Self {
+    pub fn new(vm_id: String, migration_job_id: String, target_node: String) -> Self {
         Self {
             vm_id,
             migration_job_id,
@@ -191,7 +191,7 @@ impl HealthCheckReport {
             .count();
 
         HealthCheckSummary {
-            vm_id: self.vm_id,
+            vm_id: self.vm_id.clone(),
             total_checks: total,
             passed,
             failed,
@@ -206,7 +206,7 @@ impl HealthCheckReport {
 /// Health check summary
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthCheckSummary {
-    pub vm_id: u32,
+    pub vm_id: String,
     pub total_checks: usize,
     pub passed: usize,
     pub failed: usize,
@@ -246,7 +246,7 @@ impl HealthChecker {
     /// Run all post-migration health checks
     pub async fn run_checks(
         &self,
-        vm_id: u32,
+        vm_id: &str,
         migration_job_id: String,
         target_node: String,
     ) -> HealthCheckReport {
@@ -255,7 +255,7 @@ impl HealthChecker {
             vm_id, target_node
         );
 
-        let mut report = HealthCheckReport::new(vm_id, migration_job_id, target_node);
+        let mut report = HealthCheckReport::new(vm_id.to_string(), migration_job_id, target_node);
 
         // Check 1: VM is running
         report.add_check(self.check_vm_running(vm_id).await);
@@ -299,7 +299,7 @@ impl HealthChecker {
 
     /// Check if VM is running
     #[cfg(test)]
-    async fn check_vm_running(&self, vm_id: u32) -> HealthCheck {
+    async fn check_vm_running(&self, vm_id: &str) -> HealthCheck {
         let start = std::time::Instant::now();
         debug!("Checking if VM {} is running", vm_id);
         let duration_ms = start.elapsed().as_millis() as u64;
@@ -309,7 +309,7 @@ impl HealthChecker {
 
     /// Check if VM is running
     #[cfg(not(test))]
-    async fn check_vm_running(&self, vm_id: u32) -> HealthCheck {
+    async fn check_vm_running(&self, vm_id: &str) -> HealthCheck {
         let start = std::time::Instant::now();
         debug!("Checking if VM {} is running", vm_id);
 
@@ -362,7 +362,7 @@ impl HealthChecker {
 
     /// Check if QEMU monitor is responsive
     #[cfg(test)]
-    async fn check_qemu_responsive(&self, vm_id: u32) -> HealthCheck {
+    async fn check_qemu_responsive(&self, vm_id: &str) -> HealthCheck {
         let start = std::time::Instant::now();
         debug!("Checking QEMU monitor responsiveness for VM {}", vm_id);
         let duration_ms = start.elapsed().as_millis() as u64;
@@ -374,7 +374,7 @@ impl HealthChecker {
 
     /// Check if QEMU monitor is responsive
     #[cfg(not(test))]
-    async fn check_qemu_responsive(&self, vm_id: u32) -> HealthCheck {
+    async fn check_qemu_responsive(&self, vm_id: &str) -> HealthCheck {
         let start = std::time::Instant::now();
         debug!("Checking QEMU monitor responsiveness for VM {}", vm_id);
 
@@ -420,7 +420,7 @@ impl HealthChecker {
 
     /// Check memory allocation
     #[cfg(test)]
-    async fn check_memory_allocation(&self, vm_id: u32) -> HealthCheck {
+    async fn check_memory_allocation(&self, vm_id: &str) -> HealthCheck {
         let start = std::time::Instant::now();
         debug!("Checking memory allocation for VM {}", vm_id);
         let duration_ms = start.elapsed().as_millis() as u64;
@@ -432,7 +432,7 @@ impl HealthChecker {
 
     /// Check memory allocation
     #[cfg(not(test))]
-    async fn check_memory_allocation(&self, vm_id: u32) -> HealthCheck {
+    async fn check_memory_allocation(&self, vm_id: &str) -> HealthCheck {
         let start = std::time::Instant::now();
         debug!("Checking memory allocation for VM {}", vm_id);
 
@@ -494,7 +494,7 @@ impl HealthChecker {
 
     /// Check CPU availability
     #[cfg(test)]
-    async fn check_cpu_availability(&self, vm_id: u32) -> HealthCheck {
+    async fn check_cpu_availability(&self, vm_id: &str) -> HealthCheck {
         let start = std::time::Instant::now();
         debug!("Checking CPU availability for VM {}", vm_id);
         let duration_ms = start.elapsed().as_millis() as u64;
@@ -509,7 +509,7 @@ impl HealthChecker {
 
     /// Check CPU availability
     #[cfg(not(test))]
-    async fn check_cpu_availability(&self, vm_id: u32) -> HealthCheck {
+    async fn check_cpu_availability(&self, vm_id: &str) -> HealthCheck {
         let start = std::time::Instant::now();
         debug!("Checking CPU availability for VM {}", vm_id);
 
@@ -575,7 +575,7 @@ impl HealthChecker {
 
     /// Check disk I/O
     #[cfg(test)]
-    async fn check_disk_io(&self, vm_id: u32) -> HealthCheck {
+    async fn check_disk_io(&self, vm_id: &str) -> HealthCheck {
         let start = std::time::Instant::now();
         debug!("Checking disk I/O for VM {}", vm_id);
         let duration_ms = start.elapsed().as_millis() as u64;
@@ -587,7 +587,7 @@ impl HealthChecker {
 
     /// Check disk I/O
     #[cfg(not(test))]
-    async fn check_disk_io(&self, vm_id: u32) -> HealthCheck {
+    async fn check_disk_io(&self, vm_id: &str) -> HealthCheck {
         let start = std::time::Instant::now();
         debug!("Checking disk I/O for VM {}", vm_id);
 
@@ -648,7 +648,7 @@ impl HealthChecker {
 
     /// Check network connectivity
     #[cfg(test)]
-    async fn check_network_connectivity(&self, vm_id: u32) -> HealthCheck {
+    async fn check_network_connectivity(&self, vm_id: &str) -> HealthCheck {
         let start = std::time::Instant::now();
         debug!("Checking network connectivity for VM {}", vm_id);
         let duration_ms = start.elapsed().as_millis() as u64;
@@ -660,7 +660,7 @@ impl HealthChecker {
 
     /// Check network connectivity
     #[cfg(not(test))]
-    async fn check_network_connectivity(&self, vm_id: u32) -> HealthCheck {
+    async fn check_network_connectivity(&self, vm_id: &str) -> HealthCheck {
         let start = std::time::Instant::now();
         debug!("Checking network connectivity for VM {}", vm_id);
 
@@ -720,7 +720,7 @@ impl HealthChecker {
     }
 
     /// Check guest agent
-    async fn check_guest_agent(&self, vm_id: u32) -> HealthCheck {
+    async fn check_guest_agent(&self, vm_id: &str) -> HealthCheck {
         let start = std::time::Instant::now();
         debug!("Checking guest agent for VM {}", vm_id);
 
@@ -788,7 +788,7 @@ impl HealthChecker {
     /// Verify application health (custom checks)
     pub async fn check_application_health(
         &self,
-        vm_id: u32,
+        vm_id: &str,
         health_endpoint: String,
     ) -> HealthCheck {
         let start = std::time::Instant::now();
@@ -886,10 +886,10 @@ mod tests {
     async fn test_health_checker_run() {
         let checker = HealthChecker::new();
         let report = checker
-            .run_checks(100, "migration-123".to_string(), "node2".to_string())
+            .run_checks("100", "migration-123".to_string(), "node2".to_string())
             .await;
 
-        assert_eq!(report.vm_id, 100);
+        assert_eq!(report.vm_id, "100");
         assert!(!report.checks.is_empty());
         assert_eq!(report.checks.len(), 7); // 7 checks by default
         assert_eq!(report.overall_result, HealthCheckResult::Passed);
@@ -899,11 +899,11 @@ mod tests {
     async fn test_health_check_summary() {
         let checker = HealthChecker::new();
         let report = checker
-            .run_checks(100, "migration-123".to_string(), "node2".to_string())
+            .run_checks("100", "migration-123".to_string(), "node2".to_string())
             .await;
 
         let summary = report.get_summary();
-        assert_eq!(summary.vm_id, 100);
+        assert_eq!(summary.vm_id, "100");
         assert_eq!(summary.total_checks, 7);
         assert_eq!(summary.passed, 7);
         assert_eq!(summary.failed, 0);
@@ -912,8 +912,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_check_report_finalize() {
-        let mut report =
-            HealthCheckReport::new(100, "migration-123".to_string(), "node2".to_string());
+        let mut report = HealthCheckReport::new(
+            "100".to_string(),
+            "migration-123".to_string(),
+            "node2".to_string(),
+        );
 
         report.add_check(
             HealthCheck::new(HealthCheckType::VmRunning).passed("VM running".to_string(), 100),
@@ -936,7 +939,7 @@ mod tests {
             .with_retry(5, Duration::from_secs(10));
 
         let report = checker
-            .run_checks(100, "migration-123".to_string(), "node2".to_string())
+            .run_checks("100", "migration-123".to_string(), "node2".to_string())
             .await;
 
         assert_eq!(report.overall_result, HealthCheckResult::Passed);

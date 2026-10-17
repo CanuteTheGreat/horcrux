@@ -45,7 +45,7 @@ fn default_placement_weight() -> u32 {
 /// VM resource requirements
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VmResources {
-    pub vm_id: u32,
+    pub vm_id: String,
     pub cpu_cores: usize,
     pub memory_gb: usize,
     pub disk_gb: usize,
@@ -106,7 +106,7 @@ impl Default for BalancingPolicy {
 /// Migration recommendation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MigrationRecommendation {
-    pub vm_id: u32,
+    pub vm_id: String,
     pub from_node: String,
     pub to_node: String,
     pub reason: String,
@@ -245,7 +245,7 @@ impl ClusterBalancer {
                 };
 
                 recommendations.push(MigrationRecommendation {
-                    vm_id: vm.vm_id,
+                    vm_id: vm.vm_id.clone(),
                     from_node: overloaded_node.clone(),
                     to_node: underloaded_node.clone(),
                     reason: format!("Rebalance cluster: {:.1}% improvement", improvement),
@@ -442,7 +442,7 @@ mod tests {
 
     fn create_test_vm(id: u32, node: &str) -> VmResources {
         VmResources {
-            vm_id: id,
+            vm_id: id.to_string(),
             cpu_cores: 2,
             memory_gb: 4,
             disk_gb: 50,

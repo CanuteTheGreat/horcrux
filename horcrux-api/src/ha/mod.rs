@@ -30,7 +30,7 @@ pub enum HaState {
 /// HA resource (VM or container)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HaResource {
-    pub vm_id: u32,
+    pub vm_id: String,
     pub group: String,
     pub state: HaState,
     pub current_node: Option<String>,
@@ -67,7 +67,7 @@ pub struct HaGroup {
 /// HA resource configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HaConfig {
-    pub vm_id: u32,
+    pub vm_id: String,
     pub group: String,
     pub max_restart: u32,  // Max restart attempts on same node
     pub max_relocate: u32, // Max relocations to other nodes
@@ -87,7 +87,7 @@ pub struct HaConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HaEvent {
     pub timestamp: DateTime<Utc>,
-    pub vm_id: u32,
+    pub vm_id: String,
     pub event_type: HaEventType,
     pub old_state: HaState,
     pub new_state: HaState,
@@ -107,7 +107,7 @@ pub enum HaEventType {
 
 /// High Availability Manager
 pub struct HaManager {
-    resources: Arc<RwLock<HashMap<u32, HaResource>>>,
+    resources: Arc<RwLock<HashMap<String, HaResource>>>,
     groups: Arc<RwLock<HashMap<String, HaGroup>>>,
     events: Arc<RwLock<Vec<HaEvent>>>,
     enabled: Arc<RwLock<bool>>,
@@ -174,7 +174,7 @@ impl HaManager {
         let mut groups = self.groups.write().await;
 
         if groups.contains_key(&group.name) {
-            return Err(horcrux_common::Error::System(format!(
+            return Err(horcrux_common::Error::Conflict(format!(
                 "HA group {} already exists",
                 group.name
             )));
@@ -196,7 +196,7 @@ impl HaManager {
         let using_group = resources.values().any(|r| r.group == name);
 
         if using_group {
-            return Err(horcrux_common::Error::System(format!(
+            return Err(horcrux_common::Error::Conflict(format!(
                 "Cannot remove group {}: resources still using it",
                 name
             )));
@@ -205,10 +205,30 @@ impl HaManager {
         drop(resources);
 
         let mut groups = self.groups.write().await;
-        groups.remove(name);
+        if groups.remove(name).is_none() {
+            return Err(horcrux_common::Error::NotFound(format!(
+                "HA group {} not found",
+                name
+            )));
+        }
 
         tracing::info!("Removed HA group: {}", name);
         Ok(())
+    }
+
+    /// Replace an existing group's node list / flags.
+    pub async fn update_group(&self, group: HaGroup) -> Result<()> {
+        let mut groups = self.groups.write().await;
+        match groups.get_mut(&group.name) {
+            Some(existing) => {
+                *existing = group;
+                Ok(())
+            }
+            None => Err(horcrux_common::Error::NotFound(format!(
+                "HA group {} not found",
+                group.name
+            ))),
+        }
     }
 
     /// List all HA groups
@@ -222,7 +242,7 @@ impl HaManager {
         {
             let groups = self.groups.read().await;
             if !groups.contains_key(&config.group) {
-                return Err(horcrux_common::Error::System(format!(
+                return Err(horcrux_common::Error::NotFound(format!(
                     "HA group {} does not exist",
                     config.group
                 )));
@@ -239,7 +259,7 @@ impl HaManager {
         }
 
         let resource = HaResource {
-            vm_id: config.vm_id,
+            vm_id: config.vm_id.clone(),
             group: config.group.clone(),
             state: config.state,
             current_node: None,
@@ -258,16 +278,16 @@ impl HaManager {
             config.vm_id,
             config.group
         );
-        resources.insert(config.vm_id, resource);
+        resources.insert(config.vm_id.clone(), resource);
 
         Ok(())
     }
 
     /// Remove HA resource
-    pub async fn remove_resource(&self, vm_id: u32) -> Result<()> {
+    pub async fn remove_resource(&self, vm_id: &str) -> Result<()> {
         let mut resources = self.resources.write().await;
 
-        if resources.remove(&vm_id).is_some() {
+        if resources.remove(vm_id).is_some() {
             tracing::info!("Removed HA resource: VM {}", vm_id);
             Ok(())
         } else {
@@ -284,12 +304,12 @@ impl HaManager {
     }
 
     /// Get HA resource status
-    pub async fn get_resource(&self, vm_id: u32) -> Option<HaResource> {
-        self.resources.read().await.get(&vm_id).cloned()
+    pub async fn get_resource(&self, vm_id: &str) -> Option<HaResource> {
+        self.resources.read().await.get(vm_id).cloned()
     }
 
     /// Handle node failure - migrate all VMs from failed node
-    pub async fn handle_node_failure(&self, failed_node: &str) -> Result<Vec<u32>> {
+    pub async fn handle_node_failure(&self, failed_node: &str) -> Result<Vec<String>> {
         if !self.is_enabled().await {
             return Ok(Vec::new());
         }
@@ -329,7 +349,7 @@ impl HaManager {
                 // Log event
                 self.log_event(HaEvent {
                     timestamp: Utc::now(),
-                    vm_id: *vm_id,
+                    vm_id: vm_id.clone(),
                     event_type: HaEventType::Migrated,
                     old_state: HaState::Started,
                     new_state: HaState::Migrating,
@@ -338,7 +358,7 @@ impl HaManager {
                 })
                 .await;
 
-                migrated_vms.push(*vm_id);
+                migrated_vms.push(vm_id.clone());
             } else {
                 tracing::error!("No suitable node found for VM {}", vm_id);
                 resource.state = HaState::Error;
@@ -349,14 +369,14 @@ impl HaManager {
     }
 
     /// Handle VM failure - attempt restart or migration
-    pub async fn handle_vm_failure(&self, vm_id: u32, node: &str) -> Result<HaAction> {
+    pub async fn handle_vm_failure(&self, vm_id: &str, node: &str) -> Result<HaAction> {
         if !self.is_enabled().await {
             return Ok(HaAction::None);
         }
 
         let mut resources = self.resources.write().await;
 
-        let resource = resources.get_mut(&vm_id).ok_or_else(|| {
+        let resource = resources.get_mut(vm_id).ok_or_else(|| {
             horcrux_common::Error::System(format!("VM {} not managed by HA", vm_id))
         })?;
 
@@ -369,7 +389,7 @@ impl HaManager {
 
             self.log_event(HaEvent {
                 timestamp: Utc::now(),
-                vm_id,
+                vm_id: vm_id.to_string(),
                 event_type: HaEventType::Restarted,
                 old_state: HaState::Error,
                 new_state: HaState::Started,
@@ -403,7 +423,7 @@ impl HaManager {
 
                 self.log_event(HaEvent {
                     timestamp: Utc::now(),
-                    vm_id,
+                    vm_id: vm_id.to_string(),
                     event_type: HaEventType::Migrated,
                     old_state: HaState::Error,
                     new_state: HaState::Migrating,
@@ -426,7 +446,7 @@ impl HaManager {
 
         self.log_event(HaEvent {
             timestamp: Utc::now(),
-            vm_id,
+            vm_id: vm_id.to_string(),
             event_type: HaEventType::Failed,
             old_state: HaState::Started,
             new_state: HaState::Error,
@@ -520,7 +540,7 @@ impl HaManager {
 
         if !known_candidates.is_empty() {
             let vm = VmResources {
-                vm_id: resource.vm_id,
+                vm_id: resource.vm_id.clone(),
                 cpu_cores: 0,
                 memory_gb: 0,
                 disk_gb: 0,
@@ -569,7 +589,7 @@ impl HaManager {
     }
 
     /// Get HA event history
-    pub async fn get_events(&self, vm_id: Option<u32>, limit: Option<usize>) -> Vec<HaEvent> {
+    pub async fn get_events(&self, vm_id: Option<&str>, limit: Option<usize>) -> Vec<HaEvent> {
         let events = self.events.read().await;
 
         let filtered: Vec<_> = match vm_id {
@@ -584,13 +604,13 @@ impl HaManager {
     /// Update resource state (called when state changes externally)
     pub async fn update_resource_state(
         &self,
-        vm_id: u32,
+        vm_id: &str,
         new_state: HaState,
         node: Option<String>,
     ) -> Result<()> {
         let mut resources = self.resources.write().await;
 
-        let resource = resources.get_mut(&vm_id).ok_or_else(|| {
+        let resource = resources.get_mut(vm_id).ok_or_else(|| {
             horcrux_common::Error::System(format!("VM {} not managed by HA", vm_id))
         })?;
 
@@ -663,7 +683,7 @@ mod tests {
 
         // Add resource
         let config = HaConfig {
-            vm_id: 100,
+            vm_id: "100".to_string(),
             group: "test-group".to_string(),
             max_restart: 3,
             max_relocate: 2,
@@ -675,7 +695,7 @@ mod tests {
 
         let resources = manager.list_resources().await;
         assert_eq!(resources.len(), 1);
-        assert_eq!(resources[0].vm_id, 100);
+        assert_eq!(resources[0].vm_id, "100");
     }
 
     #[tokio::test]
@@ -692,7 +712,7 @@ mod tests {
         manager.add_group(group).await.unwrap();
 
         let config = HaConfig {
-            vm_id: 100,
+            vm_id: "100".to_string(),
             group: "test-group".to_string(),
             max_restart: 3,
             max_relocate: 2,
@@ -703,17 +723,17 @@ mod tests {
         manager.add_resource(config).await.unwrap();
 
         // First failure should restart
-        let action = manager.handle_vm_failure(100, "node1").await.unwrap();
+        let action = manager.handle_vm_failure("100", "node1").await.unwrap();
         assert!(matches!(action, HaAction::Restart));
 
         // After max restarts, should migrate
-        let action = manager.handle_vm_failure(100, "node1").await.unwrap();
+        let action = manager.handle_vm_failure("100", "node1").await.unwrap();
         assert!(matches!(action, HaAction::Restart));
 
-        let action = manager.handle_vm_failure(100, "node1").await.unwrap();
+        let action = manager.handle_vm_failure("100", "node1").await.unwrap();
         assert!(matches!(action, HaAction::Restart));
 
-        let action = manager.handle_vm_failure(100, "node1").await.unwrap();
+        let action = manager.handle_vm_failure("100", "node1").await.unwrap();
         assert!(matches!(action, HaAction::Migrate(_)));
     }
 
@@ -791,7 +811,7 @@ mod tests {
             .await;
 
         let config = HaConfig {
-            vm_id: 300,
+            vm_id: "300".to_string(),
             group: "mixed-group".to_string(),
             max_restart: 0,
             max_relocate: 3,
@@ -801,7 +821,7 @@ mod tests {
         };
         manager.add_resource(config).await.unwrap();
         manager
-            .update_resource_state(300, HaState::Started, Some("x86-node".to_string()))
+            .update_resource_state("300", HaState::Started, Some("x86-node".to_string()))
             .await
             .unwrap();
 
@@ -810,12 +830,12 @@ mod tests {
         // riscv-node cannot run x86_64 at all, riscv-node must never be
         // selected.
         let migrated = manager.handle_node_failure("x86-node").await.unwrap();
-        assert_eq!(migrated, vec![300]);
+        assert_eq!(migrated, vec!["300".to_string()]);
 
-        let resource = manager.get_resource(300).await.unwrap();
+        let resource = manager.get_resource("300").await.unwrap();
         assert_eq!(resource.state, HaState::Migrating);
 
-        let events = manager.get_events(Some(300), None).await;
+        let events = manager.get_events(Some("300"), None).await;
         let migrate_event = events
             .iter()
             .find(|e| matches!(e.event_type, HaEventType::Migrated))
@@ -859,7 +879,7 @@ mod tests {
             .await;
 
         let config = HaConfig {
-            vm_id: 301,
+            vm_id: "301".to_string(),
             group: "mixed-group".to_string(),
             max_restart: 0,
             max_relocate: 3,
@@ -869,14 +889,14 @@ mod tests {
         };
         manager.add_resource(config).await.unwrap();
         manager
-            .update_resource_state(301, HaState::Started, Some("riscv-node".to_string()))
+            .update_resource_state("301", HaState::Started, Some("riscv-node".to_string()))
             .await
             .unwrap();
 
         let migrated = manager.handle_node_failure("riscv-node").await.unwrap();
-        assert_eq!(migrated, vec![301]);
+        assert_eq!(migrated, vec!["301".to_string()]);
 
-        let events = manager.get_events(Some(301), None).await;
+        let events = manager.get_events(Some("301"), None).await;
         let migrate_event = events
             .iter()
             .find(|e| matches!(e.event_type, HaEventType::Migrated))
@@ -909,7 +929,7 @@ mod tests {
             .await;
 
         let config = HaConfig {
-            vm_id: 302,
+            vm_id: "302".to_string(),
             group: "mixed-group".to_string(),
             max_restart: 0,
             max_relocate: 3,
@@ -919,7 +939,7 @@ mod tests {
         };
         manager.add_resource(config).await.unwrap();
         manager
-            .update_resource_state(302, HaState::Started, Some("riscv-node".to_string()))
+            .update_resource_state("302", HaState::Started, Some("riscv-node".to_string()))
             .await
             .unwrap();
 
@@ -928,7 +948,7 @@ mod tests {
         let migrated = manager.handle_node_failure("riscv-node").await.unwrap();
         assert!(migrated.is_empty());
 
-        let resource = manager.get_resource(302).await.unwrap();
+        let resource = manager.get_resource("302").await.unwrap();
         assert_eq!(resource.state, HaState::Error);
     }
 
@@ -976,7 +996,7 @@ mod tests {
             .await;
 
         let config = HaConfig {
-            vm_id: 400,
+            vm_id: "400".to_string(),
             group: "gpu-group".to_string(),
             max_restart: 0,
             max_relocate: 3,
@@ -986,7 +1006,7 @@ mod tests {
         };
         manager.add_resource(config).await.unwrap();
         manager
-            .update_resource_state(400, HaState::Started, Some("node-fails".to_string()))
+            .update_resource_state("400", HaState::Started, Some("node-fails".to_string()))
             .await
             .unwrap();
 
@@ -994,9 +1014,9 @@ mod tests {
         // must never be selected even though it is architecture-compatible
         // and idle.
         let migrated = manager.handle_node_failure("node-fails").await.unwrap();
-        assert_eq!(migrated, vec![400]);
+        assert_eq!(migrated, vec!["400".to_string()]);
 
-        let events = manager.get_events(Some(400), None).await;
+        let events = manager.get_events(Some("400"), None).await;
         let migrate_event = events
             .iter()
             .find(|e| matches!(e.event_type, HaEventType::Migrated))
@@ -1051,7 +1071,7 @@ mod tests {
             .await;
 
         let config = HaConfig {
-            vm_id: 401,
+            vm_id: "401".to_string(),
             group: "gpu-group".to_string(),
             max_restart: 0,
             max_relocate: 3,
@@ -1061,14 +1081,14 @@ mod tests {
         };
         manager.add_resource(config).await.unwrap();
         manager
-            .update_resource_state(401, HaState::Started, Some("node-fails".to_string()))
+            .update_resource_state("401", HaState::Started, Some("node-fails".to_string()))
             .await
             .unwrap();
 
         let migrated = manager.handle_node_failure("node-fails").await.unwrap();
-        assert_eq!(migrated, vec![401]);
+        assert_eq!(migrated, vec!["401".to_string()]);
 
-        let events = manager.get_events(Some(401), None).await;
+        let events = manager.get_events(Some("401"), None).await;
         let migrate_event = events
             .iter()
             .find(|e| matches!(e.event_type, HaEventType::Migrated))
@@ -1110,7 +1130,7 @@ mod tests {
             .await;
 
         let config = HaConfig {
-            vm_id: 402,
+            vm_id: "402".to_string(),
             group: "gpu-group".to_string(),
             max_restart: 0,
             max_relocate: 3,
@@ -1120,7 +1140,7 @@ mod tests {
         };
         manager.add_resource(config).await.unwrap();
         manager
-            .update_resource_state(402, HaState::Started, Some("node-fails".to_string()))
+            .update_resource_state("402", HaState::Started, Some("node-fails".to_string()))
             .await
             .unwrap();
 
@@ -1129,7 +1149,7 @@ mod tests {
         let migrated = manager.handle_node_failure("node-fails").await.unwrap();
         assert!(migrated.is_empty());
 
-        let resource = manager.get_resource(402).await.unwrap();
+        let resource = manager.get_resource("402").await.unwrap();
         assert_eq!(resource.state, HaState::Error);
     }
 
@@ -1186,7 +1206,7 @@ mod tests {
             .await;
 
         let config = HaConfig {
-            vm_id: 403,
+            vm_id: "403".to_string(),
             group: "mixed-group".to_string(),
             max_restart: 0,
             max_relocate: 3,
@@ -1196,7 +1216,7 @@ mod tests {
         };
         manager.add_resource(config).await.unwrap();
         manager
-            .update_resource_state(403, HaState::Started, Some("x86-node-fails".to_string()))
+            .update_resource_state("403", HaState::Started, Some("x86-node-fails".to_string()))
             .await
             .unwrap();
 
@@ -1209,7 +1229,7 @@ mod tests {
         let migrated = manager.handle_node_failure("x86-node-fails").await.unwrap();
         assert!(migrated.is_empty());
 
-        let resource = manager.get_resource(403).await.unwrap();
+        let resource = manager.get_resource("403").await.unwrap();
         assert_eq!(resource.state, HaState::Error);
     }
 }

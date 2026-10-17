@@ -66,6 +66,9 @@ pub struct TemplateManager {
     zfs_backend: Option<Arc<crate::storage::zfs::ZfsManager>>,
     ceph_backend: Option<Arc<crate::storage::ceph::CephManager>>,
     lvm_backend: Option<Arc<crate::storage::lvm::LvmManager>>,
+    /// Directory-storage VM disks live here; template copies go in
+    /// `<vm_storage>/templates`.
+    vm_storage: PathBuf,
 }
 
 impl Default for TemplateManager {
@@ -81,7 +84,23 @@ impl TemplateManager {
             zfs_backend: None,
             ceph_backend: None,
             lvm_backend: None,
+            vm_storage: PathBuf::from("/var/lib/horcrux/vms"),
         }
+    }
+
+    /// Template manager whose directory-storage disks live under the
+    /// configured VM storage path (HORCRUX_DATA_DIR / paths.vm_storage)
+    /// instead of the hardcoded /var/lib/horcrux/vms.
+    pub fn with_vm_storage(vm_storage: PathBuf) -> Self {
+        Self {
+            vm_storage,
+            ..Self::new()
+        }
+    }
+
+    /// Where a cloned VM's disk is written for directory storage.
+    pub fn clone_disk_path(&self, new_vm_id: &str) -> PathBuf {
+        self.vm_storage.join(format!("{}.qcow2", new_vm_id))
     }
 
     pub fn with_backends(
@@ -94,6 +113,7 @@ impl TemplateManager {
             zfs_backend: zfs,
             ceph_backend: ceph,
             lvm_backend: lvm,
+            vm_storage: PathBuf::from("/var/lib/horcrux/vms"),
         }
     }
 
@@ -115,6 +135,26 @@ impl TemplateManager {
         // Generate template ID
         let template_id = format!("template-{}", uuid::Uuid::new_v4());
         let created = chrono::Utc::now().timestamp();
+
+        // Directory storage: the template gets its OWN copy of the disk.
+        // It used to keep pointing at the source VM's disk, so deleting the
+        // template deleted the VM's disk, and deleting the VM broke the
+        // template. A missing source disk is an error, not a silent no-op.
+        let disk_path = if storage_type == StorageType::Directory {
+            if !disk_path.is_file() {
+                return Err(horcrux_common::Error::Validation(format!(
+                    "Source disk {} does not exist",
+                    disk_path.display()
+                )));
+            }
+            let template_dir = self.vm_storage.join("templates");
+            tokio::fs::create_dir_all(&template_dir).await?;
+            let dest = template_dir.join(format!("{}.qcow2", template_id));
+            tokio::fs::copy(&disk_path, &dest).await?;
+            dest
+        } else {
+            disk_path
+        };
 
         // Create template metadata
         let template = Template {
@@ -146,7 +186,7 @@ impl TemplateManager {
     pub async fn clone_template(&self, template_id: &str, request: CloneRequest) -> Result<String> {
         let templates = self.templates.read().await;
         let template = templates.get(template_id).ok_or_else(|| {
-            horcrux_common::Error::System(format!("Template {} not found", template_id))
+            horcrux_common::Error::NotFound(format!("Template {} not found", template_id))
         })?;
 
         tracing::info!(
@@ -195,7 +235,7 @@ impl TemplateManager {
     pub async fn get_template(&self, template_id: &str) -> Result<Template> {
         let templates = self.templates.read().await;
         templates.get(template_id).cloned().ok_or_else(|| {
-            horcrux_common::Error::System(format!("Template {} not found", template_id))
+            horcrux_common::Error::NotFound(format!("Template {} not found", template_id))
         })
     }
 
@@ -204,14 +244,20 @@ impl TemplateManager {
         let mut templates = self.templates.write().await;
 
         if let Some(template) = templates.remove(template_id) {
-            // Delete template disk if it exists
-            if template.disk_path.exists() {
+            // Delete the template's own disk copy (directory storage). Never
+            // touch a path outside <vm_storage>/templates: for ZFS/Ceph/LVM
+            // disk_path names the source VM's volume, which is not ours.
+            if template
+                .disk_path
+                .starts_with(self.vm_storage.join("templates"))
+                && template.disk_path.exists()
+            {
                 tokio::fs::remove_file(&template.disk_path).await.ok();
             }
             tracing::info!("Template deleted: {}", template_id);
             Ok(())
         } else {
-            Err(horcrux_common::Error::System(format!(
+            Err(horcrux_common::Error::NotFound(format!(
                 "Template {} not found",
                 template_id
             )))
@@ -249,16 +295,7 @@ impl TemplateManager {
                 }
             }
             StorageType::Directory => {
-                // For directory storage, copy the disk to templates directory
-                let template_dir = PathBuf::from("/var/lib/horcrux/templates");
-                // Ignore errors creating template dir (may not have permissions in tests)
-                let _ = tokio::fs::create_dir_all(&template_dir).await;
-
-                let dest = template_dir.join(format!("{}.qcow2", template.id));
-                // Only copy if source exists (for production use)
-                if template.disk_path.exists() {
-                    let _ = tokio::fs::copy(&template.disk_path, &dest).await;
-                }
+                // Already copied into <vm_storage>/templates by create_template.
             }
         }
 
@@ -426,57 +463,46 @@ impl TemplateManager {
     }
 
     async fn clone_directory(&self, template: &Template, request: &CloneRequest) -> Result<()> {
-        // For directory storage, use qemu-img to create a backing file (linked) or full copy
-        let vm_dir = PathBuf::from("/var/lib/horcrux/vms");
-        tokio::fs::create_dir_all(&vm_dir).await?;
-
-        let dest_path = vm_dir.join(format!("{}.qcow2", request.new_vm_id));
-
-        match request.clone_type {
-            CloneType::Linked => {
-                // Create a qcow2 with backing file (COW)
-                let cmd = format!(
-                    "qemu-img create -f qcow2 -b {} -F qcow2 {}",
-                    template.disk_path.display(),
-                    dest_path.display()
-                );
-
-                let output = tokio::process::Command::new("sh")
-                    .arg("-c")
-                    .arg(&cmd)
-                    .output()
-                    .await?;
-
-                if !output.status.success() {
-                    return Err(horcrux_common::Error::System(format!(
-                        "Failed to create linked clone: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    )));
-                }
-            }
-            CloneType::Full => {
-                // Full copy using qemu-img convert
-                let cmd = format!(
-                    "qemu-img convert -O qcow2 {} {}",
-                    template.disk_path.display(),
-                    dest_path.display()
-                );
-
-                let output = tokio::process::Command::new("sh")
-                    .arg("-c")
-                    .arg(&cmd)
-                    .output()
-                    .await?;
-
-                if !output.status.success() {
-                    return Err(horcrux_common::Error::System(format!(
-                        "Failed to create full clone: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    )));
-                }
-            }
+        // qemu-img is invoked directly with separate arguments. This used to
+        // build a `sh -c "qemu-img ... <paths>"` string from the template's
+        // disk path (client-supplied) and the new VM id, so a crafted value
+        // could run arbitrary shell commands.
+        tokio::fs::create_dir_all(&self.vm_storage).await?;
+        let dest_path = self.clone_disk_path(&request.new_vm_id);
+        if dest_path.exists() {
+            return Err(horcrux_common::Error::Conflict(format!(
+                "Disk for VM {} already exists",
+                request.new_vm_id
+            )));
         }
 
+        let mut cmd = tokio::process::Command::new("qemu-img");
+        match request.clone_type {
+            CloneType::Linked => {
+                cmd.arg("create")
+                    .arg("-f")
+                    .arg("qcow2")
+                    .arg("-b")
+                    .arg(&template.disk_path)
+                    .arg("-F")
+                    .arg("qcow2")
+                    .arg(&dest_path);
+            }
+            CloneType::Full => {
+                cmd.arg("convert")
+                    .arg("-O")
+                    .arg("qcow2")
+                    .arg(&template.disk_path)
+                    .arg(&dest_path);
+            }
+        }
+        let output = cmd.output().await?;
+        if !output.status.success() {
+            return Err(horcrux_common::Error::System(format!(
+                "qemu-img failed to clone template: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
         Ok(())
     }
 }
@@ -485,50 +511,125 @@ impl TemplateManager {
 mod tests {
     use super::*;
 
+    fn scratch(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("hx-tpl-{}-{}", name, std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// Real qcow2 source disk (needs qemu-img, as in CI's Test job).
+    fn source_disk(dir: &std::path::Path) -> PathBuf {
+        let p = dir.join("vm-100.qcow2");
+        let ok = std::process::Command::new("qemu-img")
+            .args(["create", "-f", "qcow2"])
+            .arg(&p)
+            .arg("16M")
+            .status()
+            .expect("qemu-img must be installed")
+            .success();
+        assert!(ok);
+        p
+    }
+
     #[tokio::test]
-    async fn test_create_template() {
-        let manager = TemplateManager::new();
+    async fn directory_template_owns_a_copy_and_clones_from_it() {
+        let dir = scratch("own");
+        let manager = TemplateManager::with_vm_storage(dir.join("vms"));
+        let src = source_disk(&dir);
 
         let template = manager
             .create_template(
                 "vm-100",
                 "Ubuntu 22.04 Template".to_string(),
                 Some("Base Ubuntu server template".to_string()),
-                PathBuf::from("/var/lib/horcrux/vms/vm-100.qcow2"),
+                src.clone(),
                 StorageType::Directory,
                 4096,
                 2,
                 OsType::Linux,
             )
-            .await;
-
-        assert!(template.is_ok());
-        let template = template.unwrap();
+            .await
+            .unwrap();
         assert_eq!(template.name, "Ubuntu 22.04 Template");
-        assert_eq!(template.memory, 4096);
-        assert_eq!(template.cpus, 2);
+        assert_eq!((template.memory, template.cpus), (4096, 2));
+        assert_ne!(
+            template.disk_path, src,
+            "template must not share the VM's disk"
+        );
+        assert!(template.disk_path.starts_with(dir.join("vms/templates")));
+        assert!(template.disk_path.is_file());
+
+        for (id, kind) in [
+            ("clone-full", CloneType::Full),
+            ("clone-linked", CloneType::Linked),
+        ] {
+            let new_id = manager
+                .clone_template(
+                    &template.id,
+                    CloneRequest {
+                        new_vm_id: id.to_string(),
+                        new_vm_name: id.to_string(),
+                        clone_type: kind,
+                        storage_pool: None,
+                        cloudinit_config: None,
+                    },
+                )
+                .await
+                .unwrap();
+            assert_eq!(new_id, id);
+            assert!(manager.clone_disk_path(id).is_file(), "{id} disk written");
+        }
+
+        // Deleting the template removes ITS copy, never the source VM disk.
+        manager.delete_template(&template.id).await.unwrap();
+        assert!(
+            src.is_file(),
+            "source VM disk must survive template deletion"
+        );
+        assert!(!template.disk_path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
-    async fn test_list_templates() {
-        let manager = TemplateManager::new();
-
-        manager
+    async fn missing_source_disk_and_unknown_template_are_errors() {
+        let dir = scratch("err");
+        let manager = TemplateManager::with_vm_storage(dir.join("vms"));
+        let r = manager
             .create_template(
-                "vm-100",
-                "Template 1".to_string(),
+                "vm-x",
+                "t".to_string(),
                 None,
-                PathBuf::from("/tmp/vm-100.qcow2"),
+                dir.join("does-not-exist.qcow2"),
                 StorageType::Directory,
-                2048,
+                512,
                 1,
                 OsType::Linux,
             )
-            .await
-            .ok();
-
-        let templates = manager.list_templates().await;
-        assert_eq!(templates.len(), 1);
-        assert_eq!(templates[0].name, "Template 1");
+            .await;
+        assert!(
+            matches!(r, Err(horcrux_common::Error::Validation(_))),
+            "{r:?}"
+        );
+        assert!(manager.list_templates().await.is_empty());
+        assert!(matches!(
+            manager.get_template("nope").await,
+            Err(horcrux_common::Error::NotFound(_))
+        ));
+        // A path with shell metacharacters is just a (missing) file name.
+        let r = manager
+            .create_template(
+                "vm-x",
+                "t".to_string(),
+                None,
+                dir.join("x;touch pwned"),
+                StorageType::Directory,
+                512,
+                1,
+                OsType::Linux,
+            )
+            .await;
+        assert!(r.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

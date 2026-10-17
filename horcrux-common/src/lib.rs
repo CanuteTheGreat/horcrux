@@ -87,18 +87,110 @@ impl std::fmt::Display for VmStatus {
 }
 
 /// Container runtime type
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ContainerRuntime {
-    Lxc,    // LXC
-    Lxd,    // LXD (can do containers)
-    Incus,  // Incus (LXD fork, can do containers)
+    Lxc,   // LXC
+    Lxd,   // LXD (can do containers)
+    Incus, // Incus (LXD fork, can do containers)
+    #[default]
     Docker, // Docker
     Podman, // Podman (daemonless Docker alternative)
 }
 
+/// OCI-runtime (Docker/Podman) creation options: what a user fills in on
+/// the "Create Container" form or what a compose service declares. Every
+/// field is optional and omitted from JSON when empty, so older clients
+/// that only send id/name/runtime/rootfs keep working unchanged.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContainerOptions {
+    /// `KEY=value` environment entries.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env: Vec<String>,
+    /// Port publications, `[host_ip:]host_port:container_port[/proto]`
+    /// or a bare `container_port`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ports: Vec<String>,
+    /// Bind mounts / named volumes, `source:target[:ro|rw]`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volumes: Vec<String>,
+    /// Command (argv) overriding the image's default CMD.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub command: Vec<String>,
+    /// Network to attach the container to (default: the runtime's bridge).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<String>,
+    /// DNS aliases on `network` (compose service names).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub network_aliases: Vec<String>,
+}
+
+impl ContainerOptions {
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+
+    /// Reject malformed entries before they reach a runtime CLI, so a bad
+    /// form value is a 400 with a clear message instead of a docker error.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        for e in &self.env {
+            // `KEY=value`, or a bare `KEY` (value taken from the host, as
+            // with `docker run -e KEY` and compose's `KEY:` with no value).
+            let key = e.split_once('=').map(|(k, _)| k).unwrap_or(e);
+            if key.is_empty() || key.contains(char::is_whitespace) {
+                return Err(format!(
+                    "invalid environment entry '{e}' (expected KEY=value)"
+                ));
+            }
+        }
+        for p in &self.ports {
+            let (spec, proto) = match p.rsplit_once('/') {
+                Some((s, pr)) => (s, Some(pr)),
+                None => (p.as_str(), None),
+            };
+            if let Some(pr) = proto {
+                if !matches!(pr, "tcp" | "udp" | "sctp") {
+                    return Err(format!("invalid port protocol in '{p}'"));
+                }
+            }
+            let parts: Vec<&str> = spec.split(':').collect();
+            let numeric = |s: &str| s.parse::<u16>().map(|n| n > 0).unwrap_or(false);
+            let ok = match parts.as_slice() {
+                [c] => numeric(c),
+                [h, c] => numeric(h) && numeric(c),
+                [ip, h, c] => !ip.is_empty() && numeric(h) && numeric(c),
+                _ => false,
+            };
+            if !ok {
+                return Err(format!(
+                    "invalid port mapping '{p}' (expected [ip:]host:container[/tcp|udp])"
+                ));
+            }
+        }
+        for v in &self.volumes {
+            let parts: Vec<&str> = v.split(':').collect();
+            let ok = match parts.as_slice() {
+                [s, t] => !s.is_empty() && t.starts_with('/'),
+                [s, t, m] => !s.is_empty() && t.starts_with('/') && matches!(*m, "ro" | "rw"),
+                _ => false,
+            };
+            if !ok || v.starts_with('-') {
+                return Err(format!(
+                    "invalid volume '{v}' (expected source:/target[:ro|rw])"
+                ));
+            }
+        }
+        if let Some(n) = &self.network {
+            if n.is_empty() || n.starts_with('-') {
+                return Err(format!("invalid network name '{n}'"));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Container configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ContainerConfig {
     pub id: String,
     pub name: String,
@@ -107,6 +199,12 @@ pub struct ContainerConfig {
     pub cpus: u32,
     pub rootfs: String, // Path to rootfs or image name for Docker
     pub status: ContainerStatus,
+    /// Docker/Podman creation options (env, ports, volumes, command, network).
+    #[serde(flatten, default)]
+    pub options: ContainerOptions,
+    /// RFC 3339 creation time, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
 }
 
 /// Container status
@@ -327,6 +425,83 @@ pub enum FirewallProtocol {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn container_options_validation() {
+        let ok = ContainerOptions {
+            env: vec!["A=1".into(), "HOME_ONLY".into()],
+            ports: vec!["80".into(), "8080:80".into(), "127.0.0.1:53:53/udp".into()],
+            volumes: vec!["data:/data".into(), "/srv:/srv:ro".into()],
+            command: vec!["sleep".into(), "1".into()],
+            network: Some("net".into()),
+            network_aliases: vec!["web".into()],
+        };
+        assert!(ok.validate().is_ok());
+        for bad in [
+            ContainerOptions {
+                env: vec!["=1".into()],
+                ..Default::default()
+            },
+            ContainerOptions {
+                ports: vec!["0:80".into()],
+                ..Default::default()
+            },
+            ContainerOptions {
+                ports: vec!["80:80/icmp".into()],
+                ..Default::default()
+            },
+            ContainerOptions {
+                ports: vec!["a:b:c:d".into()],
+                ..Default::default()
+            },
+            ContainerOptions {
+                volumes: vec!["data".into()],
+                ..Default::default()
+            },
+            ContainerOptions {
+                volumes: vec!["data:relative".into()],
+                ..Default::default()
+            },
+            ContainerOptions {
+                volumes: vec!["a:/b:rx".into()],
+                ..Default::default()
+            },
+            ContainerOptions {
+                network: Some("--privileged".into()),
+                ..Default::default()
+            },
+        ] {
+            assert!(bad.validate().is_err(), "{bad:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn container_config_json_stays_backward_compatible() {
+        // A minimal (pre-options) payload still deserializes...
+        let c: ContainerConfig = serde_json::from_str(
+            r#"{"id":"a","name":"a","runtime":"docker","memory":64,"cpus":1,
+                "rootfs":"busybox","status":"stopped"}"#,
+        )
+        .unwrap();
+        assert!(c.options.is_empty());
+        assert!(c.created_at.is_none());
+        // ...and empty options are not serialized, while set ones are flat.
+        let json = serde_json::to_value(&c).unwrap();
+        assert!(json.get("env").is_none() && json.get("options").is_none());
+        let c2 = ContainerConfig {
+            options: ContainerOptions {
+                ports: vec!["80".into()],
+                ..Default::default()
+            },
+            created_at: Some("2026-01-01T00:00:00+00:00".into()),
+            ..c
+        };
+        let json = serde_json::to_value(&c2).unwrap();
+        assert_eq!(json["ports"][0], "80");
+        assert_eq!(json["created_at"], "2026-01-01T00:00:00+00:00");
+        let back: ContainerConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(back.options.ports, vec!["80"]);
+    }
 
     #[test]
     fn test_vm_config_serialization() {

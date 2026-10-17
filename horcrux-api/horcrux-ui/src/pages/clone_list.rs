@@ -51,7 +51,7 @@ pub fn CloneList() -> impl IntoView {
                                         <th>"Job ID"</th>
                                         <th>"Source VM"</th>
                                         <th>"Target Name"</th>
-                                        <th>"Type"</th>
+                                        <th>"Stage"</th>
                                         <th>"Status"</th>
                                         <th>"Progress"</th>
                                         <th>"Created"</th>

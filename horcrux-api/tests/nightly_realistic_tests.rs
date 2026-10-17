@@ -209,6 +209,7 @@ async fn test_real_docker_container_lifecycle() {
         // below against a genuinely still-running container.
         rootfs: "nginx:alpine".to_string(),
         status: ContainerStatus::Stopped,
+        ..Default::default()
     };
 
     manager

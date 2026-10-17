@@ -384,7 +384,9 @@ async fn main() -> anyhow::Result<()> {
         cloudinit_manager: Arc::new(CloudInitManager::new(
             horcrux_config.paths.cloudinit.clone(),
         )),
-        template_manager: Arc::new(TemplateManager::new()),
+        template_manager: Arc::new(TemplateManager::with_vm_storage(
+            horcrux_config.paths.vm_storage.clone(),
+        )),
         auth_manager: Arc::new(AuthManager::new()),
         firewall_manager: Arc::new(FirewallManager::new()),
         monitoring_manager,
@@ -824,6 +826,7 @@ fn backup_routes() -> Router<Arc<AppState>> {
         .route("/api/backup-jobs", get(list_backup_jobs))
         .route("/api/backup-jobs", post(create_backup_job))
         .route("/api/backup-jobs/:id/run", post(run_backup_job_now))
+        .route("/api/backup-jobs/:id", delete(delete_backup_job))
         // Retention policy endpoint
         .route("/api/backups/retention/:target_id", post(apply_retention))
         // Cloud-init endpoints
@@ -842,6 +845,8 @@ fn auth_protected_routes() -> Router<Arc<AppState>> {
     Router::new()
         // Auth endpoints
         .route("/api/auth/logout", post(logout))
+        .route("/api/auth/sessions", get(list_auth_sessions))
+        .route("/api/auth/sessions/:id", delete(delete_auth_session))
         .route("/api/auth/verify", get(verify_session))
         .route("/api/auth/password", post(change_password))
         // User management
@@ -981,6 +986,12 @@ fn cluster_routes() -> Router<Arc<AppState>> {
         .route("/api/ha/status", get(get_ha_status))
         .route("/api/ha/groups", post(create_ha_group))
         .route("/api/ha/groups", get(list_ha_groups))
+        .route("/api/ha/groups/:name", put(update_ha_group))
+        .route("/api/ha/groups/:name", delete(delete_ha_group))
+        .route(
+            "/api/ha/groups/:name/resources",
+            post(assign_ha_group_resource),
+        )
 }
 
 /// Build network-related routes (firewall, CNI, network policies)
@@ -6864,6 +6875,7 @@ async fn exec_container_command(
 struct CloneContainerRequest {
     target_id: String,
     target_name: String,
+    #[serde(default)]
     snapshot: bool,
 }
 
@@ -6902,9 +6914,18 @@ async fn list_backup_jobs(State(state): State<Arc<AppState>>) -> Json<Vec<Backup
 async fn create_backup_job(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<BackupJob>,
+) -> Result<(StatusCode, Json<BackupJob>), ApiError> {
+    // Echo the stored job: the UI's create form reads it back.
+    state.backup_manager.create_job(payload.clone()).await?;
+    Ok((StatusCode::CREATED, Json(payload)))
+}
+
+async fn delete_backup_job(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    state.backup_manager.create_job(payload).await?;
-    Ok(StatusCode::CREATED)
+    state.backup_manager.delete_job(&id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn run_backup_job_now(
@@ -7018,27 +7039,57 @@ struct CreateTemplateRequest {
     vm_id: String,
     name: String,
     description: Option<String>,
-    disk_path: String,
+    /// Optional: must be one of the VM's own disks. Defaults to its first
+    /// disk. (Accepting any path let a client copy arbitrary host files
+    /// into a template.)
+    #[serde(default)]
+    disk_path: Option<String>,
+    #[serde(default = "default_template_storage")]
     storage_type: StorageType,
-    memory: u64,
-    cpus: u32,
+    #[serde(default)]
+    memory: Option<u64>,
+    #[serde(default)]
+    cpus: Option<u32>,
+    #[serde(default = "default_template_os")]
     os_type: OsType,
+}
+
+fn default_template_storage() -> StorageType {
+    StorageType::Directory
+}
+
+fn default_template_os() -> OsType {
+    OsType::Linux
 }
 
 async fn create_template(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateTemplateRequest>,
 ) -> Result<(StatusCode, Json<Template>), ApiError> {
+    let vm = state.vm_manager.get_vm(&payload.vm_id).await?;
+    let vm_disks: Vec<String> = vm.disks.iter().map(|d| d.path.clone()).collect();
+    let disk_path = match payload.disk_path {
+        Some(p) if vm_disks.contains(&p) => p,
+        Some(p) => {
+            return Err(ApiError::ValidationError(format!(
+                "{} is not a disk of VM {}",
+                p, payload.vm_id
+            )))
+        }
+        None => vm_disks.first().cloned().ok_or_else(|| {
+            ApiError::ValidationError(format!("VM {} has no disk", payload.vm_id))
+        })?,
+    };
     let template = state
         .template_manager
         .create_template(
             &payload.vm_id,
             payload.name,
             payload.description,
-            std::path::PathBuf::from(payload.disk_path),
+            std::path::PathBuf::from(disk_path),
             payload.storage_type,
-            payload.memory,
-            payload.cpus,
+            payload.memory.unwrap_or(vm.memory),
+            payload.cpus.unwrap_or(vm.cpus),
             payload.os_type,
         )
         .await?;
@@ -7058,7 +7109,38 @@ async fn clone_template(
     Path(id): Path<String>,
     Json(request): Json<CloneRequest>,
 ) -> Result<Json<CloneResponse>, ApiError> {
+    let template = state.template_manager.get_template(&id).await?;
+    if state.vm_manager.get_vm(&request.new_vm_id).await.is_ok() {
+        return Err(ApiError::Conflict(format!(
+            "VM {} already exists",
+            request.new_vm_id
+        )));
+    }
+    let new_vm_name = request.new_vm_name.clone();
     let new_vm_id = state.template_manager.clone_template(&id, request).await?;
+
+    // Register the clone as a real VM (it used to only write a disk file,
+    // so the "deployed" VM never appeared anywhere and couldn't be started).
+    let disk = state.template_manager.clone_disk_path(&new_vm_id);
+    state
+        .vm_manager
+        .import_vm(VmConfig {
+            id: new_vm_id.clone(),
+            name: new_vm_name,
+            hypervisor: horcrux_common::VmHypervisor::Qemu,
+            memory: template.memory,
+            cpus: template.cpus,
+            disk_size: 0, // size comes from the template image
+            status: horcrux_common::VmStatus::Stopped,
+            architecture: Default::default(),
+            disks: vec![horcrux_common::VmDisk {
+                path: disk.to_string_lossy().to_string(),
+                size_gb: 0,
+                disk_type: "virtio".to_string(),
+                cache: "writethrough".to_string(),
+            }],
+        })
+        .await?;
     Ok(Json(CloneResponse { new_vm_id }))
 }
 
@@ -7136,6 +7218,38 @@ async fn login(
     }
 }
 
+/// Live login sessions (the Sessions page). Admins see everyone's; other
+/// users only their own.
+async fn list_auth_sessions(
+    State(state): State<Arc<AppState>>,
+    auth_user: Option<axum::Extension<middleware::auth::AuthUser>>,
+) -> Result<Json<Vec<horcrux_common::auth::Session>>, ApiError> {
+    let user = auth_user
+        .map(|axum::Extension(u)| u)
+        .ok_or(ApiError::AuthenticationFailed)?;
+    let scope = (user.role != "admin").then_some(user.user_id.as_str());
+    Ok(Json(
+        db::users::list_sessions(state.database.pool(), scope).await?,
+    ))
+}
+
+async fn delete_auth_session(
+    State(state): State<Arc<AppState>>,
+    auth_user: Option<axum::Extension<middleware::auth::AuthUser>>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let user = auth_user
+        .map(|axum::Extension(u)| u)
+        .ok_or(ApiError::AuthenticationFailed)?;
+    let scope = (user.role != "admin").then_some(user.user_id.as_str());
+    let sessions = db::users::list_sessions(state.database.pool(), scope).await?;
+    if !sessions.iter().any(|s| s.id == id) {
+        return Err(ApiError::NotFound(format!("Session {} not found", id)));
+    }
+    db::users::delete_session(state.database.pool(), &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn logout(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
@@ -7199,15 +7313,31 @@ struct LogoutRequest {
     session_id: String,
 }
 
+/// GET /api/auth/verify: is the caller's own credential valid? The auth
+/// middleware has already validated the bearer token/cookie and attached
+/// the user. This used to demand a JSON body on a GET (every call, including
+/// the UI's session check, got 415), so a body with `session_id` is now
+/// optional and only needed to check some other session.
 async fn verify_session(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<VerifyRequest>,
+    auth_user: Option<axum::Extension<middleware::auth::AuthUser>>,
+    request: Option<Json<VerifyRequest>>,
 ) -> Result<Json<VerifyResponse>, ApiError> {
-    let valid = state
-        .auth_manager
-        .verify_session(&request.session_id)
-        .await?;
-    Ok(Json(VerifyResponse { valid }))
+    if let Some(Json(request)) = request {
+        let valid = state
+            .auth_manager
+            .verify_session(&request.session_id)
+            .await?;
+        return Ok(Json(VerifyResponse {
+            valid,
+            username: None,
+        }));
+    }
+    let user = auth_user.map(|axum::Extension(u)| u);
+    Ok(Json(VerifyResponse {
+        valid: user.is_some(),
+        username: user.map(|u| u.username),
+    }))
 }
 
 #[derive(serde::Deserialize)]
@@ -7218,6 +7348,8 @@ struct VerifyRequest {
 #[derive(serde::Serialize)]
 struct VerifyResponse {
     valid: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
 }
 
 async fn list_users(State(state): State<Arc<AppState>>) -> Json<Vec<horcrux_common::auth::User>> {
@@ -8770,7 +8902,7 @@ async fn list_ha_resources(State(state): State<Arc<AppState>>) -> Json<Vec<HaRes
 
 #[derive(serde::Deserialize)]
 struct AddHaResourceRequest {
-    vm_id: u32,
+    vm_id: String,
     group: String,
     priority: u32,
 }
@@ -8779,6 +8911,15 @@ async fn add_ha_resource(
     State(state): State<Arc<AppState>>,
     Json(req): Json<AddHaResourceRequest>,
 ) -> Result<StatusCode, ApiError> {
+    // HA manages real VMs: refuse ids that don't exist (it used to take a
+    // numeric id that could never match the string ids VMs actually have).
+    state.vm_manager.get_vm(&req.vm_id).await?;
+    if state.ha_manager.get_resource(&req.vm_id).await.is_some() {
+        return Err(ApiError::Conflict(format!(
+            "VM {} is already managed by HA",
+            req.vm_id
+        )));
+    }
     let config = ha::HaConfig {
         vm_id: req.vm_id,
         group: req.group,
@@ -8789,22 +8930,24 @@ async fn add_ha_resource(
         required_passthrough_devices: Default::default(),
     };
 
-    state
-        .ha_manager
-        .add_resource(config)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    state.ha_manager.add_resource(config).await?;
 
     Ok(StatusCode::CREATED)
 }
 
 async fn remove_ha_resource(
     State(state): State<Arc<AppState>>,
-    Path(vm_id): Path<u32>,
+    Path(vm_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    if state.ha_manager.get_resource(&vm_id).await.is_none() {
+        return Err(ApiError::NotFound(format!(
+            "VM {} is not managed by HA",
+            vm_id
+        )));
+    }
     state
         .ha_manager
-        .remove_resource(vm_id)
+        .remove_resource(&vm_id)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -8817,6 +8960,8 @@ struct HaStatusResponse {
     running: usize,
     stopped: usize,
     migrating: usize,
+    /// Per-resource state, so the HA dashboard can show what is running.
+    resources: Vec<ha::HaResource>,
 }
 
 async fn get_ha_status(State(state): State<Arc<AppState>>) -> Json<HaStatusResponse> {
@@ -8840,6 +8985,7 @@ async fn get_ha_status(State(state): State<Arc<AppState>>) -> Json<HaStatusRespo
         running,
         stopped,
         migrating,
+        resources,
     })
 }
 
@@ -8847,26 +8993,93 @@ async fn get_ha_status(State(state): State<Arc<AppState>>) -> Json<HaStatusRespo
 struct CreateHaGroupRequest {
     name: String,
     nodes: Vec<String>,
+    #[serde(default)]
+    restricted: bool,
+    #[serde(default)]
+    no_failback: bool,
 }
 
 async fn create_ha_group(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateHaGroupRequest>,
 ) -> Result<StatusCode, ApiError> {
+    if req.name.trim().is_empty() {
+        return Err(ApiError::ValidationError(
+            "HA group name is required".into(),
+        ));
+    }
     let group = ha::HaGroup {
         name: req.name,
         nodes: req.nodes,
-        restricted: false,
-        no_failback: false,
+        restricted: req.restricted,
+        no_failback: req.no_failback,
     };
 
-    state
-        .ha_manager
-        .add_group(group)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    state.ha_manager.add_group(group).await?;
 
     Ok(StatusCode::CREATED)
+}
+
+#[derive(serde::Deserialize)]
+struct UpdateHaGroupRequest {
+    nodes: Vec<String>,
+    #[serde(default)]
+    restricted: bool,
+    #[serde(default)]
+    no_failback: bool,
+}
+
+async fn update_ha_group(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<UpdateHaGroupRequest>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .ha_manager
+        .update_group(ha::HaGroup {
+            name,
+            nodes: req.nodes,
+            restricted: req.restricted,
+            no_failback: req.no_failback,
+        })
+        .await?;
+    Ok(StatusCode::OK)
+}
+
+async fn delete_ha_group(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.ha_manager.remove_group(&name).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(serde::Deserialize)]
+struct AssignHaResourceRequest {
+    resource_id: String,
+    #[serde(default = "default_ha_priority")]
+    priority: u32,
+}
+
+fn default_ha_priority() -> u32 {
+    3
+}
+
+/// Put a VM under HA in this group (the UI's "assign to group" action).
+async fn assign_ha_group_resource(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<AssignHaResourceRequest>,
+) -> Result<StatusCode, ApiError> {
+    add_ha_resource(
+        State(state),
+        Json(AddHaResourceRequest {
+            vm_id: req.resource_id,
+            group: name,
+            priority: req.priority,
+        }),
+    )
+    .await
 }
 
 async fn list_ha_groups(State(state): State<Arc<AppState>>) -> Json<Vec<ha::HaGroup>> {
@@ -8903,21 +9116,20 @@ async fn migrate_vm(
         "offline" => migration::MigrationType::Offline,
         "online" => migration::MigrationType::Online,
         _ => {
-            return Err(ApiError::Internal(format!(
+            return Err(ApiError::BadRequest(format!(
                 "Invalid migration type: {}",
                 migration_type_str
             )))
         }
     };
 
-    // Parse VM ID
-    let vm_id_u32: u32 = vm_id
-        .parse()
-        .map_err(|_| ApiError::Internal(format!("Invalid VM ID: {}", vm_id)))?;
+    // The VM must exist (migration used to require a numeric id, which no
+    // VM created through this API has, so every request failed with a 500).
+    state.vm_manager.get_vm(&vm_id).await?;
 
     // Create migration config
     let config = migration::MigrationConfig {
-        vm_id: vm_id_u32,
+        vm_id: vm_id.clone(),
         target_node: req.target_node.clone(),
         migration_type,
         bandwidth_limit: None,
@@ -8956,10 +9168,11 @@ async fn get_migration_status(
     State(state): State<Arc<AppState>>,
     Path(vm_id): Path<String>,
 ) -> Result<Json<migration::MigrationJob>, ApiError> {
-    // Find migration job for this VM
+    // Latest migration job for this VM (jobs are keyed by job id, so the
+    // old `get_job(vm_id)` lookup could never find anything).
     let job = state
         .migration_manager
-        .get_job(&vm_id)
+        .latest_job_for_vm(&vm_id)
         .await
         .ok_or_else(|| ApiError::NotFound(format!("No migration found for VM {}", vm_id)))?;
 

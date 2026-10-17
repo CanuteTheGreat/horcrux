@@ -130,6 +130,11 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     )
     .await?;
 
+    // VM disk list (JSON array of VmDisk). It used to be dropped on write and
+    // returned as [] on read, so every DB-backed lookup lost the VM's disk
+    // (templates, backups and clones all failed with "VM has no disk").
+    run_migration(pool, "021_add_vm_disks_column", MIGRATION_021_ADD_VM_DISKS).await?;
+
     Ok(())
 }
 
@@ -1000,3 +1005,7 @@ CREATE TABLE container_stack_services (
 
 CREATE INDEX idx_container_stack_services_stack ON container_stack_services(stack_id);
 ";
+
+const MIGRATION_021_ADD_VM_DISKS: &str = r#"
+ALTER TABLE vms ADD COLUMN disks TEXT NOT NULL DEFAULT '[]';
+"#;

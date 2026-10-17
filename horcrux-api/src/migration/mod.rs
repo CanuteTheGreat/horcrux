@@ -40,7 +40,7 @@ pub enum MigrationState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MigrationJob {
     pub id: String,
-    pub vm_id: u32,
+    pub vm_id: String,
     pub source_node: String,
     pub target_node: String,
     pub migration_type: MigrationType,
@@ -57,7 +57,7 @@ pub struct MigrationJob {
 /// Migration configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MigrationConfig {
-    pub vm_id: u32,
+    pub vm_id: String,
     pub target_node: String,
     pub migration_type: MigrationType,
     pub bandwidth_limit: Option<u64>, // MB/s, None = unlimited
@@ -167,7 +167,7 @@ impl MigrationManager {
 
         let job = MigrationJob {
             id: job_id.clone(),
-            vm_id: config.vm_id,
+            vm_id: config.vm_id.clone(),
             source_node: source_node.clone(),
             target_node: config.target_node.clone(),
             migration_type: config.migration_type.clone(),
@@ -226,7 +226,7 @@ impl MigrationManager {
 
                             let report = health_checker
                                 .run_checks(
-                                    config_clone.vm_id,
+                                    &config_clone.vm_id,
                                     job_id_clone.clone(),
                                     config_clone.target_node.clone(),
                                 )
@@ -236,7 +236,7 @@ impl MigrationManager {
                             if !summary.overall_healthy {
                                 tracing::warn!(
                                     "Health checks failed for migrated VM {}: {}/{} checks passed",
-                                    config_clone.vm_id,
+                                    &config_clone.vm_id,
                                     summary.passed,
                                     summary.total_checks
                                 );
@@ -268,7 +268,7 @@ impl MigrationManager {
                             match rb_manager
                                 .rollback_migration(
                                     job_id_clone.clone(),
-                                    config_clone.vm_id,
+                                    &config_clone.vm_id,
                                     source_clone.clone(),
                                     config_clone.target_node.clone(),
                                 )
@@ -1070,6 +1070,17 @@ impl MigrationManager {
         self.jobs.read().await.get(job_id).cloned()
     }
 
+    /// Most recently started migration job for a VM.
+    pub async fn latest_job_for_vm(&self, vm_id: &str) -> Option<MigrationJob> {
+        self.jobs
+            .read()
+            .await
+            .values()
+            .filter(|j| j.vm_id == vm_id)
+            .max_by_key(|j| j.started)
+            .cloned()
+    }
+
     /// List all migration jobs
     pub async fn list_jobs(&self) -> Vec<MigrationJob> {
         self.jobs.read().await.values().cloned().collect()
@@ -1220,7 +1231,7 @@ impl MigrationManager {
         rb_manager
             .rollback_migration(
                 migration_job_id.to_string(),
-                job.vm_id,
+                &job.vm_id,
                 job.source_node,
                 job.target_node,
             )
@@ -1257,7 +1268,7 @@ mod tests {
         let manager = MigrationManager::new();
 
         let config = MigrationConfig {
-            vm_id: 100,
+            vm_id: "100".to_string(),
             target_node: "node2".to_string(),
             migration_type: MigrationType::Live,
             bandwidth_limit: Some(100),
@@ -1275,7 +1286,7 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
         let job = manager.get_job(&job_id).await.unwrap();
-        assert_eq!(job.vm_id, 100);
+        assert_eq!(job.vm_id, "100");
         assert!(job.progress > 0.0);
     }
 
@@ -1285,7 +1296,7 @@ mod tests {
 
         // Test live migration
         let config = MigrationConfig {
-            vm_id: 100,
+            vm_id: "100".to_string(),
             target_node: "node2".to_string(),
             migration_type: MigrationType::Live,
             bandwidth_limit: None,
@@ -1306,7 +1317,7 @@ mod tests {
         manager.set_max_concurrent(1).await;
 
         let config1 = MigrationConfig {
-            vm_id: 100,
+            vm_id: "100".to_string(),
             target_node: "node2".to_string(),
             migration_type: MigrationType::Live,
             bandwidth_limit: None,
@@ -1315,7 +1326,7 @@ mod tests {
         };
 
         let config2 = MigrationConfig {
-            vm_id: 101,
+            vm_id: "101".to_string(),
             target_node: "node2".to_string(),
             migration_type: MigrationType::Live,
             bandwidth_limit: None,
@@ -1337,7 +1348,7 @@ mod tests {
         let manager = MigrationManager::new();
 
         let config = MigrationConfig {
-            vm_id: 100,
+            vm_id: "100".to_string(),
             target_node: "node2".to_string(),
             migration_type: MigrationType::Offline,
             bandwidth_limit: None,

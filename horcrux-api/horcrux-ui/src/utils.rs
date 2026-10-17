@@ -47,3 +47,41 @@ pub fn format_headers(headers: &HashMap<String, String>) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+/// Render an RFC 3339 timestamp as `YYYY-MM-DD HH:MM:SS UTC`; unparseable
+/// input is shown as-is rather than hidden.
+pub fn format_rfc3339(ts: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(ts)
+        .map(|t| {
+            t.with_timezone(&chrono::Utc)
+                .format("%Y-%m-%d %H:%M:%S UTC")
+                .to_string()
+        })
+        .unwrap_or_else(|_| ts.to_string())
+}
+
+/// Render Unix epoch seconds as `YYYY-MM-DD HH:MM:SS UTC`.
+pub fn format_unix_secs(secs: i64) -> String {
+    chrono::DateTime::from_timestamp(secs, 0)
+        .map(|t| t.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .unwrap_or_else(|| secs.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_timestamps_readably() {
+        assert_eq!(
+            format_rfc3339("2026-10-16T15:00:39+00:00"),
+            "2026-10-16 15:00:39 UTC"
+        );
+        assert_eq!(
+            format_rfc3339("2026-10-16T08:00:39-07:00"),
+            "2026-10-16 15:00:39 UTC"
+        );
+        assert_eq!(format_rfc3339("garbage"), "garbage");
+        assert_eq!(format_unix_secs(1792162839), "2026-10-16 15:00:39 UTC");
+    }
+}

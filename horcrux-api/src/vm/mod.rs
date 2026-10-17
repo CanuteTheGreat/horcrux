@@ -15,7 +15,7 @@ pub mod vgpu;
 pub use qemu::{QemuManager, QemuVm};
 
 use crate::db::Database;
-use horcrux_common::{Result, VmConfig, VmStatus};
+use horcrux_common::{Result, VmConfig, VmHypervisor, VmStatus};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -25,6 +25,8 @@ use tokio::sync::RwLock;
 pub struct VmManager {
     vms: Arc<RwLock<HashMap<String, QemuVm>>>,
     qemu: QemuManager,
+    lxd: lxd::LxdManager,
+    incus: incus::IncusManager,
     db: Option<Arc<Database>>,
 }
 
@@ -39,6 +41,8 @@ impl VmManager {
         Self {
             vms: Arc::new(RwLock::new(HashMap::new())),
             qemu: QemuManager::new(),
+            lxd: lxd::LxdManager::new(),
+            incus: incus::IncusManager::new(),
             db: None,
         }
     }
@@ -48,6 +52,8 @@ impl VmManager {
         Self {
             vms: Arc::new(RwLock::new(HashMap::new())),
             qemu: QemuManager::new(),
+            lxd: lxd::LxdManager::new(),
+            incus: incus::IncusManager::new(),
             db: Some(db),
         }
     }
@@ -60,6 +66,8 @@ impl VmManager {
         Self {
             vms: Arc::new(RwLock::new(HashMap::new())),
             qemu: QemuManager::with_storage_path(vm_storage_path),
+            lxd: lxd::LxdManager::new(),
+            incus: incus::IncusManager::new(),
             db: Some(db),
         }
     }
@@ -107,7 +115,30 @@ impl VmManager {
         }
 
         // Create the VM
-        let vm = self.qemu.create_vm(&config).await?;
+        // Dispatch on the requested hypervisor. The LXD/Incus VM backends
+        // existed but were never called: an "lxd" or "incus" VM silently
+        // became a QEMU VM labelled "qemu".
+        let vm = match config.hypervisor {
+            VmHypervisor::Qemu => self.qemu.create_vm(&config).await?,
+            VmHypervisor::Lxd => {
+                if !lxd::LxdManager::check_lxd_available() {
+                    return Err(horcrux_common::Error::Validation(
+                        "LXD is not installed on this host (USE=lxd needs app-containers/lxd)"
+                            .to_string(),
+                    ));
+                }
+                self.lxd.create_vm(&config).await?
+            }
+            VmHypervisor::Incus => {
+                if !incus::IncusManager::check_incus_available() {
+                    return Err(horcrux_common::Error::Validation(
+                        "Incus is not installed on this host (USE=incus needs app-containers/incus)"
+                            .to_string(),
+                    ));
+                }
+                self.incus.create_vm(&config).await?
+            }
+        };
         let vm_config = vm.to_config();
 
         // Save to database if available
@@ -119,14 +150,59 @@ impl VmManager {
         Ok(vm_config)
     }
 
+    /// Register a VM whose disk already exists (e.g. cloned from a
+    /// template) without creating a new disk.
+    pub async fn import_vm(&self, config: VmConfig) -> Result<VmConfig> {
+        let mut vms = self.vms.write().await;
+        let known_in_db = match &self.db {
+            Some(db) => db.get_vm(&config.id).await.is_ok(),
+            None => false,
+        };
+        if vms.contains_key(&config.id) || known_in_db {
+            return Err(horcrux_common::Error::Conflict(format!(
+                "VM with ID {} already exists",
+                config.id
+            )));
+        }
+        let vm = self.qemu.vm_from_config(&config);
+        let vm_config = vm.to_config();
+        if let Some(db) = &self.db {
+            db.create_vm(&vm_config).await?;
+        }
+        vms.insert(config.id.clone(), vm);
+        Ok(vm_config)
+    }
+
+    /// Make sure `id` is in the in-memory map, loading it from the database
+    /// if needed. VMs are persisted, but start/stop used to look only at
+    /// the in-memory map, so after an API restart every listed VM failed
+    /// with "VM not found" when started or stopped.
+    async fn hydrate(&self, vms: &mut HashMap<String, qemu::QemuVm>, id: &str) -> Result<()> {
+        if vms.contains_key(id) {
+            return Ok(());
+        }
+        if let Some(db) = &self.db {
+            if let Ok(config) = db.get_vm(id).await {
+                vms.insert(id.to_string(), self.qemu.vm_from_config(&config));
+                return Ok(());
+            }
+        }
+        Err(horcrux_common::Error::VmNotFound(id.to_string()))
+    }
+
     /// Start a virtual machine
     pub async fn start_vm(&self, id: &str) -> Result<VmConfig> {
         let mut vms = self.vms.write().await;
+        self.hydrate(&mut vms, id).await?;
         let vm = vms
             .get_mut(id)
             .ok_or_else(|| horcrux_common::Error::VmNotFound(id.to_string()))?;
 
-        self.qemu.start_vm(vm).await?;
+        match vm.hypervisor {
+            VmHypervisor::Qemu => self.qemu.start_vm(vm).await?,
+            VmHypervisor::Lxd => self.lxd.start_vm(vm).await?,
+            VmHypervisor::Incus => self.incus.start_vm(vm).await?,
+        }
         vm.status = VmStatus::Running;
         let config = vm.to_config();
 
@@ -141,11 +217,16 @@ impl VmManager {
     /// Stop a virtual machine
     pub async fn stop_vm(&self, id: &str) -> Result<VmConfig> {
         let mut vms = self.vms.write().await;
+        self.hydrate(&mut vms, id).await?;
         let vm = vms
             .get_mut(id)
             .ok_or_else(|| horcrux_common::Error::VmNotFound(id.to_string()))?;
 
-        self.qemu.stop_vm(vm).await?;
+        match vm.hypervisor {
+            VmHypervisor::Qemu => self.qemu.stop_vm(vm).await?,
+            VmHypervisor::Lxd => self.lxd.stop_vm(vm).await?,
+            VmHypervisor::Incus => self.incus.stop_vm(vm).await?,
+        }
         vm.status = VmStatus::Stopped;
         let config = vm.to_config();
 
@@ -160,12 +241,19 @@ impl VmManager {
     /// Delete a virtual machine
     pub async fn delete_vm(&self, id: &str) -> Result<()> {
         let mut vms = self.vms.write().await;
+        // Load DB-only VMs too, so their disk/process are cleaned up, not
+        // just the row.
+        let _ = self.hydrate(&mut vms, id).await;
 
         if let Some(vm) = vms.remove(id) {
             // Best-effort: the on-disk/hypervisor resources may already be
             // gone (e.g. after a server restart with a stale in-memory
             // entry); don't let that failure prevent the DB row cleanup.
-            let _ = self.qemu.delete_vm(&vm).await;
+            let _ = match vm.hypervisor {
+                VmHypervisor::Qemu => self.qemu.delete_vm(&vm).await,
+                VmHypervisor::Lxd => self.lxd.delete_vm(&vm).await,
+                VmHypervisor::Incus => self.incus.delete_vm(&vm).await,
+            };
 
             if let Some(db) = &self.db {
                 db.delete_vm(id).await?;
@@ -267,5 +355,35 @@ mod tests {
             }
             _ => panic!("Expected VmNotFound error"),
         }
+    }
+
+    /// VMs are persisted, so a new manager over the same database (= an
+    /// API restart) must still be able to operate on them. Requires
+    /// `qemu-img` (installed in CI's Test job).
+    #[tokio::test]
+    async fn vm_is_usable_after_manager_restart() {
+        let dir = std::env::temp_dir().join(format!("hx-vm-restart-{}", std::process::id()));
+        let db = Arc::new(Database::new("sqlite::memory:").await.unwrap());
+        db.migrate().await.unwrap();
+
+        let first = VmManager::with_database_and_storage_path(db.clone(), dir.clone());
+        let mut cfg = create_test_vm_config("restart-vm", "restart");
+        cfg.disk_size = 1;
+        first.create_vm(cfg).await.expect("create (needs qemu-img)");
+        let disk = dir.join("restart-vm.qcow2");
+        assert!(disk.exists());
+        drop(first);
+
+        let second = VmManager::with_database_and_storage_path(db.clone(), dir.clone());
+        if let Err(horcrux_common::Error::VmNotFound(_)) = second.stop_vm("restart-vm").await {
+            panic!("a persisted VM must not be 'not found' after a restart");
+        }
+        second.delete_vm("restart-vm").await.unwrap();
+        assert!(
+            !disk.exists(),
+            "delete must remove the disk of a VM loaded from the DB"
+        );
+        assert!(second.get_vm("restart-vm").await.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

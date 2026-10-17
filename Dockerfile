@@ -199,6 +199,16 @@ RUN emerge --verbose --quiet-build=y =app-emulation/horcrux-9999
 # make sure it exists (empty) either way.
 RUN mkdir -p /opt/horcrux
 
+# --- USE-flag matrix (CI only) --------------------------------------------
+# Not part of the default build (BuildKit only builds stages the final
+# target needs). CI's "Gentoo USE-flag matrix" job builds it with
+# `--target use-matrix`: it re-runs the real ebuild phases for contrasting
+# USE sets on top of the builder stage above (same Portage tree, same
+# rust-bin, same overlay) and checks each flag's effect on the install.
+FROM builder AS use-matrix
+COPY gentoo/ci/use-matrix.sh /usr/local/bin/horcrux-use-matrix
+RUN bash /usr/local/bin/horcrux-use-matrix
+
 # --- Runtime stage --------------------------------------------------------
 # Still Gentoo — a slim stage3 with only the installed package and its
 # runtime deps carried over, so USE-flag-gated components remain accurate.

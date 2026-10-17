@@ -1,6 +1,7 @@
 use crate::api::{
-    create_backup_job, get_backup_jobs, get_vms, run_backup_job_now, BackupEncryption, BackupJob,
-    BackupStatus, BackupTarget, CreateBackupJobRequest, RetentionPolicy,
+    create_backup_job, delete_backup_job, get_backup_jobs, get_vms, run_backup_job_now,
+    BackupEncryption, BackupJob, BackupStatus, BackupTarget, CreateBackupJobRequest,
+    RetentionPolicy,
 };
 use horcrux_common::VmConfig;
 use leptos::*;
@@ -186,6 +187,24 @@ pub fn BackupJobsPage() -> impl IntoView {
         });
     };
 
+    let delete_job = move |job_id: String| {
+        let confirmed = web_sys::window()
+            .and_then(|w| {
+                w.confirm_with_message(&format!("Delete backup job {}?", job_id))
+                    .ok()
+            })
+            .unwrap_or(false);
+        if !confirmed {
+            return;
+        }
+        spawn_local(async move {
+            match delete_backup_job(&job_id).await {
+                Ok(_) => load_backup_jobs(),
+                Err(e) => set_error.set(Some(format!("Failed to delete backup job: {}", e))),
+            }
+        });
+    };
+
     let run_job_now = move |job_id: String| {
         spawn_local(async move {
             match run_backup_job_now(&job_id).await {
@@ -318,6 +337,7 @@ pub fn BackupJobsPage() -> impl IntoView {
                                     } else {
                                         filtered_jobs().into_iter().map(|job| {
                                                 let job_id = job.id.clone();
+                                                let delete_id = job.id.clone();
                                                 let job_id2 = job.id.clone();
                                                 let status_color = get_status_color(&job.last_status);
                                                 let job_name = job.name.clone();
@@ -388,12 +408,7 @@ pub fn BackupJobsPage() -> impl IntoView {
                                                                     <i class="fas fa-play"></i>
                                                                 </button>
                                                                 <button
-                                                                    class="text-gray-600 hover:text-gray-900 px-2 py-1 rounded hover:bg-gray-50"
-                                                                    title="Edit Job"
-                                                                >
-                                                                    <i class="fas fa-edit"></i>
-                                                                </button>
-                                                                <button
+                                                                    on:click=move |_| delete_job(delete_id.clone())
                                                                     class="text-red-600 hover:text-red-900 px-2 py-1 rounded hover:bg-red-50"
                                                                     title="Delete Job"
                                                                 >

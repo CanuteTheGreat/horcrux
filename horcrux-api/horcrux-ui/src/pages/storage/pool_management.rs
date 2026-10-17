@@ -2,20 +2,10 @@
 
 use crate::api::{delete_json, fetch_json, post_json};
 use leptos::*;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-/// Storage pool information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StoragePool {
-    pub id: String,
-    pub name: String,
-    pub pool_type: String,
-    pub path: Option<String>,
-    pub total_bytes: u64,
-    pub used_bytes: u64,
-    pub available_bytes: u64,
-    pub status: String,
-}
+/// Storage pool (adapter over the API's `storage::StoragePool`).
+pub use crate::api::StoragePoolInfo as StoragePool;
 
 #[derive(Debug, Clone, Serialize)]
 struct AddStoragePoolReq {
@@ -249,9 +239,6 @@ pub fn StorageManagement() -> impl IntoView {
                                     </div>
 
                                     <div class="storage-actions">
-                                        <button class="btn btn-secondary">
-                                            "Browse"
-                                        </button>
                                         <button class="btn btn-danger"
                                                 on:click=move |_| delete_pool(pool_id.clone())>
                                             "Delete"

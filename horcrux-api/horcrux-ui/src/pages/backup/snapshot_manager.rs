@@ -738,21 +738,21 @@ pub fn SnapshotManagerPage() -> impl IntoView {
                                                 <div class="text-xs text-gray-500">"Total Quotas"</div>
                                             </div>
                                             <div>
-                                                <div class="text-2xl font-semibold text-green-600">{summary.active_quotas}</div>
+                                                <div class="text-2xl font-semibold text-green-600">{summary.healthy_quotas + summary.warning_quotas}</div>
                                                 <div class="text-xs text-gray-500">"Active"</div>
                                             </div>
                                             <div>
-                                                <div class="text-2xl font-semibold text-blue-600">{summary.total_snapshots}</div>
-                                                <div class="text-xs text-gray-500">"Snapshots"</div>
+                                                <div class="text-2xl font-semibold text-blue-600">{format!("{:.1}%", summary.overall_usage_percent)}</div>
+                                                <div class="text-xs text-gray-500">"Quota Used"</div>
                                             </div>
                                             <div>
-                                                <div class="text-2xl font-semibold text-purple-600">{format_bytes(summary.total_size)}</div>
+                                                <div class="text-2xl font-semibold text-purple-600">{format_bytes(summary.total_size_bytes)}</div>
                                                 <div class="text-xs text-gray-500">"Total Size"</div>
                                             </div>
                                             <div>
                                                 <div class=format!("text-2xl font-semibold {}",
-                                                    if summary.quotas_exceeded > 0 { "text-red-600" } else { "text-green-600" })>
-                                                    {summary.quotas_exceeded}
+                                                    if summary.exceeded_quotas > 0 { "text-red-600" } else { "text-green-600" })>
+                                                    {summary.exceeded_quotas}
                                                 </div>
                                                 <div class="text-xs text-gray-500">"Exceeded"</div>
                                             </div>

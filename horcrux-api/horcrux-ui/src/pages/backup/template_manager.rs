@@ -378,12 +378,6 @@ pub fn TemplateManagerPage() -> impl IntoView {
                                                 "Clone"
                                             </button>
                                             <button
-                                                class="bg-gray-500 hover:bg-gray-600 text-white px-3 py-2 rounded text-sm"
-                                                title="View Details"
-                                            >
-                                                <i class="fas fa-eye"></i>
-                                            </button>
-                                            <button
                                                 on:click=move |_| delete_template_action(template_id.clone(), template_name2.clone())
                                                 class="bg-red-500 hover:bg-red-600 text-white px-3 py-2 rounded text-sm"
                                                 title="Delete Template"

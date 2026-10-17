@@ -63,6 +63,7 @@ fn benchmark_container_operations(c: &mut Criterion) {
         memory: 1024,
         cpus: 2,
         status: ContainerStatus::Running,
+        ..Default::default()
     };
 
     c.bench_function("container_serialize", |b| {

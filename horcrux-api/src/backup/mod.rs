@@ -284,6 +284,22 @@ impl BackupManager {
         Ok(())
     }
 
+    /// Delete a backup job (and drop it from the scheduler). Existing
+    /// backups the job produced are kept.
+    pub async fn delete_job(&self, job_id: &str) -> Result<()> {
+        let removed = self.jobs.write().await.remove(job_id);
+        match removed {
+            Some(_) => {
+                self.scheduler.unschedule_job(job_id).await?;
+                Ok(())
+            }
+            None => Err(horcrux_common::Error::NotFound(format!(
+                "Backup job not found: {}",
+                job_id
+            ))),
+        }
+    }
+
     /// List all backup jobs
     pub async fn list_jobs(&self) -> Vec<BackupJob> {
         let jobs = self.jobs.read().await;

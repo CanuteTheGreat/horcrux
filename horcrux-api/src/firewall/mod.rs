@@ -256,27 +256,32 @@ impl FirewallManager {
         })
     }
 
-    /// Apply firewall rules for a specific scope
+    /// Apply firewall rules for a specific scope to nftables.
+    ///
+    /// Datacenter/node rules go into host input/output chains; VM and
+    /// container rules replace that guest's chain. This used to skip
+    /// datacenter/node rules entirely and then flush the whole table, so
+    /// "Apply" installed nothing (and wiped any VM/container rules).
     pub async fn apply_rules(&self, scope: FirewallScope) -> Result<()> {
-        // Apply rules for the specified scope
         let rules = self.list_rules(scope.clone()).await;
-        for rule in rules {
-            match &scope {
-                FirewallScope::Vm(vm_id) => {
-                    self.nftables.add_vm_rule(vm_id, &rule).await?;
+        match &scope {
+            FirewallScope::Datacenter => self.nftables.apply_host_rules("dc", &rules).await?,
+            FirewallScope::Node(_) => self.nftables.apply_host_rules("node", &rules).await?,
+            FirewallScope::Vm(vm_id) => {
+                self.nftables.initialize().await?;
+                let _ = self.nftables.flush_vm_chain(vm_id).await;
+                for rule in rules.iter().filter(|r| r.enabled) {
+                    self.nftables.add_vm_rule(vm_id, rule).await?;
                 }
-                FirewallScope::Container(ct_id) => {
-                    self.nftables.add_container_rule(ct_id, &rule).await?;
-                }
-                _ => {
-                    // For datacenter and node level, just reload all
-                    continue;
+            }
+            FirewallScope::Container(ct_id) => {
+                self.nftables.initialize().await?;
+                let _ = self.nftables.flush_container_chain(ct_id).await;
+                for rule in rules.iter().filter(|r| r.enabled) {
+                    self.nftables.add_container_rule(ct_id, rule).await?;
                 }
             }
         }
-
-        // Reload the full ruleset
-        self.nftables.reload_all().await?;
         Ok(())
     }
 }

@@ -36,7 +36,7 @@ fn create_test_node(name: &str, cpu: f32, memory: f32, vm_count: usize) -> NodeR
 
 fn create_test_vm(id: u32, node: &str) -> VmResources {
     VmResources {
-        vm_id: id,
+        vm_id: id.to_string(),
         cpu_cores: 2,
         memory_gb: 4,
         disk_gb: 50,

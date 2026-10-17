@@ -129,8 +129,8 @@ pub mod vms {
         let hypervisor_str = format!("{:?}", vm.hypervisor).to_lowercase();
 
         sqlx::query(
-            "INSERT INTO vms (id, name, hypervisor, memory, cpus, disk_size, status, architecture)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO vms (id, name, hypervisor, memory, cpus, disk_size, status, architecture, disks)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&vm.id)
         .bind(&vm.name)
@@ -140,11 +140,17 @@ pub mod vms {
         .bind(vm.disk_size as i64)
         .bind(&status_str)
         .bind(&arch_str)
+        .bind(disks_json(vm)?)
         .execute(pool)
         .await
         .map_err(|e| horcrux_common::Error::System(format!("Failed to create VM: {}", e)))?;
 
         Ok(())
+    }
+
+    fn disks_json(vm: &VmConfig) -> Result<String> {
+        serde_json::to_string(&vm.disks)
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to encode VM disks: {}", e)))
     }
 
     pub async fn get_vm(pool: &SqlitePool, id: &str) -> Result<VmConfig> {
@@ -180,7 +186,7 @@ pub mod vms {
 
         sqlx::query(
             "UPDATE vms SET name = ?, hypervisor = ?, memory = ?, cpus = ?, disk_size = ?,
-             status = ?, architecture = ?, updated_at = CURRENT_TIMESTAMP
+             status = ?, architecture = ?, disks = ?, updated_at = CURRENT_TIMESTAMP
              WHERE id = ?",
         )
         .bind(&vm.name)
@@ -190,6 +196,7 @@ pub mod vms {
         .bind(vm.disk_size as i64)
         .bind(&status_str)
         .bind(&arch_str)
+        .bind(disks_json(vm)?)
         .bind(&vm.id)
         .execute(pool)
         .await
@@ -249,7 +256,7 @@ pub mod vms {
             disk_size: row.get::<i64, _>("disk_size") as u64,
             status,
             architecture,
-            disks: Vec::new(), // Disks are managed separately via storage module
+            disks: serde_json::from_str(&row.get::<String, _>("disks")).unwrap_or_default(),
         })
     }
 }
@@ -375,7 +382,45 @@ pub mod users {
         })
     }
 
-    #[allow(dead_code)]
+    /// Live (unexpired) sessions with their user, newest first. `user_id`
+    /// limits the list to one user.
+    pub async fn list_sessions(pool: &SqlitePool, user_id: Option<&str>) -> Result<Vec<Session>> {
+        let now = chrono::Utc::now().timestamp();
+        let rows = sqlx::query(
+            "SELECT sessions.id AS id, sessions.user_id AS user_id, sessions.expires_at AS expires_at, \
+                    CAST(strftime('%s', sessions.created_at) AS INTEGER) AS created, \
+                    users.username AS username, users.realm AS realm \
+             FROM sessions JOIN users ON users.id = sessions.user_id \
+             WHERE sessions.expires_at >= ? AND (? IS NULL OR sessions.user_id = ?) \
+             ORDER BY sessions.created_at DESC",
+        )
+        .bind(now)
+        .bind(user_id)
+        .bind(user_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| horcrux_common::Error::System(format!("Failed to list sessions: {}", e)))?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: String = row.get("id");
+            let expires: i64 = row.get("expires_at");
+            out.push(Session {
+                id: id.clone(),
+                user_id: row.get("user_id"),
+                expires_at: chrono::DateTime::from_timestamp(expires, 0)
+                    .unwrap_or_default()
+                    .with_timezone(&chrono::Utc),
+                session_id: id,
+                username: row.get("username"),
+                realm: row.get("realm"),
+                created: row.try_get::<i64, _>("created").unwrap_or(0),
+                expires,
+            });
+        }
+        Ok(out)
+    }
+
     pub async fn delete_session(pool: &SqlitePool, session_id: &str) -> Result<()> {
         sqlx::query("DELETE FROM sessions WHERE id = ?")
             .bind(session_id)
@@ -445,6 +490,23 @@ mod tests {
             architecture: VmArchitecture::X86_64,
             disks: Vec::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn vm_disks_round_trip_through_the_database() {
+        let db = create_test_db().await;
+        let mut vm = create_test_vm_config("disk-vm", "Disk VM");
+        vm.disks = vec![horcrux_common::VmDisk {
+            path: "/var/lib/horcrux/vms/disk-vm.qcow2".to_string(),
+            size_gb: 1,
+            disk_type: "virtio".to_string(),
+            cache: "writethrough".to_string(),
+        }];
+        db.create_vm(&vm).await.unwrap();
+        let got = db.get_vm("disk-vm").await.unwrap();
+        assert_eq!(got.disks.len(), 1);
+        assert_eq!(got.disks[0].path, "/var/lib/horcrux/vms/disk-vm.qcow2");
+        assert_eq!(db.list_vms().await.unwrap()[0].disks.len(), 1);
     }
 
     #[tokio::test]

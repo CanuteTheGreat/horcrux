@@ -4,7 +4,7 @@ use leptos::*;
 use leptos_meta::*;
 use leptos_router::*;
 
-mod api;
+pub mod api;
 mod components;
 mod pages;
 pub mod utils;
@@ -12,7 +12,7 @@ mod websocket;
 
 use pages::{
     AlertCenterPage, Alerts, ApiKeysPage, BackupDashboard, BackupJobsPage, CloneList,
-    ClusterDashboard, ClusterManagementPage, ConfigMapsPage, ContainerEventsPage,
+    ClusterDashboard, ClusterManagementPage, ConfigMapsPage, ContainerCreate, ContainerEventsPage,
     ContainerExecPage, ContainerList, ContainerLogsPage, ContainerNetworksPage, Dashboard,
     DashboardsPage, DeploymentsPage, GpuManagement, HaDashboard, HaGroupsPage, HelmChartsPage,
     HelmReleasesPage, HelmRepositoriesPage, ImagesPage, IngressesPage, KubernetesManagement, Login,
@@ -100,6 +100,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/vms/create" view=VmCreate/>
                     <Route path="/vms/:id/console" view=VmConsole/>
                     <Route path="/containers" view=ContainerList/>
+                    <Route path="/containers/create" view=ContainerCreate/>
                     <Route path="/containers/images" view=ImagesPage/>
                     <Route path="/containers/volumes" view=VolumesPage/>
                     <Route path="/containers/networks" view=ContainerNetworksPage/>

@@ -16,6 +16,10 @@ pub struct QemuVm {
     pub disk_size: u64,
     pub status: VmStatus,
     pub _pid: Option<u32>, // Reserved for future process monitoring
+    /// Which hypervisor backs this VM (QEMU, or an LXD/Incus VM).
+    pub hypervisor: VmHypervisor,
+    /// Guest CPU architecture (selects the qemu-system-* binary).
+    pub architecture: horcrux_common::VmArchitecture,
 }
 
 impl QemuVm {
@@ -23,12 +27,12 @@ impl QemuVm {
         VmConfig {
             id: self.id.clone(),
             name: self.name.clone(),
-            hypervisor: VmHypervisor::Qemu,
+            hypervisor: self.hypervisor.clone(),
             memory: self.memory,
             cpus: self.cpus,
             disk_size: self.disk_size,
             status: self.status.clone(),
-            architecture: horcrux_common::VmArchitecture::default(),
+            architecture: self.architecture.clone(),
             disks: vec![horcrux_common::VmDisk {
                 path: self.disk_path.to_string_lossy().to_string(),
                 size_gb: self.disk_size,
@@ -36,6 +40,19 @@ impl QemuVm {
                 cache: "writethrough".to_string(),
             }],
         }
+    }
+}
+
+/// `qemu-system-*` binary and (for non-PC targets) the machine type.
+pub fn qemu_binary_and_machine(
+    arch: &horcrux_common::VmArchitecture,
+) -> (&'static str, Option<&'static str>) {
+    use horcrux_common::VmArchitecture::*;
+    match arch {
+        X86_64 => ("qemu-system-x86_64", None),
+        Aarch64 => ("qemu-system-aarch64", Some("virt")),
+        Riscv64 => ("qemu-system-riscv64", Some("virt")),
+        Ppc64le => ("qemu-system-ppc64", Some("pseries")),
     }
 }
 
@@ -114,7 +131,46 @@ impl QemuManager {
             disk_size: config.disk_size,
             status: VmStatus::Stopped,
             _pid: None,
+            hypervisor: VmHypervisor::Qemu,
+            architecture: config.architecture.clone(),
         })
+    }
+
+    /// Rebuild the runtime handle for a VM that exists in the database but
+    /// not in this process's memory (e.g. after an API restart). Nothing is
+    /// created on disk; the status is taken from the live QEMU process.
+    pub fn vm_from_config(&self, config: &VmConfig) -> QemuVm {
+        let disk_path = config
+            .disks
+            .first()
+            .map(|d| PathBuf::from(&d.path))
+            .unwrap_or_else(|| self.storage_path.join(format!("{}.qcow2", config.id)));
+        let status = if Self::process_running(&config.id) {
+            VmStatus::Running
+        } else {
+            VmStatus::Stopped
+        };
+        QemuVm {
+            id: config.id.clone(),
+            name: config.name.clone(),
+            memory: config.memory,
+            cpus: config.cpus,
+            disk_path,
+            disk_size: config.disk_size,
+            status,
+            _pid: None,
+            hypervisor: config.hypervisor.clone(),
+            architecture: config.architecture.clone(),
+        }
+    }
+
+    /// Whether the QEMU process for `vm_id` (per its pidfile) is alive.
+    pub fn process_running(vm_id: &str) -> bool {
+        std::fs::read_to_string(format!("/var/run/horcrux-vm-{}.pid", vm_id))
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+            .map(|pid| std::path::Path::new(&format!("/proc/{pid}")).exists())
+            .unwrap_or(false)
     }
 
     /// Start a QEMU virtual machine
@@ -128,18 +184,29 @@ impl QemuManager {
             )));
         }
 
-        // Build QEMU command
-        let mut cmd = Command::new("qemu-system-x86_64");
+        // Build QEMU command for the guest's architecture (this used to
+        // always run qemu-system-x86_64, so aarch64/riscv64 VMs silently
+        // became x86 guests).
+        let (binary, machine) = qemu_binary_and_machine(&vm.architecture);
+        let mut cmd = Command::new(binary);
 
-        // Prefer hardware acceleration (KVM) when the host supports it, but
-        // fall back to software emulation (TCG) rather than failing when
-        // nested virtualization is unavailable (no usable /dev/kvm).
+        // Prefer hardware acceleration (KVM) when the host supports it and
+        // the guest is the host's own architecture; otherwise fall back to
+        // software emulation (TCG) rather than failing.
         // Note: use "-machine accel=..." (not "-accel") since older QEMU
         // builds don't support the standalone "-accel kvm:tcg" fallback list.
-        if tokio::fs::metadata("/dev/kvm").await.is_ok() {
-            cmd.arg("-machine").arg("accel=kvm:tcg");
+        let native = vm.architecture == horcrux_common::VmArchitecture::default();
+        let accel = if native && tokio::fs::metadata("/dev/kvm").await.is_ok() {
+            "kvm:tcg"
         } else {
-            cmd.arg("-machine").arg("accel=tcg");
+            "tcg"
+        };
+        match machine {
+            Some(m) => cmd.arg("-machine").arg(format!("{m},accel={accel}")),
+            None => cmd.arg("-machine").arg(format!("accel={accel}")),
+        };
+        if machine.is_some() {
+            cmd.arg("-cpu").arg("max");
         }
 
         // Redirect the guest serial console to a log file next to the disk

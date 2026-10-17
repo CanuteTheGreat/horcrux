@@ -57,11 +57,15 @@ impl DockerManager {
         cmd.arg("create")
             .arg("--name")
             .arg(&config.name)
+            .arg("--label")
+            .arg(format!("{}={}", HORCRUX_ID_LABEL, config.id))
             .arg("--memory")
             .arg(format!("{}m", config.memory))
             .arg("--cpus")
             .arg(config.cpus.to_string())
-            .arg(&config.rootfs); // rootfs is the image name for Docker
+            .args(super::oci_option_args(&config.options))
+            .arg(&config.rootfs) // rootfs is the image name for Docker
+            .args(&config.options.command);
 
         let output = cmd.output().await.map_err(|e| {
             horcrux_common::Error::System(format!("Failed to run docker create: {}", e))
@@ -90,6 +94,8 @@ impl DockerManager {
             cpus: config.cpus,
             rootfs: config.rootfs.clone(),
             status: ContainerStatus::Stopped,
+            options: config.options.clone(),
+            created_at: Some(chrono::Utc::now().to_rfc3339()),
         })
     }
 
@@ -292,12 +298,7 @@ impl DockerManager {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let status = stdout.trim();
 
-        match status {
-            "running" => Ok(ContainerStatus::Running),
-            "paused" => Ok(ContainerStatus::Paused),
-            "exited" | "stopped" => Ok(ContainerStatus::Stopped),
-            _ => Ok(ContainerStatus::Unknown),
-        }
+        Ok(docker_state_to_status(Some(status)))
     }
 
     /// Execute command in container
@@ -330,7 +331,7 @@ impl DockerManager {
         let output = Command::new("docker")
             .arg("commit")
             .arg(source)
-            .arg(format!("{}-image", target))
+            .arg(format!("{}-image", target.to_lowercase()))
             .output()
             .await
             .map_err(|e| {
@@ -348,8 +349,8 @@ impl DockerManager {
         Ok(())
     }
 
-    /// List all containers using Docker API
-    pub async fn list_containers_api(&self) -> Result<Vec<(String, String, ContainerStatus)>> {
+    /// List all containers (running or not) on the Docker daemon.
+    pub async fn list_containers_api(&self) -> Result<Vec<DockerContainerSummary>> {
         let docker = self
             .get_docker_client()
             .ok_or_else(|| horcrux_common::Error::System("Docker API not available".to_string()))?;
@@ -371,14 +372,22 @@ impl DockerManager {
                 .and_then(|names| names.first().map(|n| n.trim_start_matches('/').to_string()))
                 .unwrap_or_else(|| id.clone());
 
-            let status = match container.state.as_deref() {
-                Some("running") => ContainerStatus::Running,
-                Some("paused") => ContainerStatus::Paused,
-                Some("exited") | Some("stopped") => ContainerStatus::Stopped,
-                _ => ContainerStatus::Unknown,
-            };
+            let status = docker_state_to_status(container.state.as_deref());
+            let created_at = container
+                .created
+                .and_then(|secs| chrono::DateTime::from_timestamp(secs, 0))
+                .map(|t| t.to_rfc3339());
 
-            result.push((id, name, status));
+            result.push(DockerContainerSummary {
+                docker_id: id,
+                name,
+                status,
+                image: container.image.unwrap_or_default(),
+                created_at,
+                horcrux_id: container
+                    .labels
+                    .and_then(|l| l.get(HORCRUX_ID_LABEL).cloned()),
+            });
         }
 
         debug!("Listed {} containers via Docker API", result.len());
@@ -504,6 +513,34 @@ impl DockerManager {
             image: container.config.and_then(|c| c.image).unwrap_or_default(),
         })
     }
+}
+
+/// Label Horcrux puts on every Docker/Podman container it creates, holding
+/// the Horcrux container id (the runtime only knows the container name).
+pub const HORCRUX_ID_LABEL: &str = "horcrux.id";
+
+/// Map a Docker/Podman state string to a Horcrux status.
+pub fn docker_state_to_status(state: Option<&str>) -> ContainerStatus {
+    match state {
+        Some("running") | Some("restarting") => ContainerStatus::Running,
+        Some("paused") => ContainerStatus::Paused,
+        Some("exited") | Some("stopped") | Some("created") | Some("dead") => {
+            ContainerStatus::Stopped
+        }
+        _ => ContainerStatus::Unknown,
+    }
+}
+
+/// One container as reported by the Docker daemon.
+#[derive(Debug, Clone)]
+pub struct DockerContainerSummary {
+    pub docker_id: String,
+    pub name: String,
+    pub status: ContainerStatus,
+    pub image: String,
+    pub created_at: Option<String>,
+    /// Value of the `horcrux.id` label, if Horcrux created it.
+    pub horcrux_id: Option<String>,
 }
 
 /// Docker container statistics

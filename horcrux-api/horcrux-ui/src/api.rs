@@ -63,6 +63,30 @@ fn with_auth(request: reqwasm::http::Request) -> reqwasm::http::Request {
     }
 }
 
+/// Build an ApiError from a non-2xx response, keeping the server's error
+/// message (e.g. a 422 validation reason) so forms can show the user why.
+async fn http_error(response: reqwasm::http::Response) -> ApiError {
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    let detail = serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| {
+            v.get("message")
+                .or_else(|| v.get("error"))
+                .and_then(|m| m.as_str().map(str::to_string))
+        })
+        .unwrap_or(body);
+    if detail.trim().is_empty() {
+        ApiError {
+            message: format!("HTTP {}", status),
+        }
+    } else {
+        ApiError {
+            message: format!("HTTP {}: {}", status, detail.trim()),
+        }
+    }
+}
+
 /// Generic JSON fetch helper
 pub async fn fetch_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> {
     let url = resolve_api_url(path);
@@ -75,9 +99,10 @@ pub async fn fetch_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> 
         })?;
 
     if response.ok() {
-        response.json().await.map_err(|e| ApiError {
+        let text = response.text().await.map_err(|e| ApiError {
             message: e.to_string(),
-        })
+        })?;
+        decode_body(&text)
     } else {
         Err(ApiError {
             message: format!("HTTP {}", response.status()),
@@ -102,13 +127,12 @@ pub async fn post_json<T: DeserializeOwned, B: Serialize>(
         })?;
 
     if response.ok() {
-        response.json().await.map_err(|e| ApiError {
+        let text = response.text().await.map_err(|e| ApiError {
             message: e.to_string(),
-        })
+        })?;
+        decode_body(&text)
     } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
+        Err(http_error(response).await)
     }
 }
 
@@ -129,14 +153,24 @@ pub async fn put_json<T: DeserializeOwned, B: Serialize>(
         })?;
 
     if response.ok() {
-        response.json().await.map_err(|e| ApiError {
+        let text = response.text().await.map_err(|e| ApiError {
             message: e.to_string(),
-        })
+        })?;
+        decode_body(&text)
     } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
+        Err(http_error(response).await)
     }
+}
+
+/// Decode a successful response body. Endpoints that answer with a bare
+/// status code (201/204, empty body) decode as JSON `null`, so callers
+/// typed `Result<(), _>` succeed instead of reporting "EOF while parsing"
+/// for an action that actually worked (run backup job, restore, ...).
+pub fn decode_body<T: DeserializeOwned>(text: &str) -> Result<T, ApiError> {
+    let text = if text.trim().is_empty() { "null" } else { text };
+    serde_json::from_str(text).map_err(|e| ApiError {
+        message: e.to_string(),
+    })
 }
 
 /// DELETE request helper
@@ -153,9 +187,7 @@ pub async fn delete_json(path: &str) -> Result<(), ApiError> {
     if response.ok() {
         Ok(())
     } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
+        Err(http_error(response).await)
     }
 }
 
@@ -173,9 +205,7 @@ pub async fn post_empty(path: &str) -> Result<(), ApiError> {
     if response.ok() {
         Ok(())
     } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
+        Err(http_error(response).await)
     }
 }
 
@@ -197,9 +227,7 @@ pub async fn post_json_no_response<B: Serialize>(path: &str, body: &B) -> Result
     if response.ok() {
         Ok(())
     } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
+        Err(http_error(response).await)
     }
 }
 
@@ -263,7 +291,10 @@ pub async fn delete_vm(vm_id: &str) -> Result<(), ApiError> {
     delete_json(&format!("/vms/{}", vm_id)).await
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Host metrics shown on the dashboard (flattened view of the API's
+/// `monitoring::NodeMetrics`, whose CPU/memory figures are nested).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(from = "NodeMetricsWire")]
 pub struct NodeMetrics {
     pub hostname: String,
     pub timestamp: i64,
@@ -273,24 +304,42 @@ pub struct NodeMetrics {
     pub uptime_seconds: u64,
 }
 
-/// Get node metrics
-pub async fn get_node_metrics() -> Result<NodeMetrics, ApiError> {
-    let response = reqwasm::http::Request::get(&format!("{}/monitoring/node", API_BASE))
-        .send()
-        .await
-        .map_err(|e| ApiError {
-            message: e.to_string(),
-        })?;
+#[derive(Deserialize)]
+struct NodeMetricsWire {
+    hostname: String,
+    timestamp: i64,
+    cpu: NodeCpuWire,
+    memory: NodeMemoryWire,
+    uptime_seconds: u64,
+}
 
-    if response.ok() {
-        response.json().await.map_err(|e| ApiError {
-            message: e.to_string(),
-        })
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
+#[derive(Deserialize)]
+struct NodeCpuWire {
+    usage_percent: f64,
+}
+
+#[derive(Deserialize)]
+struct NodeMemoryWire {
+    total_bytes: u64,
+    used_bytes: u64,
+}
+
+impl From<NodeMetricsWire> for NodeMetrics {
+    fn from(w: NodeMetricsWire) -> Self {
+        Self {
+            hostname: w.hostname,
+            timestamp: w.timestamp,
+            cpu_usage: w.cpu.usage_percent,
+            memory_used: w.memory.used_bytes,
+            memory_total: w.memory.total_bytes,
+            uptime_seconds: w.uptime_seconds,
+        }
     }
+}
+
+/// Get node metrics. `None` until the collector has taken its first sample.
+pub async fn get_node_metrics() -> Result<Option<NodeMetrics>, ApiError> {
+    fetch_json("/monitoring/node").await
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -469,112 +518,63 @@ pub struct Container {
 
 /// Get all containers
 pub async fn get_containers() -> Result<Vec<Container>, ApiError> {
-    let response = reqwasm::http::Request::get(&format!("{}/containers", API_BASE))
-        .send()
-        .await
-        .map_err(|e| ApiError {
-            message: e.to_string(),
-        })?;
+    fetch_json("/containers").await
+}
 
-    if response.ok() {
-        response.json().await.map_err(|e| ApiError {
-            message: e.to_string(),
-        })
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
-    }
+/// Body of `POST /api/containers` (horcrux_common::ContainerConfig).
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct CreateContainerRequest {
+    pub id: String,
+    pub name: String,
+    pub runtime: String,
+    pub memory: u64,
+    pub cpus: u32,
+    /// Image (docker/podman) or rootfs/template (lxc/lxd/incus).
+    pub rootfs: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub env: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ports: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub volumes: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub command: Vec<String>,
+}
+
+/// Create a container
+pub async fn create_container(req: &CreateContainerRequest) -> Result<Container, ApiError> {
+    post_json("/containers", req).await
 }
 
 /// Start a container
 pub async fn start_container(container_id: &str) -> Result<(), ApiError> {
-    let response =
-        reqwasm::http::Request::post(&format!("{}/containers/{}/start", API_BASE, container_id))
-            .send()
-            .await
-            .map_err(|e| ApiError {
-                message: e.to_string(),
-            })?;
-
-    if response.ok() {
-        Ok(())
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
-    }
+    post_json_no_response(
+        &format!("/containers/{}/start", container_id),
+        &serde_json::json!({}),
+    )
+    .await
 }
 
 /// Stop a container
 pub async fn stop_container(container_id: &str) -> Result<(), ApiError> {
-    let response =
-        reqwasm::http::Request::post(&format!("{}/containers/{}/stop", API_BASE, container_id))
-            .send()
-            .await
-            .map_err(|e| ApiError {
-                message: e.to_string(),
-            })?;
-
-    if response.ok() {
-        Ok(())
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
-    }
+    post_json_no_response(
+        &format!("/containers/{}/stop", container_id),
+        &serde_json::json!({}),
+    )
+    .await
 }
 
 /// Delete a container
 pub async fn delete_container(container_id: &str) -> Result<(), ApiError> {
-    let response =
-        reqwasm::http::Request::delete(&format!("{}/containers/{}", API_BASE, container_id))
-            .send()
-            .await
-            .map_err(|e| ApiError {
-                message: e.to_string(),
-            })?;
-
-    if response.ok() {
-        Ok(())
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
-    }
+    delete_json(&format!("/containers/{}", container_id)).await
 }
 
 // Snapshot Management APIs
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Snapshot {
-    pub id: String,
-    pub vm_id: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub created_at: String,
-    pub size_bytes: u64,
-    pub include_memory: bool,
-}
-
 /// Get snapshots for a VM
 pub async fn get_vm_snapshots(vm_id: &str) -> Result<Vec<VmSnapshot>, ApiError> {
-    let response = reqwasm::http::Request::get(&format!("{}/vms/{}/snapshots", API_BASE, vm_id))
-        .send()
-        .await
-        .map_err(|e| ApiError {
-            message: e.to_string(),
-        })?;
-
-    if response.ok() {
-        response.json().await.map_err(|e| ApiError {
-            message: e.to_string(),
-        })
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
-    }
+    fetch_json(&format!("/vms/{}/snapshots", vm_id)).await
 }
 
 /// Create a snapshot
@@ -583,118 +583,96 @@ pub async fn create_snapshot(
     name: &str,
     description: Option<String>,
     include_memory: bool,
-) -> Result<Snapshot, ApiError> {
-    #[derive(Serialize)]
-    struct CreateRequest {
-        name: String,
-        description: Option<String>,
-        include_memory: bool,
-    }
-
-    let request = CreateRequest {
-        name: name.to_string(),
-        description,
-        include_memory,
-    };
-
-    let response = reqwasm::http::Request::post(&format!("{}/vms/{}/snapshots", API_BASE, vm_id))
-        .header("Content-Type", "application/json")
-        .body(serde_json::to_string(&request).unwrap())
-        .send()
-        .await
-        .map_err(|e| ApiError {
-            message: e.to_string(),
-        })?;
-
-    if response.ok() {
-        response.json().await.map_err(|e| ApiError {
-            message: e.to_string(),
-        })
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
-    }
+) -> Result<VmSnapshot, ApiError> {
+    post_json(
+        &format!("/vms/{}/snapshots", vm_id),
+        &serde_json::json!({
+            "name": name,
+            "description": description,
+            "include_memory": include_memory,
+        }),
+    )
+    .await
 }
 
 /// Restore a snapshot
 pub async fn restore_snapshot(vm_id: &str, snapshot_id: &str) -> Result<(), ApiError> {
-    let response = reqwasm::http::Request::post(&format!(
-        "{}/vms/{}/snapshots/{}/restore",
-        API_BASE, vm_id, snapshot_id
-    ))
-    .send()
+    post_json_no_response(
+        &format!("/vms/{}/snapshots/{}/restore", vm_id, snapshot_id),
+        &serde_json::json!({}),
+    )
     .await
-    .map_err(|e| ApiError {
-        message: e.to_string(),
-    })?;
-
-    if response.ok() {
-        Ok(())
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
-    }
 }
 
 /// Delete a snapshot
 pub async fn delete_snapshot(vm_id: &str, snapshot_id: &str) -> Result<(), ApiError> {
-    let response = reqwasm::http::Request::delete(&format!(
-        "{}/vms/{}/snapshots/{}",
-        API_BASE, vm_id, snapshot_id
-    ))
-    .send()
-    .await
-    .map_err(|e| ApiError {
-        message: e.to_string(),
-    })?;
-
-    if response.ok() {
-        Ok(())
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
-    }
+    delete_json(&format!("/vms/{}/snapshots/{}", vm_id, snapshot_id)).await
 }
 
 // Clone Management APIs
 
+/// Clone job as shown on the Clones page (view of the API's
+/// `vm::clone_progress::CloneJob`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(from = "CloneJobWire")]
 pub struct CloneJob {
     pub job_id: String,
     pub source_vm_id: String,
     pub target_vm_name: String,
+    /// Current stage (e.g. "copying_disks"), or "-" when not started.
     pub clone_type: String,
     pub status: String,
+    /// 0.0 - 1.0
     pub progress: f64,
     pub created_at: String,
 }
 
+#[derive(Deserialize)]
+struct CloneJobWire {
+    id: String,
+    source_vm_id: String,
+    target_vm_name: String,
+    state: String,
+    #[serde(default)]
+    stage: Option<serde_json::Value>,
+    progress: u8,
+    created_at: String,
+}
+
+impl From<CloneJobWire> for CloneJob {
+    fn from(w: CloneJobWire) -> Self {
+        let stage = match w.stage {
+            Some(serde_json::Value::String(s)) => s,
+            Some(serde_json::Value::Object(m)) => m.keys().next().cloned().unwrap_or_default(),
+            _ => String::new(),
+        };
+        Self {
+            job_id: w.id,
+            source_vm_id: w.source_vm_id,
+            target_vm_name: w.target_vm_name,
+            clone_type: if stage.is_empty() {
+                "-".to_string()
+            } else {
+                stage
+            },
+            status: w.state,
+            progress: f64::from(w.progress.min(100)) / 100.0,
+            created_at: crate::utils::format_rfc3339(&w.created_at),
+        }
+    }
+}
+
 /// Get all clone jobs
 pub async fn get_clone_jobs() -> Result<Vec<CloneJob>, ApiError> {
-    let response = reqwasm::http::Request::get(&format!("{}/vms/clone/jobs", API_BASE))
-        .send()
-        .await
-        .map_err(|e| ApiError {
-            message: e.to_string(),
-        })?;
-
-    if response.ok() {
-        response.json().await.map_err(|e| ApiError {
-            message: e.to_string(),
-        })
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
-    }
+    fetch_json("/clone-jobs").await
 }
 
 // Replication Management APIs
 
+/// Replication job as shown on the Replication page (view of the API's
+/// `vm::replication::ReplicationJob`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(from = "ReplicationJobWire")]
 pub struct ReplicationJob {
     pub id: String,
     pub vm_id: String,
@@ -706,62 +684,102 @@ pub struct ReplicationJob {
     pub status: String,
 }
 
+#[derive(Deserialize)]
+struct ReplicationJobWire {
+    id: String,
+    source_vm_id: String,
+    target_node: String,
+    #[serde(default)]
+    target_pool: String,
+    schedule: serde_json::Value,
+    enabled: bool,
+    #[serde(default)]
+    last_run: Option<i64>,
+}
+
+/// "hourly" | {"daily":{"hour":2}} | {"weekly":{"day":1,"hour":3}} | ...
+pub fn describe_replication_schedule(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Object(m) => m
+            .iter()
+            .next()
+            .map(|(kind, args)| match args.as_object() {
+                Some(a) if !a.is_empty() => {
+                    let mut parts: Vec<String> =
+                        a.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                    parts.sort();
+                    format!("{kind} ({})", parts.join(", "))
+                }
+                _ => kind.clone(),
+            })
+            .unwrap_or_default(),
+        other => other.to_string(),
+    }
+}
+
+impl From<ReplicationJobWire> for ReplicationJob {
+    fn from(w: ReplicationJobWire) -> Self {
+        Self {
+            id: w.id,
+            vm_id: w.source_vm_id,
+            source_node: "local".to_string(),
+            target_node: if w.target_pool.is_empty() {
+                w.target_node
+            } else {
+                format!("{}:{}", w.target_node, w.target_pool)
+            },
+            schedule: describe_replication_schedule(&w.schedule),
+            enabled: w.enabled,
+            last_sync: w.last_run.map(crate::utils::format_unix_secs),
+            status: if !w.enabled {
+                "disabled".to_string()
+            } else if w.last_run.is_some() {
+                "ok".to_string()
+            } else {
+                "scheduled".to_string()
+            },
+        }
+    }
+}
+
 /// Get all replication jobs
 pub async fn get_replication_jobs() -> Result<Vec<ReplicationJob>, ApiError> {
-    let response = reqwasm::http::Request::get(&format!("{}/replication/jobs", API_BASE))
-        .send()
-        .await
-        .map_err(|e| ApiError {
-            message: e.to_string(),
-        })?;
-
-    if response.ok() {
-        response.json().await.map_err(|e| ApiError {
-            message: e.to_string(),
-        })
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
-    }
+    fetch_json("/replication/jobs").await
 }
 
 /// Execute a replication job
 pub async fn execute_replication(job_id: &str) -> Result<(), ApiError> {
-    let response =
-        reqwasm::http::Request::post(&format!("{}/replication/jobs/{}/execute", API_BASE, job_id))
-            .send()
-            .await
-            .map_err(|e| ApiError {
-                message: e.to_string(),
-            })?;
+    post_json_no_response(
+        &format!("/replication/jobs/{}/execute", job_id),
+        &serde_json::json!({}),
+    )
+    .await
+}
 
-    if response.ok() {
-        Ok(())
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
-    }
+/// Body of POST /api/replication/jobs (the API's CreateReplicationJobRequest).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct CreateReplicationRequest {
+    pub source_vm_id: String,
+    pub source_snapshot: String,
+    pub target_node: String,
+    pub target_pool: String,
+    /// "hourly" | "daily" | "weekly" | "manual"
+    pub schedule: String,
+    pub retention_count: u32,
+    pub enabled: bool,
+}
+
+/// Create a replication job
+pub async fn create_replication(
+    req: &CreateReplicationRequest,
+) -> Result<ReplicationJob, ApiError> {
+    post_json("/replication/jobs", req).await
 }
 
 /// Delete a replication job
 pub async fn delete_replication(job_id: &str) -> Result<(), ApiError> {
-    let response =
-        reqwasm::http::Request::delete(&format!("{}/replication/jobs/{}", API_BASE, job_id))
-            .send()
-            .await
-            .map_err(|e| ApiError {
-                message: e.to_string(),
-            })?;
-
-    if response.ok() {
-        Ok(())
-    } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
-    }
+    delete_json(&format!("/replication/jobs/{}", job_id)).await
 }
 
 // =============================================================================
@@ -807,28 +825,59 @@ pub fn serial_console_ws_path(ticket: &str) -> String {
     format!("{}/console/ws/serial/{}", API_BASE, ticket)
 }
 
-/// Extended VM information for backup and template operations
+/// Extended VM information for backup and template operations. The API
+/// returns `horcrux_common::VmConfig` (`status`, no `state`/`vmid`/`node`),
+/// so this is built from that shape instead of failing to deserialize
+/// ("missing field `state`" broke the HA groups and migration pages).
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(from = "VmInfoWire")]
 pub struct VmInfo {
     pub id: String,
-    #[serde(default)]
     pub vmid: String,
     pub name: String,
     pub state: String,
-    #[serde(default)]
     pub status: String,
-    #[serde(default)]
     pub node: String,
-    #[serde(default)]
     pub cpus: u32,
-    #[serde(default)]
     pub maxcpu: u32,
-    #[serde(default)]
     pub memory: u64,
-    #[serde(default)]
     pub maxmem: u64,
-    #[serde(default)]
     pub disk_size: u64,
+}
+
+#[derive(Deserialize)]
+struct VmInfoWire {
+    id: String,
+    name: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    node: Option<String>,
+    #[serde(default)]
+    cpus: u32,
+    /// MB
+    #[serde(default)]
+    memory: u64,
+    #[serde(default)]
+    disk_size: u64,
+}
+
+impl From<VmInfoWire> for VmInfo {
+    fn from(w: VmInfoWire) -> Self {
+        Self {
+            vmid: w.id.clone(),
+            id: w.id,
+            name: w.name,
+            state: w.status.clone(),
+            status: w.status,
+            node: w.node.unwrap_or_else(|| "local".to_string()),
+            cpus: w.cpus,
+            maxcpu: w.cpus,
+            memory: w.memory,
+            maxmem: w.memory * 1024 * 1024,
+            disk_size: w.disk_size,
+        }
+    }
 }
 
 /// Virtual machine representation for HA operations
@@ -1347,7 +1396,7 @@ pub async fn logout() -> Result<(), ApiError> {
 /// Verify current session
 pub async fn verify_session() -> Result<bool, ApiError> {
     match fetch_json::<serde_json::Value>("/auth/verify").await {
-        Ok(_) => Ok(true),
+        Ok(v) => Ok(v["valid"].as_bool().unwrap_or(false)),
         Err(_) => Ok(false),
     }
 }
@@ -1584,17 +1633,50 @@ pub async fn delete_ingress(
 // HA Management Data Structures
 // ============================================================================
 
+/// HA-managed resource (view of the API's `ha::HaResource`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(from = "HaResourceWire")]
 pub struct HaResource {
     pub resource_id: String,
     pub resource_type: String, // vm, container
     pub priority: u32,
-    pub state: String, // started, stopped, ignored
+    pub state: String, // started, stopped, migrating, error, disabled
     #[serde(default)]
     pub enabled: bool,
+    pub group: String,
+    pub current_node: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct HaResourceWire {
+    vm_id: String,
+    #[serde(default)]
+    group: String,
+    state: String,
+    #[serde(default)]
+    current_node: Option<String>,
+    #[serde(default)]
+    max_restart: u32,
+}
+
+impl From<HaResourceWire> for HaResource {
+    fn from(w: HaResourceWire) -> Self {
+        let state = w.state.to_lowercase();
+        Self {
+            resource_id: w.vm_id,
+            resource_type: "vm".to_string(),
+            priority: w.max_restart,
+            enabled: state != "disabled",
+            state,
+            group: w.group,
+            current_node: w.current_node,
+        }
+    }
+}
+
+/// HA group (view of the API's `ha::HaGroup`, which is keyed by name).
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(from = "HaGroupWire")]
 pub struct HaGroup {
     pub id: String,
     pub name: String,
@@ -1610,6 +1692,37 @@ pub struct HaGroup {
     pub state: String, // active, inactive, maintenance
     pub restricted: bool,
     pub nofailback: bool,
+}
+
+#[derive(Deserialize)]
+struct HaGroupWire {
+    name: String,
+    #[serde(default)]
+    nodes: Vec<String>,
+    #[serde(default)]
+    restricted: bool,
+    #[serde(default)]
+    no_failback: bool,
+}
+
+impl From<HaGroupWire> for HaGroup {
+    fn from(w: HaGroupWire) -> Self {
+        Self {
+            id: w.name.clone(),
+            name: w.name,
+            priority: 0,
+            max_restart: 0,
+            max_relocate: 0,
+            enabled: true,
+            comment: None,
+            resources: Vec::new(),
+            vm_ids: Vec::new(),
+            nodes: w.nodes,
+            state: "active".to_string(),
+            restricted: w.restricted,
+            nofailback: w.no_failback,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2275,7 +2388,10 @@ pub struct RetentionPolicy {
     pub max_age_days: Option<u32>,
 }
 
+/// VM snapshot as shown in the UI (view of the API's
+/// `vm::snapshot::VmSnapshot`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "VmSnapshotWire")]
 pub struct VmSnapshot {
     pub id: String,
     pub vm_id: String,
@@ -2286,6 +2402,45 @@ pub struct VmSnapshot {
     pub memory_included: bool,
     pub size_mb: u64,
     pub children: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct VmSnapshotWire {
+    id: String,
+    vm_id: String,
+    name: String,
+    #[serde(default)]
+    description: Option<String>,
+    created_at: i64,
+    #[serde(default)]
+    parent_snapshot: Option<String>,
+    #[serde(default)]
+    memory_snapshot: Option<String>,
+    #[serde(default)]
+    disk_snapshots: Vec<DiskSnapshotWire>,
+}
+
+#[derive(Deserialize)]
+struct DiskSnapshotWire {
+    #[serde(default)]
+    size_bytes: u64,
+}
+
+impl From<VmSnapshotWire> for VmSnapshot {
+    fn from(w: VmSnapshotWire) -> Self {
+        let bytes: u64 = w.disk_snapshots.iter().map(|d| d.size_bytes).sum();
+        Self {
+            id: w.id,
+            vm_id: w.vm_id,
+            name: w.name,
+            description: w.description,
+            parent_id: w.parent_snapshot,
+            created_at: crate::utils::format_unix_secs(w.created_at),
+            memory_included: w.memory_snapshot.is_some(),
+            size_mb: bytes / (1024 * 1024),
+            children: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2384,10 +2539,12 @@ pub struct QuotaUsage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuotaSummary {
     pub total_quotas: u64,
-    pub active_quotas: u64,
-    pub total_snapshots: u64,
-    pub total_size: u64,
-    pub quotas_exceeded: u64,
+    pub exceeded_quotas: u64,
+    pub warning_quotas: u64,
+    pub healthy_quotas: u64,
+    pub total_size_bytes: u64,
+    pub total_max_bytes: u64,
+    pub overall_usage_percent: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2395,7 +2552,10 @@ pub struct EnforceQuotaRequest {
     pub snapshot_ids: Vec<String>,
 }
 
+/// Template as the Templates page shows it, built from the API's
+/// `template::Template` (`created` unix time, `disk_path`, memory/cpus).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "TemplateWire")]
 pub struct VmTemplate {
     pub id: String,
     pub name: String,
@@ -2407,10 +2567,53 @@ pub struct VmTemplate {
     pub storage_location: String,
 }
 
+#[derive(Deserialize)]
+struct TemplateWire {
+    id: String,
+    name: String,
+    #[serde(default)]
+    description: Option<String>,
+    source_vm_id: String,
+    #[serde(default)]
+    created: i64,
+    #[serde(default)]
+    disk_path: String,
+    #[serde(default)]
+    storage_type: String,
+    #[serde(default)]
+    memory: u64,
+    #[serde(default)]
+    cpus: u32,
+    #[serde(default)]
+    os_type: serde_json::Value,
+}
+
+impl From<TemplateWire> for VmTemplate {
+    fn from(w: TemplateWire) -> Self {
+        Self {
+            id: w.id,
+            name: w.name,
+            description: w.description,
+            source_vm_id: w.source_vm_id,
+            created_at: crate::utils::format_unix_secs(w.created),
+            config: serde_json::json!({
+                "memory": w.memory,
+                "cpus": w.cpus,
+                "os_type": w.os_type,
+                "storage_type": w.storage_type,
+            }),
+            size_mb: 0,
+            storage_location: w.disk_path,
+        }
+    }
+}
+
+/// Body of POST /api/templates (the API names the source VM `vm_id`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateTemplateRequest {
     pub name: String,
     pub description: Option<String>,
+    #[serde(rename = "vm_id", alias = "source_vm_id")]
     pub source_vm_id: String,
 }
 
@@ -2431,6 +2634,10 @@ pub async fn create_backup(request: CreateBackupRequest) -> Result<VmBackup, Api
 }
 
 /// Delete a backup
+pub async fn delete_backup_job(id: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/backup-jobs/{}", id)).await
+}
+
 pub async fn delete_backup(id: &str) -> Result<(), ApiError> {
     delete_json(&format!("/backups/{}", id)).await
 }
@@ -2600,11 +2807,48 @@ pub async fn delete_template(id: &str) -> Result<(), ApiError> {
     delete_json(&format!("/templates/{}", id)).await
 }
 
-/// Clone a template
-pub async fn clone_template(id: &str, name: String) -> Result<(), ApiError> {
+/// VM id for a clone named `name` ("Web Server 2" -> "web-server-2").
+pub fn vm_id_from_name(name: &str) -> String {
+    let mut id = String::new();
+    for c in name.trim().chars() {
+        if c.is_ascii_alphanumeric() {
+            id.push(c.to_ascii_lowercase());
+        } else if !id.ends_with('-') && !id.is_empty() {
+            id.push('-');
+        }
+    }
+    id.trim_end_matches('-').to_string()
+}
+
+/// Body of POST /api/templates/:id/clone (the API's template::CloneRequest).
+pub fn clone_template_body(name: &str) -> serde_json::Value {
+    serde_json::json!({
+        "new_vm_id": vm_id_from_name(name),
+        "new_vm_name": name.trim(),
+        "clone_type": "full",
+        "storage_pool": null,
+        "cloudinit_config": null,
+    })
+}
+
+/// Clone a template into a new VM; returns the API's clone response.
+pub async fn clone_template(id: &str, name: String) -> Result<serde_json::Value, ApiError> {
     post_json(
         &format!("/templates/{}/clone", id),
-        &serde_json::json!({"name": name}),
+        &clone_template_body(&name),
+    )
+    .await
+}
+
+/// Clone a VM (POST /api/vms/:id/clone); returns the new VM.
+pub async fn clone_vm(
+    vm_id: &str,
+    name: &str,
+    mode: &str,
+) -> Result<horcrux_common::VmConfig, ApiError> {
+    post_json(
+        &format!("/vms/{}/clone", vm_id),
+        &serde_json::json!({"name": name.trim(), "id": vm_id_from_name(name), "mode": mode}),
     )
     .await
 }
@@ -2669,12 +2913,78 @@ pub struct CreateHaResourceRequest {
     pub restart_policy_delay: u32,
 }
 
+/// HA overview (view of `GET /api/ha/status`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "HaStatusWire")]
 pub struct HaStatus {
     pub cluster_status: HaClusterStatus,
     pub resources: Vec<HaResourceStatus>,
     pub last_failover: Option<String>,
     pub total_failovers: u32,
+}
+
+#[derive(Deserialize)]
+struct HaStatusWire {
+    #[serde(default)]
+    migrating: usize,
+    #[serde(default)]
+    resources: Vec<HaStatusResourceWire>,
+}
+
+#[derive(Deserialize)]
+struct HaStatusResourceWire {
+    vm_id: String,
+    state: String,
+    #[serde(default)]
+    current_node: Option<String>,
+    #[serde(default)]
+    preferred_node: Option<String>,
+    #[serde(default)]
+    restart_count: u32,
+}
+
+impl From<HaStatusWire> for HaStatus {
+    fn from(w: HaStatusWire) -> Self {
+        let resources: Vec<HaResourceStatus> = w
+            .resources
+            .into_iter()
+            .map(|r| {
+                let (status, health) = match r.state.as_str() {
+                    "Started" => (HaResourceState::Running, HealthCheckStatus::Healthy),
+                    "Stopped" | "Disabled" => {
+                        (HaResourceState::Stopped, HealthCheckStatus::Unknown)
+                    }
+                    "Migrating" => (HaResourceState::Migrating, HealthCheckStatus::Warning),
+                    "Error" => (HaResourceState::Failed, HealthCheckStatus::Critical),
+                    _ => (HaResourceState::Unknown, HealthCheckStatus::Unknown),
+                };
+                HaResourceStatus {
+                    vm_id: r.vm_id,
+                    current_node: r.current_node.unwrap_or_else(|| "-".to_string()),
+                    desired_node: r.preferred_node,
+                    status,
+                    health_check: health,
+                    last_migration: None,
+                    restart_count: r.restart_count,
+                }
+            })
+            .collect();
+        let failed = resources
+            .iter()
+            .any(|r| matches!(r.status, HaResourceState::Failed));
+        Self {
+            cluster_status: if failed {
+                HaClusterStatus::Failed
+            } else if w.migrating > 0 {
+                HaClusterStatus::Degraded
+            } else {
+                HaClusterStatus::Active
+            },
+            resources,
+            last_failover: None,
+            total_failovers: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2779,8 +3089,16 @@ pub async fn get_ha_resources() -> Result<Vec<HaResource>, ApiError> {
 }
 
 /// Add a VM to HA management
-pub async fn add_ha_resource(request: CreateHaResourceRequest) -> Result<HaResource, ApiError> {
-    post_json("/ha/resources", &request).await
+pub async fn add_ha_resource(request: CreateHaResourceRequest) -> Result<(), ApiError> {
+    post_json_no_response(
+        "/ha/resources",
+        &serde_json::json!({
+            "vm_id": request.vm_id,
+            "group": request.group_id.unwrap_or_default(),
+            "priority": request.priority,
+        }),
+    )
+    .await
 }
 
 /// Remove a VM from HA management
@@ -2800,7 +3118,17 @@ pub async fn get_ha_groups() -> Result<Vec<HaGroup>, ApiError> {
 
 /// Create a new HA group
 pub async fn create_ha_group(group: HaGroup) -> Result<HaGroup, ApiError> {
-    post_json("/ha/groups", &group).await
+    post_json_no_response(
+        "/ha/groups",
+        &serde_json::json!({
+            "name": group.name,
+            "nodes": group.nodes,
+            "restricted": group.restricted,
+            "no_failback": group.nofailback,
+        }),
+    )
+    .await?;
+    Ok(group)
 }
 
 // Migration API Functions
@@ -2817,7 +3145,25 @@ pub async fn get_migration_status(vm_id: &str) -> Result<MigrationJob, ApiError>
 // Additional HA Management API Functions for the UI components
 /// Update an existing HA group
 pub async fn update_ha_group(group: HaGroup) -> Result<HaGroup, ApiError> {
-    put_json(&format!("/ha/groups/{}", group.id), &group).await
+    let url = resolve_api_url(&format!("/ha/groups/{}", group.name));
+    let body = serde_json::json!({
+        "nodes": group.nodes,
+        "restricted": group.restricted,
+        "no_failback": group.nofailback,
+    });
+    let response = with_auth(reqwasm::http::Request::put(&url))
+        .header("Content-Type", "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
+    if response.ok() {
+        Ok(group)
+    } else {
+        Err(http_error(response).await)
+    }
 }
 
 /// Delete an HA group
@@ -2827,9 +3173,12 @@ pub async fn delete_ha_group(group_id: String) -> Result<(), ApiError> {
 
 /// Assign resource to HA group
 pub async fn assign_resource_to_ha_group(assignment: HaResourceAssignment) -> Result<(), ApiError> {
-    post_json(
+    post_json_no_response(
         &format!("/ha/groups/{}/resources", assignment.group_id),
-        &assignment,
+        &serde_json::json!({
+            "resource_id": assignment.resource_id,
+            "priority": assignment.priority,
+        }),
     )
     .await
 }
@@ -4408,7 +4757,12 @@ pub async fn enforce_user_mfa(user_id: String) -> Result<(), ApiError> {
 // =============================================================================
 
 // Storage Pool Info (for volume management)
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Storage pool as the Storage page shows it. The API returns
+/// `storage::StoragePool` (`storage_type`, sizes in GB, `enabled`), which
+/// this used to fail to deserialize ("missing field `pool_type`"), so the
+/// page broke as soon as one pool existed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "StoragePoolWire")]
 pub struct StoragePoolInfo {
     pub id: String,
     pub name: String,
@@ -4418,6 +4772,43 @@ pub struct StoragePoolInfo {
     pub available_bytes: u64,
     pub status: String,
     pub path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct StoragePoolWire {
+    id: String,
+    name: String,
+    storage_type: String,
+    #[serde(default)]
+    path: Option<String>,
+    /// GB
+    #[serde(default)]
+    available: u64,
+    /// GB
+    #[serde(default)]
+    total: u64,
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl From<StoragePoolWire> for StoragePoolInfo {
+    fn from(w: StoragePoolWire) -> Self {
+        const GB: u64 = 1024 * 1024 * 1024;
+        Self {
+            id: w.id,
+            name: w.name,
+            pool_type: w.storage_type,
+            total_bytes: w.total * GB,
+            used_bytes: w.total.saturating_sub(w.available) * GB,
+            available_bytes: w.available * GB,
+            status: if w.enabled { "active" } else { "disabled" }.to_string(),
+            path: w.path,
+        }
+    }
 }
 
 // Disk Management Types

@@ -67,6 +67,8 @@ impl IncusManager {
             disk_size: config.disk_size,
             status: VmStatus::Stopped,
             _pid: None,
+            hypervisor: horcrux_common::VmHypervisor::Incus,
+            architecture: config.architecture.clone(),
         })
     }
 

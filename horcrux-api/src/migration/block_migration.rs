@@ -72,7 +72,7 @@ pub enum BlockMigrationState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockMigrationJob {
     pub job_id: String,
-    pub vm_id: u32,
+    pub vm_id: String,
     pub devices: Vec<BlockDevice>,
     pub state: BlockMigrationState,
     pub overall_progress: f32,
@@ -104,7 +104,7 @@ impl BlockMigrationManager {
     pub async fn start_block_migration(
         &self,
         job_id: String,
-        vm_id: u32,
+        vm_id: &str,
         devices: Vec<BlockDevice>,
         source_node: String,
         target_node: String,
@@ -118,7 +118,7 @@ impl BlockMigrationManager {
         // Create job
         let job = BlockMigrationJob {
             job_id: job_id.clone(),
-            vm_id,
+            vm_id: vm_id.to_string(),
             devices: devices.clone(),
             state: BlockMigrationState::Preparing,
             overall_progress: 0.0,
@@ -140,12 +140,13 @@ impl BlockMigrationManager {
         let devices_clone = devices.clone();
         let source_clone = source_node.clone();
         let target_clone = target_node.clone();
+        let vm_id = vm_id.to_string();
 
         tokio::spawn(async move {
             if let Err(e) = manager
                 .execute_block_migration(
                     &job_id_clone,
-                    vm_id,
+                    &vm_id,
                     devices_clone,
                     source_clone,
                     target_clone,
@@ -170,7 +171,7 @@ impl BlockMigrationManager {
     async fn execute_block_migration(
         &self,
         job_id: &str,
-        vm_id: u32,
+        vm_id: &str,
         devices: Vec<BlockDevice>,
         source_node: String,
         target_node: String,
@@ -530,7 +531,7 @@ mod tests {
         let result = manager
             .start_block_migration(
                 job_id.clone(),
-                100,
+                "100",
                 devices,
                 "node1".to_string(),
                 "node2".to_string(),
@@ -546,7 +547,7 @@ mod tests {
         assert!(job.is_some());
 
         let job = job.unwrap();
-        assert_eq!(job.vm_id, 100);
+        assert_eq!(job.vm_id, "100");
         assert_eq!(job.devices.len(), 1);
     }
 }

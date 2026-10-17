@@ -18,7 +18,7 @@ pub fn Dashboard() -> impl IntoView {
     create_effect(move |_| {
         spawn_local(async move {
             match api::get_node_metrics().await {
-                Ok(metrics) => set_node_metrics.set(Some(metrics)),
+                Ok(metrics) => set_node_metrics.set(metrics),
                 Err(e) => set_fetch_error.set(Some(e.message)),
             }
             match api::get_cluster_nodes().await {

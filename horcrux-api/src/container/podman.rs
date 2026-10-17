@@ -31,11 +31,15 @@ impl PodmanManager {
         cmd.arg("create")
             .arg("--name")
             .arg(&config.name)
+            .arg("--label")
+            .arg(format!("{}={}", super::docker::HORCRUX_ID_LABEL, config.id))
             .arg("--memory")
             .arg(format!("{}m", config.memory))
             .arg("--cpus")
             .arg(config.cpus.to_string())
-            .arg(&config.rootfs); // rootfs is the image name for Podman
+            .args(super::oci_option_args(&config.options))
+            .arg(&config.rootfs) // rootfs is the image name for Podman
+            .args(&config.options.command);
 
         let output = cmd.output().await.map_err(|e| {
             horcrux_common::Error::System(format!("Failed to run podman create: {}", e))
@@ -64,6 +68,8 @@ impl PodmanManager {
             cpus: config.cpus,
             rootfs: config.rootfs.clone(),
             status: ContainerStatus::Stopped,
+            options: config.options.clone(),
+            created_at: Some(chrono::Utc::now().to_rfc3339()),
         })
     }
 
@@ -303,7 +309,7 @@ impl PodmanManager {
         let output = Command::new("podman")
             .arg("commit")
             .arg(source)
-            .arg(format!("{}-image", target))
+            .arg(format!("{}-image", target.to_lowercase()))
             .output()
             .await
             .map_err(|e| {

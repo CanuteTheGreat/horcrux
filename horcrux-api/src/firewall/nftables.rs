@@ -265,71 +265,108 @@ impl NftablesManager {
         Ok(())
     }
 
-    /// Build nftables rule from FirewallRule
-    fn build_nft_rule(&self, rule: &FirewallRule) -> String {
-        let mut parts = Vec::new();
-
-        // Protocol
-        if let Some(ref proto) = rule.protocol {
-            let proto_str = match proto {
-                super::Protocol::Tcp => "tcp",
-                super::Protocol::Udp => "udp",
-                super::Protocol::Icmp => "icmp",
-                super::Protocol::Icmpv6 => "icmpv6",
-                super::Protocol::Any => "",
-            };
-            if !proto_str.is_empty() {
-                parts.push(format!("{} ", proto_str));
-            }
-        }
-
-        // Source
-        if let Some(ref source) = rule.source {
-            parts.push(format!("ip saddr {} ", source));
-        }
-
-        // Source port
-        if let Some(ref sport) = rule.sport {
-            if let Some(ref proto) = rule.protocol {
-                let proto_str = match proto {
-                    super::Protocol::Tcp => "tcp",
-                    super::Protocol::Udp => "udp",
-                    _ => "",
-                };
-                if !proto_str.is_empty() {
-                    parts.push(format!("{} sport {} ", proto_str, sport));
-                }
-            }
-        }
-
-        // Destination
-        if let Some(ref dest) = rule.dest {
-            parts.push(format!("ip daddr {} ", dest));
-        }
-
-        // Destination port
-        if let Some(ref dport) = rule.dport {
-            if let Some(ref proto) = rule.protocol {
-                let proto_str = match proto {
-                    super::Protocol::Tcp => "tcp",
-                    super::Protocol::Udp => "udp",
-                    _ => "",
-                };
-                if !proto_str.is_empty() {
-                    parts.push(format!("{} dport {} ", proto_str, dport));
-                }
-            }
-        }
-
-        // Action
-        let action = match rule.action {
-            FirewallAction::Accept => "accept",
-            FirewallAction::Reject => "reject",
-            FirewallAction::Drop => "drop",
+    /// Build nftables rule from FirewallRule.
+    ///
+    /// Ports are matched as `tcp dport 80`; a protocol without ports as
+    /// `meta l4proto tcp`. This used to emit `tcp tcp dport 80 accept`
+    /// (protocol word twice), which nft rejects, so no port rule could
+    /// ever be installed.
+    pub(crate) fn build_nft_rule(&self, rule: &FirewallRule) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        let l4 = match rule.protocol {
+            Some(super::Protocol::Tcp) => Some("tcp"),
+            Some(super::Protocol::Udp) => Some("udp"),
+            Some(super::Protocol::Icmp) => Some("icmp"),
+            Some(super::Protocol::Icmpv6) => Some("icmpv6"),
+            Some(super::Protocol::Any) | None => None,
         };
-        parts.push(action.to_string());
+        let has_ports = rule.sport.is_some() || rule.dport.is_some();
+        let any_addr = |a: &Option<String>| {
+            a.as_deref()
+                .map(str::trim)
+                .filter(|a| !a.is_empty() && *a != "0.0.0.0/0" && *a != "any")
+                .map(str::to_string)
+        };
+        if let Some(src) = any_addr(&rule.source) {
+            parts.push(format!("ip saddr {}", src));
+        }
+        if let Some(dst) = any_addr(&rule.dest) {
+            parts.push(format!("ip daddr {}", dst));
+        }
+        match (l4, has_ports) {
+            (Some(p @ ("tcp" | "udp")), true) => {
+                if let Some(sport) = &rule.sport {
+                    parts.push(format!("{} sport {}", p, sport));
+                }
+                if let Some(dport) = &rule.dport {
+                    parts.push(format!("{} dport {}", p, dport));
+                }
+            }
+            (Some(p), _) => parts.push(format!("meta l4proto {}", p)),
+            (None, _) => {}
+        }
+        if rule.log {
+            parts.push("log".to_string());
+        }
+        parts.push(
+            match rule.action {
+                FirewallAction::Accept => "accept",
+                FirewallAction::Reject => "reject",
+                FirewallAction::Drop => "drop",
+            }
+            .to_string(),
+        );
+        parts.join(" ")
+    }
 
-        parts.concat()
+    /// Run one `nft` command; error with its stderr on failure.
+    async fn nft(&self, args: &[&str]) -> Result<()> {
+        let output = Command::new("nft").args(args).output().await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to run nft (nftables): {}", e))
+        })?;
+        if !output.status.success() {
+            return Err(horcrux_common::Error::System(format!(
+                "nftables: `nft {}` failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Install host-level (datacenter / node) rules: replace the contents of
+    /// the `<prefix>-in` (input hook) and `<prefix>-out` (output hook) base
+    /// chains with `rules`. Chains default to `policy accept`, so applying
+    /// never locks the host out by itself; VM/container chains are left
+    /// alone.
+    pub async fn apply_host_rules(&self, prefix: &str, rules: &[FirewallRule]) -> Result<()> {
+        self.initialize().await?;
+        for (dir, hook) in [("in", "input"), ("out", "output")] {
+            let chain = format!("{}-{}", prefix, dir);
+            let spec = format!(
+                "{{ type filter hook {} priority 0 ; policy accept ; }}",
+                hook
+            );
+            self.nft(&["add", "chain", "inet", &self.table_name, &chain, &spec])
+                .await?;
+            self.nft(&["flush", "chain", "inet", &self.table_name, &chain])
+                .await?;
+        }
+        for rule in rules.iter().filter(|r| r.enabled) {
+            let chain = match rule.direction {
+                super::Direction::In => format!("{}-in", prefix),
+                super::Direction::Out => format!("{}-out", prefix),
+            };
+            let expr = self.build_nft_rule(rule);
+            self.nft(&["add", "rule", "inet", &self.table_name, &chain, &expr])
+                .await?;
+        }
+        info!(
+            "Applied {} {} firewall rule(s) to nftables",
+            rules.len(),
+            prefix
+        );
+        Ok(())
     }
 
     /// Reload all firewall rules
@@ -475,5 +512,46 @@ impl NftablesManager {
             .arg("--version")
             .output()
             .is_ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::firewall::{Direction, Protocol};
+
+    fn rule(protocol: Option<Protocol>, dport: Option<&str>, source: Option<&str>) -> FirewallRule {
+        FirewallRule {
+            id: "r".into(),
+            enabled: true,
+            action: FirewallAction::Accept,
+            direction: Direction::In,
+            protocol,
+            source: source.map(str::to_string),
+            dest: None,
+            sport: None,
+            dport: dport.map(str::to_string),
+            comment: None,
+            log: false,
+            position: 0,
+        }
+    }
+
+    #[test]
+    fn builds_valid_nft_expressions() {
+        let m = NftablesManager::new();
+        assert_eq!(
+            m.build_nft_rule(&rule(Some(Protocol::Tcp), Some("8443"), None)),
+            "tcp dport 8443 accept"
+        );
+        assert_eq!(
+            m.build_nft_rule(&rule(Some(Protocol::Udp), None, Some("10.0.0.0/8"))),
+            "ip saddr 10.0.0.0/8 meta l4proto udp accept"
+        );
+        // "any" addresses are not emitted as a match
+        assert_eq!(
+            m.build_nft_rule(&rule(None, None, Some("0.0.0.0/0"))),
+            "accept"
+        );
     }
 }

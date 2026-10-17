@@ -56,16 +56,12 @@
 		<flag name="docker">Enable Docker container runtime support</flag>
 		<flag name="podman">Enable Podman (daemonless) container runtime support</flag>
 
-		<!-- Storage backends (virtualization) -->
-		<flag name="zfs">Enable ZFS storage backend with native snapshot support</flag>
-		<flag name="ceph">Enable Ceph RBD distributed storage backend</flag>
-		<flag name="lvm">Enable LVM storage backend with snapshot support</flag>
 
 		<!-- Core features -->
 		<flag name="backup">Enable automated backup and restore functionality</flag>
+		<flag name="kubernetes">Enable Kubernetes cluster management (kube-rs client for k8s/k3s clusters)</flag>
 		<flag name="cluster">Enable high availability clustering with Corosync</flag>
-		<flag name="ssl">Enable TLS/SSL support for encrypted connections</flag>
-		<flag name="ldap">Enable LDAP/Active Directory authentication</flag>
+		<flag name="ldap">Enable LDAP client authentication for NAS users (requires nas)</flag>
 		<flag name="webui">Build and install WebAssembly-based web management interface</flag>
 
 		<!-- Init system (global flag) -->

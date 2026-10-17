@@ -61,7 +61,7 @@ impl RollbackStep {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RollbackPlan {
     pub migration_job_id: String,
-    pub vm_id: u32,
+    pub vm_id: String,
     pub source_node: String,
     pub target_node: String,
     pub steps: Vec<RollbackStep>,
@@ -74,7 +74,7 @@ impl RollbackPlan {
     /// Create a new rollback plan for a failed migration
     pub fn new(
         migration_job_id: String,
-        vm_id: u32,
+        vm_id: &str,
         source_node: String,
         target_node: String,
     ) -> Self {
@@ -121,7 +121,7 @@ impl RollbackPlan {
 
         Self {
             migration_job_id,
-            vm_id,
+            vm_id: vm_id.to_string(),
             source_node,
             target_node,
             steps,
@@ -479,7 +479,7 @@ impl RollbackPlan {
 
         RollbackSummary {
             migration_job_id: self.migration_job_id.clone(),
-            vm_id: self.vm_id,
+            vm_id: self.vm_id.clone(),
             total_steps,
             successful_steps,
             failed_steps,
@@ -494,7 +494,7 @@ impl RollbackPlan {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RollbackSummary {
     pub migration_job_id: String,
-    pub vm_id: u32,
+    pub vm_id: String,
     pub total_steps: usize,
     pub successful_steps: usize,
     pub failed_steps: usize,
@@ -525,7 +525,7 @@ impl RollbackManager {
     pub async fn rollback_migration(
         &mut self,
         migration_job_id: String,
-        vm_id: u32,
+        vm_id: &str,
         source_node: String,
         target_node: String,
     ) -> Result<RollbackSummary> {
@@ -566,12 +566,12 @@ mod tests {
     async fn test_rollback_plan_creation() {
         let plan = RollbackPlan::new(
             "migration-123".to_string(),
-            100,
+            "100",
             "node1".to_string(),
             "node2".to_string(),
         );
 
-        assert_eq!(plan.vm_id, 100);
+        assert_eq!(plan.vm_id, "100");
         assert_eq!(plan.source_node, "node1");
         assert_eq!(plan.target_node, "node2");
         assert_eq!(plan.steps.len(), 6);
@@ -582,7 +582,7 @@ mod tests {
     async fn test_rollback_execution() {
         let mut plan = RollbackPlan::new(
             "migration-123".to_string(),
-            100,
+            "100",
             "node1".to_string(),
             "node2".to_string(),
         );
@@ -604,7 +604,7 @@ mod tests {
     async fn test_rollback_summary() {
         let mut plan = RollbackPlan::new(
             "migration-123".to_string(),
-            100,
+            "100",
             "node1".to_string(),
             "node2".to_string(),
         );
@@ -612,7 +612,7 @@ mod tests {
         plan.execute().await.ok();
 
         let summary = plan.get_summary();
-        assert_eq!(summary.vm_id, 100);
+        assert_eq!(summary.vm_id, "100");
         assert_eq!(summary.total_steps, 6);
         assert_eq!(summary.successful_steps, 6);
         assert_eq!(summary.failed_steps, 0);
@@ -626,7 +626,7 @@ mod tests {
         let summary = manager
             .rollback_migration(
                 "migration-123".to_string(),
-                100,
+                "100",
                 "node1".to_string(),
                 "node2".to_string(),
             )
@@ -637,14 +637,14 @@ mod tests {
         assert_eq!(summary.successful_steps, 6);
 
         let plan = manager.get_rollback("migration-123").unwrap();
-        assert_eq!(plan.vm_id, 100);
+        assert_eq!(plan.vm_id, "100");
     }
 
     #[tokio::test]
     async fn test_rollback_steps_order() {
         let plan = RollbackPlan::new(
             "migration-123".to_string(),
-            100,
+            "100",
             "node1".to_string(),
             "node2".to_string(),
         );

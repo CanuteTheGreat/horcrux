@@ -47,6 +47,17 @@ pub struct StoragePool {
     pub enabled: bool,
 }
 
+/// (total, available) GB of the filesystem holding `path`, via statvfs(2).
+pub fn fs_capacity_gb(path: &str) -> Option<(u64, u64)> {
+    let st = nix::sys::statvfs::statvfs(path).ok()?;
+    let frag = st.fragment_size() as u64;
+    let gb = 1024 * 1024 * 1024;
+    Some((
+        st.blocks() as u64 * frag / gb,
+        st.blocks_available() as u64 * frag / gb,
+    ))
+}
+
 /// Storage manager
 pub struct StorageManager {
     pools: Arc<RwLock<HashMap<String, StoragePool>>>,
@@ -158,6 +169,21 @@ impl StorageManager {
 
                 // Delegate detailed validation to S3 manager
                 self.s3.validate_pool(&pool).await?;
+            }
+        }
+
+        // Filesystem-backed pools: measure real capacity. The API used to
+        // store available=0/total=0 ("will be updated by backend", never
+        // was), so every volume create in a directory pool failed with
+        // "Not enough space ... Available: 0GB".
+        let mut pool = pool;
+        if matches!(
+            pool.storage_type,
+            StorageType::Directory | StorageType::Nfs | StorageType::Cifs | StorageType::BtrFs
+        ) {
+            if let Some((total, available)) = fs_capacity_gb(&pool.path) {
+                pool.total = total;
+                pool.available = available;
             }
         }
 

@@ -58,6 +58,8 @@ impl LxdContainerManager {
             cpus: config.cpus,
             rootfs: format!("/var/lib/lxd/containers/{}", config.name),
             status: ContainerStatus::Stopped,
+            options: config.options.clone(),
+            created_at: Some(chrono::Utc::now().to_rfc3339()),
         })
     }
 

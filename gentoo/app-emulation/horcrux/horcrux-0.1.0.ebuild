@@ -26,14 +26,14 @@ KEYWORDS="~amd64 ~arm64 ~riscv"  # not yet stabilized; promote once field-tested
 # USE flags
 # Virtualization backends (have Cargo features): qemu (default), lxd, incus
 # Container runtimes (have Cargo features): lxc (default), docker (default), podman
-# Features with Cargo support: backup, cluster, nas
+# Features with Cargo support: backup, cluster, kubernetes, nas
 # Build options: cli, monitoring, systemd, webui (default)
 # NAS protocols: smb, nfs-server, afp, webdav, ftp
-# NAS auth: ldap-server, kerberos, ad (Active Directory)
+# NAS auth: ldap (client), ldap-server, kerberos, ad (Active Directory)
 # NAS services: timemachine, s3-gateway, iscsi-target, rsync-server
 # NAS storage: nas-zfs, nas-btrfs, nas-mdraid, nas-lvm
 IUSE="
-	backup cli cluster docker incus lxc lxd +monitoring podman +qemu systemd +webui
+	backup cli cluster docker incus kubernetes ldap lxc lxd +monitoring podman +qemu systemd +webui
 	nas smb nfs-server afp webdav ftp
 	ldap-server kerberos ad
 	timemachine s3-gateway iscsi-target rsync-server
@@ -51,6 +51,7 @@ REQUIRED_USE="
 	ftp? ( nas )
 	ldap-server? ( nas )
 	kerberos? ( nas )
+	ldap? ( nas )
 	ad? ( nas kerberos )
 	timemachine? ( afp )
 	s3-gateway? ( nas )
@@ -167,6 +168,7 @@ src_configure() {
 		# Additional features
 		$(usex cluster "cluster" "")
 		$(usex backup "backup" "")
+		$(usex kubernetes "kubernetes" "")
 
 		# NAS Core
 		$(usex nas "nas" "")
@@ -180,6 +182,7 @@ src_configure() {
 
 		# NAS Authentication
 		$(usex ldap-server "ldap-server" "")
+		$(usex ldap "ldap" "")
 		$(usex kerberos "kerberos" "")
 		$(usex ad "ad" "")
 
@@ -241,11 +244,13 @@ src_compile() {
 
 src_install() {
 	# Install API binary
-	dobin target/release/horcrux-api
+	# cargo_target_dir (cargo.eclass) honours USE=debug and cross targets;
+	# a hardcoded target/release broke `USE=debug` installs.
+	dobin "$(cargo_target_dir)"/horcrux-api
 
 	# Install CLI if built
 	if use cli; then
-		dobin target/release/horcrux
+		dobin "$(cargo_target_dir)"/horcrux
 	fi
 
 	# Install web UI if built

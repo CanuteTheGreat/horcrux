@@ -92,6 +92,7 @@ async fn test_concurrent_container_fleet() {
                 // ps` genuinely reports it as "running", not exited.
                 rootfs: "nginx:alpine".to_string(),
                 status: ContainerStatus::Stopped,
+                ..Default::default()
             };
             manager
                 .create_container(config)
@@ -355,19 +356,10 @@ async fn test_cni_network_partition_isolation() {
 //       the real post-kill state the moment anyone asks it directly. This
 //       genuinely passes.
 //
-//   (b) There is no autonomous background reconciliation loop anywhere in
-//       horcrux-api (grepped the whole crate: no `reconcile`, no
-//       interval-based status-sync task). The in-memory `containers`
-//       HashMap inside ContainerManager is only ever mutated by explicit
-//       lifecycle calls (create/start/stop/delete) - never by anything
-//       that notices out-of-band drift on its own. So `list_containers()`
-//       keeps reporting the stale pre-kill status indefinitely until some
-//       other explicit call touches that entry. This is NOT faked as a
-//       pass: it is asserted as the documented current behavior, with a
-//       clear comment on what *would* need to be built (a periodic
-//       reconciliation task calling get_container_status for every
-//       tracked resource and correcting the stored map / emitting a
-//       drift event) to close this gap.
+//   (b) get_container()/list_containers() reconcile Docker entries with
+//       the daemon (ContainerManager::reconcile_docker), so the stored
+//       status follows the out-of-band kill, and an out-of-band
+//       `docker rm` drops the entry from the list.
 // ---------------------------------------------------------------------
 #[tokio::test]
 #[ignore]
@@ -385,6 +377,7 @@ async fn test_failure_injection_and_reconciliation() {
         cpus: 1,
         rootfs: "nginx:alpine".to_string(),
         status: ContainerStatus::Stopped,
+        ..Default::default()
     };
     manager
         .create_container(config)
@@ -423,12 +416,10 @@ async fn test_failure_injection_and_reconciliation() {
         "get_container_status should reflect the real (killed) docker state, got {live_status:?}"
     );
 
-    // (b) The passively-cached entry in list_containers()/get_container()
-    // is NOT corrected by anything in the background - documenting the
-    // real current gap rather than asserting a capability that doesn't
-    // exist. If a future reconciliation loop is added, this assertion
-    // should be the first thing updated (and should then assert Stopped,
-    // proving the gap was closed).
+    // (b) get_container()/list_containers() reconcile Docker containers
+    // against the daemon, so the out-of-band kill is visible there too
+    // (this used to be a documented gap: the cached entry kept saying
+    // Running forever).
     let cached_after = manager
         .get_container(container_id)
         .await
@@ -436,13 +427,26 @@ async fn test_failure_injection_and_reconciliation() {
         .status;
     assert_eq!(
         cached_after,
-        ContainerStatus::Running,
-        "documents a real gap: ContainerManager has NO background reconciliation loop, so its \
-         cached status still (incorrectly) says Running {} seconds after an out-of-band kill; \
-         only an explicit call to get_container_status() ever sees the truth. If this assertion \
-         ever starts failing because cached_after == Stopped, a reconciliation loop was added -\
-         update this test to assert the gap is closed instead of documenting it.",
-        0.5
+        ContainerStatus::Stopped,
+        "get_container must reflect the out-of-band kill after reconciliation"
+    );
+    let listed = manager
+        .list_containers()
+        .await
+        .into_iter()
+        .find(|c| c.id == container_id)
+        .expect("killed container must still be listed (it exists, stopped)");
+    assert_eq!(listed.status, ContainerStatus::Stopped);
+
+    // (c) An out-of-band `docker rm` makes it disappear from the list.
+    let _ = run("docker", &["rm", "-f", container_id]);
+    assert!(
+        manager
+            .list_containers()
+            .await
+            .iter()
+            .all(|c| c.id != container_id),
+        "a container removed outside Horcrux must drop out of list_containers()"
     );
 
     // Cleanup: explicit stop_container will fail (status mismatch guard
