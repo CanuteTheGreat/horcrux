@@ -17,21 +17,8 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 pub fn lxc_routes() -> Router<Arc<AppState>> {
-    let r = Router::new();
-    // Web terminal + console log for LXC. With docker/podman compiled in
-    // these are already served by the OCI route group.
-    #[cfg(not(any(feature = "docker", feature = "podman")))]
-    let r = r
-        .merge(crate::container_ws_ticket_routes())
-        .route(
-            "/api/containers/ws/logs/:ticket_id",
-            get(crate::container_logs_websocket_handler),
-        )
-        .route(
-            "/api/containers/ws/exec/:ticket_id",
-            get(crate::container_exec_websocket_handler),
-        );
-    r.route("/api/lxc/host", get(host_info))
+    Router::new()
+        .route("/api/lxc/host", get(host_info))
         .route("/api/lxc/templates/catalog", get(template_catalog))
         .route(
             "/api/lxc/templates",
