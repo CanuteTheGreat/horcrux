@@ -313,4 +313,46 @@ mod tests {
             .collect();
         assert_eq!(kept, vec!["w69", "w62", "w55", "w30"]);
     }
+    #[test]
+    fn hourly_and_yearly() {
+        // Four backups in hour 0 and one in hour 1 of the same day, plus one
+        // a year earlier: keep-hourly=2 keeps the newest of each of the two
+        // newest hours.
+        let h = |n: i64, m: i64| day(0) + n * 3600 + m * 60;
+        let bs = [
+            backup("h0a", h(0, 1), false),
+            backup("h0b", h(0, 2), false),
+            backup("h0c", h(0, 3), false),
+            backup("h1", h(1, 0), false),
+            backup("old", day(-366), false),
+        ];
+        let refs: Vec<&Backup> = bs.iter().collect();
+        let d = mark(
+            &refs,
+            &RetentionPolicy {
+                keep_hourly: Some(2),
+                ..Default::default()
+            },
+        );
+        assert_eq!(removed(&d), vec!["h0a", "h0b", "old"]);
+
+        // keep-yearly=2: the newest backup of this year and of last year.
+        let d = mark(
+            &refs,
+            &RetentionPolicy {
+                keep_yearly: Some(2),
+                ..Default::default()
+            },
+        );
+        assert_eq!(removed(&d), vec!["h0a", "h0b", "h0c"]);
+        assert_eq!(id_year(day(0), 0), "2024");
+        assert_eq!(
+            id_hour(day(0), 0),
+            Local
+                .timestamp_opt(day(0), 0)
+                .unwrap()
+                .format("%Y/%m/%d/%H")
+                .to_string()
+        );
+    }
 }

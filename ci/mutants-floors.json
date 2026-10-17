@@ -18,7 +18,7 @@
       "src/backup/retention.rs",
       "src/backup/store.rs"
     ],
-    "floor": 0
+    "floor": 24
   },
   "storage": {
     "files": [
