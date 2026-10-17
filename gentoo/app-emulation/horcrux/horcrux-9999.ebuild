@@ -253,9 +253,40 @@ src_compile() {
 			tar -xzf "${T}/trunk.tar.gz" -C "${T}/trunk" || die "Failed to unpack trunk"
 			trunk="${T}/trunk/trunk"
 		fi
+		# The UI is compiled for wasm32-unknown-unknown, and dev-lang/rust-bin
+		# ships only the host's standard library (it has no wasm USE flag):
+		# the build died with "can't find crate for `core`". Unless the
+		# installed toolchain already has the wasm32 target, fetch the
+		# official rust-std component for exactly this rustc version and
+		# build the UI against a sysroot made of it plus links to the
+		# toolchain's own target dirs (rust-lld lives there).
+		local wasm_rustflags=
+		local sysroot
+		sysroot=$(rustc --print sysroot) || die
+		if [[ ! -d ${sysroot}/lib/rustlib/wasm32-unknown-unknown ]]; then
+			local rustver std_url wasm_sysroot d
+			rustver=$(rustc --version | awk '{print $2}') || die
+			std_url="https://static.rust-lang.org/dist/rust-std-${rustver}-wasm32-unknown-unknown.tar.xz"
+			einfo "Fetching the wasm32 standard library for rustc ${rustver}..."
+			if command -v curl >/dev/null 2>&1; then
+				curl -fsSL "${std_url}" -o "${T}/rust-std-wasm32.tar.xz"
+			else
+				wget -q -O "${T}/rust-std-wasm32.tar.xz" "${std_url}"
+			fi || die "Failed to download ${std_url}"
+			tar -xJf "${T}/rust-std-wasm32.tar.xz" -C "${T}" \
+				|| die "Failed to unpack the wasm32 standard library"
+			wasm_sysroot="${T}/rust-std-${rustver}-wasm32-unknown-unknown/rust-std-wasm32-unknown-unknown"
+			for d in "${sysroot}"/lib/rustlib/*; do
+				[[ -e ${wasm_sysroot}/lib/rustlib/${d##*/} ]] \
+					|| ln -s "${d}" "${wasm_sysroot}/lib/rustlib/${d##*/}" || die
+			done
+			wasm_rustflags="--sysroot=${wasm_sysroot}"
+		fi
 		einfo "Building web UI with trunk..."
 		cd "${S}/horcrux-api/horcrux-ui" || die
-		"${trunk}" build --release || die "Failed to build web UI"
+		# trunk builds with an explicit --target, so RUSTFLAGS only reach
+		# the wasm crates, never host build scripts or proc-macros.
+		RUSTFLAGS="${wasm_rustflags}" "${trunk}" build --release || die "Failed to build web UI"
 	fi
 }
 
