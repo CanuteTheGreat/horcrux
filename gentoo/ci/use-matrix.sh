@@ -117,7 +117,7 @@ PROBES=(
 run_set full "cli webui monitoring -systemd docker lxc podman lxd incus -qemu \
     kubernetes backup cluster nas smb nfs-server afp webdav ftp ldap ldap-server \
     kerberos ad timemachine s3-gateway iscsi-target rsync-server \
-    nas-zfs nas-btrfs nas-mdraid nas-lvm"
+    nas-zfs nas-btrfs nas-mdraid nas-lvm pam"
 has usr/bin/horcrux-api
 has usr/bin/horcrux
 has opt/horcrux/horcrux-ui/index.html
@@ -133,7 +133,7 @@ has var/lib/horcrux/nas/iscsi
 "$IMAGE/usr/bin/horcrux" --help >/dev/null || fail "installed CLI does not run"
 out=$(route_status "${PROBES[@]}" /)
 echo "$out"
-features_are "ad afp backup cluster docker ftp incus iscsi-target kerberos kubernetes ldap ldap-server lxc lxd nas nas-auth nas-btrfs nas-lvm nas-mdraid nas-zfs nfs-server podman rsync-server s3-gateway smb timemachine webdav"
+features_are "ad afp backup cluster docker ftp incus iscsi-target kerberos kubernetes ldap ldap-server lxc lxd nas nas-auth nas-btrfs nas-lvm nas-mdraid nas-zfs nfs-server pam podman rsync-server s3-gateway smb timemachine webdav"
 expect '^GET /api/nas/shares 200' "USE=nas: /api/nas/shares not served"
 expect '^GET /api/k8s/clusters 200' "USE=kubernetes: /api/k8s/clusters not served"
 expect '^GET /api/containers 200' "/api/containers not served"
@@ -156,7 +156,7 @@ expect '^GET / 200' "USE=webui: UI index not served"
 
 # ---- 2. minimal, systemd ---------------------------------------------------
 run_set minimal "lxc systemd -docker -podman -qemu -webui -cli -monitoring \
-    -kubernetes -nas -backup -cluster"
+    -kubernetes -nas -backup -cluster -pam"
 has usr/bin/horcrux-api
 hasnt usr/bin/horcrux
 hasnt opt/horcrux/horcrux-ui
@@ -188,7 +188,7 @@ expect '^POST /api/containers 422 NOT_COMPILED' "USE=-docker: docker container c
 
 # ---- 3. podman + cluster, no docker/backup, OpenRC -------------------------
 run_set podman-cluster "podman cluster -docker -lxc -lxd -incus -qemu -systemd \
-    -webui -cli -monitoring -kubernetes -nas -backup"
+    -webui -cli -monitoring -kubernetes -nas -backup -pam"
 out=$(route_status "${PROBES[@]}")
 echo "$out"
 features_are "cluster podman"

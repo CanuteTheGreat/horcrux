@@ -45,6 +45,8 @@ feature_table!(
     "cluster",
     "backup",
     "kubernetes",
+    // Linux-PAM realm (host accounts)
+    "pam",
     // NAS
     "nas",
     "smb",
