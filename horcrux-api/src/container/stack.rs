@@ -474,7 +474,11 @@ impl StackManager {
     /// record (service rows cascade via the FK).
     pub async fn remove_stack(&self, id_or_name: &str) -> Result<()> {
         let stack = self.get_stack(id_or_name).await?;
-        for svc in &stack.services {
+        // Tear the services down concurrently (like `compose down`): a
+        // service whose PID 1 ignores SIGTERM takes the runtime's full stop
+        // grace period, and doing them one after another made removing a
+        // two-service stack take 30s+ (CI's stack test timed out on it).
+        futures::future::join_all(stack.services.iter().map(|svc| async move {
             let _ = self
                 .container_manager
                 .stop_container(&svc.container_id)
@@ -483,7 +487,8 @@ impl StackManager {
                 .container_manager
                 .delete_container(&svc.container_id)
                 .await;
-        }
+        }))
+        .await;
         Self::remove_stack_network(&stack.runtime, &Self::stack_network_name(&stack.name)).await;
         db_stacks::delete_stack(self.database.pool(), &stack.id).await?;
         Ok(())
