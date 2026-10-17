@@ -140,7 +140,7 @@ pub fn VmList() -> impl IntoView {
                                             <tr data-vm-id=vm.id.clone()>
                                                 <td>{&vm.id}</td>
                                                 <td><strong>{&vm.name}</strong></td>
-                                                <td><span class={status_class}>{format!("{:?}", vm.status)}</span></td>
+                                                <td><span class={status_class}>{vm.status.to_string()}</span></td>
                                                 <td>{format!("{:?}", vm.hypervisor)}</td>
                                                 <td>{vm.cpus}</td>
                                                 <td>{format!("{} MB", vm.memory)}</td>
