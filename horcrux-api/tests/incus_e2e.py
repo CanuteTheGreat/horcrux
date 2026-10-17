@@ -246,8 +246,9 @@ def console_login_and_run(ws, what, timeout=180):
         ws.send("root\r")
         ws.read_until(r"#", timeout=60, what=f"{what} root shell")
     ws.send("echo HX$((6*7))-$(tty)\r")
-    out = ws.read_until(r"HX42-/dev/\S+", timeout=60, what=f"{what} command")
-    tty = re.search(r"HX42-(/dev/\S+)", out).group(1)
+    # Up to the line end: output can arrive split mid-word ("/dev/t" + "tyS0").
+    out = ws.read_until(r"HX42-/dev/\S+\s", timeout=60, what=f"{what} command")
+    tty = re.search(r"HX42-(/dev/\S+)\s", out).group(1)
     check(True, f"{what}: command typed in the browser ran in the guest (tty {tty})")
     return tty
 
