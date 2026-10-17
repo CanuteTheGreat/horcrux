@@ -423,7 +423,8 @@ def main():
         # WebSocket proxy).
         page.goto(f"{BASE}/vms")
         page.locator(f"tr[data-vm-id='{vid}']").get_by_role("button", name="Start").click()
-        expect(page.locator(f"tr[data-vm-id='{vid}']")).to_contain_text("running", timeout=60000)
+        expect(page.locator(f"tr[data-vm-id='{vid}']")).to_contain_text(
+            re.compile("running", re.IGNORECASE), timeout=60000)  # list shows "Running"
         page.goto(f"{BASE}/vms/{vid}/console")
         expect(page.frame_locator("iframe.console-iframe").locator("#status")).to_have_text(
             "Connected", timeout=90000)
@@ -441,7 +442,8 @@ def main():
         expect(page.locator("#display-notice")).to_contain_text("Saved", timeout=30000)
         page.goto(f"{BASE}/vms")
         page.locator(f"tr[data-vm-id='{vid}']").get_by_role("button", name="Start").click()
-        expect(page.locator(f"tr[data-vm-id='{vid}']")).to_contain_text("running", timeout=60000)
+        expect(page.locator(f"tr[data-vm-id='{vid}']")).to_contain_text(
+            re.compile("running", re.IGNORECASE), timeout=60000)  # list shows "Running"
         page.goto(f"{BASE}/vms/{vid}/console")
         expect(page.locator("#spice-endpoint")).to_contain_text("127.0.0.1:", timeout=30000)
         href = page.locator("#spice-vv").get_attribute("href")
