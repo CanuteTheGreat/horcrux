@@ -512,3 +512,161 @@ impl StorageManager {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("hx-storage-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn pool(id: &str, t: StorageType, path: &str) -> StoragePool {
+        StoragePool {
+            id: id.into(),
+            name: id.into(),
+            storage_type: t,
+            path: path.into(),
+            available: 0,
+            total: 0,
+            enabled: true,
+        }
+    }
+
+    /// (total, available) GB per `df` (1K blocks, floored to GB).
+    fn df_gb(path: &str) -> (u64, u64) {
+        let out = std::process::Command::new("df")
+            .args(["-k", "--output=size,avail", path])
+            .output()
+            .expect("df");
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        let mut nums = text
+            .lines()
+            .nth(1)
+            .expect("df row")
+            .split_whitespace()
+            .map(|n| n.parse::<u64>().unwrap() / (1024 * 1024));
+        (nums.next().unwrap(), nums.next().unwrap())
+    }
+
+    #[test]
+    fn capacity_matches_df() {
+        // A filesystem with a few GB at least (the build tree), so the GB
+        // arithmetic is visible.
+        let path = env!("CARGO_MANIFEST_DIR");
+        let (total, avail) = fs_capacity_gb(path).expect("statvfs");
+        let (df_total, df_avail) = df_gb(path);
+        assert_eq!(total, df_total);
+        // Free space can move while other builds write to the disk.
+        assert!(avail.abs_diff(df_avail) <= 1, "{avail} vs df {df_avail}");
+        assert!(total > 0 && avail <= total);
+        assert_eq!(fs_capacity_gb("/nonexistent/hx-storage-test"), None);
+    }
+
+    #[tokio::test]
+    async fn directory_pool_lifecycle_with_real_capacity() {
+        let d = scratch("dir");
+        let m = StorageManager::new();
+        let p = m
+            .add_pool(pool("dirpool", StorageType::Directory, d.to_str().unwrap()))
+            .await
+            .unwrap();
+        let (total, avail) = fs_capacity_gb(d.to_str().unwrap()).unwrap();
+        assert_eq!(p.total, total, "capacity measured");
+        assert!(
+            p.available.abs_diff(avail) <= 1,
+            "{} vs {avail}",
+            p.available
+        );
+        let listed = m.list_pools().await;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "dirpool");
+        assert_eq!(m.get_pool("dirpool").await.unwrap().total, total);
+        assert!(m
+            .add_pool(pool("dirpool", StorageType::Directory, d.to_str().unwrap()))
+            .await
+            .is_err());
+        assert!(m.remove_pool("nope").await.is_err());
+        m.remove_pool("dirpool").await.unwrap();
+        assert!(m.list_pools().await.is_empty());
+        assert!(m.get_pool("dirpool").await.is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn volumes_respect_available_space_and_pool_state() {
+        let d = scratch("vol");
+        let m = StorageManager::new();
+        let mut p = pool("v", StorageType::Directory, d.to_str().unwrap());
+        p.available = 2;
+        m.pools.write().await.insert("v".into(), p);
+        // Exactly the available space fits (qcow2 is sparse).
+        let path = m.create_volume("v", "disk0", 2).await.unwrap();
+        assert_eq!(path, format!("{}/disk0.qcow2", d.display()));
+        assert!(std::path::Path::new(&path).is_file());
+        // One GB more does not.
+        assert!(m.create_volume("v", "disk1", 3).await.is_err());
+        assert!(!d.join("disk1.qcow2").exists());
+        // Disabled pools and unknown pools refuse.
+        m.pools.write().await.get_mut("v").unwrap().enabled = false;
+        assert!(m.create_volume("v", "disk2", 1).await.is_err());
+        assert!(m.create_volume("missing", "disk3", 1).await.is_err());
+        // S3 pools hold backups, not VM disks.
+        let mut s3 = pool("s3", StorageType::S3, "s3://bucket");
+        s3.available = 100;
+        m.pools.write().await.insert("s3".into(), s3);
+        assert!(m.create_volume("s3", "disk4", 1).await.is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn s3_bucket_names_are_3_to_63_characters() {
+        let m = StorageManager::new();
+        for (i, (path, ok)) in [
+            ("s3://ab".to_string(), false),
+            ("s3://abc".to_string(), true),
+            (format!("s3://{}", "b".repeat(63)), true),
+            (format!("s3://{}", "b".repeat(64)), false),
+            ("s3://endpoint.example/abc".to_string(), true),
+            ("s3://".to_string(), false),
+            ("http://abc".to_string(), false),
+            (String::new(), false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let r = m
+                .add_pool(pool(&format!("s3-{i}"), StorageType::S3, &path))
+                .await;
+            assert_eq!(r.is_ok(), ok, "{path:?}: {r:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn pools_survive_a_restart_through_the_database() {
+        let d = scratch("db");
+        let db = Arc::new(Database::new("sqlite::memory:").await.unwrap());
+        db.migrate().await.unwrap();
+        let m = StorageManager::with_database(db.clone()).await.unwrap();
+        m.add_pool(pool("kept", StorageType::Directory, d.to_str().unwrap()))
+            .await
+            .unwrap();
+        m.add_pool(pool("gone", StorageType::Directory, d.to_str().unwrap()))
+            .await
+            .unwrap();
+        m.remove_pool("gone").await.unwrap();
+        drop(m);
+
+        let again = StorageManager::with_database(db).await.unwrap();
+        let pools = again.list_pools().await;
+        assert_eq!(pools.len(), 1, "{pools:?}");
+        assert_eq!(pools[0].id, "kept");
+        // Capacity is re-measured on load.
+        let (total, _) = fs_capacity_gb(d.to_str().unwrap()).unwrap();
+        assert_eq!(pools[0].total, total);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}

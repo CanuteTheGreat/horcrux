@@ -53,8 +53,9 @@ def main() -> int:
         stats[group][key] += 1
         if key == "missed":
             span = m.get("span", {}).get("start", {})
+            name = m.get("name") or ""
             missed[group].append(
-                f"{path}:{span.get('line', '?')}: {m.get('name') or m.get('replacement', '')}"
+                name if name.startswith(path) else f"{path}:{span.get('line', '?')}: {name}"
             )
 
     failed = False
