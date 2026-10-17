@@ -13,7 +13,7 @@ use futures::{stream::StreamExt, SinkExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace};
 
 /// WebSocket event types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -325,10 +325,15 @@ impl WsState {
         });
     }
 
-    /// Broadcast an event to all connected clients
+    /// Broadcast an event to all connected clients.
+    ///
+    /// `broadcast::Sender::send` only fails when no receiver exists, i.e. no
+    /// WebSocket client is connected. That is the normal state of an idle
+    /// server (the node metrics collector broadcasts every 5s), not an error,
+    /// so it is logged at trace level instead of flooding the log with WARNs.
     pub fn broadcast(&self, event: WsEvent) {
-        if let Err(e) = self.tx.send(event) {
-            warn!("Failed to broadcast WebSocket event: {}", e);
+        if self.tx.send(event).is_err() {
+            trace!("WebSocket event dropped: no connected clients");
         }
     }
 
@@ -912,6 +917,21 @@ mod tests {
     fn test_ws_state_creation() {
         let state = WsState::new();
         assert_eq!(state.tx.receiver_count(), 0);
+    }
+
+    #[test]
+    fn test_broadcast_without_clients_is_a_silent_noop() {
+        let state = WsState::new();
+        // No subscriber: the event is dropped (no panic, nothing queued).
+        state.broadcast_notification("info".into(), "t".into(), "m".into());
+        // A client that connects afterwards only sees later events.
+        let mut rx = state.tx.subscribe();
+        assert!(rx.try_recv().is_err());
+        state.broadcast_notification("info".into(), "t2".into(), "m2".into());
+        match rx.try_recv() {
+            Ok(WsEvent::Notification { title, .. }) => assert_eq!(title, "t2"),
+            other => panic!("expected the later notification, got {:?}", other.is_ok()),
+        }
     }
 
     #[test]
