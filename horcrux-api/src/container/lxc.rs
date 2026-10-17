@@ -136,6 +136,10 @@ fn sys(msg: impl Into<String>) -> Error {
 }
 
 /// Run a command, returning stdout or an error carrying stderr.
+/// A clean shutdown re-sends the halt signal this often (see
+/// `shutdown_container`).
+const SHUTDOWN_SIGNAL_EVERY_SECS: u64 = 10;
+
 async fn run(cmd: &mut Command, what: &str) -> Result<String> {
     let out = cmd
         .stdin(Stdio::null())
@@ -974,16 +978,39 @@ impl LxcManager {
                 "Container {name} is already stopped"
             )));
         }
-        let mut c = self.lxc("stop", name);
-        c.arg("-t").arg(timeout.to_string());
-        if !force {
-            c.arg("--nokill");
+        // Ask init to power off, re-sending the halt signal every few
+        // seconds: lxc-stop sends it once, and an init that is still booting
+        // (a container started or rebooted moments ago) can miss it - the
+        // shutdown then sat out the whole timeout although the guest would
+        // have stopped at once on a second signal.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout as u64);
+        let mut last = Ok(String::new());
+        loop {
+            let left = deadline
+                .saturating_duration_since(std::time::Instant::now())
+                .as_secs();
+            if left == 0 {
+                break;
+            }
+            let mut c = self.lxc("stop", name);
+            c.arg("-t")
+                .arg(left.min(SHUTDOWN_SIGNAL_EVERY_SECS).to_string())
+                .arg("--nokill");
+            let started = std::time::Instant::now();
+            last = run(&mut c, "lxc-stop (shutdown)").await;
+            if self.get_container_status(name).await? == ContainerStatus::Stopped {
+                return Ok(());
+            }
+            if last.is_err() && started.elapsed() < std::time::Duration::from_secs(1) {
+                // lxc-stop failed outright: don't spin.
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
         }
-        let r = run(&mut c, "lxc-stop (shutdown)").await;
-        if self.get_container_status(name).await? == ContainerStatus::Stopped {
+        if force {
+            run(self.lxc("stop", name).arg("-k"), "lxc-stop").await?;
             return Ok(());
         }
-        r?;
+        last?;
         Err(Error::Conflict(format!(
             "container {name} did not shut down within {timeout}s (retry with force)"
         )))
