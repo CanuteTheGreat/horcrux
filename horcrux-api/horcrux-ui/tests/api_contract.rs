@@ -367,6 +367,41 @@ async fn ui_types_read_real_api_responses() {
         "empty policy keeps all: {kept:?}"
     );
 
+    // ---- VM display settings + consoles (Create VM form / console page) --
+    let display = horcrux_common::VmDisplay {
+        protocol: horcrux_common::DisplayProtocol::Spice,
+        video: horcrux_common::VideoDevice::Qxl,
+        sound: horcrux_common::SoundDevice::Ich9IntelHda,
+    };
+    let r = c
+        .put(format!("{}/vms/{vm}/display", api_base()))
+        .bearer_auth(&token)
+        .json(&display)
+        .send()
+        .await
+        .unwrap();
+    let (status, body) = (r.status().as_u16(), r.text().await.unwrap_or_default());
+    assert_eq!(status, 200, "PUT /vms/{vm}/display: {body}");
+    let cfg: horcrux_common::VmConfig =
+        serde_json::from_str(&body).expect("UI reads the PUT display response");
+    assert_eq!(cfg.display, display);
+    let cfg: horcrux_common::VmConfig = fetch(&c, &token, &format!("/vms/{vm}")).await;
+    assert_eq!(cfg.display, display, "display setting persisted");
+    let (status, body) = post(&c, &token, &format!("/vms/{vm}/start"), json!({})).await;
+    assert!((200..300).contains(&status), "start {vm}: {status} {body}");
+    let (status, body) = post(&c, &token, &format!("/console/{vm}/spice"), json!({})).await;
+    assert_eq!(status, 200, "SPICE console: {body}");
+    let info: api::ConsoleInfo = serde_json::from_value(body).expect("UI ConsoleInfo (SPICE)");
+    assert!(info.port > 0 && info.password.is_some(), "{info:?}");
+    let (status, body) = post(&c, &token, &format!("/console/{vm}/serial"), json!({})).await;
+    assert_eq!(status, 200, "serial console: {body}");
+    let info: api::ConsoleInfo = serde_json::from_value(body).expect("UI ConsoleInfo (serial)");
+    assert!(info.ws_path.contains(&info.ticket), "{info:?}");
+    let (status, body) = get_raw(&c, &token, &format!("/console/{vm}/spice.vv")).await;
+    assert_eq!(status, 200, "spice.vv: {body}");
+    let _ = post(&c, &token, &format!("/vms/{vm}/stop"), json!({})).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
     // ---- every list endpoint the UI reads --------------------------------
     macro_rules! check {
         ($path:expr, $t:ty) => {{

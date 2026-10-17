@@ -39,6 +39,7 @@ mod template;
 mod tls;
 mod validation;
 mod vm;
+mod vm_console_api;
 mod webhooks;
 mod websocket;
 
@@ -526,6 +527,7 @@ async fn main() -> anyhow::Result<()> {
     // Build protected routes using modular route builders
     let protected_routes = Router::new()
         .merge(vm_routes())
+        .merge(vm_console_api::routes())
         .merge(container_routes())
         .merge(image_routes())
         .merge(volume_routes())
@@ -6968,6 +6970,7 @@ async fn clone_template(
                 disk_type: "virtio".to_string(),
                 cache: "writethrough".to_string(),
             }],
+            display: Default::default(),
         })
         .await?;
     Ok(Json(CloneResponse { new_vm_id }))
@@ -7604,23 +7607,28 @@ struct HistoryParams {
 
 // Console API handlers
 
+async fn console_for(
+    state: &AppState,
+    vm_id: &str,
+    kind: ConsoleType,
+) -> Result<ConsoleInfo, ApiError> {
+    let vm = state.vm_manager.get_vm(vm_id).await?;
+    Ok(state.console_manager.create_console(&vm, kind).await?)
+}
+
 async fn create_vnc_console(
     State(state): State<Arc<AppState>>,
     Path(vm_id): Path<String>,
 ) -> Result<Json<ConsoleInfo>, ApiError> {
-    let info = state
-        .console_manager
-        .create_console(&vm_id, ConsoleType::Vnc)
-        .await?;
-    Ok(Json(info))
+    Ok(Json(console_for(&state, &vm_id, ConsoleType::Vnc).await?))
 }
 
 async fn get_vnc_websocket(
     State(state): State<Arc<AppState>>,
     Path(vm_id): Path<String>,
 ) -> Result<Json<String>, ApiError> {
-    let ws_url = state.console_manager.get_vnc_websocket(&vm_id).await?;
-    Ok(Json(ws_url))
+    let info = console_for(&state, &vm_id, ConsoleType::Vnc).await?;
+    Ok(Json(info.ws_path))
 }
 
 async fn verify_console_ticket(
@@ -7635,20 +7643,12 @@ async fn get_novnc_page(
     State(state): State<Arc<AppState>>,
     Path(vm_id): Path<String>,
 ) -> Result<axum::response::Html<String>, ApiError> {
-    // Create a console session and get the ticket
-    let info = state
-        .console_manager
-        .create_console(&vm_id, ConsoleType::Vnc)
-        .await?;
-
+    let info = console_for(&state, &vm_id, ConsoleType::Vnc).await?;
     // Path-only WebSocket URL; the noVNC page resolves it against its own
     // origin (ws/wss + host:port). A hardcoded `ws://localhost:8006` broke the
     // console for every browser not running on the API host itself.
-    let ws_url = format!("/api/console/ws/{}", info.ticket);
-
-    // Get the noVNC HTML page
-    let html = console::novnc::get_novnc_html(&info.ticket, &ws_url);
-
+    let html =
+        console::novnc::get_novnc_html(&info.ticket, &info.ws_path, info.password.as_deref());
     Ok(axum::response::Html(html))
 }
 
@@ -7665,11 +7665,9 @@ async fn create_serial_console(
     State(state): State<Arc<AppState>>,
     Path(vm_id): Path<String>,
 ) -> Result<Json<ConsoleInfo>, ApiError> {
-    let info = state
-        .console_manager
-        .create_console(&vm_id, ConsoleType::Serial)
-        .await?;
-    Ok(Json(info))
+    Ok(Json(
+        console_for(&state, &vm_id, ConsoleType::Serial).await?,
+    ))
 }
 
 async fn serial_websocket_handler(

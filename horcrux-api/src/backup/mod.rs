@@ -1641,7 +1641,7 @@ async fn payload(path: &Path, kind: &str) -> Result<ArchiveFile> {
 /// Stop a running QEMU VM and wait for its process to exit, so its disk
 /// is no longer being written.
 async fn stop_vm_and_wait(rt: &BackupRuntime, id: &str) -> Result<()> {
-    let pid: Option<u32> = tokio::fs::read_to_string(format!("/var/run/horcrux-vm-{id}.pid"))
+    let pid: Option<u32> = tokio::fs::read_to_string(crate::vm::qemu::pidfile(id))
         .await
         .ok()
         .and_then(|s| s.trim().parse().ok());

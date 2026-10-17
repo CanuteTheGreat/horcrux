@@ -95,6 +95,7 @@ async fn test_real_qemu_vm_boot() {
         status: VmStatus::Stopped,
         architecture: VmArchitecture::X86_64,
         disks: Vec::<VmDisk>::new(),
+        display: Default::default(),
     };
 
     // create_vm() lays down a blank qcow2 at storage_dir/{id}.qcow2 via the

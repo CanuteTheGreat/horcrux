@@ -44,6 +44,7 @@ fn benchmark_vm_status_serialization(c: &mut Criterion) {
         disk_size: 53687091200,
         status: VmStatus::Running,
         disks: vec![],
+        display: Default::default(),
     };
 
     c.bench_function("vm_status_serialize", |b| {

@@ -815,6 +815,41 @@ pub struct ConsoleInfo {
     pub ticket: String,
     #[serde(default)]
     pub ws_port: u16,
+    #[serde(default)]
+    pub ws_path: String,
+    /// VNC/SPICE password for this VM run.
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+/// Create a SPICE console session (port + per-start password).
+pub async fn create_spice_console(vm_id: &str) -> Result<ConsoleInfo, ApiError> {
+    post_json(
+        &format!("/console/{}/spice", urlencoding::encode(vm_id)),
+        &(),
+    )
+    .await
+}
+
+/// `.vv` connection file for remote-viewer (same-origin, cookie auth).
+pub fn spice_vv_url(vm_id: &str) -> String {
+    format!(
+        "{}/console/{}/spice.vv",
+        API_BASE,
+        urlencoding::encode(vm_id)
+    )
+}
+
+/// Change a stopped VM's display / video / sound (PUT /api/vms/:id/display).
+pub async fn set_vm_display(
+    vm_id: &str,
+    display: &horcrux_common::VmDisplay,
+) -> Result<horcrux_common::VmConfig, ApiError> {
+    put_json(
+        &format!("/vms/{}/display", urlencoding::encode(vm_id)),
+        display,
+    )
+    .await
 }
 
 /// Server-rendered noVNC page for a VM. It creates its own console ticket

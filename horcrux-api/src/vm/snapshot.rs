@@ -825,6 +825,7 @@ mod tests {
             status: VmStatus::Running,
             architecture: VmArchitecture::X86_64,
             disks: vec![],
+            display: Default::default(),
         }
     }
 

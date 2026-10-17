@@ -35,6 +35,7 @@ SDN_NET = "e2esdn0"
 REP_VM = "e2e-rep-vm"
 BK_VM = "e2e-bk-restored"
 BK_JOB = "e2e-bk-job"
+DISP_VM = "e2e-display-vm"
 _TOKEN = []
 
 
@@ -109,6 +110,14 @@ def cleanup():
         _req("DELETE", f"/api/vms/{REP_VM}-clone", tok)
         _req("DELETE", f"/api/vms/{REP_VM}", tok)
         _req("DELETE", f"/api/cni/networks/{SDN_NET}", tok)
+        for v in api_get("/api/vms", tok) or []:
+            if v.get("name") == DISP_VM:
+                try:
+                    _req("POST", f"/api/vms/{v['id']}/stop", tok, {})
+                except AssertionError:
+                    pass
+                time.sleep(1)
+                _req("DELETE", f"/api/vms/{v['id']}", tok)
     except Exception as e:  # server may not be up yet on the first call
         print(f"cleanup: {e}")
 
@@ -331,6 +340,63 @@ def main():
         page.goto(f"{BASE}/backup/verify")
         page.locator("#verify-all-btn").click()
         expect(page.locator("#verify-summary")).to_contain_text("0 failed", timeout=180000)
+
+        # ---- VM display: Create VM form -> console page -> live consoles ----
+        page.goto(f"{BASE}/vms/create")
+        page.locator(".form-group", has_text="VM Name").locator("input").fill(DISP_VM)
+        page.locator(".form-group", has_text="Memory (MB)").locator("input").fill("512")
+        page.locator(".form-group", has_text="Disk Size (GB)").locator("input").fill("10")
+        page.select_option("#disp-protocol", "spice")
+        page.select_option("#disp-video", "qxl")
+        page.select_option("#disp-sound", "ich9-intel-hda")
+        page.locator("button[type=submit]").click()
+        page.wait_for_url(f"{BASE}/vms", timeout=120000)
+        dvm = next(v for v in api_get("/api/vms", token()) if v["name"] == DISP_VM)
+        vid = dvm["id"]
+        assert dvm["display"] == {"protocol": "spice", "video": "qxl", "sound": "ich9-intel-hda"}, dvm
+
+        # stopped VM: the console page's Display settings switch it to VNC
+        page.goto(f"{BASE}/vms/{vid}/console")
+        page.select_option("#disp-protocol", "vnc")
+        page.locator("#save-display").click()
+        expect(page.locator("#display-notice")).to_contain_text("Saved", timeout=30000)
+        d = api_get(f"/api/vms/{vid}", token())["display"]
+        assert d["protocol"] == "vnc" and d["sound"] == "none", d
+
+        # Start from the VM list; noVNC in the console page really connects
+        # to QEMU's VNC server (password-protected, through the ticketed
+        # WebSocket proxy).
+        page.goto(f"{BASE}/vms")
+        page.locator(f"tr[data-vm-id='{vid}']").get_by_role("button", name="Start").click()
+        expect(page.locator(f"tr[data-vm-id='{vid}']")).to_contain_text("running", timeout=60000)
+        page.goto(f"{BASE}/vms/{vid}/console")
+        expect(page.frame_locator("iframe.console-iframe").locator("#status")).to_have_text(
+            "Connected", timeout=90000)
+
+        # Back to SPICE: stop, switch in the console page, start; the SPICE
+        # panel shows the endpoint and the .vv download works with the
+        # browser's own session.
+        page.goto(f"{BASE}/vms")
+        page.locator(f"tr[data-vm-id='{vid}']").get_by_role("button", name="Stop").click()
+        expect(page.locator(f"tr[data-vm-id='{vid}']")).to_contain_text("stopped", timeout=60000)
+        page.goto(f"{BASE}/vms/{vid}/console")
+        page.select_option("#disp-protocol", "spice")
+        page.select_option("#disp-sound", "intel-hda")
+        page.locator("#save-display").click()
+        expect(page.locator("#display-notice")).to_contain_text("Saved", timeout=30000)
+        page.goto(f"{BASE}/vms")
+        page.locator(f"tr[data-vm-id='{vid}']").get_by_role("button", name="Start").click()
+        expect(page.locator(f"tr[data-vm-id='{vid}']")).to_contain_text("running", timeout=60000)
+        page.goto(f"{BASE}/vms/{vid}/console")
+        expect(page.locator("#spice-endpoint")).to_contain_text("127.0.0.1:", timeout=30000)
+        href = page.locator("#spice-vv").get_attribute("href")
+        vv = page.request.get(href if href.startswith("http") else f"{BASE}{href}")
+        assert vv.status == 200, vv.status
+        body = vv.text()
+        assert "type=spice" in body and "enable-usbredir=1" in body, body
+        page.goto(f"{BASE}/vms")
+        page.locator(f"tr[data-vm-id='{vid}']").get_by_role("button", name="Stop").click()
+        expect(page.locator(f"tr[data-vm-id='{vid}']")).to_contain_text("stopped", timeout=60000)
 
         browser.close()
 

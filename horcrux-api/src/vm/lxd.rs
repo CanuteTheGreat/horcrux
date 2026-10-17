@@ -80,6 +80,7 @@ impl LxdManager {
             _pid: None,
             hypervisor: horcrux_common::VmHypervisor::Lxd,
             architecture: config.architecture.clone(),
+            display: config.display,
         })
     }
 

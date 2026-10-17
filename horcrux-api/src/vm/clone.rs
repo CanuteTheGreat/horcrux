@@ -97,6 +97,7 @@ impl VmCloneManager {
             status: VmStatus::Stopped,
             architecture: source_vm.architecture.clone(),
             disks: cloned_disks,
+            display: source_vm.display,
         };
 
         info!(
@@ -1068,6 +1069,7 @@ mod tests {
             status: VmStatus::Running,
             architecture: VmArchitecture::X86_64,
             disks: vec![],
+            display: Default::default(),
         }
     }
 

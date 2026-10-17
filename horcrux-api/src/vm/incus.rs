@@ -69,6 +69,7 @@ impl IncusManager {
             _pid: None,
             hypervisor: horcrux_common::VmHypervisor::Incus,
             architecture: config.architecture.clone(),
+            display: config.display,
         })
     }
 

@@ -103,7 +103,22 @@ jobs:
         # creation (qemu-img), storage-pool/snapshot validation, and
         # VM start (needed for the console/VNC tests) all fail even
         # though the server itself starts fine.
-        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev qemu-system-x86 qemu-system-arm qemu-utils zstd
+        #
+        # console_tests.rs boots real VMs and speaks VNC, SPICE (with
+        # audio + usbredir channels) and serial to them: SPICE and the
+        # SPICE audio backend are separate module packages on Ubuntu 24.04+
+        # (built into qemu-system-x86 on older releases), and qxl needs
+        # its VGA BIOS from the qemu firmware packages.
+        run: |
+          sudo apt-get update
+          spice_mods=""
+          if apt-cache show qemu-system-modules-spice >/dev/null 2>&1; then
+            spice_mods="qemu-system-modules-spice"
+          fi
+          sudo apt-get install -y build-essential libvirt-dev qemu-system-x86 qemu-system-arm qemu-utils zstd $spice_mods
+          # Fail here, not deep in a test, if this QEMU can't do SPICE.
+          qemu-system-x86_64 --version
+          qemu-system-x86_64 -audiodev help | grep -qx spice || { echo "qemu-system-x86_64 lacks SPICE (no spice audiodev)" >&2; exit 1; }
 
       - name: Ensure Node.js is present (self-heal)
         # catthehacker/ubuntu:act-latest job containers on the beauxbatons
@@ -672,7 +687,15 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev python3-venv qemu-utils zstd
+        # qemu-system-x86 (+ SPICE modules on Ubuntu 24.04+): the console
+        # checks start a real VM and connect noVNC / fetch its SPICE .vv.
+        run: |
+          sudo apt-get update
+          spice_mods=""
+          if apt-cache show qemu-system-modules-spice >/dev/null 2>&1; then
+            spice_mods="qemu-system-modules-spice"
+          fi
+          sudo apt-get install -y build-essential libvirt-dev python3-venv qemu-utils zstd qemu-system-x86 $spice_mods
 
       - name: Install trunk
         # Same prebuilt-binary install as the Build Web UI job.

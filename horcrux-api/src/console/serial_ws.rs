@@ -38,17 +38,13 @@ pub async fn handle_serial_websocket(
         }
     };
 
-    // Resolve the Unix socket path backing this VM's serial console
-    let socket_path = match console_manager.get_serial_socket_path(&ticket.vm_id).await {
-        Ok(path) => path,
-        Err(e) => {
-            error!(
-                "Serial console not available for VM {}: {}",
-                ticket.vm_id, e
-            );
+    // The ticket names the Unix socket QEMU was started with.
+    let socket_path = match &ticket.serial_socket {
+        Some(path) => path.to_string_lossy().to_string(),
+        None => {
             return axum::response::Response::builder()
-                .status(axum::http::StatusCode::NOT_FOUND)
-                .body(axum::body::Body::from("Serial console not available"))
+                .status(axum::http::StatusCode::BAD_REQUEST)
+                .body(axum::body::Body::from("Not a serial console ticket"))
                 .unwrap();
         }
     };

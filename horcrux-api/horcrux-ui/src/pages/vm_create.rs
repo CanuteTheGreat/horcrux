@@ -11,6 +11,7 @@ pub fn VmCreate() -> impl IntoView {
     let (disk_size, set_disk_size) = create_signal(20u64);
     let (hypervisor, set_hypervisor) = create_signal(VmHypervisor::Qemu);
     let (architecture, set_architecture) = create_signal(VmArchitecture::X86_64);
+    let display = create_rw_signal(horcrux_common::VmDisplay::default());
     let (creating, set_creating) = create_signal(false);
     let (error, set_error) = create_signal(None::<String>);
 
@@ -32,6 +33,7 @@ pub fn VmCreate() -> impl IntoView {
             status: VmStatus::Stopped,
             architecture: architecture.get(),
             disks: Vec::new(),
+            display: display.get(),
         };
 
         let navigate = navigate.clone();
@@ -135,6 +137,8 @@ pub fn VmCreate() -> impl IntoView {
                         prop:value=disk_size
                     />
                 </div>
+
+                <super::vm_display::DisplaySettingsFields display=display/>
 
                 {move || error.get().map(|err| view! {
                     <p class="error">"Error: " {err}</p>

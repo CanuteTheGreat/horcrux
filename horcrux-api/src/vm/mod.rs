@@ -1,6 +1,7 @@
 pub mod clone;
 pub mod clone_progress;
 pub mod cross_node_clone;
+pub mod display;
 pub mod incus;
 pub mod lxd;
 /// Virtual machine management module
@@ -114,6 +115,11 @@ impl VmManager {
             )));
         }
 
+        config
+            .display
+            .validate(&config.architecture)
+            .map_err(horcrux_common::Error::Validation)?;
+
         // Create the VM
         // Dispatch on the requested hypervisor. The LXD/Incus VM backends
         // existed but were never called: an "lxd" or "incus" VM silently
@@ -148,6 +154,39 @@ impl VmManager {
 
         vms.insert(config.id.clone(), vm);
         Ok(vm_config)
+    }
+
+    /// Change a stopped VM's display protocol / video card / sound card.
+    /// Takes effect at the next start.
+    pub async fn set_display(
+        &self,
+        id: &str,
+        display: horcrux_common::VmDisplay,
+    ) -> Result<VmConfig> {
+        let mut vms = self.vms.write().await;
+        self.hydrate(&mut vms, id).await?;
+        let vm = vms
+            .get_mut(id)
+            .ok_or_else(|| horcrux_common::Error::VmNotFound(id.to_string()))?;
+        if vm.hypervisor != VmHypervisor::Qemu {
+            return Err(horcrux_common::Error::Validation(
+                "Display settings apply to QEMU VMs; LXD/Incus manage their own console".into(),
+            ));
+        }
+        if vm.status == VmStatus::Running {
+            return Err(horcrux_common::Error::Conflict(
+                "Stop the VM before changing its display settings".into(),
+            ));
+        }
+        display
+            .validate(&vm.architecture)
+            .map_err(horcrux_common::Error::Validation)?;
+        vm.display = display;
+        let config = vm.to_config();
+        if let Some(db) = &self.db {
+            db.update_vm(&config).await?;
+        }
+        Ok(config)
     }
 
     /// Register a VM whose disk already exists (e.g. cloned from a
@@ -288,6 +327,7 @@ mod tests {
             status: VmStatus::Stopped,
             architecture: VmArchitecture::X86_64,
             disks: Vec::new(),
+            display: Default::default(),
         }
     }
 

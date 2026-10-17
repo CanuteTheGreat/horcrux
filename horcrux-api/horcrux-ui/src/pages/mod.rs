@@ -26,6 +26,7 @@ mod snapshot_list;
 pub mod storage;
 pub mod system;
 mod vm_create;
+mod vm_display;
 mod vm_list;
 
 pub use alerts::Alerts;

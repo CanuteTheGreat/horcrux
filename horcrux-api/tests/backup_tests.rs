@@ -84,6 +84,7 @@ impl Env {
             status: VmStatus::Stopped,
             architecture: VmArchitecture::X86_64,
             disks: vec![],
+            display: Default::default(),
         };
         let vm = self.vms.create_vm(cfg).await.unwrap();
         let disk = PathBuf::from(&vm.disks[0].path);

@@ -130,8 +130,8 @@ pub mod vms {
         let hypervisor_str = format!("{:?}", vm.hypervisor).to_lowercase();
 
         sqlx::query(
-            "INSERT INTO vms (id, name, hypervisor, memory, cpus, disk_size, status, architecture, disks)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO vms (id, name, hypervisor, memory, cpus, disk_size, status, architecture, disks, display)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&vm.id)
         .bind(&vm.name)
@@ -142,6 +142,7 @@ pub mod vms {
         .bind(&status_str)
         .bind(&arch_str)
         .bind(disks_json(vm)?)
+        .bind(display_json(vm)?)
         .execute(pool)
         .await
         .map_err(|e| horcrux_common::Error::System(format!("Failed to create VM: {}", e)))?;
@@ -152,6 +153,12 @@ pub mod vms {
     fn disks_json(vm: &VmConfig) -> Result<String> {
         serde_json::to_string(&vm.disks)
             .map_err(|e| horcrux_common::Error::System(format!("Failed to encode VM disks: {}", e)))
+    }
+
+    fn display_json(vm: &VmConfig) -> Result<String> {
+        serde_json::to_string(&vm.display).map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to encode VM display: {}", e))
+        })
     }
 
     pub async fn get_vm(pool: &SqlitePool, id: &str) -> Result<VmConfig> {
@@ -187,7 +194,7 @@ pub mod vms {
 
         sqlx::query(
             "UPDATE vms SET name = ?, hypervisor = ?, memory = ?, cpus = ?, disk_size = ?,
-             status = ?, architecture = ?, disks = ?, updated_at = CURRENT_TIMESTAMP
+             status = ?, architecture = ?, disks = ?, display = ?, updated_at = CURRENT_TIMESTAMP
              WHERE id = ?",
         )
         .bind(&vm.name)
@@ -198,6 +205,7 @@ pub mod vms {
         .bind(&status_str)
         .bind(&arch_str)
         .bind(disks_json(vm)?)
+        .bind(display_json(vm)?)
         .bind(&vm.id)
         .execute(pool)
         .await
@@ -258,6 +266,11 @@ pub mod vms {
             status,
             architecture,
             disks: serde_json::from_str(&row.get::<String, _>("disks")).unwrap_or_default(),
+            display: row
+                .try_get::<String, _>("display")
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default(),
         })
     }
 }
@@ -490,6 +503,7 @@ mod tests {
             status: VmStatus::Stopped,
             architecture: VmArchitecture::X86_64,
             disks: Vec::new(),
+            display: Default::default(),
         }
     }
 
@@ -503,8 +517,14 @@ mod tests {
             disk_type: "virtio".to_string(),
             cache: "writethrough".to_string(),
         }];
+        vm.display = horcrux_common::VmDisplay {
+            protocol: horcrux_common::DisplayProtocol::Spice,
+            video: horcrux_common::VideoDevice::Qxl,
+            sound: horcrux_common::SoundDevice::IntelHda,
+        };
         db.create_vm(&vm).await.unwrap();
         let got = db.get_vm("disk-vm").await.unwrap();
+        assert_eq!(got.display, vm.display);
         assert_eq!(got.disks.len(), 1);
         assert_eq!(got.disks[0].path, "/var/lib/horcrux/vms/disk-vm.qcow2");
         assert_eq!(db.list_vms().await.unwrap()[0].disks.len(), 1);

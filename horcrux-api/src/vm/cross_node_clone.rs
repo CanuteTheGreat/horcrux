@@ -560,6 +560,7 @@ impl CrossNodeCloneManager {
             status: horcrux_common::VmStatus::Stopped,
             architecture: source_vm.architecture.clone(),
             disks: Vec::new(),
+            display: source_vm.display,
         };
 
         // Update disk paths for target node

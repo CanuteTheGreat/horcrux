@@ -1,23 +1,24 @@
-//! Console access module
-//! Provides VNC and SPICE console access to VMs via WebSocket proxy
-
-#![allow(dead_code)]
+//! VM consoles: VNC (noVNC over the ticketed WebSocket proxy), SPICE
+//! (WebSocket proxy for browser clients + `.vv` file for remote-viewer) and
+//! the serial console (WebSocket bridge to QEMU's serial Unix socket).
+//!
+//! Every endpoint comes from what `vm::display` actually configured when the
+//! VM was started (`<disk>.display.json`); nothing is allocated here. (This
+//! module used to hand out VNC/SPICE ports and a serial socket path that
+//! QEMU was never told about, so no console could ever connect.)
 
 pub mod novnc;
-mod serial;
 pub mod serial_ws;
-mod spice;
-mod vnc;
-mod websocket;
 
-use horcrux_common::Result;
+use crate::vm::display::DisplayRuntime;
+use horcrux_common::{DisplayProtocol, Result, VmConfig, VmHypervisor};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// Console connection type
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ConsoleType {
     Vnc,
@@ -25,35 +26,42 @@ pub enum ConsoleType {
     Serial,
 }
 
-/// Console connection info
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsoleInfo {
     pub vm_id: String,
     pub console_type: ConsoleType,
+    /// Address QEMU listens on for this console (127.0.0.1 unless
+    /// HORCRUX_SPICE_LISTEN says otherwise). Port 0 for serial.
     pub host: String,
     pub port: u16,
     pub ticket: String,
+    /// Kept for API compatibility; the WebSocket proxy is served by the API
+    /// itself at `ws_path`.
     pub ws_port: u16,
+    /// Same-origin WebSocket path for this ticket.
+    #[serde(default)]
+    pub ws_path: String,
+    /// VNC/SPICE password for this VM run (set over QMP at start).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
 }
 
-/// Console ticket for authentication
 #[derive(Debug, Clone)]
 pub struct ConsoleTicket {
     pub ticket_id: String,
     pub vm_id: String,
     pub console_type: ConsoleType,
+    /// TCP target port of the WebSocket proxy (VNC or SPICE).
     pub vnc_port: u16,
+    pub target_host: String,
+    /// Unix socket of the serial console.
+    pub serial_socket: Option<PathBuf>,
     pub created_at: i64,
     pub expires_at: i64,
 }
 
-/// Console manager
 pub struct ConsoleManager {
     active_tickets: Arc<RwLock<HashMap<String, ConsoleTicket>>>,
-    vnc_manager: vnc::VncManager,
-    spice_manager: spice::SpiceManager,
-    serial_manager: serial::SerialManager,
-    ws_proxy: Arc<websocket::WebSocketProxy>,
 }
 
 impl Default for ConsoleManager {
@@ -62,205 +70,193 @@ impl Default for ConsoleManager {
     }
 }
 
+/// Disk of a QEMU VM (its console state lives next to it). LXD/Incus VMs
+/// get a pointer to their own console tooling instead.
+pub fn runtime_disk(vm: &VmConfig) -> Result<PathBuf> {
+    let tool = match vm.hypervisor {
+        VmHypervisor::Qemu => None,
+        VmHypervisor::Lxd => Some(("an LXD", "lxc")),
+        VmHypervisor::Incus => Some(("an Incus", "incus")),
+    };
+    if let Some((kind, cli)) = tool {
+        return Err(horcrux_common::Error::Validation(format!(
+            "VM {} is {kind} VM: use its own console (`{cli} console {} --type=vga` for the \
+             SPICE display, `--type=console` for the text console); Horcrux's VNC/SPICE/serial \
+             consoles are for QEMU VMs",
+            vm.id, vm.name
+        )));
+    }
+    vm.disks
+        .first()
+        .map(|d| PathBuf::from(&d.path))
+        .ok_or_else(|| horcrux_common::Error::InvalidConfig(format!("VM {} has no disk", vm.id)))
+}
+
 impl ConsoleManager {
     pub fn new() -> Self {
         Self {
             active_tickets: Arc::new(RwLock::new(HashMap::new())),
-            vnc_manager: vnc::VncManager::new(),
-            spice_manager: spice::SpiceManager::new(),
-            serial_manager: serial::SerialManager::new(),
-            ws_proxy: Arc::new(websocket::WebSocketProxy::new()),
         }
     }
 
-    /// Create a console connection for a VM
-    pub async fn create_console(
-        &self,
-        vm_id: &str,
-        console_type: ConsoleType,
-    ) -> Result<ConsoleInfo> {
-        // Generate authentication ticket
-        let ticket = self.generate_ticket(vm_id, &console_type).await?;
-
-        match console_type {
+    /// Issue a 5-minute ticket for one of the running VM's consoles.
+    pub async fn create_console(&self, vm: &VmConfig, kind: ConsoleType) -> Result<ConsoleInfo> {
+        let disk = runtime_disk(vm)?;
+        let rt = DisplayRuntime::load(&disk).await?;
+        let not_configured = |what: &str| {
+            horcrux_common::Error::Validation(format!(
+                "VM {} has no {} console (display protocol is {:?}); change the VM's display \
+                 settings and restart it",
+                vm.id, what, rt.protocol
+            ))
+        };
+        let (port, host, password, serial_socket) = match kind {
             ConsoleType::Vnc => {
-                // Get or start VNC server for this VM. Must be
-                // ensure_vnc_enabled (lazily enables + registers VNC for a
-                // running VM), not get_vnc_port (which only looks up an
-                // already-registered config and errors "VNC not configured"
-                // for every VM that hasn't had enable_vnc called on it
-                // out-of-band - which in practice was every VM, since
-                // nothing else in the codebase ever called it).
-                let vnc_port = self.vnc_manager.ensure_vnc_enabled(vm_id).await?;
-
-                // Start WebSocket proxy
-                let ws_port = self
-                    .ws_proxy
-                    .start_proxy(&ticket.ticket_id, "127.0.0.1", vnc_port)
-                    .await?;
-
-                Ok(ConsoleInfo {
-                    vm_id: vm_id.to_string(),
-                    console_type: ConsoleType::Vnc,
-                    host: "127.0.0.1".to_string(),
-                    port: vnc_port,
-                    ticket: ticket.ticket_id.clone(),
-                    ws_port,
-                })
+                if rt.protocol != DisplayProtocol::Vnc {
+                    return Err(not_configured("VNC"));
+                }
+                let port = rt.vnc_port.ok_or_else(|| not_configured("VNC"))?;
+                (port, "127.0.0.1".to_string(), rt.password.clone(), None)
             }
             ConsoleType::Spice => {
-                // Get or start SPICE server for this VM
-                let spice_port = self.spice_manager.get_spice_port(vm_id).await?;
-
-                // Start WebSocket proxy for SPICE
-                let ws_port = self
-                    .ws_proxy
-                    .start_proxy(&ticket.ticket_id, "127.0.0.1", spice_port)
-                    .await?;
-
-                Ok(ConsoleInfo {
-                    vm_id: vm_id.to_string(),
-                    console_type: ConsoleType::Spice,
-                    host: "127.0.0.1".to_string(),
-                    port: spice_port,
-                    ticket: ticket.ticket_id.clone(),
-                    ws_port,
-                })
+                if rt.protocol != DisplayProtocol::Spice {
+                    return Err(not_configured("SPICE"));
+                }
+                let port = rt.spice_port.ok_or_else(|| not_configured("SPICE"))?;
+                let listen = rt
+                    .spice_listen
+                    .clone()
+                    .unwrap_or_else(|| "127.0.0.1".into());
+                (port, listen, rt.password.clone(), None)
             }
-            ConsoleType::Serial => {
-                // Get or enable serial console for this VM
-                let socket_path = self.serial_manager.get_serial_socket(vm_id).await?;
+            ConsoleType::Serial => (
+                0,
+                "127.0.0.1".to_string(),
+                None,
+                Some(rt.serial_socket.clone()),
+            ),
+        };
 
-                // For serial console, we return the socket path directly
-                // Client can connect via WebSocket proxy to the Unix socket
-                let ws_port = self
-                    .ws_proxy
-                    .start_unix_proxy(&ticket.ticket_id, &socket_path)
-                    .await?;
+        let ticket_id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().timestamp();
+        let target_host = match host.as_str() {
+            "0.0.0.0" | "::" | "[::]" => "127.0.0.1".to_string(),
+            h => h.to_string(),
+        };
+        let ticket = ConsoleTicket {
+            ticket_id: ticket_id.clone(),
+            vm_id: vm.id.clone(),
+            console_type: kind,
+            vnc_port: port,
+            target_host,
+            serial_socket,
+            created_at: now,
+            expires_at: now + 300,
+        };
+        self.active_tickets
+            .write()
+            .await
+            .insert(ticket_id.clone(), ticket);
 
-                Ok(ConsoleInfo {
-                    vm_id: vm_id.to_string(),
-                    console_type: ConsoleType::Serial,
-                    host: "127.0.0.1".to_string(),
-                    port: 0, // Serial uses socket, not TCP port
-                    ticket: ticket.ticket_id.clone(),
-                    ws_port,
-                })
-            }
-        }
+        let ws_path = match kind {
+            ConsoleType::Serial => format!("/api/console/ws/serial/{ticket_id}"),
+            _ => format!("/api/console/ws/{ticket_id}"),
+        };
+        Ok(ConsoleInfo {
+            vm_id: vm.id.clone(),
+            console_type: kind,
+            host,
+            port,
+            ticket: ticket_id,
+            ws_port: 0,
+            ws_path,
+            password,
+        })
     }
 
-    /// Verify a console ticket
     pub async fn verify_ticket(&self, ticket_id: &str) -> Result<ConsoleTicket> {
         let tickets = self.active_tickets.read().await;
         let ticket = tickets
             .get(ticket_id)
             .ok_or_else(|| horcrux_common::Error::System("Invalid console ticket".to_string()))?;
-
-        // Check if ticket is expired
-        let now = chrono::Utc::now().timestamp();
-        if now > ticket.expires_at {
+        if chrono::Utc::now().timestamp() > ticket.expires_at {
             return Err(horcrux_common::Error::System(
                 "Console ticket expired".to_string(),
             ));
         }
-
         Ok(ticket.clone())
     }
 
-    /// Generate a new console ticket
-    async fn generate_ticket(
-        &self,
-        vm_id: &str,
-        console_type: &ConsoleType,
-    ) -> Result<ConsoleTicket> {
-        let ticket_id = uuid::Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().timestamp();
-        let expires_at = now + 300; // 5 minutes
-
-        // Get the port from QEMU based on console type
-        let vnc_port = match console_type {
-            ConsoleType::Vnc => self.vnc_manager.ensure_vnc_enabled(vm_id).await?,
-            ConsoleType::Spice => self.spice_manager.ensure_spice_enabled(vm_id).await?,
-            ConsoleType::Serial => {
-                // Ensure serial is enabled and return 0 (serial uses socket, not port)
-                let _ = self.serial_manager.ensure_serial_enabled(vm_id).await?;
-                0
-            }
-        };
-
-        let ticket = ConsoleTicket {
-            ticket_id: ticket_id.clone(),
-            vm_id: vm_id.to_string(),
-            console_type: console_type.clone(),
-            vnc_port,
-            created_at: now,
-            expires_at,
-        };
-
-        let mut tickets = self.active_tickets.write().await;
-        tickets.insert(ticket_id, ticket.clone());
-
-        Ok(ticket)
-    }
-
-    /// Clean up expired tickets
     pub async fn cleanup_expired_tickets(&self) {
         let now = chrono::Utc::now().timestamp();
-        let mut tickets = self.active_tickets.write().await;
-        tickets.retain(|_, ticket| ticket.expires_at > now);
+        self.active_tickets
+            .write()
+            .await
+            .retain(|_, ticket| ticket.expires_at > now);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horcrux_common::{VmArchitecture, VmDisk, VmDisplay, VmStatus};
+
+    fn vm(disk: &std::path::Path, hv: VmHypervisor) -> VmConfig {
+        VmConfig {
+            id: "c1".into(),
+            name: "c1".into(),
+            hypervisor: hv,
+            memory: 64,
+            cpus: 1,
+            disk_size: 1,
+            status: VmStatus::Running,
+            architecture: VmArchitecture::X86_64,
+            disks: vec![VmDisk {
+                path: disk.to_string_lossy().into(),
+                size_gb: 1,
+                disk_type: "virtio".into(),
+                cache: "none".into(),
+            }],
+            display: VmDisplay::default(),
+        }
     }
 
-    /// Get VNC websocket URL for a VM
-    pub async fn get_vnc_websocket(&self, vm_id: &str) -> Result<String> {
-        let info = self.create_console(vm_id, ConsoleType::Vnc).await?;
-        Ok(format!(
-            "ws://{}:{}/{}",
-            info.host, info.ws_port, info.ticket
-        ))
-    }
+    #[tokio::test]
+    async fn tickets_come_from_the_running_vms_display_state() {
+        let dir = std::env::temp_dir().join(format!("hx-console-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let disk = dir.join("c1.qcow2");
+        let m = ConsoleManager::new();
+        let qemu = vm(&disk, VmHypervisor::Qemu);
+        // Not running -> clear error, no ticket.
+        assert!(m.create_console(&qemu, ConsoleType::Vnc).await.is_err());
 
-    /// Get SPICE websocket URL for a VM
-    pub async fn get_spice_websocket(&self, vm_id: &str) -> Result<String> {
-        let info = self.create_console(vm_id, ConsoleType::Spice).await?;
-        Ok(format!(
-            "ws://{}:{}/{}",
-            info.host, info.ws_port, info.ticket
-        ))
-    }
+        let rt = DisplayRuntime::plan(&disk, &VmDisplay::default()).unwrap();
+        rt.save(&disk).await.unwrap();
+        let info = m.create_console(&qemu, ConsoleType::Vnc).await.unwrap();
+        assert_eq!(Some(info.port), rt.vnc_port);
+        assert_eq!(info.password, rt.password);
+        assert!(info.ws_path.ends_with(&info.ticket));
+        assert_eq!(
+            m.verify_ticket(&info.ticket).await.unwrap().vnc_port,
+            info.port
+        );
 
-    /// Get SPICE connection URI for native SPICE clients
-    pub async fn get_spice_uri(&self, vm_id: &str) -> Result<String> {
-        let config = self.spice_manager.get_spice_config(vm_id).await?;
-        Ok(spice::SpiceManager::generate_spice_uri(
-            &config.addr,
-            config.port,
-            config.password.as_deref(),
-        ))
-    }
-
-    /// Get Serial console WebSocket URL for a VM
-    pub async fn get_serial_websocket(&self, vm_id: &str) -> Result<String> {
-        let info = self.create_console(vm_id, ConsoleType::Serial).await?;
-        Ok(format!(
-            "ws://{}:{}/{}",
-            info.host, info.ws_port, info.ticket
-        ))
-    }
-
-    /// Get the raw Unix socket path backing a VM's serial console.
-    /// Used by the serial WebSocket bridge to know what to proxy to.
-    pub async fn get_serial_socket_path(&self, vm_id: &str) -> Result<String> {
-        self.serial_manager.ensure_serial_enabled(vm_id).await
-    }
-
-    /// Send data to serial console
-    pub async fn write_serial(&self, vm_id: &str, data: &str) -> Result<()> {
-        self.serial_manager.write_serial_input(vm_id, data).await
-    }
-
-    /// Read data from serial console
-    pub async fn read_serial(&self, vm_id: &str, lines: usize) -> Result<String> {
-        self.serial_manager.read_serial_output(vm_id, lines).await
+        // SPICE isn't configured on a VNC VM.
+        assert!(m.create_console(&qemu, ConsoleType::Spice).await.is_err());
+        // Serial is always there on a running QEMU VM.
+        let s = m.create_console(&qemu, ConsoleType::Serial).await.unwrap();
+        let st = m.verify_ticket(&s.ticket).await.unwrap();
+        assert_eq!(
+            st.serial_socket.as_deref(),
+            Some(rt.serial_socket.as_path())
+        );
+        // LXD/Incus VMs point at their own console tooling.
+        let e = m
+            .create_console(&vm(&disk, VmHypervisor::Incus), ConsoleType::Vnc)
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("incus console"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

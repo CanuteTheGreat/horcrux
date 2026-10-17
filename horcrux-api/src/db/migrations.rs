@@ -134,7 +134,6 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     // returned as [] on read, so every DB-backed lookup lost the VM's disk
     // (templates, backups and clones all failed with "VM has no disk").
     run_migration(pool, "021_add_vm_disks_column", MIGRATION_021_ADD_VM_DISKS).await?;
-
     // Durable copy of manager-owned configuration (storage pools, firewall,
     // HA, templates, alerts, replication, snapshot schedules, cluster nodes,
     // backup jobs + catalog) - see db/config_store.rs. Before this, all of it
@@ -152,6 +151,14 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
         pool,
         "023_create_notification_channels_table",
         MIGRATION_023_CREATE_NOTIFICATION_CHANNELS,
+    )
+    .await?;
+
+    // Per-VM display settings (JSON VmDisplay: protocol / video / sound).
+    run_migration(
+        pool,
+        "024_add_vm_display_column",
+        MIGRATION_024_ADD_VM_DISPLAY,
     )
     .await?;
 
@@ -1054,4 +1061,8 @@ CREATE TABLE notification_channels (
     success_count INTEGER NOT NULL DEFAULT 0,
     failure_count INTEGER NOT NULL DEFAULT 0
 );
+"#;
+
+const MIGRATION_024_ADD_VM_DISPLAY: &str = r#"
+ALTER TABLE vms ADD COLUMN display TEXT NOT NULL DEFAULT '{}';
 "#;

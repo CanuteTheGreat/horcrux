@@ -68,7 +68,7 @@ REQUIRED_USE="
 # These are suggested dependencies that can be installed as needed
 RDEPEND="
 	qemu? (
-		app-emulation/qemu[spice,usbredir,virtfs]
+		app-emulation/qemu[spice,usbredir,virtfs,vnc]
 		app-emulation/libvirt
 	)
 	lxc? ( app-emulation/lxc )

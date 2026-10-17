@@ -157,6 +157,12 @@ nas-apple = ["smb", "afp", "timemachine"]
 nas-enterprise = ["smb", "nfs-server", "nas-auth", "ldap", "ad", "iscsi-target"]
 
 [dev-dependencies]
+# tests/console_tests.rs speaks VNC (RFB + DES auth), SPICE (link + RSA-OAEP
+# ticket) and the console WebSockets to real QEMU VMs.
+des = "0.8"
+rsa = "0.9"
+sha1 = "0.10"
+tokio-tungstenite = "0.24"
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 
 [[bench]]

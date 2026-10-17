@@ -67,6 +67,7 @@ pub async fn handle_vm_command(
                 architecture: VmArchitecture::X86_64,
                 status: VmStatus::Stopped,
                 disks: Vec::new(), // Empty disk list, will be populated by API
+                display: Default::default(),
             };
 
             let vm: VmConfig = api.post("/api/vms", &vm_config).await?;

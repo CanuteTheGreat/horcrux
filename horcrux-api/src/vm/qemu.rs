@@ -20,6 +20,8 @@ pub struct QemuVm {
     pub hypervisor: VmHypervisor,
     /// Guest CPU architecture (selects the qemu-system-* binary).
     pub architecture: horcrux_common::VmArchitecture,
+    /// Display protocol, video card and sound card.
+    pub display: horcrux_common::VmDisplay,
 }
 
 impl QemuVm {
@@ -39,6 +41,7 @@ impl QemuVm {
                 disk_type: "virtio".to_string(),
                 cache: "writethrough".to_string(),
             }],
+            display: self.display,
         }
     }
 }
@@ -54,6 +57,67 @@ pub fn qemu_binary_and_machine(
         Riscv64 => ("qemu-system-riscv64", Some("virt")),
         Ppc64le => ("qemu-system-ppc64", Some("pseries")),
     }
+}
+
+/// Pidfile QEMU writes for a VM (`-pidfile`).
+pub fn pidfile(vm_id: &str) -> String {
+    format!("/var/run/horcrux-vm-{vm_id}.pid")
+}
+
+/// The complete QEMU command line for `vm`: binary plus every argument.
+///
+/// This is the ONE place QEMU arguments are assembled; `start_vm` only
+/// runs what it returns. Add new device/feature arguments here (or in a
+/// helper called from here, like `display::qemu_args` for the consoles),
+/// and cover them in this module's tests.
+pub fn qemu_command(
+    vm: &QemuVm,
+    runtime: &super::display::DisplayRuntime,
+    kvm_available: bool,
+) -> (&'static str, Vec<String>) {
+    // Binary per guest architecture (this used to always be
+    // qemu-system-x86_64, so aarch64/riscv64 VMs silently became x86).
+    let (binary, machine) = qemu_binary_and_machine(&vm.architecture);
+    let mut args: Vec<String> = Vec::new();
+
+    // KVM when the host has it and the guest is the host's architecture,
+    // otherwise software emulation (TCG) rather than failing. Uses
+    // "-machine accel=..." since older QEMU lacks "-accel kvm:tcg".
+    let native = vm.architecture == horcrux_common::VmArchitecture::default();
+    let accel = if native && kvm_available {
+        "kvm:tcg"
+    } else {
+        "tcg"
+    };
+    args.push("-machine".into());
+    args.push(match machine {
+        Some(m) => format!("{m},accel={accel}"),
+        None => format!("accel={accel}"),
+    });
+    if machine.is_some() {
+        args.extend(["-cpu".into(), "max".into()]);
+    }
+
+    // CPU, memory, disk.
+    args.extend([
+        "-m".into(),
+        vm.memory.to_string(),
+        "-smp".into(),
+        vm.cpus.to_string(),
+        "-drive".into(),
+        format!("file={},format=qcow2", vm.disk_path.display()),
+    ]);
+
+    // Serial console, QMP, display protocol, video and sound.
+    args.extend(super::display::qemu_args(
+        &vm.display,
+        &vm.architecture,
+        runtime,
+    ));
+
+    // Run detached; the pidfile is how stop/status find the process.
+    args.extend(["-daemonize".into(), "-pidfile".into(), pidfile(&vm.id)]);
+    (binary, args)
 }
 
 /// QEMU manager for VM operations
@@ -133,6 +197,7 @@ impl QemuManager {
             _pid: None,
             hypervisor: VmHypervisor::Qemu,
             architecture: config.architecture.clone(),
+            display: config.display,
         })
     }
 
@@ -161,12 +226,13 @@ impl QemuManager {
             _pid: None,
             hypervisor: config.hypervisor.clone(),
             architecture: config.architecture.clone(),
+            display: config.display,
         }
     }
 
     /// Whether the QEMU process for `vm_id` (per its pidfile) is alive.
     pub fn process_running(vm_id: &str) -> bool {
-        std::fs::read_to_string(format!("/var/run/horcrux-vm-{}.pid", vm_id))
+        std::fs::read_to_string(pidfile(vm_id))
             .ok()
             .and_then(|s| s.trim().parse::<u32>().ok())
             .map(|pid| std::path::Path::new(&format!("/proc/{pid}")).exists())
@@ -184,57 +250,16 @@ impl QemuManager {
             )));
         }
 
-        // Build QEMU command for the guest's architecture (this used to
-        // always run qemu-system-x86_64, so aarch64/riscv64 VMs silently
-        // became x86 guests).
-        let (binary, machine) = qemu_binary_and_machine(&vm.architecture);
-        let mut cmd = Command::new(binary);
-
-        // Prefer hardware acceleration (KVM) when the host supports it and
-        // the guest is the host's own architecture; otherwise fall back to
-        // software emulation (TCG) rather than failing.
-        // Note: use "-machine accel=..." (not "-accel") since older QEMU
-        // builds don't support the standalone "-accel kvm:tcg" fallback list.
-        let native = vm.architecture == horcrux_common::VmArchitecture::default();
-        let accel = if native && tokio::fs::metadata("/dev/kvm").await.is_ok() {
-            "kvm:tcg"
-        } else {
-            "tcg"
-        };
-        match machine {
-            Some(m) => cmd.arg("-machine").arg(format!("{m},accel={accel}")),
-            None => cmd.arg("-machine").arg(format!("accel={accel}")),
-        };
-        if machine.is_some() {
-            cmd.arg("-cpu").arg("max");
+        // Consoles: serial Unix socket (+ <disk>.serial.log), QMP, and the
+        // VM's display protocol / video / sound (see vm/display.rs).
+        let runtime = super::display::DisplayRuntime::plan(&vm.disk_path, &vm.display)?;
+        for stale in [&runtime.serial_socket, &runtime.qmp_socket] {
+            let _ = tokio::fs::remove_file(stale).await;
         }
-
-        // Redirect the guest serial console to a log file next to the disk
-        // image. This is the only way to observe genuine guest boot
-        // activity (kernel/init output, login prompts) since we run
-        // "-display none -daemonize" and never attach an interactive
-        // console; without it there is no way to tell a VM that is truly
-        // booting an OS apart from one that silently sits at "no bootable
-        // device". Harmless in production (just an extra log file) and
-        // used by the nightly realistic-test workflow to assert on real
-        // guest boot output.
-        let serial_log_path = vm.disk_path.with_extension("serial.log");
-
-        cmd.arg("-m")
-            .arg(vm.memory.to_string())
-            .arg("-smp")
-            .arg(vm.cpus.to_string())
-            .arg("-drive")
-            .arg(format!("file={},format=qcow2", vm.disk_path.display()))
-            .arg("-serial")
-            .arg(format!("file:{}", serial_log_path.display()))
-            .arg("-display")
-            .arg("none")
-            .arg("-daemonize")
-            .arg("-pidfile")
-            .arg(format!("/var/run/horcrux-vm-{}.pid", vm.id))
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+        let kvm = tokio::fs::metadata("/dev/kvm").await.is_ok();
+        let (binary, args) = qemu_command(vm, &runtime, kvm);
+        let mut cmd = Command::new(binary);
+        cmd.args(&args).stdout(Stdio::null()).stderr(Stdio::piped());
 
         debug!("QEMU command: {:?}", cmd);
 
@@ -250,6 +275,27 @@ impl QemuManager {
                 "Failed to start VM: {}",
                 stderr
             )));
+        }
+
+        runtime.save(&vm.disk_path).await?;
+        // Without a password nobody can attach to VNC/SPICE; set this run's.
+        // If that fails, don't leave a VM running whose console nobody can
+        // ever open: stop it and report the start as failed.
+        if let Err(e) = super::display::apply_password(&runtime).await {
+            error!(
+                "VM {} started but console password could not be set: {}",
+                vm.id, e
+            );
+            if let Some(pid) = std::fs::read_to_string(pidfile(&vm.id))
+                .ok()
+                .and_then(|s| s.trim().parse::<i32>().ok())
+            {
+                use nix::sys::signal::{kill, Signal};
+                let _ = kill(nix::unistd::Pid::from_raw(pid), Signal::SIGTERM);
+            }
+            let _ = tokio::fs::remove_file(pidfile(&vm.id)).await;
+            super::display::DisplayRuntime::remove(&vm.disk_path).await;
+            return Err(e);
         }
 
         info!("VM {} started successfully", vm.id);
@@ -268,7 +314,7 @@ impl QemuManager {
         }
 
         // Read PID from pidfile
-        let pidfile = format!("/var/run/horcrux-vm-{}.pid", vm.id);
+        let pidfile = pidfile(&vm.id);
         let pid_str = tokio::fs::read_to_string(&pidfile)
             .await
             .map_err(|e| horcrux_common::Error::System(format!("Failed to read pidfile: {}", e)))?;
@@ -289,6 +335,7 @@ impl QemuManager {
 
         // Remove pidfile
         tokio::fs::remove_file(&pidfile).await.ok(); // Ignore errors if file doesn't exist
+        super::display::DisplayRuntime::remove(&vm.disk_path).await;
 
         info!("VM {} stopped successfully", vm.id);
         Ok(())
@@ -338,5 +385,64 @@ impl QemuManager {
 
         let version = String::from_utf8_lossy(&output.stdout);
         Ok(version.lines().next().unwrap_or("Unknown").to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horcrux_common::{DisplayProtocol, SoundDevice, VideoDevice, VmArchitecture, VmDisplay};
+
+    fn vm(arch: VmArchitecture, display: VmDisplay) -> QemuVm {
+        QemuVm {
+            id: "t1".into(),
+            name: "t1".into(),
+            memory: 256,
+            cpus: 2,
+            disk_path: "/vms/t1.qcow2".into(),
+            disk_size: 1,
+            status: VmStatus::Stopped,
+            _pid: None,
+            hypervisor: VmHypervisor::Qemu,
+            architecture: arch,
+            display,
+        }
+    }
+
+    #[test]
+    fn one_command_line_with_consoles_and_pidfile() {
+        let d = VmDisplay {
+            protocol: DisplayProtocol::Spice,
+            video: VideoDevice::Qxl,
+            sound: SoundDevice::IntelHda,
+        };
+        let v = vm(VmArchitecture::X86_64, d);
+        let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &d).unwrap();
+        let (bin, args) = qemu_command(&v, &rt, true);
+        let a = args.join(" ");
+        assert_eq!(bin, "qemu-system-x86_64");
+        assert!(
+            a.starts_with(
+                "-machine accel=kvm:tcg -m 256 -smp 2 -drive file=/vms/t1.qcow2,format=qcow2"
+            ),
+            "{a}"
+        );
+        assert!(a.contains("-serial chardev:serial0") && a.contains("-qmp unix:/vms/t1.qmp.sock"));
+        assert!(a.contains("-spice port=") && a.contains("-audiodev spice,id=snd0"));
+        assert!(
+            a.ends_with("-daemonize -pidfile /var/run/horcrux-vm-t1.pid"),
+            "{a}"
+        );
+    }
+
+    #[test]
+    fn foreign_arch_uses_tcg_and_its_machine() {
+        let v = vm(VmArchitecture::Aarch64, VmDisplay::default());
+        let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
+        let (bin, args) = qemu_command(&v, &rt, true);
+        assert_eq!(bin, "qemu-system-aarch64");
+        assert!(args
+            .join(" ")
+            .starts_with("-machine virt,accel=tcg -cpu max"));
     }
 }

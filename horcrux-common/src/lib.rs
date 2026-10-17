@@ -63,6 +63,75 @@ pub struct VmConfig {
     pub architecture: VmArchitecture, // CPU architecture
     #[serde(default)]
     pub disks: Vec<VmDisk>, // Disk configurations
+    /// Graphical console, video card and sound (defaults: VNC, std VGA, no sound).
+    #[serde(default)]
+    pub display: VmDisplay,
+}
+
+/// Remote display protocol a VM's graphical console is served over.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DisplayProtocol {
+    /// Headless: serial console only.
+    None,
+    /// VNC on 127.0.0.1, reached through the ticketed noVNC WebSocket proxy.
+    #[default]
+    Vnc,
+    /// SPICE (password per VM start), with audio, clipboard agent and USB redirection.
+    Spice,
+}
+
+/// Emulated video card.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum VideoDevice {
+    #[default]
+    Std,
+    Virtio,
+    /// Paravirtual card for SPICE (x86 only).
+    Qxl,
+    None,
+}
+
+/// Emulated sound card; audio is carried over SPICE, so it needs `protocol: spice`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum SoundDevice {
+    #[default]
+    None,
+    IntelHda,
+    Ich9IntelHda,
+    Ac97,
+}
+
+/// Per-VM display settings.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct VmDisplay {
+    #[serde(default)]
+    pub protocol: DisplayProtocol,
+    #[serde(default)]
+    pub video: VideoDevice,
+    #[serde(default)]
+    pub sound: SoundDevice,
+}
+
+impl VmDisplay {
+    /// Reject combinations QEMU can't do (or that would silently do nothing).
+    pub fn validate(&self, arch: &VmArchitecture) -> std::result::Result<(), String> {
+        if self.sound != SoundDevice::None && self.protocol != DisplayProtocol::Spice {
+            return Err("Sound is carried over SPICE: set the display protocol to spice".into());
+        }
+        if self.video == VideoDevice::Qxl && *arch != VmArchitecture::X86_64 {
+            return Err("The qxl video card is only available on x86_64 guests".into());
+        }
+        if self.sound != SoundDevice::None && *arch != VmArchitecture::X86_64 {
+            return Err("Emulated sound cards are only offered for x86_64 guests".into());
+        }
+        if self.protocol != DisplayProtocol::None && self.video == VideoDevice::None {
+            return Err("A graphical console needs a video card (or set protocol to none)".into());
+        }
+        Ok(())
+    }
 }
 
 /// Virtual machine status
@@ -515,6 +584,7 @@ mod tests {
             disk_size: 20,
             status: VmStatus::Running,
             disks: Vec::new(),
+            display: Default::default(),
         };
 
         let json = serde_json::to_string(&vm).unwrap();
