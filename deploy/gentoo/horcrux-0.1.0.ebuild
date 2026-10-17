@@ -18,7 +18,7 @@ EGIT_COMMIT="v${PV}"
 # crate tarballs, since the workspace has no separate crates.io publishing
 # step yet.
 
-RESTRICT="network-sandbox"  # webui USE needs cargo install trunk at build time (no ebuild exists)
+RESTRICT="network-sandbox"  # webui USE fetches the prebuilt trunk bundler at build time (no ebuild exists)
 LICENSE="GPL-2"
 SLOT="0"
 KEYWORDS="~amd64 ~arm64 ~riscv"  # not yet stabilized; promote once field-tested per arch
@@ -242,17 +242,37 @@ src_compile() {
 	# Build web UI if enabled
 	if use webui; then
 		# trunk (the Leptos WASM bundler) has no Gentoo ebuild anywhere in
-		# the tree; it is a cargo-only tool, same class of dependency as
-		# any other build-time cargo binary. Install it via cargo like any
-		# other niche Rust-ecosystem CLI tool with no ebuild, rather than
-		# declaring an unsatisfiable BDEPEND atom.
-		if ! command -v trunk >/dev/null 2>&1; then
-			einfo "Installing trunk (WASM bundler, no Gentoo ebuild exists)..."
-			cargo install trunk --locked || die "Failed to install trunk"
+		# the tree. `cargo install trunk` cannot work here: cargo.eclass
+		# points CARGO_HOME at the offline vendored registry, which has no
+		# trunk ("could not find `trunk` in registry `crates-io`"), and a
+		# from-source build also hits trunk's lightningcss/cssparser
+		# conflict. Use the upstream prebuilt release instead (the same
+		# version CI's Build Web UI job currently resolves), unpacked into ${T};
+		# RESTRICT=network-sandbox already allows the fetch.
+		local trunk
+		if command -v trunk >/dev/null 2>&1; then
+			trunk=$(command -v trunk)
+		else
+			local trunk_ver=0.21.14 trunk_arch
+			case ${ARCH} in
+				amd64) trunk_arch=x86_64-unknown-linux-gnu ;;
+				arm64) trunk_arch=aarch64-unknown-linux-gnu ;;
+				*) die "USE=webui: no prebuilt trunk for ${ARCH}; install trunk into PATH first" ;;
+			esac
+			local trunk_url="https://github.com/trunk-rs/trunk/releases/download/v${trunk_ver}/trunk-${trunk_arch}.tar.gz"
+			einfo "Fetching prebuilt trunk ${trunk_ver} (${trunk_arch})..."
+			mkdir -p "${T}/trunk" || die
+			if command -v curl >/dev/null 2>&1; then
+				curl -fsSL "${trunk_url}" -o "${T}/trunk.tar.gz"
+			else
+				wget -q -O "${T}/trunk.tar.gz" "${trunk_url}"
+			fi || die "Failed to download trunk from ${trunk_url}"
+			tar -xzf "${T}/trunk.tar.gz" -C "${T}/trunk" || die "Failed to unpack trunk"
+			trunk="${T}/trunk/trunk"
 		fi
 		einfo "Building web UI with trunk..."
 		cd "${S}/horcrux-api/horcrux-ui" || die
-		"${HOME}/.cargo/bin/trunk" build --release || trunk build --release || die "Failed to build web UI"
+		"${trunk}" build --release || die "Failed to build web UI"
 	fi
 }
 
