@@ -5,7 +5,7 @@ name: Mutation testing (weekly)
 # module group must stay at or above the floors in ci/mutants-floors.json,
 # which only ever go up (the job prints when a floor can be raised).
 # One job per group (a single job over all ~520 mutants needs ~10 h:
-# every mutant rebuilds the horcrux-api crate).
+# every mutant used to rebuild the whole horcrux-api crate).
 on:
   workflow_dispatch: {}
   schedule:
@@ -66,13 +66,18 @@ jobs:
 
       - name: Run cargo-mutants on ${{ matrix.group }}
         run: |
-          files=$(python3 -c 'import json,sys; g=json.load(open("ci/mutants-floors.json"))[sys.argv[1]]; print(" ".join("--file horcrux-api/"+f for f in g["files"]))' "${{ matrix.group }}")
-          echo "mutating: $files"
+          spec='import json,sys; g=json.load(open("ci/mutants-floors.json"))[sys.argv[1]]'
+          pkg=$(python3 -c "$spec; print(g['package'])" "${{ matrix.group }}")
+          files=$(python3 -c "$spec; print(' '.join('--file '+f for f in g['files']))" "${{ matrix.group }}")
+          echo "mutating ($pkg): $files"
           # Library unit tests are the oracle (the HTTP/QEMU suites need a
-          # live server); --cargo-arg=--lib builds only the lib target for
-          # each mutant (not the 10k-line binary that compiles the same
-          # modules again). --no-shuffle keeps runs comparable week to week.
-          cargo mutants -p horcrux-api --all-features $files --jobs 2 --no-shuffle \
+          # live server). The modules live in workspace crates now (see
+          # crates/), so --test-workspace runs every crate's unit tests
+          # against each mutant - the same tests that used to share the
+          # one horcrux-api library, and only the mutated crate and its
+          # dependents are rebuilt. --no-shuffle keeps runs comparable
+          # week to week.
+          cargo mutants -p "$pkg" --test-workspace=true --all-features $files --jobs 2 --no-shuffle \
             --cargo-arg=--lib --timeout-multiplier 3 --output /tmp/mutants || true
           test -f /tmp/mutants/mutants.out/outcomes.json
 

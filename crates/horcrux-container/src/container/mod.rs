@@ -277,21 +277,8 @@ impl Drop for CreateReservation {
     }
 }
 
-/// Image source for an LXD/Incus container from the form's image field:
-/// `remote:alias` as given, `distro/release` from the public `images:`
-/// remote, anything else (a local alias or fingerprint) as given; empty
-/// means Ubuntu 22.04.
 #[cfg(any(feature = "lxd", feature = "incus"))]
-pub fn instance_image(rootfs: &str) -> String {
-    let r = rootfs.trim();
-    if r.is_empty() {
-        "images:ubuntu/22.04".to_string()
-    } else if r.contains(':') || !r.contains('/') || r.starts_with('/') {
-        r.to_string()
-    } else {
-        format!("images:{r}")
-    }
-}
+pub use crate::console::lxd::instance_image;
 
 /// Container manager
 pub struct ContainerManager {
@@ -1309,20 +1296,6 @@ impl ContainerManager {
     pub async fn delete_snapshot(&self, id: &str, name: &str) -> Result<()> {
         let c = self.lxc_container(id).await?;
         self.lxc_manager.delete_snapshot(&c.name, name).await
-    }
-}
-
-#[cfg(all(test, any(feature = "lxd", feature = "incus")))]
-mod instance_image_tests {
-    #[test]
-    fn image_sources() {
-        assert_eq!(super::instance_image("alpine/3.20"), "images:alpine/3.20");
-        assert_eq!(
-            super::instance_image("images:debian/12"),
-            "images:debian/12"
-        );
-        assert_eq!(super::instance_image("my-local"), "my-local");
-        assert_eq!(super::instance_image(" "), "images:ubuntu/22.04");
     }
 }
 

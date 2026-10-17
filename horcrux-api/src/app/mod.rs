@@ -503,17 +503,17 @@ pub async fn run() -> anyhow::Result<()> {
 
     let protected_routes = protected_routes
         // WebSocket endpoint for real-time updates
-        .route("/api/ws", get(websocket::ws_handler))
+        .route("/api/ws", get(websocket::ws_handler::<AppState>))
         .with_state(state.clone())
         // Every protected route: permission check (inner) after
         // authentication (outer layer, runs first).
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),
-            middleware::rbac::rbac_middleware,
+            middleware::rbac::rbac_middleware::<AppState>,
         ))
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),
-            middleware::auth::auth_middleware,
+            middleware::auth::auth_middleware::<AppState>,
         ));
 
     // Build main app with public and protected routes

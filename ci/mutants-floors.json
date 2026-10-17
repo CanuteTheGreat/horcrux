@@ -1,28 +1,32 @@
 {
   "vm-snapshot": {
+    "package": "horcrux-vm",
     "files": [
-      "src/vm/snapshot.rs"
+      "crates/horcrux-vm/src/vm/snapshot.rs"
     ],
     "floor": 27
   },
   "vm-runtime": {
+    "package": "horcrux-vm",
     "files": [
-      "src/vm/qemu.rs",
-      "src/vm/hold.rs"
+      "crates/horcrux-vm/src/vm/qemu.rs",
+      "crates/horcrux-vm/src/vm/hold.rs"
     ],
     "floor": 67
   },
   "backup": {
+    "package": "horcrux-backup",
     "files": [
-      "src/backup/archive.rs",
-      "src/backup/retention.rs",
-      "src/backup/store.rs"
+      "crates/horcrux-backup/src/backup/archive.rs",
+      "crates/horcrux-backup/src/backup/retention.rs",
+      "crates/horcrux-backup/src/backup/store.rs"
     ],
     "floor": 24
   },
   "storage": {
+    "package": "horcrux-storage",
     "files": [
-      "src/storage/mod.rs"
+      "crates/horcrux-storage/src/storage/mod.rs"
     ],
     "floor": 0
   }

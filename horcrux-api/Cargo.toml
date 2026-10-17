@@ -15,6 +15,11 @@ path = "src/main.rs"
 
 [dependencies]
 horcrux-common = { path = "../horcrux-common" }
+horcrux-backup = { path = "../crates/horcrux-backup", optional = true }
+horcrux-container = { path = "../crates/horcrux-container" }
+horcrux-vm = { path = "../crates/horcrux-vm" }
+horcrux-cluster = { path = "../crates/horcrux-cluster" }
+horcrux-auth = { path = "../crates/horcrux-auth" }
 horcrux-storage = { path = "../crates/horcrux-storage" }
 horcrux-monitoring = { path = "../crates/horcrux-monitoring" }
 horcrux-sdn = { path = "../crates/horcrux-sdn" }
@@ -127,22 +132,22 @@ http = { workspace = true, optional = true }
 default = ["qemu", "lxc", "docker", "backup", "pam"]
 
 # Virtualization backends
-qemu = ["virt", "horcrux-core/qemu", "horcrux-monitoring/qemu"]  # QEMU/KVM support with libvirt
+qemu = ["virt", "horcrux-core/qemu", "horcrux-monitoring/qemu", "horcrux-vm/qemu"]  # QEMU/KVM support with libvirt
 # LXD/Incus support (VMs and containers, incl. their in-browser consoles)
-lxd = ["dep:tokio-tungstenite", "horcrux-core/lxd"]
-incus = ["dep:tokio-tungstenite", "horcrux-core/incus"]
+lxd = ["dep:tokio-tungstenite", "horcrux-core/lxd", "horcrux-vm/lxd", "horcrux-container/lxd"]
+incus = ["dep:tokio-tungstenite", "horcrux-core/incus", "horcrux-vm/incus", "horcrux-container/incus"]
 
 # Container runtimes
-lxc = ["horcrux-core/lxc"]         # LXC containers
-docker = ["horcrux-core/docker"]      # Docker containers
-podman = ["horcrux-core/podman"]      # Podman containers
+lxc = ["horcrux-core/lxc", "horcrux-container/lxc", "horcrux-backup/lxc"]         # LXC containers
+docker = ["horcrux-core/docker", "horcrux-container/docker"]      # Docker containers
+podman = ["horcrux-core/podman", "horcrux-container/podman"]      # Podman containers
 
 # Additional features
-cluster = ["horcrux-core/cluster"]     # Clustering/HA support
-backup = ["horcrux-core/backup"]      # Backup and restore
+cluster = ["horcrux-core/cluster", "horcrux-cluster/cluster"]     # Clustering/HA support
+backup = ["horcrux-core/backup", "dep:horcrux-backup", "horcrux-backup/backup"]      # Backup and restore
 
 # Linux-PAM realm (host accounts). Links libpam.
-pam = ["horcrux-core/pam"]
+pam = ["horcrux-core/pam", "horcrux-auth/pam"]
 
 # Kubernetes orchestration
 kubernetes = ["kube", "k8s-openapi", "http", "horcrux-core/kubernetes", "dep:horcrux-k8s", "horcrux-k8s/kubernetes"]

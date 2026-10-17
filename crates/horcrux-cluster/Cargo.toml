@@ -1,0 +1,28 @@
+[package]
+name = "horcrux-cluster"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+horcrux-common = { path = "../../horcrux-common" }
+horcrux-core = { path = "../horcrux-core" }
+horcrux-auth = { path = "../horcrux-auth" }
+horcrux-monitoring = { path = "../horcrux-monitoring" }
+chrono = { workspace = true }
+futures = { workspace = true }
+hostname = { workspace = true }
+num_cpus = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[features]
+cluster = []

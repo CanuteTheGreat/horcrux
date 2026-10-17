@@ -43,7 +43,7 @@ impl LxdManager {
         vec![
             "init".to_string(),
             "--vm".to_string(),
-            crate::container::instance_image(image.unwrap_or("")),
+            crate::console::lxd::instance_image(image.unwrap_or("")),
             config.name.clone(),
             "-c".to_string(),
             format!("limits.cpu={}", config.cpus),
@@ -60,7 +60,7 @@ impl LxdManager {
             "Creating LXD VM: {} (ID: {}) from {}",
             config.name,
             config.id,
-            crate::container::instance_image(image.unwrap_or(""))
+            crate::console::lxd::instance_image(image.unwrap_or(""))
         );
 
         let output = Command::new("lxc")

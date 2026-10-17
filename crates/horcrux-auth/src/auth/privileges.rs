@@ -617,11 +617,20 @@ mod tests {
     /// it fall through to the administrators-only default.
     #[test]
     fn every_registered_route_is_mapped() {
-        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut files = vec![src_dir.join("main.rs")];
-        if let Ok(rd) = std::fs::read_dir(src_dir.join("api")) {
-            for e in rd.flatten() {
-                files.push(e.path());
+        // The router and handlers live in horcrux-api: src/app/ (formerly
+        // main.rs) and the src/api/ route modules.
+        let src_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../horcrux-api/src");
+        let mut files = Vec::new();
+        let mut dirs = vec![src_dir.join("app"), src_dir.join("api")];
+        while let Some(d) = dirs.pop() {
+            for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    dirs.push(p);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    files.push(p);
+                }
             }
         }
         let re = regex::Regex::new(r#"\.route\(\s*"(/[^"]*)""#).unwrap();

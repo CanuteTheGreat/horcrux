@@ -688,10 +688,16 @@ impl WsState {
     }
 }
 
+/// What the WebSocket endpoint needs from the server state (implemented
+/// by `horcrux_api::AppState`).
+pub trait WsStateSource: Send + Sync + 'static {
+    fn ws_state(&self) -> &Arc<WsState>;
+}
+
 /// WebSocket handler
-pub async fn ws_handler(
+pub async fn ws_handler<S: WsStateSource>(
     ws: WebSocketUpgrade,
-    State(state): State<Arc<crate::AppState>>,
+    State(state): State<Arc<S>>,
     Extension(auth_user): Extension<AuthUser>,
 ) -> impl IntoResponse {
     info!(
@@ -699,7 +705,7 @@ pub async fn ws_handler(
         "WebSocket connection request"
     );
 
-    let ws_state = state.ws_state.clone();
+    let ws_state = state.ws_state().clone();
     ws.on_upgrade(move |socket| handle_socket(socket, ws_state, auth_user))
 }
 

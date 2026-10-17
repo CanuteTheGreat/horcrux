@@ -1,0 +1,34 @@
+[package]
+name = "horcrux-vm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+horcrux-common = { path = "../../horcrux-common" }
+horcrux-core = { path = "../horcrux-core" }
+axum = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+nix = { workspace = true }
+rand = { workspace = true }
+rsa = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha1 = { workspace = true }
+subtle = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true, optional = true }
+tracing = { workspace = true }
+urlencoding = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[features]
+qemu = []
+lxd = ["dep:tokio-tungstenite"]
+incus = ["dep:tokio-tungstenite"]

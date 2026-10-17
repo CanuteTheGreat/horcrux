@@ -527,3 +527,32 @@ mod tests {
         assert!(Backend::Lxd.socket_path().ends_with("unix.socket"));
     }
 }
+
+/// Image source for an LXD/Incus container from the form's image field:
+/// `remote:alias` as given, `distro/release` from the public `images:`
+/// remote, anything else (a local alias or fingerprint) as given; empty
+/// means Ubuntu 22.04.
+pub fn instance_image(rootfs: &str) -> String {
+    let r = rootfs.trim();
+    if r.is_empty() {
+        "images:ubuntu/22.04".to_string()
+    } else if r.contains(':') || !r.contains('/') || r.starts_with('/') {
+        r.to_string()
+    } else {
+        format!("images:{r}")
+    }
+}
+
+#[cfg(test)]
+mod instance_image_tests {
+    #[test]
+    fn image_sources() {
+        assert_eq!(super::instance_image("alpine/3.20"), "images:alpine/3.20");
+        assert_eq!(
+            super::instance_image("images:debian/12"),
+            "images:debian/12"
+        );
+        assert_eq!(super::instance_image("my-local"), "my-local");
+        assert_eq!(super::instance_image(" "), "images:ubuntu/22.04");
+    }
+}

@@ -146,11 +146,11 @@ fn unauthorized(error: &str, message: impl Into<String>) -> AuthError {
 }
 
 /// Load the account behind a credential and make sure it may still log in.
-async fn load_user(
-    state: &Arc<crate::AppState>,
+async fn load_user<S: super::AuthState>(
+    state: &Arc<S>,
     user_id: &str,
 ) -> Result<horcrux_common::auth::User, AuthError> {
-    match crate::auth::store::find_user(state.database.pool(), user_id).await {
+    match crate::auth::store::find_user(state.database().pool(), user_id).await {
         Ok(Some(u)) if u.enabled => Ok(u),
         Ok(Some(_)) => Err(unauthorized("account_disabled", "This account is disabled")),
         _ => Err(unauthorized("invalid_session", "Session user not found")),
@@ -158,8 +158,8 @@ async fn load_user(
 }
 
 /// Authentication middleware (requires AppState with database)
-pub async fn auth_middleware(
-    State(state): State<Arc<crate::AppState>>,
+pub async fn auth_middleware<S: super::AuthState>(
+    State(state): State<Arc<S>>,
     headers: HeaderMap,
     mut request: Request,
     next: Next,
@@ -194,14 +194,14 @@ pub async fn auth_middleware(
             .sid
             .clone()
             .ok_or_else(|| unauthorized("invalid_token", "token has no session"))?;
-        let session = crate::db::users::get_session(state.database.pool(), &sid)
+        let session = crate::db::users::get_session(state.database().pool(), &sid)
             .await
             .map_err(|_| unauthorized("invalid_session", "Session expired or logged out"))?;
         if session.user_id != claims.sub {
             return Err(unauthorized("invalid_token", "token/session mismatch"));
         }
         let user = load_user(&state, &claims.sub).await?;
-        let scope = crate::auth::store::session_scope(state.database.pool(), &sid)
+        let scope = crate::auth::store::session_scope(state.database().pool(), &sid)
             .await
             .ok()
             .flatten();
@@ -218,11 +218,11 @@ pub async fn auth_middleware(
 
     // Session cookie
     if let Some(session_id) = session_cookie(&headers) {
-        let session = crate::db::users::get_session(state.database.pool(), &session_id)
+        let session = crate::db::users::get_session(state.database().pool(), &session_id)
             .await
             .map_err(|_| unauthorized("invalid_session", "Invalid or expired session"))?;
         let user = load_user(&state, &session.user_id).await?;
-        let scope = crate::auth::store::session_scope(state.database.pool(), &session_id)
+        let scope = crate::auth::store::session_scope(state.database().pool(), &session_id)
             .await
             .ok()
             .flatten();
@@ -239,7 +239,7 @@ pub async fn auth_middleware(
 
     // API key
     if let Some(key_str) = headers.get("x-api-key").and_then(|h| h.to_str().ok()) {
-        let auth_user = validate_api_key(&state.database, key_str)
+        let auth_user = validate_api_key(state.database(), key_str)
             .await
             .map_err(|e| unauthorized("invalid_api_key", e))?;
         request.extensions_mut().insert(auth_user);

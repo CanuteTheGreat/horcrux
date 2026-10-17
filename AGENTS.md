@@ -38,7 +38,7 @@ drift before.
 ## Access control: every route is permission-checked
 
 Protected routes run through `middleware/rbac.rs`, which asks
-`horcrux-api/src/auth/privileges.rs::requirement(method, path)` what the
+`crates/horcrux-auth/src/auth/privileges.rs::requirement(method, path)` what the
 request needs (a Proxmox-style privilege on an ACL path). When you add a
 route under a new top-level `/api/<area>`, add a rule for it there - CI's
 `every_registered_route_is_mapped` test fails otherwise, and an unmapped
@@ -47,3 +47,41 @@ area is administrators-only. Tests must create users through the admin API
 API serves HTTPS (self-issued certificate): test clients use
 `https://localhost:8006` with `danger_accept_invalid_certs(true)` (or the
 node CA from `/api/tls/ca.pem`). See docs/ACCESS_CONTROL.md.
+
+## Code layout: a workspace of crates (keep CI build memory low)
+
+`horcrux-api` used to be one 130k-line crate whose `main.rs` re-declared
+every module, so CI compiled it twice and needed 9+ GB. It is now split
+along its module seams into `crates/`:
+
+| crate | modules |
+|---|---|
+| `horcrux-core` | error, config, features (USE-flag table), validation, encryption, secrets, logging, db |
+| `horcrux-auth` | auth (realms, RBAC privileges), middleware, audit, tls, websocket |
+| `horcrux-monitoring` | metrics, monitoring, alerts, notification_channels, observability, prometheus, webhooks |
+| `horcrux-storage` | storage, template, cloudinit |
+| `horcrux-sdn` | sdn, firewall |
+| `horcrux-vm` | vm, console, gpu |
+| `horcrux-container` | container (docker/podman/lxc/lxd/incus) |
+| `horcrux-cluster` | cluster, ha, migration |
+| `horcrux-backup` | backup (only built with USE=backup) |
+| `horcrux-k8s` | kubernetes (only built with USE=kubernetes) |
+| `horcrux-nas` | nas (only built with USE=nas) |
+
+`horcrux-api` keeps the HTTP layer: `src/app/` (startup, router, the
+handlers that used to be in main.rs), `src/api/<lane>.rs` route modules,
+`state.rs` (AppState); `main.rs` only calls `horcrux_api::app::run()`.
+Every module is still reachable as `crate::<module>` / `horcrux_api::<module>`
+(each crate re-exports the modules it depends on), so moved code needs no
+path changes. Rules:
+
+- Every USE flag stays a Cargo feature of `horcrux-api`; it forwards the
+  feature to each crate whose code is gated on it (`qemu = [..., "horcrux-vm/qemu"]`).
+  A `#[cfg(feature = "x")]` inside a crate needs `x` declared in that
+  crate's Cargo.toml and forwarded from horcrux-api.
+- Dependencies are declared once in the root `[workspace.dependencies]`.
+- New code goes in the crate that owns the module; only HTTP handlers and
+  wiring belong in horcrux-api. Don't add a dependency from a lower crate
+  to a higher one (core <- auth/monitoring/storage/sdn/vm <- container,
+  cluster <- backup <- api); move the shared type down instead.
+

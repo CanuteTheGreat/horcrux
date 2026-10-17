@@ -2,6 +2,11 @@
 resolver = "2"
 members = [
     "horcrux-api",
+    "crates/horcrux-backup",
+    "crates/horcrux-container",
+    "crates/horcrux-vm",
+    "crates/horcrux-cluster",
+    "crates/horcrux-auth",
     "crates/horcrux-storage",
     "crates/horcrux-monitoring",
     "crates/horcrux-sdn",

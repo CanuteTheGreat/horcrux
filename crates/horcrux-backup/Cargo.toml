@@ -1,0 +1,34 @@
+[package]
+name = "horcrux-backup"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+horcrux-common = { path = "../../horcrux-common" }
+horcrux-core = { path = "../horcrux-core" }
+horcrux-vm = { path = "../horcrux-vm" }
+horcrux-container = { path = "../horcrux-container" }
+horcrux-storage = { path = "../horcrux-storage" }
+horcrux-cluster = { path = "../horcrux-cluster" }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+hex = { workspace = true }
+nix = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[features]
+lxc = []
+backup = []

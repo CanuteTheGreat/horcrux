@@ -27,17 +27,17 @@ pub mod static_ui;
 pub mod vm_console_api;
 
 // Authentication & Authorization
-pub mod audit;
-pub mod auth;
-pub mod middleware;
+pub use horcrux_auth::audit;
+pub use horcrux_auth::auth;
+pub use horcrux_auth::middleware;
 
 // Virtualization
-pub mod container;
-pub mod vm;
+pub use horcrux_container::container;
+pub use horcrux_vm::vm;
 
 // Storage
 #[cfg(feature = "backup")]
-pub mod backup;
+pub use horcrux_backup::backup;
 pub use horcrux_storage::storage;
 
 // Networking
@@ -45,10 +45,10 @@ pub use horcrux_sdn::firewall;
 pub use horcrux_sdn::sdn;
 
 // Clustering
-pub mod cluster;
+pub use horcrux_cluster::cluster;
 #[cfg(feature = "cluster")]
-pub mod ha;
-pub mod migration;
+pub use horcrux_cluster::ha;
+pub use horcrux_cluster::migration;
 
 // Monitoring
 pub use horcrux_monitoring::alerts;
@@ -60,13 +60,13 @@ pub use horcrux_monitoring::notification_channels;
 pub use horcrux_monitoring::observability;
 
 // Console access
-pub mod console;
+pub use horcrux_vm::console;
 
 // Cloud-init
 pub use horcrux_storage::cloudinit;
 
 // GPU passthrough
-pub mod gpu;
+pub use horcrux_vm::gpu;
 
 // Kubernetes integration
 #[cfg(feature = "kubernetes")]
@@ -83,7 +83,7 @@ pub use horcrux_core::db;
 pub use horcrux_core::secrets;
 
 // TLS
-pub mod tls;
+pub use horcrux_auth::tls;
 
 // Encryption
 pub use horcrux_core::encryption;
@@ -95,7 +95,7 @@ pub use horcrux_storage::template;
 pub use horcrux_monitoring::webhooks;
 
 // WebSocket
-pub mod websocket;
+pub use horcrux_auth::websocket;
 
 // Prometheus metrics
 pub use horcrux_monitoring::prometheus;

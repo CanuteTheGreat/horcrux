@@ -60,8 +60,8 @@ pub fn allowed_in_tfa_setup(path: &str) -> bool {
 }
 
 /// RBAC middleware - enforces the route's requirement for the caller.
-pub async fn rbac_middleware(
-    State(state): State<Arc<crate::AppState>>,
+pub async fn rbac_middleware<S: super::AuthState>(
+    State(state): State<Arc<S>>,
     mut request: Request,
     next: Next,
 ) -> Result<Response, RbacError> {
@@ -87,7 +87,7 @@ pub async fn rbac_middleware(
         });
     }
     let req = requirement(request.method().as_str(), &path);
-    let pool = state.database.pool();
+    let pool = state.database().pool();
     let principal = Principal::load(pool, &user.user_id)
         .await
         .map_err(|e| RbacError {

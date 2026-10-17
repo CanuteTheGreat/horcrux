@@ -81,3 +81,15 @@ pub struct AppState {
     #[cfg(feature = "kubernetes")]
     pub kubernetes_manager: Arc<kubernetes::KubernetesManager>,
 }
+
+impl middleware::AuthState for AppState {
+    fn database(&self) -> &Arc<db::Database> {
+        &self.database
+    }
+}
+
+impl websocket::WsStateSource for AppState {
+    fn ws_state(&self) -> &Arc<websocket::WsState> {
+        &self.ws_state
+    }
+}

@@ -11,11 +11,11 @@ on:
   push:
     branches: [main]
     paths:
-      - 'horcrux-api/src/console/**'
+      - 'crates/horcrux-vm/src/console/**'
       - 'horcrux-api/src/vm_console_api.rs'
-      - 'horcrux-api/src/vm/incus.rs'
-      - 'horcrux-api/src/vm/lxd.rs'
-      - 'horcrux-api/src/vm/mod.rs'
+      - 'crates/horcrux-vm/src/vm/incus.rs'
+      - 'crates/horcrux-vm/src/vm/lxd.rs'
+      - 'crates/horcrux-vm/src/vm/mod.rs'
       - 'horcrux-api/horcrux-ui/src/pages/console.rs'
       - 'horcrux-api/horcrux-ui/src/pages/vm_create.rs'
       - 'horcrux-api/tests/incus_e2e.*'
