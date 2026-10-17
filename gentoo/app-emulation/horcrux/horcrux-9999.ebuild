@@ -71,6 +71,12 @@ RDEPEND="
 	incus? ( app-containers/incus )
 	docker? ( app-containers/docker )
 	podman? ( app-containers/podman )
+	backup? (
+		app-arch/tar
+		app-arch/zstd
+		app-arch/gzip
+		app-arch/lzop
+	)
 	cluster? (
 		sys-cluster/corosync
 		sys-cluster/pacemaker

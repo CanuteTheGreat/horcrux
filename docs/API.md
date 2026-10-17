@@ -734,222 +734,62 @@ Authorization: Bearer <token>
 
 ## Backups
 
-### List Backups
+Backups are real vzdump-style archives: a tar (zstd/gzip/lzo/none) holding
+`horcrux-backup.json` (guest config + SHA-256 of every file) and the payload:
+`disk-N.qcow2` for VMs (every disk, flattened with `qemu-img convert`),
+`rootfs.tar` (+ `inspect.json`) for Docker/Podman/LXC containers, or the
+`lxc`/`incus export` tarball for LXD/Incus. The catalog and jobs are stored in
+the database. A stopped guest is copied offline in every mode; for a running
+guest `stop` stops it, backs it up and restarts it, and containers are frozen
+during `snapshot`/`suspend`. Live `snapshot`/`suspend` of a running VM is
+refused (it needs a QMP channel); use `stop`.
 
-Lists all backups.
+`storage` is `local` (the default backup directory, `paths.backups`), the id
+of a directory/NFS/CIFS/BtrFS/GlusterFS/ZFS storage pool (archives go to
+`<pool path>/dump`), or an absolute directory.
 
-```http
-GET /api/backups
-Authorization: Bearer <token>
-```
+| Method | Path | Body / query | Result |
+|---|---|---|---|
+| GET | `/api/backups` | `?target_id=` | `[Backup]`, newest first |
+| POST | `/api/backups` | `{"target_id", "target_type"?: "vm"/"container", "storage"?, "mode"?: "snapshot"/"suspend"/"stop", "compression"?: "zstd"/"gzip"/"lzo"/"none", "notes"?, "protected"?}` | 201 `Backup` (runs to completion) |
+| GET | `/api/backups/:id` | | `Backup` |
+| PUT | `/api/backups/:id` | `{"notes"?, "protected"?}` | `Backup` |
+| DELETE | `/api/backups/:id` | | 204; 409 if protected |
+| POST | `/api/backups/:id/verify` | | `{"backup_id","ok","checked_at","files_checked","error"}`, also stored on the backup as `verify_state`/`verified_at`/`verify_error` |
+| POST | `/api/backups/:id/restore` | `{"target_id"?, "name"?, "force"?, "start"?}` | `{"backup_id","target_type","target_id","name","replaced"}`; 409 if the target is running, or is a different existing guest and `force` is not set |
+| POST | `/api/backups/prune` | `{"target_id", "storage"?, "keep_last"?, "keep_hourly"?, "keep_daily"?, "keep_weekly"?, "keep_monthly"?, "keep_yearly"?, "dry_run"?}` | `[{"backup_id","timestamp","mark": "keep"/"remove"/"protected"}]` |
+| POST | `/api/backups/retention/:target_id` | keep-* policy | same as prune (not a dry run) |
+| GET | `/api/backup-storages` | | `[{"id","path","kind","available_gb","total_gb"}]` |
 
-**Query Parameters**:
-- `vm_id` (optional) - Filter by VM ID
-- `status` (optional) - Filter by status: `pending`, `running`, `completed`, `failed`
+`Backup`: `id, target_type, target_id, target_name, timestamp, size, mode,
+compression, path, storage, config_included, notes, protected, sha256,
+job_id, verify_state, verified_at, verify_error`.
 
-**Response**:
-```json
-[
-  {
-    "id": "backup-20251009-103045",
-    "vm_id": "100",
-    "vm_name": "web-server-01",
-    "type": "full",
-    "status": "completed",
-    "size": 5368709120,
-    "path": "/var/backups/horcrux/vm-100/backup-20251009-103045.tar.gz",
-    "created_at": "2025-10-09T10:30:45Z",
-    "completed_at": "2025-10-09T10:45:12Z",
-    "compression": "gzip"
-  }
-]
-```
+Restore verifies the archive (SHA-256, manifest checksums, `qemu-img check`)
+before it touches anything. A VM restore re-registers the VM: the same id
+replaces it, a new id creates a new VM next to the original.
 
-### Create Backup
-
-Creates a backup of a VM.
-
-```http
-POST /api/backups
-Authorization: Bearer <token>
-Content-Type: application/json
-
-{
-  "vm_id": "100",
-  "type": "full",
-  "compression": "gzip",
-  "description": "Weekly backup"
-}
-```
-
-**Parameters**:
-- `vm_id` (required) - VM to backup
-- `type` (optional) - Backup type: `full` or `incremental` (default: `full`)
-- `compression` (optional) - Compression: `gzip`, `bzip2`, `xz`, `none` (default: `gzip`)
-- `description` (optional) - Backup description
-
-**Response**:
-```json
-{
-  "id": "backup-20251009-103045",
-  "vm_id": "100",
-  "status": "running",
-  "message": "Backup started"
-}
-```
-
-### Get Backup
-
-Gets details for a specific backup.
-
-```http
-GET /api/backups/{id}
-Authorization: Bearer <token>
-```
-
-**Response**: Same as individual backup object in list response.
-
-### Restore Backup
-
-Restores a VM from a backup.
-
-```http
-POST /api/backups/{id}/restore
-Authorization: Bearer <token>
-Content-Type: application/json
-
-{
-  "target_vm_id": "101",
-  "overwrite": false
-}
-```
-
-**Parameters**:
-- `target_vm_id` (optional) - Restore to different VM ID (creates new VM if doesn't exist)
-- `overwrite` (optional) - Overwrite existing VM (default: false)
-
-**Response**:
-```json
-{
-  "vm_id": "101",
-  "message": "Backup restored successfully"
-}
-```
-
-### Delete Backup
-
-Deletes a backup.
-
-```http
-DELETE /api/backups/{id}
-Authorization: Bearer <token>
-```
-
-**Response**:
-```json
-{
-  "message": "Backup deleted successfully"
-}
-```
+Retention follows Proxmox `prune-backups`: the options apply in the order
+last, hourly, daily, weekly, monthly, yearly; each keeps the newest backup of
+N periods not already covered. Protected backups are always kept.
 
 ### Backup Jobs
 
-#### List Backup Jobs
+| Method | Path | Body | Result |
+|---|---|---|---|
+| GET | `/api/backup-jobs` | | `[BackupJob]` |
+| POST | `/api/backup-jobs` | `BackupJob` | 201 `BackupJob` |
+| GET / PUT / DELETE | `/api/backup-jobs/:id` | `BackupJob` (PUT) | `BackupJob` / 204 |
+| POST | `/api/backup-jobs/:id/run` | | 202 `{"job_id","started"}` (runs in the background) |
 
-Lists scheduled backup jobs.
-
-```http
-GET /api/backup-jobs
-Authorization: Bearer <token>
-```
-
-**Response**:
-```json
-[
-  {
-    "id": "job-1",
-    "name": "Daily VM Backups",
-    "schedule": "0 2 * * *",
-    "vm_ids": ["100", "101", "102"],
-    "retention_days": 30,
-    "enabled": true,
-    "last_run": "2025-10-09T02:00:00Z",
-    "next_run": "2025-10-10T02:00:00Z"
-  }
-]
-```
-
-#### Create Backup Job
-
-Creates a scheduled backup job.
-
-```http
-POST /api/backup-jobs
-Authorization: Bearer <token>
-Content-Type: application/json
-
-{
-  "name": "Daily VM Backups",
-  "schedule": "0 2 * * *",
-  "vm_ids": ["100", "101", "102"],
-  "type": "full",
-  "compression": "gzip",
-  "retention_days": 30,
-  "enabled": true
-}
-```
-
-**Schedule Format**: Cron expression (minute hour day month weekday)
-
-**Response**:
-```json
-{
-  "id": "job-1",
-  "name": "Daily VM Backups",
-  "message": "Backup job created successfully"
-}
-```
-
-#### Run Backup Job Now
-
-Triggers a backup job immediately.
-
-```http
-POST /api/backup-jobs/{id}/run
-Authorization: Bearer <token>
-```
-
-**Response**:
-```json
-{
-  "message": "Backup job started",
-  "backups_created": 3
-}
-```
-
-### Apply Retention Policy
-
-Applies retention policy to delete old backups.
-
-```http
-POST /api/backups/retention/{target_id}
-Authorization: Bearer <token>
-Content-Type: application/json
-
-{
-  "retention_days": 30
-}
-```
-
-**Response**:
-```json
-{
-  "message": "Retention policy applied",
-  "deleted_backups": 5
-}
-```
-
----
+`BackupJob`: `{"id"?, "comment"?, "enabled"?: true, "schedule", "targets":
+[ids], "storage"?, "mode"?, "compression"?, "retention"?: {keep-*}, "notify"?:
+"always"/"failure"/"never"}`, plus the server-set `last_run`, `last_status`
+("ok"/"failed"), `last_error` and `next_run`. `schedule` is a 5-field cron
+expression in local time (`*/15 9-17 * * mon-fri`) or `hourly`, `daily`,
+`weekly`, `monthly`, `yearly`. The server's scheduler runs due jobs. After
+each run the job's retention is applied per guest and storage, and the result
+goes to the configured notification channels as `notify` says.
 
 ## Templates
 

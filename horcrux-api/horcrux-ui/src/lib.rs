@@ -11,15 +11,16 @@ pub mod utils;
 mod websocket;
 
 use pages::{
-    AlertCenterPage, Alerts, ApiKeysPage, BackupDashboard, BackupJobsPage, CloneList,
-    ClusterDashboard, ClusterManagementPage, ConfigMapsPage, ContainerCreate, ContainerEventsPage,
-    ContainerExecPage, ContainerList, ContainerLogsPage, ContainerNetworksPage, Dashboard,
-    DashboardsPage, DeploymentsPage, GpuManagement, HaDashboard, HaGroupsPage, HelmChartsPage,
-    HelmReleasesPage, HelmRepositoriesPage, ImagesPage, IngressesPage, KubernetesManagement, Login,
-    MetricsExplorerPage, MigrationCenterPage, Monitoring, NetworkManagement, NotificationsPage,
-    ObservabilityPage, PodsPage, ReplicationList, RetentionPoliciesPage, RolesPage, SecretsPage,
-    ServicesPage, SessionsPage, SnapshotList, SnapshotManagerPage, StacksPage, StorageManagement,
-    TemplateManagerPage, UsersPage, VmConsole, VmCreate, VmList, VolumesPage,
+    AlertCenterPage, Alerts, ApiKeysPage, BackupDashboard, BackupJobsPage, BackupVerifyPage,
+    CloneList, ClusterDashboard, ClusterManagementPage, ConfigMapsPage, ContainerCreate,
+    ContainerEventsPage, ContainerExecPage, ContainerList, ContainerLogsPage,
+    ContainerNetworksPage, Dashboard, DashboardsPage, DeploymentsPage, GpuManagement, HaDashboard,
+    HaGroupsPage, HelmChartsPage, HelmReleasesPage, HelmRepositoriesPage, ImagesPage,
+    IngressesPage, KubernetesManagement, Login, MetricsExplorerPage, MigrationCenterPage,
+    Monitoring, NetworkManagement, NotificationsPage, ObservabilityPage, PodsPage, ReplicationList,
+    RetentionPoliciesPage, RolesPage, SecretsPage, ServicesPage, SessionsPage, SnapshotList,
+    SnapshotManagerPage, StacksPage, StorageManagement, TemplateManagerPage, UsersPage, VmConsole,
+    VmCreate, VmList, VolumesPage,
 };
 
 #[component]
@@ -141,6 +142,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/backup" view=BackupDashboard/>
                     <Route path="/backup/jobs" view=BackupJobsPage/>
                     <Route path="/backup/retention" view=RetentionPoliciesPage/>
+                    <Route path="/backup/verify" view=BackupVerifyPage/>
                     <Route path="/backup/snapshots" view=SnapshotManagerPage/>
                     <Route path="/backup/templates" view=TemplateManagerPage/>
                     <Route path="/ha" view=HaDashboard/>

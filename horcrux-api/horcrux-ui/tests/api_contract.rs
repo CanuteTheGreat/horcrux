@@ -215,6 +215,158 @@ async fn ui_types_read_real_api_responses() {
     assert_eq!(rep.vm_id, vm);
     assert!(rep.schedule.starts_with("daily"), "{rep:?}");
 
+    // ---- backups: back up, verify, prune-preview, restore, job ------------
+    use api::backup as bk;
+    let (status, body) = post(
+        &c,
+        &token,
+        "/backups",
+        serde_json::to_value(bk::CreateBackupRequest {
+            target_id: vm.into(),
+            target_type: Some("vm".into()),
+            storage: "local".into(),
+            mode: "snapshot".into(),
+            compression: "zstd".into(),
+            notes: Some("contract".into()),
+            protected: false,
+        })
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(status, 201, "create backup: {body}");
+    let backup: bk::Backup = serde_json::from_value(body).expect("UI Backup from create");
+    assert_eq!(backup.target_id, vm);
+    assert!(backup.size > 0 && backup.sha256.len() == 64, "{backup:?}");
+    let listed: Vec<bk::Backup> = fetch(&c, &token, "/backups").await;
+    assert!(listed.iter().any(|b| b.id == backup.id), "backup listed");
+    let (status, body) = post(
+        &c,
+        &token,
+        &format!("/backups/{}/verify", backup.id),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 200, "verify: {body}");
+    let v: bk::VerifyResult = serde_json::from_value(body).expect("UI VerifyResult");
+    assert!(v.ok, "{v:?}");
+    let (status, body) = post(
+        &c,
+        &token,
+        "/backups/prune",
+        serde_json::to_value(bk::PruneRequest {
+            target_id: vm.into(),
+            storage: None,
+            policy: bk::Retention {
+                keep_last: Some(5),
+                ..Default::default()
+            },
+            dry_run: true,
+        })
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200, "prune preview: {body}");
+    let d: Vec<bk::PruneDecision> = serde_json::from_value(body).expect("UI PruneDecision");
+    assert!(
+        d.iter()
+            .any(|x| x.backup_id == backup.id && x.mark == "keep"),
+        "{d:?}"
+    );
+    let restored_vm = "contract-vm-restored";
+    delete(&c, &token, &format!("/vms/{restored_vm}")).await;
+    let (status, body) = post(
+        &c,
+        &token,
+        &format!("/backups/{}/restore", backup.id),
+        serde_json::to_value(bk::RestoreRequest {
+            target_id: Some(restored_vm.into()),
+            ..Default::default()
+        })
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200, "restore: {body}");
+    let r: bk::RestoreResult = serde_json::from_value(body).expect("UI RestoreResult");
+    assert_eq!(r.target_id, restored_vm);
+    let job = bk::BackupJob {
+        id: "contract-job".into(),
+        enabled: false,
+        schedule: "0 3 * * *".into(),
+        targets: vec![vm.into()],
+        mode: "stop".into(),
+        compression: "gzip".into(),
+        retention: bk::Retention {
+            keep_daily: Some(7),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    delete(&c, &token, "/backup-jobs/contract-job").await;
+    let (status, body) = post(
+        &c,
+        &token,
+        "/backup-jobs",
+        serde_json::to_value(&job).unwrap(),
+    )
+    .await;
+    assert_eq!(status, 201, "create backup job: {body}");
+    let saved: bk::BackupJob = serde_json::from_value(body).expect("UI BackupJob from create");
+    assert_eq!(saved.retention.keep_daily, Some(7));
+    let jobs: Vec<bk::BackupJob> = fetch(&c, &token, "/backup-jobs").await;
+    assert!(jobs.iter().any(|j| j.id == "contract-job"), "job listed");
+    let storages: Vec<bk::BackupStorage> = fetch(&c, &token, "/backup-storages").await;
+    assert!(storages.iter().any(|s| s.id == "local"), "{storages:?}");
+    let one: bk::Backup = fetch(&c, &token, &format!("/backups/{}", backup.id)).await;
+    assert_eq!(one.verify_state.as_deref(), Some("ok"), "{one:?}");
+    let r = c
+        .put(format!("{}/backups/{}", api_base(), backup.id))
+        .bearer_auth(&token)
+        .json(&bk::UpdateBackupRequest {
+            notes: Some("contract notes".into()),
+            protected: None,
+        })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200, "update backup");
+    let upd: bk::Backup = r.json().await.expect("UI Backup from update");
+    assert_eq!(upd.notes.as_deref(), Some("contract notes"));
+    let one_job: bk::BackupJob = fetch(&c, &token, "/backup-jobs/contract-job").await;
+    let r = c
+        .put(format!("{}/backup-jobs/contract-job", api_base()))
+        .bearer_auth(&token)
+        .json(&bk::BackupJob {
+            comment: Some("edited".into()),
+            ..one_job
+        })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200, "update backup job");
+    let edited: bk::BackupJob = r.json().await.expect("UI BackupJob from update");
+    assert_eq!(edited.comment.as_deref(), Some("edited"));
+    let (status, body) = post(&c, &token, "/backup-jobs/contract-job/run", json!({})).await;
+    assert_eq!(status, 202, "run job: {body}");
+    let _: bk::RunStarted = serde_json::from_value(body).expect("UI RunStarted");
+    let mut job_done = None;
+    for _ in 0..120 {
+        let j: bk::BackupJob = fetch(&c, &token, "/backup-jobs/contract-job").await;
+        if j.last_status.is_some() {
+            job_done = Some(j);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    let job_done = job_done.expect("backup job run finished");
+    assert_eq!(job_done.last_status.as_deref(), Some("ok"), "{job_done:?}");
+    let (status, body) = post(&c, &token, &format!("/backups/retention/{vm}"), json!({})).await;
+    assert_eq!(status, 200, "retention: {body}");
+    let kept: Vec<bk::PruneDecision> = serde_json::from_value(body).expect("UI PruneDecision");
+    assert!(
+        kept.iter().all(|d| d.mark == "keep"),
+        "empty policy keeps all: {kept:?}"
+    );
+
     // ---- every list endpoint the UI reads --------------------------------
     macro_rules! check {
         ($path:expr, $t:ty) => {{
@@ -245,8 +397,9 @@ async fn ui_types_read_real_api_responses() {
     check!("/users", Vec<api::User>);
     check!("/roles", Vec<api::Role>);
     check!("/auth/sessions", Vec<api::UserSession>);
-    check!("/backups", Vec<api::VmBackup>);
-    check!("/backup-jobs", Vec<api::BackupJob>);
+    check!("/backups", Vec<bk::Backup>);
+    check!("/backup-jobs", Vec<bk::BackupJob>);
+    check!("/backup-storages", Vec<bk::BackupStorage>);
     check!("/snapshot-schedules", Vec<api::SnapshotSchedule>);
     check!("/snapshot-quotas", Vec<api::SnapshotQuota>);
     check!("/snapshot-quotas/summary", api::QuotaSummary);
@@ -298,6 +451,24 @@ async fn ui_types_read_real_api_responses() {
         pool_dir.join("contract-vol.qcow2").is_file(),
         "volume file in pool dir"
     );
+    // The pool is a backup storage too: archives land in <pool>/dump.
+    let storages: Vec<bk::BackupStorage> = fetch(&c, &token, "/backup-storages").await;
+    assert!(storages.iter().any(|s| s.id == pool_id), "{storages:?}");
+    let (status, body) = post(
+        &c,
+        &token,
+        "/backups",
+        json!({"target_id": vm, "storage": pool_id, "compression": "gzip"}),
+    )
+    .await;
+    assert_eq!(status, 201, "backup to pool: {body}");
+    let pb: bk::Backup = serde_json::from_value(body).unwrap();
+    assert!(
+        pb.path
+            .starts_with(&*pool_dir.join("dump").to_string_lossy()),
+        "{pb:?}"
+    );
+    delete(&c, &token, &format!("/backups/{}", pb.id)).await;
     delete(&c, &token, &format!("/storage/pools/{pool_id}")).await;
     let _ = std::fs::remove_dir_all(&pool_dir);
 
@@ -318,6 +489,12 @@ async fn ui_types_read_real_api_responses() {
 
     // ---- cleanup ---------------------------------------------------------
     delete(&c, &token, &format!("/replication/jobs/{rep_id}")).await;
+    delete(&c, &token, "/backup-jobs/contract-job").await;
+    let mine: Vec<bk::Backup> = fetch(&c, &token, &format!("/backups?target_id={vm}")).await;
+    for b in mine {
+        delete(&c, &token, &format!("/backups/{}", b.id)).await;
+    }
+    delete(&c, &token, &format!("/vms/{restored_vm}")).await;
     delete(&c, &token, &format!("/vms/{vm}")).await;
     delete(&c, &token, &format!("/containers/{ct}")).await;
 

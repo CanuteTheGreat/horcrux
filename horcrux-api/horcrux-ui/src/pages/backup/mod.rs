@@ -1,3 +1,4 @@
+mod common;
 pub mod dashboard;
 pub mod jobs;
 pub mod retention_policies;
@@ -10,3 +11,4 @@ pub use jobs::BackupJobsPage;
 pub use retention_policies::RetentionPoliciesPage;
 pub use snapshot_manager::SnapshotManagerPage;
 pub use template_manager::TemplateManagerPage;
+pub use validation::BackupVerifyPage;

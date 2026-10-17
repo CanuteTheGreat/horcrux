@@ -33,6 +33,8 @@ STACK = "e2e-ui-stack"
 EV_CT = "e2e-ui-events"
 SDN_NET = "e2esdn0"
 REP_VM = "e2e-rep-vm"
+BK_VM = "e2e-bk-restored"
+BK_JOB = "e2e-bk-job"
 _TOKEN = []
 
 
@@ -99,6 +101,11 @@ def cleanup():
         for j in api_get("/api/replication/jobs", tok) or []:
             if j.get("source_vm_id") == REP_VM:
                 _req("DELETE", f"/api/replication/jobs/{j['id']}", tok)
+        _req("DELETE", f"/api/backup-jobs/{BK_JOB}", tok)
+        for b in api_get(f"/api/backups?target_id={REP_VM}", tok) or []:
+            _req("PUT", f"/api/backups/{b['id']}", tok, {"protected": False})
+            _req("DELETE", f"/api/backups/{b['id']}", tok)
+        _req("DELETE", f"/api/vms/{BK_VM}", tok)
         _req("DELETE", f"/api/vms/{REP_VM}-clone", tok)
         _req("DELETE", f"/api/vms/{REP_VM}", tok)
         _req("DELETE", f"/api/cni/networks/{SDN_NET}", tok)
@@ -281,6 +288,49 @@ def main():
         page.locator("#rep-submit").click()
         expect(page.locator("tr", has_text=REP_VM).first).to_be_visible(timeout=30000)
         assert any(j["source_vm_id"] == REP_VM for j in api_get("/api/replication/jobs", token()))
+
+        # ---- backups: back up from /backup, verify, restore to a new VM --
+        page.goto(f"{BASE}/backup")
+        expect(page.locator(f"#backup-target option[value='{REP_VM}']")).to_have_count(1, timeout=30000)
+        page.locator("#backup-target").select_option(REP_VM)
+        page.locator("#backup-now-btn").click()
+        expect(page.locator("#backup-notice")).to_contain_text("written", timeout=180000)
+        row = page.locator(f"tr.backup-row[data-target-id='{REP_VM}']").first
+        expect(row).to_be_visible(timeout=30000)
+        bid = row.get_attribute("data-backup-id")
+        archive = api_get(f"/api/backups/{bid}", token())["path"]
+        assert os.path.getsize(archive) > 0, archive
+        page.locator(f"tr.backup-row[data-backup-id='{bid}'] .verify-btn").click()
+        expect(page.locator(f"tr.backup-row[data-backup-id='{bid}'] .verify-state")).to_contain_text("OK", timeout=120000)
+        assert api_get(f"/api/backups/{bid}", token())["verify_state"] == "ok"
+        page.locator(f"tr.backup-row[data-backup-id='{bid}'] .restore-btn").click()
+        page.fill("#restore-target", BK_VM)
+        page.locator("#restore-submit").click()
+        expect(page.locator("#backup-notice")).to_contain_text(BK_VM, timeout=180000)
+        restored = api_get(f"/api/vms/{BK_VM}", token())
+        assert restored["id"] == BK_VM and os.path.isfile(restored["disks"][0]["path"]), restored
+
+        # ---- backup jobs: create from the form, Run now, result shown -----
+        page.goto(f"{BASE}/backup/jobs")
+        page.locator("#new-job-btn").click()
+        page.fill("#job-id", BK_JOB)
+        page.locator(f"#job-targets input[value='{REP_VM}']").check()
+        page.locator("#job-submit").click()
+        job_row = page.locator(f"tr.job-row[data-job-id='{BK_JOB}']")
+        expect(job_row).to_be_visible(timeout=30000)
+        job_row.locator(".run-btn").click()
+        expect(page.locator(f"tr.job-row[data-job-id='{BK_JOB}'] .job-last-run")).to_contain_text("OK", timeout=180000)
+        assert any(b.get("job_id") == BK_JOB for b in api_get(f"/api/backups?target_id={REP_VM}", token()))
+
+        # ---- retention preview + verify-all pages render real data --------
+        page.goto(f"{BASE}/backup/retention")
+        page.locator("#prune-target").select_option(REP_VM)
+        page.fill("#prune-keep-0", "1")
+        page.locator("#prune-preview").click()
+        expect(page.locator("#prune-notice")).to_contain_text("would be removed", timeout=30000)
+        page.goto(f"{BASE}/backup/verify")
+        page.locator("#verify-all-btn").click()
+        expect(page.locator("#verify-summary")).to_contain_text("0 failed", timeout=180000)
 
         browser.close()
 

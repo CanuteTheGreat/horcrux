@@ -61,7 +61,7 @@ pub use kubernetes::{
 
 // Re-export backup components
 pub use backup::{
-    BackupDashboard, BackupJobsPage, RetentionPoliciesPage, SnapshotManagerPage,
+    BackupDashboard, BackupJobsPage, BackupVerifyPage, RetentionPoliciesPage, SnapshotManagerPage,
     TemplateManagerPage,
 };
 

@@ -39,6 +39,10 @@ mod vm;
 mod webhooks;
 mod websocket;
 
+// Lane D: backup/restore API (see src/api/backup.rs).
+#[path = "api/backup.rs"]
+mod api_backup;
+
 #[cfg(feature = "kubernetes")]
 mod kubernetes;
 
@@ -56,7 +60,7 @@ use axum::{
     routing::{delete, get, post, put},
     Json, Router,
 };
-use backup::{Backup, BackupConfig, BackupJob, BackupManager, RetentionPolicy};
+use backup::BackupManager;
 use cloudinit::{CloudInitConfig, CloudInitManager};
 use cluster::{ArchitectureSummary, ClusterManager, Node};
 use console::{ConsoleInfo, ConsoleManager, ConsoleType};
@@ -526,6 +530,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(stack_routes())
         .merge(container_ws_ticket_routes())
         .merge(backup_routes())
+        .merge(api_backup::routes(&state))
         .merge(auth_protected_routes())
         .merge(storage_routes())
         .merge(monitoring_routes())
@@ -825,22 +830,10 @@ fn container_ws_ticket_routes() -> Router<Arc<AppState>> {
         )
 }
 
-/// Build backup-related routes (backups, templates, cloud-init)
+/// Build template and cloud-init routes (backup routes live in
+/// src/api/backup.rs).
 fn backup_routes() -> Router<Arc<AppState>> {
     Router::new()
-        // Backup endpoints
-        .route("/api/backups", get(list_backups))
-        .route("/api/backups", post(create_backup))
-        .route("/api/backups/:id", get(get_backup))
-        .route("/api/backups/:id", delete(delete_backup))
-        .route("/api/backups/:id/restore", post(restore_backup))
-        // Backup job endpoints
-        .route("/api/backup-jobs", get(list_backup_jobs))
-        .route("/api/backup-jobs", post(create_backup_job))
-        .route("/api/backup-jobs/:id/run", post(run_backup_job_now))
-        .route("/api/backup-jobs/:id", delete(delete_backup_job))
-        // Retention policy endpoint
-        .route("/api/backups/retention/:target_id", post(apply_retention))
         // Cloud-init endpoints
         .route("/api/cloudinit/:vm_id", post(generate_cloudinit))
         .route("/api/cloudinit/:vm_id", delete(delete_cloudinit))
@@ -5802,72 +5795,6 @@ async fn delete_vm(
     Ok(StatusCode::NO_CONTENT)
 }
 
-// Backup API handlers
-
-async fn list_backups(State(state): State<Arc<AppState>>) -> Json<Vec<Backup>> {
-    let backups = state.backup_manager.list_backups(None).await;
-    Json(backups)
-}
-
-async fn get_backup(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<Backup>, ApiError> {
-    let backups = state.backup_manager.list_backups(None).await;
-    let backup = backups
-        .iter()
-        .find(|b| b.id == id)
-        .ok_or_else(|| horcrux_common::Error::System(format!("Backup {} not found", id)))?;
-    Ok(Json(backup.clone()))
-}
-
-async fn create_backup(
-    State(state): State<Arc<AppState>>,
-    Json(payload): Json<BackupConfig>,
-) -> Result<(StatusCode, Json<Backup>), ApiError> {
-    let target_id = payload.target_id.clone();
-    let start_time = std::time::Instant::now();
-
-    let backup = state.backup_manager.create_backup(payload).await?;
-
-    let duration_secs = start_time.elapsed().as_secs();
-
-    // Broadcast backup completed event
-    state.ws_state.broadcast_backup_completed(
-        target_id,
-        backup.id.clone(),
-        backup.size,
-        duration_secs,
-    );
-
-    Ok((StatusCode::CREATED, Json(backup)))
-}
-
-async fn delete_backup(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, ApiError> {
-    state.backup_manager.delete_backup(&id).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-#[derive(serde::Deserialize)]
-struct RestoreRequest {
-    target_id: Option<String>,
-}
-
-async fn restore_backup(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(payload): Json<RestoreRequest>,
-) -> Result<StatusCode, ApiError> {
-    state
-        .backup_manager
-        .restore_backup(&id, payload.target_id)
-        .await?;
-    Ok(StatusCode::OK)
-}
-
 // VM Snapshot handlers
 
 #[derive(serde::Deserialize)]
@@ -6916,88 +6843,6 @@ async fn clone_container(
         source_id, req.target_id
     );
     Ok(Json(cloned_container))
-}
-
-async fn list_backup_jobs(State(state): State<Arc<AppState>>) -> Json<Vec<BackupJob>> {
-    let jobs = state.backup_manager.list_jobs().await;
-    Json(jobs)
-}
-
-async fn create_backup_job(
-    State(state): State<Arc<AppState>>,
-    Json(payload): Json<BackupJob>,
-) -> Result<(StatusCode, Json<BackupJob>), ApiError> {
-    // Echo the stored job: the UI's create form reads it back.
-    state.backup_manager.create_job(payload.clone()).await?;
-    Ok((StatusCode::CREATED, Json(payload)))
-}
-
-async fn delete_backup_job(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, ApiError> {
-    state.backup_manager.delete_job(&id).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn run_backup_job_now(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, ApiError> {
-    // Get the job
-    let jobs = state.backup_manager.list_jobs().await;
-    let job = jobs
-        .iter()
-        .find(|j| j.id == id)
-        .ok_or_else(|| ApiError::NotFound(format!("Backup job not found: {}", id)))?;
-
-    if !job.enabled {
-        return Err(ApiError::Internal("Backup job is disabled".to_string()));
-    }
-
-    // Execute backup for each target in the job
-    for target_id in &job.targets {
-        let backup_config = BackupConfig {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: format!("Manual backup from job {} for {}", job.id, target_id),
-            target_type: backup::TargetType::Vm, // Default to VM, could parse from target_id
-            target_id: target_id.clone(),
-            storage: job.storage.clone(),
-            mode: job.mode.clone(),
-            compression: job.compression.clone(),
-            notes: Some(format!("Manually triggered from job {}", job.id)),
-        };
-
-        info!("Executing backup for target {} from job {}", target_id, id);
-
-        // Execute backup asynchronously
-        let backup_manager = state.backup_manager.clone();
-        tokio::spawn(async move {
-            match backup_manager.create_backup(backup_config).await {
-                Ok(backup) => {
-                    info!("Backup completed successfully: {}", backup.id);
-                }
-                Err(e) => {
-                    error!("Backup failed: {}", e);
-                }
-            }
-        });
-    }
-
-    info!("Manual backup job triggered: {}", id);
-    Ok(StatusCode::ACCEPTED)
-}
-
-async fn apply_retention(
-    State(state): State<Arc<AppState>>,
-    Path(target_id): Path<String>,
-    Json(policy): Json<RetentionPolicy>,
-) -> Result<StatusCode, ApiError> {
-    state
-        .backup_manager
-        .apply_retention(&target_id, &policy)
-        .await?;
-    Ok(StatusCode::OK)
 }
 
 // Cloud-init API handlers

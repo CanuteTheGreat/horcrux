@@ -1,534 +1,182 @@
-use crate::api::{
-    apply_retention_policy, get_backup_jobs, get_snapshot_schedules, BackupJob, RetentionPolicy,
-    SnapshotSchedule,
-};
+//! /backup/retention: preview and apply a keep-* retention policy to one
+//! guest's backups (Proxmox "prune" semantics; protected backups are kept).
+use super::common::{confirm, load_guests, short, Guest};
+use crate::api::backup as bk;
 use leptos::*;
 
 #[component]
 pub fn RetentionPoliciesPage() -> impl IntoView {
-    let (backup_jobs, set_backup_jobs) = create_signal(Vec::<BackupJob>::new());
-    let (snapshot_schedules, set_snapshot_schedules) =
-        create_signal(Vec::<SnapshotSchedule>::new());
-    let (loading, set_loading) = create_signal(false);
+    let (guests, set_guests) = create_signal(Vec::<Guest>::new());
+    let (backups, set_backups) = create_signal(Vec::<bk::Backup>::new());
+    let (target, set_target) = create_signal(String::new());
+    let (storage, set_storage) = create_signal(String::new());
+    let (decisions, set_decisions) = create_signal(None::<Vec<bk::PruneDecision>>);
+    let (applied, set_applied) = create_signal(false);
     let (error, set_error) = create_signal(None::<String>);
-    let (success_message, set_success_message) = create_signal(None::<String>);
-    let (active_tab, set_active_tab) = create_signal("backup_jobs".to_string());
+    let (notice, set_notice) = create_signal(None::<String>);
+    let keep: [(ReadSignal<String>, WriteSignal<String>); 6] =
+        std::array::from_fn(|_| create_signal(String::new()));
+    let labels = [
+        "Keep last",
+        "Keep hourly",
+        "Keep daily",
+        "Keep weekly",
+        "Keep monthly",
+        "Keep yearly",
+    ];
 
-    let load_data = move || {
-        set_loading.set(true);
-        set_error.set(None);
-
+    let reload = move || {
         spawn_local(async move {
-            let mut errors = Vec::new();
-
-            match get_backup_jobs().await {
-                Ok(jobs) => set_backup_jobs.set(jobs),
-                Err(e) => errors.push(format!("Failed to load backup jobs: {}", e)),
+            if let Ok(b) = bk::list_backups().await {
+                set_backups.set(b);
             }
-
-            match get_snapshot_schedules().await {
-                Ok(schedules) => set_snapshot_schedules.set(schedules),
-                Err(e) => errors.push(format!("Failed to load snapshot schedules: {}", e)),
-            }
-
-            if !errors.is_empty() {
-                set_error.set(Some(errors.join("; ")));
-            }
-            set_loading.set(false);
         });
     };
-
-    // Load data on mount
     create_effect(move |_| {
-        load_data();
+        reload();
+        spawn_local(async move {
+            let g = load_guests().await;
+            if let Some(first) = g.first() {
+                set_target.set(first.id.clone());
+            }
+            set_guests.set(g);
+        });
     });
 
-    let apply_retention = move |target_id: String| {
-        spawn_local(async move {
-            match apply_retention_policy(&target_id).await {
-                Ok(_) => {
-                    set_success_message
-                        .set(Some("Retention policy applied successfully".to_string()));
-                    // Clear success message after 3 seconds
-                    set_timeout(
-                        move || set_success_message.set(None),
-                        std::time::Duration::from_secs(3),
-                    );
-                }
-                Err(e) => set_error.set(Some(format!("Failed to apply retention policy: {}", e))),
+    let run = move |dry_run: bool| {
+        let k: Vec<String> = keep.iter().map(|(r, _)| r.get()).collect();
+        let policy = match bk::Retention::from_fields([&k[0], &k[1], &k[2], &k[3], &k[4], &k[5]]) {
+            Ok(p) => p,
+            Err(e) => {
+                set_error.set(Some(e));
+                return;
             }
+        };
+        let t = target.get();
+        if t.is_empty() {
+            set_error.set(Some("Choose a guest".into()));
+            return;
+        }
+        if !dry_run {
+            if policy == bk::Retention::default() {
+                set_error.set(Some("Set at least one keep-* option".into()));
+                return;
+            }
+            if !confirm(&format!(
+                "Delete every backup of {t} the policy ({}) does not keep?",
+                policy.summary()
+            )) {
+                return;
+            }
+        }
+        let req = bk::PruneRequest {
+            target_id: t.clone(),
+            storage: Some(storage.get()).filter(|s| !s.is_empty()),
+            policy,
+            dry_run,
+        };
+        spawn_local(async move {
+            match bk::prune_backups(&req).await {
+                Ok(d) => {
+                    let removed = d.iter().filter(|x| x.mark == "remove").count();
+                    set_notice.set(Some(if dry_run {
+                        format!(
+                            "Preview: {removed} of {} backup(s) of {t} would be removed",
+                            d.len()
+                        )
+                    } else {
+                        format!("Pruned {removed} backup(s) of {t}")
+                    }));
+                    set_error.set(None);
+                    set_applied.set(!dry_run);
+                    set_decisions.set(Some(d));
+                }
+                Err(e) => set_error.set(Some(format!("Prune: {}", e.message))),
+            }
+            reload();
         });
     };
 
-    let get_retention_description = move |policy: &RetentionPolicy| -> String {
-        let mut parts = Vec::new();
-
-        if let Some(hourly) = policy.keep_hourly {
-            if hourly > 0 {
-                parts.push(format!("{} hourly", hourly));
-            }
-        }
-
-        if let Some(daily) = policy.keep_daily {
-            if daily > 0 {
-                parts.push(format!("{} daily", daily));
-            }
-        }
-
-        if let Some(weekly) = policy.keep_weekly {
-            if weekly > 0 {
-                parts.push(format!("{} weekly", weekly));
-            }
-        }
-
-        if let Some(monthly) = policy.keep_monthly {
-            if monthly > 0 {
-                parts.push(format!("{} monthly", monthly));
-            }
-        }
-
-        if let Some(yearly) = policy.keep_yearly {
-            if yearly > 0 {
-                parts.push(format!("{} yearly", yearly));
-            }
-        }
-
-        if let Some(max_age) = policy.max_age_days {
-            if max_age > 0 {
-                parts.push(format!("max {} days", max_age));
-            }
-        }
-
-        if parts.is_empty() {
-            "No retention policy".to_string()
-        } else {
-            format!("Keep: {}", parts.join(", "))
-        }
-    };
-
-    let get_policy_health = move |policy: &RetentionPolicy| -> (&str, &str) {
-        let has_short_term =
-            policy.keep_hourly.unwrap_or(0) > 0 || policy.keep_daily.unwrap_or(0) > 0;
-        let has_long_term =
-            policy.keep_monthly.unwrap_or(0) > 0 || policy.keep_yearly.unwrap_or(0) > 0;
-        let has_max_age = policy.max_age_days.is_some();
-
-        match (has_short_term, has_long_term, has_max_age) {
-            (true, true, true) => ("Excellent", "bg-green-100 text-green-800"),
-            (true, true, false) => ("Good", "bg-blue-100 text-blue-800"),
-            (true, false, _) => ("Basic", "bg-yellow-100 text-yellow-800"),
-            (false, false, false) => ("None", "bg-red-100 text-red-800"),
-            _ => ("Partial", "bg-orange-100 text-orange-800"),
-        }
+    let storages_of_target = move || {
+        let t = target.get();
+        let mut s: Vec<String> = backups
+            .get()
+            .into_iter()
+            .filter(|b| b.target_id == t)
+            .map(|b| b.storage)
+            .collect();
+        s.sort();
+        s.dedup();
+        s
     };
 
     view! {
-        <div class="p-6">
-            <div class="flex justify-between items-center mb-6">
-                <div>
-                    <h1 class="text-2xl font-bold">Retention Policies</h1>
-                    <p class="text-gray-600">
-                        "Manage backup and snapshot retention policies to automatically clean up old data"
-                    </p>
-                </div>
-                <button
-                    on:click=move |_| load_data()
-                    class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg"
-                >
-                    <i class="fas fa-sync mr-2"></i>
-                    "Refresh"
-                </button>
-            </div>
-
-            // Success message
-            {move || success_message.get().map(|msg| view! {
-                <div class="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded mb-6">
-                    <i class="fas fa-check-circle mr-2"></i>
-                    {msg}
-                </div>
-            })}
-
-            // Error display
-            {move || error.get().map(|e| view! {
-                <div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-6">
-                    <i class="fas fa-exclamation-triangle mr-2"></i>
-                    {e}
-                </div>
-            })}
-
-            // Retention Policy Guide
-            <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-                <h3 class="text-lg font-medium text-blue-900 mb-2">
-                    <i class="fas fa-info-circle mr-2"></i>
-                    "Retention Policy Guidelines"
-                </h3>
-                <div class="text-sm text-blue-800 space-y-2">
-                    <p>
-                        <strong>"Grandfather-Father-Son (GFS) Strategy:"</strong>
-                        " Keep multiple generations of backups for different time periods:"
-                    </p>
-                    <ul class="list-disc list-inside ml-4 space-y-1">
-                        <li><strong>"Hourly (Son):"</strong> " Recent backups for quick recovery (keep 24-48)"</li>
-                        <li><strong>"Daily (Father):"</strong> " Regular backups for short-term recovery (keep 7-30)"</li>
-                        <li><strong>"Weekly:"</strong> " Weekly backups for medium-term recovery (keep 4-12)"</li>
-                        <li><strong>"Monthly (Grandfather):"</strong> " Long-term archival backups (keep 12-60)"</li>
-                        <li><strong>"Max Age:"</strong> " Absolute limit for data retention (90-365+ days)"</li>
-                    </ul>
-                    <p class="mt-3">
-                        <strong>"Best Practice:"</strong>
-                        " Use a combination that provides both quick recovery and long-term retention while managing storage costs."
-                    </p>
+        <div class="backup-retention">
+            <div class="page-header">
+                <h1>"Retention / Prune"</h1>
+                <div class="header-actions">
+                    <a href="/backup" class="btn btn-secondary">"Backups"</a>
+                    " "
+                    <a href="/backup/jobs" class="btn btn-secondary">"Backup Jobs"</a>
                 </div>
             </div>
+            <p>"Options apply in order (last, hourly, daily, weekly, monthly, yearly); each keeps the newest backup of N periods no earlier option covered. Protected backups are always kept. Backup jobs apply their own retention after every run."</p>
 
-            // Tab Navigation
-            <div class="bg-white rounded-lg shadow mb-6">
-                <div class="border-b border-gray-200">
-                    <nav class="-mb-px flex">
-                        <button
-                            on:click=move |_| set_active_tab.set("backup_jobs".to_string())
-                            class=format!("py-2 px-4 border-b-2 font-medium text-sm {}",
-                                if active_tab.get() == "backup_jobs" {
-                                    "border-blue-500 text-blue-600"
-                                } else {
-                                    "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-                                })
-                        >
-                            <i class="fas fa-briefcase mr-2"></i>
-                            "Backup Jobs"
-                        </button>
-                        <button
-                            on:click=move |_| set_active_tab.set("snapshot_schedules".to_string())
-                            class=format!("py-2 px-4 border-b-2 font-medium text-sm {}",
-                                if active_tab.get() == "snapshot_schedules" {
-                                    "border-blue-500 text-blue-600"
-                                } else {
-                                    "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-                                })
-                        >
-                            <i class="fas fa-camera mr-2"></i>
-                            "Snapshot Schedules"
-                        </button>
-                    </nav>
+            {move || notice.get().map(|n| view! { <div class="alert alert-success" id="prune-notice">{n}</div> })}
+            {move || error.get().map(|e| view! { <div class="error" id="prune-error">{e}</div> })}
+
+            <div class="dashboard-section">
+                <div class="form-group">
+                    <label for="prune-target">"Guest"</label>
+                    <select id="prune-target" on:change=move |ev| { set_target.set(event_target_value(&ev)); set_decisions.set(None); }>
+                        {move || guests.get().into_iter().map(|g| {
+                            let sel = g.id == target.get();
+                            view! { <option value=g.id.clone() selected=sel>{g.label}</option> }
+                        }).collect_view()}
+                    </select>
                 </div>
-
-                <div class="p-6">
-                    {move || if loading.get() {
+                <div class="form-group">
+                    <label for="prune-storage">"Storage"</label>
+                    <select id="prune-storage" on:change=move |ev| set_storage.set(event_target_value(&ev))>
+                        <option value="">"all (each pruned separately)"</option>
+                        {move || storages_of_target().into_iter().map(|s| view! { <option value=s.clone()>{s.clone()}</option> }).collect_view()}
+                    </select>
+                </div>
+                <div class="form-group">
+                    {keep.iter().enumerate().map(|(i, (r, w))| {
+                        let (r, w) = (*r, *w);
                         view! {
-                            <div class="text-center py-8">
-                                <i class="fas fa-spinner fa-spin text-2xl text-gray-400 mb-2"></i>
-                                <p class="text-gray-600">"Loading retention policies..."</p>
-                            </div>
+                            <label>{labels[i]}
+                                <input id=format!("prune-keep-{i}") type="number" min="0" prop:value=move || r.get()
+                                    on:input=move |ev| w.set(event_target_value(&ev))/>
+                            </label>
                         }
-                    } else {
-                        match active_tab.get().as_str() {
-                            "backup_jobs" => view! {
-                                <div>
-                                    <div class="flex justify-between items-center mb-4">
-                                        <h2 class="text-lg font-semibold">Backup Job Retention Policies</h2>
-                                        <span class="text-sm text-gray-600">
-                                            {backup_jobs.get().len()} " jobs configured"
-                                        </span>
-                                    </div>
-
-                                    {move || if backup_jobs.get().is_empty() {
-                                        view! {
-                                            <div class="text-center py-8 text-gray-500">
-                                                <i class="fas fa-briefcase text-4xl mb-4"></i>
-                                                <p class="text-lg">"No Backup Jobs Found"</p>
-                                                <p class="text-sm">"Create backup jobs to configure retention policies"</p>
-                                                <a href="/backup/jobs" class="inline-block mt-4 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg">
-                                                    "Create Backup Job"
-                                                </a>
-                                            </div>
-                                        }
-                                    } else {
-                                        view! {
-                                            <div class="space-y-4">
-                                                {backup_jobs.get().into_iter().map(|job| {
-                                                    let job_id = job.id.clone();
-                                                    let job_name = job.name.clone();
-                                                    let job_enabled = job.enabled;
-                                                    let job_desc = job.description.clone();
-                                                    let vm_count = job.vm_ids.len();
-                                                    let retention_desc = get_retention_description(&job.retention);
-                                                    let (health_text, health_color) = get_policy_health(&job.retention);
-                                                    let keep_hourly = job.retention.keep_hourly.map_or("0".to_string(), |h| h.to_string());
-                                                    let keep_daily = job.retention.keep_daily.map_or("0".to_string(), |d| d.to_string());
-                                                    let keep_weekly = job.retention.keep_weekly.map_or("0".to_string(), |w| w.to_string());
-                                                    let keep_monthly = job.retention.keep_monthly.map_or("0".to_string(), |m| m.to_string());
-                                                    let keep_yearly = job.retention.keep_yearly.map_or("0".to_string(), |y| y.to_string());
-                                                    let max_age = job.retention.max_age_days.map_or("Unlimited".to_string(), |age| format!("{}d", age));
-                                                    let storage_id = job.target.storage_id.clone();
-
-                                                    view! {
-                                                        <div class="border border-gray-200 rounded-lg p-4">
-                                                            <div class="flex items-center justify-between">
-                                                                <div class="flex-1">
-                                                                    <div class="flex items-center mb-2">
-                                                                        <h3 class="font-medium text-gray-900 mr-3">{job_name}</h3>
-                                                                        <span class=format!("px-2 py-1 text-xs rounded {}",
-                                                                            if job_enabled {
-                                                                                "bg-green-100 text-green-800"
-                                                                            } else {
-                                                                                "bg-gray-100 text-gray-800"
-                                                                            })>
-                                                                            {if job_enabled { "Active" } else { "Disabled" }}
-                                                                        </span>
-                                                                        <span class=format!("ml-2 px-2 py-1 text-xs rounded {}", health_color)>
-                                                                            {health_text}
-                                                                        </span>
-                                                                    </div>
-                                                                    {job_desc.map(|desc| view! {
-                                                                        <p class="text-sm text-gray-600 mb-2">{desc}</p>
-                                                                    })}
-                                                                    <div class="text-sm text-gray-700 mb-2">
-                                                                        <strong>"VMs: "</strong>
-                                                                        {format!("{} virtual machines", vm_count)}
-                                                                    </div>
-                                                                    <div class="text-sm text-blue-600 mb-3">
-                                                                        <i class="fas fa-clock mr-1"></i>
-                                                                        {retention_desc}
-                                                                    </div>
-
-                                                                    // Detailed retention breakdown
-                                                                    <div class="grid grid-cols-2 md:grid-cols-6 gap-2 text-xs">
-                                                                        <div class="bg-gray-50 p-2 rounded text-center">
-                                                                            <div class="font-medium text-gray-700">"Hourly"</div>
-                                                                            <div class="text-gray-900">{keep_hourly}</div>
-                                                                        </div>
-                                                                        <div class="bg-gray-50 p-2 rounded text-center">
-                                                                            <div class="font-medium text-gray-700">"Daily"</div>
-                                                                            <div class="text-gray-900">{keep_daily}</div>
-                                                                        </div>
-                                                                        <div class="bg-gray-50 p-2 rounded text-center">
-                                                                            <div class="font-medium text-gray-700">"Weekly"</div>
-                                                                            <div class="text-gray-900">{keep_weekly}</div>
-                                                                        </div>
-                                                                        <div class="bg-gray-50 p-2 rounded text-center">
-                                                                            <div class="font-medium text-gray-700">"Monthly"</div>
-                                                                            <div class="text-gray-900">{keep_monthly}</div>
-                                                                        </div>
-                                                                        <div class="bg-gray-50 p-2 rounded text-center">
-                                                                            <div class="font-medium text-gray-700">"Yearly"</div>
-                                                                            <div class="text-gray-900">{keep_yearly}</div>
-                                                                        </div>
-                                                                        <div class="bg-gray-50 p-2 rounded text-center">
-                                                                            <div class="font-medium text-gray-700">"Max Age"</div>
-                                                                            <div class="text-gray-900">{max_age}</div>
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
-
-                                                                <div class="flex flex-col items-end space-y-2">
-                                                                    <button
-                                                                        on:click=move |_| apply_retention(storage_id.clone())
-                                                                        class="bg-orange-500 hover:bg-orange-600 text-white text-sm px-3 py-1 rounded"
-                                                                        title="Apply retention policy now"
-                                                                    >
-                                                                        <i class="fas fa-broom mr-1"></i>
-                                                                        "Clean Now"
-                                                                    </button>
-                                                                    <a
-                                                                        href=format!("/backup/jobs?edit={}", job_id)
-                                                                        class="text-blue-600 hover:text-blue-900 text-sm"
-                                                                    >
-                                                                        "Edit Policy"
-                                                                    </a>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                    }
-                                                }).collect::<Vec<_>>()}
-                                            </div>
-                                        }
-                                    }}
-                                </div>
-                            },
-                            "snapshot_schedules" => view! {
-                                <div>
-                                    <div class="flex justify-between items-center mb-4">
-                                        <h2 class="text-lg font-semibold">Snapshot Schedule Retention Policies</h2>
-                                        <span class="text-sm text-gray-600">
-                                            {snapshot_schedules.get().len()} " schedules configured"
-                                        </span>
-                                    </div>
-
-                                    {move || if snapshot_schedules.get().is_empty() {
-                                        view! {
-                                            <div class="text-center py-8 text-gray-500">
-                                                <i class="fas fa-camera text-4xl mb-4"></i>
-                                                <p class="text-lg">"No Snapshot Schedules Found"</p>
-                                                <p class="text-sm">"Create snapshot schedules to configure retention policies"</p>
-                                                <a href="/backup/snapshots" class="inline-block mt-4 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg">
-                                                    "Create Schedule"
-                                                </a>
-                                            </div>
-                                        }
-                                    } else {
-                                        view! {
-                                            <div class="space-y-4">
-                                                {snapshot_schedules.get().into_iter().map(|schedule| {
-                                                    let schedule_id = schedule.id.clone();
-                                                    let schedule_name = schedule.name.clone();
-                                                    let schedule_enabled = schedule.enabled;
-                                                    let schedule_desc = schedule.description.clone();
-                                                    let vm_id = schedule.vm_id.clone();
-                                                    let schedule_cron = schedule.schedule.clone();
-                                                    let retention_desc = get_retention_description(&schedule.retention_policy);
-                                                    let (health_text, health_color) = get_policy_health(&schedule.retention_policy);
-                                                    let keep_hourly = schedule.retention_policy.keep_hourly.map_or("0".to_string(), |h| h.to_string());
-                                                    let keep_daily = schedule.retention_policy.keep_daily.map_or("0".to_string(), |d| d.to_string());
-                                                    let keep_weekly = schedule.retention_policy.keep_weekly.map_or("0".to_string(), |w| w.to_string());
-                                                    let keep_monthly = schedule.retention_policy.keep_monthly.map_or("0".to_string(), |m| m.to_string());
-                                                    let keep_yearly = schedule.retention_policy.keep_yearly.map_or("0".to_string(), |y| y.to_string());
-                                                    let max_age = schedule.retention_policy.max_age_days.map_or("Unlimited".to_string(), |age| format!("{}d", age));
-
-                                                    view! {
-                                                        <div class="border border-gray-200 rounded-lg p-4">
-                                                            <div class="flex items-center justify-between">
-                                                                <div class="flex-1">
-                                                                    <div class="flex items-center mb-2">
-                                                                        <h3 class="font-medium text-gray-900 mr-3">{schedule_name}</h3>
-                                                                        <span class=format!("px-2 py-1 text-xs rounded {}",
-                                                                            if schedule_enabled {
-                                                                                "bg-green-100 text-green-800"
-                                                                            } else {
-                                                                                "bg-gray-100 text-gray-800"
-                                                                            })>
-                                                                            {if schedule_enabled { "Active" } else { "Disabled" }}
-                                                                        </span>
-                                                                        <span class=format!("ml-2 px-2 py-1 text-xs rounded {}", health_color)>
-                                                                            {health_text}
-                                                                        </span>
-                                                                    </div>
-                                                                    {schedule_desc.map(|desc| view! {
-                                                                        <p class="text-sm text-gray-600 mb-2">{desc}</p>
-                                                                    })}
-                                                                    <div class="text-sm text-gray-700 mb-2">
-                                                                        <strong>"VM: "</strong>
-                                                                        {vm_id}
-                                                                    </div>
-                                                                    <div class="text-sm text-gray-700 mb-2">
-                                                                        <strong>"Schedule: "</strong>
-                                                                        {schedule_cron}
-                                                                    </div>
-                                                                    <div class="text-sm text-blue-600 mb-3">
-                                                                        <i class="fas fa-clock mr-1"></i>
-                                                                        {retention_desc}
-                                                                    </div>
-
-                                                                    // Detailed retention breakdown
-                                                                    <div class="grid grid-cols-2 md:grid-cols-6 gap-2 text-xs">
-                                                                        <div class="bg-gray-50 p-2 rounded text-center">
-                                                                            <div class="font-medium text-gray-700">"Hourly"</div>
-                                                                            <div class="text-gray-900">{keep_hourly}</div>
-                                                                        </div>
-                                                                        <div class="bg-gray-50 p-2 rounded text-center">
-                                                                            <div class="font-medium text-gray-700">"Daily"</div>
-                                                                            <div class="text-gray-900">{keep_daily}</div>
-                                                                        </div>
-                                                                        <div class="bg-gray-50 p-2 rounded text-center">
-                                                                            <div class="font-medium text-gray-700">"Weekly"</div>
-                                                                            <div class="text-gray-900">{keep_weekly}</div>
-                                                                        </div>
-                                                                        <div class="bg-gray-50 p-2 rounded text-center">
-                                                                            <div class="font-medium text-gray-700">"Monthly"</div>
-                                                                            <div class="text-gray-900">{keep_monthly}</div>
-                                                                        </div>
-                                                                        <div class="bg-gray-50 p-2 rounded text-center">
-                                                                            <div class="font-medium text-gray-700">"Yearly"</div>
-                                                                            <div class="text-gray-900">{keep_yearly}</div>
-                                                                        </div>
-                                                                        <div class="bg-gray-50 p-2 rounded text-center">
-                                                                            <div class="font-medium text-gray-700">"Max Age"</div>
-                                                                            <div class="text-gray-900">{max_age}</div>
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
-
-                                                                <div class="flex flex-col items-end space-y-2">
-                                                                    <a
-                                                                        href=format!("/backup/snapshots?edit={}", schedule_id)
-                                                                        class="text-blue-600 hover:text-blue-900 text-sm"
-                                                                    >
-                                                                        "Edit Policy"
-                                                                    </a>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                    }
-                                                }).collect::<Vec<_>>()}
-                                            </div>
-                                        }
-                                    }}
-                                </div>
-                            },
-                            _ => view! { <div></div> }
-                        }
-                    }}
+                    }).collect_view()}
+                </div>
+                <div class="form-actions">
+                    <button id="prune-preview" class="btn btn-secondary" on:click=move |_| run(true)>"Preview"</button>
+                    " "
+                    <button id="prune-apply" class="btn btn-danger" on:click=move |_| run(false)>"Prune"</button>
                 </div>
             </div>
 
-            // Retention Best Practices
-            <div class="bg-white rounded-lg shadow">
-                <div class="p-6 border-b border-gray-200">
-                    <h2 class="text-lg font-semibold">Retention Policy Best Practices</h2>
-                </div>
-                <div class="p-6">
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        <div class="text-center">
-                            <div class="bg-green-100 rounded-full w-12 h-12 flex items-center justify-center mx-auto mb-3">
-                                <i class="fas fa-trophy text-green-600 text-xl"></i>
-                            </div>
-                            <h3 class="font-medium text-gray-900 mb-2">"Recommended: GFS Strategy"</h3>
-                            <p class="text-sm text-gray-600">
-                                "7 daily, 4 weekly, 12 monthly backups with 365-day max age provides excellent coverage for most use cases."
-                            </p>
-                        </div>
-                        <div class="text-center">
-                            <div class="bg-blue-100 rounded-full w-12 h-12 flex items-center justify-center mx-auto mb-3">
-                                <i class="fas fa-balance-scale text-blue-600 text-xl"></i>
-                            </div>
-                            <h3 class="font-medium text-gray-900 mb-2">"Balance Cost vs Recovery"</h3>
-                            <p class="text-sm text-gray-600">
-                                "Consider your RTO/RPO requirements against storage costs. More frequent backups = faster recovery but higher costs."
-                            </p>
-                        </div>
-                        <div class="text-center">
-                            <div class="bg-yellow-100 rounded-full w-12 h-12 flex items-center justify-center mx-auto mb-3">
-                                <i class="fas fa-exclamation-triangle text-yellow-600 text-xl"></i>
-                            </div>
-                            <h3 class="font-medium text-gray-900 mb-2">"Monitor Compliance"</h3>
-                            <p class="text-sm text-gray-600">
-                                "Regularly review retention policies to ensure they meet your business and compliance requirements."
-                            </p>
-                        </div>
-                    </div>
-
-                    <div class="mt-8 bg-gray-50 rounded-lg p-4">
-                        <h4 class="font-medium text-gray-900 mb-3">"Common Retention Strategies by Use Case:"</h4>
-                        <div class="space-y-3 text-sm">
-                            <div class="flex items-start">
-                                <span class="font-medium text-gray-700 w-24 flex-shrink-0">"Development:"</span>
-                                <span class="text-gray-600">"24 hourly, 7 daily (rapid iteration, short retention)"</span>
-                            </div>
-                            <div class="flex items-start">
-                                <span class="font-medium text-gray-700 w-24 flex-shrink-0">"Production:"</span>
-                                <span class="text-gray-600">"7 daily, 4 weekly, 12 monthly, 7 yearly (comprehensive protection)"</span>
-                            </div>
-                            <div class="flex items-start">
-                                <span class="font-medium text-gray-700 w-24 flex-shrink-0">"Archival:"</span>
-                                <span class="text-gray-600">"1 monthly, 10 yearly (long-term regulatory compliance)"</span>
-                            </div>
-                            <div class="flex items-start">
-                                <span class="font-medium text-gray-700 w-24 flex-shrink-0">"Testing:"</span>
-                                <span class="text-gray-600">"12 hourly, 3 daily (frequent changes, short lifecycle)"</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
+            {move || decisions.get().map(|d| view! {
+                <table class="vm-table" id="prune-table">
+                    <thead><tr><th>"Backup"</th><th>"Time"</th><th>{if applied.get() { "Result" } else { "Would" }}</th></tr></thead>
+                    <tbody>
+                        {d.into_iter().map(|x| {
+                            let class = match x.mark.as_str() { "remove" => "status-stopped", "protected" => "status-paused", _ => "status-running" };
+                            view! {
+                                <tr class="prune-row" data-backup-id=x.backup_id.clone()>
+                                    <td>{short(&x.backup_id)}</td>
+                                    <td>{bk::format_time(x.timestamp)}</td>
+                                    <td><span class=class>{x.mark.clone()}</span></td>
+                                </tr>
+                            }
+                        }).collect_view()}
+                    </tbody>
+                </table>
+            })}
         </div>
     }
 }

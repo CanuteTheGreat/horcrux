@@ -1,448 +1,415 @@
-use crate::api::{
-    get_backup_jobs, get_backups, get_snapshot_quota_summary, get_templates, BackupJob,
-    BackupStatus, QuotaSummary, VmBackup, VmTemplate,
-};
+//! /backup: every backup in the catalog, "Back up now", and per-backup
+//! verify / restore / protect / delete.
+use super::common::{confirm, load_guests, non_empty, short, Guest};
+use crate::api::backup as bk;
 use leptos::*;
 
 #[component]
 pub fn BackupDashboard() -> impl IntoView {
-    let (backups, set_backups) = create_signal(Vec::<VmBackup>::new());
-    let (backup_jobs, set_backup_jobs) = create_signal(Vec::<BackupJob>::new());
-    let (quota_summary, set_quota_summary) = create_signal(None::<QuotaSummary>);
-    let (templates, set_templates) = create_signal(Vec::<VmTemplate>::new());
-    let (loading, set_loading) = create_signal(false);
+    let (backups, set_backups) = create_signal(Vec::<bk::Backup>::new());
+    let (jobs, set_jobs) = create_signal(Vec::<bk::BackupJob>::new());
+    let (guests, set_guests) = create_signal(Vec::<Guest>::new());
+    let (storages, set_storages) = create_signal(Vec::<bk::BackupStorage>::new());
+    let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
+    let (notice, set_notice) = create_signal(None::<String>);
+    let (busy, set_busy) = create_signal(false);
+    let (filter, set_filter) = create_signal(String::new());
 
-    let load_dashboard_data = move || {
-        set_loading.set(true);
-        set_error.set(None);
+    // "Back up now" form
+    let (target, set_target) = create_signal(String::new());
+    let (storage, set_storage) = create_signal("local".to_string());
+    let (mode, set_mode) = create_signal("snapshot".to_string());
+    let (compression, set_compression) = create_signal("zstd".to_string());
+    let (notes, set_notes) = create_signal(String::new());
+    let (protect, set_protect) = create_signal(false);
 
+    // Restore dialog
+    let (restore_of, set_restore_of) = create_signal(None::<bk::Backup>);
+    let (r_target, set_r_target) = create_signal(String::new());
+    let (r_name, set_r_name) = create_signal(String::new());
+    let (r_force, set_r_force) = create_signal(false);
+    let (r_start, set_r_start) = create_signal(false);
+
+    let reload = move || {
         spawn_local(async move {
-            let mut errors = Vec::new();
-
-            // Load recent backups
-            match get_backups().await {
-                Ok(mut backups_list) => {
-                    // Sort by created_at descending and take first 10
-                    backups_list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-                    backups_list.truncate(10);
-                    set_backups.set(backups_list);
+            match bk::list_backups().await {
+                Ok(b) => {
+                    set_backups.set(b);
+                    set_error.set(None);
                 }
-                Err(e) => errors.push(format!("Failed to load backups: {}", e)),
+                Err(e) => set_error.set(Some(format!("Loading backups: {}", e.message))),
             }
-
-            // Load backup jobs
-            match get_backup_jobs().await {
-                Ok(jobs) => set_backup_jobs.set(jobs),
-                Err(e) => errors.push(format!("Failed to load backup jobs: {}", e)),
-            }
-
-            // Load quota summary
-            match get_snapshot_quota_summary().await {
-                Ok(summary) => set_quota_summary.set(Some(summary)),
-                Err(e) => errors.push(format!("Failed to load quota summary: {}", e)),
-            }
-
-            // Load templates
-            match get_templates().await {
-                Ok(template_list) => set_templates.set(template_list),
-                Err(e) => errors.push(format!("Failed to load templates: {}", e)),
-            }
-
-            if !errors.is_empty() {
-                set_error.set(Some(errors.join("; ")));
+            if let Ok(j) = bk::list_backup_jobs().await {
+                set_jobs.set(j);
             }
             set_loading.set(false);
         });
     };
 
-    // Load data on mount
     create_effect(move |_| {
-        load_dashboard_data();
+        reload();
+        spawn_local(async move {
+            let g = load_guests().await;
+            if let Some(first) = g.first() {
+                set_target.set(first.id.clone());
+            }
+            set_guests.set(g);
+            if let Ok(s) = bk::list_backup_storages().await {
+                set_storages.set(s);
+            }
+        });
     });
 
-    // Auto-refresh every 30 seconds
-    use leptos::set_interval;
-    set_interval(load_dashboard_data, std::time::Duration::from_secs(30));
-
-    let get_status_color = move |status: &BackupStatus| match status {
-        BackupStatus::Completed => "bg-green-100 text-green-800",
-        BackupStatus::Running => "bg-blue-100 text-blue-800",
-        BackupStatus::Pending => "bg-yellow-100 text-yellow-800",
-        BackupStatus::Failed => "bg-red-100 text-red-800",
-        BackupStatus::Cancelled => "bg-gray-100 text-gray-800",
-    };
-
-    let format_bytes = move |bytes: u64| {
-        if bytes < 1024 {
-            format!("{} B", bytes)
-        } else if bytes < 1024 * 1024 {
-            format!("{:.1} KB", bytes as f64 / 1024.0)
-        } else if bytes < 1024 * 1024 * 1024 {
-            format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-        } else {
-            format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    let backup_now = move |ev: ev::SubmitEvent| {
+        ev.prevent_default();
+        let t = target.get();
+        if t.is_empty() {
+            set_error.set(Some("Choose a VM or container to back up".into()));
+            return;
         }
+        let kind = guests.get().into_iter().find(|g| g.id == t).map(|g| g.kind);
+        let req = bk::CreateBackupRequest {
+            target_id: t.clone(),
+            target_type: kind,
+            storage: storage.get(),
+            mode: mode.get(),
+            compression: compression.get(),
+            notes: non_empty(&notes.get()),
+            protected: protect.get(),
+        };
+        set_busy.set(true);
+        set_notice.set(Some(format!("Backing up {t}...")));
+        spawn_local(async move {
+            match bk::create_backup(&req).await {
+                Ok(b) => {
+                    set_notice.set(Some(format!(
+                        "Backup {} of {} written: {} ({})",
+                        short(&b.id),
+                        b.target_id,
+                        bk::format_bytes(b.size),
+                        b.path
+                    )));
+                    set_error.set(None);
+                    set_notes.set(String::new());
+                }
+                Err(e) => {
+                    set_notice.set(None);
+                    set_error.set(Some(format!("Backup of {t} failed: {}", e.message)));
+                }
+            }
+            set_busy.set(false);
+            reload();
+        });
     };
+
+    let verify = move |id: String| {
+        set_busy.set(true);
+        spawn_local(async move {
+            match bk::verify_backup(&id).await {
+                Ok(v) if v.ok => {
+                    set_notice.set(Some(format!(
+                        "Backup {} verified OK ({} file(s) checked)",
+                        short(&id),
+                        v.files_checked
+                    )));
+                    set_error.set(None);
+                }
+                Ok(v) => set_error.set(Some(format!(
+                    "Backup {} FAILED verification: {}",
+                    short(&id),
+                    v.error.unwrap_or_default()
+                ))),
+                Err(e) => set_error.set(Some(format!("Verify: {}", e.message))),
+            }
+            set_busy.set(false);
+            reload();
+        });
+    };
+
+    let toggle_protect = move |(id, protected): (String, bool)| {
+        spawn_local(async move {
+            let req = bk::UpdateBackupRequest {
+                notes: None,
+                protected: Some(!protected),
+            };
+            if let Err(e) = bk::update_backup(&id, &req).await {
+                set_error.set(Some(format!("Update {}: {}", short(&id), e.message)));
+            }
+            reload();
+        });
+    };
+
+    let delete = move |id: String| {
+        if !confirm(&format!("Delete backup {} and its archive?", short(&id))) {
+            return;
+        }
+        spawn_local(async move {
+            match bk::delete_backup(&id).await {
+                Ok(()) => set_notice.set(Some(format!("Backup {} deleted", short(&id)))),
+                Err(e) => set_error.set(Some(format!("Delete {}: {}", short(&id), e.message))),
+            }
+            reload();
+        });
+    };
+
+    let open_restore = move |b: bk::Backup| {
+        set_r_target.set(b.target_id.clone());
+        set_r_name.set(String::new());
+        set_r_force.set(false);
+        set_r_start.set(false);
+        set_restore_of.set(Some(b));
+    };
+
+    let do_restore = move |ev: ev::SubmitEvent| {
+        ev.prevent_default();
+        let Some(b) = restore_of.get() else { return };
+        let req = bk::RestoreRequest {
+            target_id: non_empty(&r_target.get()),
+            name: non_empty(&r_name.get()),
+            force: r_force.get(),
+            start: r_start.get(),
+        };
+        set_busy.set(true);
+        spawn_local(async move {
+            match bk::restore_backup(&b.id, &req).await {
+                Ok(r) => {
+                    set_notice.set(Some(format!(
+                        "Restored backup {} to {} {} ({}){}",
+                        short(&b.id),
+                        r.target_type,
+                        r.target_id,
+                        r.name,
+                        if r.replaced { ", replacing it" } else { "" }
+                    )));
+                    set_error.set(None);
+                    set_restore_of.set(None);
+                }
+                Err(e) => set_error.set(Some(format!("Restore failed: {}", e.message))),
+            }
+            set_busy.set(false);
+            reload();
+        });
+    };
+
+    let failed_jobs = move || {
+        jobs.get()
+            .into_iter()
+            .filter(|j| j.last_status.as_deref() == Some("failed"))
+            .count()
+    };
+
+    let has_failed = move || failed_jobs() != 0;
 
     view! {
-        <div class="p-6">
-            <div class="flex justify-between items-center mb-6">
-                <h1 class="text-2xl font-bold">Backup & Data Protection</h1>
-                <div class="flex space-x-3">
-                    <a href="/backup/jobs" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg">
-                        "Manage Jobs"
-                    </a>
-                    <a href="/backup/snapshots" class="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg">
-                        "Snapshots"
-                    </a>
-                    <a href="/backup/templates" class="bg-purple-500 hover:bg-purple-600 text-white px-4 py-2 rounded-lg">
-                        "Templates"
-                    </a>
+        <div class="backup-dashboard">
+            <div class="page-header">
+                <h1>"Backups"</h1>
+                <div class="header-actions">
+                    <a href="/backup/jobs" class="btn btn-secondary">"Backup Jobs"</a>
+                    " "
+                    <a href="/backup/retention" class="btn btn-secondary">"Retention / Prune"</a>
+                    " "
+                    <a href="/backup/verify" class="btn btn-secondary">"Verify"</a>
                 </div>
             </div>
 
-            // Error display
-            {move || error.get().map(|e| view! {
-                <div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-6">
-                    {e}
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3>"Backups"</h3>
+                    <div class="stat-value" id="backup-count">{move || backups.get().len()}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>"Total size"</h3>
+                    <div class="stat-value">
+                        {move || bk::format_bytes(backups.get().iter().map(|b| b.size).sum())}
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <h3>"Jobs"</h3>
+                    <div class="stat-value">
+                        <a href="/backup/jobs">{move || jobs.get().len()}</a>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <h3>"Failed jobs"</h3>
+                    <div class="stat-value">
+                        <a href="/backup/jobs" class:error=has_failed>
+                            {failed_jobs}
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            {move || notice.get().map(|n| view! { <div class="alert alert-success" id="backup-notice">{n}</div> })}
+            {move || error.get().map(|e| view! { <div class="error" id="backup-error">{e}</div> })}
+
+            <div class="dashboard-section">
+                <h2>"Back up now"</h2>
+                <form on:submit=backup_now class="backup-form">
+                    <div class="form-group">
+                        <label for="backup-target">"VM / container"</label>
+                        <select id="backup-target" on:change=move |ev| set_target.set(event_target_value(&ev))>
+                            {move || guests.get().into_iter().map(|g| {
+                                let selected = g.id == target.get();
+                                view! { <option value=g.id.clone() selected=selected>{g.label}</option> }
+                            }).collect_view()}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="backup-storage">"Storage"</label>
+                        <select id="backup-storage" on:change=move |ev| set_storage.set(event_target_value(&ev))>
+                            {move || storages.get().into_iter().map(|s| {
+                                let selected = s.id == storage.get();
+                                let label = format!("{} ({}, {})", s.id, s.path,
+                                    s.available_gb.map(|a| format!("{a} GB free")).unwrap_or_else(|| s.kind.clone()));
+                                view! { <option value=s.id.clone() selected=selected>{label}</option> }
+                            }).collect_view()}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="backup-mode">"Mode"</label>
+                        <select id="backup-mode" on:change=move |ev| set_mode.set(event_target_value(&ev))>
+                            <option value="snapshot" selected=move || mode.get() == "snapshot">"snapshot (offline copy if stopped; containers frozen)"</option>
+                            <option value="suspend" selected=move || mode.get() == "suspend">"suspend"</option>
+                            <option value="stop" selected=move || mode.get() == "stop">"stop (stop, back up, restart)"</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="backup-compression">"Compression"</label>
+                        <select id="backup-compression" on:change=move |ev| set_compression.set(event_target_value(&ev))>
+                            <option value="zstd" selected=move || compression.get() == "zstd">"zstd"</option>
+                            <option value="gzip" selected=move || compression.get() == "gzip">"gzip"</option>
+                            <option value="lzo" selected=move || compression.get() == "lzo">"lzo"</option>
+                            <option value="none" selected=move || compression.get() == "none">"none"</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="backup-notes">"Notes"</label>
+                        <input id="backup-notes" type="text" prop:value=move || notes.get()
+                            on:input=move |ev| set_notes.set(event_target_value(&ev))/>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input id="backup-protect" type="checkbox" prop:checked=move || protect.get()
+                                on:change=move |ev| set_protect.set(event_target_checked(&ev))/>
+                            " Protected (never pruned or deleted)"
+                        </label>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" id="backup-now-btn" class="btn btn-primary" disabled=move || busy.get()>
+                            {move || if busy.get() { "Working..." } else { "Back up now" }}
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            {move || restore_of.get().map(|b| view! {
+                <div class="dashboard-section" id="restore-dialog">
+                    <h2>{format!("Restore backup {} of {} ({})", short(&b.id), b.target_id, bk::format_time(b.timestamp))}</h2>
+                    <form on:submit=do_restore>
+                        <div class="form-group">
+                            <label for="restore-target">"Restore to id (original or a new id)"</label>
+                            <input id="restore-target" type="text" prop:value=move || r_target.get()
+                                on:input=move |ev| set_r_target.set(event_target_value(&ev))/>
+                        </div>
+                        <div class="form-group">
+                            <label for="restore-name">"Name (optional)"</label>
+                            <input id="restore-name" type="text" prop:value=move || r_name.get()
+                                on:input=move |ev| set_r_name.set(event_target_value(&ev))/>
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input id="restore-force" type="checkbox" prop:checked=move || r_force.get()
+                                    on:change=move |ev| set_r_force.set(event_target_checked(&ev))/>
+                                " Overwrite a different existing guest with this id"
+                            </label>
+                            <label>
+                                <input id="restore-start" type="checkbox" prop:checked=move || r_start.get()
+                                    on:change=move |ev| set_r_start.set(event_target_checked(&ev))/>
+                                " Start after restore"
+                            </label>
+                        </div>
+                        <p>"Restoring over the original replaces its disks/filesystem with the backup. The archive is verified first; a corrupt archive never touches the existing guest."</p>
+                        <div class="form-actions">
+                            <button type="submit" id="restore-submit" class="btn btn-warning" disabled=move || busy.get()>"Restore"</button>
+                            " "
+                            <button type="button" class="btn btn-secondary" on:click=move |_| set_restore_of.set(None)>"Cancel"</button>
+                        </div>
+                    </form>
                 </div>
             })}
 
-            // Loading state
-            {move || if loading.get() {
-                view! {
-                    <div class="bg-white rounded-lg shadow p-8 text-center">
-                        <i class="fas fa-spinner fa-spin text-2xl text-gray-400 mb-2"></i>
-                        <p class="text-gray-600">"Loading dashboard data..."</p>
-                    </div>
-                }
-            } else {
-                view! {
-                    <div class="space-y-6">
-                        // Statistics Overview
-                        <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
-                            // Recent Backups Count
-                            <div class="bg-white rounded-lg shadow p-6">
-                                <div class="flex items-center">
-                                    <div class="flex-shrink-0">
-                                        <i class="fas fa-archive text-2xl text-blue-500"></i>
-                                    </div>
-                                    <div class="ml-4">
-                                        <p class="text-sm font-medium text-gray-500">"Recent Backups"</p>
-                                        <p class="text-2xl font-semibold text-gray-900">{backups.get().len()}</p>
-                                    </div>
-                                </div>
-                            </div>
-
-                            // Active Backup Jobs
-                            <div class="bg-white rounded-lg shadow p-6">
-                                <div class="flex items-center">
-                                    <div class="flex-shrink-0">
-                                        <i class="fas fa-clock text-2xl text-green-500"></i>
-                                    </div>
-                                    <div class="ml-4">
-                                        <p class="text-sm font-medium text-gray-500">"Active Jobs"</p>
-                                        <p class="text-2xl font-semibold text-gray-900">
-                                            {backup_jobs.get().iter().filter(|job| job.enabled).count()}
-                                        </p>
-                                    </div>
-                                </div>
-                            </div>
-
-                            // Quota Summary
-                            {move || if let Some(summary) = quota_summary.get() {
-                                view! {
-                                    <div class="bg-white rounded-lg shadow p-6">
-                                        <div class="flex items-center">
-                                            <div class="flex-shrink-0">
-                                                <i class="fas fa-chart-pie text-2xl text-yellow-500"></i>
-                                            </div>
-                                            <div class="ml-4">
-                                                <p class="text-sm font-medium text-gray-500">"Snapshot Storage"</p>
-                                                <p class="text-2xl font-semibold text-gray-900">{format_bytes(summary.total_size_bytes)}</p>
-                                                <p class="text-xs text-gray-500">{format!("{:.1}% of quota", summary.overall_usage_percent)}</p>
-                                            </div>
-                                        </div>
-                                    </div>
-                                }
-                            } else {
-                                view! {
-                                    <div class="bg-white rounded-lg shadow p-6">
-                                        <div class="text-gray-500">"Loading quota data..."</div>
-                                    </div>
-                                }
-                            }}
-
-                            // Templates Count
-                            <div class="bg-white rounded-lg shadow p-6">
-                                <div class="flex items-center">
-                                    <div class="flex-shrink-0">
-                                        <i class="fas fa-file-archive text-2xl text-purple-500"></i>
-                                    </div>
-                                    <div class="ml-4">
-                                        <p class="text-sm font-medium text-gray-500">"Templates"</p>
-                                        <p class="text-2xl font-semibold text-gray-900">{templates.get().len()}</p>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        // Recent Backup Activity
-                        <div class="bg-white rounded-lg shadow">
-                            <div class="px-6 py-4 border-b border-gray-200">
-                                <h2 class="text-lg font-semibold">Recent Backup Activity</h2>
-                            </div>
-                            <div class="overflow-x-auto">
-                                <table class="min-w-full divide-y divide-gray-200">
-                                    <thead class="bg-gray-50">
-                                        <tr>
-                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                "VM"
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                "Backup Name"
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                "Status"
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                "Size"
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                "Created"
-                                            </th>
+            <div class="dashboard-section">
+                <h2>"Backup archives"</h2>
+                <div class="form-group">
+                    <input id="backup-filter" type="text" placeholder="Filter by guest id or name"
+                        prop:value=move || filter.get() on:input=move |ev| set_filter.set(event_target_value(&ev))/>
+                </div>
+                {move || {
+                    if loading.get() {
+                        return view! { <p class="loading">"Loading backups..."</p> }.into_view();
+                    }
+                    let f = filter.get().to_lowercase();
+                    let list: Vec<bk::Backup> = backups.get().into_iter()
+                        .filter(|b| f.is_empty() || b.target_id.to_lowercase().contains(&f) || b.target_name.to_lowercase().contains(&f))
+                        .collect();
+                    if list.is_empty() {
+                        return view! { <p class="no-data">"No backups yet. Use \"Back up now\" or create a backup job."</p> }.into_view();
+                    }
+                    view! {
+                        <table class="vm-table" id="backup-table">
+                            <thead>
+                                <tr>
+                                    <th>"Guest"</th>
+                                    <th>"Time"</th>
+                                    <th>"Size"</th>
+                                    <th>"Mode / compression"</th>
+                                    <th>"Storage"</th>
+                                    <th>"Verified"</th>
+                                    <th>"Notes"</th>
+                                    <th>"Actions"</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {list.into_iter().map(|b| {
+                                    let (vid, rb, pid, did) = (b.id.clone(), b.clone(), b.id.clone(), b.id.clone());
+                                    let protected = b.protected;
+                                    let verify_cell = match b.verify_state.as_deref() {
+                                        Some("ok") => view! { <span class="status-running" title=b.verified_at.map(bk::format_time).unwrap_or_default()>"OK"</span> }.into_view(),
+                                        Some(_) => view! { <span class="status-stopped" title=b.verify_error.clone().unwrap_or_default()>{format!("FAILED: {}", b.verify_error.clone().unwrap_or_default())}</span> }.into_view(),
+                                        None => view! { <span class="status-unknown">"not verified"</span> }.into_view(),
+                                    };
+                                    let kind = if b.target_type == "vm" { "VM" } else { "CT" };
+                                    view! {
+                                        <tr class="backup-row" data-backup-id=b.id.clone() data-target-id=b.target_id.clone()>
+                                            <td>{format!("{kind} {} ({})", b.target_id, b.target_name)}</td>
+                                            <td title=b.path.clone()>{bk::format_time(b.timestamp)}</td>
+                                            <td>{bk::format_bytes(b.size)}</td>
+                                            <td>{format!("{} / {}", b.mode, b.compression)}</td>
+                                            <td>{b.storage.clone()}</td>
+                                            <td class="verify-state">{verify_cell}</td>
+                                            <td>
+                                                {if protected { "[protected] " } else { "" }}
+                                                {b.job_id.clone().map(|j| format!("[job {j}] ")).unwrap_or_default()}
+                                                {b.notes.clone().unwrap_or_default()}
+                                            </td>
+                                            <td class="actions">
+                                                <button class="btn btn-sm btn-secondary verify-btn" on:click=move |_| verify(vid.clone())>"Verify"</button>
+                                                <button class="btn btn-sm btn-primary restore-btn" on:click=move |_| open_restore(rb.clone())>"Restore"</button>
+                                                <button class="btn btn-sm btn-secondary protect-btn" on:click=move |_| toggle_protect((pid.clone(), protected))>
+                                                    {if protected { "Unprotect" } else { "Protect" }}
+                                                </button>
+                                                <button class="btn btn-sm btn-danger delete-btn" disabled=protected on:click=move |_| delete(did.clone())>"Delete"</button>
+                                            </td>
                                         </tr>
-                                    </thead>
-                                    <tbody class="bg-white divide-y divide-gray-200">
-                                        {move || if backups.get().is_empty() {
-                                            view! {
-                                                <tr>
-                                                    <td colspan="5" class="px-6 py-4 text-center text-gray-500">
-                                                        "No recent backups"
-                                                    </td>
-                                                </tr>
-                                            }.into_view()
-                                        } else {
-                                            backups.get().into_iter().map(|backup| {
-                                                let status_color = get_status_color(&backup.status);
-                                                let vm_id = backup.vm_id.clone();
-                                                let name = backup.name.clone().unwrap_or_else(|| backup.id.clone());
-                                                let desc = backup.description.clone();
-                                                let status_str = format!("{:?}", backup.status);
-                                                let size_str = if let Some(size) = backup.size {
-                                                    format_bytes(size)
-                                                } else {
-                                                    "Unknown".to_string()
-                                                };
-                                                let compressed = backup.compressed_size;
-                                                let created = backup.created_at.clone();
-                                                view! {
-                                                    <tr>
-                                                        <td class="px-6 py-4 whitespace-nowrap">
-                                                            <div class="text-sm font-medium text-gray-900">{vm_id}</div>
-                                                        </td>
-                                                        <td class="px-6 py-4 whitespace-nowrap">
-                                                            <div class="text-sm text-gray-900">{name}</div>
-                                                            {desc.map(|d| view! {
-                                                                <div class="text-xs text-gray-500">{d}</div>
-                                                            })}
-                                                        </td>
-                                                        <td class="px-6 py-4 whitespace-nowrap">
-                                                            <span class=format!("px-2 py-1 text-xs font-medium rounded {}", status_color)>
-                                                                {status_str}
-                                                            </span>
-                                                        </td>
-                                                        <td class="px-6 py-4 whitespace-nowrap">
-                                                            <div class="text-sm text-gray-900">{size_str}</div>
-                                                            {compressed.map(|size| view! {
-                                                                <div class="text-xs text-gray-500">
-                                                                    "Compressed: " {format_bytes(size)}
-                                                                </div>
-                                                            })}
-                                                        </td>
-                                                        <td class="px-6 py-4 whitespace-nowrap">
-                                                            <div class="text-sm text-gray-900">{created}</div>
-                                                        </td>
-                                                    </tr>
-                                                }
-                                            }).collect_view()
-                                        }}
-                                    </tbody>
-                                </table>
-                            </div>
-                            <div class="px-6 py-4 border-t border-gray-200">
-                                <a href="/backup/history" class="text-blue-600 hover:text-blue-800 text-sm font-medium">
-                                    "View All Backups ->"
-                                </a>
-                            </div>
-                        </div>
-
-                        // Active Backup Jobs
-                        <div class="bg-white rounded-lg shadow">
-                            <div class="px-6 py-4 border-b border-gray-200">
-                                <div class="flex justify-between items-center">
-                                    <h2 class="text-lg font-semibold">Active Backup Jobs</h2>
-                                    <a href="/backup/jobs" class="text-blue-600 hover:text-blue-800 text-sm font-medium">
-                                        "Manage Jobs"
-                                    </a>
-                                </div>
-                            </div>
-                            <div class="p-6">
-                                {move || if backup_jobs.get().is_empty() {
-                                    view! {
-                                        <div class="text-center text-gray-500">
-                                            <i class="fas fa-plus-circle text-4xl mb-4"></i>
-                                            <p class="text-lg mb-2">"No backup jobs configured"</p>
-                                            <p class="text-sm mb-4">"Create a backup job to automate your backup process"</p>
-                                            <a href="/backup/jobs" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg">
-                                                "Create Backup Job"
-                                            </a>
-                                        </div>
                                     }
-                                } else {
-                                    view! {
-                                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                            {backup_jobs.get().into_iter().filter(|job| job.enabled).take(6).map(|job| {
-                                                let job_name = job.name.clone();
-                                                let job_enabled = job.enabled;
-                                                let vm_count = job.vm_ids.len();
-                                                let schedule = job.schedule.clone();
-                                                let next_run = job.next_run.clone();
-                                                let last_status = job.last_status.clone();
-                                                view! {
-                                                    <div class="border border-gray-200 rounded-lg p-4">
-                                                        <div class="flex items-center justify-between mb-2">
-                                                            <h3 class="font-medium text-gray-900">{job_name}</h3>
-                                                            <span class=format!("px-2 py-1 text-xs rounded {}",
-                                                                if job_enabled { "bg-green-100 text-green-800" } else { "bg-gray-100 text-gray-800" })>
-                                                                {if job_enabled { "Active" } else { "Disabled" }}
-                                                            </span>
-                                                        </div>
-                                                        <div class="text-sm text-gray-600 mb-2">
-                                                            {format!("{} VMs", vm_count)}
-                                                        </div>
-                                                        <div class="text-xs text-gray-500">
-                                                            "Schedule: " {schedule}
-                                                        </div>
-                                                        {next_run.map(|next| view! {
-                                                            <div class="text-xs text-gray-500">
-                                                                "Next run: " {next}
-                                                            </div>
-                                                        })}
-                                                        {last_status.map(|status| {
-                                                            let status_color = get_status_color(&status);
-                                                            view! {
-                                                                <div class="mt-2">
-                                                                    <span class=format!("px-2 py-1 text-xs rounded {}", status_color)>
-                                                                        "Last: " {format!("{:?}", status)}
-                                                                    </span>
-                                                                </div>
-                                                            }
-                                                        })}
-                                                    </div>
-                                                }
-                                            }).collect::<Vec<_>>()}
-                                        </div>
-                                    }
-                                }}
-                            </div>
-                        </div>
-
-                        // Quota Status
-                        {move || quota_summary.get().map(|summary| view! {
-                            <div class="bg-white rounded-lg shadow">
-                                <div class="px-6 py-4 border-b border-gray-200">
-                                    <div class="flex justify-between items-center">
-                                        <h2 class="text-lg font-semibold">Quota Overview</h2>
-                                        <a href="/backup/snapshots" class="text-blue-600 hover:text-blue-800 text-sm font-medium">
-                                            "Manage Quotas"
-                                        </a>
-                                    </div>
-                                </div>
-                                <div class="p-6">
-                                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                        <div class="text-center">
-                                            <div class="text-2xl font-semibold text-gray-900">{summary.total_quotas}</div>
-                                            <div class="text-sm text-gray-500">"Total Quotas"</div>
-                                        </div>
-                                        <div class="text-center">
-                                            <div class="text-2xl font-semibold text-green-600">{summary.healthy_quotas + summary.warning_quotas}</div>
-                                            <div class="text-sm text-gray-500">"Active Quotas"</div>
-                                        </div>
-                                        <div class="text-center">
-                                            <div class=format!("text-2xl font-semibold {}",
-                                                if summary.exceeded_quotas > 0 { "text-red-600" } else { "text-green-600" })>
-                                                {summary.exceeded_quotas}
-                                            </div>
-                                            <div class="text-sm text-gray-500">"Quotas Exceeded"</div>
-                                        </div>
-                                    </div>
-                                    {if summary.exceeded_quotas > 0 {
-                                        view! {
-                                            <div class="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
-                                                <div class="flex items-center">
-                                                    <i class="fas fa-exclamation-triangle text-red-500 mr-2"></i>
-                                                    <span class="text-red-700 text-sm">
-                                                        "Some quotas are exceeded. Consider reviewing your retention policies."
-                                                    </span>
-                                                </div>
-                                            </div>
-                                        }
-                                    } else {
-                                        view! { <div></div> }
-                                    }}
-                                </div>
-                            </div>
-                        })}
-
-                        // Templates Overview
-                        {move || if !templates.get().is_empty() {
-                            view! {
-                                <div class="bg-white rounded-lg shadow">
-                                    <div class="px-6 py-4 border-b border-gray-200">
-                                        <div class="flex justify-between items-center">
-                                            <h2 class="text-lg font-semibold">VM Templates</h2>
-                                            <a href="/backup/templates" class="text-blue-600 hover:text-blue-800 text-sm font-medium">
-                                                "Manage Templates"
-                                            </a>
-                                        </div>
-                                    </div>
-                                    <div class="p-6">
-                                        <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                                            {templates.get().into_iter().take(8).map(|template| {
-                                                let name = template.name.clone();
-                                                let desc = template.description.clone();
-                                                let size = format_bytes(template.size_mb * 1024 * 1024);
-                                                let created = template.created_at.clone();
-                                                view! {
-                                                    <div class="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
-                                                        <div class="flex items-center mb-2">
-                                                            <i class="fas fa-file-archive text-purple-500 mr-2"></i>
-                                                            <h3 class="font-medium text-gray-900 truncate">{name}</h3>
-                                                        </div>
-                                                        {desc.map(|d| view! {
-                                                            <p class="text-sm text-gray-600 mb-2 line-clamp-2">{d}</p>
-                                                        })}
-                                                        <div class="text-xs text-gray-500">
-                                                            "Size: " {size}
-                                                        </div>
-                                                        <div class="text-xs text-gray-500">
-                                                            "Created: " {created}
-                                                        </div>
-                                                    </div>
-                                                }
-                                            }).collect::<Vec<_>>()}
-                                        </div>
-                                    </div>
-                                </div>
-                            }
-                        } else {
-                            view! { <div></div> }
-                        }}
-                    </div>
-                }
-            }}
+                                }).collect_view()}
+                            </tbody>
+                        </table>
+                    }.into_view()
+                }}
+            </div>
         </div>
     }
 }

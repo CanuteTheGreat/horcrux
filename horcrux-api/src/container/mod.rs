@@ -328,6 +328,33 @@ impl ContainerManager {
         Ok(container_config)
     }
 
+    /// Track a container that already exists in its runtime without
+    /// creating it (e.g. an LXC/LXD/Incus container just restored from a
+    /// backup).
+    pub async fn register_existing(&self, config: ContainerConfig) -> Result<ContainerConfig> {
+        let mut containers = self.containers.write().await;
+        if containers.contains_key(&config.id) {
+            return Err(horcrux_common::Error::Conflict(format!(
+                "Container with ID {} already exists",
+                config.id
+            )));
+        }
+        let container = Container {
+            id: config.id.clone(),
+            name: config.name.clone(),
+            runtime: config.runtime.clone(),
+            memory: config.memory,
+            cpus: config.cpus,
+            rootfs: config.rootfs.clone(),
+            status: config.status.clone(),
+            options: config.options.clone(),
+            created_at: config.created_at.clone(),
+        };
+        let out = container.to_config();
+        containers.insert(config.id.clone(), container);
+        Ok(out)
+    }
+
     /// Start a container
     pub async fn start_container(&self, id: &str) -> Result<ContainerConfig> {
         // Clone the container and drop the read lock before calling out to

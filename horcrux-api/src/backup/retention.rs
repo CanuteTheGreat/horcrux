@@ -1,134 +1,153 @@
-//! Backup retention policy management
-//! Implements Proxmox-style retention (keep-hourly, keep-daily, etc.)
+//! Backup retention ("prune") policy.
+//!
+//! Implements the same marking algorithm as Proxmox VE's `prune-backups`
+//! (PVE::Storage::prune_mark): the options are applied in the order
+//! keep-last, keep-hourly, keep-daily, keep-weekly, keep-monthly,
+//! keep-yearly. Each option walks the backups newest-first and keeps the
+//! newest backup of every period (hour/day/ISO week/month/year) that no
+//! earlier option already covered, until it has kept N new periods.
+//! Protected backups are always kept and never count against any option.
+//! Everything not kept is removed. A policy with no keep-* option keeps
+//! everything.
 use super::{Backup, RetentionPolicy};
-use chrono::{Datelike, Timelike};
-use std::collections::HashMap;
+use chrono::{Datelike, Local, TimeZone};
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
-/// Retention manager
-pub struct RetentionManager {}
+/// Why a backup was kept or removed by a prune run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PruneMark {
+    Keep,
+    Remove,
+    Protected,
+}
 
-impl RetentionManager {
-    pub fn new() -> Self {
-        Self {}
+/// One backup's prune decision.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PruneDecision {
+    pub backup_id: String,
+    pub timestamp: i64,
+    pub mark: PruneMark,
+}
+
+impl RetentionPolicy {
+    /// True when no keep-* option is set (prune would keep everything).
+    pub fn keeps_all(&self) -> bool {
+        [
+            self.keep_last,
+            self.keep_hourly,
+            self.keep_daily,
+            self.keep_weekly,
+            self.keep_monthly,
+            self.keep_yearly,
+        ]
+        .iter()
+        .all(|o| o.unwrap_or(0) == 0)
     }
+}
 
-    /// Apply retention policy and return backups to delete
-    pub async fn apply_policy(&self, backups: &[&Backup], policy: &RetentionPolicy) -> Vec<String> {
-        let mut to_delete = Vec::new();
+type IdFn = fn(i64, usize) -> String;
 
-        // Sort backups by timestamp (newest first)
-        let mut sorted: Vec<&Backup> = backups.to_vec();
-        sorted.sort_by_key(|x| std::cmp::Reverse(x.timestamp));
+fn id_last(_: i64, idx: usize) -> String {
+    format!("idx-{idx}")
+}
+fn id_hour(ts: i64, _: usize) -> String {
+    period(ts, |d| d.format("%Y/%m/%d/%H").to_string())
+}
+fn id_day(ts: i64, _: usize) -> String {
+    period(ts, |d| d.format("%Y/%m/%d").to_string())
+}
+fn id_week(ts: i64, _: usize) -> String {
+    period(ts, |d| {
+        let w = d.iso_week();
+        format!("{}/{}", w.year(), w.week())
+    })
+}
+fn id_month(ts: i64, _: usize) -> String {
+    period(ts, |d| format!("{}/{}", d.year(), d.month()))
+}
+fn id_year(ts: i64, _: usize) -> String {
+    period(ts, |d| d.year().to_string())
+}
 
-        // Group backups by time period
-        let mut hourly = Vec::new();
-        let mut daily = Vec::new();
-        let mut weekly = Vec::new();
-        let mut monthly = Vec::new();
-        let mut yearly = Vec::new();
+/// Mark every backup in `backups` (one guest, one storage) as keep, remove
+/// or protected. Returned newest-first.
+pub fn mark(backups: &[&Backup], policy: &RetentionPolicy) -> Vec<PruneDecision> {
+    let mut sorted: Vec<&Backup> = backups.to_vec();
+    sorted.sort_by_key(|b| std::cmp::Reverse(b.timestamp));
 
-        let mut seen_hours = HashMap::new();
-        let mut seen_days = HashMap::new();
-        let mut seen_weeks = HashMap::new();
-        let mut seen_months = HashMap::new();
-        let mut seen_years = HashMap::new();
+    let mut marks: Vec<Option<PruneMark>> = sorted
+        .iter()
+        .map(|b| b.protected.then_some(PruneMark::Protected))
+        .collect();
 
-        for backup in &sorted {
-            let dt = match chrono::DateTime::from_timestamp(backup.timestamp, 0) {
-                Some(dt) => dt,
-                None => {
-                    tracing::warn!(
-                        backup_id = %backup.id,
-                        timestamp = backup.timestamp,
-                        "skipping backup with out-of-range timestamp during retention evaluation"
-                    );
+    if policy.keeps_all() {
+        for m in marks.iter_mut() {
+            if m.is_none() {
+                *m = Some(PruneMark::Keep);
+            }
+        }
+    } else {
+        let options: [(Option<u32>, IdFn); 6] = [
+            (policy.keep_last, id_last),
+            (policy.keep_hourly, id_hour),
+            (policy.keep_daily, id_day),
+            (policy.keep_weekly, id_week),
+            (policy.keep_monthly, id_month),
+            (policy.keep_yearly, id_year),
+        ];
+
+        for (count, id_fn) in options {
+            let Some(count) = count.filter(|c| *c > 0) else {
+                continue;
+            };
+            // Periods already covered by a backup an earlier option kept.
+            let already: HashSet<String> = sorted
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| marks[*i] == Some(PruneMark::Keep))
+                .map(|(i, b)| id_fn(b.timestamp, i))
+                .collect();
+            let mut newly: HashSet<String> = HashSet::new();
+            for (i, b) in sorted.iter().enumerate() {
+                if marks[i].is_some() {
                     continue;
                 }
-            };
-
-            // Hourly
-            let hour_key = (dt.year(), dt.month(), dt.day(), dt.hour());
-            if let std::collections::hash_map::Entry::Vacant(e) = seen_hours.entry(hour_key) {
-                e.insert(backup.id.clone());
-                hourly.push(backup.id.clone());
-            }
-
-            // Daily
-            let day_key = (dt.year(), dt.month(), dt.day());
-            if let std::collections::hash_map::Entry::Vacant(e) = seen_days.entry(day_key) {
-                e.insert(backup.id.clone());
-                daily.push(backup.id.clone());
-            }
-
-            // Weekly
-            let week_key = (dt.year(), dt.iso_week().week());
-            if let std::collections::hash_map::Entry::Vacant(e) = seen_weeks.entry(week_key) {
-                e.insert(backup.id.clone());
-                weekly.push(backup.id.clone());
-            }
-
-            // Monthly
-            let month_key = (dt.year(), dt.month());
-            if let std::collections::hash_map::Entry::Vacant(e) = seen_months.entry(month_key) {
-                e.insert(backup.id.clone());
-                monthly.push(backup.id.clone());
-            }
-
-            // Yearly
-            let year_key = dt.year();
-            if let std::collections::hash_map::Entry::Vacant(e) = seen_years.entry(year_key) {
-                e.insert(backup.id.clone());
-                yearly.push(backup.id.clone());
+                let id = id_fn(b.timestamp, i);
+                if already.contains(&id) {
+                    continue;
+                }
+                if !newly.contains(&id) {
+                    if newly.len() >= count as usize {
+                        break;
+                    }
+                    newly.insert(id);
+                    marks[i] = Some(PruneMark::Keep);
+                } else {
+                    marks[i] = Some(PruneMark::Remove);
+                }
             }
         }
+    }
 
-        // Determine which backups to keep
-        let mut keep = std::collections::HashSet::new();
+    sorted
+        .iter()
+        .zip(marks)
+        .map(|(b, m)| PruneDecision {
+            backup_id: b.id.clone(),
+            timestamp: b.timestamp,
+            mark: m.unwrap_or(PruneMark::Remove),
+        })
+        .collect()
+}
 
-        if let Some(n) = policy.keep_hourly {
-            for id in hourly.iter().take(n as usize) {
-                keep.insert(id.clone());
-            }
-        }
-
-        if let Some(n) = policy.keep_daily {
-            for id in daily.iter().take(n as usize) {
-                keep.insert(id.clone());
-            }
-        }
-
-        if let Some(n) = policy.keep_weekly {
-            for id in weekly.iter().take(n as usize) {
-                keep.insert(id.clone());
-            }
-        }
-
-        if let Some(n) = policy.keep_monthly {
-            for id in monthly.iter().take(n as usize) {
-                keep.insert(id.clone());
-            }
-        }
-
-        if let Some(n) = policy.keep_yearly {
-            for id in yearly.iter().take(n as usize) {
-                keep.insert(id.clone());
-            }
-        }
-
-        // Mark backups not in keep set for deletion
-        for backup in sorted {
-            if !keep.contains(&backup.id) {
-                to_delete.push(backup.id.clone());
-            }
-        }
-
-        tracing::info!(
-            "Retention policy applied: {} backups to keep, {} to delete",
-            keep.len(),
-            to_delete.len()
-        );
-
-        to_delete
+/// Period key of a unix timestamp in the host's local time zone (the same
+/// zone the scheduler uses), or a unique key if it is out of range.
+fn period(ts: i64, f: impl Fn(&chrono::DateTime<Local>) -> String) -> String {
+    match Local.timestamp_opt(ts, 0).single() {
+        Some(d) => f(&d),
+        None => format!("invalid-{ts}"),
     }
 }
 
@@ -138,40 +157,160 @@ mod tests {
     use crate::backup::{BackupMode, Compression, TargetType};
     use std::path::PathBuf;
 
-    #[tokio::test]
-    async fn test_retention_policy() {
-        let manager = RetentionManager::new();
+    fn backup(id: &str, ts: i64, protected: bool) -> Backup {
+        Backup {
+            id: id.to_string(),
+            target_type: TargetType::Vm,
+            target_id: "100".to_string(),
+            target_name: "test".to_string(),
+            timestamp: ts,
+            size: 1,
+            mode: BackupMode::Stop,
+            compression: Compression::Zstd,
+            path: PathBuf::from("/tmp/x"),
+            storage: "/tmp".to_string(),
+            config_included: true,
+            notes: None,
+            protected,
+            sha256: String::new(),
+            job_id: None,
+            verify_state: None,
+            verified_at: None,
+            verify_error: None,
+        }
+    }
 
-        // Create test backups spanning multiple days
-        let backups: Vec<Backup> = (0..10)
-            .map(|i| Backup {
-                id: format!("backup-{}", i),
-                target_type: TargetType::Vm,
-                target_id: "100".to_string(),
-                target_name: "test".to_string(),
-                timestamp: 1704067200 + (i * 86400), // One per day
-                size: 1000000,
-                mode: BackupMode::Snapshot,
-                compression: Compression::Zstd,
-                path: PathBuf::from("/tmp/backup"),
-                config_included: true,
-                notes: None,
-            })
+    fn removed(d: &[PruneDecision]) -> Vec<String> {
+        let mut v: Vec<String> = d
+            .iter()
+            .filter(|d| d.mark == PruneMark::Remove)
+            .map(|d| d.backup_id.clone())
             .collect();
+        v.sort();
+        v
+    }
 
-        let backup_refs: Vec<&Backup> = backups.iter().collect();
+    // Noon local time on consecutive days, so DST never moves a backup
+    // across a day boundary.
+    fn day(n: i64) -> i64 {
+        Local
+            .with_ymd_and_hms(2024, 1, 1, 12, 0, 0)
+            .unwrap()
+            .timestamp()
+            + n * 86400
+    }
 
-        let policy = RetentionPolicy {
-            keep_hourly: None,
-            keep_daily: Some(7),
-            keep_weekly: None,
-            keep_monthly: None,
-            keep_yearly: None,
-        };
+    #[test]
+    fn keep_daily_keeps_newest_n_days() {
+        let bs: Vec<Backup> = (0..10)
+            .map(|i| backup(&format!("b{i}"), day(i), false))
+            .collect();
+        let refs: Vec<&Backup> = bs.iter().collect();
+        let d = mark(
+            &refs,
+            &RetentionPolicy {
+                keep_daily: Some(7),
+                ..Default::default()
+            },
+        );
+        assert_eq!(removed(&d), vec!["b0", "b1", "b2"]);
+    }
 
-        let to_delete = manager.apply_policy(&backup_refs, &policy).await;
+    #[test]
+    fn keep_last_counts_individual_backups() {
+        // Three backups on the same day: keep-daily=1 would keep one,
+        // keep-last=2 keeps the two newest.
+        let bs = [
+            backup("a", day(0), false),
+            backup("b", day(0) + 60, false),
+            backup("c", day(0) + 120, false),
+        ];
+        let refs: Vec<&Backup> = bs.iter().collect();
+        let d = mark(
+            &refs,
+            &RetentionPolicy {
+                keep_last: Some(2),
+                ..Default::default()
+            },
+        );
+        assert_eq!(removed(&d), vec!["a"]);
+    }
 
-        // Should keep 7 daily backups, delete 3
-        assert_eq!(to_delete.len(), 3);
+    #[test]
+    fn later_options_skip_periods_covered_by_earlier_ones() {
+        // keep-last=1 keeps day 3; keep-daily=2 must then keep days 2 and 1
+        // (day 3 is already covered), so only day 0 is removed.
+        let bs: Vec<Backup> = (0..4)
+            .map(|i| backup(&format!("d{i}"), day(i), false))
+            .collect();
+        let refs: Vec<&Backup> = bs.iter().collect();
+        let d = mark(
+            &refs,
+            &RetentionPolicy {
+                keep_last: Some(1),
+                keep_daily: Some(2),
+                ..Default::default()
+            },
+        );
+        assert_eq!(removed(&d), vec!["d0"]);
+    }
+
+    #[test]
+    fn protected_backups_survive_and_do_not_count() {
+        let bs = [
+            backup("old-protected", day(0), true),
+            backup("mid", day(1), false),
+            backup("new", day(2), false),
+        ];
+        let refs: Vec<&Backup> = bs.iter().collect();
+        let d = mark(
+            &refs,
+            &RetentionPolicy {
+                keep_last: Some(1),
+                ..Default::default()
+            },
+        );
+        assert_eq!(removed(&d), vec!["mid"]);
+        assert!(d
+            .iter()
+            .any(|x| x.backup_id == "old-protected" && x.mark == PruneMark::Protected));
+    }
+
+    #[test]
+    fn empty_policy_keeps_everything() {
+        let bs: Vec<Backup> = (0..5)
+            .map(|i| backup(&format!("e{i}"), day(i), false))
+            .collect();
+        let refs: Vec<&Backup> = bs.iter().collect();
+        assert!(removed(&mark(&refs, &RetentionPolicy::default())).is_empty());
+    }
+
+    #[test]
+    fn weekly_and_monthly() {
+        // 70 daily backups from Mon 2024-01-01 to Sun 2024-03-10.
+        // keep-weekly=2 keeps the newest of ISO week 10 (Mar 10, day 69)
+        // and week 9 (Mar 3, day 62) and, like Proxmox, marks the other
+        // backups of those two weeks (down to Mon Feb 26, day 56) as
+        // removed. keep-monthly=2 then finds March already covered and
+        // keeps the newest still-unmarked backup of February (Feb 25,
+        // day 55) and of January (Jan 31, day 30).
+        let bs: Vec<Backup> = (0..70)
+            .map(|i| backup(&format!("w{i:02}"), day(i), false))
+            .collect();
+        let refs: Vec<&Backup> = bs.iter().collect();
+        let d = mark(
+            &refs,
+            &RetentionPolicy {
+                keep_weekly: Some(2),
+                keep_monthly: Some(2),
+                ..Default::default()
+            },
+        );
+        let kept: Vec<&str> = d
+            .iter()
+            .filter(|x| x.mark == PruneMark::Keep)
+            .map(|x| x.backup_id.as_str())
+            .collect();
+        assert_eq!(kept, vec!["w69", "w62", "w55", "w30"]);
     }
 }

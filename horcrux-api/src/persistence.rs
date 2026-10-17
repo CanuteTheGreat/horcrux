@@ -65,9 +65,13 @@ pub async fn load_persisted_managers(
                 .expect("Failed to load cluster nodes"),
         ),
         backup: Arc::new(
-            BackupManager::with_database(database.clone(), cfg.paths.restore.clone())
-                .await
-                .expect("Failed to load backup jobs"),
+            BackupManager::with_database(
+                database.clone(),
+                cfg.paths.backups.clone(),
+                cfg.paths.restore.clone(),
+            )
+            .await
+            .expect("Failed to load backup jobs"),
         ),
     }
 }

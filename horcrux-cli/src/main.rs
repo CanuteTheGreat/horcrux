@@ -193,45 +193,122 @@ enum StorageCommands {
     },
 }
 
+/// Retention options shared by `backup prune` and `backup schedule`.
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct KeepArgs {
+    /// Keep the N newest backups
+    #[arg(long)]
+    keep_last: Option<u32>,
+    /// Keep the newest backup of the last N hours
+    #[arg(long)]
+    keep_hourly: Option<u32>,
+    /// Keep the newest backup of the last N days
+    #[arg(long)]
+    keep_daily: Option<u32>,
+    /// Keep the newest backup of the last N weeks
+    #[arg(long)]
+    keep_weekly: Option<u32>,
+    /// Keep the newest backup of the last N months
+    #[arg(long)]
+    keep_monthly: Option<u32>,
+    /// Keep the newest backup of the last N years
+    #[arg(long)]
+    keep_yearly: Option<u32>,
+}
+
 #[derive(Subcommand)]
 enum BackupCommands {
     /// List backups
-    List,
+    List {
+        /// Only backups of this VM/container
+        #[arg(short, long)]
+        target: Option<String>,
+    },
     /// Show backup details
     Show { id: String },
-    /// Create a backup
+    /// Back up a VM or container now
     Create {
-        /// VM ID
-        vm_id: String,
+        /// VM or container ID
+        target_id: String,
         /// Backup mode (snapshot, suspend, stop)
         #[arg(short, long, default_value = "snapshot")]
         mode: String,
         /// Compression type (none, lzo, gzip, zstd)
         #[arg(short, long, default_value = "zstd")]
         compression: String,
+        /// Storage: "local", a storage pool id, or an absolute directory
+        #[arg(short, long, default_value = "local")]
+        storage: String,
+        /// Notes
+        #[arg(short, long)]
+        notes: Option<String>,
+        /// Protect the backup from pruning/deletion
+        #[arg(long)]
+        protected: bool,
     },
-    /// Restore a backup
+    /// Restore a backup (to the original guest, or a new id)
     Restore {
         /// Backup ID
         id: String,
-        /// Target VM ID (optional, restores to original if not specified)
+        /// Target VM/container ID (default: the original)
         #[arg(short, long)]
         target: Option<String>,
+        /// Name of the restored guest
+        #[arg(short, long)]
+        name: Option<String>,
+        /// Overwrite a different existing guest
+        #[arg(long)]
+        force: bool,
+        /// Start the guest after restoring
+        #[arg(long)]
+        start: bool,
     },
+    /// Verify a backup archive (checksums, unpack, qemu-img check)
+    Verify { id: String },
     /// Delete a backup
     Delete { id: String },
-    /// Schedule a backup job
+    /// Apply a retention policy to one guest's backups
+    Prune {
+        /// VM or container ID
+        target_id: String,
+        #[command(flatten)]
+        keep: KeepArgs,
+        /// Only this storage
+        #[arg(long)]
+        storage: Option<String>,
+        /// Only show what would be removed
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Create a scheduled backup job
     Schedule {
-        /// Job name
+        /// Job ID
         #[arg(short, long)]
         name: String,
-        /// Cron schedule
+        /// Cron schedule ("0 2 * * *") or daily/weekly/monthly
         #[arg(short, long)]
         schedule: String,
-        /// VMs to back up (comma-separated)
+        /// VMs/containers to back up (comma-separated)
         #[arg(short, long)]
         vms: String,
+        /// Storage: "local", a storage pool id, or an absolute directory
+        #[arg(long, default_value = "local")]
+        storage: String,
+        /// Backup mode (snapshot, suspend, stop)
+        #[arg(short, long, default_value = "snapshot")]
+        mode: String,
+        /// Compression type (none, lzo, gzip, zstd)
+        #[arg(short, long, default_value = "zstd")]
+        compression: String,
+        #[command(flatten)]
+        keep: KeepArgs,
     },
+    /// List scheduled backup jobs
+    Jobs,
+    /// Run a backup job now
+    RunJob { id: String },
+    /// Delete a backup job (its backups are kept)
+    DeleteJob { id: String },
 }
 
 #[derive(Subcommand)]

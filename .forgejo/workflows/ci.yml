@@ -178,6 +178,7 @@ jobs:
           HORCRUX_CNI_CONF_DIR=/tmp/horcrux-ci-cni/conf.d \
           ADMIN_PASSWORD=admin \
           RATE_LIMIT_MAX_REQUESTS=100000 \
+          HORCRUX_BACKUP_SCHEDULER_TICK_SECS=5 \
           RUST_LOG=info \
           nohup ./target/debug/horcrux-api > /tmp/horcrux-api.log 2>&1 &
           echo $! > /tmp/horcrux-api.pid
@@ -655,7 +656,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev python3-venv qemu-utils
+        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev python3-venv qemu-utils zstd
 
       - name: Install trunk
         # Same prebuilt-binary install as the Build Web UI job.
