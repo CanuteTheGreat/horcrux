@@ -212,6 +212,66 @@ async fn backup_corrupt_restore_and_scheduled_job_over_http() {
         .await;
     assert_eq!(s, 409);
 
+    // Running VM: suspend mode pauses it over QMP for the copy and resumes
+    // it; stop mode stops, copies and restarts it. Both archives hold the
+    // same disk content.
+    let (s, r) = a.post(&format!("/vms/{vm}/start"), json!({})).await;
+    assert!(s == 200 || s == 201, "start vm: {s} {r}");
+    let pid = || -> Option<u32> {
+        std::fs::read_to_string(format!("/var/run/horcrux-vm-{vm}.pid"))
+            .ok()
+            .and_then(|p| p.trim().parse().ok())
+            .filter(|p| Path::new(&format!("/proc/{p}")).exists())
+    };
+    let first_pid = pid().expect("VM process running");
+    let (s, live) = a
+        .post(
+            "/backups",
+            json!({"target_id": vm, "mode": "suspend", "compression": "zstd"}),
+        )
+        .await;
+    assert_eq!(s, 201, "suspend-mode backup of a running VM: {live}");
+    assert_eq!(
+        pid(),
+        Some(first_pid),
+        "suspend mode keeps the same QEMU process"
+    );
+    let (s, r) = a
+        .post(
+            &format!("/backups/{}/restore", live["id"].as_str().unwrap()),
+            json!({"target_id": copy, "force": true}),
+        )
+        .await;
+    assert_eq!(s, 200, "restore live backup: {r}");
+    assert_eq!(content_sha(&vm_disk(&a, copy).await), original);
+    let (s, stopped) = a
+        .post(
+            "/backups",
+            json!({"target_id": vm, "mode": "stop", "compression": "gzip"}),
+        )
+        .await;
+    assert_eq!(s, 201, "stop-mode backup of a running VM: {stopped}");
+    let second_pid = pid().expect("VM restarted after stop-mode backup");
+    assert_ne!(second_pid, first_pid, "stop mode restarted QEMU");
+    let (_, v) = a
+        .post(
+            &format!("/backups/{}/verify", stopped["id"].as_str().unwrap()),
+            json!({}),
+        )
+        .await;
+    assert_eq!(v["ok"], true, "{v}");
+    // Restoring over a running VM is refused.
+    let (s, _) = a.post(&format!("/backups/{bid}/restore"), json!({})).await;
+    assert_eq!(s, 409);
+    let (s, r) = a.post(&format!("/vms/{vm}/stop"), json!({})).await;
+    assert!(s == 200 || s == 201, "stop vm: {s} {r}");
+    for _ in 0..100 {
+        if pid().is_none() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
     // Protect blocks delete.
     let (s, _) = a
         .call(

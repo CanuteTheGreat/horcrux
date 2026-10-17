@@ -739,10 +739,11 @@ Backups are real vzdump-style archives: a tar (zstd/gzip/lzo/none) holding
 `disk-N.qcow2` for VMs (every disk, flattened with `qemu-img convert`),
 `rootfs.tar` (+ `inspect.json`) for Docker/Podman/LXC containers, or the
 `lxc`/`incus export` tarball for LXD/Incus. The catalog and jobs are stored in
-the database. A stopped guest is copied offline in every mode; for a running
-guest `stop` stops it, backs it up and restarts it, and containers are frozen
-during `snapshot`/`suspend`. Live `snapshot`/`suspend` of a running VM is
-refused (it needs a QMP channel); use `stop`.
+the database. A stopped guest is copied offline in every mode. For a running
+guest, `stop` stops it, backs it up and restarts it; `suspend` and `snapshot`
+pause it for the copy (VMs via QMP `stop`, which flushes every disk;
+containers are frozen) and resume it afterwards. There is no no-pause
+copy-before-write mode yet.
 
 `storage` is `local` (the default backup directory, `paths.backups`), the id
 of a directory/NFS/CIFS/BtrFS/GlusterFS/ZFS storage pool (archives go to

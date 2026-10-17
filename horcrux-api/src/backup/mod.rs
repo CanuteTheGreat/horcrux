@@ -11,10 +11,11 @@
 //! are fired by a real cron loop (`start_scheduler`).
 //!
 //! Modes: a stopped guest is always copied offline. For a running guest,
-//! `stop` stops it, backs it up and starts it again; for containers
-//! `suspend`/`snapshot` freeze (pause) it during the copy. Live
-//! `snapshot`/`suspend` backups of a *running VM* need a QMP channel to
-//! QEMU and are refused with a clear error until the QEMU runtime grows one.
+//! `stop` stops it, backs it up and starts it again; `suspend` and
+//! `snapshot` pause it for the copy (VMs over their QMP socket, which makes
+//! QEMU flush every disk; containers are frozen) and resume it afterwards.
+//! A copy-before-write block job (true no-pause snapshot) is not
+//! implemented yet.
 pub mod archive;
 pub mod providers;
 pub mod retention;
@@ -709,34 +710,50 @@ impl BackupManager {
         mode: &BackupMode,
         staging: &Path,
     ) -> Result<Vec<ArchiveFile>> {
+        let mut disks: Vec<PathBuf> = vm.disks.iter().map(|d| PathBuf::from(&d.path)).collect();
+        if disks.is_empty() {
+            disks.push(rt.vm_storage.join(format!("{}.qcow2", vm.id)));
+        }
+
         let running = crate::vm::QemuManager::process_running(&vm.id);
         let mut restart = false;
+        let mut paused: Option<crate::migration::qemu_monitor::QemuMonitor> = None;
         if running {
             match mode {
                 BackupMode::Stop => {
                     stop_vm_and_wait(rt, &vm.id).await?;
                     restart = true;
                 }
-                _ => {
-                    return Err(Error::Conflict(format!(
-                        "VM {} is running: live {:?} backups need a QMP channel the QEMU runtime does not expose yet; use mode \"stop\" (stop, back up, restart) or stop the VM first",
-                        vm.id, mode
-                    )))
+                BackupMode::Suspend | BackupMode::Snapshot => {
+                    // Pause the guest over its QMP socket: QEMU drains and
+                    // flushes every block device on `stop`, so the image
+                    // on disk is consistent while it stays paused. (No
+                    // copy-before-write block job yet, so snapshot mode
+                    // also pauses for the duration of the copy.)
+                    let qmp = crate::vm::display::DisplayRuntime::qmp_socket(&disks[0]);
+                    let mon = crate::migration::qemu_monitor::QemuMonitor::new(qmp.clone());
+                    mon.stop().await.map_err(|e| {
+                        Error::Conflict(format!(
+                            "VM {} is running but could not be paused over QMP ({}): {e}; use mode \"stop\"",
+                            vm.id,
+                            qmp.display()
+                        ))
+                    })?;
+                    tracing::info!("VM {} paused for backup", vm.id);
+                    paused = Some(mon);
                 }
             }
         }
+        // A paused QEMU still holds its image lock: read with force-share.
+        let force_share = paused.is_some();
 
         let result = async {
-            let mut disks: Vec<PathBuf> = vm.disks.iter().map(|d| PathBuf::from(&d.path)).collect();
-            if disks.is_empty() {
-                disks.push(rt.vm_storage.join(format!("{}.qcow2", vm.id)));
-            }
             let mut files = Vec::new();
             for (i, src) in disks.iter().enumerate() {
                 let name = format!("disk-{i}.qcow2");
                 let dst = staging.join(&name);
                 let (s, d) = (src.clone(), dst.clone());
-                tokio::task::spawn_blocking(move || archive::export_disk(&s, &d))
+                tokio::task::spawn_blocking(move || archive::export_disk(&s, &d, force_share))
                     .await
                     .map_err(|e| Error::System(format!("disk export task failed: {e}")))??;
                 let (sha256, size) = archive::sha256_file_async(dst).await?;
@@ -753,6 +770,19 @@ impl BackupManager {
         }
         .await;
 
+        if let Some(mon) = paused {
+            if let Err(e) = mon.cont().await {
+                tracing::error!("VM {} could not be resumed after backup: {e}", vm.id);
+                if result.is_ok() {
+                    return Err(Error::System(format!(
+                        "backup copied but VM {} failed to resume: {e}",
+                        vm.id
+                    )));
+                }
+            } else {
+                tracing::info!("VM {} resumed after backup", vm.id);
+            }
+        }
         if restart {
             if let Err(e) = rt.vm_manager.start_vm(&vm.id).await {
                 tracing::error!("VM {} could not be restarted after backup: {e}", vm.id);

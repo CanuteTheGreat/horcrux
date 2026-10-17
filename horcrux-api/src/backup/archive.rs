@@ -259,37 +259,36 @@ pub async fn sha256_file_async(path: PathBuf) -> Result<(String, u64)> {
 }
 
 /// Image format of a disk file per `qemu-img info`.
-pub fn disk_format(path: &Path) -> Result<String> {
-    let out = run(
-        "qemu-img",
-        &["info", "--output=json", &path.to_string_lossy()],
-    )?;
+pub fn disk_format(path: &Path, force_share: bool) -> Result<String> {
+    let p = path.to_string_lossy();
+    let mut args = vec!["info", "--output=json"];
+    if force_share {
+        args.push("-U");
+    }
+    args.push(&p);
+    let out = run("qemu-img", &args)?;
     let v: serde_json::Value = serde_json::from_slice(&out.stdout)
         .map_err(|e| Error::System(format!("qemu-img info output: {e}")))?;
     Ok(v["format"].as_str().unwrap_or("raw").to_string())
 }
 
-/// Consistent standalone qcow2 copy of a (stopped) VM disk.
-pub fn export_disk(src: &Path, dst: &Path) -> Result<()> {
+/// Standalone qcow2 copy of a VM disk. The VM must be stopped, or paused
+/// (`force_share`: QEMU still holds the image lock but has flushed it).
+pub fn export_disk(src: &Path, dst: &Path, force_share: bool) -> Result<()> {
     if !src.exists() {
         return Err(Error::System(format!(
             "VM disk {} does not exist",
             src.display()
         )));
     }
-    let fmt = disk_format(src)?;
-    run(
-        "qemu-img",
-        &[
-            "convert",
-            "-f",
-            &fmt,
-            "-O",
-            "qcow2",
-            &src.to_string_lossy(),
-            &dst.to_string_lossy(),
-        ],
-    )?;
+    let fmt = disk_format(src, force_share)?;
+    let (src_s, dst_s) = (src.to_string_lossy(), dst.to_string_lossy());
+    let mut args = vec!["convert"];
+    if force_share {
+        args.push("-U");
+    }
+    args.extend(["-f", &fmt, "-O", "qcow2", &src_s, &dst_s]);
+    run("qemu-img", &args)?;
     Ok(())
 }
 
