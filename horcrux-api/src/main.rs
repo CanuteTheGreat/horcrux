@@ -278,8 +278,17 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Initialize strict rate limiter for auth endpoints
+    // Overridable via AUTH_RATE_LIMIT_MAX_REQUESTS for the same reason as
+    // RATE_LIMIT_MAX_REQUESTS above: CI's shared test server is logged into
+    // by every API test binary (integration, contract, backup, console...)
+    // from one IP, which exhausts a 5/min budget and fails unrelated tests
+    // with 429. Production keeps 5/min (the var is unset there).
+    let auth_rate_limit_max_requests: u32 = std::env::var("AUTH_RATE_LIMIT_MAX_REQUESTS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5);
     let auth_rate_limit_config = middleware::rate_limit::RateLimitConfig {
-        max_requests: 5, // Only 5 login attempts per minute
+        max_requests: auth_rate_limit_max_requests, // 5 login attempts per minute by default
         window: std::time::Duration::from_secs(60),
         per_user: false, // Per IP address
     };
