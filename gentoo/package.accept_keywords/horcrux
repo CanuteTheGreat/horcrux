@@ -74,7 +74,7 @@ sys-cluster/kubernetes ~amd64 ~arm64
 sys-cluster/kubectl ~amd64 ~arm64
 sys-cluster/kubeadm ~amd64 ~arm64
 sys-cluster/kubelet ~amd64 ~arm64
-sys-cluster/helm ~amd64 ~arm64
+app-admin/helm ~amd64 ~arm64
 
 # =============================================================================
 # MONITORING

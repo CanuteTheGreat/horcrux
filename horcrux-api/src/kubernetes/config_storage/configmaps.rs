@@ -116,6 +116,54 @@ pub async fn update_configmap(
     Ok(configmap_to_info(patched))
 }
 
+/// Replace a ConfigMap's data/labels/annotations with exactly the given
+/// maps (what the web UI's edit dialog shows): keys that were removed in the
+/// dialog are removed from the ConfigMap, unlike [`update_configmap`]'s
+/// additive merge.
+#[cfg(feature = "kubernetes")]
+pub async fn replace_configmap(
+    client: &K8sClient,
+    namespace: &str,
+    name: &str,
+    request: &UpdateConfigMapRequest,
+) -> K8sResult<ConfigMapInfo> {
+    use k8s_openapi::api::core::v1::ConfigMap;
+    use kube::api::{Api, Patch, PatchParams};
+
+    let configmaps: Api<ConfigMap> = Api::namespaced(client.inner().clone(), namespace);
+    let current = configmaps.get(name).await?;
+    let patch = serde_json::json!({
+        "data": replace_map(current.data.as_ref(), &request.data),
+        "metadata": {
+            "labels": replace_map(current.metadata.labels.as_ref(), &request.labels),
+            "annotations": replace_map(current.metadata.annotations.as_ref(), &request.annotations),
+        },
+    });
+    let patched = configmaps
+        .patch(name, &PatchParams::default(), &Patch::Merge(&patch))
+        .await?;
+    Ok(configmap_to_info(patched))
+}
+
+/// JSON merge patch turning `current` into `wanted` (removed keys -> null).
+pub fn replace_map(
+    current: Option<&std::collections::BTreeMap<String, String>>,
+    wanted: &std::collections::BTreeMap<String, String>,
+) -> serde_json::Value {
+    let mut patch = serde_json::Map::new();
+    if let Some(cur) = current {
+        for k in cur.keys() {
+            if !wanted.contains_key(k) {
+                patch.insert(k.clone(), serde_json::Value::Null);
+            }
+        }
+    }
+    for (k, v) in wanted {
+        patch.insert(k.clone(), serde_json::Value::String(v.clone()));
+    }
+    serde_json::Value::Object(patch)
+}
+
 /// Delete a ConfigMap
 #[cfg(feature = "kubernetes")]
 pub async fn delete_configmap(client: &K8sClient, namespace: &str, name: &str) -> K8sResult<()> {

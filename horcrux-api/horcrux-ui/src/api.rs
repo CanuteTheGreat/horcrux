@@ -1094,7 +1094,26 @@ pub struct CreateApiTokenRequest {
 // Kubernetes Workload Data Structures
 // ============================================================================
 
+/// Human "age" (5m, 3h, 2d) of a Kubernetes object from its RFC 3339
+/// creation time, as `kubectl get` shows it.
+pub fn k8s_age(created_at: Option<&str>) -> String {
+    let Some(t) = created_at.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()) else {
+        return "-".to_string();
+    };
+    let secs = (chrono::Utc::now() - t.with_timezone(&chrono::Utc))
+        .num_seconds()
+        .max(0);
+    match secs {
+        s if s < 120 => format!("{}s", s),
+        s if s < 7200 => format!("{}m", s / 60),
+        s if s < 172_800 => format!("{}h", s / 3600),
+        s => format!("{}d", s / 86_400),
+    }
+}
+
+/// Kubernetes pod (view of the API's `kubernetes::types::PodInfo`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(from = "KubernetesPodWire")]
 pub struct KubernetesPod {
     pub name: String,
     pub namespace: String,
@@ -1103,9 +1122,66 @@ pub struct KubernetesPod {
     pub restarts: u32,
     pub age: String,
     pub node: Option<String>,
-    pub containers: Vec<Container>,
+    pub containers: Vec<PodContainer>,
     pub labels: std::collections::HashMap<String, String>,
     pub annotations: std::collections::HashMap<String, String>,
+}
+
+/// One container of a pod.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PodContainer {
+    pub name: String,
+    #[serde(default)]
+    pub image: String,
+    #[serde(default)]
+    pub ready: bool,
+    #[serde(default)]
+    pub restart_count: i32,
+}
+
+#[derive(Deserialize)]
+struct KubernetesPodWire {
+    name: String,
+    namespace: String,
+    status: String,
+    #[serde(default)]
+    node_name: Option<String>,
+    #[serde(default)]
+    containers: Vec<PodContainer>,
+    #[serde(default)]
+    labels: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    annotations: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    restart_count: i32,
+}
+
+impl From<KubernetesPodWire> for KubernetesPod {
+    fn from(w: KubernetesPodWire) -> Self {
+        let mut phase = w.status;
+        if let Some(first) = phase.get(..1) {
+            phase = first.to_uppercase() + &phase[1..];
+        }
+        let ready = w.containers.iter().filter(|c| c.ready).count();
+        Self {
+            ready: format!("{}/{}", ready, w.containers.len()),
+            restarts: w.restart_count.max(0) as u32,
+            age: k8s_age(w.created_at.as_deref()),
+            name: w.name,
+            namespace: w.namespace,
+            status: PodStatus {
+                phase,
+                reason: None,
+                message: None,
+            },
+            node: w.node_name,
+            containers: w.containers,
+            labels: w.labels,
+            annotations: w.annotations,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1150,7 +1226,9 @@ pub struct ContainerStateTerminated {
     pub finished_at: Option<String>,
 }
 
+/// Kubernetes deployment (view of the API's `DeploymentInfo`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(from = "KubernetesDeploymentWire")]
 pub struct KubernetesDeployment {
     pub name: String,
     pub namespace: String,
@@ -1160,6 +1238,49 @@ pub struct KubernetesDeployment {
     pub labels: std::collections::HashMap<String, String>,
     pub annotations: std::collections::HashMap<String, String>,
     pub conditions: Vec<DeploymentCondition>,
+}
+
+#[derive(Deserialize)]
+struct KubernetesDeploymentWire {
+    name: String,
+    namespace: String,
+    #[serde(default)]
+    replicas: i32,
+    #[serde(default)]
+    ready_replicas: i32,
+    #[serde(default)]
+    available_replicas: i32,
+    #[serde(default)]
+    updated_replicas: i32,
+    #[serde(default)]
+    labels: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    strategy: String,
+    #[serde(default)]
+    created_at: Option<String>,
+}
+
+impl From<KubernetesDeploymentWire> for KubernetesDeployment {
+    fn from(w: KubernetesDeploymentWire) -> Self {
+        let n = |v: i32| v.max(0) as u32;
+        let unavailable = n(w.replicas).saturating_sub(n(w.available_replicas));
+        Self {
+            replicas: DeploymentReplicas {
+                desired: n(w.replicas),
+                current: n(w.updated_replicas),
+                ready: n(w.ready_replicas),
+                available: n(w.available_replicas),
+                unavailable: (unavailable > 0).then_some(unavailable),
+            },
+            age: k8s_age(w.created_at.as_deref()),
+            name: w.name,
+            namespace: w.namespace,
+            strategy: w.strategy,
+            labels: w.labels,
+            annotations: Default::default(),
+            conditions: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1180,7 +1301,9 @@ pub struct DeploymentCondition {
     pub last_update_time: String,
 }
 
+/// Kubernetes service (view of the API's `ServiceInfo`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(from = "KubernetesServiceWire")]
 pub struct KubernetesService {
     pub name: String,
     pub namespace: String,
@@ -1193,12 +1316,49 @@ pub struct KubernetesService {
     pub labels: std::collections::HashMap<String, String>,
 }
 
+#[derive(Deserialize)]
+struct KubernetesServiceWire {
+    name: String,
+    namespace: String,
+    service_type: String,
+    #[serde(default)]
+    cluster_ip: Option<String>,
+    #[serde(default)]
+    external_ip: Option<String>,
+    #[serde(default)]
+    ports: Vec<ServicePort>,
+    #[serde(default)]
+    selector: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    labels: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    created_at: Option<String>,
+}
+
+impl From<KubernetesServiceWire> for KubernetesService {
+    fn from(w: KubernetesServiceWire) -> Self {
+        Self {
+            age: k8s_age(w.created_at.as_deref()),
+            name: w.name,
+            namespace: w.namespace,
+            service_type: w.service_type,
+            cluster_ip: w.cluster_ip.unwrap_or_else(|| "None".to_string()),
+            external_ips: w.external_ip.into_iter().collect(),
+            ports: w.ports,
+            selector: w.selector,
+            labels: w.labels,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServicePort {
     pub name: Option<String>,
     pub protocol: String,
     pub port: u16,
+    #[serde(default)]
     pub target_port: Option<String>,
+    #[serde(default)]
     pub node_port: Option<u16>,
 }
 
@@ -1211,7 +1371,9 @@ pub struct CreateServiceRequest {
     pub labels: Option<std::collections::HashMap<String, String>>,
 }
 
+/// Kubernetes ingress (view of the API's `IngressInfo`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(from = "KubernetesIngressWire")]
 pub struct KubernetesIngress {
     pub name: String,
     pub namespace: String,
@@ -1223,24 +1385,78 @@ pub struct KubernetesIngress {
     pub labels: std::collections::HashMap<String, String>,
 }
 
+#[derive(Deserialize)]
+struct KubernetesIngressWire {
+    name: String,
+    namespace: String,
+    #[serde(default)]
+    ingress_class: Option<String>,
+    #[serde(default)]
+    rules: Vec<IngressRule>,
+    #[serde(default)]
+    tls: Vec<IngressTLS>,
+    #[serde(default)]
+    labels: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    created_at: Option<String>,
+}
+
+impl From<KubernetesIngressWire> for KubernetesIngress {
+    fn from(w: KubernetesIngressWire) -> Self {
+        let mut hosts: Vec<String> = w.rules.iter().filter_map(|r| r.host.clone()).collect();
+        hosts.dedup();
+        Self {
+            age: k8s_age(w.created_at.as_deref()),
+            name: w.name,
+            namespace: w.namespace,
+            class: w.ingress_class,
+            hosts,
+            rules: w.rules,
+            tls: w.tls,
+            labels: w.labels,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IngressRule {
     pub host: Option<String>,
     pub paths: Vec<IngressPath>,
 }
 
+/// Ingress path. Sent as-is on create; read from the API's
+/// `{path, path_type, backend_service, backend_port}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IngressPath {
     pub path: String,
     pub path_type: String,
+    #[serde(alias = "backend_service")]
     pub service_name: String,
+    #[serde(
+        alias = "backend_port",
+        deserialize_with = "port_from_string_or_number"
+    )]
     pub service_port: u16,
+}
+
+fn port_from_string_or_number<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u16, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(match v {
+        serde_json::Value::Number(n) => n.as_u64().unwrap_or(0) as u16,
+        serde_json::Value::String(s) => s.parse().unwrap_or(0),
+        _ => 0,
+    })
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IngressTLS {
     pub hosts: Vec<String>,
+    #[serde(default, deserialize_with = "string_or_null")]
     pub secret_name: String,
+}
+
+fn string_or_null<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1799,7 +2015,9 @@ pub struct HelmRepository {
     pub name: String,
     pub url: String,
     pub description: Option<String>,
-    pub added_at: String,
+    /// Set for repositories added through Horcrux (helm records no date).
+    #[serde(default)]
+    pub added_at: Option<String>,
     pub status: String,
     pub last_update: Option<String>,
 }
@@ -1862,7 +2080,9 @@ pub struct HelmValues {
     pub user_supplied_values: serde_json::Value,
 }
 
+/// Kubernetes ConfigMap (view of the API's `ConfigMapInfo`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(from = "KubernetesConfigMapWire")]
 pub struct KubernetesConfigMap {
     pub name: String,
     pub namespace: String,
@@ -1871,8 +2091,47 @@ pub struct KubernetesConfigMap {
     pub labels: std::collections::HashMap<String, String>,
     pub annotations: std::collections::HashMap<String, String>,
     pub age: String,
-    #[serde(default)]
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Deserialize)]
+struct KubernetesConfigMapWire {
+    name: String,
+    namespace: String,
+    #[serde(default)]
+    data: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    binary_data_keys: Vec<String>,
+    #[serde(default)]
+    labels: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    annotations: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    created_at: Option<String>,
+}
+
+impl From<KubernetesConfigMapWire> for KubernetesConfigMap {
+    fn from(w: KubernetesConfigMapWire) -> Self {
+        Self {
+            age: k8s_age(w.created_at.as_deref()),
+            created_at: w
+                .created_at
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|t| t.with_timezone(&chrono::Utc)),
+            binary_data: (!w.binary_data_keys.is_empty()).then(|| {
+                w.binary_data_keys
+                    .into_iter()
+                    .map(|k| (k, String::new()))
+                    .collect()
+            }),
+            name: w.name,
+            namespace: w.namespace,
+            data: w.data,
+            labels: w.labels,
+            annotations: w.annotations,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1884,22 +2143,58 @@ pub struct CreateConfigMapRequest {
     pub annotations: Option<std::collections::HashMap<String, String>>,
 }
 
+/// Kubernetes Secret (view of the API's `SecretInfo`). The API never sends
+/// secret values, only the key names: `data` maps each key to "".
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(from = "KubernetesSecretWire")]
 pub struct KubernetesSecret {
     pub name: String,
     pub namespace: String,
-    #[serde(default)]
     pub secret_type: Option<String>,
-    #[serde(default)]
     pub data: std::collections::HashMap<String, String>,
-    #[serde(default)]
     pub labels: Option<std::collections::HashMap<String, String>>,
-    #[serde(default)]
     pub annotations: Option<std::collections::HashMap<String, String>>,
-    #[serde(default)]
     pub age: String,
-    #[serde(default)]
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Deserialize)]
+struct KubernetesSecretWire {
+    name: String,
+    namespace: String,
+    #[serde(default)]
+    secret_type: Option<String>,
+    #[serde(default)]
+    data_keys: Vec<String>,
+    #[serde(default)]
+    labels: Option<std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    annotations: Option<std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    created_at: Option<String>,
+}
+
+impl From<KubernetesSecretWire> for KubernetesSecret {
+    fn from(w: KubernetesSecretWire) -> Self {
+        Self {
+            age: k8s_age(w.created_at.as_deref()),
+            created_at: w
+                .created_at
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|t| t.with_timezone(&chrono::Utc)),
+            data: w
+                .data_keys
+                .into_iter()
+                .map(|k| (k, String::new()))
+                .collect(),
+            name: w.name,
+            namespace: w.namespace,
+            secret_type: w.secret_type,
+            labels: w.labels,
+            annotations: w.annotations,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

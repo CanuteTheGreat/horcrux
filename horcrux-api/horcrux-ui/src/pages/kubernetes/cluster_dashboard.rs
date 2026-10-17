@@ -23,8 +23,10 @@ pub struct K8sCluster {
     pub kubeconfig: Option<String>,
 }
 
-/// Cluster health information
+/// Cluster health information (view of the API's `ClusterHealth`, which
+/// reports nodes as `{total, ready, not_ready}` and no resource usage).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "ClusterHealthWire")]
 pub struct ClusterHealth {
     pub cluster_id: String,
     pub status: String,
@@ -34,6 +36,54 @@ pub struct ClusterHealth {
     pub controller_manager_healthy: bool,
     pub node_status: NodeHealthSummary,
     pub resource_usage: ResourceUsage,
+}
+
+#[derive(Deserialize)]
+struct ClusterHealthWire {
+    status: String,
+    #[serde(default)]
+    api_server_healthy: bool,
+    #[serde(default)]
+    etcd_healthy: bool,
+    #[serde(default)]
+    scheduler_healthy: bool,
+    #[serde(default)]
+    controller_manager_healthy: bool,
+    #[serde(default)]
+    nodes: NodesWire,
+}
+
+#[derive(Deserialize, Default)]
+struct NodesWire {
+    #[serde(default)]
+    total: u32,
+    #[serde(default)]
+    ready: u32,
+    #[serde(default)]
+    not_ready: u32,
+}
+
+impl From<ClusterHealthWire> for ClusterHealth {
+    fn from(w: ClusterHealthWire) -> Self {
+        Self {
+            cluster_id: String::new(),
+            status: w.status,
+            api_server_healthy: w.api_server_healthy,
+            etcd_healthy: w.etcd_healthy,
+            scheduler_healthy: w.scheduler_healthy,
+            controller_manager_healthy: w.controller_manager_healthy,
+            node_status: NodeHealthSummary {
+                total_nodes: w.nodes.total,
+                ready_nodes: w.nodes.ready,
+                not_ready_nodes: w.nodes.not_ready,
+                unknown_nodes: w
+                    .nodes
+                    .total
+                    .saturating_sub(w.nodes.ready + w.nodes.not_ready),
+            },
+            resource_usage: ResourceUsage::default(),
+        }
+    }
 }
 
 /// Node health summary
@@ -46,7 +96,7 @@ pub struct NodeHealthSummary {
 }
 
 /// Resource usage summary
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ResourceUsage {
     pub cpu_total: String,
     pub cpu_used: String,
@@ -56,8 +106,9 @@ pub struct ResourceUsage {
     pub storage_used: String,
 }
 
-/// Kubernetes node information
+/// Kubernetes node information (view of the API's `NodeInfo`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "K8sNodeWire")]
 pub struct K8sNode {
     pub name: String,
     pub status: String,
@@ -70,6 +121,48 @@ pub struct K8sNode {
     pub memory_allocatable: String,
     pub pods_allocatable: String,
     pub conditions: Vec<NodeCondition>,
+}
+
+#[derive(Deserialize)]
+struct K8sNodeWire {
+    name: String,
+    status: String,
+    #[serde(default)]
+    roles: Vec<String>,
+    #[serde(default)]
+    kubelet_version: String,
+    #[serde(default)]
+    capacity_cpu: String,
+    #[serde(default)]
+    capacity_memory: String,
+    #[serde(default)]
+    capacity_pods: String,
+    #[serde(default)]
+    allocatable_cpu: String,
+    #[serde(default)]
+    allocatable_memory: String,
+    #[serde(default)]
+    allocatable_pods: String,
+    #[serde(default)]
+    conditions: Vec<NodeCondition>,
+}
+
+impl From<K8sNodeWire> for K8sNode {
+    fn from(w: K8sNodeWire) -> Self {
+        Self {
+            name: w.name,
+            status: w.status,
+            roles: w.roles,
+            version: w.kubelet_version,
+            cpu_capacity: w.capacity_cpu,
+            memory_capacity: w.capacity_memory,
+            pods_capacity: w.capacity_pods,
+            cpu_allocatable: w.allocatable_cpu,
+            memory_allocatable: w.allocatable_memory,
+            pods_allocatable: w.allocatable_pods,
+            conditions: w.conditions,
+        }
+    }
 }
 
 /// Node condition

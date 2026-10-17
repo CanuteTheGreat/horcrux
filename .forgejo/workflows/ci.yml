@@ -179,6 +179,7 @@ jobs:
           ADMIN_PASSWORD=admin \
           RATE_LIMIT_MAX_REQUESTS=100000 \
           HORCRUX_BACKUP_SCHEDULER_TICK_SECS=5 \
+          HORCRUX_PAGERDUTY_EVENTS_URL=http://127.0.0.1:18765/v2/enqueue \
           RUST_LOG=info \
           nohup ./target/debug/horcrux-api > /tmp/horcrux-api.log 2>&1 &
           echo $! > /tmp/horcrux-api.pid
@@ -203,9 +204,20 @@ jobs:
           docker info --format 'docker {{.ServerVersion}} on {{.OperatingSystem}}'
           docker pull -q busybox:latest
 
+      - name: Start k3s + local chart repo (Helm contract test)
+        # The UI contract test drives the Kubernetes > Helm pages' routes
+        # against a real cluster: a throwaway k3s sibling container plus a
+        # local chart repository (see the script). Installs helm for the
+        # API server, which runs the helm CLI.
+        run: bash horcrux-api/tests/k8s_helm_setup.sh
+
       - name: Run tests
         env:
           HORCRUX_TEST_REQUIRE_DOCKER: "1"
+          HORCRUX_TEST_REQUIRE_K8S: "1"
+          # The server was started with the same URL; the contract test
+          # receives the PagerDuty Events v2 call there.
+          HORCRUX_PAGERDUTY_EVENTS_URL: http://127.0.0.1:18765/v2/enqueue
         run: cargo test --all-features --workspace
 
       - name: Firewall apply (real nftables)
@@ -224,6 +236,10 @@ jobs:
       - name: Dump horcrux-api server log
         if: always()
         run: cat /tmp/horcrux-api.log || true
+
+      - name: Remove k3s + chart repo
+        if: always()
+        run: bash horcrux-api/tests/k8s_helm_setup.sh --cleanup
 
       - name: Stop horcrux-api server
         if: always()

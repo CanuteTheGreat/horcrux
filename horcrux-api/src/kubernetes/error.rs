@@ -53,6 +53,14 @@ pub enum K8sError {
     #[error("Helm error: {0}")]
     HelmError(String),
 
+    /// Helm release/repository/chart that does not exist
+    #[error("{0}")]
+    HelmNotFound(String),
+
+    /// Invalid request parameter (bad name, flag-like value, ...)
+    #[error("{0}")]
+    InvalidRequest(String),
+
     /// Watch stream error
     #[error("Watch error: {0}")]
     WatchError(String),
@@ -114,6 +122,8 @@ impl From<K8sError> for ApiError {
                 ApiError::Internal(format!("Provisioning error: {}", msg))
             }
             K8sError::HelmError(msg) => ApiError::Internal(format!("Helm error: {}", msg)),
+            K8sError::HelmNotFound(msg) => ApiError::NotFound(msg),
+            K8sError::InvalidRequest(msg) => ApiError::BadRequest(msg),
             K8sError::WatchError(msg) => ApiError::Internal(format!("Watch error: {}", msg)),
             K8sError::ExecError(msg) => ApiError::Internal(format!("Exec error: {}", msg)),
             K8sError::PortForwardError(msg) => {

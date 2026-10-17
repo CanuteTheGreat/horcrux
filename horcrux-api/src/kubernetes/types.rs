@@ -5,6 +5,15 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// `null` (what the web UI sends for an unset optional map) reads as empty.
+fn null_as_default<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
 /// Kubernetes cluster information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct K8sCluster {
@@ -345,6 +354,10 @@ pub struct NodeInfo {
     pub kubelet_version: String,
     pub allocatable_cpu: String,
     pub allocatable_memory: String,
+    pub allocatable_pods: String,
+    pub capacity_cpu: String,
+    pub capacity_memory: String,
+    pub capacity_pods: String,
     pub conditions: Vec<NodeCondition>,
     pub created_at: Option<String>,
 }
@@ -421,71 +434,6 @@ pub struct PodExecRequest {
     /// Attach stdin
     #[serde(default)]
     pub stdin: bool,
-}
-
-/// Helm release information
-#[derive(Debug, Clone, Serialize)]
-pub struct HelmRelease {
-    pub name: String,
-    pub namespace: String,
-    pub chart: String,
-    pub chart_version: String,
-    pub app_version: Option<String>,
-    pub status: String,
-    pub revision: i32,
-    pub updated: String,
-}
-
-/// Helm install request
-#[derive(Debug, Clone, Deserialize)]
-pub struct HelmInstallRequest {
-    /// Release name
-    pub name: String,
-    /// Target namespace
-    pub namespace: String,
-    /// Chart reference (repo/chart or URL)
-    pub chart: String,
-    /// Chart version
-    pub version: Option<String>,
-    /// Values to override (YAML string or JSON object)
-    pub values: Option<serde_json::Value>,
-    /// Create namespace if it doesn't exist
-    #[serde(default)]
-    pub create_namespace: bool,
-    /// Wait for resources to be ready
-    #[serde(default)]
-    pub wait: bool,
-    /// Timeout for wait
-    pub timeout: Option<String>,
-}
-
-/// Helm upgrade request
-#[derive(Debug, Clone, Deserialize)]
-pub struct HelmUpgradeRequest {
-    /// Chart reference
-    pub chart: String,
-    /// Chart version
-    pub version: Option<String>,
-    /// Values to override
-    pub values: Option<serde_json::Value>,
-    /// Wait for resources to be ready
-    #[serde(default)]
-    pub wait: bool,
-    /// Timeout for wait
-    pub timeout: Option<String>,
-    /// Reset values to chart defaults
-    #[serde(default)]
-    pub reset_values: bool,
-    /// Reuse existing values
-    #[serde(default)]
-    pub reuse_values: bool,
-}
-
-/// Helm repository information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HelmRepo {
-    pub name: String,
-    pub url: String,
 }
 
 /// Kubernetes event
@@ -683,12 +631,14 @@ pub struct CreateCronJobRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateServiceRequest {
     pub name: String,
+    /// Taken from the URL path (the web UI does not repeat it in the body)
+    #[serde(default)]
     pub namespace: String,
     pub service_type: Option<String>,
     pub ports: Vec<ServicePortSpec>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub selector: BTreeMap<String, String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub labels: BTreeMap<String, String>,
     pub cluster_ip: Option<String>,
     pub external_ips: Option<Vec<String>>,
@@ -747,13 +697,15 @@ pub struct IngressTls {
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateIngressRequest {
     pub name: String,
+    /// Taken from the URL path (the web UI does not repeat it in the body)
+    #[serde(default)]
     pub namespace: String,
     pub ingress_class: Option<String>,
     pub rules: Vec<CreateIngressRule>,
     pub tls: Option<Vec<CreateIngressTls>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub labels: BTreeMap<String, String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub annotations: BTreeMap<String, String>,
 }
 
@@ -800,23 +752,25 @@ pub struct ConfigMapInfo {
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateConfigMapRequest {
     pub name: String,
+    /// Taken from the URL path (the web UI does not repeat it in the body)
+    #[serde(default)]
     pub namespace: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub data: BTreeMap<String, String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub labels: BTreeMap<String, String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub annotations: BTreeMap<String, String>,
 }
 
 /// Update ConfigMap request
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateConfigMapRequest {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub data: BTreeMap<String, String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub labels: BTreeMap<String, String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub annotations: BTreeMap<String, String>,
 }
 
@@ -836,15 +790,17 @@ pub struct SecretInfo {
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateSecretRequest {
     pub name: String,
+    /// Taken from the URL path (the web UI does not repeat it in the body)
+    #[serde(default)]
     pub namespace: String,
     pub secret_type: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub data: BTreeMap<String, String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub string_data: BTreeMap<String, String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub labels: BTreeMap<String, String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub annotations: BTreeMap<String, String>,
 }
 
@@ -939,6 +895,8 @@ pub struct PvcInfo {
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreatePvcRequest {
     pub name: String,
+    /// Taken from the URL path (the web UI does not repeat it in the body)
+    #[serde(default)]
     pub namespace: String,
     pub storage_class: Option<String>,
     pub access_modes: Vec<String>,

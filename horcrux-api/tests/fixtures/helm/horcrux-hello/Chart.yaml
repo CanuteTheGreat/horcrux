@@ -1,0 +1,12 @@
+apiVersion: v2
+name: horcrux-hello
+description: Tiny chart (one ConfigMap, no images) for Horcrux's Helm contract test
+type: application
+version: 0.1.0
+appVersion: "1.0"
+keywords:
+  - horcrux
+  - contract
+maintainers:
+  - name: Horcrux CI
+    email: hermes@errant.solutions

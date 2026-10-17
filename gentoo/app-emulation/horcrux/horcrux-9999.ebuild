@@ -81,6 +81,8 @@ RDEPEND="
 		sys-cluster/corosync
 		sys-cluster/pacemaker
 	)
+	# Helm repositories/charts/releases are driven through the helm CLI
+	kubernetes? ( app-admin/helm )
 	dev-libs/openssl:0=
 	net-misc/bridge-utils
 	sys-apps/iproute2

@@ -97,6 +97,55 @@ pub async fn create_secret(
 }
 
 /// Delete a Secret
+/// Update a Secret from the web UI's edit dialog. The API never returns
+/// secret values, so the dialog only knows the key names: a key sent with an
+/// empty value keeps its stored value, a key with a value gets that value
+/// (plaintext, Kubernetes encodes it), and a stored key that is not sent is
+/// removed. Labels and annotations are replaced.
+#[cfg(feature = "kubernetes")]
+pub async fn update_secret(
+    client: &K8sClient,
+    namespace: &str,
+    name: &str,
+    request: &CreateSecretRequest,
+) -> K8sResult<SecretInfo> {
+    use k8s_openapi::api::core::v1::Secret;
+    use kube::api::{Api, Patch, PatchParams};
+
+    let secrets: Api<Secret> = Api::namespaced(client.inner().clone(), namespace);
+    let current = secrets.get(name).await?;
+    let mut data = serde_json::Map::new();
+    if let Some(cur) = &current.data {
+        for k in cur.keys() {
+            if !request.data.contains_key(k) && !request.string_data.contains_key(k) {
+                data.insert(k.clone(), serde_json::Value::Null);
+            }
+        }
+    }
+    let mut string_data = serde_json::Map::new();
+    for (k, v) in request.data.iter().chain(request.string_data.iter()) {
+        if !v.is_empty() {
+            string_data.insert(k.clone(), serde_json::Value::String(v.clone()));
+        }
+    }
+    let replace = |cur: Option<&std::collections::BTreeMap<String, String>>,
+                   wanted: &std::collections::BTreeMap<String, String>| {
+        super::configmaps::replace_map(cur, wanted)
+    };
+    let patch = serde_json::json!({
+        "data": data,
+        "stringData": string_data,
+        "metadata": {
+            "labels": replace(current.metadata.labels.as_ref(), &request.labels),
+            "annotations": replace(current.metadata.annotations.as_ref(), &request.annotations),
+        },
+    });
+    let patched = secrets
+        .patch(name, &PatchParams::default(), &Patch::Merge(&patch))
+        .await?;
+    Ok(secret_to_info(patched))
+}
+
 #[cfg(feature = "kubernetes")]
 pub async fn delete_secret(client: &K8sClient, namespace: &str, name: &str) -> K8sResult<()> {
     use k8s_openapi::api::core::v1::Secret;

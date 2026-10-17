@@ -1,0 +1,2 @@
+# Rendered into the ConfigMap so the test can see which values a revision runs with.
+message: hello

@@ -146,6 +146,15 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     )
     .await?;
 
+    // Monitoring > Notifications channels (email/Slack/Teams/Discord/
+    // PagerDuty/webhook), see notification_channels.rs.
+    run_migration(
+        pool,
+        "023_create_notification_channels_table",
+        MIGRATION_023_CREATE_NOTIFICATION_CHANNELS,
+    )
+    .await?;
+
     Ok(())
 }
 
@@ -1031,3 +1040,18 @@ CREATE TABLE config_objects (
     PRIMARY KEY (kind, id)
 );
 ";
+
+const MIGRATION_023_CREATE_NOTIFICATION_CHANNELS: &str = r#"
+CREATE TABLE notification_channels (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    channel_type TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    config TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_used TEXT,
+    success_count INTEGER NOT NULL DEFAULT 0,
+    failure_count INTEGER NOT NULL DEFAULT 0
+);
+"#;

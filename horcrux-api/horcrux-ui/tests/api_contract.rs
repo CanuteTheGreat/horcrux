@@ -504,3 +504,1154 @@ async fn ui_types_read_real_api_responses() {
         failures.join("\n  ")
     );
 }
+
+// ===========================================================================
+// Lane M: Monitoring > Notifications, Monitoring > Metrics Explorer and
+// Kubernetes > Helm. Every route those pages call is exercised here with the
+// UI's own request/response types, and every action is checked for its real
+// effect (a message arriving at a local receiver, a ConfigMap rendered by a
+// Helm release in a real k3s cluster).
+// ===========================================================================
+
+async fn send_json(
+    c: &reqwest::Client,
+    token: &str,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<Value>,
+) -> (u16, String) {
+    let mut r = c
+        .request(method, format!("{}{}", api_base(), path))
+        .bearer_auth(token);
+    if let Some(b) = body {
+        r = r.json(&b);
+    }
+    let r = r.send().await.unwrap();
+    (r.status().as_u16(), r.text().await.unwrap_or_default())
+}
+
+fn decode<T: DeserializeOwned>(what: &str, body: &str) -> T {
+    serde_json::from_str(body).unwrap_or_else(|e| {
+        panic!(
+            "UI type {} cannot read {what}: {e}\nbody: {}",
+            std::any::type_name::<T>(),
+            &body[..body.len().min(800)]
+        )
+    })
+}
+
+/// One HTTP request as a local receiver saw it.
+#[derive(Debug, Clone)]
+struct Captured {
+    method: String,
+    path: String,
+    headers: Vec<(String, String)>,
+    body: String,
+}
+
+impl Captured {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+    fn json(&self) -> Value {
+        serde_json::from_str(&self.body).unwrap_or(Value::Null)
+    }
+}
+
+/// Minimal HTTP/1.1 receiver: records each request, answers `status`.
+async fn http_receiver(
+    bind: &str,
+    status: u16,
+) -> (
+    std::net::SocketAddr,
+    tokio::sync::mpsc::UnboundedReceiver<Captured>,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind(bind).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                return;
+            };
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 4096];
+                let (head_end, content_len) = loop {
+                    let n = sock.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                    if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&buf[..i]).to_string();
+                        let len = head
+                            .lines()
+                            .find_map(|l| {
+                                let (k, v) = l.split_once(':')?;
+                                k.trim()
+                                    .eq_ignore_ascii_case("content-length")
+                                    .then(|| v.trim().parse::<usize>().ok())?
+                            })
+                            .unwrap_or(0);
+                        break (i + 4, len);
+                    }
+                };
+                while buf.len() < head_end + content_len {
+                    let n = sock.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                }
+                let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
+                let mut lines = head.lines();
+                let mut first = lines.next().unwrap_or("").split_whitespace();
+                let method = first.next().unwrap_or("").to_string();
+                let path = first.next().unwrap_or("").to_string();
+                let headers = lines
+                    .filter_map(|l| l.split_once(':'))
+                    .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+                    .collect();
+                let body = String::from_utf8_lossy(&buf[head_end..]).to_string();
+                let _ = tx.send(Captured {
+                    method,
+                    path,
+                    headers,
+                    body,
+                });
+                let reply = format!(
+                    "HTTP/1.1 {status} X\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                );
+                let _ = sock.write_all(reply.as_bytes()).await;
+            });
+        }
+    });
+    (addr, rx)
+}
+
+/// Minimal SMTP receiver (no TLS/AUTH): yields each message's DATA.
+async fn smtp_receiver() -> (
+    std::net::SocketAddr,
+    tokio::sync::mpsc::UnboundedReceiver<String>,
+) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        loop {
+            let Ok((sock, _)) = listener.accept().await else {
+                return;
+            };
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let (r, mut w) = sock.into_split();
+                let mut r = BufReader::new(r);
+                let _ = w.write_all(b"220 contract-smtp ready\r\n").await;
+                let mut line = String::new();
+                let mut data: Option<String> = None;
+                loop {
+                    line.clear();
+                    if r.read_line(&mut line).await.unwrap_or(0) == 0 {
+                        return;
+                    }
+                    if let Some(d) = data.as_mut() {
+                        if line == ".\r\n" {
+                            let _ = tx.send(data.take().unwrap());
+                            let _ = w.write_all(b"250 queued\r\n").await;
+                        } else {
+                            d.push_str(&line);
+                        }
+                        continue;
+                    }
+                    let cmd = line.trim_end().to_uppercase();
+                    let reply: &[u8] = if cmd.starts_with("EHLO") {
+                        b"250 contract-smtp\r\n"
+                    } else if cmd.starts_with("DATA") {
+                        data = Some(String::new());
+                        b"354 go\r\n"
+                    } else if cmd.starts_with("QUIT") {
+                        let _ = w.write_all(b"221 bye\r\n").await;
+                        return;
+                    } else {
+                        b"250 ok\r\n"
+                    };
+                    let _ = w.write_all(reply).await;
+                }
+            });
+        }
+    });
+    (addr, rx)
+}
+
+async fn next<T>(rx: &mut tokio::sync::mpsc::UnboundedReceiver<T>, what: &str) -> T {
+    tokio::time::timeout(Duration::from_secs(30), rx.recv())
+        .await
+        .unwrap_or_else(|_| panic!("{what}: nothing arrived within 30s"))
+        .unwrap()
+}
+
+fn channel(
+    name: &str,
+    kind: &str,
+    config: api::NotificationChannelConfig,
+) -> api::NotificationChannel {
+    api::NotificationChannel {
+        id: format!("channel-{}", chrono::Utc::now().timestamp()),
+        name: name.into(),
+        description: Some("contract".into()),
+        channel_type: kind.into(),
+        enabled: true,
+        config,
+        created_at: chrono::Utc::now(),
+        last_used: None,
+        success_count: 0,
+        failure_count: 0,
+    }
+}
+
+#[tokio::test]
+async fn notification_channels_deliver_for_real() {
+    use reqwest::Method;
+    let c = client();
+    let token = login(&c).await;
+    let (hook_addr, mut hooks) = http_receiver("127.0.0.1:0", 200).await;
+    let (bad_addr, mut bad_hooks) = http_receiver("127.0.0.1:0", 500).await;
+    let (smtp_addr, mut mails) = smtp_receiver().await;
+    let mut created: Vec<String> = Vec::new();
+
+    // Create through the same request the UI's create form sends.
+    async fn create(
+        c: &reqwest::Client,
+        token: &str,
+        ch: &api::NotificationChannel,
+    ) -> api::NotificationChannel {
+        let (status, body) = send_json(
+            c,
+            token,
+            reqwest::Method::POST,
+            "/notifications/channels",
+            Some(serde_json::to_value(ch).unwrap()),
+        )
+        .await;
+        assert!(
+            status == 200 || status == 201,
+            "create channel {}: {status} {body}",
+            ch.name
+        );
+        decode("POST /notifications/channels", &body)
+    }
+    async fn test(c: &reqwest::Client, token: &str, id: &str) -> (u16, String) {
+        send_json(
+            c,
+            token,
+            reqwest::Method::POST,
+            &format!("/notifications/channels/{id}/test"),
+            Some(Value::Null),
+        )
+        .await
+    }
+
+    // ---- webhook with bearer auth + custom header --------------------------
+    let mut headers = std::collections::HashMap::new();
+    headers.insert("X-Contract".to_string(), "lane-m".to_string());
+    let wh = create(
+        &c,
+        &token,
+        &channel(
+            "contract-webhook",
+            "webhook",
+            api::NotificationChannelConfig::Webhook {
+                url: format!("http://{hook_addr}/hook"),
+                method: "POST".into(),
+                headers,
+                auth: Some(api::WebhookAuth::BearerToken {
+                    token: "s3cret-token".into(),
+                }),
+            },
+        ),
+    )
+    .await;
+    created.push(wh.id.clone());
+    assert_ne!(wh.id, "", "server assigns an id");
+    // The stored secret is never echoed back.
+    match &wh.config {
+        api::NotificationChannelConfig::Webhook {
+            auth: Some(api::WebhookAuth::BearerToken { token }),
+            ..
+        } => assert_ne!(token, "s3cret-token", "token must be masked"),
+        other => panic!("webhook config came back as {other:?}"),
+    }
+    let (status, body) = test(&c, &token, &wh.id).await;
+    assert_eq!(status, 204, "webhook test: {body}");
+    let got = next(&mut hooks, "webhook test").await;
+    assert_eq!(got.method, "POST");
+    assert_eq!(got.path, "/hook");
+    assert_eq!(got.header("authorization"), Some("Bearer s3cret-token"));
+    assert_eq!(got.header("x-contract"), Some("lane-m"));
+    assert_eq!(got.json()["event"], "test");
+
+    // Edit like the UI does (it re-sends the masked token): the real token
+    // must survive.
+    let mut edited = wh.clone();
+    edited.name = "contract-webhook-renamed".into();
+    let (status, body) = send_json(
+        &c,
+        &token,
+        Method::PUT,
+        &format!("/notifications/channels/{}", wh.id),
+        Some(serde_json::to_value(&edited).unwrap()),
+    )
+    .await;
+    assert_eq!(status, 200, "update channel: {body}");
+    let upd: api::NotificationChannel = decode("PUT /notifications/channels/:id", &body);
+    assert_eq!(upd.name, "contract-webhook-renamed");
+    assert_eq!(test(&c, &token, &wh.id).await.0, 204);
+    let got = next(&mut hooks, "webhook test after edit").await;
+    assert_eq!(got.header("authorization"), Some("Bearer s3cret-token"));
+
+    // ---- Slack / Discord / Teams payload shapes ---------------------------
+    for (name, kind, cfg, check) in [
+        (
+            "contract-slack",
+            "slack",
+            api::NotificationChannelConfig::Slack {
+                webhook_url: format!("http://{hook_addr}/slack"),
+                channel: Some("#ops".into()),
+                username: Some("horcrux".into()),
+                icon_emoji: None,
+            },
+            "text",
+        ),
+        (
+            "contract-discord",
+            "discord",
+            api::NotificationChannelConfig::Discord {
+                webhook_url: format!("http://{hook_addr}/discord"),
+                username: None,
+                avatar_url: None,
+            },
+            "content",
+        ),
+        (
+            "contract-teams",
+            "teams",
+            api::NotificationChannelConfig::Teams {
+                webhook_url: format!("http://{hook_addr}/teams"),
+            },
+            "text",
+        ),
+    ] {
+        let ch = create(&c, &token, &channel(name, kind, cfg)).await;
+        created.push(ch.id.clone());
+        let (status, body) = test(&c, &token, &ch.id).await;
+        assert_eq!(status, 204, "{kind} test: {body}");
+        let got = next(&mut hooks, kind).await;
+        assert!(
+            got.json()[check]
+                .as_str()
+                .unwrap_or("")
+                .contains("test notification"),
+            "{kind} payload: {}",
+            got.body
+        );
+    }
+
+    // ---- PagerDuty Events v2 (CI points HORCRUX_PAGERDUTY_EVENTS_URL at
+    // 127.0.0.1:18765) ---------------------------------------------------
+    if let Ok(pd_url) = std::env::var("HORCRUX_PAGERDUTY_EVENTS_URL") {
+        let bind = pd_url
+            .trim_start_matches("http://")
+            .split('/')
+            .next()
+            .unwrap()
+            .to_string();
+        let (_pd_addr, mut pd) = http_receiver(&bind, 202).await;
+        let ch = create(
+            &c,
+            &token,
+            &channel(
+                "contract-pagerduty",
+                "pagerduty",
+                api::NotificationChannelConfig::PagerDuty {
+                    integration_key: "R0UTINGKEY".into(),
+                    routing_key: "R0UTINGKEY".into(),
+                    severity: "warning".into(),
+                },
+            ),
+        )
+        .await;
+        created.push(ch.id.clone());
+        let (status, body) = test(&c, &token, &ch.id).await;
+        assert_eq!(status, 204, "pagerduty test: {body}");
+        let got = next(&mut pd, "pagerduty").await;
+        let v = got.json();
+        assert_eq!(v["routing_key"], "R0UTINGKEY");
+        assert_eq!(v["event_action"], "trigger");
+        assert_eq!(v["payload"]["severity"], "warning");
+    }
+
+    // ---- e-mail over SMTP ------------------------------------------------
+    let mail = create(
+        &c,
+        &token,
+        &channel(
+            "contract-email",
+            "email",
+            api::NotificationChannelConfig::Email {
+                address: "ops@example.org".into(),
+                smtp_server: "127.0.0.1".into(),
+                smtp_port: smtp_addr.port(),
+                username: String::new(),
+                password: String::new(),
+                use_tls: false,
+            },
+        ),
+    )
+    .await;
+    created.push(mail.id.clone());
+    let (status, body) = test(&c, &token, &mail.id).await;
+    assert_eq!(status, 204, "email test: {body}");
+    let data = next(&mut mails, "email").await;
+    assert!(data.contains("To: ops@example.org"), "{data}");
+    assert!(data.contains("Horcrux test notification"), "{data}");
+
+    // ---- a failing target: 502 with the target's answer, counted ---------
+    let failing = create(
+        &c,
+        &token,
+        &channel(
+            "contract-failing",
+            "webhook",
+            api::NotificationChannelConfig::Webhook {
+                url: format!("http://{bad_addr}/down"),
+                method: "POST".into(),
+                headers: Default::default(),
+                auth: None,
+            },
+        ),
+    )
+    .await;
+    created.push(failing.id.clone());
+    let (status, body) = test(&c, &token, &failing.id).await;
+    assert_eq!(
+        status, 502,
+        "failing target must report the failure: {body}"
+    );
+    assert!(body.contains("HTTP 500"), "{body}");
+    next(&mut bad_hooks, "failing webhook").await;
+
+    // ---- invalid configs are rejected, not stored -------------------------
+    let (status, _) = send_json(
+        &c,
+        &token,
+        Method::POST,
+        "/notifications/channels",
+        Some(
+            serde_json::to_value(channel(
+                "contract-bad",
+                "webhook",
+                api::NotificationChannelConfig::Webhook {
+                    url: "not a url".into(),
+                    method: "POST".into(),
+                    headers: Default::default(),
+                    auth: None,
+                },
+            ))
+            .unwrap(),
+        ),
+    )
+    .await;
+    assert_eq!(status, 400, "invalid webhook URL accepted");
+
+    // ---- the list the page renders reflects real delivery counters --------
+    let list: Vec<api::NotificationChannel> = fetch(&c, &token, "/notifications/channels").await;
+    let w = list.iter().find(|x| x.id == wh.id).expect("webhook listed");
+    assert_eq!(w.success_count, 2, "{w:?}");
+    assert!(w.last_used.is_some());
+    let f = list
+        .iter()
+        .find(|x| x.id == failing.id)
+        .expect("failing listed");
+    assert_eq!((f.success_count, f.failure_count), (0, 1), "{f:?}");
+    let one: api::NotificationChannel =
+        fetch(&c, &token, &format!("/notifications/channels/{}", mail.id)).await;
+    assert_eq!(one.success_count, 1);
+
+    for id in &created {
+        let (status, _) = send_json(
+            &c,
+            &token,
+            Method::DELETE,
+            &format!("/notifications/channels/{id}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, 204, "delete channel {id}");
+    }
+    let (status, _) = get_raw(&c, &token, &format!("/notifications/channels/{}", wh.id)).await;
+    assert_eq!(status, 404, "deleted channel still readable");
+}
+
+#[tokio::test]
+async fn metrics_explorer_queries_real_samples() {
+    let c = client();
+    let token = login(&c).await;
+    // The sampler records host series every 15 s (first one ~1 s after start).
+    let mut defs: Vec<api::MetricDefinition> = Vec::new();
+    for _ in 0..60 {
+        defs = fetch(&c, &token, "/metrics/definitions").await;
+        if defs
+            .iter()
+            .any(|d| d.name == "horcrux_node_memory_used_bytes" && d.cardinality > 0)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    let mem = defs
+        .iter()
+        .find(|d| d.name == "horcrux_node_memory_used_bytes")
+        .expect("node memory metric defined");
+    assert!(mem.cardinality >= 1, "no samples recorded: {mem:?}");
+    assert!(mem.labels.contains(&"node".to_string()));
+    assert!(!mem.last_scraped.is_empty());
+
+    // Exactly what the explorer's builder sends (avg(...), 1 minute step).
+    let end = chrono::Utc::now() + chrono::Duration::seconds(5);
+    let q = api::MetricQuery {
+        metric: "avg(horcrux_node_memory_used_bytes)".into(),
+        labels: Default::default(),
+        start_time: Some(end - chrono::Duration::hours(1)),
+        end_time: Some(end),
+        step: 60,
+    };
+    let (status, body) = post(
+        &c,
+        &token,
+        "/metrics/query",
+        serde_json::to_value(&q).unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200, "query: {body}");
+    let r: api::MetricResult = serde_json::from_value(body).expect("UI MetricResult");
+    assert!(!r.values.is_empty(), "{r:?}");
+    let total = std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|m| {
+            m.lines()
+                .find(|l| l.starts_with("MemTotal:"))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|v| v.parse::<f64>().ok())
+        })
+        .map(|kb| kb * 1024.0);
+    for p in &r.values {
+        assert!(p.value > 0.0, "{p:?}");
+        if let Some(t) = total {
+            assert!(p.value <= t, "used memory above MemTotal: {p:?}");
+        }
+    }
+
+    // Raw selector with a label matcher returns labelled points.
+    let node = r.values[0].labels.get("node").cloned();
+    let q = api::MetricQuery {
+        metric: "horcrux_node_load1{node=~\".+\"}".into(),
+        labels: Default::default(),
+        start_time: Some(end - chrono::Duration::minutes(15)),
+        end_time: Some(end),
+        step: 15,
+    };
+    let (status, body) = post(
+        &c,
+        &token,
+        "/metrics/query",
+        serde_json::to_value(&q).unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let r: api::MetricResult = serde_json::from_value(body).unwrap();
+    assert!(
+        r.values.iter().all(|p| p.labels.contains_key("node")),
+        "{r:?}"
+    );
+    let _ = node;
+
+    // Unknown metrics / functions are a 400 with a reason, not an empty chart.
+    for bad in ["no_such_metric", "rate(horcrux_node_load1[5m])"] {
+        let q = api::MetricQuery {
+            metric: bad.into(),
+            labels: Default::default(),
+            start_time: None,
+            end_time: None,
+            step: 60,
+        };
+        let (status, body) = post(
+            &c,
+            &token,
+            "/metrics/query",
+            serde_json::to_value(&q).unwrap(),
+        )
+        .await;
+        assert_eq!(status, 400, "{bad}: {body}");
+    }
+}
+
+/// Helm against a real cluster. CI's Test job starts k3s and a local chart
+/// repository (horcrux-api/tests/k8s_helm_setup.sh) and exports
+/// HORCRUX_CONTRACT_KUBECONFIG / HORCRUX_CONTRACT_HELM_REPO; with
+/// HORCRUX_TEST_REQUIRE_K8S set, a missing cluster fails the test.
+#[tokio::test]
+async fn helm_pages_drive_a_real_cluster() {
+    use reqwest::Method;
+    let (Ok(kubeconfig), Ok(repo_url)) = (
+        std::env::var("HORCRUX_CONTRACT_KUBECONFIG"),
+        std::env::var("HORCRUX_CONTRACT_HELM_REPO"),
+    ) else {
+        if std::env::var("HORCRUX_TEST_REQUIRE_K8S").is_ok() {
+            panic!("HORCRUX_TEST_REQUIRE_K8S is set but no k3s/chart repo was provided");
+        }
+        eprintln!("helm contract skipped: no HORCRUX_CONTRACT_KUBECONFIG");
+        return;
+    };
+    let c = client();
+    let token = login(&c).await;
+    let kubeconfig = std::fs::read_to_string(&kubeconfig).expect("kubeconfig readable");
+
+    // ---- cluster ------------------------------------------------------------
+    let cluster_name = format!("contract-k3s-{}", std::process::id());
+    let (status, body) = post(
+        &c,
+        &token,
+        "/k8s/clusters",
+        json!({"name": cluster_name, "kubeconfig": kubeconfig}),
+    )
+    .await;
+    assert!(
+        status == 200 || status == 201,
+        "connect cluster: {status} {body}"
+    );
+    let cid = body["id"].as_str().expect("cluster id").to_string();
+
+    // ---- repositories page --------------------------------------------------
+    let repo = "horcrux-contract";
+    let _ = send_json(
+        &c,
+        &token,
+        Method::DELETE,
+        &format!("/k8s/helm/repos/{repo}"),
+        None,
+    )
+    .await;
+    let add = api::AddHelmRepoRequest {
+        name: repo.into(),
+        url: repo_url.clone(),
+        username: None,
+        password: None,
+        force_update: Some(true),
+    };
+    let (status, body) = post(
+        &c,
+        &token,
+        "/k8s/helm/repos",
+        serde_json::to_value(&add).unwrap(),
+    )
+    .await;
+    assert!(status == 200 || status == 201, "add repo: {status} {body}");
+    let r: api::HelmRepository = serde_json::from_value(body).expect("UI HelmRepository");
+    assert_eq!(r.status, "ready");
+    assert!(r.added_at.is_some() && r.last_update.is_some(), "{r:?}");
+    let repos: Vec<api::HelmRepository> = fetch(&c, &token, "/k8s/helm/repos").await;
+    assert!(repos
+        .iter()
+        .any(|x| x.name == repo && x.url.starts_with(&repo_url)));
+    let (status, body) = send_json(
+        &c,
+        &token,
+        Method::POST,
+        &format!("/k8s/helm/repos/{repo}/update"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "update repo: {body}");
+
+    // ---- charts page ----------------------------------------------------------
+    let charts: Vec<api::HelmChart> = fetch(
+        &c,
+        &token,
+        &format!("/k8s/helm/charts?query=horcrux-hello&repo={repo}"),
+    )
+    .await;
+    let chart = charts
+        .iter()
+        .find(|x| x.name == "horcrux-hello")
+        .expect("chart found by search");
+    assert_eq!(chart.repository, repo);
+    assert_eq!(chart.version, "0.2.0");
+    assert!(
+        chart.keywords.contains(&"contract".to_string()),
+        "{chart:?}"
+    );
+    assert_eq!(chart.maintainers[0].name, "Horcrux CI");
+    let one: api::HelmChart = fetch(
+        &c,
+        &token,
+        &format!("/k8s/helm/charts/{repo}/horcrux-hello"),
+    )
+    .await;
+    assert_eq!(one.version, "0.2.0");
+    let versions: Vec<String> = fetch(
+        &c,
+        &token,
+        &format!("/k8s/helm/charts/{repo}/horcrux-hello/versions"),
+    )
+    .await;
+    assert_eq!(versions, vec!["0.2.0", "0.1.0"]);
+    let defaults: Value = fetch(
+        &c,
+        &token,
+        &format!("/k8s/helm/charts/{repo}/horcrux-hello/values?version=0.1.0"),
+    )
+    .await;
+    assert_eq!(defaults["message"], "hello");
+
+    // ---- install (charts page) ---------------------------------------------
+    let ns = "contract-helm";
+    let rel = "contract-web";
+    let cm_path = format!("/k8s/clusters/{cid}/namespaces/{ns}/configmaps/{rel}-hello");
+    let _ = send_json(
+        &c,
+        &token,
+        Method::DELETE,
+        &format!("/k8s/clusters/{cid}/namespaces/{ns}/helm/releases/{rel}"),
+        None,
+    )
+    .await;
+    let install = api::HelmInstallRequest {
+        name: rel.into(),
+        chart: format!("{}/{}", chart.repository, chart.name),
+        version: Some("0.1.0".into()),
+        values: Some(json!({"message": "installed"})),
+        create_namespace: Some(true),
+        wait: Some(true),
+        timeout: Some("120s".into()),
+    };
+    let (status, body) = post(
+        &c,
+        &token,
+        &format!("/k8s/clusters/{cid}/namespaces/{ns}/helm/install"),
+        serde_json::to_value(&install).unwrap(),
+    )
+    .await;
+    assert!(status == 200 || status == 201, "install: {status} {body}");
+    let r: api::HelmRelease = serde_json::from_value(body).expect("UI HelmRelease");
+    assert_eq!((r.revision, r.status.as_str()), (1, "deployed"), "{r:?}");
+    let cm: Value = fetch(&c, &token, &cm_path).await;
+    assert_eq!(cm["data"]["message"], "installed", "{cm}");
+    assert_eq!(cm["data"]["chartVersion"], "0.1.0");
+
+    // ---- releases page --------------------------------------------------------
+    let list: Vec<api::HelmRelease> = fetch(
+        &c,
+        &token,
+        &format!("/k8s/clusters/{cid}/helm/releases?namespace={ns}"),
+    )
+    .await;
+    let mine = list.iter().find(|x| x.name == rel).expect("release listed");
+    assert_eq!(mine.chart, "horcrux-hello");
+    let all: Vec<api::HelmRelease> =
+        fetch(&c, &token, &format!("/k8s/clusters/{cid}/helm/releases")).await;
+    assert!(all.iter().any(|x| x.name == rel && x.namespace == ns));
+    let detail: api::HelmRelease = fetch(
+        &c,
+        &token,
+        &format!("/k8s/clusters/{cid}/helm/releases/{ns}/{rel}"),
+    )
+    .await;
+    assert_eq!(detail.revision, 1);
+
+    // Upgrade exactly as the releases page does: chart = the bare chart name
+    // from the list, new version, edited values.
+    let upgrade = api::HelmInstallRequest {
+        name: rel.into(),
+        chart: mine.chart.clone(),
+        version: Some("0.2.0".into()),
+        values: Some(json!({"message": "upgraded"})),
+        create_namespace: None,
+        wait: Some(true),
+        timeout: Some("120s".into()),
+    };
+    let (status, body) = post(
+        &c,
+        &token,
+        &format!("/k8s/clusters/{cid}/namespaces/{ns}/helm/releases/{rel}/upgrade"),
+        serde_json::to_value(&upgrade).unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200, "upgrade: {body}");
+    let r: api::HelmRelease = serde_json::from_value(body).unwrap();
+    assert_eq!(r.revision, 2);
+    let cm: Value = fetch(&c, &token, &cm_path).await;
+    assert_eq!(cm["data"]["message"], "upgraded");
+    assert_eq!(cm["data"]["chartVersion"], "0.2.0");
+
+    let values: api::HelmValues = fetch(
+        &c,
+        &token,
+        &format!("/k8s/clusters/{cid}/namespaces/{ns}/helm/releases/{rel}/values"),
+    )
+    .await;
+    assert_eq!(values.user_supplied_values["message"], "upgraded");
+    let history: Vec<api::HelmRelease> = fetch(
+        &c,
+        &token,
+        &format!("/k8s/clusters/{cid}/namespaces/{ns}/helm/releases/{rel}/history"),
+    )
+    .await;
+    assert_eq!(history.len(), 2, "{history:?}");
+    assert_eq!(history[0].revision, 1);
+
+    // Rollback to revision 1 (history modal)
+    let (status, body) = post(
+        &c,
+        &token,
+        &format!("/k8s/clusters/{cid}/namespaces/{ns}/helm/releases/{rel}/rollback"),
+        json!({"revision": 1}),
+    )
+    .await;
+    assert_eq!(status, 200, "rollback: {body}");
+    let r: api::HelmRelease = serde_json::from_value(body).unwrap();
+    assert_eq!(r.revision, 3);
+    let cm: Value = fetch(&c, &token, &cm_path).await;
+    assert_eq!(
+        cm["data"]["message"], "installed",
+        "rollback restored rev 1"
+    );
+
+    // Bad names never reach helm as flags.
+    let (status, _) = post(
+        &c,
+        &token,
+        &format!("/k8s/clusters/{cid}/namespaces/{ns}/helm/install"),
+        json!({"name": "--post-renderer=/bin/sh", "chart": "x/y"}),
+    )
+    .await;
+    assert_eq!(status, 400);
+
+    // Uninstall: the release's ConfigMap is really gone.
+    let (status, body) = send_json(
+        &c,
+        &token,
+        Method::DELETE,
+        &format!("/k8s/clusters/{cid}/namespaces/{ns}/helm/releases/{rel}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 204, "uninstall: {body}");
+    let (status, _) = get_raw(&c, &token, &cm_path).await;
+    assert_eq!(status, 404, "ConfigMap left behind after uninstall");
+    let list: Vec<api::HelmRelease> = fetch(
+        &c,
+        &token,
+        &format!("/k8s/clusters/{cid}/helm/releases?namespace={ns}"),
+    )
+    .await;
+    assert!(list.iter().all(|x| x.name != rel));
+
+    // ---- the other Kubernetes pages read this same real cluster -----------
+    k8s_pages_contract(&c, &token, &cid, ns).await;
+
+    let (status, _) = send_json(
+        &c,
+        &token,
+        Method::DELETE,
+        &format!("/k8s/helm/repos/{repo}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 204);
+    let repos: Vec<api::HelmRepository> = fetch(&c, &token, "/k8s/helm/repos").await;
+    assert!(repos.iter().all(|x| x.name != repo));
+    let _ = send_json(
+        &c,
+        &token,
+        Method::DELETE,
+        &format!("/k8s/clusters/{cid}"),
+        None,
+    )
+    .await;
+}
+
+/// Kubernetes cluster/workload/config pages against the real cluster: every
+/// list decodes into the page's type, and creates/edits sent with the UI's
+/// request types really change the cluster.
+async fn k8s_pages_contract(c: &reqwest::Client, token: &str, cid: &str, ns: &str) {
+    use horcrux_ui::pages::kubernetes::{cluster_dashboard, management};
+    use reqwest::Method;
+    let base = format!("/k8s/clusters/{cid}");
+
+    let clusters: Vec<cluster_dashboard::K8sCluster> = fetch(c, token, "/k8s/clusters").await;
+    assert!(clusters
+        .iter()
+        .any(|x| x.id == cid && x.status == "connected"));
+    let _: Vec<management::K8sCluster> = fetch(c, token, "/k8s/clusters").await;
+    let _: management::ClusterHealth = fetch(c, token, &format!("{base}/health")).await;
+    let health: cluster_dashboard::ClusterHealth = fetch(c, token, &format!("{base}/health")).await;
+    assert_eq!(health.node_status.total_nodes, 1, "{health:?}");
+    assert_eq!(health.node_status.ready_nodes, 1, "{health:?}");
+    let nodes: Vec<cluster_dashboard::K8sNode> = fetch(c, token, &format!("{base}/nodes")).await;
+    let n = &nodes[0];
+    assert!(
+        !n.cpu_capacity.is_empty() && !n.pods_allocatable.is_empty(),
+        "{n:?}"
+    );
+    assert!(n.version.starts_with('v'), "{n:?}");
+
+    let pods: Vec<api::KubernetesPod> =
+        fetch(c, token, &format!("{base}/namespaces/kube-system/pods")).await;
+    let dns = pods
+        .iter()
+        .find(|p| p.name.starts_with("coredns"))
+        .expect("coredns pod listed");
+    assert_eq!(dns.status.phase, "Running", "{dns:?}");
+    assert_eq!(dns.ready, "1/1");
+    assert_ne!(dns.age, "-");
+    let deps: Vec<api::KubernetesDeployment> = fetch(
+        c,
+        token,
+        &format!("{base}/namespaces/kube-system/deployments"),
+    )
+    .await;
+    let d = deps
+        .iter()
+        .find(|d| d.name == "coredns")
+        .expect("coredns deployment");
+    assert_eq!(d.replicas.desired, 1);
+    let svcs: Vec<api::KubernetesService> =
+        fetch(c, token, &format!("{base}/namespaces/default/services")).await;
+    let k = svcs
+        .iter()
+        .find(|s| s.name == "kubernetes")
+        .expect("kubernetes service");
+    assert_eq!(k.ports[0].port, 443);
+
+    // Service: create with the UI's request, list, delete.
+    let svc = api::CreateServiceRequest {
+        name: "contract-svc".into(),
+        service_type: "ClusterIP".into(),
+        ports: vec![api::ServicePort {
+            name: Some("http".into()),
+            protocol: "TCP".into(),
+            port: 80,
+            target_port: Some("8080".into()),
+            node_port: None,
+        }],
+        selector: [("app".to_string(), "contract".to_string())].into(),
+        labels: None,
+    };
+    let (status, body) = post(
+        c,
+        token,
+        &format!("{base}/namespaces/{ns}/services"),
+        serde_json::to_value(&svc).unwrap(),
+    )
+    .await;
+    assert!(
+        status == 200 || status == 201,
+        "create service: {status} {body}"
+    );
+    let svcs: Vec<api::KubernetesService> =
+        fetch(c, token, &format!("{base}/namespaces/{ns}/services")).await;
+    assert!(svcs
+        .iter()
+        .any(|s| s.name == "contract-svc" && s.ports[0].port == 80));
+
+    // Ingress pointing at it.
+    let ing = api::CreateIngressRequest {
+        name: "contract-ing".into(),
+        ingress_class: None,
+        rules: vec![api::IngressRule {
+            host: Some("contract.example.org".into()),
+            paths: vec![api::IngressPath {
+                path: "/".into(),
+                path_type: "Prefix".into(),
+                service_name: "contract-svc".into(),
+                service_port: 80,
+            }],
+        }],
+        tls: None,
+        labels: None,
+        annotations: None,
+    };
+    let (status, body) = post(
+        c,
+        token,
+        &format!("{base}/namespaces/{ns}/ingresses"),
+        serde_json::to_value(&ing).unwrap(),
+    )
+    .await;
+    assert!(
+        status == 200 || status == 201,
+        "create ingress: {status} {body}"
+    );
+    let ings: Vec<api::KubernetesIngress> =
+        fetch(c, token, &format!("{base}/namespaces/{ns}/ingresses")).await;
+    let i = ings
+        .iter()
+        .find(|i| i.name == "contract-ing")
+        .expect("ingress listed");
+    assert_eq!(i.hosts, vec!["contract.example.org"]);
+    assert_eq!(i.rules[0].paths[0].service_name, "contract-svc");
+    assert_eq!(i.rules[0].paths[0].service_port, 80);
+
+    // ConfigMap: create, edit (drop a key), check, delete.
+    let cm = api::CreateConfigMapRequest {
+        name: "contract-cm".into(),
+        data: [
+            ("keep".to_string(), "1".to_string()),
+            ("drop".to_string(), "2".to_string()),
+        ]
+        .into(),
+        binary_data: None,
+        labels: None,
+        annotations: None,
+    };
+    let (status, body) = post(
+        c,
+        token,
+        &format!("{base}/namespaces/{ns}/configmaps"),
+        serde_json::to_value(&cm).unwrap(),
+    )
+    .await;
+    assert!(
+        status == 200 || status == 201,
+        "create configmap: {status} {body}"
+    );
+    let mut edit = cm.clone();
+    edit.data = [("keep".to_string(), "changed".to_string())].into();
+    edit.labels = Some([("edited".to_string(), "yes".to_string())].into());
+    let (status, body) = post(
+        c,
+        token,
+        &format!("{base}/namespaces/{ns}/configmaps/contract-cm"),
+        serde_json::to_value(&edit).unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200, "update configmap: {body}");
+    let cms: Vec<api::KubernetesConfigMap> =
+        fetch(c, token, &format!("{base}/namespaces/{ns}/configmaps")).await;
+    let got = cms
+        .iter()
+        .find(|x| x.name == "contract-cm")
+        .expect("configmap listed");
+    assert_eq!(got.data.get("keep").map(String::as_str), Some("changed"));
+    assert!(
+        !got.data.contains_key("drop"),
+        "removed key still there: {got:?}"
+    );
+    assert_eq!(got.labels.get("edited").map(String::as_str), Some("yes"));
+    assert!(got.created_at.is_some() && got.age != "-");
+
+    // Secret: create, then edit the way the dialog does (known key with an
+    // empty value = keep, new key = set, missing key = remove).
+    let secret = api::CreateSecretRequest {
+        name: "contract-secret".into(),
+        secret_type: "Opaque".into(),
+        data: [
+            ("user".to_string(), "admin".to_string()),
+            ("old".to_string(), "x".to_string()),
+        ]
+        .into(),
+        string_data: None,
+        labels: None,
+        annotations: None,
+    };
+    let (status, body) = post(
+        c,
+        token,
+        &format!("{base}/namespaces/{ns}/secrets"),
+        serde_json::to_value(&secret).unwrap(),
+    )
+    .await;
+    assert!(
+        status == 200 || status == 201,
+        "create secret: {status} {body}"
+    );
+    let list: Vec<api::KubernetesSecret> =
+        fetch(c, token, &format!("{base}/namespaces/{ns}/secrets")).await;
+    let s = list
+        .iter()
+        .find(|x| x.name == "contract-secret")
+        .expect("secret listed");
+    assert!(s.data.contains_key("user") && s.data.values().all(String::is_empty));
+    let mut edit = secret.clone();
+    edit.data = [
+        ("user".to_string(), String::new()),
+        ("pw".to_string(), "hunter2".to_string()),
+    ]
+    .into();
+    let (status, body) = post(
+        c,
+        token,
+        &format!("{base}/namespaces/{ns}/secrets/contract-secret"),
+        serde_json::to_value(&edit).unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200, "update secret: {body}");
+    let list: Vec<api::KubernetesSecret> =
+        fetch(c, token, &format!("{base}/namespaces/{ns}/secrets")).await;
+    let s = list.iter().find(|x| x.name == "contract-secret").unwrap();
+    let mut keys: Vec<&String> = s.data.keys().collect();
+    keys.sort();
+    assert_eq!(keys, vec!["pw", "user"]);
+    // The kept value really is the old one (read straight from k3s).
+    if let Ok(k3s) = std::env::var("HORCRUX_CI_K3S") {
+        let out = std::process::Command::new("docker")
+            .args([
+                "exec",
+                &k3s,
+                "kubectl",
+                "-n",
+                ns,
+                "get",
+                "secret",
+                "contract-secret",
+                "-o",
+                "jsonpath={.data.user} {.data.pw}",
+            ])
+            .output()
+            .expect("docker exec kubectl");
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        // base64("admin") base64("hunter2")
+        assert_eq!(
+            text.trim(),
+            "YWRtaW4= aHVudGVyMg==",
+            "secret values after edit"
+        );
+    }
+
+    for (kind, name) in [
+        ("ingresses", "contract-ing"),
+        ("services", "contract-svc"),
+        ("configmaps", "contract-cm"),
+        ("secrets", "contract-secret"),
+    ] {
+        let (status, body) = send_json(
+            c,
+            token,
+            Method::DELETE,
+            &format!("{base}/namespaces/{ns}/{kind}/{name}"),
+            None,
+        )
+        .await;
+        assert!(
+            status == 200 || status == 204,
+            "delete {kind}/{name}: {status} {body}"
+        );
+    }
+}

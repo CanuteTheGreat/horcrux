@@ -15,7 +15,7 @@ mod container_volumes;
 pub mod dashboard;
 mod gpu;
 pub mod ha;
-mod kubernetes;
+pub mod kubernetes;
 mod login;
 pub mod metrics;
 mod monitoring;

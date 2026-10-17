@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-hello
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+data:
+  message: {{ .Values.message | quote }}
+  chartVersion: {{ .Chart.Version | quote }}

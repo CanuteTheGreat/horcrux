@@ -6,7 +6,7 @@ use leptos_router::*;
 
 pub mod api;
 mod components;
-mod pages;
+pub mod pages;
 pub mod utils;
 mod websocket;
 

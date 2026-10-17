@@ -41,7 +41,9 @@ pub mod migration;
 pub mod alerts;
 pub mod metrics;
 pub mod metrics_collector;
+pub mod metrics_explorer;
 pub mod monitoring;
+pub mod notification_channels;
 pub mod observability;
 
 // Console access

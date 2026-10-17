@@ -300,7 +300,7 @@ pub fn HelmRepositoriesPage() -> impl IntoView {
                                 let status = repo.status.clone();
                                 let status_cls = status_class(&repo.status);
                                 let last_update = repo.last_update.clone().unwrap_or_else(|| "Never".to_string());
-                                let added_at = repo.added_at.clone();
+                                let added_at = repo.added_at.clone().unwrap_or_else(|| "-".to_string());
 
                                 view! {
                                     <tr class="hover:bg-gray-50">

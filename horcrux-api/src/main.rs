@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 mod alerts;
+mod api;
 mod audit;
 mod auth;
 mod backup;
@@ -20,9 +21,11 @@ mod health;
 mod logging;
 mod metrics;
 mod metrics_collector;
+mod metrics_explorer;
 mod middleware;
 mod migration;
 mod monitoring;
+mod notification_channels;
 mod observability;
 mod openapi;
 mod persistence;
@@ -535,7 +538,8 @@ async fn main() -> anyhow::Result<()> {
         .merge(storage_routes())
         .merge(monitoring_routes())
         .merge(cluster_routes())
-        .merge(network_routes());
+        .merge(network_routes())
+        .merge(api::lane_m::routes(&state).await?);
 
     // Add Kubernetes routes if feature is enabled
     #[cfg(feature = "kubernetes")]
@@ -1293,39 +1297,7 @@ fn kubernetes_routes() -> Router<Arc<AppState>> {
             "/api/k8s/clusters/:cluster_id/namespaces/:namespace/metrics/pods",
             get(k8s_get_pod_metrics),
         )
-        // Helm releases
-        .route(
-            "/api/k8s/clusters/:cluster_id/helm/releases",
-            get(k8s_list_helm_releases),
-        )
-        .route(
-            "/api/k8s/clusters/:cluster_id/helm/releases",
-            post(k8s_install_helm_release),
-        )
-        .route(
-            "/api/k8s/clusters/:cluster_id/helm/releases/:release_name",
-            put(k8s_upgrade_helm_release),
-        )
-        .route(
-            "/api/k8s/clusters/:cluster_id/helm/releases/:release_name",
-            delete(k8s_uninstall_helm_release),
-        )
-        .route(
-            "/api/k8s/clusters/:cluster_id/helm/releases/:release_name/rollback",
-            post(k8s_rollback_helm_release),
-        )
-        .route(
-            "/api/k8s/clusters/:cluster_id/helm/releases/:release_name/history",
-            get(k8s_get_helm_release_history),
-        )
-        // Helm repos (global)
-        .route("/api/k8s/helm/repos", get(k8s_list_helm_repos))
-        .route("/api/k8s/helm/repos", post(k8s_add_helm_repo))
-        .route(
-            "/api/k8s/helm/repos/:repo_name",
-            delete(k8s_remove_helm_repo),
-        )
-        .route("/api/k8s/helm/charts/search", get(k8s_search_helm_charts))
+    // Helm repositories/charts/releases: api::helm (merged in main()).
 }
 
 /// Build NAS-related routes (conditionally compiled)
@@ -9850,9 +9822,11 @@ mod k8s_handlers {
 
     pub async fn create_service(
         State(state): State<Arc<AppState>>,
-        Path((cluster_id, _namespace)): Path<(String, String)>,
-        Json(payload): Json<CreateServiceRequest>,
+        Path((cluster_id, namespace)): Path<(String, String)>,
+        Json(mut payload): Json<CreateServiceRequest>,
     ) -> Result<(StatusCode, Json<ServiceInfo>), ApiError> {
+        // The namespace is the one in the URL (the web UI does not repeat it).
+        payload.namespace = namespace;
         let client = state.kubernetes_manager.get_client(&cluster_id).await?;
         let svc =
             crate::kubernetes::networking::services::create_service(&client, &payload).await?;
@@ -9896,9 +9870,11 @@ mod k8s_handlers {
 
     pub async fn create_ingress(
         State(state): State<Arc<AppState>>,
-        Path((cluster_id, _namespace)): Path<(String, String)>,
-        Json(payload): Json<CreateIngressRequest>,
+        Path((cluster_id, namespace)): Path<(String, String)>,
+        Json(mut payload): Json<CreateIngressRequest>,
     ) -> Result<(StatusCode, Json<IngressInfo>), ApiError> {
+        // The namespace is the one in the URL (the web UI does not repeat it).
+        payload.namespace = namespace;
         let client = state.kubernetes_manager.get_client(&cluster_id).await?;
         let ing = crate::kubernetes::networking::ingress::create_ingress(&client, &payload).await?;
         Ok((StatusCode::CREATED, Json(ing)))
@@ -9943,9 +9919,11 @@ mod k8s_handlers {
 
     pub async fn create_configmap(
         State(state): State<Arc<AppState>>,
-        Path((cluster_id, _namespace)): Path<(String, String)>,
-        Json(payload): Json<CreateConfigMapRequest>,
+        Path((cluster_id, namespace)): Path<(String, String)>,
+        Json(mut payload): Json<CreateConfigMapRequest>,
     ) -> Result<(StatusCode, Json<ConfigMapInfo>), ApiError> {
+        // The namespace is the one in the URL (the web UI does not repeat it).
+        payload.namespace = namespace;
         let client = state.kubernetes_manager.get_client(&cluster_id).await?;
         let cm = crate::kubernetes::config_storage::configmaps::create_configmap(&client, &payload)
             .await?;
@@ -9989,9 +9967,11 @@ mod k8s_handlers {
 
     pub async fn create_secret(
         State(state): State<Arc<AppState>>,
-        Path((cluster_id, _namespace)): Path<(String, String)>,
-        Json(payload): Json<CreateSecretRequest>,
+        Path((cluster_id, namespace)): Path<(String, String)>,
+        Json(mut payload): Json<CreateSecretRequest>,
     ) -> Result<(StatusCode, Json<SecretInfo>), ApiError> {
+        // The namespace is the one in the URL (the web UI does not repeat it).
+        payload.namespace = namespace;
         let client = state.kubernetes_manager.get_client(&cluster_id).await?;
         let secret =
             crate::kubernetes::config_storage::secrets::create_secret(&client, &payload).await?;
@@ -10033,9 +10013,11 @@ mod k8s_handlers {
 
     pub async fn create_pvc(
         State(state): State<Arc<AppState>>,
-        Path((cluster_id, _namespace)): Path<(String, String)>,
-        Json(payload): Json<CreatePvcRequest>,
+        Path((cluster_id, namespace)): Path<(String, String)>,
+        Json(mut payload): Json<CreatePvcRequest>,
     ) -> Result<(StatusCode, Json<PvcInfo>), ApiError> {
+        // The namespace is the one in the URL (the web UI does not repeat it).
+        payload.namespace = namespace;
         let client = state.kubernetes_manager.get_client(&cluster_id).await?;
         let pvc = crate::kubernetes::config_storage::pvcs::create_pvc(&client, &payload).await?;
         Ok((StatusCode::CREATED, Json(pvc)))
@@ -10219,165 +10201,11 @@ mod k8s_handlers {
             crate::kubernetes::observability::metrics::get_pod_metrics(&client, &namespace).await?;
         Ok(Json(metrics))
     }
-
-    // =========================================================================
-    // Helm handlers
-    // =========================================================================
-
-    pub async fn list_helm_releases(
-        State(state): State<Arc<AppState>>,
-        Path(cluster_id): Path<String>,
-    ) -> Result<Json<Vec<HelmRelease>>, ApiError> {
-        // Get kubeconfig path for this cluster
-        let _client = state.kubernetes_manager.get_client(&cluster_id).await?;
-        let kubeconfig_path = format!("/tmp/kubeconfig-{}", cluster_id);
-        let releases = crate::kubernetes::helm::releases::list_releases(&kubeconfig_path).await?;
-        Ok(Json(releases))
-    }
-
-    pub async fn install_helm_release(
-        State(state): State<Arc<AppState>>,
-        Path(cluster_id): Path<String>,
-        Json(payload): Json<HelmInstallRequest>,
-    ) -> Result<(StatusCode, Json<HelmRelease>), ApiError> {
-        let _client = state.kubernetes_manager.get_client(&cluster_id).await?;
-        let kubeconfig_path = format!("/tmp/kubeconfig-{}", cluster_id);
-        let release =
-            crate::kubernetes::helm::releases::install_release(&kubeconfig_path, &payload).await?;
-        Ok((StatusCode::CREATED, Json(release)))
-    }
-
-    pub async fn upgrade_helm_release(
-        State(state): State<Arc<AppState>>,
-        Path((cluster_id, release_name)): Path<(String, String)>,
-        Json(payload): Json<HelmUpgradeRequest>,
-    ) -> Result<Json<HelmRelease>, ApiError> {
-        let _client = state.kubernetes_manager.get_client(&cluster_id).await?;
-        let kubeconfig_path = format!("/tmp/kubeconfig-{}", cluster_id);
-        let release = crate::kubernetes::helm::releases::upgrade_release(
-            &kubeconfig_path,
-            &release_name,
-            &payload,
-        )
-        .await?;
-        Ok(Json(release))
-    }
-
-    pub async fn uninstall_helm_release(
-        State(state): State<Arc<AppState>>,
-        Path((cluster_id, release_name)): Path<(String, String)>,
-        Query(query): Query<HelmNamespaceQuery>,
-    ) -> Result<StatusCode, ApiError> {
-        let _client = state.kubernetes_manager.get_client(&cluster_id).await?;
-        let kubeconfig_path = format!("/tmp/kubeconfig-{}", cluster_id);
-        let namespace = query.namespace.as_deref().unwrap_or("default");
-        crate::kubernetes::helm::releases::uninstall_release(
-            &kubeconfig_path,
-            &release_name,
-            namespace,
-        )
-        .await?;
-        Ok(StatusCode::NO_CONTENT)
-    }
-
-    #[derive(Deserialize)]
-    pub struct HelmNamespaceQuery {
-        pub namespace: Option<String>,
-    }
-
-    #[derive(Deserialize)]
-    pub struct HelmRollbackRequest {
-        pub revision: Option<i32>,
-    }
-
-    pub async fn rollback_helm_release(
-        State(state): State<Arc<AppState>>,
-        Path((cluster_id, release_name)): Path<(String, String)>,
-        Query(query): Query<HelmNamespaceQuery>,
-        Json(payload): Json<HelmRollbackRequest>,
-    ) -> Result<StatusCode, ApiError> {
-        let _client = state.kubernetes_manager.get_client(&cluster_id).await?;
-        let kubeconfig_path = format!("/tmp/kubeconfig-{}", cluster_id);
-        let namespace = query.namespace.as_deref().unwrap_or("default");
-        crate::kubernetes::helm::releases::rollback_release(
-            &kubeconfig_path,
-            &release_name,
-            namespace,
-            payload.revision,
-        )
-        .await?;
-        Ok(StatusCode::OK)
-    }
-
-    pub async fn get_helm_release_history(
-        State(state): State<Arc<AppState>>,
-        Path((cluster_id, release_name)): Path<(String, String)>,
-        Query(query): Query<HelmNamespaceQuery>,
-    ) -> Result<Json<Vec<crate::kubernetes::helm::HelmReleaseRevision>>, ApiError> {
-        let _client = state.kubernetes_manager.get_client(&cluster_id).await?;
-        let kubeconfig_path = format!("/tmp/kubeconfig-{}", cluster_id);
-        let namespace = query.namespace.as_deref().unwrap_or("default");
-        let history = crate::kubernetes::helm::releases::get_release_history(
-            &kubeconfig_path,
-            &release_name,
-            namespace,
-        )
-        .await?;
-        Ok(Json(history))
-    }
-
-    pub async fn list_helm_repos(
-        State(_state): State<Arc<AppState>>,
-    ) -> Result<Json<Vec<HelmRepo>>, ApiError> {
-        let repos = crate::kubernetes::helm::repos::list_repos().await?;
-        Ok(Json(repos))
-    }
-
-    pub async fn add_helm_repo(
-        State(_state): State<Arc<AppState>>,
-        Json(payload): Json<AddHelmRepoRequest>,
-    ) -> Result<StatusCode, ApiError> {
-        crate::kubernetes::helm::repos::add_repo(&payload.name, &payload.url).await?;
-        Ok(StatusCode::CREATED)
-    }
-
-    #[derive(Deserialize)]
-    pub struct AddHelmRepoRequest {
-        pub name: String,
-        pub url: String,
-    }
-
-    pub async fn remove_helm_repo(
-        State(_state): State<Arc<AppState>>,
-        Path(repo_name): Path<String>,
-    ) -> Result<StatusCode, ApiError> {
-        crate::kubernetes::helm::repos::remove_repo(&repo_name).await?;
-        Ok(StatusCode::NO_CONTENT)
-    }
-
-    pub async fn search_helm_charts(
-        State(_state): State<Arc<AppState>>,
-        Query(query): Query<HelmSearchQuery>,
-    ) -> Result<Json<Vec<crate::kubernetes::helm::HelmChart>>, ApiError> {
-        let charts = crate::kubernetes::helm::repos::search_charts(
-            &query.keyword,
-            query.all_versions.unwrap_or(false),
-        )
-        .await?;
-        Ok(Json(charts))
-    }
-
-    #[derive(Deserialize)]
-    pub struct HelmSearchQuery {
-        pub keyword: String,
-        pub all_versions: Option<bool>,
-    }
 }
 
 // Re-export handlers for use in routes
 #[cfg(feature = "kubernetes")]
 use k8s_handlers::{
-    add_helm_repo as k8s_add_helm_repo,
     connect_cluster as k8s_connect_cluster,
     cordon_node as k8s_cordon_node,
     create_configmap as k8s_create_configmap,
@@ -10406,7 +10234,6 @@ use k8s_handlers::{
     get_cronjob as k8s_get_cronjob,
     get_daemonset as k8s_get_daemonset,
     get_deployment as k8s_get_deployment,
-    get_helm_release_history as k8s_get_helm_release_history,
     get_ingress as k8s_get_ingress,
     get_job as k8s_get_job,
     get_namespace as k8s_get_namespace,
@@ -10420,7 +10247,6 @@ use k8s_handlers::{
     get_secret as k8s_get_secret,
     get_service as k8s_get_service,
     get_statefulset as k8s_get_statefulset,
-    install_helm_release as k8s_install_helm_release,
     // Cluster
     list_clusters as k8s_list_clusters,
     // ConfigMaps
@@ -10433,8 +10259,6 @@ use k8s_handlers::{
     // Events
     list_events as k8s_list_events,
     // Helm
-    list_helm_releases as k8s_list_helm_releases,
-    list_helm_repos as k8s_list_helm_repos,
     // Ingress
     list_ingresses as k8s_list_ingresses,
     // Jobs
@@ -10455,13 +10279,8 @@ use k8s_handlers::{
     // StatefulSets
     list_statefulsets as k8s_list_statefulsets,
     reconnect_cluster as k8s_reconnect_cluster,
-    remove_helm_repo as k8s_remove_helm_repo,
     restart_deployment as k8s_restart_deployment,
-    rollback_helm_release as k8s_rollback_helm_release,
     scale_deployment as k8s_scale_deployment,
     scale_statefulset as k8s_scale_statefulset,
-    search_helm_charts as k8s_search_helm_charts,
     uncordon_node as k8s_uncordon_node,
-    uninstall_helm_release as k8s_uninstall_helm_release,
-    upgrade_helm_release as k8s_upgrade_helm_release,
 };

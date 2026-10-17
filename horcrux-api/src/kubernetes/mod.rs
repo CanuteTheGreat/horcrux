@@ -148,10 +148,17 @@ impl KubernetesManager {
         let node_count = client.get_node_count().await.unwrap_or(0);
 
         let now = chrono::Utc::now().timestamp();
+        // Record the context actually used. It used to be stored as the
+        // literal "default" whenever the request named none, so reconnecting
+        // (and anything else that re-reads the kubeconfig) asked for a
+        // context most kubeconfigs don't have.
+        let context = context
+            .or_else(|| current_context(&request.kubeconfig))
+            .unwrap_or_else(|| "default".to_string());
         let cluster = K8sCluster {
             id: cluster_id.clone(),
             name: request.name.clone(),
-            context: context.unwrap_or_else(|| "default".to_string()),
+            context,
             api_server: client.api_server().to_string(),
             version: version.as_ref().map(|v| v.git_version.clone()),
             status: ClusterStatus::Connected,
@@ -261,9 +268,10 @@ impl KubernetesManager {
         };
 
         // Create client
+        let context = usable_context(&kubeconfig, &cluster.context);
         let client = K8sClient::from_kubeconfig(
             &kubeconfig,
-            Some(&cluster.context),
+            context.as_deref(),
             cluster_id.to_string(),
             cluster.name.clone(),
         )
@@ -327,6 +335,15 @@ impl KubernetesManager {
         clusters.values().cloned().collect()
     }
 
+    /// The cluster's stored kubeconfig as a private temp file for CLI tools
+    /// (helm). Works whether or not the cluster is currently connected.
+    pub async fn helm_target(&self, cluster_id: &str) -> K8sResult<helm::KubeTarget> {
+        let cluster = self.get_cluster(cluster_id).await?;
+        let kubeconfig = self.kubeconfig_store.get(cluster_id).await?;
+        let context = usable_context(&kubeconfig, &cluster.context);
+        helm::KubeTarget::new(&kubeconfig, context.as_deref())
+    }
+
     /// Get the kube client for a cluster
     pub async fn get_client(&self, cluster_id: &str) -> K8sResult<K8sClient> {
         let clients = self.clients.read().await;
@@ -374,5 +391,59 @@ impl KubernetesManager {
 impl Default for KubernetesManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// `current-context` of a kubeconfig, if it names one.
+fn current_context(kubeconfig_yaml: &str) -> Option<String> {
+    kube::config::Kubeconfig::from_yaml(kubeconfig_yaml)
+        .ok()
+        .and_then(|k| k.current_context)
+        .filter(|c| !c.is_empty())
+}
+
+/// The stored context if the kubeconfig has it; otherwise `None` (= use the
+/// kubeconfig's current-context). Clusters registered before the context was
+/// recorded correctly carry a placeholder "default".
+fn usable_context(kubeconfig_yaml: &str, stored: &str) -> Option<String> {
+    let cfg = kube::config::Kubeconfig::from_yaml(kubeconfig_yaml).ok()?;
+    if cfg.contexts.iter().any(|c| c.name == stored) {
+        Some(stored.to_string())
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::*;
+
+    const KUBECONFIG: &str = r#"
+apiVersion: v1
+kind: Config
+clusters:
+- name: k3s
+  cluster:
+    server: https://127.0.0.1:6443
+contexts:
+- name: k3s-ctx
+  context:
+    cluster: k3s
+    user: admin
+current-context: k3s-ctx
+users:
+- name: admin
+  user:
+    token: abc
+"#;
+
+    #[test]
+    fn context_resolution() {
+        assert_eq!(current_context(KUBECONFIG).as_deref(), Some("k3s-ctx"));
+        assert_eq!(
+            usable_context(KUBECONFIG, "k3s-ctx").as_deref(),
+            Some("k3s-ctx")
+        );
+        assert_eq!(usable_context(KUBECONFIG, "default"), None);
     }
 }

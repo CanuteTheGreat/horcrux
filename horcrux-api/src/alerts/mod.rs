@@ -57,6 +57,9 @@ pub struct AlertManager {
     active_alerts: Arc<RwLock<HashMap<String, Alert>>>,
     alert_history: Arc<RwLock<Vec<Alert>>>,
     notification_channels: Arc<RwLock<Vec<NotificationChannel>>>,
+    /// Channels managed on Monitoring > Notifications (persisted, see
+    /// notification_channels.rs); every fired alert is delivered to them too.
+    channel_store: std::sync::OnceLock<Arc<crate::notification_channels::NotificationChannelStore>>,
     max_history: usize,
     /// Durable copy of rules and notification channels; `None` = in-memory.
     store: Option<ConfigStore>,
@@ -75,6 +78,7 @@ impl AlertManager {
             active_alerts: Arc::new(RwLock::new(HashMap::new())),
             alert_history: Arc::new(RwLock::new(Vec::new())),
             notification_channels: Arc::new(RwLock::new(Vec::new())),
+            channel_store: std::sync::OnceLock::new(),
             max_history: 1000, // Keep last 1000 alerts
             store: None,
         }
@@ -111,6 +115,14 @@ impl AlertManager {
             | NotificationChannel::Webhook { name, .. }
             | NotificationChannel::Syslog { name, .. } => name,
         }
+    }
+
+    /// Deliver fired alerts to the persisted notification channels as well.
+    pub fn attach_channel_store(
+        &self,
+        store: Arc<crate::notification_channels::NotificationChannelStore>,
+    ) {
+        let _ = self.channel_store.set(store);
     }
 
     /// Add an alert rule
@@ -323,6 +335,11 @@ impl AlertManager {
 
     /// Send notifications for an alert
     async fn send_notifications(&self, alert: &Alert) {
+        if let Some(store) = self.channel_store.get() {
+            store
+                .dispatch(&crate::notification_channels::Message::from_alert(alert))
+                .await;
+        }
         let channels = self.notification_channels.read().await;
 
         for channel in channels.iter() {

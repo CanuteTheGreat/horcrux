@@ -204,6 +204,12 @@ fn node_to_info(node: k8s_openapi::api::core::v1::Node) -> NodeInfo {
         .get("memory")
         .map(|q| q.0.clone())
         .unwrap_or_default();
+    let allocatable_pods = allocatable
+        .get("pods")
+        .map(|q| q.0.clone())
+        .unwrap_or_default();
+    let capacity = status.capacity.unwrap_or_default();
+    let capacity_of = |k: &str| capacity.get(k).map(|q| q.0.clone()).unwrap_or_default();
 
     let node_conditions: Vec<NodeCondition> = conditions
         .into_iter()
@@ -227,6 +233,10 @@ fn node_to_info(node: k8s_openapi::api::core::v1::Node) -> NodeInfo {
         kubelet_version: node_info.kubelet_version,
         allocatable_cpu,
         allocatable_memory,
+        allocatable_pods,
+        capacity_cpu: capacity_of("cpu"),
+        capacity_memory: capacity_of("memory"),
+        capacity_pods: capacity_of("pods"),
         conditions: node_conditions,
         created_at: metadata.creation_timestamp.map(|t| t.0.to_rfc3339()),
     }
