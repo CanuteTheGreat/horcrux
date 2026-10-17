@@ -68,7 +68,150 @@ async fn upgrade_for_kind(
         ContainerWsKind::Events => {
             ws.on_upgrade(move |socket| handle_events(socket, ticket.runtime))
         }
+        ContainerWsKind::Console => {
+            ws.on_upgrade(move |socket| handle_console(socket, ticket.container_id, ticket.runtime))
+        }
     }
+}
+
+pub async fn handle_console_ws(
+    ws: WebSocketUpgrade,
+    Path(ticket_id): Path<String>,
+    State(ws_manager): State<Arc<ContainerWsManager>>,
+) -> Response {
+    upgrade_for_kind(ws, ticket_id, ContainerWsKind::Console, ws_manager).await
+}
+
+// ---------------------------------------------------------------------
+// LXD / Incus (instance API over the daemon's Unix socket)
+// ---------------------------------------------------------------------
+
+#[cfg(any(feature = "lxd", feature = "incus"))]
+fn instance_backend(runtime: &ContainerRuntime) -> Option<crate::console::lxd::Backend> {
+    match runtime {
+        #[cfg(feature = "lxd")]
+        ContainerRuntime::Lxd => Some(crate::console::lxd::Backend::Lxd),
+        #[cfg(feature = "incus")]
+        ContainerRuntime::Incus => Some(crate::console::lxd::Backend::Incus),
+        _ => None,
+    }
+}
+
+/// Open an LXD/Incus session (console or PTY exec) and bridge it.
+#[cfg(any(feature = "lxd", feature = "incus"))]
+async fn instance_session(
+    mut ws_socket: WebSocket,
+    backend: crate::console::lxd::Backend,
+    name: String,
+    exec: Option<Vec<String>>,
+) {
+    use crate::console::lxd::{bridge, Client, ConsoleKind};
+    let client = Client::new(backend);
+    let opened = match &exec {
+        Some(cmd) => client.exec_pty(&name, cmd).await.map(|s| (Vec::new(), s)),
+        None => {
+            let history = client.console_log(&name).await.unwrap_or_default();
+            client
+                .open_console(&name, ConsoleKind::Text)
+                .await
+                .map(|s| (history, s))
+        }
+    };
+    match opened {
+        Ok((history, session)) => {
+            bridge(ws_socket, session, history, exec.is_some()).await;
+            info!(
+                "{} {} session closed for {}",
+                backend.label(),
+                if exec.is_some() {
+                    "terminal"
+                } else {
+                    "console"
+                },
+                name
+            );
+        }
+        Err(e) => {
+            error!("{} session for {}: {}", backend.label(), name, e);
+            let _ = ws_socket
+                .send(Message::Text(format!("[error] {e}\r\n")))
+                .await;
+        }
+    }
+}
+
+/// LXD/Incus console log: what is there now, then whatever is appended.
+#[cfg(any(feature = "lxd", feature = "incus"))]
+async fn stream_instance_console_log(
+    ws_sender: &mut futures::stream::SplitSink<WebSocket, Message>,
+    backend: crate::console::lxd::Backend,
+    name: &str,
+) {
+    let client = crate::console::lxd::Client::new(backend);
+    let mut sent = 0usize;
+    loop {
+        match client.console_log(name).await {
+            Ok(log) => {
+                if log.len() < sent {
+                    sent = 0;
+                }
+                if log.len() > sent {
+                    let text = String::from_utf8_lossy(&log[sent..]).to_string();
+                    sent = log.len();
+                    if ws_sender.send(Message::Text(text)).await.is_err() {
+                        return;
+                    }
+                }
+            }
+            Err(e) => {
+                let _ = ws_sender
+                    .send(Message::Text(format!("[error] {e}\n")))
+                    .await;
+                return;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        if ws_sender.send(Message::Ping(Vec::new())).await.is_err() {
+            return;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// System console (LXC / LXD / Incus)
+// ---------------------------------------------------------------------
+
+async fn handle_console(ws_socket: WebSocket, container_id: String, runtime: ContainerRuntime) {
+    #[cfg(any(feature = "lxd", feature = "incus"))]
+    if let Some(backend) = instance_backend(&runtime) {
+        return instance_session(ws_socket, backend, container_id, None).await;
+    }
+    #[cfg(feature = "lxc")]
+    if runtime == ContainerRuntime::Lxc {
+        let mgr = super::lxc::LxcManager::new();
+        let name = mgr.resolve_name(&container_id);
+        let argv = vec![
+            "lxc-console".to_string(),
+            "-P".into(),
+            mgr.lxc_path().to_string_lossy().to_string(),
+            "-n".into(),
+            name.clone(),
+            "-t".into(),
+            "0".into(),
+        ];
+        // Recent console output first (the console log), then the live tty.
+        let history = match tokio::fs::read(mgr.console_log_path(&name)).await {
+            Ok(b) => b[b.len().saturating_sub(16 * 1024)..].to_vec(),
+            Err(_) => Vec::new(),
+        };
+        return run_on_pty(ws_socket, argv, name, history).await;
+    }
+    let (mut tx, _) = ws_socket.split();
+    let _ = tx
+        .send(Message::Text(format!(
+            "[error] {runtime:?} containers have no system console; open the Terminal or Logs instead\r\n"
+        )))
+        .await;
 }
 
 pub async fn handle_logs_ws(
@@ -106,6 +249,11 @@ async fn handle_logs(ws_socket: WebSocket, container_id: String, runtime: Contai
     // when the browser tab navigates away.
     tokio::spawn(async move { while ws_receiver.next().await.is_some() {} });
 
+    #[cfg(any(feature = "lxd", feature = "incus"))]
+    if let Some(backend) = instance_backend(&runtime) {
+        stream_instance_console_log(&mut ws_sender, backend, &container_id).await;
+        return;
+    }
     match runtime {
         #[cfg(feature = "lxc")]
         ContainerRuntime::Lxc => {
@@ -210,6 +358,10 @@ async fn handle_exec(
         exec_command
     };
 
+    #[cfg(any(feature = "lxd", feature = "incus"))]
+    if let Some(backend) = instance_backend(&runtime) {
+        return instance_session(ws_socket, backend, container_id, Some(cmd)).await;
+    }
     match runtime {
         ContainerRuntime::Docker => handle_exec_docker(ws_socket, container_id, cmd).await,
         #[cfg(feature = "lxc")]
@@ -273,7 +425,17 @@ async fn handle_exec_lxc(ws_socket: WebSocket, container_id: String, cmd: Vec<St
     let mgr = super::lxc::LxcManager::new();
     let name = mgr.resolve_name(&container_id);
     let argv = mgr.attach_argv(&name, &cmd);
+    run_on_pty(ws_socket, argv, name, Vec::new()).await
+}
+
+/// Run `argv` (lxc-attach / lxc-console) on a fresh PTY bridged to the
+/// browser; `history` is sent first.
+#[cfg(feature = "lxc")]
+async fn run_on_pty(ws_socket: WebSocket, argv: Vec<String>, name: String, history: Vec<u8>) {
     let (mut ws_sender, mut ws_receiver) = ws_socket.split();
+    if !history.is_empty() && ws_sender.send(Message::Binary(history)).await.is_err() {
+        return;
+    }
 
     let pty = match nix::pty::openpty(
         Some(&nix::pty::Winsize {
@@ -325,7 +487,7 @@ async fn handle_exec_lxc(ws_socket: WebSocket, container_id: String, cmd: Vec<St
         Ok(c) => c,
         Err(e) => {
             let _ = ws_sender
-                .send(Message::Text(format!("[error] lxc-attach: {e}\r\n")))
+                .send(Message::Text(format!("[error] {}: {e}\r\n", argv[0])))
                 .await;
             return;
         }

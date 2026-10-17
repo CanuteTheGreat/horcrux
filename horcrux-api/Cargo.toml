@@ -107,6 +107,11 @@ ciborium = "0.2"
 # Docker API client
 bollard = "0.17"
 
+# LXD/Incus consoles (USE=lxd / USE=incus): instance console and exec
+# websockets over the daemon's Unix socket. (The SPICE relay's RSA-OAEP
+# ticket uses the rsa/sha1 crates the auth code already depends on.)
+tokio-tungstenite = { version = "0.24", optional = true }
+
 # Kubernetes client
 kube = { version = "0.98", features = ["runtime", "derive", "ws"], optional = true }
 k8s-openapi = { version = "0.24", features = ["v1_32"], optional = true }
@@ -117,8 +122,9 @@ default = ["qemu", "lxc", "docker", "backup", "pam"]
 
 # Virtualization backends
 qemu = ["virt"]  # QEMU/KVM support with libvirt
-lxd = []         # LXD support (VMs and containers)
-incus = []       # Incus support (VMs and containers)
+# LXD/Incus support (VMs and containers, incl. their in-browser consoles)
+lxd = ["dep:tokio-tungstenite"]
+incus = ["dep:tokio-tungstenite"]
 
 # Container runtimes
 lxc = []         # LXC containers

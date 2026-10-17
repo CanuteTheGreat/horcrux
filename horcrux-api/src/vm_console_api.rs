@@ -5,6 +5,8 @@
 //! * `POST /api/console/:vm_id/spice`   SPICE endpoint + this run's password.
 //! * `GET  /api/console/:vm_id/spice.vv` connection file for remote-viewer
 //!   (display, audio playback/record, clipboard agent, USB redirection).
+//!   QEMU VMs: QEMU's own SPICE server; LXD/Incus VMs: Horcrux's
+//!   password-protected relay to the daemon's SPICE display.
 //!
 //! The VNC (noVNC) and serial console endpoints live with the other console
 //! routes in main.rs; all of them read what QEMU was actually started with
@@ -20,7 +22,7 @@ use axum::{
     routing::{get, post, put},
     Json, Router,
 };
-use horcrux_common::{VmConfig, VmDisplay};
+use horcrux_common::{VmConfig, VmDisplay, VmHypervisor};
 use std::sync::Arc;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -64,6 +66,26 @@ fn viewer_host(listen: &str, headers: &HeaderMap) -> String {
     }
 }
 
+/// `.vv` for an LXD/Incus VM: points at its SPICE relay.
+#[cfg(any(feature = "lxd", feature = "incus"))]
+fn instance_vv(vm: &VmConfig, info: &ConsoleInfo, headers: &HeaderMap) -> Result<String, ApiError> {
+    let relay = console::spice_relay::RelayInfo {
+        listen: info.host.clone(),
+        port: info.port,
+        password: info.password.clone().unwrap_or_default(),
+    };
+    Ok(console::spice_relay::virt_viewer_file(
+        &vm.name,
+        &viewer_host(&info.host, headers),
+        &relay,
+    ))
+}
+
+#[cfg(not(any(feature = "lxd", feature = "incus")))]
+fn instance_vv(vm: &VmConfig, _: &ConsoleInfo, _: &HeaderMap) -> Result<String, ApiError> {
+    Err(crate::features::hypervisor_not_compiled(&vm.hypervisor).into())
+}
+
 async fn get_spice_vv(
     State(state): State<Arc<AppState>>,
     Path(vm_id): Path<String>,
@@ -72,14 +94,18 @@ async fn get_spice_vv(
     let vm = state.vm_manager.get_vm(&vm_id).await?;
     // Validates that SPICE is configured and the VM is running (clear 422
     // otherwise, same as the console endpoint).
-    state
+    let info = state
         .console_manager
         .create_console(&vm, ConsoleType::Spice)
         .await?;
-    let rt = DisplayRuntime::load(&console::runtime_disk(&vm)?).await?;
-    let listen = rt.spice_listen.as_deref().unwrap_or("127.0.0.1");
-    let body = virt_viewer_file(&vm.name, &viewer_host(listen, &headers), &rt)
-        .ok_or_else(|| ApiError::ValidationError("SPICE is not configured".into()))?;
+    let body = if vm.hypervisor == VmHypervisor::Qemu {
+        let rt = DisplayRuntime::load(&console::runtime_disk(&vm)?).await?;
+        let listen = rt.spice_listen.as_deref().unwrap_or("127.0.0.1");
+        virt_viewer_file(&vm.name, &viewer_host(listen, &headers), &rt)
+            .ok_or_else(|| ApiError::ValidationError("SPICE is not configured".into()))?
+    } else {
+        instance_vv(&vm, &info, &headers)?
+    };
     Ok((
         [
             (

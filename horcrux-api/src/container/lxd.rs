@@ -27,9 +27,11 @@ impl LxdContainerManager {
         );
 
         // Launch container instance with LXD
+        // The image the user chose in the form (it used to be ignored and
+        // every container became Ubuntu 22.04).
         let output = Command::new("lxc")
             .arg("init")
-            .arg("images:ubuntu/22.04") // Default image
+            .arg(super::instance_image(&config.rootfs))
             .arg(&config.name)
             .arg("-c")
             .arg(format!("limits.cpu={}", config.cpus))

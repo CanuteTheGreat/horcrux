@@ -276,7 +276,9 @@ impl VmManager {
             .ok_or_else(|| horcrux_common::Error::VmNotFound(id.to_string()))?;
         if vm.hypervisor != VmHypervisor::Qemu {
             return Err(horcrux_common::Error::Validation(
-                "Display settings apply to QEMU VMs; LXD/Incus manage their own console".into(),
+                "Display settings apply to QEMU VMs; LXD/Incus VMs always have a SPICE display \
+                 and a serial console (both on the VM's Console page)"
+                    .into(),
             ));
         }
         if vm.status == VmStatus::Running {

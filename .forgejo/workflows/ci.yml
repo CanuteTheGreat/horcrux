@@ -281,6 +281,25 @@ jobs:
           test -n "$contract"
           bash horcrux-api/tests/lxc_e2e.sh test target/debug/horcrux-api "$contract"
 
+      - name: Incus containers (real nested Incus, in-browser consoles)
+        # incus_e2e.sh runs the built API next to a real Incus daemon in a
+        # privileged sibling container: an Incus container is created from
+        # the form's image field, then its Terminal (exec PTY), Console
+        # (type=console: log in on /dev/console and run a command) and
+        # console-log WebSockets are driven through the HTTP API, and no
+        # reply may tell the user to use a CLI console. Then the UI contract
+        # test's console-ticket part runs against that server.
+        run: |
+          contract=$(cargo test --all-features --workspace --no-run --message-format=json 2>/dev/null \
+            | python3 -c 'import json,sys
+          for l in sys.stdin:
+              m = json.loads(l)
+              if m.get("reason") == "compiler-artifact" and m.get("executable") and "/api_contract-" in m["executable"]:
+                  print(m["executable"])' | tail -1)
+          echo "UI contract test binary: ${contract:-<none>}"
+          test -n "$contract"
+          bash horcrux-api/tests/incus_e2e.sh ct target/debug/horcrux-api "$contract"
+
       - name: Run tests (no default features)
         # Unit tests of the minimal build. The integration/contract tests
         # need the server, which is the --all-features build started above;
@@ -842,6 +861,22 @@ jobs:
               /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/lxc_ui_e2e.py || rc=$?
           fi
           bash horcrux-api/tests/lxc_e2e.sh stop
+          exit $rc
+
+      - name: Incus browser E2E (container console + terminal)
+        # The API + this build's UI run next to a real Incus daemon
+        # (incus_e2e.sh serve); the browser creates an Incus container from
+        # the form, opens Console from the list (logs in on /dev/console and
+        # runs a command) and the Terminal (exec PTY).
+        if: ${{ !cancelled() }}
+        run: |
+          rc=0
+          bash horcrux-api/tests/incus_e2e.sh serve target/debug/horcrux-api horcrux-api/horcrux-ui/dist 8008 || rc=$?
+          if [ $rc -eq 0 ]; then
+            BASE_URL=$(cat /tmp/horcrux-incus-e2e.url) HORCRUX_CA_FILE=/tmp/horcrux-incus-e2e-ca.pem MODE=ct \
+              /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/incus_ui_e2e.py || rc=$?
+          fi
+          bash horcrux-api/tests/incus_e2e.sh stop
           exit $rc
 
       - name: Dump horcrux-api log

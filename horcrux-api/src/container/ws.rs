@@ -19,6 +19,10 @@ pub enum ContainerWsKind {
     Logs,
     Exec,
     Events,
+    /// The container's system console (/dev/console: getty, init output),
+    /// interactive - LXC (`lxc-console` on a PTY), LXD and Incus
+    /// (`type=console` instance console).
+    Console,
 }
 
 #[derive(Debug, Clone)]

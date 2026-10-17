@@ -2,13 +2,20 @@
 //! (WebSocket proxy for browser clients + `.vv` file for remote-viewer) and
 //! the serial console (WebSocket bridge to QEMU's serial Unix socket).
 //!
+//! LXD and Incus VMs get the same serial and SPICE consoles through the
+//! daemon's instance console API (`console::lxd`, `console::spice_relay`).
+//!
 //! Every endpoint comes from what `vm::display` actually configured when the
 //! VM was started (`<disk>.display.json`); nothing is allocated here. (This
 //! module used to hand out VNC/SPICE ports and a serial socket path that
 //! QEMU was never told about, so no console could ever connect.)
 
+#[cfg(any(feature = "lxd", feature = "incus"))]
+pub mod lxd;
 pub mod novnc;
 pub mod serial_ws;
+#[cfg(any(feature = "lxd", feature = "incus"))]
+pub mod spice_relay;
 
 use crate::vm::display::DisplayRuntime;
 use horcrux_common::{DisplayProtocol, Result, VmConfig, VmHypervisor};
@@ -56,8 +63,33 @@ pub struct ConsoleTicket {
     pub target_host: String,
     /// Unix socket of the serial console.
     pub serial_socket: Option<PathBuf>,
+    /// LXD/Incus VM whose console (via the daemon's API) this ticket opens.
+    #[cfg_attr(not(any(feature = "lxd", feature = "incus")), allow(dead_code))]
+    pub instance: Option<InstanceTarget>,
     pub created_at: i64,
     pub expires_at: i64,
+}
+
+/// An LXD or Incus instance, addressed by name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(any(feature = "lxd", feature = "incus")), allow(dead_code))]
+pub struct InstanceTarget {
+    pub hypervisor: VmHypervisor,
+    pub name: String,
+}
+
+#[cfg(any(feature = "lxd", feature = "incus"))]
+impl InstanceTarget {
+    /// The daemon backend, or "not compiled in" for a USE flag that is off.
+    pub fn backend(&self) -> Result<lxd::Backend> {
+        match self.hypervisor {
+            #[cfg(feature = "lxd")]
+            VmHypervisor::Lxd => Ok(lxd::Backend::Lxd),
+            #[cfg(feature = "incus")]
+            VmHypervisor::Incus => Ok(lxd::Backend::Incus),
+            ref h => Err(crate::features::hypervisor_not_compiled(h)),
+        }
+    }
 }
 
 pub struct ConsoleManager {
@@ -71,19 +103,12 @@ impl Default for ConsoleManager {
 }
 
 /// Disk of a QEMU VM (its console state lives next to it). LXD/Incus VMs
-/// get a pointer to their own console tooling instead.
+/// have no such state: their consoles come from the daemon.
 pub fn runtime_disk(vm: &VmConfig) -> Result<PathBuf> {
-    let tool = match vm.hypervisor {
-        VmHypervisor::Qemu => None,
-        VmHypervisor::Lxd => Some(("an LXD", "lxc")),
-        VmHypervisor::Incus => Some(("an Incus", "incus")),
-    };
-    if let Some((kind, cli)) = tool {
+    if vm.hypervisor != VmHypervisor::Qemu {
         return Err(horcrux_common::Error::Validation(format!(
-            "VM {} is {kind} VM: use its own console (`{cli} console {} --type=vga` for the \
-             SPICE display, `--type=console` for the text console); Horcrux's VNC/SPICE/serial \
-             consoles are for QEMU VMs",
-            vm.id, vm.name
+            "VM {} is not a QEMU VM; its console state is kept by {:?}",
+            vm.id, vm.hypervisor
         )));
     }
     vm.disks
@@ -101,6 +126,71 @@ impl ConsoleManager {
 
     /// Issue a 5-minute ticket for one of the running VM's consoles.
     pub async fn create_console(&self, vm: &VmConfig, kind: ConsoleType) -> Result<ConsoleInfo> {
+        match vm.hypervisor {
+            VmHypervisor::Qemu => self.create_qemu_console(vm, kind).await,
+            VmHypervisor::Lxd | VmHypervisor::Incus => self.create_instance_console(vm, kind).await,
+        }
+    }
+
+    /// Serial and SPICE consoles of an LXD/Incus VM. The serial ticket is
+    /// bridged to the daemon's `type=console` session; SPICE goes through
+    /// a password-protected relay (`spice_relay`), so the `.vv` file and the
+    /// SPICE WebSocket proxy work exactly as for QEMU VMs.
+    #[cfg(any(feature = "lxd", feature = "incus"))]
+    async fn create_instance_console(
+        &self,
+        vm: &VmConfig,
+        kind: ConsoleType,
+    ) -> Result<ConsoleInfo> {
+        let target = InstanceTarget {
+            hypervisor: vm.hypervisor.clone(),
+            name: vm.name.clone(),
+        };
+        let backend = target.backend()?;
+        let state = lxd::Client::new(backend).instance_state(&vm.name).await?;
+        if !state.is_running() {
+            return Err(horcrux_common::Error::Validation(format!(
+                "VM {} is {} - start it to open its console",
+                vm.id,
+                state.status.to_lowercase()
+            )));
+        }
+        match kind {
+            ConsoleType::Serial => Ok(self
+                .issue(vm, kind, "127.0.0.1".into(), 0, None, None, Some(target))
+                .await),
+            ConsoleType::Spice => {
+                let relay = spice_relay::ensure(backend, &vm.name).await?;
+                Ok(self
+                    .issue(
+                        vm,
+                        kind,
+                        relay.listen.clone(),
+                        relay.port,
+                        Some(relay.password),
+                        None,
+                        None,
+                    )
+                    .await)
+            }
+            ConsoleType::Vnc => Err(horcrux_common::Error::Validation(format!(
+                "{} VMs have a SPICE graphical console and a serial console (no VNC): \
+                 choose SPICE or Serial",
+                backend.label()
+            ))),
+        }
+    }
+
+    #[cfg(not(any(feature = "lxd", feature = "incus")))]
+    async fn create_instance_console(
+        &self,
+        vm: &VmConfig,
+        _kind: ConsoleType,
+    ) -> Result<ConsoleInfo> {
+        Err(crate::features::hypervisor_not_compiled(&vm.hypervisor))
+    }
+
+    async fn create_qemu_console(&self, vm: &VmConfig, kind: ConsoleType) -> Result<ConsoleInfo> {
         let disk = runtime_disk(vm)?;
         let rt = DisplayRuntime::load(&disk).await?;
         let not_configured = |what: &str| {
@@ -137,6 +227,22 @@ impl ConsoleManager {
             ),
         };
 
+        Ok(self
+            .issue(vm, kind, host, port, password, serial_socket, None)
+            .await)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn issue(
+        &self,
+        vm: &VmConfig,
+        kind: ConsoleType,
+        host: String,
+        port: u16,
+        password: Option<String>,
+        serial_socket: Option<PathBuf>,
+        instance: Option<InstanceTarget>,
+    ) -> ConsoleInfo {
         let ticket_id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp();
         let target_host = match host.as_str() {
@@ -150,6 +256,7 @@ impl ConsoleManager {
             vnc_port: port,
             target_host,
             serial_socket,
+            instance,
             created_at: now,
             expires_at: now + 300,
         };
@@ -162,7 +269,7 @@ impl ConsoleManager {
             ConsoleType::Serial => format!("/api/console/ws/serial/{ticket_id}"),
             _ => format!("/api/console/ws/{ticket_id}"),
         };
-        Ok(ConsoleInfo {
+        ConsoleInfo {
             vm_id: vm.id.clone(),
             console_type: kind,
             host,
@@ -171,7 +278,7 @@ impl ConsoleManager {
             ws_port: 0,
             ws_path,
             password,
-        })
+        }
     }
 
     pub async fn verify_ticket(&self, ticket_id: &str) -> Result<ConsoleTicket> {
@@ -251,12 +358,19 @@ mod tests {
             st.serial_socket.as_deref(),
             Some(rt.serial_socket.as_path())
         );
-        // LXD/Incus VMs point at their own console tooling.
-        let e = m
-            .create_console(&vm(&disk, VmHypervisor::Incus), ConsoleType::Vnc)
-            .await
-            .unwrap_err();
-        assert!(e.to_string().contains("incus console"), "{e}");
+        // LXD/Incus VMs never point the user at a CLI: their consoles come
+        // from the daemon (here: not compiled in, or no daemon/instance).
+        for hv in [VmHypervisor::Lxd, VmHypervisor::Incus] {
+            let e = m
+                .create_console(&vm(&disk, hv), ConsoleType::Serial)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(
+                !e.contains("lxc console") && !e.contains("incus console"),
+                "{e}"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

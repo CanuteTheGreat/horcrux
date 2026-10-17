@@ -33,7 +33,7 @@ mod vm_list;
 pub use alerts::Alerts;
 pub use clone_list::CloneList;
 pub use console::VmConsole;
-pub use container_console::{ContainerExecPage, ContainerLogsPage};
+pub use container_console::{ContainerExecPage, ContainerLogsPage, ContainerSystemConsolePage};
 pub use container_create::ContainerCreate;
 pub use container_events::ContainerEventsPage;
 pub use container_images::ImagesPage;

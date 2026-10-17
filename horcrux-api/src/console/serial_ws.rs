@@ -38,6 +38,12 @@ pub async fn handle_serial_websocket(
         }
     };
 
+    // LXD/Incus VM: the daemon's text console (with its log history).
+    #[cfg(any(feature = "lxd", feature = "incus"))]
+    if let Some(target) = ticket.instance.clone() {
+        return ws.on_upgrade(move |socket| handle_instance_console(socket, target));
+    }
+
     // The ticket names the Unix socket QEMU was started with.
     let socket_path = match &ticket.serial_socket {
         Some(path) => path.to_string_lossy().to_string(),
@@ -146,4 +152,35 @@ async fn handle_serial_connection(ws_socket: WebSocket, socket_path: String) {
         "Serial WebSocket proxy connection closed for {}",
         socket_path
     );
+}
+
+/// Serial console of an LXD/Incus VM: the console log so far, then the live
+/// `type=console` session, interactive both ways.
+#[cfg(any(feature = "lxd", feature = "incus"))]
+async fn handle_instance_console(mut ws_socket: WebSocket, target: super::InstanceTarget) {
+    use super::lxd::{bridge, Client, ConsoleKind};
+    let session = async {
+        let client = Client::new(target.backend()?);
+        // Read the history first: on VMs reading the log drains the
+        // daemon's ring buffer, which then feeds the live session.
+        let history = client.console_log(&target.name).await.unwrap_or_default();
+        let session = client.open_console(&target.name, ConsoleKind::Text).await?;
+        Ok::<_, horcrux_common::Error>((history, session))
+    }
+    .await;
+    match session {
+        Ok((history, session)) => {
+            info!(
+                "Console of {:?} instance {} attached",
+                target.hypervisor, target.name
+            );
+            bridge(ws_socket, session, history, false).await;
+        }
+        Err(e) => {
+            error!("Console of {}: {}", target.name, e);
+            let _ = ws_socket
+                .send(Message::Text(format!("[error] {e}\r\n")))
+                .await;
+        }
+    }
 }

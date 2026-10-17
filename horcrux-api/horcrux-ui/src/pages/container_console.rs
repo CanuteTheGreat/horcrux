@@ -12,6 +12,8 @@ use web_sys::{MessageEvent, WebSocket};
 pub enum ContainerWsMode {
     Logs,
     Exec,
+    /// System console (/dev/console): LXC, LXD and Incus containers.
+    Console,
 }
 
 /// Live log viewer for one container. Route: `/containers/:id/logs`.
@@ -26,17 +28,35 @@ pub fn ContainerExecPage() -> impl IntoView {
     view! { <ContainerConsole mode=ContainerWsMode::Exec/> }
 }
 
+/// Interactive system console of an LXC/LXD/Incus container (getty, init
+/// output; log history first). Route: `/containers/:id/console`.
+#[component]
+pub fn ContainerSystemConsolePage() -> impl IntoView {
+    view! { <ContainerConsole mode=ContainerWsMode::Console/> }
+}
+
 #[component]
 fn ContainerConsole(mode: ContainerWsMode) -> impl IntoView {
     let params = leptos_router::use_params_map();
     let container_id = move || params.get().get("id").cloned().unwrap_or_default();
 
-    let (runtime, set_runtime) = create_signal("docker".to_string());
-    // The container list links here with ?runtime=<runtime>.
+    // The container list links here with ?runtime=<runtime>. Start from it
+    // (not "docker") so the console page's first connect already uses the
+    // right runtime instead of racing a refused docker ticket.
     let query = leptos_router::use_query_map();
+    let (runtime, set_runtime) = create_signal(
+        query
+            .get_untracked()
+            .get("runtime")
+            .cloned()
+            .unwrap_or_else(|| "docker".to_string()),
+    );
     create_effect(move |_| {
         if let Some(rt) = query.get().get("runtime") {
-            set_runtime.set(rt.clone());
+            // Unchanged: don't re-trigger the console's auto-connect.
+            if runtime.get_untracked() != *rt {
+                set_runtime.set(rt.clone());
+            }
         }
     });
     let (exec_command, set_exec_command) = create_signal("/bin/sh".to_string());
@@ -45,21 +65,28 @@ fn ContainerConsole(mode: ContainerWsMode) -> impl IntoView {
     let (input_line, set_input_line) = create_signal(String::new());
     let (ws_handle, set_ws_handle) = create_signal(None::<WebSocket>);
 
-    let connect = move |_| {
+    let connect = move |_: ()| {
         let id = container_id();
         let rt = runtime.get();
         let cmd = exec_command.get();
         set_output.set(String::new());
+        if let Some(old) = ws_handle.get_untracked() {
+            old.set_onclose(None);
+            old.set_onmessage(None);
+            let _ = old.close();
+        }
 
         spawn_local(async move {
             let ticket = match mode {
                 ContainerWsMode::Logs => api::get_container_logs_ticket(&id, &rt).await,
                 ContainerWsMode::Exec => api::get_container_exec_ticket(&id, &cmd, &rt).await,
+                ContainerWsMode::Console => api::get_container_console_ticket(&id, &rt).await,
             };
             let ticket = match ticket {
                 Ok(t) => t,
                 Err(e) => {
                     logging::log!("Failed to get ws ticket: {}", e.message);
+                    set_output.set(format!("[error] {}\n", e.message));
                     return;
                 }
             };
@@ -110,7 +137,12 @@ fn ContainerConsole(mode: ContainerWsMode) -> impl IntoView {
     let do_send = move || {
         if let Some(ws) = ws_handle.get() {
             let mut line = input_line.get();
-            line.push('\n');
+            // A console tty wants Enter (CR); the exec PTY takes either.
+            line.push(if mode == ContainerWsMode::Console {
+                '\r'
+            } else {
+                '\n'
+            });
             let _ = ws.send_with_str(&line);
             set_input_line.set(String::new());
         }
@@ -125,7 +157,18 @@ fn ContainerConsole(mode: ContainerWsMode) -> impl IntoView {
     let title = match mode {
         ContainerWsMode::Logs => "Live Logs",
         ContainerWsMode::Exec => "Interactive Terminal",
+        ContainerWsMode::Console => "Console",
     };
+    // The console page connects on its own (again when the runtime changes);
+    // Connect/Reconnect stays available.
+    if mode == ContainerWsMode::Console {
+        create_effect(move |_| {
+            let _ = runtime.get();
+            if !container_id().is_empty() {
+                connect(());
+            }
+        });
+    }
 
     view! {
         <div class="container-list">
@@ -136,6 +179,8 @@ fn ContainerConsole(mode: ContainerWsMode) -> impl IntoView {
                         <option value="docker" selected=move || runtime.get() == "docker">"Docker"</option>
                         <option value="podman" selected=move || runtime.get() == "podman">"Podman"</option>
                         <option value="lxc" selected=move || runtime.get() == "lxc">"LXC"</option>
+                        <option value="lxd" selected=move || runtime.get() == "lxd">"LXD"</option>
+                        <option value="incus" selected=move || runtime.get() == "incus">"Incus"</option>
                     </select>
                     {move || {
                         if mode == ContainerWsMode::Exec {
@@ -151,22 +196,23 @@ fn ContainerConsole(mode: ContainerWsMode) -> impl IntoView {
                             view! {}.into_view()
                         }
                     }}
-                    <button class="btn btn-primary" on:click=connect>
+                    <button id="console-connect" class="btn btn-primary" on:click=move |_| connect(())>
                         {move || if connected.get() { "Reconnect" } else { "Connect" }}
                     </button>
                     <span>{move || if connected.get() { "● connected" } else { "○ disconnected" }}</span>
                 </div>
             </div>
 
-            <pre style="background:#111;color:#0f0;padding:1em;height:400px;overflow:auto;white-space:pre-wrap;">
+            <pre id="console-output" style="background:#111;color:#0f0;padding:1em;height:400px;overflow:auto;white-space:pre-wrap;">
                 {move || output.get()}
             </pre>
 
             {move || {
-                if mode == ContainerWsMode::Exec {
+                if mode != ContainerWsMode::Logs {
                     view! {
                         <div class="form-section">
                             <input
+                                id="console-input"
                                 type="text"
                                 style="width:80%"
                                 placeholder="type a command, press Send"

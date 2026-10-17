@@ -1,0 +1,105 @@
+name: Incus VM consoles (KVM)
+
+# In-browser consoles of LXD/Incus VMs, against a real Incus daemon with
+# real KVM guests: serial console round-trip, SPICE relay handshake (TCP
+# and the browser WebSocket proxy), .vv download, and the console page in
+# a real browser. Needs /dev/kvm, so it runs on rw-man-01's kvm-x86_64
+# runner (ctg-infrastructure ci-runners/rw-man-kvm) - on every push that
+# touches the console code, nightly, and on demand. Container consoles
+# (no KVM needed) are covered on every push by ci.yml's Test and UI E2E jobs.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'horcrux-api/src/console/**'
+      - 'horcrux-api/src/vm_console_api.rs'
+      - 'horcrux-api/src/vm/incus.rs'
+      - 'horcrux-api/src/vm/lxd.rs'
+      - 'horcrux-api/src/vm/mod.rs'
+      - 'horcrux-api/horcrux-ui/src/pages/console.rs'
+      - 'horcrux-api/tests/incus_e2e.*'
+      - 'horcrux-api/horcrux-ui/e2e/incus_ui_e2e.py'
+      - '.forgejo/workflows/incus-vm-console.yml'
+  workflow_dispatch: {}
+  schedule:
+    - cron: '30 10 * * *'
+
+concurrency:
+  group: incus-vm-console
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  incus-vm-console:
+    name: Incus VM serial + SPICE consoles (real KVM)
+    runs-on: kvm-x86_64
+    container: catthehacker/ubuntu:act-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure Node.js is present (self-heal)
+        run: |
+          if ! command -v node >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y nodejs
+          fi
+          node --version
+
+      - name: Install Rust toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install build tools + trunk
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libvirt-dev libpam0g-dev python3-venv
+          curl -L "https://github.com/trunk-rs/trunk/releases/latest/download/trunk-x86_64-unknown-linux-gnu.tar.gz" | tar xzf -
+          sudo mv trunk /usr/local/bin/trunk
+          ls -l /dev/kvm
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-incus-vm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-incus-vm-
+
+      - name: Build API (all features) and web UI
+        run: |
+          cargo build --all-features -p horcrux-api --bin horcrux-api
+          (cd horcrux-api/horcrux-ui && trunk build)
+
+      - name: Incus VM consoles through the API (serial, SPICE relay, .vv)
+        run: bash horcrux-api/tests/incus_e2e.sh vm target/debug/horcrux-api
+
+      - name: Install Playwright + Chromium
+        run: |
+          python3 -m venv /tmp/pw
+          /tmp/pw/bin/pip install -q playwright
+          sudo /tmp/pw/bin/playwright install-deps chromium
+          /tmp/pw/bin/playwright install chromium
+
+      - name: Incus VM console page in a real browser
+        run: |
+          rc=0
+          bash horcrux-api/tests/incus_e2e.sh serve target/debug/horcrux-api horcrux-api/horcrux-ui/dist 8009 kvm || rc=$?
+          if [ $rc -eq 0 ]; then
+            BASE_URL=$(cat /tmp/horcrux-incus-e2e.url) HORCRUX_CA_FILE=/tmp/horcrux-incus-e2e-ca.pem MODE=vm \
+              /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/incus_ui_e2e.py || rc=$?
+          fi
+          bash horcrux-api/tests/incus_e2e.sh stop
+          exit $rc
+
+      - name: Remove leftover Incus siblings
+        if: always()
+        run: |
+          bash horcrux-api/tests/incus_e2e.sh stop || true
+          docker ps -a --filter name=horcrux-incus-e2e --format '{{.Names}}' | xargs -r docker rm -f

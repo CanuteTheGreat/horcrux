@@ -157,8 +157,9 @@ pub fn App() -> impl IntoView {
                     <Route path="/containers/networks" view=|| view! { <Gated feature="docker|podman"><ContainerNetworksPage/></Gated> }/>
                     <Route path="/containers/stacks" view=|| view! { <Gated feature="docker|podman"><StacksPage/></Gated> }/>
                     <Route path="/containers/events" view=|| view! { <Gated feature="docker|podman"><ContainerEventsPage/></Gated> }/>
-                    <Route path="/containers/:id/logs" view=|| view! { <Gated feature="docker|podman|lxc"><ContainerLogsPage/></Gated> }/>
-                    <Route path="/containers/:id/exec" view=|| view! { <Gated feature="docker|podman|lxc"><ContainerExecPage/></Gated> }/>
+                    <Route path="/containers/:id/logs" view=|| view! { <Gated feature="docker|podman|lxc|lxd|incus"><ContainerLogsPage/></Gated> }/>
+                    <Route path="/containers/:id/exec" view=|| view! { <Gated feature="docker|podman|lxc|lxd|incus"><ContainerExecPage/></Gated> }/>
+                    <Route path="/containers/:id/console" view=|| view! { <Gated feature="lxc|lxd|incus"><crate::pages::ContainerSystemConsolePage/></Gated> }/>
                     <Route path="/containers/lxc/templates" view=|| view! { <Gated feature="lxc"><LxcTemplatesPage/></Gated> }/>
                     <Route path="/containers/:id/lxc" view=|| view! { <Gated feature="lxc"><LxcContainerPage/></Gated> }/>
                     <Route path="/kubernetes" view=|| view! { <Gated feature="kubernetes"><KubernetesManagement/></Gated> }/>

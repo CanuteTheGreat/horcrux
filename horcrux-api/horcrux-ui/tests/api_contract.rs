@@ -2210,3 +2210,55 @@ async fn lxc_ui_types_read_real_lxc_responses() {
     .await;
     assert_eq!(st, 204, "delete template: {b}");
 }
+
+/// LXD/Incus/LXC container consoles: the console-ticket route the UI's
+/// Console page calls (`api::get_container_console_ticket`), read into the
+/// UI's ticket type. Docker/Podman have no system console (clear 422, never
+/// a "use the CLI" hint). incus_e2e.sh runs this again on a server next to
+/// a real Incus daemon; the console sessions themselves are driven there by
+/// incus_e2e.py.
+#[tokio::test]
+async fn instance_console_ticket_route_reads_into_ui_type() {
+    let c = client();
+    let token = login(&c).await;
+    let feats: Value = fetch(&c, &token, "/features").await;
+    let on = |f: &str| {
+        feats["features"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|v| v == f))
+    };
+    let ct = std::env::var("HORCRUX_CONTRACT_INCUS_CT").unwrap_or_else(|_| "no-such-ct".into());
+    for rt in ["lxc", "lxd", "incus"] {
+        let (status, body) = post(
+            &c,
+            &token,
+            &format!("/containers/{ct}/console-ticket?runtime={rt}"),
+            json!({}),
+        )
+        .await;
+        if !on(rt) {
+            assert_eq!(status, 422, "{rt} not compiled in: {body}");
+            continue;
+        }
+        assert_eq!(status, 200, "{rt} console ticket: {body}");
+        let t: api::WsTicketResponse = serde_json::from_value(body).unwrap();
+        assert!(
+            t.ws_path.starts_with("/api/containers/ws/console/"),
+            "{}",
+            t.ws_path
+        );
+        assert!(t.ws_path.ends_with(&t.ticket));
+    }
+    let (status, body) = post(
+        &c,
+        &token,
+        &format!("/containers/{ct}/console-ticket?runtime=docker"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 422, "docker has no system console: {body}");
+    let text = body.to_string();
+    for hint in ["lxc console", "incus console", "docker attach"] {
+        assert!(!text.contains(hint), "CLI hint in {text}");
+    }
+}

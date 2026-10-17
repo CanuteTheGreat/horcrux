@@ -151,6 +151,9 @@ pub fn ContainerList() -> impl IntoView {
                                                     })}
                                                     <a class="btn btn-sm" href=format!("/containers/{}/logs?runtime={}", container.id, container.runtime)>"Logs"</a>
                                                     <a class="btn btn-sm" href=format!("/containers/{}/exec?runtime={}", container.id, container.runtime)>"Terminal"</a>
+                                                    {matches!(container.runtime.as_str(), "lxc" | "lxd" | "incus").then(|| view! {
+                                                        <a class="btn btn-sm container-console" href=format!("/containers/{}/console?runtime={}", container.id, container.runtime)>"Console"</a>
+                                                    })}
                                                     <button
                                                         class="btn btn-sm btn-danger"
                                                         on:click=move |_| delete_container(container_id_delete.clone())

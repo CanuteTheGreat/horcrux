@@ -22,9 +22,21 @@ pub mod podman;
 pub mod stack;
 #[cfg(any(feature = "docker", feature = "podman"))]
 pub mod volume;
-#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
+#[cfg(any(
+    feature = "docker",
+    feature = "podman",
+    feature = "lxc",
+    feature = "lxd",
+    feature = "incus"
+))]
 pub mod ws;
-#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
+#[cfg(any(
+    feature = "docker",
+    feature = "podman",
+    feature = "lxc",
+    feature = "lxd",
+    feature = "incus"
+))]
 pub mod ws_handlers;
 
 use crate::db::Database;
@@ -140,6 +152,22 @@ impl Drop for CreateReservation {
     }
 }
 
+/// Image source for an LXD/Incus container from the form's image field:
+/// `remote:alias` as given, `distro/release` from the public `images:`
+/// remote, anything else (a local alias or fingerprint) as given; empty
+/// means Ubuntu 22.04.
+#[cfg(any(feature = "lxd", feature = "incus"))]
+pub fn instance_image(rootfs: &str) -> String {
+    let r = rootfs.trim();
+    if r.is_empty() {
+        "images:ubuntu/22.04".to_string()
+    } else if r.contains(':') || !r.contains('/') || r.starts_with('/') {
+        r.to_string()
+    } else {
+        format!("images:{r}")
+    }
+}
+
 /// Container manager
 pub struct ContainerManager {
     containers: Arc<RwLock<HashMap<String, Container>>>,
@@ -214,6 +242,7 @@ impl ContainerManager {
     pub async fn list_containers(&self) -> Vec<ContainerConfig> {
         self.reconcile_docker().await;
         self.reconcile_lxc().await;
+        self.reconcile_instances().await;
         let containers = self.containers.read().await;
         let mut list: Vec<ContainerConfig> = containers.values().map(|c| c.to_config()).collect();
         list.sort_by(|a, b| a.id.cmp(&b.id));
@@ -339,10 +368,87 @@ impl ContainerManager {
         });
     }
 
+    #[cfg(not(any(feature = "lxd", feature = "incus")))]
+    pub async fn reconcile_instances(&self) {}
+
+    /// Bring the LXD/Incus part of the map in line with the daemons, so
+    /// their containers survive API restarts (they used to vanish from the
+    /// list, taking their Console/Terminal links with them), status changes
+    /// made elsewhere show up, and deleted ones disappear. A daemon that
+    /// can't be reached leaves its entries untouched.
+    #[cfg(any(feature = "lxd", feature = "incus"))]
+    pub async fn reconcile_instances(&self) {
+        use crate::console::lxd::{Backend, Client};
+        #[allow(unused_mut)]
+        let mut daemons: Vec<(ContainerRuntime, Backend)> = Vec::new();
+        #[cfg(feature = "lxd")]
+        daemons.push((ContainerRuntime::Lxd, Backend::Lxd));
+        #[cfg(feature = "incus")]
+        daemons.push((ContainerRuntime::Incus, Backend::Incus));
+        for (runtime, backend) in daemons {
+            let client = Client::quick(backend);
+            if !client.available() {
+                continue;
+            }
+            let live = match client.containers().await {
+                Ok(l) => l,
+                Err(e) => {
+                    tracing::debug!("{} reconcile skipped: {e}", backend.label());
+                    continue;
+                }
+            };
+            let in_flight: HashSet<String> = self
+                .creating
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            let mut containers = self.containers.write().await;
+            let mut seen = HashSet::new();
+            for c in live {
+                seen.insert(c.name.clone());
+                let status = match c.status.to_ascii_lowercase().as_str() {
+                    "running" => ContainerStatus::Running,
+                    "stopped" => ContainerStatus::Stopped,
+                    "frozen" => ContainerStatus::Paused,
+                    _ => ContainerStatus::Unknown,
+                };
+                if let Some(t) = containers
+                    .values_mut()
+                    .find(|t| t.runtime == runtime && t.name == c.name)
+                {
+                    t.status = status;
+                    continue;
+                }
+                if containers.contains_key(&c.name) || in_flight.contains(&c.name) {
+                    continue;
+                }
+                containers.insert(
+                    c.name.clone(),
+                    Container {
+                        id: c.name.clone(),
+                        name: c.name.clone(),
+                        runtime: runtime.clone(),
+                        memory: c.memory_mb,
+                        cpus: c.cpus,
+                        rootfs: String::new(),
+                        status,
+                        options: Default::default(),
+                        created_at: c.created_at.clone(),
+                        lxc: None,
+                    },
+                );
+            }
+            containers.retain(|id, t| {
+                t.runtime != runtime || seen.contains(&t.name) || in_flight.contains(id)
+            });
+        }
+    }
+
     /// Get a specific container by ID
     pub async fn get_container(&self, id: &str) -> Result<ContainerConfig> {
         self.reconcile_docker().await;
         self.reconcile_lxc().await;
+        self.reconcile_instances().await;
         let containers = self.containers.read().await;
         containers
             .get(id)
@@ -1074,6 +1180,20 @@ impl ContainerManager {
     pub async fn delete_snapshot(&self, id: &str, name: &str) -> Result<()> {
         let c = self.lxc_container(id).await?;
         self.lxc_manager.delete_snapshot(&c.name, name).await
+    }
+}
+
+#[cfg(all(test, any(feature = "lxd", feature = "incus")))]
+mod instance_image_tests {
+    #[test]
+    fn image_sources() {
+        assert_eq!(super::instance_image("alpine/3.20"), "images:alpine/3.20");
+        assert_eq!(
+            super::instance_image("images:debian/12"),
+            "images:debian/12"
+        );
+        assert_eq!(super::instance_image("my-local"), "my-local");
+        assert_eq!(super::instance_image(" "), "images:ubuntu/22.04");
     }
 }
 

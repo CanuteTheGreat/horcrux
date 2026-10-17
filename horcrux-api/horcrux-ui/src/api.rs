@@ -6106,6 +6106,27 @@ pub async fn get_features() -> Result<crate::features::FeaturesResponse, ApiErro
     fetch_json("/features").await
 }
 
+// ---------------------------------------------------------------------
+// Container system consoles (LXC / LXD / Incus)
+// ---------------------------------------------------------------------
+
+/// Ticket for a container's interactive system console
+/// (`POST /api/containers/:id/console-ticket?runtime=`).
+pub async fn get_container_console_ticket(
+    container_id: &str,
+    runtime: &str,
+) -> Result<WsTicketResponse, ApiError> {
+    post_json(
+        &format!(
+            "/containers/{}/console-ticket?runtime={}",
+            urlencoding::encode(container_id),
+            urlencoding::encode(runtime)
+        ),
+        &(),
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     //! Contract tests: the UI structs must deserialize the JSON horcrux-api

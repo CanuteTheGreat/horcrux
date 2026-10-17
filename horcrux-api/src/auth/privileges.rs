@@ -407,9 +407,9 @@ fn guest_action(m: &str, base: &str, action: &str) -> Requirement {
         "snapshots" => read_write(m, P::VmAudit, P::VmSnapshot, base),
         "clone" | "clone-cross-node" => need(P::VmClone, base),
         "migrate" => read_write(m, P::VmAudit, P::VmMigrate, base),
-        "console" | "vnc" | "spice" | "serial" | "exec" | "exec-ticket" | "terminal" => {
-            need(P::VmConsole, base)
-        }
+        // console-ticket: a container's interactive system console
+        "console" | "vnc" | "spice" | "serial" | "exec" | "exec-ticket" | "console-ticket"
+        | "terminal" => need(P::VmConsole, base),
         "logs" | "logs-ticket" | "status" | "stats" | "metrics" | "rrd" => need(P::VmAudit, base),
         "backup" | "backups" => read_write(m, P::VmAudit, P::VmBackup, base),
         _ => read_write(m, P::VmAudit, P::VmConfig, base),
@@ -525,6 +525,15 @@ mod tests {
         assert_eq!(
             priv_of(requirement("POST", "/api/console/abc/vnc")),
             (P::VmConsole, "/vms/abc".into())
+        );
+        assert_eq!(
+            priv_of(requirement("POST", "/api/console/abc/spice")),
+            (P::VmConsole, "/vms/abc".into())
+        );
+        // A container's system console is a console, not a config change.
+        assert_eq!(
+            priv_of(requirement("POST", "/api/containers/ct1/console-ticket")),
+            (P::VmConsole, "/containers/ct1".into())
         );
         assert_eq!(
             priv_of(requirement("POST", "/api/vms")),

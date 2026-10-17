@@ -7,7 +7,11 @@
 //!   It is also linked directly so it can be popped out into its own tab.
 //! - **Serial** gets a ticket from `POST /api/console/:vm_id/serial` and
 //!   talks to `/api/console/ws/serial/:ticket`, the WebSocket bridge to the
-//!   VM's QEMU serial socket.
+//!   VM's QEMU serial socket - or, for LXD/Incus VMs, to the daemon's text
+//!   console (its log history first, then live).
+//! - **SPICE** shows the endpoint and a `.vv` download for remote-viewer.
+//!   LXD/Incus VMs get SPICE + Serial (they have no VNC display); their
+//!   SPICE goes through Horcrux's password-protected relay.
 use crate::api;
 use horcrux_common::VmConfig;
 use leptos::*;
@@ -32,6 +36,13 @@ pub fn VmConsole() -> impl IntoView {
 
     let (console_type, set_console_type) = create_signal(ConsoleType::Vnc);
     let (vm, set_vm) = create_signal(None::<VmConfig>);
+    // LXD/Incus VM: consoles come from the daemon (Serial + SPICE, no VNC,
+    // no QEMU display settings).
+    let instance_vm = move || {
+        vm.get()
+            .map(|v| v.hypervisor != horcrux_common::VmHypervisor::Qemu)
+            .unwrap_or(false)
+    };
     let (error_message, set_error_message) = create_signal(None::<String>);
     let display_edit = create_rw_signal(horcrux_common::VmDisplay::default());
     let (display_notice, set_display_notice) = create_signal(None::<String>);
@@ -58,11 +69,17 @@ pub fn VmConsole() -> impl IntoView {
             match api::fetch_json::<VmConfig>(&format!("/vms/{}", urlencoding::encode(&id))).await {
                 Ok(config) => {
                     // Open the console the VM is actually configured for.
-                    set_console_type.set(match config.display.protocol {
-                        horcrux_common::DisplayProtocol::Spice => ConsoleType::Spice,
-                        horcrux_common::DisplayProtocol::None => ConsoleType::Serial,
-                        horcrux_common::DisplayProtocol::Vnc => ConsoleType::Vnc,
-                    });
+                    set_console_type.set(
+                        if config.hypervisor != horcrux_common::VmHypervisor::Qemu {
+                            ConsoleType::Serial
+                        } else {
+                            match config.display.protocol {
+                                horcrux_common::DisplayProtocol::Spice => ConsoleType::Spice,
+                                horcrux_common::DisplayProtocol::None => ConsoleType::Serial,
+                                horcrux_common::DisplayProtocol::Vnc => ConsoleType::Vnc,
+                            }
+                        },
+                    );
                     display_edit.set(config.display);
                     set_vm.set(Some(config));
                     set_error_message.set(None);
@@ -90,18 +107,20 @@ pub fn VmConsole() -> impl IntoView {
                 </h1>
                 <div class="header-actions console-controls">
                     <A href="/vms" class="btn btn-secondary">"Back to VMs"</A>
-                    <select on:change=move |ev| {
+                    <select id="console-type" on:change=move |ev| {
                         match event_target_value(&ev).as_str() {
                             "serial" => set_console_type.set(ConsoleType::Serial),
                             "spice" => set_console_type.set(ConsoleType::Spice),
                             _ => set_console_type.set(ConsoleType::Vnc),
                         }
                     }>
-                        <option value="vnc" selected=move || console_type.get() == ConsoleType::Vnc>
-                            "VNC (graphical)"
-                        </option>
+                        {move || (!instance_vm()).then(|| view! {
+                            <option value="vnc" selected=move || console_type.get() == ConsoleType::Vnc>
+                                "VNC (graphical)"
+                            </option>
+                        })}
                         <option value="spice" selected=move || console_type.get() == ConsoleType::Spice>
-                            "SPICE (remote-viewer)"
+                            {move || if instance_vm() { "SPICE (graphical, remote-viewer)" } else { "SPICE (remote-viewer)" }}
                         </option>
                         <option value="serial" selected=move || console_type.get() == ConsoleType::Serial>
                             "Serial"
@@ -128,17 +147,20 @@ pub fn VmConsole() -> impl IntoView {
             })}
 
             {move || vm.get().and_then(|v| {
+                let qemu = v.hypervisor == horcrux_common::VmHypervisor::Qemu;
                 (v.status != horcrux_common::VmStatus::Running).then(|| view! {
                     <div class="error-banner">
                         "This VM is " {v.status.to_string()}
                         " - start it to get a live console."
                     </div>
+                    {qemu.then(|| view! {
                     <details class="display-settings" open=true>
                         <summary>"Display settings"</summary>
                         <super::vm_display::DisplaySettingsFields display=display_edit/>
                         <button id="save-display" class="btn btn-primary" on:click=save_display>"Save display settings"</button>
                         {move || display_notice.get().map(|n| view! { <p id="display-notice">{n}</p> })}
                     </details>
+                    })}
                 })
             })}
 
@@ -148,7 +170,16 @@ pub fn VmConsole() -> impl IntoView {
                     if id.is_empty() {
                         return view! { <p>"No VM selected"</p> }.into_view();
                     }
+                    // Wait for the VM: which consoles exist depends on its
+                    // hypervisor (an LXD/Incus VM has no VNC to load).
+                    if vm.get().is_none() {
+                        return view! { <p>"Loading..."</p> }.into_view();
+                    }
                     match console_type.get() {
+                        ConsoleType::Vnc if instance_vm() => view! {
+                            <SpiceConsole vm_id=id instance=true/>
+                        }
+                        .into_view(),
                         ConsoleType::Vnc => view! {
                             <iframe
                                 id="console-frame"
@@ -160,7 +191,7 @@ pub fn VmConsole() -> impl IntoView {
                         }
                         .into_view(),
                         ConsoleType::Serial => view! { <SerialConsole vm_id=id/> }.into_view(),
-                        ConsoleType::Spice => view! { <SpiceConsole vm_id=id/> }.into_view(),
+                        ConsoleType::Spice => view! { <SpiceConsole vm_id=id instance=instance_vm()/> }.into_view(),
                     }
                 }}
             </div>
@@ -174,8 +205,9 @@ pub fn VmConsole() -> impl IntoView {
 /// unmaintained, has no audio-recording or USB-redirection support and
 /// would have to be vendored; remote-viewer gives the full channel set
 /// (display, audio playback/record, clipboard agent, USB redirection).
+/// `instance`: an LXD/Incus VM, served by Horcrux's SPICE relay.
 #[component]
-fn SpiceConsole(vm_id: String) -> impl IntoView {
+fn SpiceConsole(vm_id: String, #[prop(optional)] instance: bool) -> impl IntoView {
     let (info, set_info) = create_signal(None::<api::ConsoleInfo>);
     let (err, set_err) = create_signal(None::<String>);
     let id = vm_id.clone();
@@ -194,17 +226,22 @@ fn SpiceConsole(vm_id: String) -> impl IntoView {
             {move || err.get().map(|e| view! { <div class="error-banner" id="spice-error">{e}</div> })}
             {move || info.get().map(|i| view! {
                 <p id="spice-endpoint">"SPICE is listening on " <code>{format!("{}:{}", i.host, i.port)}</code>
-                    " (password changes at every VM start)."</p>
+                    {if instance {
+                        " (Horcrux's SPICE relay to this VM's display; the password is in the .vv file and changes when the relay restarts)."
+                    } else {
+                        " (password changes at every VM start)."
+                    }}</p>
             })}
             <a id="spice-vv" class="btn btn-primary" href=vv.clone() download="">"Download .vv for remote-viewer"</a>
             <p class="help">
-                "Open the file with remote-viewer / virt-viewer (virt-viewer package on Linux, "
-                "virt-viewer MSI on Windows). It carries display, audio (playback and microphone), "
-                "clipboard sharing (install spice-vdagent in the guest) and USB redirection. "
-                "SPICE listens on 127.0.0.1 unless the server sets HORCRUX_SPICE_LISTEN; for a "
-                "localhost-only server use an SSH tunnel (ssh -L <port>:127.0.0.1:<port> <host>) "
-                "and edit host= in the file to 127.0.0.1. A browser SPICE client is not offered: "
-                "spice-html5 is unmaintained and lacks audio input and USB redirection."
+                "Click the button and open the downloaded file: it starts remote-viewer / virt-viewer "
+                "(virt-viewer package on Linux, virt-viewer MSI on Windows, which register .vv files). "
+                "It carries display, audio (playback and microphone), clipboard sharing (install "
+                "spice-vdagent in the guest) and USB redirection. SPICE listens on 127.0.0.1 unless "
+                "the server sets HORCRUX_SPICE_LISTEN; for a localhost-only server use an SSH tunnel "
+                "(ssh -L <port>:127.0.0.1:<port> <host>) and edit host= in the file to 127.0.0.1. "
+                "A browser SPICE client is not offered: spice-html5 is unmaintained and lacks audio "
+                "input and USB redirection. For text access in the browser, choose Serial."
             </p>
         </div>
     }
@@ -259,6 +296,7 @@ fn SerialConsole(vm_id: String) -> impl IntoView {
                 } else {
                     return;
                 };
+                let chunk = crate::pages::lxc::spec::strip_ansi(&chunk);
                 set_output.update(|o| o.push_str(&chunk));
             }) as Box<dyn FnMut(MessageEvent)>);
             ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
@@ -301,6 +339,7 @@ fn SerialConsole(vm_id: String) -> impl IntoView {
                 </button>
             </div>
             <pre
+                id="serial-output"
                 class="serial-output"
                 style="background:#111;color:#0f0;padding:1em;height:60vh;overflow:auto;white-space:pre-wrap;"
             >

@@ -128,7 +128,13 @@ struct AppState {
     container_network_manager: Arc<container::cnetwork::ContainerNetworkManager>,
     #[cfg(any(feature = "docker", feature = "podman"))]
     stack_manager: Arc<container::stack::StackManager>,
-    #[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
+    #[cfg(any(
+        feature = "docker",
+        feature = "podman",
+        feature = "lxc",
+        feature = "lxd",
+        feature = "incus"
+    ))]
     container_ws_manager: Arc<container::ws::ContainerWsManager>,
     #[cfg(feature = "kubernetes")]
     kubernetes_manager: Arc<kubernetes::KubernetesManager>,
@@ -448,7 +454,13 @@ async fn main() -> anyhow::Result<()> {
             shared_container_manager,
             database_for_stacks,
         )),
-        #[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
+        #[cfg(any(
+            feature = "docker",
+            feature = "podman",
+            feature = "lxc",
+            feature = "lxd",
+            feature = "incus"
+        ))]
         container_ws_manager: Arc::new(container::ws::ContainerWsManager::new()),
         #[cfg(feature = "kubernetes")]
         kubernetes_manager,
@@ -550,7 +562,13 @@ async fn main() -> anyhow::Result<()> {
     // not compiled in has no routes, so its endpoints answer 404.
     #[cfg(any(feature = "docker", feature = "podman"))]
     let protected_routes = protected_routes.merge(oci_routes());
-    #[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
+    #[cfg(any(
+        feature = "docker",
+        feature = "podman",
+        feature = "lxc",
+        feature = "lxd",
+        feature = "incus"
+    ))]
     let protected_routes = protected_routes.merge(container_ws_routes());
     #[cfg(feature = "backup")]
     let protected_routes = protected_routes.merge(api::backup::routes(&state));
@@ -854,7 +872,13 @@ fn stack_routes() -> Router<Arc<AppState>> {
 /// interactive exec, events feed). The actual WebSocket upgrade endpoints
 /// are registered directly on the app router (public, ticket-authenticated
 /// - see console's `/api/console/*/ws/:ticket` for the exact same pattern).
-#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
+#[cfg(any(
+    feature = "docker",
+    feature = "podman",
+    feature = "lxc",
+    feature = "lxd",
+    feature = "incus"
+))]
 fn container_ws_ticket_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(
@@ -868,6 +892,10 @@ fn container_ws_ticket_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/containers/events-ticket",
             post(create_container_events_ticket),
+        )
+        .route(
+            "/api/containers/:id/console-ticket",
+            post(create_container_console_ticket),
         )
 }
 
@@ -886,7 +914,13 @@ fn oci_routes() -> Router<Arc<AppState>> {
 
 /// Container log/exec/console WebSockets and their tickets: Docker/Podman
 /// and (lane J) LXC consoles, so they must exist in an lxc-only build too.
-#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
+#[cfg(any(
+    feature = "docker",
+    feature = "podman",
+    feature = "lxc",
+    feature = "lxd",
+    feature = "incus"
+))]
 fn container_ws_routes() -> Router<Arc<AppState>> {
     Router::new()
         .merge(container_ws_ticket_routes())
@@ -903,6 +937,10 @@ fn container_ws_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/containers/ws/events/:ticket_id",
             get(container_events_websocket_handler),
+        )
+        .route(
+            "/api/containers/ws/console/:ticket_id",
+            get(container_console_websocket_handler),
         )
         .layer(axum_middleware::from_fn(features::oci_runtime_gate))
 }
@@ -7275,7 +7313,13 @@ async fn serial_websocket_handler(
     .await
 }
 
-#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
+#[cfg(any(
+    feature = "docker",
+    feature = "podman",
+    feature = "lxc",
+    feature = "lxd",
+    feature = "incus"
+))]
 async fn container_logs_websocket_handler(
     ws: axum::extract::ws::WebSocketUpgrade,
     Path(ticket_id): Path<String>,
@@ -7289,7 +7333,13 @@ async fn container_logs_websocket_handler(
     .await
 }
 
-#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
+#[cfg(any(
+    feature = "docker",
+    feature = "podman",
+    feature = "lxc",
+    feature = "lxd",
+    feature = "incus"
+))]
 async fn container_exec_websocket_handler(
     ws: axum::extract::ws::WebSocketUpgrade,
     Path(ticket_id): Path<String>,
@@ -7303,7 +7353,33 @@ async fn container_exec_websocket_handler(
     .await
 }
 
-#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
+#[cfg(any(
+    feature = "docker",
+    feature = "podman",
+    feature = "lxc",
+    feature = "lxd",
+    feature = "incus"
+))]
+async fn container_console_websocket_handler(
+    ws: axum::extract::ws::WebSocketUpgrade,
+    Path(ticket_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> axum::response::Response {
+    container::ws_handlers::handle_console_ws(
+        ws,
+        Path(ticket_id),
+        State(state.container_ws_manager.clone()),
+    )
+    .await
+}
+
+#[cfg(any(
+    feature = "docker",
+    feature = "podman",
+    feature = "lxc",
+    feature = "lxd",
+    feature = "incus"
+))]
 async fn container_events_websocket_handler(
     ws: axum::extract::ws::WebSocketUpgrade,
     Path(ticket_id): Path<String>,
@@ -7317,18 +7393,32 @@ async fn container_events_websocket_handler(
     .await
 }
 
-#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
+#[cfg(any(
+    feature = "docker",
+    feature = "podman",
+    feature = "lxc",
+    feature = "lxd",
+    feature = "incus"
+))]
 #[derive(serde::Deserialize)]
 struct RuntimeQuery {
     #[serde(default)]
     runtime: Option<String>,
 }
 
-#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
+#[cfg(any(
+    feature = "docker",
+    feature = "podman",
+    feature = "lxc",
+    feature = "lxd",
+    feature = "incus"
+))]
 fn parse_runtime(q: &Option<String>) -> horcrux_common::ContainerRuntime {
     match q.as_deref() {
         Some("podman") => horcrux_common::ContainerRuntime::Podman,
         Some("lxc") => horcrux_common::ContainerRuntime::Lxc,
+        Some("lxd") => horcrux_common::ContainerRuntime::Lxd,
+        Some("incus") => horcrux_common::ContainerRuntime::Incus,
         Some("docker") => horcrux_common::ContainerRuntime::Docker,
         // No runtime named: whichever of docker/podman this build has
         // (features::oci_runtime_gate already refused a disabled one).
@@ -7777,24 +7867,38 @@ async fn stop_stack(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
+#[cfg(any(
+    feature = "docker",
+    feature = "podman",
+    feature = "lxc",
+    feature = "lxd",
+    feature = "incus"
+))]
 #[derive(serde::Serialize)]
 struct WsTicketResponse {
     ticket: String,
     ws_path: String,
 }
 
-#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
+#[cfg(any(
+    feature = "docker",
+    feature = "podman",
+    feature = "lxc",
+    feature = "lxd",
+    feature = "incus"
+))]
 async fn create_container_logs_ticket(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,
 ) -> Result<Json<WsTicketResponse>, ApiError> {
+    let runtime = parse_runtime(&q.runtime);
+    let target = ws_target(&state, &id, &runtime).await?;
     let ticket = state
         .container_ws_manager
         .create_ticket(
-            &id,
-            parse_runtime(&q.runtime),
+            &target,
+            runtime,
             container::ws::ContainerWsKind::Logs,
             Vec::new(),
         )
@@ -7805,7 +7909,13 @@ async fn create_container_logs_ticket(
     }))
 }
 
-#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
+#[cfg(any(
+    feature = "docker",
+    feature = "podman",
+    feature = "lxc",
+    feature = "lxd",
+    feature = "incus"
+))]
 #[derive(serde::Deserialize)]
 struct ExecTicketRequest {
     #[serde(default)]
@@ -7814,17 +7924,25 @@ struct ExecTicketRequest {
     runtime: Option<String>,
 }
 
-#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
+#[cfg(any(
+    feature = "docker",
+    feature = "podman",
+    feature = "lxc",
+    feature = "lxd",
+    feature = "incus"
+))]
 async fn create_container_exec_ticket(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(req): Json<ExecTicketRequest>,
 ) -> Result<Json<WsTicketResponse>, ApiError> {
+    let runtime = parse_runtime(&req.runtime);
+    let target = ws_target(&state, &id, &runtime).await?;
     let ticket = state
         .container_ws_manager
         .create_ticket(
-            &id,
-            parse_runtime(&req.runtime),
+            &target,
+            runtime,
             container::ws::ContainerWsKind::Exec,
             req.command,
         )
@@ -7835,7 +7953,80 @@ async fn create_container_exec_ticket(
     }))
 }
 
-#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
+/// Ticket for a container's interactive system console (LXC, LXD, Incus).
+#[cfg(any(
+    feature = "docker",
+    feature = "podman",
+    feature = "lxc",
+    feature = "lxd",
+    feature = "incus"
+))]
+async fn create_container_console_ticket(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,
+) -> Result<Json<WsTicketResponse>, ApiError> {
+    let runtime = parse_runtime(&q.runtime);
+    if !matches!(
+        runtime,
+        horcrux_common::ContainerRuntime::Lxc
+            | horcrux_common::ContainerRuntime::Lxd
+            | horcrux_common::ContainerRuntime::Incus
+    ) {
+        return Err(ApiError::ValidationError(format!(
+            "{runtime:?} containers have no system console: open the Terminal or Logs instead"
+        )));
+    }
+    let target = ws_target(&state, &id, &runtime).await?;
+    let ticket = state
+        .container_ws_manager
+        .create_ticket(
+            &target,
+            runtime,
+            container::ws::ContainerWsKind::Console,
+            Vec::new(),
+        )
+        .await;
+    Ok(Json(WsTicketResponse {
+        ws_path: format!("/api/containers/ws/console/{}", ticket.ticket_id),
+        ticket: ticket.ticket_id,
+    }))
+}
+
+/// What a container WebSocket session addresses: LXD/Incus sessions talk to
+/// the daemon by instance name (the Horcrux id may differ from it); every
+/// other runtime resolves the id itself.
+#[cfg(any(
+    feature = "docker",
+    feature = "podman",
+    feature = "lxc",
+    feature = "lxd",
+    feature = "incus"
+))]
+async fn ws_target(
+    state: &AppState,
+    id: &str,
+    runtime: &horcrux_common::ContainerRuntime,
+) -> Result<String, ApiError> {
+    use horcrux_common::ContainerRuntime as R;
+    // A runtime this build doesn't have would otherwise fall through to
+    // the docker CLI path in the WebSocket handlers.
+    features::require_container_runtime(runtime)?;
+    if matches!(runtime, R::Lxd | R::Incus) {
+        if let Ok(c) = state.container_manager.get_container(id).await {
+            return Ok(c.name);
+        }
+    }
+    Ok(id.to_string())
+}
+
+#[cfg(any(
+    feature = "docker",
+    feature = "podman",
+    feature = "lxc",
+    feature = "lxd",
+    feature = "incus"
+))]
 async fn create_container_events_ticket(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,

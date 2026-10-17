@@ -335,6 +335,14 @@ def main():
     check(len(out) > 0, "console output streamed")
     s.close()
 
+    step("system console: lxc-console on a PTY over the console WebSocket")
+    _, tk = req("POST", "/containers/ct1/console-ticket?runtime=lxc", {})
+    s = ws_connect(tk["ws_path"])
+    ws_send(s, "\r")
+    out = ws_read_until(s, r"login:", timeout=60)
+    check("login:" in out, "getty on /dev/console answers in the browser console")
+    s.close()
+
     step("pct set while running: limits applied live, the rest pending until reboot")
     _, view = req("GET", "/containers/ct1/lxc/config")
     opts = view["lxc"]
