@@ -579,9 +579,13 @@ def main():
         page.goto(f"{BASE}/vms/{vid}/console")
         expect(page.locator("#spice-endpoint")).to_contain_text("127.0.0.1:", timeout=30000)
         href = page.locator("#spice-vv").get_attribute("href")
-        vv = page.request.get(href if href.startswith("http") else f"{BASE}{href}")
-        assert vv.status == 200, vv.status
-        body = vv.text()
+        # urllib with the node CA (Playwright's request context is Node's TLS
+        # stack, which doesn't trust the CA the browser was given).
+        vv_req = urllib.request.Request(href if href.startswith("http") else f"{BASE}{href}",
+                                        headers={"Authorization": f"Bearer {token()}"})
+        with urlopen(vv_req) as vv:
+            assert vv.status == 200, vv.status
+            body = vv.read().decode()
         assert "type=spice" in body and "enable-usbredir=1" in body, body
         page.goto(f"{BASE}/vms")
         page.locator(f"tr[data-vm-id='{vid}']").get_by_role("button", name="Stop").click()
