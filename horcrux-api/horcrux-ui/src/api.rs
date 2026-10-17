@@ -314,6 +314,16 @@ pub async fn create_vm(config: VmConfig) -> Result<VmConfig, ApiError> {
     post_json("/vms", &config).await
 }
 
+/// Replace a stopped VM's disk with a cloud/disk image (URL or a file in
+/// the server's images directory / a storage pool).
+pub async fn import_vm_disk(vm_id: &str, source: &str) -> Result<VmConfig, ApiError> {
+    post_json(
+        &format!("/vms/{}/import-disk", vm_id),
+        &serde_json::json!({ "source": source }),
+    )
+    .await
+}
+
 /// Start a VM
 pub async fn start_vm(vm_id: &str) -> Result<(), ApiError> {
     post_empty(&format!("/vms/{}/start", vm_id)).await

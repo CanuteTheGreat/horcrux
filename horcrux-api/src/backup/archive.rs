@@ -100,8 +100,31 @@ fn check_status(prog: &str, out: std::process::Output) -> Result<std::process::O
 }
 
 /// Run a command to completion (blocking; call from spawn_blocking).
+/// A helper command (qemu-img, tar, compressors) that dies with
+/// horcrux-api: if the API is killed mid-backup or mid-restore, its
+/// children must not keep running, holding a VM's disk lock (so the VM
+/// can't be started again) or writing into a half-finished archive.
+/// PR_SET_PDEATHSIG fires when the spawning thread exits; every caller
+/// waits for its children on that same thread.
+fn command(prog: &str) -> Command {
+    #[allow(unused_mut)]
+    let mut c = Command::new(prog);
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: prctl is async-signal-safe; nothing else runs in the hook.
+        unsafe {
+            c.pre_exec(|| {
+                nix::sys::prctl::set_pdeathsig(nix::sys::signal::Signal::SIGKILL)
+                    .map_err(std::io::Error::from)
+            });
+        }
+    }
+    c
+}
+
 pub fn run(prog: &str, args: &[&str]) -> Result<std::process::Output> {
-    let out = Command::new(prog)
+    let out = command(prog)
         .args(args)
         .stdin(Stdio::null())
         .output()
@@ -139,7 +162,7 @@ pub fn write_archive(dir: &Path, files: &[String], out: &Path, c: &Compression) 
                 run("tar", &refs)?;
             }
             Some((prog, cargs, _)) => {
-                let mut tar = Command::new("tar")
+                let mut tar = command("tar")
                     .arg("-cf")
                     .arg("-")
                     .arg("-C")
@@ -153,7 +176,7 @@ pub fn write_archive(dir: &Path, files: &[String], out: &Path, c: &Compression) 
                     .map_err(|e| spawn_err("tar", e))?;
                 let tar_out = tar.stdout.take().expect("piped stdout");
                 let file = std::fs::File::create(&partial)?;
-                let comp = Command::new(prog)
+                let comp = command(prog)
                     .args(cargs)
                     .stdin(Stdio::from(tar_out))
                     .stdout(Stdio::from(file))
@@ -198,7 +221,7 @@ pub fn extract_archive(archive: &Path, dir: &Path, c: &Compression) -> Result<()
         }
         Some((prog, _, dargs)) => {
             let input = std::fs::File::open(archive)?;
-            let mut dec = Command::new(prog)
+            let mut dec = command(prog)
                 .args(dargs)
                 .stdin(Stdio::from(input))
                 .stdout(Stdio::piped())
@@ -206,7 +229,7 @@ pub fn extract_archive(archive: &Path, dir: &Path, c: &Compression) -> Result<()
                 .spawn()
                 .map_err(|e| spawn_err(prog, e))?;
             let dec_out = dec.stdout.take().expect("piped stdout");
-            let tar = Command::new("tar")
+            let tar = command("tar")
                 .arg("-xf")
                 .arg("-")
                 .arg("-C")
@@ -295,7 +318,7 @@ pub fn export_disk(src: &Path, dst: &Path, force_share: bool) -> Result<()> {
 /// `qemu-img check` a qcow2 image. Leaked clusters (exit 3) are harmless
 /// and accepted; corruption (exit 2) or an unreadable image is an error.
 pub fn check_disk(path: &Path) -> Result<()> {
-    let out = Command::new("qemu-img")
+    let out = command("qemu-img")
         .args(["check", "-f", "qcow2"])
         .arg(path)
         .stdin(Stdio::null())
@@ -351,4 +374,30 @@ pub fn verify_extracted(dir: &Path, m: &Manifest) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn helpers_die_with_the_thread_that_spawned_them() {
+        let pid = std::thread::spawn(|| command("sleep").arg("30").spawn().unwrap().id())
+            .join()
+            .unwrap();
+        let mut dead = false;
+        for _ in 0..100 {
+            match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+                Err(_) => dead = true,
+                Ok(s) => dead = s.rsplit_once(')').unwrap().1.trim_start().starts_with('Z'),
+            }
+            if dead {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(dead, "helper {pid} outlived its parent thread");
+        let _ = nix::sys::wait::waitpid(nix::unistd::Pid::from_raw(pid as i32), None);
+    }
 }

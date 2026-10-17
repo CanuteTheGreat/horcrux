@@ -48,10 +48,13 @@ pub fn routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             .and_then(|s| s.parse::<u64>().ok())
             .filter(|s| *s > 0)
             .unwrap_or(15);
-        state
-            .backup_manager
-            .clone()
-            .start_scheduler(std::time::Duration::from_secs(tick));
+        // Clean up after a backup interrupted by an API crash/kill before
+        // the scheduler can start new ones.
+        let bm = state.backup_manager.clone();
+        tokio::spawn(async move {
+            bm.sweep_interrupted().await;
+            bm.start_scheduler(std::time::Duration::from_secs(tick));
+        });
     }
 
     Router::new()

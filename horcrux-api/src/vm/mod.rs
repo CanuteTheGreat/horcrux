@@ -2,6 +2,7 @@ pub mod clone;
 pub mod clone_progress;
 pub mod cross_node_clone;
 pub mod display;
+pub mod hold;
 #[cfg(feature = "incus")]
 pub mod incus;
 #[cfg(feature = "lxd")]
@@ -54,6 +55,21 @@ fn live_status(vm: &mut VmConfig) {
     }
 }
 
+/// `live_status` in both directions: also a QEMU that is alive while the
+/// stored status says stopped (the API died between starting QEMU and
+/// recording it) is running.
+fn observed_status(vm: &VmConfig) -> VmStatus {
+    let mut c = vm.clone();
+    live_status(&mut c);
+    if c.hypervisor == VmHypervisor::Qemu
+        && c.status == VmStatus::Stopped
+        && QemuManager::process_running(&c.id)
+    {
+        return VmStatus::Running;
+    }
+    c.status
+}
+
 impl VmManager {
     pub fn new() -> Self {
         Self {
@@ -99,43 +115,85 @@ impl VmManager {
     /// List all virtual machines
     pub async fn list_vms(&self) -> Vec<VmConfig> {
         // Try database first if available
-        if let Some(db) = &self.db {
-            if let Ok(mut vms) = db.list_vms().await {
-                vms.iter_mut().for_each(live_status);
-                return vms;
+        let listed = match &self.db {
+            Some(db) => db.list_vms().await.ok(),
+            None => None,
+        };
+        let listed = match listed {
+            Some(v) => v,
+            None => {
+                let vms = self.vms.read().await;
+                vms.values().map(|vm| vm.to_config()).collect()
+            }
+        };
+        let mut out = Vec::with_capacity(listed.len());
+        for vm in listed {
+            out.push(self.reconcile(vm).await);
+        }
+        out
+    }
+
+    /// Bring a stored VM's status in line with reality (memory + database),
+    /// and adopt the disk of a VM created by a release that didn't record
+    /// disks in the database (before migration 021): its image is at the
+    /// storage path as `<id>.qcow2`. Without this an upgraded VM has no
+    /// disk, so backup, clone and snapshots refuse it.
+    async fn reconcile(&self, mut vm: VmConfig) -> VmConfig {
+        let mut changed = false;
+        if vm.hypervisor == VmHypervisor::Qemu && vm.disks.is_empty() {
+            let legacy = self.qemu.vm_from_config(&vm);
+            if legacy.disk_path.is_file() {
+                tracing::warn!(
+                    "VM {}: no disk recorded; adopting {} (created by an older release)",
+                    vm.id,
+                    legacy.disk_path.display()
+                );
+                vm.disks = legacy.to_config().disks;
+                changed = true;
             }
         }
-
-        // Fallback to in-memory
-        let vms = self.vms.read().await;
-        vms.values()
-            .map(|vm| {
-                let mut c = vm.to_config();
-                live_status(&mut c);
-                c
-            })
-            .collect()
+        let stored = vm.status.clone();
+        let live = observed_status(&vm);
+        if live != stored {
+            vm.status = live.clone();
+            tracing::warn!(
+                "VM {}: stored status {:?} but QEMU process says {:?}; correcting",
+                vm.id,
+                stored,
+                live
+            );
+            if let Some(m) = self.vms.write().await.get_mut(&vm.id) {
+                m.status = live;
+            }
+            changed = true;
+        }
+        if changed {
+            if let Some(db) = &self.db {
+                if let Err(e) = db.update_vm(&vm).await {
+                    tracing::error!("VM {}: could not persist reconciled config: {e}", vm.id);
+                }
+            }
+        }
+        vm
     }
 
     /// Get a specific VM by ID
     pub async fn get_vm(&self, id: &str) -> Result<VmConfig> {
         // Try database first if available
         if let Some(db) = &self.db {
-            if let Ok(mut vm) = db.get_vm(id).await {
-                live_status(&mut vm);
-                return Ok(vm);
+            if let Ok(vm) = db.get_vm(id).await {
+                return Ok(self.reconcile(vm).await);
             }
         }
 
         // Fallback to in-memory
-        let vms = self.vms.read().await;
-        vms.get(id)
-            .map(|vm| {
-                let mut c = vm.to_config();
-                live_status(&mut c);
-                c
-            })
-            .ok_or_else(|| horcrux_common::Error::VmNotFound(id.to_string()))
+        let vm = {
+            let vms = self.vms.read().await;
+            vms.get(id)
+                .map(|vm| vm.to_config())
+                .ok_or_else(|| horcrux_common::Error::VmNotFound(id.to_string()))?
+        };
+        Ok(self.reconcile(vm).await)
     }
 
     /// Create a new virtual machine
@@ -284,6 +342,16 @@ impl VmManager {
         let vm = vms
             .get_mut(id)
             .ok_or_else(|| horcrux_common::Error::VmNotFound(id.to_string()))?;
+        if vm.hypervisor == VmHypervisor::Qemu {
+            // The in-memory status goes stale when QEMU dies on its own.
+            let live = observed_status(&vm.to_config());
+            if live != vm.status {
+                vm.status = live;
+                if let Some(db) = &self.db {
+                    db.update_vm(&vm.to_config()).await?;
+                }
+            }
+        }
 
         // The stored status says "running" but its QEMU is gone (the guest
         // powered off, QEMU crashed or was killed): it is stopped, and must
@@ -323,6 +391,16 @@ impl VmManager {
         let vm = vms
             .get_mut(id)
             .ok_or_else(|| horcrux_common::Error::VmNotFound(id.to_string()))?;
+        if vm.hypervisor == VmHypervisor::Qemu {
+            // The in-memory status goes stale when QEMU dies on its own.
+            let live = observed_status(&vm.to_config());
+            if live != vm.status {
+                vm.status = live;
+                if let Some(db) = &self.db {
+                    db.update_vm(&vm.to_config()).await?;
+                }
+            }
+        }
 
         let stopped: Result<()> = match vm.hypervisor {
             VmHypervisor::Qemu => self.qemu.stop_vm(vm).await,
@@ -546,6 +624,31 @@ mod tests {
             "delete must remove the disk of a VM loaded from the DB"
         );
         assert!(second.get_vm("restart-vm").await.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[tokio::test]
+    async fn vm_without_recorded_disk_adopts_its_legacy_image() {
+        // Releases before migration 021 kept no disks in the database.
+        let dir = std::env::temp_dir().join(format!("hx-vm-legacy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = Arc::new(Database::new("sqlite::memory:").await.unwrap());
+        db.migrate().await.unwrap();
+        let mut cfg = create_test_vm_config("legacy-vm", "legacy");
+        cfg.disks = Vec::new();
+        db.create_vm(&cfg).await.unwrap();
+        let m = VmManager::with_database_and_storage_path(db.clone(), dir.clone());
+
+        // No image on disk: nothing is invented.
+        assert!(m.get_vm("legacy-vm").await.unwrap().disks.is_empty());
+
+        let img = dir.join("legacy-vm.qcow2");
+        std::fs::write(&img, b"img").unwrap();
+        let vm = m.get_vm("legacy-vm").await.unwrap();
+        assert_eq!(vm.disks.len(), 1);
+        assert_eq!(vm.disks[0].path, img.to_string_lossy());
+        // ... and it is persisted, not recomputed on every read.
+        assert_eq!(db.get_vm("legacy-vm").await.unwrap().disks.len(), 1);
+        assert_eq!(m.list_vms().await[0].disks[0].path, img.to_string_lossy());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

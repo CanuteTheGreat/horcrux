@@ -487,6 +487,45 @@ impl BackupManager {
     // ------------------------------------------------------------------
 
     /// List backups, newest first, optionally for one guest.
+    /// Remove what an interrupted backup leaves behind (the API was killed
+    /// mid-backup): `.tmp-<id>` staging directories and `*.partial`
+    /// archives in the default backup directory and every storage pool's
+    /// `dump/` directory. None of these is ever in the catalog. Returns
+    /// the paths removed.
+    pub async fn sweep_interrupted(&self) -> Vec<PathBuf> {
+        let mut dirs = vec![self.default_storage.clone()];
+        if let Some(sm) = self.runtime.get().and_then(|r| r.storage_manager.as_ref()) {
+            for p in sm.list_pools().await {
+                if p.path.starts_with('/') {
+                    dirs.push(PathBuf::from(&p.path).join("dump"));
+                }
+            }
+        }
+        let mut removed = Vec::new();
+        for dir in dirs {
+            let Ok(mut rd) = tokio::fs::read_dir(&dir).await else {
+                continue;
+            };
+            while let Ok(Some(e)) = rd.next_entry().await {
+                let name = e.file_name().to_string_lossy().to_string();
+                let p = e.path();
+                let is_dir = e.file_type().await.map(|t| t.is_dir()).unwrap_or(false);
+                let gone = if is_dir && name.starts_with(".tmp-") {
+                    tokio::fs::remove_dir_all(&p).await.is_ok()
+                } else if !is_dir && name.ends_with(".partial") {
+                    tokio::fs::remove_file(&p).await.is_ok()
+                } else {
+                    false
+                };
+                if gone {
+                    tracing::warn!("Removed leftover of an interrupted backup: {}", p.display());
+                    removed.push(p);
+                }
+            }
+        }
+        removed
+    }
+
     pub async fn list_backups(&self, target_id: Option<String>) -> Result<Vec<Backup>> {
         let all = self.store.list_backups().await?;
         Ok(match target_id {
@@ -721,7 +760,14 @@ impl BackupManager {
         if running {
             match mode {
                 BackupMode::Stop => {
-                    stop_vm_and_wait(rt, &vm.id).await?;
+                    // If the API dies before the restart below, the next
+                    // API start brings the VM back up (vm::hold::recover).
+                    crate::vm::hold::set(&disks[0], crate::vm::hold::HoldAction::Start, "backup")
+                        .await?;
+                    if let Err(e) = stop_vm_and_wait(rt, &vm.id).await {
+                        crate::vm::hold::clear(&disks[0]).await;
+                        return Err(e);
+                    }
                     restart = true;
                 }
                 BackupMode::Suspend | BackupMode::Snapshot => {
@@ -732,13 +778,18 @@ impl BackupManager {
                     // also pauses for the duration of the copy.)
                     let qmp = crate::vm::display::DisplayRuntime::qmp_socket(&disks[0]);
                     let mon = crate::migration::qemu_monitor::QemuMonitor::new(qmp.clone());
-                    mon.stop().await.map_err(|e| {
-                        Error::Conflict(format!(
+                    // If the API dies while the guest is paused, the next
+                    // API start resumes it (vm::hold::recover).
+                    crate::vm::hold::set(&disks[0], crate::vm::hold::HoldAction::Resume, "backup")
+                        .await?;
+                    if let Err(e) = mon.stop().await {
+                        crate::vm::hold::clear(&disks[0]).await;
+                        return Err(Error::Conflict(format!(
                             "VM {} is running but could not be paused over QMP ({}): {e}; use mode \"stop\"",
                             vm.id,
                             qmp.display()
-                        ))
-                    })?;
+                        )));
+                    }
                     tracing::info!("VM {} paused for backup", vm.id);
                     paused = Some(mon);
                 }
@@ -781,10 +832,15 @@ impl BackupManager {
                 }
             } else {
                 tracing::info!("VM {} resumed after backup", vm.id);
+                crate::vm::hold::clear(&disks[0]).await;
             }
         }
         if restart {
-            if let Err(e) = rt.vm_manager.start_vm(&vm.id).await {
+            let started = rt.vm_manager.start_vm(&vm.id).await;
+            if started.is_ok() {
+                crate::vm::hold::clear(&disks[0]).await;
+            }
+            if let Err(e) = started {
                 tracing::error!("VM {} could not be restarted after backup: {e}", vm.id);
                 if result.is_ok() {
                     return Err(Error::System(format!(

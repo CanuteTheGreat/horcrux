@@ -6,8 +6,7 @@
 //! - Restore to previous snapshot
 //! - Delete snapshots
 //! - Snapshot trees and rollback
-use crate::migration::qemu_monitor::QemuMonitor;
-use horcrux_common::{Result, VmConfig, VmStatus};
+use horcrux_common::{Result, VmConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -68,8 +67,6 @@ pub struct SnapshotTreeNode {
 pub struct VmSnapshotManager {
     snapshots: HashMap<String, VmSnapshot>,
     snapshot_dir: String,
-    /// Pattern for QEMU monitor socket path (e.g., "/var/run/qemu/{vm_id}.qmp")
-    qmp_socket_pattern: String,
 }
 
 impl VmSnapshotManager {
@@ -77,27 +74,14 @@ impl VmSnapshotManager {
         Self {
             snapshots: HashMap::new(),
             snapshot_dir,
-            qmp_socket_pattern: "/var/run/qemu/{vm_id}.qmp".to_string(),
         }
     }
 
-    /// Create with custom QMP socket pattern
-    pub fn with_qmp_socket_pattern(snapshot_dir: String, qmp_socket_pattern: String) -> Self {
-        Self {
-            snapshots: HashMap::new(),
-            snapshot_dir,
-            qmp_socket_pattern,
-        }
-    }
-
-    /// Get QEMU monitor socket path for a VM
-    fn get_qmp_socket_path(&self, vm_id: &str) -> PathBuf {
-        PathBuf::from(self.qmp_socket_pattern.replace("{vm_id}", vm_id))
-    }
-
-    /// Get QEMU monitor for a VM
-    fn get_qemu_monitor(&self, vm_id: &str) -> QemuMonitor {
-        QemuMonitor::new(self.get_qmp_socket_path(vm_id))
+    /// Kept for callers that pass the configured QMP socket pattern: the
+    /// QMP socket of a Horcrux VM always sits next to its first disk
+    /// (`vm::display::DisplayRuntime::qmp_socket`), so the pattern is unused.
+    pub fn with_qmp_socket_pattern(snapshot_dir: String, _qmp_socket_pattern: String) -> Self {
+        Self::new(snapshot_dir)
     }
 
     /// Create a VM snapshot
@@ -118,49 +102,31 @@ impl VmSnapshotManager {
             include_memory
         );
 
-        // Determine VM state
-        let vm_state = match vm_config.status {
-            VmStatus::Running => {
-                if include_memory {
-                    VmSnapshotState::Running
-                } else {
-                    // Need to pause VM for consistent disk snapshot
-                    self.pause_vm(&vm_config.id).await?;
-                    VmSnapshotState::Paused
-                }
-            }
-            VmStatus::Stopped => VmSnapshotState::Stopped,
-            VmStatus::Paused => VmSnapshotState::Paused,
-            _ => {
-                return Err(horcrux_common::Error::System(
-                    "Cannot snapshot VM in current state".to_string(),
-                ));
-            }
-        };
+        validate_snapshot_name(&snapshot_name)?;
 
-        // Create disk snapshots
-        let mut disk_snapshots = Vec::new();
-        for (idx, disk) in vm_config.disks.iter().enumerate() {
-            let disk_snapshot = self
-                .create_disk_snapshot(&vm_config.id, &disk.path, &snapshot_name, idx)
-                .await?;
-            disk_snapshots.push(disk_snapshot);
-        }
+        // Whether a QEMU process is really running this VM right now (the
+        // stored status can be stale, e.g. after a QEMU crash). A running
+        // QEMU holds its disk images locked, so `qemu-img snapshot` can't
+        // touch them: live snapshots go through the VM's QMP socket.
+        let live = vm_config.hypervisor == horcrux_common::VmHypervisor::Qemu
+            && crate::vm::qemu::QemuManager::process_running(&vm_config.id);
 
-        // Create memory snapshot if requested and VM is running
-        let memory_snapshot = if include_memory && vm_state == VmSnapshotState::Running {
-            Some(
-                self.create_memory_snapshot(&vm_config.id, &snapshot_id)
-                    .await?,
-            )
+        let (vm_state, disk_snapshots) = if live {
+            self.create_live_snapshot(vm_config, &snapshot_name, include_memory)
+                .await?
         } else {
-            None
+            let mut disk_snapshots = Vec::new();
+            for (idx, disk) in vm_config.disks.iter().enumerate() {
+                let disk_snapshot = self
+                    .create_disk_snapshot(&vm_config.id, &disk.path, &snapshot_name, idx)
+                    .await?;
+                disk_snapshots.push(disk_snapshot);
+            }
+            (VmSnapshotState::Stopped, disk_snapshots)
         };
-
-        // Resume VM if we paused it
-        if vm_state == VmSnapshotState::Paused && vm_config.status == VmStatus::Running {
-            self.resume_vm(&vm_config.id).await?;
-        }
+        // RAM state of a live snapshot lives inside the qcow2 images
+        // (`savevm`), not in a separate file.
+        let memory_snapshot: Option<String> = None;
 
         // Track snapshot lineage: the new snapshot's parent is whichever
         // existing snapshot for this VM is currently the "head" of the chain
@@ -291,24 +257,9 @@ impl VmSnapshotManager {
         Ok(())
     }
 
-    /// Create QCOW2 internal snapshot
+    /// Create QCOW2 internal snapshot (VM stopped).
     async fn create_qcow2_snapshot(&self, qcow2_path: &str, snapshot_name: &str) -> Result<()> {
-        let output = Command::new("qemu-img")
-            .arg("snapshot")
-            .arg("-c")
-            .arg(snapshot_name)
-            .arg(qcow2_path)
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(format!(
-                "Failed to create QCOW2 snapshot: {}",
-                stderr
-            )));
-        }
-
+        qemu_img_snapshot("-c", snapshot_name, qcow2_path).await?;
         tracing::info!("Created QCOW2 snapshot: {}", snapshot_name);
         Ok(())
     }
@@ -360,31 +311,87 @@ impl VmSnapshotManager {
         Ok(())
     }
 
-    /// Create memory snapshot (save VM RAM state)
-    async fn create_memory_snapshot(&self, vm_id: &str, snapshot_id: &str) -> Result<String> {
-        let memory_file = format!("{}/{}-{}.mem", self.snapshot_dir, vm_id, snapshot_id);
+    /// QMP socket of a VM (next to its first disk).
+    fn qmp_socket_of(vm: &VmConfig) -> Result<PathBuf> {
+        let disk = vm.disks.first().ok_or_else(|| {
+            horcrux_common::Error::InvalidConfig(format!("VM {} has no disk", vm.id))
+        })?;
+        Ok(crate::vm::display::DisplayRuntime::qmp_socket(
+            std::path::Path::new(&disk.path),
+        ))
+    }
 
-        // Use QEMU monitor to save memory state
-        let monitor_path = format!("/var/run/qemu-{}.mon", vm_id);
-
-        let save_command = format!("migrate \"exec:gzip -c > {}\"", memory_file);
-
-        let output = Command::new("socat")
-            .arg("-")
-            .arg(format!("UNIX-CONNECT:{}", monitor_path))
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()?
-            .stdin
-            .ok_or_else(|| horcrux_common::Error::System("Failed to get stdin".to_string()))?;
-
-        use tokio::io::AsyncWriteExt;
-        let mut stdin = output;
-        stdin.write_all(save_command.as_bytes()).await?;
-        stdin.write_all(b"\n").await?;
-
-        tracing::info!("Created memory snapshot: {}", memory_file);
-        Ok(memory_file)
+    /// Snapshot a running QEMU VM through its QMP socket. With RAM:
+    /// `savevm` (all disks + device/RAM state under one tag, atomic).
+    /// Without: pause, internal snapshot of every disk, resume.
+    async fn create_live_snapshot(
+        &self,
+        vm: &VmConfig,
+        name: &str,
+        include_memory: bool,
+    ) -> Result<(VmSnapshotState, Vec<DiskSnapshot>)> {
+        for d in &vm.disks {
+            if self.detect_storage_type(&d.path)? != StorageType::Qcow2 {
+                return Err(horcrux_common::Error::Conflict(format!(
+                    "live snapshots need qcow2 disks ({} is not); stop VM {} first",
+                    d.path, vm.id
+                )));
+            }
+        }
+        let sock = Self::qmp_socket_of(vm)?;
+        let mut disks = Vec::new();
+        if include_memory {
+            hmp(&sock, &format!("savevm {name}")).await?;
+            for (idx, d) in vm.disks.iter().enumerate() {
+                disks.push(DiskSnapshot {
+                    disk_id: format!("disk-{idx}"),
+                    storage_type: StorageType::Qcow2,
+                    snapshot_name: name.to_string(),
+                    snapshot_path: d.path.clone(),
+                    size_bytes: self.get_disk_size(&d.path).await.unwrap_or(0),
+                });
+            }
+            return Ok((VmSnapshotState::Running, disks));
+        }
+        let disk0 = std::path::PathBuf::from(&vm.disks[0].path);
+        crate::vm::hold::set(&disk0, crate::vm::hold::HoldAction::Resume, "live snapshot").await?;
+        if let Err(e) = qmp_exec(&sock, "stop", None).await {
+            crate::vm::hold::clear(&disk0).await;
+            return Err(e);
+        }
+        let mut result = Ok(());
+        for (idx, d) in vm.disks.iter().enumerate() {
+            let snap = format!("{name}_{idx}");
+            let r = async {
+                let device = block_device_for(&sock, &d.path).await?;
+                qmp_exec(
+                    &sock,
+                    "blockdev-snapshot-internal-sync",
+                    Some(serde_json::json!({"device": device, "name": snap})),
+                )
+                .await
+            }
+            .await;
+            if let Err(e) = r {
+                result = Err(e);
+                break;
+            }
+            disks.push(DiskSnapshot {
+                disk_id: format!("disk-{idx}"),
+                storage_type: StorageType::Qcow2,
+                snapshot_name: snap,
+                snapshot_path: d.path.clone(),
+                size_bytes: self.get_disk_size(&d.path).await.unwrap_or(0),
+            });
+        }
+        // Always resume, even if a disk snapshot failed.
+        let resumed = qmp_exec(&sock, "cont", None).await;
+        if resumed.is_ok() {
+            crate::vm::hold::clear(&disk0).await;
+        }
+        result?;
+        resumed?;
+        Ok((VmSnapshotState::Paused, disks))
     }
 
     /// List all snapshots for a VM
@@ -411,9 +418,28 @@ impl VmSnapshotManager {
 
         tracing::info!("Deleting snapshot: {}", snapshot_id);
 
-        // Delete disk snapshots
-        for disk_snap in &snapshot.disk_snapshots {
-            self.delete_disk_snapshot(disk_snap).await?;
+        if crate::vm::qemu::QemuManager::process_running(&snapshot.vm_id) {
+            // The running QEMU holds the images: delete through QMP.
+            let sock = Self::qmp_socket_of(&snapshot.config_backup)?;
+            if snapshot.vm_state == VmSnapshotState::Running {
+                hmp(&sock, &format!("delvm {}", snapshot.name)).await?;
+            } else {
+                for disk_snap in &snapshot.disk_snapshots {
+                    let device = block_device_for(&sock, &disk_snap.snapshot_path).await?;
+                    qmp_exec(
+                        &sock,
+                        "blockdev-snapshot-delete-internal-sync",
+                        Some(
+                            serde_json::json!({"device": device, "name": disk_snap.snapshot_name}),
+                        ),
+                    )
+                    .await?;
+                }
+            }
+        } else {
+            for disk_snap in &snapshot.disk_snapshots {
+                self.delete_disk_snapshot(disk_snap).await?;
+            }
         }
 
         // Delete memory snapshot if exists
@@ -461,13 +487,7 @@ impl VmSnapshotManager {
                     .await?;
             }
             StorageType::Qcow2 => {
-                Command::new("qemu-img")
-                    .arg("snapshot")
-                    .arg("-d")
-                    .arg(&disk_snap.snapshot_name)
-                    .arg(&disk_snap.snapshot_path)
-                    .output()
-                    .await?;
+                qemu_img_snapshot("-d", &disk_snap.snapshot_name, &disk_snap.snapshot_path).await?;
             }
             StorageType::Btrfs => {
                 let snapshot_path = format!(
@@ -497,72 +517,32 @@ impl VmSnapshotManager {
         Ok(())
     }
 
-    /// Restore VM to a snapshot
-    pub async fn restore_snapshot(&self, snapshot_id: &str, restore_memory: bool) -> Result<()> {
+    /// Restore VM to a snapshot.
+    ///
+    /// A running VM can only be rolled back to a snapshot that includes its
+    /// RAM (`loadvm` through QMP; the VM keeps running from that point). A
+    /// disk-only snapshot needs the VM stopped first, otherwise the guest
+    /// would keep running on top of disks rewritten underneath it.
+    pub async fn restore_snapshot(&self, snapshot_id: &str, _restore_memory: bool) -> Result<()> {
         let snapshot = self
             .snapshots
             .get(snapshot_id)
-            .ok_or_else(|| horcrux_common::Error::System("Snapshot not found".to_string()))?;
+            .ok_or_else(|| horcrux_common::Error::NotFound("Snapshot not found".to_string()))?;
 
         tracing::info!("Restoring snapshot: {}", snapshot_id);
-
-        // Stop VM if running
-        self.stop_vm(&snapshot.vm_id).await?;
-
-        // Restore disk snapshots
-        for disk_snap in &snapshot.disk_snapshots {
-            self.restore_disk_snapshot(disk_snap).await?;
-        }
-
-        // Restore memory if requested and available
-        if restore_memory {
-            if let Some(ref memory_file) = snapshot.memory_snapshot {
-                tracing::info!("Restoring memory state from: {}", memory_file);
-
-                // Check if memory snapshot file exists
-                if fs::try_exists(memory_file).await.unwrap_or(false) {
-                    let monitor = self.get_qemu_monitor(&snapshot.vm_id);
-
-                    // Start VM with incoming migration (paused state)
-                    // The VM should be started with -incoming defer option
-                    // Then we trigger incoming migration from the memory file
-                    match monitor.migrate_incoming(memory_file).await {
-                        Ok(()) => {
-                            tracing::info!(
-                                "Memory state restoration initiated for VM {}",
-                                snapshot.vm_id
-                            );
-
-                            // Wait for migration to complete
-                            let mut attempts = 0;
-                            while attempts < 30 {
-                                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                                if let Ok(status) = monitor.query_migrate().await {
-                                    if crate::migration::qemu_monitor::QemuMonitor::is_migration_complete(&status) {
-                                        if crate::migration::qemu_monitor::QemuMonitor::is_migration_failed(&status) {
-                                            tracing::error!("Memory restoration failed for VM {}", snapshot.vm_id);
-                                            break;
-                                        }
-                                        tracing::info!("Memory state restored for VM {}", snapshot.vm_id);
-                                        break;
-                                    }
-                                }
-                                attempts += 1;
-                            }
-
-                            // Resume VM after memory restoration
-                            let _ = monitor.cont().await;
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to restore memory state: {}", e);
-                            // Continue without memory restoration - VM can still be started fresh
-                        }
-                    }
-                } else {
-                    tracing::warn!("Memory snapshot file not found: {}", memory_file);
-                }
-            } else {
-                tracing::debug!("No memory snapshot available for this snapshot");
+        let live = crate::vm::qemu::QemuManager::process_running(&snapshot.vm_id);
+        if live {
+            if snapshot.vm_state != VmSnapshotState::Running {
+                return Err(horcrux_common::Error::Conflict(format!(
+                    "VM {} is running: stop it before rolling back to the disk-only snapshot '{}'",
+                    snapshot.vm_id, snapshot.name
+                )));
+            }
+            let sock = Self::qmp_socket_of(&snapshot.config_backup)?;
+            hmp(&sock, &format!("loadvm {}", snapshot.name)).await?;
+        } else {
+            for disk_snap in &snapshot.disk_snapshots {
+                self.restore_disk_snapshot(disk_snap).await?;
             }
         }
 
@@ -599,13 +579,7 @@ impl VmSnapshotManager {
                     .await?;
             }
             StorageType::Qcow2 => {
-                Command::new("qemu-img")
-                    .arg("snapshot")
-                    .arg("-a")
-                    .arg(&disk_snap.snapshot_name)
-                    .arg(&disk_snap.snapshot_path)
-                    .output()
-                    .await?;
+                qemu_img_snapshot("-a", &disk_snap.snapshot_name, &disk_snap.snapshot_path).await?;
             }
             StorageType::Btrfs => {
                 // Btrfs requires deleting current and renaming snapshot
@@ -703,75 +677,6 @@ impl VmSnapshotManager {
         Ok(metadata.len())
     }
 
-    async fn pause_vm(&self, vm_id: &str) -> Result<()> {
-        let qmp_socket = self.get_qmp_socket_path(vm_id);
-
-        // Check if QMP socket exists
-        if !qmp_socket.exists() {
-            tracing::warn!(
-                "QMP socket not found for VM {}, cannot pause via QEMU monitor",
-                vm_id
-            );
-            return Ok(());
-        }
-
-        tracing::info!("Pausing VM {} via QEMU monitor", vm_id);
-        let monitor = self.get_qemu_monitor(vm_id);
-        monitor.stop().await?;
-        tracing::info!("VM {} paused successfully", vm_id);
-        Ok(())
-    }
-
-    async fn resume_vm(&self, vm_id: &str) -> Result<()> {
-        let qmp_socket = self.get_qmp_socket_path(vm_id);
-
-        // Check if QMP socket exists
-        if !qmp_socket.exists() {
-            tracing::warn!(
-                "QMP socket not found for VM {}, cannot resume via QEMU monitor",
-                vm_id
-            );
-            return Ok(());
-        }
-
-        tracing::info!("Resuming VM {} via QEMU monitor", vm_id);
-        let monitor = self.get_qemu_monitor(vm_id);
-        monitor.cont().await?;
-        tracing::info!("VM {} resumed successfully", vm_id);
-        Ok(())
-    }
-
-    async fn stop_vm(&self, vm_id: &str) -> Result<()> {
-        let qmp_socket = self.get_qmp_socket_path(vm_id);
-
-        // Check if QMP socket exists
-        if !qmp_socket.exists() {
-            tracing::warn!(
-                "QMP socket not found for VM {}, cannot stop via QEMU monitor",
-                vm_id
-            );
-            return Ok(());
-        }
-
-        tracing::info!("Stopping VM {} via QEMU monitor (ACPI shutdown)", vm_id);
-        let monitor = self.get_qemu_monitor(vm_id);
-        monitor.system_powerdown().await?;
-
-        // Wait a bit for graceful shutdown, then force if needed
-        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-
-        // Check if still running, force quit if so
-        if let Ok(status) = monitor.query_status().await {
-            if status.running {
-                tracing::warn!("VM {} did not shut down gracefully, forcing quit", vm_id);
-                let _ = monitor.quit().await;
-            }
-        }
-
-        tracing::info!("VM {} stopped", vm_id);
-        Ok(())
-    }
-
     async fn save_snapshot_metadata(&self, snapshot: &VmSnapshot) -> Result<()> {
         fs::create_dir_all(&self.snapshot_dir).await?;
 
@@ -809,10 +714,140 @@ impl VmSnapshotManager {
     }
 }
 
+/// Snapshot names end up on QEMU/HMP command lines and in qcow2 headers:
+/// letters, digits, '-', '_' and '.', 1-64 characters, not starting with '-'.
+pub fn validate_snapshot_name(name: &str) -> Result<()> {
+    let ok = !name.is_empty()
+        && name.len() <= 64
+        && !name.starts_with('-')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if ok {
+        Ok(())
+    } else {
+        Err(horcrux_common::Error::Validation(format!(
+            "invalid snapshot name {name:?}: use 1-64 letters, digits, '-', '_' or '.'"
+        )))
+    }
+}
+
+/// `qemu-img snapshot <op> <name> <image>` (op = -c create, -a apply,
+/// -d delete); a failure is an error, never silently ignored.
+async fn qemu_img_snapshot(op: &str, name: &str, image: &str) -> Result<()> {
+    let output = Command::new("qemu-img")
+        .args(["snapshot", op, name, image])
+        .output()
+        .await?;
+    if !output.status.success() {
+        return Err(horcrux_common::Error::System(format!(
+            "qemu-img snapshot {op} {name} {image}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
+/// Run one QMP command on a VM's QMP socket and return its `return`
+/// value. Asynchronous events QEMU interleaves (STOP, RESUME, ...) are
+/// skipped; a QMP error is returned as an error.
+pub async fn qmp_exec(
+    sock: &std::path::Path,
+    command: &str,
+    arguments: Option<serde_json::Value>,
+) -> Result<serde_json::Value> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let fut = async {
+        let stream = tokio::net::UnixStream::connect(sock).await.map_err(|e| {
+            horcrux_common::Error::System(format!("QMP connect {}: {e}", sock.display()))
+        })?;
+        let (rd, mut wr) = stream.into_split();
+        let mut rd = BufReader::new(rd);
+        let mut line = String::new();
+        rd.read_line(&mut line).await?; // greeting
+        for (i, cmd) in [
+            serde_json::json!({"execute": "qmp_capabilities"}),
+            match &arguments {
+                Some(a) => serde_json::json!({"execute": command, "arguments": a}),
+                None => serde_json::json!({"execute": command}),
+            },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            wr.write_all(format!("{cmd}\n").as_bytes()).await?;
+            loop {
+                line.clear();
+                if rd.read_line(&mut line).await? == 0 {
+                    return Err(horcrux_common::Error::System(
+                        "QMP connection closed".to_string(),
+                    ));
+                }
+                let v: serde_json::Value = match serde_json::from_str(&line) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if let Some(err) = v.get("error") {
+                    return Err(horcrux_common::Error::System(format!(
+                        "QMP {command}: {}",
+                        err["desc"].as_str().unwrap_or("error")
+                    )));
+                }
+                if let Some(r) = v.get("return") {
+                    if i == 1 {
+                        return Ok(r.clone());
+                    }
+                    break;
+                }
+            }
+        }
+        Err(horcrux_common::Error::System(format!(
+            "QMP {command}: no reply"
+        )))
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(600), fut)
+        .await
+        .map_err(|_| horcrux_common::Error::System(format!("QMP {command}: timed out")))?
+}
+
+/// Run an HMP command through QMP. HMP reports failures as text in the
+/// return value (e.g. "Error: ..."), so any output is treated as an error
+/// for the commands used here (savevm/loadvm/delvm print nothing on success).
+async fn hmp(sock: &std::path::Path, command_line: &str) -> Result<()> {
+    let out = qmp_exec(
+        sock,
+        "human-monitor-command",
+        Some(serde_json::json!({"command-line": command_line})),
+    )
+    .await?;
+    let text = out.as_str().unwrap_or_default().trim();
+    if !text.is_empty() {
+        return Err(horcrux_common::Error::System(format!(
+            "{command_line}: {text}"
+        )));
+    }
+    Ok(())
+}
+
+/// QEMU block device name of the drive backed by `path`.
+async fn block_device_for(sock: &std::path::Path, path: &str) -> Result<String> {
+    let blocks = qmp_exec(sock, "query-block", None).await?;
+    blocks
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|b| b["inserted"]["file"].as_str() == Some(path))
+        .and_then(|b| b["device"].as_str().map(str::to_string))
+        .ok_or_else(|| {
+            horcrux_common::Error::System(format!("no QEMU block device backed by {path}"))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use horcrux_common::VmArchitecture;
+    use horcrux_common::VmStatus;
 
     fn create_test_vm_config() -> VmConfig {
         VmConfig {
@@ -936,19 +971,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_snapshot_running_vm_no_memory() {
+    async fn status_running_without_a_qemu_process_is_snapshotted_offline() {
+        // The stored status said running, but no QEMU process exists for
+        // the VM (e.g. it crashed): the snapshot is taken offline instead
+        // of trying to pause a VM that isn't there.
         let mut manager = VmSnapshotManager::new("/tmp/test-snapshots".to_string());
         let vm_config = create_test_vm_config();
 
-        let result = manager
+        let snapshot = manager
             .create_snapshot(&vm_config, "live-snapshot".to_string(), None, false)
-            .await;
-
-        assert!(result.is_ok());
-        let snapshot = result.unwrap();
-        // VM is paused for consistent disk snapshot when running without memory
-        assert_eq!(snapshot.vm_state, VmSnapshotState::Paused);
+            .await
+            .unwrap();
+        assert_eq!(snapshot.vm_state, VmSnapshotState::Stopped);
         assert!(snapshot.memory_snapshot.is_none());
+    }
+
+    #[test]
+    fn snapshot_names_are_validated() {
+        for ok in ["s1", "before-upgrade", "daily_2026.10.17", &"a".repeat(64)] {
+            assert!(validate_snapshot_name(ok).is_ok(), "{ok}");
+        }
+        for bad in ["", "-x", "a b", "x;quit", "a/b", &"a".repeat(65)] {
+            assert!(validate_snapshot_name(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_snapshot_name_is_refused_before_touching_disks() {
+        let mut manager = VmSnapshotManager::new("/tmp/test-snapshots".to_string());
+        let vm_config = create_test_vm_config();
+        let err = manager
+            .create_snapshot(&vm_config, "x; quit".to_string(), None, false)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, horcrux_common::Error::Validation(_)),
+            "{err:?}"
+        );
     }
 
     #[tokio::test]

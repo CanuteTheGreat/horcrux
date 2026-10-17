@@ -12,6 +12,7 @@ pub mod lane_m;
 pub mod metrics;
 pub mod notifications;
 pub mod tls;
+pub mod vm_import;
 
 use crate::AppState;
 use axum::Router;

@@ -184,6 +184,47 @@ async fn ui_types_read_real_api_responses() {
     )
     .await;
     assert!(status == 200 || status == 201, "create vm: {status} {body}");
+    // VM create form "Boot disk from image": POST /vms/:id/import-disk.
+    // The server's images dir is <data dir>/images (CI: /tmp/horcrux-ci-data).
+    let images = std::path::PathBuf::from(
+        std::env::var("HORCRUX_CONTRACT_DATA_DIR")
+            .unwrap_or_else(|_| "/tmp/horcrux-ci-data".into()),
+    )
+    .join("images");
+    let (status, body) = post(
+        &c,
+        &token,
+        &format!("/vms/{vm}/import-disk"),
+        json!({"source": "/etc/passwd"}),
+    )
+    .await;
+    assert_eq!(
+        status, 403,
+        "import from outside the images dir refused: {body}"
+    );
+    if std::fs::create_dir_all(&images).is_ok() {
+        let img = images.join("contract.qcow2");
+        let made = std::process::Command::new("qemu-img")
+            .args(["create", "-q", "-f", "qcow2"])
+            .arg(&img)
+            .arg("64M")
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(made, "qemu-img create {}", img.display());
+        let (status, body) = post(
+            &c,
+            &token,
+            &format!("/vms/{vm}/import-disk"),
+            json!({"source": img.to_string_lossy()}),
+        )
+        .await;
+        assert_eq!(status, 200, "import disk: {body}");
+        let imported: horcrux_common::VmConfig =
+            serde_json::from_value(body).expect("UI VmConfig from import-disk");
+        assert_eq!(imported.id, vm);
+        let _ = std::fs::remove_file(&img);
+    }
     let (status, body) = post(
         &c,
         &token,

@@ -88,13 +88,20 @@ impl CloudInitManager {
         Ok(iso_path)
     }
 
-    /// Generate meta-data file
+    /// Generate meta-data file.
+    ///
+    /// Written as JSON: cloud-init parses meta-data as YAML (JSON is a
+    /// subset), while CirrOS and other minimal NoCloud implementations
+    /// only accept JSON - a `key: value` file made them reject the whole
+    /// seed and fall back to minutes of EC2 metadata retries.
     fn generate_meta_data(&self, hostname: &str) -> String {
-        format!(
-            "instance-id: {}\nlocal-hostname: {}\n",
-            uuid::Uuid::new_v4(),
-            hostname
-        )
+        let mut s = serde_json::json!({
+            "instance-id": uuid::Uuid::new_v4().to_string(),
+            "local-hostname": hostname,
+        })
+        .to_string();
+        s.push('\n');
+        s
     }
 
     /// Generate user-data file (cloud-config format)
@@ -316,8 +323,10 @@ mod tests {
         let manager = CloudInitManager::new(PathBuf::from("/tmp/cloudinit"));
         let meta_data = manager.generate_meta_data("test-vm");
 
-        assert!(meta_data.contains("local-hostname: test-vm"));
-        assert!(meta_data.contains("instance-id:"));
+        // JSON (valid YAML too), so JSON-only NoCloud readers accept it.
+        let v: serde_json::Value = serde_json::from_str(&meta_data).expect("meta-data is JSON");
+        assert_eq!(v["local-hostname"], "test-vm");
+        assert!(uuid::Uuid::parse_str(v["instance-id"].as_str().unwrap()).is_ok());
     }
 
     #[tokio::test]

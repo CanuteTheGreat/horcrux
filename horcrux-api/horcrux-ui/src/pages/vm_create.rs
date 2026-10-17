@@ -23,6 +23,7 @@ pub fn VmCreate() -> impl IntoView {
     let (hypervisor, set_hypervisor) = create_signal(VmHypervisor::Qemu);
     let (architecture, set_architecture) = create_signal(VmArchitecture::X86_64);
     let display = create_rw_signal(horcrux_common::VmDisplay::default());
+    let (image, set_image) = create_signal(String::new());
     let (creating, set_creating) = create_signal(false);
     let (error, set_error) = create_signal(None::<String>);
 
@@ -62,8 +63,21 @@ pub fn VmCreate() -> impl IntoView {
         };
 
         let navigate = navigate.clone();
+        let image = image.get().trim().to_string();
         spawn_local(async move {
-            match api::create_vm(config).await {
+            let created =
+                match api::create_vm(config).await {
+                    Ok(vm) if !image.is_empty() => api::import_vm_disk(&vm.id, &image)
+                        .await
+                        .map_err(|e| api::ApiError {
+                            message: format!(
+                                "VM {} created, but importing its disk failed: {}",
+                                vm.id, e.message
+                            ),
+                        }),
+                    other => other,
+                };
+            match created {
                 Ok(_) => {
                     navigate("/vms", Default::default());
                 }
@@ -168,6 +182,17 @@ pub fn VmCreate() -> impl IntoView {
                         on:input=move |ev| set_disk_size.set(event_target_value(&ev).parse().unwrap_or(20))
                         prop:value=disk_size
                     />
+                </div>
+
+                <div class="form-group">
+                    <label>"Boot disk from image (optional)"</label>
+                    <input
+                        type="text"
+                        placeholder="https://.../cloud-image.qcow2 or a file in the images directory"
+                        on:input=move |ev| set_image.set(event_target_value(&ev))
+                        prop:value=image
+                    />
+                    <small>"A cloud image or disk image (qcow2, raw, vmdk, vdi, vhdx) becomes the VM's disk, grown to the disk size above."</small>
                 </div>
 
                 <super::vm_display::DisplaySettingsFields display=display/>

@@ -536,6 +536,7 @@ async fn main() -> anyhow::Result<()> {
     let protected_routes = Router::new()
         .merge(vm_routes())
         .merge(vm_console_api::routes())
+        .merge(api::vm_import::routes(&state))
         .merge(container_routes())
         .merge(template_routes())
         .merge(auth_protected_routes())
@@ -5848,7 +5849,7 @@ async fn create_vm_snapshot(
             req.include_memory.unwrap_or(false),
         )
         .await
-        .map_err(|e| ApiError::Internal(format!("Failed to create snapshot: {}", e)))?;
+        .map_err(ApiError::from)?;
 
     Ok(Json(snapshot))
 }
@@ -5876,16 +5877,32 @@ async fn get_vm_snapshot(
 
 async fn delete_vm_snapshot(
     State(state): State<Arc<AppState>>,
-    Path((_vm_id, snapshot_id)): Path<(String, String)>,
+    Path((vm_id, snapshot_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let mut snapshot_manager = state.snapshot_manager.write().await;
+    snapshot_of_vm(&snapshot_manager, &vm_id, &snapshot_id)?;
 
     snapshot_manager
         .delete_snapshot(&snapshot_id)
         .await
-        .map_err(|e| ApiError::Internal(format!("Failed to delete snapshot: {}", e)))?;
+        .map_err(ApiError::from)?;
 
     Ok(StatusCode::OK)
+}
+
+/// A snapshot addressed as /vms/:id/snapshots/:snapshot_id must belong to
+/// that VM (a snapshot id of another VM is "not found" here).
+fn snapshot_of_vm(
+    m: &vm::snapshot::VmSnapshotManager,
+    vm_id: &str,
+    snapshot_id: &str,
+) -> Result<(), ApiError> {
+    match m.get_snapshot(snapshot_id) {
+        Some(s) if s.vm_id == vm_id => Ok(()),
+        _ => Err(ApiError::NotFound(format!(
+            "Snapshot {snapshot_id} not found for VM {vm_id}"
+        ))),
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -5895,15 +5912,16 @@ struct RestoreSnapshotRequest {
 
 async fn restore_vm_snapshot(
     State(state): State<Arc<AppState>>,
-    Path((_vm_id, snapshot_id)): Path<(String, String)>,
+    Path((vm_id, snapshot_id)): Path<(String, String)>,
     Json(req): Json<RestoreSnapshotRequest>,
 ) -> Result<StatusCode, ApiError> {
     let snapshot_manager = state.snapshot_manager.read().await;
+    snapshot_of_vm(&snapshot_manager, &vm_id, &snapshot_id)?;
 
     snapshot_manager
         .restore_snapshot(&snapshot_id, req.restore_memory.unwrap_or(false))
         .await
-        .map_err(|e| ApiError::Internal(format!("Failed to restore snapshot: {}", e)))?;
+        .map_err(ApiError::from)?;
 
     Ok(StatusCode::OK)
 }
@@ -6865,13 +6883,25 @@ async fn generate_cloudinit(
     Path(vm_id): Path<String>,
     Json(config): Json<CloudInitConfig>,
 ) -> Result<Json<CloudInitResponse>, ApiError> {
+    // The seed is attached to the VM (as a CD-ROM at its next start), so
+    // the VM must exist; it used to be generated and never attached.
+    let vm = state.vm_manager.get_vm(&vm_id).await?;
     let iso_path = state
         .cloudinit_manager
         .generate_iso(&vm_id, &config)
         .await?;
+    let attached = match vm.disks.first() {
+        Some(d) => {
+            let seed = vm::qemu::cloudinit_seed(std::path::Path::new(&d.path));
+            tokio::fs::copy(&iso_path, &seed).await?;
+            Some(seed.to_string_lossy().to_string())
+        }
+        None => None,
+    };
     Ok(Json(CloudInitResponse {
         vm_id,
         iso_path: iso_path.to_string_lossy().to_string(),
+        attached_as: attached,
     }))
 }
 
@@ -6880,6 +6910,12 @@ async fn delete_cloudinit(
     Path(vm_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     state.cloudinit_manager.delete_iso(&vm_id).await?;
+    if let Ok(vm) = state.vm_manager.get_vm(&vm_id).await {
+        if let Some(d) = vm.disks.first() {
+            let _ = tokio::fs::remove_file(vm::qemu::cloudinit_seed(std::path::Path::new(&d.path)))
+                .await;
+        }
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -6887,6 +6923,8 @@ async fn delete_cloudinit(
 struct CloudInitResponse {
     vm_id: String,
     iso_path: String,
+    /// The seed ISO the VM boots with (next start), if the VM has a disk.
+    attached_as: Option<String>,
 }
 
 // Template API handlers
