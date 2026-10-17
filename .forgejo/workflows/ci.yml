@@ -831,7 +831,7 @@ jobs:
         # so they are checked together in one build.
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Build each USE-flag feature on its own"
-          gated=$(grep -rhoE 'feature *= *"[a-z0-9-]+"' horcrux-api/src horcrux-api/tests | grep -oE '"[a-z0-9-]+"' | tr -d '"' | sort -u)
+          gated=$(grep -rhoE 'feature *= *"[a-z0-9-]+"' horcrux-api/src horcrux-api/tests crates --include='*.rs' | grep -oE '"[a-z0-9-]+"' | tr -d '"' | sort -u)
           all=$(sed -n '/^\[features\]/,/^\[/p' horcrux-api/Cargo.toml | grep -oE '^[a-z0-9-]+' | grep -v '^default$' | sort -u)
           plain=$(comm -13 <(echo "$gated") <(echo "$all") | grep -vE '^nas-(full|basic|apple|enterprise)$' | tr '\n' ',' | sed 's/,$//')
           failed=""

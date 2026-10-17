@@ -1,0 +1,43 @@
+[package]
+name = "horcrux-nas"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+horcrux-common = { path = "../../horcrux-common" }
+chrono = { workspace = true }
+hostname = { workspace = true }
+pwhash = { workspace = true }
+rand = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[features]
+nas = []
+smb = ["nas"]
+nfs-server = ["nas"]
+afp = ["nas"]
+webdav = ["nas"]
+ftp = ["nas"]
+nas-auth = ["nas"]
+ldap = ["nas-auth"]
+ldap-server = ["nas-auth"]
+kerberos = ["nas-auth"]
+ad = ["nas-auth", "kerberos"]
+timemachine = ["afp"]
+s3-gateway = ["nas"]
+iscsi-target = ["nas"]
+rsync-server = ["nas"]
+nas-zfs = ["nas"]
+nas-btrfs = ["nas"]
+nas-mdraid = ["nas"]
+nas-lvm = ["nas"]

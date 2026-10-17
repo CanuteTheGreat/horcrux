@@ -74,7 +74,7 @@ pub mod kubernetes;
 
 // NAS (Network Attached Storage)
 #[cfg(feature = "nas")]
-pub mod nas;
+pub use horcrux_nas::nas;
 
 // Database
 pub mod db;
