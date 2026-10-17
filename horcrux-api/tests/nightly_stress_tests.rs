@@ -744,59 +744,8 @@ async fn test_sustained_concurrent_api_load() {
     }
 }
 
-// ---------------------------------------------------------------------
-// 5. Serial console end-to-end via the real HTTP API - documented as a
-//    genuine architectural gap rather than faked.
-//
-// console/serial.rs (SerialManager) exists and is wired into
-// ConsoleManager, but grepping horcrux-api/src/main.rs's router shows only
-// VNC routes are ever registered:
-//   /api/console/:vm_id/vnc, /vnc/websocket, /novnc, /ticket/:id, /ws/:id
-// There is NO "/api/vms/:id/console/serial" (or any other) HTTP route
-// that reaches SerialManager at all, and horcrux-cli has no console
-// subcommand of any kind (checked horcrux-cli/src/commands/*.rs and
-// main.rs). integration_tests.rs even has a test that calls
-// `GET /vms/{id}/console/serial` but only loosely checks
-// `if response.is_ok() { ... }` without asserting success - consistent
-// with that route not existing end-to-end.
-//
-// This test proves that gap for real against the live server instead of
-// asserting it from source reading alone: it expects 404/other non-2xx,
-// and FAILS (loudly) if a route ever starts responding successfully,
-// which would mean this gap was closed and the test needs to be upgraded
-// into the real send-command/read-output check the task originally asked
-// for.
-// ---------------------------------------------------------------------
-#[tokio::test]
-#[ignore]
-async fn test_serial_console_route_not_wired_yet() {
-    let api_base = env_or("NIGHTLY_STRESS_API_BASE", "http://127.0.0.1:8007/api");
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .unwrap();
-
-    let candidates = [
-        format!("{api_base}/vms/any-vm/console/serial"),
-        format!("{api_base}/console/any-vm/serial"),
-    ];
-
-    for url in &candidates {
-        let resp = client.get(url).send().await;
-        match resp {
-            Ok(r) => assert!(
-                !r.status().is_success(),
-                "a serial console HTTP route ({url}) unexpectedly responded {} - the serial \
-                 console gap documented here may have been closed; this test should be replaced \
-                 with a real boot+attach+send-command+read-output check instead of a \
-                 route-does-not-exist check",
-                r.status()
-            ),
-            Err(e) => {
-                // Connection-level failure is also acceptable evidence
-                // the endpoint isn't served; print for visibility.
-                println!("{url}: request error (also consistent with no route): {e}");
-            }
-        }
-    }
-}
+// (5. The serial console used to be checked here as a documented "route
+// not wired" gap. It is wired now and verified end to end on every push by
+// tests/console_tests.rs: headless_vm_serial_console_is_interactive boots a
+// VM whose disk prints to COM1 and echoes input, through the real API and
+// WebSocket bridge.)

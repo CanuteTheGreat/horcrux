@@ -259,14 +259,6 @@ jobs:
             -- --ignored --test-threads=1 --nocapture \
             test_sustained_concurrent_api_load
 
-      - name: Run serial-console-gap check against the live server
-        env:
-          NIGHTLY_STRESS_API_BASE: http://127.0.0.1:8007/api
-        run: |
-          cargo test --test nightly_stress_tests -p horcrux-api \
-            -- --ignored --test-threads=1 --nocapture \
-            test_serial_console_route_not_wired_yet
-
       - name: Dump horcrux-api server log
         if: always()
         run: cat /tmp/horcrux-stress-api.log || true
