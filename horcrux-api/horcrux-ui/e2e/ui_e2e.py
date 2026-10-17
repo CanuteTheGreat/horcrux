@@ -244,7 +244,13 @@ def main():
         # ---- firewall Apply really reaches the API -------------------------
         page.get_by_role("button", name="Firewall").click()
         page.get_by_role("button", name="Apply Rules").click()
-        expect(page.locator("#network-notice")).to_contain_text("applied", timeout=30000)
+        # CI's job container has no CAP_NET_ADMIN: the page must then show the
+        # real nftables error (the real apply is the "Firewall apply (real
+        # nftables)" CI step); with privileges it shows the success notice.
+        outcome = page.locator("#network-notice, .alert-error")
+        expect(outcome.first).to_be_visible(timeout=30000)
+        text = outcome.first.inner_text()
+        assert "applied" in text or "nftables" in text, f"firewall apply outcome: {text!r}"
 
         # ---- replication: Create button opens a working form ---------------
         api_post("/api/vms", token(), {"id": REP_VM, "name": REP_VM, "hypervisor": "qemu",

@@ -208,7 +208,11 @@ jobs:
         run: bash horcrux-api/tests/firewall_nft_e2e.sh target/debug/horcrux-api
 
       - name: Run tests (no default features)
-        run: cargo test --no-default-features -p horcrux-api
+        # Unit tests of the minimal build. The integration/contract tests
+        # need the server, which is the --all-features build started above;
+        # they already ran once in "Run tests" (running them a second time
+        # against the same server only collided with their own leftovers).
+        run: cargo test --no-default-features -p horcrux-api --lib --bins
 
       - name: Dump horcrux-api server log
         if: always()

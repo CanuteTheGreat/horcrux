@@ -68,22 +68,37 @@ fn with_auth(request: reqwasm::http::Request) -> reqwasm::http::Request {
 async fn http_error(response: reqwasm::http::Response) -> ApiError {
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
-    let detail = serde_json::from_str::<serde_json::Value>(&body)
-        .ok()
-        .and_then(|v| {
-            v.get("message")
-                .or_else(|| v.get("error"))
-                .and_then(|m| m.as_str().map(str::to_string))
-        })
-        .unwrap_or(body);
-    if detail.trim().is_empty() {
-        ApiError {
-            message: format!("HTTP {}", status),
-        }
+    ApiError {
+        message: error_text(status, &body),
+    }
+}
+
+/// User-facing text for a failed request: the API's `message`, plus its
+/// `details` (the real cause; a 500 used to show only "An internal server
+/// error occurred").
+pub fn error_text(status: u16, body: &str) -> String {
+    let v = serde_json::from_str::<serde_json::Value>(body).ok();
+    let field = |k: &str| {
+        v.as_ref()
+            .and_then(|v| v.get(k))
+            .and_then(|m| m.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let detail = match (
+        field("message").or_else(|| field("error")),
+        field("details"),
+    ) {
+        (Some(m), Some(d)) if m != d => format!("{}: {}", m, d),
+        (Some(m), _) => m,
+        (None, Some(d)) => d,
+        (None, None) if v.is_none() => body.trim().to_string(),
+        (None, None) => String::new(),
+    };
+    if detail.is_empty() {
+        format!("HTTP {}", status)
     } else {
-        ApiError {
-            message: format!("HTTP {}: {}", status, detail.trim()),
-        }
+        format!("HTTP {}: {}", status, detail)
     }
 }
 
@@ -5825,6 +5840,46 @@ mod tests {
     //! actually sends. Each sample below is the real serialized shape of the
     //! named server type.
     use super::*;
+
+    #[test]
+    fn error_text_includes_the_api_details() {
+        let body = r#"{"status":500,"error":"INTERNAL_ERROR","message":"An internal server error occurred","details":"nftables: permission denied"}"#;
+        assert_eq!(
+            error_text(500, body),
+            "HTTP 500: An internal server error occurred: nftables: permission denied"
+        );
+        assert_eq!(error_text(404, ""), "HTTP 404");
+        assert_eq!(error_text(502, "bad gateway"), "HTTP 502: bad gateway");
+    }
+
+    #[test]
+    fn empty_success_body_decodes_as_unit() {
+        let r: Result<(), ApiError> = decode_body("");
+        assert!(r.is_ok());
+        let v: serde_json::Value = decode_body("{\"id\":\"x\"}").unwrap();
+        assert_eq!(v["id"], "x");
+    }
+
+    #[test]
+    fn template_and_storage_pool_read_the_api_shapes() {
+        let t: VmTemplate = serde_json::from_str(r#"{"id":"template-1","name":"t","description":null,"source_vm_id":"vm1","created":1792200000,"disk_path":"/var/lib/horcrux/vms/templates/template-1.qcow2","storage_type":"directory","memory":512,"cpus":2,"os_type":"linux","cloudinit_template":null}"#).unwrap();
+        assert_eq!(t.source_vm_id, "vm1");
+        assert!(t.storage_location.ends_with("template-1.qcow2"));
+        let p: StoragePoolInfo = serde_json::from_str(r#"{"id":"p1","name":"dir","storage_type":"directory","path":"/srv","available":10,"total":20,"enabled":true}"#).unwrap();
+        assert_eq!(p.pool_type, "directory");
+        assert_eq!(p.used_bytes, 10 * 1024 * 1024 * 1024);
+        let req = serde_json::to_value(CreateTemplateRequest {
+            name: "n".into(),
+            description: None,
+            source_vm_id: "vm1".into(),
+        })
+        .unwrap();
+        assert_eq!(req["vm_id"], "vm1");
+        assert_eq!(
+            clone_template_body("Web Server 2")["new_vm_id"],
+            "web-server-2"
+        );
+    }
 
     /// horcrux-api `cluster::node::Node` (GET /api/cluster/nodes).
     const NODES_JSON: &str = r#"[

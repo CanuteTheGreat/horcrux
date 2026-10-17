@@ -242,6 +242,13 @@ async fn test_cluster_operations() {
     let client = create_client();
     let token = admin_token(&client).await;
 
+    // Idempotent: drop a node left by an earlier run against this server.
+    let _ = client
+        .delete(format!("{}/cluster/nodes/{}", API_BASE, TEST_NODE_ID))
+        .bearer_auth(&token)
+        .send()
+        .await;
+
     // 1. Add a node to the cluster (real API: POST /cluster/nodes/:name)
     let node = json!({
         "id": 1,
@@ -292,6 +299,14 @@ async fn test_cluster_operations() {
         .await;
 
     let _ = expect_2xx(response, "Failed to get cluster architecture").await;
+
+    // 4. Remove it again
+    let response = client
+        .delete(format!("{}/cluster/nodes/{}", API_BASE, TEST_NODE_ID))
+        .bearer_auth(&token)
+        .send()
+        .await;
+    let _ = expect_2xx(response, "Failed to remove cluster node").await;
 }
 
 /// `GET /api/cluster/status`, `DELETE /api/cluster/nodes/:name` (used by
