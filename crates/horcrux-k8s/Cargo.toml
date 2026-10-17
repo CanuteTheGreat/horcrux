@@ -1,0 +1,30 @@
+[package]
+name = "horcrux-k8s"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+horcrux-common = { path = "../../horcrux-common" }
+horcrux-core = { path = "../horcrux-core" }
+chrono = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true, optional = true }
+k8s-openapi = { workspace = true, optional = true }
+kube = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+sqlx = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[features]
+kubernetes = ["dep:kube", "dep:k8s-openapi", "dep:http"]

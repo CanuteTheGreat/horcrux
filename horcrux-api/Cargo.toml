@@ -15,6 +15,10 @@ path = "src/main.rs"
 
 [dependencies]
 horcrux-common = { path = "../horcrux-common" }
+horcrux-storage = { path = "../crates/horcrux-storage" }
+horcrux-monitoring = { path = "../crates/horcrux-monitoring" }
+horcrux-sdn = { path = "../crates/horcrux-sdn" }
+horcrux-k8s = { path = "../crates/horcrux-k8s", optional = true }
 horcrux-core = { path = "../crates/horcrux-core" }
 horcrux-nas = { path = "../crates/horcrux-nas", optional = true }
 
@@ -123,7 +127,7 @@ http = { workspace = true, optional = true }
 default = ["qemu", "lxc", "docker", "backup", "pam"]
 
 # Virtualization backends
-qemu = ["virt", "horcrux-core/qemu"]  # QEMU/KVM support with libvirt
+qemu = ["virt", "horcrux-core/qemu", "horcrux-monitoring/qemu"]  # QEMU/KVM support with libvirt
 # LXD/Incus support (VMs and containers, incl. their in-browser consoles)
 lxd = ["dep:tokio-tungstenite", "horcrux-core/lxd"]
 incus = ["dep:tokio-tungstenite", "horcrux-core/incus"]
@@ -141,7 +145,7 @@ backup = ["horcrux-core/backup"]      # Backup and restore
 pam = ["horcrux-core/pam"]
 
 # Kubernetes orchestration
-kubernetes = ["kube", "k8s-openapi", "http", "horcrux-core/kubernetes"]
+kubernetes = ["kube", "k8s-openapi", "http", "horcrux-core/kubernetes", "dep:horcrux-k8s", "horcrux-k8s/kubernetes"]
 
 # === NAS Features ===
 # Core NAS functionality

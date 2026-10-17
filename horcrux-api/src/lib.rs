@@ -38,11 +38,11 @@ pub mod vm;
 // Storage
 #[cfg(feature = "backup")]
 pub mod backup;
-pub mod storage;
+pub use horcrux_storage::storage;
 
 // Networking
-pub mod firewall;
-pub mod sdn;
+pub use horcrux_sdn::firewall;
+pub use horcrux_sdn::sdn;
 
 // Clustering
 pub mod cluster;
@@ -51,26 +51,26 @@ pub mod ha;
 pub mod migration;
 
 // Monitoring
-pub mod alerts;
-pub mod metrics;
+pub use horcrux_monitoring::alerts;
+pub use horcrux_monitoring::metrics;
 pub mod metrics_collector;
-pub mod metrics_explorer;
-pub mod monitoring;
-pub mod notification_channels;
-pub mod observability;
+pub use horcrux_monitoring::metrics_explorer;
+pub use horcrux_monitoring::monitoring;
+pub use horcrux_monitoring::notification_channels;
+pub use horcrux_monitoring::observability;
 
 // Console access
 pub mod console;
 
 // Cloud-init
-pub mod cloudinit;
+pub use horcrux_storage::cloudinit;
 
 // GPU passthrough
 pub mod gpu;
 
 // Kubernetes integration
 #[cfg(feature = "kubernetes")]
-pub mod kubernetes;
+pub use horcrux_k8s::kubernetes;
 
 // NAS (Network Attached Storage)
 #[cfg(feature = "nas")]
@@ -89,16 +89,16 @@ pub mod tls;
 pub use horcrux_core::encryption;
 
 // Templates
-pub mod template;
+pub use horcrux_storage::template;
 
 // Webhooks
-pub mod webhooks;
+pub use horcrux_monitoring::webhooks;
 
 // WebSocket
 pub mod websocket;
 
 // Prometheus metrics
-pub mod prometheus;
+pub use horcrux_monitoring::prometheus;
 
 // OpenAPI documentation
 pub mod openapi;
