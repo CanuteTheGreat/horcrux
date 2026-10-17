@@ -814,7 +814,7 @@ jobs:
           # src/features.rs reports compiled features to the UI (GET
           # /api/features); a Cargo feature missing from its table would be
           # invisible to the UI's hiding logic.
-          table=$(sed -n '/^feature_table!(/,/^);/p' horcrux-api/src/features.rs | grep -oE '"[a-z0-9-]+"' | tr -d '"' | sort -u)
+          table=$(sed -n '/^feature_table!(/,/^);/p' crates/horcrux-core/src/features.rs | grep -oE '"[a-z0-9-]+"' | tr -d '"' | sort -u)
           notable=$(comm -13 <(echo "$table") <(echo "$declared") | grep -vE '^(default|nas-full|nas-basic|nas-apple|nas-enterprise)$' || true)
           [ -z "$notable" ] || { echo "Cargo features missing from src/features.rs feature_table!: $notable"; exit 1; }
           for f in gentoo/app-emulation/horcrux/horcrux-*.ebuild deploy/gentoo/horcrux-*.ebuild; do

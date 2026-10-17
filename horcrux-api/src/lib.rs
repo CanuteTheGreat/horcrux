@@ -7,10 +7,10 @@
 #![allow(dead_code)]
 
 // Core modules
-pub mod config;
-pub mod error;
-pub mod features;
-pub mod validation;
+pub use horcrux_core::config;
+pub use horcrux_core::error;
+pub use horcrux_core::features;
+pub use horcrux_core::validation;
 
 // Application state
 pub mod state;
@@ -77,16 +77,16 @@ pub mod kubernetes;
 pub use horcrux_nas::nas;
 
 // Database
-pub mod db;
+pub use horcrux_core::db;
 
 // Secrets management
-pub mod secrets;
+pub use horcrux_core::secrets;
 
 // TLS
 pub mod tls;
 
 // Encryption
-pub mod encryption;
+pub use horcrux_core::encryption;
 
 // Templates
 pub mod template;
@@ -104,7 +104,7 @@ pub mod prometheus;
 pub mod openapi;
 
 // Logging configuration
-pub mod logging;
+pub use horcrux_core::logging;
 
 // Health checks and readiness probes
 pub mod health;

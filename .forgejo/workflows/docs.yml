@@ -6,6 +6,7 @@ on:
     paths:
       - 'docs/**'
       - 'horcrux-api/src/**'
+      - 'crates/**'
       - '.forgejo/workflows/docs.yml'
 
 # Concurrency (2026-10-17, ctg-infrastructure ollivanders/forgejo/ci-supersede-sweeper):

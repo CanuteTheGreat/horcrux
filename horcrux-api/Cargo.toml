@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 horcrux-common = { path = "../horcrux-common" }
+horcrux-core = { path = "../crates/horcrux-core" }
 horcrux-nas = { path = "../crates/horcrux-nas", optional = true }
 
 # Web framework
@@ -122,55 +123,55 @@ http = { workspace = true, optional = true }
 default = ["qemu", "lxc", "docker", "backup", "pam"]
 
 # Virtualization backends
-qemu = ["virt"]  # QEMU/KVM support with libvirt
+qemu = ["virt", "horcrux-core/qemu"]  # QEMU/KVM support with libvirt
 # LXD/Incus support (VMs and containers, incl. their in-browser consoles)
-lxd = ["dep:tokio-tungstenite"]
-incus = ["dep:tokio-tungstenite"]
+lxd = ["dep:tokio-tungstenite", "horcrux-core/lxd"]
+incus = ["dep:tokio-tungstenite", "horcrux-core/incus"]
 
 # Container runtimes
-lxc = []         # LXC containers
-docker = []      # Docker containers
-podman = []      # Podman containers
+lxc = ["horcrux-core/lxc"]         # LXC containers
+docker = ["horcrux-core/docker"]      # Docker containers
+podman = ["horcrux-core/podman"]      # Podman containers
 
 # Additional features
-cluster = []     # Clustering/HA support
-backup = []      # Backup and restore
+cluster = ["horcrux-core/cluster"]     # Clustering/HA support
+backup = ["horcrux-core/backup"]      # Backup and restore
 
 # Linux-PAM realm (host accounts). Links libpam.
-pam = []
+pam = ["horcrux-core/pam"]
 
 # Kubernetes orchestration
-kubernetes = ["kube", "k8s-openapi", "http"]
+kubernetes = ["kube", "k8s-openapi", "http", "horcrux-core/kubernetes"]
 
 # === NAS Features ===
 # Core NAS functionality
-nas = ["dep:horcrux-nas", "horcrux-nas/nas"]                    # Core NAS module (shares, users, groups)
+nas = ["dep:horcrux-nas", "horcrux-nas/nas", "horcrux-core/nas"]                    # Core NAS module (shares, users, groups)
 
 # File sharing protocols
-smb = ["nas", "horcrux-nas/smb"]               # SMB/Samba file sharing (Windows/cross-platform)
-nfs-server = ["nas", "horcrux-nas/nfs-server"]        # NFS server for Unix/Linux exports
-afp = ["nas", "horcrux-nas/afp"]               # AFP/Netatalk for macOS file sharing
-webdav = ["nas", "horcrux-nas/webdav"]            # WebDAV file access over HTTP/HTTPS
-ftp = ["nas", "horcrux-nas/ftp"]               # FTP and SFTP server support
+smb = ["nas", "horcrux-nas/smb", "horcrux-core/smb"]               # SMB/Samba file sharing (Windows/cross-platform)
+nfs-server = ["nas", "horcrux-nas/nfs-server", "horcrux-core/nfs-server"]        # NFS server for Unix/Linux exports
+afp = ["nas", "horcrux-nas/afp", "horcrux-core/afp"]               # AFP/Netatalk for macOS file sharing
+webdav = ["nas", "horcrux-nas/webdav", "horcrux-core/webdav"]            # WebDAV file access over HTTP/HTTPS
+ftp = ["nas", "horcrux-nas/ftp", "horcrux-core/ftp"]               # FTP and SFTP server support
 
 # NAS Authentication backends
-nas-auth = ["nas", "horcrux-nas/nas-auth"]          # Core NAS authentication module
-ldap = ["nas-auth", "horcrux-nas/ldap"]         # LDAP client integration
-ldap-server = ["nas-auth", "horcrux-nas/ldap-server"]  # LDAP server (OpenLDAP slapd)
-kerberos = ["nas-auth", "horcrux-nas/kerberos"]     # Kerberos (MIT krb5) authentication
-ad = ["nas-auth", "kerberos", "horcrux-nas/ad"]  # Active Directory domain integration
+nas-auth = ["nas", "horcrux-nas/nas-auth", "horcrux-core/nas-auth"]          # Core NAS authentication module
+ldap = ["nas-auth", "horcrux-nas/ldap", "horcrux-core/ldap"]         # LDAP client integration
+ldap-server = ["nas-auth", "horcrux-nas/ldap-server", "horcrux-core/ldap-server"]  # LDAP server (OpenLDAP slapd)
+kerberos = ["nas-auth", "horcrux-nas/kerberos", "horcrux-core/kerberos"]     # Kerberos (MIT krb5) authentication
+ad = ["nas-auth", "kerberos", "horcrux-nas/ad", "horcrux-core/ad"]  # Active Directory domain integration
 
 # NAS Services
-timemachine = ["afp", "horcrux-nas/timemachine"]       # macOS Time Machine backup target
-s3-gateway = ["nas", "horcrux-nas/s3-gateway"]        # S3-compatible API gateway (MinIO)
-iscsi-target = ["nas", "horcrux-nas/iscsi-target"]      # iSCSI target for block storage
-rsync-server = ["nas", "horcrux-nas/rsync-server"]      # Rsync daemon for efficient backups
+timemachine = ["afp", "horcrux-nas/timemachine", "horcrux-core/timemachine"]       # macOS Time Machine backup target
+s3-gateway = ["nas", "horcrux-nas/s3-gateway", "horcrux-core/s3-gateway"]        # S3-compatible API gateway (MinIO)
+iscsi-target = ["nas", "horcrux-nas/iscsi-target", "horcrux-core/iscsi-target"]      # iSCSI target for block storage
+rsync-server = ["nas", "horcrux-nas/rsync-server", "horcrux-core/rsync-server"]      # Rsync daemon for efficient backups
 
 # NAS Storage backends (runtime dependencies)
-nas-zfs = ["nas", "horcrux-nas/nas-zfs"]           # ZFS pool/dataset optimizations for NAS
-nas-btrfs = ["nas", "horcrux-nas/nas-btrfs"]         # Btrfs subvolume/RAID support for NAS
-nas-mdraid = ["nas", "horcrux-nas/nas-mdraid"]        # Linux software RAID (mdadm)
-nas-lvm = ["nas", "horcrux-nas/nas-lvm"]           # LVM thin provisioning for NAS
+nas-zfs = ["nas", "horcrux-nas/nas-zfs", "horcrux-core/nas-zfs"]           # ZFS pool/dataset optimizations for NAS
+nas-btrfs = ["nas", "horcrux-nas/nas-btrfs", "horcrux-core/nas-btrfs"]         # Btrfs subvolume/RAID support for NAS
+nas-mdraid = ["nas", "horcrux-nas/nas-mdraid", "horcrux-core/nas-mdraid"]        # Linux software RAID (mdadm)
+nas-lvm = ["nas", "horcrux-nas/nas-lvm", "horcrux-core/nas-lvm"]           # LVM thin provisioning for NAS
 
 # NAS Feature bundles for convenience
 nas-full = [

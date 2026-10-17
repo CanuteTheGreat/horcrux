@@ -451,3 +451,84 @@ impl FirewallManager {
         Ok(())
     }
 }
+
+/// Persistence through the config store (moved from db/config_store.rs so
+/// the database layer no longer depends on this module).
+#[cfg(test)]
+#[allow(unused_imports)]
+mod config_store_persistence_tests {
+    use crate::db::config_store::{kinds, ConfigStore};
+    use crate::db::Database;
+
+    async fn store() -> (tempfile::TempDir, Database, ConfigStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}", dir.path().join("t.db").display());
+        let db = Database::new(&url).await.unwrap();
+        db.migrate().await.unwrap();
+        let s = ConfigStore::new(&db);
+        (dir, db, s)
+    }
+
+    #[tokio::test]
+    async fn firewall_rules_reload_into_their_scopes() {
+        use crate::firewall::{
+            Direction, FirewallAction, FirewallManager, FirewallRule, FirewallScope,
+        };
+        let (_dir, db, _s) = store().await;
+        let db = std::sync::Arc::new(db);
+        let rule = |id: &str| FirewallRule {
+            id: id.into(),
+            enabled: true,
+            action: FirewallAction::Accept,
+            direction: Direction::In,
+            protocol: None,
+            source: None,
+            dest: None,
+            sport: None,
+            dport: Some("22".into()),
+            comment: None,
+            log: false,
+            position: 0,
+        };
+        {
+            let fw = FirewallManager::with_database(db.clone()).await.unwrap();
+            fw.add_rule(FirewallScope::Datacenter, rule("a"))
+                .await
+                .unwrap();
+            fw.add_rule(FirewallScope::Datacenter, rule("b"))
+                .await
+                .unwrap();
+            fw.add_rule(FirewallScope::Node("n1".into()), rule("a"))
+                .await
+                .unwrap();
+            // Duplicate id within a scope is rejected.
+            assert!(fw
+                .add_rule(FirewallScope::Datacenter, rule("a"))
+                .await
+                .is_err());
+            fw.remove_rule(FirewallScope::Datacenter, "a")
+                .await
+                .unwrap();
+        }
+        let fw = FirewallManager::with_database(db).await.unwrap();
+        let dc: Vec<String> = fw
+            .list_rules(FirewallScope::Datacenter)
+            .await
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(dc, vec!["b".to_string()]);
+        assert_eq!(
+            fw.list_rules(FirewallScope::Node("n1".into())).await.len(),
+            1
+        );
+        for scope in [
+            FirewallScope::Datacenter,
+            FirewallScope::Node("x:y".into()),
+            FirewallScope::Vm("v".into()),
+            FirewallScope::Container("c".into()),
+        ] {
+            assert_eq!(FirewallScope::from_key(&scope.key()), Some(scope));
+        }
+    }
+}

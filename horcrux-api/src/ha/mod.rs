@@ -1339,3 +1339,62 @@ mod tests {
         assert_eq!(resource.state, HaState::Error);
     }
 }
+
+/// Persistence through the config store (moved from db/config_store.rs so
+/// the database layer no longer depends on this module).
+#[cfg(test)]
+#[allow(unused_imports)]
+mod config_store_persistence_tests {
+    use crate::db::config_store::{kinds, ConfigStore};
+    use crate::db::Database;
+
+    async fn store() -> (tempfile::TempDir, Database, ConfigStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}", dir.path().join("t.db").display());
+        let db = Database::new(&url).await.unwrap();
+        db.migrate().await.unwrap();
+        let s = ConfigStore::new(&db);
+        (dir, db, s)
+    }
+
+    #[tokio::test]
+    async fn ha_state_transitions_and_enabled_flag_persist() {
+        use crate::ha::{HaConfig, HaGroup, HaManager, HaState};
+        let (_dir, db, _s) = store().await;
+        let db = std::sync::Arc::new(db);
+        {
+            let ha = HaManager::with_database(db.clone()).await.unwrap();
+            ha.enable().await;
+            ha.add_group(HaGroup {
+                name: "g".into(),
+                nodes: vec!["n1".into(), "n2".into()],
+                restricted: false,
+                no_failback: false,
+            })
+            .await
+            .unwrap();
+            ha.add_resource(HaConfig {
+                vm_id: "vm1".into(),
+                group: "g".into(),
+                max_restart: 3,
+                max_relocate: 1,
+                state: HaState::Started,
+                architecture: Default::default(),
+                required_passthrough_devices: Default::default(),
+            })
+            .await
+            .unwrap();
+            ha.update_resource_state("vm1", HaState::Started, Some("n1".into()))
+                .await
+                .unwrap();
+            // A VM failure bumps the restart counter; that must persist too.
+            ha.handle_vm_failure("vm1", "n1").await.unwrap();
+        }
+        let ha = HaManager::with_database(db).await.unwrap();
+        assert!(ha.is_enabled().await);
+        assert_eq!(ha.list_groups().await.len(), 1);
+        let r = ha.get_resource("vm1").await.expect("resource reloaded");
+        assert_eq!(r.current_node.as_deref(), Some("n1"));
+        assert_eq!(r.restart_count, 1);
+    }
+}

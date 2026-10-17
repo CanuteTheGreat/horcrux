@@ -461,3 +461,59 @@ mod tests {
         assert_eq!(next_dt.minute(), 0);
     }
 }
+
+/// Persistence through the config store (moved from db/config_store.rs so
+/// the database layer no longer depends on this module).
+#[cfg(test)]
+#[allow(unused_imports)]
+mod config_store_persistence_tests {
+    use crate::db::config_store::{kinds, ConfigStore};
+    use crate::db::Database;
+
+    async fn store() -> (tempfile::TempDir, Database, ConfigStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}", dir.path().join("t.db").display());
+        let db = Database::new(&url).await.unwrap();
+        db.migrate().await.unwrap();
+        let s = ConfigStore::new(&db);
+        (dir, db, s)
+    }
+
+    #[tokio::test]
+    async fn snapshot_schedule_update_does_not_resurrect_deleted_schedule() {
+        use crate::vm::snapshot::VmSnapshotManager;
+        use crate::vm::snapshot_scheduler::{
+            ScheduleFrequency, SnapshotSchedule, SnapshotScheduler,
+        };
+        let (dir, db, s) = store().await;
+        let db = std::sync::Arc::new(db);
+        let snaps = std::sync::Arc::new(tokio::sync::RwLock::new(VmSnapshotManager::new(
+            dir.path().join("snaps").to_string_lossy().to_string(),
+        )));
+        let sched = SnapshotScheduler::with_database(snaps.clone(), db.clone())
+            .await
+            .unwrap();
+        let schedule = SnapshotSchedule {
+            id: "s1".into(),
+            vm_id: "vm1".into(),
+            name: "nightly".into(),
+            frequency: ScheduleFrequency::Hourly,
+            retention_count: 2,
+            enabled: true,
+            include_memory: false,
+            last_run: None,
+            next_run: 0,
+            created_at: 0,
+        };
+        sched.add_schedule(schedule.clone()).await.unwrap();
+        sched.remove_schedule("s1").await.unwrap();
+        assert!(sched.update_schedule(schedule).await.is_err());
+        assert!(s
+            .load_values::<SnapshotSchedule>(kinds::SNAPSHOT_SCHEDULE)
+            .await
+            .unwrap()
+            .is_empty());
+        let reloaded = SnapshotScheduler::with_database(snaps, db).await.unwrap();
+        assert!(reloaded.list_schedules().await.is_empty());
+    }
+}
