@@ -18,24 +18,27 @@ info:
     - **Live migration**: With auto-rollback and health checks
 
     ## Authentication
-    All endpoints (except `/api/health` and `/api/auth/login`) require authentication.
+    All endpoints (except `/api/health` and `/api/auth/login`) require authentication,
+    and every endpoint checks the caller's privileges (Proxmox-style ACL: a role
+    on a path such as `/vms/<id>`; see docs/ACCESS_CONTROL.md). The API serves
+    HTTPS; download the node's CA from `/api/tls/ca.pem` to verify it.
 
     ### JWT Token
     ```bash
     # Login to get token
-    curl -X POST http://localhost:8006/api/auth/login \
+    curl --cacert horcrux-local-ca.pem -X POST https://localhost:8006/api/auth/login \
       -H "Content-Type: application/json" \
       -d '{"username":"admin","password":"admin","realm":"local"}'
 
     # Use token in requests
-    curl http://localhost:8006/api/vms \
+    curl --cacert horcrux-local-ca.pem https://localhost:8006/api/vms \
       -H "Authorization: Bearer <token>"
     ```
 
     ### API Key
     ```bash
     # Use API key directly
-    curl http://localhost:8006/api/vms \
+    curl --cacert horcrux-local-ca.pem https://localhost:8006/api/vms \
       -H "X-API-Key: <api-key>"
     ```
   contact:
@@ -46,7 +49,7 @@ info:
     url: https://www.gnu.org/licenses/gpl-3.0.html
 
 servers:
-  - url: http://localhost:8006
+  - url: https://localhost:8006
     description: Local development server
   - url: https://horcrux.example.com
     description: Production server
@@ -160,8 +163,12 @@ paths:
   /api/auth/register:
     post:
       tags: [Authentication]
-      summary: Register new user
-      description: Create a new user account
+      summary: Register new user (disabled by default)
+      description: >-
+        Self-registration. Returns 403 unless the operator enabled it
+        (HORCRUX_ALLOW_REGISTRATION=true); accounts created this way have no
+        permissions until an administrator grants a role. Administrators
+        create users with POST /api/users.
       security: []
       requestBody:
         required: true

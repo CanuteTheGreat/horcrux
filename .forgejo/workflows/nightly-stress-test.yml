@@ -227,13 +227,14 @@ jobs:
           HORCRUX_CNI_CONF_DIR=/tmp/horcrux-stress-cni/conf.d \
           ADMIN_PASSWORD=admin \
           RATE_LIMIT_MAX_REQUESTS=1000000 \
+          AUTH_RATE_LIMIT_MAX_REQUESTS=100000 \
           RUST_LOG=info \
           nohup ./target/debug/horcrux-api > /tmp/horcrux-stress-api.log 2>&1 &
           echo $! > /tmp/horcrux-stress-api.pid
 
           echo "Waiting for horcrux-api to become healthy..."
           for i in $(seq 1 60); do
-            if curl -sf http://127.0.0.1:8007/api/health > /dev/null 2>&1; then
+            if curl -sfk https://127.0.0.1:8007/api/health > /dev/null 2>&1; then
               echo "horcrux-api is up (pid $(cat /tmp/horcrux-stress-api.pid))"
               exit 0
             fi
@@ -250,7 +251,7 @@ jobs:
         # cycles well within the timeout-minutes budget, continuously
         # polling /api/health in parallel the whole time.
         env:
-          NIGHTLY_STRESS_API_BASE: http://127.0.0.1:8007/api
+          NIGHTLY_STRESS_API_BASE: https://127.0.0.1:8007/api
           NIGHTLY_STRESS_API_PIDFILE: /tmp/horcrux-stress-api.pid
           NIGHTLY_STRESS_LOAD_SECONDS: "150"
           NIGHTLY_STRESS_LOAD_CONCURRENCY: "6"

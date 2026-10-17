@@ -34,3 +34,16 @@ If you are an AI coding agent working on this repo and are unsure whether
 something should be Gentoo-specific, ask -- do not assume "generic Linux
 container" is a safe default here. It has caused real, silent architectural
 drift before.
+
+## Access control: every route is permission-checked
+
+Protected routes run through `middleware/rbac.rs`, which asks
+`horcrux-api/src/auth/privileges.rs::requirement(method, path)` what the
+request needs (a Proxmox-style privilege on an ACL path). When you add a
+route under a new top-level `/api/<area>`, add a rule for it there - CI's
+`every_registered_route_is_mapped` test fails otherwise, and an unmapped
+area is administrators-only. Tests must create users through the admin API
+(`POST /api/users` + `POST /api/acl`): public registration is disabled. The
+API serves HTTPS (self-issued certificate): test clients use
+`https://localhost:8006` with `danger_accept_invalid_certs(true)` (or the
+node CA from `/api/tls/ca.pem`). See docs/ACCESS_CONTROL.md.

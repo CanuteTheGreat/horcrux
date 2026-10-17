@@ -31,10 +31,12 @@ pub struct HorcruxClient {
 }
 
 impl HorcruxClient {
-    /// Create a new client
-    pub fn new(base_url: &str) -> Self {
+    /// `insecure` skips TLS certificate verification (Horcrux serves HTTPS
+    /// with a certificate from its own node CA unless one was installed).
+    pub fn with_options(base_url: &str, insecure: bool) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
+            .danger_accept_invalid_certs(insecure)
             .build()
             .expect("Failed to create HTTP client");
 
@@ -61,6 +63,8 @@ impl HorcruxClient {
 
         #[derive(Deserialize)]
         struct LoginResponse {
+            // the API calls it `ticket`
+            #[serde(alias = "ticket")]
             token: String,
         }
 
@@ -538,13 +542,14 @@ mod tests {
 
     #[test]
     fn test_client_creation() {
-        let client = HorcruxClient::new("http://localhost:8006");
+        let client = HorcruxClient::with_options("https://localhost:8006", false);
         assert!(client.token.is_none());
     }
 
     #[test]
     fn test_client_with_token() {
-        let client = HorcruxClient::new("http://localhost:8006").with_token("test-token");
+        let client =
+            HorcruxClient::with_options("https://localhost:8006", false).with_token("test-token");
         assert_eq!(client.token, Some("test-token".to_string()));
     }
 }

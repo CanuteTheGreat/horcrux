@@ -25,6 +25,19 @@ pub struct HorcruxConfig {
     pub logging: LoggingConfig,
     /// CNI (Container Networking Interface) configuration
     pub cni: CniConfig,
+    /// Authentication settings
+    #[serde(default)]
+    pub auth: AuthConfig,
+}
+
+/// Authentication settings
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AuthConfig {
+    /// Allow anyone to create an account at `/api/auth/register` (off by
+    /// default; such accounts start without any permissions). Env:
+    /// `HORCRUX_ALLOW_REGISTRATION`.
+    #[serde(default)]
+    pub allow_registration: bool,
 }
 
 /// Server configuration
@@ -34,8 +47,12 @@ pub struct ServerConfig {
     pub host: String,
     /// Port to listen on
     pub port: u16,
-    /// Enable TLS
+    /// Serve HTTPS (default). Turn off only behind a TLS-terminating proxy.
     pub tls_enabled: bool,
+    /// Extra plain-HTTP port that redirects to HTTPS and answers ACME
+    /// HTTP-01 challenges (80 for Let's Encrypt). Env: `HORCRUX_HTTP_REDIRECT_PORT`.
+    #[serde(default)]
+    pub http_redirect_port: Option<u16>,
 }
 
 /// Storage paths configuration
@@ -120,6 +137,7 @@ impl Default for ServerConfig {
             host: "0.0.0.0".to_string(),
             port: 8006,
             tls_enabled: true,
+            http_redirect_port: None,
         }
     }
 }
@@ -243,7 +261,19 @@ impl HorcruxConfig {
             }
         }
         if let Ok(tls) = std::env::var("HORCRUX_TLS_ENABLED") {
-            self.server.tls_enabled = tls.parse().unwrap_or(true);
+            self.server.tls_enabled = !matches!(
+                tls.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            );
+        }
+        if let Ok(port) = std::env::var("HORCRUX_HTTP_REDIRECT_PORT") {
+            self.server.http_redirect_port = port.trim().parse().ok().filter(|p| *p != 0);
+        }
+        if let Ok(v) = std::env::var("HORCRUX_ALLOW_REGISTRATION") {
+            self.auth.allow_registration = matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            );
         }
 
         // Paths
@@ -289,6 +319,12 @@ impl HorcruxConfig {
         }
         if let Ok(path) = std::env::var("HORCRUX_SSL_DIR") {
             self.tls.ssl_dir = PathBuf::from(path);
+            if std::env::var("HORCRUX_TLS_CERT").is_err() {
+                self.tls.cert_path = self.tls.ssl_dir.join("cert.pem");
+            }
+            if std::env::var("HORCRUX_TLS_KEY").is_err() {
+                self.tls.key_path = self.tls.ssl_dir.join("key.pem");
+            }
         }
 
         // QEMU

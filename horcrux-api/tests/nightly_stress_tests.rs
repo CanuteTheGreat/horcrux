@@ -13,7 +13,7 @@
 //!
 //! `test_sustained_concurrent_api_load` additionally requires a running
 //! `horcrux-api` server reachable at `NIGHTLY_STRESS_API_BASE`
-//! (default `http://127.0.0.1:8007/api`) - the workflow starts one
+//! (default `https://127.0.0.1:8007/api`) - the workflow starts one
 //! dedicated to this suite (distinct port from ci.yml's 8006 /
 //! nightly-realistic-test's in-process library calls) before running
 //! `cargo test`.
@@ -468,7 +468,7 @@ async fn test_failure_injection_and_reconciliation() {
 #[tokio::test]
 #[ignore]
 async fn test_sustained_concurrent_api_load() {
-    let api_base = env_or("NIGHTLY_STRESS_API_BASE", "http://127.0.0.1:8007/api");
+    let api_base = env_or("NIGHTLY_STRESS_API_BASE", "https://127.0.0.1:8007/api");
     let pid_file = env_or("NIGHTLY_STRESS_API_PIDFILE", "/tmp/horcrux-stress-api.pid");
     let duration = Duration::from_secs(
         env_or("NIGHTLY_STRESS_LOAD_SECONDS", "150")
@@ -498,6 +498,7 @@ async fn test_sustained_concurrent_api_load() {
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
+        .danger_accept_invalid_certs(true)
         .build()
         .unwrap();
 

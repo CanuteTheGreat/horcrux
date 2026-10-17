@@ -12,6 +12,9 @@ struct User {
     email: Option<String>,
     role: String,
     enabled: bool,
+    /// roles granted on /
+    #[serde(default)]
+    roles: Vec<String>,
 }
 
 #[derive(Tabled, Serialize)]
@@ -28,8 +31,15 @@ impl From<User> for UserRow {
         Self {
             id: u.id,
             username: u.username,
-            role: u.role,
-            email: u.email.unwrap_or_else(|| "-".to_string()),
+            role: if u.roles.is_empty() {
+                "-".to_string()
+            } else {
+                u.roles.join(",")
+            },
+            email: u
+                .email
+                .filter(|e| !e.is_empty())
+                .unwrap_or_else(|| "-".to_string()),
             status: if u.enabled { "Enabled" } else { "Disabled" }.to_string(),
         }
     }
@@ -47,7 +57,7 @@ impl From<Role> for RoleRow {
         Self {
             name: r.name,
             description: r.description,
-            permissions: r.permissions.join(", "),
+            permissions: r.privileges.join(", "),
         }
     }
 }
@@ -61,19 +71,22 @@ struct CreateUserRequest {
 
 #[derive(Serialize)]
 struct ChangePasswordRequest {
-    password: String,
+    new_password: String,
 }
 
 #[derive(Serialize)]
-struct GrantPermissionRequest {
-    permission: String,
+struct GrantRequest {
+    path: String,
+    subject_type: String,
+    subject: String,
+    role: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Role {
     name: String,
     description: String,
-    permissions: Vec<String>,
+    privileges: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -135,7 +148,9 @@ pub async fn handle_user_command(
                 .find(|u| u.username == username)
                 .ok_or_else(|| anyhow::anyhow!("User '{}' not found", username))?;
 
-            let request = ChangePasswordRequest { password };
+            let request = ChangePasswordRequest {
+                new_password: password,
+            };
             api.post_empty(&format!("/api/users/{}/password", user.id), &request)
                 .await?;
             output::print_success(&format!("Password changed for user '{}'", username));
@@ -157,11 +172,17 @@ pub async fn handle_user_command(
                 .find(|u| u.username == username)
                 .ok_or_else(|| anyhow::anyhow!("User '{}' not found", username))?;
 
-            let request = GrantPermissionRequest {
-                permission: permission.clone(),
+            let (role, path) = match permission.split_once('@') {
+                Some((r, p)) => (r.to_string(), p.to_string()),
+                None => (permission.clone(), "/".to_string()),
             };
-            api.post_empty(&format!("/api/permissions/{}", user.id), &request)
-                .await?;
+            let request = GrantRequest {
+                path,
+                subject_type: "user".into(),
+                subject: user.id.clone(),
+                role,
+            };
+            api.post_empty("/api/acl", &request).await?;
             output::print_success(&format!(
                 "Permission '{}' granted to '{}'",
                 permission, username

@@ -18,10 +18,22 @@ Covers the daily-QA findings:
   * Monitoring > Notifications and Metrics Explorer called routes that did
     not exist (a channel test must really reach a webhook receiver; the
     explorer must chart real samples)
+
+It also covers access control end to end over HTTPS (the browser trusts the node's
+local CA, so WebAuthn runs in a real secure context):
+  * login page, authenticator-app (TOTP) enrollment from the Account
+    Security page, then a login that asks for the code
+  * security key enrollment and login with Chromium's virtual authenticator
+  * permission grants, groups, realms and the certificate page
 """
+import base64
+import hashlib
+import hmac
 import http.server
 import json
 import os
+import ssl
+import struct
 import re
 import subprocess
 import sys
@@ -32,7 +44,25 @@ import urllib.request
 
 from playwright.sync_api import expect, sync_playwright
 
-BASE = os.environ.get("BASE_URL", "http://127.0.0.1:8006")
+BASE = os.environ.get("BASE_URL", "https://localhost:8006")
+# Trust the node's local CA when given (CI), never skip verification silently.
+_CA = os.environ.get("HORCRUX_CA_FILE")
+SSL = ssl.create_default_context(cafile=_CA) if _CA else ssl._create_unverified_context()
+TFA_USER = "e2e-tfa-user"
+TFA_PASS = "e2e-tfa-pass-1"
+
+
+def urlopen(req):
+    return urllib.request.urlopen(req, context=SSL)
+
+
+def totp_code(secret_b32, t=None):
+    """RFC 6238 code (SHA1, 6 digits, 30 s) - what an authenticator app shows."""
+    key = base64.b32decode(secret_b32 + "=" * (-len(secret_b32) % 8))
+    counter = int((t or time.time()) // 30)
+    h = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+    o = h[19] & 15
+    return "%06d" % ((struct.unpack(">I", h[o:o + 4])[0] & 0x7FFFFFFF) % 1000000)
 CT = "e2e-ui-ct"
 STACK = "e2e-ui-stack"
 EV_CT = "e2e-ui-events"
@@ -50,7 +80,7 @@ def token():
         req = urllib.request.Request(f"{BASE}/api/auth/login",
                                      data=json.dumps({"username": "admin", "password": "admin"}).encode(),
                                      headers={"Content-Type": "application/json"})
-        _TOKEN.append(json.load(urllib.request.urlopen(req))["ticket"])
+        _TOKEN.append(json.load(urlopen(req))["ticket"])
     return _TOKEN[0]
 
 
@@ -59,7 +89,7 @@ def _req(method, path, tok, body=None):
     r = urllib.request.Request(f"{BASE}{path}", data=data, method=method,
                                headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(r) as resp:
+        with urlopen(r) as resp:
             raw = resp.read()
             return json.loads(raw) if raw else None
     except urllib.error.HTTPError as e:
@@ -127,6 +157,9 @@ def cleanup():
                     pass
                 time.sleep(1)
                 _req("DELETE", f"/api/vms/{v['id']}", tok)
+        _req("DELETE", f"/api/users/{TFA_USER}", tok)
+        _req("DELETE", "/api/groups/e2e-ui-group", tok)
+        _req("DELETE", "/api/access/realms/e2e-ui-ldap", tok)
     except Exception as e:  # server may not be up yet on the first call
         print(f"cleanup: {e}")
 
@@ -136,15 +169,16 @@ def main():
     docker("pull", "-q", "busybox:latest", check=True)
 
     # favicon is a real image, not a 404
-    with urllib.request.urlopen(f"{BASE}/favicon.ico") as r:
+    with urlopen(f"{BASE}/favicon.ico") as r:
         assert r.status == 200 and r.headers.get_content_type() != "text/html", r.headers
-    with urllib.request.urlopen(f"{BASE}/favicon.png") as r:
+    with urlopen(f"{BASE}/favicon.png") as r:
         assert r.headers.get_content_type() == "image/png", r.headers
 
     console_errors = []
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        page = browser.new_page()
+        context = browser.new_context()
+        page = context.new_page()
         page.on("console", lambda m: m.type == "error" and console_errors.append(m.text))
         page.on("dialog", lambda d: d.accept(d.default_value) if d.type == "prompt" else d.accept())
 
@@ -395,6 +429,7 @@ def main():
         page.goto(f"{BASE}/backup/verify")
         page.locator("#verify-all-btn").click()
         expect(page.locator("#verify-summary")).to_contain_text("0 failed", timeout=180000)
+        access_control_checks(context, page)
 
         # ---- VM display: Create VM form -> console page -> live consoles ----
         page.goto(f"{BASE}/vms/create")
@@ -460,6 +495,117 @@ def main():
     bad = [e for e in console_errors if "favicon" in e or "missing field" in e]
     assert not bad, f"console errors: {bad}"
     print("UI E2E: all checks passed")
+
+
+def ui_login(page, user, password):
+    page.goto(f"{BASE}/login")
+    page.fill("#login-username", user)
+    page.fill("#login-password", password)
+    page.locator("#login-submit").click()
+
+
+def ui_logout(page):
+    page.locator("#logout-button").click()
+    page.wait_for_url(f"{BASE}/login")
+
+
+def access_control_checks(context, page):
+    tok = token()
+    # http on the HTTPS port redirects
+    plain = BASE.replace("https://", "http://", 1)
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+
+    try:
+        urllib.request.build_opener(NoRedirect).open(f"{plain}/vms")
+        raise AssertionError("plain HTTP was served")
+    except urllib.error.HTTPError as e:
+        assert e.code == 308 and e.headers["Location"].startswith("https://"), (e.code, e.headers)
+
+    # ---- admin pages: permissions/groups, realms, certificates ----------
+    page.goto(f"{BASE}/auth/permissions")
+    page.fill("#group-name", "e2e-ui-group")
+    page.locator("#group-submit").click()
+    expect(page.locator("#groups-table")).to_contain_text("e2e-ui-group", timeout=30000)
+    assert any(g["name"] == "e2e-ui-group" for g in api_get("/api/groups", tok))
+
+    page.goto(f"{BASE}/auth/realms")
+    page.fill("#realm-name", "e2e-ui-ldap")
+    page.locator("#realm-submit").click()
+    expect(page.locator("#realms-table")).to_contain_text("e2e-ui-ldap", timeout=30000)
+    realm = next(r for r in api_get("/api/access/realms", tok) if r["name"] == "e2e-ui-ldap")
+    assert realm["realm_type"] == "ldap", realm
+
+    page.goto(f"{BASE}/system/certificates")
+    expect(page.locator("#cert-fingerprint")).not_to_have_text("", timeout=30000)
+    before = page.locator("#cert-fingerprint").inner_text()
+    page.fill("#cert-extra-san", "e2e-ui.horcrux.test")
+    page.locator("#cert-regenerate").click()
+    expect(page.locator("#cert-notice")).to_be_visible(timeout=30000)
+    expect(page.locator("#cert-fingerprint")).not_to_have_text(before, timeout=30000)
+    expect(page.locator("#cert-san")).to_contain_text("e2e-ui.horcrux.test")
+
+    # ---- a user created by the admin logs in and enrolls TOTP -----------
+    _req("DELETE", f"/api/users/{TFA_USER}", tok)
+    api_post("/api/users", tok, {"username": TFA_USER, "password": TFA_PASS})
+    api_post("/api/acl", tok, {"path": "/vms", "subject_type": "user", "subject": TFA_USER, "role": "VMUser"})
+    ui_logout(page)
+    ui_login(page, TFA_USER, TFA_PASS)
+    page.wait_for_url(f"{BASE}/")
+    expect(page.locator("#navbar-user")).to_contain_text(TFA_USER, timeout=30000)
+    page.goto(f"{BASE}/auth/mfa")
+    page.locator("#mfa-add-totp").click()
+    expect(page.locator("#totp-setup svg")).to_be_visible(timeout=30000)
+    secret = page.locator("#totp-secret").inner_text().strip()
+    page.fill("#totp-code", totp_code(secret))
+    page.locator("#totp-confirm").click()
+    expect(page.locator("#recovery-codes")).to_be_visible(timeout=30000)
+    expect(page.locator("#mfa-methods")).to_contain_text("Authenticator app")
+
+    # ---- security key via Chromium's virtual authenticator --------------
+    cdp = context.new_cdp_session(page)
+    cdp.send("WebAuthn.enable")
+    cdp.send("WebAuthn.addVirtualAuthenticator", {"options": {
+        "protocol": "ctap2", "transport": "usb", "hasResidentKey": False,
+        "hasUserVerification": True, "isUserVerified": True}})
+    page.fill("#mfa-factor-name", "virtual key")
+    page.locator("#mfa-add-webauthn").click()
+    expect(page.locator("#mfa-notice")).to_contain_text("Security key added", timeout=30000)
+    expect(page.locator("#mfa-methods")).to_contain_text("virtual key")
+
+    # ---- next login asks for the second factor: code ---------------------
+    ui_logout(page)
+    ui_login(page, TFA_USER, TFA_PASS)
+    expect(page.locator("#tfa-step")).to_be_visible(timeout=30000)
+    page.fill("#tfa-code", totp_code(secret, time.time() + 30))
+    page.locator("#tfa-submit").click()
+    page.wait_for_url(f"{BASE}/", timeout=30000)
+    # ---- ... or the security key ------------------------------------------
+    ui_logout(page)
+    ui_login(page, TFA_USER, TFA_PASS)
+    expect(page.locator("#tfa-webauthn")).to_be_visible(timeout=30000)
+    page.locator("#tfa-webauthn").click()
+    page.wait_for_url(f"{BASE}/", timeout=30000)
+    expect(page.locator("#navbar-user")).to_contain_text(TFA_USER)
+    # a VMUser can't open user administration data
+    page.goto(f"{BASE}/auth/users")
+    status = api_status("/api/users", page)
+    assert status == [403], status
+    ui_logout(page)
+    _req("DELETE", f"/api/users/{TFA_USER}", tok)
+    print("UI E2E: login, TOTP + security key 2FA, permissions, realms, certificates passed")
+
+
+def api_status(path, page):
+    """Status of GET `path` with the browser page's own stored token."""
+    t = page.evaluate("() => localStorage.getItem('horcrux_auth_token')")
+    try:
+        urlopen(urllib.request.Request(f"{BASE}{path}", headers={"Authorization": f"Bearer {t}"}))
+        return [200]
+    except urllib.error.HTTPError as e:
+        return [e.code]
 
 
 if __name__ == "__main__":

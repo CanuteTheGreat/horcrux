@@ -5,7 +5,7 @@ EAPI=8
 
 CRATES=""
 
-inherit cargo git-r3 systemd
+inherit cargo git-r3 pam systemd
 
 DESCRIPTION="Proxmox VE alternative built natively for Gentoo"
 HOMEPAGE="https://git.canutethegreat.com/CanuteTheGreat/horcrux"
@@ -35,7 +35,7 @@ SLOT="0"
 # NAS services: timemachine, s3-gateway, iscsi-target, rsync-server
 # NAS storage: nas-zfs, nas-btrfs, nas-mdraid, nas-lvm
 IUSE="
-	+backup cli cluster docker incus kubernetes ldap lxc lxd +monitoring podman +qemu systemd +webui
+	+backup cli cluster docker incus kubernetes ldap lxc lxd +monitoring +pam podman +qemu systemd +webui
 	nas smb nfs-server afp webdav ftp
 	ldap-server kerberos ad
 	timemachine s3-gateway iscsi-target rsync-server
@@ -93,6 +93,7 @@ RDEPEND="
 		sys-cluster/pacemaker
 	)
 	dev-libs/openssl:0=
+	pam? ( sys-libs/pam )
 	net-misc/bridge-utils
 	sys-apps/iproute2
 
@@ -157,6 +158,7 @@ src_configure() {
 		$(usex podman "podman" "")
 		# Additional features
 		$(usex cluster "cluster" "")
+		$(usex pam "pam" "")
 		$(usex backup "backup" "")
 		$(usex kubernetes "kubernetes" "")
 
@@ -288,6 +290,14 @@ src_install() {
 
 	# Create necessary directories
 	keepdir /etc/horcrux
+	# HTTPS certificate + node-local CA are generated here on first start
+	keepdir /etc/horcrux/ssl
+	fperms 0700 /etc/horcrux/ssl
+
+	# PAM realm (host accounts): the "horcrux" PAM service
+	if use pam; then
+		pamd_mimic_system horcrux auth account
+	fi
 	keepdir /var/lib/horcrux/{vms,templates,cloudinit,backups}
 	keepdir /var/log/horcrux
 	keepdir /run/horcrux

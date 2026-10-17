@@ -162,6 +162,16 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     )
     .await?;
 
+    // Access control (lane C): persisted roles, groups, ACLs, realms, second
+    // factors and login challenges. Before this, roles lived only in an
+    // in-memory map and nothing enforced them.
+    run_migration(
+        pool,
+        "025_auth_access_control",
+        MIGRATION_025_AUTH_ACCESS_CONTROL,
+    )
+    .await?;
+
     Ok(())
 }
 
@@ -1065,4 +1075,112 @@ CREATE TABLE notification_channels (
 
 const MIGRATION_024_ADD_VM_DISPLAY: &str = r#"
 ALTER TABLE vms ADD COLUMN display TEXT NOT NULL DEFAULT '{}';
+"#;
+
+const MIGRATION_025_AUTH_ACCESS_CONTROL: &str = r#"
+ALTER TABLE users ADD COLUMN comment TEXT;
+ALTER TABLE users ADD COLUMN last_login INTEGER;
+ALTER TABLE users ADD COLUMN tfa_required INTEGER NOT NULL DEFAULT 0;
+
+-- 'tfa_setup' marks the restricted login of a user who must enroll a second
+-- factor before doing anything else. Client details for the sessions page.
+ALTER TABLE sessions ADD COLUMN scope TEXT;
+ALTER TABLE sessions ADD COLUMN ip_address TEXT;
+ALTER TABLE sessions ADD COLUMN user_agent TEXT;
+
+-- Roles: a named set of privileges (JSON array of PVE-style names).
+CREATE TABLE auth_roles (
+    name TEXT PRIMARY KEY,
+    description TEXT NOT NULL DEFAULT '',
+    privileges TEXT NOT NULL DEFAULT '[]',
+    builtin INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE auth_groups (
+    name TEXT PRIMARY KEY,
+    comment TEXT
+);
+
+CREATE TABLE auth_group_members (
+    group_name TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    PRIMARY KEY (group_name, user_id),
+    FOREIGN KEY (group_name) REFERENCES auth_groups(name) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- ACL: grant `role` to a user or group on `path` (and, with propagate, on
+-- everything below it). Same model as Proxmox VE's user.cfg acl lines.
+CREATE TABLE auth_acl (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    path TEXT NOT NULL,
+    subject_type TEXT NOT NULL CHECK (subject_type IN ('user', 'group')),
+    subject TEXT NOT NULL,
+    role TEXT NOT NULL,
+    propagate INTEGER NOT NULL DEFAULT 1,
+    UNIQUE (path, subject_type, subject, role),
+    FOREIGN KEY (role) REFERENCES auth_roles(name) ON DELETE CASCADE
+);
+CREATE INDEX idx_auth_acl_subject ON auth_acl(subject_type, subject);
+-- `subject` is a user id or group name; drop a principal's grants with it.
+CREATE TRIGGER trg_users_delete_acl AFTER DELETE ON users BEGIN
+    DELETE FROM auth_acl WHERE subject_type = 'user' AND subject = OLD.id;
+END;
+CREATE TRIGGER trg_groups_delete_acl AFTER DELETE ON auth_groups BEGIN
+    DELETE FROM auth_acl WHERE subject_type = 'group' AND subject = OLD.name;
+END;
+
+-- Authentication realms besides the built-in local one (pam, ldap, ad, openid).
+CREATE TABLE auth_realms (
+    name TEXT PRIMARY KEY,
+    realm_type TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    comment TEXT,
+    config TEXT NOT NULL DEFAULT '{}',
+    default_group TEXT,
+    tfa_required INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+
+-- Second factors: kind = totp | webauthn. `data` holds the TOTP secret or
+-- the WebAuthn credential (id, COSE public key) as JSON.
+CREATE TABLE auth_tfa (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('totp', 'webauthn')),
+    name TEXT NOT NULL,
+    data TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    sign_count INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    last_used INTEGER,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_auth_tfa_user ON auth_tfa(user_id);
+
+-- One-time recovery codes, stored as SHA-256 hashes.
+CREATE TABLE auth_recovery_codes (
+    user_id TEXT NOT NULL,
+    code_hash TEXT NOT NULL,
+    used_at INTEGER,
+    PRIMARY KEY (user_id, code_hash),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- Short-lived login state: pending second-factor tickets, WebAuthn
+-- challenges, OIDC state/nonce. Kept in the DB so it survives a restart.
+CREATE TABLE auth_challenges (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    user_id TEXT,
+    data TEXT NOT NULL DEFAULT '{}',
+    expires_at INTEGER NOT NULL
+);
+CREATE INDEX idx_auth_challenges_expires ON auth_challenges(expires_at);
+
+-- Key/value settings for the access-control subsystem (TFA policy, ...).
+CREATE TABLE auth_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 "#;

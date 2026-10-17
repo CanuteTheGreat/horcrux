@@ -19,7 +19,8 @@ use serde_json::json;
 use std::time::Duration;
 use tokio::time::sleep;
 
-const API_BASE: &str = "http://localhost:8006/api";
+/// The API serves HTTPS by default with a generated self-signed certificate.
+const API_BASE: &str = "https://localhost:8006/api";
 const TEST_VM_ID: &str = "test-vm-integration";
 const TEST_NODE_ID: &str = "test-node-1";
 
@@ -27,6 +28,7 @@ const TEST_NODE_ID: &str = "test-node-1";
 fn create_client() -> Client {
     Client::builder()
         .timeout(Duration::from_secs(30))
+        .danger_accept_invalid_certs(true)
         .build()
         .expect("Failed to create HTTP client")
 }
@@ -58,6 +60,7 @@ async fn authed_client() -> Client {
     );
     Client::builder()
         .timeout(Duration::from_secs(60))
+        .danger_accept_invalid_certs(true)
         .default_headers(headers)
         .build()
         .expect("Failed to create HTTP client")
@@ -1263,18 +1266,54 @@ async fn test_session_management() {
     }
 }
 
+/// Create a local user as admin and grant `role` on `path` (no grant when
+/// `role` is empty). Self-registration is off, so this is the only way in.
+async fn create_user_with_role(
+    client: &Client,
+    admin_jwt: &str,
+    username: &str,
+    password: &str,
+    path: &str,
+    role: &str,
+) {
+    let _ = client
+        .delete(format!("{}/users/{}", API_BASE, username))
+        .bearer_auth(admin_jwt)
+        .send()
+        .await;
+    let r = client
+        .post(format!("{}/users", API_BASE))
+        .bearer_auth(admin_jwt)
+        .json(&json!({"username": username, "password": password, "email": format!("{username}@example.com")}))
+        .send()
+        .await;
+    let _ = expect_2xx(r, "admin creates user").await;
+    if !role.is_empty() {
+        let r = client
+            .post(format!("{}/acl", API_BASE))
+            .bearer_auth(admin_jwt)
+            .json(&json!({"path": path, "subject_type": "user", "subject": username, "role": role}))
+            .send()
+            .await;
+        let _ = expect_2xx(r, "admin grants role").await;
+    }
+}
+
+async fn login_token(client: &Client, username: &str, password: &str) -> String {
+    let r = expect_2xx(
+        login_with_retry(client, username, password).await,
+        &format!("login as {username}"),
+    )
+    .await
+    .unwrap();
+    let v: serde_json::Value = r.json().await.unwrap();
+    v["ticket"].as_str().expect("ticket").to_string()
+}
+
 #[tokio::test]
 async fn test_password_change() {
     let client = create_client();
-
-    // Use a unique username per test run instead of a fixed "testuser".
-    // `/auth/register` persists to the database, but the admin `DELETE
-    // /users/:id` cleanup below only removes the user from the in-memory
-    // auth manager (a separate store from the DB-backed registration
-    // table — see `AuthManager::delete_user`), so a fixed username would
-    // hit "user already exists" on every run after the first and make
-    // this test depend on manual DB resets between runs. A unique name
-    // sidesteps that leftover state entirely.
+    let admin_jwt = admin_token(&client).await;
     let username = format!(
         "testuser-{}",
         std::time::SystemTime::now()
@@ -1282,87 +1321,53 @@ async fn test_password_change() {
             .unwrap()
             .as_nanos()
     );
+    create_user_with_role(&client, &admin_jwt, &username, "testpass123", "/", "").await;
+    let token = login_token(&client, &username, "testpass123").await;
 
-    // 1. Register the test user (with retry, since /auth/register shares
-    // the same strict rate limit as /auth/login).
-    let mut attempt = 0;
-    loop {
-        let resp = client
-            .post(format!("{}/auth/register", API_BASE))
-            .json(&json!({
-                "username": username,
-                "password": "testpass123",
-                "email": format!("{}@example.com", username)
-            }))
-            .send()
-            .await;
-        match resp {
-            Ok(r) if r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < 30 => {
-                attempt += 1;
-                wait_for_operation(2000).await;
-                continue;
-            }
-            _ => break,
-        }
-    }
+    // someone else's password can't be changed through the self-service route
+    let response = client
+        .post(format!("{}/auth/password", API_BASE))
+        .bearer_auth(&token)
+        .json(&json!({"username": "admin", "old_password": "x", "new_password": "hijacked123"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        403,
+        "changing admin's password as a user"
+    );
 
-    let response = login_with_retry(&client, &username, "testpass123").await;
-
-    // `login_with_retry` returns `Ok` even when its retry budget is
-    // exhausted while the server is still rate-limiting (it just gives up
-    // and hands back the last response, whatever its status) — so a
-    // network-level error isn't the only "couldn't log in" case; a non-200
-    // response (e.g. a lingering 429) means there's no token to extract.
-    if response.is_err() {
-        // User might not exist in test environment, skip test
-        return;
-    }
-    let response = response.unwrap();
-    if response.status() != reqwest::StatusCode::OK {
-        // Login never succeeded (e.g. rate limit never cleared within the
-        // retry budget) — nothing meaningful to assert on, skip test.
-        return;
-    }
-
-    let token_response: serde_json::Value = response.json().await.unwrap();
-    let token = token_response["ticket"].as_str().unwrap();
-
-    // 2. Change password
-    let change_request = json!({
-        "username": username,
-        "old_password": "testpass123",
-        "new_password": "newpass456"
-    });
+    // wrong old password is refused
+    let response = client
+        .post(format!("{}/auth/password", API_BASE))
+        .bearer_auth(&token)
+        .json(&json!({"old_password": "wrong", "new_password": "newpass456"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 401);
 
     let response = client
         .post(format!("{}/auth/password", API_BASE))
-        .bearer_auth(token)
-        .json(&change_request)
+        .bearer_auth(&token)
+        .json(&json!({"username": username, "old_password": "testpass123", "new_password": "newpass456"}))
         .send()
         .await;
-
     let _ = expect_2xx(response, "Password change failed").await;
 
-    // 3. Verify old password doesn't work
     let response = login_with_retry(&client, &username, "testpass123").await;
-
-    if response.is_ok() {
-        assert_eq!(
-            response.unwrap().status(),
-            401,
-            "Old password should not work"
-        );
-    }
-
-    // 4. Verify new password works
+    assert_eq!(
+        response.unwrap().status(),
+        401,
+        "Old password should not work"
+    );
     let response = login_with_retry(&client, &username, "newpass456").await;
-
     let _ = expect_2xx(response, "New password should work").await;
 
-    // Cleanup
     let _ = client
         .delete(format!("{}/users/{}", API_BASE, username))
-        .bearer_auth(token)
+        .bearer_auth(&admin_jwt)
         .send()
         .await;
 }
@@ -1434,137 +1439,85 @@ async fn test_api_token_generation() {
 #[tokio::test]
 async fn test_rbac_permissions() {
     let client = create_client();
-
-    // Use the shared cached admin token instead of a fresh login, since
-    // /auth/login is strictly rate-limited (5/min) and every test competes
-    // for that budget.
     let admin_jwt = admin_token(&client).await;
 
-    // Register the vmuser (retry on rate limit; /auth/register shares the
-    // same strict 5/min budget as /auth/login).
-    let register_body = json!({
-        "username": "vmuser",
-        "password": "vmpass123",
-        "email": "vmuser@example.com"
-    });
-    let mut attempt = 0;
-    loop {
-        let resp = client
-            .post(format!("{}/auth/register", API_BASE))
-            .json(&register_body)
-            .send()
-            .await;
-        match resp {
-            Ok(r) if r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < 30 => {
-                attempt += 1;
-                wait_for_operation(2000).await;
-                continue;
-            }
-            _ => break,
-        }
-    }
+    // public self-registration is off by default
+    let r = client
+        .post(format!("{}/auth/register", API_BASE))
+        .json(&json!({"username": "selfreg", "password": "selfreg123", "email": "s@example.com"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        r.status() == 403 || r.status() == 429,
+        "self-registration must be disabled, got {}",
+        r.status()
+    );
 
-    // 2. Login as limited user (retry on rate limit; shared 5/min budget)
-    let user_login = json!({
-        "username": "vmuser",
-        "password": "vmpass123"
-    });
+    // VMUser on /vms: may view and power VMs, may not create them or
+    // touch anything else
+    create_user_with_role(&client, &admin_jwt, "vmuser", "vmpass123", "/vms", "VMUser").await;
+    let user_jwt = login_token(&client, "vmuser", "vmpass123").await;
 
-    let mut attempt = 0;
-    let response = loop {
-        let resp = client
-            .post(format!("{}/auth/login", API_BASE))
-            .json(&user_login)
-            .send()
-            .await;
-        match resp {
-            Ok(r) if r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < 30 => {
-                attempt += 1;
-                wait_for_operation(2000).await;
-                continue;
-            }
-            other => break other,
-        }
-    };
-
-    if response.is_err() {
-        return;
-    }
-
-    let user_token: serde_json::Value = response.unwrap().json().await.unwrap();
-    let user_jwt = user_token["ticket"].as_str().unwrap();
-
-    // 3. VmUser can view VMs (VmAudit privilege)
     let response = client
         .get(format!("{}/vms", API_BASE))
-        .bearer_auth(user_jwt)
+        .bearer_auth(&user_jwt)
         .send()
         .await;
-
     let _ = expect_2xx(response, "VmUser should be able to view VMs").await;
 
-    // 4. VmUser can start/stop VMs (VmPowerMgmt privilege)
-    let response = client
+    let status = client
         .post(format!("{}/vms/test-vm/start", API_BASE))
-        .bearer_auth(user_jwt)
+        .bearer_auth(&user_jwt)
         .send()
-        .await;
+        .await
+        .unwrap()
+        .status();
+    assert_ne!(status, 403, "VmUser should have power management privilege");
 
-    // Should either succeed or fail because VM doesn't exist, not forbidden
-    if response.is_ok() {
-        let status = response.unwrap().status();
-        assert_ne!(status, 403, "VmUser should have power management privilege");
+    let status = client
+        .post(format!("{}/vms", API_BASE))
+        .bearer_auth(&user_jwt)
+        .json(&json!({"name": "Unauthorized VM", "cpus": 1, "memory": 512}))
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, 403, "VmUser must not create VMs");
+
+    for (method, path) in [
+        ("GET", "/users"),
+        ("POST", "/users"),
+        ("GET", "/storage/pools"),
+        ("POST", "/firewall/rules"),
+        ("GET", "/audit/events"),
+        ("GET", "/vault/secret/x"),
+        ("POST", "/acl"),
+    ] {
+        let req = match method {
+            "GET" => client.get(format!("{}{}", API_BASE, path)),
+            _ => client
+                .post(format!("{}{}", API_BASE, path))
+                .json(&json!({"path": "/", "subject_type": "user", "subject": "vmuser", "role": "Administrator"})),
+        };
+        let status = req.bearer_auth(&user_jwt).send().await.unwrap().status();
+        assert_eq!(status, 403, "{method} {path} as VMUser");
     }
 
-    // 5. VmUser CANNOT create VMs (requires VmAllocate privilege)
-    let vm_config = json!({
-        "name": "Unauthorized VM",
-        "cpus": 1,
-        "memory": 512
-    });
-
-    // Retry on rate limit, same pattern used everywhere else in this suite
-    // (admin_token(), register/login above, test_session_management's final
-    // assertion): POST /vms shares one rate-limit budget with every other
-    // test hitting it in this binary, so without a retry loop this
-    // assertion can flake on a 429 that has nothing to do with RBAC.
-    let mut attempt = 0;
-    let response = loop {
-        let resp = client
-            .post(format!("{}/vms", API_BASE))
-            .bearer_auth(user_jwt)
-            .json(&vm_config)
-            .send()
-            .await;
-        match &resp {
-            Ok(r) if r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < 30 => {
-                attempt += 1;
-                wait_for_operation(2000).await;
-                continue;
-            }
-            _ => break resp,
-        }
-    };
-
-    if let Ok(resp) = response {
-        // Should be forbidden (403) or unauthorized (401). A 422 is also
-        // acceptable here: this vm_config is intentionally minimal (it
-        // omits fields required by the real schema), so validation may
-        // reject it before an authorization check would even matter.
-        let status = resp.status();
-        assert!(
-            status == 403 || status == 401 || status == 422,
-            "VmUser should not be able to create VMs, got status: {}",
-            status
-        );
-    }
-
-    // Cleanup
     let _ = client
         .delete(format!("{}/users/vmuser", API_BASE))
         .bearer_auth(&admin_jwt)
         .send()
         .await;
+    // deleting the account revokes its token immediately
+    let status = client
+        .get(format!("{}/vms", API_BASE))
+        .bearer_auth(&user_jwt)
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, 401, "token of a deleted user");
 }
 
 #[tokio::test]

@@ -11,12 +11,31 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
-    pub fn new(base_url: &str) -> Self {
-        Self {
-            base_url: base_url.to_string(),
-            client: reqwest::Client::new(),
-            token: Arc::new(RwLock::new(None)),
+    /// The server speaks HTTPS with a certificate from its own local CA by
+    /// default. `ca_cert` (a PEM file, e.g. the node's
+    /// `/etc/horcrux/ssl/ca.pem` or the download from `/api/tls/ca.pem`)
+    /// makes that verify; `insecure` skips verification entirely.
+    pub fn with_tls(
+        base_url: &str,
+        ca_cert: Option<&std::path::Path>,
+        insecure: bool,
+    ) -> Result<Self> {
+        let mut b = reqwest::Client::builder();
+        if let Some(path) = ca_cert {
+            let pem = std::fs::read(path)
+                .map_err(|e| anyhow::anyhow!("reading CA certificate {}: {}", path.display(), e))?;
+            for cert in reqwest::Certificate::from_pem_bundle(&pem)? {
+                b = b.add_root_certificate(cert);
+            }
         }
+        if insecure {
+            b = b.danger_accept_invalid_certs(true);
+        }
+        Ok(Self {
+            base_url: base_url.trim_end_matches('/').to_string(),
+            client: b.build()?,
+            token: Arc::new(RwLock::new(None)),
+        })
     }
 
     /// The configured base URL for the API server

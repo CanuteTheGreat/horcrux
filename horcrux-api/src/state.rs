@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use crate::alerts::AlertManager;
 use crate::audit::AuditLogger;
-use crate::auth::AuthManager;
 #[cfg(feature = "backup")]
 use crate::backup::BackupManager;
 use crate::cloudinit::CloudInitManager;
@@ -50,7 +49,6 @@ pub struct AppState {
     pub backup_manager: Arc<BackupManager>,
     pub cloudinit_manager: Arc<CloudInitManager>,
     pub template_manager: Arc<TemplateManager>,
-    pub auth_manager: Arc<AuthManager>,
     pub firewall_manager: Arc<FirewallManager>,
     pub monitoring_manager: Arc<MonitoringManager>,
     pub console_manager: Arc<ConsoleManager>,

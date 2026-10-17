@@ -18,7 +18,7 @@ pub type CliConfig = Config;
 impl Default for Config {
     fn default() -> Self {
         Self {
-            default_server: "http://localhost:8006".to_string(),
+            default_server: "https://localhost:8006".to_string(),
             default_output: "table".to_string(),
             token: None,
             username: None,

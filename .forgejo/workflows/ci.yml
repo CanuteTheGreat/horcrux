@@ -39,7 +39,7 @@ jobs:
           components: clippy, rustfmt
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
 
       - name: Ensure Node.js is present (self-heal)
         # catthehacker/ubuntu:act-latest job containers on the beauxbatons
@@ -115,7 +115,7 @@ jobs:
           if apt-cache show qemu-system-modules-spice >/dev/null 2>&1; then
             spice_mods="qemu-system-modules-spice"
           fi
-          sudo apt-get install -y build-essential libvirt-dev qemu-system-x86 qemu-system-arm qemu-utils zstd $spice_mods
+          sudo apt-get install -y build-essential libvirt-dev libpam0g-dev qemu-system-x86 qemu-system-arm qemu-utils zstd $spice_mods
           # Fail here, not deep in a test, if this QEMU can't do SPICE.
           qemu-system-x86_64 --version
           qemu-system-x86_64 -audiodev help | grep -qx spice || { echo "qemu-system-x86_64 lacks SPICE (no spice audiodev)" >&2; exit 1; }
@@ -191,18 +191,21 @@ jobs:
           HORCRUX_DATABASE_URL="sqlite:///tmp/horcrux-ci-data/horcrux.db" \
           HORCRUX_CNI_BIN_DIR=/tmp/horcrux-ci-cni/bin \
           HORCRUX_CNI_CONF_DIR=/tmp/horcrux-ci-cni/conf.d \
+          HORCRUX_SSL_DIR=/tmp/horcrux-ci-data/ssl \
           ADMIN_PASSWORD=admin \
           RATE_LIMIT_MAX_REQUESTS=100000 \
           AUTH_RATE_LIMIT_MAX_REQUESTS=1000 \
           HORCRUX_BACKUP_SCHEDULER_TICK_SECS=5 \
           HORCRUX_PAGERDUTY_EVENTS_URL=http://127.0.0.1:18765/v2/enqueue \
+          AUTH_RATE_LIMIT_MAX_REQUESTS=100000 \
           RUST_LOG=info \
           nohup ./target/debug/horcrux-api > /tmp/horcrux-api.log 2>&1 &
           echo $! > /tmp/horcrux-api.pid
 
           echo "Waiting for horcrux-api to become healthy..."
           for i in $(seq 1 60); do
-            if curl -sf http://127.0.0.1:8006/api/health > /dev/null 2>&1; then
+            # HTTPS by default (self-issued certificate from the node's local CA)
+            if curl -sfk https://127.0.0.1:8006/api/health > /dev/null 2>&1; then
               echo "horcrux-api is up"
               exit 0
             fi
@@ -235,6 +238,21 @@ jobs:
           # receives the PagerDuty Events v2 call there.
           HORCRUX_PAGERDUTY_EVENTS_URL: http://127.0.0.1:18765/v2/enqueue
         run: cargo test --all-features --workspace
+
+      - name: Auth realms + ACME (OpenLDAP, Dex, PAM, Pebble)
+        # Real servers in sibling containers on a private network: LDAP
+        # search-then-bind login, OpenID Connect login through Dex, a PAM
+        # host account, and an ACME certificate from Pebble validated over
+        # HTTP-01 and then served by the live listener.
+        run: |
+          cargo test --all-features -p horcrux-api --test auth_realms_e2e --no-run --message-format=json > /tmp/realms-build.json
+          TESTBIN=$(python3 -c 'import json,sys
+          for l in open("/tmp/realms-build.json"):
+              try: m=json.loads(l)
+              except Exception: continue
+              if m.get("reason")=="compiler-artifact" and m.get("executable") and m["target"]["name"]=="auth_realms_e2e": print(m["executable"])')
+          test -x "$TESTBIN"
+          bash horcrux-api/tests/auth_realms_e2e.sh target/debug/horcrux-api "$TESTBIN"
 
       - name: Firewall apply (real nftables)
         # The Test container is unprivileged; this runs the built API in a
@@ -317,7 +335,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
 
       - name: Ensure Node.js is present (self-heal)
         # catthehacker/ubuntu:act-latest job containers on the beauxbatons
@@ -394,7 +412,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
 
       - name: Install trunk
         # `cargo install trunk` from source hits a real dependency conflict:
@@ -477,7 +495,7 @@ jobs:
         uses: https://github.com/dtolnay/rust-toolchain@stable
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
 
       - name: Install cargo-audit
         run: cargo install cargo-audit
@@ -632,7 +650,7 @@ jobs:
         uses: https://github.com/dtolnay/rust-toolchain@stable
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
 
       - name: Ensure Node.js is present (self-heal)
         run: |
@@ -723,7 +741,7 @@ jobs:
           if apt-cache show qemu-system-modules-spice >/dev/null 2>&1; then
             spice_mods="qemu-system-modules-spice"
           fi
-          sudo apt-get install -y build-essential libvirt-dev python3-venv qemu-utils zstd qemu-system-x86 $spice_mods
+          sudo apt-get install -y build-essential libvirt-dev python3-venv libpam0g-dev libnss3-tools qemu-utils zstd qemu-system-x86 $spice_mods
 
       - name: Install trunk
         # Same prebuilt-binary install as the Build Web UI job.
@@ -777,16 +795,30 @@ jobs:
           HORCRUX_CNI_BIN_DIR=/tmp/e2e-cni/bin HORCRUX_CNI_CONF_DIR=/tmp/e2e-cni/conf.d \
           HORCRUX_DATABASE_URL="sqlite:///tmp/e2e-data/horcrux.db" \
           HORCRUX_UI_DIR="$PWD/horcrux-api/horcrux-ui/dist" \
-          ADMIN_PASSWORD=admin RATE_LIMIT_MAX_REQUESTS=100000 AUTH_RATE_LIMIT_MAX_REQUESTS=1000 RUST_LOG=info \
+          HORCRUX_SSL_DIR=/tmp/e2e-data/ssl \
+          ADMIN_PASSWORD=admin RATE_LIMIT_MAX_REQUESTS=100000 AUTH_RATE_LIMIT_MAX_REQUESTS=100000 RUST_LOG=info \
           nohup ./target/debug/horcrux-api > /tmp/horcrux-e2e.log 2>&1 &
           echo $! > /tmp/horcrux-e2e.pid
           for i in $(seq 1 60); do
-            curl -sf http://127.0.0.1:8006/api/health >/dev/null && exit 0
+            if curl -sfk https://127.0.0.1:8006/api/health >/dev/null; then
+              # Trust the node's local CA (downloadable without login) in
+              # Chromium's NSS store and for Python: real certificate
+              # validation, and a secure context for WebAuthn.
+              curl -sfk https://127.0.0.1:8006/api/tls/ca.pem -o /tmp/horcrux-ca.pem
+              mkdir -p "$HOME/.pki/nssdb"
+              certutil -d "sql:$HOME/.pki/nssdb" -N --empty-password 2>/dev/null || true
+              certutil -d "sql:$HOME/.pki/nssdb" -A -t "C,," -n horcrux-local-ca -i /tmp/horcrux-ca.pem
+              curl -sf --cacert /tmp/horcrux-ca.pem https://localhost:8006/api/health
+              exit 0
+            fi
             sleep 1
           done
           cat /tmp/horcrux-e2e.log; exit 1
 
       - name: Run browser E2E
+        env:
+          BASE_URL: https://localhost:8006
+          HORCRUX_CA_FILE: /tmp/horcrux-ca.pem
         run: /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/ui_e2e.py
 
       - name: UI offers every USE-flag feature of an all-features build

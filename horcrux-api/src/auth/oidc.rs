@@ -53,11 +53,16 @@ pub struct OidcDiscovery {
     pub issuer: String,
     pub authorization_endpoint: String,
     pub token_endpoint: String,
+    #[serde(default)]
     pub userinfo_endpoint: String,
     pub jwks_uri: String,
+    #[serde(default)]
     pub end_session_endpoint: Option<String>,
+    #[serde(default)]
     pub scopes_supported: Vec<String>,
+    #[serde(default)]
     pub response_types_supported: Vec<String>,
+    #[serde(default)]
     pub grant_types_supported: Vec<String>,
 }
 
@@ -94,6 +99,7 @@ struct JwksCache {
 pub struct TokenResponse {
     pub access_token: String,
     pub token_type: String,
+    #[serde(default)]
     pub expires_in: u64,
     pub refresh_token: Option<String>,
     pub id_token: Option<String>,
@@ -119,9 +125,12 @@ pub struct UserInfo {
 pub struct IdTokenClaims {
     pub iss: String, // Issuer
     pub sub: String, // Subject
-    pub aud: String, // Audience (client_id)
-    pub exp: u64,    // Expiration time
-    pub iat: u64,    // Issued at
+    /// Audience: a string or an array of strings (both are valid per spec);
+    /// the signature check already validated it contains our client id.
+    #[serde(default)]
+    pub aud: serde_json::Value,
+    pub exp: u64, // Expiration time
+    pub iat: u64, // Issued at
     pub nonce: Option<String>,
     pub email: Option<String>,
     pub name: Option<String>,
@@ -230,6 +239,59 @@ impl OidcProvider {
         );
 
         Ok(url)
+    }
+
+    /// Authorization URL with PKCE (S256) - what the login flow uses.
+    pub async fn authorization_url_pkce(
+        &self,
+        state: &str,
+        nonce: &str,
+        code_challenge: &str,
+    ) -> Result<String> {
+        let base = self.get_authorization_url(state, nonce).await?;
+        Ok(format!(
+            "{}&code_challenge={}&code_challenge_method=S256",
+            base,
+            urlencoding::encode(code_challenge)
+        ))
+    }
+
+    /// Exchange an authorization code obtained with PKCE.
+    pub async fn exchange_code_pkce(
+        &self,
+        code: &str,
+        code_verifier: &str,
+    ) -> Result<TokenResponse> {
+        let config = self.config.read().await.clone();
+        let discovery = match self.discovery.read().await.clone() {
+            Some(d) => d,
+            None => self.load_discovery().await?,
+        };
+        let params = [
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", config.redirect_uri.as_str()),
+            ("client_id", config.client_id.as_str()),
+            ("client_secret", config.client_secret.as_str()),
+            ("code_verifier", code_verifier),
+        ];
+        let response = self
+            .client
+            .post(&discovery.token_endpoint)
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Token exchange failed: {}", e)))?;
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(horcrux_common::Error::Authentication(format!(
+                "Token exchange failed: {}",
+                error_text
+            )));
+        }
+        response.json().await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to parse token response: {}", e))
+        })
     }
 
     /// Exchange authorization code for tokens

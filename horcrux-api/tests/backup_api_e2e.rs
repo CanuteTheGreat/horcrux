@@ -6,7 +6,7 @@
 //! applies its retention.
 //!
 //! Override the server with HORCRUX_E2E_API (default
-//! http://127.0.0.1:8006/api).
+//! https://127.0.0.1:8006/api).
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -14,7 +14,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 fn api() -> String {
-    std::env::var("HORCRUX_E2E_API").unwrap_or_else(|_| "http://127.0.0.1:8006/api".into())
+    std::env::var("HORCRUX_E2E_API").unwrap_or_else(|_| "https://127.0.0.1:8006/api".into())
 }
 
 struct Api {
@@ -26,6 +26,7 @@ impl Api {
     async fn login() -> Self {
         let c = reqwest::Client::builder()
             .timeout(Duration::from_secs(300))
+            .danger_accept_invalid_certs(true)
             .build()
             .unwrap();
         for _ in 0..60 {

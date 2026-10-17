@@ -18,7 +18,7 @@ horcrux-common = { path = "../horcrux-common" }
 
 # Web framework
 axum = { version = "0.7", features = ["ws"] }
-tower = "0.4"
+tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["fs", "trace", "cors"] }
 futures = "0.3"
 
@@ -87,6 +87,23 @@ sha2 = "0.10"
 hmac = "0.12"
 pwhash = "1.0"
 
+# TLS listener (HTTPS by default), certificates, ACME
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rustls-pemfile = "2"
+hyper = { version = "1", features = ["server", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio", "service", "http1", "http2"] }
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring", "x509-parser"] }
+x509-parser = "0.18"
+instant-acme = { version = "0.8", default-features = false, features = ["hyper-rustls", "ring", "rcgen"] }
+
+# Authentication realms and second factors
+ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
+sha1 = "0.10"
+p256 = { version = "0.13", features = ["ecdsa"] }
+rsa = { version = "0.9", features = ["sha2"] }
+ciborium = "0.2"
+
 # Docker API client
 bollard = "0.17"
 
@@ -96,7 +113,7 @@ k8s-openapi = { version = "0.24", features = ["v1_32"], optional = true }
 http = { version = "1.0", optional = true }
 
 [features]
-default = ["qemu", "lxc", "docker", "backup"]
+default = ["qemu", "lxc", "docker", "backup", "pam"]
 
 # Virtualization backends
 qemu = ["virt"]  # QEMU/KVM support with libvirt
@@ -111,6 +128,9 @@ podman = []      # Podman containers
 # Additional features
 cluster = []     # Clustering/HA support
 backup = []      # Backup and restore
+
+# Linux-PAM realm (host accounts). Links libpam.
+pam = []
 
 # Kubernetes orchestration
 kubernetes = ["kube", "k8s-openapi", "http"]
@@ -163,6 +183,7 @@ des = "0.8"
 rsa = "0.9"
 sha1 = "0.10"
 tokio-tungstenite = "0.24"
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "cookies"], default-features = false }
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 
 [[bench]]

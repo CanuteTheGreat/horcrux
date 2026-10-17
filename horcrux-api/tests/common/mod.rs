@@ -4,7 +4,7 @@ use reqwest::Client;
 use std::time::Duration;
 use tokio::time::sleep;
 
-pub const API_BASE: &str = "http://localhost:8006/api";
+pub const API_BASE: &str = "https://localhost:8006/api";
 
 /// Create HTTP client with default settings
 pub fn create_test_client() -> Client {

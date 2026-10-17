@@ -247,15 +247,15 @@ impl Node {
         self.status == NodeStatus::Online
     }
 
-    /// Base URL of this node's Horcrux API. horcrux-api always listens on
-    /// plain HTTP (TLS, if any, is terminated in front of it), and every
-    /// node in a cluster runs on the same configured port. IPv6 literals
-    /// are bracketed.
+    /// Base URL of this node's Horcrux API. horcrux-api serves HTTPS by
+    /// default (plain HTTP to that port is only redirected), and every node
+    /// in a cluster runs on the same configured port. IPv6 literals are
+    /// bracketed.
     pub fn api_url(&self, port: u16) -> String {
         if self.ip.contains(':') && !self.ip.starts_with('[') {
-            format!("http://[{}]:{}", self.ip, port)
+            format!("https://[{}]:{}", self.ip, port)
         } else {
-            format!("http://{}:{}", self.ip, port)
+            format!("https://{}:{}", self.ip, port)
         }
     }
 
@@ -456,10 +456,10 @@ mod tests {
     }
 
     #[test]
-    fn api_url_is_plain_http_on_configured_port() {
+    fn api_url_is_https_on_configured_port() {
         let mut node = Node::new(1, "n".into(), "10.0.0.1".into());
-        assert_eq!(node.api_url(8006), "http://10.0.0.1:8006");
+        assert_eq!(node.api_url(8006), "https://10.0.0.1:8006");
         node.ip = "fd00::1".into();
-        assert_eq!(node.api_url(9000), "http://[fd00::1]:9000");
+        assert_eq!(node.api_url(9000), "https://[fd00::1]:9000");
     }
 }

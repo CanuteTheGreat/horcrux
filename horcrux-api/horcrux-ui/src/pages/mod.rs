@@ -54,7 +54,10 @@ pub use vm_create::VmCreate;
 pub use vm_list::VmList;
 
 // Re-export auth components
-pub use auth::{ApiKeysPage, RolesPage, SessionsPage, UsersPage};
+pub use auth::{
+    ApiKeysPage, CertificatesPage, MfaPage, PermissionsPage, RealmsPage, RolesPage, SessionsPage,
+    UserMenu, UsersPage,
+};
 
 // Re-export kubernetes components
 pub use kubernetes::{

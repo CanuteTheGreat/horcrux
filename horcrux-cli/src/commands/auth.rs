@@ -17,9 +17,19 @@ pub enum AuthCommands {
         /// Password (will be prompted if not provided)
         #[arg(short, long)]
         password: Option<String>,
+
+        /// Authentication realm (local, or an LDAP/AD/PAM realm name);
+        /// `user@realm` works too
+        #[arg(short, long)]
+        realm: Option<String>,
+
+        /// Second-factor code (authenticator app or recovery code); prompted
+        /// for when the account needs one
+        #[arg(long)]
+        code: Option<String>,
     },
 
-    /// Register a new user account
+    /// Register a new user account (only if the server allows self-registration)
     Register {
         /// Username
         #[arg(short, long)]
@@ -56,15 +66,18 @@ pub enum AuthCommands {
 struct LoginRequest {
     username: String,
     password: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    realm: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct LoginResponse {
     ticket: String,
-    #[allow(dead_code)]
-    csrf_token: String,
     username: String,
+    #[serde(default)]
     roles: Vec<String>,
+    #[serde(default)]
+    tfa_setup_required: bool,
 }
 
 #[derive(Serialize)]
@@ -87,7 +100,12 @@ pub async fn handle_auth_command(
     config: &mut Config,
 ) -> Result<()> {
     match command {
-        AuthCommands::Login { username, password } => {
+        AuthCommands::Login {
+            username,
+            password,
+            realm,
+            code,
+        } => {
             let password = if let Some(pwd) = password {
                 pwd
             } else {
@@ -99,9 +117,43 @@ pub async fn handle_auth_command(
             let request = LoginRequest {
                 username: username.clone(),
                 password,
+                realm,
             };
 
-            let response: LoginResponse = api.post("/api/auth/login", &request).await?;
+            let first: serde_json::Value = api.post("/api/auth/login", &request).await?;
+            let first = if first["tfa_required"].as_bool().unwrap_or(false) {
+                let methods: Vec<String> =
+                    serde_json::from_value(first["methods"].clone()).unwrap_or_default();
+                if !methods.iter().any(|m| m == "totp" || m == "recovery") {
+                    anyhow::bail!(
+                        "this account only has a security key: log in through the web UI"
+                    );
+                }
+                let code = match code {
+                    Some(c) => c,
+                    None => dialoguer::Input::<String>::new()
+                        .with_prompt("Authenticator code (or recovery code)")
+                        .interact_text()?,
+                };
+                let method = if code.contains('-') {
+                    "recovery"
+                } else {
+                    "totp"
+                };
+                api.post(
+                    "/api/auth/tfa",
+                    &serde_json::json!({"ticket": first["ticket"], "method": method, "code": code}),
+                )
+                .await?
+            } else {
+                first
+            };
+            let response: LoginResponse = serde_json::from_value(first)?;
+            if response.tfa_setup_required {
+                output::print_warning(
+                    "This account must set up a second factor first: open the web UI (Account Security)",
+                );
+            }
 
             // Save token to API client
             api.set_token(response.ticket.clone()).await;

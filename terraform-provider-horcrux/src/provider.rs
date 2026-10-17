@@ -55,7 +55,7 @@ impl HorcruxProvider {
             .with_attribute(
                 "endpoint",
                 SchemaAttribute::string()
-                    .with_description("Horcrux API endpoint (e.g., http://localhost:8006)")
+                    .with_description("Horcrux API endpoint (e.g., https://localhost:8006)")
                     .required(),
             )
             .with_attribute(
@@ -113,7 +113,8 @@ impl HorcruxProvider {
         };
 
         // Create client
-        let mut client = HorcruxClient::new(&endpoint);
+        let insecure = config.insecure.unwrap_or(false);
+        let mut client = HorcruxClient::with_options(&endpoint, insecure);
 
         // Set authentication
         if let Some(token) = &config.api_token {
@@ -123,7 +124,7 @@ impl HorcruxProvider {
         {
             // Authenticate
             match self.runtime.block_on(async {
-                let mut auth_client = HorcruxClient::new(&endpoint);
+                let mut auth_client = HorcruxClient::with_options(&endpoint, insecure);
                 auth_client.authenticate(username, password).await
             }) {
                 Ok(token) => {

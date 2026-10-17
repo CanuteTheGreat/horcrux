@@ -49,8 +49,10 @@ impl Server {
             .env("HORCRUX_QEMU_RUN_DIR", dir.join("run"))
             .env("HORCRUX_CNI_BIN_DIR", cni.join("bin"))
             .env("HORCRUX_CNI_CONF_DIR", cni.join("conf.d"))
+            .env("HORCRUX_SSL_DIR", dir.join("ssl"))
             .env("ADMIN_PASSWORD", "admin")
             .env("RATE_LIMIT_MAX_REQUESTS", "100000")
+            .env("AUTH_RATE_LIMIT_MAX_REQUESTS", "100000")
             .env("RUST_LOG", "info")
             .stdout(Stdio::from(log_file.try_clone().unwrap()))
             .stderr(Stdio::from(log_file))
@@ -60,7 +62,8 @@ impl Server {
     }
 
     fn base(&self) -> String {
-        format!("http://127.0.0.1:{}/api", self.port)
+        // HTTPS by default (certificate from the node-local CA)
+        format!("https://127.0.0.1:{}/api", self.port)
     }
 
     fn log_text(&self) -> String {
@@ -196,6 +199,7 @@ async fn configuration_survives_process_restart() {
 
     let client = Client::builder()
         .timeout(Duration::from_secs(60))
+        .danger_accept_invalid_certs(true)
         .build()
         .unwrap();
     let port = free_port();

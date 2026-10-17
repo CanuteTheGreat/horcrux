@@ -23,16 +23,16 @@ docker exec "$NAME" bash -c '
 set -euo pipefail
 mkdir -p /tmp/fw && cd /tmp/fw
 HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_DATA_DIR=/tmp/fw \
-HORCRUX_DATABASE_URL=sqlite:///tmp/fw/horcrux.db ADMIN_PASSWORD=admin RUST_LOG=warn \
+HORCRUX_DATABASE_URL=sqlite:///tmp/fw/horcrux.db HORCRUX_SSL_DIR=/tmp/fw/ssl ADMIN_PASSWORD=admin RUST_LOG=warn \
   nohup horcrux-api > /tmp/fw/api.log 2>&1 &
-for i in $(seq 1 60); do curl -sf http://127.0.0.1:8006/api/health >/dev/null && break; sleep 1; done
-TOKEN=$(curl -sf -H "Content-Type: application/json" -d "{\"username\":\"admin\",\"password\":\"admin\"}" \
-  http://127.0.0.1:8006/api/auth/login | sed -E "s/.*\"ticket\":\"([^\"]+)\".*/\1/")
-curl -sf -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+for i in $(seq 1 60); do curl -skf https://127.0.0.1:8006/api/health >/dev/null && break; sleep 1; done
+TOKEN=$(curl -skf -H "Content-Type: application/json" -d "{\"username\":\"admin\",\"password\":\"admin\"}" \
+  https://127.0.0.1:8006/api/auth/login | sed -E "s/.*\"ticket\":\"([^\"]+)\".*/\1/")
+curl -skf -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d "{\"id\":\"nft-e2e\",\"enabled\":true,\"action\":\"ACCEPT\",\"direction\":\"in\",\"protocol\":\"tcp\",\"source\":null,\"dest\":null,\"sport\":null,\"dport\":\"8443\",\"comment\":\"nft-e2e\",\"log\":false,\"position\":0}" \
-  http://127.0.0.1:8006/api/firewall/rules >/dev/null
-code=$(curl -s -o /tmp/fw/apply.out -w "%{http_code}" -X POST -H "Authorization: Bearer $TOKEN" \
-  http://127.0.0.1:8006/api/firewall/datacenter/apply)
+  https://127.0.0.1:8006/api/firewall/rules >/dev/null
+code=$(curl -sk -o /tmp/fw/apply.out -w "%{http_code}" -X POST -H "Authorization: Bearer $TOKEN" \
+  https://127.0.0.1:8006/api/firewall/datacenter/apply)
 if [ "$code" != 200 ]; then echo "apply returned $code: $(cat /tmp/fw/apply.out)"; tail -50 /tmp/fw/api.log; exit 1; fi
 nft list ruleset > /tmp/fw/ruleset
 if ! grep -q "dport 8443" /tmp/fw/ruleset; then

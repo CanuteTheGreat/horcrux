@@ -17,6 +17,7 @@ pub fn UsersPage() -> impl IntoView {
     let (show_create_form, set_show_create_form) = create_signal(false);
     let (selected_users, set_selected_users) = create_signal(HashSet::<String>::new());
     let (bulk_action_loading, set_bulk_action_loading) = create_signal(false);
+    let (editing, set_editing) = create_signal(None::<api::User>);
 
     // Filter and search state
     let (search_term, set_search_term) = create_signal(String::new());
@@ -260,7 +261,23 @@ pub fn UsersPage() -> impl IntoView {
                         on:click=move |_| set_show_create_form.set(!show_create_form.get())
                     >
                         <span class="icon">"+"</span>
-                        {move || if show_create_form.get() { "Cancel" } else { "Add User" }}
+                        {move || editing.get().map(|u| view! {
+                <EditUserPanel
+                    user=u
+                    on_done=move |changed: bool| {
+                        set_editing.set(None);
+                        if changed {
+                            spawn_local(async move {
+                                if let Ok(users_data) = api::get_users().await {
+                                    set_users.set(users_data);
+                                }
+                            });
+                        }
+                    }
+                    on_error=move |msg: String| set_error_message.set(Some(msg))
+                />
+            })}
+            {move || if show_create_form.get() { "Cancel" } else { "Add User" }}
                     </button>
                 </div>
             </div>
@@ -460,16 +477,12 @@ pub fn UsersPage() -> impl IntoView {
                                                     </td>
                                                     <td>{&user.email}</td>
                                                     <td>
-                                                        <span class="role-badge">{&user.role}</span>
-                                                        {if user.roles.len() > 1 {
-                                                            view! {
-                                                                <small class="additional-roles">
-                                                                    {format!("+ {} more", user.roles.len() - 1)}
-                                                                </small>
-                                                            }.into_view()
-                                                        } else {
-                                                            view! {}.into_view()
-                                                        }}
+                                                        <span class="role-badge">
+                                                            {if user.roles.is_empty() { "no grants on /".to_string() } else { user.roles.join(", ") }}
+                                                        </span>
+                                                        {(!user.groups.is_empty()).then(|| view! {
+                                                            <small class="additional-roles">{format!("groups: {}", user.groups.join(", "))}</small>
+                                                        })}
                                                     </td>
                                                     <td>
                                                         <span class="realm-badge">{&user.realm}</span>
@@ -480,7 +493,11 @@ pub fn UsersPage() -> impl IntoView {
                                                         </span>
                                                     </td>
                                                     <td>
-                                                        {user.last_login.clone().unwrap_or_else(|| "Never".to_string())}
+                                                        {user
+                                                            .last_login
+                                                            .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
+                                                            .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
+                                                            .unwrap_or_else(|| "Never".to_string())}
                                                     </td>
                                                     <td class="actions-cell">
                                                         <div class="action-buttons">
@@ -494,6 +511,10 @@ pub fn UsersPage() -> impl IntoView {
                                                             <button
                                                                 class="btn-icon edit-btn"
                                                                 title="Edit User"
+                                                                on:click={
+                                                                    let u = user.clone();
+                                                                    move |_| set_editing.set(Some(u.clone()))
+                                                                }
                                                             >
                                                                 "✏️"
                                                             </button>
@@ -554,7 +575,16 @@ where
     let (confirm_password, set_confirm_password) = create_signal(String::new());
     let (email, set_email) = create_signal(String::new());
     let (selected_role, set_selected_role) = create_signal(String::new());
-    let (realm, set_realm) = create_signal("pam".to_string());
+    let (realm, set_realm) = create_signal("local".to_string());
+    // realms an account can belong to: local + the configured ones
+    let (realm_names, set_realm_names) = create_signal(vec!["local".to_string()]);
+    spawn_local(async move {
+        if let Ok(rs) = api::get_realms().await {
+            let mut names = vec!["local".to_string()];
+            names.extend(rs.into_iter().map(|r| r.name));
+            set_realm_names.set(names);
+        }
+    });
     let (comment, set_comment) = create_signal(String::new());
     let (creating, set_creating) = create_signal(false);
 
@@ -703,10 +733,10 @@ where
                             prop:value=move || realm.get()
                             on:change=move |ev| set_realm.set(event_target_value(&ev))
                         >
-                            <option value="pam">"PAM (System Users)"</option>
-                            <option value="ldap">"LDAP"</option>
-                            <option value="ad">"Active Directory"</option>
-                            <option value="oidc">"OpenID Connect"</option>
+                            {move || realm_names.get().into_iter().map(|r| {
+                                let label = if r == "local" { "local (Horcrux password)".to_string() } else { r.clone() };
+                                view! { <option value=r.clone()>{label}</option> }
+                            }).collect_view()}
                         </select>
                     </div>
                 </div>
@@ -730,6 +760,96 @@ where
                     >
                         {move || if creating.get() { "Creating..." } else { "Create User" }}
                     </button>
+                </div>
+            </form>
+        </div>
+    }
+}
+
+/// Edit an account: email, comment, required second factor, groups, and a
+/// password reset (local accounts).
+#[component]
+pub fn EditUserPanel<F, G>(user: api::User, on_done: F, on_error: G) -> impl IntoView
+where
+    F: Fn(bool) + Clone + 'static,
+    G: Fn(String) + Clone + 'static,
+{
+    let (email, set_email) = create_signal(user.email.clone());
+    let (comment, set_comment) = create_signal(user.comment.clone().unwrap_or_default());
+    let (tfa, set_tfa) = create_signal(user.tfa_required);
+    let (groups, set_groups) = create_signal(user.groups.join(", "));
+    let (new_pw, set_new_pw) = create_signal(String::new());
+    let id = user.id.clone();
+    let local = user.realm == "local";
+    let done_cancel = on_done.clone();
+
+    let save = move |ev: web_sys::SubmitEvent| {
+        ev.prevent_default();
+        let id = id.clone();
+        let on_done = on_done.clone();
+        let on_error = on_error.clone();
+        let groups: Vec<String> = groups
+            .get()
+            .split(',')
+            .map(|g| g.trim().to_string())
+            .filter(|g| !g.is_empty())
+            .collect();
+        let req = api::UpdateUserRequest {
+            email: Some(email.get()),
+            role: None,
+            enabled: None,
+            comment: Some(comment.get()),
+        };
+        let tfa_required = tfa.get();
+        let pw = new_pw.get();
+        spawn_local(async move {
+            let result = async {
+                api::update_user(&id, req).await?;
+                api::set_user_tfa_required(&id, tfa_required).await?;
+                api::set_user_groups(&id, groups).await?;
+                if !pw.is_empty() {
+                    api::admin_set_password(&id, pw).await?;
+                }
+                Ok::<(), api::ApiError>(())
+            }
+            .await;
+            match result {
+                Ok(()) => on_done(true),
+                Err(e) => on_error(format!("Failed to update user: {}", e)),
+            }
+        });
+    };
+
+    view! {
+        <div class="create-user-form-container" id="edit-user-panel">
+            <form class="create-user-form" on:submit=save>
+                <h2>{format!("Edit {}", user.username)}</h2>
+                <div class="form-group">
+                    <label>"Email"</label>
+                    <input type="email" id="edit-email" prop:value=email on:input=move |ev| set_email.set(event_target_value(&ev))/>
+                </div>
+                <div class="form-group">
+                    <label>"Comment"</label>
+                    <input type="text" id="edit-comment" prop:value=comment on:input=move |ev| set_comment.set(event_target_value(&ev))/>
+                </div>
+                <div class="form-group">
+                    <label>"Groups (comma separated)"</label>
+                    <input type="text" id="edit-groups" prop:value=groups on:input=move |ev| set_groups.set(event_target_value(&ev))/>
+                </div>
+                <label class="checkbox">
+                    <input type="checkbox" id="edit-tfa-required" prop:checked=tfa on:change=move |_| set_tfa.update(|v| *v = !*v)/>
+                    " Require a second factor"
+                </label>
+                {local.then(|| view! {
+                    <div class="form-group">
+                        <label>"New password (leave empty to keep)"</label>
+                        <input type="password" id="edit-password" autocomplete="new-password"
+                            prop:value=new_pw on:input=move |ev| set_new_pw.set(event_target_value(&ev))/>
+                    </div>
+                })}
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary" id="edit-save">"Save"</button>
+                    <button type="button" class="btn" on:click=move |_| done_cancel(false)>"Cancel"</button>
                 </div>
             </form>
         </div>

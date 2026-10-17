@@ -12,12 +12,15 @@ leptos_meta = { version = "0.6", features = ["csr"] }
 leptos_router = { version = "0.6", features = ["csr"] }
 console_error_panic_hook = "0.1"
 wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+# QR code for authenticator-app enrollment (pure Rust, renders SVG)
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 reqwasm = "0.5"
 chrono = { version = "0.4", features = ["wasmbind"] }
 horcrux-common = { path = "../../horcrux-common" }
-web-sys = { version = "0.3", features = ["WebSocket", "MessageEvent", "ErrorEvent", "CloseEvent", "BinaryType", "Navigator", "Clipboard", "Window", "Storage"] }
+web-sys = { version = "0.3", features = ["WebSocket", "MessageEvent", "ErrorEvent", "CloseEvent", "BinaryType", "Navigator", "Clipboard", "Window", "Storage", "Location", "History"] }
 js-sys = "0.3"
 base64 = "0.22"
 gloo-timers = { version = "0.3", features = ["futures"] }

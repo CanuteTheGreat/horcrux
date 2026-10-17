@@ -57,7 +57,6 @@ mod nas;
 
 use alerts::{Alert, AlertManager, AlertRule, NotificationChannel};
 use audit::AuditLogger;
-use auth::AuthManager;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -72,13 +71,11 @@ use cloudinit::{CloudInitConfig, CloudInitManager};
 use cluster::{ArchitectureSummary, ClusterManager, Node};
 use console::{ConsoleInfo, ConsoleManager, ConsoleType};
 use firewall::{FirewallManager, FirewallRule, FirewallScope, SecurityGroup};
-use horcrux_common::auth::{LoginRequest, LoginResponse};
 use horcrux_common::VmConfig;
 use monitoring::{MonitoringManager, NodeMetrics, ResourceMetrics, StorageMetrics};
 use observability::{OtelConfig, OtelManager};
 use secrets::VaultManager;
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
 use std::sync::Arc;
 use template::{CloneRequest, OsType, StorageType, Template, TemplateManager};
 use tls::TlsManager;
@@ -96,7 +93,6 @@ struct AppState {
     backup_manager: Arc<BackupManager>,
     cloudinit_manager: Arc<CloudInitManager>,
     template_manager: Arc<TemplateManager>,
-    auth_manager: Arc<AuthManager>,
     firewall_manager: Arc<FirewallManager>,
     monitoring_manager: Arc<MonitoringManager>,
     console_manager: Arc<ConsoleManager>,
@@ -180,56 +176,14 @@ async fn main() -> anyhow::Result<()> {
     database.migrate().await.expect("Failed to run migrations");
     info!("Database initialized");
 
-    // Create default admin user if no users exist
-    match db::users::list_users(database.pool()).await {
-        Ok(users) if users.is_empty() => {
-            use auth::password::hash_password;
-
-            let admin_password =
-                std::env::var("ADMIN_PASSWORD").unwrap_or_else(|_| "admin".to_string());
-
-            if admin_password == "admin" {
-                tracing::warn!("⚠️  WARNING: Using default admin password 'admin'!");
-                tracing::warn!(
-                    "⚠️  Please set ADMIN_PASSWORD environment variable for production!"
-                );
-            }
-
-            let password_hash =
-                hash_password(&admin_password).expect("Failed to hash admin password");
-
-            let admin_user = horcrux_common::auth::User {
-                id: uuid::Uuid::new_v4().to_string(),
-                username: "admin".to_string(),
-                password_hash,
-                email: "admin@localhost".to_string(),
-                role: "admin".to_string(),
-                realm: "local".to_string(),
-                enabled: true,
-                roles: vec!["Administrator".to_string()],
-                comment: Some("Default administrator account".to_string()),
-            };
-
-            db::users::create_user(database.pool(), &admin_user)
-                .await
-                .expect("Failed to create admin user");
-
-            info!(
-                "✓ Created default admin user (username: admin, password: {})",
-                if admin_password == "admin" {
-                    "admin [CHANGE THIS!]"
-                } else {
-                    "[from ADMIN_PASSWORD]"
-                }
-            );
-        }
-        Ok(users) => {
-            info!("Found {} existing user(s) in database", users.len());
-        }
-        Err(e) => {
-            tracing::warn!("Failed to check for existing users: {}", e);
-        }
-    }
+    // Access control: built-in roles (and the one-time conversion of
+    // pre-RBAC admins), token signing secret, first-run administrator.
+    auth::store::ensure_builtin_roles(database.pool())
+        .await
+        .expect("Failed to set up roles");
+    middleware::auth::init_jwt_secret(&horcrux_config.paths.data_dir)
+        .expect("Failed to set up the token signing secret");
+    api::auth::bootstrap_admin(&database, &horcrux_config).await;
 
     let monitoring_manager = Arc::new(MonitoringManager::new());
 
@@ -419,6 +373,24 @@ async fn main() -> anyhow::Result<()> {
         mgr
     };
 
+    // HTTPS certificate: generated on first start, replaceable at runtime.
+    let tls_manager = Arc::new(TlsManager::with_paths(
+        horcrux_config.tls.cert_path.clone(),
+        horcrux_config.tls.key_path.clone(),
+        horcrux_config.paths.data_dir.join("ssl"),
+    ));
+    tls_manager.set_http_redirect_port(horcrux_config.server.http_redirect_port);
+    if horcrux_config.server.tls_enabled {
+        let info = tls_manager
+            .ensure_certificate()
+            .expect("Failed to load or create the TLS certificate");
+        info!(
+            "TLS certificate: {} ({}), valid until {}, SHA-256 {}",
+            info.subject, info.source, info.valid_until, info.fingerprint_sha256
+        );
+        tls::acme::start_renewal_task(tls_manager.clone(), database.pool().clone());
+    }
+
     let database_for_stacks = database.clone();
     let shared_container_manager = Arc::new(container::ContainerManager::with_database(
         database_for_stacks.clone(),
@@ -436,14 +408,13 @@ async fn main() -> anyhow::Result<()> {
             horcrux_config.paths.cloudinit.clone(),
         )),
         template_manager: persisted.template,
-        auth_manager: Arc::new(AuthManager::new()),
         firewall_manager: persisted.firewall,
         monitoring_manager,
         console_manager: Arc::new(ConsoleManager::new()),
         cluster_manager: persisted.cluster,
         alert_manager: persisted.alert,
         otel_manager: Arc::new(OtelManager::new()),
-        tls_manager: Arc::new(TlsManager::new()),
+        tls_manager: tls_manager.clone(),
         vault_manager: Arc::new(VaultManager::new()),
         audit_logger: Arc::new(AuditLogger::new(Some(
             horcrux_config.logging.audit_log.clone(),
@@ -549,18 +520,17 @@ async fn main() -> anyhow::Result<()> {
         ServeDir::new(&ui_dir).not_found_service(ServeFile::new(ui_dir.join("index.html")));
 
     // Build auth router with strict rate limiting (login/register)
-    let auth_router = Router::new()
-        .route("/api/auth/login", post(login))
-        .route("/api/auth/register", post(register_user))
-        .with_state(state.clone())
-        .layer(axum_middleware::from_fn(move |conn_info, req, next| {
-            middleware::rate_limit::rate_limit_middleware(
-                auth_rate_limiter.clone(),
-                conn_info,
-                req,
-                next,
-            )
-        }));
+    let auth_router =
+        api::auth::public_routes()
+            .with_state(state.clone())
+            .layer(axum_middleware::from_fn(move |conn_info, req, next| {
+                middleware::rate_limit::rate_limit_middleware(
+                    auth_rate_limiter.clone(),
+                    conn_info,
+                    req,
+                    next,
+                )
+            }));
 
     // Build protected routes using modular route builders
     let protected_routes = Router::new()
@@ -569,6 +539,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(container_routes())
         .merge(template_routes())
         .merge(auth_protected_routes())
+        .merge(api::access_routes())
         .merge(storage_routes())
         .merge(monitoring_routes())
         .merge(network_routes())
@@ -601,7 +572,12 @@ async fn main() -> anyhow::Result<()> {
         // WebSocket endpoint for real-time updates
         .route("/api/ws", get(websocket::ws_handler))
         .with_state(state.clone())
-        // Add authentication middleware to protected routes
+        // Every protected route: permission check (inner) after
+        // authentication (outer layer, runs first).
+        .layer(axum_middleware::from_fn_with_state(
+            state.clone(),
+            middleware::rbac::rbac_middleware,
+        ))
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),
             middleware::auth::auth_middleware,
@@ -648,23 +624,42 @@ async fn main() -> anyhow::Result<()> {
     let monitoring_for_cleanup = state.monitoring_manager.clone();
     let scheduler_for_cleanup = state.snapshot_scheduler.clone();
 
-    // Start server
+    // Start server: HTTPS by default (plain HTTP on the same port is
+    // redirected), plain HTTP only when TLS is turned off.
     let addr = format!(
         "{}:{}",
         horcrux_config.server.host, horcrux_config.server.port
     );
-    info!("Horcrux API listening on {}", addr);
-
     let listener = TcpListener::bind(&addr).await?;
+    let redirect_listener = match horcrux_config.server.http_redirect_port {
+        Some(port) if horcrux_config.server.tls_enabled => {
+            let raddr = format!("{}:{}", horcrux_config.server.host, port);
+            info!("HTTP redirect / ACME challenge listener on {}", raddr);
+            Some(TcpListener::bind(&raddr).await?)
+        }
+        _ => None,
+    };
+    info!(
+        "Horcrux API listening on {}://{}",
+        if horcrux_config.server.tls_enabled {
+            "https"
+        } else {
+            "http"
+        },
+        addr
+    );
 
-    // Spawn signal handler
     let shutdown_signal = graceful.signal();
-
-    axum::serve(
+    tls::server::serve(
         listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
+        redirect_listener,
+        app,
+        horcrux_config
+            .server
+            .tls_enabled
+            .then(|| state.tls_manager.clone()),
+        shutdown_signal,
     )
-    .with_graceful_shutdown(shutdown_signal)
     .await?;
 
     // Run cleanup after server stops
@@ -926,30 +921,10 @@ fn template_routes() -> Router<Arc<AppState>> {
         .route("/api/templates/:id/clone", post(clone_template))
 }
 
-/// Build auth-related routes (users, roles, permissions, audit)
+/// Audit log routes (users, roles, sessions and the rest of access control
+/// live in `api::auth`).
 fn auth_protected_routes() -> Router<Arc<AppState>> {
     Router::new()
-        // Auth endpoints
-        .route("/api/auth/logout", post(logout))
-        .route("/api/auth/sessions", get(list_auth_sessions))
-        .route("/api/auth/sessions/:id", delete(delete_auth_session))
-        .route("/api/auth/verify", get(verify_session))
-        .route("/api/auth/password", post(change_password))
-        // User management
-        .route("/api/users", get(list_users))
-        .route("/api/users", post(create_user))
-        .route("/api/users/:id", delete(delete_user))
-        // API key management
-        .route("/api/users/:username/api-keys", get(list_api_keys))
-        .route("/api/users/:username/api-keys", post(create_api_key))
-        .route(
-            "/api/users/:username/api-keys/:key_id",
-            delete(revoke_api_key),
-        )
-        // Role and permission management
-        .route("/api/roles", get(list_roles))
-        .route("/api/permissions/:user_id", get(get_user_permissions))
-        .route("/api/permissions/:user_id", post(add_permission))
         // Audit log endpoints
         .route("/api/audit/events", get(query_audit_events))
         .route("/api/audit/stats", get(get_audit_stats))
@@ -984,18 +959,6 @@ fn storage_routes() -> Router<Arc<AppState>> {
             get(get_gpu_iommu_group),
         )
         .route("/api/gpu/iommu-status", get(check_iommu_status))
-        // TLS/SSL endpoints
-        .route("/api/tls/config", get(get_tls_config))
-        .route("/api/tls/config", post(update_tls_config))
-        .route("/api/tls/certificates", get(list_certificates))
-        .route(
-            "/api/tls/certificate/generate",
-            post(generate_self_signed_cert),
-        )
-        .route(
-            "/api/tls/certificate/info/:path",
-            get(get_certificate_info_endpoint),
-        )
         // Vault endpoints
         .route("/api/vault/config", get(get_vault_config))
         .route("/api/vault/config", post(update_vault_config))
@@ -7057,491 +7020,6 @@ struct CloneResponse {
     new_vm_id: String,
 }
 
-// Auth API handlers
-
-async fn login(
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<LoginRequest>,
-) -> Result<axum::response::Response, ApiError> {
-    use crate::auth::password::verify_password;
-    use crate::middleware::auth::generate_jwt_token;
-    use axum::response::IntoResponse;
-
-    // Try database authentication first
-    match db::users::get_user_by_username(state.database.pool(), &request.username).await {
-        Ok(user) => {
-            // Verify password
-            if !verify_password(&request.password, &user.password_hash)? {
-                return Err(ApiError::AuthenticationFailed);
-            }
-
-            // Create session in database
-            let session_id = uuid::Uuid::new_v4().to_string();
-            let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
-
-            let session = horcrux_common::auth::Session {
-                id: session_id.clone(),
-                user_id: user.id.clone(),
-                expires_at,
-                session_id: session_id.clone(),
-                username: user.username.clone(),
-                realm: user.realm.clone(),
-                created: chrono::Utc::now().timestamp(),
-                expires: expires_at.timestamp(),
-            };
-
-            db::users::create_session(state.database.pool(), &session).await?;
-
-            // Generate JWT token
-            let token = generate_jwt_token(&user.id, &user.username, &user.role)
-                .map_err(|e| ApiError::Internal(format!("Failed to generate token: {}", e)))?;
-
-            let body = LoginResponse {
-                ticket: token,
-                csrf_token: session_id.clone(),
-                username: user.username,
-                roles: vec![user.role],
-            };
-
-            // Also issue a session_id cookie so clients that prefer
-            // cookie-based auth (e.g. browsers) can use protected
-            // endpoints without handling the bearer token directly.
-            let cookie = format!(
-                "session_id={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400",
-                session_id
-            );
-            let mut response = Json(body).into_response();
-            if let Ok(value) = axum::http::HeaderValue::from_str(&cookie) {
-                response
-                    .headers_mut()
-                    .insert(axum::http::header::SET_COOKIE, value);
-            }
-            Ok(response)
-        }
-        Err(_) => {
-            // Fall back to auth manager (PAM/LDAP) if database user not found
-            let response = state.auth_manager.login(request).await?;
-            Ok(Json(response).into_response())
-        }
-    }
-}
-
-/// Live login sessions (the Sessions page). Admins see everyone's; other
-/// users only their own.
-async fn list_auth_sessions(
-    State(state): State<Arc<AppState>>,
-    auth_user: Option<axum::Extension<middleware::auth::AuthUser>>,
-) -> Result<Json<Vec<horcrux_common::auth::Session>>, ApiError> {
-    let user = auth_user
-        .map(|axum::Extension(u)| u)
-        .ok_or(ApiError::AuthenticationFailed)?;
-    let scope = (user.role != "admin").then_some(user.user_id.as_str());
-    Ok(Json(
-        db::users::list_sessions(state.database.pool(), scope).await?,
-    ))
-}
-
-async fn delete_auth_session(
-    State(state): State<Arc<AppState>>,
-    auth_user: Option<axum::Extension<middleware::auth::AuthUser>>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, ApiError> {
-    let user = auth_user
-        .map(|axum::Extension(u)| u)
-        .ok_or(ApiError::AuthenticationFailed)?;
-    let scope = (user.role != "admin").then_some(user.user_id.as_str());
-    let sessions = db::users::list_sessions(state.database.pool(), scope).await?;
-    if !sessions.iter().any(|s| s.id == id) {
-        return Err(ApiError::NotFound(format!("Session {} not found", id)));
-    }
-    db::users::delete_session(state.database.pool(), &id).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn logout(
-    State(state): State<Arc<AppState>>,
-    headers: axum::http::HeaderMap,
-    body: axum::body::Bytes,
-) -> Result<StatusCode, ApiError> {
-    // Support both JSON body {"session_id": "..."} (in-memory PAM/LDAP sessions)
-    // and a `session_id` cookie (database-backed sessions issued by /auth/login).
-    if let Ok(request) = serde_json::from_slice::<LogoutRequest>(&body) {
-        let _ = state.auth_manager.logout(&request.session_id).await;
-    }
-
-    if let Some(cookie_header) = headers.get("cookie") {
-        if let Ok(cookie_str) = cookie_header.to_str() {
-            for cookie in cookie_str.split(';') {
-                let cookie = cookie.trim();
-                if let Some(session_id) = cookie.strip_prefix("session_id=") {
-                    // Don't silently swallow a failed delete: under
-                    // concurrent load a transient SQLite lock can make this
-                    // fail even with WAL+busy_timeout configured, and if we
-                    // ignore that, logout reports success to the client
-                    // while the session cookie stays valid server-side (the
-                    // client believes it's logged out, but the old cookie -
-                    // if replayed - still authenticates). Retry briefly,
-                    // then log loudly if it still didn't take; still return
-                    // 200 either way since the client-facing contract for
-                    // logout doesn't change, but this at least makes a real
-                    // failure visible in logs instead of invisible.
-                    let mut attempts = 0;
-                    loop {
-                        match db::users::delete_session(state.database.pool(), session_id).await {
-                            Ok(()) => break,
-                            Err(e) if attempts < 2 => {
-                                attempts += 1;
-                                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                                tracing::warn!(
-                                    "logout: delete_session retry {} for session (error: {})",
-                                    attempts,
-                                    e
-                                );
-                            }
-                            Err(e) => {
-                                tracing::error!(
-                                    "logout: delete_session failed after retries, session may still be valid: {}",
-                                    e
-                                );
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(StatusCode::OK)
-}
-
-#[derive(serde::Deserialize, Default)]
-struct LogoutRequest {
-    #[serde(default)]
-    session_id: String,
-}
-
-/// GET /api/auth/verify: is the caller's own credential valid? The auth
-/// middleware has already validated the bearer token/cookie and attached
-/// the user. This used to demand a JSON body on a GET (every call, including
-/// the UI's session check, got 415), so a body with `session_id` is now
-/// optional and only needed to check some other session.
-async fn verify_session(
-    State(state): State<Arc<AppState>>,
-    auth_user: Option<axum::Extension<middleware::auth::AuthUser>>,
-    request: Option<Json<VerifyRequest>>,
-) -> Result<Json<VerifyResponse>, ApiError> {
-    if let Some(Json(request)) = request {
-        let valid = state
-            .auth_manager
-            .verify_session(&request.session_id)
-            .await?;
-        return Ok(Json(VerifyResponse {
-            valid,
-            username: None,
-        }));
-    }
-    let user = auth_user.map(|axum::Extension(u)| u);
-    Ok(Json(VerifyResponse {
-        valid: user.is_some(),
-        username: user.map(|u| u.username),
-    }))
-}
-
-#[derive(serde::Deserialize)]
-struct VerifyRequest {
-    session_id: String,
-}
-
-#[derive(serde::Serialize)]
-struct VerifyResponse {
-    valid: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    username: Option<String>,
-}
-
-async fn list_users(State(state): State<Arc<AppState>>) -> Json<Vec<horcrux_common::auth::User>> {
-    let users = state.auth_manager.list_users().await;
-    Json(users)
-}
-
-// User registration endpoint (publicly accessible)
-#[derive(serde::Deserialize)]
-struct RegisterUserRequest {
-    username: String,
-    password: String,
-    email: String,
-}
-
-async fn register_user(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<RegisterUserRequest>,
-) -> Result<StatusCode, ApiError> {
-    use crate::auth::password::hash_password;
-
-    // Validate email format
-    if !req.email.contains('@') {
-        return Err(ApiError::Internal("Invalid email format".to_string()));
-    }
-
-    // Validate username (alphanumeric and underscores only)
-    if !req
-        .username
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '_')
-    {
-        return Err(ApiError::Internal(
-            "Username must be alphanumeric".to_string(),
-        ));
-    }
-
-    // Validate password strength (at least 8 characters)
-    if req.password.len() < 8 {
-        return Err(ApiError::Internal(
-            "Password must be at least 8 characters".to_string(),
-        ));
-    }
-
-    // Check if user already exists
-    if db::users::get_user_by_username(state.database.pool(), &req.username)
-        .await
-        .is_ok()
-    {
-        return Err(ApiError::Internal("Username already exists".to_string()));
-    }
-
-    // Hash password
-    let password_hash = hash_password(&req.password)?;
-
-    // Create user
-    let user = horcrux_common::auth::User {
-        id: uuid::Uuid::new_v4().to_string(),
-        username: req.username,
-        password_hash,
-        email: req.email,
-        role: "user".to_string(), // Default role
-        realm: "local".to_string(),
-        enabled: true,
-        roles: vec!["PVEVMUser".to_string()],
-        comment: None,
-    };
-
-    db::users::create_user(state.database.pool(), &user).await?;
-
-    Ok(StatusCode::CREATED)
-}
-
-async fn create_user(
-    State(state): State<Arc<AppState>>,
-    Json(user): Json<horcrux_common::auth::User>,
-) -> Result<StatusCode, ApiError> {
-    state.auth_manager.add_user(user).await?;
-    Ok(StatusCode::CREATED)
-}
-
-async fn delete_user(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, ApiError> {
-    state.auth_manager.delete_user(&id).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn list_roles(State(state): State<Arc<AppState>>) -> Json<Vec<horcrux_common::auth::Role>> {
-    let roles = state.auth_manager.list_roles().await;
-    Json(roles)
-}
-
-async fn get_user_permissions(
-    State(state): State<Arc<AppState>>,
-    Path(user_id): Path<String>,
-) -> Json<Vec<horcrux_common::auth::Permission>> {
-    let permissions = state.auth_manager.get_user_permissions(&user_id).await;
-    Json(permissions)
-}
-
-async fn add_permission(
-    State(state): State<Arc<AppState>>,
-    Path(user_id): Path<String>,
-    Json(permission): Json<horcrux_common::auth::Permission>,
-) -> Result<StatusCode, ApiError> {
-    state
-        .auth_manager
-        .add_permission(&user_id, permission)
-        .await?;
-    Ok(StatusCode::CREATED)
-}
-
-// Password change endpoint
-#[derive(serde::Deserialize)]
-struct ChangePasswordRequest {
-    username: String,
-    old_password: String,
-    new_password: String,
-}
-
-async fn change_password(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<ChangePasswordRequest>,
-) -> Result<StatusCode, ApiError> {
-    use crate::auth::password::{hash_password, verify_password};
-
-    // Get user from database
-    let user = db::users::get_user_by_username(state.database.pool(), &req.username)
-        .await
-        .map_err(|_| ApiError::AuthenticationFailed)?;
-
-    // Verify old password
-    if !verify_password(&req.old_password, &user.password_hash)? {
-        return Err(ApiError::AuthenticationFailed);
-    }
-
-    // Hash new password
-    let new_hash = hash_password(&req.new_password)?;
-
-    // Update password in database
-    sqlx::query(
-        "UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?",
-    )
-    .bind(&new_hash)
-    .bind(&req.username)
-    .execute(state.database.pool())
-    .await
-    .map_err(|e| ApiError::Internal(format!("Failed to update password: {}", e)))?;
-
-    Ok(StatusCode::OK)
-}
-
-// API key management endpoints
-#[derive(serde::Deserialize)]
-struct CreateApiKeyRequest {
-    name: String,
-    expires_days: Option<i64>,
-}
-
-#[derive(serde::Serialize)]
-struct CreateApiKeyResponse {
-    id: String,
-    key: String,
-    name: String,
-    expires_at: Option<i64>,
-}
-
-async fn create_api_key(
-    State(state): State<Arc<AppState>>,
-    Path(username): Path<String>,
-    Json(req): Json<CreateApiKeyRequest>,
-) -> Result<Json<CreateApiKeyResponse>, ApiError> {
-    use crate::auth::password::{generate_api_key, hash_password};
-
-    // Get user
-    let user = db::users::get_user_by_username(state.database.pool(), &username)
-        .await
-        .map_err(|_| ApiError::NotFound(format!("User {} not found", username)))?;
-
-    // Generate API key
-    let api_key = generate_api_key();
-    let key_hash = hash_password(&api_key)?;
-
-    // Calculate expiration
-    let expires_at = req
-        .expires_days
-        .map(|days| chrono::Utc::now().timestamp() + (days * 86400));
-
-    // Create ID
-    let key_id = uuid::Uuid::new_v4().to_string();
-
-    // Insert into database
-    sqlx::query(
-        "INSERT INTO api_keys (id, user_id, key_hash, name, expires_at, enabled)
-         VALUES (?, ?, ?, ?, ?, 1)",
-    )
-    .bind(&key_id)
-    .bind(&user.id)
-    .bind(&key_hash)
-    .bind(&req.name)
-    .bind(expires_at)
-    .execute(state.database.pool())
-    .await
-    .map_err(|e| ApiError::Internal(format!("Failed to create API key: {}", e)))?;
-
-    Ok(Json(CreateApiKeyResponse {
-        id: key_id,
-        key: api_key, // Only return the key once!
-        name: req.name,
-        expires_at,
-    }))
-}
-
-#[derive(serde::Serialize)]
-struct ApiKeyInfo {
-    id: String,
-    name: String,
-    enabled: bool,
-    expires_at: Option<i64>,
-    created_at: String,
-    last_used_at: Option<String>,
-}
-
-async fn list_api_keys(
-    State(state): State<Arc<AppState>>,
-    Path(username): Path<String>,
-) -> Result<Json<Vec<ApiKeyInfo>>, ApiError> {
-    // Get user
-    let user = db::users::get_user_by_username(state.database.pool(), &username)
-        .await
-        .map_err(|_| ApiError::NotFound(format!("User {} not found", username)))?;
-
-    // Query API keys
-    let rows = sqlx::query(
-        "SELECT id, name, enabled, expires_at, created_at, last_used_at
-         FROM api_keys WHERE user_id = ? ORDER BY created_at DESC",
-    )
-    .bind(&user.id)
-    .fetch_all(state.database.pool())
-    .await
-    .map_err(|e| ApiError::Internal(format!("Failed to list API keys: {}", e)))?;
-
-    let mut keys = Vec::new();
-    for row in rows {
-        use sqlx::Row;
-        keys.push(ApiKeyInfo {
-            id: row.get("id"),
-            name: row.get("name"),
-            enabled: row.get("enabled"),
-            expires_at: row.get("expires_at"),
-            created_at: row.get("created_at"),
-            last_used_at: row.get("last_used_at"),
-        });
-    }
-
-    Ok(Json(keys))
-}
-
-async fn revoke_api_key(
-    State(state): State<Arc<AppState>>,
-    Path((username, key_id)): Path<(String, String)>,
-) -> Result<StatusCode, ApiError> {
-    // Get user
-    let user = db::users::get_user_by_username(state.database.pool(), &username)
-        .await
-        .map_err(|_| ApiError::NotFound(format!("User {} not found", username)))?;
-
-    // Delete API key (verify it belongs to the user)
-    let result = sqlx::query("DELETE FROM api_keys WHERE id = ? AND user_id = ?")
-        .bind(&key_id)
-        .bind(&user.id)
-        .execute(state.database.pool())
-        .await
-        .map_err(|e| ApiError::Internal(format!("Failed to revoke API key: {}", e)))?;
-
-    if result.rows_affected() == 0 {
-        return Err(ApiError::NotFound("API key not found".to_string()));
-    }
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
 // Firewall API handlers
 
 async fn list_firewall_rules(State(state): State<Arc<AppState>>) -> Json<Vec<FirewallRule>> {
@@ -8571,70 +8049,6 @@ async fn export_metrics_now(State(state): State<Arc<AppState>>) -> Result<Status
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     Ok(StatusCode::OK)
-}
-
-// TLS/SSL handlers
-
-async fn get_tls_config(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<tls::TlsConfig>, ApiError> {
-    let config = state.tls_manager.get_config().await;
-    Ok(Json(config))
-}
-
-async fn update_tls_config(
-    State(state): State<Arc<AppState>>,
-    Json(config): Json<tls::TlsConfig>,
-) -> Result<StatusCode, ApiError> {
-    state
-        .tls_manager
-        .load_config(config)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-    Ok(StatusCode::OK)
-}
-
-async fn list_certificates(State(state): State<Arc<AppState>>) -> Json<Vec<tls::CertificateInfo>> {
-    let certs = state.tls_manager.list_certificates().await;
-    Json(certs)
-}
-
-#[derive(serde::Deserialize)]
-struct GenerateCertRequest {
-    common_name: String,
-    organization: String,
-    validity_days: u32,
-}
-
-async fn generate_self_signed_cert(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<GenerateCertRequest>,
-) -> Result<Json<tls::CertificateInfo>, ApiError> {
-    let cert = state
-        .tls_manager
-        .generate_self_signed_cert(
-            &req.common_name,
-            &req.organization,
-            req.validity_days,
-            &state.config.tls.cert_path.to_string_lossy(),
-            &state.config.tls.key_path.to_string_lossy(),
-        )
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-
-    Ok(Json(cert))
-}
-
-async fn get_certificate_info_endpoint(
-    State(state): State<Arc<AppState>>,
-    Path(path): Path<String>,
-) -> Result<Json<tls::CertificateInfo>, ApiError> {
-    let info = state
-        .tls_manager
-        .get_certificate_info(&path)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-    Ok(Json(info))
 }
 
 // Vault handlers

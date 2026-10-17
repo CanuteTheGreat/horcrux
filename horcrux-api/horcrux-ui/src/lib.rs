@@ -17,19 +17,21 @@ mod components;
 pub mod features;
 pub mod pages;
 pub mod utils;
+mod webauthn;
 mod websocket;
 
 use pages::{
     AlertCenterPage, Alerts, ApiKeysPage, BackupDashboard, BackupJobsPage, BackupVerifyPage,
-    CloneList, ClusterDashboard, ClusterManagementPage, ConfigMapsPage, ContainerCreate,
-    ContainerEventsPage, ContainerExecPage, ContainerList, ContainerLogsPage,
+    CertificatesPage, CloneList, ClusterDashboard, ClusterManagementPage, ConfigMapsPage,
+    ContainerCreate, ContainerEventsPage, ContainerExecPage, ContainerList, ContainerLogsPage,
     ContainerNetworksPage, Dashboard, DashboardsPage, DeploymentsPage, GpuManagement, HaDashboard,
     HaGroupsPage, HelmChartsPage, HelmReleasesPage, HelmRepositoriesPage, ImagesPage,
     IngressesPage, KubernetesManagement, Login, LxcContainerPage, LxcTemplatesPage,
-    MetricsExplorerPage, MigrationCenterPage, Monitoring, NetworkManagement, NotificationsPage,
-    ObservabilityPage, PodsPage, ReplicationList, RetentionPoliciesPage, RolesPage, SecretsPage,
-    ServicesPage, SessionsPage, SnapshotList, SnapshotManagerPage, StacksPage, StorageManagement,
-    TemplateManagerPage, UsersPage, VmConsole, VmCreate, VmList, VolumesPage,
+    MetricsExplorerPage, MfaPage, MigrationCenterPage, Monitoring, NetworkManagement,
+    NotificationsPage, ObservabilityPage, PermissionsPage, PodsPage, RealmsPage, ReplicationList,
+    RetentionPoliciesPage, RolesPage, SecretsPage, ServicesPage, SessionsPage, SnapshotList,
+    SnapshotManagerPage, StacksPage, StorageManagement, TemplateManagerPage, UserMenu, UsersPage,
+    VmConsole, VmCreate, VmList, VolumesPage,
 };
 
 #[component]
@@ -129,12 +131,17 @@ pub fn App() -> impl IntoView {
                         <span class="navbar-item dropdown-trigger">"Administration ▾"</span>
                         <div class="dropdown-content">
                             <A href="/auth/users" class="dropdown-item">"Users"</A>
-                            <A href="/auth/roles" class="dropdown-item">"Roles & Permissions"</A>
+                            <A href="/auth/roles" class="dropdown-item">"Roles"</A>
+                            <A href="/auth/permissions" class="dropdown-item">"Permissions & Groups"</A>
+                            <A href="/auth/realms" class="dropdown-item">"Authentication Realms"</A>
+                            <A href="/auth/mfa" class="dropdown-item">"Account Security (2FA)"</A>
+                            <A href="/system/certificates" class="dropdown-item">"Certificates"</A>
                             <A href="/auth/sessions" class="dropdown-item">"Active Sessions"</A>
                             <A href="/auth/api-keys" class="dropdown-item">"API Keys"</A>
                         </div>
                     </div>
                 </div>
+                <UserMenu/>
             </nav>
 
             <main class="container">
@@ -184,6 +191,10 @@ pub fn App() -> impl IntoView {
                     <Route path="/auth/roles" view=RolesPage/>
                     <Route path="/auth/sessions" view=SessionsPage/>
                     <Route path="/auth/api-keys" view=ApiKeysPage/>
+                    <Route path="/auth/mfa" view=MfaPage/>
+                    <Route path="/auth/permissions" view=PermissionsPage/>
+                    <Route path="/auth/realms" view=RealmsPage/>
+                    <Route path="/system/certificates" view=CertificatesPage/>
                     <Route path="/backup" view=|| view! { <Gated feature="backup"><BackupDashboard/></Gated> }/>
                     <Route path="/backup/jobs" view=|| view! { <Gated feature="backup"><BackupJobsPage/></Gated> }/>
                     <Route path="/backup/retention" view=|| view! { <Gated feature="backup"><RetentionPoliciesPage/></Gated> }/>

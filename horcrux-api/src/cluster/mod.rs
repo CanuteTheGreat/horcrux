@@ -125,9 +125,14 @@ impl ClusterManager {
     pub fn start_usage_monitor(self: &Arc<Self>, api_port: u16) {
         let manager = Arc::clone(self);
         tokio::spawn(async move {
+            // Peers serve HTTPS with their own node-local CA, which this node
+            // doesn't hold, so the channel is encrypted but the peer isn't
+            // authenticated by certificate; the request only carries a 30 s,
+            // read-only, single-route service token (see middleware::auth).
             let client = match reqwest::Client::builder()
                 .connect_timeout(usage::FETCH_TIMEOUT)
                 .timeout(usage::FETCH_TIMEOUT)
+                .danger_accept_invalid_certs(true)
                 .build()
             {
                 Ok(c) => c,

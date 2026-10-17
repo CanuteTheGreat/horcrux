@@ -13,9 +13,23 @@ use clap::{Parser, Subcommand};
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
 struct Cli {
-    /// API server address
-    #[arg(short, long, default_value = "http://localhost:8006")]
+    /// API server address (HTTPS; plain http:// is redirected)
+    #[arg(
+        short,
+        long,
+        env = "HORCRUX_SERVER",
+        default_value = "https://localhost:8006"
+    )]
     server: String,
+
+    /// CA certificate (PEM) to verify the server with. Defaults to the
+    /// local node's CA (/etc/horcrux/ssl/ca.pem) when that file is readable.
+    #[arg(long, env = "HORCRUX_CA_CERT")]
+    ca_cert: Option<std::path::PathBuf>,
+
+    /// Don't verify the server's TLS certificate
+    #[arg(long, env = "HORCRUX_INSECURE")]
+    insecure: bool,
 
     /// Output format (table, json, yaml)
     #[arg(short, long, default_value = "table")]
@@ -350,7 +364,8 @@ enum UserCommands {
         /// Password
         #[arg(short, long)]
         password: String,
-        /// Role (admin, operator, user)
+        /// Role granted on / (e.g. Administrator, Auditor, VMAdmin);
+        /// "user" grants nothing (use `grant` for narrower paths)
         #[arg(short, long, default_value = "user")]
         role: String,
     },
@@ -363,11 +378,12 @@ enum UserCommands {
     },
     /// List roles
     Roles,
-    /// Grant permission
+    /// Grant a role on a path (Proxmox-style ACL)
     Grant {
         /// Username
         username: String,
-        /// Permission (e.g., "VM.Allocate")
+        /// Role, optionally with the path it applies to: "VMUser@/vms/100"
+        /// (default path "/"). See `horcrux user roles`.
         permission: String,
     },
 }
@@ -1088,7 +1104,11 @@ async fn main() -> Result<()> {
     let mut config = config::Config::load().unwrap_or_default();
 
     // Initialize API client
-    let api_client = api::ApiClient::new(&cli.server);
+    let ca_cert = cli.ca_cert.clone().or_else(|| {
+        let local = std::path::PathBuf::from("/etc/horcrux/ssl/ca.pem");
+        std::fs::File::open(&local).is_ok().then_some(local)
+    });
+    let api_client = api::ApiClient::with_tls(&cli.server, ca_cert.as_deref(), cli.insecure)?;
 
     // Load token from config if available
     if let Some(token) = &config.token {

@@ -1,6 +1,10 @@
 //! Authentication middleware
 //!
-//! Validates JWT tokens or session cookies for API requests
+//! Accepts a bearer JWT (issued at login), the `session_id` cookie, or an
+//! `X-API-Key`. Every credential is tied to a live database row: a JWT names
+//! its login session (`sid`), so logging out, deleting the session, or
+//! disabling/deleting the user revokes it immediately instead of leaving a
+//! 24-hour bearer token valid.
 use axum::{
     extract::{Request, State},
     http::{HeaderMap, StatusCode},
@@ -27,6 +31,15 @@ impl IntoResponse for AuthError {
     }
 }
 
+/// How the caller authenticated.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AuthMethod {
+    Token,
+    Cookie,
+    ApiKey,
+    ClusterNode,
+}
+
 /// Extracted user information from authentication
 #[derive(Clone, Debug)]
 pub struct AuthUser {
@@ -34,7 +47,17 @@ pub struct AuthUser {
     pub username: String,
     #[allow(dead_code)]
     pub role: String,
+    /// `Some("tfa_setup")` for the restricted login a user gets when a
+    /// second factor is mandatory but not configured yet: only the
+    /// second-factor setup endpoints accept it.
+    pub scope: Option<String>,
+    /// Login session backing this credential (not set for API keys).
+    pub session_id: Option<String>,
+    pub method: AuthMethod,
 }
+
+/// Scope of the restricted "set up your second factor first" login.
+pub const SCOPE_TFA_SETUP: &str = "tfa_setup";
 
 /// JWT claims structure
 #[derive(Debug, Serialize, Deserialize)]
@@ -44,18 +67,94 @@ struct Claims {
     role: String,
     exp: usize, // expiration time (seconds since epoch)
     iat: usize, // issued at (seconds since epoch)
+    /// login session id (absent only on cluster-node service tokens)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scope: Option<String>,
 }
 
-/// JWT secret key (singleton)
-/// In production, this should be loaded from environment variable or config file
+static JWT_SECRET: OnceLock<String> = OnceLock::new();
+
+/// Load the token signing secret: `JWT_SECRET` if set, otherwise a random
+/// secret generated on first start and kept in `<data_dir>/jwt.secret`
+/// (mode 0600). There is no built-in default any more - a published default
+/// let anyone mint tokens. Every node of a cluster must use the same secret
+/// (set `JWT_SECRET`, or copy the file) so their service tokens verify.
+pub fn init_jwt_secret(data_dir: &std::path::Path) -> std::io::Result<()> {
+    if JWT_SECRET.get().is_some() {
+        return Ok(());
+    }
+    let secret = match std::env::var("JWT_SECRET") {
+        Ok(s) if s.len() >= 16 => s,
+        Ok(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "JWT_SECRET must be at least 16 characters",
+            ))
+        }
+        Err(_) => {
+            let path = data_dir.join("jwt.secret");
+            match std::fs::read_to_string(&path) {
+                Ok(s) if s.trim().len() >= 32 => s.trim().to_string(),
+                _ => {
+                    std::fs::create_dir_all(data_dir)?;
+                    let s = crate::auth::random_token(64);
+                    write_private(&path, s.as_bytes())?;
+                    tracing::info!("Generated token signing secret at {}", path.display());
+                    s
+                }
+            }
+        }
+    };
+    let _ = JWT_SECRET.set(secret);
+    Ok(())
+}
+
+/// Write a file readable only by the service user.
+pub fn write_private(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    opts.mode(0o600);
+    let mut f = opts.open(path)?;
+    f.write_all(data)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
 fn get_jwt_secret() -> &'static str {
-    static JWT_SECRET: OnceLock<String> = OnceLock::new();
     JWT_SECRET.get_or_init(|| {
-        std::env::var("JWT_SECRET").unwrap_or_else(|_| {
-            tracing::warn!("JWT_SECRET not set, using default (INSECURE for production!)");
-            "horcrux-default-jwt-secret-change-in-production-please".to_string()
-        })
+        // Not initialized (unit tests, library use): a random per-process
+        // secret is safe - tokens just don't outlive the process.
+        std::env::var("JWT_SECRET").unwrap_or_else(|_| crate::auth::random_token(64))
     })
+}
+
+fn unauthorized(error: &str, message: impl Into<String>) -> AuthError {
+    AuthError {
+        error: error.to_string(),
+        message: message.into(),
+    }
+}
+
+/// Load the account behind a credential and make sure it may still log in.
+async fn load_user(
+    state: &Arc<crate::AppState>,
+    user_id: &str,
+) -> Result<horcrux_common::auth::User, AuthError> {
+    match crate::auth::store::find_user(state.database.pool(), user_id).await {
+        Ok(Some(u)) if u.enabled => Ok(u),
+        Ok(Some(_)) => Err(unauthorized("account_disabled", "This account is disabled")),
+        _ => Err(unauthorized("invalid_session", "Session user not found")),
+    }
 }
 
 /// Authentication middleware (requires AppState with database)
@@ -65,139 +164,103 @@ pub async fn auth_middleware(
     mut request: Request,
     next: Next,
 ) -> Result<Response, AuthError> {
-    // Check for Authorization header (Bearer token)
-    if let Some(auth_header) = headers.get("authorization") {
-        if let Ok(auth_str) = auth_header.to_str() {
-            if let Some(token) = auth_str.strip_prefix("Bearer ") {
-                // Validate JWT token with signature verification
-                match validate_jwt_token(token) {
-                    Ok(claims) => {
-                        // A node-to-node service token is scoped to the
-                        // usage endpoint only; refuse it everywhere else.
-                        if claims.role == CLUSTER_NODE_ROLE
-                            && !cluster_node_may_access(request.method(), request.uri().path())
-                        {
-                            return Err(AuthError {
-                                error: "insufficient_scope".to_string(),
-                                message: "cluster-node service tokens are only valid for GET /api/cluster/local-usage".to_string(),
-                            });
-                        }
-                        // Add user info to request extensions
-                        let auth_user = AuthUser {
-                            user_id: claims.sub,
-                            username: claims.username,
-                            role: claims.role,
-                        };
-                        request.extensions_mut().insert(auth_user);
-                        return Ok(next.run(request).await);
-                    }
-                    Err(e) => {
-                        return Err(AuthError {
-                            error: "invalid_token".to_string(),
-                            message: format!("Invalid JWT token: {}", e),
-                        });
-                    }
-                }
+    // Bearer token
+    if let Some(token) = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+    {
+        let claims = validate_jwt_token(token)
+            .map_err(|e| unauthorized("invalid_token", format!("Invalid JWT token: {}", e)))?;
+        if claims.role == CLUSTER_NODE_ROLE {
+            // A node-to-node service token is scoped to the usage endpoint only.
+            if !cluster_node_may_access(request.method(), request.uri().path()) {
+                return Err(unauthorized(
+                    "insufficient_scope",
+                    "cluster-node service tokens are only valid for GET /api/cluster/local-usage",
+                ));
             }
+            request.extensions_mut().insert(AuthUser {
+                user_id: claims.sub,
+                username: claims.username,
+                role: claims.role,
+                scope: None,
+                session_id: None,
+                method: AuthMethod::ClusterNode,
+            });
+            return Ok(next.run(request).await);
         }
+        let sid = claims
+            .sid
+            .clone()
+            .ok_or_else(|| unauthorized("invalid_token", "token has no session"))?;
+        let session = crate::db::users::get_session(state.database.pool(), &sid)
+            .await
+            .map_err(|_| unauthorized("invalid_session", "Session expired or logged out"))?;
+        if session.user_id != claims.sub {
+            return Err(unauthorized("invalid_token", "token/session mismatch"));
+        }
+        let user = load_user(&state, &claims.sub).await?;
+        let scope = crate::auth::store::session_scope(state.database.pool(), &sid)
+            .await
+            .ok()
+            .flatten();
+        request.extensions_mut().insert(AuthUser {
+            user_id: user.id,
+            username: user.username,
+            role: user.role,
+            scope,
+            session_id: Some(sid),
+            method: AuthMethod::Token,
+        });
+        return Ok(next.run(request).await);
     }
 
-    // Check for session cookie with database validation
-    if let Some(cookie_header) = headers.get("cookie") {
-        if let Ok(cookie_str) = cookie_header.to_str() {
-            // Parse cookies and look for session ID
-            for cookie in cookie_str.split(';') {
-                let cookie = cookie.trim();
-                if let Some(session_id) = cookie.strip_prefix("session_id=") {
-                    // Validate session with database
-                    match crate::db::users::get_session(state.database.pool(), session_id).await {
-                        Ok(session) => {
-                            // Get user details
-                            match crate::db::users::get_user_by_username(
-                                state.database.pool(),
-                                &session.username,
-                            )
-                            .await
-                            {
-                                Ok(user) => {
-                                    let auth_user = AuthUser {
-                                        user_id: user.id,
-                                        username: user.username,
-                                        role: user.role,
-                                    };
-                                    request.extensions_mut().insert(auth_user);
-                                    return Ok(next.run(request).await);
-                                }
-                                Err(_) => {
-                                    return Err(AuthError {
-                                        error: "invalid_session".to_string(),
-                                        message: "Session user not found".to_string(),
-                                    });
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            return Err(AuthError {
-                                error: "invalid_session".to_string(),
-                                message: "Invalid or expired session".to_string(),
-                            });
-                        }
-                    }
-                }
-            }
-        }
+    // Session cookie
+    if let Some(session_id) = session_cookie(&headers) {
+        let session = crate::db::users::get_session(state.database.pool(), &session_id)
+            .await
+            .map_err(|_| unauthorized("invalid_session", "Invalid or expired session"))?;
+        let user = load_user(&state, &session.user_id).await?;
+        let scope = crate::auth::store::session_scope(state.database.pool(), &session_id)
+            .await
+            .ok()
+            .flatten();
+        request.extensions_mut().insert(AuthUser {
+            user_id: user.id,
+            username: user.username,
+            role: user.role,
+            scope,
+            session_id: Some(session_id),
+            method: AuthMethod::Cookie,
+        });
+        return Ok(next.run(request).await);
     }
 
-    // Check for API key header with database validation
-    if let Some(api_key) = headers.get("x-api-key") {
-        if let Ok(key_str) = api_key.to_str() {
-            // Validate API key with database
-            match validate_api_key(&state.database, key_str).await {
-                Ok(auth_user) => {
-                    request.extensions_mut().insert(auth_user);
-                    return Ok(next.run(request).await);
-                }
-                Err(e) => {
-                    return Err(AuthError {
-                        error: "invalid_api_key".to_string(),
-                        message: e,
-                    });
-                }
-            }
-        }
+    // API key
+    if let Some(key_str) = headers.get("x-api-key").and_then(|h| h.to_str().ok()) {
+        let auth_user = validate_api_key(&state.database, key_str)
+            .await
+            .map_err(|e| unauthorized("invalid_api_key", e))?;
+        request.extensions_mut().insert(auth_user);
+        return Ok(next.run(request).await);
     }
 
-    Err(AuthError {
-        error: "unauthorized".to_string(),
-        message: "Authentication required. Provide Bearer token, session cookie, or API key."
-            .to_string(),
-    })
+    Err(unauthorized(
+        "unauthorized",
+        "Authentication required. Provide Bearer token, session cookie, or API key.",
+    ))
 }
 
-/// Optional authentication middleware (doesn't fail on missing auth)
-#[allow(dead_code)]
-pub async fn optional_auth_middleware(
-    headers: HeaderMap,
-    mut request: Request,
-    next: Next,
-) -> Response {
-    // Try to extract auth but don't fail if missing
-    if let Some(auth_header) = headers.get("authorization") {
-        if let Ok(auth_str) = auth_header.to_str() {
-            if let Some(token) = auth_str.strip_prefix("Bearer ") {
-                if let Ok(claims) = validate_jwt_token(token) {
-                    let auth_user = AuthUser {
-                        user_id: claims.sub,
-                        username: claims.username,
-                        role: claims.role,
-                    };
-                    request.extensions_mut().insert(auth_user);
-                }
-            }
-        }
-    }
-
-    next.run(request).await
+/// The `session_id` cookie value, if any.
+pub fn session_cookie(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get_all("cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|s| s.split(';'))
+        .find_map(|c| c.trim().strip_prefix("session_id=").map(str::to_string))
+        .filter(|s| !s.is_empty())
 }
 
 /// Validate JWT token with proper signature verification
@@ -228,12 +291,15 @@ pub const CLUSTER_NODE_ALLOWED_PATH: &str = "/api/cluster/local-usage";
 pub const CLUSTER_NODE_TOKEN_TTL_SECS: usize = 30;
 
 /// Lifetime of a normal user login token.
-const USER_TOKEN_TTL_SECS: usize = 86400; // 24 hours
+pub const USER_TOKEN_TTL_SECS: usize = 86400; // 24 hours
+
+/// Lifetime of the restricted second-factor-setup login.
+pub const TFA_SETUP_TOKEN_TTL_SECS: usize = 900;
 
 /// Whether a request authenticated by a `cluster-node` service token may
 /// proceed. Only a read of this node's own usage is allowed -- the token
-/// travels to every registered peer address (possibly over plain HTTP), so
-/// it must never grant general API access.
+/// travels to every registered peer address, so it must never grant general
+/// API access.
 pub fn cluster_node_may_access(method: &axum::http::Method, path: &str) -> bool {
     method == axum::http::Method::GET && path == CLUSTER_NODE_ALLOWED_PATH
 }
@@ -242,41 +308,50 @@ pub fn cluster_node_may_access(method: &axum::http::Method, path: &str) -> bool 
 /// peers' `local-usage` endpoint.
 pub fn generate_cluster_node_token(local_hostname: &str) -> Result<String, String> {
     let subject = format!("{}:{}", CLUSTER_NODE_ROLE, local_hostname);
-    generate_jwt_token_with_ttl(
-        &subject,
-        &subject,
-        CLUSTER_NODE_ROLE,
+    sign(
+        Claims {
+            sub: subject.clone(),
+            username: subject,
+            role: CLUSTER_NODE_ROLE.to_string(),
+            exp: 0,
+            iat: 0,
+            sid: None,
+            scope: None,
+        },
         CLUSTER_NODE_TOKEN_TTL_SECS,
     )
 }
 
-/// Generate JWT token for a user with proper HMAC-SHA256 signature
-pub fn generate_jwt_token(user_id: &str, username: &str, role: &str) -> Result<String, String> {
-    generate_jwt_token_with_ttl(user_id, username, role, USER_TOKEN_TTL_SECS)
-}
-
-fn generate_jwt_token_with_ttl(
+/// Generate a login token bound to the database session `session_id`.
+pub fn generate_session_token(
     user_id: &str,
     username: &str,
     role: &str,
+    session_id: &str,
+    scope: Option<&str>,
     ttl_secs: usize,
 ) -> Result<String, String> {
+    sign(
+        Claims {
+            sub: user_id.to_string(),
+            username: username.to_string(),
+            role: role.to_string(),
+            exp: 0,
+            iat: 0,
+            sid: Some(session_id.to_string()),
+            scope: scope.map(str::to_string),
+        },
+        ttl_secs,
+    )
+}
+
+fn sign(mut claims: Claims, ttl_secs: usize) -> Result<String, String> {
     let now = chrono::Utc::now().timestamp() as usize;
-    let expiration = now + ttl_secs;
-
-    let claims = Claims {
-        sub: user_id.to_string(),
-        username: username.to_string(),
-        role: role.to_string(),
-        exp: expiration,
-        iat: now,
-    };
-
-    let secret = get_jwt_secret();
-    let encoding_key = EncodingKey::from_secret(secret.as_bytes());
-    let header = Header::new(Algorithm::HS256);
-
-    encode(&header, &claims, &encoding_key).map_err(|e| format!("Failed to generate JWT: {}", e))
+    claims.iat = now;
+    claims.exp = now + ttl_secs;
+    let encoding_key = EncodingKey::from_secret(get_jwt_secret().as_bytes());
+    encode(&Header::new(Algorithm::HS256), &claims, &encoding_key)
+        .map_err(|e| format!("Failed to generate JWT: {}", e))
 }
 
 /// Validate API key against database
@@ -291,8 +366,6 @@ async fn validate_api_key(
         return Err("Invalid API key format".to_string());
     }
 
-    // Query all enabled API keys from database
-    // API keys are validated using Argon2 password hashing (secure)
     let pool = db.pool();
 
     let rows = sqlx::query("SELECT * FROM api_keys WHERE enabled = 1")
@@ -305,84 +378,43 @@ async fn validate_api_key(
         let key_hash: String = row.get("key_hash");
         let expires_at: Option<i64> = row.get("expires_at");
 
-        // Check expiration
         if let Some(exp) = expires_at {
-            let now = chrono::Utc::now().timestamp();
-            if exp < now {
+            if exp < chrono::Utc::now().timestamp() {
                 continue; // Skip expired keys
             }
         }
 
-        // Verify API key hash (using Argon2)
-        let parsed_hash =
-            PasswordHash::new(&key_hash).map_err(|_| "Invalid hash format".to_string())?;
+        let Ok(parsed_hash) = PasswordHash::new(&key_hash) else {
+            continue;
+        };
 
         if Argon2::default()
             .verify_password(api_key.as_bytes(), &parsed_hash)
             .is_ok()
         {
-            // Key is valid, get user info
             let user_id: String = row.get("user_id");
-
-            // Update last_used_at
             let _ =
                 sqlx::query("UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?")
                     .bind(row.get::<String, _>("id"))
                     .execute(pool)
                     .await;
 
-            // api_keys.user_id is a foreign key into users.id (a UUID), NOT
-            // the username -- it must be resolved with get_user_by_id, not
-            // get_user_by_username. The previous code looked this up by
-            // username (which never matches a UUID) and silently fell back
-            // to a hardcoded role of "user", meaning every API key -- admin
-            // keys included -- was always treated as an unprivileged user.
-            match crate::db::users::get_user_by_id(pool, &user_id).await {
-                Ok(user) => {
-                    return Ok(AuthUser {
-                        user_id: user.id,
-                        username: user.username,
-                        role: user.role,
-                    });
-                }
-                Err(_) => {
-                    return Err("API key references a user that no longer exists".to_string());
-                }
-            }
+            // api_keys.user_id is users.id (a UUID), not the username.
+            return match crate::db::users::get_user_by_id(pool, &user_id).await {
+                Ok(user) => Ok(AuthUser {
+                    user_id: user.id,
+                    username: user.username,
+                    role: user.role,
+                    scope: None,
+                    session_id: None,
+                    method: AuthMethod::ApiKey,
+                }),
+                Err(_) => Err("API key belongs to a disabled or deleted user".to_string()),
+            };
         }
     }
 
     Err("Invalid API key".to_string())
-}
-
-/// Role-based access control middleware
-#[allow(dead_code)]
-pub fn require_role(
-    required_role: &'static str,
-) -> impl Fn(
-    Request,
-    Next,
-) -> std::pin::Pin<
-    Box<dyn std::future::Future<Output = Result<Response, StatusCode>> + Send>,
-> + Clone {
-    move |request: Request, next: Next| {
-        Box::pin(async move {
-            // Get user from request extensions
-            let auth_user = request.extensions().get::<AuthUser>().cloned();
-
-            match auth_user {
-                Some(user) => {
-                    // Check role
-                    if user.role == required_role || user.role == "admin" {
-                        Ok(next.run(request).await)
-                    } else {
-                        Err(StatusCode::FORBIDDEN)
-                    }
-                }
-                None => Err(StatusCode::UNAUTHORIZED),
-            }
-        })
-    }
 }
 
 #[cfg(test)]
@@ -390,22 +422,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_generate_jwt_token() {
-        let token = generate_jwt_token("user123", "admin", "admin").unwrap();
-        assert!(token.contains('.'));
-
-        let parts: Vec<&str> = token.split('.').collect();
-        assert_eq!(parts.len(), 3);
-    }
-
-    #[test]
-    fn test_validate_jwt_token_format() {
-        let token = generate_jwt_token("user123", "admin", "admin").unwrap();
+    fn test_session_token_round_trip() {
+        let token =
+            generate_session_token("user123", "admin", "admin", "sid1", None, 86400).unwrap();
+        assert_eq!(token.split('.').count(), 3);
         let claims = validate_jwt_token(&token).unwrap();
-
         assert_eq!(claims.sub, "user123");
         assert_eq!(claims.username, "admin");
-        assert_eq!(claims.role, "admin");
+        assert_eq!(claims.sid.as_deref(), Some("sid1"));
+        assert_eq!(claims.exp - claims.iat, USER_TOKEN_TTL_SECS);
     }
 
     #[test]
@@ -416,6 +441,7 @@ mod tests {
         assert_eq!(claims.sub, "cluster-node:node1");
         assert_eq!(claims.exp - claims.iat, CLUSTER_NODE_TOKEN_TTL_SECS);
         assert_eq!(claims.exp - claims.iat, 30);
+        assert!(claims.sid.is_none());
 
         use axum::http::Method;
         assert!(cluster_node_may_access(
@@ -431,22 +457,36 @@ mod tests {
             &Method::POST,
             "/api/cluster/nodes/x"
         ));
-        assert!(!cluster_node_may_access(
-            &Method::DELETE,
-            "/api/cluster/nodes/x"
-        ));
-    }
-
-    #[test]
-    fn test_user_token_keeps_24h_lifetime() {
-        let token = generate_jwt_token("u", "admin", "admin").unwrap();
-        let claims = validate_jwt_token(&token).unwrap();
-        assert_eq!(claims.exp - claims.iat, 86400);
     }
 
     #[test]
     fn test_validate_invalid_token() {
-        let result = validate_jwt_token("invalid");
-        assert!(result.is_err());
+        assert!(validate_jwt_token("invalid").is_err());
+        // a token signed with the old published default secret is rejected
+        let forged = encode(
+            &Header::new(Algorithm::HS256),
+            &Claims {
+                sub: "u".into(),
+                username: "admin".into(),
+                role: "admin".into(),
+                exp: (chrono::Utc::now().timestamp() + 600) as usize,
+                iat: 0,
+                sid: Some("x".into()),
+                scope: None,
+            },
+            &EncodingKey::from_secret(b"horcrux-default-jwt-secret-change-in-production-please"),
+        )
+        .unwrap();
+        assert!(validate_jwt_token(&forged).is_err());
+    }
+
+    #[test]
+    fn session_cookie_parsing() {
+        let mut h = HeaderMap::new();
+        h.insert("cookie", "a=b; session_id=abc123; c=d".parse().unwrap());
+        assert_eq!(session_cookie(&h).as_deref(), Some("abc123"));
+        let mut h = HeaderMap::new();
+        h.insert("cookie", "session_id=".parse().unwrap());
+        assert!(session_cookie(&h).is_none());
     }
 }

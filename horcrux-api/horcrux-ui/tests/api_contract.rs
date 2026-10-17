@@ -13,7 +13,8 @@
 //! deserializes the real response bodies into the UI's own types.
 //!
 //! Override the server with HORCRUX_CONTRACT_API (default
-//! http://127.0.0.1:8006/api).
+//! https://127.0.0.1:8006/api - the API serves HTTPS with a self-signed
+//! certificate by default).
 
 use horcrux_ui::api;
 use serde::de::DeserializeOwned;
@@ -21,12 +22,13 @@ use serde_json::{json, Value};
 use std::time::Duration;
 
 fn api_base() -> String {
-    std::env::var("HORCRUX_CONTRACT_API").unwrap_or_else(|_| "http://127.0.0.1:8006/api".into())
+    std::env::var("HORCRUX_CONTRACT_API").unwrap_or_else(|_| "https://127.0.0.1:8006/api".into())
 }
 
 fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
+        .danger_accept_invalid_certs(true)
         .build()
         .unwrap()
 }
@@ -435,6 +437,18 @@ async fn ui_types_read_real_api_responses() {
     check!("/backups", Vec<bk::Backup>);
     check!("/backup-jobs", Vec<bk::BackupJob>);
     check!("/backup-storages", Vec<bk::BackupStorage>);
+    // access control (users/roles/groups/ACL/realms/2FA) and certificates
+    check!("/auth/realms", api::LoginRealms);
+    check!("/auth/me", api::Me);
+    check!("/auth/mfa/status", api::MfaStatus);
+    check!("/auth/mfa/policy", api::MfaEnforcementPolicy);
+    check!("/auth/mfa/users", Vec<api::UserMfaStatus>);
+    check!("/privileges", Vec<String>);
+    check!("/groups", Vec<api::Group>);
+    check!("/acl", Vec<api::AclEntry>);
+    check!("/access/realms", Vec<api::Realm>);
+    check!("/tls/status", api::TlsStatus);
+    check!("/tls/certificates", Vec<api::CertificateInfo>);
     check!("/snapshot-schedules", Vec<api::SnapshotSchedule>);
     check!("/snapshot-quotas", Vec<api::SnapshotQuota>);
     check!("/snapshot-quotas/summary", api::QuotaSummary);
@@ -521,6 +535,124 @@ async fn ui_types_read_real_api_responses() {
         .expect("contract VM listed for HA pages");
     assert_eq!(v.vmid, vm);
     assert!(!v.state.is_empty(), "{v:?}");
+
+    // ---- access control: the bodies the UI pages send --------------------
+    delete(&c, &token, "/groups/contract-group").await;
+    delete(&c, &token, "/users/contract-user").await;
+    delete(&c, &token, "/access/realms/contract-ldap").await;
+    let (status, body) = post(
+        &c,
+        &token,
+        "/users",
+        serde_json::to_value(api::CreateUserRequest {
+            username: "contract-user".into(),
+            password: "contract-pass-1".into(),
+            email: "contract@example.com".into(),
+            role: "user".into(),
+            realm: "local".into(),
+            enabled: true,
+            comment: Some("api contract".into()),
+        })
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(status, 201, "create user: {body}");
+    let created: api::User =
+        serde_json::from_value(body).expect("UI User type reads create response");
+    let (status, body) = post(
+        &c,
+        &token,
+        "/groups",
+        json!({"name": "contract-group", "members": ["contract-user"]}),
+    )
+    .await;
+    assert_eq!(status, 201, "create group: {body}");
+    let (status, body) = post(
+        &c,
+        &token,
+        "/acl",
+        json!({"path": "/vms", "subject_type": "group", "subject": "contract-group", "role": "VMUser", "propagate": true}),
+    )
+    .await;
+    assert_eq!(status, 201, "grant: {body}");
+    let acl: Vec<api::AclEntry> = fetch(&c, &token, "/acl").await;
+    assert!(
+        acl.iter()
+            .any(|e| e.subject == "contract-group" && e.role == "VMUser"),
+        "{acl:?}"
+    );
+    let groups: Vec<api::Group> = fetch(&c, &token, "/groups").await;
+    assert!(groups
+        .iter()
+        .any(|g| g.name == "contract-group" && g.members == vec!["contract-user".to_string()]));
+    let users: Vec<api::User> = fetch(&c, &token, "/users").await;
+    let u = users
+        .iter()
+        .find(|u| u.id == created.id)
+        .expect("created user listed (DB-backed)");
+    assert_eq!(u.groups, vec!["contract-group".to_string()]);
+    let (status, body) = post(
+        &c,
+        &token,
+        &format!("/users/{}/toggle", created.id),
+        json!({"enabled": false}),
+    )
+    .await;
+    assert_eq!(status, 200, "toggle: {body}");
+    let (status, body) = post(
+        &c,
+        &token,
+        "/access/realms",
+        serde_json::to_value(api::Realm {
+            name: "contract-ldap".into(),
+            realm_type: "ldap".into(),
+            enabled: false,
+            comment: None,
+            config: json!({"server": "ldap.invalid", "base_dn": "dc=x", "bind_password": "s3cret"}),
+            default_group: Some("contract-group".into()),
+            tfa_required: false,
+        })
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(status, 201, "create realm: {body}");
+    let realms: Vec<api::Realm> = fetch(&c, &token, "/access/realms").await;
+    let r = realms
+        .iter()
+        .find(|r| r.name == "contract-ldap")
+        .expect("realm listed");
+    assert_eq!(
+        r.config["bind_password"], "********",
+        "secrets are never returned"
+    );
+    let (status, body) = post(&c, &token, "/auth/mfa/totp/setup", json!({})).await;
+    assert_eq!(status, 200, "totp setup: {body}");
+    let setup: api::TotpSetup =
+        serde_json::from_value(body).expect("UI TotpSetup reads setup response");
+    assert!(
+        setup.qr_code_url.starts_with("otpauth://totp/"),
+        "{setup:?}"
+    );
+    let roles: Vec<api::Role> = fetch(&c, &token, "/roles").await;
+    for builtin in ["Administrator", "NoAccess", "Auditor", "VMAdmin", "VMUser"] {
+        assert!(
+            roles.iter().any(|r| r.name == builtin),
+            "built-in role {builtin}"
+        );
+    }
+    let r = c
+        .put(format!("{}/roles/Administrator", api_base()))
+        .bearer_auth(&token)
+        .json(&json!({"name": "Administrator", "description": "x", "permissions": []}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 422, "built-in roles are read-only");
+    let tls: api::TlsStatus = fetch(&c, &token, "/tls/status").await;
+    assert!(!tls.certificate.fingerprint_sha256.is_empty(), "{tls:?}");
+    delete(&c, &token, "/access/realms/contract-ldap").await;
+    delete(&c, &token, "/groups/contract-group").await;
+    delete(&c, &token, &format!("/users/{}", created.id)).await;
 
     // ---- cleanup ---------------------------------------------------------
     delete(&c, &token, &format!("/replication/jobs/{rep_id}")).await;

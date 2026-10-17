@@ -1250,13 +1250,24 @@ pub struct QueryValidationResult {
 pub struct User {
     pub id: String,
     pub username: String,
+    #[serde(default)]
     pub email: String,
     pub role: String,
     pub realm: String,
     pub enabled: bool,
+    /// Roles granted on `/`.
+    #[serde(default)]
     pub roles: Vec<String>,
     pub comment: Option<String>,
-    pub last_login: Option<String>,
+    /// Unix seconds.
+    #[serde(default)]
+    pub last_login: Option<i64>,
+    #[serde(default)]
+    pub groups: Vec<String>,
+    #[serde(default)]
+    pub tfa_required: bool,
+    #[serde(default)]
+    pub tfa_configured: bool,
 }
 
 /// Role definition
@@ -1313,6 +1324,9 @@ pub struct LoginResponse {
     pub csrf_token: String,
     pub username: String,
     pub roles: Vec<String>,
+    /// Logged in, but must enroll a second factor before anything else.
+    #[serde(default)]
+    pub tfa_setup_required: bool,
 }
 
 /// Create user request
@@ -1871,11 +1885,39 @@ pub async fn change_password(
     post_json(&format!("/users/{}/password", user_id), &request).await
 }
 
-/// Login user
-pub async fn login(request: LoginRequest) -> Result<LoginResponse, ApiError> {
-    let response: LoginResponse = post_json("/auth/login", &request).await?;
-    set_auth_token(&response.ticket);
-    Ok(response)
+/// Login user. Either logged in, or a second factor is needed next.
+pub async fn login(request: LoginRequest) -> Result<LoginOutcome, ApiError> {
+    let v: serde_json::Value = post_json("/auth/login", &request).await?;
+    login_outcome(v)
+}
+
+fn login_outcome(v: serde_json::Value) -> Result<LoginOutcome, ApiError> {
+    if v["tfa_required"].as_bool().unwrap_or(false) {
+        let ch: TfaChallenge = serde_json::from_value(v).map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
+        return Ok(LoginOutcome::SecondFactor(ch));
+    }
+    let r: LoginResponse = serde_json::from_value(v).map_err(|e| ApiError {
+        message: e.to_string(),
+    })?;
+    set_auth_token(&r.ticket);
+    Ok(LoginOutcome::LoggedIn(r))
+}
+
+/// Finish a login with a second factor (`method`: totp, recovery, webauthn).
+pub async fn login_tfa(
+    ticket: &str,
+    method: &str,
+    code: Option<String>,
+    credential: Option<serde_json::Value>,
+) -> Result<LoginOutcome, ApiError> {
+    let v: serde_json::Value = post_json(
+        "/auth/tfa",
+        &serde_json::json!({"ticket": ticket, "method": method, "code": code, "credential": credential}),
+    )
+    .await?;
+    login_outcome(v)
 }
 
 /// Logout current user
@@ -5090,8 +5132,11 @@ pub struct MfaMethod {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TotpSetup {
+    #[serde(default)]
+    pub setup_id: String,
     pub secret: String,
     pub qr_code_url: String,
+    #[serde(default)]
     pub backup_codes: Vec<String>,
 }
 
@@ -5140,16 +5185,47 @@ pub async fn initiate_totp_setup() -> Result<TotpSetup, ApiError> {
     post_json("/auth/mfa/totp/setup", &()).await
 }
 
-pub async fn verify_totp_setup(code: String) -> Result<Vec<String>, ApiError> {
-    post_json("/auth/mfa/totp/verify", &serde_json::json!({"code": code})).await
+/// Confirm a TOTP setup; returns new recovery codes (empty if the user
+/// already had some).
+pub async fn verify_totp_setup(
+    setup_id: String,
+    code: String,
+    name: String,
+) -> Result<Vec<String>, ApiError> {
+    let v: serde_json::Value = post_json(
+        "/auth/mfa/totp/verify",
+        &serde_json::json!({"setup_id": setup_id, "code": code, "name": name}),
+    )
+    .await?;
+    Ok(codes_of(&v))
 }
 
-pub async fn register_webauthn_credential(name: String) -> Result<(), ApiError> {
-    post_json(
+fn codes_of(v: &serde_json::Value) -> Vec<String> {
+    v["recovery_codes"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Register a security key / passkey: server options -> browser ceremony ->
+/// server verification. Returns new recovery codes (if any).
+pub async fn register_webauthn_credential(name: String) -> Result<Vec<String>, ApiError> {
+    let start: serde_json::Value = post_json(
         "/auth/mfa/webauthn/register",
         &serde_json::json!({"name": name}),
     )
-    .await
+    .await?;
+    let credential = crate::webauthn::create(&start["publicKey"]).await?;
+    let v: serde_json::Value = post_json(
+        "/auth/mfa/webauthn/register/finish",
+        &serde_json::json!({"challenge_id": start["challenge_id"], "credential": credential, "name": name}),
+    )
+    .await?;
+    Ok(codes_of(&v))
 }
 
 pub async fn regenerate_mfa_backup_codes() -> Result<Vec<String>, ApiError> {
@@ -5160,12 +5236,16 @@ pub async fn revoke_trusted_device(device_id: String) -> Result<(), ApiError> {
     delete_json(&format!("/auth/mfa/trusted-devices/{}", device_id)).await
 }
 
+/// Remove a second factor; confirm with a current code or the password.
 pub async fn disable_mfa(method_id: String, verification_code: String) -> Result<(), ApiError> {
-    post_json(
-        &format!("/auth/mfa/methods/{}/disable", method_id),
-        &serde_json::json!({"code": verification_code}),
-    )
-    .await
+    let body = if verification_code.chars().all(|c| c.is_ascii_digit())
+        || verification_code.contains('-')
+    {
+        serde_json::json!({"code": verification_code})
+    } else {
+        serde_json::json!({"password": verification_code})
+    };
+    post_json_no_response(&format!("/auth/mfa/methods/{}/disable", method_id), &body).await
 }
 
 pub async fn set_primary_mfa_method(method_id: String) -> Result<(), ApiError> {
@@ -6264,4 +6344,325 @@ mod tests {
         // No hardcoded host/port: the noVNC page derives them from its origin.
         assert!(!novnc_page_url("vm-100").contains("localhost"));
     }
+}
+
+// =============================================================================
+// Access control: login realms, second factors, groups, ACL, realms, TLS
+// =============================================================================
+
+/// Result of a password login.
+#[derive(Clone, Debug)]
+pub enum LoginOutcome {
+    LoggedIn(LoginResponse),
+    SecondFactor(TfaChallenge),
+}
+
+/// A pending second-factor step.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TfaChallenge {
+    pub ticket: String,
+    pub username: String,
+    pub methods: Vec<String>,
+    #[serde(default)]
+    pub webauthn: Option<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LoginRealm {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub realm_type: String,
+    #[serde(default)]
+    pub comment: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct LoginRealms {
+    pub realms: Vec<LoginRealm>,
+    #[serde(default)]
+    pub registration_enabled: bool,
+    #[serde(default)]
+    pub initial_password_file: Option<String>,
+}
+
+pub async fn get_login_realms() -> Result<LoginRealms, ApiError> {
+    fetch_json("/auth/realms").await
+}
+
+/// The logged-in user and their effective privileges per path.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Me {
+    pub user: User,
+    pub is_admin: bool,
+    pub permissions: std::collections::HashMap<String, Vec<String>>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub tfa_required: bool,
+}
+
+impl Me {
+    pub fn can(&self, privilege: &str) -> bool {
+        self.permissions
+            .values()
+            .any(|p| p.iter().any(|x| x == privilege))
+    }
+}
+
+pub async fn get_me() -> Result<Me, ApiError> {
+    fetch_json("/auth/me").await
+}
+
+pub async fn change_own_password(
+    old_password: String,
+    new_password: String,
+) -> Result<(), ApiError> {
+    post_json_no_response(
+        "/auth/password",
+        &serde_json::json!({"old_password": old_password, "new_password": new_password}),
+    )
+    .await
+}
+
+/// Require (or stop requiring) a second factor for one account.
+pub async fn set_user_tfa_required(user_id: &str, required: bool) -> Result<(), ApiError> {
+    put_json::<serde_json::Value, _>(
+        &format!("/users/{}", user_id),
+        &serde_json::json!({"tfa_required": required}),
+    )
+    .await
+    .map(|_| ())
+}
+
+/// Replace an account's group memberships.
+pub async fn set_user_groups(user_id: &str, groups: Vec<String>) -> Result<(), ApiError> {
+    put_json::<serde_json::Value, _>(
+        &format!("/users/{}/groups", user_id),
+        &serde_json::json!({"groups": groups}),
+    )
+    .await
+    .map(|_| ())
+}
+
+pub async fn admin_set_password(user_id: &str, new_password: String) -> Result<(), ApiError> {
+    post_json_no_response(
+        &format!("/users/{}/password", user_id),
+        &serde_json::json!({"new_password": new_password}),
+    )
+    .await
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Group {
+    pub name: String,
+    #[serde(default)]
+    pub comment: Option<String>,
+    #[serde(default)]
+    pub members: Vec<String>,
+}
+
+pub async fn get_groups() -> Result<Vec<Group>, ApiError> {
+    fetch_json("/groups").await
+}
+
+pub async fn create_group(
+    name: String,
+    comment: Option<String>,
+    members: Vec<String>,
+) -> Result<(), ApiError> {
+    post_json_no_response(
+        "/groups",
+        &serde_json::json!({"name": name, "comment": comment, "members": members}),
+    )
+    .await
+}
+
+pub async fn update_group(
+    name: &str,
+    comment: Option<String>,
+    members: Vec<String>,
+) -> Result<(), ApiError> {
+    put_json::<serde_json::Value, _>(
+        &format!("/groups/{}", name),
+        &serde_json::json!({"comment": comment, "members": members}),
+    )
+    .await
+    .map(|_| ())
+}
+
+pub async fn delete_group(name: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/groups/{}", name)).await
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AclEntry {
+    #[serde(default)]
+    pub id: i64,
+    pub path: String,
+    pub subject_type: String,
+    pub subject: String,
+    #[serde(default)]
+    pub subject_name: String,
+    pub role: String,
+    pub propagate: bool,
+}
+
+pub async fn get_acl() -> Result<Vec<AclEntry>, ApiError> {
+    fetch_json("/acl").await
+}
+
+pub async fn add_acl(
+    path: String,
+    subject_type: String,
+    subject: String,
+    role: String,
+    propagate: bool,
+) -> Result<(), ApiError> {
+    post_json_no_response(
+        "/acl",
+        &serde_json::json!({"path": path, "subject_type": subject_type, "subject": subject, "role": role, "propagate": propagate}),
+    )
+    .await
+}
+
+pub async fn remove_acl(e: &AclEntry) -> Result<(), ApiError> {
+    delete_json(&format!(
+        "/acl?path={}&subject_type={}&subject={}&role={}",
+        urlencoding::encode(&e.path),
+        urlencoding::encode(&e.subject_type),
+        urlencoding::encode(&e.subject),
+        urlencoding::encode(&e.role)
+    ))
+    .await
+}
+
+pub async fn get_privileges() -> Result<Vec<String>, ApiError> {
+    fetch_json("/privileges").await
+}
+
+/// An authentication realm (PAM, LDAP, Active Directory, OpenID Connect).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Realm {
+    pub name: String,
+    pub realm_type: String,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub comment: Option<String>,
+    #[serde(default)]
+    pub config: serde_json::Value,
+    #[serde(default)]
+    pub default_group: Option<String>,
+    #[serde(default)]
+    pub tfa_required: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+pub async fn get_realms() -> Result<Vec<Realm>, ApiError> {
+    fetch_json("/access/realms").await
+}
+
+pub async fn create_realm(r: &Realm) -> Result<(), ApiError> {
+    post_json_no_response("/access/realms", r).await
+}
+
+pub async fn update_realm(r: &Realm) -> Result<(), ApiError> {
+    put_json::<serde_json::Value, _>(&format!("/access/realms/{}", r.name), r)
+        .await
+        .map(|_| ())
+}
+
+pub async fn delete_realm(name: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/access/realms/{}", name)).await
+}
+
+pub async fn test_realm(
+    name: &str,
+    username: Option<String>,
+    password: Option<String>,
+) -> Result<serde_json::Value, ApiError> {
+    post_json(
+        &format!("/access/realms/{}/test", name),
+        &serde_json::json!({"username": username, "password": password}),
+    )
+    .await
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
+pub struct CertificateInfo {
+    pub subject: String,
+    pub issuer: String,
+    pub valid_from: String,
+    pub valid_until: String,
+    #[serde(default)]
+    pub not_after_unix: i64,
+    pub serial_number: String,
+    pub fingerprint_sha256: String,
+    pub san: Vec<String>,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub self_signed: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
+pub struct AcmeConfig {
+    pub directory_url: String,
+    #[serde(default)]
+    pub contact_email: Option<String>,
+    pub domains: Vec<String>,
+    #[serde(default)]
+    pub ca_cert: Option<String>,
+    #[serde(default)]
+    pub auto_renew: bool,
+    #[serde(default)]
+    pub renew_days_before: i64,
+    #[serde(default)]
+    pub accept_tos: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct TlsStatus {
+    pub config: serde_json::Value,
+    pub certificate: CertificateInfo,
+    #[serde(default)]
+    pub acme: Option<AcmeConfig>,
+    #[serde(default)]
+    pub acme_last_result: Option<serde_json::Value>,
+}
+
+pub async fn get_tls_status() -> Result<TlsStatus, ApiError> {
+    fetch_json("/tls/status").await
+}
+
+pub async fn regenerate_self_signed(san: Vec<String>) -> Result<CertificateInfo, ApiError> {
+    post_json(
+        "/tls/certificate/generate",
+        &serde_json::json!({"san": san}),
+    )
+    .await
+}
+
+pub async fn upload_certificate(
+    cert_pem: String,
+    key_pem: String,
+) -> Result<CertificateInfo, ApiError> {
+    post_json(
+        "/tls/certificate/upload",
+        &serde_json::json!({"cert_pem": cert_pem, "key_pem": key_pem}),
+    )
+    .await
+}
+
+pub async fn save_acme_config(cfg: &AcmeConfig) -> Result<(), ApiError> {
+    put_json::<serde_json::Value, _>("/tls/acme", cfg)
+        .await
+        .map(|_| ())
+}
+
+pub async fn order_acme_certificate() -> Result<CertificateInfo, ApiError> {
+    post_json("/tls/acme/order", &serde_json::json!({})).await
 }
