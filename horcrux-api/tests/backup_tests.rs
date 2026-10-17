@@ -4,6 +4,9 @@
 //! The VM tests create a small qcow2 disk holding known data, back it up,
 //! destroy the original (corrupt/delete), restore it and compare the
 //! guest-visible disk contents byte for byte (SHA-256 of a raw dump).
+//!
+//! USE=backup only: the backup module is not compiled without it.
+#![cfg(feature = "backup")]
 
 use horcrux_api::backup::{
     BackupConfig, BackupJob, BackupManager, BackupMode, BackupRuntime, Compression, PruneRequest,

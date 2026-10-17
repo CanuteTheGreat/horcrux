@@ -21,10 +21,7 @@ pub fn ServicesPage() -> impl IntoView {
     create_effect(move |_| {
         spawn_local(async move {
             set_loading.set(true);
-            match reqwasm::http::Request::get("/api/nas/services")
-                .send()
-                .await
-            {
+            match crate::api::authed::get("/api/nas/services").send().await {
                 Ok(resp) => {
                     if resp.ok() {
                         if let Ok(data) = resp.json::<Vec<NasService>>().await {
@@ -43,7 +40,7 @@ pub fn ServicesPage() -> impl IntoView {
 
     let service_action = move |name: String, action: &'static str| {
         spawn_local(async move {
-            let _ = reqwasm::http::Request::post(&format!("/api/nas/services/{}/{}", name, action))
+            let _ = crate::api::authed::post(&format!("/api/nas/services/{}/{}", name, action))
                 .send()
                 .await;
         });

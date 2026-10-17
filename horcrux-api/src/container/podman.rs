@@ -32,7 +32,7 @@ impl PodmanManager {
             .arg("--name")
             .arg(&config.name)
             .arg("--label")
-            .arg(format!("{}={}", super::docker::HORCRUX_ID_LABEL, config.id))
+            .arg(format!("{}={}", super::HORCRUX_ID_LABEL, config.id))
             .arg("--memory")
             .arg(format!("{}m", config.memory))
             .arg("--cpus")

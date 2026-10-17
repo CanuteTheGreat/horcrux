@@ -7,6 +7,7 @@ use std::sync::Arc;
 use crate::alerts::AlertManager;
 use crate::audit::AuditLogger;
 use crate::auth::AuthManager;
+#[cfg(feature = "backup")]
 use crate::backup::BackupManager;
 use crate::cloudinit::CloudInitManager;
 use crate::cluster::ClusterManager;
@@ -15,6 +16,7 @@ use crate::container::ContainerManager;
 use crate::db::Database;
 use crate::firewall::FirewallManager;
 use crate::gpu::GpuManager;
+#[cfg(feature = "cluster")]
 use crate::ha::HaManager;
 #[cfg(feature = "kubernetes")]
 use crate::kubernetes::KubernetesManager;
@@ -44,6 +46,7 @@ use crate::websocket::WsState;
 pub struct AppState {
     pub vm_manager: Arc<VmManager>,
     pub container_manager: Arc<ContainerManager>,
+    #[cfg(feature = "backup")]
     pub backup_manager: Arc<BackupManager>,
     pub cloudinit_manager: Arc<CloudInitManager>,
     pub template_manager: Arc<TemplateManager>,
@@ -60,6 +63,7 @@ pub struct AppState {
     pub database: Arc<Database>,
     pub _rate_limiter: Arc<RateLimiter>,
     pub storage_manager: Arc<StorageManager>,
+    #[cfg(feature = "cluster")]
     pub ha_manager: Arc<HaManager>,
     pub migration_manager: Arc<MigrationManager>,
     pub gpu_manager: Arc<GpuManager>,

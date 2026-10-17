@@ -78,6 +78,15 @@ pub fn build_request(
     })
 }
 
+/// (value, label) of every container runtime, in menu order.
+const RUNTIMES: [(&str, &str); 5] = [
+    ("docker", "Docker"),
+    ("podman", "Podman"),
+    ("lxc", "LXC"),
+    ("lxd", "LXD"),
+    ("incus", "Incus"),
+];
+
 #[component]
 pub fn ContainerCreate() -> impl IntoView {
     let (name, set_name) = create_signal(String::new());
@@ -94,6 +103,17 @@ pub fn ContainerCreate() -> impl IntoView {
     let (error, set_error) = create_signal(None::<String>);
 
     let navigate = use_navigate();
+
+    // Default to the first runtime this server was built with (docker is
+    // not there with USE=-docker).
+    let features = crate::features::use_features();
+    create_effect(move |_| {
+        if features.loaded() && !features.has(&runtime.get_untracked()) {
+            if let Some((v, _)) = RUNTIMES.iter().find(|(v, _)| features.has(v)) {
+                set_runtime.set(v.to_string());
+            }
+        }
+    });
 
     let submit = move |ev: ev::SubmitEvent| {
         ev.prevent_default();
@@ -163,13 +183,19 @@ pub fn ContainerCreate() -> impl IntoView {
                 </div>
                 <div class="form-group">
                     <label for="ct-runtime">"Runtime"</label>
+                    // Only the runtimes compiled into the server (USE flags).
                     <select id="ct-runtime" name="runtime"
+                        prop:value=runtime
                         on:change=move |ev| set_runtime.set(event_target_value(&ev))>
-                        <option value="docker" selected=true>"Docker"</option>
-                        <option value="podman">"Podman"</option>
-                        <option value="lxc">"LXC"</option>
-                        <option value="lxd">"LXD"</option>
-                        <option value="incus">"Incus"</option>
+                        {move || {
+                            RUNTIMES
+                                .iter()
+                                .filter(|(v, _)| features.has(v))
+                                .map(|(v, label)| {
+                                    view! { <option value=*v selected=move || runtime.get() == *v>{*label}</option> }
+                                })
+                                .collect_view()
+                        }}
                     </select>
                 </div>
                 <div class="form-group">

@@ -63,6 +63,29 @@ fn with_auth(request: reqwasm::http::Request) -> reqwasm::http::Request {
     }
 }
 
+/// Request builders that carry the stored auth token, for pages that build
+/// raw `reqwasm` requests (the NAS pages used unauthenticated
+/// `Request::get(...)` and every call came back 401).
+pub mod authed {
+    use reqwasm::http::Request;
+
+    pub fn get(url: &str) -> Request {
+        super::with_auth(Request::get(url))
+    }
+    pub fn post(url: &str) -> Request {
+        super::with_auth(Request::post(url))
+    }
+    pub fn put(url: &str) -> Request {
+        super::with_auth(Request::put(url))
+    }
+    pub fn delete(url: &str) -> Request {
+        super::with_auth(Request::delete(url))
+    }
+    pub fn patch(url: &str) -> Request {
+        super::with_auth(Request::patch(url))
+    }
+}
+
 /// Build an ApiError from a non-2xx response, keeping the server's error
 /// message (e.g. a 422 validation reason) so forms can show the user why.
 async fn http_error(response: reqwasm::http::Response) -> ApiError {
@@ -5779,6 +5802,15 @@ pub fn resolve_ws_url(ws_path: &str) -> String {
     };
     let host = location.host().unwrap_or_default();
     format!("{protocol}//{host}{ws_path}")
+}
+
+// =============================================================================
+// Build-time features (USE flags) - see crate::features
+// =============================================================================
+
+/// `GET /api/features`: the USE-flag features this server was built with.
+pub async fn get_features() -> Result<crate::features::FeaturesResponse, ApiError> {
+    fetch_json("/features").await
 }
 
 #[cfg(test)]

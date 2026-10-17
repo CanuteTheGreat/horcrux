@@ -20,7 +20,7 @@ pub fn GroupsPage() -> impl IntoView {
     create_effect(move |_| {
         spawn_local(async move {
             set_loading.set(true);
-            match reqwasm::http::Request::get("/api/nas/groups").send().await {
+            match crate::api::authed::get("/api/nas/groups").send().await {
                 Ok(resp) => {
                     if resp.ok() {
                         if let Ok(data) = resp.json::<Vec<NasGroup>>().await {
@@ -43,7 +43,7 @@ pub fn GroupsPage() -> impl IntoView {
             .unwrap_or(false)
         {
             spawn_local(async move {
-                let _ = reqwasm::http::Request::delete(&format!("/api/nas/groups/{}", group_id))
+                let _ = crate::api::authed::delete(&format!("/api/nas/groups/{}", group_id))
                     .send()
                     .await;
             });

@@ -2,7 +2,9 @@ pub mod clone;
 pub mod clone_progress;
 pub mod cross_node_clone;
 pub mod display;
+#[cfg(feature = "incus")]
 pub mod incus;
+#[cfg(feature = "lxd")]
 pub mod lxd;
 /// Virtual machine management module
 /// Handles QEMU/KVM, LXD, and Incus virtual machine lifecycle
@@ -26,7 +28,9 @@ use tokio::sync::RwLock;
 pub struct VmManager {
     vms: Arc<RwLock<HashMap<String, QemuVm>>>,
     qemu: QemuManager,
+    #[cfg(feature = "lxd")]
     lxd: lxd::LxdManager,
+    #[cfg(feature = "incus")]
     incus: incus::IncusManager,
     db: Option<Arc<Database>>,
 }
@@ -42,7 +46,9 @@ impl VmManager {
         Self {
             vms: Arc::new(RwLock::new(HashMap::new())),
             qemu: QemuManager::new(),
+            #[cfg(feature = "lxd")]
             lxd: lxd::LxdManager::new(),
+            #[cfg(feature = "incus")]
             incus: incus::IncusManager::new(),
             db: None,
         }
@@ -53,7 +59,9 @@ impl VmManager {
         Self {
             vms: Arc::new(RwLock::new(HashMap::new())),
             qemu: QemuManager::new(),
+            #[cfg(feature = "lxd")]
             lxd: lxd::LxdManager::new(),
+            #[cfg(feature = "incus")]
             incus: incus::IncusManager::new(),
             db: Some(db),
         }
@@ -67,7 +75,9 @@ impl VmManager {
         Self {
             vms: Arc::new(RwLock::new(HashMap::new())),
             qemu: QemuManager::with_storage_path(vm_storage_path),
+            #[cfg(feature = "lxd")]
             lxd: lxd::LxdManager::new(),
+            #[cfg(feature = "incus")]
             incus: incus::IncusManager::new(),
             db: Some(db),
         }
@@ -124,8 +134,13 @@ impl VmManager {
         // Dispatch on the requested hypervisor. The LXD/Incus VM backends
         // existed but were never called: an "lxd" or "incus" VM silently
         // became a QEMU VM labelled "qemu".
-        let vm = match config.hypervisor {
+        // A hypervisor whose USE flag was off at build time is refused
+        // (its backend module is not compiled into this binary).
+        crate::features::require_vm_hypervisor(&config.hypervisor)?;
+        let vm: qemu::QemuVm = match config.hypervisor {
+            #[cfg(feature = "qemu")]
             VmHypervisor::Qemu => self.qemu.create_vm(&config).await?,
+            #[cfg(feature = "lxd")]
             VmHypervisor::Lxd => {
                 if !lxd::LxdManager::check_lxd_available() {
                     return Err(horcrux_common::Error::Validation(
@@ -135,6 +150,7 @@ impl VmManager {
                 }
                 self.lxd.create_vm(&config).await?
             }
+            #[cfg(feature = "incus")]
             VmHypervisor::Incus => {
                 if !incus::IncusManager::check_incus_available() {
                     return Err(horcrux_common::Error::Validation(
@@ -144,6 +160,8 @@ impl VmManager {
                 }
                 self.incus.create_vm(&config).await?
             }
+            #[allow(unreachable_patterns)]
+            _ => return Err(crate::features::hypervisor_not_compiled(&config.hypervisor)),
         };
         let vm_config = vm.to_config();
 
@@ -238,9 +256,14 @@ impl VmManager {
             .ok_or_else(|| horcrux_common::Error::VmNotFound(id.to_string()))?;
 
         match vm.hypervisor {
+            #[cfg(feature = "qemu")]
             VmHypervisor::Qemu => self.qemu.start_vm(vm).await?,
+            #[cfg(feature = "lxd")]
             VmHypervisor::Lxd => self.lxd.start_vm(vm).await?,
+            #[cfg(feature = "incus")]
             VmHypervisor::Incus => self.incus.start_vm(vm).await?,
+            #[allow(unreachable_patterns)]
+            _ => return Err(crate::features::hypervisor_not_compiled(&vm.hypervisor)),
         }
         vm.status = VmStatus::Running;
         let config = vm.to_config();
@@ -263,8 +286,12 @@ impl VmManager {
 
         match vm.hypervisor {
             VmHypervisor::Qemu => self.qemu.stop_vm(vm).await?,
+            #[cfg(feature = "lxd")]
             VmHypervisor::Lxd => self.lxd.stop_vm(vm).await?,
+            #[cfg(feature = "incus")]
             VmHypervisor::Incus => self.incus.stop_vm(vm).await?,
+            #[allow(unreachable_patterns)]
+            _ => return Err(crate::features::hypervisor_not_compiled(&vm.hypervisor)),
         }
         vm.status = VmStatus::Stopped;
         let config = vm.to_config();
@@ -289,9 +316,16 @@ impl VmManager {
             // gone (e.g. after a server restart with a stale in-memory
             // entry); don't let that failure prevent the DB row cleanup.
             let _ = match vm.hypervisor {
+                // Stopping/deleting a QEMU VM only needs the process and disk
+                // handling, so a VM left in the database by an earlier
+                // USE=qemu build can still be cleaned up with USE=-qemu.
                 VmHypervisor::Qemu => self.qemu.delete_vm(&vm).await,
+                #[cfg(feature = "lxd")]
                 VmHypervisor::Lxd => self.lxd.delete_vm(&vm).await,
+                #[cfg(feature = "incus")]
                 VmHypervisor::Incus => self.incus.delete_vm(&vm).await,
+                #[allow(unreachable_patterns)]
+                _ => Err(crate::features::hypervisor_not_compiled(&vm.hypervisor)),
             };
 
             if let Some(db) = &self.db {
@@ -343,6 +377,30 @@ mod tests {
         let manager = VmManager::new();
         let vms = manager.list_vms().await;
         assert_eq!(vms.len(), 0);
+    }
+
+    /// USE=-qemu/-lxd/-incus: creating a VM on a hypervisor that was not
+    /// compiled in is refused before anything touches the host.
+    #[tokio::test]
+    async fn create_vm_refuses_hypervisors_not_compiled_in() {
+        let manager = VmManager::new();
+        for (h, on) in [
+            (VmHypervisor::Qemu, cfg!(feature = "qemu")),
+            (VmHypervisor::Lxd, cfg!(feature = "lxd")),
+            (VmHypervisor::Incus, cfg!(feature = "incus")),
+        ] {
+            if on {
+                continue;
+            }
+            let mut cfg = create_test_vm_config("gated-vm", "gated");
+            cfg.hypervisor = h.clone();
+            match manager.create_vm(cfg).await {
+                Err(horcrux_common::Error::Validation(msg)) => {
+                    assert!(msg.contains("not compiled"), "{h:?}: {msg}")
+                }
+                other => panic!("{h:?} must be refused when not compiled in, got {other:?}"),
+            }
+        }
     }
 
     #[tokio::test]
@@ -400,6 +458,7 @@ mod tests {
     /// VMs are persisted, so a new manager over the same database (= an
     /// API restart) must still be able to operate on them. Requires
     /// `qemu-img` (installed in CI's Test job).
+    #[cfg(feature = "qemu")]
     #[tokio::test]
     async fn vm_is_usable_after_manager_restart() {
         let dir = std::env::temp_dir().join(format!("hx-vm-restart-{}", std::process::id()));

@@ -9,6 +9,7 @@
 // Core modules
 pub mod config;
 pub mod error;
+pub mod features;
 pub mod validation;
 
 // Application state
@@ -25,6 +26,7 @@ pub mod container;
 pub mod vm;
 
 // Storage
+#[cfg(feature = "backup")]
 pub mod backup;
 pub mod storage;
 
@@ -34,6 +36,7 @@ pub mod sdn;
 
 // Clustering
 pub mod cluster;
+#[cfg(feature = "cluster")]
 pub mod ha;
 pub mod migration;
 

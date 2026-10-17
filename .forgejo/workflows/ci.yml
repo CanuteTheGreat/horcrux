@@ -645,6 +645,12 @@ jobs:
           # Bundles/defaults/internal features are not USE flags.
           unmapped=$(comm -13 <(echo "$mapped") <(echo "$declared") | grep -vE '^(default|nas-full|nas-basic|nas-apple|nas-enterprise|nas-auth)$' || true)
           [ -z "$unmapped" ] || { echo "Cargo features with no USE flag in $eb: $unmapped"; exit 1; }
+          # src/features.rs reports compiled features to the UI (GET
+          # /api/features); a Cargo feature missing from its table would be
+          # invisible to the UI's hiding logic.
+          table=$(sed -n '/^feature_table!(/,/^);/p' horcrux-api/src/features.rs | grep -oE '"[a-z0-9-]+"' | tr -d '"' | sort -u)
+          notable=$(comm -13 <(echo "$table") <(echo "$declared") | grep -vE '^(default|nas-full|nas-basic|nas-apple|nas-enterprise)$' || true)
+          [ -z "$notable" ] || { echo "Cargo features missing from src/features.rs feature_table!: $notable"; exit 1; }
           for f in gentoo/app-emulation/horcrux/horcrux-*.ebuild deploy/gentoo/horcrux-*.ebuild; do
             diff <(grep -oE 'usex [a-z0-9-]+ "[a-z0-9-]+"' "$eb") <(grep -oE 'usex [a-z0-9-]+ "[a-z0-9-]+"' "$f") \
               || { echo "$f maps USE flags differently from $eb"; exit 1; }
@@ -761,6 +767,9 @@ jobs:
       - name: Run browser E2E
         run: /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/ui_e2e.py
 
+      - name: UI offers every USE-flag feature of an all-features build
+        run: MODE=full /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/ui_features_e2e.py
+
       - name: Dump horcrux-api log
         if: always()
         run: tail -200 /tmp/horcrux-e2e.log || true
@@ -768,6 +777,33 @@ jobs:
       - name: Stop horcrux-api
         if: always()
         run: kill "$(cat /tmp/horcrux-e2e.pid)" 2>/dev/null || true
+
+      - name: UI hides features a reduced USE set did not compile in
+        # Same UI bundle, server built with only the lxc feature (what
+        # USE="lxc -docker -podman -qemu -backup -cluster -nas -kubernetes"
+        # compiles): menus, pages and form options of everything else must
+        # be hidden / marked "not compiled in" (horcrux-ui/src/features.rs).
+        run: |
+          cargo build -p horcrux-api --bin horcrux-api --no-default-features --features lxc
+          cp target/debug/horcrux-api /tmp/horcrux-api-reduced
+          rm -rf /tmp/e2e-reduced && mkdir -p /tmp/e2e-reduced
+          HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8007 HORCRUX_DATA_DIR=/tmp/e2e-reduced \
+          HORCRUX_DATABASE_URL="sqlite:///tmp/e2e-reduced/horcrux.db" \
+          HORCRUX_UI_DIR="$PWD/horcrux-api/horcrux-ui/dist" \
+          ADMIN_PASSWORD=admin RATE_LIMIT_MAX_REQUESTS=100000 RUST_LOG=info \
+          nohup /tmp/horcrux-api-reduced > /tmp/horcrux-reduced.log 2>&1 &
+          echo $! > /tmp/horcrux-reduced.pid
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8007/api/health >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8007/api/features
+          echo
+          set +e
+          BASE_URL=http://127.0.0.1:8007 MODE=reduced /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/ui_features_e2e.py
+          rc=$?
+          kill "$(cat /tmp/horcrux-reduced.pid)" 2>/dev/null
+          [ $rc -eq 0 ] || { tail -100 /tmp/horcrux-reduced.log; exit $rc; }
 
   gentoo-use-matrix:
     name: Gentoo USE-flag matrix (ebuild install)
@@ -782,10 +818,12 @@ jobs:
 
       - name: Ebuild phases for contrasting USE sets
         # See gentoo/ci/use-matrix.sh: runs `ebuild horcrux-9999.ebuild
-        # install` with everything-on (OpenRC, webui, NAS, kubernetes) and a
-        # minimal systemd set, checks the installed files, and starts the
-        # installed horcrux-api to confirm USE-disabled features' routes
-        # are really absent and enabled ones are served.
+        # install` with everything-on (OpenRC, webui, NAS, kubernetes), a
+        # minimal systemd set (lxc only) and a podman+cluster set, checks the
+        # installed files, and starts the installed horcrux-api to confirm
+        # USE-disabled features' routes are really absent (404), enabled
+        # ones are served, GET /api/features reports exactly the USE set, and
+        # a docker container / qemu VM is refused when not compiled in.
         run: |
           daemon_arch="$(docker info --format '{{.Architecture}}' 2>/dev/null || true)"
           case "$daemon_arch" in

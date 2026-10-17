@@ -32,7 +32,7 @@ pub fn IscsiPage() -> impl IntoView {
     create_effect(move |_| {
         spawn_local(async move {
             set_loading.set(true);
-            match reqwasm::http::Request::get("/api/nas/iscsi/targets")
+            match crate::api::authed::get("/api/nas/iscsi/targets")
                 .send()
                 .await
             {
@@ -55,7 +55,7 @@ pub fn IscsiPage() -> impl IntoView {
     let toggle_target = move |target_id: String, enable: bool| {
         spawn_local(async move {
             let action = if enable { "enable" } else { "disable" };
-            let _ = reqwasm::http::Request::post(&format!(
+            let _ = crate::api::authed::post(&format!(
                 "/api/nas/iscsi/targets/{}/{}",
                 target_id, action
             ))
@@ -70,12 +70,10 @@ pub fn IscsiPage() -> impl IntoView {
             .unwrap_or(false)
         {
             spawn_local(async move {
-                let _ = reqwasm::http::Request::delete(&format!(
-                    "/api/nas/iscsi/targets/{}",
-                    target_id
-                ))
-                .send()
-                .await;
+                let _ =
+                    crate::api::authed::delete(&format!("/api/nas/iscsi/targets/{}", target_id))
+                        .send()
+                        .await;
             });
         }
     };

@@ -96,7 +96,7 @@ k8s-openapi = { version = "0.24", features = ["v1_32"], optional = true }
 http = { version = "1.0", optional = true }
 
 [features]
-default = ["qemu", "lxc", "docker"]
+default = ["qemu", "lxc", "docker", "backup"]
 
 # Virtualization backends
 qemu = ["virt"]  # QEMU/KVM support with libvirt

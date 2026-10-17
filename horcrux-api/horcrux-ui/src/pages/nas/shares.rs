@@ -22,7 +22,7 @@ pub fn SharesPage() -> impl IntoView {
     create_effect(move |_| {
         spawn_local(async move {
             set_loading.set(true);
-            match reqwasm::http::Request::get("/api/nas/shares").send().await {
+            match crate::api::authed::get("/api/nas/shares").send().await {
                 Ok(resp) => {
                     if resp.ok() {
                         if let Ok(data) = resp.json::<Vec<Share>>().await {
@@ -50,7 +50,7 @@ pub fn SharesPage() -> impl IntoView {
             .unwrap_or(false)
         {
             spawn_local(async move {
-                let _ = reqwasm::http::Request::delete(&format!("/api/nas/shares/{}", share_id))
+                let _ = crate::api::authed::delete(&format!("/api/nas/shares/{}", share_id))
                     .send()
                     .await;
             });
@@ -60,10 +60,9 @@ pub fn SharesPage() -> impl IntoView {
     let toggle_share = move |share_id: String, enable: bool| {
         spawn_local(async move {
             let action = if enable { "enable" } else { "disable" };
-            let _ =
-                reqwasm::http::Request::post(&format!("/api/nas/shares/{}/{}", share_id, action))
-                    .send()
-                    .await;
+            let _ = crate::api::authed::post(&format!("/api/nas/shares/{}/{}", share_id, action))
+                .send()
+                .await;
         });
     };
 

@@ -278,6 +278,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "cluster")]
     #[tokio::test]
     async fn ha_state_transitions_and_enabled_flag_persist() {
         use crate::ha::{HaConfig, HaGroup, HaManager, HaState};

@@ -25,7 +25,7 @@ pub fn UsersPage() -> impl IntoView {
     create_effect(move |_| {
         spawn_local(async move {
             set_loading.set(true);
-            match reqwasm::http::Request::get("/api/nas/users").send().await {
+            match crate::api::authed::get("/api/nas/users").send().await {
                 Ok(resp) => {
                     if resp.ok() {
                         if let Ok(data) = resp.json::<Vec<NasUser>>().await {
@@ -50,7 +50,7 @@ pub fn UsersPage() -> impl IntoView {
             .unwrap_or(false)
         {
             spawn_local(async move {
-                let _ = reqwasm::http::Request::delete(&format!("/api/nas/users/{}", user_id))
+                let _ = crate::api::authed::delete(&format!("/api/nas/users/{}", user_id))
                     .send()
                     .await;
             });

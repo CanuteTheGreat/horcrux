@@ -1,4 +1,5 @@
 use crate::api;
+use crate::features::IfFeature;
 use leptos::*;
 
 #[component]
@@ -21,9 +22,12 @@ pub fn Dashboard() -> impl IntoView {
                 Ok(metrics) => set_node_metrics.set(metrics),
                 Err(e) => set_fetch_error.set(Some(e.message)),
             }
-            match api::get_cluster_nodes().await {
-                Ok(nodes) => set_cluster_nodes.set(nodes),
-                Err(e) => set_fetch_error.set(Some(e.message)),
+            // USE=-cluster: no cluster routes on the server, no panel.
+            if crate::features::load().await.has("cluster") {
+                match api::get_cluster_nodes().await {
+                    Ok(nodes) => set_cluster_nodes.set(nodes),
+                    Err(e) => set_fetch_error.set(Some(e.message)),
+                }
             }
             match api::get_active_alerts().await {
                 Ok(alerts) => set_active_alerts.set(alerts),
@@ -50,10 +54,12 @@ pub fn Dashboard() -> impl IntoView {
                     <div class="stat-value">{move || vm_count.get()}</div>
                 </div>
 
-                <div class="stat-card">
-                    <h3>"Cluster Nodes"</h3>
-                    <div class="stat-value">{move || cluster_nodes.get().len()}</div>
-                </div>
+                <IfFeature feature="cluster">
+                    <div class="stat-card" id="stat-cluster-nodes">
+                        <h3>"Cluster Nodes"</h3>
+                        <div class="stat-value">{move || cluster_nodes.get().len()}</div>
+                    </div>
+                </IfFeature>
 
                 <div class="stat-card">
                     <h3>"Active Alerts"</h3>

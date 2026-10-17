@@ -1690,3 +1690,40 @@ async fn k8s_pages_contract(c: &reqwest::Client, token: &str, cid: &str, ns: &st
         );
     }
 }
+
+/// `GET /api/features` (public, no token): the UI reads it to hide the
+/// pages of USE flags the server was built without. CI's server is built
+/// with --all-features, so every feature it knows about must be enabled
+/// and the UI's FeatureSet must report each one.
+#[tokio::test]
+async fn features_endpoint_matches_ui_type() {
+    let c = client();
+    let r = c
+        .get(format!("{}/features", api_base()))
+        .send()
+        .await
+        .expect("horcrux-api must be running for the UI contract test");
+    assert_eq!(r.status().as_u16(), 200, "/api/features must be public");
+    let body = r.text().await.unwrap();
+    let f: horcrux_ui::features::FeaturesResponse = serde_json::from_str(&body)
+        .unwrap_or_else(|e| panic!("UI FeaturesResponse cannot read /api/features: {e}\n{body}"));
+    assert!(!f.all.is_empty(), "{body}");
+    let set = horcrux_ui::features::FeatureSet::from_names(f.features.clone());
+    for name in &f.all {
+        assert!(
+            set.has(name),
+            "--all-features server must report '{name}' enabled: {body}"
+        );
+    }
+    for name in [
+        "docker",
+        "podman",
+        "lxc",
+        "backup",
+        "cluster",
+        "nas",
+        "kubernetes",
+    ] {
+        assert!(set.has(name), "{name} missing from {body}");
+    }
+}

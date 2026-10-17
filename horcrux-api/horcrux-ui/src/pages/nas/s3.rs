@@ -46,7 +46,7 @@ pub fn S3Page() -> impl IntoView {
             set_loading.set(true);
 
             // Fetch gateway status
-            match reqwasm::http::Request::get("/api/nas/s3-gateway/status")
+            match crate::api::authed::get("/api/nas/s3-gateway/status")
                 .send()
                 .await
             {
@@ -61,7 +61,7 @@ pub fn S3Page() -> impl IntoView {
             }
 
             // Fetch buckets
-            if let Ok(resp) = reqwasm::http::Request::get("/api/nas/s3-gateway/buckets")
+            if let Ok(resp) = crate::api::authed::get("/api/nas/s3-gateway/buckets")
                 .send()
                 .await
             {
@@ -73,7 +73,7 @@ pub fn S3Page() -> impl IntoView {
             }
 
             // Fetch access keys
-            if let Ok(resp) = reqwasm::http::Request::get("/api/nas/s3-gateway/keys")
+            if let Ok(resp) = crate::api::authed::get("/api/nas/s3-gateway/keys")
                 .send()
                 .await
             {
@@ -90,7 +90,7 @@ pub fn S3Page() -> impl IntoView {
 
     let start_gateway = move |_| {
         spawn_local(async move {
-            let _ = reqwasm::http::Request::post("/api/nas/s3-gateway/start")
+            let _ = crate::api::authed::post("/api/nas/s3-gateway/start")
                 .send()
                 .await;
         });
@@ -98,7 +98,7 @@ pub fn S3Page() -> impl IntoView {
 
     let stop_gateway = move |_| {
         spawn_local(async move {
-            let _ = reqwasm::http::Request::post("/api/nas/s3-gateway/stop")
+            let _ = crate::api::authed::post("/api/nas/s3-gateway/stop")
                 .send()
                 .await;
         });
@@ -113,7 +113,7 @@ pub fn S3Page() -> impl IntoView {
             .unwrap_or(false)
         {
             spawn_local(async move {
-                let _ = reqwasm::http::Request::delete(&format!(
+                let _ = crate::api::authed::delete(&format!(
                     "/api/nas/s3-gateway/buckets/{}",
                     bucket_name
                 ))
@@ -129,10 +129,9 @@ pub fn S3Page() -> impl IntoView {
             .unwrap_or(false)
         {
             spawn_local(async move {
-                let _ =
-                    reqwasm::http::Request::delete(&format!("/api/nas/s3-gateway/keys/{}", key_id))
-                        .send()
-                        .await;
+                let _ = crate::api::authed::delete(&format!("/api/nas/s3-gateway/keys/{}", key_id))
+                    .send()
+                    .await;
             });
         }
     };

@@ -515,9 +515,7 @@ impl DockerManager {
     }
 }
 
-/// Label Horcrux puts on every Docker/Podman container it creates, holding
-/// the Horcrux container id (the runtime only knows the container name).
-pub const HORCRUX_ID_LABEL: &str = "horcrux.id";
+pub use super::HORCRUX_ID_LABEL;
 
 /// Map a Docker/Podman state string to a Horcrux status.
 pub fn docker_state_to_status(state: Option<&str>) -> ContainerStatus {

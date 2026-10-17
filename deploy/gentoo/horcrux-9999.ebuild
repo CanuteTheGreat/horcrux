@@ -22,16 +22,20 @@ SLOT="0"
 # Live ebuilds are not keyworded (see Gentoo devmanual, live ebuilds section)
 
 # USE flags
-# Virtualization backends (have Cargo features): qemu (default), lxd, incus
-# Container runtimes (have Cargo features): lxc (default), docker (default), podman
-# Features with Cargo support: backup, cluster, kubernetes, nas
+# Every flag below except the build options maps 1:1 to a horcrux-api Cargo
+# feature (src_configure) that gates real code: a disabled backend is not
+# compiled in, its API routes answer 404 and the web UI hides it (via
+# GET /api/features). gentoo/ci/use-matrix.sh proves this in CI.
+# Virtualization backends: qemu (default), lxd, incus
+# Container runtimes: lxc, docker, podman
+# Platform features: backup (default), cluster (+HA), kubernetes, nas
 # Build options: cli, monitoring, systemd, webui (default)
 # NAS protocols: smb, nfs-server, afp, webdav, ftp
 # NAS auth: ldap (client), ldap-server, kerberos, ad (Active Directory)
 # NAS services: timemachine, s3-gateway, iscsi-target, rsync-server
 # NAS storage: nas-zfs, nas-btrfs, nas-mdraid, nas-lvm
 IUSE="
-	backup cli cluster docker incus kubernetes ldap lxc lxd +monitoring podman +qemu systemd +webui
+	+backup cli cluster docker incus kubernetes ldap lxc lxd +monitoring podman +qemu systemd +webui
 	nas smb nfs-server afp webdav ftp
 	ldap-server kerberos ad
 	timemachine s3-gateway iscsi-target rsync-server
@@ -65,7 +69,10 @@ REQUIRED_USE="
 # Note: All storage backends, networking, SSL, LDAP are always available at runtime
 # These are suggested dependencies that can be installed as needed
 RDEPEND="
-	qemu? ( app-emulation/qemu[spice,usbredir,virtfs,vnc] )
+	qemu? (
+		app-emulation/qemu[spice,usbredir,virtfs,vnc]
+		app-emulation/libvirt
+	)
 	lxc? ( app-emulation/lxc )
 	lxd? ( app-containers/lxd )
 	incus? ( app-containers/incus )

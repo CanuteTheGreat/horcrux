@@ -68,7 +68,7 @@ pub fn SchedulerPage() -> impl IntoView {
             set_loading.set(true);
 
             // Fetch scheduler status
-            match reqwasm::http::Request::get("/api/nas/scheduler/status")
+            match crate::api::authed::get("/api/nas/scheduler/status")
                 .send()
                 .await
             {
@@ -83,7 +83,7 @@ pub fn SchedulerPage() -> impl IntoView {
             }
 
             // Fetch jobs
-            if let Ok(resp) = reqwasm::http::Request::get("/api/nas/scheduler/jobs")
+            if let Ok(resp) = crate::api::authed::get("/api/nas/scheduler/jobs")
                 .send()
                 .await
             {
@@ -102,12 +102,10 @@ pub fn SchedulerPage() -> impl IntoView {
     create_effect(move |_| {
         if let Some(job_id) = selected_job_id.get() {
             spawn_local(async move {
-                if let Ok(resp) = reqwasm::http::Request::get(&format!(
-                    "/api/nas/scheduler/jobs/{}/history",
-                    job_id
-                ))
-                .send()
-                .await
+                if let Ok(resp) =
+                    crate::api::authed::get(&format!("/api/nas/scheduler/jobs/{}/history", job_id))
+                        .send()
+                        .await
                 {
                     if resp.ok() {
                         if let Ok(data) = resp.json::<Vec<JobHistory>>().await {
@@ -121,28 +119,25 @@ pub fn SchedulerPage() -> impl IntoView {
 
     let run_job = move |job_id: String| {
         spawn_local(async move {
-            let _ =
-                reqwasm::http::Request::post(&format!("/api/nas/scheduler/jobs/{}/run", job_id))
-                    .send()
-                    .await;
+            let _ = crate::api::authed::post(&format!("/api/nas/scheduler/jobs/{}/run", job_id))
+                .send()
+                .await;
         });
     };
 
     let pause_job = move |job_id: String| {
         spawn_local(async move {
-            let _ =
-                reqwasm::http::Request::post(&format!("/api/nas/scheduler/jobs/{}/pause", job_id))
-                    .send()
-                    .await;
+            let _ = crate::api::authed::post(&format!("/api/nas/scheduler/jobs/{}/pause", job_id))
+                .send()
+                .await;
         });
     };
 
     let resume_job = move |job_id: String| {
         spawn_local(async move {
-            let _ =
-                reqwasm::http::Request::post(&format!("/api/nas/scheduler/jobs/{}/resume", job_id))
-                    .send()
-                    .await;
+            let _ = crate::api::authed::post(&format!("/api/nas/scheduler/jobs/{}/resume", job_id))
+                .send()
+                .await;
         });
     };
 
@@ -155,10 +150,9 @@ pub fn SchedulerPage() -> impl IntoView {
             .unwrap_or(false)
         {
             spawn_local(async move {
-                let _ =
-                    reqwasm::http::Request::delete(&format!("/api/nas/scheduler/jobs/{}", job_id))
-                        .send()
-                        .await;
+                let _ = crate::api::authed::delete(&format!("/api/nas/scheduler/jobs/{}", job_id))
+                    .send()
+                    .await;
             });
         }
     };
@@ -192,7 +186,7 @@ pub fn SchedulerPage() -> impl IntoView {
                 _ => {}
             }
 
-            let _ = reqwasm::http::Request::post("/api/nas/scheduler/jobs")
+            let _ = crate::api::authed::post("/api/nas/scheduler/jobs")
                 .header("Content-Type", "application/json")
                 .body(body.to_string())
                 .send()

@@ -42,7 +42,7 @@ pub fn PoolsPage() -> impl IntoView {
             set_loading.set(true);
 
             // Fetch pools
-            match reqwasm::http::Request::get("/api/nas/pools").send().await {
+            match crate::api::authed::get("/api/nas/pools").send().await {
                 Ok(resp) => {
                     if resp.ok() {
                         if let Ok(data) = resp.json::<Vec<StoragePool>>().await {
@@ -54,10 +54,7 @@ pub fn PoolsPage() -> impl IntoView {
             }
 
             // Fetch datasets
-            if let Ok(resp) = reqwasm::http::Request::get("/api/nas/datasets")
-                .send()
-                .await
-            {
+            if let Ok(resp) = crate::api::authed::get("/api/nas/datasets").send().await {
                 if resp.ok() {
                     if let Ok(data) = resp.json::<Vec<Dataset>>().await {
                         set_datasets.set(data);
@@ -71,7 +68,7 @@ pub fn PoolsPage() -> impl IntoView {
 
     let scrub_pool = move |pool_id: String| {
         spawn_local(async move {
-            let _ = reqwasm::http::Request::post(&format!("/api/nas/pools/{}/scrub", pool_id))
+            let _ = crate::api::authed::post(&format!("/api/nas/pools/{}/scrub", pool_id))
                 .send()
                 .await;
         });
@@ -86,7 +83,7 @@ pub fn PoolsPage() -> impl IntoView {
             .unwrap_or(false)
         {
             spawn_local(async move {
-                let _ = reqwasm::http::Request::delete(&format!("/api/nas/pools/{}", pool_id))
+                let _ = crate::api::authed::delete(&format!("/api/nas/pools/{}", pool_id))
                     .send()
                     .await;
             });

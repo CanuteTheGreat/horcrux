@@ -4,8 +4,17 @@ use leptos::*;
 use leptos_meta::*;
 use leptos_router::*;
 
+use features::{provide_features, Gated, IfFeature};
+use pages::nas::{
+    DirectoryPage as NasDirectoryPage, GroupsPage as NasGroupsPage, IscsiPage as NasIscsiPage,
+    NasDashboard, NasUsersPage, PoolsPage as NasPoolsPage, S3Page as NasS3Page,
+    SchedulerPage as NasSchedulerPage, ServicesPage as NasServicesPage,
+    SharesPage as NasSharesPage,
+};
+
 pub mod api;
 mod components;
+pub mod features;
 pub mod pages;
 pub mod utils;
 mod websocket;
@@ -26,6 +35,9 @@ use pages::{
 #[component]
 pub fn App() -> impl IntoView {
     provide_meta_context();
+    // Which USE-flag features the server was built with: menu entries and
+    // pages of the others are hidden (see features.rs).
+    let features = provide_features();
 
     view! {
         <Stylesheet id="leptos" href="/pkg/horcrux-ui.css"/>
@@ -33,7 +45,7 @@ pub fn App() -> impl IntoView {
         <Meta name="description" content="Horcrux Virtualization Management Platform"/>
 
         <Router>
-            <nav class="navbar">
+            <nav class="navbar" data-features-loaded=move || features.loaded().to_string()>
                 <div class="navbar-brand">
                     <h1>"Horcrux"</h1>
                     <span class="tagline">"Gentoo Virtualization Platform"</span>
@@ -45,12 +57,16 @@ pub fn App() -> impl IntoView {
                         <div class="dropdown-content">
                             <A href="/vms" class="dropdown-item">"Virtual Machines"</A>
                             <A href="/containers" class="dropdown-item">"Containers"</A>
-                            <A href="/containers/images" class="dropdown-item">"Images"</A>
-                            <A href="/containers/volumes" class="dropdown-item">"Volumes"</A>
-                            <A href="/containers/networks" class="dropdown-item">"Container Networks"</A>
-                            <A href="/containers/stacks" class="dropdown-item">"Stacks (Compose)"</A>
-                            <A href="/containers/events" class="dropdown-item">"Container Events"</A>
-                            <A href="/kubernetes" class="dropdown-item">"Kubernetes"</A>
+                            <IfFeature feature="docker|podman">
+                                <A href="/containers/images" class="dropdown-item">"Images"</A>
+                                <A href="/containers/volumes" class="dropdown-item">"Volumes"</A>
+                                <A href="/containers/networks" class="dropdown-item">"Container Networks"</A>
+                                <A href="/containers/stacks" class="dropdown-item">"Stacks (Compose)"</A>
+                                <A href="/containers/events" class="dropdown-item">"Container Events"</A>
+                            </IfFeature>
+                            <IfFeature feature="kubernetes">
+                                <A href="/kubernetes" class="dropdown-item">"Kubernetes"</A>
+                            </IfFeature>
                         </div>
                     </div>
                     <div class="navbar-dropdown">
@@ -59,13 +75,40 @@ pub fn App() -> impl IntoView {
                             <A href="/storage" class="dropdown-item">"Storage"</A>
                             <A href="/network" class="dropdown-item">"Network"</A>
                             <A href="/gpu" class="dropdown-item">"GPU Passthrough"</A>
-                            <A href="/ha" class="dropdown-item">"High Availability"</A>
+                            <IfFeature feature="cluster">
+                                <A href="/ha" class="dropdown-item">"High Availability"</A>
+                            </IfFeature>
                         </div>
                     </div>
+                    <IfFeature feature="nas">
+                        <div class="navbar-dropdown" id="nav-nas">
+                            <span class="navbar-item dropdown-trigger">"NAS ▾"</span>
+                            <div class="dropdown-content">
+                                <A href="/nas" class="dropdown-item">"NAS Overview"</A>
+                                <A href="/nas/shares" class="dropdown-item">"Shares"</A>
+                                <A href="/nas/users" class="dropdown-item">"Users"</A>
+                                <A href="/nas/groups" class="dropdown-item">"Groups"</A>
+                                <A href="/nas/pools" class="dropdown-item">"Pools"</A>
+                                <A href="/nas/services" class="dropdown-item">"Services"</A>
+                                <A href="/nas/scheduler" class="dropdown-item">"Scheduler"</A>
+                                <IfFeature feature="ldap|ldap-server|kerberos|ad">
+                                    <A href="/nas/directory" class="dropdown-item">"Directory Services"</A>
+                                </IfFeature>
+                                <IfFeature feature="iscsi-target">
+                                    <A href="/nas/iscsi" class="dropdown-item">"iSCSI Targets"</A>
+                                </IfFeature>
+                                <IfFeature feature="s3-gateway">
+                                    <A href="/nas/s3" class="dropdown-item">"S3 Gateway"</A>
+                                </IfFeature>
+                            </div>
+                        </div>
+                    </IfFeature>
                     <div class="navbar-dropdown">
                         <span class="navbar-item dropdown-trigger">"Operations ▾"</span>
                         <div class="dropdown-content">
-                            <A href="/backup" class="dropdown-item">"Backup & Protection"</A>
+                            <IfFeature feature="backup">
+                                <A href="/backup" class="dropdown-item">"Backup & Protection"</A>
+                            </IfFeature>
                             <A href="/snapshots" class="dropdown-item">"Snapshots"</A>
                             <A href="/clones" class="dropdown-item">"Clones"</A>
                             <A href="/replication" class="dropdown-item">"Replication"</A>
@@ -102,30 +145,30 @@ pub fn App() -> impl IntoView {
                     <Route path="/vms/:id/console" view=VmConsole/>
                     <Route path="/containers" view=ContainerList/>
                     <Route path="/containers/create" view=ContainerCreate/>
-                    <Route path="/containers/images" view=ImagesPage/>
-                    <Route path="/containers/volumes" view=VolumesPage/>
-                    <Route path="/containers/networks" view=ContainerNetworksPage/>
-                    <Route path="/containers/stacks" view=StacksPage/>
-                    <Route path="/containers/events" view=ContainerEventsPage/>
-                    <Route path="/containers/:id/logs" view=ContainerLogsPage/>
-                    <Route path="/containers/:id/exec" view=ContainerExecPage/>
-                    <Route path="/kubernetes" view=KubernetesManagement/>
-                    <Route path="/kubernetes/:cluster_id/dashboard" view=ClusterDashboard/>
-                    <Route path="/kubernetes/:cluster_id/pods" view=PodsPage/>
-                    <Route path="/kubernetes/:cluster_id/deployments" view=DeploymentsPage/>
-                    <Route path="/kubernetes/:cluster_id/services" view=ServicesPage/>
-                    <Route path="/kubernetes/:cluster_id/ingresses" view=IngressesPage/>
-                    <Route path="/kubernetes/:cluster_id/:namespace/pods" view=PodsPage/>
-                    <Route path="/kubernetes/:cluster_id/:namespace/deployments" view=DeploymentsPage/>
-                    <Route path="/kubernetes/:cluster_id/:namespace/services" view=ServicesPage/>
-                    <Route path="/kubernetes/:cluster_id/:namespace/ingresses" view=IngressesPage/>
-                    <Route path="/kubernetes/:cluster_id/helm/repositories" view=HelmRepositoriesPage/>
-                    <Route path="/kubernetes/:cluster_id/helm/charts" view=HelmChartsPage/>
-                    <Route path="/kubernetes/:cluster_id/helm/releases" view=HelmReleasesPage/>
-                    <Route path="/kubernetes/:cluster_id/config/configmaps" view=ConfigMapsPage/>
-                    <Route path="/kubernetes/:cluster_id/config/secrets" view=SecretsPage/>
-                    <Route path="/kubernetes/:cluster_id/:namespace/configmaps" view=ConfigMapsPage/>
-                    <Route path="/kubernetes/:cluster_id/:namespace/secrets" view=SecretsPage/>
+                    <Route path="/containers/images" view=|| view! { <Gated feature="docker|podman"><ImagesPage/></Gated> }/>
+                    <Route path="/containers/volumes" view=|| view! { <Gated feature="docker|podman"><VolumesPage/></Gated> }/>
+                    <Route path="/containers/networks" view=|| view! { <Gated feature="docker|podman"><ContainerNetworksPage/></Gated> }/>
+                    <Route path="/containers/stacks" view=|| view! { <Gated feature="docker|podman"><StacksPage/></Gated> }/>
+                    <Route path="/containers/events" view=|| view! { <Gated feature="docker|podman"><ContainerEventsPage/></Gated> }/>
+                    <Route path="/containers/:id/logs" view=|| view! { <Gated feature="docker|podman"><ContainerLogsPage/></Gated> }/>
+                    <Route path="/containers/:id/exec" view=|| view! { <Gated feature="docker|podman"><ContainerExecPage/></Gated> }/>
+                    <Route path="/kubernetes" view=|| view! { <Gated feature="kubernetes"><KubernetesManagement/></Gated> }/>
+                    <Route path="/kubernetes/:cluster_id/dashboard" view=|| view! { <Gated feature="kubernetes"><ClusterDashboard/></Gated> }/>
+                    <Route path="/kubernetes/:cluster_id/pods" view=|| view! { <Gated feature="kubernetes"><PodsPage/></Gated> }/>
+                    <Route path="/kubernetes/:cluster_id/deployments" view=|| view! { <Gated feature="kubernetes"><DeploymentsPage/></Gated> }/>
+                    <Route path="/kubernetes/:cluster_id/services" view=|| view! { <Gated feature="kubernetes"><ServicesPage/></Gated> }/>
+                    <Route path="/kubernetes/:cluster_id/ingresses" view=|| view! { <Gated feature="kubernetes"><IngressesPage/></Gated> }/>
+                    <Route path="/kubernetes/:cluster_id/:namespace/pods" view=|| view! { <Gated feature="kubernetes"><PodsPage/></Gated> }/>
+                    <Route path="/kubernetes/:cluster_id/:namespace/deployments" view=|| view! { <Gated feature="kubernetes"><DeploymentsPage/></Gated> }/>
+                    <Route path="/kubernetes/:cluster_id/:namespace/services" view=|| view! { <Gated feature="kubernetes"><ServicesPage/></Gated> }/>
+                    <Route path="/kubernetes/:cluster_id/:namespace/ingresses" view=|| view! { <Gated feature="kubernetes"><IngressesPage/></Gated> }/>
+                    <Route path="/kubernetes/:cluster_id/helm/repositories" view=|| view! { <Gated feature="kubernetes"><HelmRepositoriesPage/></Gated> }/>
+                    <Route path="/kubernetes/:cluster_id/helm/charts" view=|| view! { <Gated feature="kubernetes"><HelmChartsPage/></Gated> }/>
+                    <Route path="/kubernetes/:cluster_id/helm/releases" view=|| view! { <Gated feature="kubernetes"><HelmReleasesPage/></Gated> }/>
+                    <Route path="/kubernetes/:cluster_id/config/configmaps" view=|| view! { <Gated feature="kubernetes"><ConfigMapsPage/></Gated> }/>
+                    <Route path="/kubernetes/:cluster_id/config/secrets" view=|| view! { <Gated feature="kubernetes"><SecretsPage/></Gated> }/>
+                    <Route path="/kubernetes/:cluster_id/:namespace/configmaps" view=|| view! { <Gated feature="kubernetes"><ConfigMapsPage/></Gated> }/>
+                    <Route path="/kubernetes/:cluster_id/:namespace/secrets" view=|| view! { <Gated feature="kubernetes"><SecretsPage/></Gated> }/>
                     <Route path="/storage" view=StorageManagement/>
                     <Route path="/network" view=NetworkManagement/>
                     <Route path="/gpu" view=GpuManagement/>
@@ -139,21 +182,32 @@ pub fn App() -> impl IntoView {
                     <Route path="/auth/roles" view=RolesPage/>
                     <Route path="/auth/sessions" view=SessionsPage/>
                     <Route path="/auth/api-keys" view=ApiKeysPage/>
-                    <Route path="/backup" view=BackupDashboard/>
-                    <Route path="/backup/jobs" view=BackupJobsPage/>
-                    <Route path="/backup/retention" view=RetentionPoliciesPage/>
-                    <Route path="/backup/verify" view=BackupVerifyPage/>
+                    <Route path="/backup" view=|| view! { <Gated feature="backup"><BackupDashboard/></Gated> }/>
+                    <Route path="/backup/jobs" view=|| view! { <Gated feature="backup"><BackupJobsPage/></Gated> }/>
+                    <Route path="/backup/retention" view=|| view! { <Gated feature="backup"><RetentionPoliciesPage/></Gated> }/>
+                    <Route path="/backup/verify" view=|| view! { <Gated feature="backup"><BackupVerifyPage/></Gated> }/>
                     <Route path="/backup/snapshots" view=SnapshotManagerPage/>
                     <Route path="/backup/templates" view=TemplateManagerPage/>
-                    <Route path="/ha" view=HaDashboard/>
-                    <Route path="/ha/cluster" view=ClusterManagementPage/>
-                    <Route path="/ha/groups" view=HaGroupsPage/>
-                    <Route path="/ha/migration" view=MigrationCenterPage/>
+                    <Route path="/ha" view=|| view! { <Gated feature="cluster"><HaDashboard/></Gated> }/>
+                    <Route path="/ha/cluster" view=|| view! { <Gated feature="cluster"><ClusterManagementPage/></Gated> }/>
+                    <Route path="/ha/groups" view=|| view! { <Gated feature="cluster"><HaGroupsPage/></Gated> }/>
+                    <Route path="/ha/migration" view=|| view! { <Gated feature="cluster"><MigrationCenterPage/></Gated> }/>
                     <Route path="/monitoring/alerts" view=AlertCenterPage/>
                     <Route path="/monitoring/notifications" view=NotificationsPage/>
                     <Route path="/monitoring/dashboards" view=DashboardsPage/>
                     <Route path="/monitoring/metrics" view=MetricsExplorerPage/>
                     <Route path="/monitoring/observability" view=ObservabilityPage/>
+                    // NAS (USE=nas and its protocol/service flags)
+                    <Route path="/nas" view=|| view! { <Gated feature="nas"><NasDashboard/></Gated> }/>
+                    <Route path="/nas/shares" view=|| view! { <Gated feature="nas"><NasSharesPage/></Gated> }/>
+                    <Route path="/nas/users" view=|| view! { <Gated feature="nas"><NasUsersPage/></Gated> }/>
+                    <Route path="/nas/groups" view=|| view! { <Gated feature="nas"><NasGroupsPage/></Gated> }/>
+                    <Route path="/nas/pools" view=|| view! { <Gated feature="nas"><NasPoolsPage/></Gated> }/>
+                    <Route path="/nas/services" view=|| view! { <Gated feature="nas"><NasServicesPage/></Gated> }/>
+                    <Route path="/nas/scheduler" view=|| view! { <Gated feature="nas"><NasSchedulerPage/></Gated> }/>
+                    <Route path="/nas/directory" view=|| view! { <Gated feature="ldap|ldap-server|kerberos|ad"><NasDirectoryPage/></Gated> }/>
+                    <Route path="/nas/iscsi" view=|| view! { <Gated feature="iscsi-target"><NasIscsiPage/></Gated> }/>
+                    <Route path="/nas/s3" view=|| view! { <Gated feature="s3-gateway"><NasS3Page/></Gated> }/>
                 </Routes>
             </main>
 

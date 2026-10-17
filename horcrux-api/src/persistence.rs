@@ -5,21 +5,26 @@
 //! here they are built and loaded from the database before the API starts.
 
 use crate::alerts::AlertManager;
+#[cfg(feature = "backup")]
 use crate::backup::BackupManager;
 use crate::cluster::ClusterManager;
 use crate::firewall::FirewallManager;
+#[cfg(feature = "cluster")]
+use crate::ha;
 use crate::template::TemplateManager;
-use crate::{config, db, ha, storage};
+use crate::{config, db, storage};
 use std::sync::Arc;
 
 /// Database-backed configuration managers built at startup.
 pub struct PersistedManagers {
     pub storage: Arc<storage::StorageManager>,
     pub firewall: Arc<FirewallManager>,
+    #[cfg(feature = "cluster")]
     pub ha: Arc<ha::HaManager>,
     pub alert: Arc<AlertManager>,
     pub template: Arc<TemplateManager>,
     pub cluster: Arc<ClusterManager>,
+    #[cfg(feature = "backup")]
     pub backup: Arc<BackupManager>,
 }
 
@@ -44,6 +49,7 @@ pub async fn load_persisted_managers(
                 .expect("Failed to load storage pools"),
         ),
         firewall: Arc::new(firewall),
+        #[cfg(feature = "cluster")]
         ha: Arc::new(
             ha::HaManager::with_database(database.clone())
                 .await
@@ -64,6 +70,7 @@ pub async fn load_persisted_managers(
                 .await
                 .expect("Failed to load cluster nodes"),
         ),
+        #[cfg(feature = "backup")]
         backup: Arc::new(
             BackupManager::with_database(
                 database.clone(),

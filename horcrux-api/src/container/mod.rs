@@ -1,15 +1,26 @@
+#[cfg(any(feature = "docker", feature = "podman"))]
 pub mod cnetwork;
+#[cfg(feature = "docker")]
 pub mod docker;
+#[cfg(any(feature = "docker", feature = "podman"))]
 pub mod image;
+#[cfg(feature = "incus")]
 pub mod incus;
 /// Container management module
 /// Handles LXC, LXD, Incus, Docker, and Podman container lifecycle
+#[cfg(feature = "lxc")]
 pub mod lxc;
+#[cfg(feature = "lxd")]
 pub mod lxd;
+#[cfg(feature = "podman")]
 pub mod podman;
+#[cfg(any(feature = "docker", feature = "podman"))]
 pub mod stack;
+#[cfg(any(feature = "docker", feature = "podman"))]
 pub mod volume;
+#[cfg(any(feature = "docker", feature = "podman"))]
 pub mod ws;
+#[cfg(any(feature = "docker", feature = "podman"))]
 pub mod ws_handlers;
 
 use crate::db::Database;
@@ -52,6 +63,11 @@ impl Container {
         }
     }
 }
+
+/// Label Horcrux puts on every Docker/Podman container it creates, holding
+/// the Horcrux container id (the runtime only knows the container name).
+/// Shared by docker.rs and podman.rs, either of which may be compiled out.
+pub const HORCRUX_ID_LABEL: &str = "horcrux.id";
 
 /// `docker/podman create` flags for the user-supplied options (everything
 /// that goes before the image argument; `command` goes after it).
@@ -122,10 +138,15 @@ pub struct ContainerManager {
     containers: Arc<RwLock<HashMap<String, Container>>>,
     /// Ids with a runtime create in flight (see `create_container`).
     creating: Arc<Mutex<HashSet<String>>>,
+    #[cfg(feature = "lxc")]
     lxc_manager: lxc::LxcManager,
+    #[cfg(feature = "lxd")]
     lxd_manager: lxd::LxdContainerManager,
+    #[cfg(feature = "incus")]
     incus_manager: incus::IncusContainerManager,
+    #[cfg(feature = "docker")]
     docker_manager: docker::DockerManager,
+    #[cfg(feature = "podman")]
     podman_manager: podman::PodmanManager,
     _db: Option<Arc<Database>>, // Reserved for future persistent container storage
 }
@@ -141,10 +162,15 @@ impl ContainerManager {
         Self {
             containers: Arc::new(RwLock::new(HashMap::new())),
             creating: Arc::new(Mutex::new(HashSet::new())),
+            #[cfg(feature = "lxc")]
             lxc_manager: lxc::LxcManager::new(),
+            #[cfg(feature = "lxd")]
             lxd_manager: lxd::LxdContainerManager::new(),
+            #[cfg(feature = "incus")]
             incus_manager: incus::IncusContainerManager::new(),
+            #[cfg(feature = "docker")]
             docker_manager: docker::DockerManager::new(),
+            #[cfg(feature = "podman")]
             podman_manager: podman::PodmanManager::new(),
             _db: None,
         }
@@ -155,10 +181,15 @@ impl ContainerManager {
         Self {
             containers: Arc::new(RwLock::new(HashMap::new())),
             creating: Arc::new(Mutex::new(HashSet::new())),
+            #[cfg(feature = "lxc")]
             lxc_manager: lxc::LxcManager::new(),
+            #[cfg(feature = "lxd")]
             lxd_manager: lxd::LxdContainerManager::new(),
+            #[cfg(feature = "incus")]
             incus_manager: incus::IncusContainerManager::new(),
+            #[cfg(feature = "docker")]
             docker_manager: docker::DockerManager::new(),
+            #[cfg(feature = "podman")]
             podman_manager: podman::PodmanManager::new(),
             _db: Some(db),
         }
@@ -183,6 +214,14 @@ impl ContainerManager {
 
     /// Bring the Docker part of the in-memory map in line with the daemon.
     /// A no-op when the Docker API is unreachable (no daemon on this host).
+    #[cfg(not(feature = "docker"))]
+    pub async fn reconcile_docker(&self) {
+        // USE=-docker: no Docker backend compiled in, nothing to reconcile.
+    }
+
+    /// Bring the Docker part of the in-memory map in line with the daemon.
+    /// A no-op when the Docker API is unreachable (no daemon on this host).
+    #[cfg(feature = "docker")]
     pub async fn reconcile_docker(&self) {
         let live = match self.docker_manager.list_containers_api().await {
             Ok(live) => live,
@@ -310,12 +349,19 @@ impl ContainerManager {
         };
 
         // Create the container based on runtime
-        let container = match config.runtime {
+        let container: Container = match config.runtime {
+            #[cfg(feature = "lxc")]
             ContainerRuntime::Lxc => self.lxc_manager.create_container(&config).await?,
+            #[cfg(feature = "lxd")]
             ContainerRuntime::Lxd => self.lxd_manager.create_container(&config).await?,
+            #[cfg(feature = "incus")]
             ContainerRuntime::Incus => self.incus_manager.create_container(&config).await?,
+            #[cfg(feature = "docker")]
             ContainerRuntime::Docker => self.docker_manager.create_container(&config).await?,
+            #[cfg(feature = "podman")]
             ContainerRuntime::Podman => self.podman_manager.create_container(&config).await?,
+            #[allow(unreachable_patterns)]
+            _ => return Err(crate::features::runtime_not_compiled(&config.runtime)),
         };
 
         let container_config = container.to_config();
@@ -375,11 +421,18 @@ impl ContainerManager {
         };
 
         match container.runtime {
+            #[cfg(feature = "lxc")]
             ContainerRuntime::Lxc => self.lxc_manager.start_container(&container).await?,
+            #[cfg(feature = "lxd")]
             ContainerRuntime::Lxd => self.lxd_manager.start_container(&container).await?,
+            #[cfg(feature = "incus")]
             ContainerRuntime::Incus => self.incus_manager.start_container(&container).await?,
+            #[cfg(feature = "docker")]
             ContainerRuntime::Docker => self.docker_manager.start_container(&container).await?,
+            #[cfg(feature = "podman")]
             ContainerRuntime::Podman => self.podman_manager.start_container(&container).await?,
+            #[allow(unreachable_patterns)]
+            _ => return Err(crate::features::runtime_not_compiled(&container.runtime)),
         }
 
         let mut containers = self.containers.write().await;
@@ -403,11 +456,18 @@ impl ContainerManager {
         };
 
         match container.runtime {
+            #[cfg(feature = "lxc")]
             ContainerRuntime::Lxc => self.lxc_manager.stop_container(&container).await?,
+            #[cfg(feature = "lxd")]
             ContainerRuntime::Lxd => self.lxd_manager.stop_container(&container).await?,
+            #[cfg(feature = "incus")]
             ContainerRuntime::Incus => self.incus_manager.stop_container(&container).await?,
+            #[cfg(feature = "docker")]
             ContainerRuntime::Docker => self.docker_manager.stop_container(&container).await?,
+            #[cfg(feature = "podman")]
             ContainerRuntime::Podman => self.podman_manager.stop_container(&container).await?,
+            #[allow(unreachable_patterns)]
+            _ => return Err(crate::features::runtime_not_compiled(&container.runtime)),
         }
 
         let mut containers = self.containers.write().await;
@@ -436,12 +496,19 @@ impl ContainerManager {
             (container, in_flight)
         };
 
-        let result = match container.runtime {
+        let result: Result<()> = match container.runtime {
+            #[cfg(feature = "lxc")]
             ContainerRuntime::Lxc => self.lxc_manager.delete_container(&container).await,
+            #[cfg(feature = "lxd")]
             ContainerRuntime::Lxd => self.lxd_manager.delete_container(&container).await,
+            #[cfg(feature = "incus")]
             ContainerRuntime::Incus => self.incus_manager.delete_container(&container).await,
+            #[cfg(feature = "docker")]
             ContainerRuntime::Docker => self.docker_manager.delete_container(&container).await,
+            #[cfg(feature = "podman")]
             ContainerRuntime::Podman => self.podman_manager.delete_container(&container).await,
+            #[allow(unreachable_patterns)]
+            _ => Err(crate::features::runtime_not_compiled(&container.runtime)),
         };
 
         if let Err(e) = result {
@@ -469,11 +536,18 @@ impl ContainerManager {
         };
 
         match container.runtime {
+            #[cfg(feature = "lxc")]
             ContainerRuntime::Lxc => self.lxc_manager.pause_container(&container).await?,
+            #[cfg(feature = "lxd")]
             ContainerRuntime::Lxd => self.lxd_manager.pause_container(&container).await?,
+            #[cfg(feature = "incus")]
             ContainerRuntime::Incus => self.incus_manager.pause_container(&container).await?,
+            #[cfg(feature = "docker")]
             ContainerRuntime::Docker => self.docker_manager.pause_container(&container).await?,
+            #[cfg(feature = "podman")]
             ContainerRuntime::Podman => self.podman_manager.pause_container(&container).await?,
+            #[allow(unreachable_patterns)]
+            _ => return Err(crate::features::runtime_not_compiled(&container.runtime)),
         }
 
         let mut containers = self.containers.write().await;
@@ -497,11 +571,18 @@ impl ContainerManager {
         };
 
         match container.runtime {
+            #[cfg(feature = "lxc")]
             ContainerRuntime::Lxc => self.lxc_manager.resume_container(&container).await?,
+            #[cfg(feature = "lxd")]
             ContainerRuntime::Lxd => self.lxd_manager.resume_container(&container).await?,
+            #[cfg(feature = "incus")]
             ContainerRuntime::Incus => self.incus_manager.resume_container(&container).await?,
+            #[cfg(feature = "docker")]
             ContainerRuntime::Docker => self.docker_manager.resume_container(&container).await?,
+            #[cfg(feature = "podman")]
             ContainerRuntime::Podman => self.podman_manager.resume_container(&container).await?,
+            #[allow(unreachable_patterns)]
+            _ => return Err(crate::features::runtime_not_compiled(&container.runtime)),
         }
 
         let mut containers = self.containers.write().await;
@@ -521,32 +602,39 @@ impl ContainerManager {
             .get(id)
             .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?;
 
-        let status = match container.runtime {
+        let status: ContainerStatus = match container.runtime {
+            #[cfg(feature = "lxc")]
             ContainerRuntime::Lxc => {
                 self.lxc_manager
                     .get_container_status(&container.name)
                     .await?
             }
+            #[cfg(feature = "lxd")]
             ContainerRuntime::Lxd => {
                 self.lxd_manager
                     .get_container_status(&container.name)
                     .await?
             }
+            #[cfg(feature = "incus")]
             ContainerRuntime::Incus => {
                 self.incus_manager
                     .get_container_status(&container.name)
                     .await?
             }
+            #[cfg(feature = "docker")]
             ContainerRuntime::Docker => {
                 self.docker_manager
                     .get_container_status(&container.name)
                     .await?
             }
+            #[cfg(feature = "podman")]
             ContainerRuntime::Podman => {
                 self.podman_manager
                     .get_container_status(&container.name)
                     .await?
             }
+            #[allow(unreachable_patterns)]
+            _ => return Err(crate::features::runtime_not_compiled(&container.runtime)),
         };
 
         Ok(status)
@@ -559,32 +647,39 @@ impl ContainerManager {
             .get(id)
             .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?;
 
-        let output = match container.runtime {
+        let output: String = match container.runtime {
+            #[cfg(feature = "lxc")]
             ContainerRuntime::Lxc => {
                 self.lxc_manager
                     .exec_command(&container.name, &command)
                     .await?
             }
+            #[cfg(feature = "lxd")]
             ContainerRuntime::Lxd => {
                 self.lxd_manager
                     .exec_command(&container.name, &command)
                     .await?
             }
+            #[cfg(feature = "incus")]
             ContainerRuntime::Incus => {
                 self.incus_manager
                     .exec_command(&container.name, &command)
                     .await?
             }
+            #[cfg(feature = "docker")]
             ContainerRuntime::Docker => {
                 self.docker_manager
                     .exec_command(&container.name, &command)
                     .await?
             }
+            #[cfg(feature = "podman")]
             ContainerRuntime::Podman => {
                 self.podman_manager
                     .exec_command(&container.name, &command)
                     .await?
             }
+            #[allow(unreachable_patterns)]
+            _ => return Err(crate::features::runtime_not_compiled(&container.runtime)),
         };
 
         Ok(output)
@@ -626,23 +721,33 @@ impl ContainerManager {
                 ))
             })?;
 
-        let clone = match source_container.runtime {
+        crate::features::require_container_runtime(&source_container.runtime)?;
+        let clone: Container = match source_container.runtime {
             ContainerRuntime::Lxc | ContainerRuntime::Lxd | ContainerRuntime::Incus => {
                 match source_container.runtime {
+                    #[cfg(feature = "lxc")]
                     ContainerRuntime::Lxc => {
                         self.lxc_manager
                             .clone_container(&source_container.name, target_name, snapshot)
                             .await?
                     }
+                    #[cfg(feature = "lxd")]
                     ContainerRuntime::Lxd => {
                         self.lxd_manager
                             .clone_container(&source_container.name, target_name, snapshot)
                             .await?
                     }
-                    _ => {
+                    #[cfg(feature = "incus")]
+                    ContainerRuntime::Incus => {
                         self.incus_manager
                             .clone_container(&source_container.name, target_name, snapshot)
                             .await?
+                    }
+                    #[allow(unreachable_patterns)]
+                    _ => {
+                        return Err(crate::features::runtime_not_compiled(
+                            &source_container.runtime,
+                        ))
                     }
                 }
                 Container {
@@ -666,14 +771,25 @@ impl ContainerManager {
                 }
             }
             ContainerRuntime::Docker | ContainerRuntime::Podman => {
-                if source_container.runtime == ContainerRuntime::Docker {
-                    self.docker_manager
-                        .clone_container(&source_container.name, target_name, snapshot)
-                        .await?;
-                } else {
-                    self.podman_manager
-                        .clone_container(&source_container.name, target_name, snapshot)
-                        .await?;
+                match source_container.runtime {
+                    #[cfg(feature = "docker")]
+                    ContainerRuntime::Docker => {
+                        self.docker_manager
+                            .clone_container(&source_container.name, target_name, snapshot)
+                            .await?;
+                    }
+                    #[cfg(feature = "podman")]
+                    ContainerRuntime::Podman => {
+                        self.podman_manager
+                            .clone_container(&source_container.name, target_name, snapshot)
+                            .await?;
+                    }
+                    #[allow(unreachable_patterns)]
+                    _ => {
+                        return Err(crate::features::runtime_not_compiled(
+                            &source_container.runtime,
+                        ))
+                    }
                 }
                 let config = ContainerConfig {
                     id: target_id.to_string(),
@@ -690,10 +806,21 @@ impl ContainerManager {
                     },
                     created_at: None,
                 };
-                if source_container.runtime == ContainerRuntime::Docker {
-                    self.docker_manager.create_container(&config).await?
-                } else {
-                    self.podman_manager.create_container(&config).await?
+                match source_container.runtime {
+                    #[cfg(feature = "docker")]
+                    ContainerRuntime::Docker => {
+                        self.docker_manager.create_container(&config).await?
+                    }
+                    #[cfg(feature = "podman")]
+                    ContainerRuntime::Podman => {
+                        self.podman_manager.create_container(&config).await?
+                    }
+                    #[allow(unreachable_patterns)]
+                    _ => {
+                        return Err(crate::features::runtime_not_compiled(
+                            &source_container.runtime,
+                        ))
+                    }
                 }
             }
         };

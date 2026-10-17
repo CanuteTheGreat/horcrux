@@ -112,7 +112,7 @@ fn LdapPanel() -> impl IntoView {
     create_effect(move |_| {
         spawn_local(async move {
             set_loading.set(true);
-            if let Ok(resp) = reqwasm::http::Request::get("/api/nas/directory/ldap/status")
+            if let Ok(resp) = crate::api::authed::get("/api/nas/directory/ldap/status")
                 .send()
                 .await
             {
@@ -135,7 +135,7 @@ fn LdapPanel() -> impl IntoView {
         };
 
         spawn_local(async move {
-            match reqwasm::http::Request::post("/api/nas/directory/ldap/configure")
+            match crate::api::authed::post("/api/nas/directory/ldap/configure")
                 .header("Content-Type", "application/json")
                 .body(serde_json::to_string(&config).unwrap())
                 .send()
@@ -154,7 +154,7 @@ fn LdapPanel() -> impl IntoView {
 
     let test_connection = move |_| {
         spawn_local(async move {
-            match reqwasm::http::Request::get("/api/nas/directory/ldap/test")
+            match crate::api::authed::get("/api/nas/directory/ldap/test")
                 .send()
                 .await
             {
@@ -170,7 +170,7 @@ fn LdapPanel() -> impl IntoView {
 
     let sync_users = move |_| {
         spawn_local(async move {
-            match reqwasm::http::Request::post("/api/nas/directory/ldap/sync")
+            match crate::api::authed::post("/api/nas/directory/ldap/sync")
                 .send()
                 .await
             {
@@ -321,7 +321,7 @@ fn KerberosPanel() -> impl IntoView {
     create_effect(move |_| {
         spawn_local(async move {
             set_loading.set(true);
-            if let Ok(resp) = reqwasm::http::Request::get("/api/nas/directory/kerberos/status")
+            if let Ok(resp) = crate::api::authed::get("/api/nas/directory/kerberos/status")
                 .send()
                 .await
             {
@@ -343,7 +343,7 @@ fn KerberosPanel() -> impl IntoView {
         };
 
         spawn_local(async move {
-            match reqwasm::http::Request::post("/api/nas/directory/kerberos/configure")
+            match crate::api::authed::post("/api/nas/directory/kerberos/configure")
                 .header("Content-Type", "application/json")
                 .body(serde_json::to_string(&config).unwrap())
                 .send()
@@ -362,7 +362,7 @@ fn KerberosPanel() -> impl IntoView {
 
     let kdestroy = move |_| {
         spawn_local(async move {
-            match reqwasm::http::Request::post("/api/nas/directory/kerberos/kdestroy")
+            match crate::api::authed::post("/api/nas/directory/kerberos/kdestroy")
                 .send()
                 .await
             {
@@ -502,7 +502,7 @@ fn AdPanel() -> impl IntoView {
     create_effect(move |_| {
         spawn_local(async move {
             set_loading.set(true);
-            if let Ok(resp) = reqwasm::http::Request::get("/api/nas/directory/ad/status")
+            if let Ok(resp) = crate::api::authed::get("/api/nas/directory/ad/status")
                 .send()
                 .await
             {
@@ -526,7 +526,7 @@ fn AdPanel() -> impl IntoView {
         };
 
         spawn_local(async move {
-            match reqwasm::http::Request::post("/api/nas/directory/ad/join")
+            match crate::api::authed::post("/api/nas/directory/ad/join")
                 .header("Content-Type", "application/json")
                 .body(serde_json::to_string(&form).unwrap())
                 .send()
@@ -555,7 +555,7 @@ fn AdPanel() -> impl IntoView {
         }
 
         spawn_local(async move {
-            match reqwasm::http::Request::post("/api/nas/directory/ad/leave")
+            match crate::api::authed::post("/api/nas/directory/ad/leave")
                 .header("Content-Type", "application/json")
                 .body("{}")
                 .send()
@@ -573,7 +573,7 @@ fn AdPanel() -> impl IntoView {
 
     let test_trust = move |_| {
         spawn_local(async move {
-            match reqwasm::http::Request::get("/api/nas/directory/ad/trust/test")
+            match crate::api::authed::get("/api/nas/directory/ad/trust/test")
                 .send()
                 .await
             {

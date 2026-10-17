@@ -5,6 +5,7 @@ mod alerts;
 mod api;
 mod audit;
 mod auth;
+#[cfg(feature = "backup")]
 mod backup;
 mod cloudinit;
 mod cluster;
@@ -14,8 +15,10 @@ mod container;
 mod db;
 mod encryption;
 mod error;
+mod features;
 mod firewall;
 mod gpu;
+#[cfg(feature = "cluster")]
 mod ha;
 mod health;
 mod logging;
@@ -44,6 +47,7 @@ mod webhooks;
 mod websocket;
 
 // Lane D: backup/restore API (see src/api/backup.rs).
+#[cfg(feature = "backup")]
 #[path = "api/backup.rs"]
 mod api_backup;
 
@@ -64,6 +68,7 @@ use axum::{
     routing::{delete, get, post, put},
     Json, Router,
 };
+#[cfg(feature = "backup")]
 use backup::BackupManager;
 use cloudinit::{CloudInitConfig, CloudInitManager};
 use cluster::{ArchitectureSummary, ClusterManager, Node};
@@ -89,6 +94,7 @@ struct AppState {
     config: Arc<config::HorcruxConfig>,
     vm_manager: Arc<VmManager>,
     container_manager: Arc<container::ContainerManager>,
+    #[cfg(feature = "backup")]
     backup_manager: Arc<BackupManager>,
     cloudinit_manager: Arc<CloudInitManager>,
     template_manager: Arc<TemplateManager>,
@@ -105,6 +111,7 @@ struct AppState {
     database: Arc<db::Database>,
     _rate_limiter: Arc<middleware::rate_limit::RateLimiter>, // Reserved for future rate limiting middleware
     storage_manager: Arc<storage::StorageManager>,
+    #[cfg(feature = "cluster")]
     ha_manager: Arc<ha::HaManager>,
     migration_manager: Arc<migration::MigrationManager>,
     gpu_manager: Arc<gpu::GpuManager>,
@@ -119,10 +126,15 @@ struct AppState {
     clone_job_manager: Arc<vm::clone_progress::CloneJobManager>,
     replication_manager: Arc<vm::replication::ReplicationManager>,
     ws_state: Arc<websocket::WsState>,
+    #[cfg(any(feature = "docker", feature = "podman"))]
     image_manager: Arc<container::image::ImageManager>,
+    #[cfg(any(feature = "docker", feature = "podman"))]
     volume_manager: Arc<container::volume::VolumeManager>,
+    #[cfg(any(feature = "docker", feature = "podman"))]
     container_network_manager: Arc<container::cnetwork::ContainerNetworkManager>,
+    #[cfg(any(feature = "docker", feature = "podman"))]
     stack_manager: Arc<container::stack::StackManager>,
+    #[cfg(any(feature = "docker", feature = "podman"))]
     container_ws_manager: Arc<container::ws::ContainerWsManager>,
     #[cfg(feature = "kubernetes")]
     kubernetes_manager: Arc<kubernetes::KubernetesManager>,
@@ -142,17 +154,21 @@ async fn main() -> anyhow::Result<()> {
     info!("Configuration loaded successfully");
     let horcrux_config = Arc::new(horcrux_config);
 
-    // Check if KVM is available
-    if vm::qemu::QemuManager::check_kvm_available() {
-        info!("KVM acceleration is available");
-    } else {
-        error!("WARNING: KVM is not available. VMs will run without hardware acceleration!");
-    }
+    // QEMU/KVM host checks (USE=qemu only).
+    #[cfg(feature = "qemu")]
+    {
+        // Check if KVM is available
+        if vm::qemu::QemuManager::check_kvm_available() {
+            info!("KVM acceleration is available");
+        } else {
+            error!("WARNING: KVM is not available. VMs will run without hardware acceleration!");
+        }
 
-    // Get QEMU version
-    match vm::qemu::QemuManager::get_qemu_version().await {
-        Ok(version) => info!("QEMU version: {}", version),
-        Err(e) => error!("Failed to get QEMU version: {}", e),
+        // Get QEMU version
+        match vm::qemu::QemuManager::get_qemu_version().await {
+            Ok(version) => info!("QEMU version: {}", version),
+            Err(e) => error!("Failed to get QEMU version: {}", e),
+        }
     }
 
     // Initialize database
@@ -407,6 +423,7 @@ async fn main() -> anyhow::Result<()> {
             horcrux_config.paths.vm_storage.clone(),
         )),
         container_manager: shared_container_manager.clone(),
+        #[cfg(feature = "backup")]
         backup_manager: persisted.backup,
         cloudinit_manager: Arc::new(CloudInitManager::new(
             horcrux_config.paths.cloudinit.clone(),
@@ -427,6 +444,7 @@ async fn main() -> anyhow::Result<()> {
         database,
         _rate_limiter: rate_limiter.clone(),
         storage_manager: persisted.storage,
+        #[cfg(feature = "cluster")]
         ha_manager: persisted.ha,
         migration_manager: Arc::new(migration::MigrationManager::new()),
         gpu_manager,
@@ -441,13 +459,18 @@ async fn main() -> anyhow::Result<()> {
         clone_job_manager,
         replication_manager,
         ws_state: Arc::new(websocket::WsState::new()),
+        #[cfg(any(feature = "docker", feature = "podman"))]
         image_manager: Arc::new(container::image::ImageManager::new()),
+        #[cfg(any(feature = "docker", feature = "podman"))]
         volume_manager: Arc::new(container::volume::VolumeManager::new()),
+        #[cfg(any(feature = "docker", feature = "podman"))]
         container_network_manager: Arc::new(container::cnetwork::ContainerNetworkManager::new()),
+        #[cfg(any(feature = "docker", feature = "podman"))]
         stack_manager: Arc::new(container::stack::StackManager::new(
             shared_container_manager,
             database_for_stacks,
         )),
+        #[cfg(any(feature = "docker", feature = "podman"))]
         container_ws_manager: Arc::new(container::ws::ContainerWsManager::new()),
         #[cfg(feature = "kubernetes")]
         kubernetes_manager,
@@ -487,6 +510,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Cluster node heartbeat: keeps every registered node's live CPU/memory
     // usage and online/offline status current.
+    // USE=cluster only: without it there are no cluster routes to
+    // register nodes with.
+    #[cfg(feature = "cluster")]
     state
         .cluster_manager
         .start_usage_monitor(horcrux_config.server.port);
@@ -534,19 +560,21 @@ async fn main() -> anyhow::Result<()> {
         .merge(vm_routes())
         .merge(vm_console_api::routes())
         .merge(container_routes())
-        .merge(image_routes())
-        .merge(volume_routes())
-        .merge(container_network_routes())
-        .merge(stack_routes())
-        .merge(container_ws_ticket_routes())
-        .merge(backup_routes())
-        .merge(api_backup::routes(&state))
+        .merge(template_routes())
         .merge(auth_protected_routes())
         .merge(storage_routes())
         .merge(monitoring_routes())
-        .merge(cluster_routes())
         .merge(network_routes())
         .merge(api::lane_m::routes(&state).await?);
+
+    // USE-flag gated route groups (see src/features.rs): a feature that was
+    // not compiled in has no routes, so its endpoints answer 404.
+    #[cfg(any(feature = "docker", feature = "podman"))]
+    let protected_routes = protected_routes.merge(oci_routes());
+    #[cfg(feature = "backup")]
+    let protected_routes = protected_routes.merge(api_backup::routes(&state));
+    #[cfg(feature = "cluster")]
+    let protected_routes = protected_routes.merge(cluster_routes());
 
     // Add Kubernetes routes if feature is enabled
     #[cfg(feature = "kubernetes")]
@@ -573,6 +601,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/health/live", get(liveness_probe))
         .route("/api/health/ready", get(readiness_probe))
         .with_state(state.clone())
+        // Compiled-in features (USE flags), read by the UI to hide the rest
+        .merge(features::routes())
         // Merge OpenAPI / Swagger UI routes (public, for documentation)
         .merge(openapi::openapi_routes())
         // Merge protected routes (with auth middleware)
@@ -730,20 +760,6 @@ fn vm_routes() -> Router<Arc<AppState>> {
             "/api/console/ws/serial/:ticket_id",
             get(serial_websocket_handler),
         )
-        // Container logs/exec/events WebSocket endpoints (ticket-authenticated,
-        // same pattern as the VNC/serial console WebSockets above).
-        .route(
-            "/api/containers/ws/logs/:ticket_id",
-            get(container_logs_websocket_handler),
-        )
-        .route(
-            "/api/containers/ws/exec/:ticket_id",
-            get(container_exec_websocket_handler),
-        )
-        .route(
-            "/api/containers/ws/events/:ticket_id",
-            get(container_events_websocket_handler),
-        )
         // Migration endpoints
         .route("/api/migrate/:vm_id", post(migrate_vm))
         .route("/api/migrate/:vm_id/status", get(get_migration_status))
@@ -768,6 +784,7 @@ fn container_routes() -> Router<Arc<AppState>> {
 /// Image management routes (Docker + Podman) - see container/image.rs.
 /// Runtime is selected via `?runtime=docker|podman` query param, defaulting
 /// to docker, consistent with Portainer's per-environment image view.
+#[cfg(any(feature = "docker", feature = "podman"))]
 fn image_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/images", get(list_images))
@@ -778,6 +795,7 @@ fn image_routes() -> Router<Arc<AppState>> {
 }
 
 /// Volume management routes - see container/volume.rs.
+#[cfg(any(feature = "docker", feature = "podman"))]
 fn volume_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/volumes", get(list_volumes))
@@ -788,6 +806,7 @@ fn volume_routes() -> Router<Arc<AppState>> {
 
 /// Container-runtime network routes (docker/podman bridge networks - not
 /// Horcrux's own SDN/CNI, see container/cnetwork.rs).
+#[cfg(any(feature = "docker", feature = "podman"))]
 fn container_network_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/container-networks", get(list_container_networks))
@@ -811,6 +830,7 @@ fn container_network_routes() -> Router<Arc<AppState>> {
 }
 
 /// Compose/stack deployment routes - see container/stack.rs.
+#[cfg(any(feature = "docker", feature = "podman"))]
 fn stack_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/stacks", get(list_stacks))
@@ -825,6 +845,7 @@ fn stack_routes() -> Router<Arc<AppState>> {
 /// interactive exec, events feed). The actual WebSocket upgrade endpoints
 /// are registered directly on the app router (public, ticket-authenticated
 /// - see console's `/api/console/*/ws/:ticket` for the exact same pattern).
+#[cfg(any(feature = "docker", feature = "podman"))]
 fn container_ws_ticket_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(
@@ -841,9 +862,37 @@ fn container_ws_ticket_routes() -> Router<Arc<AppState>> {
         )
 }
 
+/// Docker/Podman-only route groups (images, volumes, runtime networks,
+/// stacks, container WebSocket tickets and streams), behind the gate that
+/// refuses a `runtime` this build was compiled without.
+#[cfg(any(feature = "docker", feature = "podman"))]
+fn oci_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .merge(image_routes())
+        .merge(volume_routes())
+        .merge(container_network_routes())
+        .merge(stack_routes())
+        .merge(container_ws_ticket_routes())
+        // Container logs/exec/events WebSocket endpoints (ticket-authenticated,
+        // same pattern as the VNC/serial console WebSockets).
+        .route(
+            "/api/containers/ws/logs/:ticket_id",
+            get(container_logs_websocket_handler),
+        )
+        .route(
+            "/api/containers/ws/exec/:ticket_id",
+            get(container_exec_websocket_handler),
+        )
+        .route(
+            "/api/containers/ws/events/:ticket_id",
+            get(container_events_websocket_handler),
+        )
+        .layer(axum_middleware::from_fn(features::oci_runtime_gate))
+}
+
 /// Build template and cloud-init routes (backup routes live in
-/// src/api/backup.rs).
-fn backup_routes() -> Router<Arc<AppState>> {
+/// src/api/backup.rs, USE=backup).
+fn template_routes() -> Router<Arc<AppState>> {
     Router::new()
         // Cloud-init endpoints
         .route("/api/cloudinit/:vm_id", post(generate_cloudinit))
@@ -978,7 +1027,8 @@ fn monitoring_routes() -> Router<Arc<AppState>> {
         .route("/api/webhooks/:id/deliveries", get(get_webhook_deliveries))
 }
 
-/// Build cluster-related routes (nodes, HA)
+/// Build cluster-related routes (nodes, HA) (USE=cluster)
+#[cfg(feature = "cluster")]
 fn cluster_routes() -> Router<Arc<AppState>> {
     Router::new()
         // Cluster management
@@ -7688,6 +7738,7 @@ async fn serial_websocket_handler(
     .await
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn container_logs_websocket_handler(
     ws: axum::extract::ws::WebSocketUpgrade,
     Path(ticket_id): Path<String>,
@@ -7701,6 +7752,7 @@ async fn container_logs_websocket_handler(
     .await
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn container_exec_websocket_handler(
     ws: axum::extract::ws::WebSocketUpgrade,
     Path(ticket_id): Path<String>,
@@ -7714,6 +7766,7 @@ async fn container_exec_websocket_handler(
     .await
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn container_events_websocket_handler(
     ws: axum::extract::ws::WebSocketUpgrade,
     Path(ticket_id): Path<String>,
@@ -7727,19 +7780,25 @@ async fn container_events_websocket_handler(
     .await
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 #[derive(serde::Deserialize)]
 struct RuntimeQuery {
     #[serde(default)]
     runtime: Option<String>,
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 fn parse_runtime(q: &Option<String>) -> horcrux_common::ContainerRuntime {
     match q.as_deref() {
         Some("podman") => horcrux_common::ContainerRuntime::Podman,
-        _ => horcrux_common::ContainerRuntime::Docker,
+        Some("docker") => horcrux_common::ContainerRuntime::Docker,
+        // No runtime named: whichever of docker/podman this build has
+        // (features::oci_runtime_gate already refused a disabled one).
+        _ => features::default_oci_runtime(),
     }
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn list_images(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,
@@ -7752,6 +7811,7 @@ async fn list_images(
     Ok(Json(images))
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 #[derive(serde::Deserialize)]
 struct PullImageRequest {
     name: String,
@@ -7761,15 +7821,18 @@ struct PullImageRequest {
     runtime: Option<String>,
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 fn default_tag() -> String {
     "latest".to_string()
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 #[derive(serde::Serialize)]
 struct PullImageResponse {
     lines: Vec<container::image::PullProgress>,
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 /// Synchronous pull (collects every progress line and returns once done).
 /// For live streaming progress, the UI can instead use a logs-ticket-style
 /// WebSocket in a future iteration; this endpoint already surfaces full
@@ -7799,6 +7862,7 @@ async fn pull_image(
     Ok(Json(PullImageResponse { lines }))
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn inspect_image(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -7814,6 +7878,7 @@ async fn inspect_image(
     Ok(Json(value))
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn remove_image(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -7829,6 +7894,7 @@ async fn remove_image(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 #[derive(serde::Deserialize)]
 struct TagImageRequest {
     repo: String,
@@ -7837,6 +7903,7 @@ struct TagImageRequest {
     runtime: Option<String>,
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn tag_image(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -7862,6 +7929,7 @@ async fn tag_image(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn list_volumes(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,
@@ -7876,6 +7944,7 @@ async fn list_volumes(
     Ok(Json(volumes))
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 #[derive(serde::Deserialize)]
 struct CreateContainerVolumeRequest {
     name: String,
@@ -7885,6 +7954,7 @@ struct CreateContainerVolumeRequest {
     runtime: Option<String>,
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn create_container_volume(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateContainerVolumeRequest>,
@@ -7909,6 +7979,7 @@ async fn create_container_volume(
     Ok(Json(v))
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn inspect_volume(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -7924,6 +7995,7 @@ async fn inspect_volume(
     Ok(Json(value))
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn remove_volume(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -7939,6 +8011,7 @@ async fn remove_volume(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn list_container_networks(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,
@@ -7953,6 +8026,7 @@ async fn list_container_networks(
     Ok(Json(nets))
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 #[derive(serde::Deserialize)]
 struct CreateContainerNetworkRequest {
     name: String,
@@ -7962,6 +8036,7 @@ struct CreateContainerNetworkRequest {
     runtime: Option<String>,
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn create_container_network(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateContainerNetworkRequest>,
@@ -7986,6 +8061,7 @@ async fn create_container_network(
     Ok(Json(id))
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn inspect_container_network(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -8011,6 +8087,7 @@ async fn inspect_container_network(
     Ok(Json(value))
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn remove_container_network(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -8036,6 +8113,7 @@ async fn remove_container_network(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 #[derive(serde::Deserialize)]
 struct NetworkContainerRequest {
     container_id: String,
@@ -8045,6 +8123,7 @@ struct NetworkContainerRequest {
     force: bool,
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn connect_container_network(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -8070,6 +8149,7 @@ async fn connect_container_network(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn disconnect_container_network(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -8095,12 +8175,14 @@ async fn disconnect_container_network(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn list_stacks(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<container::stack::StackSummary>>, ApiError> {
     Ok(Json(state.stack_manager.list_stacks().await?))
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 #[derive(serde::Deserialize)]
 struct DeployStackRequest {
     name: String,
@@ -8109,6 +8191,7 @@ struct DeployStackRequest {
     runtime: Option<String>,
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn deploy_stack(
     State(state): State<Arc<AppState>>,
     Json(req): Json<DeployStackRequest>,
@@ -8121,6 +8204,7 @@ async fn deploy_stack(
     Ok(Json(summary))
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn get_stack(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -8128,6 +8212,7 @@ async fn get_stack(
     Ok(Json(state.stack_manager.get_stack(&id).await?))
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn remove_stack(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -8136,6 +8221,7 @@ async fn remove_stack(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn start_stack(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -8144,6 +8230,7 @@ async fn start_stack(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn stop_stack(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -8152,12 +8239,14 @@ async fn stop_stack(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 #[derive(serde::Serialize)]
 struct WsTicketResponse {
     ticket: String,
     ws_path: String,
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn create_container_logs_ticket(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -8178,6 +8267,7 @@ async fn create_container_logs_ticket(
     }))
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 #[derive(serde::Deserialize)]
 struct ExecTicketRequest {
     #[serde(default)]
@@ -8186,6 +8276,7 @@ struct ExecTicketRequest {
     runtime: Option<String>,
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn create_container_exec_ticket(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -8206,6 +8297,7 @@ async fn create_container_exec_ticket(
     }))
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn create_container_events_ticket(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,
@@ -8697,6 +8789,7 @@ async fn create_volume(
 
 // HA (High Availability) handlers
 
+#[cfg(feature = "cluster")]
 #[derive(serde::Serialize)]
 struct HaResourceResponse {
     vm_id: String,
@@ -8706,6 +8799,7 @@ struct HaResourceResponse {
     state: String,
 }
 
+#[cfg(feature = "cluster")]
 async fn list_ha_resources(State(state): State<Arc<AppState>>) -> Json<Vec<HaResourceResponse>> {
     let resources = state.ha_manager.list_resources().await;
 
@@ -8732,6 +8826,7 @@ async fn list_ha_resources(State(state): State<Arc<AppState>>) -> Json<Vec<HaRes
     Json(responses)
 }
 
+#[cfg(feature = "cluster")]
 #[derive(serde::Deserialize)]
 struct AddHaResourceRequest {
     vm_id: String,
@@ -8739,6 +8834,7 @@ struct AddHaResourceRequest {
     priority: u32,
 }
 
+#[cfg(feature = "cluster")]
 async fn add_ha_resource(
     State(state): State<Arc<AppState>>,
     Json(req): Json<AddHaResourceRequest>,
@@ -8767,6 +8863,7 @@ async fn add_ha_resource(
     Ok(StatusCode::CREATED)
 }
 
+#[cfg(feature = "cluster")]
 async fn remove_ha_resource(
     State(state): State<Arc<AppState>>,
     Path(vm_id): Path<String>,
@@ -8786,6 +8883,7 @@ async fn remove_ha_resource(
     Ok(StatusCode::OK)
 }
 
+#[cfg(feature = "cluster")]
 #[derive(serde::Serialize)]
 struct HaStatusResponse {
     total_resources: usize,
@@ -8796,6 +8894,7 @@ struct HaStatusResponse {
     resources: Vec<ha::HaResource>,
 }
 
+#[cfg(feature = "cluster")]
 async fn get_ha_status(State(state): State<Arc<AppState>>) -> Json<HaStatusResponse> {
     let resources = state.ha_manager.list_resources().await;
 
@@ -8821,6 +8920,7 @@ async fn get_ha_status(State(state): State<Arc<AppState>>) -> Json<HaStatusRespo
     })
 }
 
+#[cfg(feature = "cluster")]
 #[derive(serde::Deserialize)]
 struct CreateHaGroupRequest {
     name: String,
@@ -8831,6 +8931,7 @@ struct CreateHaGroupRequest {
     no_failback: bool,
 }
 
+#[cfg(feature = "cluster")]
 async fn create_ha_group(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateHaGroupRequest>,
@@ -8852,6 +8953,7 @@ async fn create_ha_group(
     Ok(StatusCode::CREATED)
 }
 
+#[cfg(feature = "cluster")]
 #[derive(serde::Deserialize)]
 struct UpdateHaGroupRequest {
     nodes: Vec<String>,
@@ -8861,6 +8963,7 @@ struct UpdateHaGroupRequest {
     no_failback: bool,
 }
 
+#[cfg(feature = "cluster")]
 async fn update_ha_group(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -8878,6 +8981,7 @@ async fn update_ha_group(
     Ok(StatusCode::OK)
 }
 
+#[cfg(feature = "cluster")]
 async fn delete_ha_group(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -8886,6 +8990,7 @@ async fn delete_ha_group(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[cfg(feature = "cluster")]
 #[derive(serde::Deserialize)]
 struct AssignHaResourceRequest {
     resource_id: String,
@@ -8893,10 +8998,12 @@ struct AssignHaResourceRequest {
     priority: u32,
 }
 
+#[cfg(feature = "cluster")]
 fn default_ha_priority() -> u32 {
     3
 }
 
+#[cfg(feature = "cluster")]
 /// Put a VM under HA in this group (the UI's "assign to group" action).
 async fn assign_ha_group_resource(
     State(state): State<Arc<AppState>>,
@@ -8914,6 +9021,7 @@ async fn assign_ha_group_resource(
     .await
 }
 
+#[cfg(feature = "cluster")]
 async fn list_ha_groups(State(state): State<Arc<AppState>>) -> Json<Vec<ha::HaGroup>> {
     let groups = state.ha_manager.list_groups().await;
     Json(groups)

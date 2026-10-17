@@ -3,6 +3,17 @@ use horcrux_common::{VmArchitecture, VmConfig, VmHypervisor, VmStatus};
 use leptos::*;
 use leptos_router::*;
 
+/// (value, label) of every VM hypervisor, in menu order.
+const HYPERVISORS: [(&str, &str); 3] = [("qemu", "QEMU/KVM"), ("lxd", "LXD"), ("incus", "Incus")];
+
+fn hypervisor_from(value: &str) -> VmHypervisor {
+    match value {
+        "lxd" => VmHypervisor::Lxd,
+        "incus" => VmHypervisor::Incus,
+        _ => VmHypervisor::Qemu,
+    }
+}
+
 #[component]
 pub fn VmCreate() -> impl IntoView {
     let (name, set_name) = create_signal(String::new());
@@ -16,6 +27,20 @@ pub fn VmCreate() -> impl IntoView {
     let (error, set_error) = create_signal(None::<String>);
 
     let navigate = use_navigate();
+
+    let features = crate::features::use_features();
+    create_effect(move |_| {
+        let current = match hypervisor.get_untracked() {
+            VmHypervisor::Qemu => "qemu",
+            VmHypervisor::Lxd => "lxd",
+            VmHypervisor::Incus => "incus",
+        };
+        if features.loaded() && !features.has(current) {
+            if let Some((v, _)) = HYPERVISORS.iter().find(|(v, _)| features.has(v)) {
+                set_hypervisor.set(hypervisor_from(v));
+            }
+        }
+    });
 
     let submit = move |ev: ev::SubmitEvent| {
         ev.prevent_default();
@@ -68,19 +93,26 @@ pub fn VmCreate() -> impl IntoView {
 
                 <div class="form-group">
                     <label>"Hypervisor"</label>
-                    <select on:change=move |ev| {
-                        let value = event_target_value(&ev);
-                        let hv = match value.as_str() {
-                            "lxd" => VmHypervisor::Lxd,
-                            "incus" => VmHypervisor::Incus,
-                            _ => VmHypervisor::Qemu,
-                        };
-                        set_hypervisor.set(hv);
+                    // Only the hypervisors compiled into the server (USE flags).
+                    <select id="vm-hypervisor" on:change=move |ev| {
+                        set_hypervisor.set(hypervisor_from(&event_target_value(&ev)));
                     }>
-                        <option value="qemu">"QEMU/KVM"</option>
-                        <option value="lxd">"LXD"</option>
-                        <option value="incus">"Incus"</option>
+                        {move || {
+                            HYPERVISORS
+                                .iter()
+                                .filter(|(v, _)| features.has(v))
+                                .map(|(v, label)| {
+                                    let hv = hypervisor_from(v);
+                                    view! { <option value=*v selected=move || hypervisor.get() == hv>{*label}</option> }
+                                })
+                                .collect_view()
+                        }}
                     </select>
+                    <Show when=move || features.loaded() && !HYPERVISORS.iter().any(|(v, _)| features.has(v))>
+                        <p class="error" id="vm-no-hypervisor">
+                            "No VM hypervisor is compiled into this server (USE=qemu, lxd or incus)."
+                        </p>
+                    </Show>
                 </div>
 
                 <div class="form-group">
