@@ -578,6 +578,8 @@ async fn main() -> anyhow::Result<()> {
     // not compiled in has no routes, so its endpoints answer 404.
     #[cfg(any(feature = "docker", feature = "podman"))]
     let protected_routes = protected_routes.merge(oci_routes());
+    #[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
+    let protected_routes = protected_routes.merge(container_ws_routes());
     #[cfg(feature = "backup")]
     let protected_routes = protected_routes.merge(api::backup::routes(&state));
     #[cfg(feature = "cluster")]
@@ -874,8 +876,8 @@ fn container_ws_ticket_routes() -> Router<Arc<AppState>> {
 }
 
 /// Docker/Podman-only route groups (images, volumes, runtime networks,
-/// stacks, container WebSocket tickets and streams), behind the gate that
-/// refuses a `runtime` this build was compiled without.
+/// stacks), behind the gate that refuses a `runtime` this build was
+/// compiled without.
 #[cfg(any(feature = "docker", feature = "podman"))]
 fn oci_routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -883,6 +885,14 @@ fn oci_routes() -> Router<Arc<AppState>> {
         .merge(volume_routes())
         .merge(container_network_routes())
         .merge(stack_routes())
+        .layer(axum_middleware::from_fn(features::oci_runtime_gate))
+}
+
+/// Container log/exec/console WebSockets and their tickets: Docker/Podman
+/// and (lane J) LXC consoles, so they must exist in an lxc-only build too.
+#[cfg(any(feature = "docker", feature = "podman", feature = "lxc"))]
+fn container_ws_routes() -> Router<Arc<AppState>> {
+    Router::new()
         .merge(container_ws_ticket_routes())
         // Container logs/exec/events WebSocket endpoints (ticket-authenticated,
         // same pattern as the VNC/serial console WebSockets).
