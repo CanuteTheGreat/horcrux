@@ -42,6 +42,7 @@ feature_table!(
     "docker",
     "podman",
     // Platform features
+    "pam",
     "cluster",
     "backup",
     "kubernetes",
