@@ -425,12 +425,47 @@ def main():
         req("POST", "/containers/deb/shutdown", {"timeout": 60, "force": True})
         req("DELETE", "/containers/deb", None, expect=204)
 
+    step("backup a running LXC container and restore it as a new one (vzdump/pct restore)")
+    req("POST", "/containers/ct1/start", {})
+    marker = f"lxc-journey-{os.getpid()}"
+    exec_ct("ct1", f"echo {marker} > /root/marker; sync")
+    _, bk = req("POST", "/backups", {"target_id": "ct1", "mode": "suspend", "compression": "zstd"}, expect=201)
+    check("RUNNING" in lxc_state("ct1"), "suspend-mode backup leaves ct1 running")
+    _, v = req("POST", f"/backups/{bk['id']}/verify", {})
+    check(v["ok"] is True, "backup verifies")
+    exec_ct("ct1", "echo changed > /root/marker; sync")
+    _, r = req("POST", f"/backups/{bk['id']}/restore", {"target_id": "ct1r", "name": "ct1r"})
+    check(os.path.isdir(f"{LXC_PATH}/ct1r"), "restored container created")
+    req("POST", "/containers/ct1r/start", {})
+    check(exec_ct("ct1r", "cat /root/marker") == marker, "restored container has the data as of the backup")
+    check(exec_ct("ct1", "cat /root/marker") == "changed", "original untouched by the restore")
+    req("POST", "/containers/ct1r/stop", {})
+    req("DELETE", "/containers/ct1r", None, expect=204)
+    req("DELETE", f"/backups/{bk['id']}", None, expect=204)
+
+    def restart_api(signal):
+        sh(f"kill -{signal} $(cat /tmp/api.pid); sleep 2")
+        sh("bash /tmp/start-api.sh")
+        TOKEN[0] = None
+        _, body = req("POST", "/auth/login", {"username": "admin", "password": "admin"})
+        TOKEN[0] = body.get("ticket") or body.get("token")
+
+    step("a running container is untouched by API restarts (SIGTERM and SIGKILL)")
+    init_pid = sh("lxc-info -n ct1 -P " + LXC_PATH + " -p -H").strip()
+    check(init_pid.isdigit(), f"ct1 init pid {init_pid!r}")
+    for signal in ("TERM", "KILL"):
+        restart_api(signal)
+        check("RUNNING" in lxc_state("ct1"), f"SIG{signal}: ct1 still running")
+        check(sh("lxc-info -n ct1 -P " + LXC_PATH + " -p -H").strip() == init_pid,
+              f"SIG{signal}: same init process")
+        _, lst = req("GET", "/containers")
+        row = [x for x in lst if x["id"] == "ct1"]
+        check(row and row[0]["status"] == "running", f"SIG{signal}: API reports ct1 running")
+        check(exec_ct("ct1", "cat /root/marker") == "changed", f"SIG{signal}: exec still works")
+    req("POST", "/containers/ct1/shutdown", {"timeout": 60, "force": True})
+
     step("settings survive an API restart (horcrux.json + reconcile)")
-    sh("kill $(cat /tmp/api.pid); sleep 2")
-    sh("bash /tmp/start-api.sh")
-    TOKEN[0] = None
-    _, body = req("POST", "/auth/login", {"username": "admin", "password": "admin"})
-    TOKEN[0] = body.get("ticket") or body.get("token")
+    restart_api("TERM")
     _, lst = req("GET", "/containers")
     ct1 = [x for x in lst if x["id"] == "ct1"]
     check(ct1 and ct1[0]["runtime"] == "lxc" and ct1[0]["lxc"]["hostname"] == "ct-renamed"

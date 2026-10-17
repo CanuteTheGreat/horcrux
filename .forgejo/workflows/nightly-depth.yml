@@ -1,0 +1,122 @@
+name: Nightly depth (journeys, restart/crash, upgrade)
+
+# Real-workload customer journeys on the KVM runner, too slow for every
+# push (see ~/.hermes/state/test-depth/horcrux.md for the program):
+# - VM from a cloud image -> boot -> serial console -> live snapshots +
+#   rollback -> clone -> backup -> restore to a new VM -> data identical
+#   inside the guest (tests/depth_vm_journey.rs);
+# - running guests survive API restarts (SIGTERM/SIGKILL), QEMU crashes are
+#   detected, the API killed mid-backup / mid-snapshot leaves consistent
+#   state, backups to a full storage pool fail cleanly
+#   (tests/depth_restart_crash.rs);
+# - the previous release's database upgraded by HEAD's migrations
+#   (tests/depth_upgrade.rs, previous release = newest v* tag).
+on:
+  workflow_dispatch: {}
+  schedule:
+    # 10:30 UTC, after the realistic nightly (09:00) on the same runner.
+    - cron: '30 10 * * *'
+
+env:
+  CARGO_TERM_COLOR: never
+  RUST_BACKTRACE: 1
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+jobs:
+  depth:
+    name: Depth journeys (real QEMU/KVM)
+    # rw-man-01: /dev/kvm + privileged job containers (tmpfs mount for the
+    # disk-full test). ctg-infrastructure ci-runners/rw-man-kvm.
+    runs-on: kvm-x86_64
+    container: catthehacker/ubuntu:act-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure Node.js is present (self-heal)
+        run: |
+          if ! command -v node >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y nodejs
+          fi
+          node --version
+
+      - name: Install Rust toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@stable
+
+      - name: Install QEMU and tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libvirt-dev qemu-system-x86 qemu-utils zstd jq curl genisoimage
+          qemu-system-x86_64 --version
+          ls -l /dev/kvm
+          test -c /dev/kvm || { echo "::error::no /dev/kvm on the kvm-x86_64 runner"; exit 1; }
+
+      - name: Download CirrOS cloud image
+        run: |
+          mkdir -p /tmp/hcx-depth
+          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
+            -o /tmp/hcx-depth/cirros.qcow2 \
+            https://download.cirros-cloud.net/0.6.2/cirros-0.6.2-x86_64-disk.img
+          qemu-img info /tmp/hcx-depth/cirros.qcow2
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            /tmp/hcx-old-target
+          key: ${{ runner.os }}-cargo-depth-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-depth-
+            ${{ runner.os }}-cargo-
+
+      - name: Build previous release (newest v* tag)
+        run: |
+          prev=$(git tag -l 'v*' --sort=-v:refname | head -1)
+          echo "previous release: $prev ($(git rev-list -n1 "$prev"))"
+          rm -rf /tmp/hcx-old && git worktree add --detach /tmp/hcx-old "$prev"
+          (cd /tmp/hcx-old && CARGO_TARGET_DIR=/tmp/hcx-old-target CARGO_BUILD_JOBS=4 \
+             cargo build -p horcrux-api --bin horcrux-api)
+          echo "HORCRUX_DEPTH_OLD_BIN=/tmp/hcx-old-target/debug/horcrux-api" >> "$GITHUB_ENV"
+
+      - name: Build HEAD and the depth suites
+        run: |
+          cargo build --all-features -p horcrux-api --bin horcrux-api
+          cargo test --all-features -p horcrux-api --no-run \
+            --test depth_vm_journey --test depth_restart_crash --test depth_upgrade
+
+      - name: VM journey (cloud image -> snapshot -> clone -> backup -> restore)
+        env:
+          HORCRUX_DEPTH_IMAGE: /tmp/hcx-depth/cirros.qcow2
+          HORCRUX_DEPTH_REQUIRE_KVM: "1"
+          HORCRUX_DEPTH_DIR: /tmp/hcx-depth
+        run: cargo test --all-features -p horcrux-api --test depth_vm_journey -- --ignored --nocapture --test-threads=1
+
+      - name: Restart survival + crash consistency + disk full
+        env:
+          HORCRUX_DEPTH_DIR: /tmp/hcx-depth
+        run: cargo test --all-features -p horcrux-api --test depth_restart_crash -- --ignored --nocapture --test-threads=1
+
+      - name: Upgrade from the previous release
+        env:
+          HORCRUX_DEPTH_DIR: /tmp/hcx-depth
+        run: cargo test --all-features -p horcrux-api --test depth_upgrade -- --ignored --nocapture --test-threads=1
+
+      - name: Server logs on failure
+        if: failure()
+        run: |
+          for f in /tmp/hcx-depth/hcx-depth-*/server-*.log; do echo "== $f"; tail -80 "$f"; done 2>/dev/null || true
+          for f in /tmp/hcx-depth/hcx-depth-*/data/vms/*.serial.log; do echo "== $f"; tail -40 "$f"; done 2>/dev/null || true
+
+      - name: Clean up
+        if: always()
+        run: |
+          pkill -f 'horcrux-vm-(jv|rs|cr|df|up)' || true
+          grep -l hcx-depth /proc/mounts >/dev/null 2>&1 && awk '$2 ~ /hcx-depth/ {print $2}' /proc/mounts | xargs -r -n1 umount || true
+          git worktree remove --force /tmp/hcx-old 2>/dev/null || true
+          rm -rf /tmp/hcx-depth
+          rm -f /var/run/horcrux-vm-jv* /var/run/horcrux-vm-rs* /var/run/horcrux-vm-cr* /var/run/horcrux-vm-df* /var/run/horcrux-vm-up*

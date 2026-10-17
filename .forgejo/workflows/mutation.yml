@@ -1,0 +1,72 @@
+name: Mutation testing (weekly)
+
+# cargo-mutants over Horcrux's core modules (VM lifecycle/snapshots, backup,
+# storage). Each surviving mutant is a behaviour no test checks. Scores per
+# module group must stay at or above the floors in ci/mutants-floors.json,
+# which only ever go up (the job prints when a floor can be raised).
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Sundays 06:00 UTC
+    - cron: '0 6 * * 0'
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+jobs:
+  mutants:
+    name: cargo-mutants (vm, backup, storage)
+    runs-on: linux-cross-x86_64
+    container: catthehacker/ubuntu:act-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure Node.js is present (self-heal)
+        run: |
+          if ! command -v node >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y nodejs
+          fi
+
+      - name: Install Rust toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@stable
+
+      - name: Install build tools
+        # qemu-img backs the snapshot/backup unit tests.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libvirt-dev qemu-utils zstd python3
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/cargo-mutants
+            target
+          key: ${{ runner.os }}-cargo-mutants-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-mutants-
+            ${{ runner.os }}-cargo-
+
+      - name: Install cargo-mutants
+        run: command -v cargo-mutants || cargo install cargo-mutants --locked
+
+      - name: Run cargo-mutants on the core modules
+        run: |
+          files=$(python3 -c 'import json; d=json.load(open("ci/mutants-floors.json")); print(" ".join("--file horcrux-api/"+f for g in d.values() for f in g["files"]))')
+          echo "mutating: $files"
+          # Library unit tests are the oracle (the HTTP/QEMU suites need a
+          # live server). --no-shuffle keeps runs comparable week to week.
+          cargo mutants -p horcrux-api --all-features $files --jobs 2 --no-shuffle \
+            --timeout-multiplier 3 --output /tmp/mutants -- --lib || true
+          test -f /tmp/mutants/mutants.out/outcomes.json
+
+      - name: Enforce mutation score floors
+        run: python3 ci/mutants_floor.py /tmp/mutants/mutants.out ci/mutants-floors.json
+
+      - name: Missed mutants
+        if: always()
+        run: cat /tmp/mutants/mutants.out/missed.txt 2>/dev/null || true
