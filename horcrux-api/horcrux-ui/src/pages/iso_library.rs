@@ -1,4 +1,4 @@
-//! Infrastructure > ISO Images (`/storage/isos`): the ISO library VM CD-ROM
+//! Infrastructure > ISO Library (`/storage/isos`): the ISO library VM CD-ROM
 //! drives pick from - list, download from a URL, delete.
 use crate::api::{self, IsoFile};
 use leptos::*;
@@ -89,7 +89,7 @@ pub fn IsoLibraryPage() -> impl IntoView {
     view! {
         <div class="iso-library">
             <div class="page-header">
-                <h1>"ISO Images"</h1>
+                <h1>"ISO Library"</h1>
             </div>
             <p class="form-help">
                 "Installer and live ISOs for VM CD-ROM drives. Stored in "

@@ -176,7 +176,7 @@ pub fn HardwareFields(
                     }}
                 </select>
                 <small class="form-help">
-                    "ISOs come from the ISO library (Infrastructure > ISO Images: download one from a URL). The disc can be changed while the VM runs."
+                    "ISOs come from the ISO library (Infrastructure > ISO Library: download one from a URL). The disc can be changed while the VM runs."
                 </small>
             </div>
             <div class="form-group">
@@ -342,7 +342,7 @@ pub fn VmHardwarePage() -> impl IntoView {
                     </div>
                     <div class="form-group">
                         <label for="vm-hw-memory">"Memory (MB)"</label>
-                        <input id="vm-hw-memory" type="number" min="16" step="128" prop:value=memory disabled={move || running.get()}
+                        <input id="vm-hw-memory" type="number" min="16" prop:value=memory disabled={move || running.get()}
                             on:input=move |ev| memory.set(event_target_value(&ev).parse().unwrap_or(512))/>
                     </div>
                 </div>

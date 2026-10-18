@@ -74,7 +74,7 @@ pub fn App() -> impl IntoView {
                         <span class="navbar-item dropdown-trigger">"Infrastructure ▾"</span>
                         <div class="dropdown-content">
                             <A href="/storage" class="dropdown-item">"Storage"</A>
-                            <A href="/storage/isos" class="dropdown-item">"ISO Images"</A>
+                            <A href="/storage/isos" class="dropdown-item">"ISO Library"</A>
                             <A href="/network" class="dropdown-item">"Network"</A>
                             <A href="/network/bridges" class="dropdown-item">"Host Bridges"</A>
                             <A href="/gpu" class="dropdown-item">"GPU Passthrough"</A>
