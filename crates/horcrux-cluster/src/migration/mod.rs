@@ -15,6 +15,24 @@ use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::RwLock;
 
+tokio::task_local! {
+    /// The ssh client a migration task runs (tests substitute a fake one).
+    static SSH_PROGRAM: String;
+}
+
+/// An `ssh` command for one migration step. `kill_on_drop`: when the user
+/// cancels, the migration task's future is dropped mid-step and the
+/// in-flight ssh (and the remote command it runs) must die with it instead
+/// of finishing in the background.
+fn ssh_command() -> Command {
+    let program = SSH_PROGRAM
+        .try_with(|p| p.clone())
+        .unwrap_or_else(|_| "ssh".to_string());
+    let mut cmd = Command::new(program);
+    cmd.kill_on_drop(true);
+    cmd
+}
+
 /// Migration type
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum MigrationType {
@@ -85,6 +103,9 @@ pub struct MigrationManager {
     health_checker: Arc<health_check::HealthChecker>,
     health_check_enabled: Arc<RwLock<bool>>,
     health_reports: Arc<RwLock<HashMap<String, health_check::HealthCheckReport>>>,
+    /// Cancel signal of each running job's task (see `cancel_migration`).
+    cancels: Arc<RwLock<HashMap<String, tokio::sync::watch::Sender<bool>>>>,
+    ssh_program: String,
 }
 
 impl Default for MigrationManager {
@@ -104,7 +125,15 @@ impl MigrationManager {
             health_checker: Arc::new(health_check::HealthChecker::new()),
             health_check_enabled: Arc::new(RwLock::new(true)), // Health checks enabled by default
             health_reports: Arc::new(RwLock::new(HashMap::new())),
+            cancels: Arc::new(RwLock::new(HashMap::new())),
+            ssh_program: "ssh".to_string(),
         }
+    }
+
+    /// Use another ssh client (tests: a fake that records its calls).
+    pub fn with_ssh_program(mut self, program: impl Into<String>) -> Self {
+        self.ssh_program = program.into();
+        self
     }
 
     /// Enable or disable automatic rollback on migration failure
@@ -198,14 +227,30 @@ impl MigrationManager {
         let health_check_enabled = *self.health_check_enabled.read().await;
         let health_reports = self.health_reports.clone();
 
-        tokio::spawn(async move {
-            let result = Self::execute_migration(
-                jobs.clone(),
-                job_id_clone.clone(),
-                config_clone.clone(),
-                source_clone.clone(),
-            )
-            .await;
+        let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+        self.cancels.write().await.insert(job_id.clone(), cancel_tx);
+        let cancels = self.cancels.clone();
+        let ssh_program = self.ssh_program.clone();
+
+        tokio::spawn(SSH_PROGRAM.scope(ssh_program, async move {
+            // Cancelling drops the migration future between (or in the
+            // middle of) its steps: no later step runs, and the in-flight
+            // ssh child is killed (kill_on_drop). It used to only flip the
+            // displayed state while the task went on stopping, copying and
+            // moving the VM.
+            let result = tokio::select! {
+                r = Self::execute_migration(
+                    jobs.clone(),
+                    job_id_clone.clone(),
+                    config_clone.clone(),
+                    source_clone.clone(),
+                ) => r,
+                _ = cancel_rx.wait_for(|c| *c) => {
+                    tracing::info!("Migration {} cancelled: remaining steps skipped", job_id_clone);
+                    Err(horcrux_common::Error::System("cancelled".into()))
+                }
+            };
+            cancels.write().await.remove(&job_id_clone);
 
             let mut jobs_lock = jobs.write().await;
             if let Some(job) = jobs_lock
@@ -303,7 +348,7 @@ impl MigrationManager {
                     }
                 }
             }
-        });
+        }));
 
         tracing::info!(
             "Started {} migration of VM {} from {} to {}",
@@ -376,7 +421,7 @@ impl MigrationManager {
         virsh_args.push(target_uri);
 
         // Initiate live migration via SSH to source node
-        let output = Command::new("ssh")
+        let output = ssh_command()
             .args([
                 "-o",
                 "StrictHostKeyChecking=no",
@@ -413,7 +458,7 @@ impl MigrationManager {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
             // Query migration status via virsh
-            let status_output = Command::new("ssh")
+            let status_output = ssh_command()
                 .args([
                     "-o",
                     "StrictHostKeyChecking=no",
@@ -493,7 +538,7 @@ impl MigrationManager {
         tracing::info!("Finalizing live migration for VM {}", config.vm_id);
 
         // Verify VM is running on target
-        let verify_output = Command::new("ssh")
+        let verify_output = ssh_command()
             .args([
                 "-o",
                 "StrictHostKeyChecking=no",
@@ -542,7 +587,7 @@ impl MigrationManager {
         Self::update_job_state(jobs, job_id, MigrationState::Preparing, 10.0).await;
         tracing::info!("Stopping VM {} for offline migration", config.vm_id);
 
-        let output = Command::new("ssh")
+        let output = ssh_command()
             .args([
                 "-o",
                 "StrictHostKeyChecking=no",
@@ -563,7 +608,7 @@ impl MigrationManager {
                 "Graceful shutdown failed, forcing VM {} shutdown",
                 config.vm_id
             );
-            let force_output = Command::new("ssh")
+            let force_output = ssh_command()
                 .args([
                     "-o",
                     "StrictHostKeyChecking=no",
@@ -595,7 +640,7 @@ impl MigrationManager {
         Self::update_job_state(jobs, job_id, MigrationState::Transferring, 20.0).await;
         tracing::info!("Exporting VM {} configuration", config.vm_id);
 
-        let xml_output = Command::new("ssh")
+        let xml_output = ssh_command()
             .args([
                 "-o",
                 "StrictHostKeyChecking=no",
@@ -626,7 +671,7 @@ impl MigrationManager {
         tracing::info!("Transferring disk images for VM {}", config.vm_id);
 
         // Get list of disk images
-        let disklist_output = Command::new("ssh")
+        let disklist_output = ssh_command()
             .args([
                 "-o",
                 "StrictHostKeyChecking=no",
@@ -662,7 +707,7 @@ impl MigrationManager {
 
                 tracing::info!("Transferring disk: {}", disk_path);
 
-                let rsync_output = Command::new("ssh")
+                let rsync_output = ssh_command()
                     .args([
                         "-o",
                         "StrictHostKeyChecking=no",
@@ -702,7 +747,7 @@ impl MigrationManager {
         // avoids a temp file on the target node.
         let define_result: std::result::Result<std::process::Output, horcrux_common::Error> =
             async {
-                let mut child = Command::new("ssh")
+                let mut child = ssh_command()
                     .args([
                         "-o",
                         "StrictHostKeyChecking=no",
@@ -760,7 +805,7 @@ impl MigrationManager {
             config.target_node
         );
 
-        let start_output = Command::new("ssh")
+        let start_output = ssh_command()
             .args([
                 "-o",
                 "StrictHostKeyChecking=no",
@@ -787,7 +832,7 @@ impl MigrationManager {
         // Verify VM is running
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
-        let verify_output = Command::new("ssh")
+        let verify_output = ssh_command()
             .args([
                 "-o",
                 "StrictHostKeyChecking=no",
@@ -817,7 +862,7 @@ impl MigrationManager {
         }
 
         // Step 6: Undefine VM from source node
-        let undefine_output = Command::new("ssh")
+        let undefine_output = ssh_command()
             .args([
                 "-o",
                 "StrictHostKeyChecking=no",
@@ -883,7 +928,7 @@ impl MigrationManager {
         virsh_args.push(target_uri);
 
         // Initiate migration
-        let output = Command::new("ssh")
+        let output = ssh_command()
             .args([
                 "-o",
                 "StrictHostKeyChecking=no",
@@ -914,7 +959,7 @@ impl MigrationManager {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-            let status_output = Command::new("ssh")
+            let status_output = ssh_command()
                 .args([
                     "-o",
                     "StrictHostKeyChecking=no",
@@ -991,7 +1036,7 @@ impl MigrationManager {
         tracing::info!("Finalizing online migration for VM {}", config.vm_id);
 
         // Verify VM is running on target
-        let verify_output = Command::new("ssh")
+        let verify_output = ssh_command()
             .args([
                 "-o",
                 "StrictHostKeyChecking=no",
@@ -1134,10 +1179,16 @@ impl MigrationManager {
         let (source, vm_name) = (job.source_node.clone(), format!("vm-{}", job.vm_id));
         drop(jobs);
 
+        // Stop the migration task: no further step runs and the current
+        // step's ssh is killed.
+        if let Some(tx) = self.cancels.read().await.get(job_id) {
+            let _ = tx.send(true);
+        }
+
         // Stop the transfer itself: abort the libvirt migration job on the
         // source node (no-op if it already ended or never got that far).
-        tokio::spawn(async move {
-            let out = Command::new("ssh")
+        tokio::spawn(SSH_PROGRAM.scope(self.ssh_program.clone(), async move {
+            let out = ssh_command()
                 .args([
                     "-o",
                     "StrictHostKeyChecking=no",
@@ -1162,7 +1213,7 @@ impl MigrationManager {
                     );
                 }
             }
-        });
+        }));
 
         tracing::info!("Cancelled migration job {}", job_id);
         Ok(())
@@ -1409,6 +1460,79 @@ mod tests {
 
         let job = manager.get_job(&job_id).await.unwrap();
         assert_eq!(job.state, MigrationState::Cancelled);
+    }
+
+    /// A cancel must stop the work, not just the displayed state: with a
+    /// source that hangs on the first step (`virsh shutdown`), cancelling
+    /// kills that ssh and no later step (destroy, dumpxml, rsync, define,
+    /// start, undefine) is ever run.
+    #[tokio::test]
+    async fn cancel_stops_the_remaining_migration_steps() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("ssh.log");
+        let fake = dir.path().join("ssh");
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\necho \"start $*\" >> {log}\nsleep 3\necho \"done $*\" >> {log}\n",
+                log = log.display()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let manager = MigrationManager::new().with_ssh_program(fake.to_string_lossy());
+        manager.set_auto_rollback(false).await;
+        manager.set_health_checks(false).await;
+        let job_id = manager
+            .start_migration(
+                MigrationConfig {
+                    vm_id: "qa-src".into(),
+                    target_node: "node3.invalid".into(),
+                    migration_type: MigrationType::Offline,
+                    bandwidth_limit: None,
+                    force: true,
+                    with_local_disks: false,
+                },
+                "node1.invalid".into(),
+            )
+            .await
+            .unwrap();
+        // Let the first step (virsh shutdown on the source) start and hang.
+        for _ in 0..50 {
+            if std::fs::read_to_string(&log)
+                .unwrap_or_default()
+                .contains("virsh shutdown")
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        manager.cancel_migration(&job_id).await.unwrap();
+        // Longer than the fake ssh's sleep: an un-killed step would finish
+        // and the next one would start.
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let steps: Vec<&str> = calls
+            .lines()
+            .filter(|l| !l.contains("domjobabort"))
+            .collect();
+        assert_eq!(steps.len(), 1, "steps ran after the cancel: {calls}");
+        assert!(steps[0].starts_with("start ") && steps[0].contains("virsh shutdown vm-qa-src"));
+        assert!(
+            !calls
+                .lines()
+                .any(|l| l.starts_with("done ") && !l.contains("domjobabort")),
+            "the in-flight ssh was not killed: {calls}"
+        );
+        assert!(
+            !calls.contains("destroy") && !calls.contains("dumpxml"),
+            "{calls}"
+        );
+        let job = manager.get_job(&job_id).await.unwrap();
+        assert_eq!(job.state, MigrationState::Cancelled);
+        assert!(manager.cancels.read().await.is_empty());
     }
 
     #[tokio::test]
