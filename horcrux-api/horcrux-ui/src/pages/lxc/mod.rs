@@ -239,9 +239,10 @@ pub fn LxcContainerPage() -> impl IntoView {
         set_ssh_keys.set(o.ssh_public_keys.join("\n"));
     };
 
-    let reload = move || {
+    // Fetch status, settings and snapshots and refill the form from the server.
+    let load = move || {
         let cid = id();
-        spawn_local(async move {
+        async move {
             match api::get_container_config(&cid).await {
                 Ok(c) => set_status.set(c.status.to_string()),
                 Err(e) => set_error.set(Some(e.message)),
@@ -256,9 +257,9 @@ pub fn LxcContainerPage() -> impl IntoView {
             if let Ok(s) = api::get_container_snapshots(&cid).await {
                 set_snapshots.set(s);
             }
-        });
+        }
     };
-    create_effect(move |_| reload());
+    create_effect(move |_| spawn_local(load()));
 
     // Run an action, show its outcome, reload.
     let act = move |label: &'static str,
@@ -269,12 +270,17 @@ pub fn LxcContainerPage() -> impl IntoView {
         set_error.set(None);
         set_msg.set(None);
         spawn_local(async move {
-            match fut.await {
+            let outcome = fut.await;
+            // Refill the form BEFORE reporting the outcome and re-enabling the buttons: the
+            // reload overwrites every field, so anything typed after "Settings saved" appeared
+            // but before the reload landed was silently lost (seen in CI: a hostname typed right
+            // after a save was wiped and the next save sent no change).
+            load().await;
+            match outcome {
                 Ok(m) => set_msg.set(Some(m)),
                 Err(e) => set_error.set(Some(format!("{label}: {}", e.message))),
             }
             set_working.set(false);
-            reload();
         });
     };
 
