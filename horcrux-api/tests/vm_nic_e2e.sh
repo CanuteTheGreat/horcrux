@@ -11,6 +11,9 @@
 #     network: its tap device is a port of the bridge with PVID 20, and the
 #     guest's PXE ROM really sends DHCP from the VM's MAC on VLAN 20
 #   - live CD-ROM insert/eject in the running guest (QMP query-block)
+#   - VM firewall: an outbound DROP udp/67 rule really stops the guest's DHCP
+#     from leaving the bridge (bridge-family nftables on the VM's taps), and
+#     deleting the rule lets it through
 #   - NIC changes refused while running; Shutdown (ignored ACPI -> 409, then
 #     force), Reboot, Reset; taps removed on stop
 #
@@ -28,7 +31,7 @@ docker run -d --name "$NAME" --cap-add NET_ADMIN --device /dev/net/tun --memory 
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api
 docker cp "$(dirname "$0")/vm_nic_e2e.py" "$NAME":/tmp/vm_nic_e2e.py
 docker exec "$NAME" bash -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-  qemu-system-x86 qemu-utils ipxe-qemu iproute2 tcpdump curl python3 libvirt0 genisoimage >/dev/null'
+  qemu-system-x86 qemu-utils ipxe-qemu iproute2 tcpdump nftables curl python3 libvirt0 genisoimage >/dev/null'
 
 docker exec "$NAME" bash -c '
 set -euo pipefail

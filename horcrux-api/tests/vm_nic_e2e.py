@@ -224,6 +224,61 @@ check(vm["status"] == "stopped", "Shutdown with force stops the VM")
 check(bridge_ports(BR) == [] and not os.path.exists(f"/sys/class/net/{tap}"),
       "tap device removed when the VM stops")
 
+# --- VM firewall: a rule only on this VM's taps, enforced on bridged traffic --
+FWBR, FWVM = "vmbr-fw", "nic-e2e-fw"
+call("DELETE", f"/network/bridges/{FWBR}", ok=None)
+call("POST", "/network/bridges", {"name": FWBR, "vlan_aware": False})
+# A second port on the bridge: frames the guest sends are forwarded to it
+# (through the bridge forward hook) and captured on its peer.
+subprocess.run("ip link del fwa", shell=True, capture_output=True)
+sh(f"ip link add fwa type veth peer name fwb && ip link set fwa master {FWBR} && ip link set fwa up && ip link set fwb up")
+call("DELETE", f"/vms/{FWVM}", ok=None)
+_, fwvm = call("POST", "/vms", {
+    "id": FWVM, "name": FWVM, "hypervisor": "qemu", "architecture": "x86_64",
+    "cpus": 1, "memory": 128, "disk_size": 1, "status": "stopped",
+    "display": {"protocol": "none", "video": "std", "sound": "none"},
+    "hardware": {"nets": [{"model": "e1000", "bridge": FWBR}], "boot": ["net"]},
+})
+fwmac = fwvm["hardware"]["nets"][0]["mac"]
+rule = {"id": "", "enabled": True, "action": "DROP", "direction": "out", "protocol": "udp",
+        "source": None, "dest": None, "sport": None, "dport": "67", "comment": "no dhcp",
+        "log": False, "position": 0}
+_, created_rule = call("POST", f"/vms/{FWVM}/firewall/rules", rule)
+_, listed = call("GET", f"/vms/{FWVM}/firewall/rules")
+check(len(listed) == 1 and listed[0]["id"] == created_rule["id"], "VM firewall rule stored")
+ruleset = sh("nft list table bridge horcrux")
+check(f"jump vm-{FWVM}-out" in ruleset and "udp dport 67 drop" in ruleset and "iifname" in ruleset,
+      "rule installed in the bridge family, jumped to from the VM's taps")
+
+
+def capture_dhcp(seconds):
+    """Start capturing the guest's DHCP on the other bridge port."""
+    return subprocess.Popen(
+        ["timeout", str(seconds), "tcpdump", "-i", "fwb", "-e", "-nn", "-c", "1", "-l",
+         f"ether src {fwmac} and udp dst port 67"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+
+
+def seen(cap):
+    out, _ = cap.communicate()
+    return fwmac in out.lower()
+
+
+cap = capture_dhcp(45)
+time.sleep(1)
+call("POST", f"/vms/{FWVM}/start")
+check(not seen(cap), "DROP udp/67 out: the guest's DHCP never leaves the bridge")
+call("DELETE", f"/vms/{FWVM}/firewall/rules/{created_rule['id']}")
+# Reset so the PXE ROM starts DHCP again (it gives up after a while).
+cap = capture_dhcp(120)
+time.sleep(1)
+call("POST", f"/vms/{FWVM}/reset", {})
+check(seen(cap), "rule deleted: the guest's DHCP reaches the other bridge port")
+call("POST", f"/vms/{FWVM}/stop")
+call("DELETE", f"/vms/{FWVM}")
+sh("ip link del fwa")
+call("DELETE", f"/network/bridges/{FWBR}")
+
 # Cold edit applies at the next start.
 _, vm = call("PUT", f"/vms/{VM}/config", {"memory": 192, "hardware": dict(hw, nets=[])})
 check(vm["memory"] == 192 and vm["hardware"]["nets"] == [], "cold edit of memory + NICs")

@@ -279,8 +279,11 @@ impl FirewallManager {
                     .or_insert_with(Vec::new)
                     .push(rule.clone());
 
-                // Apply to nftables for this VM
-                self.nftables.add_vm_rule(&vm_id, &rule).await?;
+                drop(rules);
+                // Reinstall this VM's whole rule set (bridge family, matched
+                // on the VM's tap devices).
+                let all = self.list_rules(FirewallScope::Vm(vm_id.clone())).await;
+                self.nftables.sync_vm_rules(&vm_id, &all).await?;
             }
             FirewallScope::Container(ct_id) => {
                 let mut rules = self.container_rules.write().await;
@@ -322,8 +325,9 @@ impl FirewallManager {
                     vm_rules.retain(|r| r.id != rule_id);
                 }
 
-                // Remove from nftables
-                self.nftables.remove_vm_rule(&vm_id, rule_id).await?;
+                drop(rules);
+                let all = self.list_rules(FirewallScope::Vm(vm_id.clone())).await;
+                self.nftables.sync_vm_rules(&vm_id, &all).await?;
             }
             FirewallScope::Container(ct_id) => {
                 let mut rules = self.container_rules.write().await;
@@ -433,13 +437,7 @@ impl FirewallManager {
         match &scope {
             FirewallScope::Datacenter => self.nftables.apply_host_rules("dc", &rules).await?,
             FirewallScope::Node(_) => self.nftables.apply_host_rules("node", &rules).await?,
-            FirewallScope::Vm(vm_id) => {
-                self.nftables.initialize().await?;
-                let _ = self.nftables.flush_vm_chain(vm_id).await;
-                for rule in rules.iter().filter(|r| r.enabled) {
-                    self.nftables.add_vm_rule(vm_id, rule).await?;
-                }
-            }
+            FirewallScope::Vm(vm_id) => self.nftables.sync_vm_rules(vm_id, &rules).await?,
             FirewallScope::Container(ct_id) => {
                 self.nftables.initialize().await?;
                 let _ = self.nftables.flush_container_chain(ct_id).await;

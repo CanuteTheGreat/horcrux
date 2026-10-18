@@ -139,6 +139,24 @@ pub struct VmHardware {
     pub boot: Vec<BootDevice>,
 }
 
+/// Host tap device name prefix of a VM's network cards: `tap<8 hex>i`
+/// (FNV-1a of the VM id; Linux interface names are limited to 15 characters
+/// and VM ids are longer). Stable across restarts and builds, so the VM
+/// firewall can match all of a VM's NICs with `iifname "<prefix>*"`.
+pub fn vm_tap_prefix(vm_id: &str) -> String {
+    let mut h: u32 = 0x811c9dc5;
+    for b in vm_id.as_bytes() {
+        h ^= *b as u32;
+        h = h.wrapping_mul(0x01000193);
+    }
+    format!("tap{h:08x}i")
+}
+
+/// Host tap device of a VM's `index`-th network card (`tap<8 hex>i<n>`).
+pub fn vm_tap_name(vm_id: &str, index: usize) -> String {
+    format!("{}{index}", vm_tap_prefix(vm_id))
+}
+
 /// Most network cards one VM can have.
 pub const MAX_VM_NICS: usize = 8;
 

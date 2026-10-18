@@ -6938,3 +6938,53 @@ pub async fn create_bridge(b: &NewBridge) -> Result<NewBridge, ApiError> {
 pub async fn delete_bridge(name: &str) -> Result<(), ApiError> {
     delete_json(&format!("/network/bridges/{}", urlencoding::encode(name))).await
 }
+
+// VM firewall (VM Hardware page) - /api/vms/:id/firewall/rules.
+
+/// A firewall rule (`firewall::FirewallRule` on the server).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct GuestFirewallRule {
+    pub id: String,
+    pub enabled: bool,
+    /// ACCEPT, DROP, REJECT
+    pub action: String,
+    /// "in" = to the guest, "out" = from it
+    pub direction: String,
+    /// tcp, udp, icmp, icmpv6, any (null = any)
+    pub protocol: Option<String>,
+    pub source: Option<String>,
+    pub dest: Option<String>,
+    pub sport: Option<String>,
+    pub dport: Option<String>,
+    pub comment: Option<String>,
+    pub log: bool,
+    pub position: u32,
+}
+
+pub async fn list_vm_firewall(vm_id: &str) -> Result<Vec<GuestFirewallRule>, ApiError> {
+    fetch_json(&format!(
+        "/vms/{}/firewall/rules",
+        urlencoding::encode(vm_id)
+    ))
+    .await
+}
+
+pub async fn add_vm_firewall(
+    vm_id: &str,
+    rule: &GuestFirewallRule,
+) -> Result<GuestFirewallRule, ApiError> {
+    post_json(
+        &format!("/vms/{}/firewall/rules", urlencoding::encode(vm_id)),
+        rule,
+    )
+    .await
+}
+
+pub async fn delete_vm_firewall(vm_id: &str, rule_id: &str) -> Result<(), ApiError> {
+    delete_json(&format!(
+        "/vms/{}/firewall/rules/{}",
+        urlencoding::encode(vm_id),
+        urlencoding::encode(rule_id)
+    ))
+    .await
+}

@@ -59,59 +59,6 @@ impl NftablesManager {
         Ok(())
     }
 
-    /// Add firewall rule for a VM
-    pub async fn add_vm_rule(&self, vm_id: &str, rule: &FirewallRule) -> Result<()> {
-        info!("Adding firewall rule for VM {}: {}", vm_id, rule.id);
-
-        let chain_name = format!("vm-{}", vm_id);
-
-        // Ensure chain exists
-        self.ensure_chain(&chain_name).await?;
-
-        // Build rule
-        let nft_rule = self.build_nft_rule(rule);
-
-        // Add rule to chain
-        let output = Command::new("nft")
-            .arg("add")
-            .arg("rule")
-            .arg("inet")
-            .arg(&self.table_name)
-            .arg(&chain_name)
-            .arg(&nft_rule)
-            .output()
-            .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to add nftables rule: {}", e))
-            })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            error!("Failed to add nftables rule: {}", stderr);
-            return Err(horcrux_common::Error::System(format!(
-                "Failed to add nftables rule: {}",
-                stderr
-            )));
-        }
-
-        // Track rule handle
-        let mut next_handle = self.next_handle.write().await;
-        let handle = *next_handle;
-        *next_handle += 1;
-        drop(next_handle);
-
-        let rule_handle = RuleHandle {
-            _rule_id: rule.id.clone(),
-            chain_name: chain_name.clone(),
-            handle,
-        };
-
-        let mut handles = self.rule_handles.write().await;
-        handles.insert(format!("vm-{}-{}", vm_id, rule.id), rule_handle);
-
-        Ok(())
-    }
-
     /// Add firewall rule for a container
     pub async fn add_container_rule(&self, ct_id: &str, rule: &FirewallRule) -> Result<()> {
         info!("Adding firewall rule for container {}: {}", ct_id, rule.id);
@@ -156,43 +103,6 @@ impl NftablesManager {
 
         let mut handles = self.rule_handles.write().await;
         handles.insert(format!("ct-{}-{}", ct_id, rule.id), rule_handle);
-
-        Ok(())
-    }
-
-    /// Remove firewall rule for a VM
-    pub async fn remove_vm_rule(&self, vm_id: &str, rule_id: &str) -> Result<()> {
-        info!("Removing firewall rule {} for VM {}", rule_id, vm_id);
-
-        let key = format!("vm-{}-{}", vm_id, rule_id);
-        let mut handles = self.rule_handles.write().await;
-
-        if let Some(rule_handle) = handles.remove(&key) {
-            // Delete rule by handle
-            let output = Command::new("nft")
-                .arg("delete")
-                .arg("rule")
-                .arg("inet")
-                .arg(&self.table_name)
-                .arg(&rule_handle.chain_name)
-                .arg("handle")
-                .arg(rule_handle.handle.to_string())
-                .output()
-                .await
-                .map_err(|e| {
-                    horcrux_common::Error::System(format!("Failed to delete nftables rule: {}", e))
-                })?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                warn!("Failed to delete nftables rule: {}", stderr);
-                // Don't return error - rule might already be deleted
-            }
-
-            info!("Removed firewall rule {} for VM {}", rule_id, vm_id);
-        } else {
-            warn!("Firewall rule {} not found for VM {}", rule_id, vm_id);
-        }
 
         Ok(())
     }
@@ -369,6 +279,98 @@ impl NftablesManager {
         Ok(())
     }
 
+    /// The nft commands that install VM `vm_id`'s firewall (bridge family,
+    /// so it sees bridged guest traffic): regular chains `vm-<id>-in` (to the
+    /// guest, `oifname` = one of its taps) and `vm-<id>-out` (from the
+    /// guest, `iifname`), flushed and refilled from `rules`, and jumps from
+    /// the shared `forward` base chain matched on the VM's tap name prefix.
+    /// The jumps are added once (`jumps_present` = already installed).
+    pub fn vm_ruleset_commands(
+        &self,
+        vm_id: &str,
+        rules: &[FirewallRule],
+        jumps_present: bool,
+    ) -> Vec<Vec<String>> {
+        let t = self.table_name.clone();
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let (cin, cout) = (format!("vm-{vm_id}-in"), format!("vm-{vm_id}-out"));
+        let taps = format!("\"{}*\"", horcrux_common::vm_tap_prefix(vm_id));
+        let mut cmds = vec![
+            s(&["add", "table", "bridge", &t]),
+            s(&[
+                "add",
+                "chain",
+                "bridge",
+                &t,
+                "forward",
+                "{ type filter hook forward priority 0 ; policy accept ; }",
+            ]),
+            s(&["add", "chain", "bridge", &t, &cin]),
+            s(&["add", "chain", "bridge", &t, &cout]),
+            s(&["flush", "chain", "bridge", &t, &cin]),
+            s(&["flush", "chain", "bridge", &t, &cout]),
+        ];
+        let mut sorted: Vec<&FirewallRule> = rules.iter().filter(|r| r.enabled).collect();
+        sorted.sort_by_key(|r| r.position);
+        for r in sorted {
+            let chain = match r.direction {
+                super::Direction::In => &cin,
+                super::Direction::Out => &cout,
+            };
+            cmds.push(vec![
+                "add".into(),
+                "rule".into(),
+                "bridge".into(),
+                t.clone(),
+                chain.clone(),
+                self.build_nft_rule(r),
+            ]);
+        }
+        if !jumps_present {
+            let comment = format!("comment \"vm:{vm_id}\"");
+            cmds.push(vec![
+                "add".into(),
+                "rule".into(),
+                "bridge".into(),
+                t.clone(),
+                "forward".into(),
+                format!("oifname {taps} jump {cin} {comment}"),
+            ]);
+            cmds.push(vec![
+                "add".into(),
+                "rule".into(),
+                "bridge".into(),
+                t.clone(),
+                "forward".into(),
+                format!("iifname {taps} jump {cout} {comment}"),
+            ]);
+        }
+        cmds
+    }
+
+    /// Install VM `vm_id`'s firewall rules (see `vm_ruleset_commands`).
+    pub async fn sync_vm_rules(&self, vm_id: &str, rules: &[FirewallRule]) -> Result<()> {
+        let listing = Command::new("nft")
+            .args(["list", "chain", "bridge", &self.table_name, "forward"])
+            .output()
+            .await
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+        let jumps_present = listing.contains(&format!("\"vm:{vm_id}\""));
+        for cmd in self.vm_ruleset_commands(vm_id, rules, jumps_present) {
+            let args: Vec<&str> = cmd.iter().map(String::as_str).collect();
+            self.nft(&args).await?;
+        }
+        info!(
+            "Installed {} firewall rule(s) for VM {}",
+            rules.iter().filter(|r| r.enabled).count(),
+            vm_id
+        );
+        Ok(())
+    }
+
     /// Reload all firewall rules
     pub async fn reload_all(&self) -> Result<()> {
         info!("Reloading all nftables rules");
@@ -400,39 +402,6 @@ impl NftablesManager {
         drop(next_handle);
 
         info!("All nftables rules flushed and reset");
-
-        Ok(())
-    }
-
-    /// Flush chain for specific VM
-    pub async fn flush_vm_chain(&self, vm_id: &str) -> Result<()> {
-        info!("Flushing firewall chain for VM {}", vm_id);
-
-        let chain_name = format!("vm-{}", vm_id);
-
-        // Flush the chain
-        let output = Command::new("nft")
-            .arg("flush")
-            .arg("chain")
-            .arg("inet")
-            .arg(&self.table_name)
-            .arg(&chain_name)
-            .output()
-            .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to flush nftables chain: {}", e))
-            })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            warn!("Failed to flush nftables chain: {}", stderr);
-        }
-
-        // Remove from tracking
-        let mut handles = self.rule_handles.write().await;
-        handles.retain(|k, _| !k.starts_with(&format!("vm-{}-", vm_id)));
-
-        info!("Flushed firewall chain for VM {}", vm_id);
 
         Ok(())
     }
@@ -519,6 +488,59 @@ impl NftablesManager {
 mod tests {
     use super::*;
     use crate::firewall::{Direction, Protocol};
+
+    /// VM rules live in the bridge family (bridged guest traffic never
+    /// reaches the inet forward hook) and only apply to that VM's taps.
+    #[test]
+    fn vm_rules_are_bridge_chains_jumped_to_by_the_vms_taps() {
+        let m = NftablesManager::new();
+        let mut drop_dhcp = rule(Some(Protocol::Udp), Some("67"), None);
+        drop_dhcp.direction = Direction::Out;
+        drop_dhcp.action = FirewallAction::Drop;
+        let mut ssh_in = rule(Some(Protocol::Tcp), Some("22"), Some("10.0.0.0/8"));
+        ssh_in.direction = Direction::In;
+        let mut disabled = ssh_in.clone();
+        disabled.enabled = false;
+        let cmds: Vec<String> = m
+            .vm_ruleset_commands("vm-1", &[drop_dhcp, ssh_in, disabled], false)
+            .iter()
+            .map(|c| c.join(" "))
+            .collect();
+        let prefix = horcrux_common::vm_tap_prefix("vm-1");
+        assert!(
+            cmds.contains(&"add table bridge horcrux".to_string()),
+            "{cmds:#?}"
+        );
+        assert!(cmds
+            .iter()
+            .any(|c| c.starts_with("add chain bridge horcrux forward { type filter hook forward")));
+        assert!(cmds.contains(&"flush chain bridge horcrux vm-vm-1-in".to_string()));
+        assert!(
+            cmds.contains(&"add rule bridge horcrux vm-vm-1-out udp dport 67 drop".to_string()),
+            "{cmds:#?}"
+        );
+        assert!(
+            cmds.contains(
+                &"add rule bridge horcrux vm-vm-1-in ip saddr 10.0.0.0/8 tcp dport 22 accept"
+                    .to_string()
+            ),
+            "{cmds:#?}"
+        );
+        assert_eq!(
+            cmds.iter().filter(|c| c.contains("dport 22")).count(),
+            1,
+            "disabled rule installed"
+        );
+        assert!(cmds.contains(&format!(
+            "add rule bridge horcrux forward oifname \"{prefix}*\" jump vm-vm-1-in comment \"vm:vm-1\""
+        )));
+        assert!(cmds.contains(&format!(
+            "add rule bridge horcrux forward iifname \"{prefix}*\" jump vm-vm-1-out comment \"vm:vm-1\""
+        )));
+        // Re-sync: chains are refilled, the jumps are not added twice.
+        let again = m.vm_ruleset_commands("vm-1", &[], true);
+        assert!(!again.iter().any(|c| c.join(" ").contains("jump")));
+    }
 
     fn rule(protocol: Option<Protocol>, dport: Option<&str>, source: Option<&str>) -> FirewallRule {
         FirewallRule {

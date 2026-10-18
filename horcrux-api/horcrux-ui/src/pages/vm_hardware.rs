@@ -358,6 +358,136 @@ pub fn VmHardwarePage() -> impl IntoView {
                     <button type="submit" id="vm-hw-save" class="btn btn-primary" disabled=busy>"Save"</button>
                 </div>
             </form>
+
+            <Show when=is_qemu>
+                <VmFirewall vm_id=Signal::derive(vm_id)/>
+            </Show>
         </div>
+    }
+}
+
+/// The VM's own firewall: rules on its network cards, applied at once.
+#[component]
+fn VmFirewall(#[prop(into)] vm_id: Signal<String>) -> impl IntoView {
+    let (rules, set_rules) = create_signal(Vec::<api::GuestFirewallRule>::new());
+    let (error, set_error) = create_signal(None::<String>);
+    let direction = create_rw_signal("in".to_string());
+    let action = create_rw_signal("DROP".to_string());
+    let protocol = create_rw_signal("tcp".to_string());
+    let dport = create_rw_signal(String::new());
+    let source = create_rw_signal(String::new());
+    let comment = create_rw_signal(String::new());
+
+    let reload = move || {
+        let id = vm_id.get_untracked();
+        spawn_local(async move {
+            match api::list_vm_firewall(&id).await {
+                Ok(r) => set_rules.set(r),
+                Err(e) => set_error.set(Some(e.message)),
+            }
+        });
+    };
+    create_effect(move |_| {
+        vm_id.track();
+        reload()
+    });
+
+    let add = move |ev: ev::SubmitEvent| {
+        ev.prevent_default();
+        let opt = |s: String| Some(s.trim().to_string()).filter(|s| !s.is_empty());
+        let proto = protocol.get();
+        let rule = api::GuestFirewallRule {
+            id: String::new(),
+            enabled: true,
+            action: action.get(),
+            direction: direction.get(),
+            protocol: (proto != "any").then_some(proto.clone()),
+            source: opt(source.get()),
+            dest: None,
+            sport: None,
+            dport: if proto == "tcp" || proto == "udp" {
+                opt(dport.get())
+            } else {
+                None
+            },
+            comment: opt(comment.get()),
+            log: false,
+            position: rules.get_untracked().len() as u32,
+        };
+        let id = vm_id.get_untracked();
+        spawn_local(async move {
+            match api::add_vm_firewall(&id, &rule).await {
+                Ok(_) => {
+                    set_error.set(None);
+                    dport.set(String::new());
+                    comment.set(String::new());
+                }
+                Err(e) => set_error.set(Some(e.message)),
+            }
+            reload();
+        });
+    };
+    let remove = move |rule_id: String| {
+        let id = vm_id.get_untracked();
+        spawn_local(async move {
+            if let Err(e) = api::delete_vm_firewall(&id, &rule_id).await {
+                set_error.set(Some(e.message));
+            }
+            reload();
+        });
+    };
+
+    view! {
+        <fieldset class="vm-hardware" id="vm-firewall">
+            <legend>"Firewall"</legend>
+            <p class="form-help">
+                "Rules for this VM's network cards only, applied immediately. In = traffic to the VM, Out = traffic from it. Anything not matched is allowed."
+            </p>
+            {move || error.get().map(|e| view! { <div class="alert alert-error" id="vm-fw-error">{e}</div> })}
+            <table class="vm-table" id="vm-fw-table">
+                <thead><tr><th>"Direction"</th><th>"Action"</th><th>"Protocol"</th><th>"Port"</th><th>"Source"</th><th>"Comment"</th><th></th></tr></thead>
+                <tbody>
+                    {move || rules.get().into_iter().map(|r| {
+                        let rid = r.id.clone();
+                        view! {
+                            <tr class="vm-fw-row" data-rule=r.id.clone()>
+                                <td>{r.direction.clone()}</td>
+                                <td>{r.action.clone()}</td>
+                                <td>{r.protocol.clone().unwrap_or_else(|| "any".into())}</td>
+                                <td>{r.dport.clone().unwrap_or_default()}</td>
+                                <td>{r.source.clone().unwrap_or_default()}</td>
+                                <td>{r.comment.clone().unwrap_or_default()}</td>
+                                <td><button type="button" class="btn btn-sm btn-danger vm-fw-delete"
+                                    on:click=move |_| remove(rid.clone())>"Delete"</button></td>
+                            </tr>
+                        }
+                    }).collect_view()}
+                </tbody>
+            </table>
+            <form class="form-row" id="vm-fw-form" on:submit=add>
+                <select id="vm-fw-direction" on:change=move |ev| direction.set(event_target_value(&ev))>
+                    <option value="in">"In (to VM)"</option>
+                    <option value="out">"Out (from VM)"</option>
+                </select>
+                <select id="vm-fw-action" on:change=move |ev| action.set(event_target_value(&ev))>
+                    <option value="DROP">"Drop"</option>
+                    <option value="REJECT">"Reject"</option>
+                    <option value="ACCEPT">"Accept"</option>
+                </select>
+                <select id="vm-fw-protocol" on:change=move |ev| protocol.set(event_target_value(&ev))>
+                    <option value="tcp">"TCP"</option>
+                    <option value="udp">"UDP"</option>
+                    <option value="icmp">"ICMP"</option>
+                    <option value="any">"Any"</option>
+                </select>
+                <input id="vm-fw-dport" type="text" placeholder="port (22, 80-90)" prop:value=dport
+                    on:input=move |ev| dport.set(event_target_value(&ev))/>
+                <input id="vm-fw-source" type="text" placeholder="source IP/CIDR (any)" prop:value=source
+                    on:input=move |ev| source.set(event_target_value(&ev))/>
+                <input id="vm-fw-comment" type="text" placeholder="comment" prop:value=comment
+                    on:input=move |ev| comment.set(event_target_value(&ev))/>
+                <button type="submit" id="vm-fw-add" class="btn btn-primary">"Add rule"</button>
+            </form>
+        </fieldset>
     }
 }

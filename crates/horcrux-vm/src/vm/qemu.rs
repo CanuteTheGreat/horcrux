@@ -199,13 +199,7 @@ pub const CDROM_DEVICE_ID: &str = "cdrom0";
 /// ids are longer) and stable across restarts, so firewall rules and
 /// monitoring can find it.
 pub fn tap_name(vm_id: &str, index: usize) -> String {
-    // FNV-1a: stable across builds and platforms (unlike DefaultHasher).
-    let mut h: u32 = 0x811c9dc5;
-    for b in vm_id.as_bytes() {
-        h ^= *b as u32;
-        h = h.wrapping_mul(0x01000193);
-    }
-    format!("tap{h:08x}i{index}")
+    horcrux_common::vm_tap_name(vm_id, index)
 }
 
 /// Network arguments for `vm`: one tap netdev + NIC device per configured

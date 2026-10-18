@@ -2810,6 +2810,14 @@ async fn vm_hardware_iso_library_and_bridges_read_into_ui_types() {
     let got: horcrux_common::VmConfig = fetch(&c, &token, &format!("/vms/{vm}")).await;
     assert_eq!(got.hardware, updated.hardware);
 
+    // VM firewall list (adding rules needs nftables + CAP_NET_ADMIN, which
+    // this unprivileged job lacks: tests/vm_nic_e2e.sh covers it for real).
+    let fw: Vec<api::GuestFirewallRule> =
+        fetch(&c, &token, &format!("/vms/{vm}/firewall/rules")).await;
+    assert!(fw.is_empty());
+    let (status, _) = get_raw(&c, &token, "/vms/no-such-vm-fw/firewall/rules").await;
+    assert_eq!(status, 404);
+
     // The ISO can't be deleted while a VM's CD-ROM holds it.
     let r = c
         .delete(format!("{}/storage/isos/{}", api_base(), name))

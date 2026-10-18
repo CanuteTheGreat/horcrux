@@ -8,6 +8,9 @@
 //! - `POST /api/vms/:id/shutdown`      ACPI shutdown, optional forced stop
 //! - `POST /api/vms/:id/reboot`        shutdown + start
 //! - `POST /api/vms/:id/reset`         hard reset
+//! - `GET|POST /api/vms/:id/firewall/rules`, `DELETE .../:rule_id`: the
+//!   VM's own firewall (bridge-family nftables chains jumped to from the
+//!   VM's tap devices, so a VM rule only ever touches that VM's traffic)
 //! - `GET  /api/storage/isos`, `POST /api/storage/isos/download`,
 //!   `DELETE /api/storage/isos/:name`
 //!
@@ -40,6 +43,14 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/vms/:id/shutdown", post(shutdown))
         .route("/api/vms/:id/reboot", post(reboot))
         .route("/api/vms/:id/reset", post(reset))
+        .route(
+            "/api/vms/:id/firewall/rules",
+            get(list_vm_firewall).post(add_vm_firewall),
+        )
+        .route(
+            "/api/vms/:id/firewall/rules/:rule_id",
+            delete(delete_vm_firewall),
+        )
         .route("/api/storage/isos", get(list_isos))
         .route("/api/storage/isos/download", post(download_iso))
         .route("/api/storage/isos/:name", delete(delete_iso))
@@ -275,6 +286,67 @@ async fn reset(
     Path(id): Path<String>,
 ) -> Result<Json<VmConfig>, ApiError> {
     Ok(Json(state.vm_manager.reset_vm(&id).await?))
+}
+
+async fn list_vm_firewall(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<crate::firewall::FirewallRule>>, ApiError> {
+    state.vm_manager.get_vm(&id).await?;
+    Ok(Json(
+        state
+            .firewall_manager
+            .list_rules(crate::firewall::FirewallScope::Vm(id))
+            .await,
+    ))
+}
+
+/// Add a rule to a VM's firewall; it is installed at once. `direction`
+/// "in" = traffic to the VM, "out" = traffic from it. A missing id is
+/// generated.
+async fn add_vm_firewall(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(mut rule): Json<crate::firewall::FirewallRule>,
+) -> Result<(StatusCode, Json<crate::firewall::FirewallRule>), ApiError> {
+    state.vm_manager.get_vm(&id).await?;
+    if rule.id.trim().is_empty() {
+        rule.id = format!("fw-{}", uuid::Uuid::new_v4().simple());
+    }
+    if !rule
+        .id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return Err(ApiError::BadRequest(
+            "rule id: letters, digits, - _ . only".into(),
+        ));
+    }
+    state
+        .firewall_manager
+        .add_rule(crate::firewall::FirewallScope::Vm(id), rule.clone())
+        .await?;
+    Ok((StatusCode::CREATED, Json(rule)))
+}
+
+async fn delete_vm_firewall(
+    State(state): State<Arc<AppState>>,
+    Path((id, rule_id)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    let scope = crate::firewall::FirewallScope::Vm(id);
+    if !state
+        .firewall_manager
+        .list_rules(scope.clone())
+        .await
+        .iter()
+        .any(|r| r.id == rule_id)
+    {
+        return Err(ApiError::NotFound(format!(
+            "firewall rule {rule_id} not found"
+        )));
+    }
+    state.firewall_manager.remove_rule(scope, &rule_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_isos(State(state): State<Arc<AppState>>) -> Json<Vec<IsoFile>> {
