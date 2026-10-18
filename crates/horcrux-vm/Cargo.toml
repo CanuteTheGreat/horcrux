@@ -29,6 +29,10 @@ uuid = { workspace = true }
 tempfile = { workspace = true }
 
 [features]
-qemu = []
-lxd = ["dep:tokio-tungstenite"]
-incus = ["dep:tokio-tungstenite"]
+# Each backend feature also turns on horcrux-core's flag of the same name:
+# the runtime gate (horcrux_core::features::require_vm_hypervisor) reads
+# horcrux-core's cfg, so `-p horcrux-vm --features qemu` (cargo-mutants,
+# per-crate tests) must not end up with a VmManager that refuses QEMU.
+qemu = ["horcrux-core/qemu"]
+lxd = ["dep:tokio-tungstenite", "horcrux-core/lxd"]
+incus = ["dep:tokio-tungstenite", "horcrux-core/incus"]
