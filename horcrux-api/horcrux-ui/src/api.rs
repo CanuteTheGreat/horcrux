@@ -3317,23 +3317,16 @@ pub async fn delete_template(id: &str) -> Result<(), ApiError> {
     delete_json(&format!("/templates/{}", id)).await
 }
 
-/// VM id for a clone named `name` ("Web Server 2" -> "web-server-2").
-pub fn vm_id_from_name(name: &str) -> String {
-    let mut id = String::new();
-    for c in name.trim().chars() {
-        if c.is_ascii_alphanumeric() {
-            id.push(c.to_ascii_lowercase());
-        } else if !id.ends_with('-') && !id.is_empty() {
-            id.push('-');
-        }
-    }
-    id.trim_end_matches('-').to_string()
+/// Id for a new VM made by cloning a template: the same `vm-<unix time>`
+/// scheme as Create VM (a VM clone gets one from the API).
+pub fn new_vm_id() -> String {
+    format!("vm-{}", chrono::Utc::now().timestamp())
 }
 
 /// Body of POST /api/templates/:id/clone (the API's template::CloneRequest).
 pub fn clone_template_body(name: &str) -> serde_json::Value {
     serde_json::json!({
-        "new_vm_id": vm_id_from_name(name),
+        "new_vm_id": new_vm_id(),
         "new_vm_name": name.trim(),
         "clone_type": "full",
         "storage_pool": null,
@@ -3350,17 +3343,25 @@ pub async fn clone_template(id: &str, name: String) -> Result<serde_json::Value,
     .await
 }
 
-/// Clone a VM (POST /api/vms/:id/clone); returns the new VM.
+/// Clone a VM (POST /api/vms/:id/clone); returns the new VM. `mode` is
+/// "full" or "linked"; the API picks the id (`vm-<unix time>`, like Create
+/// VM).
 pub async fn clone_vm(
     vm_id: &str,
     name: &str,
     mode: &str,
+    start: bool,
 ) -> Result<horcrux_common::VmConfig, ApiError> {
     post_json(
         &format!("/vms/{}/clone", vm_id),
-        &serde_json::json!({"name": name.trim(), "id": vm_id_from_name(name), "mode": mode}),
+        &clone_vm_body(name, mode, start),
     )
     .await
+}
+
+/// Body of POST /api/vms/:id/clone.
+pub fn clone_vm_body(name: &str, mode: &str, start: bool) -> serde_json::Value {
+    serde_json::json!({"name": name.trim(), "mode": mode, "start": start})
 }
 
 // =============================================================================
@@ -6244,9 +6245,18 @@ mod tests {
         })
         .unwrap();
         assert_eq!(req["vm_id"], "vm1");
+        let id = clone_template_body("Web Server 2")["new_vm_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            id.strip_prefix("vm-")
+                .is_some_and(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit())),
+            "{id}"
+        );
         assert_eq!(
-            clone_template_body("Web Server 2")["new_vm_id"],
-            "web-server-2"
+            clone_vm_body(" Web 2 ", "linked", false),
+            serde_json::json!({"name": "Web 2", "mode": "linked", "start": false})
         );
     }
 

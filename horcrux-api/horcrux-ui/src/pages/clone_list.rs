@@ -68,7 +68,7 @@ pub fn CloneList() -> impl IntoView {
                                         };
 
                                         view! {
-                                            <tr>
+                                            <tr class="clone-job-row" data-target-name=job.target_vm_name.clone() data-source-vm=job.source_vm_id.clone()>
                                                 <td><code>{&job.job_id}</code></td>
                                                 <td>{&job.source_vm_id}</td>
                                                 <td><strong>{&job.target_vm_name}</strong></td>

@@ -52,25 +52,46 @@ pub fn VmList() -> impl IntoView {
         });
     };
 
-    let clone_vm = move |vm_id: String| {
-        let name = web_sys::window()
-            .and_then(|w| {
-                w.prompt_with_message_and_default(
-                    &format!("Name for the clone of {}:", vm_id),
-                    &format!("{}-clone", vm_id),
-                )
-                .ok()
-                .flatten()
-            })
-            .unwrap_or_default();
+    // Clone dialog: name, full or linked, start afterwards. (It used to be
+    // a browser prompt for the name that always sent mode "full".)
+    let (clone_src, set_clone_src) = create_signal(None::<VmConfig>);
+    let (clone_name, set_clone_name) = create_signal(String::new());
+    let (clone_mode, set_clone_mode) = create_signal("full".to_string());
+    let (clone_start, set_clone_start) = create_signal(false);
+    let (clone_error, set_clone_error) = create_signal(None::<String>);
+    let (cloning, set_cloning) = create_signal(false);
+
+    let open_clone = move |vm: VmConfig| {
+        set_clone_name.set(format!("{}-clone", vm.name));
+        set_clone_mode.set("full".to_string());
+        set_clone_start.set(false);
+        set_clone_error.set(None);
+        set_clone_src.set(Some(vm));
+    };
+
+    let submit_clone = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        let Some(src) = clone_src.get() else { return };
+        let name = clone_name.get();
         if name.trim().is_empty() {
+            set_clone_error.set(Some("Enter a name for the clone".to_string()));
             return;
         }
+        let (mode, start) = (clone_mode.get(), clone_start.get());
+        set_cloning.set(true);
         spawn_local(async move {
-            let r = api::clone_vm(&vm_id, &name, "full").await;
+            let r = api::clone_vm(&src.id, &name, &mode, start).await;
+            set_cloning.set(false);
             match r {
-                Ok(vm) => report(format!("VM {} cloned as {}", vm_id, vm.id), Ok(())),
-                Err(e) => report(String::new(), Err(e)),
+                Ok(vm) => {
+                    set_clone_src.set(None);
+                    report(
+                        format!("VM {} cloned ({}) as {} ({})", src.id, mode, vm.name, vm.id),
+                        Ok(()),
+                    );
+                }
+                // Keep the dialog open with the API's reason.
+                Err(e) => set_clone_error.set(Some(e.message)),
             }
         });
     };
@@ -128,7 +149,7 @@ pub fn VmList() -> impl IntoView {
                                         let vm_id_start = vm.id.clone();
                                         let vm_id_stop = vm.id.clone();
                                         let vm_id_delete = vm.id.clone();
-                                        let vm_id_clone = vm.id.clone();
+                                        let vm_for_clone = vm.clone();
                                         let status_class = match vm.status {
                                             horcrux_common::VmStatus::Running => "status-running",
                                             horcrux_common::VmStatus::Stopped => "status-stopped",
@@ -157,7 +178,7 @@ pub fn VmList() -> impl IntoView {
                                                     >"Stop"</button>
                                                     <button
                                                         class="btn btn-sm btn-secondary"
-                                                        on:click=move |_| clone_vm(vm_id_clone.clone())
+                                                        on:click=move |_| open_clone(vm_for_clone.clone())
                                                     >"Clone"</button>
                                                     <button
                                                         class="btn btn-sm btn-danger"
@@ -173,6 +194,49 @@ pub fn VmList() -> impl IntoView {
                     }
                 }
             }}
+
+            {move || clone_src.get().map(|src| view! {
+                <div class="modal" id="clone-dialog">
+                    <div class="modal-content">
+                        <h2>"Clone " {src.name.clone()}</h2>
+                        <form id="clone-vm-form" on:submit=submit_clone>
+                            {move || clone_error.get().map(|e| view! { <div class="alert alert-error" id="clone-error">{e}</div> })}
+                            <div class="form-group">
+                                <label for="clone-name">"Name"</label>
+                                <input id="clone-name" type="text" required prop:value=clone_name
+                                    on:input=move |ev| set_clone_name.set(event_target_value(&ev))/>
+                            </div>
+                            <div class="form-group">
+                                <label for="clone-mode">"Mode"</label>
+                                <select id="clone-mode" prop:value=clone_mode
+                                    on:change=move |ev| set_clone_mode.set(event_target_value(&ev))>
+                                    <option value="full">"Full clone (independent copy of the disk)"</option>
+                                    <option value="linked">"Linked clone (qcow2 overlay on this VM's disk)"</option>
+                                </select>
+                                {move || (clone_mode.get() == "linked").then(|| view! {
+                                    <small class="form-help" id="clone-linked-help">
+                                        "A linked clone only stores its own changes and reads the rest from this VM's disk, so this VM can't be deleted while the clone exists."
+                                    </small>
+                                })}
+                            </div>
+                            <div class="form-group">
+                                <label>
+                                    <input id="clone-start" type="checkbox" prop:checked=clone_start
+                                        on:change=move |ev| set_clone_start.set(event_target_checked(&ev))/>
+                                    " Start the clone afterwards"
+                                </label>
+                            </div>
+                            <div class="form-actions">
+                                <button type="button" class="btn btn-secondary"
+                                    on:click=move |_| set_clone_src.set(None)>"Cancel"</button>
+                                <button id="clone-submit" type="submit" class="btn btn-primary" disabled=cloning>
+                                    {move || if cloning.get() { "Cloning..." } else { "Clone" }}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            })}
         </div>
     }
 }

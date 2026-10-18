@@ -68,6 +68,7 @@ STACK = "e2e-ui-stack"
 EV_CT = "e2e-ui-events"
 SDN_NET = "e2esdn0"
 REP_VM = "e2e-rep-vm"
+REP_CLONE = "e2e-rep-linked"
 BK_VM = "e2e-bk-restored"
 BK_JOB = "e2e-bk-job"
 DISP_VM = "e2e-display-vm"
@@ -144,7 +145,10 @@ def cleanup():
             _req("PUT", f"/api/backups/{b['id']}", tok, {"protected": False})
             _req("DELETE", f"/api/backups/{b['id']}", tok)
         _req("DELETE", f"/api/vms/{BK_VM}", tok)
-        _req("DELETE", f"/api/vms/{REP_VM}-clone", tok)
+        # Linked clones first: their base can't be deleted while they exist.
+        for v in api_get("/api/vms", tok) or []:
+            if v.get("name") == REP_CLONE:
+                _req("DELETE", f"/api/vms/{v['id']}", tok)
         _req("DELETE", f"/api/vms/{REP_VM}", tok)
         _req("DELETE", f"/api/cni/networks/{SDN_NET}", tok)
         for ch in api_get("/api/notifications/channels", tok) or []:
@@ -469,11 +473,35 @@ def main():
         snaps = api_get(f"/api/vms/{REP_VM}/snapshots", token())
         assert any(s["name"] == "e2e-snap" for s in snaps), snaps
 
-        # ---- VM clone from the VM list -------------------------------------
+        # ---- VM clone from the VM list: dialog, linked mode, base protected
         page.goto(f"{BASE}/vms")
         page.locator(f"tr[data-vm-id='{REP_VM}']").get_by_role("button", name="Clone").click()
-        expect(page.locator(f"tr[data-vm-id='{REP_VM}-clone']")).to_be_visible(timeout=120000)
-        assert api_get(f"/api/vms/{REP_VM}-clone", token())["id"] == f"{REP_VM}-clone"
+        page.fill("#clone-name", REP_CLONE)
+        page.select_option("#clone-mode", "linked")
+        expect(page.locator("#clone-linked-help")).to_be_visible()
+        page.locator("#clone-submit").click()
+        expect(page.locator("#vm-notice")).to_contain_text(REP_CLONE, timeout=120000)
+        cvm = next(v for v in api_get("/api/vms", token()) if v["name"] == REP_CLONE)
+        cid = cvm["id"]
+        assert re.fullmatch(r"vm-\d+", cid), f"clone id not in Create VM's scheme: {cid}"
+        expect(page.locator(f"tr[data-vm-id='{cid}']")).to_be_visible(timeout=30000)
+        info = json.loads(subprocess.run(
+            ["qemu-img", "info", "--output=json", "-U", cvm["disks"][0]["path"]],
+            capture_output=True, text=True, check=True).stdout)
+        base = info.get("full-backing-filename") or info.get("backing-filename")
+        rep_disk = api_get(f"/api/vms/{REP_VM}", token())["disks"][0]["path"]
+        assert base and os.path.realpath(base) == os.path.realpath(rep_disk), info
+        # ... it's a clone job on the Clones page ...
+        page.goto(f"{BASE}/clones")
+        expect(page.locator(f"tr.clone-job-row[data-target-name='{REP_CLONE}']")).to_contain_text(
+            "completed", timeout=30000)
+        # ... and Delete on its base is refused with the reason shown.
+        page.goto(f"{BASE}/vms")
+        page.locator(f"tr[data-vm-id='{REP_VM}']").get_by_role("button", name="Delete").click()
+        expect(page.locator("#vm-notice")).to_contain_text("linked clone", timeout=30000)
+        expect(page.locator("#vm-notice")).to_contain_text(cid)
+        assert api_get(f"/api/vms/{REP_VM}", token())["id"] == REP_VM
+        assert os.path.isfile(rep_disk), "base disk deleted under a linked clone"
 
         page.goto(f"{BASE}/replication")
         page.locator("#create-replication-btn").click()

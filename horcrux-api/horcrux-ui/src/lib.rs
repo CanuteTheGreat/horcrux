@@ -225,7 +225,7 @@ pub fn App() -> impl IntoView {
             </main>
 
             <footer class="footer">
-                <p>"Horcrux v0.1.1 - Built with Rust + Leptos"</p>
+                <p>"Horcrux v" {env!("CARGO_PKG_VERSION")} " - Built with Rust + Leptos"</p>
                 <p>"50,000+ lines of memory-safe code"</p>
             </footer>
         </Router>
