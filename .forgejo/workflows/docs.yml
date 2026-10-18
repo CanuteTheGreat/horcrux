@@ -22,7 +22,7 @@ concurrency:
 jobs:
   build-docs:
     name: Build Documentation
-    runs-on: linux-cross-x86_64
+    runs-on: linux-any  # arch-independent (ctg-infrastructure ci-runners)
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
@@ -87,9 +87,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-docs-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-docs-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-docs-
+            ${{ runner.os }}-${{ runner.arch }}-cargo-docs-
 
       - name: Build rustdoc
         run: cargo doc --no-deps --all-features --workspace

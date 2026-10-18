@@ -35,7 +35,9 @@ concurrency:
 jobs:
   check:
     name: Check
-    runs-on: linux-cross-x86_64
+    # linux-any: arch-independent (fmt/clippy/cargo check/audit/wasm), served by the arm64 hosts and
+    # the x86 linux-cross slots (ctg-infrastructure ci-runners). Cache keys carry runner.arch.
+    runs-on: linux-any
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
@@ -89,9 +91,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-check-v2-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-check-v2-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-check-v2-
+            ${{ runner.os }}-${{ runner.arch }}-cargo-check-v2-
 
       - name: Check formatting
         run: |
@@ -194,9 +196,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-test-v2-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-test-v2-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-test-v2-
+            ${{ runner.os }}-${{ runner.arch }}-cargo-test-v2-
 
       - name: Build horcrux-api server (for integration tests)
         run: |
@@ -468,9 +470,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-build-${{ matrix.features }}-v2-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-build-${{ matrix.features }}-v2-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-build-${{ matrix.features }}-v2-
+            ${{ runner.os }}-${{ runner.arch }}-cargo-build-${{ matrix.features }}-v2-
 
       - name: Build (features=${{ matrix.features }})
         # Deliberately NOT passing --target here even though the matrix
@@ -501,7 +503,9 @@ jobs:
 
   build-ui:
     name: Build Web UI
-    runs-on: linux-cross-x86_64
+    # linux-any: arch-independent (fmt/clippy/cargo check/audit/wasm), served by the arm64 hosts and
+    # the x86 linux-cross slots (ctg-infrastructure ci-runners). Cache keys carry runner.arch.
+    runs-on: linux-any
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
@@ -584,9 +588,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-wasm-v2-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-wasm-v2-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-wasm-v2-
+            ${{ runner.os }}-${{ runner.arch }}-cargo-wasm-v2-
 
       - name: Build UI
         working-directory: horcrux-api/horcrux-ui
@@ -600,7 +604,9 @@ jobs:
 
   security-audit:
     name: Security Audit
-    runs-on: linux-cross-x86_64
+    # linux-any: arch-independent (fmt/clippy/cargo check/audit/wasm), served by the arm64 hosts and
+    # the x86 linux-cross slots (ctg-infrastructure ci-runners). Cache keys carry runner.arch.
+    runs-on: linux-any
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
@@ -778,7 +784,9 @@ jobs:
 
   use-features:
     name: USE-flag feature builds
-    runs-on: linux-cross-x86_64
+    # linux-any: arch-independent (fmt/clippy/cargo check/audit/wasm), served by the arm64 hosts and
+    # the x86 linux-cross slots (ctg-infrastructure ci-runners). Cache keys carry runner.arch.
+    runs-on: linux-any
     container: catthehacker/ubuntu:act-latest
     needs: check
     steps:
@@ -812,9 +820,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-features-v2-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-features-v2-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-features-v2-
+            ${{ runner.os }}-${{ runner.arch }}-cargo-features-v2-
 
       - name: Every ebuild USE flag maps to a Cargo feature
         # src_configure() turns USE flags into --features; a USE flag whose
@@ -926,9 +934,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-e2e-v2-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-e2e-v2-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-e2e-v2-
+            ${{ runner.os }}-${{ runner.arch }}-cargo-e2e-v2-
 
       - name: Build web UI and API
         run: |
