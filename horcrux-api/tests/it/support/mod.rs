@@ -458,10 +458,58 @@ impl Serial {
     /// Log in to a CirrOS guest and wait for the shell prompt.
     pub fn cirros_login(&mut self, boot_secs: u64) {
         self.expect("login:", boot_secs, Some("\n"));
-        self.send("cirros\n");
-        self.expect("assword:", 60, None);
-        self.send("gocubsgo\n");
-        self.expect("$ ", 60, Some("\n"));
+        // A newline poked while waiting for the login prompt can still be
+        // in flight and land in the password prompt ("Login incorrect",
+        // seen in the nightly depth journey): log in again then.
+        for attempt in 1..=3 {
+            self.send("cirros\n");
+            self.expect("assword:", 60, None);
+            self.send("gocubsgo\n");
+            if self.expect_any(&["$ ", "Login incorrect"], 60, Some("\n")) == 0 {
+                return;
+            }
+            if attempt < 3 {
+                self.expect("login:", 30, Some("\n"));
+            }
+        }
+        panic!(
+            "serial: cirros login failed 3 times; last output:\n{}",
+            self.tail()
+        );
+    }
+
+    /// Like `expect`, for several needles: the index of the one that
+    /// appears first.
+    pub fn expect_any(&mut self, needles: &[&str], secs: u64, poke: Option<&str>) -> usize {
+        let start = self.seen.len();
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        let mut last_poke = Instant::now();
+        let mut buf = [0u8; 4096];
+        while Instant::now() < deadline {
+            match self.s.read(&mut buf) {
+                Ok(0) => panic!("serial console closed; seen:\n{}", self.tail()),
+                Ok(n) => self.seen.push_str(&String::from_utf8_lossy(&buf[..n])),
+                Err(_) => {}
+            }
+            let hit = needles
+                .iter()
+                .enumerate()
+                .filter_map(|(i, n)| self.seen[start..].find(n).map(|pos| (pos, i)))
+                .min();
+            if let Some((_, i)) = hit {
+                return i;
+            }
+            if let Some(p) = poke {
+                if last_poke.elapsed() > Duration::from_secs(5) {
+                    self.send(p);
+                    last_poke = Instant::now();
+                }
+            }
+        }
+        panic!(
+            "serial: none of {needles:?} within {secs}s; last output:\n{}",
+            self.tail()
+        );
     }
 
     /// Run a shell command and return its output between two markers.
