@@ -468,17 +468,16 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                     let container_clone = container.clone();
                                     let container_clone2 = container.clone();
                                     let vmid = container.vmid;
-                                    let vmid_str = vmid.to_string();
-                                    let vmid_str2 = vmid_str.clone();
+                                    let vmid_str2 = vmid.to_string();
                                     let hostname = container.hostname.clone();
                                     let status = container.status.clone();
                                     let status_lower = container.status.to_lowercase();
                                     let node = container.node.clone();
                                     let cpus = container.cpus;
                                     let memory_gb = format!("{:.1} GB", container.maxmem as f64 / 1024.0 / 1024.0 / 1024.0);
-                                    let can_migrate = container.status == "running" && !migration_jobs.get()
-                                        .iter().any(|job| job.resource_id == vmid_str &&
-                                                  (job.status == "running" || job.status == "pending"));
+                                    // Live/offline migration is implemented for VMs only
+                                    // (the API answers 400 for containers), so don't offer it.
+                                    let can_migrate = false;
 
                                     view! {
                                         <div class="resource-card">
@@ -516,7 +515,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                                         set_show_migration_modal.set(true);
                                                     }
                                                 >
-                                                    {if can_migrate { "Migrate" } else { "Unavailable" }}
+                                                    {if can_migrate { "Migrate" } else { "VMs only" }}
                                                 </button>
                                                 <button
                                                     class="btn btn-sm btn-secondary"

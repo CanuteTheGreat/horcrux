@@ -2460,3 +2460,181 @@ async fn instance_console_ticket_route_reads_into_ui_type() {
         assert!(!text.contains(hint), "CLI hint in {text}");
     }
 }
+
+/// HA > Migration Center: the page lists, starts and cancels migrations
+/// through /migration/jobs (+ /migration/bulk), which used to answer 404
+/// ("Failed to load migration jobs: HTTP 404"). Starts a real migration job
+/// on the server's MigrationManager for a real VM (the target is a .invalid
+/// host, so the transfer itself fails or is cancelled - nothing leaves the
+/// runner) and reads every response into the page's own types.
+#[tokio::test]
+async fn migration_center_routes_read_into_ui_types() {
+    let c = client();
+    let token = login(&c).await;
+    let _: Vec<api::MigrationJob> = fetch(&c, &token, "/migration/jobs").await;
+
+    let vm = "contract-migrate-vm";
+    delete(&c, &token, &format!("/vms/{vm}")).await;
+    let (status, body) = post(
+        &c,
+        &token,
+        "/vms",
+        json!({"id": vm, "name": vm, "hypervisor": "qemu", "architecture": "x86_64",
+               "cpus": 1, "memory": 128, "disk_size": 1, "status": "stopped"}),
+    )
+    .await;
+    assert!(status == 200 || status == 201, "create vm: {status} {body}");
+
+    let job = |rtype: &str, rid: &str| api::MigrationJob {
+        job_id: String::new(),
+        resource_type: rtype.into(),
+        resource_id: rid.into(),
+        source_node: String::new(),
+        target_node: "contract-target.invalid".into(),
+        migration_type: "offline".into(),
+        status: "pending".into(),
+        progress: 0,
+        start_time: chrono::Utc::now(),
+        end_time: None,
+        error: None,
+        bandwidth_limit: None,
+        timeout: 300,
+        force: false,
+        with_local_disks: false,
+        estimated_duration: None,
+        transferred_bytes: 0,
+        remaining_bytes: None,
+    };
+
+    // containers aren't migratable: a clear 400, not a 404/500
+    let (status, body) = post(
+        &c,
+        &token,
+        "/migration/jobs",
+        serde_json::to_value(job("container", "contract-ct")).unwrap(),
+    )
+    .await;
+    assert_eq!(status, 400, "container migration: {body}");
+    // unknown VM: 404
+    let (status, body) = post(
+        &c,
+        &token,
+        "/migration/jobs",
+        serde_json::to_value(job("vm", "no-such-vm-for-migration")).unwrap(),
+    )
+    .await;
+    assert_eq!(status, 404, "unknown vm: {body}");
+
+    // start (one migration at a time: wait out a job another run left)
+    let mut created = None;
+    for _ in 0..30 {
+        let (status, body) = post(
+            &c,
+            &token,
+            "/migration/jobs",
+            serde_json::to_value(job("vm", vm)).unwrap(),
+        )
+        .await;
+        if status == 409 {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            continue;
+        }
+        assert_eq!(status, 201, "start migration: {body}");
+        created = Some(
+            serde_json::from_value::<api::MigrationJob>(body).expect("UI MigrationJob from create"),
+        );
+        break;
+    }
+    let created = created.expect("migration slot never freed");
+    assert_eq!(created.resource_id, vm);
+    assert_eq!(created.resource_type, "vm");
+    assert_eq!(created.target_node, "contract-target.invalid");
+    assert!(!created.job_id.is_empty());
+
+    // listed
+    let jobs: Vec<api::MigrationJob> = fetch(&c, &token, "/migration/jobs").await;
+    assert!(
+        jobs.iter().any(|j| j.job_id == created.job_id),
+        "new job not listed: {jobs:?}"
+    );
+
+    // cancel: 204 while it runs, 409 if the transfer already failed
+    let (status, body) = send_json(
+        &c,
+        &token,
+        reqwest::Method::DELETE,
+        &format!("/migration/jobs/{}", created.job_id),
+        None,
+    )
+    .await;
+    assert!(status == 204 || status == 409, "cancel: {status} {body}");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let jobs: Vec<api::MigrationJob> = fetch(&c, &token, "/migration/jobs").await;
+    let mine = jobs
+        .iter()
+        .find(|j| j.job_id == created.job_id)
+        .expect("job still listed");
+    if status == 204 {
+        assert_eq!(mine.status, "cancelled", "{mine:?}");
+        assert!(mine.end_time.is_some());
+    } else {
+        assert_eq!(mine.status, "failed", "{mine:?}");
+    }
+    let (status, _) = send_json(
+        &c,
+        &token,
+        reqwest::Method::DELETE,
+        "/migration/jobs/no-such-job",
+        None,
+    )
+    .await;
+    assert_eq!(status, 404);
+
+    // bulk: the page's BulkMigrationJob round-trips
+    let mut bulk_ok = false;
+    for _ in 0..30 {
+        let bulk = api::BulkMigrationJob {
+            job_id: String::new(),
+            target_node: "contract-target.invalid".into(),
+            resources: vec![("vm".into(), vm.into())],
+            max_workers: 1,
+            migration_type: "offline".into(),
+            status: "pending".into(),
+            start_time: chrono::Utc::now(),
+            end_time: None,
+            completed_count: 0,
+            failed_count: 0,
+            total_count: 1,
+        };
+        let (status, body) = post(
+            &c,
+            &token,
+            "/migration/bulk",
+            serde_json::to_value(&bulk).unwrap(),
+        )
+        .await;
+        if status == 400 && body.to_string().contains("Maximum concurrent") {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            continue;
+        }
+        assert_eq!(status, 201, "bulk: {body}");
+        let b: api::BulkMigrationJob = serde_json::from_value(body).expect("UI BulkMigrationJob");
+        assert_eq!(b.total_count, 1);
+        assert_eq!(b.failed_count, 0);
+        bulk_ok = true;
+        break;
+    }
+    assert!(bulk_ok, "bulk migration never got a slot");
+    let jobs: Vec<api::MigrationJob> = fetch(&c, &token, "/migration/jobs").await;
+    for j in jobs.iter().filter(|j| j.resource_id == vm) {
+        let _ = send_json(
+            &c,
+            &token,
+            reqwest::Method::DELETE,
+            &format!("/migration/jobs/{}", j.job_id),
+            None,
+        )
+        .await;
+    }
+    delete(&c, &token, &format!("/vms/{vm}")).await;
+}

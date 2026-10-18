@@ -208,7 +208,12 @@ impl MigrationManager {
             .await;
 
             let mut jobs_lock = jobs.write().await;
-            if let Some(job) = jobs_lock.get_mut(&job_id_clone) {
+            if let Some(job) = jobs_lock
+                .get_mut(&job_id_clone)
+                // Cancelled by the user: keep that outcome (no "completed",
+                // no automatic rollback of a migration that was aborted).
+                .filter(|j| j.state != MigrationState::Cancelled)
+            {
                 match result {
                     Ok(_) => {
                         job.state = MigrationState::Completed;
@@ -1060,6 +1065,11 @@ impl MigrationManager {
     ) {
         let mut jobs_lock = jobs.write().await;
         if let Some(job) = jobs_lock.get_mut(job_id) {
+            // A cancelled job stays cancelled: the background task used to
+            // flip it back to Transferring/Completed a moment later.
+            if job.state == MigrationState::Cancelled {
+                return;
+            }
             job.state = state;
             job.progress = progress;
         }
@@ -1121,6 +1131,38 @@ impl MigrationManager {
 
         job.state = MigrationState::Cancelled;
         job.completed = Some(Utc::now());
+        let (source, vm_name) = (job.source_node.clone(), format!("vm-{}", job.vm_id));
+        drop(jobs);
+
+        // Stop the transfer itself: abort the libvirt migration job on the
+        // source node (no-op if it already ended or never got that far).
+        tokio::spawn(async move {
+            let out = Command::new("ssh")
+                .args([
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-o",
+                    "UserKnownHostsFile=/dev/null",
+                    "-o",
+                    "ConnectTimeout=10",
+                    &format!("root@{}", source),
+                    "virsh",
+                    "domjobabort",
+                    &vm_name,
+                ])
+                .output()
+                .await;
+            if let Ok(o) = out {
+                if !o.status.success() {
+                    tracing::debug!(
+                        "domjobabort {} on {}: {}",
+                        vm_name,
+                        source,
+                        String::from_utf8_lossy(&o.stderr)
+                    );
+                }
+            }
+        });
 
         tracing::info!("Cancelled migration job {}", job_id);
         Ok(())
@@ -1367,5 +1409,33 @@ mod tests {
 
         let job = manager.get_job(&job_id).await.unwrap();
         assert_eq!(job.state, MigrationState::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn cancelled_migration_stays_cancelled_after_its_task_ends() {
+        // The background task used to overwrite the cancel with
+        // Preparing/Transferring and then Completed/Failed, so the Migration
+        // Center showed a cancelled job as running again.
+        let manager = MigrationManager::new();
+        let config = MigrationConfig {
+            vm_id: "cancel-me".to_string(),
+            target_node: "target.invalid".to_string(),
+            migration_type: MigrationType::Live,
+            bandwidth_limit: None,
+            force: true,
+            with_local_disks: false,
+        };
+        let job_id = manager
+            .start_migration(config, "source.invalid".to_string())
+            .await
+            .unwrap();
+        manager.cancel_migration(&job_id).await.unwrap();
+        // ssh to a .invalid host fails at once; give the task time to finish.
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        let job = manager.get_job(&job_id).await.unwrap();
+        assert_eq!(job.state, MigrationState::Cancelled);
+        assert!(job.completed.is_some());
+        // and it no longer blocks the one-at-a-time migration slot
+        assert!(manager.list_active().await.is_empty());
     }
 }

@@ -11,6 +11,7 @@ pub mod helm;
 pub mod k8s_config;
 pub mod lane_m;
 pub mod metrics;
+pub mod migration_jobs;
 pub mod notifications;
 pub mod tls;
 pub mod vm_import;

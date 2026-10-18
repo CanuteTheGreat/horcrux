@@ -470,7 +470,8 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(storage_routes())
         .merge(monitoring_routes())
         .merge(network_routes())
-        .merge(api::lane_m::routes(&state).await?);
+        .merge(api::lane_m::routes(&state).await?)
+        .merge(api::migration_jobs::routes());
 
     // USE-flag gated route groups (see src/features.rs): a feature that was
     // not compiled in has no routes, so its endpoints answer 404.
