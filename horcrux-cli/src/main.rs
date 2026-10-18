@@ -27,8 +27,14 @@ struct Cli {
     #[arg(long, env = "HORCRUX_CA_CERT")]
     ca_cert: Option<std::path::PathBuf>,
 
-    /// Don't verify the server's TLS certificate
-    #[arg(long, env = "HORCRUX_INSECURE")]
+    /// Don't verify the server's TLS certificate. HORCRUX_INSECURE accepts
+    /// 1/0, true/false, yes/no, on/off.
+    #[arg(
+        long,
+        env = "HORCRUX_INSECURE",
+        action = clap::ArgAction::SetTrue,
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
     insecure: bool,
 
     /// Output format (table, json, yaml)
@@ -1198,4 +1204,38 @@ fn generate_completions(shell: clap_complete::Shell) {
     let name = cmd.get_name().to_string();
 
     generate(shell, &mut cmd, name, &mut io::stdout());
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    /// `HORCRUX_INSECURE=1` used to be refused ("invalid value '1' for
+    /// '--insecure' [possible values: true, false]"). Env access is
+    /// process-wide, so every case runs in this one test.
+    #[test]
+    fn insecure_flag_and_env_accept_boolish_values() {
+        let parse = || Cli::try_parse_from(["horcrux", "vm", "list"]).map(|c| c.insecure);
+        std::env::remove_var("HORCRUX_INSECURE");
+        assert!(!parse().unwrap());
+        for (v, want) in [
+            ("1", true),
+            ("yes", true),
+            ("true", true),
+            ("on", true),
+            ("0", false),
+            ("no", false),
+            ("false", false),
+            ("off", false),
+        ] {
+            std::env::set_var("HORCRUX_INSECURE", v);
+            assert_eq!(parse().unwrap(), want, "HORCRUX_INSECURE={v}");
+        }
+        std::env::remove_var("HORCRUX_INSECURE");
+        assert!(
+            Cli::try_parse_from(["horcrux", "--insecure", "vm", "list"])
+                .unwrap()
+                .insecure
+        );
+    }
 }
