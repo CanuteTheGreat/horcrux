@@ -336,6 +336,11 @@ impl QemuManager {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             error!("QEMU failed to start: {}", stderr);
+            // QEMU creates the serial/QMP sockets before it opens the disks;
+            // a start that fails afterwards (e.g. a missing backing file)
+            // would otherwise leave them behind.
+            let _ = tokio::fs::remove_file(pidfile(&vm.id)).await;
+            super::display::DisplayRuntime::remove(&vm.disk_path).await;
             return Err(horcrux_common::Error::System(format!(
                 "Failed to start VM: {}",
                 stderr
@@ -418,18 +423,72 @@ impl QemuManager {
             )));
         }
 
-        // Delete disk image
-        tokio::fs::remove_file(&vm.disk_path).await.map_err(|e| {
-            horcrux_common::Error::System(format!("Failed to delete disk image: {}", e))
-        })?;
-        // Files that belong to the disk: console state, serial log,
-        // cloud-init seed, an interrupted operation's hold marker.
+        // Files that belong to the disk: console state + serial/QMP
+        // sockets (left behind by a QEMU that failed to start or was
+        // killed), serial log, cloud-init seed, an interrupted operation's
+        // hold marker.
+        super::display::DisplayRuntime::remove(&vm.disk_path).await;
         for ext in ["cidata.iso", "serial.log", "display.json", "hold.json"] {
             let _ = tokio::fs::remove_file(vm.disk_path.with_extension(ext)).await;
+        }
+        let _ = tokio::fs::remove_file(pidfile(&vm.id)).await;
+
+        // Delete the disk image (already gone is fine: the rest is cleaned).
+        match tokio::fs::remove_file(&vm.disk_path).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(horcrux_common::Error::System(format!(
+                    "Failed to delete disk image: {}",
+                    e
+                )))
+            }
         }
 
         info!("VM {} deleted successfully", vm.id);
         Ok(())
+    }
+
+    /// The images `disk` sits on top of in its qcow2 backing chain,
+    /// nearest first, as absolute paths. A backing file that no longer
+    /// exists is still listed (it ends the chain). Empty for a standalone
+    /// image or one qemu-img can't read.
+    pub async fn backing_files(disk: &std::path::Path) -> Vec<PathBuf> {
+        let mut chain = Vec::new();
+        let mut current = disk.to_path_buf();
+        // A chain longer than this is a loop, not something to follow.
+        for _ in 0..32 {
+            let out = match Command::new("qemu-img")
+                .args(["info", "--output=json", "-U"])
+                .arg(&current)
+                .output()
+                .await
+            {
+                Ok(o) if o.status.success() => o,
+                _ => break,
+            };
+            let info: serde_json::Value = match serde_json::from_slice(&out.stdout) {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+            let backing = info["full-backing-filename"]
+                .as_str()
+                .or_else(|| info["backing-filename"].as_str())
+                .filter(|b| !b.is_empty());
+            let Some(backing) = backing else { break };
+            let mut next = PathBuf::from(backing);
+            if next.is_relative() {
+                if let Some(dir) = current.parent() {
+                    next = dir.join(next);
+                }
+            }
+            chain.push(next.clone());
+            if !next.is_file() {
+                break;
+            }
+            current = next;
+        }
+        chain
     }
 
     /// Check if KVM is available

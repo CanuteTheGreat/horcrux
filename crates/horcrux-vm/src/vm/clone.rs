@@ -138,6 +138,15 @@ impl VmCloneManager {
             source_path, new_disk_path, mode
         );
 
+        // Never write over an existing image (another VM's disk, or one an
+        // earlier failed clone left behind): qemu-img would overwrite it.
+        if new_disk_path.exists() {
+            return Err(horcrux_common::Error::Conflict(format!(
+                "A disk image already exists at {}",
+                new_disk_path.display()
+            )));
+        }
+
         // Detect storage type and clone accordingly
         let storage_type = self.detect_storage_type(&source_disk.path)?;
 
@@ -145,6 +154,12 @@ impl VmCloneManager {
             StorageType::Qcow2 => {
                 self.clone_qcow2_disk(source_path, &new_disk_path, mode)
                     .await?
+            }
+            StorageType::Raw if matches!(mode, CloneMode::Linked) => {
+                return Err(horcrux_common::Error::Validation(format!(
+                    "A linked clone needs a qcow2 disk; {} is a raw image. Use a full clone.",
+                    source_disk.path
+                )))
             }
             StorageType::Raw => self.clone_raw_disk(source_path, &new_disk_path).await?,
             StorageType::Zfs => {

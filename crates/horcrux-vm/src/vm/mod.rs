@@ -447,12 +447,94 @@ impl VmManager {
         Ok(config)
     }
 
-    /// Delete a virtual machine
+    /// Other QEMU VMs whose disks are qcow2 overlays on top of (directly or
+    /// further down the backing chain) one of VM `id`'s disks - its linked
+    /// clones - as "name (id)".
+    async fn linked_dependents(
+        &self,
+        vms: &HashMap<String, qemu::QemuVm>,
+        id: &str,
+        disk_path: &std::path::Path,
+    ) -> Vec<String> {
+        let canon =
+            |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        let mut own: Vec<PathBuf> = vec![canon(disk_path)];
+        let mut others: Vec<VmConfig> = vms
+            .values()
+            .filter(|v| v.id != id)
+            .map(|v| v.to_config())
+            .collect();
+        if let Some(db) = &self.db {
+            if let Ok(cfg) = db.get_vm(id).await {
+                own.extend(
+                    cfg.disks
+                        .iter()
+                        .map(|d| canon(std::path::Path::new(&d.path))),
+                );
+            }
+            if let Ok(all) = db.list_vms().await {
+                for v in all {
+                    if v.id != id && !others.iter().any(|o| o.id == v.id) {
+                        others.push(v);
+                    }
+                }
+            }
+        }
+        let mut dependents = Vec::new();
+        for other in others {
+            if other.hypervisor != VmHypervisor::Qemu {
+                continue;
+            }
+            let mut disks: Vec<PathBuf> =
+                other.disks.iter().map(|d| PathBuf::from(&d.path)).collect();
+            if disks.is_empty() {
+                disks.push(self.qemu.vm_from_config(&other).disk_path);
+            }
+            'disks: for disk in disks {
+                if !disk.is_file() {
+                    continue;
+                }
+                for backing in QemuManager::backing_files(&disk).await {
+                    if own.contains(&canon(&backing)) {
+                        dependents.push(format!("{} ({})", other.name, other.id));
+                        break 'disks;
+                    }
+                }
+            }
+        }
+        dependents.sort();
+        dependents
+    }
+
+    /// Delete a virtual machine. A QEMU VM is refused (Conflict) while it
+    /// runs or while linked clones are backed by its disk.
     pub async fn delete_vm(&self, id: &str) -> Result<()> {
         let mut vms = self.vms.write().await;
         // Load DB-only VMs too, so their disk/process are cleaned up, not
         // just the row.
         let _ = self.hydrate(&mut vms, id).await;
+
+        if let Some(vm) = vms.get(id) {
+            if vm.hypervisor == VmHypervisor::Qemu {
+                // A running VM used to lose its database row while QEMU kept
+                // running on a disk nobody could manage any more.
+                if QemuManager::process_running(id) {
+                    return Err(horcrux_common::Error::Conflict(format!(
+                        "VM {id} is running. Stop it before deleting it."
+                    )));
+                }
+                let dependents = self.linked_dependents(&vms, id, &vm.disk_path).await;
+                if !dependents.is_empty() {
+                    return Err(horcrux_common::Error::Conflict(format!(
+                        "VM {id} can't be deleted: its disk is the base image of the linked \
+                         clone(s) {}. Delete those clones first (or make full clones of them \
+                         and delete the linked ones); deleting this disk would leave them \
+                         unbootable.",
+                        dependents.join(", ")
+                    )));
+                }
+            }
+        }
 
         if let Some(vm) = vms.remove(id) {
             // Best-effort: the on-disk/hypervisor resources may already be
