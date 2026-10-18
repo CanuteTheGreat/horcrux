@@ -691,6 +691,15 @@ def vm_hardware_checks(page, vid):
     page.locator(".modal-content .modal-close").click()
     srv.shutdown()
 
+    # ---- Monitoring overview buttons do something (they had no handler) --
+    page.goto(f"{BASE}/monitoring")
+    with page.expect_download(timeout=30000) as dl:
+        page.locator("#monitoring-export").click()
+    data = json.loads(open(dl.value.path()).read())
+    assert "exported_at" in data and "node" in data and "vms" in data, data
+    page.get_by_role("link", name="Configure Alerts").click()
+    page.wait_for_url(f"{BASE}/monitoring/alerts")
+
 
 def ui_login(page, user, password):
     page.goto(f"{BASE}/login")

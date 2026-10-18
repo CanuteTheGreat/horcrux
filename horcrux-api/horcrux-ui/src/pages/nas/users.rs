@@ -44,6 +44,47 @@ pub fn UsersPage() -> impl IntoView {
         });
     });
 
+    // Password: inline form (the button used to have no handler).
+    let (pw_user, set_pw_user) = create_signal(None::<(String, String)>);
+    let (pw_value, set_pw_value) = create_signal(String::new());
+    let (notice, set_notice) = create_signal(None::<String>);
+    let save_password = move |ev: ev::SubmitEvent| {
+        ev.prevent_default();
+        let Some((id, name)) = pw_user.get() else {
+            return;
+        };
+        let pw = pw_value.get();
+        spawn_local(async move {
+            match crate::api::post_json_no_response(
+                &format!("/nas/users/{}/password", id),
+                &serde_json::json!({ "password": pw }),
+            )
+            .await
+            {
+                Ok(()) => {
+                    set_notice.set(Some(format!("Password of {name} changed")));
+                    set_pw_user.set(None);
+                }
+                Err(e) => set_notice.set(Some(format!("Failed: {}", e.message))),
+            }
+            set_pw_value.set(String::new());
+        });
+    };
+    let toggle_user = move |id: String, enable: bool| {
+        spawn_local(async move {
+            let action = if enable { "enable" } else { "disable" };
+            match crate::api::post_empty(&format!("/nas/users/{}/{}", id, action)).await {
+                Ok(()) => set_notice.set(Some(format!("User {action}d"))),
+                Err(e) => set_notice.set(Some(format!("Failed: {}", e.message))),
+            }
+            if let Ok(resp) = crate::api::authed::get("/api/nas/users").send().await {
+                if let Ok(data) = resp.json::<Vec<NasUser>>().await {
+                    set_users.set(data);
+                }
+            }
+        });
+    };
+
     let delete_user = move |user_id: String| {
         if web_sys::window()
             .and_then(|w| w.confirm_with_message("Delete this user?").ok())
@@ -68,6 +109,16 @@ pub fn UsersPage() -> impl IntoView {
                 </div>
             </div>
 
+            {move || notice.get().map(|n| view! { <div class="alert alert-info" id="nas-user-notice">{n}</div> })}
+            {move || pw_user.get().map(|(_, name)| view! {
+                <form class="form-row" id="nas-password-form" on:submit=save_password>
+                    <label>"New password for " <strong>{name}</strong></label>
+                    <input id="nas-password" type="password" required minlength="8" autocomplete="new-password"
+                        prop:value=pw_value on:input=move |ev| set_pw_value.set(event_target_value(&ev))/>
+                    <button type="submit" class="btn btn-primary">"Set password"</button>
+                    <button type="button" class="btn btn-secondary" on:click=move |_| set_pw_user.set(None)>"Cancel"</button>
+                </form>
+            })}
             {move || {
                 if loading.get() {
                     view! { <p class="loading">"Loading users..."</p> }.into_view()
@@ -116,8 +167,16 @@ pub fn UsersPage() -> impl IntoView {
                                                     </span>
                                                 </td>
                                                 <td class="actions">
-                                                    <a href={format!("/nas/users/{}", user.id)} class="btn btn-sm">"Edit"</a>
-                                                    <button class="btn btn-sm">"Password"</button>
+                                                    <button class="btn btn-sm nas-user-password"
+                                                        on:click={
+                                                            let (id, name) = (user.id.clone(), user.username.clone());
+                                                            move |_| set_pw_user.set(Some((id.clone(), name.clone())))
+                                                        }>"Password"</button>
+                                                    <button class="btn btn-sm nas-user-toggle"
+                                                        on:click={
+                                                            let (id, enabled) = (user.id.clone(), user.enabled);
+                                                            move |_| toggle_user(id.clone(), !enabled)
+                                                        }>{if user.enabled { "Disable" } else { "Enable" }}</button>
                                                     <button
                                                         class="btn btn-sm btn-danger"
                                                         on:click=move |_| delete_user(user_id.clone())

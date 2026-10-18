@@ -85,8 +85,14 @@ pub fn Monitoring() -> impl IntoView {
                             view! { <span class="badge badge-danger">"○ Disconnected"</span> }.into_view()
                         }}
                     </div>
-                    <button class="btn btn-secondary">"⚙ Configure Alerts"</button>
-                    <button class="btn btn-primary">"📊 Export Data"</button>
+                    <leptos_router::A href="/monitoring/alerts" class="btn btn-secondary">"⚙ Configure Alerts"</leptos_router::A>
+                    <button class="btn btn-primary" id="monitoring-export"
+                        on:click=move |_| export_metrics(
+                            serde_json::to_value(node_metrics.get_untracked()).unwrap_or_default(),
+                            serde_json::to_value(vm_metrics_list.get_untracked()).unwrap_or_default(),
+                        )>
+                        "📊 Export Data"
+                    </button>
                 </div>
             </div>
 
@@ -174,7 +180,7 @@ pub fn Monitoring() -> impl IntoView {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 struct NodeMetricsData {
     hostname: String,
     cpu_usage: f64,
@@ -184,7 +190,7 @@ struct NodeMetricsData {
     timestamp: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 struct VmMetricsData {
     vm_id: String,
     cpu_usage: f64,
@@ -328,5 +334,39 @@ fn format_bytes(bytes: u64) -> String {
         format!("{:.2} KB", bytes as f64 / 1_000.0)
     } else {
         format!("{} B", bytes)
+    }
+}
+
+/// Download the metrics on screen as a JSON file (the Export button used to
+/// have no handler).
+fn export_metrics(node: serde_json::Value, vms: serde_json::Value) {
+    let body = serde_json::json!({
+        "exported_at": chrono::Utc::now().to_rfc3339(),
+        "node": node,
+        "vms": vms,
+    });
+    let text = serde_json::to_string_pretty(&body).unwrap_or_default();
+    let href = format!(
+        "data:application/json;charset=utf-8,{}",
+        urlencoding::encode(&text)
+    );
+    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+        if let Ok(a) = doc.create_element("a") {
+            let _ = a.set_attribute("href", &href);
+            let _ = a.set_attribute(
+                "download",
+                &format!(
+                    "horcrux-metrics-{}.json",
+                    chrono::Utc::now().format("%Y%m%d-%H%M%S")
+                ),
+            );
+            if let Some(body) = doc.body() {
+                let _ = body.append_child(&a);
+                if let Some(el) = wasm_bindgen::JsCast::dyn_ref::<web_sys::HtmlElement>(&a) {
+                    el.click();
+                }
+                let _ = body.remove_child(&a);
+            }
+        }
     }
 }
