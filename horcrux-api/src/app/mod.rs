@@ -473,7 +473,9 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(monitoring_routes())
         .merge(network_routes())
         .merge(api::lane_m::routes(&state).await?)
-        .merge(api::migration_jobs::routes());
+        .merge(api::migration_jobs::routes())
+        .merge(api::vm_hw::routes())
+        .merge(api::host_net::routes(&state));
 
     // USE-flag gated route groups (see src/features.rs): a feature that was
     // not compiled in has no routes, so its endpoints answer 404.
@@ -1733,6 +1735,8 @@ async fn create_vm(
     Json(payload): Json<CreateVmRequest>,
 ) -> Result<(StatusCode, Json<VmConfig>), ApiError> {
     let vm_name = payload.config.name.clone();
+    // Bridges exist on this host, the ISO is in the ISO library.
+    api::vm_hw::check_host_hardware(&state, &payload.config.hardware).await?;
     let vm = state
         .vm_manager
         .create_vm_from_image(payload.config, payload.image)
@@ -3141,6 +3145,7 @@ async fn clone_template(
                 cache: "writethrough".to_string(),
             }],
             display: Default::default(),
+            hardware: Default::default(),
         })
         .await?;
     Ok(Json(CloneResponse { new_vm_id }))

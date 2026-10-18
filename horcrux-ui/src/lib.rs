@@ -316,6 +316,7 @@ fn VirtualMachines() -> impl IntoView {
                     cpus: 2,
                     disk_size: 50,
                     status: "running".to_string(),
+                    hardware: Default::default(),
                 },
                 VmConfig {
                     id: "101".to_string(),
@@ -324,6 +325,7 @@ fn VirtualMachines() -> impl IntoView {
                     cpus: 4,
                     disk_size: 100,
                     status: "running".to_string(),
+                    hardware: Default::default(),
                 },
                 VmConfig {
                     id: "102".to_string(),
@@ -332,6 +334,7 @@ fn VirtualMachines() -> impl IntoView {
                     cpus: 2,
                     disk_size: 30,
                     status: "stopped".to_string(),
+                    hardware: Default::default(),
                 },
             ]
         },

@@ -6783,3 +6783,158 @@ pub async fn save_acme_config(cfg: &AcmeConfig) -> Result<(), ApiError> {
 pub async fn order_acme_certificate() -> Result<CertificateInfo, ApiError> {
     post_json("/tls/acme/order", &serde_json::json!({})).await
 }
+
+// ---------------------------------------------------------------------------
+// VM hardware (network cards, CD-ROM, boot order), power actions and the ISO
+// library - horcrux-api/src/api/vm_hw.rs.
+// ---------------------------------------------------------------------------
+
+/// A Linux bridge on the host a VM NIC can attach to.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct HostBridge {
+    pub name: String,
+    pub vlan_aware: bool,
+}
+
+/// An ISO image in the ISO library.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct IsoFile {
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+    #[serde(default)]
+    pub downloading: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// GET /api/vms/host-options
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct VmHostOptions {
+    pub bridges: Vec<HostBridge>,
+    pub isos: Vec<IsoFile>,
+    pub iso_dir: String,
+}
+
+/// PUT /api/vms/:id/config body (absent fields stay as they are).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct VmConfigUpdate {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpus: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hardware: Option<horcrux_common::VmHardware>,
+}
+
+pub async fn get_vm_host_options() -> Result<VmHostOptions, ApiError> {
+    fetch_json("/vms/host-options").await
+}
+
+pub async fn get_vm(vm_id: &str) -> Result<VmConfig, ApiError> {
+    fetch_json(&format!("/vms/{}", urlencoding::encode(vm_id))).await
+}
+
+pub async fn update_vm_config(vm_id: &str, upd: &VmConfigUpdate) -> Result<VmConfig, ApiError> {
+    put_json(&format!("/vms/{}/config", urlencoding::encode(vm_id)), upd).await
+}
+
+/// ACPI shutdown; `force_stop` stops the VM if the guest ignores it.
+pub async fn shutdown_vm(
+    vm_id: &str,
+    timeout: u64,
+    force_stop: bool,
+) -> Result<VmConfig, ApiError> {
+    post_json(
+        &format!("/vms/{}/shutdown", urlencoding::encode(vm_id)),
+        &serde_json::json!({ "timeout": timeout, "force_stop": force_stop }),
+    )
+    .await
+}
+
+pub async fn reboot_vm(vm_id: &str) -> Result<VmConfig, ApiError> {
+    post_json(
+        &format!("/vms/{}/reboot", urlencoding::encode(vm_id)),
+        &serde_json::json!({}),
+    )
+    .await
+}
+
+pub async fn reset_vm(vm_id: &str) -> Result<VmConfig, ApiError> {
+    post_json(
+        &format!("/vms/{}/reset", urlencoding::encode(vm_id)),
+        &serde_json::json!({}),
+    )
+    .await
+}
+
+pub async fn list_isos() -> Result<Vec<IsoFile>, ApiError> {
+    fetch_json("/storage/isos").await
+}
+
+pub async fn download_iso(url: &str, filename: Option<&str>) -> Result<IsoFile, ApiError> {
+    post_json(
+        "/storage/isos/download",
+        &serde_json::json!({ "url": url, "filename": filename }),
+    )
+    .await
+}
+
+pub async fn delete_iso(name: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/storage/isos/{}", urlencoding::encode(name))).await
+}
+
+/// Human-readable byte size.
+pub fn human_bytes(n: u64) -> String {
+    const U: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < U.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {}", U[i])
+    }
+}
+
+// Host bridges (Infrastructure > Host Bridges) - horcrux-api/src/api/host_net.rs.
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct BridgeInfo {
+    pub name: String,
+    pub vlan_aware: bool,
+    pub up: bool,
+    pub ports: Vec<String>,
+    pub addresses: Vec<String>,
+    pub managed: bool,
+    #[serde(default)]
+    pub comment: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct NewBridge {
+    pub name: String,
+    pub vlan_aware: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    pub ports: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+}
+
+pub async fn list_bridges() -> Result<Vec<BridgeInfo>, ApiError> {
+    fetch_json("/network/bridges").await
+}
+
+pub async fn create_bridge(b: &NewBridge) -> Result<NewBridge, ApiError> {
+    post_json("/network/bridges", b).await
+}
+
+pub async fn delete_bridge(name: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/network/bridges/{}", urlencoding::encode(name))).await
+}

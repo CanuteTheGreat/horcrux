@@ -7,6 +7,7 @@ pub mod auth;
 pub mod backup;
 #[cfg(feature = "kubernetes")]
 pub mod helm;
+pub mod host_net;
 #[cfg(feature = "kubernetes")]
 pub mod k8s_config;
 pub mod lane_m;
@@ -14,6 +15,7 @@ pub mod metrics;
 pub mod migration_jobs;
 pub mod notifications;
 pub mod tls;
+pub mod vm_hw;
 pub mod vm_import;
 
 use crate::AppState;

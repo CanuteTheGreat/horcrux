@@ -2638,3 +2638,211 @@ async fn migration_center_routes_read_into_ui_types() {
     }
     delete(&c, &token, &format!("/vms/{vm}")).await;
 }
+
+async fn put(c: &reqwest::Client, token: &str, path: &str, body: Value) -> (u16, String) {
+    let r = c
+        .put(format!("{}{}", api_base(), path))
+        .bearer_auth(token)
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    (r.status().as_u16(), r.text().await.unwrap_or_default())
+}
+
+/// Serve `body` once per request on a local port (an ISO "mirror").
+async fn file_server(body: Vec<u8>) -> u16 {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut s, _)) = listener.accept().await else {
+                return;
+            };
+            let body = body.clone();
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let _ = s.read(&mut buf).await;
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = s.write_all(head.as_bytes()).await;
+                let _ = s.write_all(&body).await;
+            });
+        }
+    });
+    port
+}
+
+/// VM hardware (NICs, CD-ROM, boot order), the ISO library and host bridges:
+/// every route the Create VM form, the VM Hardware page, Infrastructure >
+/// ISO Images and Host Bridges call, read into the UI's own types against
+/// the real server. (Real tap devices, VLANs, PXE traffic and live CD-ROM
+/// changes in a booted guest are covered by tests/vm_nic_e2e.sh.)
+#[tokio::test]
+async fn vm_hardware_iso_library_and_bridges_read_into_ui_types() {
+    let c = client();
+    let token = login(&c).await;
+    let opts: api::VmHostOptions = fetch(&c, &token, "/vms/host-options").await;
+    let _: Vec<api::BridgeInfo> = fetch(&c, &token, "/network/bridges").await;
+
+    // ISO library: download from a URL -> listed as downloading, then ready.
+    let iso_bytes = vec![0x5au8; 300_000];
+    let port = file_server(iso_bytes.clone()).await;
+    let name = format!("contract-{}.iso", std::process::id());
+    delete(&c, &token, &format!("/storage/isos/{name}")).await;
+    let (status, body) = post(
+        &c,
+        &token,
+        "/storage/isos/download",
+        json!({"url": format!("http://127.0.0.1:{port}/files/whatever.iso"), "filename": name}),
+    )
+    .await;
+    assert_eq!(status, 202, "download: {body}");
+    let started: api::IsoFile = serde_json::from_value(body).unwrap();
+    assert!(started.downloading);
+    let mut ready = None;
+    for _ in 0..60 {
+        let list: Vec<api::IsoFile> = fetch(&c, &token, "/storage/isos").await;
+        if let Some(i) = list.iter().find(|i| i.name == name && !i.downloading) {
+            assert!(i.error.is_none(), "download failed: {:?}", i.error);
+            ready = Some(i.clone());
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    let iso = ready.expect("ISO download never completed");
+    assert_eq!(iso.size, iso_bytes.len() as u64);
+    assert!(
+        iso.path.starts_with(&opts.iso_dir),
+        "{} not in {}",
+        iso.path,
+        opts.iso_dir
+    );
+    // a second download of the same name is refused
+    let (status, _) = post(
+        &c,
+        &token,
+        "/storage/isos/download",
+        json!({"url": format!("http://127.0.0.1:{port}/x.iso"), "filename": name}),
+    )
+    .await;
+    assert_eq!(status, 409);
+    let (status, _) = post(
+        &c,
+        &token,
+        "/storage/isos/download",
+        json!({"url": "http://127.0.0.1:1/x.iso", "filename": "../etc.iso"}),
+    )
+    .await;
+    assert_eq!(status, 400);
+
+    // VM with the ISO in its CD-ROM and CD-ROM-first boot order.
+    let vm = "contract-hw-vm";
+    delete(&c, &token, &format!("/vms/{vm}")).await;
+    let (status, body) = post(
+        &c,
+        &token,
+        "/vms",
+        json!({"id": vm, "name": vm, "hypervisor": "qemu", "architecture": "x86_64",
+               "cpus": 1, "memory": 128, "disk_size": 1, "status": "stopped",
+               "hardware": {"cdrom": iso.path, "boot": ["cdrom", "disk"]}}),
+    )
+    .await;
+    assert!(status == 200 || status == 201, "create vm: {status} {body}");
+    let created: horcrux_common::VmConfig = serde_json::from_value(body).unwrap();
+    assert_eq!(created.hardware.cdrom.as_deref(), Some(iso.path.as_str()));
+
+    // A NIC on a bridge this host doesn't have is refused with the reason.
+    let (status, body) = post(
+        &c,
+        &token,
+        "/vms",
+        json!({"id": "contract-hw-bad", "name": "bad", "hypervisor": "qemu", "cpus": 1,
+               "memory": 128, "disk_size": 1, "status": "stopped",
+               "hardware": {"nets": [{"bridge": "nosuchbr0"}]}}),
+    )
+    .await;
+    assert_eq!(status, 400, "{body}");
+    assert!(body.to_string().contains("nosuchbr0"), "{body}");
+    // ...and so is an ISO outside the ISO library.
+    let (status, _) = put(
+        &c,
+        &token,
+        &format!("/vms/{vm}/config"),
+        json!({"hardware": {"cdrom": "/etc/hostname"}}),
+    )
+    .await;
+    assert!(status == 403 || status == 400, "foreign cdrom: {status}");
+
+    // Edit through the UI's own request type.
+    let mut hw = created.hardware.clone();
+    if let Some(b) = opts.bridges.first() {
+        hw.nets.push(horcrux_common::VmNic {
+            model: horcrux_common::NicModel::E1000,
+            bridge: b.name.clone(),
+            mac: None,
+            vlan: None,
+        });
+    }
+    let upd = api::VmConfigUpdate {
+        name: Some("contract-hw-renamed".into()),
+        cpus: Some(2),
+        memory: Some(256),
+        hardware: Some(hw.clone()),
+    };
+    let (status, body) = put(
+        &c,
+        &token,
+        &format!("/vms/{vm}/config"),
+        serde_json::to_value(&upd).unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200, "update config: {body}");
+    let updated: horcrux_common::VmConfig = decode("PUT /vms/:id/config", &body);
+    assert_eq!((updated.cpus, updated.memory), (2, 256));
+    assert_eq!(updated.name, "contract-hw-renamed");
+    for n in &updated.hardware.nets {
+        assert!(n.mac.is_some(), "MAC not generated: {:?}", n);
+    }
+    let got: horcrux_common::VmConfig = fetch(&c, &token, &format!("/vms/{vm}")).await;
+    assert_eq!(got.hardware, updated.hardware);
+
+    // The ISO can't be deleted while a VM's CD-ROM holds it.
+    let r = c
+        .delete(format!("{}/storage/isos/{}", api_base(), name))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 409);
+
+    // Power actions on a stopped VM answer 409, not 404/500.
+    for action in ["shutdown", "reset"] {
+        let (status, body) = post(&c, &token, &format!("/vms/{vm}/{action}"), json!({})).await;
+        assert_eq!(status, 409, "{action} on a stopped VM: {body}");
+    }
+
+    // Eject, then the ISO deletes.
+    hw.cdrom = None;
+    let (status, body) = put(
+        &c,
+        &token,
+        &format!("/vms/{vm}/config"),
+        json!({"hardware": serde_json::to_value(&hw).unwrap()}),
+    )
+    .await;
+    assert_eq!(status, 200, "eject: {body}");
+    delete(&c, &token, &format!("/vms/{vm}")).await;
+    let r = c
+        .delete(format!("{}/storage/isos/{}", api_base(), name))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 204);
+    let list: Vec<api::IsoFile> = fetch(&c, &token, "/storage/isos").await;
+    assert!(!list.iter().any(|i| i.name == name));
+}

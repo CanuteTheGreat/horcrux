@@ -45,6 +45,7 @@ fn benchmark_vm_status_serialization(c: &mut Criterion) {
         status: VmStatus::Running,
         disks: vec![],
         display: Default::default(),
+        hardware: Default::default(),
     };
 
     c.bench_function("vm_status_serialize", |b| {

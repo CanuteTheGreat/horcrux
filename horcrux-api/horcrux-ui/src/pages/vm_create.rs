@@ -24,6 +24,29 @@ pub fn VmCreate() -> impl IntoView {
     let (architecture, set_architecture) = create_signal(VmArchitecture::X86_64);
     let display = create_rw_signal(horcrux_common::VmDisplay::default());
     let (image, set_image) = create_signal(String::new());
+    // Network cards, CD-ROM and boot order (QEMU).
+    let hardware = create_rw_signal(horcrux_common::VmHardware::default());
+    let (host_options, set_host_options) = create_signal(None::<api::VmHostOptions>);
+    spawn_local(async move {
+        if let Ok(o) = api::get_vm_host_options().await {
+            // Proxmox's default: one VirtIO NIC on vmbr0 when the host has
+            // it (other bridges are picked with "Add network card").
+            if let Some(b) = o.bridges.iter().find(|b| b.name == "vmbr0") {
+                let bridge = b.name.clone();
+                hardware.update(|h| {
+                    if h.nets.is_empty() {
+                        h.nets.push(horcrux_common::VmNic {
+                            model: horcrux_common::NicModel::Virtio,
+                            bridge,
+                            mac: None,
+                            vlan: None,
+                        })
+                    }
+                });
+            }
+            set_host_options.set(Some(o));
+        }
+    });
     let (creating, set_creating) = create_signal(false);
     let (error, set_error) = create_signal(None::<String>);
 
@@ -61,6 +84,12 @@ pub fn VmCreate() -> impl IntoView {
             architecture: architecture.get(),
             disks: Vec::new(),
             display: display.get(),
+            // Hardware settings are for QEMU VMs (LXD/Incus use profiles).
+            hardware: if matches!(hypervisor.get(), VmHypervisor::Qemu) {
+                hardware.get()
+            } else {
+                Default::default()
+            },
         };
 
         let navigate = navigate.clone();
@@ -217,6 +246,10 @@ pub fn VmCreate() -> impl IntoView {
                 </div>
 
                 <super::vm_display::DisplaySettingsFields display=display/>
+
+                <Show when=move || !is_instance()>
+                    <super::vm_hardware::HardwareFields hardware=hardware options=host_options/>
+                </Show>
 
                 {move || error.get().map(|err| view! {
                     <p class="error">"Error: " {err}</p>

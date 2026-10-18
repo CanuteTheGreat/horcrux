@@ -482,6 +482,7 @@ mod tests {
             architecture: Default::default(),
             disks: Vec::new(),
             display: Default::default(),
+            hardware: Default::default(),
         }
     }
 

@@ -2,6 +2,7 @@ pub mod clone;
 pub mod clone_progress;
 pub mod cross_node_clone;
 pub mod display;
+pub mod hardware;
 pub mod hold;
 #[cfg(feature = "incus")]
 pub mod incus;
@@ -234,6 +235,9 @@ impl VmManager {
             .display
             .validate(&config.architecture)
             .map_err(horcrux_common::Error::Validation)?;
+        // NICs (MACs generated here), CD-ROM, boot order.
+        let mut config = config;
+        hardware::prepare_hardware(&mut config)?;
 
         // Create the VM
         // Dispatch on the requested hypervisor. The LXD/Incus VM backends
@@ -333,6 +337,9 @@ impl VmManager {
                 config.id
             )));
         }
+        // Clones arrive without MACs: give them their own.
+        let mut config = config;
+        hardware::prepare_hardware(&mut config)?;
         let vm = self.qemu.vm_from_config(&config);
         let vm_config = vm.to_config();
         if let Some(db) = &self.db {
@@ -595,6 +602,7 @@ mod tests {
             architecture: VmArchitecture::X86_64,
             disks: Vec::new(),
             display: Default::default(),
+            hardware: Default::default(),
         }
     }
 

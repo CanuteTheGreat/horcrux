@@ -215,6 +215,13 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
             if id == "import" {
                 return need(P::VmAllocate, "/vms");
             }
+            // What the VM create/edit forms can offer (bridges, ISOs).
+            if id == "host-options" {
+                return Requirement::AnyBelow {
+                    privilege: P::VmAudit,
+                    prefix: "/vms".into(),
+                };
+            }
             guest_action(m, &format!("/vms/{}", id), arg(2))
         }
 

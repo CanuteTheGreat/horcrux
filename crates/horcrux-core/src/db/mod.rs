@@ -130,8 +130,8 @@ pub mod vms {
         let hypervisor_str = format!("{:?}", vm.hypervisor).to_lowercase();
 
         sqlx::query(
-            "INSERT INTO vms (id, name, hypervisor, memory, cpus, disk_size, status, architecture, disks, display)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO vms (id, name, hypervisor, memory, cpus, disk_size, status, architecture, disks, display, hardware)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&vm.id)
         .bind(&vm.name)
@@ -143,6 +143,7 @@ pub mod vms {
         .bind(&arch_str)
         .bind(disks_json(vm)?)
         .bind(display_json(vm)?)
+        .bind(hardware_json(vm)?)
         .execute(pool)
         .await
         .map_err(|e| horcrux_common::Error::System(format!("Failed to create VM: {}", e)))?;
@@ -158,6 +159,12 @@ pub mod vms {
     fn display_json(vm: &VmConfig) -> Result<String> {
         serde_json::to_string(&vm.display).map_err(|e| {
             horcrux_common::Error::System(format!("Failed to encode VM display: {}", e))
+        })
+    }
+
+    fn hardware_json(vm: &VmConfig) -> Result<String> {
+        serde_json::to_string(&vm.hardware).map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to encode VM hardware: {}", e))
         })
     }
 
@@ -194,7 +201,7 @@ pub mod vms {
 
         sqlx::query(
             "UPDATE vms SET name = ?, hypervisor = ?, memory = ?, cpus = ?, disk_size = ?,
-             status = ?, architecture = ?, disks = ?, display = ?, updated_at = CURRENT_TIMESTAMP
+             status = ?, architecture = ?, disks = ?, display = ?, hardware = ?, updated_at = CURRENT_TIMESTAMP
              WHERE id = ?",
         )
         .bind(&vm.name)
@@ -206,6 +213,7 @@ pub mod vms {
         .bind(&arch_str)
         .bind(disks_json(vm)?)
         .bind(display_json(vm)?)
+        .bind(hardware_json(vm)?)
         .bind(&vm.id)
         .execute(pool)
         .await
@@ -268,6 +276,11 @@ pub mod vms {
             disks: serde_json::from_str(&row.get::<String, _>("disks")).unwrap_or_default(),
             display: row
                 .try_get::<String, _>("display")
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default(),
+            hardware: row
+                .try_get::<String, _>("hardware")
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default(),
@@ -504,6 +517,7 @@ mod tests {
             architecture: VmArchitecture::X86_64,
             disks: Vec::new(),
             display: Default::default(),
+            hardware: Default::default(),
         }
     }
 
@@ -528,6 +542,31 @@ mod tests {
         assert_eq!(got.disks.len(), 1);
         assert_eq!(got.disks[0].path, "/var/lib/horcrux/vms/disk-vm.qcow2");
         assert_eq!(db.list_vms().await.unwrap()[0].disks.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn vm_hardware_round_trips_through_create_and_update() {
+        use horcrux_common::{BootDevice, NicModel, VmHardware, VmNic};
+        let db = create_test_db().await;
+        let mut vm = create_test_vm_config("hw-vm", "HW VM");
+        db.create_vm(&vm).await.unwrap();
+        assert_eq!(
+            db.get_vm("hw-vm").await.unwrap().hardware,
+            VmHardware::default()
+        );
+        vm.hardware = VmHardware {
+            nets: vec![VmNic {
+                model: NicModel::E1000,
+                bridge: "vmbr0".into(),
+                mac: Some("02:00:00:aa:bb:cc".into()),
+                vlan: Some(20),
+            }],
+            cdrom: Some("/var/lib/horcrux/images/install.iso".into()),
+            boot: vec![BootDevice::Cdrom, BootDevice::Disk],
+        };
+        db.update_vm(&vm).await.unwrap();
+        assert_eq!(db.get_vm("hw-vm").await.unwrap().hardware, vm.hardware);
+        assert_eq!(db.list_vms().await.unwrap()[0].hardware, vm.hardware);
     }
 
     #[tokio::test]

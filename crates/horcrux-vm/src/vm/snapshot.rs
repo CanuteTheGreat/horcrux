@@ -861,6 +861,7 @@ mod tests {
             architecture: VmArchitecture::X86_64,
             disks: vec![],
             display: Default::default(),
+            hardware: Default::default(),
         }
     }
 

@@ -22,6 +22,8 @@ pub struct QemuVm {
     pub architecture: horcrux_common::VmArchitecture,
     /// Display protocol, video card and sound card.
     pub display: horcrux_common::VmDisplay,
+    /// Network cards, CD-ROM and boot order.
+    pub hardware: horcrux_common::VmHardware,
 }
 
 impl QemuVm {
@@ -42,6 +44,7 @@ impl QemuVm {
                 cache: "writethrough".to_string(),
             }],
             display: self.display,
+            hardware: self.hardware.clone(),
         }
     }
 }
@@ -159,14 +162,21 @@ pub fn qemu_command(
         ]);
     }
 
+    // CD-ROM drive (installer ISOs) with a stable device id, so media can
+    // be changed while the VM runs (QMP blockdev-change-medium / eject).
+    args.extend(cdrom_args(vm));
+
+    // Boot order (SeaBIOS, x86 PC): c = disk, d = CD-ROM, n = network.
+    args.extend(boot_args(vm));
+
     // Networking. Without any -nic/-netdev QEMU silently adds a default
     // user-mode (SLIRP) NIC, which NATs the guest through the HOST's own
     // network stack: on a cloud host the guest could then read the host's
     // instance metadata service (169.254.169.254) and its IAM role
-    // credentials. Horcrux QEMU VMs have no NIC configuration yet, so a VM
-    // gets no network at all; future NIC support must emit explicit
-    // -netdev/-device pairs in `network_args` instead. Only the implicit
-    // NIC is removed - no -nodefaults, so QEMU's other default devices stay.
+    // credentials. So a VM gets exactly the NICs it is configured with
+    // (tap devices on host bridges, see `network_args`), and `-nic none`
+    // when it has none. Only the implicit NIC is removed - no -nodefaults,
+    // so QEMU's other default devices stay.
     args.extend(network_args(vm));
 
     // Serial console, QMP, display protocol, video and sound.
@@ -181,11 +191,196 @@ pub fn qemu_command(
     (binary, args)
 }
 
-/// Network arguments for `vm`. No NIC is configurable for QEMU VMs yet, so
-/// this always disables QEMU's implicit default user-mode NIC (see the
-/// comment in `qemu_command`).
-fn network_args(_vm: &QemuVm) -> Vec<String> {
-    vec!["-nic".into(), "none".into()]
+/// QMP/QOM id of a VM's CD-ROM drive (used by live media changes).
+pub const CDROM_DEVICE_ID: &str = "cdrom0";
+
+/// The host tap device of a VM's `index`-th NIC: `tap<8 hex>i<n>`, derived
+/// from the VM id (Linux interface names are limited to 15 characters, VM
+/// ids are longer) and stable across restarts, so firewall rules and
+/// monitoring can find it.
+pub fn tap_name(vm_id: &str, index: usize) -> String {
+    // FNV-1a: stable across builds and platforms (unlike DefaultHasher).
+    let mut h: u32 = 0x811c9dc5;
+    for b in vm_id.as_bytes() {
+        h ^= *b as u32;
+        h = h.wrapping_mul(0x01000193);
+    }
+    format!("tap{h:08x}i{index}")
+}
+
+/// Network arguments for `vm`: one tap netdev + NIC device per configured
+/// card (the taps are created and attached to their bridges by
+/// `setup_taps` before QEMU starts), or `-nic none` when the VM has no
+/// network (see the comment in `qemu_command`).
+fn network_args(vm: &QemuVm) -> Vec<String> {
+    if vm.hardware.nets.is_empty() {
+        return vec!["-nic".into(), "none".into()];
+    }
+    let mut args = Vec::new();
+    for (i, nic) in vm.hardware.nets.iter().enumerate() {
+        args.push("-netdev".into());
+        args.push(format!(
+            "tap,id=net{i},ifname={},script=no,downscript=no",
+            tap_name(&vm.id, i)
+        ));
+        let mut dev = format!("{},netdev=net{i},id=nic{i}", nic.model.qemu_device());
+        if let Some(mac) = &nic.mac {
+            dev.push_str(&format!(",mac={mac}"));
+        }
+        args.push("-device".into());
+        args.push(dev);
+    }
+    args
+}
+
+/// CD-ROM drive: IDE on the x86 PC machine, virtio-SCSI elsewhere (the
+/// ARM/RISC-V `virt` machines have no IDE). Always present, empty when no
+/// ISO is configured, so an ISO can be inserted later without a restart.
+fn cdrom_args(vm: &QemuVm) -> Vec<String> {
+    let mut drive = "if=none,id=cd0,media=cdrom,readonly=on".to_string();
+    if let Some(iso) = &vm.hardware.cdrom {
+        drive.push_str(&format!(",format=raw,file={}", iso.replace(',', ",,")));
+    }
+    let mut args = vec!["-drive".into(), drive];
+    if vm.architecture == horcrux_common::VmArchitecture::X86_64 {
+        args.extend([
+            "-device".into(),
+            format!("ide-cd,drive=cd0,id={CDROM_DEVICE_ID}"),
+        ]);
+    } else {
+        args.extend([
+            "-device".into(),
+            "virtio-scsi-pci,id=cdscsi".into(),
+            "-device".into(),
+            format!("scsi-cd,bus=cdscsi.0,drive=cd0,id={CDROM_DEVICE_ID}"),
+        ]);
+    }
+    args
+}
+
+/// `-boot order=...` (SeaBIOS letters) for x86 guests. Default: disk, then
+/// CD-ROM - a blank disk falls through to the installer ISO.
+fn boot_args(vm: &QemuVm) -> Vec<String> {
+    use horcrux_common::BootDevice;
+    if vm.architecture != horcrux_common::VmArchitecture::X86_64 {
+        return Vec::new();
+    }
+    let order: String = if vm.hardware.boot.is_empty() {
+        "cd".into()
+    } else {
+        vm.hardware
+            .boot
+            .iter()
+            .map(|d| match d {
+                BootDevice::Disk => 'c',
+                BootDevice::Cdrom => 'd',
+                BootDevice::Net => 'n',
+            })
+            .collect()
+    };
+    vec!["-boot".into(), format!("order={order}")]
+}
+
+async fn run_ip(program: &str, args: &[&str]) -> Result<()> {
+    let out = Command::new(program)
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| horcrux_common::Error::System(format!("{program}: {e}")))?;
+    if !out.status.success() {
+        return Err(horcrux_common::Error::System(format!(
+            "{program} {}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
+/// Whether the host has a Linux bridge called `name`, and if it filters
+/// VLANs (`vlan_filtering`).
+pub fn host_bridge(name: &str) -> Option<bool> {
+    if !horcrux_common::valid_ifname(name) {
+        return None;
+    }
+    let dir = std::path::Path::new("/sys/class/net").join(name);
+    if !dir.join("bridge").is_dir() {
+        return None;
+    }
+    Some(
+        std::fs::read_to_string(dir.join("bridge/vlan_filtering"))
+            .map(|s| s.trim() == "1")
+            .unwrap_or(false),
+    )
+}
+
+/// Create the tap device of each NIC and plug it into its bridge (with the
+/// VLAN tag as the port's PVID) before QEMU starts. On failure every tap
+/// made so far is removed again.
+pub async fn setup_taps(vm: &QemuVm) -> Result<()> {
+    for (i, nic) in vm.hardware.nets.iter().enumerate() {
+        if let Err(e) = setup_tap(vm, i, nic).await {
+            remove_taps(&vm.id, vm.hardware.nets.len()).await;
+            return Err(e);
+        }
+    }
+    Ok(())
+}
+
+async fn setup_tap(vm: &QemuVm, i: usize, nic: &horcrux_common::VmNic) -> Result<()> {
+    let vlan_aware = host_bridge(&nic.bridge).ok_or_else(|| {
+        horcrux_common::Error::Validation(format!(
+            "net{i}: bridge {} does not exist on this host",
+            nic.bridge
+        ))
+    })?;
+    if nic.vlan.is_some() && !vlan_aware {
+        return Err(horcrux_common::Error::Validation(format!(
+            "net{i}: VLAN tag set but bridge {} is not VLAN-aware (vlan_filtering is off)",
+            nic.bridge
+        )));
+    }
+    let tap = tap_name(&vm.id, i);
+    // A tap left by a QEMU that died on its own: start from a clean one.
+    if std::path::Path::new("/sys/class/net").join(&tap).exists() {
+        let _ = run_ip("ip", &["link", "del", &tap]).await;
+    }
+    run_ip("ip", &["tuntap", "add", "dev", &tap, "mode", "tap"]).await?;
+    run_ip("ip", &["link", "set", &tap, "master", &nic.bridge]).await?;
+    if let Some(vid) = nic.vlan {
+        let vid = vid.to_string();
+        let _ = run_ip("bridge", &["vlan", "del", "dev", &tap, "vid", "1"]).await;
+        run_ip(
+            "bridge",
+            &["vlan", "add", "dev", &tap, "vid", &vid, "pvid", "untagged"],
+        )
+        .await?;
+    }
+    run_ip("ip", &["link", "set", &tap, "up"]).await?;
+    debug!("VM {}: net{i} = {tap} on {}", vm.id, nic.bridge);
+    Ok(())
+}
+
+/// Clean up after a QEMU that exited by itself (guest powered off): its
+/// pidfile, console sockets/state and tap devices.
+pub async fn cleanup_after_exit(vm: &QemuVm) {
+    let _ = tokio::fs::remove_file(pidfile(&vm.id)).await;
+    super::display::DisplayRuntime::remove(&vm.disk_path).await;
+    remove_taps(&vm.id, vm.hardware.nets.len()).await;
+}
+
+/// Remove a VM's tap devices (after stop, failed start or delete). Taps of
+/// NICs removed from the config since the last start are covered by
+/// scanning up to the maximum NIC count.
+pub async fn remove_taps(vm_id: &str, _configured: usize) {
+    for i in 0..horcrux_common::MAX_VM_NICS {
+        let tap = tap_name(vm_id, i);
+        if std::path::Path::new("/sys/class/net").join(&tap).exists() {
+            if let Err(e) = run_ip("ip", &["link", "del", &tap]).await {
+                tracing::warn!("VM {vm_id}: could not remove {tap}: {e}");
+            }
+        }
+    }
 }
 
 /// QEMU manager for VM operations
@@ -266,6 +461,7 @@ impl QemuManager {
             hypervisor: VmHypervisor::Qemu,
             architecture: config.architecture.clone(),
             display: config.display,
+            hardware: config.hardware.clone(),
         })
     }
 
@@ -295,6 +491,7 @@ impl QemuManager {
             hypervisor: config.hypervisor.clone(),
             architecture: config.architecture.clone(),
             display: config.display,
+            hardware: config.hardware.clone(),
         }
     }
 
@@ -321,6 +518,15 @@ impl QemuManager {
         for stale in [&runtime.serial_socket, &runtime.qmp_socket] {
             let _ = tokio::fs::remove_file(stale).await;
         }
+        if let Some(iso) = &vm.hardware.cdrom {
+            if !std::path::Path::new(iso).is_file() {
+                return Err(horcrux_common::Error::Validation(format!(
+                    "The ISO in the VM's CD-ROM drive is missing: {iso}"
+                )));
+            }
+        }
+        // Tap devices on the configured bridges (before QEMU opens them).
+        setup_taps(vm).await?;
         let kvm = tokio::fs::metadata("/dev/kvm").await.is_ok();
         let (binary, args) = qemu_command(vm, &runtime, kvm);
         let mut cmd = Command::new(binary);
@@ -341,6 +547,7 @@ impl QemuManager {
             // would otherwise leave them behind.
             let _ = tokio::fs::remove_file(pidfile(&vm.id)).await;
             super::display::DisplayRuntime::remove(&vm.disk_path).await;
+            remove_taps(&vm.id, vm.hardware.nets.len()).await;
             return Err(horcrux_common::Error::System(format!(
                 "Failed to start VM: {}",
                 stderr
@@ -365,6 +572,7 @@ impl QemuManager {
             }
             let _ = tokio::fs::remove_file(pidfile(&vm.id)).await;
             super::display::DisplayRuntime::remove(&vm.disk_path).await;
+            remove_taps(&vm.id, vm.hardware.nets.len()).await;
             return Err(e);
         }
 
@@ -403,9 +611,18 @@ impl QemuManager {
         kill(Pid::from_raw(pid), Signal::SIGTERM)
             .map_err(|e| horcrux_common::Error::System(format!("Failed to stop VM: {}", e)))?;
 
+        // Wait (bounded) for QEMU to exit so its tap devices are free.
+        for _ in 0..50 {
+            if !pid_alive(pid as u32) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+
         // Remove pidfile
         tokio::fs::remove_file(&pidfile).await.ok(); // Ignore errors if file doesn't exist
         super::display::DisplayRuntime::remove(&vm.disk_path).await;
+        remove_taps(&vm.id, vm.hardware.nets.len()).await;
 
         info!("VM {} stopped successfully", vm.id);
         Ok(())
@@ -432,6 +649,7 @@ impl QemuManager {
             let _ = tokio::fs::remove_file(vm.disk_path.with_extension(ext)).await;
         }
         let _ = tokio::fs::remove_file(pidfile(&vm.id)).await;
+        remove_taps(&vm.id, vm.hardware.nets.len()).await;
 
         // Delete the disk image (already gone is fine: the rest is cleaned).
         match tokio::fs::remove_file(&vm.disk_path).await {
@@ -624,6 +842,7 @@ mod tests {
             hypervisor: VmHypervisor::Qemu,
             architecture: arch,
             display,
+            hardware: Default::default(),
         }
     }
 
@@ -681,6 +900,84 @@ mod tests {
                 "{arch:?}: {args:?}"
             );
         }
+    }
+
+    #[test]
+    fn configured_nics_are_tap_devices_on_their_bridges() {
+        use horcrux_common::{NicModel, VmNic};
+        let mut v = vm(VmArchitecture::X86_64, VmDisplay::default());
+        v.hardware.nets = vec![
+            VmNic {
+                model: NicModel::Virtio,
+                bridge: "vmbr0".into(),
+                mac: Some("02:00:00:00:00:01".into()),
+                vlan: Some(20),
+            },
+            VmNic {
+                model: NicModel::E1000,
+                bridge: "br1".into(),
+                mac: Some("02:00:00:00:00:02".into()),
+                vlan: None,
+            },
+        ];
+        let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
+        let (_, args) = qemu_command(&v, &rt, true);
+        let a = args.join(" ");
+        let (t0, t1) = (tap_name("t1", 0), tap_name("t1", 1));
+        assert!(
+            a.contains(&format!(
+                "-netdev tap,id=net0,ifname={t0},script=no,downscript=no -device virtio-net-pci,netdev=net0,id=nic0,mac=02:00:00:00:00:01"
+            )),
+            "{a}"
+        );
+        assert!(
+            a.contains(&format!(
+                "-netdev tap,id=net1,ifname={t1},script=no,downscript=no -device e1000,netdev=net1,id=nic1,mac=02:00:00:00:00:02"
+            )),
+            "{a}"
+        );
+        // A VM with NICs has no "-nic none" and still no user-mode NIC.
+        assert!(!a.contains("-nic none") && !a.contains("user"), "{a}");
+    }
+
+    #[test]
+    fn tap_names_fit_linux_interface_names_and_are_stable() {
+        let t = tap_name("vm-1792357611", 7);
+        assert!(t.len() <= 15 && horcrux_common::valid_ifname(&t), "{t}");
+        assert_eq!(t, tap_name("vm-1792357611", 7));
+        assert_ne!(tap_name("vm-1", 0), tap_name("vm-2", 0));
+        assert_ne!(tap_name("vm-1", 0), tap_name("vm-1", 1));
+    }
+
+    #[test]
+    fn cdrom_and_boot_order() {
+        use horcrux_common::BootDevice;
+        let mut v = vm(VmArchitecture::X86_64, VmDisplay::default());
+        let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
+        // Empty drive, default order disk then CD-ROM.
+        let a = qemu_command(&v, &rt, true).1.join(" ");
+        assert!(
+            a.contains(
+                "-drive if=none,id=cd0,media=cdrom,readonly=on -device ide-cd,drive=cd0,id=cdrom0"
+            ),
+            "{a}"
+        );
+        assert!(a.contains("-boot order=cd"), "{a}");
+        v.hardware.cdrom = Some("/isos/a,b.iso".into());
+        v.hardware.boot = vec![BootDevice::Cdrom, BootDevice::Disk, BootDevice::Net];
+        let a = qemu_command(&v, &rt, true).1.join(" ");
+        // Commas in a path are escaped for QEMU's option parser.
+        assert!(a.contains("format=raw,file=/isos/a,,b.iso"), "{a}");
+        assert!(a.contains("-boot order=dcn"), "{a}");
+        // ARM virt has no IDE: the CD-ROM sits on virtio-SCSI, no -boot.
+        let mut v = vm(VmArchitecture::Aarch64, VmDisplay::default());
+        v.hardware.cdrom = Some("/isos/x.iso".into());
+        let a = qemu_command(&v, &rt, true).1.join(" ");
+        assert!(
+            a.contains("-device virtio-scsi-pci,id=cdscsi -device scsi-cd,bus=cdscsi.0,drive=cd0,id=cdrom0"),
+            "{a}"
+        );
+        assert!(!a.contains("-boot"), "{a}");
     }
 
     #[test]

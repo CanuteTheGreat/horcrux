@@ -71,6 +71,161 @@ pub struct VmConfig {
     /// Graphical console, video card and sound (defaults: VNC, std VGA, no sound).
     #[serde(default)]
     pub display: VmDisplay,
+    /// Network cards, CD-ROM (ISO) and boot order (QEMU VMs).
+    #[serde(default)]
+    pub hardware: VmHardware,
+}
+
+/// Emulated network card model.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum NicModel {
+    /// Paravirtual (best performance; Linux guests, Windows with virtio drivers).
+    #[default]
+    Virtio,
+    /// Intel e1000 (works without drivers in almost every OS installer).
+    E1000,
+    /// Realtek RTL8139 (very old guests).
+    Rtl8139,
+}
+
+impl NicModel {
+    /// QEMU `-device` driver name.
+    pub fn qemu_device(&self) -> &'static str {
+        match self {
+            NicModel::Virtio => "virtio-net-pci",
+            NicModel::E1000 => "e1000",
+            NicModel::Rtl8139 => "rtl8139",
+        }
+    }
+}
+
+/// One VM network card: a tap device on a host Linux bridge.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VmNic {
+    #[serde(default)]
+    pub model: NicModel,
+    /// Host bridge the NIC's tap device is attached to (e.g. vmbr0, br0).
+    pub bridge: String,
+    /// MAC address; generated (locally administered) and stored when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mac: Option<String>,
+    /// VLAN tag (the tap's PVID; the bridge must be VLAN-aware).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vlan: Option<u16>,
+}
+
+/// A boot device class, in `VmHardware::boot` order.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BootDevice {
+    Disk,
+    Cdrom,
+    Net,
+}
+
+/// Per-VM hardware beyond CPU/memory/disk/display.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct VmHardware {
+    /// Network cards (net0, net1, ...). Empty = no network at all.
+    #[serde(default)]
+    pub nets: Vec<VmNic>,
+    /// ISO image in the CD-ROM drive (a file from the ISO library); None =
+    /// drive empty. Can be changed while the VM runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cdrom: Option<String>,
+    /// Boot order; empty = disk, then CD-ROM.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boot: Vec<BootDevice>,
+}
+
+/// Most network cards one VM can have.
+pub const MAX_VM_NICS: usize = 8;
+
+/// Whether `name` is a valid Linux interface name (1-15 chars, no '/',
+/// whitespace or ':').
+pub fn valid_ifname(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 15
+        && name != "."
+        && name != ".."
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+/// Normalize a MAC address to lower-case `aa:bb:cc:dd:ee:ff`, refusing
+/// malformed and multicast addresses (a guest NIC needs a unicast MAC).
+pub fn normalize_mac(mac: &str) -> std::result::Result<String, String> {
+    let parts: Vec<&str> = mac.trim().split([':', '-']).collect();
+    if parts.len() != 6 || parts.iter().any(|p| p.len() != 2) {
+        return Err(format!("invalid MAC address {mac:?}"));
+    }
+    let mut bytes = [0u8; 6];
+    for (b, p) in bytes.iter_mut().zip(&parts) {
+        *b = u8::from_str_radix(p, 16).map_err(|_| format!("invalid MAC address {mac:?}"))?;
+    }
+    if bytes[0] & 1 == 1 {
+        return Err(format!("{mac} is a multicast address"));
+    }
+    if bytes == [0; 6] {
+        return Err("the all-zero MAC address can't be used".into());
+    }
+    Ok(bytes
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(":"))
+}
+
+impl VmHardware {
+    /// The hardware a clone gets: the same cards, ISO and boot order, but
+    /// no MAC addresses (new ones are generated, two guests on one network
+    /// with the same MAC break each other's connectivity).
+    pub fn for_clone(&self) -> VmHardware {
+        let mut hw = self.clone();
+        for n in &mut hw.nets {
+            n.mac = None;
+        }
+        hw
+    }
+
+    /// Check everything that doesn't need the host (bridges and ISO files
+    /// are checked by the server).
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.nets.len() > MAX_VM_NICS {
+            return Err(format!("a VM can have at most {MAX_VM_NICS} network cards"));
+        }
+        let mut macs = Vec::new();
+        for (i, n) in self.nets.iter().enumerate() {
+            if !valid_ifname(&n.bridge) {
+                return Err(format!("net{i}: invalid bridge name {:?}", n.bridge));
+            }
+            if let Some(v) = n.vlan {
+                if !(1..=4094).contains(&v) {
+                    return Err(format!("net{i}: VLAN tag must be 1-4094"));
+                }
+            }
+            if let Some(m) = &n.mac {
+                let m = normalize_mac(m).map_err(|e| format!("net{i}: {e}"))?;
+                if macs.contains(&m) {
+                    return Err(format!("net{i}: MAC {m} is used twice"));
+                }
+                macs.push(m);
+            }
+        }
+        for (i, d) in self.boot.iter().enumerate() {
+            if self.boot[..i].contains(d) {
+                return Err(format!("boot device {d:?} is listed twice"));
+            }
+        }
+        if let Some(iso) = &self.cdrom {
+            if iso.trim().is_empty() {
+                return Err("cdrom: empty ISO path (omit it to leave the drive empty)".into());
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Remote display protocol a VM's graphical console is served over.
@@ -594,6 +749,7 @@ mod tests {
             status: VmStatus::Running,
             disks: Vec::new(),
             display: Default::default(),
+            hardware: Default::default(),
         };
 
         let json = serde_json::to_string(&vm).unwrap();
@@ -683,5 +839,65 @@ mod tests {
         let available = pool.size_gb - pool.used_gb;
         assert_eq!(available, 55);
         assert!(pool.used_gb <= pool.size_gb);
+    }
+
+    #[test]
+    fn vm_hardware_validation() {
+        let nic = |bridge: &str| VmNic {
+            model: NicModel::Virtio,
+            bridge: bridge.into(),
+            mac: None,
+            vlan: None,
+        };
+        let mut hw = VmHardware {
+            nets: vec![nic("vmbr0")],
+            cdrom: None,
+            boot: vec![BootDevice::Cdrom, BootDevice::Disk],
+        };
+        assert!(hw.validate().is_ok());
+        hw.nets[0].vlan = Some(4095);
+        assert!(hw.validate().unwrap_err().contains("VLAN"));
+        hw.nets[0].vlan = Some(20);
+        hw.nets.push(nic("bad/name"));
+        assert!(hw.validate().unwrap_err().contains("bridge"));
+        hw.nets[1] = nic("averyveryverylongbridge");
+        assert!(hw.validate().is_err());
+        hw.nets[1] = nic("br1");
+        hw.nets[0].mac = Some("02:00:00:00:00:01".into());
+        hw.nets[1].mac = Some("02-00-00-00-00-01".into());
+        assert!(hw.validate().unwrap_err().contains("used twice"));
+        hw.nets[1].mac = None;
+        hw.boot.push(BootDevice::Disk);
+        assert!(hw.validate().unwrap_err().contains("twice"));
+        hw.boot.pop();
+        hw.nets = (0..=MAX_VM_NICS).map(|_| nic("br0")).collect();
+        assert!(hw.validate().is_err());
+    }
+
+    #[test]
+    fn mac_addresses_are_normalized_and_must_be_unicast() {
+        assert_eq!(
+            normalize_mac("02:AB:cd:00:11:22").unwrap(),
+            "02:ab:cd:00:11:22"
+        );
+        assert_eq!(
+            normalize_mac("52-54-00-12-34-56").unwrap(),
+            "52:54:00:12:34:56"
+        );
+        assert!(normalize_mac("01:00:5e:00:00:01").is_err()); // multicast
+        assert!(normalize_mac("00:00:00:00:00:00").is_err());
+        assert!(normalize_mac("02:00:00:00:00").is_err());
+        assert!(normalize_mac("zz:00:00:00:00:00").is_err());
+    }
+
+    #[test]
+    fn vm_config_without_hardware_still_parses() {
+        // VMs stored or sent before NIC support have no "hardware" key.
+        let v: VmConfig = serde_json::from_str(
+            r#"{"id":"a","name":"a","hypervisor":"qemu","memory":512,"cpus":1,"disk_size":1,"status":"stopped"}"#,
+        )
+        .unwrap();
+        assert!(v.hardware.nets.is_empty());
+        assert!(v.hardware.cdrom.is_none());
     }
 }

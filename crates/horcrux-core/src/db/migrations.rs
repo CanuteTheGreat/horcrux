@@ -172,6 +172,15 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     )
     .await?;
 
+    // Per-VM hardware (JSON VmHardware: network cards, CD-ROM ISO, boot
+    // order). QEMU VMs had no NIC and no way to boot an installer before.
+    run_migration(
+        pool,
+        "026_add_vm_hardware_column",
+        MIGRATION_026_ADD_VM_HARDWARE,
+    )
+    .await?;
+
     Ok(())
 }
 
@@ -1075,6 +1084,10 @@ CREATE TABLE notification_channels (
 
 const MIGRATION_024_ADD_VM_DISPLAY: &str = r#"
 ALTER TABLE vms ADD COLUMN display TEXT NOT NULL DEFAULT '{}';
+"#;
+
+const MIGRATION_026_ADD_VM_HARDWARE: &str = r#"
+ALTER TABLE vms ADD COLUMN hardware TEXT NOT NULL DEFAULT '{}';
 "#;
 
 const MIGRATION_025_AUTH_ACCESS_CONTROL: &str = r#"

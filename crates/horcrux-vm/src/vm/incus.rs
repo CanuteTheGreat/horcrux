@@ -84,6 +84,7 @@ impl IncusManager {
             hypervisor: horcrux_common::VmHypervisor::Incus,
             architecture: config.architecture.clone(),
             display: config.display,
+            hardware: Default::default(),
         })
     }
 
@@ -229,6 +230,7 @@ mod image_tests {
             architecture: Default::default(),
             disks: Vec::new(),
             display: Default::default(),
+            hardware: Default::default(),
         }
     }
 

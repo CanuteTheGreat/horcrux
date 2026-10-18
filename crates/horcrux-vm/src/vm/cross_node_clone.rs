@@ -561,6 +561,8 @@ impl CrossNodeCloneManager {
             architecture: source_vm.architecture.clone(),
             disks: Vec::new(),
             display: source_vm.display,
+            // Same NICs/ISO/boot order; the clone gets new MAC addresses.
+            hardware: source_vm.hardware.for_clone(),
         };
 
         // Update disk paths for target node

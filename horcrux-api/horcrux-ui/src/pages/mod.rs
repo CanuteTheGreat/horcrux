@@ -15,6 +15,8 @@ mod container_volumes;
 pub mod dashboard;
 mod gpu;
 pub mod ha;
+mod host_bridges;
+mod iso_library;
 pub mod kubernetes;
 mod login;
 pub mod lxc;
@@ -28,6 +30,7 @@ pub mod storage;
 pub mod system;
 mod vm_create;
 mod vm_display;
+mod vm_hardware;
 mod vm_list;
 
 pub use alerts::Alerts;
@@ -43,6 +46,8 @@ pub use container_stacks::StacksPage;
 pub use container_volumes::VolumesPage;
 pub use dashboard::Dashboard;
 pub use gpu::GpuManagement;
+pub use host_bridges::HostBridgesPage;
+pub use iso_library::IsoLibraryPage;
 pub use login::Login;
 pub use lxc::{LxcContainerPage, LxcTemplatesPage};
 pub use monitoring::Monitoring;
@@ -51,6 +56,7 @@ pub use replication_list::ReplicationList;
 pub use snapshot_list::SnapshotList;
 pub use storage::StorageManagement;
 pub use vm_create::VmCreate;
+pub use vm_hardware::VmHardwarePage;
 pub use vm_list::VmList;
 
 // Re-export auth components

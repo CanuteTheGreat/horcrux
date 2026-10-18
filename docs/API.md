@@ -420,6 +420,58 @@ Authorization: Bearer <token>
 
 ---
 
+### VM hardware: network cards, CD-ROM, boot order
+
+`POST /api/vms` and `PUT /api/vms/:id/config` take a `hardware` object (QEMU VMs):
+
+```json
+{
+  "nets":  [{"model": "virtio", "bridge": "vmbr0", "vlan": 20, "mac": "02:..:..:..:..:.."}],
+  "cdrom": "/var/lib/horcrux/images/debian-12.iso",
+  "boot":  ["cdrom", "disk"]
+}
+```
+
+- Each NIC is a tap device (`tap<hash>i<n>`) plugged into the host bridge; `vlan`
+  sets the tap's PVID and needs a VLAN-aware bridge. A missing `mac` is generated
+  (locally administered). `model`: `virtio` (default), `e1000`, `rtl8139`.
+- `cdrom` must be a file in the ISO library (see ISO Images). It can be changed or
+  set to `null` (eject) while the VM runs; everything else needs the VM stopped
+  (409 otherwise).
+- `boot`: any order of `disk`, `cdrom`, `net`; default disk then CD-ROM.
+- `PUT /api/vms/:id/config` also takes `name`, `cpus`, `memory` (MB); absent
+  fields are kept.
+- `GET /api/vms/host-options`: the host's bridges (`name`, `vlan_aware`), the ISO
+  library and its directory, for VM forms.
+
+### Shutdown / Reboot / Reset VM
+
+- `POST /api/vms/:id/shutdown` `{"timeout": 60, "force_stop": false}`: ACPI power
+  button, wait up to `timeout` s. If the guest ignores it: 409 (VM keeps running),
+  or with `force_stop` the VM is stopped.
+- `POST /api/vms/:id/reboot` `{"timeout": 60}`: shutdown (stopped after the
+  timeout), then start.
+- `POST /api/vms/:id/reset`: hard reset.
+
+### ISO Images
+
+- `GET /api/storage/isos`: ISOs in the image directory (`HORCRUX_IMAGE_DIR`,
+  default `<data_dir>/images`) and storage pool directories; downloads in
+  progress show `downloading: true`, failed ones an `error`.
+- `POST /api/storage/isos/download` `{"url": "https://...", "filename": "x.iso"}`
+  -> 202; the file appears once complete.
+- `DELETE /api/storage/isos/:name` (409 while a VM's CD-ROM holds it).
+
+### Host bridges
+
+- `GET /api/network/bridges`: every Linux bridge (ports, addresses, VLAN
+  filtering, `managed`).
+- `POST /api/network/bridges` `{"name": "vmbr0", "vlan_aware": true,
+  "address": "10.10.0.1/24", "ports": ["eth1"]}`: create a bridge; Horcrux
+  re-creates it when it starts. A port that carries an IP address is refused.
+- `DELETE /api/network/bridges/:name`: managed bridges only, refused while a VM
+  NIC uses it.
+
 ## Snapshots
 
 ### List Snapshots

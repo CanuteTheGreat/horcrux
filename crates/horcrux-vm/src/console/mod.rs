@@ -325,6 +325,7 @@ mod tests {
                 cache: "none".into(),
             }],
             display: VmDisplay::default(),
+            hardware: Default::default(),
         }
     }
 

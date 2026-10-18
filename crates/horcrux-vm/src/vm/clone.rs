@@ -98,6 +98,8 @@ impl VmCloneManager {
             architecture: source_vm.architecture.clone(),
             disks: cloned_disks,
             display: source_vm.display,
+            // Same NICs/ISO/boot order; the clone gets new MAC addresses.
+            hardware: source_vm.hardware.for_clone(),
         };
 
         info!(
@@ -1085,6 +1087,7 @@ mod tests {
             architecture: VmArchitecture::X86_64,
             disks: vec![],
             display: Default::default(),
+            hardware: Default::default(),
         }
     }
 

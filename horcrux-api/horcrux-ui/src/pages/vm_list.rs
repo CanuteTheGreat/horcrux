@@ -45,6 +45,22 @@ pub fn VmList() -> impl IntoView {
         });
     };
 
+    // Clean shutdown (ACPI power button), reboot.
+    let shutdown_vm = move |vm_id: String| {
+        set_notice.set(Some(format!("Shutting down VM {}...", vm_id)));
+        spawn_local(async move {
+            let r = api::shutdown_vm(&vm_id, 60, false).await.map(|_| ());
+            report(format!("VM {} shut down", vm_id), r);
+        });
+    };
+    let reboot_vm = move |vm_id: String| {
+        set_notice.set(Some(format!("Rebooting VM {}...", vm_id)));
+        spawn_local(async move {
+            let r = api::reboot_vm(&vm_id).await.map(|_| ());
+            report(format!("VM {} rebooted", vm_id), r);
+        });
+    };
+
     let stop_vm = move |vm_id: String| {
         spawn_local(async move {
             let r = api::stop_vm(&vm_id).await;
@@ -148,6 +164,10 @@ pub fn VmList() -> impl IntoView {
                                         let console_href = format!("/vms/{}/console", vm.id);
                                         let vm_id_start = vm.id.clone();
                                         let vm_id_stop = vm.id.clone();
+                                        let vm_id_shutdown = vm.id.clone();
+                                        let vm_id_reboot = vm.id.clone();
+                                        let hardware_href = format!("/vms/{}/hardware", vm.id);
+                                        let is_qemu = vm.hypervisor == horcrux_common::VmHypervisor::Qemu;
                                         let vm_id_delete = vm.id.clone();
                                         let vm_for_clone = vm.clone();
                                         let status_class = match vm.status {
@@ -172,10 +192,23 @@ pub fn VmList() -> impl IntoView {
                                                         class="btn btn-sm btn-success"
                                                         on:click=move |_| start_vm(vm_id_start.clone())
                                                     >"Start"</button>
+                                                    {is_qemu.then(|| view! {
+                                                        <button
+                                                            class="btn btn-sm btn-warning vm-shutdown"
+                                                            title="ACPI shutdown (the guest powers itself off)"
+                                                            on:click=move |_| shutdown_vm(vm_id_shutdown.clone())
+                                                        >"Shutdown"</button>
+                                                        <button
+                                                            class="btn btn-sm btn-secondary vm-reboot"
+                                                            on:click=move |_| reboot_vm(vm_id_reboot.clone())
+                                                        >"Reboot"</button>
+                                                    })}
                                                     <button
                                                         class="btn btn-sm btn-warning"
+                                                        title="Stop immediately (like pulling the power)"
                                                         on:click=move |_| stop_vm(vm_id_stop.clone())
                                                     >"Stop"</button>
+                                                    <A href=hardware_href class="btn btn-sm btn-secondary vm-hardware-link">"Hardware"</A>
                                                     <button
                                                         class="btn btn-sm btn-secondary"
                                                         on:click=move |_| open_clone(vm_for_clone.clone())

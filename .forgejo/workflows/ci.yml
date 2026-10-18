@@ -331,6 +331,16 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Firewall apply (real nftables)"
           bash horcrux-api/tests/firewall_nft_e2e.sh target/debug/horcrux-api
 
+      - name: VM networking + hardware (real taps, VLAN, PXE, live CD-ROM)
+        # NET_ADMIN + /dev/net/tun sibling container with real QEMU: Host
+        # Bridges API (create, re-create at start), ISO download, a VM NIC
+        # on a VLAN-aware bridge (tap = bridge port with PVID 20, the
+        # guest's PXE ROM sends DHCP from the VM's MAC on VLAN 20), live
+        # CD-ROM insert/eject over QMP, shutdown/reboot/reset.
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "VM networking + hardware"
+          bash horcrux-api/tests/vm_nic_e2e.sh target/debug/horcrux-api
+
       - name: LXC containers (real nested LXC, Proxmox pct parity)
         # The Test container can't run LXC, so lxc_e2e.sh runs the built API
         # in a privileged sibling container with LXC installed, a VLAN-aware

@@ -619,12 +619,77 @@ def main():
         page.locator(f"tr[data-vm-id='{vid}']").get_by_role("button", name="Stop").click()
         expect(page.locator(f"tr[data-vm-id='{vid}']")).to_contain_text("stopped", timeout=60000)
 
+        vm_hardware_checks(page, vid)
+
         browser.close()
 
     bad = [e for e in console_errors if "favicon" in e or "missing field" in e]
     assert not bad, f"console errors: {bad}"
     assert not missing_resources, f"page loads fetched missing resources (404): {sorted(set(missing_resources))}"
     print("UI E2E: all checks passed")
+
+
+def vm_hardware_checks(page, vid):
+    """ISO library download, VM Hardware page (CD-ROM, boot order, CPUs),
+    Host Bridges page, and the Migration Center's resource cards (they were
+    rendered once, empty, before the VM list loaded - no Migrate button)."""
+    # ---- Infrastructure > ISO Images: download from a URL ---------------
+    iso_dir = "/tmp/e2e-isosrc"
+    os.makedirs(iso_dir, exist_ok=True)
+    with open(f"{iso_dir}/e2e-ui.iso", "wb") as f:
+        f.write(b"\0" * 65536)
+    handler = lambda *a, **k: http.server.SimpleHTTPRequestHandler(*a, directory=iso_dir, **k)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    tok = token()
+    _req("DELETE", "/api/storage/isos/e2e-ui.iso", tok)
+    page.goto(f"{BASE}/storage/isos")
+    page.fill("#iso-url", f"http://127.0.0.1:{srv.server_address[1]}/e2e-ui.iso")
+    page.locator("#iso-download").click()
+    expect(page.locator("tr.iso-row[data-iso='e2e-ui.iso'] .iso-status")).to_have_text("ready", timeout=60000)
+    iso = next(i for i in api_get("/api/storage/isos", tok) if i["name"] == "e2e-ui.iso")
+
+    # ---- VM > Hardware: CD-ROM + boot order + CPUs, saved ----------------
+    page.goto(f"{BASE}/vms")
+    page.locator(f"tr[data-vm-id='{vid}']").get_by_role("link", name="Hardware").click()
+    page.wait_for_url(f"{BASE}/vms/{vid}/hardware")
+    expect(page.locator("#vm-cdrom option", has_text="e2e-ui.iso")).to_have_count(1, timeout=30000)
+    page.select_option("#vm-cdrom", iso["path"])
+    page.select_option("#vm-boot", "cdrom")
+    page.fill("#vm-hw-cpus", "2")
+    page.locator("#vm-hw-save").click()
+    expect(page.locator("#vm-hw-notice")).to_contain_text("Saved", timeout=30000)
+    v = api_get(f"/api/vms/{vid}", tok)
+    assert v["cpus"] == 2 and v["hardware"]["cdrom"] == iso["path"], v
+    assert v["hardware"]["boot"] == ["cdrom", "disk"], v["hardware"]
+    # "Add network card" adds a row (or explains there is no bridge yet,
+    # with a link to Host Bridges - never a dead end).
+    page.locator("#vm-nic-add").click()
+    expect(page.locator(".vm-nic-row")).to_have_count(1)
+    if page.locator("#vm-no-bridges").count():
+        page.locator("#vm-no-bridges a").click()
+        page.wait_for_url(f"{BASE}/network/bridges")
+    # eject so the ISO can be deleted
+    _req("PUT", f"/api/vms/{vid}/config", tok, {"hardware": {"cdrom": None}})
+    _req("DELETE", "/api/storage/isos/e2e-ui.iso", tok)
+
+    # ---- Infrastructure > Host Bridges renders -----------------------------
+    page.goto(f"{BASE}/network/bridges")
+    expect(page.locator("#bridge-table")).to_be_visible(timeout=30000)
+    expect(page.locator("#bridge-create-form")).to_be_visible()
+
+    # ---- HA > Migration Center lists the VM with a Migrate button -----------
+    page.goto(f"{BASE}/ha/migration")
+    card = page.locator("#migration-vm-grid .resource-card", has_text=v["name"])
+    expect(card).to_have_count(1, timeout=30000)
+    migrate = card.get_by_role("button", name="Migrate")
+    expect(migrate).to_be_enabled()
+    migrate.click()
+    expect(page.locator(".modal-content", has_text="Migrate Resource")).to_be_visible()
+    # a stopped VM is offered an offline migration
+    expect(page.locator(".modal-content select").nth(1)).to_have_value("offline")
+    page.locator(".modal-content .modal-close").click()
+    srv.shutdown()
 
 
 def ui_login(page, user, password):
