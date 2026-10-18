@@ -304,6 +304,14 @@ impl std::fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
+impl ApiError {
+    /// The server refused for lack of a privilege (HTTP 403): the panel or
+    /// page should say "no permission", not "could not reach the backend".
+    pub fn is_forbidden(&self) -> bool {
+        self.message == "HTTP 403" || self.message.starts_with("HTTP 403:")
+    }
+}
+
 /// Get all VMs
 pub async fn get_vms() -> Result<Vec<VmConfig>, ApiError> {
     fetch_json("/vms").await
@@ -6190,6 +6198,27 @@ mod tests {
         );
         assert_eq!(error_text(404, ""), "HTTP 404");
         assert_eq!(error_text(502, "bad gateway"), "HTTP 502: bad gateway");
+    }
+
+    #[test]
+    fn rbac_refusals_are_recognised_as_no_permission() {
+        // the body rbac_middleware sends for a missing privilege
+        let body = r#"{"error":"forbidden","message":"Permission check failed: Sys.Audit on /","required_privilege":"Sys.Audit","path":"/"}"#;
+        let e = ApiError {
+            message: error_text(403, body),
+        };
+        assert!(e.is_forbidden(), "{}", e.message);
+        assert!(ApiError {
+            message: error_text(403, "")
+        }
+        .is_forbidden());
+        for other in [
+            error_text(401, ""),
+            error_text(500, body),
+            "HTTP 4030".into(),
+        ] {
+            assert!(!ApiError { message: other }.is_forbidden());
+        }
     }
 
     #[test]
