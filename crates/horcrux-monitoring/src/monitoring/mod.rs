@@ -1,4 +1,3 @@
-#![allow(clippy::unnecessary_filter_map)]
 //! Monitoring and metrics collection
 //! Provides real-time and historical resource metrics for VMs, containers, and system
 pub mod advanced_metrics;
@@ -151,27 +150,9 @@ impl MonitoringManager {
                     }
                 }
 
-                // Collect VM metrics
-                if let Ok(vms) = Self::discover_vms().await {
-                    for vm_id in vms {
-                        if let Ok(metrics) = Self::collect_vm_metrics(&vm_id).await {
-                            let mut vms = vm_metrics.write().await;
-                            vms.insert(vm_id.clone(), metrics.clone());
-
-                            // Store in history
-                            let mut hist = history.write().await;
-                            let key = format!("vm.{}.cpu.usage", vm_id);
-                            let points = hist.entry(key).or_insert_with(Vec::new);
-                            points.push(TimeSeriesPoint {
-                                timestamp: metrics.timestamp,
-                                value: metrics.cpu.usage_percent,
-                            });
-                            if points.len() > max_points {
-                                points.remove(0);
-                            }
-                        }
-                    }
-                }
+                // VM metrics are not collected here: the API's metrics
+                // collector knows the real VM ids and configs and pushes
+                // them in through `record_vm_metrics`.
 
                 // Collect container metrics
                 if let Ok(containers) = Self::discover_containers().await {
@@ -218,6 +199,35 @@ impl MonitoringManager {
     pub async fn list_vm_metrics(&self) -> Vec<ResourceMetrics> {
         let metrics = self.vm_metrics.read().await;
         metrics.values().cloned().collect()
+    }
+
+    /// Store the latest metrics of a VM (keyed by its Horcrux VM id) and
+    /// append its CPU usage to the `vm.<id>.cpu.usage` history.
+    pub async fn record_vm_metrics(&self, metrics: ResourceMetrics) {
+        {
+            let mut hist = self.history.write().await;
+            let points = hist
+                .entry(format!("vm.{}.cpu.usage", metrics.id))
+                .or_default();
+            points.push(TimeSeriesPoint {
+                timestamp: metrics.timestamp,
+                value: metrics.cpu.usage_percent,
+            });
+            if points.len() > self.max_history_points {
+                let excess = points.len() - self.max_history_points;
+                points.drain(..excess);
+            }
+        }
+        self.vm_metrics
+            .write()
+            .await
+            .insert(metrics.id.clone(), metrics);
+    }
+
+    /// Drop the current metrics of every VM `keep` rejects (stopped or
+    /// deleted VMs), so they aren't reported as live. History is kept.
+    pub async fn retain_vm_metrics(&self, keep: impl Fn(&str) -> bool) {
+        self.vm_metrics.write().await.retain(|id, _| keep(id));
     }
 
     /// Get current container metrics
@@ -297,114 +307,6 @@ impl MonitoringManager {
             load_average_1m: load1,
             load_average_5m: load5,
             load_average_15m: load15,
-        })
-    }
-
-    async fn collect_vm_metrics(vm_id: &str) -> Result<ResourceMetrics> {
-        let timestamp = chrono::Utc::now().timestamp();
-
-        // Try to get VM PID
-        let pid_result = tokio::process::Command::new("pgrep")
-            .arg("-f")
-            .arg(format!("qemu.*{}", vm_id))
-            .output()
-            .await;
-
-        let (cpu_usage, memory_bytes) = if let Ok(pid_output) = pid_result {
-            if pid_output.status.success() {
-                let pid_str = String::from_utf8_lossy(&pid_output.stdout);
-                if let Some(pid) = pid_str.trim().lines().next() {
-                    // Read process stats from /proc/<pid>/stat
-                    let stat_path = format!("/proc/{}/stat", pid);
-                    let stat_result = tokio::fs::read_to_string(&stat_path).await;
-
-                    let cpu = if let Ok(stat) = stat_result {
-                        let parts: Vec<&str> = stat.split_whitespace().collect();
-                        if parts.len() >= 14 {
-                            let utime: u64 = parts[13].parse().unwrap_or(0);
-                            let stime: u64 = parts[14].parse().unwrap_or(0);
-                            let total_time = utime + stime;
-                            // Convert to percentage (rough estimate)
-                            (total_time as f64 / 100.0).min(100.0)
-                        } else {
-                            0.0
-                        }
-                    } else {
-                        0.0
-                    };
-
-                    // Read memory from /proc/<pid>/status
-                    let status_path = format!("/proc/{}/status", pid);
-                    let mem = if let Ok(status) = tokio::fs::read_to_string(&status_path).await {
-                        let mut mem_kb = 0u64;
-                        for line in status.lines() {
-                            if line.starts_with("VmRSS:") {
-                                if let Some(kb_str) = line.split_whitespace().nth(1) {
-                                    if let Ok(kb) = kb_str.parse::<u64>() {
-                                        mem_kb = kb;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        mem_kb * 1024 // Convert KB to bytes
-                    } else {
-                        0u64
-                    };
-
-                    (cpu, mem)
-                } else {
-                    (0.0, 0u64)
-                }
-            } else {
-                (0.0, 0u64)
-            }
-        } else {
-            (0.0, 0u64)
-        };
-
-        // Estimate total memory (from VM config, would need to query QEMU)
-        let total_memory = if memory_bytes > 0 {
-            memory_bytes * 2 // Rough estimate
-        } else {
-            4 * 1024 * 1024 * 1024 // Default 4GB
-        };
-
-        let usage_percent = if total_memory > 0 {
-            (memory_bytes as f64 / total_memory as f64) * 100.0
-        } else {
-            0.0
-        };
-
-        Ok(ResourceMetrics {
-            id: vm_id.to_string(),
-            name: format!("VM-{}", vm_id),
-            timestamp,
-            cpu: CpuMetrics {
-                usage_percent: cpu_usage,
-                cores: 2,
-                load_average: cpu_usage / 100.0,
-            },
-            memory: MemoryMetrics {
-                total_bytes: total_memory,
-                used_bytes: memory_bytes,
-                free_bytes: total_memory.saturating_sub(memory_bytes),
-                usage_percent,
-            },
-            disk: DiskMetrics {
-                read_bytes_per_sec: 0,
-                write_bytes_per_sec: 0,
-                read_iops: 0,
-                write_iops: 0,
-                total_bytes: 100 * 1024 * 1024 * 1024,
-                used_bytes: 50 * 1024 * 1024 * 1024,
-            },
-            network: NetworkMetrics {
-                rx_bytes_per_sec: 0,
-                tx_bytes_per_sec: 0,
-                rx_packets_per_sec: 0,
-                tx_packets_per_sec: 0,
-            },
         })
     }
 
@@ -622,31 +524,6 @@ impl MonitoringManager {
         })
     }
 
-    async fn discover_vms() -> Result<Vec<String>> {
-        // Query running VMs from QEMU processes
-        let output = tokio::process::Command::new("pgrep")
-            .arg("-f")
-            .arg("qemu-system")
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Ok(vec![]);
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let vm_ids: Vec<String> = stdout
-            .lines()
-            .filter_map(|pid| {
-                // Try to extract VM ID from process command line
-                // This is a simplified approach
-                Some(format!("vm-{}", pid.trim()))
-            })
-            .collect();
-
-        Ok(vm_ids)
-    }
-
     async fn discover_containers() -> Result<Vec<String>> {
         // Try Docker first
         if let Ok(output) = tokio::process::Command::new("docker")
@@ -825,6 +702,69 @@ mod tests {
     async fn test_monitoring_manager() {
         let manager = MonitoringManager::new();
         assert!(manager.get_node_metrics().await.is_none());
+    }
+
+    fn vm_sample(id: &str, timestamp: i64, cpu: f64) -> ResourceMetrics {
+        ResourceMetrics {
+            id: id.to_string(),
+            name: id.to_string(),
+            timestamp,
+            cpu: CpuMetrics {
+                usage_percent: cpu,
+                cores: 2,
+                load_average: 0.0,
+            },
+            memory: MemoryMetrics {
+                total_bytes: 0,
+                used_bytes: 0,
+                free_bytes: 0,
+                usage_percent: 0.0,
+            },
+            disk: DiskMetrics {
+                read_bytes_per_sec: 0,
+                write_bytes_per_sec: 0,
+                read_iops: 0,
+                write_iops: 0,
+                total_bytes: 0,
+                used_bytes: 0,
+            },
+            network: NetworkMetrics {
+                rx_bytes_per_sec: 0,
+                tx_bytes_per_sec: 0,
+                rx_packets_per_sec: 0,
+                tx_packets_per_sec: 0,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn recorded_vm_metrics_are_keyed_by_vm_id_with_capped_history() {
+        let mut manager = MonitoringManager::new();
+        manager.max_history_points = 3;
+        for t in 1..=5 {
+            manager
+                .record_vm_metrics(vm_sample("web-1", t, t as f64 * 10.0))
+                .await;
+        }
+        let latest = manager.get_vm_metrics("web-1").await.unwrap();
+        assert_eq!(latest.timestamp, 5);
+        assert_eq!(latest.cpu.usage_percent, 50.0);
+        assert_eq!(manager.list_vm_metrics().await.len(), 1);
+        let hist = manager.get_history("vm.web-1.cpu.usage", 0, i64::MAX).await;
+        let values: Vec<f64> = hist.iter().map(|p| p.value).collect();
+        assert_eq!(values, vec![30.0, 40.0, 50.0]);
+    }
+
+    #[tokio::test]
+    async fn retain_vm_metrics_drops_vms_that_are_no_longer_running() {
+        let manager = MonitoringManager::new();
+        manager.record_vm_metrics(vm_sample("a", 1, 1.0)).await;
+        manager.record_vm_metrics(vm_sample("b", 1, 2.0)).await;
+        manager.retain_vm_metrics(|id| id == "a").await;
+        assert!(manager.get_vm_metrics("a").await.is_some());
+        assert!(manager.get_vm_metrics("b").await.is_none());
+        // History of the stopped VM is kept for the history endpoint.
+        assert_eq!(manager.get_history("vm.b.cpu.usage", 0, 10).await.len(), 1);
     }
 
     #[tokio::test]

@@ -7,7 +7,9 @@ use tokio::time::{interval, Duration};
 use tracing::{debug, error, info};
 
 use crate::metrics::{LibvirtManager, MetricsCache};
-use crate::monitoring::MonitoringManager;
+use crate::monitoring::{
+    CpuMetrics, DiskMetrics, MemoryMetrics, MonitoringManager, NetworkMetrics, ResourceMetrics,
+};
 use crate::vm::VmManager;
 use crate::websocket::WsState;
 
@@ -54,6 +56,7 @@ pub fn start_metrics_collector(
 
     // Spawn VM metrics collection task
     let cpu_samples = CpuSamples::default();
+    let io_samples = IoSamples::default();
     tokio::spawn(async move {
         let mut interval = interval(Duration::from_secs(VM_METRICS_INTERVAL_SECS));
         info!(
@@ -66,9 +69,11 @@ pub fn start_metrics_collector(
 
             match collect_and_broadcast_vm_metrics(
                 &ws_state,
+                &monitoring_manager,
                 &vm_manager,
                 &libvirt_manager,
                 &cpu_samples,
+                &io_samples,
             )
             .await
             {
@@ -135,21 +140,29 @@ async fn collect_and_broadcast_node_metrics(
 /// Collect and broadcast VM metrics
 async fn collect_and_broadcast_vm_metrics(
     ws_state: &Arc<WsState>,
+    monitoring_manager: &Arc<MonitoringManager>,
     vm_manager: &Arc<VmManager>,
     libvirt_manager: &Option<Arc<LibvirtManager>>,
     cpu_samples: &CpuSamples,
+    io_samples: &IoSamples,
 ) -> Result<(), String> {
     // Get list of all VMs
     let vms = vm_manager.list_vms().await;
 
     // Forget CPU samples of VMs that stopped or were deleted, so a restarted
     // VM's fresh counters are never diffed against its old process.
+    let running = |id: &str| {
+        vms.iter()
+            .any(|vm| vm.id == id && vm.status == horcrux_common::VmStatus::Running)
+    };
     if let Ok(mut samples) = cpu_samples.lock() {
-        samples.retain(|id, _| {
-            vms.iter()
-                .any(|vm| &vm.id == id && vm.status == horcrux_common::VmStatus::Running)
-        });
+        samples.retain(|id, _| running(id.as_str()));
     }
+    if let Ok(mut samples) = io_samples.lock() {
+        samples.retain(|id, _| running(id.as_str()));
+    }
+    // /api/monitoring/vms lists only VMs that are running now.
+    monitoring_manager.retain_vm_metrics(running).await;
 
     // Collect metrics for each running VM
     for vm in vms {
@@ -157,6 +170,18 @@ async fn collect_and_broadcast_vm_metrics(
         if vm.status == horcrux_common::VmStatus::Running {
             match collect_vm_metrics(&vm, libvirt_manager, cpu_samples).await {
                 Ok((cpu, memory, disk_read, disk_write, net_rx, net_tx)) => {
+                    let rates =
+                        io_rates(io_samples, &vm.id, [disk_read, disk_write, net_rx, net_tx]);
+                    monitoring_manager
+                        .record_vm_metrics(resource_metrics(
+                            &vm,
+                            cpu,
+                            memory,
+                            rates,
+                            disk_used_bytes(&vm),
+                            chrono::Utc::now().timestamp(),
+                        ))
+                        .await;
                     ws_state.broadcast_vm_metrics(
                         vm.id.clone(),
                         cpu,
@@ -249,6 +274,99 @@ async fn collect_vm_metrics(
 
 /// Last cumulative CPU time (clock ticks) seen per VM, and when.
 type CpuSamples = Arc<Mutex<HashMap<String, (Instant, u64)>>>;
+
+/// Last cumulative [disk read, disk write, net rx, net tx] bytes per VM, and when.
+type IoSamples = Arc<Mutex<HashMap<String, (Instant, [u64; 4])>>>;
+
+/// Per-second [disk read, disk write, net rx, net tx] since the VM's previous
+/// sample. All zero on the first sample; a counter that went backwards (the
+/// VM restarted) gives 0 for that counter rather than a huge bogus rate.
+fn io_rates(io_samples: &IoSamples, vm_id: &str, current: [u64; 4]) -> [u64; 4] {
+    let now = Instant::now();
+    let prev = match io_samples.lock() {
+        Ok(mut samples) => samples.insert(vm_id.to_string(), (now, current)),
+        Err(_) => None,
+    };
+    match prev {
+        Some((at, prev)) => per_second(prev, current, now.duration_since(at)),
+        None => [0; 4],
+    }
+}
+
+fn per_second(prev: [u64; 4], current: [u64; 4], elapsed: Duration) -> [u64; 4] {
+    let secs = elapsed.as_secs_f64();
+    if secs <= 0.0 {
+        return [0; 4];
+    }
+    std::array::from_fn(|i| (current[i].saturating_sub(prev[i]) as f64 / secs) as u64)
+}
+
+/// Bytes actually allocated on the host for the VM's disk image files
+/// (sparse/qcow2 images use less than their virtual size). Block devices
+/// and missing paths count 0.
+fn disk_used_bytes(vm: &horcrux_common::VmConfig) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    vm.disks
+        .iter()
+        .filter_map(|d| std::fs::metadata(&d.path).ok())
+        .filter(|m| m.is_file())
+        .map(|m| m.blocks().saturating_mul(512))
+        .sum()
+}
+
+/// The `/api/monitoring/vms` entry for a VM, from the same real sample that
+/// is broadcast over the WebSocket: memory and disk totals come from the
+/// VM's configuration, not guesses.
+fn resource_metrics(
+    vm: &horcrux_common::VmConfig,
+    cpu_percent: f64,
+    memory_percent: f64,
+    rates: [u64; 4],
+    disk_used: u64,
+    timestamp: i64,
+) -> ResourceMetrics {
+    const MIB: u64 = 1024 * 1024;
+    const GIB: u64 = 1024 * MIB;
+    let total_memory = vm.memory.saturating_mul(MIB);
+    let used_memory = (total_memory as f64 * memory_percent.clamp(0.0, 100.0) / 100.0) as u64;
+    let disk_total = if vm.disks.is_empty() {
+        vm.disk_size.saturating_mul(GIB)
+    } else {
+        vm.disks.iter().map(|d| d.size_gb.saturating_mul(GIB)).sum()
+    };
+    let [disk_read, disk_write, net_rx, net_tx] = rates;
+    ResourceMetrics {
+        id: vm.id.clone(),
+        name: vm.name.clone(),
+        timestamp,
+        cpu: CpuMetrics {
+            usage_percent: cpu_percent,
+            cores: vm.cpus,
+            // vCPUs kept busy on average over the sample interval.
+            load_average: cpu_percent / 100.0 * f64::from(vm.cpus),
+        },
+        memory: MemoryMetrics {
+            total_bytes: total_memory,
+            used_bytes: used_memory,
+            free_bytes: total_memory.saturating_sub(used_memory),
+            usage_percent: memory_percent,
+        },
+        disk: DiskMetrics {
+            read_bytes_per_sec: disk_read,
+            write_bytes_per_sec: disk_write,
+            read_iops: 0,
+            write_iops: 0,
+            total_bytes: disk_total,
+            used_bytes: disk_used,
+        },
+        network: NetworkMetrics {
+            rx_bytes_per_sec: net_rx,
+            tx_bytes_per_sec: net_tx,
+            rx_packets_per_sec: 0,
+            tx_packets_per_sec: 0,
+        },
+    }
+}
 
 /// Clock ticks per second in /proc/<pid>/stat. The kernel reports these in
 /// USER_HZ, which is 100 on every architecture Horcrux targets.
@@ -406,6 +524,57 @@ mod tests {
         // Counter went backwards (pid reused) or no time passed: no rate.
         assert_eq!(cpu_percent(2000, 1000, ten_s, 1), None);
         assert_eq!(cpu_percent(0, 1000, Duration::ZERO, 1), None);
+    }
+
+    #[test]
+    fn io_rates_are_per_second_deltas_and_never_negative() {
+        let ten_s = Duration::from_secs(10);
+        assert_eq!(
+            per_second([0, 100, 1000, 0], [1000, 100, 21000, 50], ten_s),
+            [100, 0, 2000, 5]
+        );
+        // VM restarted: counters reset below the previous sample.
+        assert_eq!(per_second([5000, 0, 0, 0], [10, 0, 0, 0], ten_s), [0; 4]);
+        assert_eq!(per_second([0; 4], [100; 4], Duration::ZERO), [0; 4]);
+        // First sample of a VM has no rate yet.
+        let samples = IoSamples::default();
+        assert_eq!(io_rates(&samples, "io-rate-test", [7; 4]), [0; 4]);
+        assert!(samples.lock().unwrap().contains_key("io-rate-test"));
+    }
+
+    #[test]
+    fn monitoring_entry_uses_the_vms_id_name_and_configured_sizes() {
+        let mut vm = test_vm("web-1");
+        vm.name = "Web server".into();
+        let m = resource_metrics(&vm, 50.0, 25.0, [1, 2, 3, 4], 4096, 1700000000);
+        assert_eq!(m.id, "web-1");
+        assert_eq!(m.name, "Web server");
+        assert_eq!(m.timestamp, 1700000000);
+        assert_eq!(m.cpu.cores, 2);
+        assert_eq!(m.cpu.load_average, 1.0);
+        assert_eq!(m.memory.total_bytes, 1024 * 1024 * 1024);
+        assert_eq!(m.memory.used_bytes, 256 * 1024 * 1024);
+        assert_eq!(m.memory.free_bytes, 768 * 1024 * 1024);
+        assert_eq!(m.disk.total_bytes, 10 * 1024 * 1024 * 1024);
+        assert_eq!(m.disk.used_bytes, 4096);
+        assert_eq!(m.disk.read_bytes_per_sec, 1);
+        assert_eq!(m.disk.write_bytes_per_sec, 2);
+        assert_eq!(m.network.rx_bytes_per_sec, 3);
+        assert_eq!(m.network.tx_bytes_per_sec, 4);
+        // Explicit disks win over the legacy disk_size.
+        vm.disks = vec![horcrux_common::VmDisk {
+            path: "/nonexistent/horcrux-metrics-test.qcow2".into(),
+            size_gb: 3,
+            disk_type: "virtio".into(),
+            cache: "none".into(),
+        }];
+        assert_eq!(
+            resource_metrics(&vm, 0.0, 0.0, [0; 4], 0, 0)
+                .disk
+                .total_bytes,
+            3 * 1024 * 1024 * 1024
+        );
+        assert_eq!(disk_used_bytes(&vm), 0);
     }
 
     #[test]

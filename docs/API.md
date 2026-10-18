@@ -1370,20 +1370,38 @@ GET /api/monitoring/vms/{id}
 Authorization: Bearer <token>
 ```
 
+Refreshed every 10 seconds for running VMs (`null` if the VM isn't running
+or has no metrics source yet). Rates are per second over the last interval;
+memory and disk totals are the VM's configured sizes, disk `used_bytes` is
+what its image files actually occupy on the host.
+
 **Response**:
 ```json
 {
-  "vm_id": "100",
-  "status": "running",
-  "cpu_usage": 25.3,
-  "memory_used": 2147483648,
-  "memory_total": 4294967296,
-  "memory_usage": 50.0,
-  "disk_read_bytes": 1073741824,
-  "disk_write_bytes": 536870912,
-  "network_rx_bytes": 2147483648,
-  "network_tx_bytes": 1073741824,
-  "uptime_seconds": 3600
+  "id": "vm-100",
+  "name": "web-server",
+  "timestamp": 1760796000,
+  "cpu": { "usage_percent": 25.3, "cores": 2, "load_average": 0.51 },
+  "memory": {
+    "total_bytes": 4294967296,
+    "used_bytes": 2147483648,
+    "free_bytes": 2147483648,
+    "usage_percent": 50.0
+  },
+  "disk": {
+    "read_bytes_per_sec": 1048576,
+    "write_bytes_per_sec": 524288,
+    "read_iops": 0,
+    "write_iops": 0,
+    "total_bytes": 21474836480,
+    "used_bytes": 3221225472
+  },
+  "network": {
+    "rx_bytes_per_sec": 0,
+    "tx_bytes_per_sec": 0,
+    "rx_packets_per_sec": 0,
+    "tx_packets_per_sec": 0
+  }
 }
 ```
 
