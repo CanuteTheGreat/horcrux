@@ -51,9 +51,9 @@ jobs:
           - { group: vm-runtime, full_dow: 4 }
           - { group: backup, full_dow: 5 }
           - { group: storage, full_dow: 6 }
-    # colo-only lane (rw-man-01, ctg-infrastructure ci-runners/rw-man-colo): mutation / chaos /
-    # security-tool / network-probing CI never runs on the EC2 hosts rw-man-02..05 (GuardDuty).
-    runs-on: colo-x86_64
+    # shared mutation/chaos lane (x86 slots on rw-man-01..05 since 2026-10-18,
+    # ctg-infrastructure ci-runners/README.md); jobs that must stay on colo set CI_COLO_ONLY=1.
+    runs-on: mutation-x86_64
     container: catthehacker/ubuntu:act-latest
     timeout-minutes: 360
     steps:

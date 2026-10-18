@@ -7,8 +7,16 @@
 # inside containers too, so this works from a CI job container or by hand. rw-man-01 reports
 # QEMU and has no metadata service, so it passes.
 #
-# Usage: <path>/ec2-guard.sh [what is about to run]   exits 1 on EC2, 0 elsewhere.
+# Opt-in since 2026-10-18 (owner: the colo backlog was too big; GuardDuty suppression kept, all
+# rw-man-01..05 may run mutation/chaos again): refuses only when CI_COLO_ONLY=1 is set, so setting
+# that one variable (workflow env or runner envs:) re-enables the colo-only rule.
+#
+# Usage: <path>/ec2-guard.sh [what is about to run]   with CI_COLO_ONLY=1: exits 1 on EC2, 0 elsewhere.
 what="${1:-mutation/chaos testing}"
+if [ "${CI_COLO_ONLY:-0}" != 1 ]; then
+  echo "ec2-guard: off (CI_COLO_ONLY unset); $what may run on any rw-man host"
+  exit 0
+fi
 hit=""
 for f in sys_vendor board_vendor; do
   if [ "$(cat "/sys/class/dmi/id/$f" 2>/dev/null)" = "Amazon EC2" ]; then hit="DMI $f = Amazon EC2"; fi
