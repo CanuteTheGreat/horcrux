@@ -29,12 +29,24 @@ use std::sync::Arc;
 type St = State<Arc<AppState>>;
 type ApiResult<T> = Result<T, ApiError>;
 
-/// Routes reachable without logging in (behind the strict auth rate limiter).
-pub fn public_routes() -> Router<Arc<AppState>> {
+/// Credential-submitting public routes. app/mod.rs puts these (and only
+/// these) behind the strict per-IP auth rate limit (5/min by default): they
+/// are what a password guesser hits.
+pub fn credential_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/auth/login", post(login))
         .route("/api/auth/tfa", post(login_tfa))
         .route("/api/auth/register", post(register))
+}
+
+/// Public reads and the OpenID Connect round trip: the login page's realm
+/// list, the CA download, the redirect to the provider and its callback.
+/// No password is submitted here (the provider checked it; the callback's
+/// code is single-use and bound to a state we issued), so these only get
+/// the general rate limit. Sharing the 5/min login bucket meant a few
+/// login-page views made the SSO callback answer 429.
+pub fn public_read_routes() -> Router<Arc<AppState>> {
+    Router::new()
         .route("/api/auth/realms", get(login_realms))
         .route("/api/auth/oidc/:realm/login", get(oidc_login))
         .route("/api/auth/oidc/callback", get(oidc_callback))

@@ -445,18 +445,20 @@ pub async fn run() -> anyhow::Result<()> {
     // like /vms used to come back 404), real 404s for missing assets.
     let serve_dir = static_ui::ui_service(&ui_dir);
 
-    // Build auth router with strict rate limiting (login/register)
-    let auth_router =
-        api::auth::public_routes()
-            .with_state(state.clone())
-            .layer(axum_middleware::from_fn(move |conn_info, req, next| {
-                middleware::rate_limit::rate_limit_middleware(
-                    auth_rate_limiter.clone(),
-                    conn_info,
-                    req,
-                    next,
-                )
-            }));
+    // Public auth routes: the strict per-IP limit applies only to the
+    // credential-submitting POSTs (login, tfa, register); the login page's
+    // reads and the OpenID redirect/callback get the general limit only.
+    let auth_router = api::auth::credential_routes()
+        .with_state(state.clone())
+        .layer(axum_middleware::from_fn(move |conn_info, req, next| {
+            middleware::rate_limit::rate_limit_middleware(
+                auth_rate_limiter.clone(),
+                conn_info,
+                req,
+                next,
+            )
+        }))
+        .merge(api::auth::public_read_routes().with_state(state.clone()));
 
     // Build protected routes using modular route builders
     let protected_routes = Router::new()
