@@ -27,15 +27,17 @@ Commands
         auto: full on ISO weekday --full-dow (UTC) unless a green full already ran today; also
         full the day after if the last green full is > 6 days old (a delayed/red full day);
         full when there is no usable base at all. Otherwise incremental against the baseline
-        sha, or - with no baseline yet - against the newest commit older than 26 h. skip when
-        none of PATH... changed: the baseline is advanced to HEAD right away.
+        sha, or - with no baseline yet - against the newest commit older than 26 h (mutmut: a full
+        run instead, its unit is a whole function). skip when none of PATH... changed: the
+        baseline is advanced to HEAD right away.
   mutmut-targets --diff F --mutants DIR [--sample N]
         (inside the mutmut container, after mutant generation) prints the mutant keys of every
         function the diff touches, plus every function whose tests live in a changed test file
         (from mutants/mutmut-stats.json). Prints ALL when a conftest/fixture/setup file changed.
-  gate  --kind cargo|pit|mutmut --mode M [--exclude-desc-prefix P] [--allow-empty] -- RESULT...
+  gate  --kind cargo|pit|mutmut --mode M [--exclude-desc-prefix P] [--allow-empty] [--diff F] -- RESULT...
         incremental: fails on every surviving mutant that is not a known survivor of the
-        baseline (= a new survivor in changed code); full: records the survivors. Then writes
+        baseline (= a new survivor in changed code; with --diff, PIT survivors count only on the
+        changed lines, like cargo-mutants --in-diff); full: records the survivors. Then writes
         the new baseline (sha = HEAD). Score floors stay with each repo's own floor script and
         apply to full runs (a score over a diff subset means nothing).
 """
@@ -166,6 +168,13 @@ def cmd_plan(a):
     targets = ""
     if a.kind == "pit":
         targets = ",".join(pit_targets(changed_root))
+    if a.kind == "mutmut" and diff.strip() and not b:
+        # mutmut's unit is a whole function and there is no list of known survivors yet: a full
+        # run (minutes for most tools) is the baseline every later night diffs against
+        open(diff_path, "w").close()
+        export(MUT_MODE="full", MUT_BASE="", MUT_DIFF=diff_path, MUT_CHANGED=changed_path, MUT_TARGETS="", MUT_STATE=sd)
+        print(f"mutation {a.id}: FULL run (code changed and no baseline yet: this run becomes it)")
+        return
     if not diff.strip() or (a.kind == "pit" and not targets):
         nb = dict(b or {}, id=a.id, sha=head)
         nb.setdefault("survivors", [])
@@ -296,8 +305,16 @@ def strip_line(name):
     return re.sub(r"^(.*?):\d+(?::\d+)?:\s*", r"\1: ", name)
 
 
+TIMEOUT_SHARE_LIMIT = 0.5
+
+
 def survivors_cargo(paths):
+    """Missed mutants; also fails when most mutants timed out: cargo-mutants counts a timeout as
+    caught, so a test timeout that is too tight for the loaded colo host turns every mutant into a
+    false catch (horcrux storage 2026-10-18: 35 of 35 TIMEOUT with 2 libtest threads; rustinion
+    run 4302: every web-auth mutant)."""
     cur, seen = set(), False
+    timeouts = viable = 0
     for p in paths:
         f = p if p.endswith(".json") else os.path.join(p, "outcomes.json")
         if not os.path.exists(f) and os.path.exists(os.path.join(p, "mutants.out", "outcomes.json")):
@@ -307,13 +324,21 @@ def survivors_cargo(paths):
         seen = True
         for o in json.load(open(f)).get("outcomes", []):
             sc = o.get("scenario")
+            if isinstance(sc, dict) and "Mutant" in sc and o.get("summary") in ("CaughtMutant", "MissedMutant", "Timeout"):
+                viable += 1
+                timeouts += o.get("summary") == "Timeout"
             if o.get("summary") == "MissedMutant" and isinstance(sc, dict) and "Mutant" in sc:
                 m = sc["Mutant"]
                 cur.add(strip_line(m.get("name") or f"{m.get('file')}: {m.get('replacement')}"))
+    if timeouts >= 5 and timeouts > TIMEOUT_SHARE_LIMIT * viable:
+        raise SystemExit(f"::error::mutation gate: {timeouts} of {viable} mutants TIMED OUT - the test timeout is too "
+                         "tight for this host (timeouts count as caught, so the score means nothing); raise "
+                         "--minimum-test-timeout / --timeout for this job")
     return cur, seen
 
 
-def survivors_pit(paths, exclude):
+def survivors_pit(paths, exclude, lines_by_path=None):
+    """lines_by_path (incremental): only survivors on lines the diff touched count."""
     cur, seen = set(), False
     for p in paths:
         for f in ([p] if p.endswith(".xml") else glob.glob(os.path.join(p, "**", "mutations.xml"), recursive=True)):
@@ -326,6 +351,12 @@ def survivors_pit(paths, exclude):
                 d = m.findtext("description") or ""
                 if any(d.startswith(x) for x in exclude):
                     continue
+                if lines_by_path is not None:
+                    cls = m.findtext("mutatedClass") or ""
+                    suffix = "/".join(cls.split(".")[:-1] + [m.findtext("sourceFile") or ""])
+                    ln = int(m.findtext("lineNumber") or 0)
+                    if not any(p.endswith(suffix) and ln in ls for p, ls in lines_by_path.items()):
+                        continue
                 cur.add(f"{m.findtext('mutatedClass')}.{m.findtext('mutatedMethod')}: {m.findtext('mutator')}: {d}")
     return cur, seen
 
@@ -345,7 +376,10 @@ def cmd_gate(a):
     if a.kind == "cargo":
         cur, seen = survivors_cargo(a.results)
     elif a.kind == "pit":
-        cur, seen = survivors_pit(a.results, a.exclude_desc_prefix)
+        lines = None
+        if a.mode == "incremental" and a.diff:
+            lines = changed_lines(open(a.diff).read())
+        cur, seen = survivors_pit(a.results, a.exclude_desc_prefix, lines)
     else:
         cur, seen = survivors_mutmut(a.results)
     if not seen and not a.allow_empty:
@@ -390,6 +424,7 @@ def main():
     g.add_argument("--mode", required=True, choices=["full", "incremental"])
     g.add_argument("--exclude-desc-prefix", action="append", default=[])
     g.add_argument("--allow-empty", action="store_true")
+    g.add_argument("--diff", default="", help="(pit, incremental) count only survivors on the diff's changed lines")
     g.add_argument("results", nargs="+")
     a = ap.parse_args()
     if a.cmd == "plan":

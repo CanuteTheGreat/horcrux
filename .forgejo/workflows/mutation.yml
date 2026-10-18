@@ -32,10 +32,10 @@ concurrency:
 env:
   CARGO_TERM_COLOR: never
   CARGO_PROFILE_DEV_DEBUG: 0
-  # --jobs 2 mutants at a time x 2 rustc / 2 test threads each = the colo slot's 4 CPUs
-  # (libtest otherwise starts one thread per host CPU, 8, inside a 4-CPU quota)
+  # --jobs 2 mutants at a time x 2 rustc each = the colo slot's 4 CPUs. libtest keeps its default
+  # thread count: with 2 threads the workspace suite outgrew cargo-mutants' 20 s test timeout and
+  # every mutant "timed out" (= counted as caught) - mutation-incremental.py gate now fails on that.
   CARGO_BUILD_JOBS: 2
-  RUST_TEST_THREADS: 2
 
 jobs:
   mutants:
