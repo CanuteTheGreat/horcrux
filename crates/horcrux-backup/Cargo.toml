@@ -30,5 +30,7 @@ uuid = { workspace = true }
 tempfile = { workspace = true }
 
 [features]
-lxc = []
+# The lxc restore path calls ContainerManager::lxc(), which only exists with
+# horcrux-container/lxc (`-p horcrux-backup --all-features` didn't compile).
+lxc = ["horcrux-container/lxc"]
 backup = []
