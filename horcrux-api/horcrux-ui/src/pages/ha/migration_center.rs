@@ -43,28 +43,40 @@ pub fn MigrationCenterPage() -> impl IntoView {
     };
 
     // Load data
-    let load_data = create_action(move |_: &()| async move {
-        set_loading.set(true);
-        set_error_message.set(None);
+    // `true` = user-visible load (spinner); the 5 s auto-refresh passes
+    // `false` so the job list doesn't flash "Loading..." and every button
+    // isn't disabled for a moment every 5 seconds.
+    let load_data = create_action(move |show_loading: &bool| {
+        let show_loading = *show_loading;
+        async move {
+            if show_loading {
+                set_loading.set(true);
+            }
+            set_error_message.set(None);
 
-        match get_migration_jobs().await {
-            Ok(jobs) => set_migration_jobs.set(jobs),
-            Err(e) => set_error_message.set(Some(format!("Failed to load migration jobs: {}", e))),
+            match get_migration_jobs().await {
+                Ok(jobs) => set_migration_jobs.set(jobs),
+                Err(e) => {
+                    set_error_message.set(Some(format!("Failed to load migration jobs: {}", e)))
+                }
+            }
+
+            if let Ok(vm_list) = get_virtual_machines().await {
+                set_vms.set(vm_list)
+            }
+
+            if let Ok(container_list) = get_containers().await {
+                set_containers.set(container_list)
+            }
+
+            if let Ok(nodes) = get_cluster_nodes().await {
+                set_cluster_nodes.set(nodes)
+            }
+
+            if show_loading {
+                set_loading.set(false);
+            }
         }
-
-        if let Ok(vm_list) = get_virtual_machines().await {
-            set_vms.set(vm_list)
-        }
-
-        if let Ok(container_list) = get_containers().await {
-            set_containers.set(container_list)
-        }
-
-        if let Ok(nodes) = get_cluster_nodes().await {
-            set_cluster_nodes.set(nodes)
-        }
-
-        set_loading.set(false);
     });
 
     // Create migration job
@@ -99,7 +111,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
                     set_show_migration_modal.set(false);
                     set_selected_resource.set(None);
                     clear_migration_form();
-                    load_data.dispatch(());
+                    load_data.dispatch(true);
                 }
                 Err(e) => set_error_message.set(Some(format!("Failed to create migration: {}", e))),
             }
@@ -118,7 +130,24 @@ pub fn MigrationCenterPage() -> impl IntoView {
             target_node: bulk_target_node.get(),
             resources: selected_resources.get(),
             max_workers: bulk_max_workers.get(),
-            migration_type: "online".to_string(),
+            // Live/online needs every selected VM running; otherwise offline.
+            migration_type: {
+                let running: Vec<String> = vms
+                    .get_untracked()
+                    .into_iter()
+                    .filter(|v| v.status == "running")
+                    .map(|v| v.vmid)
+                    .collect();
+                if selected_resources
+                    .get_untracked()
+                    .iter()
+                    .all(|(_, id)| running.contains(id))
+                {
+                    "online".to_string()
+                } else {
+                    "offline".to_string()
+                }
+            },
             status: "pending".to_string(),
             start_time: chrono::Utc::now(),
             end_time: None,
@@ -131,7 +160,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
             Ok(_) => {
                 set_show_bulk_modal.set(false);
                 set_selected_resources.set(Vec::new());
-                load_data.dispatch(());
+                load_data.dispatch(true);
             }
             Err(e) => {
                 set_error_message.set(Some(format!("Failed to create bulk migration: {}", e)))
@@ -149,7 +178,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
             set_error_message.set(None);
 
             match cancel_migration_job(job_id).await {
-                Ok(_) => load_data.dispatch(()),
+                Ok(_) => load_data.dispatch(true),
                 Err(e) => set_error_message.set(Some(format!("Failed to cancel migration: {}", e))),
             }
 
@@ -165,6 +194,14 @@ pub fn MigrationCenterPage() -> impl IntoView {
         set_migration_timeout.set(300);
         set_bandwidth_limit.set(None);
         set_with_local_disks.set(false);
+    };
+
+    let selected_is_stopped = move || {
+        selected_resource
+            .get()
+            .and_then(|(_, id)| vms.get().into_iter().find(|v| v.vmid == id))
+            .map(|v| v.status != "running")
+            .unwrap_or(false)
     };
 
     let get_resource_name = move |resource_type: &str, resource_id: &str| {
@@ -192,32 +229,22 @@ pub fn MigrationCenterPage() -> impl IntoView {
         pick_migration_target(&cluster_nodes.get(), Some(source_node)).unwrap_or_default()
     };
 
-    // Auto-refresh with setInterval from web APIs
-    create_effect(move |_| {
-        use wasm_bindgen::prelude::*;
-        use wasm_bindgen::JsCast;
-
-        let interval = refresh_interval.0.get();
-        if interval > 0 {
-            let closure = Closure::wrap(Box::new(move || {
-                load_data.dispatch(());
-            }) as Box<dyn Fn()>);
-
-            web_sys::window()
-                .unwrap()
-                .set_interval_with_callback_and_timeout_and_arguments_0(
-                    closure.as_ref().unchecked_ref(),
-                    interval as i32,
-                )
-                .unwrap();
-
-            closure.forget(); // Keep the closure alive
+    // Auto-refresh every 5 s while the page is open. The interval used to
+    // be leaked (Closure::forget, never cleared), so every visit added one
+    // more timer that kept polling after leaving the page.
+    let interval = refresh_interval.0.get_untracked();
+    if interval > 0 {
+        if let Ok(handle) = set_interval_with_handle(
+            move || load_data.dispatch(false),
+            std::time::Duration::from_millis(interval as u64),
+        ) {
+            on_cleanup(move || handle.clear());
         }
-    });
+    }
 
     // Initial load
     create_effect(move |_| {
-        load_data.dispatch(());
+        load_data.dispatch(true);
     });
 
     view! {
@@ -234,7 +261,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
                     </button>
                     <button
                         class="btn btn-secondary"
-                        on:click=move |_| load_data.dispatch(())
+                        on:click=move |_| load_data.dispatch(true)
                         disabled=loading
                     >
                         "Refresh"
@@ -380,8 +407,10 @@ pub fn MigrationCenterPage() -> impl IntoView {
                     <div class="resource-tabs">
                         <div class="tab-content">
                             <h3>"Virtual Machines"</h3>
-                            <div class="resource-grid">
-                                {vms.get().into_iter().map(|vm| {
+                            <div class="resource-grid" id="migration-vm-grid">
+                                // Reactive: the lists are filled after mount by
+                                // load_data (they used to be read once, empty).
+                                {move || vms.get().into_iter().map(|vm| {
                                     let vm_clone = vm.clone();
                                     let vm_clone2 = vm.clone();
                                     let vmid = vm.vmid;
@@ -394,7 +423,10 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                     let node = vm.node.clone();
                                     let maxcpu = vm.maxcpu;
                                     let memory_gb = format!("{:.1} GB", vm.maxmem as f64 / 1024.0 / 1024.0 / 1024.0);
-                                    let can_migrate = vm.status == "running" && !migration_jobs.get()
+                                    // Running VMs migrate live/online, stopped ones
+                                    // offline; not while a job for it is active.
+                                    let is_running = vm.status == "running";
+                                    let can_migrate = !migration_jobs.get()
                                         .iter().any(|job| job.resource_id == vmid_str &&
                                                   (job.status == "running" || job.status == "pending"));
 
@@ -431,6 +463,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                                     on:click=move |_| {
                                                         set_selected_resource.set(Some(("vm".to_string(), vm_clone.vmid.to_string())));
                                                         set_target_node.set(get_optimal_target_node(&vm_clone.node));
+                                                        set_migration_type.set(if is_running { "online" } else { "offline" }.to_string());
                                                         set_show_migration_modal.set(true);
                                                     }
                                                 >
@@ -450,7 +483,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                                         set_selected_resources.set(resources);
                                                     }
                                                 >
-                                                    {if selected_resources.get().contains(&("vm".to_string(), vmid_str2)) {
+                                                    {move || if selected_resources.get().contains(&("vm".to_string(), vmid_str2.clone())) {
                                                         "[OK] Selected"
                                                     } else {
                                                         "Select"
@@ -459,12 +492,12 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                             </div>
                                         </div>
                                     }
-                                }).collect::<Vec<_>>()}
+                                }).collect_view()}
                             </div>
 
                             <h3>"Containers"</h3>
-                            <div class="resource-grid">
-                                {containers.get().into_iter().map(|container| {
+                            <div class="resource-grid" id="migration-ct-grid">
+                                {move || containers.get().into_iter().map(|container| {
                                     let container_clone = container.clone();
                                     let container_clone2 = container.clone();
                                     let vmid = container.vmid;
@@ -531,7 +564,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                                         set_selected_resources.set(resources);
                                                     }
                                                 >
-                                                    {if selected_resources.get().contains(&("container".to_string(), vmid_str2)) {
+                                                    {move || if selected_resources.get().contains(&("container".to_string(), vmid_str2.clone())) {
                                                         "[OK] Selected"
                                                     } else {
                                                         "Select"
@@ -540,7 +573,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                             </div>
                                         </div>
                                     }
-                                }).collect::<Vec<_>>()}
+                                }).collect_view()}
                             </div>
                         </div>
                     </div>
@@ -603,7 +636,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                         prop:value=migration_type
                                         on:change=move |ev| set_migration_type.set(event_target_value(&ev))
                                     >
-                                        <option value="online">"Online (Live Migration)"</option>
+                                        <option value="online" disabled=move || migration_type.get() == "offline" && selected_is_stopped()>"Online (Live Migration)"</option>
                                         <option value="offline">"Offline (Stop & Start)"</option>
                                     </select>
                                 </div>
