@@ -2352,6 +2352,73 @@ pub async fn nas_update_directory_config(
         ))
     }
 }
+/// Turn the `server` / `port` of a "test LDAP connection" request into the
+/// URI handed to `ldapsearch -H`. Accepts a bare host (`dc1`), `host:port`,
+/// an IPv6 literal (bare or `[...]`), or a full `ldap://` / `ldaps://` URI;
+/// an explicit port in `server` wins over the `port` field. Anything that
+/// would make a different URI than the one the admin typed (path, query,
+/// userinfo, whitespace) is rejected instead of silently passed through.
+#[cfg(any(feature = "ldap-server", test))]
+fn ldap_probe_uri(server: &str, port: Option<u64>) -> Result<String, String> {
+    let server = server.trim();
+    let (scheme, rest) = if let Some(r) = server.strip_prefix("ldaps://") {
+        ("ldaps", r)
+    } else if let Some(r) = server.strip_prefix("ldap://") {
+        ("ldap", r)
+    } else {
+        ("ldap", server)
+    };
+    let rest = rest.strip_suffix('/').unwrap_or(rest);
+    if rest.is_empty() {
+        return Err("'server' is empty".into());
+    }
+    if rest
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control() || "/?#@,%\\".contains(c))
+    {
+        return Err(format!("'server' is not a host name or address: {rest:?}"));
+    }
+    let parse_port = |p: &str| -> Result<u16, String> {
+        p.parse::<u16>()
+            .ok()
+            .filter(|p| *p != 0)
+            .ok_or_else(|| format!("invalid port {p:?}"))
+    };
+    let (host, explicit_port) = if let Some(inner) = rest.strip_prefix('[') {
+        // [v6] or [v6]:port
+        let (addr, after) = inner
+            .split_once(']')
+            .ok_or_else(|| "unterminated '[' in 'server'".to_string())?;
+        let port = match after {
+            "" => None,
+            a => Some(parse_port(
+                a.strip_prefix(':')
+                    .ok_or_else(|| format!("unexpected {a:?} after ']'"))?,
+            )?),
+        };
+        (format!("[{addr}]"), port)
+    } else if rest.matches(':').count() > 1 {
+        (format!("[{rest}]"), None) // bare IPv6 literal
+    } else if let Some((h, p)) = rest.split_once(':') {
+        (h.to_string(), Some(parse_port(p)?))
+    } else {
+        (rest.to_string(), None)
+    };
+    if host.is_empty() || host == "[]" {
+        return Err("'server' has no host".into());
+    }
+    let port = match (explicit_port, port) {
+        (Some(p), _) => p,
+        (None, Some(p)) => u16::try_from(p)
+            .ok()
+            .filter(|p| *p != 0)
+            .ok_or_else(|| format!("invalid port {p}"))?,
+        (None, None) if scheme == "ldaps" => 636,
+        (None, None) => 389,
+    };
+    Ok(format!("{scheme}://{host}:{port}"))
+}
+
 pub async fn nas_test_ldap_connection(
     State(_state): State<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
@@ -2362,28 +2429,48 @@ pub async fn nas_test_ldap_connection(
             .get("server")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ApiError::BadRequest("Missing 'server' field".to_string()))?;
-        let _port = body.get("port").and_then(|v| v.as_u64()).unwrap_or(389);
-        // Test LDAP connection using ldapsearch or similar
+        // The port used to be read and then ignored: every test went to 389.
+        let uri = ldap_probe_uri(server, body.get("port").and_then(|v| v.as_u64()))
+            .map_err(ApiError::BadRequest)?;
+        // ldapsearch's network timeout is infinite by default, so a
+        // black-holed address held the HTTP request open forever.
         use tokio::process::Command;
-        let output = Command::new("ldapsearch")
-            .args([
-                "-x",
-                "-H",
-                &format!("ldap://{}", server),
-                "-b",
-                "",
-                "-s",
-                "base",
-            ])
-            .output()
-            .await;
+        let mut cmd = Command::new("ldapsearch");
+        cmd.args([
+            "-x",
+            "-o",
+            "nettimeout=5",
+            "-l",
+            "5",
+            "-H",
+            &uri,
+            "-b",
+            "",
+            "-s",
+            "base",
+        ])
+        .kill_on_drop(true);
+        let output = tokio::time::timeout(std::time::Duration::from_secs(10), cmd.output()).await;
         match output {
-            Ok(out) if out.status.success() => Ok(Json(
-                serde_json::json!({"success": true, "message": "Connection successful"}),
-            )),
-            _ => Ok(Json(
-                serde_json::json!({"success": false, "message": "Connection failed"}),
-            )),
+            Ok(Ok(out)) if out.status.success() => Ok(Json(serde_json::json!({
+                "success": true, "uri": uri, "message": "Connection successful"
+            }))),
+            Ok(Ok(out)) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let detail = stderr.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+                Ok(Json(serde_json::json!({
+                    "success": false, "uri": uri,
+                    "message": format!("Connection failed: {}", detail.trim())
+                })))
+            }
+            Ok(Err(e)) => Ok(Json(serde_json::json!({
+                "success": false, "uri": uri,
+                "message": format!("Connection failed: could not run ldapsearch: {e}")
+            }))),
+            Err(_) => Ok(Json(serde_json::json!({
+                "success": false, "uri": uri,
+                "message": "Connection failed: timed out after 10s"
+            }))),
         }
     }
     #[cfg(not(feature = "ldap-server"))]
@@ -3940,4 +4027,66 @@ pub async fn nas_list_timemachine_targets(
     State(_state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
     Ok(Json(vec![]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ldap_probe_uri;
+
+    #[test]
+    fn ldap_probe_uri_honours_port_and_scheme() {
+        assert_eq!(ldap_probe_uri("dc1", None).unwrap(), "ldap://dc1:389");
+        assert_eq!(
+            ldap_probe_uri(" dc1 ", Some(3268)).unwrap(),
+            "ldap://dc1:3268"
+        );
+        assert_eq!(
+            ldap_probe_uri("dc1:1389", Some(3268)).unwrap(),
+            "ldap://dc1:1389"
+        );
+        assert_eq!(
+            ldap_probe_uri("ldaps://dc1", None).unwrap(),
+            "ldaps://dc1:636"
+        );
+        assert_eq!(
+            ldap_probe_uri("ldap://dc1/", Some(10389)).unwrap(),
+            "ldap://dc1:10389"
+        );
+        assert_eq!(
+            ldap_probe_uri("10.0.0.5", Some(636)).unwrap(),
+            "ldap://10.0.0.5:636"
+        );
+        assert_eq!(
+            ldap_probe_uri("fd00::5", None).unwrap(),
+            "ldap://[fd00::5]:389"
+        );
+        assert_eq!(
+            ldap_probe_uri("[fd00::5]:636", None).unwrap(),
+            "ldap://[fd00::5]:636"
+        );
+    }
+
+    #[test]
+    fn ldap_probe_uri_rejects_garbage() {
+        for bad in [
+            "",
+            "   ",
+            "ldap://",
+            "dc1/ou=x",
+            "dc1?x",
+            "user@dc1",
+            "dc 1",
+            "dc1:0",
+            "dc1:99999",
+            "dc1:abc",
+            "[fd00::5",
+            "[fd00::5]x",
+            "[]",
+            ":389",
+        ] {
+            assert!(ldap_probe_uri(bad, None).is_err(), "{bad:?} accepted");
+        }
+        assert!(ldap_probe_uri("dc1", Some(0)).is_err());
+        assert!(ldap_probe_uri("dc1", Some(70000)).is_err());
+    }
 }
