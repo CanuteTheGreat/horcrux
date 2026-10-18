@@ -13,6 +13,9 @@
 #
 # Cleanup: horcrux-api/tests/k8s_helm_setup.sh --cleanup
 set -euo pipefail
+# A command that fails under `set -e` inside a $(...) exits the script with
+# no output at all; name the line so a failed CI step says what broke.
+trap 'rc=$?; echo "k8s_helm_setup.sh: line $LINENO exited $rc: $BASH_COMMAND" >&2' ERR
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 HELM_VERSION=${HELM_VERSION:-v4.3.1}
@@ -91,8 +94,16 @@ for c in $(docker ps -aq --filter name=horcrux-ci-k3s-); do
     [ -n "$cname" ] || continue
     orphan=1
     for n in $(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$c" 2>/dev/null || true); do
-        others=$(docker network inspect "$n" -f '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null |
-            tr ' ' '\n' | { grep -v -x -e "$cname" -e '' || true; } | wc -l)
+        # Another job's cleanup can remove this k3s and its network between
+        # `docker ps` and here. Under pipefail a failed inspect inside the
+        # pipeline used to end this script silently with exit 1 (Test job
+        # 22567, "Start k3s" step). Can't inspect it: leave it alone; a real
+        # leftover gets removed by a later job.
+        if ! members=$(docker network inspect "$n" -f '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null); then
+            orphan=0
+            continue
+        fi
+        others=$(printf '%s\n' $members | { grep -v -x -e "$cname" -e '' || true; } | wc -l)
         [ "$others" -gt 0 ] && orphan=0
     done
     if [ "$orphan" = 1 ]; then
