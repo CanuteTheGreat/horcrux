@@ -3089,6 +3089,18 @@ async fn delete_template(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    // A template's disk is the base image of the VMs linked-cloned from
+    // it: deleting it would leave them unbootable.
+    if let Ok(t) = state.template_manager.get_template(&id).await {
+        let dependents = state.vm_manager.vms_backed_by(&t.disk_path).await;
+        if !dependents.is_empty() {
+            return Err(ApiError::Conflict(format!(
+                "Template {id} can't be deleted: its disk is the base image of the linked \
+                 clone(s) {}. Delete those VMs first.",
+                dependents.join(", ")
+            )));
+        }
+    }
     state.template_manager.delete_template(&id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

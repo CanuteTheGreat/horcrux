@@ -1126,7 +1126,24 @@ async fn test_template_operations() {
         .unwrap();
     assert_eq!(r.status(), 404);
 
-    // 4. Deleting the template leaves the base VM's disk alone.
+    // 4. The template's disk backs the linked clone: deleting the template
+    //    is refused (409 naming it) until that VM is gone.
+    let r = client
+        .delete(format!("{}/templates/{}", API_BASE, tpl_id))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 409, "delete template under a linked clone");
+    let msg = r.text().await.unwrap_or_default();
+    assert!(msg.contains("tpl-clone-linked"), "{msg}");
+    assert!(!msg.contains("tpl-clone-full"), "{msg}");
+    let r = client
+        .delete(format!("{}/vms/tpl-clone-linked", API_BASE))
+        .send()
+        .await;
+    let _ = expect_2xx(r, "delete the linked template clone").await;
+
+    //    Deleting the template leaves the base VM's disk alone.
     let r = client
         .delete(format!("{}/templates/{}", API_BASE, tpl_id))
         .send()

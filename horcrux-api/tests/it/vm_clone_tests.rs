@@ -209,6 +209,49 @@ async fn linked_clones_protect_their_base_and_are_recorded_as_jobs() {
         std::fs::rename(&aside, &src_disk).unwrap();
     }
 
+    // A template's disk is protected the same way while a VM linked-cloned
+    // from the template exists.
+    let (s, tpl) = a
+        .post(
+            "/templates",
+            json!({"vm_id": full_id, "name": "cl template"}),
+        )
+        .await;
+    assert_eq!(s, 201, "create template: {tpl}");
+    let tpl_id = tpl["id"].as_str().unwrap().to_string();
+    let tplc = format!("{src}-tplc");
+    let (s, b) = a
+        .post(
+            &format!("/templates/{tpl_id}/clone"),
+            json!({"new_vm_id": tplc, "new_vm_name": tplc, "clone_type": "linked",
+                   "storage_pool": null, "cloudinit_config": null}),
+        )
+        .await;
+    assert!((200..300).contains(&s), "linked template clone: {s} {b}");
+    let tplc_disk = disk_of(&a, &tplc).await;
+    assert!(backing_of(&tplc_disk).is_some(), "template clone is linked");
+    let (s, b) = a
+        .call(
+            reqwest::Method::DELETE,
+            &format!("/templates/{tpl_id}"),
+            None,
+        )
+        .await;
+    assert_eq!(s, 409, "delete template under a linked clone: {b}");
+    assert!(
+        b["message"].as_str().unwrap_or_default().contains(&tplc),
+        "{b}"
+    );
+    assert_eq!(a.delete(&format!("/vms/{tplc}")).await, 204);
+    let (s, b) = a
+        .call(
+            reqwest::Method::DELETE,
+            &format!("/templates/{tpl_id}"),
+            None,
+        )
+        .await;
+    assert!((200..300).contains(&s), "delete template: {s} {b}");
+
     // Stale sockets from a killed QEMU are removed with the VM.
     for ext in ["qmp.sock", "serial.sock"] {
         std::fs::write(chained_disk.with_extension(ext), b"").unwrap();

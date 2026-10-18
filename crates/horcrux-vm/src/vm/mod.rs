@@ -447,6 +447,14 @@ impl VmManager {
         Ok(config)
     }
 
+    /// QEMU VMs ("name (id)") whose disks are linked-clone overlays on
+    /// `disk`, directly or further down the chain (e.g. a template's disk).
+    pub async fn vms_backed_by(&self, disk: &std::path::Path) -> Vec<String> {
+        let vms = self.vms.read().await;
+        // No VM has an empty id: every VM is a candidate.
+        self.linked_dependents(&vms, "", disk).await
+    }
+
     /// Other QEMU VMs whose disks are qcow2 overlays on top of (directly or
     /// further down the backing chain) one of VM `id`'s disks - its linked
     /// clones - as "name (id)".
