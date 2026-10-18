@@ -119,7 +119,6 @@ impl MonitoringManager {
 
     /// Start background metrics collection
     pub async fn start_collection(&self) {
-        let vm_metrics = self.vm_metrics.clone();
         let container_metrics = self.container_metrics.clone();
         let storage_metrics = self.storage_metrics.clone();
         let node_metrics = self.node_metrics.clone();
