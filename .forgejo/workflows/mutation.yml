@@ -33,6 +33,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Refuse on EC2 (colo lane only)
+        # Belt and braces for the runs-on label: rw-man-02..05 are EC2 under GuardDuty.
+        run: sh ci/ec2-guard.sh "cargo-mutants"
+
       - name: Ensure Node.js is present (self-heal)
         run: |
           if ! command -v node >/dev/null 2>&1; then
