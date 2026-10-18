@@ -29,3 +29,4 @@ build/iso/
 *.iso
 *.iso.sha256
 *.iso.sha512
+.mutation-baseline/

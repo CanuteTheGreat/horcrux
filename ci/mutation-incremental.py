@@ -1,0 +1,405 @@
+#!/usr/bin/env python3
+"""Incremental mutation testing: mutate only what changed since the last green baseline.
+
+Canonical copy: ctg-infrastructure ci-runners/mutation-incremental/ (README there). Each repo that
+runs mutation testing on the colo lane (rw-man-01, colo-x86_64) carries an identical copy; fix
+bugs there first, then copy.
+
+Why: the colo lane has 2 slots on one CPU-bound host. Full mutation passes (1-3 h per job) every
+night for ~20 repos queued 10+ h. Most nights only a few functions changed, so a full pass mostly
+re-proves yesterday's result.
+
+State (one per mutation job id), restored/saved with actions/cache on the colo runner:
+    .mutation-baseline/<id>/baseline.json
+        {"id", "sha": last green commit, "last_full": "YYYY-MM-DD" (UTC) of the last green full
+         run, "survivors": [keys of mutants that survived that run]}
+The cache is saved only when the job succeeds, so the baseline always points at a green run.
+
+Commands
+  plan  --id ID --full-dow N [--mode auto|full|incremental] [--relative DIR] [--kind K] -- PATH...
+        Decides the mode and writes the diff. Exports (to $GITHUB_ENV and stdout):
+          MUT_MODE   full | incremental | skip
+          MUT_BASE   commit the diff starts at (incremental/skip)
+          MUT_DIFF   unified diff BASE..HEAD of PATH... (paths relative to --relative DIR)
+          MUT_CHANGED  file listing the changed PATHs (relative to the repo root)
+          MUT_TARGETS  (--kind pit) comma-separated PIT --targetClasses globs of changed classes
+          MUT_STATE  the state dir
+        auto: full on ISO weekday --full-dow (UTC) unless a green full already ran today; also
+        full the day after if the last green full is > 6 days old (a delayed/red full day);
+        full when there is no usable base at all. Otherwise incremental against the baseline
+        sha, or - with no baseline yet - against the newest commit older than 26 h. skip when
+        none of PATH... changed: the baseline is advanced to HEAD right away.
+  mutmut-targets --diff F --mutants DIR [--sample N]
+        (inside the mutmut container, after mutant generation) prints the mutant keys of every
+        function the diff touches, plus every function whose tests live in a changed test file
+        (from mutants/mutmut-stats.json). Prints ALL when a conftest/fixture/setup file changed.
+  gate  --kind cargo|pit|mutmut --mode M [--exclude-desc-prefix P] [--allow-empty] -- RESULT...
+        incremental: fails on every surviving mutant that is not a known survivor of the
+        baseline (= a new survivor in changed code); full: records the survivors. Then writes
+        the new baseline (sha = HEAD). Score floors stay with each repo's own floor script and
+        apply to full runs (a score over a diff subset means nothing).
+"""
+import argparse, ast, datetime, fnmatch, glob, json, os, re, subprocess, sys
+import xml.etree.ElementTree as ET
+
+STATE_ROOT = ".mutation-baseline"
+
+
+def git(*args, cwd=None, check=True):
+    r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    if check and r.returncode != 0:
+        raise SystemExit(f"git {' '.join(args)} failed: {r.stderr.strip()}")
+    return r.stdout if r.returncode == 0 else None
+
+
+def today():
+    return datetime.datetime.now(datetime.timezone.utc).date()
+
+
+def state_dir(i):
+    return os.path.join(STATE_ROOT, i)
+
+
+def load(i):
+    try:
+        with open(os.path.join(state_dir(i), "baseline.json")) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def save(i, b):
+    os.makedirs(state_dir(i), exist_ok=True)
+    with open(os.path.join(state_dir(i), "baseline.json"), "w") as f:
+        json.dump(b, f, indent=1, sort_keys=True)
+
+
+def export(**kv):
+    env = os.environ.get("GITHUB_ENV")
+    out = os.environ.get("GITHUB_OUTPUT")
+    for k, v in kv.items():
+        print(f"{k}={v}")
+        for p in (env, out):
+            if p:
+                with open(p, "a") as f:
+                    f.write(f"{k}={v}\n")
+
+
+def usable(sha):
+    if not sha:
+        return False
+    if git("cat-file", "-e", f"{sha}^{{commit}}", check=False) is None:
+        return False
+    return git("merge-base", "--is-ancestor", sha, "HEAD", check=False) is not None
+
+
+def pit_targets(changed):
+    """PIT --targetClasses globs for changed Kotlin/Java sources under src/main."""
+    pats = set()
+    for p in changed:
+        m = re.search(r"/src/main/(?:kotlin|java)/(.+)\.(kt|java)$", p)
+        if not m or not os.path.exists(p):
+            continue
+        text = open(p, encoding="utf-8", errors="replace").read()
+        pkg = re.search(r"^\s*package\s+([\w.]+)", text, re.M)
+        pkg = pkg.group(1) + "." if pkg else ""
+        stem = os.path.basename(m.group(1))
+        names = {stem}
+        if m.group(2) == "kt":
+            names.add(stem + "Kt")  # top-level functions
+        names |= set(re.findall(r"^\s*(?:[a-z]+\s+)*(?:class|object|interface)\s+([A-Z]\w*)", text, re.M))
+        for n in names:
+            pats.add(f"{pkg}{n}")
+            pats.add(f"{pkg}{n}$*")
+    return sorted(pats)
+
+
+def cmd_plan(a):
+    head = git("rev-parse", "HEAD").strip()
+    b = load(a.id)
+    now = today()
+    base, why = None, ""
+    if b and usable(b.get("sha")):
+        base, why = b["sha"], "last green baseline"
+    elif b:
+        why = f"baseline {str(b.get('sha'))[:10]} is not in this history"
+    if not base:
+        cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=26)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        old = (git("rev-list", "-1", f"--before={cutoff}", "HEAD", check=False) or "").strip()
+        if old:
+            base, why = old, (why + "; " if why else "") + "no baseline yet: changes of the last 26 h"
+    last_full = b.get("last_full") if b else None
+    days_since_full = (now - datetime.date.fromisoformat(last_full)).days if last_full else None
+    dow = now.isoweekday()
+    mode = a.mode
+    if mode == "auto":
+        if dow == a.full_dow and last_full != now.isoformat():
+            mode, why = "full", f"weekly full day (ISO weekday {a.full_dow})"
+        elif dow == a.full_dow % 7 + 1 and (days_since_full is None or days_since_full > 6) and b is not None:
+            mode, why = "full", f"last green full {last_full or 'never'}: catching up the day after the full day"
+        elif not base:
+            mode, why = "full", "no usable base commit"
+        else:
+            mode = "incremental"
+    elif mode == "incremental" and not base:
+        mode, why = "full", "incremental asked, but there is no usable base commit"
+    os.makedirs(state_dir(a.id), exist_ok=True)
+    sd = os.path.abspath(state_dir(a.id))
+    diff_path = os.path.join(sd, "diff.patch")
+    changed_path = os.path.join(sd, "changed.txt")
+    rel = a.relative or "."
+    if mode == "full":
+        open(diff_path, "w").close()
+        open(changed_path, "w").close()
+        export(MUT_MODE="full", MUT_BASE="", MUT_DIFF=diff_path, MUT_CHANGED=changed_path, MUT_TARGETS="", MUT_STATE=sd)
+        print(f"mutation {a.id}: FULL run ({why or a.mode})")
+        return
+    paths = a.paths or ["."]
+    diff = git("-C", rel, "diff", "--no-ext-diff", "--no-color", "--relative", base, head, "--", *paths)
+    changed = git("-C", rel, "diff", "--name-only", "--relative", base, head, "--", *paths).split()
+    root_rel = os.path.relpath(os.path.abspath(rel), os.path.abspath(git("rev-parse", "--show-toplevel").strip()))
+    changed_root = [os.path.normpath(os.path.join(root_rel, c)) for c in changed]
+    with open(diff_path, "w") as f:
+        f.write(diff)
+    with open(changed_path, "w") as f:
+        f.write("\n".join(changed_root) + ("\n" if changed_root else ""))
+    targets = ""
+    if a.kind == "pit":
+        targets = ",".join(pit_targets(changed_root))
+    if not diff.strip() or (a.kind == "pit" and not targets):
+        nb = dict(b or {}, id=a.id, sha=head)
+        nb.setdefault("survivors", [])
+        nb.setdefault("last_full", None)
+        save(a.id, nb)
+        export(MUT_MODE="skip", MUT_BASE=base, MUT_DIFF=diff_path, MUT_CHANGED=changed_path, MUT_TARGETS="", MUT_STATE=sd)
+        print(f"mutation {a.id}: SKIP - nothing it mutates changed since {base[:10]} ({why}); baseline -> {head[:10]}")
+        return
+    export(MUT_MODE="incremental", MUT_BASE=base, MUT_DIFF=diff_path, MUT_CHANGED=changed_path, MUT_TARGETS=targets, MUT_STATE=sd)
+    print(f"mutation {a.id}: INCREMENTAL since {base[:10]} ({why}); {len(changed_root)} changed file(s): {' '.join(changed_root)}")
+    if targets:
+        print(f"  PIT target classes: {targets}")
+
+
+# ------------------------------------------------------------------ mutmut targets
+HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
+
+def changed_lines(diff_text):
+    """{path: set(new-side line numbers touched)} (a pure deletion marks the line after it)."""
+    out, cur, ln = {}, None, 0
+    for line in diff_text.splitlines():
+        if line.startswith("+++ "):
+            p = line[4:].strip()
+            cur = None if p == "/dev/null" else re.sub(r"^b/", "", p)
+            continue
+        if line.startswith("--- ") or cur is None:
+            continue
+        m = HUNK.match(line)
+        if m:
+            ln = int(m.group(1))
+            if m.group(2) == "0":  # deletion only
+                out.setdefault(cur, set()).add(max(ln, 1))
+            continue
+        if line.startswith("+"):
+            out.setdefault(cur, set()).add(ln)
+            ln += 1
+        elif line.startswith("-"):
+            out.setdefault(cur, set()).add(ln)
+        else:
+            ln += 1
+    return out
+
+
+def mangled_functions(path, lines):
+    """mutmut mangled names (x_func / xǁClassǁmethod) of top-level functions/methods touching lines."""
+    try:
+        tree = ast.parse(open(path, encoding="utf-8").read())
+    except (OSError, SyntaxError):
+        return None
+    names = set()
+
+    def hit(node):
+        start = min([node.lineno] + [d.lineno for d in getattr(node, "decorator_list", [])])
+        return any(start <= l <= node.end_lineno for l in lines)
+
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and hit(node):
+            names.add(f"x_{node.name}")
+        elif isinstance(node, ast.ClassDef):
+            for sub in node.body:
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)) and hit(sub):
+                    names.add(f"x\u01c1{node.name}\u01c1{sub.name}")
+    return names
+
+
+def all_mutmut_keys(mutants):
+    keys = {}
+    for p in glob.glob(os.path.join(mutants, "**", "*.meta"), recursive=True):
+        try:
+            d = json.load(open(p))
+        except ValueError:
+            continue
+        for k, v in d.get("exit_code_by_key", {}).items():
+            keys[k] = v
+    return keys
+
+
+def cmd_mutmut_targets(a):
+    diff = open(a.diff).read()
+    keys = all_mutmut_keys(a.mutants)
+    touched = changed_lines(diff)
+    wanted = set()
+    everything = False
+    tests_changed = set()
+    for path, lines in touched.items():
+        base = os.path.basename(path)
+        if path.startswith("tests/") or "/tests/" in path:
+            if not (base.startswith("test_") and base.endswith(".py")):
+                everything = True  # conftest / helper module / fixture data: any test may behave differently
+            else:
+                tests_changed.add(path)
+            continue
+        if not path.endswith(".py"):
+            if base in ("setup.sh", "pyproject.toml", "setup.cfg") or base.startswith("requirements"):
+                everything = True
+            continue
+        names = mangled_functions(path, lines)
+        if names is None:
+            everything = True
+            continue
+        mod = path[:-3].replace("/", ".")
+        mod = mod[4:] if mod.startswith("src.") else mod
+        for n in names:
+            wanted.add(f"{mod}.{n}")
+    if tests_changed:
+        try:
+            stats = json.load(open(os.path.join(a.mutants, "mutmut-stats.json")))
+        except (OSError, ValueError):
+            stats = {}
+            everything = True
+        for fn, tests in stats.get("tests_by_mangled_function_name", {}).items():
+            if any(t.split("::")[0] in tests_changed for t in tests):
+                wanted.add(fn)
+    if everything:
+        pick = sorted(keys)
+    else:
+        pick = sorted(k for k in keys if k.partition("__mutmut_")[0] in wanted)
+    if a.sample > 1:
+        import zlib
+        pick = [k for k in pick if zlib.crc32(k.encode()) % a.sample == 0]
+    print(" ".join(pick))
+    print(f"mutmut-targets: {len(pick)} of {len(keys)} mutants ({'everything: a shared test input changed' if everything else str(len(wanted)) + ' function(s) touched'})", file=sys.stderr)
+
+
+# ------------------------------------------------------------------ gate
+def strip_line(name):
+    return re.sub(r"^(.*?):\d+(?::\d+)?:\s*", r"\1: ", name)
+
+
+def survivors_cargo(paths):
+    cur, seen = set(), False
+    for p in paths:
+        f = p if p.endswith(".json") else os.path.join(p, "outcomes.json")
+        if not os.path.exists(f) and os.path.exists(os.path.join(p, "mutants.out", "outcomes.json")):
+            f = os.path.join(p, "mutants.out", "outcomes.json")
+        if not os.path.exists(f):
+            continue
+        seen = True
+        for o in json.load(open(f)).get("outcomes", []):
+            sc = o.get("scenario")
+            if o.get("summary") == "MissedMutant" and isinstance(sc, dict) and "Mutant" in sc:
+                m = sc["Mutant"]
+                cur.add(strip_line(m.get("name") or f"{m.get('file')}: {m.get('replacement')}"))
+    return cur, seen
+
+
+def survivors_pit(paths, exclude):
+    cur, seen = set(), False
+    for p in paths:
+        for f in ([p] if p.endswith(".xml") else glob.glob(os.path.join(p, "**", "mutations.xml"), recursive=True)):
+            if not os.path.exists(f):
+                continue
+            seen = True
+            for m in ET.parse(f).getroot().iter("mutation"):
+                if m.get("status") not in ("SURVIVED", "NO_COVERAGE"):
+                    continue
+                d = m.findtext("description") or ""
+                if any(d.startswith(x) for x in exclude):
+                    continue
+                cur.add(f"{m.findtext('mutatedClass')}.{m.findtext('mutatedMethod')}: {m.findtext('mutator')}: {d}")
+    return cur, seen
+
+
+def survivors_mutmut(paths):
+    cur, seen = set(), False
+    for p in paths:
+        keys = all_mutmut_keys(p)
+        if keys:
+            seen = True
+        cur |= {k for k, v in keys.items() if v in (0, 5, 33)}  # survived, no tests
+    return cur, seen
+
+
+def cmd_gate(a):
+    b = load(a.id) or {"id": a.id, "survivors": [], "last_full": None}
+    if a.kind == "cargo":
+        cur, seen = survivors_cargo(a.results)
+    elif a.kind == "pit":
+        cur, seen = survivors_pit(a.results, a.exclude_desc_prefix)
+    else:
+        cur, seen = survivors_mutmut(a.results)
+    if not seen and not a.allow_empty:
+        raise SystemExit(f"mutation gate {a.id}: no results found in {a.results}")
+    head = git("rev-parse", "HEAD").strip()
+    if a.mode == "full":
+        nb = dict(b, id=a.id, sha=head, survivors=sorted(cur), last_full=today().isoformat())
+        save(a.id, nb)
+        print(f"mutation gate {a.id}: full run recorded ({len(cur)} survivor(s)); baseline -> {head[:10]}")
+        return
+    known = set(b.get("survivors", []))
+    new = sorted(cur - known)
+    if new:
+        print(f"::error::mutation gate {a.id}: {len(new)} NEW surviving mutant(s) in code changed since {str(b.get('sha'))[:10]} - add tests that catch them:")
+        for n in new:
+            print(f"  NEW SURVIVOR {n}")
+        sys.exit(1)
+    nb = dict(b, id=a.id, sha=head)
+    nb["survivors"] = sorted(known | cur)
+    save(a.id, nb)
+    print(f"mutation gate {a.id}: incremental run clean ({len(cur)} survivor(s), all known from the last full run{'' if seen else '; no mutants in the changed code'}); baseline -> {head[:10]}")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("plan")
+    p.add_argument("--id", required=True)
+    p.add_argument("--full-dow", type=int, required=True, help="ISO weekday (1=Mon..7=Sun, UTC) of the weekly full run")
+    # "" = a scheduled run (workflow_dispatch inputs are empty then) = auto
+    p.add_argument("--mode", default="auto", choices=["", "auto", "full", "incremental"])
+    p.add_argument("--relative", default="")
+    p.add_argument("--kind", default="cargo", choices=["cargo", "pit", "mutmut"])
+    p.add_argument("paths", nargs="*")
+    m = sub.add_parser("mutmut-targets")
+    m.add_argument("--diff", required=True)
+    m.add_argument("--mutants", default="mutants")
+    m.add_argument("--sample", type=int, default=1)
+    g = sub.add_parser("gate")
+    g.add_argument("--id", required=True)
+    g.add_argument("--kind", required=True, choices=["cargo", "pit", "mutmut"])
+    g.add_argument("--mode", required=True, choices=["full", "incremental"])
+    g.add_argument("--exclude-desc-prefix", action="append", default=[])
+    g.add_argument("--allow-empty", action="store_true")
+    g.add_argument("results", nargs="+")
+    a = ap.parse_args()
+    if a.cmd == "plan":
+        if a.mode == "": a.mode = "auto"
+        cmd_plan(a)
+    elif a.cmd == "mutmut-targets":
+        cmd_mutmut_targets(a)
+    else:
+        cmd_gate(a)
+
+
+if __name__ == "__main__":
+    main()

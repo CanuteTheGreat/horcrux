@@ -1,20 +1,41 @@
-name: Mutation testing (weekly)
+name: Mutation testing (nightly incremental, weekly full per group)
 
 # cargo-mutants over Horcrux's core modules (VM lifecycle/snapshots, backup,
-# storage). Each surviving mutant is a behaviour no test checks. Scores per
-# module group must stay at or above the floors in ci/mutants-floors.json,
-# which only ever go up (the job prints when a floor can be raised).
+# storage). Each surviving mutant is a behaviour no test checks.
+#
+# Full run: each group once a week on its own weekday (full_dow in the matrix),
+# scored against the floors in ci/mutants-floors.json, which only ever go up (the
+# job prints when a floor can be raised). The other nights a group only mutates
+# the lines changed since its last green run (cargo-mutants --in-diff, decided by
+# ci/mutation-incremental.py - canonical copy in ctg-infrastructure
+# ci-runners/mutation-incremental) and fails on any new surviving mutant there; a
+# group whose files did not change finishes in about a minute.
 # One job per group (a single job over all ~520 mutants needs ~10 h:
 # every mutant used to rebuild the whole horcrux-api crate).
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'auto (full on the group''s weekday, else changed lines only), full or incremental'
+        required: false
+        default: 'auto'
   schedule:
-    # Sundays 06:00 UTC
-    - cron: '0 6 * * 0'
+    # daily 02:10 UTC, staggered across the colo lane's day (ctg-infrastructure ci-runners/rw-man-colo)
+    - cron: '10 2 * * *'
+
+# A newer queued run replaces an older one that has not started (ci-supersede-sweeper,
+# replace: groups); a started run is never cancelled.
+concurrency:
+  group: "replace:${{ github.workflow }}@${{ github.ref }}"
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: never
   CARGO_PROFILE_DEV_DEBUG: 0
+  # --jobs 2 mutants at a time x 2 rustc / 2 test threads each = the colo slot's 4 CPUs
+  # (libtest otherwise starts one thread per host CPU, 8, inside a 4-CPU quota)
+  CARGO_BUILD_JOBS: 2
+  RUST_TEST_THREADS: 2
 
 jobs:
   mutants:
@@ -24,7 +45,12 @@ jobs:
       matrix:
         # Keep in sync with the group names in ci/mutants-floors.json
         # (mutants_floor.py fails on a group with no mutants tested).
-        group: [vm-snapshot, vm-runtime, backup, storage]
+        # full_dow: ISO weekday (UTC) of the group's weekly full run, one group per day.
+        include:
+          - { group: vm-snapshot, full_dow: 1 }
+          - { group: vm-runtime, full_dow: 4 }
+          - { group: backup, full_dow: 5 }
+          - { group: storage, full_dow: 6 }
     # colo-only lane (rw-man-01, ctg-infrastructure ci-runners/rw-man-colo): mutation / chaos /
     # security-tool / network-probing CI never runs on the EC2 hosts rw-man-02..05 (GuardDuty).
     runs-on: colo-x86_64
@@ -32,27 +58,48 @@ jobs:
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
+        with:
+          # the incremental diff starts at the group's last green run
+          fetch-depth: 0
 
       - name: Refuse on EC2 (colo lane only)
         # Belt and braces for the runs-on label: rw-man-02..05 are EC2 under GuardDuty.
         run: sh ci/ec2-guard.sh "cargo-mutants"
 
+      - name: Mutation baseline (last green run)
+        uses: actions/cache@v4
+        with:
+          path: .mutation-baseline
+          # saved only when the job succeeds; restore-keys picks the newest green baseline
+          key: mutation-baseline-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: mutation-baseline-${{ matrix.group }}-
+
+      - name: Full or incremental?
+        run: |
+          files=$(python3 -c 'import json,sys; print(" ".join(json.load(open("ci/mutants-floors.json"))[sys.argv[1]]["files"]))' "${{ matrix.group }}")
+          python3 ci/mutation-incremental.py plan --id "${{ matrix.group }}" --full-dow "${{ matrix.full_dow }}" \
+            --mode "${{ github.event.inputs.mode }}" -- $files
+
       - name: Ensure Node.js is present (self-heal)
+        if: env.MUT_MODE != 'skip'
         run: |
           if ! command -v node >/dev/null 2>&1; then
             sudo apt-get update -qq && sudo apt-get install -y nodejs
           fi
 
       - name: Install Rust toolchain
+        if: env.MUT_MODE != 'skip'
         uses: https://github.com/dtolnay/rust-toolchain@stable
 
       - name: Install build tools
+        if: env.MUT_MODE != 'skip'
         # qemu-img backs the snapshot/backup unit tests.
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libvirt-dev libpam0g-dev qemu-utils zstd python3
 
       - name: Cache cargo
+        if: env.MUT_MODE != 'skip'
         uses: actions/cache@v4
         with:
           path: |
@@ -66,14 +113,18 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Install cargo-mutants
+        if: env.MUT_MODE != 'skip'
         run: command -v cargo-mutants || cargo install cargo-mutants --locked
 
       - name: Run cargo-mutants on ${{ matrix.group }}
+        if: env.MUT_MODE != 'skip'
         run: |
           spec='import json,sys; g=json.load(open("ci/mutants-floors.json"))[sys.argv[1]]'
           pkg=$(python3 -c "$spec; print(g['package'])" "${{ matrix.group }}")
           files=$(python3 -c "$spec; print(' '.join('--file '+f for f in g['files']))" "${{ matrix.group }}")
-          echo "mutating ($pkg): $files"
+          diff=""
+          [ "$MUT_MODE" = incremental ] && diff="--in-diff $MUT_DIFF"
+          echo "mutating ($pkg, $MUT_MODE): $files"
           # Library unit tests are the oracle (the HTTP/QEMU suites need a
           # live server). The modules live in workspace crates now (see
           # crates/), so --test-workspace runs every crate's unit tests
@@ -81,12 +132,27 @@ jobs:
           # one horcrux-api library, and only the mutated crate and its
           # dependents are rebuilt. --no-shuffle keeps runs comparable
           # week to week.
-          cargo mutants -p "$pkg" --test-workspace=true --all-features $files --jobs 2 --no-shuffle \
-            --cargo-arg=--lib --timeout-multiplier 3 --output /tmp/mutants || true
-          test -f /tmp/mutants/mutants.out/outcomes.json
+          set +e
+          cargo mutants -p "$pkg" --test-workspace=true --all-features $files $diff --jobs 2 --no-shuffle \
+            --cargo-arg=--lib --timeout-multiplier 3 --output /tmp/mutants
+          rc=$?
+          set -e
+          echo "cargo-mutants exit $rc (2 = missed mutants, 3 = timeouts: scored below)"
+          if [ -f /tmp/mutants/mutants.out/outcomes.json ]; then
+            case $rc in 0|2|3) ;; *) exit 1 ;; esac
+          elif [ "$MUT_MODE" = incremental ] && [ $rc = 0 ]; then
+            echo "no mutants in the changed lines"
+          else
+            exit 1
+          fi
 
       - name: Enforce mutation score floor
+        if: env.MUT_MODE == 'full'
         run: python3 ci/mutants_floor.py /tmp/mutants/mutants.out ci/mutants-floors.json "${{ matrix.group }}"
+
+      - name: New survivors in the changed code / record the baseline
+        if: env.MUT_MODE != 'skip'
+        run: python3 ci/mutation-incremental.py gate --id "${{ matrix.group }}" --kind cargo --mode "$MUT_MODE" --allow-empty -- /tmp/mutants/mutants.out
 
       - name: Missed mutants
         if: always()
