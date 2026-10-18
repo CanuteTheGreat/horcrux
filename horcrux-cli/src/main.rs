@@ -701,9 +701,13 @@ enum CloneCommands {
         /// New VM name
         #[arg(short, long)]
         name: String,
-        /// Full clone (vs linked clone)
-        #[arg(short, long)]
+        /// Full clone: an independent copy of the disk (the default)
+        #[arg(short, long, conflicts_with = "linked")]
         full: bool,
+        /// Linked clone: a qcow2 overlay on the source VM's disk (the
+        /// source can't be deleted while the clone exists)
+        #[arg(long)]
+        linked: bool,
         /// Start after clone
         #[arg(short, long)]
         start: bool,
