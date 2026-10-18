@@ -32,6 +32,10 @@ pub mod kinds {
     pub const TEMPLATE: &str = "template";
     pub const ALERT_RULE: &str = "alert_rule";
     pub const NOTIFICATION_CHANNEL: &str = "notification_channel";
+    /// Firing/acknowledged alerts, keyed `rule_id:target`.
+    pub const ALERT_ACTIVE: &str = "alert_active";
+    /// Alert history entries (fired/resolved), keyed by an ordered sequence.
+    pub const ALERT_HISTORY: &str = "alert_history";
     pub const REPLICATION_JOB: &str = "replication_job";
     pub const SNAPSHOT_SCHEDULE: &str = "snapshot_schedule";
     pub const CLUSTER_NODE: &str = "cluster_node";

@@ -55,7 +55,8 @@ pub struct Alert {
 pub struct AlertManager {
     rules: Arc<RwLock<HashMap<String, AlertRule>>>,
     active_alerts: Arc<RwLock<HashMap<String, Alert>>>,
-    alert_history: Arc<RwLock<Vec<Alert>>>,
+    /// `(persistence key, entry)`, oldest first.
+    alert_history: Arc<RwLock<Vec<(String, Alert)>>>,
     notification_channels: Arc<RwLock<Vec<NotificationChannel>>>,
     /// Channels managed on Monitoring > Notifications (persisted, see
     /// notification_channels.rs); every fired alert is delivered to them too.
@@ -108,8 +109,64 @@ impl AlertManager {
                 channels.len()
             );
         }
+        // Firing/acknowledged alerts and the history survive a restart: an
+        // acknowledged alert used to come back as "firing" and page again.
+        {
+            let mut active = mgr.active_alerts.write().await;
+            for (key, alert) in store.load::<Alert>(kinds::ALERT_ACTIVE).await? {
+                active.insert(key, alert);
+            }
+            let mut history = mgr.alert_history.write().await;
+            *history = store.load::<Alert>(kinds::ALERT_HISTORY).await?;
+            // keys are zero-padded sequence numbers: sort = chronological
+            history.sort_by(|(a, _), (b, _)| a.cmp(b));
+            let excess = history.len().saturating_sub(mgr.max_history);
+            for (key, _) in history.drain(..excess) {
+                let _ = store.delete(kinds::ALERT_HISTORY, &key).await;
+            }
+            tracing::info!(
+                "Loaded {} active alert(s) and {} alert history entr(ies) from database",
+                active.len(),
+                history.len()
+            );
+        }
         mgr.store = Some(store);
         Ok(mgr)
+    }
+
+    /// Write an active alert through to the database (logged, not fatal:
+    /// alerting must keep working if the disk is full).
+    async fn persist_active(&self, key: &str, alert: &Alert) {
+        if let Err(e) = config_store::put_opt(&self.store, kinds::ALERT_ACTIVE, key, alert).await {
+            tracing::error!("Failed to persist active alert {}: {}", key, e);
+        }
+    }
+
+    async fn forget_active(&self, key: &str) {
+        if let Err(e) = config_store::delete_opt(&self.store, kinds::ALERT_ACTIVE, key).await {
+            tracing::error!("Failed to remove persisted alert {}: {}", key, e);
+        }
+    }
+
+    /// Append to the history (memory + database), trimming to `max_history`.
+    async fn push_history(&self, alert: Alert) {
+        let mut history = self.alert_history.write().await;
+        // Ordered, unique key: nanoseconds, bumped past the last entry's.
+        let now = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0).max(0) as u128;
+        let last = history
+            .last()
+            .and_then(|(k, _)| k.parse::<u128>().ok())
+            .unwrap_or(0);
+        let key = format!("{:030}", now.max(last + 1));
+        if let Err(e) = config_store::put_opt(&self.store, kinds::ALERT_HISTORY, &key, &alert).await
+        {
+            tracing::error!("Failed to persist alert history entry: {}", e);
+        }
+        history.push((key, alert));
+        while history.len() > self.max_history {
+            let (old, _) = history.remove(0);
+            let _ = config_store::delete_opt(&self.store, kinds::ALERT_HISTORY, &old).await;
+        }
     }
 
     /// Name of a notification channel (its identity for persistence).
@@ -339,17 +396,15 @@ impl AlertManager {
         );
 
         active_alerts.insert(alert_key.clone(), alert.clone());
+        // (under the lock, so a concurrent resolve can't leave a stale row)
+        self.persist_active(&alert_key, &alert).await;
         drop(active_alerts);
 
         // Send notifications
         self.send_notifications(&alert).await;
 
         // Add to history
-        let mut history = self.alert_history.write().await;
-        history.push(alert);
-        if history.len() > self.max_history {
-            history.remove(0);
-        }
+        self.push_history(alert).await;
     }
 
     /// Resolve an alert
@@ -358,17 +413,15 @@ impl AlertManager {
         let mut active_alerts = self.active_alerts.write().await;
 
         if let Some(mut alert) = active_alerts.remove(&alert_key) {
+            self.forget_active(&alert_key).await;
+            drop(active_alerts);
             alert.status = AlertStatus::Resolved;
             alert.resolved_at = Some(chrono::Utc::now().timestamp());
 
             tracing::info!("Alert resolved: {} for {}", alert.rule_name, alert.target);
 
             // Update history
-            let mut history = self.alert_history.write().await;
-            history.push(alert);
-            if history.len() > self.max_history {
-                history.remove(0);
-            }
+            self.push_history(alert).await;
         }
     }
 
@@ -384,12 +437,16 @@ impl AlertManager {
         alert.status = AlertStatus::Acknowledged;
         alert.acknowledged_at = Some(chrono::Utc::now().timestamp());
         alert.acknowledged_by = Some(user.to_string());
+        let acked = alert.clone();
+        // Must survive a restart, or the alert re-fires and pages again.
+        config_store::put_opt(&self.store, kinds::ALERT_ACTIVE, &alert_key, &acked).await?;
+        drop(active_alerts);
 
         tracing::info!(
             "Alert acknowledged by {}: {} for {}",
             user,
-            alert.rule_name,
-            alert.target
+            acked.rule_name,
+            acked.target
         );
 
         Ok(())
@@ -406,7 +463,12 @@ impl AlertManager {
         let history = self.alert_history.read().await;
         let limit = limit.unwrap_or(100).min(self.max_history);
 
-        history.iter().rev().take(limit).cloned().collect()
+        history
+            .iter()
+            .rev()
+            .take(limit)
+            .map(|(_, a)| a.clone())
+            .collect()
     }
 
     /// Add a notification channel
@@ -545,6 +607,59 @@ mod tests {
                 duration_seconds,
             },
         }
+    }
+
+    #[tokio::test]
+    async fn acknowledged_alerts_and_history_survive_a_restart() {
+        // QA: after `docker restart` an acknowledged alert came back as
+        // "firing" (acknowledged_by null), paged the webhook again, and the
+        // history was empty - active alerts and history lived in memory only.
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}", dir.path().join("horcrux.db").display());
+        let open = || async {
+            let db = Database::new(&url).await.unwrap();
+            db.migrate().await.unwrap();
+            AlertManager::with_database(Arc::new(db)).await.unwrap()
+        };
+
+        let mgr = open().await;
+        mgr.add_rule(cpu_rule("r1", 80.0, 0)).await.unwrap();
+        mgr.evaluate_metric(MetricType::CpuUsage, "vm-1", 95.0)
+            .await;
+        mgr.acknowledge_alert("r1", "vm-1", "admin").await.unwrap();
+        drop(mgr);
+
+        // "restart": a new manager on a new connection to the same file
+        let mgr = open().await;
+        let active = mgr.get_active_alerts().await;
+        assert_eq!(active.len(), 1, "{active:?}");
+        assert_eq!(active[0].status, AlertStatus::Acknowledged);
+        assert_eq!(active[0].acknowledged_by.as_deref(), Some("admin"));
+        assert_eq!(
+            mgr.get_alert_history(None).await.len(),
+            1,
+            "fired entry kept"
+        );
+        // still true after the restart: stays acknowledged, no second page
+        mgr.evaluate_metric(MetricType::CpuUsage, "vm-1", 96.0)
+            .await;
+        assert_eq!(mgr.get_alert_history(None).await.len(), 1, "not re-fired");
+        assert_eq!(
+            mgr.get_active_alerts().await[0].status,
+            AlertStatus::Acknowledged
+        );
+        // resolves, and that is durable too
+        mgr.evaluate_metric(MetricType::CpuUsage, "vm-1", 10.0)
+            .await;
+        drop(mgr);
+
+        let mgr = open().await;
+        assert!(mgr.get_active_alerts().await.is_empty());
+        let history = mgr.get_alert_history(None).await;
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].status, AlertStatus::Resolved, "newest first");
+        assert_eq!(history[1].status, AlertStatus::Firing);
+        assert_eq!(history[0].id, history[1].id);
     }
 
     #[tokio::test]
