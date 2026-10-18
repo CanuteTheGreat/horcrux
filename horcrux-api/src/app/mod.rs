@@ -2061,10 +2061,45 @@ async fn clone_vm(
         }
     };
 
-    // Create clone options
+    let name = req.name.trim().to_string();
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("The clone needs a name".to_string()));
+    }
+
+    // Same id scheme as Create VM (`vm-<unix time>`) unless the caller
+    // picks one; an id that's taken is refused before any disk is written
+    // (the clone's disk is `<id>.qcow2`, so a reused id would overwrite
+    // that VM's disk).
+    let new_id = match req
+        .id
+        .map(|i| i.trim().to_string())
+        .filter(|i| !i.is_empty())
+    {
+        Some(id) => {
+            if state.vm_manager.get_vm(&id).await.is_ok() {
+                return Err(ApiError::Conflict(format!(
+                    "VM with ID {id} already exists"
+                )));
+            }
+            id
+        }
+        None => next_vm_id(&state).await,
+    };
+
+    // Recorded as a clone job, so it shows on the Clones page and in
+    // `horcrux clone list/status`.
+    let jobs = &state.clone_job_manager;
+    let job_id = jobs
+        .create_job(vm_id.clone(), new_id.clone(), name.clone())
+        .await;
+    let _ = jobs.start_job(&job_id).await;
+    let _ = jobs
+        .update_progress(&job_id, vm::clone_progress::CloneStage::CloningDisk, 10)
+        .await;
+
     let clone_options = vm::clone::CloneOptions {
-        name: req.name,
-        id: req.id,
+        name,
+        id: Some(new_id),
         mode: clone_mode,
         start: req.start,
         mac_addresses: req.mac_addresses,
@@ -2072,23 +2107,62 @@ async fn clone_vm(
         network_config: req.network_config,
     };
 
-    // Clone the VM
-    let cloned_vm = state
-        .clone_manager
-        .clone_vm(&source_vm, clone_options)
-        .await
-        .map_err(|e| ApiError::Internal(format!("Failed to clone VM: {}", e)))?;
+    let result: Result<VmConfig, ApiError> = async {
+        let cloned_vm = state
+            .clone_manager
+            .clone_vm(&source_vm, clone_options)
+            .await
+            .map_err(|e| match e {
+                horcrux_common::Error::Conflict(_) | horcrux_common::Error::Validation(_) => {
+                    ApiError::from(e)
+                }
+                e => ApiError::Internal(format!("Failed to clone VM: {}", e)),
+            })?;
+        let _ = jobs
+            .update_progress(&job_id, vm::clone_progress::CloneStage::Finalizing, 90)
+            .await;
+        state.database.create_vm(&cloned_vm).await.map_err(|e| {
+            ApiError::Internal(format!("Failed to save cloned VM to database: {}", e))
+        })?;
+        Ok(cloned_vm)
+    }
+    .await;
 
-    // Save to database
-    state
-        .database
-        .create_vm(&cloned_vm)
-        .await
-        .map_err(|e| ApiError::Internal(format!("Failed to save cloned VM to database: {}", e)))?;
+    let cloned_vm = match result {
+        Ok(vm) => {
+            let _ = jobs.complete_job(&job_id).await;
+            vm
+        }
+        Err(e) => {
+            let r = e.to_error_response();
+            let _ = jobs.fail_job(&job_id, r.details.unwrap_or(r.message)).await;
+            return Err(e);
+        }
+    };
 
-    info!("VM {} cloned successfully to {}", vm_id, cloned_vm.id);
+    info!(
+        "VM {} cloned successfully to {} (job {})",
+        vm_id, cloned_vm.id, job_id
+    );
 
+    if req.start {
+        return Ok(Json(state.vm_manager.start_vm(&cloned_vm.id).await?));
+    }
     Ok(Json(cloned_vm))
+}
+
+/// A free VM id in Create VM's scheme, `vm-<unix time>` (the next second
+/// if that one is taken).
+async fn next_vm_id(state: &AppState) -> String {
+    let mut ts = chrono::Utc::now().timestamp();
+    loop {
+        let id = format!("vm-{ts}");
+        let disk = state.config.paths.vm_storage.join(format!("{id}.qcow2"));
+        if state.vm_manager.get_vm(&id).await.is_err() && !disk.exists() {
+            return id;
+        }
+        ts += 1;
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2120,12 +2194,13 @@ async fn clone_vm_cross_node(
         .map_err(|_| ApiError::NotFound(format!("VM {} not found", vm_id)))?;
 
     // Create clone options
+    let new_id = match req.id.clone().filter(|i| !i.trim().is_empty()) {
+        Some(id) => id,
+        None => next_vm_id(&state).await,
+    };
     let clone_options = CloneOptions {
         name: req.name.clone(),
-        id: req
-            .id
-            .clone()
-            .or_else(|| Some(uuid::Uuid::new_v4().to_string())),
+        id: Some(new_id),
         mode: vm::clone::CloneMode::Full, // Cross-node clones are always full clones
         start: false,
         mac_addresses: None, // Auto-generate on target
