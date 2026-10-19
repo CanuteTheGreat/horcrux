@@ -757,7 +757,13 @@ impl BackupManager {
         let running = crate::vm::QemuManager::process_running(&vm.id);
         let mut restart = false;
         let mut paused: Option<crate::migration::qemu_monitor::QemuMonitor> = None;
-        if running {
+        // Snapshot mode on a running VM: copy-before-write block jobs for
+        // all disks started in one QMP transaction (blockdev-backup), so the
+        // guest keeps running while its point-in-time images are copied
+        // (Proxmox-style, no pause).
+        let live_qmp = (running && *mode == BackupMode::Snapshot)
+            .then(|| crate::vm::display::DisplayRuntime::qmp_socket(&disks[0]));
+        if running && live_qmp.is_none() {
             match mode {
                 BackupMode::Stop => {
                     // If the API dies before the restart below, the next
@@ -771,11 +777,11 @@ impl BackupManager {
                     restart = true;
                 }
                 BackupMode::Suspend | BackupMode::Snapshot => {
-                    // Pause the guest over its QMP socket: QEMU drains and
-                    // flushes every block device on `stop`, so the image
-                    // on disk is consistent while it stays paused. (No
-                    // copy-before-write block job yet, so snapshot mode
-                    // also pauses for the duration of the copy.)
+                    // Suspend: pause the guest over its QMP socket: QEMU
+                    // drains and flushes every block device on `stop`, so
+                    // the image on disk is consistent while it stays
+                    // paused. (Snapshot mode only gets here when it can't
+                    // run live, which it always can for a running VM.)
                     let qmp = crate::vm::display::DisplayRuntime::qmp_socket(&disks[0]);
                     let mon = crate::migration::qemu_monitor::QemuMonitor::new(qmp.clone());
                     // If the API dies while the guest is paused, the next
@@ -800,13 +806,23 @@ impl BackupManager {
 
         let result = async {
             let mut files = Vec::new();
+            if let Some(sock) = &live_qmp {
+                let pairs: Vec<(PathBuf, PathBuf)> = disks
+                    .iter()
+                    .enumerate()
+                    .map(|(i, src)| (src.clone(), staging.join(format!("disk-{i}.qcow2"))))
+                    .collect();
+                live_backup_disks(sock, &pairs).await?;
+            }
             for (i, src) in disks.iter().enumerate() {
                 let name = format!("disk-{i}.qcow2");
                 let dst = staging.join(&name);
-                let (s, d) = (src.clone(), dst.clone());
-                tokio::task::spawn_blocking(move || archive::export_disk(&s, &d, force_share))
-                    .await
-                    .map_err(|e| Error::System(format!("disk export task failed: {e}")))??;
+                if live_qmp.is_none() {
+                    let (s, d) = (src.clone(), dst.clone());
+                    tokio::task::spawn_blocking(move || archive::export_disk(&s, &d, force_share))
+                        .await
+                        .map_err(|e| Error::System(format!("disk export task failed: {e}")))??;
+                }
                 let (sha256, size) = archive::sha256_file_async(dst).await?;
                 files.push(ArchiveFile {
                     name,
@@ -1736,6 +1752,131 @@ async fn payload(path: &Path, kind: &str) -> Result<ArchiveFile> {
 
 use crate::vm::qemu::pid_alive;
 
+/// Back up the disks of a running VM without pausing it: per disk a qcow2
+/// target of the disk's size is attached to the VM's QEMU (`blockdev-add`)
+/// and one QMP `transaction` starts a `blockdev-backup` (sync=full) job for
+/// every disk at the same instant, so all copies are of one point in time
+/// (guest writes after that first copy the old data out: copy-before-write).
+/// The jobs are polled to completion; the targets are detached again on
+/// success and on failure, and a failed or cancelled job is an error.
+async fn live_backup_disks(sock: &Path, disks: &[(PathBuf, PathBuf)]) -> Result<()> {
+    use crate::vm::snapshot::{block_device_for, qmp_exec};
+    // QEMU node names are at most 31 characters.
+    let tag = format!(
+        "hxbk{:08x}",
+        (std::process::id() << 16) ^ chrono::Utc::now().timestamp_subsec_micros()
+    );
+    let mut nodes: Vec<String> = Vec::new();
+    let mut actions = Vec::new();
+    let mut jobs: Vec<String> = Vec::new();
+    let attach = async {
+        for (i, (src, dst)) in disks.iter().enumerate() {
+            let device = block_device_for(sock, &src.to_string_lossy()).await?;
+            let size = crate::vm::QemuManager::virtual_size(src).await?;
+            crate::vm::QemuManager::create_disk_image_bytes(dst, size).await?;
+            let (node, job) = (format!("{tag}-t{i}"), format!("{tag}-j{i}"));
+            qmp_exec(
+                sock,
+                "blockdev-add",
+                Some(serde_json::json!({
+                    "driver": "qcow2", "node-name": node,
+                    "file": {"driver": "file", "filename": dst.to_string_lossy()}
+                })),
+            )
+            .await?;
+            nodes.push(node.clone());
+            actions.push(serde_json::json!({
+                "type": "blockdev-backup",
+                "data": {"job-id": job, "device": device, "target": node,
+                         "sync": "full", "auto-dismiss": false}
+            }));
+            jobs.push(job);
+        }
+        Ok::<(), Error>(())
+    }
+    .await;
+    let run = match attach {
+        Err(e) => Err(e),
+        Ok(()) => {
+            async {
+                qmp_exec(
+                    sock,
+                    "transaction",
+                    Some(serde_json::json!({ "actions": actions })),
+                )
+                .await?;
+                let mut pending = jobs.clone();
+                while !pending.is_empty() {
+                    let list = qmp_exec(sock, "query-jobs", None).await?;
+                    let list = list.as_array().cloned().unwrap_or_default();
+                    let mut still = Vec::new();
+                    for job in pending {
+                        let Some(j) = list.iter().find(|j| j["id"] == job.as_str()) else {
+                            return Err(Error::System(format!("backup job {job} disappeared")));
+                        };
+                        if j["status"] == "concluded" {
+                            if let Some(e) = j["error"].as_str() {
+                                return Err(Error::System(format!("live backup job {job}: {e}")));
+                            }
+                        } else {
+                            still.push(job);
+                        }
+                    }
+                    pending = still;
+                    if !pending.is_empty() {
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    }
+                }
+                Ok(())
+            }
+            .await
+        }
+    };
+    if run.is_err() {
+        for job in &jobs {
+            let _ = qmp_exec(
+                sock,
+                "block-job-cancel",
+                Some(serde_json::json!({"device": job, "force": true})),
+            )
+            .await;
+        }
+        for _ in 0..50 {
+            let busy = qmp_exec(sock, "query-jobs", None)
+                .await
+                .map(|l| {
+                    l.as_array().is_some_and(|a| {
+                        a.iter().any(|x| {
+                            jobs.iter().any(|j| x["id"] == j.as_str()) && x["status"] != "concluded"
+                        })
+                    })
+                })
+                .unwrap_or(false);
+            if !busy {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+    for job in &jobs {
+        let _ = qmp_exec(sock, "job-dismiss", Some(serde_json::json!({"id": job}))).await;
+    }
+    let mut detached = Ok(());
+    for node in &nodes {
+        if let Err(e) = qmp_exec(
+            sock,
+            "blockdev-del",
+            Some(serde_json::json!({"node-name": node})),
+        )
+        .await
+        {
+            detached = Err(e);
+        }
+    }
+    run?;
+    detached
+}
+
 /// Stop a running QEMU VM and wait for its process to exit, so its disk
 /// is no longer being written.
 async fn stop_vm_and_wait(rt: &BackupRuntime, id: &str) -> Result<()> {
@@ -1857,6 +1998,95 @@ async fn rewrite_lxc_config(cfg: &Path, lxc_path: &Path, old: &str, new: &str) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Real QEMU (TCG): a running guest's disk is backed up by the
+    /// copy-before-write job while it keeps running, the copy is identical
+    /// to the disk, and the target is detached from QEMU afterwards.
+    #[tokio::test]
+    async fn a_running_vm_disk_is_backed_up_live_without_pausing() {
+        let have = |b: &str| {
+            std::process::Command::new(b)
+                .arg("--version")
+                .output()
+                .is_ok_and(|o| o.status.success())
+        };
+        if !have("qemu-system-x86_64") || !have("qemu-img") || !have("qemu-io") {
+            eprintln!("qemu-system-x86_64/qemu-img/qemu-io not installed: skipped");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let disk = dir.path().join("vm.qcow2");
+        let sh = |p: &str, a: &[&str]| {
+            let o = std::process::Command::new(p).args(a).output().unwrap();
+            assert!(
+                o.status.success(),
+                "{p} {a:?}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+        };
+        let d = disk.to_string_lossy().to_string();
+        sh("qemu-img", &["create", "-f", "qcow2", &d, "64M"]);
+        sh("qemu-io", &["-f", "qcow2", "-c", "write -P 0x5a 1M 2M", &d]);
+        let sock = dir.path().join("vm.qmp.sock");
+        let mut qemu = std::process::Command::new("qemu-system-x86_64")
+            .args([
+                "-nodefaults",
+                "-display",
+                "none",
+                "-m",
+                "64",
+                "-machine",
+                "accel=tcg",
+            ])
+            .arg("-drive")
+            .arg(format!("file={d},format=qcow2,if=virtio,id=drive0"))
+            .arg("-qmp")
+            .arg(format!("unix:{},server=on,wait=off", sock.display()))
+            .spawn()
+            .unwrap();
+        for _ in 0..100 {
+            if sock.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        let status = |s: &Path| {
+            let s = s.to_path_buf();
+            async move {
+                crate::vm::snapshot::qmp_exec(&s, "query-status", None)
+                    .await
+                    .unwrap()["status"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            }
+        };
+        assert_eq!(status(&sock).await, "running");
+        let dst = dir.path().join("backup.qcow2");
+        let r = live_backup_disks(&sock, &[(disk.clone(), dst.clone())]).await;
+        let after = status(&sock).await;
+        let blocks = crate::vm::snapshot::qmp_exec(&sock, "query-named-block-nodes", None)
+            .await
+            .unwrap();
+        let _ = qemu.kill();
+        let _ = qemu.wait();
+        r.expect("live backup");
+        assert_eq!(after, "running", "the guest was not paused");
+        assert!(
+            !blocks.to_string().contains("backup.qcow2"),
+            "backup target detached from QEMU: {blocks}"
+        );
+        let cmp = std::process::Command::new("qemu-img")
+            .args(["compare", "-f", "qcow2", "-F", "qcow2", &d])
+            .arg(&dst)
+            .output()
+            .unwrap();
+        assert!(
+            cmp.status.success(),
+            "backup equals the disk: {}",
+            String::from_utf8_lossy(&cmp.stdout)
+        );
+    }
 
     #[test]
     fn pid_liveness() {

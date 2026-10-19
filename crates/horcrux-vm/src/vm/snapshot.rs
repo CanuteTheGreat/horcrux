@@ -861,8 +861,8 @@ async fn hmp(sock: &std::path::Path, command_line: &str) -> Result<()> {
     Ok(())
 }
 
-/// QEMU block device name of the drive backed by `path`.
-async fn block_device_for(sock: &std::path::Path, path: &str) -> Result<String> {
+/// The QEMU block device (drive id) backed by image `path`.
+pub async fn block_device_for(sock: &std::path::Path, path: &str) -> Result<String> {
     let blocks = qmp_exec(sock, "query-block", None).await?;
     blocks
         .as_array()

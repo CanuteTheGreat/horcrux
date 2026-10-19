@@ -17,6 +17,31 @@ fn api() -> String {
     std::env::var("HORCRUX_E2E_API").unwrap_or_else(|_| "https://127.0.0.1:8006/api".into())
 }
 
+/// The guest's run state ("running", "paused", ...) from QMP query-status,
+/// `None` when the socket can't be read right now.
+fn qmp_status(sock: &Path) -> Option<String> {
+    use std::io::{BufRead, BufReader, Write};
+    let s = std::os::unix::net::UnixStream::connect(sock).ok()?;
+    s.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    let mut w = s.try_clone().ok()?;
+    let mut r = BufReader::new(s);
+    let mut line = String::new();
+    r.read_line(&mut line).ok()?; // greeting
+    writeln!(w, "{}", json!({"execute": "qmp_capabilities"})).ok()?;
+    writeln!(w, "{}", json!({"execute": "query-status"})).ok()?;
+    for _ in 0..20 {
+        line.clear();
+        if r.read_line(&mut line).ok()? == 0 {
+            return None;
+        }
+        let v: Value = serde_json::from_str(&line).ok()?;
+        if let Some(st) = v["return"]["status"].as_str() {
+            return Some(st.to_string());
+        }
+    }
+    None
+}
+
 struct Api {
     c: reqwest::Client,
     token: String,
@@ -244,6 +269,55 @@ async fn backup_corrupt_restore_and_scheduled_job_over_http() {
         )
         .await;
     assert_eq!(s, 200, "restore live backup: {r}");
+    assert_eq!(content_sha(&vm_disk(&a, copy).await), original);
+
+    // Snapshot mode backs the running VM up without pausing it (QMP
+    // blockdev-backup copy-before-write): the guest's run state is polled
+    // over QMP for the whole request and must never leave "running".
+    let qmp = vm_disk(&a, vm).await.with_extension("qmp.sock");
+    let stop_poll = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let poller = {
+        let stop_poll = stop_poll.clone();
+        std::thread::spawn(move || {
+            let mut seen = std::collections::BTreeSet::new();
+            while !stop_poll.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Some(st) = qmp_status(&qmp) {
+                    seen.insert(st);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            seen
+        })
+    };
+    let (s, snap) = a
+        .post(
+            "/backups",
+            json!({"target_id": vm, "mode": "snapshot", "compression": "zstd"}),
+        )
+        .await;
+    stop_poll.store(true, std::sync::atomic::Ordering::Relaxed);
+    let states = poller.join().unwrap();
+    assert_eq!(s, 201, "snapshot-mode backup of a running VM: {snap}");
+    assert_eq!(
+        pid(),
+        Some(first_pid),
+        "snapshot mode keeps the same QEMU process"
+    );
+    assert!(
+        !states.is_empty(),
+        "QMP status was observed during the backup"
+    );
+    assert!(
+        states.iter().all(|s| s == "running"),
+        "the guest must not be paused by a snapshot-mode backup: saw {states:?}"
+    );
+    let (s, r) = a
+        .post(
+            &format!("/backups/{}/restore", snap["id"].as_str().unwrap()),
+            json!({"target_id": copy, "force": true}),
+        )
+        .await;
+    assert_eq!(s, 200, "restore snapshot-mode backup: {r}");
     assert_eq!(content_sha(&vm_disk(&a, copy).await), original);
     let (s, stopped) = a
         .post(
