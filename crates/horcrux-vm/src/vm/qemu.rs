@@ -538,10 +538,16 @@ async fn run_ip(program: &str, args: &[&str]) -> Result<()> {
 /// Whether the host has a Linux bridge called `name`, and if it filters
 /// VLANs (`vlan_filtering`).
 pub fn host_bridge(name: &str) -> Option<bool> {
+    host_bridge_in(std::path::Path::new("/sys/class/net"), name)
+}
+
+/// `host_bridge` against a given sysfs `class/net` directory (tests use a
+/// fake one; a real bridge can't be created without root).
+fn host_bridge_in(sys_class_net: &std::path::Path, name: &str) -> Option<bool> {
     if !horcrux_common::valid_ifname(name) {
         return None;
     }
-    let dir = std::path::Path::new("/sys/class/net").join(name);
+    let dir = sys_class_net.join(name);
     if !dir.join("bridge").is_dir() {
         return None;
     }
@@ -1566,5 +1572,201 @@ mod tests {
         assert!(args
             .join(" ")
             .starts_with("-machine virt,accel=tcg -cpu max"));
+    }
+
+    // Host-side helpers and lifecycle guards: each test below targets
+    // surviving mutants of the vm-runtime cargo-mutants group.
+
+    fn temp_vm(dir: &std::path::Path, id: &str) -> QemuVm {
+        let mut v = vm(VmArchitecture::X86_64, VmDisplay::default());
+        v.id = format!("hxtest-{id}-{}", std::process::id());
+        v.name = v.id.clone();
+        v.disk_path = dir.join(format!("{id}.qcow2"));
+        v
+    }
+
+    #[tokio::test]
+    async fn run_ip_fails_on_a_failing_or_missing_program() {
+        run_ip("true", &[]).await.expect("exit status 0 is success");
+        let err = run_ip("false", &["link", "show"]).await.unwrap_err();
+        assert!(err.to_string().contains("false link show"), "{err}");
+        let err = run_ip("/nonexistent/hx-ip", &[]).await.unwrap_err();
+        assert!(err.to_string().contains("/nonexistent/hx-ip"), "{err}");
+    }
+
+    #[test]
+    fn host_bridge_reads_bridge_and_vlan_filtering_from_sysfs() {
+        let root = tempfile::tempdir().unwrap();
+        let net = root.path().join("net");
+        let mkbridge = |name: &str, filtering: Option<&str>| {
+            std::fs::create_dir_all(net.join(name).join("bridge")).unwrap();
+            if let Some(f) = filtering {
+                std::fs::write(net.join(name).join("bridge/vlan_filtering"), f).unwrap();
+            }
+        };
+        mkbridge("vmbr0", Some("1\n"));
+        mkbridge("vmbr1", Some("0\n"));
+        mkbridge("vmbr2", None);
+        std::fs::create_dir_all(net.join("eth0")).unwrap();
+        // A bridge one level up, reachable only through a path in the name.
+        std::fs::create_dir_all(root.path().join("evil/bridge")).unwrap();
+        std::fs::write(root.path().join("evil/bridge/vlan_filtering"), "1").unwrap();
+
+        assert_eq!(host_bridge_in(&net, "vmbr0"), Some(true));
+        assert_eq!(host_bridge_in(&net, "vmbr1"), Some(false));
+        assert_eq!(host_bridge_in(&net, "vmbr2"), Some(false));
+        assert_eq!(host_bridge_in(&net, "eth0"), None, "not a bridge");
+        assert_eq!(host_bridge_in(&net, "vmbr9"), None, "no such device");
+        assert_eq!(host_bridge_in(&net, "../evil"), None, "not an ifname");
+        // The real sysfs: loopback exists in every netns and is no bridge.
+        assert_eq!(host_bridge("lo"), None);
+    }
+
+    #[tokio::test]
+    async fn setup_taps_refuses_a_bridge_missing_on_this_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut v = temp_vm(dir.path(), "nobr");
+        v.hardware.nets = vec![horcrux_common::VmNic {
+            model: Default::default(),
+            bridge: "hxnobr0".into(),
+            mac: None,
+            vlan: None,
+        }];
+        let err = setup_taps(&v).await.unwrap_err();
+        assert!(
+            matches!(&err, horcrux_common::Error::Validation(m)
+                if m.contains("net0") && m.contains("hxnobr0") && m.contains("does not exist")),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn start_vm_refuses_missing_media_before_launching_anything() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = QemuManager::new();
+        let mut v = temp_vm(dir.path(), "start");
+        let iso = dir.path().join("gone.iso").to_string_lossy().to_string();
+        v.hardware.cdrom = Some(iso.clone());
+        let err = mgr.start_vm(&v).await.unwrap_err();
+        assert!(
+            matches!(&err, horcrux_common::Error::Validation(m) if m.contains("ISO") && m.contains(&iso)),
+            "{err}"
+        );
+        v.hardware.cdrom = None;
+        let err = mgr.start_vm(&v).await.unwrap_err();
+        assert!(
+            matches!(&err, horcrux_common::Error::Validation(m) if m.contains("disk0") && m.contains("missing")),
+            "{err}"
+        );
+        v.status = VmStatus::Running;
+        let err = mgr.start_vm(&v).await.unwrap_err();
+        assert!(err.to_string().contains("already running"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn stop_vm_without_a_pidfile_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = QemuManager::new();
+        let mut v = temp_vm(dir.path(), "stop");
+        let err = mgr.stop_vm(&v).await.unwrap_err();
+        assert!(err.to_string().contains("already stopped"), "{err}");
+        v.status = VmStatus::Running;
+        assert!(!std::path::Path::new(&pidfile(&v.id)).exists());
+        let err = mgr.stop_vm(&v).await.unwrap_err();
+        assert!(
+            matches!(&err, horcrux_common::Error::System(m) if m.contains("pidfile")),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_vm_tolerates_a_gone_disk_but_not_an_undeletable_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = QemuManager::new();
+        // Disk already gone: the side files are still cleaned, and it's Ok.
+        let v = temp_vm(dir.path(), "gone");
+        for ext in ["serial.log", "cidata.iso", "hold.json"] {
+            std::fs::write(v.disk_path.with_extension(ext), b"x").unwrap();
+        }
+        mgr.delete_vm(&v).await.expect("a missing disk is fine");
+        for ext in ["serial.log", "cidata.iso", "hold.json"] {
+            assert!(
+                !v.disk_path.with_extension(ext).exists(),
+                "{ext} left behind"
+            );
+        }
+        // A disk path that can't be unlinked (a directory) is reported.
+        let v = temp_vm(dir.path(), "dir");
+        std::fs::create_dir(&v.disk_path).unwrap();
+        let err = mgr.delete_vm(&v).await.unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to delete disk image"),
+            "{err}"
+        );
+        // Running VMs are never deleted.
+        let mut v = temp_vm(dir.path(), "run");
+        std::fs::write(&v.disk_path, b"x").unwrap();
+        v.status = VmStatus::Running;
+        assert!(mgr.delete_vm(&v).await.is_err());
+        assert!(v.disk_path.exists());
+    }
+
+    #[tokio::test]
+    async fn backing_chain_is_followed_nearest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let img = |args: &[&str]| {
+            let out = std::process::Command::new("qemu-img")
+                .args(args)
+                .current_dir(d)
+                .output()
+                .expect("qemu-img (qemu-utils) is installed on the CI runners");
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        img(&["create", "-q", "-f", "qcow2", "base.qcow2", "1M"]);
+        img(&[
+            "create",
+            "-q",
+            "-f",
+            "qcow2",
+            "-b",
+            "base.qcow2",
+            "-F",
+            "qcow2",
+            "mid.qcow2",
+        ]);
+        img(&[
+            "create",
+            "-q",
+            "-f",
+            "qcow2",
+            "-b",
+            "mid.qcow2",
+            "-F",
+            "qcow2",
+            "top.qcow2",
+        ]);
+
+        let chain = [d.join("mid.qcow2"), d.join("base.qcow2")];
+        assert_eq!(
+            QemuManager::backing_files(&d.join("top.qcow2")).await,
+            chain
+        );
+        assert!(QemuManager::backing_files(&d.join("base.qcow2"))
+            .await
+            .is_empty());
+        assert!(QemuManager::backing_files(&d.join("absent.qcow2"))
+            .await
+            .is_empty());
+        // A missing backing file is still listed, and ends the chain.
+        std::fs::remove_file(d.join("base.qcow2")).unwrap();
+        assert_eq!(
+            QemuManager::backing_files(&d.join("top.qcow2")).await,
+            chain
+        );
     }
 }
