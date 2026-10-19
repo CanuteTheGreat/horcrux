@@ -67,6 +67,10 @@ pub struct SnapshotTreeNode {
 pub struct VmSnapshotManager {
     snapshots: HashMap<String, VmSnapshot>,
     snapshot_dir: String,
+    /// Whether a QEMU process is running a VM right now (decides offline
+    /// `qemu-img` vs. live QMP handling). Tests swap it to exercise the
+    /// live paths against a fake QMP socket.
+    process_running: fn(&str) -> bool,
 }
 
 impl VmSnapshotManager {
@@ -74,6 +78,7 @@ impl VmSnapshotManager {
         Self {
             snapshots: HashMap::new(),
             snapshot_dir,
+            process_running: crate::vm::qemu::QemuManager::process_running,
         }
     }
 
@@ -109,7 +114,7 @@ impl VmSnapshotManager {
         // QEMU holds its disk images locked, so `qemu-img snapshot` can't
         // touch them: live snapshots go through the VM's QMP socket.
         let live = vm_config.hypervisor == horcrux_common::VmHypervisor::Qemu
-            && crate::vm::qemu::QemuManager::process_running(&vm_config.id);
+            && (self.process_running)(&vm_config.id);
 
         let (vm_state, disk_snapshots) = if live {
             self.create_live_snapshot(vm_config, &snapshot_name, include_memory)
@@ -213,46 +218,26 @@ impl VmSnapshotManager {
             .ok_or_else(|| horcrux_common::Error::System("Invalid ZFS path".to_string()))?;
 
         let snapshot_path = format!("{}@{}", dataset, snapshot_name);
-
-        let output = Command::new("zfs")
-            .arg("snapshot")
-            .arg(&snapshot_path)
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(format!(
-                "Failed to create ZFS snapshot: {}",
-                stderr
-            )));
-        }
-
+        run_tool(
+            "zfs",
+            &["snapshot", snapshot_path.as_str()],
+            "create ZFS snapshot",
+        )
+        .await?;
         tracing::info!("Created ZFS snapshot: {}", snapshot_path);
         Ok(())
     }
 
     /// Create LVM snapshot
     async fn create_lvm_snapshot(&self, lv_path: &str, snapshot_name: &str) -> Result<()> {
-        // LVM path format: /dev/vg_name/lv_name
-        let output = Command::new("lvcreate")
-            .arg("-s")
-            .arg("-n")
-            .arg(snapshot_name)
-            .arg("-L")
-            .arg("10G") // Snapshot size - should be configurable
-            .arg(lv_path)
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(format!(
-                "Failed to create LVM snapshot: {}",
-                stderr
-            )));
-        }
-
+        // LVM path format: /dev/vg_name/lv_name. Snapshot size: 10G
+        // (should be configurable).
+        run_tool(
+            "lvcreate",
+            &["-s", "-n", snapshot_name, "-L", "10G", lv_path],
+            "create LVM snapshot",
+        )
+        .await?;
         tracing::info!("Created LVM snapshot: {}", snapshot_name);
         Ok(())
     }
@@ -268,23 +253,19 @@ impl VmSnapshotManager {
     async fn create_btrfs_snapshot(&self, subvol_path: &str, snapshot_name: &str) -> Result<()> {
         let snapshot_path = format!("{}.snap_{}", subvol_path, snapshot_name);
 
-        let output = Command::new("btrfs")
-            .arg("subvolume")
-            .arg("snapshot")
-            .arg("-r") // Read-only snapshot
-            .arg(subvol_path)
-            .arg(&snapshot_path)
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(format!(
-                "Failed to create Btrfs snapshot: {}",
-                stderr
-            )));
-        }
-
+        // -r: read-only snapshot
+        run_tool(
+            "btrfs",
+            &[
+                "subvolume",
+                "snapshot",
+                "-r",
+                subvol_path,
+                snapshot_path.as_str(),
+            ],
+            "create Btrfs snapshot",
+        )
+        .await?;
         tracing::info!("Created Btrfs snapshot: {}", snapshot_path);
         Ok(())
     }
@@ -292,21 +273,13 @@ impl VmSnapshotManager {
     /// Create Ceph RBD snapshot
     async fn create_ceph_snapshot(&self, rbd_path: &str, snapshot_name: &str) -> Result<()> {
         // RBD path format: pool/image
-        let output = Command::new("rbd")
-            .arg("snap")
-            .arg("create")
-            .arg(format!("{}@{}", rbd_path, snapshot_name))
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(format!(
-                "Failed to create Ceph snapshot: {}",
-                stderr
-            )));
-        }
-
+        let spec = format!("{}@{}", rbd_path, snapshot_name);
+        run_tool(
+            "rbd",
+            &["snap", "create", spec.as_str()],
+            "create Ceph snapshot",
+        )
+        .await?;
         tracing::info!("Created Ceph RBD snapshot: {}", snapshot_name);
         Ok(())
     }
@@ -418,7 +391,7 @@ impl VmSnapshotManager {
 
         tracing::info!("Deleting snapshot: {}", snapshot_id);
 
-        if crate::vm::qemu::QemuManager::process_running(&snapshot.vm_id) {
+        if (self.process_running)(&snapshot.vm_id) {
             // The running QEMU holds the images: delete through QMP.
             let sock = Self::qmp_socket_of(&snapshot.config_backup)?;
             if snapshot.vm_state == VmSnapshotState::Running {
@@ -530,7 +503,7 @@ impl VmSnapshotManager {
             .ok_or_else(|| horcrux_common::Error::NotFound("Snapshot not found".to_string()))?;
 
         tracing::info!("Restoring snapshot: {}", snapshot_id);
-        let live = crate::vm::qemu::QemuManager::process_running(&snapshot.vm_id);
+        let live = (self.process_running)(&snapshot.vm_id);
         if live {
             if snapshot.vm_state != VmSnapshotState::Running {
                 return Err(horcrux_common::Error::Conflict(format!(
@@ -730,6 +703,24 @@ pub fn validate_snapshot_name(name: &str) -> Result<()> {
             "invalid snapshot name {name:?}: use 1-64 letters, digits, '-', '_' or '.'"
         )))
     }
+}
+
+/// Run a storage tool (zfs, lvcreate, btrfs, rbd). A tool that can't be
+/// started or exits non-zero is an error naming what failed and why
+/// (the tool's stderr), never a silent success.
+async fn run_tool(prog: &str, args: &[&str], what: &str) -> Result<()> {
+    let output = Command::new(prog)
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| horcrux_common::Error::System(format!("Failed to {what}: {prog}: {e}")))?;
+    if !output.status.success() {
+        return Err(horcrux_common::Error::System(format!(
+            "Failed to {what}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(())
 }
 
 /// `qemu-img snapshot <op> <name> <image>` (op = -c create, -a apply,
@@ -1255,5 +1246,327 @@ mod tests {
         assert!(m.is_current_snapshot(&s1.id), "s1 is the head again");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- storage tools: a failure is an error, never a silent success ----
+
+    #[tokio::test]
+    async fn run_tool_reports_what_failed_and_why() {
+        run_tool("true", &[], "do nothing").await.unwrap();
+
+        let err = run_tool(
+            "sh",
+            &["-c", "echo pool is busy >&2; exit 3"],
+            "create ZFS snapshot",
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("Failed to create ZFS snapshot: pool is busy"),
+            "{err}"
+        );
+
+        let err = run_tool("hx-no-such-storage-tool", &[], "create LVM snapshot")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("Failed to create LVM snapshot: hx-no-such-storage-tool"),
+            "{err}"
+        );
+    }
+
+    /// Each backend's snapshot of a disk that doesn't exist fails (the tool
+    /// is missing on the runner or refuses the bogus target), and the
+    /// failure reaches the caller.
+    #[tokio::test]
+    async fn backend_snapshot_failures_reach_the_caller() {
+        let m = VmSnapshotManager::new("/tmp/test-snapshots".to_string());
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("no-such-subvolume");
+
+        let err = m
+            .create_zfs_snapshot("/var/lib/not-a-zvol", "s")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Invalid ZFS path"), "{err}");
+        assert!(m
+            .create_zfs_snapshot("/dev/zvol/hx-no-such-pool/disk", "s")
+            .await
+            .is_err());
+        assert!(m
+            .create_lvm_snapshot("/dev/hx-no-such-vg/disk", "s")
+            .await
+            .is_err());
+        assert!(m
+            .create_btrfs_snapshot(&missing.to_string_lossy(), "s")
+            .await
+            .is_err());
+        assert!(m
+            .create_ceph_snapshot("hx-no-such-pool/disk", "s")
+            .await
+            .is_err());
+    }
+
+    // ---- QMP: a fake QEMU monitor socket ----
+
+    type Seen = std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>;
+
+    /// A fake QEMU QMP endpoint on `sock`. Per connection: greeting,
+    /// `qmp_capabilities` -> `{}`, then one command, answered with
+    /// `answer(command)` after an async event and a non-JSON line (which
+    /// clients must skip). Every command after the handshake is recorded.
+    fn fake_qmp(
+        sock: &std::path::Path,
+        answer: impl Fn(&serde_json::Value) -> serde_json::Value + Send + 'static,
+    ) -> Seen {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let _ = std::fs::remove_file(sock);
+        let listener = tokio::net::UnixListener::bind(sock).unwrap();
+        let seen: Seen = Default::default();
+        let log = seen.clone();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let (rd, mut wr) = stream.into_split();
+                let mut rd = BufReader::new(rd);
+                let mut line = String::new();
+                let _ = wr
+                    .write_all(b"{\"QMP\": {\"version\": {}, \"capabilities\": []}}\n")
+                    .await;
+                if rd.read_line(&mut line).await.unwrap_or(0) == 0 {
+                    continue;
+                }
+                let _ = wr.write_all(b"{\"return\": {}}\n").await;
+                line.clear();
+                if rd.read_line(&mut line).await.unwrap_or(0) == 0 {
+                    continue;
+                }
+                let cmd: serde_json::Value = serde_json::from_str(&line).unwrap();
+                log.lock().unwrap().push(cmd.clone());
+                let reply = format!(
+                    "{{\"event\": \"STOP\", \"timestamp\": {{}}}}\nnot json\n{}\n",
+                    answer(&cmd)
+                );
+                let _ = wr.write_all(reply.as_bytes()).await;
+            }
+        });
+        seen
+    }
+
+    fn commands(seen: &Seen) -> Vec<serde_json::Value> {
+        seen.lock().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn qmp_exec_returns_the_commands_own_reply() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("vm.qmp.sock");
+        let seen = fake_qmp(
+            &sock,
+            |cmd| serde_json::json!({"return": {"ran": cmd["execute"], "args": cmd["arguments"]}}),
+        );
+
+        let r = qmp_exec(&sock, "query-status", Some(serde_json::json!({"x": 1})))
+            .await
+            .unwrap();
+        assert_eq!(
+            r,
+            serde_json::json!({"ran": "query-status", "args": {"x": 1}})
+        );
+        let r = qmp_exec(&sock, "stop", None).await.unwrap();
+        assert_eq!(r, serde_json::json!({"ran": "stop", "args": null}));
+
+        let sent = commands(&seen);
+        assert_eq!(sent.len(), 2);
+        assert_eq!(
+            sent[0],
+            serde_json::json!({"execute": "query-status", "arguments": {"x": 1}})
+        );
+        assert_eq!(sent[1], serde_json::json!({"execute": "stop"}));
+    }
+
+    #[tokio::test]
+    async fn qmp_errors_and_a_missing_socket_are_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("vm.qmp.sock");
+        fake_qmp(
+            &sock,
+            |_| serde_json::json!({"error": {"class": "GenericError", "desc": "device is locked"}}),
+        );
+        let err = qmp_exec(&sock, "cont", None).await.unwrap_err().to_string();
+        assert!(err.contains("QMP cont: device is locked"), "{err}");
+
+        let err = qmp_exec(&dir.path().join("absent.sock"), "cont", None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("QMP connect"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn hmp_output_is_a_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("vm.qmp.sock");
+        let seen = fake_qmp(&sock, |cmd| {
+            if cmd["arguments"]["command-line"] == "savevm good" {
+                serde_json::json!({"return": ""})
+            } else {
+                serde_json::json!({"return": "Error: No block device can accept snapshots\r\n"})
+            }
+        });
+        hmp(&sock, "savevm good").await.unwrap();
+        let err = hmp(&sock, "savevm bad").await.unwrap_err().to_string();
+        assert!(
+            err.contains("savevm bad: Error: No block device can accept snapshots"),
+            "{err}"
+        );
+        assert_eq!(
+            commands(&seen)[0],
+            serde_json::json!({"execute": "human-monitor-command",
+                               "arguments": {"command-line": "savevm good"}})
+        );
+    }
+
+    fn query_block(disk: &str) -> serde_json::Value {
+        serde_json::json!({"return": [
+            {"device": "ide1-cd0", "inserted": {"file": "/isos/install.iso"}},
+            {"device": "floppy0"},
+            {"device": "virtio0", "inserted": {"file": disk}},
+        ]})
+    }
+
+    #[tokio::test]
+    async fn block_device_for_finds_the_drive_backed_by_the_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("vm.qmp.sock");
+        fake_qmp(&sock, |_| query_block("/vm/a.qcow2"));
+        assert_eq!(
+            block_device_for(&sock, "/vm/a.qcow2").await.unwrap(),
+            "virtio0"
+        );
+        let err = block_device_for(&sock, "/vm/b.qcow2")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("no QEMU block device backed by /vm/b.qcow2"),
+            "{err}"
+        );
+    }
+
+    /// A manager that sees every VM as running, with one snapshot of a VM
+    /// whose disk (and so QMP socket) lives in `dir`.
+    fn live_manager(dir: &std::path::Path, state: VmSnapshotState) -> (VmSnapshotManager, String) {
+        let mut m = VmSnapshotManager::new(dir.join("meta").to_string_lossy().to_string());
+        m.process_running = |_| true;
+        let mut vm = create_test_vm_config();
+        vm.disks = vec![horcrux_common::VmDisk {
+            path: dir.join("vm.qcow2").to_string_lossy().to_string(),
+            size_gb: 1,
+            disk_type: "virtio".into(),
+            cache: "none".into(),
+        }];
+        let disk_snapshots = vec![DiskSnapshot {
+            disk_id: "disk-0".into(),
+            storage_type: StorageType::Qcow2,
+            snapshot_name: "snap_0".into(),
+            snapshot_path: vm.disks[0].path.clone(),
+            size_bytes: 0,
+        }];
+        m.snapshots.insert(
+            "snap-id".into(),
+            VmSnapshot {
+                id: "snap-id".into(),
+                vm_id: vm.id.clone(),
+                name: "snap".into(),
+                description: None,
+                created_at: 0,
+                parent_snapshot: None,
+                vm_state: state,
+                disk_snapshots,
+                memory_snapshot: None,
+                config_backup: vm.clone(),
+            },
+        );
+        (m, vm.disks[0].path.clone())
+    }
+
+    fn fake_vm_qmp(dir: &std::path::Path, disk: String) -> Seen {
+        fake_qmp(&dir.join("vm.qmp.sock"), move |cmd| {
+            match cmd["execute"].as_str().unwrap_or_default() {
+                "query-block" => query_block(&disk),
+                _ => serde_json::json!({"return": ""}),
+            }
+        })
+    }
+
+    /// Running VM, snapshot with RAM: rollback and delete go through
+    /// `loadvm`/`delvm` on the VM's QMP socket.
+    #[tokio::test]
+    async fn live_ram_snapshot_rolls_back_and_deletes_through_qmp() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut m, disk) = live_manager(dir.path(), VmSnapshotState::Running);
+        let seen = fake_vm_qmp(dir.path(), disk);
+
+        m.restore_snapshot("snap-id", true).await.unwrap();
+        m.delete_snapshot("snap-id").await.unwrap();
+        assert!(m.get_snapshot("snap-id").is_none());
+
+        let lines: Vec<_> = commands(&seen)
+            .iter()
+            .map(|c| c["arguments"]["command-line"].clone())
+            .collect();
+        assert_eq!(lines, ["loadvm snap", "delvm snap"]);
+    }
+
+    /// Running VM, disk-only snapshot: rollback is refused (the guest would
+    /// run on disks rewritten under it) without touching QEMU; delete
+    /// removes the internal snapshot from the drive backed by the disk.
+    #[tokio::test]
+    async fn live_disk_only_snapshot_refuses_rollback_and_deletes_per_drive() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut m, disk) = live_manager(dir.path(), VmSnapshotState::Paused);
+        let seen = fake_vm_qmp(dir.path(), disk);
+
+        let err = m.restore_snapshot("snap-id", false).await.unwrap_err();
+        assert!(matches!(err, horcrux_common::Error::Conflict(_)), "{err:?}");
+        assert!(commands(&seen).is_empty(), "rollback refused before QMP");
+
+        m.delete_snapshot("snap-id").await.unwrap();
+        assert!(m.get_snapshot("snap-id").is_none());
+        assert_eq!(
+            commands(&seen),
+            [
+                serde_json::json!({"execute": "query-block"}),
+                serde_json::json!({"execute": "blockdev-snapshot-delete-internal-sync",
+                                   "arguments": {"device": "virtio0", "name": "snap_0"}}),
+            ]
+        );
+    }
+
+    /// Only a QEMU VM with a live QEMU process is snapshotted live: an
+    /// LXD/Incus VM goes the offline way even when "running".
+    #[tokio::test]
+    async fn only_running_qemu_vms_are_snapshotted_live() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut m = VmSnapshotManager::new(dir.path().to_string_lossy().to_string());
+        m.process_running = |_| true;
+        let mut vm = create_test_vm_config();
+        vm.hypervisor = horcrux_common::VmHypervisor::Lxd;
+        let snap = m
+            .create_snapshot(&vm, "offline".into(), None, false)
+            .await
+            .unwrap();
+        assert_eq!(snap.vm_state, VmSnapshotState::Stopped);
+
+        // The same VM on QEMU takes the live path (which needs a disk for
+        // its QMP socket, so this disk-less VM is refused).
+        vm.hypervisor = horcrux_common::VmHypervisor::Qemu;
+        let err = m
+            .create_snapshot(&vm, "live".into(), None, false)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("has no disk"), "{err}");
     }
 }
