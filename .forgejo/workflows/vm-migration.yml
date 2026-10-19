@@ -18,6 +18,7 @@ on:
       - 'crates/horcrux-cluster/src/migration/**'
       - 'crates/horcrux-sdn/src/firewall/**'
       - 'crates/horcrux-auth/src/middleware/**'
+      - 'crates/horcrux-auth/src/auth/privileges.rs'
       - 'horcrux-common/src/lib.rs'
       - 'horcrux-api/src/api/vm_migration.rs'
       - 'horcrux-api/src/api/migration_peer.rs'
