@@ -44,6 +44,83 @@ fn run(cmd: &str, args: &[&str]) -> std::process::Output {
         .unwrap_or_else(|e| panic!("failed to spawn `{} {:?}`: {}", cmd, args, e))
 }
 
+/// One QMP command on a VM's QMP socket (greeting + qmp_capabilities
+/// first); returns the reply's `return` value.
+fn qmp_query(sock: &std::path::Path, command: &str) -> serde_json::Value {
+    use std::io::{BufRead, BufReader, Write};
+    let stream = std::os::unix::net::UnixStream::connect(sock)
+        .unwrap_or_else(|e| panic!("QMP socket {}: {e}", sock.display()));
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut w = stream.try_clone().unwrap();
+    let mut r = BufReader::new(stream);
+    let mut line = String::new();
+    r.read_line(&mut line).unwrap(); // greeting
+    for cmd in ["qmp_capabilities", command] {
+        writeln!(w, "{}", serde_json::json!({ "execute": cmd })).unwrap();
+        loop {
+            line.clear();
+            r.read_line(&mut line).unwrap();
+            let v: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
+            if v.get("event").is_some() {
+                continue;
+            }
+            if cmd == command {
+                return v["return"].clone();
+            }
+            break;
+        }
+    }
+    unreachable!()
+}
+
+/// Which accelerator a started VM really runs on, printed for the nightly
+/// log; on a host whose /dev/kvm this process can open (the kvm-x86_64
+/// runner) the guest must be on KVM - QEMU's `accel=kvm:tcg` would
+/// otherwise fall back to TCG silently. NIGHTLY_REQUIRE_KVM=1 makes a
+/// missing /dev/kvm a failure too. `Err` = the accelerator is wrong.
+fn accel_evidence(disk: &std::path::Path, vm_id: &str) -> Result<(), String> {
+    let kvm_usable = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/kvm")
+        .is_ok();
+    let cmdline = std::fs::read_to_string(horcrux_api::vm::qemu::pidfile(vm_id))
+        .ok()
+        .and_then(|p| std::fs::read(format!("/proc/{}/cmdline", p.trim())).ok())
+        .map(|c| String::from_utf8_lossy(&c).replace('\0', " "))
+        .unwrap_or_default();
+    let machine = cmdline
+        .split_whitespace()
+        .skip_while(|a| *a != "-machine")
+        .nth(1)
+        .unwrap_or("?")
+        .to_string();
+    // (a QMP failure must not skip the VM cleanup: it shows as null here)
+    let sock = horcrux_api::vm::display::DisplayRuntime::qmp_socket(disk);
+    for _ in 0..50 {
+        if sock.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let kvm = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        qmp_query(&sock, "query-kvm")
+    }))
+    .unwrap_or(serde_json::Value::Null);
+    println!("accel evidence: /dev/kvm usable={kvm_usable}, -machine {machine}, query-kvm={kvm}");
+    if std::env::var("NIGHTLY_REQUIRE_KVM").as_deref() == Ok("1") && !kvm_usable {
+        return Err("NIGHTLY_REQUIRE_KVM=1 but /dev/kvm can't be opened".into());
+    }
+    if kvm_usable && kvm["enabled"] != true {
+        return Err(format!(
+            "/dev/kvm is usable but the guest runs under TCG: query-kvm={kvm}, -machine {machine}"
+        ));
+    }
+    Ok(())
+}
+
 fn run_ok(cmd: &str, args: &[&str], context: &str) {
     let out = run(cmd, args);
     assert!(
@@ -123,6 +200,8 @@ async fn test_real_qemu_vm_boot() {
     // Stopped).
     let mut running_vm = vm.clone();
     running_vm.status = VmStatus::Running;
+    // Which accelerator the guest really got (checked after cleanup).
+    let accel = accel_evidence(&vm.disk_path, vm_id);
 
     let serial_log = vm.disk_path.with_extension("serial.log");
     // 120s, then 240s, were each tuned assuming the datasource-probe
@@ -173,6 +252,7 @@ async fn test_real_qemu_vm_boot() {
     );
     stop_result.expect("stop_vm should succeed after a real boot");
     delete_result.expect("delete_vm should succeed after stopping");
+    accel.expect("guest accelerator");
 }
 
 // ---------------------------------------------------------------------
