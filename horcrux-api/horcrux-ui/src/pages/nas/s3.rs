@@ -491,12 +491,12 @@ pub fn S3Page() -> impl IntoView {
                         <div class="form-group"><label>"Region"</label>
                             <input type="text" id="s3-f-region" prop:value=f_region on:input=move |ev| set_f_region.set(event_target_value(&ev))/></div>
                     </div>
-                    <div class="form-group"><label>"Data directories (one per line; 4+ = erasure coding)"</label>
+                    <div class="form-group"><label>"Data directories (one per line; 4+ = erasure coding; below the node data dir's nas/ or /mnt/nas/ unless you administer the whole host)"</label>
                         <textarea id="s3-f-dirs" prop:value=f_dirs on:input=move |ev| set_f_dirs.set(event_target_value(&ev))></textarea></div>
                     <div class="form-row">
-                        <div class="form-group"><label>"Server binary (empty = minio or silo)"</label>
+                        <div class="form-group"><label>"Server program (empty = auto; minio or silo, by name or in /usr/bin, /usr/local/bin, /opt/horcrux/bin)"</label>
                             <input type="text" id="s3-f-server" prop:value=f_server on:input=move |ev| set_f_server.set(event_target_value(&ev))/></div>
-                        <div class="form-group"><label>"Client binary (empty = mcli or mc)"</label>
+                        <div class="form-group"><label>"Client program (empty = auto; mcli or mc, by name or in /usr/bin, /usr/local/bin, /opt/horcrux/bin)"</label>
                             <input type="text" id="s3-f-client" prop:value=f_client on:input=move |ev| set_f_client.set(event_target_value(&ev))/></div>
                     </div>
                     <div class="form-actions">

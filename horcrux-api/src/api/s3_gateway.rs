@@ -22,11 +22,14 @@
 //! creates (kind `s3_access_key`, never the secret) and matches them against
 //! the server's list; a key made outside Horcrux is manageable when its full
 //! id is shown and listed read-only when only a masked one is.
+use crate::auth::store::Principal;
 use crate::db::config_store::ConfigStore;
 use crate::error::ApiError;
 use crate::nas::services::s3::{
-    mask_access_key, random_alnum, validate_bucket_name, validate_user_name, CreateBucketOptions,
-    S3Bucket, S3GatewayConfig, S3GatewayManager, S3GatewayStatus, S3Object,
+    check_gateway_binary, forbidden_data_dir, mask_access_key, nas_data_roots, normalize_data_dir,
+    random_alnum, validate_bucket_name, validate_user_name, within_nas_roots, CreateBucketOptions,
+    S3Bucket, S3GatewayConfig, S3GatewayManager, S3GatewayStatus, S3Object, CLIENT_BINARIES,
+    SERVER_BINARIES,
 };
 use crate::AppState;
 use axum::{
@@ -37,6 +40,7 @@ use axum::{
     routing::{get, post, put},
     Extension, Json, Router,
 };
+use horcrux_common::auth::Privilege;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -234,8 +238,14 @@ async fn get_config(Extension(gw): Gw) -> Result<Json<GatewaySettings>, ApiError
 
 async fn update_config(
     Extension(gw): Gw,
+    principal: Option<Extension<Principal>>,
     Json(req): Json<GatewaySettings>,
 ) -> Result<Json<GatewaySettings>, ApiError> {
+    // Sys.Modify on /nas is enough to run the gateway; where its data goes
+    // outside the NAS roots is a host-level decision (Sys.Modify on /).
+    let host_admin = principal
+        .as_ref()
+        .is_some_and(|Extension(p)| p.has(Privilege::SysModify, "/"));
     let old = gw.config().await?;
     let mut cfg = old.clone();
     if let Some(a) = req.address {
@@ -268,21 +278,55 @@ async fn update_config(
             .map(|d| d.trim().to_string())
             .filter(|d| !d.is_empty())
             .collect();
-        if dirs.is_empty() || dirs.iter().any(|d| !d.starts_with('/')) {
+        if dirs.is_empty() {
             return Err(ApiError::ValidationError(
-                "Data directories must be absolute paths".to_string(),
+                "At least one data directory is required".to_string(),
             ));
         }
-        cfg.data_dirs = dirs;
+        let mut out = Vec::with_capacity(dirs.len());
+        for d in dirs {
+            let p = normalize_data_dir(&d).map_err(ApiError::ValidationError)?;
+            let s = p.to_string_lossy().into_owned();
+            // unchanged directories stay valid (they were accepted before)
+            if !old.data_dirs.contains(&s) {
+                if let Some(why) = forbidden_data_dir(&p, &gw.data_dir) {
+                    return Err(ApiError::ValidationError(why));
+                }
+                if !host_admin && !within_nas_roots(&p, &gw.data_dir) {
+                    return Err(ApiError::Forbidden(format!(
+                        "Data directory '{}' is outside the NAS data roots ({}); \
+                         other locations need Sys.Modify on /",
+                        s,
+                        nas_data_roots(&gw.data_dir)
+                            .iter()
+                            .map(|r| format!("{}/...", r.display()))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )));
+                }
+            }
+            if !out.contains(&s) {
+                out.push(s);
+            }
+        }
+        cfg.data_dirs = out;
     }
     if let Some(b) = req.browser {
         cfg.browser = b;
     }
     if let Some(b) = req.server_bin {
-        cfg.server_bin = Some(b.trim().to_string()).filter(|b| !b.is_empty());
+        let b = b.trim();
+        if !b.is_empty() {
+            check_gateway_binary(b, SERVER_BINARIES).map_err(ApiError::ValidationError)?;
+        }
+        cfg.server_bin = Some(b.to_string()).filter(|b| !b.is_empty());
     }
     if let Some(b) = req.client_bin {
-        cfg.client_bin = Some(b.trim().to_string()).filter(|b| !b.is_empty());
+        let b = b.trim();
+        if !b.is_empty() {
+            check_gateway_binary(b, CLIENT_BINARIES).map_err(ApiError::ValidationError)?;
+        }
+        cfg.client_bin = Some(b.to_string()).filter(|b| !b.is_empty());
     }
 
     // A running gateway is restarted with the new settings.

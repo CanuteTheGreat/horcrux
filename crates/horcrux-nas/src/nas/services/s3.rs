@@ -557,6 +557,178 @@ pub fn random_alnum(len: usize) -> String {
         .collect()
 }
 
+// ------------------------------------------------------------ path policy
+//
+// The API runs as root and the gateway settings are editable by anyone with
+// Sys.Modify on /nas, so what the gateway executes and where it writes are
+// not free-form: the server and client must be one of the packaged
+// MinIO-compatible programs (by name, or at a packaged install path), and
+// data directories are absolute, normalised and never system directories.
+
+/// Server programs the gateway may run.
+pub const SERVER_BINARIES: &[&str] = &["minio", "silo"];
+/// MinIO client programs the gateway may run.
+pub const CLIENT_BINARIES: &[&str] = &["mcli", "mc"];
+/// Directories a configured binary path may point into (package install
+/// locations only root can write to).
+pub const BINARY_DIRS: &[&str] = &[
+    "/usr/bin",
+    "/usr/sbin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/opt/horcrux/bin",
+];
+
+/// Check a configured server/client binary against the allow-list: a bare
+/// name from `allowed`, or `<one of BINARY_DIRS>/<name from allowed>`.
+pub fn check_gateway_binary(value: &str, allowed: &[&str]) -> std::result::Result<(), String> {
+    let refuse = || {
+        Err(format!(
+            "'{}' is not an allowed S3 gateway program: use one of {} (by name or installed in {})",
+            value,
+            allowed.join(", "),
+            BINARY_DIRS.join(", ")
+        ))
+    };
+    if !value.contains('/') {
+        return if allowed.contains(&value) {
+            Ok(())
+        } else {
+            refuse()
+        };
+    }
+    // <dir>/<name> exactly, compared as strings: no `.`/`..`/empty segments
+    match value.rsplit_once('/') {
+        Some((dir, name)) if BINARY_DIRS.contains(&dir) && allowed.contains(&name) => Ok(()),
+        _ => refuse(),
+    }
+}
+
+/// System locations a gateway data directory may never be in (or be).
+const SYSTEM_DIRS: &[&str] = &[
+    "/bin",
+    "/boot",
+    "/dev",
+    "/etc",
+    "/lib",
+    "/lib32",
+    "/lib64",
+    "/libx32",
+    "/proc",
+    "/root",
+    "/run",
+    "/sbin",
+    "/sys",
+    "/usr",
+    "/var/log",
+    "/var/run",
+    "/var/spool",
+    "/var/cache",
+];
+
+/// Parse a data directory: absolute, no `.`/`..`/empty components, not a
+/// trailing-slash variant. Returns the path as given.
+pub fn normalize_data_dir(dir: &str) -> std::result::Result<std::path::PathBuf, String> {
+    let d = dir.trim();
+    let d = if d.len() > 1 {
+        d.trim_end_matches('/')
+    } else {
+        d
+    };
+    let p = std::path::Path::new(d);
+    let segments: Vec<&str> = d.split('/').skip(1).collect();
+    let normal = d.starts_with('/')
+        && !segments.is_empty()
+        && segments
+            .iter()
+            .all(|s| !s.is_empty() && *s != "." && *s != "..");
+    if !normal {
+        return Err(format!(
+            "Data directory '{}' must be an absolute path without '.' or '..' (and not /)",
+            d
+        ));
+    }
+    Ok(p.components().collect())
+}
+
+/// `p` with symlinks resolved as far as it exists (a not-yet-created tail is
+/// appended as given), so a prefix check can't be dodged through a link.
+pub fn resolve_existing(p: &std::path::Path) -> std::path::PathBuf {
+    let mut existing = p.to_path_buf();
+    let mut tail = Vec::new();
+    loop {
+        if let Ok(c) = std::fs::canonicalize(&existing) {
+            let mut out = c;
+            for t in tail.iter().rev() {
+                out.push(t);
+            }
+            return out;
+        }
+        match (
+            existing.file_name().map(|n| n.to_owned()),
+            existing.parent(),
+        ) {
+            (Some(n), Some(parent)) => {
+                tail.push(n);
+                existing = parent.to_path_buf();
+            }
+            _ => return p.to_path_buf(),
+        }
+    }
+}
+
+/// Why `dir` (normalised) can't hold gateway data for anyone: a system
+/// directory, or the node data directory / one of its ancestors (the server
+/// would expose every VM disk and the database as "buckets").
+pub fn forbidden_data_dir(
+    dir: &std::path::Path,
+    node_data_dir: &std::path::Path,
+) -> Option<String> {
+    for d in [dir.to_path_buf(), resolve_existing(dir)] {
+        if SYSTEM_DIRS.iter().any(|s| d.starts_with(s)) {
+            return Some(format!(
+                "Data directory '{}' is inside a system directory",
+                dir.display()
+            ));
+        }
+        let node = resolve_existing(node_data_dir);
+        if node.starts_with(&d) || node_data_dir.starts_with(&d) {
+            return Some(format!(
+                "Data directory '{}' would contain the node data directory {}",
+                dir.display(),
+                node_data_dir.display()
+            ));
+        }
+    }
+    None
+}
+
+/// Roots a NAS-scoped administrator may put gateway data under (strictly
+/// below them): `<node data dir>/nas` and the default NAS share base.
+pub fn nas_data_roots(node_data_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    vec![
+        node_data_dir.join("nas"),
+        std::path::PathBuf::from("/mnt/nas"),
+    ]
+}
+
+/// Is `dir` strictly below one of the NAS data roots - also once symlinks
+/// in the existing part are resolved? (`<data>/nas/s3-gateway`, the run
+/// directory, is excluded: it holds the server's pid file and log.)
+pub fn within_nas_roots(dir: &std::path::Path, node_data_dir: &std::path::Path) -> bool {
+    let run_dir = node_data_dir.join("nas/s3-gateway");
+    let below = |d: &std::path::Path| {
+        !d.starts_with(&run_dir)
+            && !d.starts_with(resolve_existing(&run_dir))
+            && nas_data_roots(node_data_dir).iter().any(|root| {
+                let resolved_root = resolve_existing(root);
+                (d.starts_with(root) && d != root.as_path())
+                    || (d.starts_with(&resolved_root) && d != resolved_root.as_path())
+            })
+    };
+    below(dir) && below(&resolve_existing(dir))
+}
+
 /// Find `name` in `$PATH` (plus the usual sbin dirs a service PATH may lack).
 fn find_in_path(name: &str) -> Option<String> {
     let mut dirs: Vec<std::path::PathBuf> = std::env::var_os("PATH")
@@ -636,6 +808,10 @@ impl S3GatewayManager {
     /// The S3 server binary: the configured one, else `minio`, else `silo`.
     pub fn server_binary(&self) -> Option<String> {
         if let Some(b) = self.config.server_bin.as_deref().filter(|b| !b.is_empty()) {
+            // a stored value from before the allow-list is never executed
+            if check_gateway_binary(b, SERVER_BINARIES).is_err() {
+                return None;
+            }
             return if b.contains('/') {
                 std::path::Path::new(b).exists().then(|| b.to_string())
             } else {
@@ -649,6 +825,9 @@ impl S3GatewayManager {
     /// `mc` that really is the MinIO client.
     pub fn client_binary(&self) -> Option<String> {
         if let Some(b) = self.config.client_bin.as_deref().filter(|b| !b.is_empty()) {
+            if check_gateway_binary(b, CLIENT_BINARIES).is_err() {
+                return None;
+            }
             return if b.contains('/') {
                 std::path::Path::new(b).exists().then(|| b.to_string())
             } else {
@@ -793,6 +972,14 @@ impl S3GatewayManager {
     pub async fn start(&self) -> Result<()> {
         if self.running_pid().is_some() {
             return Ok(());
+        }
+        for (bin, allowed) in [
+            (&self.config.server_bin, SERVER_BINARIES),
+            (&self.config.client_bin, CLIENT_BINARIES),
+        ] {
+            if let Some(b) = bin.as_deref().filter(|b| !b.is_empty()) {
+                check_gateway_binary(b, allowed).map_err(Error::Validation)?;
+            }
         }
         let server = self.server_binary().ok_or_else(|| {
             Error::Internal(
@@ -2538,6 +2725,125 @@ async fn get_disk_usage(path: &str) -> Result<(u64, u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_packaged_gateway_programs_are_accepted_as_binaries() {
+        for ok in [
+            "minio",
+            "silo",
+            "/usr/bin/silo",
+            "/usr/local/bin/minio",
+            "/opt/horcrux/bin/silo",
+        ] {
+            assert!(check_gateway_binary(ok, SERVER_BINARIES).is_ok(), "{ok}");
+        }
+        for ok in ["mcli", "mc", "/usr/bin/mcli", "/usr/local/bin/mc"] {
+            assert!(check_gateway_binary(ok, CLIENT_BINARIES).is_ok(), "{ok}");
+        }
+        for bad in [
+            "/usr/bin/id",
+            "id",
+            "sh",
+            "mcli", // a client is not a server
+            "/tmp/silo",
+            "/usr/bin/../../tmp/silo",
+            "/usr/bin/./silo",
+            "/usr//bin/silo",
+            "/var/lib/horcrux/nas/s3/silo",
+            "usr/bin/silo",
+            "/usr/bin/silo/",
+            "/usr/bin/silo --address",
+        ] {
+            assert!(check_gateway_binary(bad, SERVER_BINARIES).is_err(), "{bad}");
+        }
+        assert!(check_gateway_binary("/bin/sh", CLIENT_BINARIES).is_err());
+    }
+
+    #[test]
+    fn a_stored_disallowed_binary_is_never_resolved_or_started() {
+        let cfg = S3GatewayConfig {
+            server_bin: Some("/usr/bin/id".into()),
+            client_bin: Some("/bin/sh".into()),
+            data_dirs: vec!["/nonexistent-hx-test/s3".into()],
+            ..Default::default()
+        };
+        let m = S3GatewayManager::with_config(cfg);
+        assert_eq!(m.server_binary(), None);
+        assert_eq!(m.client_binary(), None);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        match rt.block_on(m.start()) {
+            Err(Error::Validation(msg)) => assert!(msg.contains("not an allowed"), "{msg}"),
+            other => panic!("expected a validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn data_dirs_must_be_normalised_absolute_paths() {
+        assert!(normalize_data_dir("/srv/s3").is_ok());
+        for bad in [
+            "/",
+            "srv/s3",
+            "/srv/../etc",
+            "/srv/./s3",
+            "//srv",
+            "",
+            "/srv//s3",
+        ] {
+            assert!(normalize_data_dir(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn system_dirs_and_the_node_data_dir_are_never_gateway_data_dirs() {
+        let node = std::path::Path::new("/var/lib/horcrux");
+        for bad in [
+            "/etc",
+            "/etc/minio",
+            "/usr/share/x",
+            "/root/s3",
+            "/proc/1",
+            "/var",
+            "/var/lib",
+            "/var/lib/horcrux",
+        ] {
+            assert!(
+                forbidden_data_dir(std::path::Path::new(bad), node).is_some(),
+                "{bad}"
+            );
+        }
+        for ok in [
+            "/var/lib/horcrux/nas/s3",
+            "/mnt/nas/s3",
+            "/srv/s3",
+            "/data/s3",
+        ] {
+            assert!(
+                forbidden_data_dir(std::path::Path::new(ok), node).is_none(),
+                "{ok}"
+            );
+        }
+    }
+
+    #[test]
+    fn nas_admins_may_only_use_dirs_below_the_nas_roots() {
+        let tmp = std::env::temp_dir().join(format!("hx-s3-roots-{}", std::process::id()));
+        let node = tmp.join("data");
+        std::fs::create_dir_all(node.join("nas")).unwrap();
+        assert!(within_nas_roots(&node.join("nas/s3"), &node));
+        assert!(within_nas_roots(&node.join("nas/pool1/s3"), &node));
+        assert!(within_nas_roots(std::path::Path::new("/mnt/nas/s3"), &node));
+        assert!(!within_nas_roots(&node.join("nas"), &node));
+        assert!(!within_nas_roots(&node.join("nas/s3-gateway"), &node));
+        assert!(!within_nas_roots(&node.join("vms"), &node));
+        assert!(!within_nas_roots(std::path::Path::new("/srv/s3"), &node));
+        // a link inside a NAS root pointing elsewhere does not count as inside
+        std::os::unix::fs::symlink(&tmp, node.join("nas/escape")).unwrap();
+        assert!(!within_nas_roots(&node.join("nas/escape/data/vms"), &node));
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
 
     #[test]
     fn test_default_config() {

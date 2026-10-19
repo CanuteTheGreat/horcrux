@@ -340,3 +340,164 @@ async fn a_grant_on_one_vm_reaches_that_vm_and_nothing_else() {
         failures.join("\n")
     );
 }
+
+/// PUT /api/nas/s3/config is a /nas Sys.Modify route, but the API runs as
+/// root: a NAS-scoped administrator must not choose what root executes or
+/// point the gateway's data directory anywhere on the host.
+#[tokio::test]
+async fn a_nas_scoped_admin_cannot_choose_the_s3_gateway_programs_or_host_data_dirs() {
+    let c = client();
+    let adm = admin(&c).await;
+    let (uid, tok) = user_with(&c, &adm, "SysAdmin", "/nas").await;
+    let (s, orig) = call(&c, &tok, "GET", "/nas/s3/config", Value::Null).await;
+    assert_eq!(s, 200, "NAS admin reads the gateway config: {orig}");
+    let dirs: Vec<String> = serde_json::from_value(orig["data_dirs"].clone()).unwrap();
+    let base = dirs.first().expect("a data dir").clone();
+    // <node data dir>/nas/s3 by default
+    let node_dir = std::path::Path::new(&base)
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "/var/lib/horcrux".into());
+
+    let mut failures: Vec<String> = vec![];
+    fn expect(failures: &mut Vec<String>, what: &str, got: StatusCode, want: u16, body: &Value) {
+        if got.as_u16() != want {
+            failures.push(format!("{what}: {got} (want {want}) {body}"));
+        }
+    }
+    // any program outside the allow-list -> 422, for every caller
+    for (field, bin) in [
+        ("server_bin", "/usr/bin/id"),
+        ("server_bin", "id"),
+        ("server_bin", "/tmp/silo"),
+        ("server_bin", "/usr/bin/../../tmp/silo"),
+        ("client_bin", "/bin/sh"),
+        ("client_bin", "mcli; id"),
+    ] {
+        let (s, v) = call(&c, &tok, "PUT", "/nas/s3/config", json!({ field: bin })).await;
+        expect(
+            &mut failures,
+            &format!("NAS admin sets {field}={bin}"),
+            s,
+            422,
+            &v,
+        );
+    }
+    let (s, v) = call(
+        &c,
+        &adm,
+        "PUT",
+        "/nas/s3/config",
+        json!({"server_bin": "/usr/bin/id"}),
+    )
+    .await;
+    expect(
+        &mut failures,
+        "root admin sets server_bin=/usr/bin/id",
+        s,
+        422,
+        &v,
+    );
+    // system dirs and the node data dir -> 422 for everyone
+    for d in [
+        "/etc/hx-s3",
+        "/usr/hx-s3",
+        "/proc/hx-s3",
+        "/srv/../etc/hx",
+        node_dir.as_str(),
+    ] {
+        let (s, v) = call(&c, &tok, "PUT", "/nas/s3/config", json!({"data_dirs": [d]})).await;
+        expect(
+            &mut failures,
+            &format!("NAS admin sets data_dirs=[{d}]"),
+            s,
+            422,
+            &v,
+        );
+        let (s, v) = call(&c, &adm, "PUT", "/nas/s3/config", json!({"data_dirs": [d]})).await;
+        expect(
+            &mut failures,
+            &format!("root admin sets data_dirs=[{d}]"),
+            s,
+            422,
+            &v,
+        );
+    }
+    // somewhere else on the host -> 403 for a NAS-scoped admin
+    let (s, v) = call(
+        &c,
+        &tok,
+        "PUT",
+        "/nas/s3/config",
+        json!({"data_dirs": ["/srv/hx-s3-rbac"]}),
+    )
+    .await;
+    expect(
+        &mut failures,
+        "NAS admin sets data_dirs=[/srv/hx-s3-rbac]",
+        s,
+        403,
+        &v,
+    );
+    let (s, after) = call(&c, &adm, "GET", "/nas/s3/config", Value::Null).await;
+    assert_eq!(s, 200);
+    if after["server_bin"] != orig["server_bin"]
+        || after["client_bin"] != orig["client_bin"]
+        || after["data_dirs"] != orig["data_dirs"]
+    {
+        failures.push(format!(
+            "refused PUTs changed the config: {orig} -> {after}"
+        ));
+    }
+    // allowed: packaged programs by name, and a dir below the NAS roots
+    let below = format!("{base}-rbac");
+    let (s, v) = call(
+        &c,
+        &tok,
+        "PUT",
+        "/nas/s3/config",
+        json!({"server_bin": "silo", "client_bin": "/usr/local/bin/mcli", "data_dirs": [below]}),
+    )
+    .await;
+    expect(
+        &mut failures,
+        "NAS admin sets silo + /usr/local/bin/mcli + a NAS data dir",
+        s,
+        200,
+        &v,
+    );
+    // the unchanged (already accepted) settings stay savable
+    let (s, v) = call(
+        &c,
+        &tok,
+        "PUT",
+        "/nas/s3/config",
+        json!({"data_dirs": [below]}),
+    )
+    .await;
+    expect(
+        &mut failures,
+        "NAS admin re-saves the same data dir",
+        s,
+        200,
+        &v,
+    );
+
+    // restore
+    let (s, v) = call(
+        &c,
+        &adm,
+        "PUT",
+        "/nas/s3/config",
+        json!({"server_bin": orig["server_bin"], "client_bin": orig["client_bin"], "data_dirs": orig["data_dirs"]}),
+    )
+    .await;
+    assert_eq!(s, 200, "restore the gateway config: {v}");
+    let _ = call(&c, &adm, "DELETE", &format!("/users/{uid}"), Value::Null).await;
+    assert!(
+        failures.is_empty(),
+        "gateway settings policy:\n{}",
+        failures.join("\n")
+    );
+}
