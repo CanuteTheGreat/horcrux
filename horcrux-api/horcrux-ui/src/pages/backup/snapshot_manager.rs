@@ -59,6 +59,39 @@ pub fn SnapshotManagerPage() -> impl IntoView {
     let (quota_summary, set_quota_summary) = create_signal(None::<QuotaSummary>);
     let (loading, set_loading) = create_signal(false);
     let (error, set_error) = create_signal(None::<String>);
+    // Usage shown under a quota card after "Usage" (quota id -> text).
+    let (usage, set_usage) = create_signal(std::collections::HashMap::<String, String>::new());
+    let show_usage = move |quota_id: String| {
+        spawn_local(async move {
+            let text = match crate::api::get_snapshot_quota_usage(&quota_id).await {
+                Ok(u) => format!(
+                    "{} snapshot(s), {:.1} MiB of {} ({:.0}%){}{}",
+                    u.current_count,
+                    u.current_size_bytes as f64 / 1048576.0,
+                    if u.max_size_bytes > 0 {
+                        format!("{:.1} MiB", u.max_size_bytes as f64 / 1048576.0)
+                    } else {
+                        "no size limit".into()
+                    },
+                    u.usage_percent,
+                    u.max_count
+                        .map(|m| format!(", count limit {m}"))
+                        .unwrap_or_default(),
+                    if u.is_exceeded {
+                        " - EXCEEDED"
+                    } else if u.is_warning {
+                        " - warning"
+                    } else {
+                        ""
+                    }
+                ),
+                Err(e) => format!("Could not read usage: {}", e.message),
+            };
+            set_usage.update(|m| {
+                m.insert(quota_id, text);
+            });
+        });
+    };
     let (active_tab, set_active_tab) = create_signal("snapshots".to_string());
 
     // Modal states
@@ -798,6 +831,12 @@ pub fn SnapshotManagerPage() -> impl IntoView {
                                                                 {quota_desc.map(|desc| view! {
                                                                     <p class="text-sm text-gray-600 mb-2">{desc}</p>
                                                                 })}
+                                                                {
+                                                                    let id = quota_id.clone();
+                                                                    move || usage.get().get(&id).cloned().map(|t| view! {
+                                                                        <p class="text-sm text-gray-800 mb-2 quota-usage-text">{t}</p>
+                                                                    })
+                                                                }
                                                                 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs text-gray-500">
                                                                     <div>
                                                                         <span class="font-medium">"Type: "</span>
@@ -819,7 +858,11 @@ pub fn SnapshotManagerPage() -> impl IntoView {
                                                             </div>
                                                             <div class="flex items-center space-x-2">
                                                                 <button
-                                                                    class="text-blue-600 hover:text-blue-900 text-sm"
+                                                                    class="text-blue-600 hover:text-blue-900 text-sm quota-usage"
+                                                                    on:click={
+                                                                        let id = quota_id.clone();
+                                                                        move |_| show_usage(id.clone())
+                                                                    }
                                                                 >
                                                                     "Usage"
                                                                 </button>

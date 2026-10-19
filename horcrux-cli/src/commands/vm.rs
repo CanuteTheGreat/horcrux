@@ -24,7 +24,9 @@ impl From<VmConfig> for VmRow {
             name: vm.name,
             status: format!("{:?}", vm.status),
             cpus: vm.cpus,
-            memory_mb: vm.memory / 1024 / 1024,
+            // VmConfig.memory is already MB (it was divided by 1024*1024
+            // again, so every VM showed 0).
+            memory_mb: vm.memory,
             architecture: format!("{:?}", vm.architecture),
         }
     }
@@ -147,4 +149,18 @@ pub async fn handle_vm_command(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn list_row_shows_memory_in_mb() {
+        let vm: VmConfig = serde_json::from_str(
+            r#"{"id":"v","name":"v","hypervisor":"qemu","memory":128,"cpus":1,"disk_size":1,"status":"stopped"}"#,
+        )
+        .unwrap();
+        assert_eq!(VmRow::from(vm).memory_mb, 128);
+    }
 }

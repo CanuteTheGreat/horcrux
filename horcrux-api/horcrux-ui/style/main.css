@@ -460,3 +460,35 @@ body {
     margin: 0.25rem 0;
     opacity: 0.8;
 }
+
+/* In-page dropdown buttons (.dropdown > .dropdown-toggle + .dropdown-menu):
+   the menu opens when the toggle is hovered or clicked (focus), so the
+   toggle is never a button that does nothing. */
+.dropdown {
+  position: relative;
+  display: inline-block;
+}
+.dropdown > .dropdown-menu {
+  display: none;
+  position: absolute;
+  right: 0;
+  z-index: 50;
+  min-width: 11rem;
+  padding: 0.25rem 0;
+  background: var(--bg-secondary, #1f2937);
+  border: 1px solid var(--border-color, #374151);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+.dropdown:hover > .dropdown-menu,
+.dropdown:focus-within > .dropdown-menu {
+  display: block;
+}
+.dropdown > .dropdown-menu > .dropdown-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}

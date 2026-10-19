@@ -1,6 +1,6 @@
 //! Kubernetes Cluster Management Page
 
-use crate::api::{delete_json, fetch_json, post_empty};
+use crate::api::{delete_json, fetch_json, post_empty, post_json};
 use leptos::*;
 use serde::{Deserialize, Serialize};
 
@@ -36,6 +36,37 @@ pub fn KubernetesManagement() -> impl IntoView {
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
     let (show_connect_modal, set_show_connect_modal) = create_signal(false);
+    // Connect form (POST /api/k8s/clusters {name, kubeconfig, context}).
+    let connect_name = create_rw_signal(String::new());
+    let connect_kubeconfig = create_rw_signal(String::new());
+    let connect_context = create_rw_signal(String::new());
+    let (connecting, set_connecting) = create_signal(false);
+    let (connect_error, set_connect_error) = create_signal(None::<String>);
+    let connect = move |_| {
+        let body = serde_json::json!({
+            "name": connect_name.get().trim(),
+            "kubeconfig": connect_kubeconfig.get(),
+            "context": Some(connect_context.get().trim().to_string()).filter(|c| !c.is_empty()),
+        });
+        set_connecting.set(true);
+        set_connect_error.set(None);
+        spawn_local(async move {
+            match post_json::<K8sCluster, _>("/api/k8s/clusters", &body).await {
+                Ok(c) => {
+                    set_clusters.update(|cs| {
+                        cs.retain(|x| x.id != c.id);
+                        cs.push(c);
+                    });
+                    set_show_connect_modal.set(false);
+                    connect_name.set(String::new());
+                    connect_kubeconfig.set(String::new());
+                    connect_context.set(String::new());
+                }
+                Err(e) => set_connect_error.set(Some(e.message)),
+            }
+            set_connecting.set(false);
+        });
+    };
 
     // Fetch clusters on mount
     create_effect(move |_| {
@@ -219,7 +250,7 @@ pub fn KubernetesManagement() -> impl IntoView {
                 view! { <div></div> }.into_view()
             }}
 
-            // Connect Cluster Modal (simplified - would need full form)
+            // Connect Cluster Modal
             {move || show_connect_modal.get().then(|| view! {
                 <div class="modal-overlay" on:click=move |_| set_show_connect_modal.set(false)>
                     <div class="modal" on:click=|e| e.stop_propagation()>
@@ -230,25 +261,31 @@ pub fn KubernetesManagement() -> impl IntoView {
                             </button>
                         </div>
                         <div class="modal-body">
+                            {move || connect_error.get().map(|e| view! { <div class="alert alert-error" id="k8s-connect-error">{e}</div> })}
                             <div class="form-group">
                                 <label>"Cluster Name"</label>
-                                <input type="text" class="form-control" placeholder="production-cluster"/>
+                                <input id="k8s-connect-name" type="text" class="form-control" placeholder="production-cluster"
+                                    prop:value=connect_name on:input=move |ev| connect_name.set(event_target_value(&ev))/>
                             </div>
                             <div class="form-group">
                                 <label>"Kubeconfig"</label>
-                                <textarea class="form-control" rows="10" placeholder="Paste your kubeconfig here..."></textarea>
+                                <textarea id="k8s-connect-kubeconfig" class="form-control" rows="10" placeholder="Paste your kubeconfig here..."
+                                    prop:value=connect_kubeconfig on:input=move |ev| connect_kubeconfig.set(event_target_value(&ev))></textarea>
                             </div>
                             <div class="form-group">
                                 <label>"Context (Optional)"</label>
-                                <input type="text" class="form-control" placeholder="Leave empty for default"/>
+                                <input id="k8s-connect-context" type="text" class="form-control" placeholder="Leave empty for default"
+                                    prop:value=connect_context on:input=move |ev| connect_context.set(event_target_value(&ev))/>
                             </div>
                         </div>
                         <div class="modal-footer">
                             <button class="btn btn-secondary" on:click=move |_| set_show_connect_modal.set(false)>
                                 "Cancel"
                             </button>
-                            <button class="btn btn-primary">
-                                "Connect"
+                            <button id="k8s-connect-submit" class="btn btn-primary"
+                                disabled=move || connecting.get() || connect_name.get().trim().is_empty() || connect_kubeconfig.get().trim().is_empty()
+                                on:click=connect>
+                                {move || if connecting.get() { "Connecting..." } else { "Connect" }}
                             </button>
                         </div>
                     </div>

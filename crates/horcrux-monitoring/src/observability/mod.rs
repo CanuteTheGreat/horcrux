@@ -133,9 +133,28 @@ impl OtelManager {
         self.config.read().await.clone()
     }
 
-    /// Update configuration
+    /// Update configuration. The settings are kept even when export is
+    /// disabled (they used to be dropped, so the page always showed the
+    /// defaults again); disabling stops the exporters.
     pub async fn update_config(&self, config: OtelConfig) -> Result<(), String> {
-        self.initialize(config).await
+        if config.enabled {
+            if config.protocol == OtelProtocol::Grpc {
+                return Err(
+                    "OTLP over gRPC is not supported; use the HTTP protocol (port 4318)".into(),
+                );
+            }
+            if !(config.endpoint.starts_with("http://") || config.endpoint.starts_with("https://"))
+            {
+                return Err("endpoint must be an http(s) URL, e.g. http://collector:4318".into());
+            }
+            if config.export_interval_secs < 5 {
+                return Err("export interval must be at least 5 seconds".into());
+            }
+            self.initialize(config).await
+        } else {
+            *self.config.write().await = config;
+            self.shutdown().await
+        }
     }
 
     /// Shutdown and cleanup
