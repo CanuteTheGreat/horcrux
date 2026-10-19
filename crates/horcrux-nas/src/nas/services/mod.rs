@@ -65,7 +65,8 @@ impl NasService {
             NasService::Netatalk,
             NasService::Proftpd,
             NasService::Sshd,
-            NasService::Minio,
+            // MinIO is not an init-system service: Horcrux supervises it
+            // itself (NAS > S3 Gateway, services::s3).
             NasService::Tgtd,
             NasService::Rsyncd,
         ]
@@ -404,7 +405,11 @@ mod tests {
     #[test]
     fn test_all_services() {
         let all = NasService::all();
-        assert!(all.len() >= 12);
+        assert!(all.len() >= 11);
+        assert!(
+            !all.contains(&NasService::Minio),
+            "MinIO is supervised by the S3 gateway, not the init system"
+        );
         assert!(all.contains(&NasService::Smbd));
     }
 }

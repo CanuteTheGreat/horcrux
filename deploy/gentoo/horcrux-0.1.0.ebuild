@@ -113,7 +113,10 @@ RDEPEND="
 	)
 
 	timemachine? ( net-fs/netatalk )
-	s3-gateway? ( app-misc/minio-bin )
+	s3-gateway? (
+		app-misc/silo-bin
+		app-misc/mcli-bin
+	)
 	iscsi-target? ( sys-block/tgt )
 	rsync-server? ( net-misc/rsync )
 

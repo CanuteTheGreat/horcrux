@@ -2937,6 +2937,8 @@ pub async fn delete_kubernetes_secret(
 // Backup & restore: types and calls live in api/backup.rs (lane D)
 // =============================================================================
 pub mod backup;
+pub mod dashboards;
+pub mod s3;
 
 /// Snapshot-schedule retention (used by the snapshot pages).
 #[derive(Debug, Clone, Serialize, Deserialize)]

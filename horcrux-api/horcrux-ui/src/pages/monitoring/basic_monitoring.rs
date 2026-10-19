@@ -1,3 +1,4 @@
+use super::metric_panel::MetricPanel;
 use crate::websocket;
 use leptos::*;
 
@@ -8,6 +9,20 @@ pub fn Monitoring() -> impl IntoView {
         websocket::TOPIC_NODE_METRICS.to_string(),
         websocket::TOPIC_VM_METRICS.to_string(),
     ]);
+
+    // Performance trends: time range + a refresh tick every 15 s
+    let (range, set_range) = create_signal(3600i64);
+    let (tick, set_tick) = create_signal(0u64);
+    let interval = set_interval_with_handle(
+        move || set_tick.update(|t| *t += 1),
+        std::time::Duration::from_secs(15),
+    )
+    .ok();
+    on_cleanup(move || {
+        if let Some(h) = interval {
+            h.clear();
+        }
+    });
 
     // Store latest metrics
     let (node_metrics, set_node_metrics) = create_signal(None::<NodeMetricsData>);
@@ -168,13 +183,32 @@ pub fn Monitoring() -> impl IntoView {
                 }}
             </div>
 
-            // Real-time Graph Section (placeholder for future charts)
-            <div class="metrics-section">
-                <h2>"Performance Trends"</h2>
-                <div class="chart-container">
-                    <p class="chart-placeholder">"📈 Real-time graphs coming soon..."</p>
-                    <p class="hint">"CPU, Memory, Disk I/O, and Network trends over time"</p>
+            // Performance trends: the node's sampled metrics (15 s samples,
+            // 24 h retention) from the Metrics Explorer store.
+            <div class="metrics-section" id="performance-trends">
+                <div class="section-header">
+                    <h2>"Performance Trends"</h2>
+                    <select id="trend-range" on:change=move |ev| {
+                        set_range.set(event_target_value(&ev).parse().unwrap_or(3600));
+                    }>
+                        <option value="900">"Last 15 minutes"</option>
+                        <option value="3600" selected>"Last hour"</option>
+                        <option value="21600">"Last 6 hours"</option>
+                        <option value="86400">"Last 24 hours"</option>
+                    </select>
                 </div>
+                <div class="trend-grid">
+                    <MetricPanel title="CPU usage (%)" query="horcrux_node_cpu_usage_percent" chart="line" range_secs=range tick=tick/>
+                    <MetricPanel title="Memory usage (%)" query="horcrux_node_memory_usage_percent" chart="area" range_secs=range tick=tick/>
+                    <MetricPanel title="Disk usage (%)" query="horcrux_node_disk_usage_percent" chart="line" range_secs=range tick=tick/>
+                    <MetricPanel title="Load average (1 min)" query="horcrux_node_load1" chart="line" range_secs=range tick=tick/>
+                </div>
+                <p class="hint">
+                    "Sampled every 15 s, kept 24 h. Build your own charts on "
+                    <a href="/monitoring/dashboards">"Dashboards"</a>
+                    " or explore every metric in the "
+                    <a href="/monitoring/metrics">"Metrics Explorer"</a>"."
+                </p>
             </div>
         </div>
     }

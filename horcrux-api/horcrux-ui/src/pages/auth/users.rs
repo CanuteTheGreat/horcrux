@@ -261,7 +261,15 @@ pub fn UsersPage() -> impl IntoView {
                         on:click=move |_| set_show_create_form.set(!show_create_form.get())
                     >
                         <span class="icon">"+"</span>
-                        {move || editing.get().map(|u| view! {
+                        {move || if show_create_form.get() { "Cancel" } else { "Add User" }}
+                    </button>
+                </div>
+            </div>
+
+            // Edit panel (opened by a row's edit icon). It used to be rendered
+            // inside the "Add User" button, where every click in the form also
+            // toggled the create form and the panel was unusable.
+            {move || editing.get().map(|u| view! {
                 <EditUserPanel
                     user=u
                     on_done=move |changed: bool| {
@@ -277,10 +285,6 @@ pub fn UsersPage() -> impl IntoView {
                     on_error=move |msg: String| set_error_message.set(Some(msg))
                 />
             })}
-            {move || if show_create_form.get() { "Cancel" } else { "Add User" }}
-                    </button>
-                </div>
-            </div>
 
             {move || error_message.get().map(|msg| view! {
                 <div class="alert alert-error">

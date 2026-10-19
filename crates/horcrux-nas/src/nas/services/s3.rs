@@ -46,17 +46,34 @@ pub struct S3GatewayConfig {
     pub domain: Option<String>,
     /// Max object size (bytes, default 5TiB)
     pub max_object_size: u64,
+    /// Started by Horcrux and to be started again when the API starts
+    #[serde(default)]
+    pub enabled: bool,
+    /// Pid file, server log and client state live here
+    #[serde(default = "default_run_dir")]
+    pub run_dir: String,
+    /// Server binary (`minio`, `silo` or a path); empty = auto-detect
+    #[serde(default)]
+    pub server_bin: Option<String>,
+    /// MinIO client binary (`mcli`, `mc` or a path); empty = auto-detect
+    #[serde(default)]
+    pub client_bin: Option<String>,
+}
+
+fn default_run_dir() -> String {
+    "/var/lib/horcrux/nas/s3-gateway".to_string()
 }
 
 impl Default for S3GatewayConfig {
     fn default() -> Self {
         Self {
-            data_dirs: vec!["/mnt/nas/s3".to_string()],
+            data_dirs: vec!["/var/lib/horcrux/nas/s3".to_string()],
             address: "0.0.0.0".to_string(),
             port: 9000,
             console_port: 9001,
-            root_user: "minioadmin".to_string(),
-            root_password: "minioadmin".to_string(),
+            // never a well-known default password: a fresh random one
+            root_user: "horcrux-admin".to_string(),
+            root_password: random_alnum(40),
             browser: true,
             region: "us-east-1".to_string(),
             tls: None,
@@ -68,6 +85,10 @@ impl Default for S3GatewayConfig {
             audit_webhook: None,
             domain: None,
             max_object_size: 5 * 1024 * 1024 * 1024 * 1024, // 5TiB
+            enabled: false,
+            run_dir: default_run_dir(),
+            server_bin: None,
+            client_bin: None,
         }
     }
 }
@@ -163,6 +184,12 @@ pub struct S3Bucket {
     pub replication: Option<BucketReplication>,
     /// Event notifications
     pub notifications: Vec<BucketNotification>,
+    /// Bytes stored
+    #[serde(default)]
+    pub size_bytes: u64,
+    /// Objects stored
+    #[serde(default)]
+    pub object_count: u64,
 }
 
 /// Bucket encryption configuration
@@ -388,8 +415,28 @@ pub enum QuotaType {
 /// S3 Gateway Status
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct S3GatewayStatus {
-    /// Running
+    /// Running (process alive and answering its health check)
     pub running: bool,
+    /// Started from Horcrux; started again when the API starts
+    pub enabled: bool,
+    /// Server process id
+    pub pid: Option<u32>,
+    /// S3 API port
+    pub port: u16,
+    /// Web console port
+    pub console_port: u16,
+    /// http or https
+    pub scheme: String,
+    /// Server binary in use (None = not installed)
+    pub server_binary: Option<String>,
+    /// Client binary in use (None = not installed)
+    pub client_binary: Option<String>,
+    /// What has to be installed before the gateway can start
+    pub missing: Vec<String>,
+    /// Root (admin) user name; its password is never returned
+    pub root_user: String,
+    /// Data directories
+    pub data_dirs: Vec<String>,
     /// Version
     pub version: Option<String>,
     /// Address
@@ -483,25 +530,96 @@ pub struct PresignedUrlRequest {
 }
 
 /// S3 Gateway Manager
+///
+/// Horcrux supervises the S3 server process itself (like it does QEMU): the
+/// server is started detached in its own process group with a pid file, so
+/// it keeps running across API restarts, and the API starts it again at boot
+/// when the gateway is enabled. Administration goes through the MinIO client
+/// (`mcli`/`mc`) with the root credentials passed in `MC_HOST_<alias>`, so no
+/// client configuration is left in anyone's home directory.
+///
+/// Any MinIO-compatible server works: `minio` or `silo` (the community fork
+/// that still ships binaries) - see `S3GatewayConfig::server_bin`.
 pub struct S3GatewayManager {
     config: S3GatewayConfig,
     mc_alias: String,
 }
 
+/// Seconds to wait for a freshly started server to answer its health check.
+const START_TIMEOUT_SECS: u64 = 45;
+
+/// A random alphanumeric string (credentials, generated keys).
+pub fn random_alnum(len: usize) -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    (0..len)
+        .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
+        .collect()
+}
+
+/// Find `name` in `$PATH` (plus the usual sbin dirs a service PATH may lack).
+fn find_in_path(name: &str) -> Option<String> {
+    let mut dirs: Vec<std::path::PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    for extra in ["/usr/local/bin", "/usr/bin", "/opt/horcrux/bin"] {
+        dirs.push(extra.into());
+    }
+    dirs.into_iter()
+        .map(|d| d.join(name))
+        .find(|p| {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::metadata(p)
+                .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                .unwrap_or(false)
+        })
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Is `bin` a MinIO-compatible client (and not GNU Midnight Commander, which
+/// is also installed as `mc` on many hosts)?
+fn is_minio_client(bin: &str) -> bool {
+    std::process::Command::new(bin)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map(|o| {
+            let out = String::from_utf8_lossy(&o.stdout).to_lowercase();
+            o.status.success() && out.contains("release.") && !out.contains("midnight")
+        })
+        .unwrap_or(false)
+}
+
+/// pid of a live (not zombie) process whose command line contains `needle`.
+fn live_pid(pid: i32, needle: &str) -> bool {
+    let stat = match std::fs::read_to_string(format!("/proc/{}/stat", pid)) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    // state is the first field after the parenthesised comm
+    let state = stat
+        .rsplit_once(')')
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .unwrap_or("X");
+    if state == "Z" || state == "X" {
+        return false;
+    }
+    std::fs::read(format!("/proc/{}/cmdline", pid))
+        .map(|c| String::from_utf8_lossy(&c).contains(needle))
+        .unwrap_or(false)
+}
+
 impl S3GatewayManager {
-    /// Create a new S3 gateway manager
+    /// Create a new S3 gateway manager with the default configuration
     pub fn new() -> Self {
-        Self {
-            config: S3GatewayConfig::default(),
-            mc_alias: "local".to_string(),
-        }
+        Self::with_config(S3GatewayConfig::default())
     }
 
     /// Create with specific configuration
     pub fn with_config(config: S3GatewayConfig) -> Self {
         Self {
             config,
-            mc_alias: "local".to_string(),
+            mc_alias: "horcrux".to_string(),
         }
     }
 
@@ -515,170 +633,414 @@ impl S3GatewayManager {
         &self.config
     }
 
-    /// Setup mc alias for API access
-    async fn setup_mc_alias(&self) -> Result<()> {
-        let protocol = if self.config.tls.as_ref().map(|t| t.enabled).unwrap_or(false) {
+    /// The S3 server binary: the configured one, else `minio`, else `silo`.
+    pub fn server_binary(&self) -> Option<String> {
+        if let Some(b) = self.config.server_bin.as_deref().filter(|b| !b.is_empty()) {
+            return if b.contains('/') {
+                std::path::Path::new(b).exists().then(|| b.to_string())
+            } else {
+                find_in_path(b)
+            };
+        }
+        find_in_path("minio").or_else(|| find_in_path("silo"))
+    }
+
+    /// The MinIO client binary: the configured one, else `mcli`, else an
+    /// `mc` that really is the MinIO client.
+    pub fn client_binary(&self) -> Option<String> {
+        if let Some(b) = self.config.client_bin.as_deref().filter(|b| !b.is_empty()) {
+            return if b.contains('/') {
+                std::path::Path::new(b).exists().then(|| b.to_string())
+            } else {
+                find_in_path(b)
+            };
+        }
+        find_in_path("mcli").or_else(|| find_in_path("mc").filter(|b| is_minio_client(b)))
+    }
+
+    /// Host:port the API (and the client) reaches the server on.
+    fn local_endpoint(&self) -> String {
+        let host = match self.config.address.as_str() {
+            "" | "0.0.0.0" | "::" | "[::]" => "127.0.0.1",
+            a => a,
+        };
+        format!("{}:{}", host, self.config.port)
+    }
+
+    fn scheme(&self) -> &'static str {
+        if self.config.tls.as_ref().map(|t| t.enabled).unwrap_or(false) {
             "https"
         } else {
             "http"
-        };
-
-        let url = format!(
-            "{}://{}:{}",
-            protocol,
-            if self.config.address == "0.0.0.0" {
-                "127.0.0.1"
-            } else {
-                &self.config.address
-            },
-            self.config.port
-        );
-
-        let output = Command::new("mc")
-            .args([
-                "alias",
-                "set",
-                &self.mc_alias,
-                &url,
-                &self.config.root_user,
-                &self.config.root_password,
-            ])
-            .output()
-            .await
-            .map_err(|e| Error::Internal(format!("Failed to setup mc alias: {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!(
-                "mc alias setup failed: {}",
-                stderr
-            )));
         }
-
-        Ok(())
     }
 
-    /// Start the S3 gateway
+    fn pid_file(&self) -> std::path::PathBuf {
+        std::path::Path::new(&self.config.run_dir).join("server.pid")
+    }
+
+    /// Server log (stdout + stderr of the server process).
+    pub fn log_file(&self) -> std::path::PathBuf {
+        std::path::Path::new(&self.config.run_dir).join("server.log")
+    }
+
+    /// A client command bound to this gateway's root credentials.
+    fn mc(&self) -> Command {
+        let bin = self.client_binary().unwrap_or_else(|| "mcli".to_string());
+        let mut cmd = Command::new(bin);
+        cmd.env(
+            format!("MC_HOST_{}", self.mc_alias),
+            format!(
+                "{}://{}:{}@{}",
+                self.scheme(),
+                self.config.root_user,
+                self.config.root_password,
+                self.local_endpoint()
+            ),
+        )
+        .env(
+            "MC_CONFIG_DIR",
+            std::path::Path::new(&self.config.run_dir).join("mc"),
+        )
+        .env("MC_NO_COLOR", "1")
+        .env("MC_DISABLE_PAGER", "1")
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+        if self.scheme() == "https" {
+            cmd.env("MC_INSECURE", "1");
+        }
+        cmd
+    }
+
+    /// Run a client command and return stdout, or the client's own error
+    /// message (JSON `error.cause.message` / `error.message`, else stderr).
+    async fn mc_run(&self, args: &[&str]) -> Result<String> {
+        if self.client_binary().is_none() {
+            return Err(Error::Internal(
+                "MinIO client not installed (need `mcli` or the MinIO `mc`)".to_string(),
+            ));
+        }
+        let output = self
+            .mc()
+            .args(args)
+            .output()
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to run the MinIO client: {}", e)))?;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        if output.status.success() {
+            return Ok(stdout);
+        }
+        Err(Error::Internal(mc_error_message(
+            &stdout,
+            &String::from_utf8_lossy(&output.stderr),
+        )))
+    }
+
+    /// pid of the running server, if any.
+    pub fn running_pid(&self) -> Option<i32> {
+        let content = std::fs::read_to_string(self.pid_file()).ok()?;
+        let pid: i32 = content.lines().next()?.trim().parse().ok()?;
+        let needle = self
+            .server_binary()
+            .and_then(|b| {
+                std::path::Path::new(&b)
+                    .file_name()
+                    .map(|f| f.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "server".to_string());
+        live_pid(pid, &needle).then_some(pid)
+    }
+
+    /// Start time (unix seconds) recorded with the pid.
+    fn started_at(&self) -> Option<i64> {
+        let content = std::fs::read_to_string(self.pid_file()).ok()?;
+        content.lines().nth(1)?.trim().parse().ok()
+    }
+
+    /// Does the server answer its liveness endpoint?
+    pub async fn healthy(&self) -> bool {
+        use tokio::io::AsyncReadExt;
+        let ep = self.local_endpoint();
+        let fut = async {
+            let mut s = tokio::net::TcpStream::connect(&ep).await.ok()?;
+            s.write_all(
+                format!("GET /minio/health/live HTTP/1.0\r\nHost: {}\r\n\r\n", ep).as_bytes(),
+            )
+            .await
+            .ok()?;
+            let mut buf = vec![0u8; 64];
+            let n = s.read(&mut buf).await.ok()?;
+            Some(String::from_utf8_lossy(&buf[..n]).contains(" 200"))
+        };
+        if self.scheme() == "https" {
+            // health over TLS: fall back to "the port accepts connections"
+            return tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                tokio::net::TcpStream::connect(&ep),
+            )
+            .await
+            .map(|r| r.is_ok())
+            .unwrap_or(false);
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(3), fut)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(false)
+    }
+
+    /// Start the S3 gateway (no-op if it is already running).
     pub async fn start(&self) -> Result<()> {
-        // Ensure data directories exist
+        if self.running_pid().is_some() {
+            return Ok(());
+        }
+        let server = self.server_binary().ok_or_else(|| {
+            Error::Internal(
+                "S3 server not installed: install MinIO (`minio`) or Silo (`silo`), or set the server binary in the gateway settings".to_string(),
+            )
+        })?;
+        if self.client_binary().is_none() {
+            return Err(Error::Internal(
+                "MinIO client not installed: install `mcli` (or the MinIO `mc`) - the gateway is administered through it".to_string(),
+            ));
+        }
+        if self.config.data_dirs.is_empty() {
+            return Err(Error::Validation(
+                "No data directory configured".to_string(),
+            ));
+        }
         for dir in &self.config.data_dirs {
             tokio::fs::create_dir_all(dir).await.map_err(|e| {
                 Error::Internal(format!("Failed to create S3 data dir {}: {}", dir, e))
             })?;
         }
+        tokio::fs::create_dir_all(&self.config.run_dir)
+            .await
+            .map_err(|e| {
+                Error::Internal(format!(
+                    "Failed to create S3 run dir {}: {}",
+                    self.config.run_dir, e
+                ))
+            })?;
+        // Something else already on the port would make the health check
+        // pass against the wrong server.
+        if self.healthy().await {
+            return Err(Error::Conflict(format!(
+                "Port {} already serves an S3 endpoint that Horcrux did not start",
+                self.config.port
+            )));
+        }
 
-        // Write configuration
-        self.write_config().await?;
+        let log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.log_file())
+            .map_err(|e| Error::Internal(format!("Failed to open S3 server log: {}", e)))?;
+        let log_err = log
+            .try_clone()
+            .map_err(|e| Error::Internal(format!("Failed to open S3 server log: {}", e)))?;
 
-        // Start MinIO via systemd/OpenRC
-        crate::nas::services::manage_service(
-            &crate::nas::services::NasService::Minio,
-            crate::nas::services::ServiceAction::Start,
+        let mut cmd = Command::new(&server);
+        cmd.arg("server");
+        for dir in &self.config.data_dirs {
+            cmd.arg(dir);
+        }
+        cmd.arg("--address")
+            .arg(format!("{}:{}", self.config.address, self.config.port))
+            .arg("--console-address")
+            .arg(format!(
+                "{}:{}",
+                self.config.address, self.config.console_port
+            ));
+        if self.config.tls.as_ref().map(|t| t.enabled).unwrap_or(false) {
+            cmd.arg("--certs-dir")
+                .arg(std::path::Path::new(&self.config.run_dir).join("certs"));
+        }
+        for (k, v) in self.server_env() {
+            cmd.env(k, v);
+        }
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(log)
+            .stderr(log_err)
+            // own process group: not killed with the API's group, survives
+            // an API restart
+            .process_group(0);
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| Error::Internal(format!("Failed to start {}: {}", server, e)))?;
+        let pid = child.id().unwrap_or(0) as i32;
+        std::fs::write(
+            self.pid_file(),
+            format!("{}\n{}\n", pid, chrono::Utc::now().timestamp()),
         )
-        .await?;
+        .map_err(|e| Error::Internal(format!("Failed to write S3 pid file: {}", e)))?;
+        // Reap the child when it exits (no zombie while the API runs).
+        tokio::spawn(async move {
+            let _ = child.wait().await;
+        });
 
-        // Wait for service to be ready
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-        // Setup mc alias
-        let _ = self.setup_mc_alias().await;
-
-        Ok(())
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(START_TIMEOUT_SECS);
+        loop {
+            if self.healthy().await {
+                tracing::info!(
+                    "S3 gateway started (pid {}, {}://{})",
+                    pid,
+                    self.scheme(),
+                    self.local_endpoint()
+                );
+                return Ok(());
+            }
+            if self.running_pid().is_none() || std::time::Instant::now() > deadline {
+                let _ = self.stop().await;
+                return Err(Error::Internal(format!(
+                    "S3 server did not come up: {}",
+                    self.log_tail(15)
+                )));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
     }
 
-    /// Stop the S3 gateway
+    /// Environment of the server process.
+    pub fn server_env(&self) -> Vec<(String, String)> {
+        let mut env = vec![
+            ("MINIO_ROOT_USER".to_string(), self.config.root_user.clone()),
+            (
+                "MINIO_ROOT_PASSWORD".to_string(),
+                self.config.root_password.clone(),
+            ),
+            ("MINIO_SITE_REGION".to_string(), self.config.region.clone()),
+            // nothing phones home / offers updates from a managed install
+            ("MINIO_UPDATE".to_string(), "off".to_string()),
+        ];
+        if !self.config.browser {
+            env.push(("MINIO_BROWSER".to_string(), "off".to_string()));
+        }
+        if self.config.metrics {
+            env.push((
+                "MINIO_PROMETHEUS_AUTH_TYPE".to_string(),
+                if self.config.metrics_auth_token.is_some() {
+                    "jwt"
+                } else {
+                    "public"
+                }
+                .to_string(),
+            ));
+        }
+        if let Some(ref domain) = self.config.domain {
+            env.push(("MINIO_DOMAIN".to_string(), domain.clone()));
+        }
+        if self.config.audit_log {
+            if let Some(ref webhook) = self.config.audit_webhook {
+                env.push(("MINIO_AUDIT_WEBHOOK_ENABLE_target1".into(), "on".into()));
+                env.push((
+                    "MINIO_AUDIT_WEBHOOK_ENDPOINT_target1".into(),
+                    webhook.clone(),
+                ));
+            }
+        }
+        env
+    }
+
+    /// Last `n` lines of the server log (for error messages).
+    pub fn log_tail(&self, n: usize) -> String {
+        let text = std::fs::read_to_string(self.log_file()).unwrap_or_default();
+        let lines: Vec<&str> = text.lines().collect();
+        let tail = lines[lines.len().saturating_sub(n)..].join("\n");
+        if tail.trim().is_empty() {
+            "(no server output)".to_string()
+        } else {
+            tail
+        }
+    }
+
+    /// Stop the S3 gateway (SIGTERM, then SIGKILL after 15 s).
     pub async fn stop(&self) -> Result<()> {
-        crate::nas::services::manage_service(
-            &crate::nas::services::NasService::Minio,
-            crate::nas::services::ServiceAction::Stop,
-        )
-        .await
+        if let Some(pid) = self.running_pid() {
+            use nix::sys::signal::{kill, Signal};
+            use nix::unistd::Pid;
+            let _ = kill(Pid::from_raw(pid), Signal::SIGTERM);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            while self.running_pid().is_some() && std::time::Instant::now() < deadline {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+            if self.running_pid().is_some() {
+                let _ = kill(Pid::from_raw(pid), Signal::SIGKILL);
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+            if self.running_pid().is_some() {
+                return Err(Error::Internal(format!(
+                    "S3 server (pid {}) did not stop",
+                    pid
+                )));
+            }
+            tracing::info!("S3 gateway stopped (pid {})", pid);
+        }
+        let _ = std::fs::remove_file(self.pid_file());
+        Ok(())
     }
 
     /// Restart the S3 gateway
     pub async fn restart(&self) -> Result<()> {
-        self.write_config().await?;
-        crate::nas::services::manage_service(
-            &crate::nas::services::NasService::Minio,
-            crate::nas::services::ServiceAction::Restart,
-        )
-        .await?;
-
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-        let _ = self.setup_mc_alias().await;
-
-        Ok(())
+        self.stop().await?;
+        self.start().await
     }
 
     /// Check if S3 gateway is running
     pub async fn is_running(&self) -> bool {
-        let output = Command::new("systemctl")
-            .args(["is-active", "--quiet", "minio"])
-            .status()
-            .await;
-
-        if let Ok(status) = output {
-            if status.success() {
-                return true;
-            }
-        }
-
-        // Try OpenRC
-        let output = Command::new("rc-service")
-            .args(["minio", "status"])
-            .output()
-            .await;
-
-        if let Ok(out) = output {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            return stdout.contains("started") || stdout.contains("running");
-        }
-
-        false
+        self.running_pid().is_some()
     }
 
     /// Get S3 gateway status
     pub async fn get_status(&self) -> Result<S3GatewayStatus> {
-        let running = self.is_running().await;
+        let pid = self.running_pid();
+        let running = pid.is_some() && self.healthy().await;
+        let server_binary = self.server_binary();
+        let client_binary = self.client_binary();
+        let mut missing = Vec::new();
+        if server_binary.is_none() {
+            missing.push("S3 server (minio or silo)".to_string());
+        }
+        if client_binary.is_none() {
+            missing.push("MinIO client (mcli or mc)".to_string());
+        }
+
         let buckets = if running {
             self.list_buckets().await.unwrap_or_default()
         } else {
             Vec::new()
         };
-
-        // Get version
-        let version = self.get_version().await.ok();
-
-        // Get drive info
+        let version = match &server_binary {
+            Some(b) => get_version(b).await.ok(),
+            None => None,
+        };
         let drives = if running {
             self.get_drive_info().await.unwrap_or_default()
         } else {
             Vec::new()
         };
-
         let (storage_used, storage_available) = drives.iter().fold((0u64, 0u64), |acc, d| {
             (acc.0 + d.used_bytes, acc.1 + d.available_bytes)
         });
-
-        // Get uptime
         let uptime = if running {
-            self.get_uptime().await.ok()
+            self.started_at()
+                .map(|t| (chrono::Utc::now().timestamp() - t).max(0) as u64)
         } else {
             None
         };
-
-        // Get object count (approximate)
-        let object_count = if running {
-            self.get_total_object_count().await.unwrap_or(0)
-        } else {
-            0
-        };
+        let object_count = buckets.iter().map(|b| b.object_count).sum();
 
         Ok(S3GatewayStatus {
             running,
+            enabled: self.config.enabled,
+            pid: pid.filter(|_| running).map(|p| p as u32),
             version,
             address: format!("{}:{}", self.config.address, self.config.port),
             console_address: format!("{}:{}", self.config.address, self.config.console_port),
+            port: self.config.port,
+            console_port: self.config.console_port,
+            scheme: self.scheme().to_string(),
             bucket_count: buckets.len() as u32,
             object_count,
             storage_used_bytes: storage_used,
@@ -688,70 +1050,50 @@ impl S3GatewayManager {
             uptime_secs: uptime,
             servers: vec![],
             drives,
+            server_binary,
+            client_binary,
+            missing,
+            root_user: self.config.root_user.clone(),
+            data_dirs: self.config.data_dirs.clone(),
         })
-    }
-
-    /// Get MinIO version
-    async fn get_version(&self) -> Result<String> {
-        let output = Command::new("minio")
-            .args(["--version"])
-            .output()
-            .await
-            .map_err(|e| Error::Internal(format!("Failed to get minio version: {}", e)))?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        // Parse "minio version RELEASE.2024-01-01T00-00-00Z"
-        if let Some(version) = stdout.split_whitespace().nth(2) {
-            return Ok(version.to_string());
-        }
-
-        Err(Error::Internal("Failed to parse minio version".to_string()))
     }
 
     /// Get drive information
     async fn get_drive_info(&self) -> Result<Vec<DriveInfo>> {
-        let output = Command::new("mc")
-            .args(["admin", "info", &self.mc_alias, "--json"])
-            .output()
-            .await
-            .map_err(|e| Error::Internal(format!("mc admin info failed: {}", e)))?;
-
-        if !output.status.success() {
-            return Ok(Vec::new());
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-
-        // Parse JSON response
         let mut drives = Vec::new();
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-            if let Some(disks) = json
-                .get("info")
-                .and_then(|i| i.get("backend"))
-                .and_then(|b| b.get("onlineDisks"))
-            {
-                if let Some(disk_list) = disks.as_array() {
-                    for disk in disk_list {
+        if let Ok(stdout) = self
+            .mc_run(&["admin", "info", &self.mc_alias, "--json"])
+            .await
+        {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
+                let servers = json
+                    .pointer("/info/servers")
+                    .and_then(|s| s.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                for server in servers {
+                    for disk in server
+                        .get("drives")
+                        .and_then(|d| d.as_array())
+                        .cloned()
+                        .unwrap_or_default()
+                    {
+                        let n = |k: &str| disk.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
                         drives.push(DriveInfo {
                             path: disk
                                 .get("path")
+                                .or_else(|| disk.get("endpoint"))
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string(),
                             state: disk
                                 .get("state")
                                 .and_then(|v| v.as_str())
-                                .unwrap_or("online")
+                                .unwrap_or("ok")
                                 .to_string(),
-                            total_bytes: disk
-                                .get("totalSpace")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0),
-                            used_bytes: disk.get("usedSpace").and_then(|v| v.as_u64()).unwrap_or(0),
-                            available_bytes: disk
-                                .get("availableSpace")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0),
+                            total_bytes: n("totalspace"),
+                            used_bytes: n("usedspace"),
+                            available_bytes: n("availspace"),
                         });
                     }
                 }
@@ -764,7 +1106,7 @@ impl S3GatewayManager {
                 if let Ok((total, used, available)) = get_disk_usage(dir).await {
                     drives.push(DriveInfo {
                         path: dir.clone(),
-                        state: "online".to_string(),
+                        state: "ok".to_string(),
                         total_bytes: total,
                         used_bytes: used,
                         available_bytes: available,
@@ -776,66 +1118,23 @@ impl S3GatewayManager {
         Ok(drives)
     }
 
-    /// Get uptime in seconds
-    async fn get_uptime(&self) -> Result<u64> {
-        let output = Command::new("mc")
-            .args(["admin", "info", &self.mc_alias, "--json"])
-            .output()
-            .await
-            .map_err(|e| Error::Internal(format!("mc admin info failed: {}", e)))?;
-
-        if !output.status.success() {
-            return Err(Error::Internal("mc admin info failed".to_string()));
+    /// Size and object count of a bucket (`du`).
+    async fn bucket_usage(&self, bucket: &str) -> (u64, u64) {
+        let target = format!("{}/{}", self.mc_alias, bucket);
+        match self.mc_run(&["du", &target, "--json"]).await {
+            Ok(stdout) => stdout
+                .lines()
+                .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+                .find(|j| j.get("status").and_then(|s| s.as_str()) == Some("success"))
+                .map(|j| {
+                    (
+                        j.get("size").and_then(|v| v.as_u64()).unwrap_or(0),
+                        j.get("objects").and_then(|v| v.as_u64()).unwrap_or(0),
+                    )
+                })
+                .unwrap_or((0, 0)),
+            Err(_) => (0, 0),
         }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-            if let Some(uptime) = json
-                .get("info")
-                .and_then(|i| i.get("uptime"))
-                .and_then(|u| u.as_u64())
-            {
-                return Ok(uptime);
-            }
-        }
-
-        Err(Error::Internal("Failed to parse uptime".to_string()))
-    }
-
-    /// Get total object count
-    async fn get_total_object_count(&self) -> Result<u64> {
-        let buckets = self.list_buckets().await?;
-        let mut total = 0u64;
-
-        for bucket in buckets {
-            if let Ok(count) = self.get_bucket_object_count(&bucket.name).await {
-                total += count;
-            }
-        }
-
-        Ok(total)
-    }
-
-    /// Get object count in bucket
-    async fn get_bucket_object_count(&self, bucket: &str) -> Result<u64> {
-        let output = Command::new("mc")
-            .args(["stat", &format!("{}/{}", self.mc_alias, bucket), "--json"])
-            .output()
-            .await
-            .map_err(|e| Error::Internal(format!("mc stat failed: {}", e)))?;
-
-        if !output.status.success() {
-            return Ok(0);
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-            if let Some(count) = json.get("objectsCount").and_then(|v| v.as_u64()) {
-                return Ok(count);
-            }
-        }
-
-        Ok(0)
     }
 
     // ========== Bucket Operations ==========
@@ -846,6 +1145,7 @@ impl S3GatewayManager {
         name: &str,
         options: Option<CreateBucketOptions>,
     ) -> Result<S3Bucket> {
+        validate_bucket_name(name)?;
         let opts = options.unwrap_or_default();
 
         // Create bucket using mc
@@ -857,7 +1157,8 @@ impl S3GatewayManager {
 
         args.push(format!("{}/{}", self.mc_alias, name));
 
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args(&args)
             .output()
             .await
@@ -866,7 +1167,7 @@ impl S3GatewayManager {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             // Check if bucket already exists
-            if stderr.contains("already exists") || stderr.contains("already owned") {
+            if stderr.contains("already exists") || stderr.contains("already own") {
                 return Err(Error::Conflict(format!("Bucket '{}' already exists", name)));
             }
             return Err(Error::Internal(format!(
@@ -877,7 +1178,7 @@ impl S3GatewayManager {
 
         // Set versioning if requested
         if opts.versioning {
-            let _ = self.set_bucket_versioning(name, true).await;
+            self.set_bucket_versioning(name, true).await?;
         }
 
         // Set quota if specified
@@ -902,7 +1203,7 @@ impl S3GatewayManager {
                 self.config
                     .data_dirs
                     .first()
-                    .unwrap_or(&"/mnt/nas/s3".to_string()),
+                    .unwrap_or(&"/var/lib/horcrux/nas/s3".to_string()),
                 name
             ),
             versioning: opts.versioning,
@@ -914,6 +1215,8 @@ impl S3GatewayManager {
             lifecycle_rules: vec![],
             replication: None,
             notifications: vec![],
+            size_bytes: 0,
+            object_count: 0,
         })
     }
 
@@ -927,7 +1230,8 @@ impl S3GatewayManager {
 
         args.push(format!("{}/{}", self.mc_alias, name));
 
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args(&args)
             .output()
             .await
@@ -949,7 +1253,8 @@ impl S3GatewayManager {
 
     /// List buckets
     pub async fn list_buckets(&self) -> Result<Vec<S3Bucket>> {
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args(["ls", &self.mc_alias, "--json"])
             .output()
             .await
@@ -974,7 +1279,7 @@ impl S3GatewayManager {
                                 self.config
                                     .data_dirs
                                     .first()
-                                    .unwrap_or(&"/mnt/nas/s3".to_string()),
+                                    .unwrap_or(&"/var/lib/horcrux/nas/s3".to_string()),
                                 name
                             ),
                             versioning: false,
@@ -991,10 +1296,19 @@ impl S3GatewayManager {
                             lifecycle_rules: vec![],
                             replication: None,
                             notifications: vec![],
+                            size_bytes: 0,
+                            object_count: 0,
                         });
                     }
                 }
             }
+        }
+
+        for b in buckets.iter_mut() {
+            let (size, objects) = self.bucket_usage(&b.name).await;
+            b.size_bytes = size;
+            b.object_count = objects;
+            b.versioning = self.get_bucket_versioning(&b.name).await.unwrap_or(false);
         }
 
         Ok(buckets)
@@ -1002,7 +1316,8 @@ impl S3GatewayManager {
 
     /// Get bucket info
     pub async fn get_bucket(&self, name: &str) -> Result<S3Bucket> {
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args(["stat", &format!("{}/{}", self.mc_alias, name), "--json"])
             .output()
             .await
@@ -1023,6 +1338,7 @@ impl S3GatewayManager {
 
         // Get lifecycle rules
         let lifecycle_rules = self.get_bucket_lifecycle(name).await.unwrap_or_default();
+        let (size_bytes, object_count) = self.bucket_usage(name).await;
 
         Ok(S3Bucket {
             name: name.to_string(),
@@ -1031,7 +1347,7 @@ impl S3GatewayManager {
                 self.config
                     .data_dirs
                     .first()
-                    .unwrap_or(&"/mnt/nas/s3".to_string()),
+                    .unwrap_or(&"/var/lib/horcrux/nas/s3".to_string()),
                 name
             ),
             versioning,
@@ -1043,6 +1359,8 @@ impl S3GatewayManager {
             lifecycle_rules,
             replication: None,
             notifications: vec![],
+            size_bytes,
+            object_count,
         })
     }
 
@@ -1050,7 +1368,8 @@ impl S3GatewayManager {
     pub async fn set_bucket_versioning(&self, bucket: &str, enabled: bool) -> Result<()> {
         let status = if enabled { "enable" } else { "suspend" };
 
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args(["version", status, &format!("{}/{}", self.mc_alias, bucket)])
             .output()
             .await
@@ -1069,7 +1388,8 @@ impl S3GatewayManager {
 
     /// Get bucket versioning status
     pub async fn get_bucket_versioning(&self, bucket: &str) -> Result<bool> {
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args([
                 "version",
                 "info",
@@ -1084,9 +1404,16 @@ impl S3GatewayManager {
             return Ok(false);
         }
 
+        // {"status":"success","versioning":{"status":"Enabled","MFADelete":""}}
         let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(stdout.contains("\"versioning\":\"Enabled\"")
-            || stdout.contains("\"versioning\": \"Enabled\""))
+        Ok(stdout
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .any(|j| {
+                let v = j.get("versioning");
+                v.and_then(|v| v.get("status")).and_then(|s| s.as_str()) == Some("Enabled")
+                    || v.and_then(|v| v.as_str()) == Some("Enabled")
+            }))
     }
 
     /// Set bucket quota
@@ -1096,7 +1423,8 @@ impl S3GatewayManager {
             QuotaType::Fifo => "fifo",
         };
 
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args([
                 "quota",
                 "set",
@@ -1120,7 +1448,8 @@ impl S3GatewayManager {
 
     /// Get bucket quota
     pub async fn get_bucket_quota(&self, bucket: &str) -> Result<Option<BucketQuota>> {
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args([
                 "quota",
                 "info",
@@ -1159,7 +1488,8 @@ impl S3GatewayManager {
 
     /// Clear bucket quota
     pub async fn clear_bucket_quota(&self, bucket: &str) -> Result<()> {
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args(["quota", "clear", &format!("{}/{}", self.mc_alias, bucket)])
             .output()
             .await
@@ -1196,7 +1526,8 @@ impl S3GatewayManager {
         let target = format!("{}/{}", self.mc_alias, bucket);
         args.push(&target);
 
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args(&args)
             .output()
             .await
@@ -1221,7 +1552,8 @@ impl S3GatewayManager {
     ) -> Result<()> {
         let tags_str: Vec<String> = tags.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
 
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args([
                 "tag",
                 "set",
@@ -1242,7 +1574,8 @@ impl S3GatewayManager {
 
     /// Get bucket tags
     pub async fn get_bucket_tags(&self, bucket: &str) -> Result<HashMap<String, String>> {
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args([
                 "tag",
                 "list",
@@ -1284,7 +1617,8 @@ impl S3GatewayManager {
             .await
             .map_err(|e| Error::Internal(format!("Failed to write lifecycle config: {}", e)))?;
 
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args(["ilm", "import", &format!("{}/{}", self.mc_alias, bucket)])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -1305,7 +1639,8 @@ impl S3GatewayManager {
 
     /// Get bucket lifecycle rules
     pub async fn get_bucket_lifecycle(&self, bucket: &str) -> Result<Vec<LifecycleRule>> {
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args([
                 "ilm",
                 "ls",
@@ -1356,7 +1691,8 @@ impl S3GatewayManager {
 
     /// Create S3 user
     pub async fn create_user(&self, username: &str, password: &str) -> Result<S3User> {
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args(["admin", "user", "add", &self.mc_alias, username, password])
             .output()
             .await
@@ -1381,7 +1717,8 @@ impl S3GatewayManager {
 
     /// Delete S3 user
     pub async fn delete_user(&self, username: &str) -> Result<()> {
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args(["admin", "user", "remove", &self.mc_alias, username])
             .output()
             .await
@@ -1400,7 +1737,8 @@ impl S3GatewayManager {
 
     /// List S3 users
     pub async fn list_users(&self) -> Result<Vec<S3User>> {
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args(["admin", "user", "list", &self.mc_alias, "--json"])
             .output()
             .await
@@ -1436,7 +1774,8 @@ impl S3GatewayManager {
 
     /// Set user policy
     pub async fn set_user_policy(&self, username: &str, policy: &str) -> Result<()> {
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args([
                 "admin",
                 "policy",
@@ -1462,7 +1801,8 @@ impl S3GatewayManager {
     pub async fn set_user_status(&self, username: &str, enabled: bool) -> Result<()> {
         let status = if enabled { "enable" } else { "disable" };
 
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args(["admin", "user", status, &self.mc_alias, username])
             .output()
             .await
@@ -1519,7 +1859,8 @@ impl S3GatewayManager {
         args.push(self.mc_alias.clone());
         args.push(user_id.to_string());
 
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args(&args)
             .output()
             .await
@@ -1548,7 +1889,8 @@ impl S3GatewayManager {
 
     /// Delete access key
     pub async fn delete_access_key(&self, access_key: &str) -> Result<()> {
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args(["admin", "user", "svcacct", "rm", &self.mc_alias, access_key])
             .output()
             .await
@@ -1563,53 +1905,6 @@ impl S3GatewayManager {
         }
 
         Ok(())
-    }
-
-    /// List access keys for user
-    pub async fn list_access_keys(&self, user_id: &str) -> Result<Vec<S3AccessKey>> {
-        let output = Command::new("mc")
-            .args([
-                "admin",
-                "user",
-                "svcacct",
-                "list",
-                &self.mc_alias,
-                user_id,
-                "--json",
-            ])
-            .output()
-            .await
-            .map_err(|e| Error::Internal(format!("mc svcacct list failed: {}", e)))?;
-
-        if !output.status.success() {
-            return Ok(Vec::new());
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut keys = Vec::new();
-
-        for line in stdout.lines() {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-                if let Some(access_key) = json.get("accessKey").and_then(|a| a.as_str()) {
-                    keys.push(S3AccessKey {
-                        access_key: access_key.to_string(),
-                        secret_key: String::new(),
-                        user_id: user_id.to_string(),
-                        description: json
-                            .get("description")
-                            .and_then(|d| d.as_str())
-                            .map(|s| s.to_string()),
-                        enabled: json.get("accountStatus").and_then(|s| s.as_str()) != Some("off"),
-                        expires_at: None,
-                        created_at: 0,
-                        last_used: None,
-                        policies: vec![],
-                    });
-                }
-            }
-        }
-
-        Ok(keys)
     }
 
     // ========== Policy Operations ==========
@@ -1627,7 +1922,8 @@ impl S3GatewayManager {
             .await
             .map_err(|e| Error::Internal(format!("Failed to write policy file: {}", e)))?;
 
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args([
                 "admin",
                 "policy",
@@ -1660,7 +1956,8 @@ impl S3GatewayManager {
 
     /// Delete policy
     pub async fn delete_policy(&self, name: &str) -> Result<()> {
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args(["admin", "policy", "remove", &self.mc_alias, name])
             .output()
             .await
@@ -1679,7 +1976,8 @@ impl S3GatewayManager {
 
     /// List policies
     pub async fn list_policies(&self) -> Result<Vec<S3Policy>> {
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args(["admin", "policy", "list", &self.mc_alias, "--json"])
             .output()
             .await
@@ -1739,7 +2037,8 @@ impl S3GatewayManager {
         };
         args.push(path);
 
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args(&args)
             .output()
             .await
@@ -1797,7 +2096,8 @@ impl S3GatewayManager {
 
     /// Delete object
     pub async fn delete_object(&self, bucket: &str, key: &str) -> Result<()> {
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args(["rm", &format!("{}/{}/{}", self.mc_alias, bucket, key)])
             .output()
             .await
@@ -1835,7 +2135,8 @@ impl S3GatewayManager {
             self.mc_alias, request.bucket, request.key
         ));
 
-        let output = Command::new("mc")
+        let output = self
+            .mc()
             .args(&args)
             .output()
             .await
@@ -1867,184 +2168,277 @@ impl S3GatewayManager {
 
     // ========== Configuration ==========
 
-    /// Write MinIO configuration files
-    pub async fn write_config(&self) -> Result<()> {
-        let env_content = self.generate_env_file();
-
-        // Create config directory
-        tokio::fs::create_dir_all("/etc/minio").await.ok();
-        tokio::fs::create_dir_all("/etc/minio/certs").await.ok();
-
-        // Write environment file
-        let env_path = "/etc/default/minio";
-        tokio::fs::write(env_path, &env_content)
-            .await
-            .map_err(|e| Error::Internal(format!("Failed to write MinIO config: {}", e)))?;
-
-        // Write systemd service file if needed
-        if crate::nas::services::detect_init_system() == crate::nas::services::InitSystem::Systemd {
-            self.write_systemd_service().await?;
-        } else {
-            self.write_openrc_service().await?;
+    /// Every access key on the server, as `(parent user, masked key)`.
+    ///
+    /// The client masks access keys in listings (`AKIATE...0001`); callers
+    /// match them against the keys Horcrux created with `mask_access_key`.
+    pub async fn list_server_access_keys(&self) -> Result<Vec<(String, String)>> {
+        let stdout = self
+            .mc_run(&[
+                "admin",
+                "accesskey",
+                "ls",
+                &self.mc_alias,
+                "--all",
+                "--json",
+            ])
+            .await?;
+        let mut out = Vec::new();
+        for line in stdout.lines() {
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let user = json.get("user").and_then(|u| u.as_str()).unwrap_or("");
+            for key in json
+                .get("svcaccs")
+                .and_then(|s| s.as_array())
+                .cloned()
+                .unwrap_or_default()
+            {
+                if let Some(k) = key.get("accessKey").and_then(|k| k.as_str()) {
+                    out.push((user.to_string(), k.to_string()));
+                }
+            }
         }
-
-        Ok(())
+        Ok(out)
     }
 
-    /// Generate MinIO environment file
-    pub fn generate_env_file(&self) -> String {
-        let mut content = format!(
-            "# MinIO Configuration - Generated by Horcrux\n\
-             MINIO_ROOT_USER={}\n\
-             MINIO_ROOT_PASSWORD={}\n\
-             MINIO_VOLUMES={}\n",
-            self.config.root_user,
-            self.config.root_password,
-            self.config.data_dirs.join(" "),
-        );
-
-        // Server address
-        content.push_str(&format!(
-            "MINIO_OPTS=\"--address {}:{} --console-address {}:{}\"\n",
-            self.config.address, self.config.port, self.config.address, self.config.console_port,
-        ));
-
-        // Region
-        content.push_str(&format!("MINIO_REGION={}\n", self.config.region));
-
-        // Browser
-        if !self.config.browser {
-            content.push_str("MINIO_BROWSER=off\n");
-        }
-
-        // TLS
-        if let Some(ref tls) = self.config.tls {
-            if tls.enabled {
-                content.push_str("MINIO_CERTS_DIR=/etc/minio/certs\n");
-            }
-        }
-
-        // Metrics
-        if self.config.metrics {
-            content.push_str("MINIO_PROMETHEUS_AUTH_TYPE=public\n");
-            if let Some(ref token) = self.config.metrics_auth_token {
-                content.push_str("MINIO_PROMETHEUS_AUTH_TYPE=jwt\n");
-                content.push_str(&format!("MINIO_PROMETHEUS_JWT_SECRET={}\n", token));
-            }
-        }
-
-        // Domain
-        if let Some(ref domain) = self.config.domain {
-            content.push_str(&format!("MINIO_DOMAIN={}\n", domain));
-        }
-
-        // Audit
-        if self.config.audit_log {
-            if let Some(ref webhook) = self.config.audit_webhook {
-                content.push_str("MINIO_AUDIT_WEBHOOK_ENABLE_target1=on\n");
-                content.push_str(&format!(
-                    "MINIO_AUDIT_WEBHOOK_ENDPOINT_target1={}\n",
-                    webhook
-                ));
-            }
-        }
-
-        // Cache
-        if let Some(ref cache) = self.config.cache {
-            content.push_str("MINIO_CACHE=on\n");
-            content.push_str(&format!("MINIO_CACHE_DRIVES={}\n", cache.drives.join(",")));
-            content.push_str(&format!("MINIO_CACHE_EXPIRY={}\n", cache.expiry));
-            content.push_str(&format!("MINIO_CACHE_QUOTA={}\n", cache.quota));
-            if !cache.exclude.is_empty() {
-                content.push_str(&format!(
-                    "MINIO_CACHE_EXCLUDE={}\n",
-                    cache.exclude.join(";")
-                ));
-            }
-        }
-
-        content
+    /// Details of one access key, or `NotFound` if the server lacks it.
+    pub async fn access_key_info(&self, access_key: &str) -> Result<S3AccessKey> {
+        let stdout = self
+            .mc_run(&[
+                "admin",
+                "user",
+                "svcacct",
+                "info",
+                &self.mc_alias,
+                access_key,
+                "--json",
+            ])
+            .await
+            .map_err(|e| {
+                let msg = e.to_string();
+                if msg.contains("does not exist") || msg.contains("NoSuch") {
+                    Error::NotFound(format!("Access key {} not found", access_key))
+                } else {
+                    e
+                }
+            })?;
+        let json: serde_json::Value = stdout
+            .lines()
+            .find_map(|l| serde_json::from_str(l).ok())
+            .ok_or_else(|| Error::Internal("Unreadable access key info".to_string()))?;
+        let s = |k: &str| json.get(k).and_then(|v| v.as_str()).map(|v| v.to_string());
+        Ok(S3AccessKey {
+            access_key: access_key.to_string(),
+            secret_key: String::new(),
+            user_id: s("parentUser").unwrap_or_default(),
+            description: s("description").filter(|d| !d.is_empty()),
+            enabled: s("accountStatus").as_deref() != Some("off"),
+            expires_at: None,
+            created_at: 0,
+            last_used: None,
+            policies: vec![],
+        })
     }
 
-    /// Write systemd service file
-    async fn write_systemd_service(&self) -> Result<()> {
-        let service = r#"[Unit]
-Description=MinIO S3 Gateway
-Documentation=https://docs.min.io
-After=network-online.target
-Wants=network-online.target
+    /// Give an access key a new secret (the access key id stays). Returns
+    /// the new secret; the old one stops working at once.
+    pub async fn rotate_access_key(&self, access_key: &str) -> Result<String> {
+        let secret = random_alnum(40);
+        self.mc_run(&[
+            "admin",
+            "user",
+            "svcacct",
+            "edit",
+            "--secret-key",
+            &secret,
+            &self.mc_alias,
+            access_key,
+            "--json",
+        ])
+        .await?;
+        Ok(secret)
+    }
 
-[Service]
-Type=notify
-EnvironmentFile=/etc/default/minio
-ExecStart=/usr/bin/minio server $MINIO_VOLUMES $MINIO_OPTS
-Restart=always
-RestartSec=5
-LimitNOFILE=65536
-TasksMax=infinity
-TimeoutStopSec=0
+    /// Enable or disable an access key.
+    pub async fn set_access_key_enabled(&self, access_key: &str, enabled: bool) -> Result<()> {
+        let action = if enabled { "enable" } else { "disable" };
+        self.mc_run(&[
+            "admin",
+            "user",
+            "svcacct",
+            action,
+            &self.mc_alias,
+            access_key,
+            "--json",
+        ])
+        .await
+        .map(|_| ())
+    }
 
-[Install]
-WantedBy=multi-user.target
-"#;
-
-        tokio::fs::write("/etc/systemd/system/minio.service", service)
+    /// Upload an object: `data` is streamed to the client's stdin.
+    pub async fn put_object<R>(&self, bucket: &str, key: &str, data: &mut R) -> Result<u64>
+    where
+        R: tokio::io::AsyncRead + Unpin + ?Sized,
+    {
+        validate_object_key(key)?;
+        let target = format!("{}/{}/{}", self.mc_alias, bucket, key);
+        let mut child = self
+            .mc()
+            .args(["pipe", &target, "--json"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| Error::Internal(format!("Failed to run the MinIO client: {}", e)))?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| Error::Internal("client stdin unavailable".to_string()))?;
+        let copied = tokio::io::copy(data, &mut stdin).await;
+        drop(stdin);
+        let output = child
+            .wait_with_output()
             .await
-            .map_err(|e| Error::Internal(format!("Failed to write systemd service: {}", e)))?;
+            .map_err(|e| Error::Internal(format!("Upload failed: {}", e)))?;
+        let total = copied.map_err(|e| Error::Internal(format!("Upload failed: {}", e)))?;
+        if !output.status.success() {
+            return Err(Error::Internal(mc_error_message(
+                &String::from_utf8_lossy(&output.stdout),
+                &String::from_utf8_lossy(&output.stderr),
+            )));
+        }
+        Ok(total)
+    }
 
-        // Reload systemd
-        let _ = Command::new("systemctl")
-            .args(["daemon-reload"])
+    /// Read an object (whole body).
+    pub async fn get_object(&self, bucket: &str, key: &str) -> Result<Vec<u8>> {
+        validate_object_key(key)?;
+        let target = format!("{}/{}/{}", self.mc_alias, bucket, key);
+        let output = self
+            .mc()
+            .args(["cat", &target])
             .output()
-            .await;
-
-        Ok(())
-    }
-
-    /// Write OpenRC service file
-    async fn write_openrc_service(&self) -> Result<()> {
-        let service = r#"#!/sbin/openrc-run
-
-name="minio"
-description="MinIO S3 Gateway"
-
-depend() {
-    need net
-    after firewall
-}
-
-start_pre() {
-    . /etc/default/minio
-}
-
-start() {
-    . /etc/default/minio
-    ebegin "Starting MinIO"
-    start-stop-daemon --start --background \
-        --make-pidfile --pidfile /var/run/minio.pid \
-        --exec /usr/bin/minio -- server $MINIO_VOLUMES $MINIO_OPTS
-    eend $?
-}
-
-stop() {
-    ebegin "Stopping MinIO"
-    start-stop-daemon --stop --pidfile /var/run/minio.pid
-    eend $?
-}
-"#;
-
-        tokio::fs::write("/etc/init.d/minio", service)
             .await
-            .map_err(|e| Error::Internal(format!("Failed to write OpenRC service: {}", e)))?;
-
-        // Make executable
-        let _ = Command::new("chmod")
-            .args(["+x", "/etc/init.d/minio"])
-            .output()
-            .await;
-
-        Ok(())
+            .map_err(|e| Error::Internal(format!("Failed to run the MinIO client: {}", e)))?;
+        if !output.status.success() {
+            let msg = mc_error_message(
+                &String::from_utf8_lossy(&output.stdout),
+                &String::from_utf8_lossy(&output.stderr),
+            );
+            if msg.contains("does not exist") {
+                return Err(Error::NotFound(format!("Object {} not found", key)));
+            }
+            return Err(Error::Internal(msg));
+        }
+        Ok(output.stdout)
     }
+}
+
+/// Masked form the client prints for an access key: first 6 + "..." + last 4.
+pub fn mask_access_key(key: &str) -> String {
+    if key.len() <= 10 {
+        return key.to_string();
+    }
+    format!("{}...{}", &key[..6], &key[key.len() - 4..])
+}
+
+/// S3 bucket names: 3-63 chars of a-z, 0-9, '.', '-', starting and ending
+/// with a letter or digit.
+pub fn validate_bucket_name(name: &str) -> Result<()> {
+    let ok = (3..=63).contains(&name.len())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '.')
+        && name
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_alphanumeric())
+            .unwrap_or(false)
+        && name
+            .chars()
+            .last()
+            .map(|c| c.is_ascii_alphanumeric())
+            .unwrap_or(false)
+        && !name.contains("..");
+    if ok {
+        Ok(())
+    } else {
+        Err(Error::Validation(format!(
+            "Invalid bucket name '{}': use 3-63 lowercase letters, digits, '-' or '.', starting and ending with a letter or digit",
+            name
+        )))
+    }
+}
+
+/// Object keys: non-empty, no leading '/', no '..' path segments.
+pub fn validate_object_key(key: &str) -> Result<()> {
+    if key.is_empty()
+        || key.len() > 1024
+        || key.starts_with('/')
+        || key.split('/').any(|s| s == ".." || s == ".")
+        || key.contains('\0')
+    {
+        return Err(Error::Validation(format!("Invalid object key '{}'", key)));
+    }
+    Ok(())
+}
+
+/// S3 user names (MinIO access keys of users): 3-128 safe characters.
+pub fn validate_user_name(name: &str) -> Result<()> {
+    if (3..=128).contains(&name.len())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_.@+=,".contains(c))
+    {
+        Ok(())
+    } else {
+        Err(Error::Validation(format!(
+            "Invalid user name '{}': 3-128 letters, digits or -_.@+=,",
+            name
+        )))
+    }
+}
+
+/// The client's own error text from its JSON (or plain) output.
+fn mc_error_message(stdout: &str, stderr: &str) -> String {
+    for line in stdout.lines().chain(stderr.lines()) {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+            let msg = json.pointer("/error/message").and_then(|m| m.as_str());
+            let cause = json
+                .pointer("/error/cause/message")
+                .and_then(|m| m.as_str())
+                .filter(|m| !m.is_empty());
+            if let Some(m) = msg {
+                return match cause {
+                    Some(c) => format!("{} {}", m, c),
+                    None => m.to_string(),
+                };
+            }
+        }
+    }
+    let text = stderr.trim();
+    if text.is_empty() {
+        stdout.trim().to_string()
+    } else {
+        text.to_string()
+    }
+}
+
+/// `<server> --version` -> "RELEASE...."
+async fn get_version(bin: &str) -> Result<String> {
+    let output = Command::new(bin)
+        .arg("--version")
+        .output()
+        .await
+        .map_err(|e| Error::Internal(format!("Failed to get server version: {}", e)))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .split_whitespace()
+        .find(|w| w.starts_with("RELEASE."))
+        .map(|v| v.to_string())
+        .ok_or_else(|| Error::Internal("Failed to parse server version".to_string()))
 }
 
 impl Default for S3GatewayManager {
@@ -2150,15 +2544,52 @@ mod tests {
         let config = S3GatewayConfig::default();
         assert_eq!(config.port, 9000);
         assert_eq!(config.console_port, 9001);
-        assert_eq!(config.root_user, "minioadmin");
+        // no well-known default credentials
+        assert_ne!(config.root_password, "minioadmin");
+        assert_eq!(config.root_password.len(), 40);
+        assert_ne!(
+            S3GatewayConfig::default().root_password,
+            config.root_password
+        );
+        assert!(!config.enabled);
     }
 
     #[test]
-    fn test_env_generation() {
+    fn test_server_env() {
         let manager = S3GatewayManager::new();
-        let env = manager.generate_env_file();
-        assert!(env.contains("MINIO_ROOT_USER=minioadmin"));
-        assert!(env.contains("MINIO_VOLUMES=/mnt/nas/s3"));
+        let env = manager.server_env();
+        let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        assert_eq!(get("MINIO_ROOT_USER").as_deref(), Some("horcrux-admin"));
+        assert_eq!(
+            get("MINIO_ROOT_PASSWORD"),
+            Some(manager.get_config().root_password.clone())
+        );
+        assert_eq!(get("MINIO_SITE_REGION").as_deref(), Some("us-east-1"));
+    }
+
+    #[test]
+    fn test_mask_and_validation() {
+        assert_eq!(mask_access_key("AKIATEST000000000001"), "AKIATE...0001");
+        assert!(validate_bucket_name("my-bucket.1").is_ok());
+        for bad in ["ab", "My-Bucket", "-abc", "abc-", "a..b", "a_b_c"] {
+            assert!(validate_bucket_name(bad).is_err(), "{bad}");
+        }
+        assert!(validate_object_key("dir/file.txt").is_ok());
+        for bad in ["", "/abs", "a/../b", "./x"] {
+            assert!(validate_object_key(bad).is_err(), "{bad}");
+        }
+        assert!(validate_user_name("alice").is_ok());
+        assert!(validate_user_name("a b").is_err());
+    }
+
+    #[test]
+    fn test_mc_error_message() {
+        let out = r#"{"status":"error","error":{"message":"Unable to make bucket `hx/b1`.","cause":{"message":"Bucket name cannot be shorter than 3 characters","error":{}},"type":"error"}}"#;
+        assert_eq!(
+            mc_error_message(out, ""),
+            "Unable to make bucket `hx/b1`. Bucket name cannot be shorter than 3 characters"
+        );
+        assert_eq!(mc_error_message("", "boom\n"), "boom");
     }
 
     #[test]

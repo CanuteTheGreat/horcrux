@@ -496,7 +496,10 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::migration_jobs::routes())
         .merge(api::migration_peer::routes())
         .merge(api::vm_hw::routes())
-        .merge(api::host_net::routes(&state));
+        .merge(api::host_net::routes(&state))
+        .merge(api::dashboards::routes(&state));
+    #[cfg(feature = "s3-gateway")]
+    let protected_routes = protected_routes.merge(api::s3_gateway::routes(&state));
 
     // USE-flag gated route groups (see src/features.rs): a feature that was
     // not compiled in has no routes, so its endpoints answer 404.
@@ -1509,21 +1512,6 @@ fn nas_routes() -> Router<Arc<AppState>> {
             post(nas_create_iscsi_acl),
         )
         .route("/api/nas/iscsi/acls/:acl_id", delete(nas_delete_iscsi_acl))
-        // S3 Gateway endpoints
-        .route("/api/nas/s3/status", get(nas_get_s3_status))
-        .route("/api/nas/s3/buckets", get(nas_list_s3_buckets))
-        .route("/api/nas/s3/buckets", post(nas_create_s3_bucket))
-        .route("/api/nas/s3/buckets/:bucket_name", get(nas_get_s3_bucket))
-        .route(
-            "/api/nas/s3/buckets/:bucket_name",
-            delete(nas_delete_s3_bucket),
-        )
-        .route("/api/nas/s3/access-keys", get(nas_list_s3_access_keys))
-        .route("/api/nas/s3/access-keys", post(nas_create_s3_access_key))
-        .route(
-            "/api/nas/s3/access-keys/:key_id",
-            delete(nas_delete_s3_access_key),
-        )
         // Directory/Auth configuration
         .route("/api/nas/directory/config", get(nas_get_directory_config))
         .route(

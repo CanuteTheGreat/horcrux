@@ -5,6 +5,7 @@ pub mod alert_rules;
 pub mod auth;
 #[cfg(feature = "backup")]
 pub mod backup;
+pub mod dashboards;
 #[cfg(feature = "kubernetes")]
 pub mod helm;
 pub mod host_net;
@@ -15,6 +16,8 @@ pub mod metrics;
 pub mod migration_jobs;
 pub mod migration_peer;
 pub mod notifications;
+#[cfg(feature = "s3-gateway")]
+pub mod s3_gateway;
 pub mod tls;
 pub mod vm_hw;
 pub mod vm_import;

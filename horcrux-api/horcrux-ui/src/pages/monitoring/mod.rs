@@ -1,6 +1,7 @@
 pub mod alert_center;
 mod basic_monitoring;
 pub mod dashboards;
+pub mod metric_panel;
 pub mod metrics_explorer;
 pub mod notifications;
 pub mod observability;

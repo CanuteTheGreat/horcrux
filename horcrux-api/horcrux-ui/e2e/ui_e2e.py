@@ -619,6 +619,9 @@ def main():
         page.locator(f"tr[data-vm-id='{vid}']").get_by_role("button", name="Stop").click()
         expect(page.locator(f"tr[data-vm-id='{vid}']")).to_contain_text("stopped", timeout=60000)
 
+        s3_gateway_checks(page)
+        monitoring_dashboard_checks(page)
+        users_edit_checks(page)
         vm_hardware_checks(page, vid)
 
         browser.close()
@@ -724,6 +727,193 @@ def vm_hardware_checks(page, vid):
     assert "exported_at" in data and "node" in data and "vms" in data, data
     page.get_by_role("link", name="Configure Alerts").click()
     page.wait_for_url(f"{BASE}/monitoring/alerts")
+
+
+def _free_port():
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def _s3_get(port, bucket, key, ak, sk, region="us-east-1"):
+    """GET an object with an access key, signed by curl (SigV4)."""
+    r = subprocess.run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                        "--aws-sigv4", f"aws:amz:{region}:s3", "--user", f"{ak}:{sk}",
+                        f"http://127.0.0.1:{port}/{bucket}/{key}"], capture_output=True, text=True)
+    return int(r.stdout.strip() or 0)
+
+
+def s3_gateway_checks(page):
+    """NAS > S3 Gateway page end to end against the real server (silo + mcli
+    installed by ci/install-s3-gateway.sh): start, bucket, upload, download,
+    S3 user, access key used by a real S3 client, Rotate, Disable, Delete,
+    bucket delete, stop."""
+    tok = token()
+    _req("POST", "/api/nas/s3/stop", tok, {})
+    port, cport = _free_port(), _free_port()
+    _req("PUT", "/api/nas/s3/config", tok, {"address": "127.0.0.1", "port": port, "console_port": cport})
+    page.goto(f"{BASE}/nas/s3")
+    expect(page.locator("#s3-state")).to_have_text("Stopped", timeout=30000)
+    expect(page.locator("#s3-missing")).to_have_count(0)
+    page.locator("#s3-start").click()
+    expect(page.locator("#s3-state")).to_have_text("Running", timeout=90000)
+    expect(page.locator("#s3-endpoint")).to_contain_text(f":{port}")
+
+    bucket = "e2e-ui-bucket"
+    page.locator("#s3-bucket-name").fill(bucket)
+    page.locator("#s3-bucket-create").click()
+    row = page.locator(f"tr[data-bucket='{bucket}']")
+    expect(row).to_be_visible(timeout=30000)
+    row.locator(".s3-browse").click()
+    expect(page.locator("#s3-objects")).to_be_visible()
+    payload = b"hello from the Horcrux UI\n"
+    page.set_input_files("#s3-upload-file", files=[{"name": "hello.txt", "mimeType": "text/plain", "buffer": payload}])
+    page.locator("#s3-upload").click()
+    expect(page.locator("tr[data-key='hello.txt']")).to_be_visible(timeout=30000)
+    with page.expect_download(timeout=30000) as dl:
+        page.locator("tr[data-key='hello.txt'] .s3-download").click()
+    assert open(dl.value.path(), "rb").read() == payload
+
+    # S3 user (read-only) and an access key for it
+    page.locator("#s3-tab-users").click()
+    page.locator("#s3-user-name").fill("e2e-ui-user")
+    page.select_option("#s3-user-policy", "readonly")
+    page.locator("#s3-user-create").click()
+    expect(page.locator("tr[data-user='e2e-ui-user']")).to_be_visible(timeout=30000)
+    expect(page.locator("#s3-secret")).to_be_visible()
+    page.locator("#s3-secret button").click()
+
+    page.locator("#s3-tab-keys").click()
+    page.select_option("#s3-key-user", "e2e-ui-user")
+    page.locator("#s3-key-desc").fill("e2e ui key")
+    page.locator("#s3-key-create").click()
+    expect(page.locator("#s3-secret")).to_be_visible(timeout=30000)
+    ak = page.locator("#s3-secret-access").inner_text().strip()
+    sk = page.locator("#s3-secret-secret").inner_text().strip()
+    assert len(sk) >= 20, sk
+    assert _s3_get(port, bucket, "hello.txt", ak, sk) == 200, "new key reads the object"
+    page.locator("#s3-secret button").click()
+    key_row = page.locator(f"tr[data-key='{ak}']")
+    expect(key_row).to_contain_text("e2e-ui-user")
+
+    # Rotate: the page shows a new secret; the old one is refused
+    key_row.locator(".s3-key-rotate").click()
+    expect(page.locator("#s3-secret")).to_contain_text("New secret", timeout=30000)
+    sk2 = page.locator("#s3-secret-secret").inner_text().strip()
+    assert sk2 and sk2 != sk
+    page.locator("#s3-secret button").click()
+    assert _s3_get(port, bucket, "hello.txt", ak, sk) == 403, "old secret refused after Rotate"
+    assert _s3_get(port, bucket, "hello.txt", ak, sk2) == 200, "rotated secret works"
+
+    # Disable / Enable
+    key_row.locator(".s3-key-toggle").click()
+    expect(key_row).to_have_attribute("data-enabled", "false", timeout=30000)
+    assert _s3_get(port, bucket, "hello.txt", ak, sk2) == 403, "disabled key refused"
+    key_row.locator(".s3-key-toggle").click()
+    expect(key_row).to_have_attribute("data-enabled", "true", timeout=30000)
+
+    # Delete key (confirm dialog accepted by the page handler)
+    key_row.locator(".s3-key-delete").click()
+    expect(key_row).to_have_count(0, timeout=30000)
+    assert _s3_get(port, bucket, "hello.txt", ak, sk2) == 403, "deleted key refused"
+
+    page.locator("#s3-tab-users").click()
+    page.locator("tr[data-user='e2e-ui-user'] .s3-user-delete").click()
+    expect(page.locator("tr[data-user='e2e-ui-user']")).to_have_count(0, timeout=30000)
+
+    page.locator("#s3-tab-buckets").click()
+    page.locator(f"tr[data-bucket='{bucket}'] .s3-bucket-delete").click()
+    expect(page.locator(f"tr[data-bucket='{bucket}']")).to_have_count(0, timeout=30000)
+
+    page.locator("#s3-stop").click()
+    expect(page.locator("#s3-state")).to_have_text("Stopped", timeout=60000)
+    import socket
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=2).close()
+        raise AssertionError("S3 port still open after Stop")
+    except OSError:
+        pass
+    print("UI E2E: S3 gateway (start, bucket, upload/download, user, key rotate/disable/delete, stop) passed")
+
+
+def monitoring_dashboard_checks(page):
+    """Monitoring overview draws real trend charts; Monitoring > Dashboards
+    creates, saves, reloads, edits and deletes a user-defined dashboard."""
+    page.goto(f"{BASE}/monitoring")
+    cpu = page.locator("#performance-trends .metric-panel[data-query='horcrux_node_cpu_usage_percent']")
+    expect(cpu.locator("polyline.series")).to_have_count(1, timeout=60000)
+    expect(page.locator("#performance-trends")).not_to_contain_text("coming soon")
+    page.select_option("#trend-range", "900")
+    expect(cpu.locator("polyline.series")).to_have_count(1, timeout=30000)
+
+    for d in api_get("/api/monitoring/dashboards", token()):
+        if d["name"].startswith("E2E dashboard"):
+            _req("DELETE", f"/api/monitoring/dashboards/{d['id']}", token())
+    page.goto(f"{BASE}/monitoring/dashboards")
+    expect(page.locator("body")).not_to_contain_text("coming soon")
+    page.locator("#create-dashboard").click()
+    expect(page.locator("#dashboard-editor")).to_be_visible()
+    page.locator("#dash-name").fill("E2E dashboard")
+    page.select_option("#dash-range", "15m")
+    page.locator("#add-panel").click()
+    p2 = page.locator(".panel-editor[data-index='1']")
+    p2.locator(".panel-title").fill("Load now")
+    p2.locator(".panel-title").press("Tab")
+    p2.locator(".panel-query").fill("horcrux_node_load1")
+    p2.locator(".panel-query").press("Tab")
+    p2.locator(".panel-chart").select_option("stat")
+    page.locator("#save-dashboard").click()
+    expect(page.locator("#dashboard-title")).to_have_text("E2E dashboard", timeout=30000)
+    page.wait_for_url(re.compile(r".*/monitoring/dashboards\?id=.+"), timeout=30000)
+    expect(page.locator("#dashboard-view .metric-panel")).to_have_count(2)
+    expect(page.locator("#dashboard-view .metric-panel").nth(0).locator("polyline.series")).to_have_count(1, timeout=60000)
+    expect(page.locator("#dashboard-view .metric-panel").nth(1).locator(".stat-value")).to_have_count(1, timeout=60000)
+
+    # saved: survives a full reload
+    url = page.url
+    page.goto(url)
+    expect(page.locator("#dashboard-title")).to_have_text("E2E dashboard", timeout=30000)
+    expect(page.locator("#dashboard-view .metric-panel")).to_have_count(2)
+    stored = [d for d in api_get("/api/monitoring/dashboards", token()) if d["name"] == "E2E dashboard"]
+    assert len(stored) == 1 and [p["query"] for p in stored[0]["panels"]] == [
+        "horcrux_node_cpu_usage_percent", "horcrux_node_load1"], stored
+
+    # edit: rename, drop the first panel
+    page.locator("#edit-dashboard").click()
+    page.locator("#dash-name").fill("E2E dashboard v2")
+    page.locator(".panel-editor[data-index='0'] .panel-remove").click()
+    page.locator("#save-dashboard").click()
+    expect(page.locator("#dashboard-title")).to_have_text("E2E dashboard v2", timeout=30000)
+    expect(page.locator("#dashboard-view .metric-panel")).to_have_count(1)
+
+    page.locator("#delete-dashboard").click()
+    expect(page.locator("#dashboard-notice")).to_contain_text("deleted", timeout=30000)
+    assert not [d for d in api_get("/api/monitoring/dashboards", token()) if d["name"].startswith("E2E dashboard")]
+    print("UI E2E: monitoring trends + user-defined dashboards passed")
+
+
+def users_edit_checks(page):
+    """Access > Users: the row's edit icon opens a working edit form."""
+    tok = token()
+    _req("DELETE", "/api/users/e2e-edit-user", tok)
+    api_post("/api/users", tok, {"username": "e2e-edit-user", "password": "e2e-edit-pass-1"})
+    page.goto(f"{BASE}/auth/users")
+    row = page.locator("tr", has_text="e2e-edit-user")
+    expect(row).to_be_visible(timeout=30000)
+    row.locator(".edit-btn").click()
+    expect(page.locator("#edit-user-panel")).to_be_visible()
+    page.locator("#edit-comment").fill("edited from the UI")
+    page.locator("#edit-email").fill("e2e-edit@errant.solutions")
+    page.locator("#edit-save").click()
+    expect(page.locator("#edit-user-panel")).to_have_count(0, timeout=30000)
+    u = next(u for u in api_get("/api/users", tok) if u["username"] == "e2e-edit-user")
+    assert u.get("comment") == "edited from the UI" and u.get("email") == "e2e-edit@errant.solutions", u
+    expect(row).to_contain_text("edited from the UI", timeout=30000)
+    _req("DELETE", "/api/users/e2e-edit-user", tok)
+    print("UI E2E: users edit icon passed")
 
 
 def ui_login(page, user, password):

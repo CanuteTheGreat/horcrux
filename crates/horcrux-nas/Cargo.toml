@@ -9,6 +9,7 @@ license.workspace = true
 horcrux-common = { path = "../../horcrux-common" }
 chrono = { workspace = true }
 hostname = { workspace = true }
+nix = { workspace = true }
 pwhash = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }

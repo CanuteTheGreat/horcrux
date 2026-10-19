@@ -3037,3 +3037,471 @@ async fn vm_hardware_iso_library_and_bridges_read_into_ui_types() {
     let list: Vec<api::IsoFile> = fetch(&c, &token, "/storage/isos").await;
     assert!(!list.iter().any(|i| i.name == name));
 }
+
+// ---------------------------------------------------------------------------
+// NAS > S3 Gateway against a real MinIO-compatible server
+// ---------------------------------------------------------------------------
+
+/// A free TCP port on 127.0.0.1.
+fn free_tcp_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// An S3 request signed with SigV4 by curl (an S3 client independent of the
+/// MinIO client the API uses): returns (HTTP status, body).
+fn s3_curl(
+    method: &str,
+    url: &str,
+    region: &str,
+    access: &str,
+    secret: &str,
+    upload: Option<&std::path::Path>,
+) -> (u16, Vec<u8>) {
+    let out = std::env::temp_dir().join(format!("hx-s3-body-{}", std::process::id()));
+    let mut cmd = std::process::Command::new("curl");
+    cmd.args(["-s", "-o"])
+        .arg(&out)
+        .args(["-w", "%{http_code}", "-X", method])
+        .args(["--aws-sigv4", &format!("aws:amz:{region}:s3")])
+        .args(["--user", &format!("{access}:{secret}")]);
+    if let Some(f) = upload {
+        cmd.arg("-T").arg(f);
+    }
+    cmd.arg(url);
+    let o = cmd.output().expect("curl is installed");
+    let code = String::from_utf8_lossy(&o.stdout)
+        .trim()
+        .parse()
+        .unwrap_or(0);
+    let body = std::fs::read(&out).unwrap_or_default();
+    let _ = std::fs::remove_file(&out);
+    (code, body)
+}
+
+async fn send_bytes(
+    c: &reqwest::Client,
+    token: &str,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<Vec<u8>>,
+) -> (u16, Vec<u8>) {
+    let mut r = c
+        .request(method, format!("{}{}", api_base(), path))
+        .bearer_auth(token);
+    if let Some(b) = body {
+        r = r.body(b);
+    }
+    let r = r.send().await.unwrap();
+    let status = r.status().as_u16();
+    (status, r.bytes().await.unwrap_or_default().to_vec())
+}
+
+/// The S3 Gateway page end to end against the real server (MinIO or Silo +
+/// the MinIO client installed on the CI runner): configure, start, bucket,
+/// S3 user, access key, objects written and read with that key by an
+/// independent SigV4 client, rotate (old secret refused), disable/enable,
+/// upload/download/delete through the API, delete key/user/bucket, stop.
+/// Every response is read into the page's own types.
+#[tokio::test]
+async fn s3_gateway_drives_a_real_minio() {
+    let c = client();
+    let token = login(&c).await;
+    let (code, body) = get_raw(&c, &token, "/nas/s3/status").await;
+    if code == 404 {
+        assert!(
+            std::env::var("HORCRUX_TEST_REQUIRE_S3").is_err(),
+            "HORCRUX_TEST_REQUIRE_S3 is set but the server has no S3 gateway routes (built without USE=s3-gateway?)"
+        );
+        eprintln!("server built without s3-gateway: skipping");
+        return;
+    }
+    let st: api::s3::S3GatewayStatus = decode("S3 status", &body);
+    if !st.missing.is_empty() {
+        assert!(
+            std::env::var("HORCRUX_TEST_REQUIRE_S3").is_err(),
+            "HORCRUX_TEST_REQUIRE_S3 is set but the server reports missing: {:?}",
+            st.missing
+        );
+        eprintln!(
+            "S3 server/client not installed ({:?}): skipping",
+            st.missing
+        );
+        return;
+    }
+
+    // a clean, stopped gateway on private ports
+    let (code, body) = post(&c, &token, "/nas/s3/stop", json!({})).await;
+    assert_eq!(code, 200, "stop: {body}");
+    let port = free_tcp_port();
+    let cport = free_tcp_port();
+    let (code, body) = put(
+        &c,
+        &token,
+        "/nas/s3/config",
+        json!({"address": "127.0.0.1", "port": port, "console_port": cport}),
+    )
+    .await;
+    assert_eq!(code, 200, "config: {body}");
+    let settings: api::s3::S3GatewaySettings = decode("S3 settings", &body);
+    assert_eq!(settings.port, Some(port));
+    let (code, _) = put(
+        &c,
+        &token,
+        "/nas/s3/config",
+        json!({"port": port, "console_port": port}),
+    )
+    .await;
+    assert_eq!(code, 422, "same API and console port is refused");
+
+    // start
+    let (code, body) = post(&c, &token, "/nas/s3/start", json!({})).await;
+    assert_eq!(code, 200, "start: {body}");
+    let st: api::s3::S3GatewayStatus = serde_json::from_value(body).unwrap();
+    assert!(st.running && st.enabled && st.pid.is_some(), "{st:?}");
+    assert_eq!(st.port, port);
+    let region = st.region.clone();
+    let ep = format!("http://127.0.0.1:{port}");
+
+    // bucket
+    let bucket = format!("hx-contract-{}", std::process::id());
+    let (code, body) = post(&c, &token, "/nas/s3/buckets", json!({"name": "Bad_Name"})).await;
+    assert_eq!(code, 422, "invalid bucket name refused: {body}");
+    let (code, body) = post(
+        &c,
+        &token,
+        "/nas/s3/buckets",
+        json!({"name": bucket, "versioning": true}),
+    )
+    .await;
+    assert_eq!(code, 201, "create bucket: {body}");
+    let created: api::s3::S3Bucket = serde_json::from_value(body).unwrap();
+    assert_eq!(created.name, bucket);
+    let (code, _) = post(&c, &token, "/nas/s3/buckets", json!({"name": bucket})).await;
+    assert_eq!(code, 409, "duplicate bucket");
+    let list: Vec<api::s3::S3Bucket> = fetch(&c, &token, "/nas/s3/buckets").await;
+    let b = list
+        .iter()
+        .find(|b| b.name == bucket)
+        .expect("bucket listed");
+    assert!(b.versioning, "versioning enabled: {b:?}");
+
+    // S3 user + an access key for it
+    let user = format!("ct-user-{}", std::process::id());
+    let (code, body) = post(
+        &c,
+        &token,
+        "/nas/s3/users",
+        json!({"username": user, "policy": "readwrite"}),
+    )
+    .await;
+    assert_eq!(code, 201, "create user: {body}");
+    let u: api::s3::S3User = serde_json::from_value(body).unwrap();
+    assert!(u
+        .secret_key
+        .as_deref()
+        .map(|s| s.len() >= 8)
+        .unwrap_or(false));
+    let users: Vec<api::s3::S3User> = fetch(&c, &token, "/nas/s3/users").await;
+    assert!(users
+        .iter()
+        .any(|x| x.username == user && x.policies.contains(&"readwrite".to_string())));
+
+    let (code, body) = post(
+        &c,
+        &token,
+        "/nas/s3/access-keys",
+        json!({"user_id": user, "description": "contract test"}),
+    )
+    .await;
+    assert_eq!(code, 201, "create key: {body}");
+    let key: api::s3::S3AccessKey = serde_json::from_value(body).unwrap();
+    let ak = key.access_key.clone();
+    let sk = key.secret_key.clone().expect("secret returned once");
+    assert!(key.managed && key.enabled);
+    let keys: Vec<api::s3::S3AccessKey> = fetch(&c, &token, "/nas/s3/access-keys").await;
+    let listed = keys
+        .iter()
+        .find(|k| k.access_key == ak)
+        .expect("key listed");
+    assert_eq!(listed.user_id, user);
+    assert!(listed.secret_key.is_none(), "list never returns secrets");
+    let (code, _) = post(
+        &c,
+        &token,
+        "/nas/s3/access-keys",
+        json!({"user_id": "nobody-here"}),
+    )
+    .await;
+    assert_eq!(code, 404, "key for an unknown user");
+
+    // put + get an object with the key (curl SigV4, not the MinIO client)
+    let payload = format!("horcrux s3 contract {}\n", std::process::id());
+    let file = std::env::temp_dir().join(format!("hx-s3-up-{}", std::process::id()));
+    std::fs::write(&file, &payload).unwrap();
+    let url = format!("{ep}/{bucket}/dir/hello.txt");
+    let (code, body) = s3_curl("PUT", &url, &region, &ak, &sk, Some(&file));
+    assert_eq!(
+        code,
+        200,
+        "PUT with the new key: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let (code, body) = s3_curl("GET", &url, &region, &ak, &sk, None);
+    assert_eq!(
+        (code, String::from_utf8_lossy(&body).to_string()),
+        (200, payload.clone())
+    );
+
+    // the page sees it and downloads the same bytes
+    let objs: Vec<api::s3::S3Object> =
+        fetch(&c, &token, &format!("/nas/s3/buckets/{bucket}/objects")).await;
+    let o = objs
+        .iter()
+        .find(|o| o.key == "dir/hello.txt")
+        .expect("object listed");
+    assert_eq!(o.size, payload.len() as u64);
+    let (code, bytes) = send_bytes(
+        &c,
+        &token,
+        reqwest::Method::GET,
+        &format!("/nas/s3/buckets/{bucket}/objects/download?key=dir%2Fhello.txt"),
+        None,
+    )
+    .await;
+    assert_eq!((code, bytes), (200, payload.clone().into_bytes()));
+    let st: api::s3::S3GatewayStatus = fetch(&c, &token, "/nas/s3/status").await;
+    assert!(st.object_count >= 1 && st.bucket_count >= 1, "{st:?}");
+
+    // rotate: the old secret stops working, the new one works
+    let (code, body) = post(
+        &c,
+        &token,
+        &format!("/nas/s3/access-keys/{ak}/rotate"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(code, 200, "rotate: {body}");
+    let rotated: api::s3::S3AccessKey = serde_json::from_value(body).unwrap();
+    assert_eq!(rotated.access_key, ak);
+    let sk2 = rotated.secret_key.expect("new secret");
+    assert_ne!(sk2, sk);
+    let (code, _) = s3_curl("GET", &url, &region, &ak, &sk, None);
+    assert_eq!(code, 403, "old secret refused after rotate");
+    let (code, _) = s3_curl("GET", &url, &region, &ak, &sk2, None);
+    assert_eq!(code, 200, "new secret works");
+
+    // disable / enable
+    let (code, body) = put(
+        &c,
+        &token,
+        &format!("/nas/s3/access-keys/{ak}"),
+        json!({"enabled": false}),
+    )
+    .await;
+    assert_eq!(code, 200, "disable: {body}");
+    let k: api::s3::S3AccessKey = decode("disabled key", &body);
+    assert!(!k.enabled);
+    let (code, _) = s3_curl("GET", &url, &region, &ak, &sk2, None);
+    assert_eq!(code, 403, "disabled key refused");
+    let (code, body) = put(
+        &c,
+        &token,
+        &format!("/nas/s3/access-keys/{ak}"),
+        json!({"enabled": true}),
+    )
+    .await;
+    assert_eq!(code, 200, "enable: {body}");
+    let (code, _) = s3_curl("GET", &url, &region, &ak, &sk2, None);
+    assert_eq!(code, 200, "re-enabled key works");
+
+    // upload through the API (the page's file upload), read with the key
+    let blob: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+    let (code, body) = send_bytes(
+        &c,
+        &token,
+        reqwest::Method::PUT,
+        &format!("/nas/s3/buckets/{bucket}/objects?key=api%2Fup.bin"),
+        Some(blob.clone()),
+    )
+    .await;
+    assert_eq!(code, 201, "API upload: {}", String::from_utf8_lossy(&body));
+    let (code, got) = s3_curl(
+        "GET",
+        &format!("{ep}/{bucket}/api/up.bin"),
+        &region,
+        &ak,
+        &sk2,
+        None,
+    );
+    assert_eq!(code, 200);
+    assert!(
+        got == blob,
+        "uploaded bytes round-trip ({} vs {})",
+        got.len(),
+        blob.len()
+    );
+    let (code, _) = send_bytes(
+        &c,
+        &token,
+        reqwest::Method::DELETE,
+        &format!("/nas/s3/buckets/{bucket}/objects?key=api%2Fup.bin"),
+        None,
+    )
+    .await;
+    assert_eq!(code, 204);
+    let (code, _) = s3_curl(
+        "GET",
+        &format!("{ep}/{bucket}/api/up.bin"),
+        &region,
+        &ak,
+        &sk2,
+        None,
+    );
+    assert_eq!(code, 404, "deleted object is gone");
+
+    // delete the key: refused at once, gone from the list
+    let (code, _) = send_bytes(
+        &c,
+        &token,
+        reqwest::Method::DELETE,
+        &format!("/nas/s3/access-keys/{ak}"),
+        None,
+    )
+    .await;
+    assert_eq!(code, 204);
+    let (code, _) = s3_curl("GET", &url, &region, &ak, &sk2, None);
+    assert_eq!(code, 403, "deleted key refused");
+    let keys: Vec<api::s3::S3AccessKey> = fetch(&c, &token, "/nas/s3/access-keys").await;
+    assert!(!keys.iter().any(|k| k.access_key == ak));
+
+    // a non-empty bucket needs force; then user, bucket
+    let (code, _) = send_bytes(
+        &c,
+        &token,
+        reqwest::Method::DELETE,
+        &format!("/nas/s3/buckets/{bucket}"),
+        None,
+    )
+    .await;
+    assert_eq!(code, 409, "non-empty bucket needs force");
+    let (code, _) = send_bytes(
+        &c,
+        &token,
+        reqwest::Method::DELETE,
+        &format!("/nas/s3/users/{user}"),
+        None,
+    )
+    .await;
+    assert_eq!(code, 204);
+    let (code, _) = send_bytes(
+        &c,
+        &token,
+        reqwest::Method::DELETE,
+        &format!("/nas/s3/buckets/{bucket}?force=true"),
+        None,
+    )
+    .await;
+    assert_eq!(code, 204);
+    let list: Vec<api::s3::S3Bucket> = fetch(&c, &token, "/nas/s3/buckets").await;
+    assert!(!list.iter().any(|b| b.name == bucket));
+
+    // stop: the server process and its port are gone
+    let (code, body) = post(&c, &token, "/nas/s3/stop", json!({})).await;
+    assert_eq!(code, 200, "stop: {body}");
+    let st: api::s3::S3GatewayStatus = serde_json::from_value(body).unwrap();
+    assert!(!st.running && !st.enabled && st.pid.is_none(), "{st:?}");
+    assert!(
+        std::net::TcpStream::connect(("127.0.0.1", port)).is_err(),
+        "S3 port still open after stop"
+    );
+    let (code, _) = post(&c, &token, "/nas/s3/buckets", json!({"name": "after-stop"})).await;
+    assert_eq!(code, 409, "bucket ops need a running gateway");
+    let _ = std::fs::remove_file(&file);
+}
+
+// ---------------------------------------------------------------------------
+// Monitoring > Dashboards
+// ---------------------------------------------------------------------------
+
+/// User-defined dashboards: create (panels validated against the metrics
+/// catalog), list/get/update/delete read into the page's types, and each
+/// panel's query runs against the real metrics store.
+#[tokio::test]
+async fn dashboards_round_trip_and_panels_query_real_metrics() {
+    let c = client();
+    let token = login(&c).await;
+    let (code, body) = post(
+        &c,
+        &token,
+        "/monitoring/dashboards",
+        json!({"name": "bad", "panels": [{"title": "x", "query": "no_such_metric", "chart": "line", "width": 1}]}),
+    )
+    .await;
+    assert_eq!(code, 422, "unknown metric refused: {body}");
+
+    let req = json!({
+        "name": "Contract dashboard",
+        "description": "made by api_contract",
+        "time_range": "15m",
+        "refresh_secs": 30,
+        "panels": [
+            {"title": "CPU", "query": "horcrux_node_cpu_usage_percent", "chart": "line", "width": 1},
+            {"title": "Load", "query": "horcrux_node_load1", "chart": "stat", "width": 2}
+        ]
+    });
+    let (code, body) = post(&c, &token, "/monitoring/dashboards", req).await;
+    assert_eq!(code, 201, "create: {body}");
+    let d: api::dashboards::Dashboard = serde_json::from_value(body).unwrap();
+    assert_eq!(d.panels.len(), 2);
+    assert!(d.panels.iter().all(|p| !p.id.is_empty()));
+    assert_eq!(d.created_by, "admin");
+
+    let list: Vec<api::dashboards::Dashboard> = fetch(&c, &token, "/monitoring/dashboards").await;
+    assert!(list.iter().any(|x| x.id == d.id));
+    let one: api::dashboards::Dashboard =
+        fetch(&c, &token, &format!("/monitoring/dashboards/{}", d.id)).await;
+    assert_eq!(one, d);
+
+    // what the page does for each panel
+    for p in &d.panels {
+        let (code, body) = post(
+            &c,
+            &token,
+            "/metrics/query",
+            json!({"metric": p.query, "step": 15}),
+        )
+        .await;
+        assert_eq!(code, 200, "panel query {}: {body}", p.query);
+        let _: api::MetricResult = serde_json::from_value(body).unwrap();
+    }
+
+    let update = api::dashboards::DashboardRequest {
+        name: "Contract dashboard v2".into(),
+        description: String::new(),
+        time_range: "6h".into(),
+        refresh_secs: 0,
+        panels: vec![d.panels[1].clone()],
+    };
+    let (code, body) = put(
+        &c,
+        &token,
+        &format!("/monitoring/dashboards/{}", d.id),
+        serde_json::to_value(&update).unwrap(),
+    )
+    .await;
+    assert_eq!(code, 200, "update: {body}");
+    let u: api::dashboards::Dashboard = decode("updated dashboard", &body);
+    assert_eq!(
+        (u.name.as_str(), u.time_range.as_str(), u.panels.len()),
+        ("Contract dashboard v2", "6h", 1)
+    );
+    assert_eq!(u.panels[0].id, d.panels[1].id, "panel ids are kept");
+
+    delete(&c, &token, &format!("/monitoring/dashboards/{}", d.id)).await;
+    let (code, _) = get_raw(&c, &token, &format!("/monitoring/dashboards/{}", d.id)).await;
+    assert_eq!(code, 404);
+}

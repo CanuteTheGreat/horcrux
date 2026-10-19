@@ -50,6 +50,8 @@ RUN mkdir -p /var/db/repos/horcrux-overlay/{app-emulation,metadata,profiles} && 
     echo 'horcrux-overlay' > /var/db/repos/horcrux-overlay/profiles/repo_name && \
     mkdir -p /etc/portage/repos.conf
 COPY gentoo/app-emulation /var/db/repos/horcrux-overlay/app-emulation
+# S3 gateway server + client (USE=s3-gateway)
+COPY gentoo/app-misc /var/db/repos/horcrux-overlay/app-misc
 RUN printf '[horcrux-overlay]\nlocation = /var/db/repos/horcrux-overlay\npriority = 50\n' \
     > /etc/portage/repos.conf/horcrux-overlay.conf
 

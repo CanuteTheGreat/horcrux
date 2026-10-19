@@ -663,7 +663,7 @@ pub fn MetricsExplorerPage() -> impl IntoView {
 
 /// Inline SVG chart of query results: one polyline (line/area) or bar set per
 /// label set, time on X, value on Y, with min/max/first/last axis labels.
-fn render_chart_svg(results: &[MetricResult], chart_type: &str) -> String {
+pub(crate) fn render_chart_svg(results: &[MetricResult], chart_type: &str) -> String {
     use std::collections::BTreeMap;
     const W: f64 = 800.0;
     const H: f64 = 260.0;

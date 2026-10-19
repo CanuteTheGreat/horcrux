@@ -6,8 +6,6 @@ use crate::nas::monitoring::{collect_metrics, get_nas_health};
 #[cfg(feature = "iscsi-target")]
 use crate::nas::services::iscsi::IscsiTargetManager;
 
-#[cfg(feature = "s3-gateway")]
-use crate::nas::services::s3::S3GatewayManager;
 use crate::nas::services::{get_service_status, manage_service, NasService, ServiceAction};
 #[cfg(feature = "nfs-server")]
 use crate::nas::shares::nfs::NfsServerManager;
@@ -1416,7 +1414,10 @@ fn parse_service_name(name: &str) -> Result<NasService, ApiError> {
         "ftp" | "proftpd" => Ok(NasService::Proftpd),
         "ssh" | "sshd" | "sftp" => Ok(NasService::Sshd),
         "rsync" | "rsyncd" => Ok(NasService::Rsyncd),
-        "minio" | "s3" => Ok(NasService::Minio),
+        "minio" | "s3" => Err(ApiError::BadRequest(
+            "The S3 gateway is managed on NAS > S3 Gateway (POST /api/nas/s3/start, /api/nas/s3/stop)"
+                .to_string(),
+        )),
         "tgt" | "tgtd" | "iscsi" => Ok(NasService::Tgtd),
         _ => Err(ApiError::BadRequest(format!("Unknown service: {}", name))),
     }
@@ -2122,197 +2123,6 @@ pub async fn nas_delete_iscsi_acl(
     Path(_id): Path<String>,
 ) -> Result<(), ApiError> {
     Err(ApiError::Internal("iSCSI feature not enabled".to_string()))
-}
-
-// S3 handlers
-#[cfg(feature = "s3-gateway")]
-pub async fn nas_get_s3_status(
-    State(_state): State<Arc<AppState>>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let manager = S3GatewayManager::new();
-    match manager.get_status().await {
-        Ok(status) => Ok(Json(serde_json::to_value(status).unwrap_or_default())),
-        Err(e) => Err(ApiError::Internal(format!(
-            "Failed to get S3 status: {}",
-            e
-        ))),
-    }
-}
-#[cfg(not(feature = "s3-gateway"))]
-pub async fn nas_get_s3_status(
-    State(_state): State<Arc<AppState>>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(
-        serde_json::json!({"running": false, "enabled": false}),
-    ))
-}
-#[cfg(feature = "s3-gateway")]
-pub async fn nas_list_s3_buckets(
-    State(_state): State<Arc<AppState>>,
-) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
-    let manager = S3GatewayManager::new();
-    match manager.list_buckets().await {
-        Ok(buckets) => {
-            let json_buckets: Vec<serde_json::Value> = buckets
-                .iter()
-                .map(|b| serde_json::to_value(b).unwrap_or_default())
-                .collect();
-            Ok(Json(json_buckets))
-        }
-        Err(e) => Err(ApiError::Internal(format!(
-            "Failed to list S3 buckets: {}",
-            e
-        ))),
-    }
-}
-#[cfg(not(feature = "s3-gateway"))]
-pub async fn nas_list_s3_buckets(
-    State(_state): State<Arc<AppState>>,
-) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
-    Ok(Json(vec![]))
-}
-#[cfg(feature = "s3-gateway")]
-pub async fn nas_create_s3_bucket(
-    State(_state): State<Arc<AppState>>,
-    Json(body): Json<serde_json::Value>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let name = body
-        .get("name")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| ApiError::BadRequest("Missing 'name' field".to_string()))?;
-    let manager = S3GatewayManager::new();
-    match manager.create_bucket(name, None).await {
-        Ok(bucket) => Ok(Json(serde_json::to_value(bucket).unwrap_or_default())),
-        Err(e) => Err(ApiError::Internal(format!(
-            "Failed to create bucket: {}",
-            e
-        ))),
-    }
-}
-#[cfg(not(feature = "s3-gateway"))]
-pub async fn nas_create_s3_bucket(
-    State(_state): State<Arc<AppState>>,
-    Json(_body): Json<serde_json::Value>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    Err(ApiError::Internal(
-        "S3 gateway feature not enabled".to_string(),
-    ))
-}
-#[cfg(feature = "s3-gateway")]
-pub async fn nas_get_s3_bucket(
-    State(_state): State<Arc<AppState>>,
-    Path(name): Path<String>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let manager = S3GatewayManager::new();
-    match manager.get_bucket(&name).await {
-        Ok(bucket) => Ok(Json(serde_json::to_value(bucket).unwrap_or_default())),
-        Err(_) => Err(ApiError::NotFound("Bucket not found".to_string())),
-    }
-}
-#[cfg(not(feature = "s3-gateway"))]
-pub async fn nas_get_s3_bucket(
-    State(_state): State<Arc<AppState>>,
-    Path(_name): Path<String>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    Err(ApiError::NotFound("Bucket not found".to_string()))
-}
-#[cfg(feature = "s3-gateway")]
-pub async fn nas_delete_s3_bucket(
-    State(_state): State<Arc<AppState>>,
-    Path(name): Path<String>,
-) -> Result<(), ApiError> {
-    let manager = S3GatewayManager::new();
-    manager
-        .delete_bucket(&name, false)
-        .await
-        .map_err(|e| ApiError::Internal(format!("Failed to delete bucket: {}", e)))
-}
-#[cfg(not(feature = "s3-gateway"))]
-pub async fn nas_delete_s3_bucket(
-    State(_state): State<Arc<AppState>>,
-    Path(_name): Path<String>,
-) -> Result<(), ApiError> {
-    Err(ApiError::Internal(
-        "S3 gateway feature not enabled".to_string(),
-    ))
-}
-#[cfg(feature = "s3-gateway")]
-pub async fn nas_list_s3_access_keys(
-    State(_state): State<Arc<AppState>>,
-    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
-    let user_id = params
-        .get("user_id")
-        .ok_or_else(|| ApiError::BadRequest("Missing 'user_id' query parameter".to_string()))?;
-
-    let manager = S3GatewayManager::new();
-    match manager.list_access_keys(user_id).await {
-        Ok(keys) => {
-            let json_keys: Vec<serde_json::Value> = keys
-                .iter()
-                .map(|k| serde_json::to_value(k).unwrap_or_default())
-                .collect();
-            Ok(Json(json_keys))
-        }
-        Err(e) => Err(ApiError::Internal(format!(
-            "Failed to list access keys: {}",
-            e
-        ))),
-    }
-}
-#[cfg(not(feature = "s3-gateway"))]
-pub async fn nas_list_s3_access_keys(
-    State(_state): State<Arc<AppState>>,
-) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
-    Ok(Json(vec![]))
-}
-#[cfg(feature = "s3-gateway")]
-pub async fn nas_create_s3_access_key(
-    State(_state): State<Arc<AppState>>,
-    Json(body): Json<serde_json::Value>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = body
-        .get("user_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| ApiError::BadRequest("Missing 'user_id' field".to_string()))?;
-    let description = body.get("description").and_then(|v| v.as_str());
-    let manager = S3GatewayManager::new();
-    match manager.create_access_key(user_id, description).await {
-        Ok(key) => Ok(Json(serde_json::to_value(key).unwrap_or_default())),
-        Err(e) => Err(ApiError::Internal(format!(
-            "Failed to create access key: {}",
-            e
-        ))),
-    }
-}
-#[cfg(not(feature = "s3-gateway"))]
-pub async fn nas_create_s3_access_key(
-    State(_state): State<Arc<AppState>>,
-    Json(_body): Json<serde_json::Value>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    Err(ApiError::Internal(
-        "S3 gateway feature not enabled".to_string(),
-    ))
-}
-#[cfg(feature = "s3-gateway")]
-pub async fn nas_delete_s3_access_key(
-    State(_state): State<Arc<AppState>>,
-    Path(access_key): Path<String>,
-) -> Result<(), ApiError> {
-    let manager = S3GatewayManager::new();
-    manager
-        .delete_access_key(&access_key)
-        .await
-        .map_err(|e| ApiError::Internal(format!("Failed to delete access key: {}", e)))
-}
-#[cfg(not(feature = "s3-gateway"))]
-pub async fn nas_delete_s3_access_key(
-    State(_state): State<Arc<AppState>>,
-    Path(_id): Path<String>,
-) -> Result<(), ApiError> {
-    Err(ApiError::Internal(
-        "S3 gateway feature not enabled".to_string(),
-    ))
 }
 
 // Directory/Auth handlers

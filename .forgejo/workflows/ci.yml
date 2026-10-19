@@ -170,6 +170,9 @@ jobs:
           # Fail here, not deep in a test, if this QEMU can't do SPICE.
           qemu-system-x86_64 --version
           qemu-system-x86_64 -audiodev help | grep -qx spice || { echo "qemu-system-x86_64 lacks SPICE (no spice audiodev)" >&2; exit 1; }
+          # NAS > S3 Gateway: a real MinIO-compatible server + MinIO client
+          # for the server started below (api_contract s3_gateway_* test).
+          bash ci/install-s3-gateway.sh
 
       - name: Ensure Node.js is present (self-heal)
         # catthehacker/ubuntu:act-latest job containers on the beauxbatons
@@ -292,6 +295,7 @@ jobs:
         env:
           HORCRUX_TEST_REQUIRE_DOCKER: "1"
           HORCRUX_TEST_REQUIRE_K8S: "1"
+          HORCRUX_TEST_REQUIRE_S3: "1"
           # The server was started with the same URL; the contract test
           # receives the PagerDuty Events v2 call there.
           HORCRUX_PAGERDUTY_EVENTS_URL: http://127.0.0.1:18765/v2/enqueue
@@ -411,6 +415,9 @@ jobs:
           if [ -f /tmp/horcrux-api.pid ]; then
             kill "$(cat /tmp/horcrux-api.pid)" 2>/dev/null || true
           fi
+          # the S3 gateway runs in its own process group (survives API
+          # restarts by design): don't leave one behind in a reused container
+          pkill -x silo 2>/dev/null || true
 
       - name: Memory probe report
         if: always()
@@ -914,6 +921,8 @@ jobs:
             spice_mods="qemu-system-modules-spice"
           fi
           sudo apt-get install -y build-essential clang mold libvirt-dev python3-venv libpam0g-dev libnss3-tools qemu-utils zstd qemu-system-x86 $spice_mods
+          # the S3 Gateway page drives a real server (ui_e2e.py s3 checks)
+          bash ci/install-s3-gateway.sh
 
       - name: Install trunk
         # Same prebuilt-binary install as the Build Web UI job.
@@ -1054,6 +1063,7 @@ jobs:
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Stop horcrux-api"
           kill "$(cat /tmp/horcrux-e2e.pid)" 2>/dev/null || true
+          pkill -x silo 2>/dev/null || true
 
       - name: UI hides features a reduced USE set did not compile in
         # Independent of the steps above (own binary, own port), so it

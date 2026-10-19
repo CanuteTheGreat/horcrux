@@ -168,6 +168,18 @@ pub const FAMILIES: &[Family] = &[
     },
 ];
 
+/// Check a query string the way `MetricsStore::query` would, without running
+/// it (dashboards validate their panels with this before saving).
+pub fn validate_query(query: &str) -> Result<(), String> {
+    let parsed = parse(query)?;
+    family(&parsed.metric).map(|_| ()).ok_or_else(|| {
+        format!(
+            "unknown metric '{}' (GET /api/metrics/definitions lists the available metrics)",
+            parsed.metric
+        )
+    })
+}
+
 pub fn family(name: &str) -> Option<&'static Family> {
     FAMILIES.iter().find(|f| f.name == name)
 }

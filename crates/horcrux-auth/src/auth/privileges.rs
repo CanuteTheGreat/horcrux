@@ -360,6 +360,9 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
                 privilege: P::DatastoreAudit,
                 prefix: "/storage".into(),
             },
+            // user-defined dashboards: shared, editing them changes what
+            // every operator sees
+            ("dashboards", _) => read_write(m, P::SysAudit, P::SysModify, "/"),
             _ => need(P::SysAudit, "/nodes"),
         },
         "cluster" => match arg(1) {
@@ -382,7 +385,14 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
                 read_write(m, P::SysAudit, P::SysModify, "/k8s")
             }
         }
-        "nas" => read_write(m, P::SysAudit, P::SysModify, "/nas"),
+        "nas" => {
+            // reading object data out of the S3 gateway is not an audit
+            if arg(1) == "s3" && s.contains(&"download") {
+                need(P::SysModify, "/nas")
+            } else {
+                read_write(m, P::SysAudit, P::SysModify, "/nas")
+            }
+        }
         "ws" => need(P::SysAudit, "/"),
         "tasks" => Requirement::Authenticated,
 
