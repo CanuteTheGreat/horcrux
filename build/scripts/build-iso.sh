@@ -335,21 +335,31 @@ create_rootfs() {
 
 echo "Horcrux Init Starting..."
 
-# Mount essential filesystems
-mount -t proc none /proc 2>/dev/null
-mount -t sysfs none /sys 2>/dev/null
-mount -t devtmpfs none /dev 2>/dev/null || true
+# The root is a read-only squashfs: /dev, /run, /tmp and /var are
+# writable mounts the initramfs moved/created over it before switch_root
+# (a boot without that initramfs gets them here). Only mount what isn't
+# mounted yet, and say so when something fails instead of hiding it.
+mounted() { grep -q " $1 " /proc/mounts 2>/dev/null; }
+need_mount() { # type target [options]
+    mounted "$2" && return 0
+    mount -t "$1" ${3:+-o "$3"} "$1" "$2" || echo "init: could not mount $1 on $2"
+}
+need_mount proc /proc
+need_mount sysfs /sys
+mounted /dev || mount -t devtmpfs devtmpfs /dev || need_mount tmpfs /dev mode=0755
+[ -c /dev/console ] || mknod -m 600 /dev/console c 5 1
+[ -c /dev/null ] || mknod -m 666 /dev/null c 1 3
 
 # Setup /dev/pts for pseudo-terminals
 mkdir -p /dev/pts
-mount -t devpts devpts /dev/pts 2>/dev/null || true
+need_mount devpts /dev/pts
 
-# Mount tmpfs for runtime directories
-mount -t tmpfs tmpfs /run 2>/dev/null || true
-mount -t tmpfs tmpfs /tmp 2>/dev/null || true
-
-# Create runtime directories
-mkdir -p /run/lock /var/run
+# Writable runtime directories
+need_mount tmpfs /run mode=0755
+need_mount tmpfs /tmp mode=1777
+need_mount tmpfs /var mode=0755
+mkdir -p /run/lock /var/lib/horcrux /var/log/horcrux /var/tmp
+[ -e /var/run ] || ln -s /run /var/run
 
 # Set hostname
 hostname horcrux 2>/dev/null || true
@@ -360,7 +370,8 @@ ip link set lo up 2>/dev/null || true
 echo ""
 echo "========================================"
 echo "  Horcrux Virtualization Platform"
-echo "  Version: 0.1.0"
+VERSION=$(. /etc/os-release 2>/dev/null && echo "$VERSION")
+echo "  Version: ${VERSION:-unknown}"
 echo "========================================"
 echo ""
 echo "Root filesystem is read-only (squashfs)"
@@ -381,7 +392,7 @@ INITEOF
 
     # Copy essential system binaries for the rootfs
     log_info "Copying essential system binaries to rootfs..."
-    local rootfs_binaries=(sh bash mount umount cat ls mkdir hostname ip)
+    local rootfs_binaries=(sh bash mount umount cat ls mkdir hostname ip grep mknod ln)
     for cmd in "${rootfs_binaries[@]}"; do
         if command -v "$cmd" &> /dev/null; then
             local bin_path
@@ -704,10 +715,23 @@ fi
 
 echo "Switching to root filesystem..."
 
-# Switch to real root
+# The new root is a read-only squashfs: hand it a populated /dev (moved,
+# not unmounted, so the nodes created above survive) and writable tmpfs
+# for /run, /tmp and /var before switching.
+if grep -q " /dev " /proc/mounts && mount -o move /dev /newroot/dev 2>/dev/null; then
+    :
+elif ! mount -t devtmpfs devtmpfs /newroot/dev 2>/dev/null; then
+    mount -t tmpfs -o mode=0755 tmpfs /newroot/dev
+    mknod -m 600 /newroot/dev/console c 5 1
+    mknod -m 666 /newroot/dev/null c 1 3
+fi
+mount -t tmpfs -o mode=0755 tmpfs /newroot/run
+mount -t tmpfs -o mode=1777 tmpfs /newroot/tmp
+mount -t tmpfs -o mode=0755 tmpfs /newroot/var
+mkdir -p /newroot/run/lock /newroot/var/lib/horcrux /newroot/var/log/horcrux /newroot/var/tmp
+ln -s /run /newroot/var/run
 umount /proc 2>/dev/null
 umount /sys 2>/dev/null
-umount /dev 2>/dev/null
 
 exec switch_root /newroot "$init"
 EOF
@@ -719,7 +743,7 @@ EOF
         cp "$(which busybox)" "$initramfs_dir/bin/"
 
         # Create symlinks for essential commands
-        for cmd in sh mount umount switch_root cat sleep mknod mkdir; do
+        for cmd in sh mount umount switch_root cat sleep mknod mkdir grep ln ls insmod uname; do
             ln -sf /bin/busybox "$initramfs_dir/bin/$cmd"
         done
         ln -sf /bin/busybox "$initramfs_dir/sbin/switch_root"
@@ -731,7 +755,7 @@ EOF
 
         # Copy essential binaries from system
         local binaries=()
-        for cmd in sh bash mount umount cat sleep mkdir mknod ls insmod uname; do
+        for cmd in sh bash mount umount cat sleep mkdir mknod ls insmod uname grep ln; do
             if command -v "$cmd" &> /dev/null; then
                 local bin_path="$(which $cmd)"
                 cp "$bin_path" "$initramfs_dir/bin/" 2>/dev/null || true
