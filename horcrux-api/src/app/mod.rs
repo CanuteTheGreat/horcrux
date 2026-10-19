@@ -420,6 +420,26 @@ pub async fn run() -> anyhow::Result<()> {
         .cluster_manager
         .start_usage_monitor(horcrux_config.server.port);
 
+    // OpenTelemetry export (saved settings + periodic export).
+    start_otel_exporter(state.clone());
+
+    // Running Docker/Podman containers with firewall rules: give their
+    // host-side veths the stable names the rules match (the runtime gave
+    // them random ones when it started them, e.g. at boot).
+    {
+        let st = state.clone();
+        tokio::spawn(async move {
+            // Let the container reconcilers load the runtimes' containers.
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            let _ = st.container_manager.list_containers().await;
+            for id in st.firewall_manager.containers_with_rules().await {
+                if let Err(e) = st.container_manager.name_host_veths(&id).await {
+                    tracing::warn!("container {id}: host-side interfaces not renamed: {e}");
+                }
+            }
+        });
+    }
+
     // Start metrics collection background task
     metrics_collector::start_metrics_collector(
         state.ws_state.clone(),
@@ -474,6 +494,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(network_routes())
         .merge(api::lane_m::routes(&state).await?)
         .merge(api::migration_jobs::routes())
+        .merge(api::migration_peer::routes())
         .merge(api::vm_hw::routes())
         .merge(api::host_net::routes(&state));
 
@@ -953,6 +974,7 @@ fn monitoring_routes() -> Router<Arc<AppState>> {
         // OpenTelemetry endpoints
         .route("/api/observability/config", get(get_otel_config))
         .route("/api/observability/config", post(update_otel_config))
+        .route("/api/observability/status", get(get_otel_status))
         .route(
             "/api/observability/export/metrics",
             post(export_metrics_now),
@@ -1809,6 +1831,15 @@ async fn delete_vm(
         .unwrap_or_else(|_| id.clone());
 
     state.vm_manager.delete_vm(&id).await?;
+    // Its firewall goes with it: the rules used to stay stored, be
+    // re-installed at every start, and apply to a new VM with the same id.
+    if let Err(e) = state
+        .firewall_manager
+        .remove_guest_rules(FirewallScope::Vm(id.clone()))
+        .await
+    {
+        tracing::warn!("VM {id} deleted, but its firewall rules stayed: {e}");
+    }
 
     // Broadcast VM deleted event
     let username = auth_user
@@ -2792,6 +2823,15 @@ async fn delete_container(
     tokio::spawn(async move { manager.delete_container(&del_id).await })
         .await
         .map_err(|e| ApiError::Internal(format!("container delete task failed: {e}")))??;
+    // Its firewall goes with it (a new container with the same id must
+    // not inherit the rules).
+    if let Err(e) = state
+        .firewall_manager
+        .remove_guest_rules(FirewallScope::Container(id.clone()))
+        .await
+    {
+        tracing::warn!("container {id} deleted, but its firewall rules stayed: {e}");
+    }
 
     // Broadcast container deleted event
     state
@@ -3086,6 +3126,18 @@ async fn create_template(
             payload.os_type,
         )
         .await?;
+    // Deployed VMs get the source VM's chipset/firmware/CPU/NIC layout
+    // and the disk's bus, or a UEFI/Q35/VirtIO guest wouldn't boot.
+    let bus = vm
+        .disks
+        .iter()
+        .find(|d| d.path == template.disk_path.to_string_lossy())
+        .map(|d| d.disk_type.clone())
+        .unwrap_or_else(|| "default".to_string());
+    let template = state
+        .template_manager
+        .set_hardware(&template.id, vm.hardware.clone(), bus)
+        .await?;
     Ok((StatusCode::CREATED, Json(template)))
 }
 
@@ -3141,11 +3193,16 @@ async fn clone_template(
             disks: vec![horcrux_common::VmDisk {
                 path: disk.to_string_lossy().to_string(),
                 size_gb: 0,
-                disk_type: "virtio".to_string(),
-                cache: "writethrough".to_string(),
+                // Templates made before buses were recorded came from VMs
+                // whose disk was on QEMU's default bus.
+                disk_type: template
+                    .disk_bus
+                    .clone()
+                    .unwrap_or_else(|| "default".to_string()),
+                ..Default::default()
             }],
             display: Default::default(),
-            hardware: Default::default(),
+            hardware: template.hardware.for_clone(),
         })
         .await?;
     Ok(Json(CloneResponse { new_vm_id }))
@@ -4320,23 +4377,85 @@ async fn update_otel_config(
 ) -> Result<StatusCode, ApiError> {
     state
         .otel_manager
-        .update_config(config)
+        .update_config(config.clone())
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        .map_err(ApiError::BadRequest)?;
+    // Persisted: it used to be lost at every restart.
+    crate::db::config_store::ConfigStore::new(&state.database)
+        .put(OTEL_KIND, "default", &config)
+        .await?;
     Ok(StatusCode::OK)
 }
 
-async fn export_metrics_now(State(state): State<Arc<AppState>>) -> Result<StatusCode, ApiError> {
-    // Collect current metrics
+/// Config-store kind of the OpenTelemetry export settings.
+const OTEL_KIND: &str = "otel_config";
+
+/// Outcome of the last OTLP metrics export (periodic or "Export now").
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct OtelExportStatus {
+    pub last_attempt: Option<String>,
+    pub last_success: Option<String>,
+    pub last_error: Option<String>,
+    pub exports: u64,
+}
+
+fn otel_status() -> &'static std::sync::Mutex<OtelExportStatus> {
+    static S: std::sync::OnceLock<std::sync::Mutex<OtelExportStatus>> = std::sync::OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+async fn export_otel_once(state: &AppState) -> Result<(), String> {
     let metrics = observability::metrics::MetricsCollector::collect_system_metrics();
+    let r = state.otel_manager.export_metrics(metrics).await;
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut st = otel_status().lock().unwrap();
+    st.last_attempt = Some(now.clone());
+    match &r {
+        Ok(()) => {
+            st.last_success = Some(now);
+            st.last_error = None;
+            st.exports += 1;
+        }
+        Err(e) => st.last_error = Some(e.clone()),
+    }
+    r
+}
 
-    // Export to configured endpoint
-    state
-        .otel_manager
-        .export_metrics(metrics)
+/// Load the saved OpenTelemetry settings and export metrics every
+/// `export_interval_secs` while export is enabled.
+pub fn start_otel_exporter(state: Arc<AppState>) {
+    tokio::spawn(async move {
+        if let Some(cfg) = crate::db::config_store::ConfigStore::new(&state.database)
+            .load_values::<OtelConfig>(OTEL_KIND)
+            .await
+            .ok()
+            .and_then(|v| v.into_iter().next())
+        {
+            if let Err(e) = state.otel_manager.update_config(cfg).await {
+                tracing::warn!("saved OpenTelemetry settings not applied: {e}");
+            }
+        }
+        loop {
+            let cfg = state.otel_manager.get_config().await;
+            let wait = cfg.export_interval_secs.max(5);
+            tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+            if state.otel_manager.get_config().await.enabled {
+                if let Err(e) = export_otel_once(&state).await {
+                    tracing::debug!("OTLP metrics export failed: {e}");
+                }
+            }
+        }
+    });
+}
+
+async fn get_otel_status() -> Json<OtelExportStatus> {
+    Json(otel_status().lock().unwrap().clone())
+}
+
+async fn export_metrics_now(State(state): State<Arc<AppState>>) -> Result<StatusCode, ApiError> {
+    export_otel_once(&state)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-
+        .map_err(ApiError::ServiceUnavailable)?;
     Ok(StatusCode::OK)
 }
 
@@ -4802,19 +4921,12 @@ async fn migrate_vm(
         with_local_disks: false,
     };
 
-    // Get the actual source node (local node)
     let source_node = state
         .cluster_manager
         .get_local_node_name()
         .await
         .unwrap_or_else(|_| "localhost".to_string());
-
-    // Start migration
-    let job_id = state
-        .migration_manager
-        .start_migration(config, source_node.clone())
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let job_id = api::vm_migration::start(&state, config).await?;
 
     info!(
         "Started migration of VM {} to node {}, job ID: {}",

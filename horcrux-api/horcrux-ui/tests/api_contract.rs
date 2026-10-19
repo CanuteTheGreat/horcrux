@@ -2464,9 +2464,10 @@ async fn instance_console_ticket_route_reads_into_ui_type() {
 /// HA > Migration Center: the page lists, starts and cancels migrations
 /// through /migration/jobs (+ /migration/bulk), which used to answer 404
 /// ("Failed to load migration jobs: HTTP 404"). Starts a real migration job
-/// on the server's MigrationManager for a real VM (the target is a .invalid
-/// host, so the transfer itself fails or is cancelled - nothing leaves the
-/// runner) and reads every response into the page's own types.
+/// for a real VM to a registered cluster node at a TEST-NET address that
+/// never answers (the transfer itself fails or is cancelled - nothing
+/// leaves the runner; real two-node migrations are tests/vm_migrate_e2e.sh)
+/// and reads every response into the page's own types.
 #[tokio::test]
 async fn migration_center_routes_read_into_ui_types() {
     let c = client();
@@ -2475,6 +2476,14 @@ async fn migration_center_routes_read_into_ui_types() {
 
     let vm = "contract-migrate-vm";
     delete(&c, &token, &format!("/vms/{vm}")).await;
+    // The target must be a node of the cluster (192.0.2.0/24 = TEST-NET-1).
+    let _ = post(
+        &c,
+        &token,
+        "/cluster/nodes/contract-target",
+        json!({"ip": "192.0.2.10"}),
+    )
+    .await;
     let (status, body) = post(
         &c,
         &token,
@@ -2490,7 +2499,7 @@ async fn migration_center_routes_read_into_ui_types() {
         resource_type: rtype.into(),
         resource_id: rid.into(),
         source_node: String::new(),
-        target_node: "contract-target.invalid".into(),
+        target_node: "contract-target".into(),
         migration_type: "offline".into(),
         status: "pending".into(),
         progress: 0,
@@ -2524,6 +2533,21 @@ async fn migration_center_routes_read_into_ui_types() {
     )
     .await;
     assert_eq!(status, 404, "unknown vm: {body}");
+    // a target that isn't a cluster node: 400 naming it
+    let mut not_node = job("vm", vm);
+    not_node.target_node = "no-such-node".into();
+    let (status, body) = post(
+        &c,
+        &token,
+        "/migration/jobs",
+        serde_json::to_value(not_node).unwrap(),
+    )
+    .await;
+    assert_eq!(status, 400, "unknown target: {body}");
+    assert!(body.to_string().contains("no-such-node"), "{body}");
+    // the peer API refuses user logins (only nodes' migration tokens)
+    let (status, body) = post(&c, &token, "/migration/peer/probe", json!({"files": []})).await;
+    assert_eq!(status, 403, "peer API with a user token: {body}");
 
     // start (one migration at a time: wait out a job another run left)
     let mut created = None;
@@ -2548,7 +2572,7 @@ async fn migration_center_routes_read_into_ui_types() {
     let created = created.expect("migration slot never freed");
     assert_eq!(created.resource_id, vm);
     assert_eq!(created.resource_type, "vm");
-    assert_eq!(created.target_node, "contract-target.invalid");
+    assert_eq!(created.target_node, "contract-target");
     assert!(!created.job_id.is_empty());
 
     // listed
@@ -2595,7 +2619,7 @@ async fn migration_center_routes_read_into_ui_types() {
     for _ in 0..30 {
         let bulk = api::BulkMigrationJob {
             job_id: String::new(),
-            target_node: "contract-target.invalid".into(),
+            target_node: "contract-target".into(),
             resources: vec![("vm".into(), vm.into())],
             max_workers: 1,
             migration_type: "offline".into(),
@@ -2613,7 +2637,10 @@ async fn migration_center_routes_read_into_ui_types() {
             serde_json::to_value(&bulk).unwrap(),
         )
         .await;
-        if status == 400 && body.to_string().contains("Maximum concurrent") {
+        if (status == 400 || status == 409)
+            && (body.to_string().contains("Maximum concurrent")
+                || body.to_string().contains("already being migrated"))
+        {
             tokio::time::sleep(Duration::from_secs(1)).await;
             continue;
         }
@@ -2637,6 +2664,14 @@ async fn migration_center_routes_read_into_ui_types() {
         .await;
     }
     delete(&c, &token, &format!("/vms/{vm}")).await;
+    let _ = send_json(
+        &c,
+        &token,
+        reqwest::Method::DELETE,
+        "/cluster/nodes/contract-target",
+        None,
+    )
+    .await;
 }
 
 async fn put(c: &reqwest::Client, token: &str, path: &str, body: Value) -> (u16, String) {
@@ -2816,6 +2851,154 @@ async fn vm_hardware_iso_library_and_bridges_read_into_ui_types() {
         fetch(&c, &token, &format!("/vms/{vm}/firewall/rules")).await;
     assert!(fw.is_empty());
     let (status, _) = get_raw(&c, &token, "/vms/no-such-vm-fw/firewall/rules").await;
+    assert_eq!(status, 404);
+
+    // System settings round-trip (CPU type/sockets, q35, UEFI/TPM when the
+    // host has OVMF/swtpm - the host options say so).
+    let mut sys = updated.hardware.clone();
+    sys.cpu_type = Some("qemu64".into());
+    sys.sockets = Some(2);
+    sys.machine = horcrux_common::MachineType::Q35;
+    if opts.ovmf {
+        sys.firmware = horcrux_common::Firmware::Ovmf;
+    }
+    let (status, body) = put(
+        &c,
+        &token,
+        &format!("/vms/{vm}/config"),
+        serde_json::to_value(&api::VmConfigUpdate {
+            hardware: Some(sys.clone()),
+            ..Default::default()
+        })
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200, "system settings: {body}");
+    let got: horcrux_common::VmConfig = decode("PUT /vms/:id/config (system)", &body);
+    assert_eq!(got.hardware.cpu_type.as_deref(), Some("qemu64"));
+    assert_eq!(got.hardware.machine, horcrux_common::MachineType::Q35);
+    // 2 CPUs over 3 sockets can't work.
+    let mut bad = sys.clone();
+    bad.sockets = Some(3);
+    let (status, _) = put(
+        &c,
+        &token,
+        &format!("/vms/{vm}/config"),
+        json!({"hardware": serde_json::to_value(&bad).unwrap()}),
+    )
+    .await;
+    assert!(status == 400 || status == 422, "bad sockets: {status}");
+    if !opts.swtpm {
+        let mut tpm = sys.clone();
+        tpm.tpm = true;
+        let (status, body) = put(
+            &c,
+            &token,
+            &format!("/vms/{vm}/config"),
+            json!({"hardware": serde_json::to_value(&tpm).unwrap()}),
+        )
+        .await;
+        assert_eq!(status, 400, "TPM without swtpm: {body}");
+    }
+
+    // Disks: add one through the UI's request type, grow it, change its
+    // bus, detach it (deleting the image).
+    let spec = api::VmDiskSpec {
+        size_gb: 1,
+        bus: "scsi".into(),
+        cache: "none".into(),
+        discard: true,
+        ssd: true,
+        iothread: true,
+    };
+    let (status, body) = post(
+        &c,
+        &token,
+        &format!("/vms/{vm}/disks"),
+        serde_json::to_value(&spec).unwrap(),
+    )
+    .await;
+    assert_eq!(status, 201, "add disk: {body}");
+    let with_disk: horcrux_common::VmConfig = serde_json::from_value(body).unwrap();
+    assert_eq!(with_disk.disks.len(), 2, "{:?}", with_disk.disks);
+    let d1 = with_disk.disks[1].clone();
+    assert!(
+        d1.path.ends_with(&format!("{vm}-disk1.qcow2")),
+        "{}",
+        d1.path
+    );
+    assert!(
+        std::path::Path::new(&d1.path).exists(),
+        "{} not created",
+        d1.path
+    );
+    assert!((d1.discard, d1.ssd, d1.iothread) == (true, true, true));
+    let (status, body) = put(
+        &c,
+        &token,
+        &format!("/vms/{vm}/disks/1"),
+        serde_json::to_value(&api::VmDiskUpdate {
+            size_gb: Some(2),
+            bus: Some("sata".into()),
+            iothread: Some(false),
+            ..Default::default()
+        })
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200, "update disk: {body}");
+    let upd_disk: horcrux_common::VmConfig = decode("PUT /vms/:id/disks/1", &body);
+    assert_eq!(
+        (
+            upd_disk.disks[1].size_gb,
+            upd_disk.disks[1].disk_type.as_str()
+        ),
+        (2, "sata")
+    );
+    // shrinking is refused; disk0 can't be detached; bad bus refused
+    let (status, _) = put(
+        &c,
+        &token,
+        &format!("/vms/{vm}/disks/1"),
+        json!({"size_gb": 1}),
+    )
+    .await;
+    assert!(status == 400 || status == 422, "shrink: {status}");
+    let (status, _) = post(
+        &c,
+        &token,
+        &format!("/vms/{vm}/disks"),
+        json!({"size_gb": 1, "bus": "floppy"}),
+    )
+    .await;
+    assert!(status == 400 || status == 422, "bad bus: {status}");
+    let r = c
+        .delete(format!("{}/vms/{vm}/disks/0", api_base()))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        matches!(r.status().as_u16(), 400 | 422),
+        "detach disk0: {}",
+        r.status()
+    );
+    let r = c
+        .delete(format!("{}/vms/{vm}/disks/1?delete_file=true", api_base()))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 200);
+    let after: horcrux_common::VmConfig = fetch(&c, &token, &format!("/vms/{vm}")).await;
+    assert_eq!(after.disks.len(), 1);
+    assert!(
+        !std::path::Path::new(&d1.path).exists(),
+        "image not deleted"
+    );
+
+    // Container firewall list for an unknown container: 404.
+    let (status, _) = get_raw(&c, &token, "/containers/no-such-ct-fw/firewall/rules").await;
     assert_eq!(status, 404);
 
     // The ISO can't be deleted while a VM's CD-ROM holds it.

@@ -172,12 +172,23 @@ pub async fn auth_middleware<S: super::AuthState>(
     {
         let claims = validate_jwt_token(token)
             .map_err(|e| unauthorized("invalid_token", format!("Invalid JWT token: {}", e)))?;
-        if claims.role == CLUSTER_NODE_ROLE {
-            // A node-to-node service token is scoped to the usage endpoint only.
-            if !cluster_node_may_access(request.method(), request.uri().path()) {
+        if claims.role == CLUSTER_NODE_ROLE || claims.role == CLUSTER_MIGRATION_ROLE {
+            // Node-to-node service tokens are scoped: the usage token to the
+            // usage endpoint, the migration token to the migration peer API.
+            if claims.role == CLUSTER_NODE_ROLE
+                && !cluster_node_may_access(request.method(), request.uri().path())
+            {
                 return Err(unauthorized(
                     "insufficient_scope",
                     "cluster-node service tokens are only valid for GET /api/cluster/local-usage",
+                ));
+            }
+            if claims.role == CLUSTER_MIGRATION_ROLE
+                && !cluster_migration_may_access(request.uri().path())
+            {
+                return Err(unauthorized(
+                    "insufficient_scope",
+                    "cluster-migration service tokens are only valid for /api/migration/peer/",
                 ));
             }
             request.extensions_mut().insert(AuthUser {
@@ -284,6 +295,41 @@ pub const CLUSTER_NODE_ROLE: &str = "cluster-node";
 
 /// The one route a `cluster-node` service token is accepted on.
 pub const CLUSTER_NODE_ALLOWED_PATH: &str = "/api/cluster/local-usage";
+
+/// Role of the service token a node sends to the target node of a VM
+/// migration. Valid only on [`CLUSTER_MIGRATION_PATH_PREFIX`] routes (the
+/// migration peer API), which in turn accept nothing else.
+pub const CLUSTER_MIGRATION_ROLE: &str = "cluster-migration";
+
+/// Routes a `cluster-migration` token is accepted on.
+pub const CLUSTER_MIGRATION_PATH_PREFIX: &str = "/api/migration/peer/";
+
+/// Lifetime of a `cluster-migration` token: one is minted per request, so
+/// this only has to cover the start of that request (a long disk upload is
+/// authenticated when it begins).
+pub const CLUSTER_MIGRATION_TOKEN_TTL_SECS: usize = 120;
+
+/// Whether a `cluster-migration` token may call `path`.
+pub fn cluster_migration_may_access(path: &str) -> bool {
+    path.starts_with(CLUSTER_MIGRATION_PATH_PREFIX)
+}
+
+/// Generate the short-lived service token for one migration peer request.
+pub fn generate_cluster_migration_token(local_hostname: &str) -> Result<String, String> {
+    let subject = format!("{}:{}", CLUSTER_MIGRATION_ROLE, local_hostname);
+    sign(
+        Claims {
+            sub: subject.clone(),
+            username: subject,
+            role: CLUSTER_MIGRATION_ROLE.to_string(),
+            exp: 0,
+            iat: 0,
+            sid: None,
+            scope: None,
+        },
+        CLUSTER_MIGRATION_TOKEN_TTL_SECS,
+    )
+}
 
 /// Lifetime of a `cluster-node` service token. The usage monitor mints a
 /// fresh one every poll round (10s), so this only has to cover one round
@@ -457,6 +503,28 @@ mod tests {
             &Method::POST,
             "/api/cluster/nodes/x"
         ));
+    }
+
+    #[test]
+    fn test_cluster_migration_token_is_scoped_to_the_peer_api() {
+        let token = generate_cluster_migration_token("node1").unwrap();
+        let claims = validate_jwt_token(&token).unwrap();
+        assert_eq!(claims.role, CLUSTER_MIGRATION_ROLE);
+        assert_eq!(claims.exp - claims.iat, CLUSTER_MIGRATION_TOKEN_TTL_SECS);
+        assert!(claims.sid.is_none());
+        assert!(cluster_migration_may_access("/api/migration/peer/prepare"));
+        assert!(cluster_migration_may_access(
+            "/api/migration/peer/j1/file/disk0"
+        ));
+        assert!(!cluster_migration_may_access("/api/migration/jobs"));
+        assert!(!cluster_migration_may_access("/api/vms"));
+        // The usage token can't reach the peer API and vice versa.
+        use axum::http::Method;
+        assert!(!cluster_node_may_access(
+            &Method::POST,
+            "/api/migration/peer/prepare"
+        ));
+        assert!(!cluster_migration_may_access("/api/cluster/local-usage"));
     }
 
     #[test]

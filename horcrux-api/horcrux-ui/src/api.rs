@@ -3090,11 +3090,15 @@ pub struct CreateSnapshotQuotaRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuotaUsage {
     pub quota_id: String,
-    pub current_count: u64,
-    pub current_size: u64,
-    pub oldest_snapshot: Option<String>,
-    pub newest_snapshot: Option<String>,
-    pub exceeds_quota: bool,
+    pub current_size_bytes: u64,
+    pub current_count: u32,
+    pub max_size_bytes: u64,
+    pub max_count: Option<u32>,
+    pub usage_percent: f32,
+    pub is_warning: bool,
+    pub is_exceeded: bool,
+    #[serde(default)]
+    pub snapshots: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -6814,6 +6818,15 @@ pub struct VmHostOptions {
     pub bridges: Vec<HostBridge>,
     pub isos: Vec<IsoFile>,
     pub iso_dir: String,
+    /// UEFI (OVMF) firmware is installed on the node.
+    #[serde(default)]
+    pub ovmf: bool,
+    /// swtpm is installed (VM TPM 2.0).
+    #[serde(default)]
+    pub swtpm: bool,
+    /// KVM is available (CPU type "host").
+    #[serde(default)]
+    pub kvm: bool,
 }
 
 /// PUT /api/vms/:id/config body (absent fields stay as they are).
@@ -6859,6 +6872,59 @@ pub async fn reboot_vm(vm_id: &str) -> Result<VmConfig, ApiError> {
         &format!("/vms/{}/reboot", urlencoding::encode(vm_id)),
         &serde_json::json!({}),
     )
+    .await
+}
+
+/// POST /api/vms/:id/disks body.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct VmDiskSpec {
+    pub size_gb: u64,
+    pub bus: String,
+    pub cache: String,
+    pub discard: bool,
+    pub ssd: bool,
+    pub iothread: bool,
+}
+
+/// PUT /api/vms/:id/disks/:index body (absent fields stay as they are).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct VmDiskUpdate {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_gb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bus: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discard: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssd: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iothread: Option<bool>,
+}
+
+pub async fn add_vm_disk(vm_id: &str, spec: &VmDiskSpec) -> Result<VmConfig, ApiError> {
+    post_json(&format!("/vms/{}/disks", urlencoding::encode(vm_id)), spec).await
+}
+
+pub async fn update_vm_disk(
+    vm_id: &str,
+    index: usize,
+    upd: &VmDiskUpdate,
+) -> Result<VmConfig, ApiError> {
+    put_json(
+        &format!("/vms/{}/disks/{index}", urlencoding::encode(vm_id)),
+        upd,
+    )
+    .await
+}
+
+/// Detach disk `index`; `delete_file` also deletes its image.
+pub async fn remove_vm_disk(vm_id: &str, index: usize, delete_file: bool) -> Result<(), ApiError> {
+    delete_json(&format!(
+        "/vms/{}/disks/{index}?delete_file={delete_file}",
+        urlencoding::encode(vm_id)
+    ))
     .await
 }
 
@@ -6959,6 +7025,42 @@ pub struct GuestFirewallRule {
     pub comment: Option<String>,
     pub log: bool,
     pub position: u32,
+}
+
+/// GET /api/containers/:id/firewall/rules
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct ContainerFirewall {
+    pub rules: Vec<GuestFirewallRule>,
+    pub interface_prefix: String,
+    pub interfaces: Vec<String>,
+}
+
+pub async fn get_container_firewall(ct_id: &str) -> Result<ContainerFirewall, ApiError> {
+    fetch_json(&format!(
+        "/containers/{}/firewall/rules",
+        urlencoding::encode(ct_id)
+    ))
+    .await
+}
+
+pub async fn add_container_firewall(
+    ct_id: &str,
+    rule: &GuestFirewallRule,
+) -> Result<GuestFirewallRule, ApiError> {
+    post_json(
+        &format!("/containers/{}/firewall/rules", urlencoding::encode(ct_id)),
+        rule,
+    )
+    .await
+}
+
+pub async fn delete_container_firewall(ct_id: &str, rule_id: &str) -> Result<(), ApiError> {
+    delete_json(&format!(
+        "/containers/{}/firewall/rules/{}",
+        urlencoding::encode(ct_id),
+        urlencoding::encode(rule_id)
+    ))
+    .await
 }
 
 pub async fn list_vm_firewall(vm_id: &str) -> Result<Vec<GuestFirewallRule>, ApiError> {

@@ -13,10 +13,12 @@ pub mod k8s_config;
 pub mod lane_m;
 pub mod metrics;
 pub mod migration_jobs;
+pub mod migration_peer;
 pub mod notifications;
 pub mod tls;
 pub mod vm_hw;
 pub mod vm_import;
+pub mod vm_migration;
 
 use crate::AppState;
 use axum::Router;

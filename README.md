@@ -97,7 +97,7 @@ See [docs/KUBERNETES.md](docs/KUBERNETES.md) for complete K8s documentation.
 - **HA Framework** - Automatic failover (IPMI, iLO/DRAC, SSH, libvirt,
   watchdog, and SNMP-PDU fencing agents implemented; the `Hypervisor`
   fencing agent type is a documented stub — see `horcrux-api/src/ha/fencing.rs`)
-- **Live Migration** - Move VMs between nodes
+- **Live Migration** - Move running QEMU VMs between nodes (disk mirror + QEMU migration, no shared storage needed), or offline with a verified copy; cancel rolls back (see docs/MIGRATION.md)
 - **Mixed-Architecture** - x86_64 + ARM64 + RISC-V in same cluster ⭐ **UNIQUE**
 
 ### Security

@@ -1,0 +1,82 @@
+name: VM migration + hardware (2 nodes, KVM)
+
+# Moving Horcrux's own QEMU VMs between two real nodes: live migration (disk
+# mirror over NBD + QEMU migration stream) of a running UEFI/Q35/TPM VM with
+# two disks, offline migration (chunked, SHA-256 verified copy), cancel with
+# rollback, refusal by a target that can't run the VM, and live migration on
+# shared storage - see horcrux-api/tests/vm_migrate_e2e.py. Two sibling
+# containers with their own network namespaces on one docker network, real
+# QEMU (KVM) + OVMF + swtpm and CirrOS guests. Needs /dev/kvm for guest boot
+# times that fit a push check, so it runs on rw-man-01's kvm-x86_64 runner
+# (ctg-infrastructure ci-runners/rw-man-kvm): on every push that touches the
+# VM runtime / migration code, nightly, and on demand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/horcrux-vm/src/vm/**'
+      - 'crates/horcrux-cluster/src/migration/**'
+      - 'crates/horcrux-sdn/src/firewall/**'
+      - 'crates/horcrux-auth/src/middleware/**'
+      - 'horcrux-common/src/lib.rs'
+      - 'horcrux-api/src/api/vm_migration.rs'
+      - 'horcrux-api/src/api/migration_peer.rs'
+      - 'horcrux-api/src/api/migration_jobs.rs'
+      - 'horcrux-api/src/api/vm_hw.rs'
+      - 'horcrux-api/tests/vm_migrate_e2e.*'
+      - 'horcrux-api/tests/hx_node.py'
+      - '.forgejo/workflows/vm-migration.yml'
+  workflow_dispatch: {}
+  schedule:
+    - cron: '50 9 * * *'
+
+concurrency:
+  group: vm-migration
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  vm-migration:
+    name: Two-node VM migration (live, offline, cancel, shared storage)
+    runs-on: kvm-x86_64
+    container: catthehacker/ubuntu:act-latest
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: "4"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@stable
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
+          ls -l /dev/kvm || echo "no /dev/kvm: guests run under TCG (slow)"
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-vm-migration-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-vm-migration-
+
+      - name: Build API (all features)
+        run: cargo build --all-features -p horcrux-api --bin horcrux-api
+
+      - name: Two-node VM migration end to end
+        run: bash horcrux-api/tests/vm_migrate_e2e.sh target/debug/horcrux-api
+
+      - name: Remove leftover node siblings
+        if: always()
+        run: |
+          docker ps -a --filter name=hxmig- --format '{{.Names}}' | xargs -r docker rm -f
+          docker network ls --filter name=hxmig- --format '{{.Name}}' | xargs -r docker network rm || true
+          docker volume ls --filter name=hxmig- --format '{{.Name}}' | xargs -r docker volume rm || true

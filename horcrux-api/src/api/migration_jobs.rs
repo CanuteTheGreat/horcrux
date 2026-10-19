@@ -3,8 +3,9 @@
 //! The page calls `/api/migration/jobs` (GET/POST/DELETE) and
 //! `/api/migration/bulk`; only `/api/migrate/:vm_id` used to exist, so the
 //! page answered "Failed to load migration jobs: HTTP 404". These routes sit
-//! on the same `MigrationManager` the per-VM route uses (real `virsh migrate`
-//! over SSH) and translate its jobs into the shape the page renders.
+//! on the same `MigrationManager` the per-VM route uses (the peer-to-peer
+//! QEMU migration in `vm_migration.rs`) and translate its jobs into the
+//! shape the page renders.
 //! Permissions come from the `migration` area in `auth::privileges`
 //! (VM.Audit on /vms to list, VM.Migrate on /vms to start or cancel).
 
@@ -169,18 +170,7 @@ async fn start_one(
             resource_id, target_node
         )));
     }
-    let job_id = state
-        .migration_manager
-        .start_migration(config, source_node.clone())
-        .await
-        .map_err(|e| {
-            let msg = e.to_string();
-            if msg.contains("Maximum concurrent migrations") {
-                ApiError::Conflict(msg)
-            } else {
-                ApiError::Internal(msg)
-            }
-        })?;
+    let job_id = super::vm_migration::start(state, config).await?;
     state.ws_state.broadcast_migration_started(
         resource_id.to_string(),
         source_node,

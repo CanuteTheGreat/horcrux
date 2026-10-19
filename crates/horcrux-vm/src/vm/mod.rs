@@ -2,12 +2,14 @@ pub mod clone;
 pub mod clone_progress;
 pub mod cross_node_clone;
 pub mod display;
+pub mod firmware;
 pub mod hardware;
 pub mod hold;
 #[cfg(feature = "incus")]
 pub mod incus;
 #[cfg(feature = "lxd")]
 pub mod lxd;
+pub mod migrate;
 /// Virtual machine management module
 /// Handles QEMU/KVM, LXD, and Incus virtual machine lifecycle
 pub mod qemu;
