@@ -90,14 +90,22 @@ pub fn view(job: &MigrationJob) -> MigrationJobView {
         end_time: job.completed,
         error: job.error.clone(),
         bandwidth_limit: job.bandwidth_limit,
-        timeout: 0,
+        timeout: job.timeout_secs.unwrap_or(0).min(u32::MAX as u64) as u32,
         force: false,
         with_local_disks: false,
         estimated_duration: None,
         transferred_bytes: job.transferred_bytes,
-        remaining_bytes: (job.total_bytes > 0)
-            .then(|| job.total_bytes.saturating_sub(job.transferred_bytes)),
+        remaining_bytes: remaining_bytes(job),
     }
+}
+
+/// Bytes still to move: none once the job completed (the last progress
+/// sample is taken before the end), unknown before a total is known.
+fn remaining_bytes(job: &MigrationJob) -> Option<u64> {
+    if job.state == MigrationState::Completed {
+        return Some(0);
+    }
+    (job.total_bytes > 0).then(|| job.total_bytes.saturating_sub(job.transferred_bytes))
 }
 
 async fn list_jobs(State(state): State<Arc<AppState>>) -> Json<Vec<MigrationJobView>> {
@@ -122,6 +130,9 @@ pub struct CreateJobRequest {
     pub force: bool,
     #[serde(default)]
     pub with_local_disks: bool,
+    /// Seconds after which the job fails and is rolled back (0: no limit).
+    #[serde(default)]
+    pub timeout: Option<u64>,
 }
 
 fn default_resource_type() -> String {
@@ -195,6 +206,7 @@ async fn create_job(
         bandwidth_limit: req.bandwidth_limit,
         force: req.force,
         with_local_disks: req.with_local_disks,
+        timeout_secs: req.timeout.filter(|t| *t > 0),
     };
     let job = start_one(&state, &req.resource_type, config).await?;
     Ok((StatusCode::CREATED, Json(view(&job))))
@@ -270,6 +282,7 @@ async fn create_bulk(
             bandwidth_limit: None,
             force: false,
             with_local_disks: false,
+            timeout_secs: None,
         };
         match start_one(&state, rtype, config).await {
             Ok(_) => started += 1,
@@ -324,6 +337,7 @@ mod tests {
             error: None,
             transferred_bytes: 10,
             total_bytes: 30,
+            timeout_secs: Some(300),
         }
     }
 
@@ -339,6 +353,38 @@ mod tests {
         assert_eq!(v.remaining_bytes, Some(20));
         assert_eq!(view(&job(MigrationState::Cancelled)).status, "cancelled");
         assert_eq!(view(&job(MigrationState::Pending)).status, "pending");
+        assert_eq!(v.timeout, 300, "the job's timeout is shown");
+    }
+
+    /// A completed job has nothing left to move, whatever the last
+    /// progress sample said (QA: 100% with 0.1 GB "remaining").
+    #[test]
+    fn completed_job_has_no_remaining_bytes() {
+        let mut j = job(MigrationState::Completed);
+        j.transferred_bytes = 127_596_322;
+        j.total_bytes = 285_810_688;
+        assert_eq!(view(&j).remaining_bytes, Some(0));
+        j.state = MigrationState::Failed;
+        assert_eq!(view(&j).remaining_bytes, Some(158_214_366));
+        j.total_bytes = 0;
+        j.state = MigrationState::Transferring;
+        assert_eq!(view(&j).remaining_bytes, None);
+    }
+
+    /// The Migrate dialog's Timeout field reaches the job (it used to be
+    /// dropped); 0 means no limit.
+    #[test]
+    fn dialog_timeout_is_kept() {
+        let req: CreateJobRequest = serde_json::from_value(serde_json::json!({
+            "resource_id": "vm1", "target_node": "b", "timeout": 300,
+            "job_id": "", "status": "pending", "progress": 0
+        }))
+        .unwrap();
+        assert_eq!(req.timeout, Some(300));
+        let req: CreateJobRequest =
+            serde_json::from_value(serde_json::json!({"resource_id": "vm1", "target_node": "b"}))
+                .unwrap();
+        assert_eq!(req.timeout, None);
     }
 
     #[test]

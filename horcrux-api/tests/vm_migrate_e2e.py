@@ -19,7 +19,14 @@ network between them, a shared docker volume at /shared), real QEMU
     no trace of it.
  4. A target that can't run the VM (bridge missing there): the job fails
     with the reason, the VM stays where it was.
- 5. SHARED storage: live migration of a VM whose disk is on storage both
+ 5. PARTITION: the target stops answering in the middle of a slow live
+    move (its traffic from the source dropped) and its API restarts. The
+    source gives up by itself (no keepalive answer for the TTL), cuts the
+    hung disk mirror (no block job left), the VM keeps running; the target
+    discards its half-received copy by itself (QEMU, disk, record) - after
+    the partition heals the VM moves there fine. A job TIMEOUT fails and
+    rolls back a move that takes too long; completed jobs show 0 remaining.
+ 6. SHARED storage: live migration of a VM whose disk is on storage both
     nodes see - nothing is copied, the same file is used by the target.
 """
 import json
@@ -32,6 +39,7 @@ N1, N2 = os.environ["N1"], os.environ["N2"]
 IP = {N1: os.environ["IP1"], N2: os.environ["IP2"]}
 NAME = {N1: "node1", N2: "node2"}
 STORE = "/var/lib/hx/vms"
+TTL = int(os.environ.get("PEER_TTL", "20"))  # HORCRUX_MIGRATION_PEER_TTL_SECS of the nodes
 FAILED = []
 
 
@@ -119,10 +127,12 @@ def create_vm(node, vm, hardware=None, disks=None, start=True):
     return b
 
 
-def migrate(node, vm, target, mtype, bandwidth=None, wait=True):
+def migrate(node, vm, target, mtype, bandwidth=None, wait=True, timeout=None):
     body = {"resource_type": "vm", "resource_id": vm, "target_node": target, "migration_type": mtype}
     if bandwidth:
         body["bandwidth_limit"] = bandwidth
+    if timeout is not None:
+        body["timeout"] = timeout
     st, job = api(node, "POST", "/migration/jobs", body)
     check(st == 201, f"{mtype} migration of {vm} to {target} started ({st} {job if st != 201 else ''})")
     if not wait:
@@ -196,6 +206,8 @@ st, _ = api(N1, "POST", f"/vms/{vm}/firewall/rules",
 check(st == 201, "VM firewall rule added on node1")
 job = migrate(N1, vm, "node2", "live")
 check(job["status"] == "completed", f"live migration completed ({job.get('error')})")
+check(job["remaining_bytes"] == 0 and job["transferred_bytes"] > 0,
+      f"completed job: nothing remaining ({job['transferred_bytes']} / {job['remaining_bytes']})")
 st, moved = api(N2, "GET", f"/vms/{vm}")
 check(st == 200 and moved["status"] == "running", f"{vm} runs on node2 ({st} {moved})")
 d0 = moved["disks"][0]["path"]
@@ -275,8 +287,87 @@ ok, why = gone_from(N2, vm)
 check(ok, f"nothing on node2 {why}")
 api(N1, "DELETE", f"/vms/{vm}")
 
-# --- 5. shared storage -----------------------------------------------------
-log("== 5. live migration on shared storage (nothing copied)")
+# --- 5. partition ---------------------------------------------------------
+def wait_running(node, job_id, above=6):
+    for _ in range(90):
+        st, jobs = api(node, "GET", "/migration/jobs")
+        j = next(x for x in jobs if x["job_id"] == job_id)
+        if j["status"] != "running" or j["progress"] > above:
+            return j
+        time.sleep(1)
+    return j
+
+
+def partition(node, peer_ip, on):
+    if on:
+        sh(node, "nft add table inet hxpart && "
+           "nft add chain inet hxpart in '{ type filter hook input priority -300; policy accept; }' && "
+           "nft add chain inet hxpart out '{ type filter hook output priority -300; policy accept; }' && "
+           f"nft add rule inet hxpart in ip saddr {peer_ip} drop && "
+           f"nft add rule inet hxpart out ip daddr {peer_ip} drop")
+    else:
+        sh(node, "nft delete table inet hxpart 2>/dev/null; true")
+
+
+log("== 5. target partitioned away mid-move (and its API restarted)")
+vm = "mig-part"
+cfg = create_vm(N1, vm)
+d0 = cfg["disks"][0]["path"]
+guest(N1, d0, "true")  # booted
+pid = qemu_pid(N1, vm)
+job = migrate(N1, vm, "node2", "live", bandwidth=1, wait=False)
+j = wait_running(N1, job["job_id"])
+check(j["status"] == "running", f"migration is transferring ({j['status']} {j['progress']}%)")
+check(sh(N2, f"pgrep -f '[h]orcrux-vm-{vm}.pid' || true") != "", "target QEMU is receiving")
+check(sh(N2, "ls /var/lib/hx/migration-incoming/") != "", "target recorded the receive on disk")
+partition(N2, IP[N1], True)
+t0 = time.time()
+# The receiving QEMU outlives an API restart; the restarted API must
+# still know it is a leftover.
+sh(N2, "bash /hx/start-api.sh")
+j = wait_job(N1, job["job_id"], timeout=TTL * 4 + 120)
+err = j.get("error") or ""
+check(j["status"] == "failed" and ("lost contact" in err or "no longer has" in err),
+      f"source gave up by itself after {time.time() - t0:.0f} s ({j['status']}: {err})")
+check("rollback incomplete" not in err, "rollback complete")
+check(qmp(N1, d0, "query-block-jobs")["return"] == [], "hung disk mirror to the dead target is gone")
+st, here = api(N1, "GET", f"/vms/{vm}")
+check(here["status"] == "running" and qemu_pid(N1, vm) == pid, "VM still running on node1 in the same QEMU")
+check(qmp(N1, d0, "query-status")["return"]["status"] == "running", "guest not paused")
+ok, why = False, None
+for _ in range(TTL * 3):
+    ok, why = gone_from(N2, vm)
+    if ok:
+        break
+    time.sleep(1)
+check(ok, f"node2 discarded its half-received copy by itself, still partitioned {why}")
+check(sh(N2, "ls /var/lib/hx/migration-incoming/ 2>/dev/null; true") == "", "and its receive record")
+check("discarding the half-received VM" in sh(N2, "cat /var/lib/hx/api.log"), "node2 logged why")
+partition(N2, IP[N1], False)
+log("  partition healed: moving the VM there again")
+job = migrate(N1, vm, "node2", "live")
+check(job["status"] == "completed", f"moved to node2 after the partition ({job.get('error')})")
+check(job["remaining_bytes"] == 0, f"completed job: 0 remaining ({job['remaining_bytes']})")
+st, moved = api(N2, "GET", f"/vms/{vm}")
+check(st == 200 and moved["status"] == "running", "runs on node2")
+d0 = moved["disks"][0]["path"]
+pid = qemu_pid(N2, vm)
+
+log("== 5b. a job timeout fails and rolls back a move that takes too long")
+job = migrate(N2, vm, "node1", "live", bandwidth=1, wait=False, timeout=5)
+check(job["timeout"] == 5, f"the job carries its timeout ({job['timeout']})")
+j = wait_job(N2, job["job_id"], timeout=120)
+check(j["status"] == "failed" and "timed out" in (j.get("error") or ""), f"failed: {j.get('error')}")
+st, here = api(N2, "GET", f"/vms/{vm}")
+check(here["status"] == "running" and qemu_pid(N2, vm) == pid, "VM still running on node2 in the same QEMU")
+check(qmp(N2, d0, "query-block-jobs")["return"] == [], "no disk mirror left")
+ok, why = gone_from(N1, vm)
+check(ok, f"nothing of {vm} on node1 {why}")
+api(N2, "POST", f"/vms/{vm}/stop")
+api(N2, "DELETE", f"/vms/{vm}")
+
+# --- 6. shared storage -----------------------------------------------------
+log("== 6. live migration on shared storage (nothing copied)")
 for n in (N1, N2):
     sh(n, "bash /hx/start-api.sh /shared/vms")
 vm = "mig-shared"

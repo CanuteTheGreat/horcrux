@@ -59,6 +59,10 @@ pub struct MigrationJob {
     pub error: Option<String>,
     pub transferred_bytes: u64,
     pub total_bytes: u64,
+    /// The job fails (and is rolled back) when it runs longer (None/0: no
+    /// limit).
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
 }
 
 /// Migration configuration
@@ -70,6 +74,10 @@ pub struct MigrationConfig {
     pub bandwidth_limit: Option<u64>, // MB/s, None = unlimited
     pub force: bool,                  // Force migration even if checks fail
     pub with_local_disks: bool,       // Migrate local disks (requires shared storage otherwise)
+    /// Fail and roll back a migration still running after this many
+    /// seconds (None or 0: no limit).
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
 }
 
 /// Migration statistics
@@ -109,12 +117,14 @@ impl JobReporter {
     }
 }
 
-/// The work of one migration: `run` does it; `abort` (after a failure or
-/// a cancel, with the reason) undoes whatever `run` got done. They usually
+/// The work of one migration: `run` does it; `abort` (after a failure, a
+/// cancel or a timeout, with the reason) undoes whatever `run` got done and
+/// says what it could not undo (recorded as the job's error). They usually
 /// share state through an `Arc` captured by both closures.
 pub struct MigrationExecutor {
     pub run: Box<dyn FnOnce(JobReporter) -> BoxFuture<'static, Result<()>> + Send>,
-    pub abort: Box<dyn FnOnce(String) -> BoxFuture<'static, ()> + Send>,
+    pub abort:
+        Box<dyn FnOnce(String) -> BoxFuture<'static, std::result::Result<(), String>> + Send>,
 }
 
 /// Migration manager
@@ -236,7 +246,9 @@ impl MigrationManager {
             error: None,
             transferred_bytes: 0,
             total_bytes: 0,
+            timeout_secs: config.timeout_secs.filter(|s| *s > 0),
         };
+        let timeout = job.timeout_secs;
         self.jobs.write().await.insert(job_id.clone(), job);
 
         let jobs = self.jobs.clone();
@@ -256,11 +268,27 @@ impl MigrationManager {
             // of) its steps: no later step runs and in-flight child
             // processes die with it (kill_on_drop); then abort undoes the
             // steps already done.
+            // The job's timeout stops it like a cancel (and always rolls
+            // back: its run was dropped in the middle of a step).
+            let deadline = async move {
+                match timeout {
+                    Some(secs) => tokio::time::sleep(std::time::Duration::from_secs(secs)).await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
+            let mut timed_out = false;
             let result = tokio::select! {
                 r = run(reporter) => r,
                 _ = cancel_rx.wait_for(|c| *c) => {
                     tracing::info!("Migration {} cancelled: remaining steps skipped", task_job_id);
                     Err(horcrux_common::Error::System("cancelled by the user".into()))
+                }
+                _ = deadline => {
+                    timed_out = true;
+                    Err(horcrux_common::Error::System(format!(
+                        "timed out: still running after its {} s timeout",
+                        timeout.unwrap_or(0)
+                    )))
                 }
             };
             let cancelled = jobs
@@ -269,10 +297,14 @@ impl MigrationManager {
                 .get(&task_job_id)
                 .map(|j| j.state == MigrationState::Cancelled)
                 .unwrap_or(false);
+            let mut rollback_error = None;
             if let Err(e) = &result {
-                if cancelled || auto_rollback {
+                if cancelled || timed_out || auto_rollback {
                     tracing::warn!("Migration {} {}: rolling back", task_job_id, e);
-                    abort(e.to_string()).await;
+                    if let Err(left) = abort(e.to_string()).await {
+                        tracing::error!("Migration {} rollback incomplete: {}", task_job_id, left);
+                        rollback_error = Some(left);
+                    }
                 } else {
                     tracing::warn!(
                         "Migration {} failed ({}) and automatic rollback is disabled",
@@ -283,20 +315,34 @@ impl MigrationManager {
             }
             cancels.write().await.remove(&task_job_id);
             let mut jobs_lock = jobs.write().await;
-            if let Some(job) = jobs_lock
-                .get_mut(&task_job_id)
-                .filter(|j| j.state != MigrationState::Cancelled)
-            {
-                job.completed = Some(Utc::now());
-                match result {
-                    Ok(()) => {
-                        job.state = MigrationState::Completed;
-                        job.progress = 100.0;
-                    }
-                    Err(e) => {
-                        job.state = MigrationState::Failed;
-                        job.error = Some(e.to_string());
-                    }
+            let Some(job) = jobs_lock.get_mut(&task_job_id) else {
+                return;
+            };
+            if job.state == MigrationState::Cancelled {
+                // Cancelled stays cancelled; a rollback that could not
+                // undo everything says so.
+                if let Some(left) = rollback_error {
+                    job.error = Some(format!("cancelled, but the rollback is incomplete: {left}"));
+                }
+                return;
+            }
+            job.completed = Some(Utc::now());
+            match result {
+                Ok(()) => {
+                    job.state = MigrationState::Completed;
+                    job.progress = 100.0;
+                    // Everything arrived: nothing remains (the last
+                    // progress sample was taken before the end).
+                    let total = job.total_bytes.max(job.transferred_bytes);
+                    job.total_bytes = total;
+                    job.transferred_bytes = total;
+                }
+                Err(e) => {
+                    job.state = MigrationState::Failed;
+                    job.error = Some(match rollback_error {
+                        Some(left) => format!("{e}; rollback incomplete: {left}"),
+                        None => e.to_string(),
+                    });
                 }
             }
         });
@@ -549,6 +595,7 @@ mod tests {
             bandwidth_limit: None,
             force: false,
             with_local_disks: false,
+            timeout_secs: None,
         }
     }
 
@@ -571,6 +618,7 @@ mod tests {
             abort: Box::new(move |_reason| {
                 Box::pin(async move {
                     aborts.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
                 })
             }),
         }
@@ -602,7 +650,8 @@ mod tests {
         let j = wait_done(&m, &id).await;
         assert_eq!(j.state, MigrationState::Completed);
         assert_eq!(j.progress, 100.0);
-        assert_eq!((j.transferred_bytes, j.total_bytes), (10, 100));
+        // The last sample said 10 of 100; a completed job moved it all.
+        assert_eq!((j.transferred_bytes, j.total_bytes), (100, 100));
         assert_eq!(aborts.load(Ordering::SeqCst), 0);
     }
 
@@ -676,6 +725,7 @@ mod tests {
                 Box::pin(async move {
                     assert!(reason.contains("cancelled"), "{reason}");
                     a2.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
                 })
             }),
         };
@@ -695,5 +745,123 @@ mod tests {
         assert!(m.list_active().await.is_empty(), "the slot is free again");
         // A finished job can't be cancelled; an unknown one is an error.
         assert!(m.cancel_migration("nope").await.is_err());
+    }
+
+    /// The job's timeout is enforced: a run still going after it is
+    /// stopped (no later step runs), rolled back, and the job fails with
+    /// the reason; a run within its timeout completes.
+    #[tokio::test]
+    async fn timeout_fails_and_rolls_back_the_job() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("after");
+        let m2 = marker.clone();
+        let aborts = Arc::new(AtomicUsize::new(0));
+        let a2 = aborts.clone();
+        let exec = MigrationExecutor {
+            run: Box::new(move |r: JobReporter| {
+                Box::pin(async move {
+                    r.update(MigrationState::Transferring, 6.0).await;
+                    // A target that stopped answering: no progress.
+                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                    std::fs::write(&m2, b"ran").unwrap();
+                    Ok(())
+                })
+            }),
+            abort: Box::new(move |reason| {
+                Box::pin(async move {
+                    assert!(reason.contains("timed out"), "{reason}");
+                    a2.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                })
+            }),
+        };
+        let m = MigrationManager::new();
+        // Even with automatic rollback off, a timeout rolls back.
+        m.set_auto_rollback(false).await;
+        let mut c = config("slow");
+        c.timeout_secs = Some(1);
+        let id = m.start_migration(c, "node1".into(), exec).await.unwrap();
+        assert_eq!(m.get_job(&id).await.unwrap().timeout_secs, Some(1));
+        let j = wait_done(&m, &id).await;
+        assert_eq!(j.state, MigrationState::Failed);
+        assert!(
+            j.error.as_deref().unwrap().contains("timed out"),
+            "{:?}",
+            j.error
+        );
+        assert_eq!(aborts.load(Ordering::SeqCst), 1);
+        assert!(!marker.exists());
+
+        // timeout 0 = no limit; a quick run under a limit completes.
+        let mut c = config("quick");
+        c.timeout_secs = Some(0);
+        let a = Arc::new(AtomicUsize::new(0));
+        let id = m
+            .start_migration(c, "node1".into(), executor(0, true, a.clone()))
+            .await
+            .unwrap();
+        assert_eq!(m.get_job(&id).await.unwrap().timeout_secs, None);
+        assert_eq!(wait_done(&m, &id).await.state, MigrationState::Completed);
+        let mut c = config("quick2");
+        c.timeout_secs = Some(30);
+        let id = m
+            .start_migration(c, "node1".into(), executor(0, true, a.clone()))
+            .await
+            .unwrap();
+        assert_eq!(wait_done(&m, &id).await.state, MigrationState::Completed);
+        assert_eq!(a.load(Ordering::SeqCst), 0);
+    }
+
+    /// A rollback that can't undo everything (e.g. a disk mirror to a dead
+    /// target still attached) is reported on the job, also a cancelled one.
+    #[tokio::test]
+    async fn incomplete_rollback_is_reported() {
+        let failing = |secs: u64, ok: bool| MigrationExecutor {
+            run: Box::new(move |_r| {
+                Box::pin(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                    if ok {
+                        Ok(())
+                    } else {
+                        Err(horcrux_common::Error::System("target gone".into()))
+                    }
+                })
+            }),
+            abort: Box::new(move |_reason| {
+                Box::pin(async move { Err("disk mirror mig-drive-disk0 still attached".into()) })
+            }),
+        };
+        let m = MigrationManager::new();
+        let id = m
+            .start_migration(config("a"), "node1".into(), failing(0, false))
+            .await
+            .unwrap();
+        let j = wait_done(&m, &id).await;
+        assert_eq!(j.state, MigrationState::Failed);
+        let e = j.error.unwrap();
+        assert!(
+            e.contains("target gone")
+                && e.contains("rollback incomplete")
+                && e.contains("still attached"),
+            "{e}"
+        );
+
+        let id = m
+            .start_migration(config("b"), "node1".into(), failing(30, true))
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        m.cancel_migration(&id).await.unwrap();
+        wait_done(&m, &id).await;
+        let mut j = m.get_job(&id).await.unwrap();
+        for _ in 0..50 {
+            if j.error.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            j = m.get_job(&id).await.unwrap();
+        }
+        assert_eq!(j.state, MigrationState::Cancelled);
+        assert!(j.error.unwrap().contains("still attached"));
     }
 }

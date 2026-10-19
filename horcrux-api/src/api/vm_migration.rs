@@ -14,9 +14,13 @@
 //!   device state; when it completes, the mirrors are completed and the
 //!   guest runs on the target. Disks on shared storage aren't copied.
 //!
-//! Cancel or failure rolls back: migration and mirrors are cancelled, the
-//! target discards what it received, and the VM keeps (or resumes)
-//! running on the source.
+//! Cancel, failure or timeout rolls back: migration and mirrors are
+//! cancelled (connections to a target that stopped answering are yanked,
+//! so the mirror really goes), the target discards what it received, and
+//! the VM keeps (or resumes) running on the source. While it runs the
+//! source sends the target keepalives: a target that discarded the job or
+//! stayed unreachable for `peer_ttl` fails it; the target likewise
+//! discards a receive whose source went quiet (`migration_peer`).
 use crate::api::migration_peer::{
     self, CommitRequest, FileDigest, FilePlan, PrepareRequest, PrepareResponse, ProbeFile,
     ProbeRequest, StartResponse, CHUNK,
@@ -92,6 +96,43 @@ impl Peer {
         serde_json::from_str(&text).map_err(|e| Error::System(format!("target node reply: {e}")))
     }
 
+    /// Keepalive for `job`: Ok(false) if the target no longer has it.
+    async fn keepalive(&self, job: &str) -> Result<bool> {
+        let resp = self
+            .client
+            .post(format!("{}/api/migration/peer/{job}/keepalive", self.base))
+            .bearer_auth(self.token()?)
+            .timeout(migration_peer::KEEPALIVE_EVERY * 2)
+            .send()
+            .await
+            .map_err(|e| Error::System(format!("target node {}: {e}", self.base)))?;
+        match resp.status() {
+            s if s.is_success() => Ok(true),
+            reqwest::StatusCode::NOT_FOUND => Ok(false),
+            s => Err(Error::System(format!("target node answered {s}"))),
+        }
+    }
+
+    /// Ask the target to discard `job` (idempotent), bounded in time.
+    async fn abort(&self, job: &str) -> Result<()> {
+        match tokio::time::timeout(
+            Duration::from_secs(20),
+            self.call::<serde_json::Value>(
+                reqwest::Method::POST,
+                &format!("/api/migration/peer/{job}/abort"),
+                None,
+            ),
+        )
+        .await
+        {
+            Ok(r) => r.map(|_| ()),
+            Err(_) => Err(Error::System(format!(
+                "target node {}: no answer within 20 s",
+                self.base
+            ))),
+        }
+    }
+
     async fn put_chunk(
         &self,
         job: &str,
@@ -131,6 +172,9 @@ struct Progress {
     migrating: bool,
     /// Offline move of a running VM: we shut it down.
     stopped_here: bool,
+    /// The commit request was sent (keepalives stop: the target no
+    /// longer lists the job while it commits).
+    committing: bool,
     /// The target owns the VM now: nothing may be rolled back any more.
     committed: bool,
     /// Live on shared storage: the source's runtime files were renamed
@@ -207,6 +251,19 @@ pub async fn start(
         local: local.clone(),
     };
     let was_running = crate::vm::QemuManager::process_running(&vm.id);
+    if was_running {
+        let disk0 = PathBuf::from(&vm.disks.first().map(|d| d.path.clone()).unwrap_or_default());
+        let left = migration_block_jobs(&DisplayRuntime::qmp_socket(&disk0)).await;
+        if !left.is_empty() {
+            return Err(ApiError::Conflict(format!(
+                "VM {} still has the disk mirror {} of an earlier migration to a node that \
+                 stopped answering attached; it goes once that node answers again (or stop and \
+                 start the VM), then migrate",
+                vm.id,
+                left.join(", ")
+            )));
+        }
+    }
     let live = was_running && config.migration_type != MigrationType::Offline;
     let bandwidth = state.migration_manager.effective_bandwidth(&config).await;
     let plan = Arc::new(Plan {
@@ -303,7 +360,7 @@ impl Plan {
             .firewall_manager
             .list_rules(crate::firewall::FirewallScope::Vm(self.job_vm.id.clone()))
             .await;
-        let _: PrepareResponse = self
+        let prep: PrepareResponse = self
             .peer
             .call(
                 reqwest::Method::POST,
@@ -315,6 +372,7 @@ impl Plan {
                         live: self.live,
                         files: plans.clone(),
                         firewall,
+                        keepalive: true,
                     })
                     .map_err(|e| Error::System(e.to_string()))?,
                 ),
@@ -323,10 +381,20 @@ impl Plan {
         self.progress.lock().await.prepared = true;
         r.update(MigrationState::Transferring, 5.0).await;
 
-        if self.live {
-            self.run_live(&r, &job, &plans).await?;
+        let work = async {
+            if self.live {
+                self.run_live(&r, &job, &plans).await
+            } else {
+                self.run_offline(&r, &job, &plans).await
+            }
+        };
+        if prep.keepalive {
+            tokio::select! {
+                res = work => res?,
+                e = self.keep_alive(&job) => return Err(e),
+            }
         } else {
-            self.run_offline(&r, &job, &plans).await?;
+            work.await?;
         }
 
         // The VM is the target's now; remove it here.
@@ -353,6 +421,44 @@ impl Plan {
             self.target
         );
         Ok(())
+    }
+
+    /// Keepalives to the target until the commit; returns why the
+    /// migration must stop: the target discarded it, or did not answer
+    /// for `peer_ttl` (partitioned, down).
+    async fn keep_alive(&self, job: &str) -> Error {
+        let ttl = migration_peer::peer_ttl();
+        let mut last_ok = std::time::Instant::now();
+        let committing = || async {
+            let p = self.progress.lock().await;
+            p.committing || p.committed
+        };
+        loop {
+            tokio::time::sleep(migration_peer::KEEPALIVE_EVERY).await;
+            if committing().await {
+                return std::future::pending().await;
+            }
+            match self.peer.keepalive(job).await {
+                Ok(true) => last_ok = std::time::Instant::now(),
+                // (A keepalive that crossed the commit request.)
+                Ok(false) if committing().await => return std::future::pending().await,
+                Ok(false) => {
+                    return Error::System(format!(
+                        "target node {} no longer has this migration (it discarded its copy)",
+                        self.target
+                    ))
+                }
+                Err(e) => {
+                    if last_ok.elapsed() > ttl {
+                        return Error::System(format!(
+                            "lost contact with target node {} for {} s ({e})",
+                            self.target,
+                            last_ok.elapsed().as_secs()
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     /// (kind, path, virtual size) of every file that belongs to the VM.
@@ -464,6 +570,7 @@ impl Plan {
         }
         result?;
         r.update(MigrationState::Syncing, 92.0).await;
+        self.progress.lock().await.committing = true;
         let _: VmConfig = self
             .peer
             .call(
@@ -720,6 +827,7 @@ impl Plan {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         r.update(MigrationState::Finalizing, 94.0).await;
+        self.progress.lock().await.committing = true;
         let _: VmConfig = self
             .peer
             .call(
@@ -743,8 +851,9 @@ impl Plan {
         Ok(())
     }
 
-    /// Undo after a failure or a cancel: the VM keeps running here.
-    async fn rollback(self: Arc<Self>, reason: String) {
+    /// Undo after a failure, a cancel or a timeout: the VM keeps running
+    /// here. Err says what could not be undone.
+    async fn rollback(self: Arc<Self>, reason: String) -> std::result::Result<(), String> {
         let job = self.job_id.lock().await.clone();
         let p = {
             let mut g = self.progress.lock().await;
@@ -759,7 +868,7 @@ impl Plan {
                 self.job_vm.id,
                 self.target
             );
-            return;
+            return Ok(());
         }
         let sock = if p.runtime_aside {
             self.disk0()
@@ -767,6 +876,7 @@ impl Plan {
         } else {
             self.qmp()
         };
+        let mut incomplete = None;
         if self.live && crate::vm::QemuManager::process_running(&self.job_vm.id) {
             if p.migrating {
                 let _ = qmp_command(&sock, json!({"execute": "migrate_cancel"})).await;
@@ -778,18 +888,44 @@ impl Plan {
                 )
                 .await;
             }
+            if !p.mirrors.is_empty() || p.migrating {
+                // A cancelled mirror only goes once its in-flight writes
+                // to the target finish - never, if the target stopped
+                // answering: yank (cut) the connections to it.
+                let mut left = wait_jobs_gone(&sock, &p.mirrors, Duration::from_secs(5)).await;
+                let stuck_migration = p.migrating && migration_active(&sock).await;
+                if !left.is_empty() || stuck_migration {
+                    tracing::warn!(
+                        "Migration {job}: target not answering, cutting the connections to it"
+                    );
+                    yank_target_connections(&sock).await;
+                    left = wait_jobs_gone(&sock, &p.mirrors, Duration::from_secs(30)).await;
+                }
+                if !left.is_empty() {
+                    incomplete = Some(format!(
+                        "disk mirror {} to the target is still attached on this node",
+                        left.join(", ")
+                    ));
+                }
+            }
         }
         if p.prepared {
-            let r: Result<serde_json::Value> = self
-                .peer
-                .call(
-                    reqwest::Method::POST,
-                    &format!("/api/migration/peer/{job}/abort"),
-                    None,
-                )
-                .await;
-            if let Err(e) = r {
-                tracing::warn!("Migration {job}: target could not discard its copy: {e}");
+            if let Err(e) = self.peer.abort(&job).await {
+                tracing::warn!(
+                    "Migration {job}: target could not discard its copy now ({e}); retrying in the \
+                     background (it also discards it by itself after {} s without word from us)",
+                    migration_peer::peer_ttl().as_secs()
+                );
+                let (peer, job) = (self.peer.clone(), job.clone());
+                tokio::spawn(async move {
+                    for _ in 0..120 {
+                        tokio::time::sleep(Duration::from_secs(15)).await;
+                        if peer.abort(&job).await.is_ok() {
+                            tracing::info!("Migration {job}: target discarded its copy");
+                            return;
+                        }
+                    }
+                });
             }
         }
         if p.runtime_aside {
@@ -812,11 +948,190 @@ impl Plan {
                     "Migration {job}: VM {} could not be started again here: {e}",
                     self.job_vm.id
                 );
+                incomplete = Some(format!("the VM could not be started again here: {e}"));
             }
         }
-        tracing::info!(
-            "Migration {job}: rolled back ({reason}); VM {} stays on this node",
-            self.job_vm.id
+        match incomplete {
+            None => {
+                tracing::info!(
+                    "Migration {job}: rolled back ({reason}); VM {} stays on this node",
+                    self.job_vm.id
+                );
+                Ok(())
+            }
+            Some(left) => {
+                tracing::error!(
+                    "Migration {job}: rolled back incompletely ({reason}): {left}; VM {} stays on this node",
+                    self.job_vm.id
+                );
+                Err(left)
+            }
+        }
+    }
+}
+
+/// Block jobs of an earlier migration (`mig-*`) still on the QEMU behind
+/// `sock` (none if it doesn't answer).
+async fn migration_block_jobs(sock: &Path) -> Vec<String> {
+    match qmp_command(sock, json!({"execute": "query-block-jobs"})).await {
+        Ok(jobs) => jobs
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|j| j["device"].as_str())
+            .filter(|d| d.starts_with("mig-"))
+            .map(str::to_string)
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Wait up to `within` for the block jobs `names` to be gone; returns
+/// those still there.
+async fn wait_jobs_gone(sock: &Path, names: &[String], within: Duration) -> Vec<String> {
+    let end = std::time::Instant::now() + within;
+    loop {
+        let jobs = match qmp_command(sock, json!({"execute": "query-block-jobs"})).await {
+            Ok(j) => j,
+            Err(_) => return Vec::new(),
+        };
+        let left: Vec<String> = names
+            .iter()
+            .filter(|n| {
+                jobs.as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|j| j["device"].as_str() == Some(n.as_str()))
+            })
+            .cloned()
+            .collect();
+        if left.is_empty() || std::time::Instant::now() >= end {
+            return left;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// Whether the outgoing migration is still active/cancelling.
+async fn migration_active(sock: &Path) -> bool {
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    match qmp_command(sock, json!({"execute": "query-migrate"})).await {
+        Ok(m) => matches!(
+            m["status"].as_str(),
+            Some("active" | "cancelling" | "setup" | "pre-switchover" | "device")
+        ),
+        Err(_) => false,
+    }
+}
+
+/// QMP `yank` of the source QEMU's connections to the target: the NBD
+/// clients of the mirror targets and the migration stream (never the
+/// chardevs: those are the VM's consoles). In-flight requests then fail
+/// at once instead of waiting for a TCP timeout.
+async fn yank_target_connections(sock: &Path) {
+    let Ok(list) = qmp_command(sock, json!({"execute": "query-yank"})).await else {
+        return;
+    };
+    let instances = yank_instances(&list);
+    if instances.is_empty() {
+        return;
+    }
+    if let Err(e) = qmp_command(
+        sock,
+        json!({"execute": "yank", "arguments": {"instances": instances}}),
+    )
+    .await
+    {
+        tracing::warn!("yank of the migration connections failed: {e}");
+    }
+}
+
+/// The yank instances of a `query-yank` reply that belong to the target:
+/// block nodes (the source's own disks are files, which register none;
+/// the NBD mirror targets do) and the migration.
+fn yank_instances(list: &serde_json::Value) -> Vec<serde_json::Value> {
+    list.as_array()
+        .into_iter()
+        .flatten()
+        .filter(|i| matches!(i["type"].as_str(), Some("block-node" | "migration")))
+        .cloned()
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Only the connections to the target are yanked, never the VM's
+    /// consoles (chardevs).
+    #[test]
+    fn yank_cuts_nbd_and_migration_but_not_consoles() {
+        let list = json!([
+            {"type": "block-node", "node-name": "#block512"},
+            {"type": "chardev", "id": "serial0"},
+            {"type": "migration"},
+            {"type": "chardev", "id": "qmp"}
+        ]);
+        let got = yank_instances(&list);
+        assert_eq!(
+            got,
+            vec![
+                json!({"type": "block-node", "node-name": "#block512"}),
+                json!({"type": "migration"})
+            ]
         );
+        assert!(yank_instances(&json!([])).is_empty());
+        assert!(yank_instances(&json!({"error": "x"})).is_empty());
+    }
+
+    /// A leftover mirror of an earlier migration is found through QMP
+    /// (a real Unix socket answering like QEMU).
+    #[tokio::test]
+    async fn leftover_migration_mirror_is_detected() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("vm.qmp.sock");
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let (r, mut w) = stream.into_split();
+                    let _ = w
+                        .write_all(b"{\"QMP\": {\"version\": {}, \"capabilities\": []}}\n")
+                        .await;
+                    let mut lines = BufReader::new(r).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let reply = if line.contains("query-block-jobs") {
+                            "{\"return\": [{\"device\": \"mig-drive-disk0\", \"type\": \"mirror\"}, {\"device\": \"backup-1\", \"type\": \"backup\"}]}\n"
+                        } else {
+                            "{\"return\": {}}\n"
+                        };
+                        let _ = w.write_all(reply.as_bytes()).await;
+                    }
+                });
+            }
+        });
+        assert_eq!(
+            migration_block_jobs(&sock).await,
+            vec!["mig-drive-disk0".to_string()]
+        );
+        let left = wait_jobs_gone(
+            &sock,
+            &["mig-drive-disk0".to_string()],
+            Duration::from_millis(300),
+        )
+        .await;
+        assert_eq!(left, vec!["mig-drive-disk0".to_string()]);
+        assert!(wait_jobs_gone(
+            &sock,
+            &["mig-drive-disk1".to_string()],
+            Duration::from_secs(1)
+        )
+        .await
+        .is_empty());
+        // No QEMU: nothing to report.
+        assert!(migration_block_jobs(&dir.path().join("none.sock"))
+            .await
+            .is_empty());
     }
 }

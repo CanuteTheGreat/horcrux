@@ -12,7 +12,7 @@ set -euo pipefail
 BIN=${1:?usage: $0 <horcrux-api binary> [image]}
 IMAGE=${2:-catthehacker/ubuntu:act-latest}
 HERE=$(cd "$(dirname "$0")" && pwd)
-TAG="hxmig-$$"
+TAG="${HXMIG_TAG:-hxmig-$$}"
 N1="$TAG-n1"
 N2="$TAG-n2"
 NET="$TAG-net"
@@ -55,6 +55,7 @@ HORCRUX_HOST=0.0.0.0 HORCRUX_PORT=8006 HORCRUX_DATA_DIR=/var/lib/hx \\
 HORCRUX_DATABASE_URL=sqlite:///var/lib/hx/horcrux.db HORCRUX_SSL_DIR=/var/lib/hx/ssl \\
 HORCRUX_VM_STORAGE=\$STORAGE ADMIN_PASSWORD=admin JWT_SECRET=$JWT \\
 RATE_LIMIT_MAX_REQUESTS=100000 AUTH_RATE_LIMIT_MAX_REQUESTS=100000 RUST_LOG=info \\
+HORCRUX_MIGRATION_PEER_TTL_SECS=${PEER_TTL:-20} \\
   nohup horcrux-api >> /var/lib/hx/api.log 2>&1 &
 echo \$! > /var/lib/hx/api.pid
 rm -f /tmp/hx-token-*

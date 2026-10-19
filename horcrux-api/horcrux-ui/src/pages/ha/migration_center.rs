@@ -19,7 +19,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
     let (target_node, set_target_node) = create_signal(String::new());
     let (migration_type, set_migration_type) = create_signal("online".to_string());
     let (force_migration, set_force_migration) = create_signal(false);
-    let (migration_timeout, set_migration_timeout) = create_signal(300);
+    let (migration_timeout, set_migration_timeout) = create_signal(3600u32);
     let (bandwidth_limit, set_bandwidth_limit) = create_signal(None::<u64>);
     let (with_local_disks, set_with_local_disks) = create_signal(false);
 
@@ -37,7 +37,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
         set_target_node.set(String::new());
         set_migration_type.set("online".to_string());
         set_force_migration.set(false);
-        set_migration_timeout.set(300);
+        set_migration_timeout.set(3600);
         set_bandwidth_limit.set(None);
         set_with_local_disks.set(false);
     };
@@ -191,7 +191,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
         set_target_node.set(String::new());
         set_migration_type.set("online".to_string());
         set_force_migration.set(false);
-        set_migration_timeout.set(300);
+        set_migration_timeout.set(3600);
         set_bandwidth_limit.set(None);
         set_with_local_disks.set(false);
     };
@@ -643,13 +643,13 @@ pub fn MigrationCenterPage() -> impl IntoView {
 
                                 <div class="form-row">
                                     <div class="form-group">
-                                        <label>"Timeout (seconds)"</label>
+                                        <label>"Timeout (seconds, 0 = none)"</label>
                                         <input
                                             type="number"
                                             prop:value=migration_timeout
-                                            on:input=move |ev| set_migration_timeout.set(event_target_value(&ev).parse().unwrap_or(300))
-                                            min="60"
-                                            max="3600"
+                                            on:input=move |ev| set_migration_timeout.set(event_target_value(&ev).parse().unwrap_or(0))
+                                            min="0"
+                                            title="The job fails and is rolled back (the VM stays here) when it takes longer"
                                         />
                                     </div>
                                     <div class="form-group">

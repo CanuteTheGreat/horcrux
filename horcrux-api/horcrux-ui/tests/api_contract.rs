@@ -2548,6 +2548,8 @@ async fn migration_center_routes_read_into_ui_types() {
     // the peer API refuses user logins (only nodes' migration tokens)
     let (status, body) = post(&c, &token, "/migration/peer/probe", json!({"files": []})).await;
     assert_eq!(status, 403, "peer API with a user token: {body}");
+    let (status, body) = post(&c, &token, "/migration/peer/j1/keepalive", json!({})).await;
+    assert_eq!(status, 403, "peer keepalive with a user token: {body}");
 
     // start (one migration at a time: wait out a job another run left)
     let mut created = None;

@@ -423,6 +423,9 @@ pub async fn run() -> anyhow::Result<()> {
     // OpenTelemetry export (saved settings + periodic export).
     start_otel_exporter(state.clone());
 
+    // VMs half-received from a migration whose source went quiet.
+    api::migration_peer::spawn_reaper(state.clone());
+
     // Running Docker/Podman containers with firewall rules: give their
     // host-side veths the stable names the rules match (the runtime gave
     // them random ones when it started them, e.g. at boot).
@@ -4910,6 +4913,7 @@ async fn migrate_vm(
         bandwidth_limit: None,
         force: false,
         with_local_disks: false,
+        timeout_secs: None,
     };
 
     let source_node = state

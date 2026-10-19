@@ -56,6 +56,7 @@ async fn test_migration_config_serialization() {
         bandwidth_limit: Some(100),
         force: false,
         with_local_disks: false,
+        timeout_secs: Some(300),
     };
 
     let json = serde_json::to_string(&config).unwrap();
