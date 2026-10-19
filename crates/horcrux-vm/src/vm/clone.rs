@@ -187,6 +187,7 @@ impl VmCloneManager {
             size_gb: source_disk.size_gb,
             disk_type: source_disk.disk_type.clone(),
             cache: source_disk.cache.clone(),
+            ..source_disk.clone()
         })
     }
 
@@ -1097,6 +1098,7 @@ mod tests {
             size_gb: 10,
             disk_type: "virtio".to_string(),
             cache: "none".to_string(),
+            ..Default::default()
         }
     }
 

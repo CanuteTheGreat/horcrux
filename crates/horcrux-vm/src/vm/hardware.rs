@@ -26,12 +26,15 @@ pub fn generate_mac() -> String {
 pub fn prepare_hardware(config: &mut VmConfig) -> Result<()> {
     if config.hypervisor != VmHypervisor::Qemu && config.hardware != VmHardware::default() {
         return Err(Error::Validation(
-            "Network cards, CD-ROM and boot order are QEMU VM settings; LXD/Incus VMs \
-             get their network from the LXD/Incus profile"
+            "Network cards, CD-ROM, boot order, CPU type, chipset, firmware and TPM are \
+             QEMU VM settings; LXD/Incus VMs get them from the LXD/Incus profile"
                 .into(),
         ));
     }
-    config.hardware.validate().map_err(Error::Validation)?;
+    config
+        .hardware
+        .validate_for(&config.architecture, config.cpus)
+        .map_err(Error::Validation)?;
     let mut used: Vec<String> = Vec::new();
     for nic in &mut config.hardware.nets {
         if let Some(m) = &nic.mac {
@@ -249,6 +252,273 @@ impl VmManager {
         .await?;
         Ok(vm.to_config())
     }
+
+    /// Add a new, empty disk to a stopped QEMU VM (`qm set --scsi1 local:32`):
+    /// a qcow2 image of `size_gb` in the VM storage directory, attached on
+    /// the given bus at the next start.
+    pub async fn add_disk(&self, id: &str, spec: DiskSpec) -> Result<VmConfig> {
+        let mut vms = self.vms.write().await;
+        self.hydrate(&mut vms, id).await?;
+        let vm = vms
+            .get_mut(id)
+            .ok_or_else(|| Error::VmNotFound(id.to_string()))?;
+        require_stopped_qemu(vm, "adding a disk")?;
+        let mut disks = vm.all_disks();
+        if disks.len() >= horcrux_common::MAX_VM_DISKS {
+            return Err(Error::Validation(format!(
+                "a VM can have at most {} disks",
+                horcrux_common::MAX_VM_DISKS
+            )));
+        }
+        if spec.size_gb == 0 || spec.size_gb > 65536 {
+            return Err(Error::Validation("size must be 1-65536 GB".into()));
+        }
+        // The first free <id>-disk<N>.qcow2 (a removed disk's number may
+        // be reused once its file is gone).
+        let mut n = disks.len();
+        let path = loop {
+            let p = self.qemu.disk_file(id, n);
+            if !p.exists() && !disks.iter().any(|d| d.path == p.to_string_lossy()) {
+                break p;
+            }
+            n += 1;
+        };
+        let disk = horcrux_common::VmDisk {
+            path: path.to_string_lossy().to_string(),
+            size_gb: spec.size_gb,
+            disk_type: spec.bus.clone(),
+            cache: spec.cache.clone(),
+            discard: spec.discard,
+            ssd: spec.ssd,
+            iothread: spec.iothread,
+        };
+        disk.validate(disks.len()).map_err(Error::Validation)?;
+        disks.push(disk);
+        qemu::validate_disk_set(&disks).map_err(Error::Validation)?;
+        QemuManager::create_disk_image(&path, spec.size_gb).await?;
+        vm.disks = disks;
+        let config = vm.to_config();
+        if let Some(db) = &self.db {
+            if let Err(e) = db.update_vm(&config).await {
+                let _ = tokio::fs::remove_file(&path).await;
+                vm.disks.pop();
+                return Err(e);
+            }
+        }
+        Ok(config)
+    }
+
+    /// Change a disk's bus/cache/options (stopped VM) and/or grow it
+    /// (`qm resize`; also while the VM runs, through QMP `block_resize`).
+    pub async fn update_disk(&self, id: &str, index: usize, upd: DiskUpdate) -> Result<VmConfig> {
+        let (live_resize, new_size) = {
+            let mut vms = self.vms.write().await;
+            self.hydrate(&mut vms, id).await?;
+            let vm = vms
+                .get_mut(id)
+                .ok_or_else(|| Error::VmNotFound(id.to_string()))?;
+            if vm.hypervisor != VmHypervisor::Qemu {
+                return Err(Error::Validation(
+                    "disks of LXD/Incus VMs are managed by LXD/Incus".into(),
+                ));
+            }
+            let running = QemuManager::process_running(&vm.id);
+            let mut disks = vm.all_disks();
+            let Some(cur) = disks.get(index).cloned() else {
+                return Err(Error::NotFound(format!("VM {id} has no disk{index}")));
+            };
+            let mut next = cur.clone();
+            if let Some(b) = &upd.bus {
+                next.disk_type = b.clone();
+            }
+            if let Some(c) = &upd.cache {
+                next.cache = c.clone();
+            }
+            if let Some(v) = upd.discard {
+                next.discard = v;
+            }
+            if let Some(v) = upd.ssd {
+                next.ssd = v;
+            }
+            if let Some(v) = upd.iothread {
+                next.iothread = v;
+            }
+            next.validate(index).map_err(Error::Validation)?;
+            let options_changed = {
+                let mut a = next.clone();
+                a.size_gb = cur.size_gb;
+                a != cur
+            };
+            if running && options_changed {
+                return Err(Error::Conflict(
+                    "Stop the VM before changing a disk's bus, cache or options (a running \
+                     disk can only be grown)"
+                        .into(),
+                ));
+            }
+            let grow = match upd.size_gb {
+                Some(s) if s < cur.size_gb => {
+                    return Err(Error::Validation(format!(
+                    "disk{index} is {} GB: disks can only be grown (shrinking would cut off the \
+                         guest's file systems)",
+                    cur.size_gb
+                )))
+                }
+                Some(s) if s > 65536 => {
+                    return Err(Error::Validation("size must be at most 65536 GB".into()))
+                }
+                Some(s) if s > cur.size_gb => Some(s),
+                _ => None,
+            };
+            disks[index] = next.clone();
+            qemu::validate_disk_set(&disks).map_err(Error::Validation)?;
+            if let Some(s) = grow {
+                if !running {
+                    resize_image(&next.path, s).await?;
+                    disks[index].size_gb = s;
+                }
+            }
+            if running && grow.is_some() {
+                (Some(vm.disk_path.clone()), grow)
+            } else {
+                vm.disks = disks;
+                if index == 0 {
+                    vm.disk_size = vm.disks[0].size_gb;
+                }
+                let config = vm.to_config();
+                if let Some(db) = &self.db {
+                    db.update_vm(&config).await?;
+                }
+                return Ok(config);
+            }
+        };
+        // Grow the disk inside the running QEMU (the guest sees the new size).
+        let (Some(disk0), Some(size)) = (live_resize, new_size) else {
+            unreachable!("live resize path");
+        };
+        qmp_command(
+            &DisplayRuntime::qmp_socket(&disk0),
+            serde_json::json!({
+                "execute": "block_resize",
+                "arguments": {"device": qemu::disk_drive_id(index), "size": size * 1024 * 1024 * 1024}
+            }),
+        )
+        .await?;
+        let mut vms = self.vms.write().await;
+        let vm = vms
+            .get_mut(id)
+            .ok_or_else(|| Error::VmNotFound(id.to_string()))?;
+        let mut disks = vm.all_disks();
+        disks[index].size_gb = size;
+        vm.disks = disks;
+        if index == 0 {
+            vm.disk_size = size;
+        }
+        let config = vm.to_config();
+        if let Some(db) = &self.db {
+            db.update_vm(&config).await?;
+        }
+        Ok(config)
+    }
+
+    /// Detach a disk from a stopped VM (not the first one: the VM's console
+    /// sockets, EFI vars and TPM state live next to it). `delete_file`
+    /// also deletes the image; otherwise it stays on disk.
+    pub async fn remove_disk(&self, id: &str, index: usize, delete_file: bool) -> Result<VmConfig> {
+        let mut vms = self.vms.write().await;
+        self.hydrate(&mut vms, id).await?;
+        let vm = vms
+            .get_mut(id)
+            .ok_or_else(|| Error::VmNotFound(id.to_string()))?;
+        require_stopped_qemu(vm, "removing a disk")?;
+        let mut disks = vm.all_disks();
+        if index == 0 {
+            return Err(Error::Validation(
+                "disk0 is the VM's main disk and can't be removed (delete the VM instead)".into(),
+            ));
+        }
+        if index >= disks.len() {
+            return Err(Error::NotFound(format!("VM {id} has no disk{index}")));
+        }
+        let removed = disks.remove(index);
+        vm.disks = disks;
+        let config = vm.to_config();
+        if let Some(db) = &self.db {
+            db.update_vm(&config).await?;
+        }
+        if delete_file {
+            if let Err(e) = tokio::fs::remove_file(&removed.path).await {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!("VM {id}: could not delete {}: {e}", removed.path);
+                }
+            }
+        }
+        Ok(config)
+    }
+}
+
+fn require_stopped_qemu(vm: &qemu::QemuVm, what: &str) -> Result<()> {
+    if vm.hypervisor != VmHypervisor::Qemu {
+        return Err(Error::Validation(
+            "disks of LXD/Incus VMs are managed by LXD/Incus".into(),
+        ));
+    }
+    if QemuManager::process_running(&vm.id) {
+        return Err(Error::Conflict(format!("Stop the VM before {what}")));
+    }
+    Ok(())
+}
+
+async fn resize_image(path: &str, size_gb: u64) -> Result<()> {
+    let out = tokio::process::Command::new("qemu-img")
+        .args(["resize", path, &format!("{size_gb}G")])
+        .output()
+        .await
+        .map_err(|e| Error::System(format!("qemu-img: {e}")))?;
+    if !out.status.success() {
+        return Err(Error::System(format!(
+            "qemu-img resize {path}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
+/// `POST /api/vms/:id/disks`: a new disk.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiskSpec {
+    pub size_gb: u64,
+    #[serde(default = "default_bus")]
+    pub bus: String,
+    #[serde(default)]
+    pub cache: String,
+    #[serde(default)]
+    pub discard: bool,
+    #[serde(default)]
+    pub ssd: bool,
+    #[serde(default)]
+    pub iothread: bool,
+}
+
+fn default_bus() -> String {
+    "virtio".into()
+}
+
+/// `PUT /api/vms/:id/disks/:index`: fields to change (absent = keep).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DiskUpdate {
+    #[serde(default)]
+    pub size_gb: Option<u64>,
+    #[serde(default)]
+    pub bus: Option<String>,
+    #[serde(default)]
+    pub cache: Option<String>,
+    #[serde(default)]
+    pub discard: Option<bool>,
+    #[serde(default)]
+    pub ssd: Option<bool>,
+    #[serde(default)]
+    pub iothread: Option<bool>,
 }
 
 /// Insert (`Some`) or eject (`None`) the medium of a running VM's CD-ROM.

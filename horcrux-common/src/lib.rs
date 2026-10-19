@@ -46,12 +46,77 @@ impl Default for VmArchitecture {
 }
 
 /// Virtual machine disk configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct VmDisk {
     pub path: String,
     pub size_gb: u64,
-    pub disk_type: String, // "virtio", "scsi", "ide", "sata"
-    pub cache: String,     // "none", "writethrough", "writeback"
+    /// Bus the guest sees the disk on: "virtio" (virtio-blk), "scsi"
+    /// (virtio-scsi), "sata" (AHCI), "ide", or "default" = QEMU's default
+    /// interface for the machine (IDE on x86 PC): what every disk got
+    /// before buses were configurable, kept for those VMs so their guests
+    /// still find their disks.
+    pub disk_type: String,
+    /// Host cache mode: "none", "writethrough", "writeback", "directsync",
+    /// "unsafe". Empty = QEMU's default (writeback).
+    pub cache: String,
+    /// Pass guest TRIM/UNMAP through to the image (frees space in qcow2).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub discard: bool,
+    /// Report the disk to the guest as an SSD (non-rotational); not on virtio-blk.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ssd: bool,
+    /// Give the disk its own I/O thread (virtio / virtio-scsi only).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub iothread: bool,
+}
+
+/// Disk buses a VM disk can use (`VmDisk::disk_type`).
+pub const DISK_BUSES: [&str; 5] = ["virtio", "scsi", "sata", "ide", "default"];
+
+/// Host cache modes a VM disk can use (`VmDisk::cache`, "" = default).
+pub const DISK_CACHE_MODES: [&str; 6] = [
+    "",
+    "none",
+    "writethrough",
+    "writeback",
+    "directsync",
+    "unsafe",
+];
+
+/// Most disks one VM can have.
+pub const MAX_VM_DISKS: usize = 16;
+
+impl VmDisk {
+    /// Check bus/cache/option combinations QEMU would refuse or ignore.
+    pub fn validate(&self, index: usize) -> std::result::Result<(), String> {
+        if !DISK_BUSES.contains(&self.disk_type.as_str()) {
+            return Err(format!(
+                "disk{index}: bus must be one of {}",
+                DISK_BUSES.join(", ")
+            ));
+        }
+        if !DISK_CACHE_MODES.contains(&self.cache.as_str()) {
+            return Err(format!(
+                "disk{index}: cache must be one of none, writethrough, writeback, directsync, unsafe"
+            ));
+        }
+        if self.ssd && matches!(self.disk_type.as_str(), "virtio" | "default") {
+            return Err(format!(
+                "disk{index}: SSD emulation needs the scsi, sata or ide bus (virtio-blk has no rotation rate)"
+            ));
+        }
+        if self.iothread && !matches!(self.disk_type.as_str(), "virtio" | "scsi") {
+            return Err(format!(
+                "disk{index}: an I/O thread needs the virtio or scsi bus"
+            ));
+        }
+        if self.discard && self.disk_type == "default" {
+            return Err(format!(
+                "disk{index}: pick a bus to use discard (the legacy default bus has no options)"
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Virtual machine configuration
@@ -137,6 +202,74 @@ pub struct VmHardware {
     /// Boot order; empty = disk, then CD-ROM.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub boot: Vec<BootDevice>,
+    /// QEMU CPU model (`host`, `max`, `qemu64`, `x86-64-v2-AES`,
+    /// `EPYC-v4`, ...). None = QEMU's default for the machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_type: Option<String>,
+    /// CPU sockets the VM's CPUs are split over (CPUs = sockets x cores;
+    /// must divide the CPU count). None = 1 socket.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sockets: Option<u32>,
+    /// Chipset of x86 VMs.
+    #[serde(default, skip_serializing_if = "MachineType::is_default")]
+    pub machine: MachineType,
+    /// Firmware of x86 VMs: SeaBIOS (legacy BIOS) or OVMF (UEFI, with a
+    /// per-VM EFI variable store next to the first disk).
+    #[serde(default, skip_serializing_if = "Firmware::is_default")]
+    pub firmware: Firmware,
+    /// Emulated TPM 2.0 chip (swtpm; its state lives next to the first disk).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tpm: bool,
+}
+
+/// x86 chipset (`-machine`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MachineType {
+    /// i440FX + PIIX (QEMU's `pc`): the default, what every OS knows.
+    #[default]
+    I440fx,
+    /// Q35 + ICH9 (QEMU's `q35`): PCIe, AHCI; preferred for UEFI/Windows 11.
+    Q35,
+}
+
+impl MachineType {
+    pub fn is_default(&self) -> bool {
+        *self == MachineType::default()
+    }
+    /// QEMU machine type name.
+    pub fn qemu_name(&self) -> &'static str {
+        match self {
+            MachineType::I440fx => "pc",
+            MachineType::Q35 => "q35",
+        }
+    }
+}
+
+/// VM firmware.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Firmware {
+    /// SeaBIOS: legacy BIOS boot.
+    #[default]
+    Seabios,
+    /// OVMF (EDK2): UEFI boot.
+    Ovmf,
+}
+
+impl Firmware {
+    pub fn is_default(&self) -> bool {
+        *self == Firmware::default()
+    }
+}
+
+/// Whether `s` is a plausible QEMU CPU model name (`-cpu` value without
+/// flags): letters, digits, `-`, `_`, `.`. QEMU itself checks the model exists.
+pub fn valid_cpu_type(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 64
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
 /// Host tap device name prefix of a VM's network cards: `tap<8 hex>i`
@@ -150,6 +283,30 @@ pub fn vm_tap_prefix(vm_id: &str) -> String {
         h = h.wrapping_mul(0x01000193);
     }
     format!("tap{h:08x}i")
+}
+
+fn fnv32(id: &str) -> u32 {
+    let mut h: u32 = 0x811c9dc5;
+    for b in id.as_bytes() {
+        h ^= *b as u32;
+        h = h.wrapping_mul(0x01000193);
+    }
+    h
+}
+
+/// Host-side veth name prefix of a container's network interfaces:
+/// `vc<8 hex>i` (FNV-1a of the container id, like the VM taps). Horcrux
+/// gives every container NIC a stable host name (LXC `veth.pair`,
+/// LXD/Incus `host_name`, Docker/Podman renamed at start), so the
+/// container firewall can match exactly that container's traffic with
+/// `iifname/oifname "<prefix>*"`.
+pub fn ct_veth_prefix(ct_id: &str) -> String {
+    format!("vc{:08x}i", fnv32(ct_id))
+}
+
+/// Host-side veth of a container's `index`-th interface (`vc<8 hex>i<n>`).
+pub fn ct_veth_name(ct_id: &str, index: usize) -> String {
+    format!("{}{index}", ct_veth_prefix(ct_id))
 }
 
 /// Host tap device of a VM's `index`-th network card (`tap<8 hex>i<n>`).
@@ -240,6 +397,43 @@ impl VmHardware {
         if let Some(iso) = &self.cdrom {
             if iso.trim().is_empty() {
                 return Err("cdrom: empty ISO path (omit it to leave the drive empty)".into());
+            }
+        }
+        if let Some(c) = &self.cpu_type {
+            if !valid_cpu_type(c) {
+                return Err(format!(
+                    "cpu type {c:?}: letters, digits, - _ . only (e.g. host, max, x86-64-v2-AES)"
+                ));
+            }
+        }
+        if let Some(s) = self.sockets {
+            if !(1..=16).contains(&s) {
+                return Err("sockets must be 1-16".into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Checks that need the VM's architecture and CPU count.
+    pub fn validate_for(
+        &self,
+        arch: &VmArchitecture,
+        cpus: u32,
+    ) -> std::result::Result<(), String> {
+        self.validate()?;
+        if let Some(s) = self.sockets {
+            if !cpus.is_multiple_of(s) {
+                return Err(format!(
+                    "{cpus} CPUs can't be split evenly over {s} sockets"
+                ));
+            }
+        }
+        if *arch != VmArchitecture::X86_64 {
+            if !self.machine.is_default() {
+                return Err("the q35 chipset is for x86_64 VMs".into());
+            }
+            if !self.firmware.is_default() {
+                return Err("OVMF (UEFI) firmware is offered for x86_64 VMs".into());
             }
         }
         Ok(())
@@ -871,6 +1065,7 @@ mod tests {
             nets: vec![nic("vmbr0")],
             cdrom: None,
             boot: vec![BootDevice::Cdrom, BootDevice::Disk],
+            ..Default::default()
         };
         assert!(hw.validate().is_ok());
         hw.nets[0].vlan = Some(4095);
@@ -890,6 +1085,66 @@ mod tests {
         hw.boot.pop();
         hw.nets = (0..=MAX_VM_NICS).map(|_| nic("br0")).collect();
         assert!(hw.validate().is_err());
+    }
+
+    #[test]
+    fn cpu_machine_firmware_and_disk_validation() {
+        let mut hw = VmHardware {
+            cpu_type: Some("x86-64-v2-AES".into()),
+            sockets: Some(2),
+            machine: MachineType::Q35,
+            firmware: Firmware::Ovmf,
+            tpm: true,
+            ..Default::default()
+        };
+        assert!(hw.validate_for(&VmArchitecture::X86_64, 4).is_ok());
+        assert!(hw
+            .validate_for(&VmArchitecture::X86_64, 3)
+            .unwrap_err()
+            .contains("sockets"));
+        assert!(hw.validate_for(&VmArchitecture::Aarch64, 4).is_err());
+        hw.cpu_type = Some("host,+vmx".into());
+        assert!(hw.validate().is_err(), "flags are not a model name");
+        hw.cpu_type = None;
+        hw.sockets = Some(0);
+        assert!(hw.validate().is_err());
+        // Old rows/requests without the new keys parse to the defaults,
+        // and the defaults aren't written back.
+        let parsed: VmHardware = serde_json::from_str(r#"{"nets":[]}"#).unwrap();
+        assert_eq!(parsed, VmHardware::default());
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), r#"{"nets":[]}"#);
+        assert_eq!(
+            serde_json::to_value(MachineType::Q35).unwrap(),
+            serde_json::json!("q35")
+        );
+
+        let disk = |bus: &str| VmDisk {
+            path: "/v/d.qcow2".into(),
+            size_gb: 1,
+            disk_type: bus.into(),
+            ..Default::default()
+        };
+        assert!(disk("virtio").validate(0).is_ok());
+        assert!(disk("floppy").validate(0).is_err());
+        let mut d = disk("virtio");
+        d.ssd = true;
+        assert!(d.validate(1).unwrap_err().contains("disk1"));
+        d.disk_type = "scsi".into();
+        d.iothread = true;
+        d.discard = true;
+        d.cache = "none".into();
+        assert!(d.validate(1).is_ok());
+        d.disk_type = "sata".into();
+        assert!(d.validate(1).is_err(), "iothread on sata");
+        d.iothread = false;
+        d.cache = "bogus".into();
+        assert!(d.validate(1).is_err());
+        // Disks stored before the new options parse with them off.
+        let old: VmDisk = serde_json::from_str(
+            r#"{"path":"/v/a.qcow2","size_gb":1,"disk_type":"default","cache":""}"#,
+        )
+        .unwrap();
+        assert!(!old.discard && !old.ssd && !old.iothread);
     }
 
     #[test]

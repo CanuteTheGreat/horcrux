@@ -85,6 +85,7 @@ impl IncusManager {
             architecture: config.architecture.clone(),
             display: config.display,
             hardware: Default::default(),
+            disks: Vec::new(),
         })
     }
 

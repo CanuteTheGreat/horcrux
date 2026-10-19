@@ -323,6 +323,7 @@ mod tests {
                 size_gb: 1,
                 disk_type: "virtio".into(),
                 cache: "none".into(),
+                ..Default::default()
             }],
             display: VmDisplay::default(),
             hardware: Default::default(),

@@ -522,6 +522,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn migration_027_marks_recorded_disks_as_legacy_bus() {
+        // Disks recorded before buses were configurable were all started
+        // on QEMU's default bus whatever disk_type said.
+        let db = Database::new("sqlite::memory:").await.unwrap();
+        db.migrate().await.unwrap();
+        sqlx::query(
+            "INSERT INTO vms (id, name, hypervisor, memory, cpus, disk_size, status, architecture, disks) \
+             VALUES ('old', 'old', 'qemu', 512, 1, 1, 'stopped', 'x86_64', ?)",
+        )
+        .bind(r#"[{"path":"/v/old.qcow2","size_gb":1,"disk_type":"virtio","cache":"writethrough"},{"path":"/v/b.qcow2","size_gb":2,"disk_type":"virtio","cache":"none"}]"#)
+        .execute(db.pool())
+        .await
+        .unwrap();
+        sqlx::query(super::migrations::MIGRATION_027_VM_DISKS_LEGACY_BUS)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let vm = db.get_vm("old").await.unwrap();
+        assert_eq!(vm.disks.len(), 2);
+        for d in &vm.disks {
+            assert_eq!(d.disk_type, "default");
+            assert_eq!(d.cache, "");
+        }
+        assert_eq!(vm.disks[1].path, "/v/b.qcow2");
+        assert_eq!(vm.disks[1].size_gb, 2);
+    }
+
+    #[tokio::test]
     async fn vm_disks_round_trip_through_the_database() {
         let db = create_test_db().await;
         let mut vm = create_test_vm_config("disk-vm", "Disk VM");
@@ -530,6 +558,7 @@ mod tests {
             size_gb: 1,
             disk_type: "virtio".to_string(),
             cache: "writethrough".to_string(),
+            ..Default::default()
         }];
         vm.display = horcrux_common::VmDisplay {
             protocol: horcrux_common::DisplayProtocol::Spice,
@@ -563,6 +592,11 @@ mod tests {
             }],
             cdrom: Some("/var/lib/horcrux/images/install.iso".into()),
             boot: vec![BootDevice::Cdrom, BootDevice::Disk],
+            cpu_type: Some("host".into()),
+            sockets: Some(2),
+            machine: horcrux_common::MachineType::Q35,
+            firmware: horcrux_common::Firmware::Ovmf,
+            tpm: true,
         };
         db.update_vm(&vm).await.unwrap();
         assert_eq!(db.get_vm("hw-vm").await.unwrap().hardware, vm.hardware);

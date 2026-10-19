@@ -26,6 +26,13 @@ pub fn VmCreate() -> impl IntoView {
     let (image, set_image) = create_signal(String::new());
     // Network cards, CD-ROM and boot order (QEMU).
     let hardware = create_rw_signal(horcrux_common::VmHardware::default());
+    // The first disk's bus/cache/options (its size is "Disk Size") and any
+    // additional disks (QEMU).
+    let disk0 = create_rw_signal(horcrux_common::VmDisk {
+        disk_type: "virtio".into(),
+        ..Default::default()
+    });
+    let extra_disks = create_rw_signal(Vec::<horcrux_common::VmDisk>::new());
     let (host_options, set_host_options) = create_signal(None::<api::VmHostOptions>);
     spawn_local(async move {
         if let Ok(o) = api::get_vm_host_options().await {
@@ -82,7 +89,13 @@ pub fn VmCreate() -> impl IntoView {
             disk_size: disk_size.get(),
             status: VmStatus::Stopped,
             architecture: architecture.get(),
-            disks: Vec::new(),
+            disks: if matches!(hypervisor.get(), VmHypervisor::Qemu) {
+                let mut d0 = disk0.get();
+                d0.size_gb = disk_size.get();
+                std::iter::once(d0).chain(extra_disks.get()).collect()
+            } else {
+                Vec::new()
+            },
             display: display.get(),
             // Hardware settings are for QEMU VMs (LXD/Incus use profiles).
             hardware: if matches!(hypervisor.get(), VmHypervisor::Qemu) {
@@ -244,6 +257,43 @@ pub fn VmCreate() -> impl IntoView {
                         view! { <small>"A cloud image or disk image (qcow2, raw, vmdk, vdi, vhdx) becomes the VM's disk, grown to the disk size above."</small> }
                     }}
                 </div>
+
+                <Show when=move || !is_instance()>
+                    <fieldset class="vm-hardware" id="vm-create-disks">
+                        <legend>"Disks"</legend>
+                        <div class="form-row">
+                            <strong>"disk0"</strong>
+                            <span>{move || format!("{} GB", disk_size.get())}</span>
+                            <super::vm_hardware::DiskOptionFields disk=disk0 prefix="vm-create-disk0"/>
+                        </div>
+                        {move || extra_disks.get().into_iter().enumerate().map(|(i, d)| {
+                            let n = i + 1;
+                            let row = create_rw_signal(d);
+                            create_effect(move |_| {
+                                let v = row.get();
+                                extra_disks.update(|ds| if let Some(x) = ds.get_mut(i) { if *x != v { *x = v } });
+                            });
+                            view! {
+                                <div class="form-row vm-create-disk" data-disk=n>
+                                    <strong>{format!("disk{n}")}</strong>
+                                    <input type="number" min="1" class="vm-create-disk-size" prop:value={move || row.get().size_gb}
+                                        on:change=move |ev| { let s = event_target_value(&ev).parse().unwrap_or(1); row.update(|d| d.size_gb = s) }/>
+                                    " GB "
+                                    <super::vm_hardware::DiskOptionFields disk=row prefix=format!("vm-create-disk{n}")/>
+                                    <button type="button" class="btn btn-sm btn-danger"
+                                        on:click=move |_| extra_disks.update(|ds| { if i < ds.len() { ds.remove(i); } })>"Remove"</button>
+                                </div>
+                            }
+                        }).collect_view()}
+                        <button type="button" id="vm-create-add-disk" class="btn btn-sm btn-secondary"
+                            disabled={move || extra_disks.get().len() + 1 >= horcrux_common::MAX_VM_DISKS}
+                            on:click=move |_| extra_disks.update(|ds| ds.push(horcrux_common::VmDisk {
+                                size_gb: 8,
+                                disk_type: "virtio".into(),
+                                ..Default::default()
+                            }))>"Add disk"</button>
+                    </fieldset>
+                </Show>
 
                 <super::vm_display::DisplaySettingsFields display=display/>
 

@@ -181,6 +181,18 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     )
     .await?;
 
+    // Disk buses became configurable: every disk recorded so far was
+    // started with a plain `-drive file=...` (QEMU's default interface,
+    // IDE on x86) whatever its stored disk_type said ("virtio"), so mark
+    // them "default" - their guests keep finding their disks where the
+    // installer put them. Cache modes were never applied either.
+    run_migration(
+        pool,
+        "027_vm_disks_legacy_bus",
+        MIGRATION_027_VM_DISKS_LEGACY_BUS,
+    )
+    .await?;
+
     Ok(())
 }
 
@@ -1088,6 +1100,14 @@ ALTER TABLE vms ADD COLUMN display TEXT NOT NULL DEFAULT '{}';
 
 const MIGRATION_026_ADD_VM_HARDWARE: &str = r#"
 ALTER TABLE vms ADD COLUMN hardware TEXT NOT NULL DEFAULT '{}';
+"#;
+
+pub(crate) const MIGRATION_027_VM_DISKS_LEGACY_BUS: &str = r#"
+UPDATE vms SET disks = (
+    SELECT json_group_array(json_set(value, '$.disk_type', 'default', '$.cache', ''))
+    FROM json_each(vms.disks)
+)
+WHERE hypervisor = 'qemu' AND json_valid(disks) AND json_array_length(disks) > 0;
 "#;
 
 const MIGRATION_025_AUTH_ACCESS_CONTROL: &str = r#"

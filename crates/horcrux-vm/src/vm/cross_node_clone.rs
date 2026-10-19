@@ -585,6 +585,7 @@ impl CrossNodeCloneManager {
                 size_gb: disk.size_gb,
                 disk_type: disk.disk_type.clone(),
                 cache: disk.cache.clone(),
+                ..disk.clone()
             });
         }
 

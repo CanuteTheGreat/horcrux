@@ -1186,6 +1186,7 @@ mod tests {
             size_gb: 1,
             disk_type: "virtio".into(),
             cache: "none".into(),
+            ..Default::default()
         }];
 
         let s1 = m
@@ -1466,6 +1467,7 @@ mod tests {
             size_gb: 1,
             disk_type: "virtio".into(),
             cache: "none".into(),
+            ..Default::default()
         }];
         let disk_snapshots = vec![DiskSnapshot {
             disk_id: "disk-0".into(),

@@ -568,6 +568,7 @@ mod tests {
             size_gb: 3,
             disk_type: "virtio".into(),
             cache: "none".into(),
+            ..Default::default()
         }];
         assert_eq!(
             resource_metrics(&vm, 0.0, 0.0, [0; 4], 0, 0)

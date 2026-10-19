@@ -23,6 +23,15 @@ pub struct Template {
     pub cpus: u32,
     pub os_type: OsType,
     pub cloudinit_template: Option<String>, // Default cloud-init config
+    /// Hardware of the source VM (chipset, firmware, CPU type, TPM, NICs
+    /// without MACs...): VMs deployed from the template get it, so a guest
+    /// installed for UEFI/Q35 still boots.
+    #[serde(default)]
+    pub hardware: horcrux_common::VmHardware,
+    /// Bus of the source VM's disk the template was made from ("default"
+    /// for templates made before buses were recorded).
+    #[serde(default)]
+    pub disk_bus: Option<String>,
 }
 
 /// Storage type for templates
@@ -200,6 +209,8 @@ impl TemplateManager {
             cpus,
             os_type,
             cloudinit_template: None,
+            hardware: Default::default(),
+            disk_bus: None,
         };
 
         // Mark the VM disk as read-only or move it to templates directory
@@ -221,6 +232,25 @@ impl TemplateManager {
 
         tracing::info!("Template created: {} ({})", name, template_id);
         Ok(template)
+    }
+
+    /// Record the source VM's hardware and disk bus on a template.
+    pub async fn set_hardware(
+        &self,
+        template_id: &str,
+        hardware: horcrux_common::VmHardware,
+        disk_bus: String,
+    ) -> Result<Template> {
+        let mut templates = self.templates.write().await;
+        let t = templates.get_mut(template_id).ok_or_else(|| {
+            horcrux_common::Error::NotFound(format!("Template {} not found", template_id))
+        })?;
+        let mut next = t.clone();
+        next.hardware = hardware.for_clone();
+        next.disk_bus = Some(disk_bus);
+        config_store::put_opt(&self.store, kinds::TEMPLATE, template_id, &next).await?;
+        *t = next.clone();
+        Ok(next)
     }
 
     /// Clone a template to create a new VM

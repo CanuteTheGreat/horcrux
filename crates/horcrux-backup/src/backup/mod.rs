@@ -1190,6 +1190,7 @@ impl BackupManager {
                         size_gb: config.disk_size,
                         disk_type: "virtio".into(),
                         cache: "writethrough".into(),
+                        ..Default::default()
                     });
                 d.path = p.to_string_lossy().into();
                 d

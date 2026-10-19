@@ -5,7 +5,7 @@ EAPI=8
 
 CRATES=""
 
-inherit cargo git-r3 pam systemd
+inherit cargo git-r3 optfeature pam systemd
 
 DESCRIPTION="Proxmox VE alternative built natively for Gentoo"
 HOMEPAGE="https://git.canutethegreat.com/CanuteTheGreat/horcrux"
@@ -359,6 +359,10 @@ src_install() {
 }
 
 pkg_postinst() {
+	if use qemu; then
+		optfeature "UEFI (OVMF) firmware for QEMU VMs" sys-firmware/edk2-bin
+		optfeature "emulated TPM 2.0 for QEMU VMs" app-crypt/swtpm
+	fi
 	elog ""
 	elog "Horcrux ${PV} - Gentoo Virtualization Platform"
 	elog ""

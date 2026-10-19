@@ -43,6 +43,11 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/vms/:id/shutdown", post(shutdown))
         .route("/api/vms/:id/reboot", post(reboot))
         .route("/api/vms/:id/reset", post(reset))
+        .route("/api/vms/:id/disks", post(add_disk))
+        .route(
+            "/api/vms/:id/disks/:index",
+            put(update_disk).delete(remove_disk),
+        )
         .route(
             "/api/vms/:id/firewall/rules",
             get(list_vm_firewall).post(add_vm_firewall),
@@ -50,6 +55,14 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route(
             "/api/vms/:id/firewall/rules/:rule_id",
             delete(delete_vm_firewall),
+        )
+        .route(
+            "/api/containers/:id/firewall/rules",
+            get(list_ct_firewall).post(add_ct_firewall),
+        )
+        .route(
+            "/api/containers/:id/firewall/rules/:rule_id",
+            delete(delete_ct_firewall),
         )
         .route("/api/storage/isos", get(list_isos))
         .route("/api/storage/isos/download", post(download_iso))
@@ -82,6 +95,47 @@ pub struct HostOptions {
     pub isos: Vec<IsoFile>,
     /// Where downloaded ISOs go.
     pub iso_dir: String,
+    /// UEFI firmware (OVMF) is installed: VMs can boot with UEFI.
+    #[serde(default)]
+    pub ovmf: bool,
+    /// swtpm is installed: VMs can have a TPM 2.0.
+    #[serde(default)]
+    pub swtpm: bool,
+    /// KVM acceleration is available (CPU type "host" needs it).
+    #[serde(default)]
+    pub kvm: bool,
+}
+
+/// Whether `program` is an executable in PATH.
+fn in_path(program: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths).any(|d| {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::metadata(d.join(program))
+                    .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Firmware/TPM settings this host can't run: refused when saved rather
+/// than failing at the next start.
+pub fn check_host_firmware(hw: &VmHardware) -> Result<(), ApiError> {
+    if hw.firmware == horcrux_common::Firmware::Ovmf && crate::vm::firmware::find_ovmf().is_none() {
+        return Err(ApiError::BadRequest(
+            crate::vm::firmware::ovmf_missing().to_string(),
+        ));
+    }
+    if hw.tpm && !in_path("swtpm") {
+        return Err(ApiError::BadRequest(
+            "A TPM needs swtpm, which is not installed on this host (app-crypt/swtpm; \
+             Debian/Ubuntu: swtpm)"
+                .into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Linux bridges on this host.
@@ -181,6 +235,7 @@ async fn scan_isos(state: &AppState) -> Vec<IsoFile> {
 /// A host-side check of a VM's hardware: bridges exist (and are VLAN-aware
 /// when a tag is set) and the CD-ROM ISO is a file in the ISO library.
 pub async fn check_host_hardware(state: &AppState, hw: &VmHardware) -> Result<(), ApiError> {
+    check_host_firmware(hw)?;
     for (i, nic) in hw.nets.iter().enumerate() {
         match crate::vm::qemu::host_bridge(&nic.bridge) {
             None => {
@@ -223,7 +278,52 @@ async fn host_options(State(state): State<Arc<AppState>>) -> Json<HostOptions> {
         iso_dir: image_dir(&state.config.paths.data_dir)
             .to_string_lossy()
             .to_string(),
+        ovmf: crate::vm::firmware::find_ovmf().is_some(),
+        swtpm: in_path("swtpm"),
+        kvm: std::path::Path::new("/dev/kvm").exists(),
     })
+}
+
+/// Add a new empty disk to a stopped VM.
+async fn add_disk(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(spec): Json<crate::vm::hardware::DiskSpec>,
+) -> Result<(StatusCode, Json<VmConfig>), ApiError> {
+    Ok((
+        StatusCode::CREATED,
+        Json(state.vm_manager.add_disk(&id, spec).await?),
+    ))
+}
+
+/// Change a disk's bus/cache/options (stopped VM) or grow it (any time).
+async fn update_disk(
+    State(state): State<Arc<AppState>>,
+    Path((id, index)): Path<(String, usize)>,
+    Json(upd): Json<crate::vm::hardware::DiskUpdate>,
+) -> Result<Json<VmConfig>, ApiError> {
+    Ok(Json(state.vm_manager.update_disk(&id, index, upd).await?))
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct RemoveDiskQuery {
+    /// Also delete the image file (default: keep it).
+    #[serde(default)]
+    pub delete_file: bool,
+}
+
+/// Detach a disk (not disk0) from a stopped VM.
+async fn remove_disk(
+    State(state): State<Arc<AppState>>,
+    Path((id, index)): Path<(String, usize)>,
+    axum::extract::Query(q): axum::extract::Query<RemoveDiskQuery>,
+) -> Result<Json<VmConfig>, ApiError> {
+    Ok(Json(
+        state
+            .vm_manager
+            .remove_disk(&id, index, q.delete_file)
+            .await?,
+    ))
 }
 
 async fn update_config(
@@ -334,6 +434,98 @@ async fn delete_vm_firewall(
     Path((id, rule_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let scope = crate::firewall::FirewallScope::Vm(id);
+    if !state
+        .firewall_manager
+        .list_rules(scope.clone())
+        .await
+        .iter()
+        .any(|r| r.id == rule_id)
+    {
+        return Err(ApiError::NotFound(format!(
+            "firewall rule {rule_id} not found"
+        )));
+    }
+    state.firewall_manager.remove_rule(scope, &rule_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// A container firewall rule list plus the host-side interfaces it
+/// matches (`vc<hash>i<n>`), so the page can show what the rules apply to.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ContainerFirewall {
+    pub rules: Vec<crate::firewall::FirewallRule>,
+    /// Interface name prefix the rules match (`vc<hash>i`).
+    pub interface_prefix: String,
+    /// Host-side interfaces of the container that exist right now.
+    pub interfaces: Vec<String>,
+}
+
+fn ct_interfaces(id: &str) -> Vec<String> {
+    let prefix = horcrux_common::ct_veth_prefix(id);
+    let mut out: Vec<String> = std::fs::read_dir("/sys/class/net")
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .filter(|n| n.starts_with(&prefix))
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
+}
+
+async fn list_ct_firewall(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<ContainerFirewall>, ApiError> {
+    state.container_manager.get_container(&id).await?;
+    Ok(Json(ContainerFirewall {
+        rules: state
+            .firewall_manager
+            .list_rules(crate::firewall::FirewallScope::Container(id.clone()))
+            .await,
+        interface_prefix: horcrux_common::ct_veth_prefix(&id),
+        interfaces: ct_interfaces(&id),
+    }))
+}
+
+/// Add a rule to one container's firewall; installed at once on that
+/// container's host-side interfaces only (bridge-family nftables).
+async fn add_ct_firewall(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(mut rule): Json<crate::firewall::FirewallRule>,
+) -> Result<(StatusCode, Json<crate::firewall::FirewallRule>), ApiError> {
+    state.container_manager.get_container(&id).await?;
+    if rule.id.trim().is_empty() {
+        rule.id = format!("fw-{}", uuid::Uuid::new_v4().simple());
+    }
+    if !rule
+        .id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return Err(ApiError::BadRequest(
+            "rule id: letters, digits, - _ . only".into(),
+        ));
+    }
+    // A running Docker/Podman container's veths get their stable names
+    // now (otherwise at its next start).
+    if let Err(e) = state.container_manager.name_host_veths(&id).await {
+        tracing::warn!("container {id}: {e}");
+    }
+    state
+        .firewall_manager
+        .add_rule(crate::firewall::FirewallScope::Container(id), rule.clone())
+        .await?;
+    Ok((StatusCode::CREATED, Json(rule)))
+}
+
+async fn delete_ct_firewall(
+    State(state): State<Arc<AppState>>,
+    Path((id, rule_id)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    let scope = crate::firewall::FirewallScope::Container(id);
     if !state
         .firewall_manager
         .list_rules(scope.clone())

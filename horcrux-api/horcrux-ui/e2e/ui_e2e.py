@@ -673,6 +673,30 @@ def vm_hardware_checks(page, vid):
     _req("PUT", f"/api/vms/{vid}/config", tok, {"hardware": {"cdrom": None}})
     _req("DELETE", "/api/storage/isos/e2e-ui.iso", tok)
 
+    # ---- VM > Hardware: System (CPU type, chipset) + Disks -----------------
+    page.reload()
+    expect(page.locator("#vm-system")).to_be_visible(timeout=30000)
+    page.select_option("#vm-cpu-type", "qemu64")
+    page.select_option("#vm-machine", "q35")
+    page.locator("#vm-hw-save").click()
+    expect(page.locator("#vm-hw-notice")).to_contain_text("Saved", timeout=30000)
+    v = api_get(f"/api/vms/{vid}", tok)
+    assert v["hardware"].get("cpu_type") == "qemu64" and v["hardware"].get("machine") == "q35", v["hardware"]
+    n_disks = len(v["disks"])
+    page.fill("#vm-disk-add-size", "1")
+    page.select_option("#vm-disk-add-bus", "scsi")
+    page.locator("#vm-disk-add").click()
+    expect(page.locator("#vm-disk-notice")).to_contain_text("Added", timeout=30000)
+    expect(page.locator(".vm-disk-row")).to_have_count(n_disks + 1)
+    v = api_get(f"/api/vms/{vid}", tok)
+    assert len(v["disks"]) == n_disks + 1 and v["disks"][-1]["disk_type"] == "scsi", v["disks"]
+    last = page.locator(f".vm-disk-row[data-disk='{n_disks}']")
+    last.locator(".vm-disk-delete-file").check()
+    last.locator(".vm-disk-detach").click()
+    expect(page.locator("#vm-disk-notice")).to_contain_text("detached", timeout=30000)
+    assert len(api_get(f"/api/vms/{vid}", tok)["disks"]) == n_disks
+    _req("PUT", f"/api/vms/{vid}/config", tok, {"hardware": {"machine": "i440fx"}})
+
     # ---- Infrastructure > Host Bridges renders -----------------------------
     page.goto(f"{BASE}/network/bridges")
     expect(page.locator("#bridge-table")).to_be_visible(timeout=30000)
