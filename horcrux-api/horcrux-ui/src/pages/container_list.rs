@@ -151,6 +151,7 @@ pub fn ContainerList() -> impl IntoView {
                                                     })}
                                                     <a class="btn btn-sm" href=format!("/containers/{}/logs?runtime={}", container.id, container.runtime)>"Logs"</a>
                                                     <a class="btn btn-sm" href=format!("/containers/{}/exec?runtime={}", container.id, container.runtime)>"Terminal"</a>
+                                                    <a class="btn btn-sm container-firewall" href=format!("/containers/{}/firewall", container.id)>"Firewall"</a>
                                                     {matches!(container.runtime.as_str(), "lxc" | "lxd" | "incus").then(|| view! {
                                                         <a class="btn btn-sm container-console" href=format!("/containers/{}/console?runtime={}", container.id, container.runtime)>"Console"</a>
                                                     })}

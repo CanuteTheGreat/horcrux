@@ -301,6 +301,24 @@ def main():
     check("nameserver 10.20.0.1" in resolv and "search e2e.lan" in resolv, "resolv.conf written")
     check("e2e@horcrux" in exec_ct("ct1", "cat /root/.ssh/authorized_keys"), "ssh key installed")
 
+    step("container firewall: rules on ct1's own host-side veths only")
+    _, fw = req("GET", "/containers/ct1/firewall/rules")
+    prefix = fw["interface_prefix"]
+    check(re.fullmatch(r"vc[0-9a-f]{8}i", prefix) is not None, f"stable veth prefix {prefix}")
+    links = sh("ip -o link show")
+    check(f"{prefix}0" in links and f"{prefix}1" in links, f"host-side veths {prefix}0/1 exist (lxc.net.N.veth.pair)")
+    check(sorted(fw["interfaces"]) == [f"{prefix}0", f"{prefix}1"], f"API lists them: {fw['interfaces']}")
+    reach = "ping -c1 -W2 10.20.0.1 >/dev/null 2>&1 && echo REACHED || echo BLOCKED"
+    check(exec_ct("ct1", reach) == "REACHED", "gateway reachable before the rule")
+    _, rule = req("POST", "/containers/ct1/firewall/rules",
+                  {"id": "", "enabled": True, "action": "DROP", "direction": "out", "protocol": "icmp",
+                   "log": False, "position": 0}, expect=201)
+    nft = sh("nft list table bridge horcrux")
+    check(f'iifname "{prefix}*" jump ct-ct1-out' in nft and "ct-ct1-out" in nft, "bridge chains jumped to from ct1's veths")
+    check(exec_ct("ct1", reach) == "BLOCKED", "outbound ICMP from ct1 dropped (to the host, bridge input hook)")
+    req("DELETE", f"/containers/ct1/firewall/rules/{rule['id']}", expect=204)
+    check(exec_ct("ct1", reach) == "REACHED", "deleting the rule lets it through again")
+
     step("mounts: read-only bind, managed volume owned by container root")
     check(exec_ct("ct1", "cat /mnt/host/hello") == "from host", "bind mount visible")
     check("Read-only" in exec_ct("ct1", "touch /mnt/host/nope 2>&1 || true"), "bind mount is read-only")

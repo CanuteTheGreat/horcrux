@@ -458,6 +458,7 @@ impl LxcManager {
     fn render(&self, meta: &LxcMeta) -> String {
         let dir = self.dir(&meta.name);
         lxc_config::render_config(&ConfigInput {
+            id: &meta.id,
             name: &meta.name,
             dir: &dir,
             distro: &meta.distro,

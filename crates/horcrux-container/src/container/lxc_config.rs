@@ -40,6 +40,9 @@ pub struct HostEnv {
 
 /// Everything needed to render one container's config.
 pub struct ConfigInput<'a> {
+    /// Horcrux container id: names the host-side veths (`vc<hash>i<n>`)
+    /// the container firewall matches on.
+    pub id: &'a str,
     pub name: &'a str,
     pub dir: &'a Path,
     pub distro: &'a str,
@@ -213,7 +216,7 @@ pub fn render_config(i: &ConfigInput) -> String {
         let _ = writeln!(c, "lxc.net.0.type = empty");
     }
     for (n, net) in o.nets.iter().enumerate() {
-        render_net(&mut c, n, net, i.guest_net_managed);
+        render_net(&mut c, i.id, n, net, i.guest_net_managed);
     }
 
     if !o.mounts.is_empty() {
@@ -264,10 +267,13 @@ pub fn render_config(i: &ConfigInput) -> String {
     c
 }
 
-fn render_net(c: &mut String, n: usize, net: &LxcNet, guest_net_managed: bool) {
+fn render_net(c: &mut String, id: &str, n: usize, net: &LxcNet, guest_net_managed: bool) {
     let p = format!("lxc.net.{n}");
     let _ = writeln!(c, "{p}.type = veth");
     let _ = writeln!(c, "{p}.link = {}", net.bridge);
+    // Stable host-side name (LXC would pick a random vethXXXXXX), so the
+    // container's firewall rules match this container's traffic only.
+    let _ = writeln!(c, "{p}.veth.pair = {}", horcrux_common::ct_veth_name(id, n));
     let _ = writeln!(c, "{p}.name = {}", net.if_name(n));
     let _ = writeln!(c, "{p}.flags = up");
     if let Some(m) = &net.hwaddr {
@@ -584,6 +590,7 @@ mod tests {
         };
         let h = host();
         let cfg = render_config(&ConfigInput {
+            id: "ct-test",
             name: "ct1",
             dir: Path::new("/var/lib/lxc/ct1"),
             distro: "alpine",
@@ -629,6 +636,15 @@ mod tests {
         ] {
             assert!(cfg.lines().any(|l| l == line), "missing `{line}` in\n{cfg}");
         }
+        // Stable host-side veth names from the container id (the
+        // container firewall matches on them).
+        for n in 0..2 {
+            let line = format!(
+                "lxc.net.{n}.veth.pair = {}",
+                horcrux_common::ct_veth_name("ct-test", n)
+            );
+            assert!(cfg.lines().any(|l| l == line), "missing `{line}` in\n{cfg}");
+        }
         // DHCP interfaces get no LXC-side address.
         assert!(!cfg.contains("lxc.net.1.ipv4"));
         // No device-cgroup allowlist for an unprivileged container (it
@@ -639,6 +655,7 @@ mod tests {
             ..opts.clone()
         };
         let pcfg = render_config(&ConfigInput {
+            id: "ct-test",
             name: "ct1",
             dir: Path::new("/var/lib/lxc/ct1"),
             distro: "alpine",
@@ -653,6 +670,7 @@ mod tests {
         assert!(pcfg.contains("lxc.cgroup2.devices.allow = c 10:229 rwm\n"));
         // When the guest config is managed, LXC sets no addresses at all.
         let managed = render_config(&ConfigInput {
+            id: "ct-test",
             name: "ct1",
             dir: Path::new("/var/lib/lxc/ct1"),
             distro: "alpine",
@@ -682,6 +700,7 @@ mod tests {
             ..Default::default()
         };
         let cfg = render_config(&ConfigInput {
+            id: "ct-test",
             name: "p",
             dir: Path::new("/x/p"),
             distro: "debian",

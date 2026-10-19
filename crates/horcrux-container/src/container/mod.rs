@@ -20,6 +20,7 @@ pub mod lxd;
 pub mod podman;
 #[cfg(any(feature = "docker", feature = "podman"))]
 pub mod stack;
+pub mod veth;
 #[cfg(any(feature = "docker", feature = "podman"))]
 pub mod volume;
 #[cfg(any(
@@ -711,6 +712,16 @@ impl ContainerManager {
                 .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?
         };
 
+        // LXD/Incus: the NIC's host-side name, so the container firewall
+        // matches it (LXC sets it in its config; Docker/Podman below).
+        match container.runtime {
+            ContainerRuntime::Lxd => veth::set_instance_host_name("lxc", &container.name, id).await,
+            ContainerRuntime::Incus => {
+                veth::set_instance_host_name("incus", &container.name, id).await
+            }
+            _ => {}
+        }
+
         // Result-valued match + `?` (not `return` in the fallback arm), so
         // builds without any container runtime have no unreachable code.
         match container.runtime {
@@ -728,6 +739,10 @@ impl ContainerManager {
             _ => Err(crate::features::runtime_not_compiled(&container.runtime)),
         }?;
 
+        if let Err(e) = self.name_host_veths(id).await {
+            tracing::warn!("container {id}: host-side interfaces not renamed: {e}");
+        }
+
         let mut containers = self.containers.write().await;
         if let Some(stored) = containers.get_mut(id) {
             stored.status = ContainerStatus::Running;
@@ -736,6 +751,20 @@ impl ContainerManager {
             status: ContainerStatus::Running,
             ..container.to_config()
         })
+    }
+
+    /// Give a running Docker/Podman container's host-side veths their
+    /// stable names (`vc<hash>i<n>`) so its firewall matches them; LXC and
+    /// LXD/Incus containers get those names from their own config.
+    pub async fn name_host_veths(&self, id: &str) -> Result<Vec<String>> {
+        let container = {
+            let containers = self.containers.read().await;
+            containers
+                .get(id)
+                .cloned()
+                .ok_or_else(|| horcrux_common::Error::ContainerNotFound(id.to_string()))?
+        };
+        veth::name_docker_veths(&container.runtime, &container.name, id).await
     }
 
     /// Stop a container

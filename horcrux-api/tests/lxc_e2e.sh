@@ -124,7 +124,7 @@ sed -e 's/ / +/g' -e 's/^/+/' < /sys/fs/cgroup/cgroup.controllers > /sys/fs/cgro
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/dev/null
-apt-get install -y -qq lxc-utils uidmap xz-utils e2fsprogs iproute2 iputils-ping dnsmasq-base curl libvirt0 >/dev/null
+apt-get install -y -qq lxc-utils uidmap xz-utils e2fsprogs iproute2 iputils-ping dnsmasq-base curl libvirt0 nftables >/dev/null
 lxc-start --version
 
 # Host networking for the containers: VLAN-aware bridge, untagged

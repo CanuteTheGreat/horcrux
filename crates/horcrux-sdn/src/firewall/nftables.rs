@@ -283,7 +283,9 @@ impl NftablesManager {
     /// so it sees bridged guest traffic): regular chains `vm-<id>-in` (to the
     /// guest, `oifname` = one of its taps) and `vm-<id>-out` (from the
     /// guest, `iifname`), flushed and refilled from `rules`, and jumps from
-    /// the shared `forward` base chain matched on the VM's tap name prefix.
+    /// the shared base chains matched on the VM's tap name prefix:
+    /// `forward` (to/from other ports of the bridge), `input` (from the
+    /// guest to the host itself) and `output` (from the host to the guest).
     /// The jumps are added once (`jumps_present` = already installed).
     pub fn vm_ruleset_commands(
         &self,
@@ -291,25 +293,62 @@ impl NftablesManager {
         rules: &[FirewallRule],
         jumps_present: bool,
     ) -> Vec<Vec<String>> {
+        self.guest_ruleset_commands(
+            GuestKind::Vm,
+            vm_id,
+            &horcrux_common::vm_tap_prefix(vm_id),
+            rules,
+            [jumps_present; 3],
+        )
+    }
+
+    /// Same for a container: chains `ct-<id>-in/out`, matched on the
+    /// container's stable host-side veth names (`vc<hash>i<n>`).
+    pub fn ct_ruleset_commands(
+        &self,
+        ct_id: &str,
+        rules: &[FirewallRule],
+        jumps_present: bool,
+    ) -> Vec<Vec<String>> {
+        self.guest_ruleset_commands(
+            GuestKind::Container,
+            ct_id,
+            &horcrux_common::ct_veth_prefix(ct_id),
+            rules,
+            [jumps_present; 3],
+        )
+    }
+
+    fn guest_ruleset_commands(
+        &self,
+        kind: GuestKind,
+        id: &str,
+        if_prefix: &str,
+        rules: &[FirewallRule],
+        // Jumps already installed in forward / input / output.
+        jumps_present: [bool; 3],
+    ) -> Vec<Vec<String>> {
         let t = self.table_name.clone();
         let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-        let (cin, cout) = (format!("vm-{vm_id}-in"), format!("vm-{vm_id}-out"));
-        let taps = format!("\"{}*\"", horcrux_common::vm_tap_prefix(vm_id));
-        let mut cmds = vec![
-            s(&["add", "table", "bridge", &t]),
-            s(&[
+        let (cin, cout) = kind.chains(id);
+        let ifs = format!("\"{if_prefix}*\"");
+        let mut cmds = vec![s(&["add", "table", "bridge", &t])];
+        for base in BASE_CHAINS {
+            cmds.push(s(&[
                 "add",
                 "chain",
                 "bridge",
                 &t,
-                "forward",
-                "{ type filter hook forward priority 0 ; policy accept ; }",
-            ]),
+                base,
+                &format!("{{ type filter hook {base} priority 0 ; policy accept ; }}"),
+            ]));
+        }
+        cmds.extend([
             s(&["add", "chain", "bridge", &t, &cin]),
             s(&["add", "chain", "bridge", &t, &cout]),
             s(&["flush", "chain", "bridge", &t, &cin]),
             s(&["flush", "chain", "bridge", &t, &cout]),
-        ];
+        ]);
         let mut sorted: Vec<&FirewallRule> = rules.iter().filter(|r| r.enabled).collect();
         sorted.sort_by_key(|r| r.position);
         for r in sorted {
@@ -326,48 +365,127 @@ impl NftablesManager {
                 self.build_nft_rule(r),
             ]);
         }
-        if !jumps_present {
-            let comment = format!("comment \"vm:{vm_id}\"");
-            cmds.push(vec![
-                "add".into(),
-                "rule".into(),
-                "bridge".into(),
-                t.clone(),
-                "forward".into(),
-                format!("oifname {taps} jump {cin} {comment}"),
-            ]);
-            cmds.push(vec![
-                "add".into(),
-                "rule".into(),
-                "bridge".into(),
-                t.clone(),
-                "forward".into(),
-                format!("iifname {taps} jump {cout} {comment}"),
-            ]);
+        let comment = format!("comment \"{}\"", kind.comment(id));
+        // forward: both directions; input: from the guest to the host;
+        // output: from the host to the guest.
+        let jumps: [(&str, Vec<String>); 3] = [
+            (
+                "forward",
+                vec![
+                    format!("oifname {ifs} jump {cin} {comment}"),
+                    format!("iifname {ifs} jump {cout} {comment}"),
+                ],
+            ),
+            (
+                "input",
+                vec![format!("iifname {ifs} jump {cout} {comment}")],
+            ),
+            (
+                "output",
+                vec![format!("oifname {ifs} jump {cin} {comment}")],
+            ),
+        ];
+        for (i, (base, exprs)) in jumps.into_iter().enumerate() {
+            if jumps_present[i] {
+                continue;
+            }
+            for e in exprs {
+                cmds.push(vec![
+                    "add".into(),
+                    "rule".into(),
+                    "bridge".into(),
+                    t.clone(),
+                    base.to_string(),
+                    e,
+                ]);
+            }
         }
         cmds
     }
 
-    /// Install VM `vm_id`'s firewall rules (see `vm_ruleset_commands`).
-    pub async fn sync_vm_rules(&self, vm_id: &str, rules: &[FirewallRule]) -> Result<()> {
-        let listing = Command::new("nft")
-            .args(["list", "chain", "bridge", &self.table_name, "forward"])
+    async fn chain_listing(&self, chain: &str) -> String {
+        Command::new("nft")
+            .args(["-a", "list", "chain", "bridge", &self.table_name, chain])
             .output()
             .await
             .ok()
             .filter(|o| o.status.success())
             .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-            .unwrap_or_default();
-        let jumps_present = listing.contains(&format!("\"vm:{vm_id}\""));
-        for cmd in self.vm_ruleset_commands(vm_id, rules, jumps_present) {
+            .unwrap_or_default()
+    }
+
+    async fn sync_guest(&self, kind: GuestKind, id: &str, rules: &[FirewallRule]) -> Result<()> {
+        let tag = format!("\"{}\"", kind.comment(id));
+        let mut present = [false; 3];
+        for (i, base) in BASE_CHAINS.iter().enumerate() {
+            present[i] = self.chain_listing(base).await.contains(&tag);
+        }
+        let prefix = match kind {
+            GuestKind::Vm => horcrux_common::vm_tap_prefix(id),
+            GuestKind::Container => horcrux_common::ct_veth_prefix(id),
+        };
+        let cmds = self.guest_ruleset_commands(kind, id, &prefix, rules, present);
+        for cmd in cmds {
             let args: Vec<&str> = cmd.iter().map(String::as_str).collect();
             self.nft(&args).await?;
         }
         info!(
-            "Installed {} firewall rule(s) for VM {}",
+            "Installed {} firewall rule(s) for {} {}",
             rules.iter().filter(|r| r.enabled).count(),
-            vm_id
+            kind.label(),
+            id
         );
+        Ok(())
+    }
+
+    /// Install VM `vm_id`'s firewall rules (see `vm_ruleset_commands`).
+    pub async fn sync_vm_rules(&self, vm_id: &str, rules: &[FirewallRule]) -> Result<()> {
+        self.sync_guest(GuestKind::Vm, vm_id, rules).await
+    }
+
+    /// Install container `ct_id`'s firewall rules (see `ct_ruleset_commands`).
+    pub async fn sync_ct_rules(&self, ct_id: &str, rules: &[FirewallRule]) -> Result<()> {
+        self.sync_guest(GuestKind::Container, ct_id, rules).await
+    }
+
+    /// The `forward` jump handles belonging to a guest (from `nft -a list`).
+    pub fn guest_jump_handles(listing: &str, comment: &str) -> Vec<String> {
+        let needle = format!("comment \"{comment}\"");
+        listing
+            .lines()
+            .filter(|l| l.contains(&needle))
+            .filter_map(|l| {
+                l.rsplit_once("# handle ")
+                    .map(|(_, h)| h.trim().to_string())
+            })
+            .collect()
+    }
+
+    /// Remove a guest's firewall from the kernel entirely: its jumps from
+    /// `forward` and its two chains (after the guest was deleted).
+    pub async fn remove_guest(&self, kind: GuestKind, id: &str) -> Result<()> {
+        for base in BASE_CHAINS {
+            let listing = self.chain_listing(base).await;
+            for h in Self::guest_jump_handles(&listing, &kind.comment(id)) {
+                let _ = self
+                    .nft(&[
+                        "delete",
+                        "rule",
+                        "bridge",
+                        &self.table_name,
+                        base,
+                        "handle",
+                        &h,
+                    ])
+                    .await;
+            }
+        }
+        let (cin, cout) = kind.chains(id);
+        for c in [cin, cout] {
+            let _ = self
+                .nft(&["delete", "chain", "bridge", &self.table_name, &c])
+                .await;
+        }
         Ok(())
     }
 
@@ -484,6 +602,38 @@ impl NftablesManager {
     }
 }
 
+/// Base chains of the bridge table guest firewalls hook into.
+const BASE_CHAINS: [&str; 3] = ["forward", "input", "output"];
+
+/// Which kind of guest a bridge-family firewall belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuestKind {
+    Vm,
+    Container,
+}
+
+impl GuestKind {
+    fn chains(&self, id: &str) -> (String, String) {
+        let p = match self {
+            GuestKind::Vm => "vm",
+            GuestKind::Container => "ct",
+        };
+        (format!("{p}-{id}-in"), format!("{p}-{id}-out"))
+    }
+    fn comment(&self, id: &str) -> String {
+        match self {
+            GuestKind::Vm => format!("vm:{id}"),
+            GuestKind::Container => format!("ct:{id}"),
+        }
+    }
+    fn label(&self) -> &'static str {
+        match self {
+            GuestKind::Vm => "VM",
+            GuestKind::Container => "container",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,9 +687,64 @@ mod tests {
         assert!(cmds.contains(&format!(
             "add rule bridge horcrux forward iifname \"{prefix}*\" jump vm-vm-1-out comment \"vm:vm-1\""
         )));
+        // Traffic between the VM and the host itself goes through the
+        // bridge's input/output hooks, not forward: jumped to there too.
+        assert!(cmds.contains(&format!(
+            "add rule bridge horcrux input iifname \"{prefix}*\" jump vm-vm-1-out comment \"vm:vm-1\""
+        )), "{cmds:#?}");
+        assert!(cmds.contains(&format!(
+            "add rule bridge horcrux output oifname \"{prefix}*\" jump vm-vm-1-in comment \"vm:vm-1\""
+        )));
+        assert!(cmds
+            .iter()
+            .any(|c| c.starts_with("add chain bridge horcrux input { type filter hook input")));
         // Re-sync: chains are refilled, the jumps are not added twice.
         let again = m.vm_ruleset_commands("vm-1", &[], true);
         assert!(!again.iter().any(|c| c.join(" ").contains("jump")));
+    }
+
+    /// Container rules work the same way on the container's stable
+    /// host-side veth names, in their own chains.
+    #[test]
+    fn container_rules_are_bridge_chains_on_its_veths() {
+        let m = NftablesManager::new();
+        let mut drop_out = rule(Some(Protocol::Tcp), Some("443"), None);
+        drop_out.direction = Direction::Out;
+        drop_out.action = FirewallAction::Drop;
+        let cmds: Vec<String> = m
+            .ct_ruleset_commands("web1", &[drop_out], false)
+            .iter()
+            .map(|c| c.join(" "))
+            .collect();
+        let prefix = horcrux_common::ct_veth_prefix("web1");
+        assert!(prefix.starts_with("vc") && prefix.len() == 11, "{prefix}");
+        assert!(
+            cmds.contains(&"add rule bridge horcrux ct-web1-out tcp dport 443 drop".to_string()),
+            "{cmds:#?}"
+        );
+        assert!(cmds.contains(&format!(
+            "add rule bridge horcrux forward iifname \"{prefix}*\" jump ct-web1-out comment \"ct:web1\""
+        )));
+        assert!(cmds.contains(&format!(
+            "add rule bridge horcrux forward oifname \"{prefix}*\" jump ct-web1-in comment \"ct:web1\""
+        )));
+        assert_ne!(prefix, horcrux_common::ct_veth_prefix("web2"));
+        assert!(horcrux_common::valid_ifname(&horcrux_common::ct_veth_name(
+            "web1", 7
+        )));
+    }
+
+    #[test]
+    fn guest_jumps_are_found_by_comment_for_removal() {
+        let listing = "table bridge horcrux {\n\tchain forward {\n\t\ttype filter hook forward priority filter; policy accept;\n\
+                       \t\toifname \"tapabc*\" jump vm-vm-1-in comment \"vm:vm-1\" # handle 4\n\
+                       \t\tiifname \"tapabc*\" jump vm-vm-1-out comment \"vm:vm-1\" # handle 5\n\
+                       \t\toifname \"tapdef*\" jump vm-vm-10-in comment \"vm:vm-10\" # handle 6\n\t}\n}\n";
+        assert_eq!(
+            NftablesManager::guest_jump_handles(listing, "vm:vm-1"),
+            vec!["4".to_string(), "5".to_string()]
+        );
+        assert!(NftablesManager::guest_jump_handles(listing, "ct:x").is_empty());
     }
 
     fn rule(protocol: Option<Protocol>, dport: Option<&str>, source: Option<&str>) -> FirewallRule {

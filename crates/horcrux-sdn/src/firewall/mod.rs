@@ -205,6 +205,17 @@ impl FirewallManager {
         }
     }
 
+    /// Ids of the containers that have firewall rules.
+    pub async fn containers_with_rules(&self) -> Vec<String> {
+        self.container_rules
+            .read()
+            .await
+            .iter()
+            .filter(|(_, r)| !r.is_empty())
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
     /// Append a rule to the in-memory list for a scope (no nftables, no DB).
     async fn push_rule(&self, scope: &FirewallScope, rule: FirewallRule) {
         match scope {
@@ -292,8 +303,13 @@ impl FirewallManager {
                     .or_insert_with(Vec::new)
                     .push(rule.clone());
 
-                // Apply to nftables for this container
-                self.nftables.add_container_rule(&ct_id, &rule).await?;
+                drop(rules);
+                // Reinstall this container's whole rule set (bridge family,
+                // matched on the container's stable host-side veths).
+                let all = self
+                    .list_rules(FirewallScope::Container(ct_id.clone()))
+                    .await;
+                self.nftables.sync_ct_rules(&ct_id, &all).await?;
             }
         }
 
@@ -335,8 +351,11 @@ impl FirewallManager {
                     ct_rules.retain(|r| r.id != rule_id);
                 }
 
-                // Remove from nftables
-                self.nftables.remove_container_rule(&ct_id, rule_id).await?;
+                drop(rules);
+                let all = self
+                    .list_rules(FirewallScope::Container(ct_id.clone()))
+                    .await;
+                self.nftables.sync_ct_rules(&ct_id, &all).await?;
             }
         }
 
@@ -438,13 +457,44 @@ impl FirewallManager {
             FirewallScope::Datacenter => self.nftables.apply_host_rules("dc", &rules).await?,
             FirewallScope::Node(_) => self.nftables.apply_host_rules("node", &rules).await?,
             FirewallScope::Vm(vm_id) => self.nftables.sync_vm_rules(vm_id, &rules).await?,
-            FirewallScope::Container(ct_id) => {
-                self.nftables.initialize().await?;
-                let _ = self.nftables.flush_container_chain(ct_id).await;
-                for rule in rules.iter().filter(|r| r.enabled) {
-                    self.nftables.add_container_rule(ct_id, rule).await?;
-                }
+            FirewallScope::Container(ct_id) => self.nftables.sync_ct_rules(ct_id, &rules).await?,
+        }
+        Ok(())
+    }
+
+    /// Forget every rule of a VM or container that is gone (deleted, or
+    /// migrated to another node): stored rules, and its chains and jumps in
+    /// the kernel. Otherwise they'd be re-installed at every start and a
+    /// new guest that gets the same id would inherit them.
+    pub async fn remove_guest_rules(&self, scope: FirewallScope) -> Result<()> {
+        let (kind, id) = match &scope {
+            FirewallScope::Vm(id) => (nftables::GuestKind::Vm, id.clone()),
+            FirewallScope::Container(id) => (nftables::GuestKind::Container, id.clone()),
+            _ => {
+                return Err(horcrux_common::Error::Validation(
+                    "only VM and container firewalls belong to a guest".into(),
+                ))
             }
+        };
+        for rule in self.list_rules(scope.clone()).await {
+            config_store::delete_opt(
+                &self.store,
+                kinds::FIREWALL_RULE,
+                &stored_rule_id(&scope, &rule.id),
+            )
+            .await?;
+        }
+        match &scope {
+            FirewallScope::Vm(id) => {
+                self.vm_rules.write().await.remove(id);
+            }
+            FirewallScope::Container(id) => {
+                self.container_rules.write().await.remove(id);
+            }
+            _ => {}
+        }
+        if let Err(e) = self.nftables.remove_guest(kind, &id).await {
+            tracing::warn!("firewall of {} not removed from nftables: {e}", scope.key());
         }
         Ok(())
     }
