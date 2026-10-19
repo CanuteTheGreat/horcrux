@@ -575,6 +575,11 @@ pub async fn run() -> anyhow::Result<()> {
                 next,
             )
         }))
+        // Prometheus: count every request by route pattern and status
+        .layer(axum_middleware::from_fn_with_state(
+            state.clone(),
+            api::prometheus_export::count_http_requests,
+        ))
         // Note: Auth middleware will be added per-route or per-group later
         // Serve static files (frontend) - must be last to act as fallback
         .fallback_service(serve_dir);
@@ -5046,7 +5051,8 @@ async fn check_iommu_status(
 // Prometheus Metrics Endpoint
 
 async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    // Export metrics in Prometheus format
+    // Fill the gauges from the live sources, then export
+    api::prometheus_export::refresh(&state).await;
     let metrics = state.prometheus_manager.export_metrics().await;
 
     // Return as plain text with Prometheus content type

@@ -16,6 +16,7 @@ pub mod metrics;
 pub mod migration_jobs;
 pub mod migration_peer;
 pub mod notifications;
+pub mod prometheus_export;
 #[cfg(feature = "s3-gateway")]
 pub mod s3_gateway;
 pub mod tls;

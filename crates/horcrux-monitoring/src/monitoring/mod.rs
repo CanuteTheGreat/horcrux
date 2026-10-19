@@ -590,31 +590,27 @@ impl MonitoringManager {
         Ok(pools)
     }
 
+    /// Node CPU utilisation in percent over the interval since the previous
+    /// call (two /proc/stat reads 250 ms apart on the first one) - a
+    /// single read only gives the since-boot average.
     async fn read_cpu_usage() -> Result<f64> {
-        // Read /proc/stat and calculate CPU usage
-        let stat = tokio::fs::read_to_string("/proc/stat").await?;
-
-        // Parse first line which is aggregate CPU stats
-        if let Some(line) = stat.lines().next() {
-            if line.starts_with("cpu ") {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 5 {
-                    let user: u64 = parts[1].parse().unwrap_or(0);
-                    let nice: u64 = parts[2].parse().unwrap_or(0);
-                    let system: u64 = parts[3].parse().unwrap_or(0);
-                    let idle: u64 = parts[4].parse().unwrap_or(0);
-
-                    let total = user + nice + system + idle;
-                    let active = user + nice + system;
-
-                    if total > 0 {
-                        return Ok((active as f64 / total as f64) * 100.0);
-                    }
-                }
+        use crate::metrics::system::{read_cpu_stats, CpuStats};
+        static PREV: std::sync::Mutex<Option<CpuStats>> = std::sync::Mutex::new(None);
+        let prev = PREV.lock().ok().and_then(|mut p| p.take());
+        let prev = match prev {
+            Some(p) => p,
+            None => {
+                let first = read_cpu_stats()?;
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                first
             }
+        };
+        let current = read_cpu_stats()?;
+        let usage = current.usage_percent(&prev).clamp(0.0, 100.0);
+        if let Ok(mut p) = PREV.lock() {
+            *p = Some(current);
         }
-
-        Ok(0.0)
+        Ok(usage)
     }
 
     async fn read_memory_info() -> Result<MemoryMetrics> {

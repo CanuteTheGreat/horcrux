@@ -2716,3 +2716,42 @@ async fn test_multi_hypervisor_support() {
             .await;
     }
 }
+
+/// GET /metrics exports live figures, not just the registered defaults:
+/// this node's CPU/memory, the VM and cluster-node counts, and a request
+/// counter labelled by route pattern.
+#[tokio::test]
+async fn prometheus_metrics_export_live_node_vm_and_request_figures() {
+    let client = authed_client().await;
+    // a request with a route parameter, to see the pattern label
+    let _ = client
+        .get(format!("{}/vms/prom-metrics-probe", API_BASE))
+        .send()
+        .await;
+    let root = API_BASE.trim_end_matches("/api");
+    let r = client.get(format!("{root}/metrics")).send().await;
+    let text = expect_2xx(r, "GET /metrics")
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let value = |prefix: &str| -> Option<f64> {
+        text.lines()
+            .find(|l| l.starts_with(prefix) && !l.starts_with('#'))
+            .and_then(|l| l.rsplit(' ').next()?.parse().ok())
+    };
+    let mem = value("horcrux_node_memory_usage_bytes{").expect("node memory series");
+    assert!(mem > 0.0, "node memory in use: {mem}");
+    let cpu = value("horcrux_node_cpu_usage_percent{").expect("node CPU series");
+    assert!((0.0..=100.0).contains(&cpu), "{cpu}");
+    assert!(value("horcrux_node_uptime_seconds{").unwrap_or(0.0) > 0.0);
+    assert!(value("horcrux_vms_total ").is_some(), "VM count: {text}");
+    assert!(value("horcrux_cluster_nodes_total ").is_some());
+    assert!(
+        text.lines()
+            .any(|l| l.starts_with("horcrux_http_requests_total{")
+                && l.contains("path=\"/api/vms/:id\"")),
+        "requests counted by route pattern: {text}"
+    );
+}

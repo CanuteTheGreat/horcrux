@@ -149,6 +149,14 @@ impl PrometheusRegistry {
         output
     }
 
+    /// Drop every series of one metric (gauges that are re-filled from the
+    /// current objects on each scrape, so deleted VMs/pools disappear).
+    pub async fn reset(&self, name: &str) {
+        if let Some(metric) = self.metrics.write().await.get_mut(name) {
+            metric.values.clear();
+        }
+    }
+
     /// Clear all metrics
     pub async fn clear(&self) {
         let mut metrics = self.metrics.write().await;
@@ -340,13 +348,13 @@ impl PrometheusManager {
             .await;
     }
 
-    /// Update storage metrics
+    /// Update storage metrics (sizes in bytes).
     pub async fn update_storage_metrics(
         &self,
         pool_id: &str,
         pool_name: &str,
-        total: u64,
-        used: u64,
+        total_bytes: u64,
+        used_bytes: u64,
     ) {
         let mut labels = HashMap::new();
         labels.insert("pool_id".to_string(), pool_id.to_string());
@@ -356,15 +364,21 @@ impl PrometheusManager {
             .set_gauge(
                 "horcrux_storage_total_bytes",
                 labels.clone(),
-                (total * 1024 * 1024 * 1024) as f64,
+                total_bytes as f64,
             )
             .await;
         self.registry
-            .set_gauge(
-                "horcrux_storage_used_bytes",
-                labels.clone(),
-                ((total - used) * 1024 * 1024 * 1024) as f64,
-            )
+            .set_gauge("horcrux_storage_used_bytes", labels, used_bytes as f64)
+            .await;
+    }
+
+    /// Update the VM count gauges.
+    pub async fn update_vm_counts(&self, total: usize, running: usize) {
+        self.registry
+            .set_gauge("horcrux_vms_total", HashMap::new(), total as f64)
+            .await;
+        self.registry
+            .set_gauge("horcrux_vms_running", HashMap::new(), running as f64)
             .await;
     }
 
@@ -445,6 +459,43 @@ mod tests {
 
         let output = registry.export().await;
         assert!(output.contains("test_counter"));
+    }
+
+    #[tokio::test]
+    async fn updates_land_in_the_export_and_reset_drops_stale_series() {
+        let m = PrometheusManager::new();
+        m.init_default_metrics().await;
+        m.update_node_metrics("node1", 12.5, 1_073_741_824, 3600)
+            .await;
+        m.update_storage_metrics("local", "local", 10_000, 4_000)
+            .await;
+        m.update_vm_metrics("vm-1", "web", 3.0, 268_435_456, "running")
+            .await;
+        m.update_vm_counts(2, 1).await;
+        m.inc_http_requests("GET", "/api/vms", 200).await;
+        m.inc_http_requests("GET", "/api/vms", 200).await;
+        let out = m.export_metrics().await;
+        assert!(
+            out.contains("horcrux_node_cpu_usage_percent{node=\"node1\"} 12.5"),
+            "{out}"
+        );
+        assert!(out.contains("horcrux_node_memory_usage_bytes{node=\"node1\"} 1073741824"));
+        assert!(out.contains("horcrux_storage_used_bytes{"), "{out}");
+        assert!(
+            out.contains("} 4000\n"),
+            "used bytes, not total - used: {out}"
+        );
+        assert!(out.contains("horcrux_vms_running 1"));
+        assert!(
+            out.contains("horcrux_http_requests_total{") && out.contains("} 2\n"),
+            "{out}"
+        );
+        m.registry().reset("horcrux_vm_cpu_usage_percent").await;
+        let out = m.export_metrics().await;
+        assert!(
+            !out.contains("vm_id=\"vm-1\"} 3"),
+            "deleted VM series dropped: {out}"
+        );
     }
 
     #[tokio::test]
