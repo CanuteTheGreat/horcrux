@@ -53,6 +53,10 @@ pub struct NodeUsage {
     pub architecture: Architecture,
     /// Unix timestamp (seconds) the sample was taken.
     pub timestamp: i64,
+    /// Persistent identity of the reporting Horcrux instance (absent from
+    /// older nodes). See [`check_identity`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
 }
 
 /// Result of one usage poll of one node.
@@ -72,6 +76,9 @@ pub enum PollOutcome {
 pub fn apply_poll(node: &mut Node, outcome: PollOutcome, now: i64) {
     match outcome {
         PollOutcome::Usage(usage) => {
+            if node.node_id.is_none() {
+                node.node_id = usage.node_id.clone();
+            }
             node.status = NodeStatus::Online;
             node.cpu_usage = Some(usage.cpu_usage.clamp(0.0, 100.0));
             node.memory_used = Some(usage.memory_used);
@@ -121,6 +128,124 @@ pub fn memory_in_use(mem: &system::MemoryStats) -> u64 {
     }
 }
 
+/// Turn a report that came from the wrong Horcrux instance into
+/// `Unreachable`: either this node polled itself through another node's
+/// address (`own_id`, and the target isn't this host), or the node's
+/// pinned identity differs from the responder's (the address now belongs
+/// to a different node, e.g. a restarted container got the dead node's
+/// IP). Without that check a dead node is shown online.
+pub fn check_identity(
+    node: &Node,
+    outcome: PollOutcome,
+    own_id: &str,
+    target_is_this_host: bool,
+) -> PollOutcome {
+    if let PollOutcome::Usage(u) = &outcome {
+        if let Some(got) = u.node_id.as_deref() {
+            if !target_is_this_host && !own_id.is_empty() && got == own_id {
+                tracing::warn!(
+                    "Cluster node {} ({}): this node answered at that address - not counting it as up",
+                    node.name,
+                    node.ip
+                );
+                return PollOutcome::Unreachable;
+            }
+            if let Some(pinned) = node.node_id.as_deref() {
+                if pinned != got {
+                    tracing::warn!(
+                        "Cluster node {} ({}): answered by a different Horcrux instance ({} instead of {}); \
+                         remove and re-add the node if it was reinstalled",
+                        node.name,
+                        node.ip,
+                        got,
+                        pinned
+                    );
+                    return PollOutcome::Unreachable;
+                }
+            }
+        }
+    }
+    outcome
+}
+
+/// "No limit" as cgroup v1 reports it (page-rounded i64::MAX) and anything
+/// above it.
+const CGROUP_V1_UNLIMITED: u64 = 0x7FFF_FFFF_FFFF_F000;
+
+fn read_u64(p: &std::path::Path) -> Option<u64> {
+    std::fs::read_to_string(p).ok()?.trim().parse().ok()
+}
+
+fn stat_field(p: &std::path::Path, key: &str) -> u64 {
+    std::fs::read_to_string(p)
+        .ok()
+        .and_then(|s| {
+            s.lines().find_map(|l| {
+                let (k, v) = l.split_once(' ')?;
+                (k == key).then(|| v.trim().parse().ok()).flatten()
+            })
+        })
+        .unwrap_or(0)
+}
+
+/// This process's cgroup memory limit and usage (bytes), when it runs
+/// under a limit: cgroup v2 `memory.max` (the smallest one up the
+/// hierarchy) / `memory.current`, or v1 `memory.limit_in_bytes` /
+/// `memory.usage_in_bytes`; usage excludes inactive page cache like
+/// MemAvailable does. `root` is the cgroup mount (/sys/fs/cgroup),
+/// `self_cgroup` the text of /proc/self/cgroup. `None` = no limit.
+pub fn cgroup_memory(root: &std::path::Path, self_cgroup: &str) -> Option<(u64, u64)> {
+    // cgroup v2: "0::/path"
+    if let Some(path) = self_cgroup.lines().find_map(|l| l.strip_prefix("0::")) {
+        let mut dir = root.join(path.trim().trim_start_matches('/'));
+        if !dir.join("memory.max").exists() {
+            dir = root.to_path_buf(); // cgroup namespace: we are at the root
+        }
+        let mut limit: Option<u64> = None;
+        let mut d = dir.clone();
+        loop {
+            if let Some(v) = read_u64(&d.join("memory.max")) {
+                limit = Some(limit.map_or(v, |l: u64| l.min(v)));
+            }
+            if d == root || !d.pop() || !d.starts_with(root) {
+                break;
+            }
+        }
+        let limit = limit?;
+        let current = read_u64(&dir.join("memory.current"))?;
+        let inactive = stat_field(&dir.join("memory.stat"), "inactive_file");
+        return Some((limit, current.saturating_sub(inactive).min(limit)));
+    }
+    // cgroup v1: "N:memory:/path" (or "N:...,memory,...:/path")
+    let path = self_cgroup.lines().find_map(|l| {
+        let mut parts = l.splitn(3, ':');
+        let (_, ctrls, path) = (parts.next()?, parts.next()?, parts.next()?);
+        ctrls.split(',').any(|c| c == "memory").then_some(path)
+    })?;
+    let base = root.join("memory");
+    let mut dir = base.join(path.trim().trim_start_matches('/'));
+    if !dir.join("memory.limit_in_bytes").exists() {
+        dir = base;
+    }
+    let limit = read_u64(&dir.join("memory.limit_in_bytes"))?;
+    if limit >= CGROUP_V1_UNLIMITED {
+        return None;
+    }
+    let usage = read_u64(&dir.join("memory.usage_in_bytes"))?;
+    let inactive = stat_field(&dir.join("memory.stat"), "total_inactive_file");
+    Some((limit, usage.saturating_sub(inactive).min(limit)))
+}
+
+/// Host memory (total, in use), narrowed to this process's cgroup limit
+/// when that is smaller than the host's RAM (a containerised node can only
+/// place workloads within its limit).
+pub fn effective_memory(host_total: u64, host_used: u64, cgroup: Option<(u64, u64)>) -> (u64, u64) {
+    match cgroup {
+        Some((limit, used)) if limit > 0 && limit < host_total => (limit, used.min(limit)),
+        _ => (host_total, host_used),
+    }
+}
+
 /// Samples this host's CPU and memory from procfs. CPU utilisation is a
 /// real delta between consecutive /proc/stat reads (not the since-boot
 /// average a single read gives you).
@@ -163,14 +288,19 @@ impl LocalUsageSampler {
         if mem.total == 0 {
             return None;
         }
+        let cgroup = std::fs::read_to_string("/proc/self/cgroup")
+            .ok()
+            .and_then(|c| cgroup_memory(std::path::Path::new("/sys/fs/cgroup"), &c));
+        let (memory_total, memory_used) = effective_memory(mem.total, memory_in_use(&mem), cgroup);
 
         Some(NodeUsage {
             cpu_usage,
-            memory_used: memory_in_use(&mem),
-            memory_total: mem.total,
+            memory_used,
+            memory_total,
             cpu_cores: system::get_cpu_count() as u32,
             architecture: Architecture::detect(),
             timestamp: chrono::Utc::now().timestamp(),
+            node_id: None,
         })
     }
 }
@@ -249,6 +379,7 @@ mod tests {
             cpu_cores: 8,
             architecture: Architecture::Aarch64,
             timestamp: 1_000,
+            node_id: None,
         }
     }
 
@@ -317,6 +448,146 @@ mod tests {
         let mut n = node("n1", "10.0.0.1");
         apply_poll(&mut n, PollOutcome::Usage(usage(140.0, 1)), 1_000);
         assert_eq!(n.cpu_usage, Some(100.0));
+    }
+
+    fn from(id: Option<&str>) -> PollOutcome {
+        let mut u = usage(5.0, 1 << 30);
+        u.node_id = id.map(str::to_string);
+        PollOutcome::Usage(u)
+    }
+
+    #[test]
+    fn a_node_pins_the_identity_of_its_first_report() {
+        let mut n = node("node3", "172.18.0.4");
+        let o = check_identity(&n, from(Some("id-node3")), "id-node1", false);
+        apply_poll(&mut n, o, 1_000);
+        assert_eq!(n.status, NodeStatus::Online);
+        assert_eq!(n.node_id.as_deref(), Some("id-node3"));
+        // the same instance keeps it online
+        let o = check_identity(&n, from(Some("id-node3")), "id-node1", false);
+        assert!(matches!(o, PollOutcome::Usage(_)));
+    }
+
+    #[test]
+    fn a_different_instance_at_a_dead_nodes_address_does_not_make_it_online() {
+        // node3 died; node2 restarted onto node3's old address
+        let mut n = node("node3", "172.18.0.4");
+        n.node_id = Some("id-node3".into());
+        let o = check_identity(&n, from(Some("id-node2")), "id-node1", false);
+        assert_eq!(o, PollOutcome::Unreachable);
+        apply_poll(&mut n, o, 1_000);
+        assert_eq!(n.status, NodeStatus::Offline);
+        assert_eq!(n.cpu_usage, None);
+        assert_eq!(n.node_id.as_deref(), Some("id-node3"), "pin kept");
+    }
+
+    #[test]
+    fn a_node_polling_itself_through_another_nodes_address_is_not_that_node() {
+        // node1 restarted onto node3's old address and polls "node3"
+        let n = node("node3", "172.18.0.4");
+        assert_eq!(
+            check_identity(&n, from(Some("id-node1")), "id-node1", false),
+            PollOutcome::Unreachable
+        );
+        // ... but its own (local) entry is fine
+        let local = node("node1", "127.0.0.1");
+        assert!(matches!(
+            check_identity(&local, from(Some("id-node1")), "id-node1", true),
+            PollOutcome::Usage(_)
+        ));
+    }
+
+    #[test]
+    fn reports_without_an_identity_from_older_nodes_are_accepted() {
+        let mut n = node("old", "10.0.0.9");
+        n.node_id = Some("id-x".into());
+        assert!(matches!(
+            check_identity(&n, from(None), "id-node1", false),
+            PollOutcome::Usage(_)
+        ));
+        assert_eq!(
+            check_identity(&n, PollOutcome::ReachableNoUsage, "id-node1", false),
+            PollOutcome::ReachableNoUsage
+        );
+    }
+
+    fn cg(dir: &std::path::Path, files: &[(&str, &str)]) {
+        for (p, v) in files {
+            let f = dir.join(p);
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(f, v).unwrap();
+        }
+    }
+
+    #[test]
+    fn node_memory_honours_a_cgroup_v2_limit() {
+        let root = tempfile::tempdir().unwrap();
+        let r = root.path();
+        cg(
+            r,
+            &[
+                ("system.slice/memory.max", "max\n"),
+                ("system.slice/hx.service/memory.max", "1610612736\n"),
+                ("system.slice/hx.service/memory.current", "524288000\n"),
+                (
+                    "system.slice/hx.service/memory.stat",
+                    "anon 1\ninactive_file 104857600\n",
+                ),
+            ],
+        );
+        let got = cgroup_memory(r, "0::/system.slice/hx.service\n");
+        assert_eq!(got, Some((1_610_612_736, 524_288_000 - 104_857_600)));
+        // a 1.5 GB-capped node on a 30.7 GB host reports 1.5 GB
+        let host = 30_700_000_000u64;
+        assert_eq!(
+            effective_memory(host, 9_000_000_000, got),
+            (1_610_612_736, 419_430_400)
+        );
+        // a parent's lower limit applies too
+        cg(r, &[("system.slice/memory.max", "1073741824\n")]);
+        assert_eq!(
+            cgroup_memory(r, "0::/system.slice/hx.service\n").unwrap().0,
+            1_073_741_824
+        );
+        // no limit anywhere -> host figures
+        let free = tempfile::tempdir().unwrap();
+        cg(
+            free.path(),
+            &[("memory.max", "max\n"), ("memory.current", "1\n")],
+        );
+        assert_eq!(cgroup_memory(free.path(), "0::/\n"), None);
+        assert_eq!(effective_memory(host, 5, None), (host, 5));
+    }
+
+    #[test]
+    fn node_memory_honours_a_cgroup_v1_limit_and_namespace_root() {
+        let root = tempfile::tempdir().unwrap();
+        let r = root.path();
+        // container view: the host path from /proc/self/cgroup isn't mounted,
+        // the container's own cgroup is the memory controller root
+        cg(
+            r,
+            &[
+                ("memory/memory.limit_in_bytes", "2147483648\n"),
+                ("memory/memory.usage_in_bytes", "1073741824\n"),
+                (
+                    "memory/memory.stat",
+                    "cache 5\ntotal_inactive_file 73741824\n",
+                ),
+            ],
+        );
+        let self_cg = "12:cpuset:/docker/abc\n4:memory:/docker/abc\n";
+        assert_eq!(
+            cgroup_memory(r, self_cg),
+            Some((2_147_483_648, 1_000_000_000))
+        );
+        cg(
+            r,
+            &[("memory/memory.limit_in_bytes", "9223372036854771712\n")],
+        );
+        assert_eq!(cgroup_memory(r, self_cg), None, "v1 'unlimited'");
+        // a limit above the host's RAM changes nothing
+        assert_eq!(effective_memory(1000, 400, Some((5000, 600))), (1000, 400));
     }
 
     #[test]

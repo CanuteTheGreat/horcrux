@@ -178,6 +178,12 @@ pub struct Node {
     /// this node; `None` if it has never reported.
     #[serde(default)]
     pub last_seen: Option<i64>,
+    /// Identity of the Horcrux instance that answers at this address, pinned
+    /// from its first usage report (`NodeUsage::node_id`). A report from a
+    /// different instance (the address now belongs to another node) does
+    /// not count as this node being up. Cleared by removing the node.
+    #[serde(default)]
+    pub node_id: Option<String>,
 }
 
 /// Node status
@@ -204,6 +210,7 @@ impl Node {
             cpu_usage: None,
             memory_used: None,
             last_seen: None,
+            node_id: None,
         }
     }
 
@@ -222,6 +229,7 @@ impl Node {
             cpu_usage: None,
             memory_used: None,
             last_seen: None,
+            node_id: None,
         }
     }
 
@@ -351,6 +359,7 @@ impl AddNodeRequest {
             cpu_usage: None,
             memory_used: None,
             last_seen: None,
+            node_id: None,
         }
     }
 }

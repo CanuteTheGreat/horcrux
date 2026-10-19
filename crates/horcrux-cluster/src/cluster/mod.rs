@@ -40,6 +40,32 @@ pub struct ClusterManager {
     local_usage: Arc<RwLock<Option<NodeUsage>>>,
     /// Durable copy of the node list and cluster config; `None` = in-memory.
     store: Option<ConfigStore>,
+    /// This Horcrux instance's persistent identity, sent with its usage
+    /// reports so peers can tell it apart from whatever else answers at an
+    /// address (see `usage::check_identity`).
+    local_node_id: String,
+}
+
+/// A new random node identity (the kernel's UUID generator).
+fn new_node_id() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/random/uuid")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| {
+            format!(
+                "{:x}-{:x}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            )
+        })
+}
+
+/// Stored form of `ClusterManager::local_node_id`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct NodeIdentity {
+    id: String,
 }
 
 /// Id of the single persisted cluster config document.
@@ -62,6 +88,7 @@ impl ClusterManager {
             usage_sampler: Arc::new(usage::LocalUsageSampler::new()),
             local_usage: Arc::new(RwLock::new(None)),
             store: None,
+            local_node_id: new_node_id(),
         }
     }
 
@@ -90,6 +117,21 @@ impl ClusterManager {
             }
             tracing::info!("Loaded {} cluster node(s) from database", nodes.len());
         }
+        // The node identity survives restarts (it is what peers pin).
+        match store
+            .load_values::<NodeIdentity>(kinds::NODE_IDENTITY)
+            .await?
+            .into_iter()
+            .next()
+        {
+            Some(ident) => mgr.local_node_id = ident.id,
+            None => {
+                let ident = NodeIdentity {
+                    id: mgr.local_node_id.clone(),
+                };
+                store.put(kinds::NODE_IDENTITY, "local", &ident).await?;
+            }
+        }
         mgr.store = Some(store);
         Ok(mgr)
     }
@@ -110,11 +152,24 @@ impl ClusterManager {
         if let Some(sample) = self.local_usage.read().await.clone() {
             return Some(sample);
         }
-        let sample = self.usage_sampler.sample().await;
+        let sample = self.sample_local().await;
         if let Some(ref s) = sample {
             *self.local_usage.write().await = Some(s.clone());
         }
         sample
+    }
+
+    /// A fresh sample of this host, tagged with this node's identity.
+    async fn sample_local(&self) -> Option<NodeUsage> {
+        self.usage_sampler.sample().await.map(|mut s| {
+            s.node_id = Some(self.local_node_id.clone());
+            s
+        })
+    }
+
+    /// This Horcrux instance's persistent identity.
+    pub fn local_node_id(&self) -> &str {
+        &self.local_node_id
     }
 
     /// Start the background usage monitor: every [`usage::POLL_INTERVAL`]
@@ -156,7 +211,7 @@ impl ClusterManager {
 
     /// One usage-monitor round (see [`Self::start_usage_monitor`]).
     pub async fn poll_node_usage_once(&self, client: &reqwest::Client, api_port: u16) {
-        let local_sample = self.usage_sampler.sample().await;
+        let local_sample = self.sample_local().await;
         *self.local_usage.write().await = local_sample.clone();
 
         let targets: Vec<Node> = self.nodes.read().await.values().cloned().collect();
@@ -178,7 +233,8 @@ impl ClusterManager {
             let token = token.clone();
             let local_hostname = local_hostname.clone();
             async move {
-                let outcome = if usage::is_this_host(node, &local_hostname) {
+                let this_host = usage::is_this_host(node, &local_hostname);
+                let outcome = if this_host {
                     match local_sample {
                         Some(sample) => usage::PollOutcome::Usage(sample),
                         // We're obviously up; we just can't read procfs.
@@ -188,21 +244,50 @@ impl ClusterManager {
                     usage::fetch_remote_usage(client, &node.api_url(api_port), token.as_deref())
                         .await
                 };
+                let outcome = usage::check_identity(node, outcome, &self.local_node_id, this_host);
                 (node.name.clone(), outcome)
             }
         });
         let results = futures::future::join_all(polls).await;
 
         let now = chrono::Utc::now().timestamp();
-        let mut nodes = self.nodes.write().await;
-        for (name, outcome) in results {
-            // The node may have been removed while we were polling.
-            if let Some(node) = nodes.get_mut(&name) {
-                let was = node.status.clone();
-                usage::apply_poll(node, outcome, now);
-                if node.status != was {
-                    tracing::info!("Cluster node {} is now {:?}", name, node.status);
+        let mut changed_facts = Vec::new();
+        {
+            let mut nodes = self.nodes.write().await;
+            for (name, outcome) in results {
+                // The node may have been removed while we were polling.
+                if let Some(node) = nodes.get_mut(&name) {
+                    let was = node.status.clone();
+                    let facts = |n: &Node| {
+                        (
+                            n.cpu_cores,
+                            n.memory_total,
+                            n.architecture.clone(),
+                            n.node_id.clone(),
+                        )
+                    };
+                    let before = facts(node);
+                    usage::apply_poll(node, outcome, now);
+                    if node.status != was {
+                        tracing::info!("Cluster node {} is now {:?}", name, node.status);
+                    }
+                    // Learned hardware facts / identity outlive a restart
+                    // (an offline node keeps its cores, RAM and arch).
+                    if facts(node) != before {
+                        changed_facts.push(node.name.clone());
+                    }
                 }
+            }
+        }
+        for name in changed_facts {
+            // the current record (a concurrent edit may have landed)
+            let Some(node) = self.nodes.read().await.get(&name).cloned() else {
+                continue;
+            };
+            if let Err(e) =
+                config_store::put_opt(&self.store, kinds::CLUSTER_NODE, &node.name, &node).await
+            {
+                tracing::warn!("Could not save cluster node {}: {}", node.name, e);
             }
         }
     }
@@ -659,6 +744,58 @@ pub struct ArchitectureSummary {
 mod tests {
     use super::*;
     use node::{AddNodeRequest, Architecture};
+
+    async fn db_manager(dir: &std::path::Path) -> ClusterManager {
+        let url = format!("sqlite://{}", dir.join("t.db").display());
+        let db = crate::db::Database::new(&url).await.unwrap();
+        db.migrate().await.unwrap();
+        ClusterManager::with_database(Arc::new(db)).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn learned_node_hardware_and_identities_survive_a_restart() {
+        if !std::path::Path::new("/proc/stat").exists() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let m = db_manager(dir.path()).await;
+        let own = m.local_node_id().to_string();
+        assert!(!own.is_empty());
+        // added by address only: hardware unknown until it reports
+        let req: AddNodeRequest =
+            serde_json::from_value(serde_json::json!({"address": "127.0.0.1"})).unwrap();
+        m.add_node(req.into_node("self".into(), 1)).await.unwrap();
+        let client = reqwest::Client::new();
+        m.poll_node_usage_once(&client, 9).await;
+        let polled = m
+            .list_nodes()
+            .await
+            .into_iter()
+            .find(|n| n.name == "self")
+            .unwrap();
+        assert!(
+            polled.cpu_cores > 0 && polled.memory_total > 0,
+            "{polled:?}"
+        );
+        assert_eq!(polled.node_id.as_deref(), Some(own.as_str()));
+        drop(m);
+
+        // a restart: the node is not polled yet, its facts are still known
+        let m = db_manager(dir.path()).await;
+        assert_eq!(m.local_node_id(), own, "node identity is persistent");
+        let n = m
+            .list_nodes()
+            .await
+            .into_iter()
+            .find(|n| n.name == "self")
+            .unwrap();
+        assert_eq!(n.cpu_cores, polled.cpu_cores);
+        assert_eq!(n.memory_total, polled.memory_total);
+        assert_eq!(n.architecture, polled.architecture);
+        assert_ne!(n.architecture, Architecture::Unknown);
+        assert_eq!(n.node_id, polled.node_id);
+        assert_eq!(n.status, NodeStatus::Unknown, "live state is not restored");
+    }
 
     fn node(name: &str, cores: u32, mem_total: u64, mem_used: Option<u64>, online: bool) -> Node {
         let req: AddNodeRequest = serde_json::from_value(serde_json::json!({

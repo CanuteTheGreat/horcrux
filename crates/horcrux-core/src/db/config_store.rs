@@ -40,6 +40,8 @@ pub mod kinds {
     pub const SNAPSHOT_SCHEDULE: &str = "snapshot_schedule";
     pub const CLUSTER_NODE: &str = "cluster_node";
     pub const CLUSTER_CONFIG: &str = "cluster_config";
+    /// This node's own persistent identity (cluster heartbeat).
+    pub const NODE_IDENTITY: &str = "node_identity";
     pub const BACKUP_JOB: &str = "backup_job";
     pub const BACKUP: &str = "backup";
 }
