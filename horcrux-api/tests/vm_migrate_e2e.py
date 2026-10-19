@@ -290,6 +290,8 @@ job = migrate(N1, vm, "node2", "live")
 check(job["status"] == "completed", f"completed ({job.get('error')})")
 st, moved = api(N2, "GET", f"/vms/{vm}")
 check(st == 200 and moved["disks"][0]["path"] == d0, "node2 uses the same disk file")
+# The source QEMU's exit must not take the target's console sockets with it.
+check(qmp(N2, d0, "query-status").get("return", {}).get("status") == "running", "node2's QMP socket answers")
 check(f"Migration {job['job_id']}: 1 of 1 file(s) on storage shared" in sh(N1, "cat /var/lib/hx/api.log"),
       "the disk was detected as shared and not copied")
 check(sh(N2, f"test -f {d0} && echo y") == "y", "the shared disk was not deleted by the source")

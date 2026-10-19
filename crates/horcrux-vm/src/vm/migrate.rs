@@ -74,7 +74,19 @@ impl VmManager {
         let vm = vms
             .remove(id)
             .ok_or_else(|| Error::VmNotFound(id.to_string()))?;
-        if QemuManager::process_running(id) {
+        if shared_disk0 {
+            // The source's QEMU and swtpm still know their sockets by the
+            // standard paths they were bound to, and a graceful exit
+            // unlinks those paths - which now hold the target's QMP/serial
+            // sockets. SIGKILL skips that cleanup; after a completed
+            // migration the source has nothing left to flush (its block
+            // devices were inactivated and the target owns the disks).
+            let aside_tpm_pid = vm
+                .disk_path
+                .with_extension(format!("tpm.pid.{MIG_SRC_SUFFIX}"));
+            kill_hard(read_pid(&aside_tpm_pid).await, "swtpm").await;
+            kill_hard(read_pid(Path::new(&qemu::pidfile(id))).await, "qemu").await;
+        } else if QemuManager::process_running(id) {
             kill_qemu(id).await;
         }
         let _ = tokio::fs::remove_file(qemu::pidfile(id)).await;
@@ -150,6 +162,34 @@ pub async fn set_runtime_files_aside(disk0: &Path, restore: bool) {
     }
 }
 
+async fn read_pid(pidfile: &Path) -> Option<i32> {
+    tokio::fs::read_to_string(pidfile)
+        .await
+        .ok()
+        .and_then(|s| s.trim().parse::<i32>().ok())
+}
+
+/// SIGKILL `pid` if it is still a process whose command line contains
+/// `name` (a stale pidfile's pid may have been reused), and wait for it to
+/// be gone.
+async fn kill_hard(pid: Option<i32>, name: &str) {
+    let Some(pid) = pid else { return };
+    let is_it = std::fs::read(format!("/proc/{pid}/cmdline"))
+        .map(|c| String::from_utf8_lossy(&c).contains(name))
+        .unwrap_or(false);
+    if !is_it {
+        return;
+    }
+    use nix::sys::signal::{kill, Signal};
+    let _ = kill(nix::unistd::Pid::from_raw(pid), Signal::SIGKILL);
+    for _ in 0..50 {
+        if !qemu::pid_alive(pid as u32) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
 /// SIGTERM (then SIGKILL) the QEMU of `vm_id` and wait for it to exit.
 pub async fn kill_qemu(vm_id: &str) {
     let Some(pid) = tokio::fs::read_to_string(qemu::pidfile(vm_id))
@@ -188,6 +228,37 @@ pub fn side_files(disk0: &Path) -> Vec<(&'static str, PathBuf)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// kill_hard only kills a pid whose command line matches, and waits
+    /// for it to be gone (SIGKILL: no exit handlers run).
+    #[tokio::test]
+    async fn kill_hard_kills_only_the_named_process() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("300")
+            .spawn()
+            .unwrap();
+        let pid = child.id() as i32;
+        // Right after spawn the child's cmdline can still be empty.
+        for _ in 0..50 {
+            if !std::fs::read(format!("/proc/{pid}/cmdline"))
+                .unwrap_or_default()
+                .is_empty()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        kill_hard(Some(pid), "qemu").await;
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "not a qemu: left alone"
+        );
+        kill_hard(Some(pid), "sleep").await;
+        let status = child.wait().unwrap();
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(status.signal(), Some(9));
+        kill_hard(None, "sleep").await;
+    }
 
     /// A listening socket moved aside keeps answering at its new path, the
     /// standard path is free for the target's QEMU, and restore puts it back.
