@@ -270,7 +270,7 @@ pub fn BackupDashboard() -> impl IntoView {
                     <div class="form-group">
                         <label for="backup-mode">"Mode"</label>
                         <select id="backup-mode" on:change=move |ev| set_mode.set(event_target_value(&ev))>
-                            <option value="snapshot" selected=move || mode.get() == "snapshot">"snapshot (running guests paused during the copy)"</option>
+                            <option value="snapshot" selected=move || mode.get() == "snapshot">"snapshot (running VMs keep running; containers frozen during the copy)"</option>
                             <option value="suspend" selected=move || mode.get() == "suspend">"suspend (pause, copy, resume)"</option>
                             <option value="stop" selected=move || mode.get() == "stop">"stop (stop, back up, restart)"</option>
                         </select>
