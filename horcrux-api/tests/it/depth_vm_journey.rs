@@ -210,6 +210,15 @@ async fn vm_from_cloud_image_through_snapshot_clone_backup_restore() {
         .await;
     assert_eq!(s, 200, "live snapshot with RAM: {s1}");
     assert_eq!(s1["vm_state"], "Running", "{s1}");
+    // the snapshot says it holds RAM, and its size is that saved state
+    assert_eq!(s1["memory_included"], true, "{s1}");
+    let state = s1["vm_state_bytes"].as_u64().unwrap_or(0);
+    assert!(state > 0, "RAM snapshot reports its VM state size: {s1}");
+    assert_eq!(
+        s1["disk_snapshots"][0]["size_bytes"].as_u64(),
+        Some(state),
+        "{s1}"
+    );
     assert_eq!(qemu_pid(&id), Some(pid), "same QEMU process");
     let st = qmp(&qmp_sock, json!({"execute": "query-status"}));
     assert_eq!(st["return"]["status"], "running", "{st}");
@@ -227,6 +236,11 @@ async fn vm_from_cloud_image_through_snapshot_clone_backup_restore() {
         .await;
     assert_eq!(s, 200, "live disk-only snapshot: {s2}");
     assert_eq!(s2["vm_state"], "Paused", "{s2}");
+    assert_eq!(s2["memory_included"], false, "{s2}");
+    assert_eq!(
+        s2["vm_state_bytes"], 0,
+        "a disk-only snapshot holds no VM state: {s2}"
+    );
     let st = qmp(&qmp_sock, json!({"execute": "query-status"}));
     assert_eq!(
         st["return"]["status"], "running",

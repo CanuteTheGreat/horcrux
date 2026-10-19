@@ -32,6 +32,46 @@ pub struct Template {
     /// for templates made before buses were recorded).
     #[serde(default)]
     pub disk_bus: Option<String>,
+    /// Space the template disk takes on storage, in bytes (read from the
+    /// disk when the template is listed; 0 = not a local image).
+    #[serde(default)]
+    pub disk_size_bytes: u64,
+    /// The disk's virtual (guest-visible) size in bytes (`qemu-img info`).
+    #[serde(default)]
+    pub virtual_size_bytes: u64,
+}
+
+/// On-storage and virtual size of a disk image: allocated blocks, and
+/// `qemu-img info`'s virtual-size (the file length for a raw image or
+/// when qemu-img is unavailable). (0, 0) when the path isn't a local file.
+pub async fn disk_image_sizes(path: &std::path::Path) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt;
+    let meta = match tokio::fs::metadata(path).await {
+        Ok(m) if m.is_file() => m,
+        _ => return (0, 0),
+    };
+    let allocated = meta.blocks() * 512;
+    let virtual_size = tokio::process::Command::new("qemu-img")
+        .args(["info", "--output=json", "-U"])
+        .arg(path)
+        .output()
+        .await
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| serde_json::from_slice::<serde_json::Value>(&o.stdout).ok())
+        .and_then(|v| v["virtual-size"].as_u64())
+        .unwrap_or(meta.len());
+    (allocated, virtual_size)
+}
+
+impl Template {
+    /// This template with its disk sizes read from storage now.
+    pub async fn with_sizes(mut self) -> Self {
+        let (allocated, virtual_size) = disk_image_sizes(&self.disk_path).await;
+        self.disk_size_bytes = allocated;
+        self.virtual_size_bytes = virtual_size;
+        self
+    }
 }
 
 /// Storage type for templates
@@ -211,6 +251,8 @@ impl TemplateManager {
             cloudinit_template: None,
             hardware: Default::default(),
             disk_bus: None,
+            disk_size_bytes: 0,
+            virtual_size_bytes: 0,
         };
 
         // Mark the VM disk as read-only or move it to templates directory
@@ -231,7 +273,7 @@ impl TemplateManager {
         templates.insert(template_id.clone(), template.clone());
 
         tracing::info!("Template created: {} ({})", name, template_id);
-        Ok(template)
+        Ok(template.with_sizes().await)
     }
 
     /// Record the source VM's hardware and disk bus on a template.
@@ -298,16 +340,24 @@ impl TemplateManager {
 
     /// List all templates
     pub async fn list_templates(&self) -> Vec<Template> {
-        let templates = self.templates.read().await;
-        templates.values().cloned().collect()
+        let list: Vec<Template> = self.templates.read().await.values().cloned().collect();
+        let mut out = Vec::with_capacity(list.len());
+        for t in list {
+            out.push(t.with_sizes().await);
+        }
+        out
     }
 
     /// Get template by ID
     pub async fn get_template(&self, template_id: &str) -> Result<Template> {
-        let templates = self.templates.read().await;
-        templates.get(template_id).cloned().ok_or_else(|| {
-            horcrux_common::Error::NotFound(format!("Template {} not found", template_id))
-        })
+        let t = self.templates.read().await.get(template_id).cloned();
+        match t {
+            Some(t) => Ok(t.with_sizes().await),
+            None => Err(horcrux_common::Error::NotFound(format!(
+                "Template {} not found",
+                template_id
+            ))),
+        }
     }
 
     /// Delete a template
@@ -633,7 +683,19 @@ mod tests {
         );
         assert!(template.disk_path.starts_with(dir.join("vms/templates")));
         assert!(template.disk_path.is_file());
-
+        // the template reports its real disk sizes (16 MiB virtual qcow2)
+        assert_eq!(template.virtual_size_bytes, 16 * 1024 * 1024);
+        assert!(template.disk_size_bytes > 0, "allocated size");
+        let listed = manager.list_templates().await;
+        assert_eq!(listed[0].virtual_size_bytes, 16 * 1024 * 1024);
+        assert_eq!(
+            manager
+                .get_template(&template.id)
+                .await
+                .unwrap()
+                .disk_size_bytes,
+            template.disk_size_bytes
+        );
         for (id, kind) in [
             ("clone-full", CloneType::Full),
             ("clone-linked", CloneType::Linked),

@@ -2963,8 +2963,27 @@ pub struct VmSnapshot {
     pub parent_id: Option<String>,
     pub created_at: String,
     pub memory_included: bool,
-    pub size_mb: u64,
+    /// What the snapshot holds on its own: its saved RAM/device state
+    /// (qcow2 internal snapshots share their disk clusters with the image).
+    pub state_bytes: u64,
     pub children: Vec<String>,
+}
+
+impl VmSnapshot {
+    /// The Size column: the saved VM state, or "disk only".
+    pub fn size_label(&self) -> String {
+        if self.state_bytes == 0 {
+            return "disk only".to_string();
+        }
+        let b = self.state_bytes as f64;
+        if b >= 1024.0 * 1024.0 * 1024.0 {
+            format!("{:.1} GB RAM state", b / (1024.0 * 1024.0 * 1024.0))
+        } else if b >= 1024.0 * 1024.0 {
+            format!("{:.1} MB RAM state", b / (1024.0 * 1024.0))
+        } else {
+            format!("{:.1} KB RAM state", b / 1024.0)
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -2980,18 +2999,20 @@ struct VmSnapshotWire {
     #[serde(default)]
     memory_snapshot: Option<String>,
     #[serde(default)]
-    disk_snapshots: Vec<DiskSnapshotWire>,
-}
-
-#[derive(Deserialize)]
-struct DiskSnapshotWire {
+    memory_included: bool,
     #[serde(default)]
-    size_bytes: u64,
+    vm_state: String,
+    #[serde(default)]
+    vm_state_bytes: u64,
 }
 
 impl From<VmSnapshotWire> for VmSnapshot {
     fn from(w: VmSnapshotWire) -> Self {
-        let bytes: u64 = w.disk_snapshots.iter().map(|d| d.size_bytes).sum();
+        // Snapshots taken before the API reported `memory_included`: a live
+        // (`Running`) snapshot was a savevm with RAM. (Their disk
+        // `size_bytes` was the whole image file, not the snapshot, so it is
+        // not shown as the snapshot's size.)
+        let memory = w.memory_included || w.memory_snapshot.is_some() || w.vm_state == "Running";
         Self {
             id: w.id,
             vm_id: w.vm_id,
@@ -2999,8 +3020,8 @@ impl From<VmSnapshotWire> for VmSnapshot {
             description: w.description,
             parent_id: w.parent_snapshot,
             created_at: crate::utils::format_unix_secs(w.created_at),
-            memory_included: w.memory_snapshot.is_some(),
-            size_mb: bytes / (1024 * 1024),
+            memory_included: memory,
+            state_bytes: w.vm_state_bytes,
             children: Vec::new(),
         }
     }
@@ -3130,12 +3151,19 @@ pub struct VmTemplate {
     pub source_vm_id: String,
     pub created_at: String,
     pub config: serde_json::Value,
-    pub size_mb: u64,
+    /// Space the template disk takes on storage (bytes).
+    pub size_bytes: u64,
+    /// The disk's virtual (guest-visible) size (bytes).
+    pub virtual_size_bytes: u64,
     pub storage_location: String,
 }
 
 #[derive(Deserialize)]
 struct TemplateWire {
+    #[serde(default)]
+    disk_size_bytes: u64,
+    #[serde(default)]
+    virtual_size_bytes: u64,
     id: String,
     name: String,
     #[serde(default)]
@@ -3169,7 +3197,8 @@ impl From<TemplateWire> for VmTemplate {
                 "os_type": w.os_type,
                 "storage_type": w.storage_type,
             }),
-            size_mb: 0,
+            size_bytes: w.disk_size_bytes,
+            virtual_size_bytes: w.virtual_size_bytes,
             storage_location: w.disk_path,
         }
     }
@@ -3330,21 +3359,28 @@ pub fn new_vm_id() -> String {
 }
 
 /// Body of POST /api/templates/:id/clone (the API's template::CloneRequest).
-pub fn clone_template_body(name: &str) -> serde_json::Value {
+/// `mode` is "full" (independent copy) or "linked" (qcow2 overlay on the
+/// template disk); anything else is sent as "full".
+pub fn clone_template_body(name: &str, mode: &str) -> serde_json::Value {
+    let mode = if mode == "linked" { "linked" } else { "full" };
     serde_json::json!({
         "new_vm_id": new_vm_id(),
         "new_vm_name": name.trim(),
-        "clone_type": "full",
+        "clone_type": mode,
         "storage_pool": null,
         "cloudinit_config": null,
     })
 }
 
 /// Clone a template into a new VM; returns the API's clone response.
-pub async fn clone_template(id: &str, name: String) -> Result<serde_json::Value, ApiError> {
+pub async fn clone_template(
+    id: &str,
+    name: String,
+    mode: &str,
+) -> Result<serde_json::Value, ApiError> {
     post_json(
         &format!("/templates/{}/clone", id),
-        &clone_template_body(&name),
+        &clone_template_body(&name, mode),
     )
     .await
 }
@@ -6238,8 +6274,39 @@ mod tests {
 
     #[test]
     fn template_and_storage_pool_read_the_api_shapes() {
-        let t: VmTemplate = serde_json::from_str(r#"{"id":"template-1","name":"t","description":null,"source_vm_id":"vm1","created":1792200000,"disk_path":"/var/lib/horcrux/vms/templates/template-1.qcow2","storage_type":"directory","memory":512,"cpus":2,"os_type":"linux","cloudinit_template":null}"#).unwrap();
+        // /snapshots: a live savevm snapshot shows Memory = Yes and its RAM
+        // state as the size; a disk-only one "disk only"; a snapshot from
+        // before memory_included existed is judged by vm_state.
+        let live: VmSnapshot = serde_json::from_value(serde_json::json!({
+            "id": "s1", "vm_id": "vm1", "name": "qa-snap1", "created_at": 0,
+            "vm_state": "Running", "memory_snapshot": null, "memory_included": true,
+            "vm_state_bytes": 141557760u64,
+            "disk_snapshots": [{"size_bytes": 141557760u64}]
+        }))
+        .unwrap();
+        assert!(live.memory_included);
+        assert_eq!(live.size_label(), "135.0 MB RAM state");
+        let old: VmSnapshot = serde_json::from_value(serde_json::json!({
+            "id": "s0", "vm_id": "vm1", "name": "old", "created_at": 0,
+            "vm_state": "Running", "memory_snapshot": null,
+            "disk_snapshots": [{"size_bytes": 685000000u64}]
+        }))
+        .unwrap();
+        assert!(old.memory_included, "legacy live snapshot had RAM");
+        assert_eq!(old.size_label(), "disk only", "never the whole image size");
+        let disk: VmSnapshot = serde_json::from_value(serde_json::json!({
+            "id": "s2", "vm_id": "vm1", "name": "d", "created_at": 0,
+            "vm_state": "Stopped", "memory_included": false, "vm_state_bytes": 0
+        }))
+        .unwrap();
+        assert!(!disk.memory_included);
+        assert_eq!(disk.size_label(), "disk only");
+        let t: VmTemplate = serde_json::from_str(r#"{"id":"template-1","name":"t","description":null,"source_vm_id":"vm1","created":1792200000,"disk_path":"/var/lib/horcrux/vms/templates/template-1.qcow2","storage_type":"directory","memory":512,"cpus":2,"os_type":"linux","cloudinit_template":null,"disk_size_bytes":58933248,"virtual_size_bytes":10737418240}"#).unwrap();
         assert_eq!(t.source_vm_id, "vm1");
+        assert_eq!(
+            (t.size_bytes, t.virtual_size_bytes),
+            (58933248, 10737418240)
+        );
         assert!(t.storage_location.ends_with("template-1.qcow2"));
         let p: StoragePoolInfo = serde_json::from_str(r#"{"id":"p1","name":"dir","storage_type":"directory","path":"/srv","available":10,"total":20,"enabled":true}"#).unwrap();
         assert_eq!(p.pool_type, "directory");
@@ -6251,7 +6318,10 @@ mod tests {
         })
         .unwrap();
         assert_eq!(req["vm_id"], "vm1");
-        let id = clone_template_body("Web Server 2")["new_vm_id"]
+        assert_eq!(clone_template_body("w", "linked")["clone_type"], "linked");
+        assert_eq!(clone_template_body("w", "full")["clone_type"], "full");
+        assert_eq!(clone_template_body("w", "bogus")["clone_type"], "full");
+        let id = clone_template_body("Web Server 2", "full")["new_vm_id"]
             .as_str()
             .unwrap()
             .to_string();

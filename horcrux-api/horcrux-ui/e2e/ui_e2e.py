@@ -74,6 +74,9 @@ BK_JOB = "e2e-bk-job"
 DISP_VM = "e2e-display-vm"
 NOTIFY = "e2e-notify-hook"
 ALERT_RULE = "e2e-alert-rule"
+TPL_VM = "e2e-tpl-vm"
+TPL_NAME = "e2e-tpl"
+TPL_CLONE = "e2e-tpl-linked"
 _TOKEN = []
 
 
@@ -150,6 +153,13 @@ def cleanup():
             if v.get("name") == REP_CLONE:
                 _req("DELETE", f"/api/vms/{v['id']}", tok)
         _req("DELETE", f"/api/vms/{REP_VM}", tok)
+        for v in api_get("/api/vms", tok) or []:
+            if v.get("name") == TPL_CLONE:
+                _req("DELETE", f"/api/vms/{v['id']}", tok)
+        for t in api_get("/api/templates", tok) or []:
+            if t.get("name") == TPL_NAME:
+                _req("DELETE", f"/api/templates/{t['id']}", tok)
+        _req("DELETE", f"/api/vms/{TPL_VM}", tok)
         _req("DELETE", f"/api/cni/networks/{SDN_NET}", tok)
         for ch in api_get("/api/notifications/channels", tok) or []:
             if ch.get("name") == NOTIFY:
@@ -622,6 +632,7 @@ def main():
         s3_gateway_checks(page)
         monitoring_dashboard_checks(page)
         users_edit_checks(page)
+        template_checks(page)
         vm_hardware_checks(page, vid)
 
         browser.close()
@@ -914,6 +925,41 @@ def users_edit_checks(page):
     expect(row).to_contain_text("edited from the UI", timeout=30000)
     _req("DELETE", "/api/users/e2e-edit-user", tok)
     print("UI E2E: users edit icon passed")
+
+
+def template_checks(page):
+    """Backup > Templates: the card shows the template disk's real size, and
+    the Clone dialog's Linked mode deploys a VM whose qcow2 is backed by the
+    template disk and which reports the template's disk size."""
+    tok = token()
+    api_post("/api/vms", tok, {"id": TPL_VM, "name": TPL_VM, "hypervisor": "qemu",
+                               "architecture": "x86_64", "cpus": 1, "memory": 128,
+                               "disk_size": 1, "status": "stopped"})
+    tpl = api_post("/api/templates", tok, {"vm_id": TPL_VM, "name": TPL_NAME})
+    tid = tpl["id"]
+    assert tpl.get("virtual_size_bytes") == 1024 ** 3, tpl
+    page.goto(f"{BASE}/backup/templates")
+    card = page.locator(f".template-card[data-template-id='{tid}']")
+    expect(card.locator(".template-size")).to_contain_text("1.0 GB virtual", timeout=30000)
+    assert "0 B" != card.locator(".template-size").inner_text().strip()
+    card.get_by_role("button", name="Clone").click()
+    page.fill("#template-clone-name", TPL_CLONE)
+    page.select_option("#template-clone-mode", "linked")
+    expect(page.locator("#template-clone-linked-help")).to_be_visible()
+    page.locator("#template-clone-submit").click()
+    assert wait_for(lambda: any(v["name"] == TPL_CLONE for v in api_get("/api/vms", tok)),
+                    "VM deployed from the template", timeout=120)
+    vm = next(v for v in api_get("/api/vms", tok) if v["name"] == TPL_CLONE)
+    assert vm["disk_size"] == 1 and vm["disks"][0]["size_gb"] == 1, vm
+    info = json.loads(subprocess.run(
+        ["qemu-img", "info", "--output=json", "-U", vm["disks"][0]["path"]],
+        capture_output=True, text=True, check=True).stdout)
+    base = info.get("full-backing-filename") or info.get("backing-filename")
+    assert base and os.path.realpath(base) == os.path.realpath(tpl["disk_path"]), info
+    _req("DELETE", f"/api/vms/{vm['id']}", tok)
+    _req("DELETE", f"/api/templates/{tid}", tok)
+    _req("DELETE", f"/api/vms/{TPL_VM}", tok)
+    print("UI E2E: templates (real size, linked clone from the Clone dialog) passed")
 
 
 def ui_login(page, user, password):

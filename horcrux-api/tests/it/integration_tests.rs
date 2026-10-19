@@ -1060,6 +1060,16 @@ async fn test_template_operations() {
     let tpl_id = tpl["id"].as_str().unwrap().to_string();
     assert_eq!(tpl["memory"], 512);
     assert_eq!(tpl["cpus"], 2);
+    // the template reports its real disk size (1 GiB virtual qcow2)
+    assert_eq!(
+        tpl["virtual_size_bytes"],
+        1024u64 * 1024 * 1024,
+        "template size: {tpl}"
+    );
+    assert!(
+        tpl["disk_size_bytes"].as_u64().unwrap_or(0) > 0,
+        "template allocated size: {tpl}"
+    );
     let list: Vec<serde_json::Value> = client
         .get(format!("{}/templates", API_BASE))
         .send()
@@ -1091,6 +1101,9 @@ async fn test_template_operations() {
             .await
             .unwrap();
         assert_eq!(vm["memory"], 512);
+        // a VM deployed from a template has the template disk's size
+        assert_eq!(vm["disk_size"], 1, "{id} disk_size: {vm}");
+        assert_eq!(vm["disks"][0]["size_gb"], 1, "{id} disks[0].size_gb: {vm}");
         assert!(std::path::Path::new(vm["disks"][0]["path"].as_str().unwrap()).is_file());
     }
     let r = client

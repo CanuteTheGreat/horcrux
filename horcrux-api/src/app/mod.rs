@@ -3167,6 +3167,9 @@ async fn clone_template(
     // Register the clone as a real VM (it used to only write a disk file,
     // so the "deployed" VM never appeared anywhere and couldn't be started).
     let disk = state.template_manager.clone_disk_path(&new_vm_id);
+    // The VM's disk is as big as the template image (GB, rounded up).
+    let (_, virtual_bytes) = crate::template::disk_image_sizes(&disk).await;
+    let size_gb = virtual_bytes.div_ceil(1024 * 1024 * 1024);
     state
         .vm_manager
         .import_vm(VmConfig {
@@ -3175,12 +3178,12 @@ async fn clone_template(
             hypervisor: horcrux_common::VmHypervisor::Qemu,
             memory: template.memory,
             cpus: template.cpus,
-            disk_size: 0, // size comes from the template image
+            disk_size: size_gb,
             status: horcrux_common::VmStatus::Stopped,
             architecture: Default::default(),
             disks: vec![horcrux_common::VmDisk {
                 path: disk.to_string_lossy().to_string(),
-                size_gb: 0,
+                size_gb,
                 // Templates made before buses were recorded came from VMs
                 // whose disk was on QEMU's default bus.
                 disk_type: template

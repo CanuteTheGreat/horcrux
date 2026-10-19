@@ -9,25 +9,13 @@ use crate::api::{
 use horcrux_common::VmConfig;
 use leptos::*;
 
-fn format_bytes_static(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{} B", bytes)
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-    }
-}
-
 fn render_snapshot_tree_node(node: &SnapshotTreeNode, depth: usize) -> impl IntoView {
     let indent = "  ".repeat(depth);
     let snapshot = &node.snapshot;
     let children = node.children.clone();
 
     let snapshot_name = snapshot.name.clone();
-    let snapshot_size = format_bytes_static(snapshot.size_mb * 1024 * 1024);
+    let snapshot_size = snapshot.size_label();
     let snapshot_created = snapshot.created_at.clone();
 
     view! {
@@ -604,7 +592,7 @@ pub fn SnapshotManagerPage() -> impl IntoView {
                                                                     let snapshot_id_delete = snapshot.id.clone();
                                                                     let snapshot_name = snapshot.name.clone();
                                                                     let snapshot_desc = snapshot.description.clone();
-                                                                    let snapshot_size = format_bytes(snapshot.size_mb * 1024 * 1024);
+                                                                    let snapshot_size = snapshot.size_label();
                                                                     let memory_included = snapshot.memory_included;
                                                                     let created_at = snapshot.created_at.clone();
                                                                     view! {

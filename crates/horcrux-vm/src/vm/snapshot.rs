@@ -26,6 +26,13 @@ pub struct VmSnapshot {
     pub disk_snapshots: Vec<DiskSnapshot>,
     pub memory_snapshot: Option<String>,
     pub config_backup: VmConfig,
+    /// RAM/device state is part of the snapshot (a live `savevm`; it lives
+    /// inside the qcow2 images, so `memory_snapshot` stays `None`).
+    #[serde(default)]
+    pub memory_included: bool,
+    /// Size of that saved VM state in bytes (`qemu-img info` vm-state-size).
+    #[serde(default)]
+    pub vm_state_bytes: u64,
 }
 
 /// VM state at snapshot time
@@ -132,6 +139,8 @@ impl VmSnapshotManager {
         // RAM state of a live snapshot lives inside the qcow2 images
         // (`savevm`), not in a separate file.
         let memory_snapshot: Option<String> = None;
+        let memory_included = vm_state == VmSnapshotState::Running;
+        let vm_state_bytes: u64 = disk_snapshots.iter().map(|d| d.size_bytes).sum();
 
         // Track snapshot lineage: the new snapshot's parent is whichever
         // existing snapshot for this VM is currently the "head" of the chain
@@ -158,6 +167,8 @@ impl VmSnapshotManager {
             disk_snapshots,
             memory_snapshot,
             config_backup: vm_config.clone(),
+            memory_included,
+            vm_state_bytes,
         };
 
         // Save snapshot metadata
@@ -199,7 +210,12 @@ impl VmSnapshotManager {
             }
         }
 
-        let size = self.get_disk_size(disk_path).await.unwrap_or(0);
+        // qcow2: what this snapshot holds on its own (its saved VM state;
+        // its disk clusters are shared with the image). Others: as before.
+        let size = match storage_type {
+            StorageType::Qcow2 => qcow2_snapshot_state_size(disk_path, &snapshot_id).await,
+            _ => self.get_disk_size(disk_path).await.unwrap_or(0),
+        };
 
         Ok(DiskSnapshot {
             disk_id: format!("disk-{}", disk_idx),
@@ -321,7 +337,7 @@ impl VmSnapshotManager {
                     storage_type: StorageType::Qcow2,
                     snapshot_name: name.to_string(),
                     snapshot_path: d.path.clone(),
-                    size_bytes: self.get_disk_size(&d.path).await.unwrap_or(0),
+                    size_bytes: qcow2_snapshot_state_size(&d.path, name).await,
                 });
             }
             return Ok((VmSnapshotState::Running, disks));
@@ -352,9 +368,9 @@ impl VmSnapshotManager {
             disks.push(DiskSnapshot {
                 disk_id: format!("disk-{idx}"),
                 storage_type: StorageType::Qcow2,
+                size_bytes: qcow2_snapshot_state_size(&d.path, &snap).await,
                 snapshot_name: snap,
                 snapshot_path: d.path.clone(),
-                size_bytes: self.get_disk_size(&d.path).await.unwrap_or(0),
             });
         }
         // Always resume, even if a disk snapshot failed.
@@ -801,6 +817,31 @@ pub async fn qmp_exec(
         .map_err(|_| horcrux_common::Error::System(format!("QMP {command}: timed out")))?
 }
 
+/// What a qcow2 internal snapshot holds on its own as `qemu-img info`
+/// reports it: its saved VM state (`vm-state-size`), 0 for a disk-only
+/// snapshot or when the image can't be read.
+async fn qcow2_snapshot_state_size(path: &str, name: &str) -> u64 {
+    let out = tokio::process::Command::new("qemu-img")
+        .args(["info", "--output=json", "-U", path])
+        .output()
+        .await;
+    match out {
+        Ok(o) if o.status.success() => serde_json::from_slice::<serde_json::Value>(&o.stdout)
+            .map(|v| snapshot_state_size(&v, name))
+            .unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// `vm-state-size` of snapshot `name` in a `qemu-img info --output=json`.
+fn snapshot_state_size(info: &serde_json::Value, name: &str) -> u64 {
+    info["snapshots"]
+        .as_array()
+        .and_then(|a| a.iter().find(|s| s["name"] == name))
+        .and_then(|s| s["vm-state-size"].as_u64())
+        .unwrap_or(0)
+}
+
 /// Run an HMP command through QMP. HMP reports failures as text in the
 /// return value (e.g. "Error: ..."), so any output is treated as an error
 /// for the commands used here (savevm/loadvm/delvm print nothing on success).
@@ -839,6 +880,21 @@ mod tests {
     use super::*;
     use horcrux_common::VmArchitecture;
     use horcrux_common::VmStatus;
+
+    #[test]
+    fn a_snapshot_reports_its_own_vm_state_size_not_the_image_size() {
+        let info = serde_json::json!({
+            "virtual-size": 10737418240u64, "actual-size": 718274560u64,
+            "snapshots": [
+                {"id": "1", "name": "disk-only", "vm-state-size": 0},
+                {"id": "2", "name": "qa-snap1", "vm-state-size": 141557760u64}
+            ]
+        });
+        assert_eq!(snapshot_state_size(&info, "qa-snap1"), 141557760);
+        assert_eq!(snapshot_state_size(&info, "disk-only"), 0);
+        assert_eq!(snapshot_state_size(&info, "missing"), 0);
+        assert_eq!(snapshot_state_size(&serde_json::json!({}), "x"), 0);
+    }
 
     fn create_test_vm_config() -> VmConfig {
         VmConfig {
@@ -1077,6 +1133,8 @@ mod tests {
             disk_snapshots: vec![],
             memory_snapshot: None,
             config_backup: vm_config,
+            memory_included: false,
+            vm_state_bytes: 0,
         };
 
         let tree_node = SnapshotTreeNode {
@@ -1198,8 +1256,11 @@ mod tests {
         assert_eq!(s1.disk_snapshots.len(), 1);
         let ds = &s1.disk_snapshots[0];
         assert_eq!(ds.storage_type, StorageType::Qcow2);
-        assert_eq!(ds.size_bytes, std::fs::metadata(&img).unwrap().len());
-        assert!(ds.size_bytes > 0);
+        // a disk-only snapshot holds no VM state of its own (not the
+        // whole image file size)
+        assert_eq!(ds.size_bytes, 0);
+        assert!(!s1.memory_included);
+        assert_eq!(s1.vm_state_bytes, 0);
         let list = sh("qemu-img", &["snapshot", "-l", &img_s]);
         assert!(list.contains(&ds.snapshot_name), "{list}");
 
@@ -1489,6 +1550,8 @@ mod tests {
                 disk_snapshots,
                 memory_snapshot: None,
                 config_backup: vm.clone(),
+                memory_included: false,
+                vm_state_bytes: 0,
             },
         );
         (m, vm.disks[0].path.clone())

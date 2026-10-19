@@ -22,6 +22,7 @@ pub fn TemplateManagerPage() -> impl IntoView {
     let (template_description, set_template_description) = create_signal(String::new());
     let (source_vm_id, set_source_vm_id) = create_signal(String::new());
     let (clone_name, set_clone_name) = create_signal(String::new());
+    let (clone_mode, set_clone_mode) = create_signal("full".to_string());
 
     let load_templates = move || {
         set_loading.set(true);
@@ -139,6 +140,7 @@ pub fn TemplateManagerPage() -> impl IntoView {
     let start_clone = move |template: VmTemplate| {
         set_selected_template.set(Some(template.clone()));
         set_clone_name.set(format!("{}-clone", template.name));
+        set_clone_mode.set("full".to_string());
         set_show_clone_modal.set(true);
     };
 
@@ -146,9 +148,10 @@ pub fn TemplateManagerPage() -> impl IntoView {
         if let Some(template) = selected_template.get() {
             let template_id = template.id.clone();
             let new_name = clone_name.get();
+            let mode = clone_mode.get();
 
             spawn_local(async move {
-                match clone_template(&template_id, new_name.clone()).await {
+                match clone_template(&template_id, new_name.clone(), &mode).await {
                     Ok(_) => {
                         set_show_clone_modal.set(false);
                         reset_form();
@@ -329,12 +332,21 @@ pub fn TemplateManagerPage() -> impl IntoView {
                             let template_clone = template.clone();
                             let template_desc = template.description.clone();
                             let source_vm_name = get_vm_name(&template.source_vm_id);
-                            let size = format_bytes(template.size_mb * 1024 * 1024);
+                            let size = if template.virtual_size_bytes > 0 {
+                                format!(
+                                    "{} on disk / {} virtual",
+                                    format_bytes(template.size_bytes),
+                                    format_bytes(template.virtual_size_bytes)
+                                )
+                            } else {
+                                format_bytes(template.size_bytes)
+                            };
                             let created_at = template.created_at.clone();
                             let storage_location = template.storage_location.clone();
+                            let card_id = template.id.clone();
 
                             view! {
-                                <div class="bg-white rounded-lg shadow hover:shadow-lg transition-shadow">
+                                <div class="bg-white rounded-lg shadow hover:shadow-lg transition-shadow template-card" data-template-id=card_id>
                                     <div class="p-6">
                                         <div class="flex items-start justify-between mb-4">
                                             <div class="flex-1">
@@ -355,7 +367,7 @@ pub fn TemplateManagerPage() -> impl IntoView {
                                             <div class="flex items-center">
                                                 <i class="fas fa-hdd w-4 mr-2 text-gray-400"></i>
                                                 <span class="font-medium">"Size: "</span>
-                                                <span class="ml-1">{size}</span>
+                                                <span class="ml-1 template-size">{size}</span>
                                             </div>
                                             <div class="flex items-center">
                                                 <i class="fas fa-calendar w-4 mr-2 text-gray-400"></i>
@@ -515,6 +527,7 @@ pub fn TemplateManagerPage() -> impl IntoView {
                                         "New VM Name"
                                     </label>
                                     <input
+                                        id="template-clone-name"
                                         type="text"
                                         placeholder="new-vm-name"
                                         prop:value=move || clone_name.get()
@@ -524,6 +537,23 @@ pub fn TemplateManagerPage() -> impl IntoView {
                                     <p class="text-xs text-gray-500 mt-1">
                                         "This will create a new VM from the template"
                                     </p>
+                                </div>
+
+                                <div>
+                                    <label for="template-clone-mode" class="block text-sm font-medium text-gray-700 mb-1">
+                                        "Mode"
+                                    </label>
+                                    <select id="template-clone-mode" prop:value=move || clone_mode.get()
+                                        on:change=move |ev| set_clone_mode.set(event_target_value(&ev))
+                                        class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                                        <option value="full">"Full clone (independent copy of the template disk)"</option>
+                                        <option value="linked">"Linked clone (qcow2 overlay on the template disk)"</option>
+                                    </select>
+                                    {move || (clone_mode.get() == "linked").then(|| view! {
+                                        <p class="text-xs text-gray-500 mt-1" id="template-clone-linked-help">
+                                            "A linked clone only stores its own changes and reads the rest from the template disk, so the template can't be deleted while the clone exists."
+                                        </p>
+                                    })}
                                 </div>
 
                                 <div class="bg-blue-50 border border-blue-200 rounded p-3">
@@ -544,6 +574,7 @@ pub fn TemplateManagerPage() -> impl IntoView {
                                     "Cancel"
                                 </button>
                                 <button
+                                    id="template-clone-submit"
                                     on:click=move |_| clone_template_action()
                                     class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600"
                                     disabled=move || clone_name.get().is_empty()

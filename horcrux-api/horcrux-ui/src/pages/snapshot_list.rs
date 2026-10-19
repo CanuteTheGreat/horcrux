@@ -198,7 +198,7 @@ pub fn SnapshotList() -> impl IntoView {
                                                     {snapshot.description.as_ref().map(|d| d.to_string()).unwrap_or_else(|| "-".to_string())}
                                                 </td>
                                                 <td>{&snapshot.created_at}</td>
-                                                <td>{format!("{} MB", snapshot.size_mb)}</td>
+                                                <td class="snapshot-size">{snapshot.size_label()}</td>
                                                 <td>
                                                     {if snapshot.memory_included {
                                                         view! { <span class="badge badge-success">"Yes"</span> }.into_view()
