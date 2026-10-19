@@ -825,6 +825,12 @@ async fn qcow2_snapshot_state_size(path: &str, name: &str) -> u64 {
         .args(["info", "--output=json", "-U", path])
         .output()
         .await;
+    state_size_from_info_output(out, name)
+}
+
+/// `vm-state-size` of snapshot `name` from a `qemu-img info --output=json`
+/// run; 0 when qemu-img couldn't run, failed, or printed no usable JSON.
+fn state_size_from_info_output(out: std::io::Result<std::process::Output>, name: &str) -> u64 {
     match out {
         Ok(o) if o.status.success() => serde_json::from_slice::<serde_json::Value>(&o.stdout)
             .map(|v| snapshot_state_size(&v, name))
@@ -894,6 +900,27 @@ mod tests {
         assert_eq!(snapshot_state_size(&info, "disk-only"), 0);
         assert_eq!(snapshot_state_size(&info, "missing"), 0);
         assert_eq!(snapshot_state_size(&serde_json::json!({}), "x"), 0);
+    }
+
+    /// A failed `qemu-img info` is never trusted, even if it printed JSON;
+    /// a successful one is read; a qemu-img that can't run reports 0.
+    #[cfg(unix)]
+    #[test]
+    fn qemu_img_info_output_counts_only_when_qemu_img_succeeded() {
+        use std::os::unix::process::ExitStatusExt;
+        let stdout = br#"{"snapshots":[{"name":"s","vm-state-size":4096}]}"#.to_vec();
+        let run = |code: i32| {
+            Ok(std::process::Output {
+                status: std::process::ExitStatus::from_raw(code << 8),
+                stdout: stdout.clone(),
+                stderr: Vec::new(),
+            })
+        };
+        assert_eq!(state_size_from_info_output(run(0), "s"), 4096);
+        assert_eq!(state_size_from_info_output(run(1), "s"), 0);
+        assert_eq!(state_size_from_info_output(run(0), "other"), 0);
+        let not_found = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert_eq!(state_size_from_info_output(Err(not_found), "s"), 0);
     }
 
     fn create_test_vm_config() -> VmConfig {
@@ -1308,6 +1335,56 @@ mod tests {
         assert!(m.is_current_snapshot(&s1.id), "s1 is the head again");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `qcow2_snapshot_state_size` reads a real image's snapshot table via
+    /// qemu-img. Saving real VM state needs a running QEMU, so the test
+    /// takes a disk-only internal snapshot and then writes a vm-state size
+    /// into its qcow2 snapshot table entry (32-bit `vm_state_size` at +32
+    /// and the 64-bit `vm_state_size_large` extra-data field at +40).
+    #[tokio::test]
+    async fn qcow2_snapshot_state_size_reads_the_image_for_real() {
+        use std::io::{Read, Seek, SeekFrom, Write};
+        let dir = tempfile::tempdir().unwrap();
+        let img = dir.path().join("state.qcow2");
+        let img_s = img.to_string_lossy().to_string();
+        sh("qemu-img", &["create", "-q", "-f", "qcow2", &img_s, "16M"]);
+        sh("qemu-img", &["snapshot", "-c", "with-state", &img_s]);
+        assert_eq!(qcow2_snapshot_state_size(&img_s, "with-state").await, 0);
+
+        const STATE: u64 = 0x0123_4560;
+        let mut f = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&img)
+            .unwrap();
+        let mut hdr = [0u8; 72];
+        f.read_exact(&mut hdr).unwrap();
+        assert_eq!(&hdr[0..4], b"QFI\xfb");
+        assert_eq!(u32::from_be_bytes(hdr[60..64].try_into().unwrap()), 1);
+        let table = u64::from_be_bytes(hdr[64..72].try_into().unwrap());
+        let mut entry = [0u8; 40];
+        f.seek(SeekFrom::Start(table)).unwrap();
+        f.read_exact(&mut entry).unwrap();
+        let extra = u32::from_be_bytes(entry[36..40].try_into().unwrap());
+        f.seek(SeekFrom::Start(table + 32)).unwrap();
+        f.write_all(&(STATE as u32).to_be_bytes()).unwrap();
+        if extra >= 8 {
+            f.seek(SeekFrom::Start(table + 40)).unwrap();
+            f.write_all(&STATE.to_be_bytes()).unwrap();
+        }
+        drop(f);
+
+        assert_eq!(qcow2_snapshot_state_size(&img_s, "with-state").await, STATE);
+        assert_eq!(
+            qcow2_snapshot_state_size(&img_s, "no-such-snapshot").await,
+            0
+        );
+        let missing = dir.path().join("missing.qcow2");
+        assert_eq!(
+            qcow2_snapshot_state_size(&missing.to_string_lossy(), "with-state").await,
+            0
+        );
     }
 
     // ---- storage tools: a failure is an error, never a silent success ----
