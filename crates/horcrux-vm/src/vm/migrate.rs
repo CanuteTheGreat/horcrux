@@ -90,7 +90,7 @@ impl VmManager {
             kill_qemu(id).await;
         }
         let _ = tokio::fs::remove_file(qemu::pidfile(id)).await;
-        qemu::remove_taps(id, vm.hardware.nets.len()).await;
+        qemu::HostNet::system().remove_taps(id).await;
         if shared_disk0 {
             for f in renamed_runtime_files(&vm.disk_path) {
                 let _ = tokio::fs::remove_file(f).await;

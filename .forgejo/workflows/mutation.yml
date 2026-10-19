@@ -35,6 +35,9 @@ env:
   # --jobs 2 mutants at a time x 2 rustc each = the colo slot's 4 CPUs. libtest keeps its default
   # thread count: with 2 threads the workspace suite outgrew cargo-mutants' 20 s test timeout and
   # every mutant "timed out" (= counted as caught) - mutation-incremental.py gate now fails on that.
+  # --minimum-test-timeout 90: the unmutated baseline runs alone (0-2 s, so cargo-mutants auto-sets
+  # 20 s), but each mutant's tests run beside the other job's rustc on a shared host and take
+  # ~18 s; vm-runtime run 577 had 14 of 50 mutants "time out" at 20 s (false catches).
   CARGO_BUILD_JOBS: 2
 
 jobs:
@@ -134,7 +137,7 @@ jobs:
           # week to week.
           set +e
           cargo mutants -p "$pkg" --test-workspace=true --all-features $files $diff --jobs 2 --no-shuffle \
-            --cargo-arg=--lib --timeout-multiplier 3 --output /tmp/mutants
+            --cargo-arg=--lib --timeout-multiplier 3 --minimum-test-timeout 90 --output /tmp/mutants
           rc=$?
           set -e
           echo "cargo-mutants exit $rc (2 = missed mutants, 3 = timeouts: scored below)"

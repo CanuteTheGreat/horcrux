@@ -123,6 +123,13 @@ pub fn cloudinit_seed(disk: &std::path::Path) -> PathBuf {
     disk.with_extension("cidata.iso")
 }
 
+/// Whether `vm` boots with UEFI (OVMF): only x86 guests set to OVMF (the
+/// ARM/RISC-V `virt` machines bring their own firmware).
+pub fn uses_ovmf(vm: &QemuVm) -> bool {
+    vm.architecture == horcrux_common::VmArchitecture::X86_64
+        && vm.hardware.firmware == horcrux_common::Firmware::Ovmf
+}
+
 /// The complete QEMU command line for `vm`: binary plus every argument.
 ///
 /// This is the ONE place QEMU arguments are assembled; `start_vm` only
@@ -175,7 +182,7 @@ pub fn qemu_command(
     });
 
     // UEFI: read-only OVMF code + the VM's own variable store (qcow2).
-    if x86 && vm.hardware.firmware == horcrux_common::Firmware::Ovmf {
+    if uses_ovmf(vm) {
         if let Some(ovmf) = ovmf {
             args.extend([
                 "-drive".into(),
@@ -535,74 +542,116 @@ async fn run_ip(program: &str, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-/// Whether the host has a Linux bridge called `name`, and if it filters
-/// VLANs (`vlan_filtering`).
-pub fn host_bridge(name: &str) -> Option<bool> {
-    host_bridge_in(std::path::Path::new("/sys/class/net"), name)
+/// The host's network devices as Horcrux sees them: sysfs `class/net` to
+/// look them up and the iproute2 programs (`ip`, `bridge`) that change
+/// them. Production uses [`HostNet::system`]; tests point it at a fake
+/// sysfs tree and stand-in programs, since real bridges and taps need
+/// CAP_NET_ADMIN.
+#[derive(Debug, Clone)]
+pub struct HostNet {
+    sys_class_net: PathBuf,
+    /// argv prefix that runs `ip` / `bridge`.
+    ip: Vec<String>,
+    bridge: Vec<String>,
 }
 
-/// `host_bridge` against a given sysfs `class/net` directory (tests use a
-/// fake one; a real bridge can't be created without root).
-fn host_bridge_in(sys_class_net: &std::path::Path, name: &str) -> Option<bool> {
-    if !horcrux_common::valid_ifname(name) {
-        return None;
-    }
-    let dir = sys_class_net.join(name);
-    if !dir.join("bridge").is_dir() {
-        return None;
-    }
-    Some(
-        std::fs::read_to_string(dir.join("bridge/vlan_filtering"))
-            .map(|s| s.trim() == "1")
-            .unwrap_or(false),
-    )
-}
-
-/// Create the tap device of each NIC and plug it into its bridge (with the
-/// VLAN tag as the port's PVID) before QEMU starts. On failure every tap
-/// made so far is removed again.
-pub async fn setup_taps(vm: &QemuVm) -> Result<()> {
-    for (i, nic) in vm.hardware.nets.iter().enumerate() {
-        if let Err(e) = setup_tap(vm, i, nic).await {
-            remove_taps(&vm.id, vm.hardware.nets.len()).await;
-            return Err(e);
+impl HostNet {
+    /// This host: /sys/class/net, `ip` and `bridge` from PATH.
+    pub fn system() -> Self {
+        Self {
+            sys_class_net: PathBuf::from("/sys/class/net"),
+            ip: vec!["ip".into()],
+            bridge: vec!["bridge".into()],
         }
     }
-    Ok(())
-}
 
-async fn setup_tap(vm: &QemuVm, i: usize, nic: &horcrux_common::VmNic) -> Result<()> {
-    let vlan_aware = host_bridge(&nic.bridge).ok_or_else(|| {
-        horcrux_common::Error::Validation(format!(
-            "net{i}: bridge {} does not exist on this host",
-            nic.bridge
-        ))
-    })?;
-    if nic.vlan.is_some() && !vlan_aware {
-        return Err(horcrux_common::Error::Validation(format!(
-            "net{i}: VLAN tag set but bridge {} is not VLAN-aware (vlan_filtering is off)",
-            nic.bridge
-        )));
+    async fn run(tool: &[String], args: &[&str]) -> Result<()> {
+        let mut argv: Vec<&str> = tool[1..].iter().map(String::as_str).collect();
+        argv.extend_from_slice(args);
+        run_ip(&tool[0], &argv).await
     }
-    let tap = tap_name(&vm.id, i);
-    // A tap left by a QEMU that died on its own: start from a clean one.
-    if std::path::Path::new("/sys/class/net").join(&tap).exists() {
-        let _ = run_ip("ip", &["link", "del", &tap]).await;
+
+    fn exists(&self, ifname: &str) -> bool {
+        self.sys_class_net.join(ifname).exists()
     }
-    run_ip("ip", &["tuntap", "add", "dev", &tap, "mode", "tap"]).await?;
-    run_ip("ip", &["link", "set", &tap, "master", &nic.bridge]).await?;
-    if let Some(vid) = nic.vlan {
-        let vid = vid.to_string();
-        let _ = run_ip("bridge", &["vlan", "del", "dev", &tap, "vid", "1"]).await;
-        run_ip(
-            "bridge",
-            &["vlan", "add", "dev", &tap, "vid", &vid, "pvid", "untagged"],
+
+    /// Whether the host has a Linux bridge called `name`, and if it
+    /// filters VLANs (`vlan_filtering`).
+    pub fn bridge_vlan_aware(&self, name: &str) -> Option<bool> {
+        if !horcrux_common::valid_ifname(name) {
+            return None;
+        }
+        let dir = self.sys_class_net.join(name);
+        if !dir.join("bridge").is_dir() {
+            return None;
+        }
+        Some(
+            std::fs::read_to_string(dir.join("bridge/vlan_filtering"))
+                .map(|s| s.trim() == "1")
+                .unwrap_or(false),
         )
-        .await?;
     }
-    run_ip("ip", &["link", "set", &tap, "up"]).await?;
-    debug!("VM {}: net{i} = {tap} on {}", vm.id, nic.bridge);
-    Ok(())
+
+    /// Create the tap device of each NIC and plug it into its bridge (with
+    /// the VLAN tag as the port's PVID) before QEMU starts. On failure
+    /// every tap made so far is removed again.
+    pub async fn setup_taps(&self, vm: &QemuVm) -> Result<()> {
+        for (i, nic) in vm.hardware.nets.iter().enumerate() {
+            if let Err(e) = self.setup_tap(vm, i, nic).await {
+                self.remove_taps(&vm.id).await;
+                return Err(e);
+            }
+        }
+        Ok(())
+    }
+
+    async fn setup_tap(&self, vm: &QemuVm, i: usize, nic: &horcrux_common::VmNic) -> Result<()> {
+        let vlan_aware = self.bridge_vlan_aware(&nic.bridge).ok_or_else(|| {
+            horcrux_common::Error::Validation(format!(
+                "net{i}: bridge {} does not exist on this host",
+                nic.bridge
+            ))
+        })?;
+        if nic.vlan.is_some() && !vlan_aware {
+            return Err(horcrux_common::Error::Validation(format!(
+                "net{i}: VLAN tag set but bridge {} is not VLAN-aware (vlan_filtering is off)",
+                nic.bridge
+            )));
+        }
+        let tap = tap_name(&vm.id, i);
+        // A tap left by a QEMU that died on its own: start from a clean one.
+        if self.exists(&tap) {
+            let _ = Self::run(&self.ip, &["link", "del", &tap]).await;
+        }
+        Self::run(&self.ip, &["tuntap", "add", "dev", &tap, "mode", "tap"]).await?;
+        Self::run(&self.ip, &["link", "set", &tap, "master", &nic.bridge]).await?;
+        if let Some(vid) = nic.vlan {
+            let vid = vid.to_string();
+            let _ = Self::run(&self.bridge, &["vlan", "del", "dev", &tap, "vid", "1"]).await;
+            Self::run(
+                &self.bridge,
+                &["vlan", "add", "dev", &tap, "vid", &vid, "pvid", "untagged"],
+            )
+            .await?;
+        }
+        Self::run(&self.ip, &["link", "set", &tap, "up"]).await?;
+        debug!("VM {}: net{i} = {tap} on {}", vm.id, nic.bridge);
+        Ok(())
+    }
+
+    /// Remove a VM's tap devices (after stop, failed start or delete). Taps
+    /// of NICs removed from the config since the last start are covered by
+    /// scanning up to the maximum NIC count.
+    pub async fn remove_taps(&self, vm_id: &str) {
+        for i in 0..horcrux_common::MAX_VM_NICS {
+            let tap = tap_name(vm_id, i);
+            if self.exists(&tap) {
+                if let Err(e) = Self::run(&self.ip, &["link", "del", &tap]).await {
+                    tracing::warn!("VM {vm_id}: could not remove {tap}: {e}");
+                }
+            }
+        }
+    }
 }
 
 /// Clean up after a QEMU that exited by itself (guest powered off): its
@@ -610,21 +659,7 @@ async fn setup_tap(vm: &QemuVm, i: usize, nic: &horcrux_common::VmNic) -> Result
 pub async fn cleanup_after_exit(vm: &QemuVm) {
     let _ = tokio::fs::remove_file(pidfile(&vm.id)).await;
     super::display::DisplayRuntime::remove(&vm.disk_path).await;
-    remove_taps(&vm.id, vm.hardware.nets.len()).await;
-}
-
-/// Remove a VM's tap devices (after stop, failed start or delete). Taps of
-/// NICs removed from the config since the last start are covered by
-/// scanning up to the maximum NIC count.
-pub async fn remove_taps(vm_id: &str, _configured: usize) {
-    for i in 0..horcrux_common::MAX_VM_NICS {
-        let tap = tap_name(vm_id, i);
-        if std::path::Path::new("/sys/class/net").join(&tap).exists() {
-            if let Err(e) = run_ip("ip", &["link", "del", &tap]).await {
-                tracing::warn!("VM {vm_id}: could not remove {tap}: {e}");
-            }
-        }
-    }
+    HostNet::system().remove_taps(&vm.id).await;
 }
 
 /// Checks across a VM's disks: no two share a file, and the buses with a
@@ -932,9 +967,7 @@ impl QemuManager {
             }
         }
         // UEFI: OVMF must be installed; the VM gets its variable store.
-        let ovmf = if vm.architecture == horcrux_common::VmArchitecture::X86_64
-            && vm.hardware.firmware == horcrux_common::Firmware::Ovmf
-        {
+        let ovmf = if uses_ovmf(vm) {
             let o = super::firmware::find_ovmf().ok_or_else(super::firmware::ovmf_missing)?;
             super::firmware::ensure_efivars(&vm.disk_path, &o).await?;
             Some(o)
@@ -946,7 +979,7 @@ impl QemuManager {
             super::firmware::start_swtpm(&vm.disk_path).await?;
         }
         // Tap devices on the configured bridges (before QEMU opens them).
-        if let Err(e) = setup_taps(vm).await {
+        if let Err(e) = HostNet::system().setup_taps(vm).await {
             super::firmware::stop_swtpm(&vm.disk_path).await;
             return Err(e);
         }
@@ -973,7 +1006,7 @@ impl QemuManager {
             // would otherwise leave them behind.
             let _ = tokio::fs::remove_file(pidfile(&vm.id)).await;
             super::display::DisplayRuntime::remove(&vm.disk_path).await;
-            remove_taps(&vm.id, vm.hardware.nets.len()).await;
+            HostNet::system().remove_taps(&vm.id).await;
             super::firmware::stop_swtpm(&vm.disk_path).await;
             return Err(horcrux_common::Error::System(format!(
                 "Failed to start VM: {}",
@@ -999,7 +1032,7 @@ impl QemuManager {
             }
             let _ = tokio::fs::remove_file(pidfile(&vm.id)).await;
             super::display::DisplayRuntime::remove(&vm.disk_path).await;
-            remove_taps(&vm.id, vm.hardware.nets.len()).await;
+            HostNet::system().remove_taps(&vm.id).await;
             return Err(e);
         }
 
@@ -1049,7 +1082,7 @@ impl QemuManager {
         // Remove pidfile
         tokio::fs::remove_file(&pidfile).await.ok(); // Ignore errors if file doesn't exist
         super::display::DisplayRuntime::remove(&vm.disk_path).await;
-        remove_taps(&vm.id, vm.hardware.nets.len()).await;
+        HostNet::system().remove_taps(&vm.id).await;
 
         info!("VM {} stopped successfully", vm.id);
         Ok(())
@@ -1076,7 +1109,7 @@ impl QemuManager {
             let _ = tokio::fs::remove_file(vm.disk_path.with_extension(ext)).await;
         }
         let _ = tokio::fs::remove_file(pidfile(&vm.id)).await;
-        remove_taps(&vm.id, vm.hardware.nets.len()).await;
+        HostNet::system().remove_taps(&vm.id).await;
         super::firmware::remove_state(&vm.disk_path).await;
 
         // Delete the disk images (already gone is fine: the rest is
@@ -1475,6 +1508,97 @@ mod tests {
     }
 
     #[test]
+    fn legacy_vm_reports_its_one_disk_with_size_and_path() {
+        let mut v = vm(VmArchitecture::X86_64, VmDisplay::default());
+        v.disk_size = 20;
+        let d = v.all_disks();
+        assert_eq!(d.len(), 1);
+        assert_eq!(
+            (d[0].path.as_str(), d[0].size_gb, d[0].disk_type.as_str()),
+            ("/vms/t1.qcow2", 20, "default")
+        );
+        assert_eq!(v.to_config().disks, d);
+        // With a disk list, disk0's path is always the VM's disk_path.
+        v.disks = vec![
+            disk("/elsewhere.qcow2", "virtio"),
+            disk("/vms/b.raw", "sata"),
+        ];
+        let d = v.all_disks();
+        assert_eq!(
+            d.iter().map(|d| d.path.as_str()).collect::<Vec<_>>(),
+            ["/vms/t1.qcow2", "/vms/b.raw"]
+        );
+    }
+
+    #[test]
+    fn smp_topology_only_when_the_sockets_divide_the_cpus() {
+        let smp = |cpus: u32, sockets: Option<u32>| {
+            let mut v = vm(VmArchitecture::X86_64, VmDisplay::default());
+            v.cpus = cpus;
+            v.hardware.sockets = sockets;
+            let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
+            let a = qemu_command(&v, &rt, true, None).1;
+            a[a.iter().position(|x| x == "-smp").unwrap() + 1].clone()
+        };
+        assert_eq!(smp(4, None), "4");
+        assert_eq!(smp(4, Some(1)), "4", "one socket: plain -smp");
+        assert_eq!(smp(3, Some(2)), "3", "3 CPUs can't split over 2 sockets");
+        assert_eq!(smp(6, Some(3)), "6,sockets=3,cores=2,threads=1");
+        assert_eq!(smp(2, Some(2)), "2,sockets=2,cores=1,threads=1");
+    }
+
+    #[test]
+    fn network_boot_gets_bootindexes_in_the_configured_order() {
+        use horcrux_common::BootDevice;
+        let mut v = vm(VmArchitecture::X86_64, VmDisplay::default());
+        v.disks = vec![disk("/vms/t1.qcow2", "virtio")];
+        v.hardware.nets = vec![nic("vmbr0", None), nic("vmbr1", None)];
+        v.hardware.boot = vec![BootDevice::Net, BootDevice::Disk];
+        let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
+        let a = qemu_command(&v, &rt, true, None).1.join(" ");
+        for want in [
+            "id=nic0,bootindex=1",
+            "id=nic1,bootindex=2",
+            "virtio-blk-pci,drive=drive-disk0,id=disk0,bootindex=3",
+        ] {
+            assert!(a.contains(want), "missing {want}\nin {a}");
+        }
+        assert!(
+            !a.contains("cdrom0,bootindex"),
+            "CD-ROM not in the order: {a}"
+        );
+        // Without Net in the boot order the NICs get no bootindex.
+        v.hardware.boot = vec![BootDevice::Disk];
+        let a = qemu_command(&v, &rt, true, None).1.join(" ");
+        assert!(
+            !a.contains("id=nic0,bootindex") && !a.contains("id=nic1,bootindex"),
+            "{a}"
+        );
+        assert!(a.contains("id=disk0,bootindex=1"), "{a}");
+    }
+
+    #[test]
+    fn sata_disks_share_one_ahci_controller_on_consecutive_ports() {
+        let mut v = vm(VmArchitecture::X86_64, VmDisplay::default());
+        v.disks = vec![
+            disk("/vms/t1.qcow2", "sata"),
+            disk("/vms/t1-disk1.qcow2", "virtio"),
+            disk("/vms/t1-disk2.qcow2", "sata"),
+            disk("/vms/t1-disk3.qcow2", "sata"),
+        ];
+        let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
+        let a = qemu_command(&v, &rt, true, None).1.join(" ");
+        assert_eq!(a.matches("ahci,id=ahci0").count(), 1, "{a}");
+        for want in [
+            "ide-hd,bus=ahci0.0,drive=drive-disk0,id=disk0",
+            "ide-hd,bus=ahci0.1,drive=drive-disk2,id=disk2",
+            "ide-hd,bus=ahci0.2,drive=drive-disk3,id=disk3",
+        ] {
+            assert!(a.contains(want), "missing {want}\nin {a}");
+        }
+    }
+
+    #[test]
     fn cpu_type_topology_q35_ovmf_and_tpm() {
         use horcrux_common::{Firmware, MachineType};
         let mut v = vm(VmArchitecture::X86_64, VmDisplay::default());
@@ -1522,6 +1646,45 @@ mod tests {
         assert!(validate_disk_set(&sata).is_err());
         let ide: Vec<_> = (0..4).map(|i| disk(&format!("/i{i}"), "ide")).collect();
         assert!(validate_disk_set(&ide).unwrap_err().contains("IDE"));
+        // Exactly full buses are fine: 6 SATA ports, 3 IDE units (one of
+        // them may be the legacy default-bus disk) next to the CD-ROM.
+        let sata6: Vec<_> = (0..6).map(|i| disk(&format!("/s{i}"), "sata")).collect();
+        assert_eq!(validate_disk_set(&sata6), Ok(()));
+        let ide3 = vec![
+            disk("/i0", "default"),
+            disk("/i1", "ide"),
+            disk("/i2", "ide"),
+        ];
+        assert_eq!(validate_disk_set(&ide3), Ok(()));
+        let ide4 = [ide3.clone(), vec![disk("/i3", "default")]].concat();
+        assert!(validate_disk_set(&ide4)
+            .unwrap_err()
+            .contains("4 IDE disks"));
+    }
+
+    #[tokio::test]
+    async fn disk_image_of_an_exact_byte_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("mirror.qcow2");
+        let bytes = 3 * 1024 * 1024 + 64 * 1024;
+        QemuManager::create_disk_image_bytes(&p, bytes)
+            .await
+            .unwrap();
+        assert_eq!(QemuManager::virtual_size(&p).await.unwrap(), bytes);
+        let err = QemuManager::virtual_size(&dir.path().join("absent.qcow2"))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("absent.qcow2"), "{err}");
+        // qemu-img's failure is reported, naming the image.
+        let bad = dir.path().join("no/such/dir/x.qcow2");
+        let err = QemuManager::create_disk_image_bytes(&bad, bytes)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, horcrux_common::Error::System(m) if m.contains(&*bad.to_string_lossy())),
+            "{err}"
+        );
+        assert!(!bad.exists());
     }
 
     #[test]
@@ -1550,6 +1713,16 @@ mod tests {
         );
         cfg.disks[1].size_gb = 0;
         assert!(m.planned_disks(&cfg).is_err());
+        // Up to MAX_VM_DISKS disks; one more is refused.
+        let max = horcrux_common::MAX_VM_DISKS;
+        cfg.disks = (0..max).map(|_| disk("", "virtio")).collect();
+        assert_eq!(m.planned_disks(&cfg).unwrap().len(), max);
+        cfg.disks.push(disk("", "virtio"));
+        let err = m.planned_disks(&cfg).unwrap_err();
+        assert!(
+            err.to_string().contains(&format!("at most {max} disks")),
+            "{err}"
+        );
     }
 
     #[test]
@@ -1594,50 +1767,242 @@ mod tests {
         assert!(err.to_string().contains("/nonexistent/hx-ip"), "{err}");
     }
 
-    #[test]
-    fn host_bridge_reads_bridge_and_vlan_filtering_from_sysfs() {
-        let root = tempfile::tempdir().unwrap();
-        let net = root.path().join("net");
-        let mkbridge = |name: &str, filtering: Option<&str>| {
-            std::fs::create_dir_all(net.join(name).join("bridge")).unwrap();
-            if let Some(f) = filtering {
-                std::fs::write(net.join(name).join("bridge/vlan_filtering"), f).unwrap();
-            }
-        };
-        mkbridge("vmbr0", Some("1\n"));
-        mkbridge("vmbr1", Some("0\n"));
-        mkbridge("vmbr2", None);
-        std::fs::create_dir_all(net.join("eth0")).unwrap();
-        // A bridge one level up, reachable only through a path in the name.
-        std::fs::create_dir_all(root.path().join("evil/bridge")).unwrap();
-        std::fs::write(root.path().join("evil/bridge/vlan_filtering"), "1").unwrap();
+    /// A host with a fake `class/net` tree and stand-ins for `ip` and
+    /// `bridge` that log each call to `<root>/calls` and make the device
+    /// appear / disappear on `tuntap add` / `link del`, the way the kernel
+    /// does. A call whose arguments equal the content of `<root>/fail`
+    /// fails, like a real `ip` that hits an error.
+    struct FakeNet {
+        root: tempfile::TempDir,
+        host: HostNet,
+    }
 
-        assert_eq!(host_bridge_in(&net, "vmbr0"), Some(true));
-        assert_eq!(host_bridge_in(&net, "vmbr1"), Some(false));
-        assert_eq!(host_bridge_in(&net, "vmbr2"), Some(false));
-        assert_eq!(host_bridge_in(&net, "eth0"), None, "not a bridge");
-        assert_eq!(host_bridge_in(&net, "vmbr9"), None, "no such device");
-        assert_eq!(host_bridge_in(&net, "../evil"), None, "not an ifname");
+    impl FakeNet {
+        fn new() -> Self {
+            let root = tempfile::tempdir().unwrap();
+            let r = root.path();
+            std::fs::create_dir(r.join("net")).unwrap();
+            let script = r#"d=$(dirname "$0")
+echo "$(basename "$0") $*" >> "$d/calls"
+if [ -f "$d/fail" ] && [ "$*" = "$(cat "$d/fail")" ]; then echo "RTNETLINK answers: busy" >&2; exit 2; fi
+case "$*" in
+  "tuntap add dev "*" mode tap") mkdir "$d/net/$4" ;;
+  "link del "*) rmdir "$d/net/$3" ;;
+esac
+"#;
+            for tool in ["ip", "bridge"] {
+                std::fs::write(r.join(tool), script).unwrap();
+            }
+            let sh = |tool: &str| vec!["sh".to_string(), r.join(tool).to_string_lossy().into()];
+            let host = HostNet {
+                sys_class_net: r.join("net"),
+                ip: sh("ip"),
+                bridge: sh("bridge"),
+            };
+            FakeNet { root, host }
+        }
+
+        fn net(&self) -> PathBuf {
+            self.root.path().join("net")
+        }
+
+        fn add_bridge(&self, name: &str, vlan_filtering: Option<&str>) {
+            std::fs::create_dir_all(self.net().join(name).join("bridge")).unwrap();
+            if let Some(f) = vlan_filtering {
+                std::fs::write(self.net().join(name).join("bridge/vlan_filtering"), f).unwrap();
+            }
+        }
+
+        fn add_dev(&self, name: &str) {
+            std::fs::create_dir_all(self.net().join(name)).unwrap();
+        }
+
+        fn has_dev(&self, name: &str) -> bool {
+            self.net().join(name).exists()
+        }
+
+        fn fail_on(&self, args: &str) {
+            std::fs::write(self.root.path().join("fail"), args).unwrap();
+        }
+
+        fn calls(&self) -> Vec<String> {
+            std::fs::read_to_string(self.root.path().join("calls"))
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_string)
+                .collect()
+        }
+    }
+
+    fn nic(bridge: &str, vlan: Option<u16>) -> horcrux_common::VmNic {
+        horcrux_common::VmNic {
+            model: Default::default(),
+            bridge: bridge.into(),
+            mac: None,
+            vlan,
+        }
+    }
+
+    #[test]
+    fn bridge_vlan_aware_reads_bridge_and_vlan_filtering_from_sysfs() {
+        let f = FakeNet::new();
+        f.add_bridge("vmbr0", Some("1\n"));
+        f.add_bridge("vmbr1", Some("0\n"));
+        f.add_bridge("vmbr2", None);
+        f.add_dev("eth0");
+        // A bridge one level up, reachable only through a path in the name.
+        std::fs::create_dir_all(f.root.path().join("evil/bridge")).unwrap();
+        std::fs::write(f.root.path().join("evil/bridge/vlan_filtering"), "1").unwrap();
+
+        let h = &f.host;
+        assert_eq!(h.bridge_vlan_aware("vmbr0"), Some(true));
+        assert_eq!(h.bridge_vlan_aware("vmbr1"), Some(false));
+        assert_eq!(h.bridge_vlan_aware("vmbr2"), Some(false));
+        assert_eq!(h.bridge_vlan_aware("eth0"), None, "not a bridge");
+        assert_eq!(h.bridge_vlan_aware("vmbr9"), None, "no such device");
+        assert_eq!(h.bridge_vlan_aware("../evil"), None, "not an ifname");
         // The real sysfs: loopback exists in every netns and is no bridge.
-        assert_eq!(host_bridge("lo"), None);
+        assert_eq!(HostNet::system().bridge_vlan_aware("lo"), None);
     }
 
     #[tokio::test]
     async fn setup_taps_refuses_a_bridge_missing_on_this_host() {
         let dir = tempfile::tempdir().unwrap();
         let mut v = temp_vm(dir.path(), "nobr");
-        v.hardware.nets = vec![horcrux_common::VmNic {
-            model: Default::default(),
-            bridge: "hxnobr0".into(),
-            mac: None,
-            vlan: None,
-        }];
-        let err = setup_taps(&v).await.unwrap_err();
+        v.hardware.nets = vec![nic("hxnobr0", None)];
+        // The real host (no such bridge in any CI netns) and a fake one.
+        let f = FakeNet::new();
+        for host in [HostNet::system(), f.host.clone()] {
+            let err = host.setup_taps(&v).await.unwrap_err();
+            assert!(
+                matches!(&err, horcrux_common::Error::Validation(m)
+                    if m.contains("net0") && m.contains("hxnobr0") && m.contains("does not exist")),
+                "{err}"
+            );
+        }
+        assert!(f.calls().is_empty(), "{:?}", f.calls());
+    }
+
+    #[tokio::test]
+    async fn setup_taps_plugs_each_nic_into_its_bridge_with_its_vlan() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = FakeNet::new();
+        f.add_bridge("vmbr0", Some("0"));
+        f.add_bridge("vmbr1", Some("1"));
+        let mut v = temp_vm(dir.path(), "taps");
+        // An untagged NIC on a plain bridge, a tagged one on a VLAN-aware bridge.
+        v.hardware.nets = vec![nic("vmbr0", None), nic("vmbr1", Some(42))];
+        let (t0, t1) = (tap_name(&v.id, 0), tap_name(&v.id, 1));
+        // A tap left over from a QEMU that died: replaced by a fresh one.
+        f.add_dev(&t1);
+
+        f.host.setup_taps(&v).await.expect("both NICs set up");
+        assert_eq!(
+            f.calls(),
+            [
+                format!("ip tuntap add dev {t0} mode tap"),
+                format!("ip link set {t0} master vmbr0"),
+                format!("ip link set {t0} up"),
+                format!("ip link del {t1}"),
+                format!("ip tuntap add dev {t1} mode tap"),
+                format!("ip link set {t1} master vmbr1"),
+                format!("bridge vlan del dev {t1} vid 1"),
+                format!("bridge vlan add dev {t1} vid 42 pvid untagged"),
+                format!("ip link set {t1} up"),
+            ]
+        );
+        assert!(f.has_dev(&t0) && f.has_dev(&t1));
+    }
+
+    #[tokio::test]
+    async fn setup_taps_refuses_a_vlan_tag_on_a_bridge_without_vlan_filtering() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = FakeNet::new();
+        f.add_bridge("vmbr0", Some("1"));
+        f.add_bridge("vmbr1", None);
+        let mut v = temp_vm(dir.path(), "vlan");
+        v.hardware.nets = vec![nic("vmbr0", None), nic("vmbr1", Some(7))];
+        let err = f.host.setup_taps(&v).await.unwrap_err();
         assert!(
             matches!(&err, horcrux_common::Error::Validation(m)
-                if m.contains("net0") && m.contains("hxnobr0") && m.contains("does not exist")),
+                if m.contains("net1") && m.contains("vmbr1") && m.contains("not VLAN-aware")),
             "{err}"
         );
+        // net0 had been made already: it is removed again.
+        let t0 = tap_name(&v.id, 0);
+        assert_eq!(f.calls().last(), Some(&format!("ip link del {t0}")));
+        assert!(!f.has_dev(&t0));
+    }
+
+    #[tokio::test]
+    async fn setup_taps_reports_a_failing_ip_and_removes_the_taps_made() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = FakeNet::new();
+        f.add_bridge("vmbr0", Some("1"));
+        let mut v = temp_vm(dir.path(), "fail");
+        v.hardware.nets = vec![nic("vmbr0", None), nic("vmbr0", Some(5))];
+        let (t0, t1) = (tap_name(&v.id, 0), tap_name(&v.id, 1));
+        f.fail_on(&format!("vlan add dev {t1} vid 5 pvid untagged"));
+        let err = f.host.setup_taps(&v).await.unwrap_err();
+        assert!(
+            matches!(&err, horcrux_common::Error::System(m)
+                if m.contains("vlan add") && m.contains("RTNETLINK answers: busy")),
+            "{err}"
+        );
+        let calls = f.calls();
+        assert!(
+            !calls.contains(&format!("ip link set {t1} up")),
+            "{calls:?}"
+        );
+        assert!(
+            calls.ends_with(&[format!("ip link del {t0}"), format!("ip link del {t1}")]),
+            "{calls:?}"
+        );
+        assert!(!f.has_dev(&t0) && !f.has_dev(&t1));
+    }
+
+    #[tokio::test]
+    async fn remove_taps_deletes_every_tap_of_the_vm_and_nothing_else() {
+        let f = FakeNet::new();
+        let id = "hxtest-rm";
+        // Taps of NICs since removed from the config are found too.
+        f.add_dev(&tap_name(id, 0));
+        f.add_dev(&tap_name(id, 5));
+        f.add_dev(&tap_name(id, horcrux_common::MAX_VM_NICS - 1));
+        f.add_dev(&tap_name("hxtest-other", 0));
+        // A tap that can't be deleted doesn't stop the others' removal.
+        f.fail_on(&format!("link del {}", tap_name(id, 0)));
+        f.host.remove_taps(id).await;
+        assert_eq!(
+            f.calls(),
+            [0, 5, horcrux_common::MAX_VM_NICS - 1]
+                .map(|i| format!("ip link del {}", tap_name(id, i)))
+        );
+        assert!(f.has_dev(&tap_name(id, 0)), "the failed delete");
+        assert!(!f.has_dev(&tap_name(id, 5)));
+        assert!(!f.has_dev(&tap_name(id, horcrux_common::MAX_VM_NICS - 1)));
+        assert!(f.has_dev(&tap_name("hxtest-other", 0)), "another VM's tap");
+    }
+
+    #[tokio::test]
+    async fn cleanup_after_exit_removes_the_console_sockets_and_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let v = temp_vm(dir.path(), "exit");
+        let d = &v.disk_path;
+        let files = [
+            super::super::display::DisplayRuntime::state_path(d),
+            super::super::display::DisplayRuntime::serial_socket(d),
+            super::super::display::DisplayRuntime::qmp_socket(d),
+        ];
+        for p in &files {
+            std::fs::write(p, b"x").unwrap();
+        }
+        std::fs::write(d, b"disk").unwrap();
+        cleanup_after_exit(&v).await;
+        for p in &files {
+            assert!(!p.exists(), "{} left behind", p.display());
+        }
+        assert!(d.exists(), "the disk itself stays");
     }
 
     #[tokio::test]
@@ -1658,8 +2023,16 @@ mod tests {
             matches!(&err, horcrux_common::Error::Validation(m) if m.contains("disk0") && m.contains("missing")),
             "{err}"
         );
+        // The receiving side of a migration checks the same.
+        let err = mgr.start_vm_incoming(&v).await.unwrap_err();
+        assert!(
+            matches!(&err, horcrux_common::Error::Validation(m) if m.contains("disk0") && m.contains("missing")),
+            "{err}"
+        );
         v.status = VmStatus::Running;
         let err = mgr.start_vm(&v).await.unwrap_err();
+        assert!(err.to_string().contains("already running"), "{err}");
+        let err = mgr.start_vm_incoming(&v).await.unwrap_err();
         assert!(err.to_string().contains("already running"), "{err}");
     }
 
@@ -1677,6 +2050,61 @@ mod tests {
             matches!(&err, horcrux_common::Error::System(m) if m.contains("pidfile")),
             "{err}"
         );
+    }
+
+    #[test]
+    fn only_x86_guests_set_to_ovmf_use_uefi() {
+        use horcrux_common::Firmware;
+        let mut v = vm(VmArchitecture::X86_64, VmDisplay::default());
+        assert!(!uses_ovmf(&v), "BIOS by default");
+        v.hardware.firmware = Firmware::Ovmf;
+        assert!(uses_ovmf(&v));
+        for arch in [VmArchitecture::Aarch64, VmArchitecture::Riscv64] {
+            let mut a = vm(arch, VmDisplay::default());
+            assert!(!uses_ovmf(&a));
+            a.hardware.firmware = Firmware::Ovmf;
+            assert!(!uses_ovmf(&a), "virt machines bring their own firmware");
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_vm_waits_for_qemu_to_exit() {
+        // A "QEMU" that takes a moment to shut down after SIGTERM.
+        let mut child = std::process::Command::new("sh")
+            .args([
+                "-c",
+                "trap 'sleep 0.4; exit 0' TERM; while true; do sleep 0.05; done",
+            ])
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        // Let sh install its trap before the signal arrives.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let dir = tempfile::tempdir().unwrap();
+        let mut v = temp_vm(dir.path(), "wait");
+        v.status = VmStatus::Running;
+        let pf = pidfile(&v.id);
+        if let Err(e) = std::fs::write(&pf, pid.to_string()) {
+            // /var/run is root's; CI runs the tests as root.
+            let _ = child.kill();
+            let _ = child.wait();
+            assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied, "{e}");
+            eprintln!("skipped: {pf} not writable");
+            return;
+        }
+        let t = std::time::Instant::now();
+        let r = QemuManager::new().stop_vm(&v).await;
+        let waited = t.elapsed();
+        let gone = !pid_alive(pid);
+        let _ = child.kill();
+        let _ = child.wait();
+        r.unwrap();
+        assert!(gone, "stop_vm returned while QEMU was still running");
+        assert!(
+            waited < std::time::Duration::from_secs(4),
+            "stop_vm kept waiting after QEMU exited: {waited:?}"
+        );
+        assert!(!std::path::Path::new(&pf).exists(), "pidfile removed");
     }
 
     #[tokio::test]

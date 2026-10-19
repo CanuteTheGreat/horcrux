@@ -144,7 +144,7 @@ pub fn host_bridges() -> Vec<HostBridge> {
     if let Ok(rd) = std::fs::read_dir("/sys/class/net") {
         for e in rd.flatten() {
             let name = e.file_name().to_string_lossy().to_string();
-            if let Some(vlan_aware) = crate::vm::qemu::host_bridge(&name) {
+            if let Some(vlan_aware) = crate::vm::qemu::HostNet::system().bridge_vlan_aware(&name) {
                 out.push(HostBridge { name, vlan_aware });
             }
         }
@@ -237,7 +237,7 @@ async fn scan_isos(state: &AppState) -> Vec<IsoFile> {
 pub async fn check_host_hardware(state: &AppState, hw: &VmHardware) -> Result<(), ApiError> {
     check_host_firmware(hw)?;
     for (i, nic) in hw.nets.iter().enumerate() {
-        match crate::vm::qemu::host_bridge(&nic.bridge) {
+        match crate::vm::qemu::HostNet::system().bridge_vlan_aware(&nic.bridge) {
             None => {
                 return Err(ApiError::BadRequest(format!(
                     "net{i}: bridge {} does not exist on this host (bridges: {})",

@@ -65,7 +65,10 @@ pub fn routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
         match store.load_values::<ManagedBridge>(KIND).await {
             Ok(list) => {
                 for b in list {
-                    if crate::vm::qemu::host_bridge(&b.name).is_none() {
+                    if crate::vm::qemu::HostNet::system()
+                        .bridge_vlan_aware(&b.name)
+                        .is_none()
+                    {
                         match apply(&b).await {
                             Ok(()) => tracing::info!("Re-created host bridge {}", b.name),
                             Err(e) => tracing::warn!("Could not re-create bridge {}: {e}", b.name),
@@ -278,14 +281,19 @@ async fn remove(
     let store = ConfigStore::new(&state.database);
     let managed = store.load_values::<ManagedBridge>(KIND).await?;
     if !managed.iter().any(|m| m.name == name) {
-        return Err(if crate::vm::qemu::host_bridge(&name).is_some() {
-            ApiError::Conflict(format!(
-                "{name} was not created by Horcrux (it belongs to the host's network \
+        return Err(
+            if crate::vm::qemu::HostNet::system()
+                .bridge_vlan_aware(&name)
+                .is_some()
+            {
+                ApiError::Conflict(format!(
+                    "{name} was not created by Horcrux (it belongs to the host's network \
                  configuration), so it is not removed here"
-            ))
-        } else {
-            ApiError::NotFound(format!("bridge {name} not found"))
-        });
+                ))
+            } else {
+                ApiError::NotFound(format!("bridge {name} not found"))
+            },
+        );
     }
     let users: Vec<String> = state
         .vm_manager
@@ -301,7 +309,10 @@ async fn remove(
             users.join(", ")
         )));
     }
-    if crate::vm::qemu::host_bridge(&name).is_some() {
+    if crate::vm::qemu::HostNet::system()
+        .bridge_vlan_aware(&name)
+        .is_some()
+    {
         run("ip", &["link", "del", &name])
             .await
             .map_err(ApiError::Internal)?;
