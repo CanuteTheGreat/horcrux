@@ -30,3 +30,7 @@ build/iso/
 *.iso.sha256
 *.iso.sha512
 .mutation-baseline/
+
+# Python bytecode (a py_compile check committed one by accident in 9ba8940)
+__pycache__/
+*.py[cod]
