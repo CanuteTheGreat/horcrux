@@ -292,7 +292,11 @@ impl TemplateManager {
         next.disk_bus = Some(disk_bus);
         config_store::put_opt(&self.store, kinds::TEMPLATE, template_id, &next).await?;
         *t = next.clone();
-        Ok(next)
+        drop(templates);
+        // The stored copy carries no sizes (they're read from the disk on
+        // every read); this is what POST /api/templates returns, so it has
+        // to report them like create/get/list do.
+        Ok(next.with_sizes().await)
     }
 
     /// Clone a template to create a new VM
@@ -686,6 +690,13 @@ mod tests {
         // the template reports its real disk sizes (16 MiB virtual qcow2)
         assert_eq!(template.virtual_size_bytes, 16 * 1024 * 1024);
         assert!(template.disk_size_bytes > 0, "allocated size");
+        // set_hardware's result (the POST /api/templates response) too
+        let with_hw = manager
+            .set_hardware(&template.id, Default::default(), "virtio".to_string())
+            .await
+            .unwrap();
+        assert_eq!(with_hw.virtual_size_bytes, 16 * 1024 * 1024);
+        assert_eq!(with_hw.disk_size_bytes, template.disk_size_bytes);
         let listed = manager.list_templates().await;
         assert_eq!(listed[0].virtual_size_bytes, 16 * 1024 * 1024);
         assert_eq!(
