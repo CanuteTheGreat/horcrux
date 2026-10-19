@@ -728,9 +728,18 @@ impl Plan {
                 Some(json!({})),
             )
             .await?;
-        self.progress.lock().await.committed = true;
-        // The guest runs on the target: end the paused source QEMU.
-        let _ = qmp_command(&sock, json!({"execute": "quit"})).await;
+        let shared_runtime = {
+            let mut p = self.progress.lock().await;
+            p.committed = true;
+            p.runtime_aside
+        };
+        // The guest runs on the target: end the paused source QEMU. On
+        // shared storage not with `quit`: a clean exit unlinks the socket
+        // paths QEMU bound, which now hold the target's QMP/serial sockets;
+        // forget_migrated SIGKILLs it instead.
+        if !shared_runtime {
+            let _ = qmp_command(&sock, json!({"execute": "quit"})).await;
+        }
         Ok(())
     }
 
