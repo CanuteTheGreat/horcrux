@@ -233,8 +233,7 @@ impl ClusterManager {
             let token = token.clone();
             let local_hostname = local_hostname.clone();
             async move {
-                let this_host = usage::is_this_host(node, &local_hostname);
-                let outcome = if this_host {
+                let outcome = if usage::is_this_host(node, &local_hostname) {
                     match local_sample {
                         Some(sample) => usage::PollOutcome::Usage(sample),
                         // We're obviously up; we just can't read procfs.
@@ -244,7 +243,7 @@ impl ClusterManager {
                     usage::fetch_remote_usage(client, &node.api_url(api_port), token.as_deref())
                         .await
                 };
-                let outcome = usage::check_identity(node, outcome, &self.local_node_id, this_host);
+                let outcome = usage::check_identity(node, outcome);
                 (node.name.clone(), outcome)
             }
         });

@@ -129,39 +129,26 @@ pub fn memory_in_use(mem: &system::MemoryStats) -> u64 {
 }
 
 /// Turn a report that came from the wrong Horcrux instance into
-/// `Unreachable`: either this node polled itself through another node's
-/// address (`own_id`, and the target isn't this host), or the node's
-/// pinned identity differs from the responder's (the address now belongs
-/// to a different node, e.g. a restarted container got the dead node's
-/// IP). Without that check a dead node is shown online.
-pub fn check_identity(
-    node: &Node,
-    outcome: PollOutcome,
-    own_id: &str,
-    target_is_this_host: bool,
-) -> PollOutcome {
+/// `Unreachable`: the node's pinned identity differs from the responder's
+/// (the address now belongs to a different node, e.g. a restarted
+/// container got a dead node's IP - possibly this very node, polling
+/// itself). Without that check a dead node is shown online. An unpinned
+/// node takes the identity of whoever answers first (see `apply_poll`),
+/// which is also how this node's own entry, registered by address, pins
+/// this node.
+pub fn check_identity(node: &Node, outcome: PollOutcome) -> PollOutcome {
     if let PollOutcome::Usage(u) = &outcome {
-        if let Some(got) = u.node_id.as_deref() {
-            if !target_is_this_host && !own_id.is_empty() && got == own_id {
+        if let (Some(got), Some(pinned)) = (u.node_id.as_deref(), node.node_id.as_deref()) {
+            if pinned != got {
                 tracing::warn!(
-                    "Cluster node {} ({}): this node answered at that address - not counting it as up",
+                    "Cluster node {} ({}): answered by a different Horcrux instance ({} instead of {}); \
+                     remove and re-add the node if it was reinstalled",
                     node.name,
-                    node.ip
+                    node.ip,
+                    got,
+                    pinned
                 );
                 return PollOutcome::Unreachable;
-            }
-            if let Some(pinned) = node.node_id.as_deref() {
-                if pinned != got {
-                    tracing::warn!(
-                        "Cluster node {} ({}): answered by a different Horcrux instance ({} instead of {}); \
-                         remove and re-add the node if it was reinstalled",
-                        node.name,
-                        node.ip,
-                        got,
-                        pinned
-                    );
-                    return PollOutcome::Unreachable;
-                }
             }
         }
     }
@@ -459,12 +446,12 @@ mod tests {
     #[test]
     fn a_node_pins_the_identity_of_its_first_report() {
         let mut n = node("node3", "172.18.0.4");
-        let o = check_identity(&n, from(Some("id-node3")), "id-node1", false);
+        let o = check_identity(&n, from(Some("id-node3")));
         apply_poll(&mut n, o, 1_000);
         assert_eq!(n.status, NodeStatus::Online);
         assert_eq!(n.node_id.as_deref(), Some("id-node3"));
         // the same instance keeps it online
-        let o = check_identity(&n, from(Some("id-node3")), "id-node1", false);
+        let o = check_identity(&n, from(Some("id-node3")));
         assert!(matches!(o, PollOutcome::Usage(_)));
     }
 
@@ -473,7 +460,7 @@ mod tests {
         // node3 died; node2 restarted onto node3's old address
         let mut n = node("node3", "172.18.0.4");
         n.node_id = Some("id-node3".into());
-        let o = check_identity(&n, from(Some("id-node2")), "id-node1", false);
+        let o = check_identity(&n, from(Some("id-node2")));
         assert_eq!(o, PollOutcome::Unreachable);
         apply_poll(&mut n, o, 1_000);
         assert_eq!(n.status, NodeStatus::Offline);
@@ -482,17 +469,23 @@ mod tests {
     }
 
     #[test]
-    fn a_node_polling_itself_through_another_nodes_address_is_not_that_node() {
-        // node1 restarted onto node3's old address and polls "node3"
-        let n = node("node3", "172.18.0.4");
+    fn a_node_polling_itself_through_a_dead_nodes_address_is_not_that_node() {
+        // node1 restarted onto node3's old address: polling "node3" reaches
+        // node1 itself, whose identity isn't node3's pinned one
+        let mut n = node("node3", "172.18.0.4");
+        n.node_id = Some("id-node3".into());
         assert_eq!(
-            check_identity(&n, from(Some("id-node1")), "id-node1", false),
+            check_identity(&n, from(Some("id-node1"))),
             PollOutcome::Unreachable
         );
-        // ... but its own (local) entry is fine
-        let local = node("node1", "127.0.0.1");
+        // ... while this node's own entry (registered by its address) pins
+        // and keeps this node
+        let mut own = node("node1", "172.18.0.2");
+        let o = check_identity(&own, from(Some("id-node1")));
+        apply_poll(&mut own, o, 1_000);
+        assert_eq!(own.status, NodeStatus::Online);
         assert!(matches!(
-            check_identity(&local, from(Some("id-node1")), "id-node1", true),
+            check_identity(&own, from(Some("id-node1"))),
             PollOutcome::Usage(_)
         ));
     }
@@ -502,11 +495,11 @@ mod tests {
         let mut n = node("old", "10.0.0.9");
         n.node_id = Some("id-x".into());
         assert!(matches!(
-            check_identity(&n, from(None), "id-node1", false),
+            check_identity(&n, from(None)),
             PollOutcome::Usage(_)
         ));
         assert_eq!(
-            check_identity(&n, PollOutcome::ReachableNoUsage, "id-node1", false),
+            check_identity(&n, PollOutcome::ReachableNoUsage),
             PollOutcome::ReachableNoUsage
         );
     }
