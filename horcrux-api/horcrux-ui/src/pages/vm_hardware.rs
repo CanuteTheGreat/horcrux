@@ -632,6 +632,11 @@ pub fn VmHardwarePage() -> impl IntoView {
                     on:click=move |_| power("Reset")>"Reset"</button>
             </div>
 
+            // The form appears once the VM is loaded: rendered earlier, the
+            // load would overwrite whatever the user had already changed.
+            <Show when=move || vm.get().is_some() fallback=move || view! {
+                <p class="form-help" id="vm-hw-loading">{move || if error.get().is_some() { "" } else { "Loading the VM..." }}</p>
+            }>
             <form id="vm-hardware-form" on:submit=save>
                 <div class="form-group">
                     <label for="vm-hw-name">"Name"</label>
@@ -662,6 +667,7 @@ pub fn VmHardwarePage() -> impl IntoView {
                     <button type="submit" id="vm-hw-save" class="btn btn-primary" disabled=busy>"Save"</button>
                 </div>
             </form>
+            </Show>
 
             <Show when=is_qemu>
                 <VmDisks vm_id=Signal::derive(vm_id) vm=vm set_vm=set_vm running=running/>
