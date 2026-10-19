@@ -674,7 +674,8 @@ def vm_hardware_checks(page, vid):
     _req("DELETE", "/api/storage/isos/e2e-ui.iso", tok)
 
     # ---- VM > Hardware: System (CPU type, chipset) + Disks -----------------
-    page.reload()
+    # (the NIC step above may have followed the link to Host Bridges)
+    page.goto(f"{BASE}/vms/{vid}/hardware")
     expect(page.locator("#vm-system")).to_be_visible(timeout=30000)
     page.select_option("#vm-cpu-type", "qemu64")
     page.select_option("#vm-machine", "q35")

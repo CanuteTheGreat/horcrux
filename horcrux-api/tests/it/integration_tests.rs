@@ -1774,28 +1774,19 @@ async fn test_vm_migration() {
         .unwrap();
     assert_eq!(r.status(), 400);
 
-    // A real VM id is accepted and produces a trackable job.
-    let response = client
+    // A target that isn't a node of this cluster is refused up front with a
+    // message that says how to fix it (the real two-node live/offline/cancel
+    // runs are in tests/vm_migrate_e2e.sh, workflow vm-migration.yml).
+    let r = client
         .post(format!("{}/migrate/{}", API_BASE, vm))
         .bearer_auth(&token)
         .json(&json!({"target_node": "node2", "online": false, "migration_type": "offline"}))
         .send()
-        .await;
-    let response = expect_2xx(response, "Failed to start migration").await;
-    let job_id: serde_json::Value = response.unwrap().json().await.unwrap();
-    assert!(job_id.is_string(), "migration returns a job id: {job_id}");
-
-    wait_for_operation(500).await;
-    let response = client
-        .get(format!("{}/migrate/{}/status", API_BASE, vm))
-        .bearer_auth(&token)
-        .send()
-        .await;
-    let response = expect_2xx(response, "Failed to get migration status").await;
-    let status: serde_json::Value = response.unwrap().json().await.unwrap();
-    assert_eq!(status["vm_id"], vm);
-    assert_eq!(status["id"], job_id);
-    assert!(status.get("state").is_some(), "{status}");
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 400);
+    let body = r.text().await.unwrap();
+    assert!(body.contains("not a node of this cluster"), "{body}");
 
     let _ = client
         .delete(format!("{}/vms/{}", API_BASE, vm))

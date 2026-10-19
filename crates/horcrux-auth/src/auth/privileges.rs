@@ -254,6 +254,9 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
         "snapshot-quotas" => read_write(m, P::DatastoreAudit, P::DatastoreAllocate, "/storage"),
         "clone-jobs" => read_write(m, P::VmAudit, P::VmClone, "/vms"),
         "replication" => read_write(m, P::VmAudit, P::VmMigrate, "/vms"),
+        // The peer API is node-to-node only: the handlers accept nothing but
+        // a `cluster-migration` service token (403 for every user role).
+        "migration" if arg(1) == "peer" => Requirement::Authenticated,
         "migration" => read_write(m, P::VmAudit, P::VmMigrate, "/vms"),
         "cloudinit" => {
             let id = arg(1);
