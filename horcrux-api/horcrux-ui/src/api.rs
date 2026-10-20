@@ -460,6 +460,11 @@ pub struct ClusterNode {
     /// Unix seconds of the node's last successful usage report.
     #[serde(default)]
     pub last_seen: Option<i64>,
+    /// Why the node has its current status, when the heartbeat had more
+    /// to say ("not answering", "unverified: ..." when whatever answers at
+    /// the address can't prove it is this node, "up, usage unknown: ...").
+    #[serde(default)]
+    pub status_reason: Option<String>,
 }
 
 fn default_node_priority() -> u32 {
@@ -6410,6 +6415,7 @@ mod tests {
             cpu_usage: cpu,
             memory_used: used_gb.map(|g| g << 30),
             last_seen: None,
+            status_reason: None,
         }
     }
 

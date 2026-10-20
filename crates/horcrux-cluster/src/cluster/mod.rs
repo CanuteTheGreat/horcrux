@@ -105,6 +105,7 @@ impl ClusterManager {
                 node.status = NodeStatus::Unknown;
                 node.cpu_usage = None;
                 node.memory_used = None;
+                node.status_reason = None;
                 nodes.insert(node.name.clone(), node);
             }
             if let Some(cfg) = store
@@ -222,7 +223,9 @@ impl ClusterManager {
         let local_hostname = self.get_local_node_name().await.unwrap_or_default();
         // Short-lived service token for the other nodes' local-usage
         // endpoint. Nodes of one cluster share JWT_SECRET; a node that
-        // doesn't will answer 401, which is reported as "up, usage unknown".
+        // doesn't will answer 401, which is reported as "up, usage unknown"
+        // until the node's identity is pinned and as unverified (not online)
+        // after that (see usage::check_identity).
         // The token is route-scoped (GET /api/cluster/local-usage only, see
         // middleware::auth) and expires in seconds, since it is sent to every
         // registered peer address.
@@ -235,15 +238,23 @@ impl ClusterManager {
             async move {
                 let outcome = if usage::is_this_host(node, &local_hostname) {
                     match local_sample {
-                        Some(sample) => usage::PollOutcome::Usage(sample),
+                        Some(sample) => {
+                            usage::check_identity(node, usage::PollOutcome::Usage(sample))
+                        }
                         // We're obviously up; we just can't read procfs.
-                        None => usage::PollOutcome::ReachableNoUsage,
+                        None => usage::PollOutcome::ReachableNoUsage(
+                            "this host's procfs can't be read".to_string(),
+                        ),
                     }
                 } else {
-                    usage::fetch_remote_usage(client, &node.api_url(api_port), token.as_deref())
-                        .await
+                    let reply = usage::fetch_remote_usage(
+                        client,
+                        &node.api_url(api_port),
+                        token.as_deref(),
+                    )
+                    .await;
+                    usage::check_identity(node, reply)
                 };
-                let outcome = usage::check_identity(node, outcome);
                 (node.name.clone(), outcome)
             }
         });

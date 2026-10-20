@@ -184,6 +184,12 @@ pub struct Node {
     /// not count as this node being up. Cleared by removing the node.
     #[serde(default)]
     pub node_id: Option<String>,
+    /// Why the node has its current status when that isn't simply "it
+    /// reported its usage": "not answering", "unverified: ..." (whatever
+    /// answers at the address can't prove it is this pinned node), "up,
+    /// usage unknown: ...". `None` after a normal report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_reason: Option<String>,
 }
 
 /// Node status
@@ -211,6 +217,7 @@ impl Node {
             memory_used: None,
             last_seen: None,
             node_id: None,
+            status_reason: None,
         }
     }
 
@@ -230,6 +237,7 @@ impl Node {
             memory_used: None,
             last_seen: None,
             node_id: None,
+            status_reason: None,
         }
     }
 
@@ -360,6 +368,7 @@ impl AddNodeRequest {
             memory_used: None,
             last_seen: None,
             node_id: None,
+            status_reason: None,
         }
     }
 }

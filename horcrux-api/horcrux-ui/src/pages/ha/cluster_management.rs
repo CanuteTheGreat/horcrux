@@ -413,6 +413,9 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                                             <span class=format!("px-2 py-1 text-xs font-medium rounded {}", status_color)>
                                                                 {node.status.clone()}
                                                             </span>
+                                                            {node.status_reason.clone().map(|why| view! {
+                                                                <div class="mt-1 text-xs text-gray-500 whitespace-normal max-w-xs">{why}</div>
+                                                            })}
                                                         </td>
                                                         <td class="px-6 py-4 whitespace-nowrap">
                                                             <div class="text-sm text-gray-900">

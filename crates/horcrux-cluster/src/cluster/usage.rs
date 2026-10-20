@@ -64,10 +64,18 @@ pub struct NodeUsage {
 pub enum PollOutcome {
     /// The node reported its usage.
     Usage(NodeUsage),
-    /// The node's API answered, but not with usage data (auth rejected
-    /// because the node uses a different JWT secret, an older Horcrux
-    /// without the endpoint, ...). The node is up; its usage is unknown.
-    ReachableNoUsage,
+    /// Something answered at the node's address, but not with usage data
+    /// (auth rejected because the node uses a different JWT secret, an
+    /// older Horcrux without the endpoint, an unparseable body, ...); the
+    /// string says what came back. For a node without a pinned identity
+    /// this means "up, usage unknown"; for a pinned node it can't prove the
+    /// answer came from that node (see [`check_identity`]).
+    ReachableNoUsage(String),
+    /// Whatever answered at a pinned node's address couldn't prove it is
+    /// that node (a different identity, no identity, or no usage reply at
+    /// all); the string says why. Counts like [`PollOutcome::Unreachable`]
+    /// for the node's status, with the reason recorded on the node.
+    Unverified(String),
     /// No answer at all (connection refused, timeout, DNS failure).
     Unreachable,
 }
@@ -80,6 +88,7 @@ pub fn apply_poll(node: &mut Node, outcome: PollOutcome, now: i64) {
                 node.node_id = usage.node_id.clone();
             }
             node.status = NodeStatus::Online;
+            node.status_reason = None;
             node.cpu_usage = Some(usage.cpu_usage.clamp(0.0, 100.0));
             node.memory_used = Some(usage.memory_used);
             node.last_seen = Some(now);
@@ -97,22 +106,29 @@ pub fn apply_poll(node: &mut Node, outcome: PollOutcome, now: i64) {
                 node.architecture = usage.architecture;
             }
         }
-        PollOutcome::ReachableNoUsage => {
+        PollOutcome::ReachableNoUsage(why) => {
             node.status = NodeStatus::Online;
+            node.status_reason = Some(format!("up, usage unknown: {why}"));
             node.cpu_usage = None;
             node.memory_used = None;
         }
-        PollOutcome::Unreachable => {
-            let recently_seen = node
-                .last_seen
-                .map(|seen| now - seen <= STALE_AFTER_SECS)
-                .unwrap_or(false);
-            if !recently_seen {
-                node.status = NodeStatus::Offline;
-                node.cpu_usage = None;
-                node.memory_used = None;
-            }
-        }
+        PollOutcome::Unverified(why) => mark_missed(node, why, now),
+        PollOutcome::Unreachable => mark_missed(node, "not answering".to_string(), now),
+    }
+}
+
+/// A poll that didn't hear from the node itself: it goes offline (usage
+/// unknown) once it hasn't reported for [`STALE_AFTER_SECS`].
+fn mark_missed(node: &mut Node, why: String, now: i64) {
+    let recently_seen = node
+        .last_seen
+        .map(|seen| now - seen <= STALE_AFTER_SECS)
+        .unwrap_or(false);
+    node.status_reason = Some(why);
+    if !recently_seen {
+        node.status = NodeStatus::Offline;
+        node.cpu_usage = None;
+        node.memory_used = None;
     }
 }
 
@@ -128,31 +144,39 @@ pub fn memory_in_use(mem: &system::MemoryStats) -> u64 {
     }
 }
 
-/// Turn a report that came from the wrong Horcrux instance into
-/// `Unreachable`: the node's pinned identity differs from the responder's
-/// (the address now belongs to a different node, e.g. a restarted
+/// Once a node's identity is pinned, only a usage report carrying that
+/// identity proves the node is up. Anything else that answers at its
+/// address becomes [`PollOutcome::Unverified`]: a different Horcrux
+/// instance (the address now belongs to another node, e.g. a restarted
 /// container got a dead node's IP - possibly this very node, polling
-/// itself). Without that check a dead node is shown online. An unpinned
-/// node takes the identity of whoever answers first (see `apply_poll`),
-/// which is also how this node's own entry, registered by address, pins
-/// this node.
+/// itself), a report without an identity, or a reply that isn't a usage
+/// report at all (401 from a Horcrux with another JWT secret, any other
+/// web server's error page or body). Without that check a dead node is
+/// shown online and stays a placement target. An unpinned node (older
+/// Horcrux, or not reported yet) takes the identity of whoever answers
+/// first (see `apply_poll`), which is also how this node's own entry,
+/// registered by address, pins this node; until then a non-usage reply
+/// still means "up, usage unknown".
 pub fn check_identity(node: &Node, outcome: PollOutcome) -> PollOutcome {
-    if let PollOutcome::Usage(u) = &outcome {
-        if let (Some(got), Some(pinned)) = (u.node_id.as_deref(), node.node_id.as_deref()) {
-            if pinned != got {
-                tracing::warn!(
-                    "Cluster node {} ({}): answered by a different Horcrux instance ({} instead of {}); \
-                     remove and re-add the node if it was reinstalled",
-                    node.name,
-                    node.ip,
-                    got,
-                    pinned
-                );
-                return PollOutcome::Unreachable;
-            }
+    let Some(pinned) = node.node_id.as_deref() else {
+        return outcome;
+    };
+    let why = match &outcome {
+        PollOutcome::Usage(u) => match u.node_id.as_deref() {
+            Some(got) if got == pinned => return outcome,
+            Some(got) => format!(
+                "unverified: answered by a different Horcrux instance ({got} instead of {pinned}); \
+                 remove and re-add the node if it was reinstalled"
+            ),
+            None => format!("unverified: the reply carries no node identity (expected {pinned})"),
+        },
+        PollOutcome::ReachableNoUsage(reply) => {
+            format!("unverified: {reply}, which doesn't prove it is node {pinned}")
         }
-    }
-    outcome
+        PollOutcome::Unverified(_) | PollOutcome::Unreachable => return outcome,
+    };
+    tracing::warn!("Cluster node {} ({}): {}", node.name, node.ip, why);
+    PollOutcome::Unverified(why)
 }
 
 /// "No limit" as cgroup v1 reports it (page-rounded i64::MAX) and anything
@@ -310,16 +334,12 @@ pub async fn fetch_remote_usage(
             Ok(usage) => PollOutcome::Usage(usage),
             Err(e) => {
                 tracing::debug!("{}: unparseable local-usage response: {}", base_url, e);
-                PollOutcome::ReachableNoUsage
+                PollOutcome::ReachableNoUsage("the reply is not a usage report".to_string())
             }
         },
         Ok(resp) => {
-            tracing::debug!(
-                "{}: local-usage answered HTTP {} (node up, usage unknown)",
-                base_url,
-                resp.status()
-            );
-            PollOutcome::ReachableNoUsage
+            tracing::debug!("{}: local-usage answered HTTP {}", base_url, resp.status());
+            PollOutcome::ReachableNoUsage(format!("local-usage answered HTTP {}", resp.status()))
         }
         Err(e) => {
             tracing::debug!("{}: usage poll failed: {}", base_url, e);
@@ -424,10 +444,18 @@ mod tests {
     fn reachable_without_usage_is_online_but_unknown() {
         let mut n = node("n1", "10.0.0.1");
         apply_poll(&mut n, PollOutcome::Usage(usage(20.0, 1 << 30)), 1_000);
-        apply_poll(&mut n, PollOutcome::ReachableNoUsage, 1_010);
+        apply_poll(
+            &mut n,
+            PollOutcome::ReachableNoUsage("HTTP 401".into()),
+            1_010,
+        );
         assert_eq!(n.status, NodeStatus::Online);
         assert_eq!(n.cpu_usage, None);
         assert_eq!(n.memory_used, None);
+        assert_eq!(
+            n.status_reason.as_deref(),
+            Some("up, usage unknown: HTTP 401")
+        );
     }
 
     #[test]
@@ -461,9 +489,17 @@ mod tests {
         let mut n = node("node3", "172.18.0.4");
         n.node_id = Some("id-node3".into());
         let o = check_identity(&n, from(Some("id-node2")));
-        assert_eq!(o, PollOutcome::Unreachable);
+        assert!(
+            matches!(&o, PollOutcome::Unverified(w) if w.contains("id-node2 instead of id-node3")),
+            "{o:?}"
+        );
         apply_poll(&mut n, o, 1_000);
         assert_eq!(n.status, NodeStatus::Offline);
+        assert!(n
+            .status_reason
+            .as_deref()
+            .unwrap()
+            .starts_with("unverified"));
         assert_eq!(n.cpu_usage, None);
         assert_eq!(n.node_id.as_deref(), Some("id-node3"), "pin kept");
     }
@@ -474,10 +510,10 @@ mod tests {
         // node1 itself, whose identity isn't node3's pinned one
         let mut n = node("node3", "172.18.0.4");
         n.node_id = Some("id-node3".into());
-        assert_eq!(
+        assert!(matches!(
             check_identity(&n, from(Some("id-node1"))),
-            PollOutcome::Unreachable
-        );
+            PollOutcome::Unverified(_)
+        ));
         // ... while this node's own entry (registered by its address) pins
         // and keeps this node
         let mut own = node("node1", "172.18.0.2");
@@ -491,17 +527,71 @@ mod tests {
     }
 
     #[test]
-    fn reports_without_an_identity_from_older_nodes_are_accepted() {
+    fn unpinned_older_nodes_keep_todays_behaviour() {
+        // an older Horcrux never sends an identity, so it is never pinned
         let mut n = node("old", "10.0.0.9");
-        n.node_id = Some("id-x".into());
-        assert!(matches!(
-            check_identity(&n, from(None)),
-            PollOutcome::Usage(_)
-        ));
-        assert_eq!(
-            check_identity(&n, PollOutcome::ReachableNoUsage),
-            PollOutcome::ReachableNoUsage
-        );
+        let o = check_identity(&n, from(None));
+        assert!(matches!(o, PollOutcome::Usage(_)));
+        apply_poll(&mut n, o, 1_000);
+        assert_eq!(n.node_id, None);
+        assert_eq!(n.status, NodeStatus::Online);
+        assert_eq!(n.status_reason, None);
+        let o = check_identity(&n, PollOutcome::ReachableNoUsage("HTTP 401".into()));
+        assert_eq!(o, PollOutcome::ReachableNoUsage("HTTP 401".into()));
+        apply_poll(&mut n, o, 1_010);
+        assert_eq!(n.status, NodeStatus::Online, "up, usage unknown");
+    }
+
+    #[test]
+    fn a_pinned_node_whose_reply_cant_prove_its_identity_is_not_online() {
+        for reply in [
+            PollOutcome::ReachableNoUsage("local-usage answered HTTP 401 Unauthorized".into()),
+            PollOutcome::ReachableNoUsage("local-usage answered HTTP 404 Not Found".into()),
+            PollOutcome::ReachableNoUsage("the reply is not a usage report".into()),
+            from(None),
+        ] {
+            let mut n = node("node3", "172.31.250.13");
+            n.node_id = Some("id-node3".into());
+            let o = check_identity(&n, reply.clone());
+            assert!(
+                matches!(o, PollOutcome::Unverified(_)),
+                "{reply:?} -> {o:?}"
+            );
+            // never seen: offline straight away, with the reason
+            apply_poll(&mut n, o.clone(), 1_000);
+            assert_eq!(n.status, NodeStatus::Offline, "{reply:?}");
+            assert_eq!(n.cpu_usage, None);
+            let why = n.status_reason.clone().unwrap();
+            assert!(
+                why.starts_with("unverified") && why.contains("id-node3"),
+                "{why}"
+            );
+
+            // seen a moment ago: one unverified poll doesn't flap it, but it
+            // goes offline once the last real report is stale
+            let mut n2 = node("node3", "172.31.250.13");
+            apply_poll(&mut n2, from(Some("id-node3")), 1_000);
+            assert_eq!(n2.status, NodeStatus::Online);
+            apply_poll(&mut n2, o.clone(), 1_010);
+            assert_eq!(n2.status, NodeStatus::Online);
+            assert!(n2
+                .status_reason
+                .as_deref()
+                .unwrap()
+                .starts_with("unverified"));
+            apply_poll(&mut n2, o, 1_001 + STALE_AFTER_SECS);
+            assert_eq!(n2.status, NodeStatus::Offline);
+            assert_eq!(
+                n2.last_seen,
+                Some(1_000),
+                "an unverified reply is not a sighting"
+            );
+            // the real node back: online, reason cleared
+            let back = check_identity(&n2, from(Some("id-node3")));
+            apply_poll(&mut n2, back, 1_100);
+            assert_eq!(n2.status, NodeStatus::Online);
+            assert_eq!(n2.status_reason, None);
+        }
     }
 
     fn cg(dir: &std::path::Path, files: &[(&str, &str)]) {
@@ -646,6 +736,118 @@ mod tests {
         // Second sample diffs against the first one's counters.
         let second = sampler.sample().await.expect("procfs sample");
         assert!((0.0..=100.0).contains(&second.cpu_usage));
+    }
+
+    /// An HTTP server on loopback answering every request with `status` and
+    /// `body`; returns its base URL.
+    async fn canned_server(status: &'static str, body: &'static str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", l.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = l.accept().await {
+                let mut buf = vec![0u8; 4096];
+                let mut got = Vec::new();
+                while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match s.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => got.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let resp = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = s.write_all(resp.as_bytes()).await;
+                let _ = s.shutdown().await;
+            }
+        });
+        base
+    }
+
+    /// Poll a pinned node served at `base` the way the usage monitor does.
+    async fn poll_pinned(base: &str) -> (PollOutcome, Node) {
+        let client = reqwest::Client::new();
+        let raw = fetch_remote_usage(&client, base, Some("tok")).await;
+        let mut n = node("node3", "172.31.250.13");
+        n.node_id = Some("id-node3".into());
+        let o = check_identity(&n, raw.clone());
+        apply_poll(&mut n, o, 1_000);
+        (raw, n)
+    }
+
+    fn reason(n: &Node) -> &str {
+        n.status_reason.as_deref().unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn heartbeat_replies_that_cant_prove_a_pinned_identity_leave_it_offline() {
+        // a Horcrux with another JWT_SECRET
+        let base = canned_server("401 Unauthorized", r#"{"error":"invalid token"}"#).await;
+        let (raw, n) = poll_pinned(&base).await;
+        assert!(
+            matches!(&raw, PollOutcome::ReachableNoUsage(w) if w.contains("401")),
+            "{raw:?}"
+        );
+        assert_eq!(n.status, NodeStatus::Offline);
+        assert!(reason(&n).contains("HTTP 401"), "{n:?}");
+
+        // any other web server's error
+        let base = canned_server("404 Not Found", "<html>nope</html>").await;
+        let (raw, n) = poll_pinned(&base).await;
+        assert!(matches!(&raw, PollOutcome::ReachableNoUsage(w) if w.contains("404")));
+        assert_eq!(n.status, NodeStatus::Offline);
+        assert!(reason(&n).contains("HTTP 404"), "{n:?}");
+        let base = canned_server("503 Service Unavailable", "").await;
+        let (_, n) = poll_pinned(&base).await;
+        assert_eq!(n.status, NodeStatus::Offline);
+        assert!(reason(&n).contains("HTTP 503"), "{n:?}");
+
+        // 200 with a body that isn't a usage report
+        let base = canned_server("200 OK", "<html>welcome to nginx</html>").await;
+        let (raw, n) = poll_pinned(&base).await;
+        assert!(
+            matches!(&raw, PollOutcome::ReachableNoUsage(w) if w.contains("not a usage report")),
+            "{raw:?}"
+        );
+        assert_eq!(n.status, NodeStatus::Offline);
+        assert_eq!(n.cpu_usage, None);
+
+        // a usage report without an identity
+        let base = canned_server(
+            "200 OK",
+            r#"{"cpu_usage":5.0,"memory_used":1,"memory_total":2,"cpu_cores":1,"architecture":"x86_64","timestamp":1}"#,
+        )
+        .await;
+        let (raw, n) = poll_pinned(&base).await;
+        assert!(matches!(raw, PollOutcome::Usage(_)));
+        assert_eq!(n.status, NodeStatus::Offline);
+        assert!(reason(&n).contains("no node identity"), "{n:?}");
+
+        // the normal case: the pinned node itself
+        let base = canned_server(
+            "200 OK",
+            r#"{"cpu_usage":12.5,"memory_used":1024,"memory_total":4096,"cpu_cores":4,"architecture":"x86_64","timestamp":1,"node_id":"id-node3"}"#,
+        )
+        .await;
+        let (raw, n) = poll_pinned(&base).await;
+        assert!(matches!(raw, PollOutcome::Usage(_)));
+        assert_eq!(n.status, NodeStatus::Online);
+        assert_eq!(n.status_reason, None);
+        assert_eq!(n.cpu_usage, Some(12.5));
+        assert_eq!(n.last_seen, Some(1_000));
+    }
+
+    #[tokio::test]
+    async fn an_unpinned_node_answering_401_is_up_with_usage_unknown() {
+        let base = canned_server("401 Unauthorized", "{}").await;
+        let client = reqwest::Client::new();
+        let mut n = node("old", "10.0.0.9");
+        let o = check_identity(&n, fetch_remote_usage(&client, &base, None).await);
+        apply_poll(&mut n, o, 1_000);
+        assert_eq!(n.status, NodeStatus::Online);
+        assert_eq!(n.cpu_usage, None);
+        assert!(reason(&n).contains("HTTP 401"), "{n:?}");
     }
 
     #[tokio::test]
