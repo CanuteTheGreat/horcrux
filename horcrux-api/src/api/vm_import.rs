@@ -10,8 +10,10 @@
 //! - local sources must live under `<data_dir>/images` or a storage pool's
 //!   directory, so the API can't be used to read arbitrary host files;
 //! - the source format is probed once with `qemu-img info` and then passed
-//!   explicitly (`-f`), and images with a backing file are refused (a
-//!   crafted image could otherwise pull in a host file as its backing);
+//!   explicitly (`-f`), and images that would make qemu-img read another
+//!   file are refused: a backing file, a qcow2 external data file, or VMDK
+//!   extents other than the image itself (a crafted image could otherwise
+//!   copy a host file into the VM's disk);
 //! - the conversion writes a temporary file next to the disk and renames it
 //!   over the old disk only when complete, so a failure (disk full, bad
 //!   image, server killed mid-import) leaves the VM's old disk intact and
@@ -65,7 +67,12 @@ pub fn allowed_local_source(source: &FsPath, roots: &[PathBuf]) -> bool {
         .any(|r| source.starts_with(&r) && source != r)
 }
 
-/// Format of a probed image, refusing backing files and unknown formats.
+/// Format of a probed image, refusing unknown formats and every way an image
+/// can make qemu-img read a second file: a backing file, a qcow2 external
+/// data file (`data_file`), or a VMDK descriptor whose extents are other
+/// files (`RW 2048 FLAT "/etc/shadow" 0`). Without the last two checks an
+/// upload or URL of a few hundred bytes would copy any host file qemu-img can
+/// open into the VM's disk.
 pub fn checked_format(info: &serde_json::Value) -> Result<String, String> {
     if info.get("backing-filename").is_some() || info.get("full-backing-filename").is_some() {
         return Err("images with a backing file can't be imported".into());
@@ -73,6 +80,25 @@ pub fn checked_format(info: &serde_json::Value) -> Result<String, String> {
     let fmt = info["format"].as_str().unwrap_or_default();
     if !FORMATS.contains(&fmt) {
         return Err(format!("unsupported image format {fmt:?}"));
+    }
+    let specific = &info["format-specific"]["data"];
+    if specific.get("data-file").is_some() {
+        return Err("images with an external data file can't be imported".into());
+    }
+    if fmt == "vmdk" {
+        // A single-file VMDK (monolithicSparse, streamOptimized) has exactly
+        // one extent: the image itself.
+        let own = info["filename"].as_str();
+        let extents = specific["extents"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        if own.is_none()
+            || extents.is_empty()
+            || extents.iter().any(|e| e["filename"].as_str() != own)
+        {
+            return Err("only single-file VMDK images can be imported".into());
+        }
     }
     Ok(fmt.to_string())
 }
@@ -221,6 +247,105 @@ mod tests {
         assert!(checked_format(&json!({"format": "qcow2", "full-backing-filename": "x"})).is_err());
         assert!(checked_format(&json!({"format": "vvfat"})).is_err());
         assert!(checked_format(&json!({})).is_err());
+    }
+
+    #[test]
+    fn external_data_files_and_foreign_vmdk_extents_are_refused() {
+        let qcow2 = |data: serde_json::Value| {
+            json!({"format": "qcow2", "filename": "/i/a",
+                   "format-specific": {"type": "qcow2", "data": data}})
+        };
+        assert!(checked_format(&qcow2(json!({"compat": "1.1"}))).is_ok());
+        assert!(checked_format(&qcow2(json!({"data-file": "/etc/shadow"}))).is_err());
+        let vmdk = |extents: serde_json::Value| {
+            json!({"format": "vmdk", "filename": "/i/a.vmdk",
+                   "format-specific": {"type": "vmdk", "data": {"extents": extents}}})
+        };
+        assert_eq!(
+            checked_format(&vmdk(json!([{"filename": "/i/a.vmdk"}]))).unwrap(),
+            "vmdk"
+        );
+        assert!(checked_format(&vmdk(json!([{"filename": "/etc/shadow"}]))).is_err());
+        assert!(checked_format(&vmdk(
+            json!([{"filename": "/i/a.vmdk"}, {"filename": "/etc/shadow"}])
+        ))
+        .is_err());
+        assert!(checked_format(&vmdk(json!([]))).is_err(), "no extent info");
+        assert!(checked_format(&json!({"format": "vmdk", "filename": "/i/a.vmdk"})).is_err());
+        let mut no_name = vmdk(json!([{"filename": "/i/a.vmdk"}]));
+        no_name.as_object_mut().unwrap().remove("filename");
+        assert!(checked_format(&no_name).is_err());
+    }
+
+    fn qemu_img_info(path: &FsPath) -> serde_json::Value {
+        let out = std::process::Command::new("qemu-img")
+            .args(["info", "--output=json"])
+            .arg(path)
+            .output()
+            .expect("qemu-img");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap()
+    }
+
+    fn qemu_img_create(args: &[&str], path: &FsPath) {
+        let st = std::process::Command::new("qemu-img")
+            .args(["create", "-q"])
+            .args(args)
+            .arg(path)
+            .arg("1M")
+            .status()
+            .expect("qemu-img");
+        assert!(st.success());
+    }
+
+    /// The same checks against what the real qemu-img reports for crafted
+    /// images that point at a "host secret" outside the import roots.
+    #[test]
+    fn real_images_that_read_another_host_file_are_refused() {
+        let d = std::env::temp_dir().join(format!("vm-import-real-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let secret = d.join("secret");
+        std::fs::write(&secret, vec![0x5au8; 1 << 20]).unwrap();
+
+        // Ordinary single-file images are still accepted.
+        let plain = d.join("plain.qcow2");
+        qemu_img_create(&["-f", "qcow2"], &plain);
+        assert_eq!(checked_format(&qemu_img_info(&plain)).unwrap(), "qcow2");
+        let sparse = d.join("sparse.vmdk");
+        qemu_img_create(&["-f", "vmdk"], &sparse);
+        assert_eq!(checked_format(&qemu_img_info(&sparse)).unwrap(), "vmdk");
+
+        // qcow2 whose guest data lives in an external file.
+        let ext = d.join("ext.qcow2");
+        let data = d.join("ext.data");
+        let opt = format!("data_file={},data_file_raw=on", data.display());
+        qemu_img_create(&["-f", "qcow2", "-o", &opt], &ext);
+        let err = checked_format(&qemu_img_info(&ext)).unwrap_err();
+        assert!(err.contains("external data file"), "{err}");
+
+        // VMDK descriptor (plain text) whose extent is the secret.
+        let desc = d.join("desc.vmdk");
+        std::fs::write(
+            &desc,
+            format!(
+                "# Disk DescriptorFile\nversion=1\nCID=fffffffe\nparentCID=ffffffff\n\
+                 createType=\"monolithicFlat\"\n\nRW 2048 FLAT \"{}\" 0\n\n\
+                 ddb.adapterType = \"ide\"\n",
+                secret.display()
+            ),
+        )
+        .unwrap();
+        let info = qemu_img_info(&desc);
+        assert_eq!(info["format"], "vmdk", "{info}");
+        let err = checked_format(&info).unwrap_err();
+        assert!(err.contains("single-file VMDK"), "{err}");
+
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]
