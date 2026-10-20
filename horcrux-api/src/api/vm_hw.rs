@@ -596,6 +596,7 @@ async fn download_iso(
     if !(req.url.starts_with("http://") || req.url.starts_with("https://")) {
         return Err(ApiError::BadRequest("url must be http(s)".into()));
     }
+    let name = iso_file_name(&req.url, req.filename.as_deref()).map_err(ApiError::BadRequest)?;
     // Same guard as disk import: never the node's own services or cloud
     // metadata. A literal refused host is a 403 here; host names are
     // checked when resolved, and redirects hop by hop (in `fetch`).
@@ -604,7 +605,6 @@ async fn download_iso(
     if let Some(why) = refused_url(&parsed) {
         return Err(ApiError::Forbidden(why));
     }
-    let name = iso_file_name(&req.url, req.filename.as_deref()).map_err(ApiError::BadRequest)?;
     let dir = image_dir(&state.config.paths.data_dir);
     tokio::fs::create_dir_all(&dir).await?;
     let target = dir.join(&name);

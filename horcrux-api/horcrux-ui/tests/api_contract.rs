@@ -2687,10 +2687,22 @@ async fn put(c: &reqwest::Client, token: &str, path: &str, body: Value) -> (u16,
     (r.status().as_u16(), r.text().await.unwrap_or_default())
 }
 
-/// Serve `body` once per request on a local port (an ISO "mirror").
+/// This host's primary non-loopback address. The API refuses to download
+/// from the node's own loopback, so the ISO "mirror" listens here. (A UDP
+/// connect only picks the source address; nothing is sent.)
+fn mirror_ip() -> std::net::IpAddr {
+    let s = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+    s.connect("192.0.2.1:9")
+        .expect("ISO mirror needs a non-loopback address (default route)");
+    s.local_addr().unwrap().ip()
+}
+
+/// Serve `body` once per request on [`mirror_ip`] (an ISO "mirror").
 async fn file_server(body: Vec<u8>) -> u16 {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind((mirror_ip(), 0))
+        .await
+        .unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
         loop {
@@ -2728,13 +2740,24 @@ async fn vm_hardware_iso_library_and_bridges_read_into_ui_types() {
     // ISO library: download from a URL -> listed as downloading, then ready.
     let iso_bytes = vec![0x5au8; 300_000];
     let port = file_server(iso_bytes.clone()).await;
+    let mirror = mirror_ip();
     let name = format!("contract-{}.iso", std::process::id());
     delete(&c, &token, &format!("/storage/isos/{name}")).await;
+    // Never from the node's own loopback (its local-only services).
     let (status, body) = post(
         &c,
         &token,
         "/storage/isos/download",
         json!({"url": format!("http://127.0.0.1:{port}/files/whatever.iso"), "filename": name}),
+    )
+    .await;
+    assert_eq!(status, 403, "loopback download: {body}");
+    assert!(body.to_string().contains("refusing"), "{body}");
+    let (status, body) = post(
+        &c,
+        &token,
+        "/storage/isos/download",
+        json!({"url": format!("http://{mirror}:{port}/files/whatever.iso"), "filename": name}),
     )
     .await;
     assert_eq!(status, 202, "download: {body}");
@@ -2763,7 +2786,7 @@ async fn vm_hardware_iso_library_and_bridges_read_into_ui_types() {
         &c,
         &token,
         "/storage/isos/download",
-        json!({"url": format!("http://127.0.0.1:{port}/x.iso"), "filename": name}),
+        json!({"url": format!("http://{mirror}:{port}/x.iso"), "filename": name}),
     )
     .await;
     assert_eq!(status, 409);

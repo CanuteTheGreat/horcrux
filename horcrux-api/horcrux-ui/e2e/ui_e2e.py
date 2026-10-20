@@ -35,6 +35,7 @@ import os
 import ssl
 import struct
 import re
+import socket
 import subprocess
 import sys
 import threading
@@ -653,12 +654,19 @@ def vm_hardware_checks(page, vid):
     with open(f"{iso_dir}/e2e-ui.iso", "wb") as f:
         f.write(b"\0" * 65536)
     handler = lambda *a, **k: http.server.SimpleHTTPRequestHandler(*a, directory=iso_dir, **k)
-    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    # The API refuses to download from the node's own loopback, so the
+    # mirror listens on this host's primary address (a UDP connect only
+    # picks the source address; nothing is sent).
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    probe.connect(("192.0.2.1", 9))
+    mirror = probe.getsockname()[0]
+    probe.close()
+    srv = http.server.ThreadingHTTPServer((mirror, 0), handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     tok = token()
     _req("DELETE", "/api/storage/isos/e2e-ui.iso", tok)
     page.goto(f"{BASE}/storage/isos")
-    page.fill("#iso-url", f"http://127.0.0.1:{srv.server_address[1]}/e2e-ui.iso")
+    page.fill("#iso-url", f"http://{mirror}:{srv.server_address[1]}/e2e-ui.iso")
     page.locator("#iso-download").click()
     expect(page.locator("tr.iso-row[data-iso='e2e-ui.iso'] .iso-status")).to_have_text("ready", timeout=60000)
     iso = next(i for i in api_get("/api/storage/isos", tok) if i["name"] == "e2e-ui.iso")
