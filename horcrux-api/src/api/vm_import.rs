@@ -245,8 +245,17 @@ pub(crate) fn error_chain(e: &dyn std::error::Error) -> String {
 /// HTTP client for URL sources: guarded resolution, and every redirect hop
 /// re-checked with [`refused_url`] (at most 10 hops). Shared with the ISO
 /// library's URL downloads (`vm_hw`).
+///
+/// System proxies (`HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`) are ignored: a
+/// proxied request hands the host *name* to the proxy, which resolves and
+/// connects on its own, so [`GuardedResolver`] would never see it and a
+/// name for the node's loopback services or the cloud metadata address
+/// would be fetched by the proxy. Pre-checking the name here wouldn't
+/// help either - the proxy resolves it again and may get another answer.
+/// Downloads always connect directly from the node.
 pub(crate) fn download_client() -> reqwest::Result<reqwest::Client> {
     reqwest::Client::builder()
+        .no_proxy()
         .dns_resolver(Arc::new(GuardedResolver))
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             if attempt.previous().len() >= 10 {
@@ -560,6 +569,126 @@ mod tests {
         );
         assert!(!to.exists());
         srv.abort();
+    }
+
+    /// Set (to anything) in the child process
+    /// [`downloads_ignore_system_proxies`] runs itself as.
+    const PROXY_CHILD: &str = "HORCRUX_TEST_DOWNLOAD_PROXY_CHILD";
+
+    /// With `HTTP(S)_PROXY`/`ALL_PROXY` pointing at a fake proxy, a host
+    /// name for the node itself is still refused and nothing reaches the
+    /// proxy (a proxy would resolve the name itself, past the guard). Runs
+    /// in a child process so the proxy environment can't leak into other
+    /// tests of this binary.
+    #[test]
+    fn downloads_ignore_system_proxies() {
+        if std::env::var_os(PROXY_CHILD).is_some() {
+            return proxied_downloads_child();
+        }
+        use std::io::{Read, Write};
+        // The fake proxy: records each request line, answers 200.
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let proxy = format!("http://{}", l.local_addr().unwrap());
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let s = seen.clone();
+        std::thread::spawn(move || {
+            for mut c in l.incoming().flatten() {
+                let mut got = Vec::new();
+                let mut buf = [0u8; 2048];
+                while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match c.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => got.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let line = String::from_utf8_lossy(&got)
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string();
+                s.lock().unwrap().push(line);
+                let _ = c.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                );
+            }
+        });
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child
+            .args([
+                "downloads_ignore_system_proxies",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(PROXY_CHILD, "1")
+            .env_remove("NO_PROXY")
+            .env_remove("no_proxy")
+            .env_remove("REQUEST_METHOD");
+        for var in [
+            "HTTP_PROXY",
+            "http_proxy",
+            "HTTPS_PROXY",
+            "https_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+        ] {
+            child.env(var, &proxy);
+        }
+        let out = child.output().expect("run the proxied child");
+        let log = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.status.success(), "child failed:\n{log}");
+        assert!(log.contains("1 passed"), "child ran nothing:\n{log}");
+        let seen = seen.lock().unwrap().clone();
+        // Only the control request (a plain client, which does use the
+        // environment's proxy) may have reached the fake proxy.
+        assert_eq!(
+            seen,
+            vec!["GET http://proxy-control.invalid/ HTTP/1.1".to_string()],
+            "a guarded download went through the proxy:\n{log}"
+        );
+    }
+
+    fn proxied_downloads_child() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            // Control: the proxy environment is in effect (a default client
+            // sends the unresolved .invalid name to the fake proxy).
+            let r = reqwest::Client::new()
+                .get("http://proxy-control.invalid/")
+                .send()
+                .await
+                .expect("the fake proxy answers the control request");
+            assert_eq!(r.status(), 200);
+
+            let to = std::env::temp_dir().join(format!("vm-import-proxy-{}", std::process::id()));
+            for url in [
+                "http://localhost:18080/canary.qcow2",
+                "https://localhost/canary.qcow2",
+            ] {
+                let err = download(url, &to).await.unwrap_err();
+                assert!(format!("{err:?}").contains("refusing"), "{url}: {err:?}");
+            }
+            // literal metadata address: refused before any request
+            let err = download("http://169.254.169.254/latest/meta-data/", &to)
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ApiError::Forbidden(_)), "{err:?}");
+            // the client shared with the ISO library refuses the same way
+            let err = download_client()
+                .unwrap()
+                .get("http://localhost/x.iso")
+                .send()
+                .await
+                .unwrap_err();
+            assert!(error_chain(&err).contains("refusing"), "{err:?}");
+            assert!(!to.exists());
+        });
     }
 
     #[test]
