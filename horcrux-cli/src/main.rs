@@ -501,7 +501,8 @@ enum ContainerCommands {
         #[arg(short, long, default_value = "docker")]
         runtime: String,
         /// Image (docker/podman) or LXC template: distro/release[/variant]
-        /// (e.g. alpine/3.22, debian/bookworm) or a local rootfs tarball path
+        /// (e.g. alpine/3.22, debian/bookworm) or the path of a rootfs tarball in
+        /// the server's image directory (HORCRUX_IMAGE_DIR)
         #[arg(short, long)]
         image: String,
         /// Memory in MB

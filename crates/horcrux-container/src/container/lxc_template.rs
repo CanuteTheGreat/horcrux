@@ -31,6 +31,18 @@ pub fn valid_component(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
+/// `HORCRUX_IMAGE_DIR`, default `<HORCRUX_DATA_DIR or /var/lib/horcrux>/images`.
+pub fn default_image_dir() -> PathBuf {
+    std::env::var("HORCRUX_IMAGE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::var("HORCRUX_DATA_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from("/var/lib/horcrux"))
+                .join("images")
+        })
+}
+
 /// Parse `index-system`: `distro;release;arch;variant;build;path` lines.
 pub fn parse_index(text: &str) -> Vec<LxcCatalogEntry> {
     text.lines()
@@ -128,6 +140,8 @@ impl TemplateRef {
 
 pub struct TemplateStore {
     dir: PathBuf,
+    /// Directory local rootfs tarballs may come from (besides `dir`).
+    image_dir: PathBuf,
     base_url: String,
     client: reqwest::Client,
     catalog: Mutex<Option<(Instant, Vec<LxcCatalogEntry>)>>,
@@ -136,8 +150,14 @@ pub struct TemplateStore {
 
 impl TemplateStore {
     pub fn new(dir: PathBuf, base_url: String) -> Self {
+        Self::with_image_dir(dir, default_image_dir(), base_url)
+    }
+
+    /// Like `new`, with an explicit directory for local rootfs tarballs.
+    pub fn with_image_dir(dir: PathBuf, image_dir: PathBuf, base_url: String) -> Self {
         Self {
             dir,
+            image_dir,
             base_url: base_url.trim_end_matches('/').to_string(),
             client: reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(20))
@@ -151,6 +171,12 @@ impl TemplateStore {
 
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// Where local rootfs tarballs must live (`HORCRUX_IMAGE_DIR`, default
+    /// `<data_dir>/images`, the same directory disk imports and ISOs use).
+    pub fn image_dir(&self) -> &Path {
+        &self.image_dir
     }
 
     fn template_dir(&self, d: &str, r: &str, a: &str, v: &str) -> PathBuf {
@@ -374,13 +400,33 @@ impl TemplateStore {
     pub async fn resolve(&self, r: &TemplateRef) -> Result<(PathBuf, Option<String>)> {
         match r {
             TemplateRef::Local(p) => {
-                if !p.is_file() {
+                // Only tarballs the admin put in the image directory (or the
+                // template cache). Anywhere else, a user allowed to create
+                // containers could unpack any host archive they can name -
+                // another guest's backup (`rootfs.tar`), a config tarball -
+                // into a container they own and read it from inside.
+                let canon = std::fs::canonicalize(p).ok();
+                let inside = canon.as_deref().is_some_and(|c| {
+                    [&self.image_dir, &self.dir]
+                        .iter()
+                        .filter_map(|r| std::fs::canonicalize(r).ok())
+                        .any(|r| c.starts_with(&r) && c != r)
+                });
+                if !inside {
+                    return Err(Error::Validation(format!(
+                        "local template {} must be a file under {}",
+                        p.display(),
+                        self.image_dir.display()
+                    )));
+                }
+                let canon = canon.unwrap_or_default();
+                if !canon.is_file() {
                     return Err(Error::Validation(format!(
                         "template file {} does not exist",
                         p.display()
                     )));
                 }
-                Ok((p.clone(), None))
+                Ok((canon, None))
             }
             TemplateRef::Catalog {
                 distro,
@@ -504,5 +550,49 @@ mod tests {
         store.delete(&t.id).await.unwrap();
         assert!(store.list().await.unwrap().is_empty());
         assert!(matches!(store.delete(&t.id).await, Err(Error::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn local_templates_must_come_from_the_image_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("cache");
+        let images = tmp.path().join("images");
+        let elsewhere = tmp.path().join("backups/ct1");
+        for d in [&cache, &images, &elsewhere] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let store =
+            TemplateStore::with_image_dir(cache.clone(), images.clone(), DEFAULT_IMAGES_URL.into());
+        let local = |p: &Path| TemplateRef::parse(p.to_str().unwrap(), "amd64").unwrap();
+
+        // An admin-provided tarball in the image directory works.
+        let ok = images.join("debian-12.tar.zst");
+        std::fs::write(&ok, b"x").unwrap();
+        let (p, d) = store.resolve(&local(&ok)).await.unwrap();
+        assert_eq!(p, std::fs::canonicalize(&ok).unwrap());
+        assert_eq!(d, None);
+
+        // Another guest's backup archive (or any host tarball) is refused.
+        let secret = elsewhere.join("rootfs.tar");
+        std::fs::write(&secret, b"other tenant").unwrap();
+        let err = store.resolve(&local(&secret)).await.unwrap_err();
+        assert!(matches!(err, Error::Validation(_)), "{err:?}");
+
+        // So is a symlink planted in the image directory that points out.
+        let link = images.join("sneaky.tar");
+        std::os::unix::fs::symlink(&secret, &link).unwrap();
+        assert!(matches!(
+            store.resolve(&local(&link)).await,
+            Err(Error::Validation(_))
+        ));
+
+        // A directory, or a missing file, inside the image dir is refused too.
+        let dir_tar = images.join("d.tar");
+        std::fs::create_dir(&dir_tar).unwrap();
+        assert!(store.resolve(&local(&dir_tar)).await.is_err());
+        assert!(store
+            .resolve(&local(&images.join("missing.tar")))
+            .await
+            .is_err());
     }
 }

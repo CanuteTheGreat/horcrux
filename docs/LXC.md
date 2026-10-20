@@ -15,7 +15,12 @@ Templates are cached in `<data_dir>/lxc-templates/<distro>/<release>/<arch>/<var
 Set `HORCRUX_LXC_IMAGES_URL` to use a mirror. A create request may name a
 template that isn't downloaded yet (`alpine/3.22`, `debian/bookworm/cloud`,
 `ubuntu/noble/amd64/default`); it is downloaded first. An absolute path to a
-local rootfs tarball (`.tar`, `.tar.gz`, `.tar.xz`, `.tar.zst`) also works.
+local rootfs tarball (`.tar`, `.tar.gz`, `.tar.xz`, `.tar.zst`) also works if
+the file is in the image directory (`HORCRUX_IMAGE_DIR`, default
+`<data_dir>/images`, the same one disk imports and ISOs use) or the template
+cache. Other paths are refused (422), so a user who may create containers
+can't unpack an arbitrary host archive, such as another guest's backup, into
+a container they control.
 
 ## Create (`pct create`)
 
