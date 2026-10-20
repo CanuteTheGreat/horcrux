@@ -14,6 +14,13 @@
 //!   file are refused: a backing file, a qcow2 external data file, or VMDK
 //!   extents other than the image itself (a crafted image could otherwise
 //!   copy a host file into the VM's disk);
+//! - URL sources may not point at the node itself or at link-local
+//!   addresses (cloud metadata at 169.254.169.254, `fd00:ec2::254`): the
+//!   check covers literal IPs, every address a host name resolves to (the
+//!   connection only uses checked addresses, so DNS rebinding can't slip
+//!   past it) and every redirect hop, so a VM-modify user can't make the node
+//!   fetch its own localhost-only services or instance credentials into a VM
+//!   disk. LAN mirrors (RFC 1918 / ULA addresses) stay allowed;
 //! - the conversion writes a temporary file next to the disk and renames it
 //!   over the old disk only when complete, so a failure (disk full, bad
 //!   image, server killed mid-import) leaves the VM's old disk intact and
@@ -129,13 +136,142 @@ impl Drop for TempFiles {
     }
 }
 
+/// Why a URL source may not be fetched from `ip`, if it may not: the node
+/// itself (loopback, `0.0.0.0/8`, unspecified), link-local (cloud metadata
+/// lives at 169.254.169.254), AWS's IPv6 metadata address, multicast and
+/// broadcast. IPv4-mapped and NAT64 (`64:ff9b::/96`) forms are judged by the
+/// IPv4 address they carry.
+pub fn refused_ip(ip: std::net::IpAddr) -> Option<&'static str> {
+    const AWS_METADATA_V6: std::net::Ipv6Addr =
+        std::net::Ipv6Addr::new(0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254);
+    use std::net::{IpAddr, Ipv4Addr};
+    let v4 = |a: Ipv4Addr| {
+        if a.is_loopback() || a.octets()[0] == 0 {
+            Some("the node itself")
+        } else if a.is_link_local() {
+            Some("a link-local (cloud metadata) address")
+        } else if a.is_multicast() || a.is_broadcast() {
+            Some("a multicast/broadcast address")
+        } else {
+            None
+        }
+    };
+    match ip {
+        IpAddr::V4(a) => v4(a),
+        IpAddr::V6(a) => {
+            if let Some(m) = a.to_ipv4_mapped() {
+                return v4(m);
+            }
+            let seg = a.segments();
+            if seg[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
+                return v4(Ipv4Addr::new(
+                    (seg[6] >> 8) as u8,
+                    seg[6] as u8,
+                    (seg[7] >> 8) as u8,
+                    seg[7] as u8,
+                ));
+            }
+            if a.is_loopback() || a.is_unspecified() {
+                Some("the node itself")
+            } else if seg[0] & 0xffc0 == 0xfe80 || a == AWS_METADATA_V6 {
+                Some("a link-local (cloud metadata) address")
+            } else if a.is_multicast() {
+                Some("a multicast/broadcast address")
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Why `url` may not be fetched, if it may not: only http(s), and a literal
+/// IP host must pass [`refused_ip`]. Host names are checked when they are
+/// resolved ([`GuardedResolver`]).
+pub fn refused_url(url: &reqwest::Url) -> Option<String> {
+    if !matches!(url.scheme(), "http" | "https") {
+        return Some(format!("{url}: only http(s) sources can be imported"));
+    }
+    let ip = match url.host() {
+        Some(url::Host::Ipv4(a)) => std::net::IpAddr::V4(a),
+        Some(url::Host::Ipv6(a)) => std::net::IpAddr::V6(a),
+        Some(url::Host::Domain(_)) => return None,
+        None => return Some(format!("{url}: no host")),
+    };
+    refused_ip(ip).map(|why| format!("{url}: refusing to download from {why}"))
+}
+
+/// Resolves host names like the system resolver but hands reqwest only
+/// addresses that pass [`refused_ip`], so the address checked is the
+/// address connected to.
+struct GuardedResolver;
+impl reqwest::dns::Resolve for GuardedResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(resolve_guarded(name.as_str().to_string()))
+    }
+}
+
+async fn resolve_guarded(
+    host: String,
+) -> Result<reqwest::dns::Addrs, Box<dyn std::error::Error + Send + Sync>> {
+    let all: Vec<std::net::SocketAddr> =
+        tokio::net::lookup_host((host.as_str(), 0)).await?.collect();
+    let ok: Vec<std::net::SocketAddr> = all
+        .iter()
+        .copied()
+        .filter(|a| refused_ip(a.ip()).is_none())
+        .collect();
+    if ok.is_empty() {
+        let why = all
+            .first()
+            .and_then(|a| refused_ip(a.ip()))
+            .unwrap_or("no address");
+        return Err(format!("{host} resolves to {why}; refusing to download").into());
+    }
+    Ok(Box::new(ok.into_iter()))
+}
+
+/// `e` and its causes, so a refused redirect or resolution says why.
+fn error_chain(e: &dyn std::error::Error) -> String {
+    let mut msg = e.to_string();
+    let mut src = e.source();
+    while let Some(s) = src {
+        msg.push_str(": ");
+        msg.push_str(&s.to_string());
+        src = s.source();
+    }
+    msg
+}
+
+/// HTTP client for URL sources: guarded resolution, and every redirect hop
+/// re-checked with [`refused_url`] (at most 10 hops).
+fn download_client() -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .dns_resolver(Arc::new(GuardedResolver))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 10 {
+                attempt.error("too many redirects")
+            } else if let Some(why) = refused_url(attempt.url()) {
+                attempt.error(why)
+            } else {
+                attempt.follow()
+            }
+        }))
+        .build()
+}
+
 async fn download(url: &str, to: &FsPath) -> Result<(), ApiError> {
     use tokio::io::AsyncWriteExt;
-    let mut resp = reqwest::Client::new()
-        .get(url)
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|e| ApiError::BadRequest(format!("download {url}: {e}")))?;
+    if let Some(why) = refused_url(&parsed) {
+        return Err(ApiError::Forbidden(why));
+    }
+    let client = download_client().map_err(|e| ApiError::Internal(format!("http client: {e}")))?;
+    let mut resp = client
+        .get(parsed)
         .send()
         .await
-        .map_err(|e| ApiError::BadRequest(format!("download {url}: {e}")))?;
+        .map_err(|e| ApiError::BadRequest(format!("download {url}: {}", error_chain(&e))))?;
     if !resp.status().is_success() {
         return Err(ApiError::BadRequest(format!(
             "download {url}: HTTP {}",
@@ -346,6 +482,83 @@ mod tests {
         assert!(err.contains("single-file VMDK"), "{err}");
 
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn url_sources_may_not_reach_the_node_or_metadata() {
+        let ip = |s: &str| refused_ip(s.parse().unwrap());
+        for bad in [
+            "127.0.0.1",
+            "127.8.9.10",
+            "0.0.0.0",
+            "0.1.2.3",
+            "169.254.169.254",
+            "224.0.0.1",
+            "255.255.255.255",
+            "::1",
+            "::",
+            "fe80::1",
+            "fd00:ec2::254",
+            "ff02::1",
+            "::ffff:127.0.0.1",
+            "::ffff:169.254.169.254",
+            "64:ff9b::a9fe:a9fe",
+        ] {
+            assert!(ip(bad).is_some(), "{bad} must be refused");
+        }
+        for good in [
+            "10.0.0.5",
+            "192.168.1.10",
+            "172.16.0.1",
+            "8.8.8.8",
+            "fd12:3456::1",
+            "2001:db8::1",
+            "::ffff:192.168.1.10",
+        ] {
+            assert_eq!(ip(good), None, "{good} is a normal LAN/internet address");
+        }
+
+        let url = |s: &str| refused_url(&reqwest::Url::parse(s).unwrap());
+        assert_eq!(url("https://cloud.debian.org/images/x.qcow2"), None);
+        assert_eq!(url("http://192.168.1.10:8080/cirros.img"), None);
+        assert!(url("http://169.254.169.254/latest/meta-data/").is_some());
+        assert!(url("http://[::1]:8006/api").is_some());
+        assert!(url("http://2130706433/").is_some(), "decimal 127.0.0.1");
+        assert!(url("http://0x7f.1/").is_some(), "hex 127.0.0.1");
+        assert!(url("file:///etc/shadow").is_some());
+        assert!(url("ftp://example.com/x").is_some());
+    }
+
+    #[tokio::test]
+    async fn downloads_never_connect_to_refused_addresses() {
+        // A listener that records whether anything connected.
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        let hit = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let h = hit.clone();
+        let srv = tokio::spawn(async move {
+            while l.accept().await.is_ok() {
+                h.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+        let to = std::env::temp_dir().join(format!("vm-import-dl-{}", std::process::id()));
+        // A literal loopback IP is refused before any request is made.
+        let err = download(&format!("http://127.0.0.1:{port}/a.qcow2"), &to)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ApiError::Forbidden(_)), "{err:?}");
+        // A host name resolving to loopback is refused by the resolver.
+        let err = download(&format!("http://localhost:{port}/a.qcow2"), &to)
+            .await
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("refusing"), "{err:?}");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            !hit.load(std::sync::atomic::Ordering::SeqCst),
+            "nothing may connect to the node's own services"
+        );
+        assert!(!to.exists());
+        srv.abort();
     }
 
     #[test]
