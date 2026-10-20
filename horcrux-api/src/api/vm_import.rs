@@ -231,7 +231,7 @@ async fn resolve_guarded(
 }
 
 /// `e` and its causes, so a refused redirect or resolution says why.
-fn error_chain(e: &dyn std::error::Error) -> String {
+pub(crate) fn error_chain(e: &dyn std::error::Error) -> String {
     let mut msg = e.to_string();
     let mut src = e.source();
     while let Some(s) = src {
@@ -243,8 +243,9 @@ fn error_chain(e: &dyn std::error::Error) -> String {
 }
 
 /// HTTP client for URL sources: guarded resolution, and every redirect hop
-/// re-checked with [`refused_url`] (at most 10 hops).
-fn download_client() -> reqwest::Result<reqwest::Client> {
+/// re-checked with [`refused_url`] (at most 10 hops). Shared with the ISO
+/// library's URL downloads (`vm_hw`).
+pub(crate) fn download_client() -> reqwest::Result<reqwest::Client> {
     reqwest::Client::builder()
         .dns_resolver(Arc::new(GuardedResolver))
         .redirect(reqwest::redirect::Policy::custom(|attempt| {

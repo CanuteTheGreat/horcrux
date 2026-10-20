@@ -19,7 +19,9 @@
 //! directories (top level and Proxmox's `template/iso`). A VM's CD-ROM may
 //! only point at a file there, so the API can't be used to attach arbitrary
 //! host files to a guest.
-use crate::api::vm_import::{allowed_local_source, image_dir};
+use crate::api::vm_import::{
+    allowed_local_source, download_client, error_chain, image_dir, refused_url,
+};
 use crate::error::ApiError;
 use crate::vm::hardware::VmConfigUpdate;
 use crate::AppState;
@@ -594,6 +596,14 @@ async fn download_iso(
     if !(req.url.starts_with("http://") || req.url.starts_with("https://")) {
         return Err(ApiError::BadRequest("url must be http(s)".into()));
     }
+    // Same guard as disk import: never the node's own services or cloud
+    // metadata. A literal refused host is a 403 here; host names are
+    // checked when resolved, and redirects hop by hop (in `fetch`).
+    let parsed = reqwest::Url::parse(&req.url)
+        .map_err(|e| ApiError::BadRequest(format!("download {}: {e}", req.url)))?;
+    if let Some(why) = refused_url(&parsed) {
+        return Err(ApiError::Forbidden(why));
+    }
     let name = iso_file_name(&req.url, req.filename.as_deref()).map_err(ApiError::BadRequest)?;
     let dir = image_dir(&state.config.paths.data_dir);
     tokio::fs::create_dir_all(&dir).await?;
@@ -640,11 +650,16 @@ async fn fetch(url: &str, target: &FsPath) -> Result<(), String> {
     use tokio::io::AsyncWriteExt;
     let part = partial_path(target);
     let res: Result<(), String> = async {
-        let mut resp = reqwest::Client::new()
-            .get(url)
+        let parsed = reqwest::Url::parse(url).map_err(|e| e.to_string())?;
+        if let Some(why) = refused_url(&parsed) {
+            return Err(why);
+        }
+        let mut resp = download_client()
+            .map_err(|e| format!("http client: {e}"))?
+            .get(parsed)
             .send()
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| error_chain(&e))?;
         if !resp.status().is_success() {
             return Err(format!("HTTP {}", resp.status()));
         }
@@ -730,6 +745,40 @@ mod tests {
         assert!(iso_file_name("https://x.test/a.iso", Some(".hidden.iso")).is_err());
         assert!(iso_file_name("https://x.test/a.qcow2", None).is_err());
         assert!(iso_file_name("https://x.test/a b.iso", None).is_err());
+    }
+
+    #[tokio::test]
+    async fn iso_downloads_never_connect_to_the_node_itself() {
+        // A listener that records whether anything connected.
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        let hit = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let h = hit.clone();
+        let srv = tokio::spawn(async move {
+            while l.accept().await.is_ok() {
+                h.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+        let d = std::env::temp_dir().join(format!("iso-dl-test-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let to = d.join("x.iso");
+        for url in [
+            format!("http://127.0.0.1:{port}/x.iso"),
+            format!("http://[::ffff:127.0.0.1]:{port}/x.iso"),
+            format!("http://localhost:{port}/x.iso"),
+            "http://169.254.169.254/latest/meta-data/x.iso".to_string(),
+        ] {
+            let err = fetch(&url, &to).await.unwrap_err();
+            assert!(err.contains("refusing"), "{url}: {err}");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !hit.load(std::sync::atomic::Ordering::SeqCst),
+            "nothing may connect to the node's own services"
+        );
+        assert!(!to.exists() && !partial_path(&to).exists());
+        std::fs::remove_dir_all(&d).unwrap();
+        srv.abort();
     }
 
     #[test]

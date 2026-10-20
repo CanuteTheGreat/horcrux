@@ -137,10 +137,16 @@ os.makedirs("/tmp/isosrc/d", exist_ok=True)
 open("/tmp/isosrc/d/hello.txt", "w").write("horcrux e2e\n")
 sh("genisoimage -quiet -V E2E -o /tmp/isosrc/e2e.iso /tmp/isosrc/d")
 handler = lambda *a, **k: http.server.SimpleHTTPRequestHandler(*a, directory="/tmp/isosrc", **k)
-srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+# Served on the bridge's address: the API refuses to fetch from the node's
+# own loopback (or cloud metadata), which this checks first.
+srv = http.server.ThreadingHTTPServer(("10.77.0.1", 0), handler)
 threading.Thread(target=srv.serve_forever, daemon=True).start()
+status, body = call("POST", "/storage/isos/download",
+                    {"url": f"http://127.0.0.1:{srv.server_address[1]}/e2e.iso"}, ok=None)
+check(status == 403 and "refusing" in json.dumps(body),
+      "ISO download from the node's own loopback is refused (403)")
 call("POST", "/storage/isos/download",
-     {"url": f"http://127.0.0.1:{srv.server_address[1]}/e2e.iso"})
+     {"url": f"http://10.77.0.1:{srv.server_address[1]}/e2e.iso"})
 iso = None
 for _ in range(60):
     _, isos = call("GET", "/storage/isos")
