@@ -260,6 +260,11 @@ impl VmManager {
                         "LXD is not installed on this host (USE=lxd needs app-containers/lxd)"
                             .to_string(),
                     ))
+                } else if let Err(e) = crate::console::lxd::validate_instance_create(
+                    &config.name,
+                    image.as_deref().unwrap_or(""),
+                ) {
+                    Err(e)
                 } else {
                     self.lxd.create_vm(&config, image.as_deref()).await
                 }
@@ -271,6 +276,11 @@ impl VmManager {
                         "Incus is not installed on this host (USE=incus needs app-containers/incus)"
                             .to_string(),
                     ))
+                } else if let Err(e) = crate::console::lxd::validate_instance_create(
+                    &config.name,
+                    image.as_deref().unwrap_or(""),
+                ) {
+                    Err(e)
                 } else {
                     self.incus.create_vm(&config, image.as_deref()).await
                 }

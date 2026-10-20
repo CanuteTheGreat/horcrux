@@ -597,6 +597,23 @@ impl ContainerManager {
                     )));
                 }
             }
+            #[cfg(any(feature = "lxd", feature = "incus"))]
+            ContainerRuntime::Lxd | ContainerRuntime::Incus => {
+                if config.lxc.is_some() {
+                    return Err(horcrux_common::Error::Validation(
+                        "lxc settings are only valid with the lxc runtime".to_string(),
+                    ));
+                }
+                if !config.options.is_empty() {
+                    return Err(horcrux_common::Error::Validation(
+                        "env/ports/volumes/command/network are only supported for the \
+                         docker and podman runtimes"
+                            .to_string(),
+                    ));
+                }
+                // name and image go to `incus|lxc init` as positionals.
+                crate::console::lxd::validate_instance_create(&config.name, &config.rootfs)?;
+            }
             _ => {
                 if config.lxc.is_some() && config.runtime != ContainerRuntime::Lxc {
                     return Err(horcrux_common::Error::Validation(

@@ -543,6 +543,39 @@ pub fn instance_image(rootfs: &str) -> String {
     }
 }
 
+/// Refuse an instance name or image that `incus init` / `lxc init` would
+/// read as something other than a positional argument. Both go on the
+/// command line unquoted by a shell but still through the CLI's flag
+/// parser, so an image of `-craw.lxc=lxc.mount.entry=/ host none bind`
+/// or `-csecurity.privileged=true` (or a name starting with `-`) became
+/// instance config instead of an image - a user allowed to create
+/// containers/VMs could get a privileged instance or bind-mount the host.
+/// Names: letters, digits and `-`, starting with a letter or digit (Incus
+/// and LXD accept a subset of this). Images: no leading `-` or `/` (a host
+/// path is not an instance image), no whitespace or control characters.
+pub fn validate_instance_create(name: &str, image: &str) -> Result<()> {
+    let mut chars = name.chars();
+    let name_ok = matches!(chars.next(), Some(c) if c.is_ascii_alphanumeric())
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if !name_ok {
+        return Err(Error::Validation(format!(
+            "Invalid instance name '{name}': use letters, digits and '-' \
+             (starting with a letter or digit)"
+        )));
+    }
+    let image = image.trim();
+    if image.starts_with('-')
+        || image.starts_with('/')
+        || image.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(Error::Validation(format!(
+            "Invalid instance image '{image}': give `distro/release`, \
+             `remote:alias` or a local alias/fingerprint"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod instance_image_tests {
     #[test]
@@ -554,5 +587,22 @@ mod instance_image_tests {
         );
         assert_eq!(super::instance_image("my-local"), "my-local");
         assert_eq!(super::instance_image(" "), "images:ubuntu/22.04");
+    }
+
+    #[test]
+    fn create_refuses_flag_like_names_and_images() {
+        let v = super::validate_instance_create;
+        assert!(v("web-1", "alpine/3.20").is_ok());
+        assert!(v("web1", "images:debian/12").is_ok());
+        assert!(v("web1", "my-local").is_ok());
+        assert!(v("web1", "").is_ok());
+        assert!(v("web1", "-csecurity.privileged=true").is_err());
+        assert!(v("web1", "--config=raw.lxc=x").is_err());
+        assert!(v("web1", "/var/lib/horcrux/backups/x.tar").is_err());
+        assert!(v("web1", "alpine/3.20 -c x").is_err());
+        assert!(v("-csecurity.privileged=true", "alpine/3.20").is_err());
+        assert!(v("--vm", "alpine/3.20").is_err());
+        assert!(v("", "alpine/3.20").is_err());
+        assert!(v("a b", "alpine/3.20").is_err());
     }
 }
