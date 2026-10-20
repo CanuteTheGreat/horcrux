@@ -106,6 +106,9 @@ pub struct HostOptions {
     /// KVM acceleration is available (CPU type "host" needs it).
     #[serde(default)]
     pub kvm: bool,
+    /// Storage pools a VM disk can be created in (Create VM / Add disk).
+    #[serde(default)]
+    pub storage_pools: Vec<crate::api::storage_volumes::VmDiskPool>,
 }
 
 /// Whether `program` is an executable in PATH.
@@ -283,6 +286,7 @@ async fn host_options(State(state): State<Arc<AppState>>) -> Json<HostOptions> {
         ovmf: crate::vm::firmware::find_ovmf().is_some(),
         swtpm: in_path("swtpm"),
         kvm: std::path::Path::new("/dev/kvm").exists(),
+        storage_pools: crate::api::storage_volumes::vm_disk_pools(&state).await,
     })
 }
 
@@ -290,8 +294,9 @@ async fn host_options(State(state): State<Arc<AppState>>) -> Json<HostOptions> {
 async fn add_disk(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    Json(spec): Json<crate::vm::hardware::DiskSpec>,
+    Json(mut spec): Json<crate::vm::hardware::DiskSpec>,
 ) -> Result<(StatusCode, Json<VmConfig>), ApiError> {
+    crate::api::storage_volumes::place_new_disk(&state, &mut spec).await?;
     Ok((
         StatusCode::CREATED,
         Json(state.vm_manager.add_disk(&id, spec).await?),

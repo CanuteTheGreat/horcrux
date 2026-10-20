@@ -836,7 +836,31 @@ impl QemuManager {
                 )));
             }
             d.validate(i).map_err(horcrux_common::Error::Validation)?;
-            d.path = self.disk_file(&config.id, i).to_string_lossy().to_string();
+            // File names are always server-chosen. A disk on a storage pool
+            // keeps the directory the API resolved the pool to (the
+            // directory of the `path` it set); any other disk goes to the
+            // VM storage directory, whatever path the request carried.
+            let file = self.disk_file(&config.id, i);
+            d.path = match &d.storage {
+                None => file.to_string_lossy().to_string(),
+                Some(pool) => {
+                    let p = std::path::Path::new(&d.path);
+                    let dir = p.parent().filter(|dir| {
+                        dir.is_absolute()
+                            && !dir
+                                .components()
+                                .any(|c| matches!(c, std::path::Component::ParentDir))
+                    });
+                    match (dir, file.file_name()) {
+                        (Some(dir), Some(name)) => dir.join(name).to_string_lossy().to_string(),
+                        _ => {
+                            return Err(horcrux_common::Error::Validation(format!(
+                                "disk{i}: storage pool {pool} was not resolved to a directory"
+                            )))
+                        }
+                    }
+                }
+            };
         }
         validate_disk_set(&disks).map_err(horcrux_common::Error::Validation)?;
         Ok(disks)
@@ -857,7 +881,18 @@ impl QemuManager {
         let mut created: Vec<PathBuf> = Vec::new();
         for d in &disks {
             let path = PathBuf::from(&d.path);
-            if let Err(e) = Self::create_disk_image(&path, d.size_gb).await {
+            // A pool may already hold a volume of that name: never truncate it.
+            let taken = d.storage.is_some() && path.exists();
+            let made = if taken {
+                Err(horcrux_common::Error::AlreadyExists(format!(
+                    "{} already exists in storage pool {}",
+                    path.display(),
+                    d.storage.as_deref().unwrap_or_default()
+                )))
+            } else {
+                Self::create_disk_image(&path, d.size_gb).await
+            };
+            if let Err(e) = made {
                 for c in &created {
                     let _ = tokio::fs::remove_file(c).await;
                 }
@@ -1723,6 +1758,35 @@ mod tests {
             err.to_string().contains(&format!("at most {max} disks")),
             "{err}"
         );
+    }
+
+    #[test]
+    fn planned_disks_on_a_storage_pool_keep_the_pool_directory() {
+        let m = QemuManager::with_storage_path("/srv/vms".into());
+        let mut cfg = vm(VmArchitecture::X86_64, VmDisplay::default()).to_config();
+        cfg.id = "vm-7".into();
+        cfg.disk_size = 4;
+        let mut d0 = disk("/pools/fast/whatever.qcow2", "virtio");
+        d0.storage = Some("fast".into());
+        let mut d1 = disk("/etc/passwd", "virtio");
+        d1.size_gb = 2;
+        let mut d2 = disk("/pools/slow/x", "scsi");
+        d2.size_gb = 3;
+        d2.storage = Some("slow".into());
+        cfg.disks = vec![d0, d1, d2];
+        let d = m.planned_disks(&cfg).unwrap();
+        assert_eq!(d[0].path, "/pools/fast/vm-7.qcow2");
+        assert_eq!(d[0].storage.as_deref(), Some("fast"));
+        assert_eq!(
+            d[1].path, "/srv/vms/vm-7-disk1.qcow2",
+            "no pool: default dir"
+        );
+        assert_eq!(d[2].path, "/pools/slow/vm-7-disk2.qcow2");
+        // Unresolved or escaping pool directories are refused.
+        for bad in ["", "relative/x", "/pools/../etc/x"] {
+            cfg.disks[2].path = bad.into();
+            assert!(m.planned_disks(&cfg).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

@@ -68,6 +68,10 @@ pub struct VmDisk {
     /// Give the disk its own I/O thread (virtio / virtio-scsi only).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub iothread: bool,
+    /// Storage pool (id) the image lives in; `None` = the node's VM
+    /// storage directory. Chosen at create / add-disk time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage: Option<String>,
 }
 
 /// Disk buses a VM disk can use (`VmDisk::disk_type`).

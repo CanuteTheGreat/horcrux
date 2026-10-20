@@ -275,9 +275,17 @@ impl VmManager {
         }
         // The first free <id>-disk<N>.qcow2 (a removed disk's number may
         // be reused once its file is gone).
+        if spec.storage.is_some() != spec.dir.is_some() {
+            return Err(Error::Validation(
+                "a disk on a storage pool needs the pool's directory".into(),
+            ));
+        }
         let mut n = disks.len();
         let path = loop {
-            let p = self.qemu.disk_file(id, n);
+            let mut p = self.qemu.disk_file(id, n);
+            if let (Some(dir), Some(file)) = (&spec.dir, p.file_name()) {
+                p = dir.join(file);
+            }
             if !p.exists() && !disks.iter().any(|d| d.path == p.to_string_lossy()) {
                 break p;
             }
@@ -291,6 +299,7 @@ impl VmManager {
             discard: spec.discard,
             ssd: spec.ssd,
             iothread: spec.iothread,
+            storage: spec.storage.clone(),
         };
         disk.validate(disks.len()).map_err(Error::Validation)?;
         disks.push(disk);
@@ -498,6 +507,13 @@ pub struct DiskSpec {
     pub ssd: bool,
     #[serde(default)]
     pub iothread: bool,
+    /// Storage pool (id) to create the image in; `None` = the VM storage
+    /// directory. The API resolves it to `dir` (a file-based pool's
+    /// directory) before calling `add_disk`.
+    #[serde(default)]
+    pub storage: Option<String>,
+    #[serde(skip)]
+    pub dir: Option<std::path::PathBuf>,
 }
 
 fn default_bus() -> String {

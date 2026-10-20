@@ -384,6 +384,33 @@ pub fn DiskOptionFields(disk: RwSignal<VmDisk>, #[prop(into)] prefix: String) ->
     }
 }
 
+/// Storage pool a new disk is created in (Create VM and Add disk). Empty =
+/// the node's VM storage directory (the default, where every disk went
+/// before pools could hold VM disks).
+#[component]
+pub fn DiskStorageSelect(
+    disk: RwSignal<VmDisk>,
+    #[prop(into)] options: Signal<Option<VmHostOptions>>,
+    #[prop(into)] id: String,
+) -> impl IntoView {
+    view! {
+        <select class="vm-disk-storage" id=id title="Storage pool"
+            on:change=move |ev| {
+                let v = event_target_value(&ev);
+                disk.update(|d| d.storage = (!v.is_empty()).then_some(v));
+            }>
+            <option value="" selected={move || disk.get().storage.is_none()}>"Default (VM storage)"</option>
+            {move || options.get().map(|o| o.storage_pools).unwrap_or_default().into_iter().map(|p| {
+                let pid = p.id.clone();
+                let label = format!("{} ({}, {} GB free)", p.name, p.storage_type, p.available);
+                view! {
+                    <option value=p.id.clone() selected={move || disk.get().storage.as_deref() == Some(pid.as_str())}>{label}</option>
+                }
+            }).collect_view()}
+        </select>
+    }
+}
+
 /// The VM's disks on its Hardware page: options/size per disk, add, detach.
 #[component]
 fn VmDisks(
@@ -391,6 +418,7 @@ fn VmDisks(
     vm: ReadSignal<Option<VmConfig>>,
     set_vm: WriteSignal<Option<VmConfig>>,
     #[prop(into)] running: Signal<bool>,
+    #[prop(into)] options: Signal<Option<VmHostOptions>>,
 ) -> impl IntoView {
     let (error, set_error) = create_signal(None::<String>);
     let (notice, set_notice) = create_signal(None::<String>);
@@ -422,6 +450,7 @@ fn VmDisks(
                 discard: d.discard,
                 ssd: d.ssd,
                 iothread: d.iothread,
+                storage: d.storage.clone(),
             };
             done(
                 api::add_vm_disk(&id, &spec).await,
@@ -472,6 +501,13 @@ fn VmDisks(
                     <div class="vm-disk-row form-row" data-disk=i>
                         <strong>{format!("disk{i}")}</strong>
                         <code class="vm-disk-path">{d.path.clone()}</code>
+                        {d.storage.clone().map(|p| {
+                            let label = move || options.get()
+                                .and_then(|o| o.storage_pools.into_iter().find(|x| x.id == p))
+                                .map(|x| x.name)
+                                .unwrap_or_else(|| p.clone());
+                            view! { <span class="type-badge vm-disk-pool">{label}</span> }
+                        })}
                         <input class="vm-disk-size" type="number" min=d.size_gb.to_string() prop:value=size
                             on:input=move |ev| size.set(event_target_value(&ev).parse().unwrap_or(0))/>
                         " GB "
@@ -492,6 +528,7 @@ fn VmDisks(
                     on:input=move |ev| { let n = event_target_value(&ev).parse().unwrap_or(1); new_disk.update(|d| d.size_gb = n) }/>
                 " GB "
                 <DiskOptionFields disk=new_disk prefix="vm-disk-add"/>
+                <DiskStorageSelect disk=new_disk options=options id="vm-disk-add-storage"/>
                 <button type="submit" id="vm-disk-add" class="btn btn-secondary" disabled={move || running.get()}>"Add disk"</button>
             </form>
         </fieldset>
@@ -670,7 +707,7 @@ pub fn VmHardwarePage() -> impl IntoView {
             </Show>
 
             <Show when=is_qemu>
-                <VmDisks vm_id=Signal::derive(vm_id) vm=vm set_vm=set_vm running=running/>
+                <VmDisks vm_id=Signal::derive(vm_id) vm=vm set_vm=set_vm running=running options=options/>
                 <GuestFirewall guest_id=Signal::derive(vm_id) container=false/>
             </Show>
         </div>

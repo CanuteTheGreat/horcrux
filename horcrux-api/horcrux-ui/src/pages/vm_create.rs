@@ -265,6 +265,7 @@ pub fn VmCreate() -> impl IntoView {
                             <strong>"disk0"</strong>
                             <span>{move || format!("{} GB", disk_size.get())}</span>
                             <super::vm_hardware::DiskOptionFields disk=disk0 prefix="vm-create-disk0"/>
+                            <super::vm_hardware::DiskStorageSelect disk=disk0 options=host_options id="vm-create-disk0-storage"/>
                         </div>
                         {move || extra_disks.get().into_iter().enumerate().map(|(i, d)| {
                             let n = i + 1;
@@ -280,6 +281,7 @@ pub fn VmCreate() -> impl IntoView {
                                         on:change=move |ev| { let s = event_target_value(&ev).parse().unwrap_or(1); row.update(|d| d.size_gb = s) }/>
                                     " GB "
                                     <super::vm_hardware::DiskOptionFields disk=row prefix=format!("vm-create-disk{n}")/>
+                                    <super::vm_hardware::DiskStorageSelect disk=row options=host_options id=format!("vm-create-disk{n}-storage")/>
                                     <button type="button" class="btn btn-sm btn-danger"
                                         on:click=move |_| extra_disks.update(|ds| { if i < ds.len() { ds.remove(i); } })>"Remove"</button>
                                 </div>

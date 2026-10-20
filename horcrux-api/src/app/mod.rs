@@ -1750,9 +1750,11 @@ struct CreateVmRequest {
 async fn create_vm(
     State(state): State<Arc<AppState>>,
     auth_user: Option<axum::Extension<middleware::auth::AuthUser>>,
-    Json(payload): Json<CreateVmRequest>,
+    Json(mut payload): Json<CreateVmRequest>,
 ) -> Result<(StatusCode, Json<VmConfig>), ApiError> {
     let vm_name = payload.config.name.clone();
+    // Disks placed on a storage pool: resolve the pool to its directory.
+    api::storage_volumes::place_vm_disks(&state, &mut payload.config).await?;
     // Bridges exist on this host, the ISO is in the ISO library.
     api::vm_hw::check_host_hardware(&state, &payload.config.hardware).await?;
     let vm = state

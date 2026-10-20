@@ -635,6 +635,7 @@ def main():
         users_edit_checks(page)
         template_checks(page)
         vm_hardware_checks(page, vid)
+        storage_volume_checks(page, vid)
 
         browser.close()
 
@@ -746,6 +747,74 @@ def vm_hardware_checks(page, vid):
     assert "exported_at" in data and "node" in data and "vms" in data, data
     page.get_by_role("link", name="Configure Alerts").click()
     page.wait_for_url(f"{BASE}/monitoring/alerts")
+
+
+def storage_volume_checks(page, vid):
+    """Storage page volume view and VM disks placed on a storage pool."""
+    import shutil
+    tok = token()
+    pool_dir = "/tmp/e2e-ui-pool"
+    shutil.rmtree(pool_dir, ignore_errors=True)
+    os.makedirs(pool_dir)
+    pool = api_post("/api/storage/pools", tok,
+                    {"name": "e2e-ui-pool", "storage_type": "directory", "path": pool_dir})
+    pid = pool["id"]
+
+    # ---- Infrastructure > Storage: list / create / grow / delete volumes --
+    page.goto(f"{BASE}/storage")
+    card = page.locator(".storage-card", has_text="e2e-ui-pool")
+    expect(card).to_have_count(1, timeout=30000)
+    card.locator(".pool-volumes-toggle").click()
+    vols = card.locator(".pool-volumes")
+    expect(vols.locator(".empty-volumes")).to_be_visible(timeout=30000)
+    vols.locator(".pool-volume-name").fill("e2e-vol")
+    vols.locator(".pool-volume-size-input").fill("1")
+    vols.locator(".pool-volume-create-btn").click()
+    row = vols.locator("tr.pool-volume[data-volume='e2e-vol']")
+    expect(row).to_have_count(1, timeout=30000)
+    assert os.path.isfile(f"{pool_dir}/e2e-vol.qcow2")
+    row.locator(".pool-volume-grow-size").fill("2")
+    row.locator(".pool-volume-grow").click()
+    expect(vols.locator(".pool-volume-notice")).to_contain_text("is now 2.0 GB", timeout=30000)
+    page.once("dialog", lambda d: d.accept())
+    row.locator(".pool-volume-delete").click()
+    expect(row).to_have_count(0, timeout=30000)
+    assert not os.path.exists(f"{pool_dir}/e2e-vol.qcow2")
+
+    # ---- VM > Hardware: Add disk on the pool ------------------------------
+    page.goto(f"{BASE}/vms/{vid}/hardware")
+    expect(page.locator("#vm-disk-add-storage option", has_text="e2e-ui-pool")).to_have_count(1, timeout=30000)
+    n_disks = len(api_get(f"/api/vms/{vid}", tok)["disks"])
+    page.fill("#vm-disk-add-size", "1")
+    page.select_option("#vm-disk-add-storage", pid)
+    page.locator("#vm-disk-add").click()
+    expect(page.locator("#vm-disk-notice")).to_contain_text("Added", timeout=30000)
+    d = api_get(f"/api/vms/{vid}", tok)["disks"][-1]
+    assert d.get("storage") == pid and d["path"].startswith(pool_dir + "/"), d
+    assert os.path.isfile(d["path"]), d
+    expect(page.locator(f".vm-disk-row[data-disk='{n_disks}'] .vm-disk-pool")).to_have_text("e2e-ui-pool")
+
+    # The pool lists the VM's disk and refuses to delete it.
+    page.goto(f"{BASE}/storage")
+    card = page.locator(".storage-card", has_text="e2e-ui-pool")
+    card.locator(".pool-volumes-toggle").click()
+    name = os.path.basename(d["path"])[: -len(".qcow2")]
+    row = card.locator(f"tr.pool-volume[data-volume='{name}']")
+    expect(row).to_have_count(1, timeout=30000)
+    page.once("dialog", lambda dl: dl.accept())
+    row.locator(".pool-volume-delete").click()
+    expect(card.locator(".pool-volume-error")).to_contain_text("is a disk of VM", timeout=30000)
+    assert os.path.isfile(d["path"])
+
+    # ---- Create VM: disk0 on the pool --------------------------------------
+    page.goto(f"{BASE}/vms/create")
+    expect(page.locator("#vm-create-disk0-storage option", has_text="e2e-ui-pool")).to_have_count(1, timeout=30000)
+
+    # Clean up: detach + delete the pool disk, then the pool.
+    _req("DELETE", f"/api/vms/{vid}/disks/{n_disks}?delete_file=true", tok)
+    assert not os.path.exists(d["path"])
+    _req("DELETE", f"/api/storage/pools/{pid}", tok)
+    shutil.rmtree(pool_dir, ignore_errors=True)
 
 
 def _free_port():

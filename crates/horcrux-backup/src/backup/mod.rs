@@ -1209,6 +1209,8 @@ impl BackupManager {
                         ..Default::default()
                     });
                 d.path = p.to_string_lossy().into();
+                // Restored into the VM storage directory, not the old pool.
+                d.storage = None;
                 d
             })
             .collect();

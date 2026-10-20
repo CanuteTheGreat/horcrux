@@ -187,6 +187,8 @@ impl VmCloneManager {
             size_gb: source_disk.size_gb,
             disk_type: source_disk.disk_type.clone(),
             cache: source_disk.cache.clone(),
+            // Clones are created in the VM storage directory.
+            storage: None,
             ..source_disk.clone()
         })
     }

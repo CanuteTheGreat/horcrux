@@ -148,6 +148,17 @@ async fn resize_volume(
     Json(req): Json<ResizeVolumeRequest>,
 ) -> Result<Json<VolumeInfo>, ApiError> {
     check_name(&name)?;
+    let pool = state
+        .storage_manager
+        .get_pool(&pool_id)
+        .await
+        .map_err(|_| ApiError::NotFound(format!("Storage pool {pool_id} not found")))?;
+    let location = crate::storage::StorageManager::volume_location(&pool, &name).map_err(err)?;
+    if let Some(vm) = used_by(&state, &location).await {
+        return Err(ApiError::Conflict(format!(
+            "Volume {name} is a disk of VM {vm}; grow it on the VM's Hardware page"
+        )));
+    }
     state
         .storage_manager
         .resize_volume(&pool_id, &name, req.size)
@@ -162,4 +173,120 @@ async fn resize_volume(
         .find(|v| v.name == name)
         .map(Json)
         .ok_or_else(|| ApiError::NotFound(format!("Volume {name} not found")))
+}
+
+// ---- VM disks on storage pools ------------------------------------------
+
+/// A pool a VM disk can be created in (`GET /api/vms/host-options`).
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+pub struct VmDiskPool {
+    pub id: String,
+    pub name: String,
+    pub storage_type: crate::storage::StorageType,
+    pub path: String,
+    /// GB free.
+    pub available: u64,
+}
+
+/// File-based pools hold VM disks as `<pool dir>/<vm>[-diskN].qcow2`;
+/// block pools (ZFS/LVM/Ceph/iSCSI), btrfs (subvolume per volume) and S3
+/// are not offered for VM disks.
+fn holds_vm_disks(p: &crate::storage::StoragePool) -> bool {
+    use crate::storage::StorageType as T;
+    p.enabled
+        && matches!(
+            p.storage_type,
+            T::Directory | T::Nfs | T::Cifs | T::GlusterFs
+        )
+        && std::path::Path::new(&p.path).is_absolute()
+        && std::path::Path::new(&p.path).is_dir()
+}
+
+/// Pools offered by the Create VM / Add disk pool selector.
+pub async fn vm_disk_pools(state: &AppState) -> Vec<VmDiskPool> {
+    let mut out: Vec<VmDiskPool> = state
+        .storage_manager
+        .list_pools()
+        .await
+        .into_iter()
+        .filter(holds_vm_disks)
+        .map(|p| VmDiskPool {
+            id: p.id,
+            name: p.name,
+            storage_type: p.storage_type,
+            path: p.path,
+            available: p.available,
+        })
+        .collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+/// Directory to create a `size_gb` VM disk in for pool `pool_id` (400 if
+/// the pool can't hold VM disks or lacks the space, 404 if unknown).
+pub async fn vm_disk_dir(
+    state: &AppState,
+    pool_id: &str,
+    size_gb: u64,
+) -> Result<std::path::PathBuf, ApiError> {
+    let pool = state
+        .storage_manager
+        .get_pool(pool_id)
+        .await
+        .map_err(|_| ApiError::NotFound(format!("Storage pool {pool_id} not found")))?;
+    if !holds_vm_disks(&pool) {
+        return Err(ApiError::BadRequest(format!(
+            "Storage pool {} ({:?}) can't hold VM disks: use an enabled directory, NFS, \
+             CIFS or GlusterFS pool",
+            pool.name, pool.storage_type
+        )));
+    }
+    if size_gb > pool.available {
+        return Err(ApiError::BadRequest(format!(
+            "Not enough space in pool {}. Requested: {}GB, Available: {}GB",
+            pool.name, size_gb, pool.available
+        )));
+    }
+    Ok(std::path::PathBuf::from(&pool.path))
+}
+
+/// Create VM: resolve each disk's `storage` pool to its directory (the VM
+/// manager keeps that directory and picks the file name). Request paths
+/// are never trusted; disks without a pool go to the VM storage directory.
+pub async fn place_vm_disks(
+    state: &AppState,
+    config: &mut horcrux_common::VmConfig,
+) -> Result<(), ApiError> {
+    for (i, d) in config.disks.iter_mut().enumerate() {
+        d.storage = d.storage.take().filter(|s| !s.trim().is_empty());
+        d.path = match &d.storage {
+            None => String::new(),
+            Some(pool) => {
+                let size = if i == 0 && d.size_gb == 0 {
+                    config.disk_size
+                } else {
+                    d.size_gb
+                };
+                vm_disk_dir(state, pool, size)
+                    .await?
+                    .join("pending.qcow2")
+                    .to_string_lossy()
+                    .to_string()
+            }
+        };
+    }
+    Ok(())
+}
+
+/// Add disk: resolve the spec's `storage` pool to its directory.
+pub async fn place_new_disk(
+    state: &AppState,
+    spec: &mut crate::vm::hardware::DiskSpec,
+) -> Result<(), ApiError> {
+    spec.storage = spec.storage.take().filter(|s| !s.trim().is_empty());
+    spec.dir = match &spec.storage {
+        None => None,
+        Some(pool) => Some(vm_disk_dir(state, pool, spec.size_gb).await?),
+    };
+    Ok(())
 }

@@ -5473,54 +5473,6 @@ pub struct PartitionInfo {
     pub label: Option<String>,
 }
 
-// Volume Management Types
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VolumeInfo {
-    pub id: String,
-    pub name: String,
-    pub pool_id: String,
-    pub pool_name: String,
-    pub size_bytes: u64,
-    pub used_bytes: u64,
-    pub volume_type: String,
-    pub format: String,
-    pub attached_to: Option<String>,
-    pub attached_name: Option<String>,
-    pub snapshots: u32,
-    pub created_at: String,
-    pub status: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VolumeSnapshot {
-    pub id: String,
-    pub name: String,
-    pub volume_id: String,
-    pub size_bytes: u64,
-    pub created_at: String,
-    pub description: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct VolumeFilters {
-    pub search: String,
-    pub pool_id: Option<String>,
-    pub volume_type: Option<String>,
-    pub status: Option<String>,
-    pub attached_only: bool,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct CreateVolumeForm {
-    pub name: String,
-    pub pool_id: String,
-    pub size_gb: u64,
-    pub volume_type: String,
-    pub format: String,
-    pub thin_provisioned: bool,
-    pub description: String,
-}
-
 // SMART Monitoring Types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SmartDiskInfo {
@@ -5675,126 +5627,65 @@ pub async fn unmount_partition(disk_id: &str, partition_id: &str) -> Result<(), 
     .await
 }
 
-// Volume Management API
-pub async fn get_volumes(filters: VolumeFilters) -> Result<Vec<VolumeInfo>, ApiError> {
-    let mut query_params = Vec::new();
-    if !filters.search.is_empty() {
-        query_params.push(format!("search={}", filters.search));
-    }
-    if let Some(ref pool_id) = filters.pool_id {
-        if !pool_id.is_empty() {
-            query_params.push(format!("pool_id={}", pool_id));
-        }
-    }
-    if let Some(ref volume_type) = filters.volume_type {
-        if !volume_type.is_empty() {
-            query_params.push(format!("type={}", volume_type));
-        }
-    }
-    if let Some(ref status) = filters.status {
-        if !status.is_empty() {
-            query_params.push(format!("status={}", status));
-        }
-    }
-    if filters.attached_only {
-        query_params.push("attached=true".to_string());
-    }
-
-    let query_string = if query_params.is_empty() {
-        String::new()
-    } else {
-        format!("?{}", query_params.join("&"))
-    };
-
-    fetch_json(&format!("/storage/volumes{}", query_string)).await
+// Storage pool volumes (per-pool routes; see horcrux-api/src/api/storage_volumes.rs)
+/// `GET /api/storage/pools/:id/volumes` item.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PoolVolume {
+    pub name: String,
+    pub path: String,
+    #[serde(default)]
+    pub format: String,
+    /// Virtual size in bytes.
+    pub size_bytes: u64,
+    /// Bytes allocated on the pool.
+    #[serde(default)]
+    pub allocated_bytes: u64,
 }
 
-pub async fn get_volume(volume_id: &str) -> Result<VolumeInfo, ApiError> {
-    fetch_json(&format!("/storage/volumes/{}", volume_id)).await
+fn pool_volumes_path(pool_id: &str) -> String {
+    format!("/storage/pools/{}/volumes", urlencoding::encode(pool_id))
 }
 
-pub async fn create_new_volume(form: CreateVolumeForm) -> Result<VolumeInfo, ApiError> {
-    post_json(
-        "/storage/volumes",
-        &serde_json::json!({
-            "name": form.name,
-            "pool_id": form.pool_id,
-            "size_gb": form.size_gb,
-            "volume_type": form.volume_type,
-            "format": form.format,
-            "thin_provisioned": form.thin_provisioned,
-            "description": form.description
-        }),
-    )
-    .await
+pub async fn list_pool_volumes(pool_id: &str) -> Result<Vec<PoolVolume>, ApiError> {
+    fetch_json(&pool_volumes_path(pool_id)).await
 }
 
-pub async fn resize_volume_api(volume_id: &str, new_size_gb: u64) -> Result<(), ApiError> {
-    put_json(
-        &format!("/storage/volumes/{}/resize", volume_id),
-        &serde_json::json!({"size_gb": new_size_gb}),
-    )
-    .await
-}
-
-pub async fn delete_volume_api(volume_id: &str) -> Result<(), ApiError> {
-    delete_json(&format!("/storage/volumes/{}", volume_id)).await
-}
-
-pub async fn attach_volume(
-    volume_id: &str,
-    vm_id: &str,
-    device: Option<&str>,
-) -> Result<(), ApiError> {
-    post_json(
-        &format!("/storage/volumes/{}/attach", volume_id),
-        &serde_json::json!({
-            "vm_id": vm_id,
-            "device": device
-        }),
-    )
-    .await
-}
-
-pub async fn detach_volume(volume_id: &str) -> Result<(), ApiError> {
-    post_json(&format!("/storage/volumes/{}/detach", volume_id), &()).await
-}
-
-pub async fn get_volume_snapshots(volume_id: &str) -> Result<Vec<VolumeSnapshot>, ApiError> {
-    fetch_json(&format!("/storage/volumes/{}/snapshots", volume_id)).await
-}
-
-pub async fn create_volume_snapshot(
-    volume_id: &str,
+/// Create an empty qcow2 volume of `size_gb` GB.
+pub async fn create_pool_volume(
+    pool_id: &str,
     name: &str,
-    description: Option<&str>,
-) -> Result<VolumeSnapshot, ApiError> {
+    size_gb: u64,
+) -> Result<PoolVolume, ApiError> {
     post_json(
-        &format!("/storage/volumes/{}/snapshots", volume_id),
-        &serde_json::json!({
-            "name": name,
-            "description": description
-        }),
+        &pool_volumes_path(pool_id),
+        &serde_json::json!({"name": name, "size": size_gb}),
     )
     .await
 }
 
-pub async fn delete_volume_snapshot(volume_id: &str, snapshot_id: &str) -> Result<(), ApiError> {
-    delete_json(&format!(
-        "/storage/volumes/{}/snapshots/{}",
-        volume_id, snapshot_id
-    ))
-    .await
-}
-
-pub async fn restore_volume_snapshot(volume_id: &str, snapshot_id: &str) -> Result<(), ApiError> {
+/// Grow a volume to `size_gb` GB.
+pub async fn resize_pool_volume(
+    pool_id: &str,
+    name: &str,
+    size_gb: u64,
+) -> Result<PoolVolume, ApiError> {
     post_json(
         &format!(
-            "/storage/volumes/{}/snapshots/{}/restore",
-            volume_id, snapshot_id
+            "{}/{}/resize",
+            pool_volumes_path(pool_id),
+            urlencoding::encode(name)
         ),
-        &(),
+        &serde_json::json!({"size": size_gb}),
     )
+    .await
+}
+
+pub async fn delete_pool_volume(pool_id: &str, name: &str) -> Result<(), ApiError> {
+    delete_json(&format!(
+        "{}/{}",
+        pool_volumes_path(pool_id),
+        urlencoding::encode(name)
+    ))
     .await
 }
 
@@ -6905,6 +6796,21 @@ pub struct VmHostOptions {
     /// KVM is available (CPU type "host").
     #[serde(default)]
     pub kvm: bool,
+    /// Storage pools a VM disk can be created in (Create VM / Add disk).
+    #[serde(default)]
+    pub storage_pools: Vec<VmDiskPool>,
+}
+
+/// A storage pool offered for VM disks (`VmHostOptions::storage_pools`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VmDiskPool {
+    pub id: String,
+    pub name: String,
+    pub storage_type: String,
+    pub path: String,
+    /// GB free.
+    #[serde(default)]
+    pub available: u64,
 }
 
 /// PUT /api/vms/:id/config body (absent fields stay as they are).
@@ -6962,6 +6868,9 @@ pub struct VmDiskSpec {
     pub discard: bool,
     pub ssd: bool,
     pub iothread: bool,
+    /// Storage pool id; `None` = the VM storage directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage: Option<String>,
 }
 
 /// PUT /api/vms/:id/disks/:index body (absent fields stay as they are).

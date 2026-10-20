@@ -1,6 +1,6 @@
 //! Storage Pool Management Page
 
-use crate::api::{delete_json, fetch_json, post_json};
+use crate::api::{self, delete_json, fetch_json, post_json, PoolVolume};
 use leptos::*;
 use serde::Serialize;
 
@@ -188,6 +188,8 @@ pub fn StorageManagement() -> impl IntoView {
                     <div class="storage-grid">
                         {move || pools.get().into_iter().map(|pool| {
                             let pool_id = pool.id.clone();
+                            let volumes_pool_id = pool.id.clone();
+                            let show_volumes = create_rw_signal(false);
                             let usage_percent = if pool.total_bytes > 0 {
                                 (pool.used_bytes as f64 / pool.total_bytes as f64) * 100.0
                             } else {
@@ -239,11 +241,18 @@ pub fn StorageManagement() -> impl IntoView {
                                     </div>
 
                                     <div class="storage-actions">
+                                        <button class="btn btn-secondary pool-volumes-toggle"
+                                                on:click=move |_| show_volumes.update(|v| *v = !*v)>
+                                            {move || if show_volumes.get() { "Hide volumes" } else { "Volumes" }}
+                                        </button>
                                         <button class="btn btn-danger"
                                                 on:click=move |_| delete_pool(pool_id.clone())>
                                             "Delete"
                                         </button>
                                     </div>
+                                    {move || show_volumes.get().then(|| view! {
+                                        <PoolVolumes pool_id=volumes_pool_id.clone()/>
+                                    })}
                                 </div>
                             }
                         }).collect_view()}
@@ -342,6 +351,141 @@ pub fn StorageManagement() -> impl IntoView {
                     </div>
                 </div>
             </div>
+        </div>
+    }
+}
+
+fn human_size(bytes: u64) -> String {
+    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+    let b = bytes as f64;
+    if b >= GB {
+        format!("{:.1} GB", b / GB)
+    } else {
+        format!("{:.1} MB", b / MB)
+    }
+}
+
+/// The volumes of one pool: list, create (name + GB), grow, delete.
+/// Volumes that are a VM's disk can't be deleted (the API answers 409
+/// naming the VM).
+#[component]
+fn PoolVolumes(pool_id: String) -> impl IntoView {
+    let pool_id = store_value(pool_id);
+    let (volumes, set_volumes) = create_signal(None::<Vec<PoolVolume>>);
+    let (error, set_error) = create_signal(None::<String>);
+    let (notice, set_notice) = create_signal(None::<String>);
+    let name = create_rw_signal(String::new());
+    let size = create_rw_signal(1u64);
+
+    let reload = move || {
+        spawn_local(async move {
+            match api::list_pool_volumes(&pool_id.get_value()).await {
+                Ok(v) => set_volumes.set(Some(v)),
+                Err(e) => {
+                    set_volumes.set(Some(Vec::new()));
+                    set_error.set(Some(format!("Could not list volumes: {}", e.message)))
+                }
+            }
+        });
+    };
+    reload();
+    let report = move |r: Result<String, api::ApiError>| match r {
+        Ok(msg) => {
+            set_error.set(None);
+            set_notice.set(Some(msg));
+            reload();
+        }
+        Err(e) => {
+            set_notice.set(None);
+            set_error.set(Some(e.message));
+        }
+    };
+
+    let create = move |ev: ev::SubmitEvent| {
+        ev.prevent_default();
+        let n = name.get_untracked().trim().to_string();
+        let gb = size.get_untracked();
+        spawn_local(async move {
+            let r = api::create_pool_volume(&pool_id.get_value(), &n, gb)
+                .await
+                .map(|v| format!("Created {} ({})", v.name, human_size(v.size_bytes)));
+            if r.is_ok() {
+                name.set(String::new());
+            }
+            report(r);
+        });
+    };
+
+    view! {
+        <div class="pool-volumes" data-pool=pool_id.get_value()>
+            <h4>"Volumes"</h4>
+            {move || notice.get().map(|n| view! { <div class="alert alert-info pool-volume-notice">{n}</div> })}
+            {move || error.get().map(|e| view! { <div class="alert alert-error pool-volume-error">{e}</div> })}
+            {move || match volumes.get() {
+                None => view! { <p class="loading">"Loading volumes..."</p> }.into_view(),
+                Some(v) if v.is_empty() => view! { <p class="empty-volumes">"No volumes in this pool."</p> }.into_view(),
+                Some(v) => view! {
+                    <table class="table pool-volume-table">
+                        <thead><tr><th>"Name"</th><th>"Format"</th><th>"Size"</th><th>"Allocated"</th><th>"Path"</th><th></th></tr></thead>
+                        <tbody>
+                            {v.into_iter().map(|vol| {
+                                let grow_to = create_rw_signal(vol.size_bytes.div_ceil(1024 * 1024 * 1024) + 1);
+                                let n_resize = vol.name.clone();
+                                let n_delete = vol.name.clone();
+                                let grow = move |_| {
+                                    let n = n_resize.clone();
+                                    let gb = grow_to.get_untracked();
+                                    spawn_local(async move {
+                                        report(api::resize_pool_volume(&pool_id.get_value(), &n, gb)
+                                            .await
+                                            .map(|v| format!("{} is now {}", v.name, human_size(v.size_bytes))));
+                                    });
+                                };
+                                let remove = move |_| {
+                                    let n = n_delete.clone();
+                                    let ok = web_sys::window()
+                                        .and_then(|w| w.confirm_with_message(&format!("Delete volume {n}? Its data is lost.")).ok())
+                                        .unwrap_or(false);
+                                    if !ok {
+                                        return;
+                                    }
+                                    spawn_local(async move {
+                                        report(api::delete_pool_volume(&pool_id.get_value(), &n)
+                                            .await
+                                            .map(|_| format!("Deleted {n}")));
+                                    });
+                                };
+                                view! {
+                                    <tr class="pool-volume" data-volume=vol.name.clone()>
+                                        <td>{vol.name.clone()}</td>
+                                        <td>{vol.format.clone()}</td>
+                                        <td class="pool-volume-size">{human_size(vol.size_bytes)}</td>
+                                        <td>{human_size(vol.allocated_bytes)}</td>
+                                        <td><code>{vol.path.clone()}</code></td>
+                                        <td>
+                                            <input type="number" min="1" class="pool-volume-grow-size" prop:value=grow_to
+                                                on:input=move |ev| grow_to.set(event_target_value(&ev).parse().unwrap_or(0))/>
+                                            " GB "
+                                            <button type="button" class="btn btn-sm btn-secondary pool-volume-grow" on:click=grow>"Grow"</button>
+                                            <button type="button" class="btn btn-sm btn-danger pool-volume-delete" on:click=remove>"Delete"</button>
+                                        </td>
+                                    </tr>
+                                }
+                            }).collect_view()}
+                        </tbody>
+                    </table>
+                }.into_view(),
+            }}
+            <form class="form-row pool-volume-create" on:submit=create>
+                <input type="text" class="pool-volume-name" placeholder="volume name (letters, digits, . _ -)"
+                    pattern="[A-Za-z0-9_][A-Za-z0-9._\\-]{0,63}" required=true
+                    prop:value=name on:input=move |ev| name.set(event_target_value(&ev))/>
+                <input type="number" min="1" class="pool-volume-size-input" prop:value=size
+                    on:input=move |ev| size.set(event_target_value(&ev).parse().unwrap_or(1))/>
+                " GB "
+                <button type="submit" class="btn btn-sm btn-primary pool-volume-create-btn">"Create volume"</button>
+            </form>
         </div>
     }
 }

@@ -542,6 +542,48 @@ async fn ui_types_read_real_api_responses() {
         pool_dir.join("contract-vol.qcow2").is_file(),
         "volume file in pool dir"
     );
+    // The Storage page's volume list, grow and delete (api::*_pool_volume
+    // paths and the PoolVolume type against the real routes).
+    let vols: Vec<api::PoolVolume> =
+        fetch(&c, &token, &format!("/storage/pools/{pool_id}/volumes")).await;
+    let v = vols
+        .iter()
+        .find(|v| v.name == "contract-vol")
+        .expect("volume listed");
+    assert_eq!(v.size_bytes, 1 << 30);
+    assert_eq!(v.format, "qcow2");
+    let (status, body) = post(
+        &c,
+        &token,
+        &format!("/storage/pools/{pool_id}/volumes/contract-vol/resize"),
+        json!({"size": 2}),
+    )
+    .await;
+    assert_eq!(status, 200, "grow volume: {body}");
+    let grown: api::PoolVolume = serde_json::from_value(body).unwrap();
+    assert_eq!(grown.size_bytes, 2 << 30);
+    let (status, body) = post(
+        &c,
+        &token,
+        &format!("/storage/pools/{pool_id}/volumes"),
+        json!({"name": "../../tmp/contract-escape", "size": 1}),
+    )
+    .await;
+    assert_eq!(status, 400, "traversal refused: {body}");
+    // Create VM / Add disk offer the pool for VM disks.
+    let opts: api::VmHostOptions = fetch(&c, &token, "/vms/host-options").await;
+    assert!(
+        opts.storage_pools.iter().any(|p| p.id == pool_id),
+        "{:?}",
+        opts.storage_pools
+    );
+    delete(
+        &c,
+        &token,
+        &format!("/storage/pools/{pool_id}/volumes/contract-vol"),
+    )
+    .await;
+    assert!(!pool_dir.join("contract-vol.qcow2").exists());
     // The pool is a backup storage too: archives land in <pool>/dump.
     let storages: Vec<bk::BackupStorage> = fetch(&c, &token, "/backup-storages").await;
     assert!(storages.iter().any(|s| s.id == pool_id), "{storages:?}");
@@ -2935,6 +2977,7 @@ async fn vm_hardware_iso_library_and_bridges_read_into_ui_types() {
         discard: true,
         ssd: true,
         iothread: true,
+        storage: None,
     };
     let (status, body) = post(
         &c,

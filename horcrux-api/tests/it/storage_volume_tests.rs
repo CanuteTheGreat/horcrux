@@ -168,3 +168,123 @@ async fn volume_names_cannot_escape_the_pool_over_http() {
     assert_eq!(tree(&outside), before);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// VM disks placed on a storage pool (Create VM and Add disk pool
+/// selector): the images are created in the pool directory, the pool's
+/// volume list shows them, a volume in use can't be deleted, and pools
+/// that can't hold VM disks are refused.
+#[tokio::test]
+async fn vm_disks_can_live_on_a_storage_pool() {
+    let dir = scratch("vm-disk-pool");
+    let mut srv = Server::new(&dir);
+    srv.start();
+    srv.wait_healthy().await;
+    let api = srv.api().await;
+    let pool_dir = dir.join("fastpool");
+    std::fs::create_dir_all(&pool_dir).unwrap();
+    let pool = api
+        .ok(
+            reqwest::Method::POST,
+            "/storage/pools",
+            Some(json!({"name": "fast", "storage_type": "directory",
+                        "path": pool_dir.to_string_lossy()})),
+        )
+        .await;
+    let pid = pool["id"].as_str().unwrap().to_string();
+
+    // The Create VM / Add disk selector offers the pool.
+    let (s, opts) = api.get("/vms/host-options").await;
+    assert_eq!(s, 200);
+    assert!(
+        opts["storage_pools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["id"] == pid.as_str()),
+        "{opts}"
+    );
+
+    // disk0 on the pool, disk1 in the default VM directory; a request
+    // path is never trusted.
+    let (s, vm) = api
+        .post(
+            "/vms",
+            json!({"id": "pooled", "name": "pooled", "hypervisor": "qemu",
+            "architecture": "x86_64", "cpus": 1, "memory": 256, "disk_size": 1,
+            "status": "stopped", "display": {"protocol": "none"},
+            "disks": [
+                {"path": "/etc/evil", "size_gb": 1, "disk_type": "virtio", "cache": "",
+                 "storage": pid},
+                {"path": "/etc/evil2", "size_gb": 1, "disk_type": "virtio", "cache": ""}
+            ]}),
+        )
+        .await;
+    assert_eq!(s, 201, "create vm: {vm}");
+    let d0 = pool_dir.join("pooled.qcow2");
+    assert_eq!(vm["disks"][0]["path"], d0.to_string_lossy().as_ref());
+    assert_eq!(vm["disks"][0]["storage"], pid.as_str());
+    assert!(d0.is_file());
+    let d1 = vm["disks"][1]["path"].as_str().unwrap().to_string();
+    assert!(!d1.starts_with(&*pool_dir.to_string_lossy()) && d1.ends_with("pooled-disk1.qcow2"));
+    assert!(vm["disks"][1].get("storage").is_none());
+    assert!(!std::path::Path::new("/etc/evil").exists());
+
+    // Add disk on the pool.
+    let (s, vm) = api
+        .post(
+            "/vms/pooled/disks",
+            json!({"size_gb": 2, "bus": "virtio", "storage": pid}),
+        )
+        .await;
+    assert_eq!(s, 201, "add disk: {vm}");
+    let d2 = pool_dir.join("pooled-disk2.qcow2");
+    assert_eq!(vm["disks"][2]["path"], d2.to_string_lossy().as_ref());
+    assert!(d2.is_file());
+
+    // The pool's volume list shows both; in-use volumes can't be deleted.
+    let (_, list) = api.get(&format!("/storage/pools/{pid}/volumes")).await;
+    let names: Vec<&str> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["pooled", "pooled-disk2"]);
+    assert_eq!(
+        api.delete(&format!("/storage/pools/{pid}/volumes/pooled"))
+            .await,
+        409
+    );
+    assert!(d0.is_file());
+    let (s, _) = api
+        .post(
+            &format!("/storage/pools/{pid}/volumes/pooled/resize"),
+            json!({"size": 5}),
+        )
+        .await;
+    assert_eq!(s, 409, "a VM's disk is grown from the VM, not the pool");
+
+    // Unknown pool -> 404; no space -> 400; nothing created.
+    let (s, _) = api
+        .post(
+            "/vms/pooled/disks",
+            json!({"size_gb": 1, "bus": "virtio", "storage": "no-such-pool"}),
+        )
+        .await;
+    assert_eq!(s, 404);
+    let (s, _) = api
+        .post(
+            "/vms/pooled/disks",
+            json!({"size_gb": 65536, "bus": "virtio", "storage": pid}),
+        )
+        .await;
+    assert_eq!(s, 400);
+    assert!(!pool_dir.join("pooled-disk3.qcow2").exists());
+
+    // Deleting the VM removes its pool disks too.
+    assert!((200..300).contains(&api.delete("/vms/pooled").await));
+    assert!(!d0.exists() && !d2.exists());
+    let (_, list) = api.get(&format!("/storage/pools/{pid}/volumes")).await;
+    assert_eq!(list.as_array().unwrap().len(), 0, "{list}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
