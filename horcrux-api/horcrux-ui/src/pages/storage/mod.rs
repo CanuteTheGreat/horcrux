@@ -4,13 +4,12 @@
 //! - Storage pool management (existing functionality)
 //! - Storage migration tools
 //! - Disk management
-//! - Volume management
+//! - Volume management (per pool, in pool_management)
 //! - SMART monitoring
 
 mod disk_management;
 mod migration;
 mod pool_management;
 mod smart_monitoring;
-mod volume_management;
 
 pub use pool_management::StorageManagement;
