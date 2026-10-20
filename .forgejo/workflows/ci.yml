@@ -667,9 +667,21 @@ jobs:
         # itself needs to be replaced (e.g. with serde_yaml_ng or similar)
         # as a separate migration. Re-evaluate and drop this --ignore once
         # that migration lands.
+        #
+        # RUSTSEC-2026-0381 (webpki-roots < 1.0.10 bundles the distrusted
+        # emSign root): Cargo.lock pins the fixed webpki-roots 1.0.10. The
+        # advisory still matches webpki-roots 0.26.11, which bundles no
+        # certificates - it is a `pub use webpki_roots::*` shim over 1.x
+        # (its only dependency), so here it re-exports the fixed 1.0.10.
+        # It comes from tokio-tungstenite 0.24 (LXD/Incus consoles); there
+        # is no fixed 0.26.x. The grep below fails the job if webpki-roots
+        # 1.x in Cargo.lock is ever older than 1.0.10 again. Drop this
+        # --ignore once tokio-tungstenite no longer pulls the 0.26 shim.
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Run security audit"
-          cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0449
+          grep -A1 '^name = "webpki-roots"$' Cargo.lock | grep -q '^version = "1\.0\.\([1-9][0-9]\)"' \
+            || { echo "webpki-roots 1.x in Cargo.lock is older than 1.0.10 (RUSTSEC-2026-0381)"; exit 1; }
+          cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0449 --ignore RUSTSEC-2026-0381
 
       - name: Memory probe report
         if: always()
