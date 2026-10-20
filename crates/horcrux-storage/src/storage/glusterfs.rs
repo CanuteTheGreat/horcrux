@@ -259,6 +259,7 @@ impl GlusterFsManager {
         volume_name: &str,
         size_gb: u64,
     ) -> Result<String> {
+        super::check_names(&[volume_name])?;
         use std::path::PathBuf;
 
         tracing::info!("Creating {}GB volume {} on GlusterFS", size_gb, volume_name);
@@ -304,6 +305,7 @@ impl GlusterFsManager {
 
     /// Create snapshot
     pub async fn create_snapshot(&self, volume_path: &str, snapshot_name: &str) -> Result<String> {
+        super::check_names(&[snapshot_name])?;
         tracing::info!("Creating snapshot {} of {}", snapshot_name, volume_path);
 
         // Use qcow2 internal snapshots
@@ -328,6 +330,7 @@ impl GlusterFsManager {
 
     /// Restore a volume from a snapshot
     pub async fn restore_snapshot(&self, volume_path: &str, snapshot_name: &str) -> Result<()> {
+        super::check_names(&[snapshot_name])?;
         tracing::info!(
             "Restoring volume {} to snapshot {}",
             volume_path,

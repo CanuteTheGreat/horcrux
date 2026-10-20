@@ -143,6 +143,7 @@ impl CifsManager {
         volume_name: &str,
         size_gb: u64,
     ) -> Result<String> {
+        super::check_names(&[volume_name])?;
         let volume_path = format!("{}/{}.qcow2", mount_point, volume_name);
 
         info!("Creating CIFS volume: {} ({}GB)", volume_path, size_gb);

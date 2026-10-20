@@ -499,6 +499,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::migration_jobs::routes())
         .merge(api::migration_peer::routes())
         .merge(api::vm_hw::routes())
+        .merge(api::storage_volumes::routes())
         .merge(api::host_net::routes(&state))
         .merge(api::dashboards::routes(&state));
     #[cfg(feature = "s3-gateway")]
@@ -931,7 +932,6 @@ fn storage_routes() -> Router<Arc<AppState>> {
         .route("/api/storage/pools/:id", get(get_storage_pool))
         .route("/api/storage/pools", post(add_storage_pool))
         .route("/api/storage/pools/:id", delete(remove_storage_pool))
-        .route("/api/storage/pools/:pool_id/volumes", post(create_volume))
         // GPU passthrough endpoints
         .route("/api/gpu/devices", get(list_gpu_devices))
         .route("/api/gpu/devices/scan", post(scan_gpu_devices))
@@ -4606,25 +4606,6 @@ async fn remove_storage_pool(
     state
         .storage_manager
         .remove_pool(&id)
-        .await
-        .map_err(ApiError::from)?;
-    Ok(StatusCode::OK)
-}
-
-#[derive(serde::Deserialize)]
-struct CreateVolumeRequest {
-    name: String,
-    size: u64, // Size in GB
-}
-
-async fn create_volume(
-    State(state): State<Arc<AppState>>,
-    Path(pool_id): Path<String>,
-    Json(req): Json<CreateVolumeRequest>,
-) -> Result<StatusCode, ApiError> {
-    state
-        .storage_manager
-        .create_volume(&pool_id, &req.name, req.size)
         .await
         .map_err(ApiError::from)?;
     Ok(StatusCode::OK)

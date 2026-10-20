@@ -299,6 +299,55 @@ pub fn validate_snapshot_name(name: &str) -> ValidationResult<()> {
     Ok(())
 }
 
+/// Longest storage volume / volume snapshot name accepted (LVM caps LV
+/// names at 127, ZFS dataset components at 255; 64 leaves room for the
+/// `.qcow2` suffix, the `vm-` btrfs subvolume prefix and snapshot suffixes).
+pub const MAX_VOLUME_NAME_LENGTH: usize = 64;
+
+/// Storage volume (and volume snapshot) name: the single check every
+/// storage path builder runs before joining a name onto a pool path
+/// (`<dir>/<name>.qcow2`, `<vg>/<name>`, `<pool>/<name>@<snap>`, `rbd:...`).
+///
+/// Allowed: 1..=64 of `[A-Za-z0-9._-]`, starting with a letter, digit or
+/// `_` (so no `.`/`..`/hidden files and nothing a CLI tool would parse as
+/// an option), and no `..` anywhere. That rules out `/`, `\`, `@`, `:`,
+/// spaces, NUL and absolute paths, so a volume can never land outside its
+/// pool.
+pub fn validate_volume_name(name: &str) -> ValidationResult<()> {
+    if name.is_empty() {
+        return Err(Error::Validation("Volume name cannot be empty".to_string()));
+    }
+    if name.len() > MAX_VOLUME_NAME_LENGTH {
+        return Err(Error::Validation(format!(
+            "Volume name too long (max {} characters)",
+            MAX_VOLUME_NAME_LENGTH
+        )));
+    }
+    if !name
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    {
+        return Err(Error::Validation(format!(
+            "Invalid volume name {:?}: only letters, digits, '.', '_' and '-' are allowed",
+            name
+        )));
+    }
+    let first = name.as_bytes()[0];
+    if !(first.is_ascii_alphanumeric() || first == b'_') {
+        return Err(Error::Validation(format!(
+            "Invalid volume name {:?}: must start with a letter, digit or '_'",
+            name
+        )));
+    }
+    if name.contains("..") {
+        return Err(Error::Validation(format!(
+            "Invalid volume name {:?}: '..' is not allowed",
+            name
+        )));
+    }
+    Ok(())
+}
+
 /// Description validation
 pub fn validate_description(description: &str) -> ValidationResult<()> {
     if description.len() > MAX_DESCRIPTION_LENGTH {
@@ -502,6 +551,55 @@ pub fn validate_user_registration(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn volume_names_cannot_leave_the_pool() {
+        let max = "v".repeat(MAX_VOLUME_NAME_LENGTH);
+        for ok in [
+            "disk0",
+            "vm-100-disk-1",
+            "a",
+            "data_1.raw",
+            "_x",
+            "A.b-c_d",
+            max.as_str(),
+        ] {
+            assert!(
+                validate_volume_name(ok).is_ok(),
+                "{ok:?} should be accepted"
+            );
+        }
+        let long = "v".repeat(MAX_VOLUME_NAME_LENGTH + 1);
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../x",
+            "../../tmp/x",
+            "a/b",
+            "/tmp/x",
+            "/",
+            "a/../b",
+            "x..y",
+            ".hidden",
+            "-rf",
+            "-",
+            "a b",
+            "a\\b",
+            "a@snap",
+            "pool:x",
+            "a\0b",
+            "é",
+            "a\nb",
+            long.as_str(),
+        ] {
+            let r = validate_volume_name(bad);
+            assert!(
+                matches!(r, Err(Error::Validation(_))),
+                "{bad:?} should be refused, got {r:?}"
+            );
+        }
+    }
 
     #[test]
     fn test_validate_vm_name() {

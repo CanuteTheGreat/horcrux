@@ -30,4 +30,5 @@ mod oidc_integration_tests;
 mod persistence_restart_tests;
 mod rbac_matrix_tests;
 mod sdn_tests;
+mod storage_volume_tests;
 mod vm_clone_tests;

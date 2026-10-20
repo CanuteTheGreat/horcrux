@@ -76,6 +76,7 @@ impl DirectoryManager {
         volume_name: &str,
         size_gb: u64,
     ) -> Result<String> {
+        super::check_names(&[volume_name])?;
         info!(
             "Creating directory volume: {}/{}.qcow2 ({}GB)",
             dir_path, volume_name, size_gb
@@ -109,6 +110,7 @@ impl DirectoryManager {
 
     /// Delete a volume file
     pub async fn delete_volume(&self, dir_path: &str, volume_name: &str) -> Result<()> {
+        super::check_names(&[volume_name])?;
         info!(
             "Deleting directory volume: {}/{}.qcow2",
             dir_path, volume_name

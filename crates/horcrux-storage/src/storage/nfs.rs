@@ -131,6 +131,7 @@ impl NfsManager {
         volume_name: &str,
         size_gb: u64,
     ) -> Result<String> {
+        super::check_names(&[volume_name])?;
         let volume_path = format!("{}/{}.qcow2", mount_point, volume_name);
 
         info!("Creating NFS volume: {} ({}GB)", volume_path, size_gb);
@@ -174,6 +175,7 @@ impl NfsManager {
 
     /// Create a snapshot (copy-on-write)
     pub async fn create_snapshot(&self, volume_path: &str, snapshot_name: &str) -> Result<()> {
+        super::check_names(&[snapshot_name])?;
         info!("Creating NFS snapshot: {}", snapshot_name);
 
         let snapshot_path = format!("{}.{}", volume_path, snapshot_name);

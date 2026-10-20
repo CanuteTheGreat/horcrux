@@ -18,6 +18,7 @@ use crate::db::Database;
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -58,6 +59,79 @@ pub fn fs_capacity_gb(path: &str) -> Option<(u64, u64)> {
         st.blocks() as u64 * frag / gb,
         st.blocks_available() as u64 * frag / gb,
     ))
+}
+
+/// Defence in depth: every backend re-checks each name it joins onto a pool
+/// path with the one shared validator (`validation::validate_volume_name`),
+/// so a volume or snapshot can never be created/deleted outside its pool
+/// even if a caller skipped the API-layer check.
+pub(crate) fn check_names(names: &[&str]) -> Result<()> {
+    for name in names {
+        crate::validation::validate_volume_name(name)?;
+    }
+    Ok(())
+}
+
+/// A volume in a storage pool (`GET /api/storage/pools/:id/volumes`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VolumeInfo {
+    pub name: String,
+    /// What a VM disk would point at: a file, `/dev/...` or `rbd:pool/image`.
+    pub path: String,
+    pub format: String,
+    /// Virtual size in bytes.
+    pub size_bytes: u64,
+    /// Bytes actually allocated on the pool (0 when the backend can't tell).
+    pub allocated_bytes: u64,
+}
+
+/// Virtual size from a qcow2 header (magic `QFI\xfb`, size at bytes 24..32).
+fn qcow2_virtual_size(path: &Path) -> Option<u64> {
+    use std::io::Read;
+    let mut hdr = [0u8; 32];
+    std::fs::File::open(path).ok()?.read_exact(&mut hdr).ok()?;
+    if hdr[..4] != *b"QFI\xfb" {
+        return None;
+    }
+    Some(u64::from_be_bytes(hdr[24..32].try_into().ok()?))
+}
+
+fn file_volume_info(name: &str, path: &Path) -> Option<VolumeInfo> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    let (format, size) = match qcow2_virtual_size(path) {
+        Some(size) => ("qcow2", size),
+        None => ("raw", meta.len()),
+    };
+    Some(VolumeInfo {
+        name: name.to_string(),
+        path: path.to_string_lossy().to_string(),
+        format: format.to_string(),
+        size_bytes: size,
+        allocated_bytes: meta.blocks() * 512,
+    })
+}
+
+fn unsupported(op: &str, t: &StorageType) -> horcrux_common::Error {
+    horcrux_common::Error::InvalidConfig(format!("{op} is not supported on {t:?} storage pools"))
+}
+
+async fn run_tool(program: &str, args: &[&str]) -> Result<String> {
+    let out = tokio::process::Command::new(program)
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| horcrux_common::Error::System(format!("Failed to run {program}: {e}")))?;
+    if !out.status.success() {
+        return Err(horcrux_common::Error::System(format!(
+            "{program} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
 /// Storage manager
@@ -248,9 +322,10 @@ impl StorageManager {
         volume_name: &str,
         size_gb: u64,
     ) -> Result<String> {
+        check_names(&[volume_name])?;
         let pools = self.pools.read().await;
         let pool = pools.get(pool_id).ok_or_else(|| {
-            horcrux_common::Error::System(format!("Storage pool {} not found", pool_id))
+            horcrux_common::Error::NotFound(format!("Storage pool {} not found", pool_id))
         })?;
 
         if !pool.enabled {
@@ -260,11 +335,28 @@ impl StorageManager {
             )));
         }
 
+        if size_gb == 0 {
+            return Err(horcrux_common::Error::InvalidConfig(
+                "Volume size must be at least 1 GB".to_string(),
+            ));
+        }
+
         if size_gb > pool.available {
             return Err(horcrux_common::Error::InvalidConfig(format!(
                 "Not enough space in pool {}. Requested: {}GB, Available: {}GB",
                 pool_id, size_gb, pool.available
             )));
+        }
+
+        // `qemu-img create` silently truncates an existing image: never let
+        // a create overwrite a volume (possibly a VM's disk).
+        if let Some(path) = Self::file_volume_path(pool, volume_name)? {
+            if path.exists() {
+                return Err(horcrux_common::Error::AlreadyExists(format!(
+                    "Volume {} already exists in pool {}",
+                    volume_name, pool_id
+                )));
+            }
         }
 
         let volume_path = match pool.storage_type {
@@ -339,32 +431,267 @@ impl StorageManager {
         Ok(volume_path)
     }
 
-    /// Delete a volume from a storage pool
-    #[allow(dead_code)]
-    pub async fn delete_volume(&self, pool_id: &str, volume_name: &str) -> Result<()> {
-        let pools = self.pools.read().await;
-        let pool = pools.get(pool_id).ok_or_else(|| {
-            horcrux_common::Error::System(format!("Storage pool {} not found", pool_id))
-        })?;
+    /// File backing `name` in a file-based pool (`None` for block/object
+    /// pools). The name is validated first, so the result is always a
+    /// direct child of the pool directory (btrfs: of its `vm-<name>`
+    /// subvolume).
+    pub fn file_volume_path(pool: &StoragePool, name: &str) -> Result<Option<PathBuf>> {
+        check_names(&[name])?;
+        let base = Path::new(&pool.path);
+        Ok(match pool.storage_type {
+            StorageType::Directory
+            | StorageType::Nfs
+            | StorageType::Cifs
+            | StorageType::GlusterFs => Some(base.join(format!("{name}.qcow2"))),
+            StorageType::BtrFs => Some(
+                base.join(format!("vm-{name}"))
+                    .join(format!("{name}.qcow2")),
+            ),
+            _ => None,
+        })
+    }
 
+    /// What a VM disk on volume `name` of `pool` points at.
+    pub fn volume_location(pool: &StoragePool, name: &str) -> Result<String> {
+        if let Some(p) = Self::file_volume_path(pool, name)? {
+            return Ok(p.to_string_lossy().to_string());
+        }
+        Ok(match pool.storage_type {
+            StorageType::Zfs => format!("/dev/zvol/{}/{}", pool.path, name),
+            StorageType::Lvm => format!("/dev/{}/{}", pool.path, name),
+            StorageType::Ceph => format!("rbd:{}/{}", pool.path, name),
+            ref t => return Err(unsupported("Named volumes", t)),
+        })
+    }
+
+    /// Volumes currently in a pool.
+    pub async fn list_volumes(&self, pool_id: &str) -> Result<Vec<VolumeInfo>> {
+        let pool = self.get_pool_or_404(pool_id).await?;
+        let mut out = Vec::new();
         match pool.storage_type {
-            StorageType::Zfs => self.zfs.delete_volume(&pool.path, volume_name).await?,
-            StorageType::Ceph => self.ceph.delete_volume(&pool.path, volume_name).await?,
-            StorageType::Lvm => self.lvm.delete_volume(&pool.path, volume_name).await?,
-            StorageType::Directory => {
-                self.directory
-                    .delete_volume(&pool.path, volume_name)
-                    .await?
+            StorageType::Directory
+            | StorageType::Nfs
+            | StorageType::Cifs
+            | StorageType::GlusterFs => {
+                let rd = std::fs::read_dir(&pool.path).map_err(|e| {
+                    horcrux_common::Error::System(format!("Cannot read {}: {}", pool.path, e))
+                })?;
+                for e in rd.flatten() {
+                    let file = e.file_name().to_string_lossy().to_string();
+                    let Some(name) = file.strip_suffix(".qcow2") else {
+                        continue;
+                    };
+                    if check_names(&[name]).is_err() {
+                        continue;
+                    }
+                    if let Some(v) = file_volume_info(name, &e.path()) {
+                        out.push(v);
+                    }
+                }
             }
-            StorageType::Iscsi => {}
-            StorageType::Cifs => {}
-            StorageType::Nfs => {}
-            StorageType::GlusterFs => {}
-            StorageType::BtrFs => {}
-            StorageType::S3 => {}
+            StorageType::BtrFs => {
+                if let Ok(rd) = std::fs::read_dir(&pool.path) {
+                    for e in rd.flatten() {
+                        let dir = e.file_name().to_string_lossy().to_string();
+                        let Some(name) = dir.strip_prefix("vm-") else {
+                            continue;
+                        };
+                        if check_names(&[name]).is_err() {
+                            continue;
+                        }
+                        if let Some(v) =
+                            file_volume_info(name, &e.path().join(format!("{name}.qcow2")))
+                        {
+                            out.push(v);
+                        }
+                    }
+                }
+            }
+            StorageType::Zfs => {
+                let text = run_tool(
+                    "zfs",
+                    &[
+                        "list",
+                        "-H",
+                        "-p",
+                        "-t",
+                        "volume",
+                        "-d",
+                        "1",
+                        "-o",
+                        "name,volsize,used",
+                        &pool.path,
+                    ],
+                )
+                .await?;
+                for line in text.lines() {
+                    let f: Vec<&str> = line.split('\t').collect();
+                    if f.len() < 3 {
+                        continue;
+                    }
+                    let name = f[0].rsplit('/').next().unwrap_or(f[0]);
+                    out.push(VolumeInfo {
+                        name: name.to_string(),
+                        path: format!("/dev/zvol/{}", f[0]),
+                        format: "zvol".into(),
+                        size_bytes: f[1].parse().unwrap_or(0),
+                        allocated_bytes: f[2].parse().unwrap_or(0),
+                    });
+                }
+            }
+            StorageType::Lvm => {
+                let text = run_tool(
+                    "lvs",
+                    &[
+                        "--noheadings",
+                        "--units",
+                        "b",
+                        "--nosuffix",
+                        "--separator",
+                        "|",
+                        "-o",
+                        "lv_name,lv_size",
+                        &pool.path,
+                    ],
+                )
+                .await?;
+                for line in text.lines() {
+                    let f: Vec<&str> = line.trim().split('|').collect();
+                    if f.len() < 2 || f[0].is_empty() {
+                        continue;
+                    }
+                    let size = f[1].trim().parse().unwrap_or(0);
+                    out.push(VolumeInfo {
+                        name: f[0].to_string(),
+                        path: format!("/dev/{}/{}", pool.path, f[0]),
+                        format: "lv".into(),
+                        size_bytes: size,
+                        allocated_bytes: size,
+                    });
+                }
+            }
+            StorageType::Ceph => {
+                let text = run_tool("rbd", &["ls", "-l", "--format", "json", &pool.path]).await?;
+                let items: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap_or_default();
+                for it in items {
+                    if it.get("snapshot").is_some() {
+                        continue;
+                    }
+                    let Some(name) = it.get("image").and_then(|v| v.as_str()) else {
+                        continue;
+                    };
+                    out.push(VolumeInfo {
+                        name: name.to_string(),
+                        path: format!("rbd:{}/{}", pool.path, name),
+                        format: "rbd".into(),
+                        size_bytes: it.get("size").and_then(|v| v.as_u64()).unwrap_or(0),
+                        allocated_bytes: 0,
+                    });
+                }
+            }
+            ref t => return Err(unsupported("Listing volumes", t)),
+        }
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+
+    async fn get_pool_or_404(&self, pool_id: &str) -> Result<StoragePool> {
+        self.pools
+            .read()
+            .await
+            .get(pool_id)
+            .cloned()
+            .ok_or_else(|| {
+                horcrux_common::Error::NotFound(format!("Storage pool {} not found", pool_id))
+            })
+    }
+
+    /// Delete a volume from a storage pool
+    pub async fn delete_volume(&self, pool_id: &str, volume_name: &str) -> Result<()> {
+        check_names(&[volume_name])?;
+        let pool = self.get_pool_or_404(pool_id).await?;
+
+        if let Some(path) = Self::file_volume_path(&pool, volume_name)? {
+            if !path.is_file() {
+                return Err(horcrux_common::Error::NotFound(format!(
+                    "Volume {} not found in pool {}",
+                    volume_name, pool_id
+                )));
+            }
+            let p = path.to_string_lossy().to_string();
+            return match pool.storage_type {
+                StorageType::Directory => {
+                    self.directory.delete_volume(&pool.path, volume_name).await
+                }
+                StorageType::Nfs => self.nfs.delete_volume(&p).await,
+                StorageType::Cifs => self.cifs.delete_volume(&p).await,
+                StorageType::GlusterFs => self.glusterfs.delete_volume(&p).await,
+                _ => self.btrfs.delete_volume(&p).await,
+            };
         }
 
-        Ok(())
+        match pool.storage_type {
+            StorageType::Zfs => self.zfs.delete_volume(&pool.path, volume_name).await,
+            StorageType::Ceph => self.ceph.delete_volume(&pool.path, volume_name).await,
+            StorageType::Lvm => self.lvm.delete_volume(&pool.path, volume_name).await,
+            ref t => Err(unsupported("Deleting volumes", t)),
+        }
+    }
+
+    /// Grow a volume to `new_size_gb` (shrinking would destroy guest data
+    /// and is refused).
+    pub async fn resize_volume(
+        &self,
+        pool_id: &str,
+        volume_name: &str,
+        new_size_gb: u64,
+    ) -> Result<()> {
+        check_names(&[volume_name])?;
+        let pool = self.get_pool_or_404(pool_id).await?;
+        let gb = 1024 * 1024 * 1024;
+        let size_arg = format!("{new_size_gb}G");
+
+        if let Some(path) = Self::file_volume_path(&pool, volume_name)? {
+            let Some(cur) = file_volume_info(volume_name, &path) else {
+                return Err(horcrux_common::Error::NotFound(format!(
+                    "Volume {} not found in pool {}",
+                    volume_name, pool_id
+                )));
+            };
+            if new_size_gb.saturating_mul(gb) < cur.size_bytes {
+                return Err(horcrux_common::Error::InvalidConfig(format!(
+                    "Volume {} is {} GB; shrinking is not supported",
+                    volume_name,
+                    cur.size_bytes.div_ceil(gb)
+                )));
+            }
+            let grow_gb = (new_size_gb * gb - cur.size_bytes).div_ceil(gb);
+            if grow_gb > pool.available {
+                return Err(horcrux_common::Error::InvalidConfig(format!(
+                    "Not enough space in pool {}. Requested: +{}GB, Available: {}GB",
+                    pool_id, grow_gb, pool.available
+                )));
+            }
+            let p = path.to_string_lossy().to_string();
+            run_tool("qemu-img", &["resize", "-f", &cur.format, &p, &size_arg]).await?;
+            return Ok(());
+        }
+
+        let target = format!("{}/{}", pool.path, volume_name);
+        match pool.storage_type {
+            StorageType::Zfs => {
+                self.zfs
+                    .resize_volume(&pool.path, volume_name, new_size_gb)
+                    .await
+            }
+            StorageType::Lvm => run_tool("lvextend", &["-L", &size_arg, &target])
+                .await
+                .map(|_| ()),
+            StorageType::Ceph => run_tool("rbd", &["resize", "--size", &size_arg, &target])
+                .await
+                .map(|_| ()),
+            ref t => Err(unsupported("Resizing volumes", t)),
+        }
     }
 
     /// Create a snapshot of a volume
@@ -374,6 +701,7 @@ impl StorageManager {
         volume_name: &str,
         snapshot_name: &str,
     ) -> Result<()> {
+        check_names(&[volume_name, snapshot_name])?;
         let pools = self.pools.read().await;
         let pool = pools.get(pool_id).ok_or_else(|| {
             horcrux_common::Error::System(format!("Storage pool {} not found", pool_id))
@@ -446,6 +774,7 @@ impl StorageManager {
         volume_name: &str,
         snapshot_name: &str,
     ) -> Result<()> {
+        check_names(&[volume_name, snapshot_name])?;
         let pools = self.pools.read().await;
         let pool = pools.get(pool_id).ok_or_else(|| {
             horcrux_common::Error::System(format!("Storage pool {} not found", pool_id))
@@ -619,6 +948,236 @@ mod tests {
         s3.available = 100;
         m.pools.write().await.insert("s3".into(), s3);
         assert!(m.create_volume("s3", "disk4", 1).await.is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    const BAD_NAMES: &[&str] = &[
+        "../x",
+        "../../tmp/x",
+        "a/b",
+        "/tmp/x",
+        "/etc/passwd",
+        "",
+        ".",
+        "..",
+        "-rf",
+        "x@y",
+    ];
+
+    fn is_validation<T>(r: &Result<T>) -> bool {
+        matches!(r, Err(horcrux_common::Error::Validation(_)))
+    }
+
+    /// Every file under `root` (to prove nothing landed outside the pool).
+    fn tree(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(root) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    out.extend(tree(&p));
+                } else {
+                    out.push(p);
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    #[tokio::test]
+    async fn volume_names_cannot_escape_the_pool() {
+        // root/pool is the pool; root/victim.qcow2 and root/x.qcow2 sit
+        // next to it, where "../victim" / "../x" would point.
+        let root = scratch("traversal");
+        let d = root.join("pool");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(root.join("victim.qcow2"), b"keep me").unwrap();
+        let m = StorageManager::new();
+        let mut p = pool("t", StorageType::Directory, d.to_str().unwrap());
+        p.available = 100;
+        m.pools.write().await.insert("t".into(), p);
+        let before = tree(&root);
+
+        for bad in BAD_NAMES.iter().chain(["../victim"].iter()) {
+            assert!(
+                is_validation(&m.create_volume("t", bad, 1).await),
+                "create {bad:?}"
+            );
+            assert!(
+                is_validation(&m.delete_volume("t", bad).await),
+                "delete {bad:?}"
+            );
+            assert!(
+                is_validation(&m.resize_volume("t", bad, 2).await),
+                "resize {bad:?}"
+            );
+            assert!(
+                is_validation(&m.create_snapshot("t", bad, "s1").await),
+                "snapshot vol {bad:?}"
+            );
+            assert!(
+                is_validation(&m.create_snapshot("t", "disk0", bad).await),
+                "snapshot name {bad:?}"
+            );
+            assert!(
+                is_validation(&m.restore_snapshot("t", bad, "s1").await),
+                "restore {bad:?}"
+            );
+            let pool = m.get_pool("t").await.unwrap();
+            assert!(StorageManager::file_volume_path(&pool, bad).is_err());
+            assert!(StorageManager::volume_location(&pool, bad).is_err());
+        }
+        assert_eq!(tree(&root), before, "nothing created or deleted");
+        assert_eq!(
+            std::fs::read(root.join("victim.qcow2")).unwrap(),
+            b"keep me"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Defence in depth: the backends themselves refuse bad names before
+    /// building a path or running a tool, even when called directly.
+    #[tokio::test]
+    async fn every_backend_refuses_bad_names() {
+        let root = scratch("backend");
+        let dir = root.join("pool");
+        std::fs::create_dir_all(&dir).unwrap();
+        let ds = dir.to_str().unwrap();
+        let before = tree(&root);
+        for bad in BAD_NAMES {
+            assert!(is_validation(
+                &directory::DirectoryManager::new()
+                    .create_volume(ds, bad, 1)
+                    .await
+            ));
+            assert!(is_validation(
+                &directory::DirectoryManager::new()
+                    .delete_volume(ds, bad)
+                    .await
+            ));
+            assert!(is_validation(
+                &nfs::NfsManager::new().create_volume(ds, bad, 1).await
+            ));
+            assert!(is_validation(
+                &nfs::NfsManager::new().create_snapshot(ds, bad).await
+            ));
+            assert!(is_validation(
+                &cifs::CifsManager::new().create_volume(ds, bad, 1).await
+            ));
+            assert!(is_validation(
+                &glusterfs::GlusterFsManager::new()
+                    .create_volume(ds, bad, 1)
+                    .await
+            ));
+            assert!(is_validation(
+                &glusterfs::GlusterFsManager::new()
+                    .create_snapshot(ds, bad)
+                    .await
+            ));
+            assert!(is_validation(
+                &glusterfs::GlusterFsManager::new()
+                    .restore_snapshot(ds, bad)
+                    .await
+            ));
+            assert!(is_validation(
+                &btrfs::BtrFsManager::new().create_volume(ds, bad, 1).await
+            ));
+            assert!(is_validation(
+                &btrfs::BtrFsManager::new()
+                    .create_snapshot(ds, bad, true)
+                    .await
+            ));
+            let z = zfs::ZfsManager::new();
+            assert!(is_validation(&z.create_volume("tank", bad, 1).await));
+            assert!(is_validation(&z.delete_volume("tank", bad).await));
+            assert!(is_validation(&z.resize_volume("tank", bad, 2).await));
+            assert!(is_validation(&z.create_snapshot("tank", bad, "s").await));
+            assert!(is_validation(&z.create_snapshot("tank", "v", bad).await));
+            assert!(is_validation(&z.restore_snapshot("tank", bad, "s").await));
+            assert!(is_validation(
+                &z.clone_snapshot("tank", "v", "s", bad).await
+            ));
+            assert!(is_validation(&z.delete_snapshot("tank", bad, "s").await));
+            let l = lvm::LvmManager::new();
+            assert!(is_validation(&l.create_volume("vg0", bad, 1).await));
+            assert!(is_validation(&l.delete_volume("vg0", bad).await));
+            assert!(is_validation(&l.create_snapshot("vg0", bad, "s").await));
+            assert!(is_validation(&l.restore_snapshot("vg0", "v", bad).await));
+            let c = ceph::CephManager::new();
+            assert!(is_validation(&c.create_volume("rbd", bad, 1).await));
+            assert!(is_validation(&c.delete_volume("rbd", bad).await));
+            assert!(is_validation(&c.create_snapshot("rbd", bad, "s").await));
+            assert!(is_validation(&c.restore_snapshot("rbd", "v", bad).await));
+            assert!(is_validation(&c.clone_snapshot("rbd", "v", "s", bad).await));
+            assert!(is_validation(&c.map_rbd("rbd", bad).await));
+        }
+        assert_eq!(tree(&root), before);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn directory_volumes_list_resize_and_delete() {
+        let d = scratch("vols");
+        let m = StorageManager::new();
+        let mut p = pool("v", StorageType::Directory, d.to_str().unwrap());
+        p.available = 10;
+        m.pools.write().await.insert("v".into(), p);
+
+        assert!(m.list_volumes("v").await.unwrap().is_empty());
+        m.create_volume("v", "data-1", 1).await.unwrap();
+        m.create_volume("v", "boot.disk", 2).await.unwrap();
+        // Same name again would truncate the image: refused.
+        assert!(matches!(
+            m.create_volume("v", "data-1", 1).await,
+            Err(horcrux_common::Error::AlreadyExists(_))
+        ));
+        assert!(m.create_volume("v", "zero", 0).await.is_err());
+        // Files that aren't valid volume names are not listed.
+        std::fs::write(d.join(".hidden.qcow2"), b"x").unwrap();
+        std::fs::write(d.join("notes.txt"), b"x").unwrap();
+
+        let gb = 1024 * 1024 * 1024;
+        let vols = m.list_volumes("v").await.unwrap();
+        let names: Vec<_> = vols.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, ["boot.disk", "data-1"]);
+        assert_eq!(vols[0].size_bytes, 2 * gb);
+        assert_eq!(vols[0].format, "qcow2");
+        assert_eq!(vols[1].path, format!("{}/data-1.qcow2", d.display()));
+        let pool = m.get_pool("v").await.unwrap();
+        assert_eq!(
+            StorageManager::volume_location(&pool, "data-1").unwrap(),
+            vols[1].path
+        );
+
+        // Grow (real qemu-img resize), refuse shrink and over-allocation.
+        m.resize_volume("v", "data-1", 3).await.unwrap();
+        assert_eq!(qcow2_virtual_size(&d.join("data-1.qcow2")), Some(3 * gb));
+        assert!(m.resize_volume("v", "data-1", 2).await.is_err());
+        assert!(m.resize_volume("v", "data-1", 50).await.is_err());
+        assert!(matches!(
+            m.resize_volume("v", "missing", 5).await,
+            Err(horcrux_common::Error::NotFound(_))
+        ));
+
+        m.delete_volume("v", "data-1").await.unwrap();
+        assert!(!d.join("data-1.qcow2").exists());
+        assert!(matches!(
+            m.delete_volume("v", "data-1").await,
+            Err(horcrux_common::Error::NotFound(_))
+        ));
+        assert!(matches!(
+            m.list_volumes("nope").await,
+            Err(horcrux_common::Error::NotFound(_))
+        ));
+        let names: Vec<_> = m
+            .list_volumes("v")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|v| v.name)
+            .collect();
+        assert_eq!(names, ["boot.disk"]);
         let _ = std::fs::remove_dir_all(&d);
     }
 

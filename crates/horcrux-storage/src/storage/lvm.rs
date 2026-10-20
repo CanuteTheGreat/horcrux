@@ -53,6 +53,7 @@ impl LvmManager {
         volume_name: &str,
         size_gb: u64,
     ) -> Result<String> {
+        super::check_names(&[volume_name])?;
         info!(
             "Creating LVM volume: {}/{} ({}GB)",
             vg_name, volume_name, size_gb
@@ -84,6 +85,7 @@ impl LvmManager {
 
     /// Delete an LVM logical volume
     pub async fn delete_volume(&self, vg_name: &str, volume_name: &str) -> Result<()> {
+        super::check_names(&[volume_name])?;
         info!("Deleting LVM volume: {}/{}", vg_name, volume_name);
 
         let output = Command::new("lvremove")
@@ -117,6 +119,7 @@ impl LvmManager {
         volume_name: &str,
         snapshot_name: &str,
     ) -> Result<()> {
+        super::check_names(&[volume_name, snapshot_name])?;
         info!(
             "Creating LVM snapshot: {}/{} -> {}",
             vg_name, volume_name, snapshot_name
@@ -157,6 +160,7 @@ impl LvmManager {
         snapshot_name: &str,
         size_gb: u64,
     ) -> Result<()> {
+        super::check_names(&[volume_name, snapshot_name])?;
         info!(
             "Creating LVM snapshot: {}/{} -> {} ({}GB)",
             vg_name, volume_name, snapshot_name, size_gb
@@ -189,6 +193,7 @@ impl LvmManager {
 
     /// List snapshots for a volume (volume chains)
     pub async fn list_snapshots(&self, vg_name: &str, volume_name: &str) -> Result<Vec<String>> {
+        super::check_names(&[volume_name])?;
         let output = Command::new("lvs")
             .arg("--noheadings")
             .arg("-o")
@@ -228,6 +233,7 @@ impl LvmManager {
         vg_name: &str,
         volume_name: &str,
     ) -> Result<SnapshotChain> {
+        super::check_names(&[volume_name])?;
         let snapshots = self.list_snapshots(vg_name, volume_name).await?;
 
         Ok(SnapshotChain {
@@ -243,6 +249,7 @@ impl LvmManager {
         _volume_name: &str,
         snapshot_name: &str,
     ) -> Result<()> {
+        super::check_names(&[_volume_name, snapshot_name])?;
         info!("Restoring LVM snapshot: {}/{}", vg_name, snapshot_name);
 
         let output = Command::new("lvconvert")

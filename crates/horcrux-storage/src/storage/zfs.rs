@@ -52,6 +52,7 @@ impl ZfsManager {
         volume_name: &str,
         size_gb: u64,
     ) -> Result<String> {
+        super::check_names(&[volume_name])?;
         info!(
             "Creating ZFS volume: {}/{} ({}GB)",
             pool_path, volume_name, size_gb
@@ -86,6 +87,7 @@ impl ZfsManager {
 
     /// Delete a ZFS volume
     pub async fn delete_volume(&self, pool_path: &str, volume_name: &str) -> Result<()> {
+        super::check_names(&[volume_name])?;
         info!("Deleting ZFS volume: {}/{}", pool_path, volume_name);
 
         let volume_path = format!("{}/{}", pool_path, volume_name);
@@ -118,6 +120,7 @@ impl ZfsManager {
         volume_name: &str,
         snapshot_name: &str,
     ) -> Result<()> {
+        super::check_names(&[volume_name, snapshot_name])?;
         info!(
             "Creating ZFS snapshot: {}/{}@{}",
             pool_path, volume_name, snapshot_name
@@ -153,6 +156,7 @@ impl ZfsManager {
         volume_name: &str,
         snapshot_name: &str,
     ) -> Result<()> {
+        super::check_names(&[volume_name, snapshot_name])?;
         info!(
             "Restoring ZFS snapshot: {}/{}@{}",
             pool_path, volume_name, snapshot_name
@@ -189,6 +193,7 @@ impl ZfsManager {
         snapshot_name: &str,
         clone_name: &str,
     ) -> Result<String> {
+        super::check_names(&[volume_name, snapshot_name, clone_name])?;
         info!(
             "Cloning ZFS snapshot: {}/{}@{} -> {}",
             pool_path, volume_name, snapshot_name, clone_name
@@ -415,6 +420,7 @@ impl ZfsManager {
         volume_name: &str,
         snapshot_name: &str,
     ) -> Result<()> {
+        super::check_names(&[volume_name, snapshot_name])?;
         info!(
             "Deleting ZFS snapshot: {}/{}@{}",
             pool_path, volume_name, snapshot_name
@@ -490,6 +496,7 @@ impl ZfsManager {
         volume_name: &str,
         new_size_gb: u64,
     ) -> Result<()> {
+        super::check_names(&[volume_name])?;
         info!(
             "Resizing ZFS volume: {}/{} to {}GB",
             pool_path, volume_name, new_size_gb

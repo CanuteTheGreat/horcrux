@@ -143,6 +143,7 @@ impl BtrFsManager {
         volume_name: &str,
         size_gb: u64,
     ) -> Result<String> {
+        super::check_names(&[volume_name])?;
         // Create subvolume for the VM
         let subvol_name = format!("vm-{}", volume_name);
         let subvol_path = self.create_subvolume(base_path, &subvol_name).await?;
@@ -205,6 +206,7 @@ impl BtrFsManager {
         snapshot_name: &str,
         readonly: bool,
     ) -> Result<String> {
+        super::check_names(&[snapshot_name])?;
         let source = PathBuf::from(source_path);
         let parent = source
             .parent()
