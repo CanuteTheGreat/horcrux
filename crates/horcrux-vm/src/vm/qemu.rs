@@ -1789,6 +1789,47 @@ mod tests {
         }
     }
 
+    /// create_vm never truncates a volume a storage pool already holds under
+    /// the planned name (and removes the disks it made before it), while a
+    /// leftover image in the VM storage directory - which only Horcrux
+    /// writes - is replaced by a fresh one. Needs qemu-img (CI has it).
+    #[tokio::test]
+    async fn create_vm_keeps_pool_volumes_and_replaces_stale_default_disks() {
+        let vms = tempfile::tempdir().unwrap();
+        let pool = tempfile::tempdir().unwrap();
+        let m = QemuManager::with_storage_path(vms.path().to_path_buf());
+        let mut cfg = vm(VmArchitecture::X86_64, VmDisplay::default()).to_config();
+        cfg.id = "vm-5".into();
+        cfg.disk_size = 1;
+        let default_disk = vms.path().join("vm-5.qcow2");
+
+        // The pool already has vm-5-disk1.qcow2: refused, left untouched,
+        // and disk0 (already created in the VM directory) is rolled back.
+        let taken = pool.path().join("vm-5-disk1.qcow2");
+        std::fs::write(&taken, b"someone else's volume").unwrap();
+        let mut on_pool = disk(&pool.path().join("x.qcow2").to_string_lossy(), "virtio");
+        on_pool.storage = Some("fast".into());
+        cfg.disks = vec![disk("", "virtio"), on_pool];
+        match m.create_vm(&cfg).await {
+            Err(horcrux_common::Error::AlreadyExists(msg)) => {
+                assert!(msg.contains("storage pool fast"), "{msg}")
+            }
+            other => panic!("an existing pool volume must be refused, got {other:?}"),
+        }
+        assert_eq!(std::fs::read(&taken).unwrap(), b"someone else's volume");
+        assert!(!default_disk.exists(), "disk0 must be rolled back");
+
+        // A stale image in the VM directory is not a reason to refuse.
+        std::fs::write(&default_disk, b"stale").unwrap();
+        cfg.disks = Vec::new();
+        let made = m
+            .create_vm(&cfg)
+            .await
+            .expect("a stale default-directory image is recreated (needs qemu-img)");
+        assert_eq!(made.disk_path, default_disk);
+        assert_eq!(QemuManager::virtual_size(&default_disk).await.unwrap(), 1 << 30);
+    }
+
     #[test]
     fn incoming_start_waits_paused_for_the_state() {
         let v = vm(VmArchitecture::X86_64, VmDisplay::default());
