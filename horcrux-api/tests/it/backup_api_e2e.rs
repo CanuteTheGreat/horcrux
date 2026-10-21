@@ -238,6 +238,21 @@ async fn backup_corrupt_restore_and_scheduled_job_over_http() {
         .await;
     assert_eq!(s, 409);
 
+    // A restored VM's ID names its disk file and pidfile: Create VM's rule
+    // (422) - `_`, `.`, a leading `-` and path-like ids are refused and
+    // nothing is written for them.
+    for bad in ["a_b.c", "-x", "../../tmp/x", "a/b"] {
+        let (s, r) = a
+            .post(
+                &format!("/backups/{bid}/restore"),
+                json!({"target_id": bad}),
+            )
+            .await;
+        assert_eq!(s, 422, "restore to {bad:?}: {r}");
+        let (s, _) = a.get(&format!("/vms/{}", bad.replace('/', "%2F"))).await;
+        assert_eq!(s, 404, "no VM {bad:?} registered");
+    }
+
     // Running VM: suspend mode pauses it over QMP for the copy and resumes
     // it; stop mode stops, copies and restarts it. Both archives hold the
     // same disk content.

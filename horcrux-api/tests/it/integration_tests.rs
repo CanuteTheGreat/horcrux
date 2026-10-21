@@ -1128,6 +1128,59 @@ async fn test_template_operations() {
         .await
         .unwrap();
     assert_eq!(r.status(), 409);
+
+    // The new VM ID names the clone's disk file: path-like or option-like
+    // IDs are refused with 422 (Create VM's rule) for both clone types,
+    // nothing is written outside the VM storage directory and no VM is
+    // registered under them (it used to write /tmp/<x>.qcow2 and list a
+    // VM called "../../../tmp/<x>").
+    let escape = format!("/tmp/hx-tpl-escape-{}", std::process::id());
+    let traversal = format!("../../../../../../../..{escape}");
+    for bad in [
+        traversal.as_str(),
+        "../../../tmp/hqa-evil5",
+        "a/b",
+        escape.as_str(),
+        "-x",
+        "a_b.c",
+        "",
+    ] {
+        for kind in ["full", "linked"] {
+            let r = client
+                .post(format!("{}/templates/{}/clone", API_BASE, tpl_id))
+                .json(
+                    &json!({"new_vm_id": bad, "new_vm_name": "x", "clone_type": kind,
+                              "storage_pool": null, "cloudinit_config": null}),
+                )
+                .send()
+                .await
+                .unwrap();
+            let status = r.status();
+            let msg = r.text().await.unwrap_or_default();
+            assert_eq!(status, 422, "template clone to {bad:?} ({kind}): {msg}");
+            assert!(msg.contains("VM ID"), "{bad:?}: {msg}");
+        }
+    }
+    assert!(
+        !std::path::Path::new(&format!("{escape}.qcow2")).exists(),
+        "no disk outside the VM storage directory"
+    );
+    let vms: Vec<serde_json::Value> = client
+        .get(format!("{}/vms", API_BASE))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        !vms.iter().any(|v| {
+            let id = v["id"].as_str().unwrap_or("");
+            id.contains('/') || id == "-x" || id == "a_b.c"
+        }),
+        "no VM registered under a refused ID"
+    );
+
     let r = client
         .post(format!("{}/templates/nope/clone", API_BASE))
         .json(

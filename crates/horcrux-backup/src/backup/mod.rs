@@ -1100,6 +1100,12 @@ impl BackupManager {
                 "invalid target id '{target}' (letters, digits, '-', '_', '.')"
             )));
         }
+        if b.target_type == TargetType::Vm {
+            // A restored VM's ID names `<vm storage>/<id>.qcow2` and its
+            // pidfile: same rule as Create VM (valid_guest_id allows '_',
+            // '.', a leading '-' and 128 characters).
+            crate::validation::validate_vm_id(&target)?;
+        }
         let _busy = claim(&self.busy, &target, &target)?;
         tracing::info!("Restoring backup {} to {}", b.id, target);
 

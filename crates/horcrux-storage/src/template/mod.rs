@@ -301,6 +301,10 @@ impl TemplateManager {
 
     /// Clone a template to create a new VM
     pub async fn clone_template(&self, template_id: &str, request: CloneRequest) -> Result<String> {
+        // The ID names the clone's disk (`<vm storage>/<id>.qcow2`, or the
+        // ZFS/Ceph/LVM volume): `../../tmp/x` used to make qemu-img write
+        // outside the VM storage directory.
+        crate::validation::validate_vm_id(&request.new_vm_id)?;
         let templates = self.templates.read().await;
         let template = templates.get(template_id).ok_or_else(|| {
             horcrux_common::Error::NotFound(format!("Template {} not found", template_id))
@@ -735,6 +739,66 @@ mod tests {
             "source VM disk must survive template deletion"
         );
         assert!(!template.disk_path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The new VM ID names the clone's disk file: anything that is not a
+    /// plain VM ID is refused before qemu-img runs, and nothing is written
+    /// outside the VM storage directory.
+    #[tokio::test]
+    async fn clone_refuses_path_like_vm_ids() {
+        let dir = scratch("ids");
+        let manager = TemplateManager::with_vm_storage(dir.join("vms"));
+        let src = source_disk(&dir);
+        let template = manager
+            .create_template(
+                "vm-100",
+                "t".to_string(),
+                None,
+                src,
+                StorageType::Directory,
+                512,
+                1,
+                OsType::Linux,
+            )
+            .await
+            .unwrap();
+        for bad in [
+            "../../../tmp/hqa-evil",
+            "../outside",
+            "a/b",
+            "/tmp/x",
+            "-x",
+            "a_b.c",
+            "",
+        ] {
+            for kind in [CloneType::Full, CloneType::Linked] {
+                let r = manager
+                    .clone_template(
+                        &template.id,
+                        CloneRequest {
+                            new_vm_id: bad.to_string(),
+                            new_vm_name: "x".to_string(),
+                            clone_type: kind,
+                            storage_pool: None,
+                            cloudinit_config: None,
+                        },
+                    )
+                    .await;
+                assert!(
+                    matches!(r, Err(horcrux_common::Error::Validation(_))),
+                    "{bad:?}: {r:?}"
+                );
+            }
+        }
+        assert!(!dir.join("outside.qcow2").exists());
+        let mut files: Vec<String> = std::fs::read_dir(dir.join("vms"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        files.sort();
+        assert_eq!(files, ["templates"], "no clone disk written");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

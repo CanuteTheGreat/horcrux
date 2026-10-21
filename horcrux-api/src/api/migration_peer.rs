@@ -469,6 +469,8 @@ async fn prepare(
     require_peer(&user)?;
     valid_job(&req.job_id)?;
     let mut vm = req.vm;
+    // The ID names the disk files, sockets and pidfile created here.
+    crate::validation::validate_vm_id(&vm.id)?;
     if vm.hypervisor != horcrux_common::VmHypervisor::Qemu {
         return Err(ApiError::BadRequest("only QEMU VMs can be migrated".into()));
     }

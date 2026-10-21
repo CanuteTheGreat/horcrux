@@ -920,18 +920,21 @@ Authorization: Bearer <token>
 Content-Type: application/json
 
 {
-  "name": "web-server-03",
-  "id": "103",
-  "start": true
+  "new_vm_id": "web-03",
+  "new_vm_name": "web-server-03",
+  "clone_type": "linked"
 }
 ```
+
+`clone_type` is `full` (standalone copy) or `linked` (qcow2 overlay on the
+template disk). `new_vm_id` follows the Create VM `id` rule: 1-64 ASCII
+letters, digits and `-`, not starting with `-` (`422 VALIDATION_ERROR`
+otherwise; it names the clone's disk file). `409` if a VM with that ID exists.
 
 **Response**:
 ```json
 {
-  "vm_id": "103",
-  "name": "web-server-03",
-  "message": "VM created from template successfully"
+  "new_vm_id": "web-03"
 }
 ```
 

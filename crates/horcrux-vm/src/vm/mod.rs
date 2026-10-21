@@ -342,6 +342,10 @@ impl VmManager {
     /// Register a VM whose disk already exists (e.g. cloned from a
     /// template) without creating a new disk.
     pub async fn import_vm(&self, config: VmConfig) -> Result<VmConfig> {
+        // Template deploys, backup restores and incoming migrations all
+        // register through here: the ID names the pidfile and disk files,
+        // so it follows Create VM's rule.
+        crate::validation::validate_vm_id(&config.id)?;
         let mut vms = self.vms.write().await;
         let known_in_db = match &self.db {
             Some(db) => db.get_vm(&config.id).await.is_ok(),
@@ -666,6 +670,23 @@ mod tests {
         for id in ["../../etc/cron.d/evil", "/tmp/evil", "a/b", "-x", ""] {
             let cfg = create_test_vm_config(id, "evil");
             match manager.create_vm(cfg).await {
+                Err(horcrux_common::Error::Validation(msg)) => {
+                    assert!(msg.contains("VM ID"), "{id:?}: {msg}")
+                }
+                other => panic!("{id:?} must be refused, got {other:?}"),
+            }
+        }
+        assert!(manager.list_vms().await.is_empty());
+    }
+
+    /// import_vm (template deploy, backup restore, incoming migration)
+    /// applies the same ID rule before registering anything.
+    #[tokio::test]
+    async fn import_vm_refuses_path_like_ids() {
+        let manager = VmManager::new();
+        for id in ["../../../tmp/evil", "/tmp/evil", "a/b", "-x", "a_b.c", ""] {
+            let cfg = create_test_vm_config(id, "evil");
+            match manager.import_vm(cfg).await {
                 Err(horcrux_common::Error::Validation(msg)) => {
                     assert!(msg.contains("VM ID"), "{id:?}: {msg}")
                 }

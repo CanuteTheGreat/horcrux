@@ -3135,6 +3135,9 @@ async fn clone_template(
     Path(id): Path<String>,
     Json(request): Json<CloneRequest>,
 ) -> Result<Json<CloneResponse>, ApiError> {
+    // The new VM's ID names its disk (`<vm storage>/<id>.qcow2`): same rule
+    // as Create VM / Clone VM (422), checked before anything is written.
+    crate::validation::validate_vm_id(&request.new_vm_id)?;
     let template = state.template_manager.get_template(&id).await?;
     if state.vm_manager.get_vm(&request.new_vm_id).await.is_ok() {
         return Err(ApiError::Conflict(format!(
