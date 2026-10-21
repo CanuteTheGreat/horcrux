@@ -2476,7 +2476,10 @@ Authorization: Bearer <token>
 
 ### List Webhooks
 
-Lists all webhook configurations.
+Lists all webhook configurations with their delivery counters
+(`success_count`, `failure_count`, `last_triggered`). The `secret` and every
+header value come back as `"********"`; send that placeholder back on update
+to keep the stored value.
 
 ```http
 GET /api/webhooks
@@ -2563,7 +2566,8 @@ Authorization: Bearer <token>
 
 ### Test Webhook
 
-Sends a test event to a webhook.
+Sends one `test` event to this webhook (no retries, also when it is
+disabled) and returns the delivery record. 404 if the webhook doesn't exist.
 
 ```http
 POST /api/webhooks/{id}/test
@@ -2573,9 +2577,13 @@ Authorization: Bearer <token>
 **Response**:
 ```json
 {
-  "status": "success",
-  "response_code": 200,
-  "response_time_ms": 145
+  "webhook_id": "webhook-1",
+  "event_type": "test",
+  "timestamp": "2025-10-09T10:30:45Z",
+  "success": true,
+  "status_code": 200,
+  "error": null,
+  "retry_count": 0
 }
 ```
 

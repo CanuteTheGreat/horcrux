@@ -3805,3 +3805,145 @@ async fn sdn_policies_read_into_ui_types() {
     .await;
     assert_eq!(code, 404);
 }
+
+/// `X-Horcrux-Signature` of a received event, checked against `key`.
+fn signed_with(got: &Captured, key: &str) -> bool {
+    use hmac::{Hmac, Mac};
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(key.as_bytes()).unwrap();
+    mac.update(got.body.as_bytes());
+    let want = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
+    got.header("X-Horcrux-Signature") == Some(want.as_str())
+}
+
+/// POST /webhooks/{id}/test and expect a successful delivery to it.
+async fn fire_test_webhook(c: &reqwest::Client, token: &str, id: &str) {
+    let (status, text) = send_json(
+        c,
+        token,
+        reqwest::Method::POST,
+        &format!("/webhooks/{id}/test"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "test webhook: {text}");
+    let d: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(d["success"], true, "{text}");
+    assert_eq!(d["status_code"], 200, "{text}");
+    assert_eq!(d["webhook_id"], id, "{text}");
+}
+
+/// Event webhooks (`/api/webhooks`, the Notifications page's Webhooks tab).
+/// The UI type used to fail on any real list (it expected fields the API
+/// never sent), so the tab always said "No event webhooks configured". The
+/// API returned the HMAC secret and header values to any Sys.Audit reader,
+/// and Test broadcast to nobody. Now: the UI reads a real list, nothing
+/// returned leaks a secret, Test reaches this webhook signed with the
+/// stored key, and an edit that sends the masks back keeps both.
+#[tokio::test]
+async fn event_webhooks_mask_secrets_and_deliver_signed() {
+    use reqwest::Method;
+    let c = client();
+    let token = login(&c).await;
+    let (addr, mut rx) = http_receiver("127.0.0.1:0", 200).await;
+    let id = format!("contract-hook-{}", std::process::id());
+    let key = "contract-hmac-key";
+    let bearer = "Bearer contract-token";
+    let leaks = |text: &str| text.contains(key) || text.contains("contract-token");
+
+    let body = json!({
+        "id": id,
+        "name": "contract hook",
+        "url": format!("http://{addr}/evt"),
+        "events": ["vm_started", {"custom": "contract"}],
+        "secret": key,
+        "headers": {"Authorization": bearer},
+    });
+    let (status, text) = send_json(&c, &token, Method::POST, "/webhooks", Some(body.clone())).await;
+    assert_eq!(status, 200, "create webhook: {text}");
+    assert!(!leaks(&text), "create echoed a secret: {text}");
+    let (status, text) = send_json(&c, &token, Method::POST, "/webhooks", Some(body)).await;
+    assert_eq!(status, 409, "a taken id is refused: {text}");
+    let (status, text) = send_json(
+        &c,
+        &token,
+        Method::POST,
+        "/webhooks",
+        Some(json!({"name": "bad", "url": "ftp://example.org/x"})),
+    )
+    .await;
+    assert_eq!(status, 422, "a non-http url is refused: {text}");
+
+    let (status, text) = get_raw(&c, &token, "/webhooks").await;
+    assert_eq!(status, 200, "list: {text}");
+    assert!(!leaks(&text), "list leaks a secret: {text}");
+    let list: Vec<api::WebhookConfig> = decode("GET /webhooks", &text);
+    let w = list
+        .iter()
+        .find(|w| w.id == id)
+        .expect("created webhook is listed");
+    assert_eq!(
+        w.events.iter().map(|e| e.label()).collect::<Vec<_>>(),
+        ["vm_started", "custom:contract"]
+    );
+    assert_eq!((w.success_count, w.failure_count), (0, 0));
+    assert!(w.last_triggered.is_none());
+    assert_eq!(w.secret.as_deref(), Some("********"));
+    assert_eq!(w.headers["Authorization"], "********");
+
+    // Test reaches this webhook, signed with the stored secret.
+    let received = |got: &Captured| {
+        assert_eq!((got.method.as_str(), got.path.as_str()), ("POST", "/evt"));
+        assert_eq!(got.header("Authorization"), Some(bearer));
+        assert!(signed_with(got, key), "bad signature: {got:?}");
+        let ev = got.json();
+        assert_eq!(ev["event_type"], "test", "{ev}");
+        assert_eq!(ev["data"]["webhook_id"], id.as_str(), "{ev}");
+    };
+    fire_test_webhook(&c, &token, &id).await;
+    received(&next(&mut rx, "test event").await);
+
+    let (status, text) = get_raw(&c, &token, &format!("/webhooks/{id}")).await;
+    assert_eq!(status, 200, "get: {text}");
+    assert!(!leaks(&text), "get leaks a secret: {text}");
+    let w: api::WebhookConfig = decode("GET /webhooks/{id}", &text);
+    assert_eq!((w.success_count, w.failure_count), (1, 0));
+    assert!(w.last_triggered.is_some());
+
+    // Edit what GET returned (masks included) under a stray body id.
+    let mut edit: Value = serde_json::from_str(&text).unwrap();
+    edit["name"] = json!("contract hook (edited)");
+    edit["id"] = json!("contract-hook-stray");
+    let (status, text) = send_json(
+        &c,
+        &token,
+        Method::POST,
+        &format!("/webhooks/{id}"),
+        Some(edit),
+    )
+    .await;
+    assert_eq!(status, 200, "update: {text}");
+    fire_test_webhook(&c, &token, &id).await;
+    received(&next(&mut rx, "test event after edit").await);
+    let w: api::WebhookConfig = fetch(&c, &token, &format!("/webhooks/{id}")).await;
+    assert_eq!(w.name, "contract hook (edited)");
+    assert_eq!(w.success_count, 2);
+    let (status, _) = get_raw(&c, &token, "/webhooks/contract-hook-stray").await;
+    assert_eq!(status, 404, "the body id must not create a second webhook");
+
+    let (status, text) = send_json(
+        &c,
+        &token,
+        Method::POST,
+        "/webhooks/contract-hook-missing/test",
+        None,
+    )
+    .await;
+    assert_eq!(status, 404, "test of an unknown webhook: {text}");
+    let path = format!("/webhooks/{id}");
+    let (status, text) = send_json(&c, &token, Method::DELETE, &path, None).await;
+    assert_eq!(status, 200, "delete: {text}");
+    let (status, _) = send_json(&c, &token, Method::DELETE, &path, None).await;
+    assert_eq!(status, 404, "second delete");
+    let (status, _) = get_raw(&c, &token, &path).await;
+    assert_eq!(status, 404, "deleted webhook is gone");
+}

@@ -661,7 +661,7 @@ pub fn NotificationsPage() -> impl IntoView {
                                                     <tr>
                                                         <td>{w.name}</td>
                                                         <td>{w.url}</td>
-                                                        <td>{w.events.join(", ")}</td>
+                                                        <td>{w.events.iter().map(|e| e.label()).collect::<Vec<_>>().join(", ")}</td>
                                                         <td>{if w.enabled { "yes" } else { "no" }}</td>
                                                         <td>{w.success_count}</td>
                                                         <td>{w.failure_count}</td>

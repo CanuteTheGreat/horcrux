@@ -5034,11 +5034,12 @@ async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> impl IntoResp
 
 // Webhook Endpoints
 
+// Responses carry the masked configuration (no secret, no header values)
+// plus delivery counters: reading webhooks only needs Sys.Audit.
 async fn list_webhooks(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<webhooks::WebhookConfig>>, ApiError> {
-    let webhooks = state.webhook_manager.list_webhooks().await;
-    Ok(Json(webhooks))
+) -> Result<Json<Vec<webhooks::WebhookSummary>>, ApiError> {
+    Ok(Json(state.webhook_manager.summaries().await))
 }
 
 async fn create_webhook(
@@ -5049,19 +5050,19 @@ async fn create_webhook(
         .webhook_manager
         .add_webhook(config)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        .map_err(ApiError::from)?;
 
     info!("Created webhook: {} ({})", webhook.name, webhook.id);
-    Ok(Json(webhook))
+    Ok(Json(webhook.masked()))
 }
 
 async fn get_webhook(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-) -> Result<Json<webhooks::WebhookConfig>, ApiError> {
+) -> Result<Json<webhooks::WebhookSummary>, ApiError> {
     let webhook = state
         .webhook_manager
-        .get_webhook(&id)
+        .summary(&id)
         .await
         .ok_or_else(|| ApiError::NotFound(format!("Webhook {} not found", id)))?;
 
@@ -5077,7 +5078,7 @@ async fn update_webhook(
         .webhook_manager
         .update_webhook(&id, config)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        .map_err(ApiError::from)?;
 
     info!("Updated webhook: {}", id);
     Ok(Json("Webhook updated successfully"))
@@ -5091,33 +5092,26 @@ async fn delete_webhook(
         .webhook_manager
         .remove_webhook(&id)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        .map_err(ApiError::from)?;
 
     info!("Deleted webhook: {}", id);
     Ok(Json("Webhook deleted successfully"))
 }
 
+/// Send one test event to this webhook (404 if there is none) and return
+/// the delivery record. It used to broadcast a `custom: test` event to
+/// whichever webhooks subscribed to it - usually none - and answer
+/// "Test webhook sent" either way.
 async fn test_webhook(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-) -> Result<Json<&'static str>, ApiError> {
-    // Send a test event
-    let test_data = serde_json::json!({
-        "message": "This is a test webhook event",
-        "webhook_id": id,
-        "timestamp": chrono::Utc::now().to_rfc3339(),
-    });
-
-    state
+) -> Result<Json<webhooks::WebhookDelivery>, ApiError> {
+    let delivery = state
         .webhook_manager
-        .trigger_event(
-            webhooks::WebhookEventType::Custom("test".to_string()),
-            test_data,
-        )
+        .test_webhook(&id)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-
-    Ok(Json("Test webhook sent"))
+        .map_err(ApiError::from)?;
+    Ok(Json(delivery))
 }
 
 async fn get_webhook_deliveries(

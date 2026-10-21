@@ -4102,21 +4102,47 @@ pub async fn get_notification_channels() -> Result<Vec<NotificationChannel>, Api
     fetch_json("/notifications/channels").await
 }
 
+/// An event webhook as `GET /api/webhooks` returns it: the configuration
+/// (secret and header values masked) plus its delivery counters.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WebhookConfig {
     pub id: String,
     pub name: String,
     pub url: String,
-    pub method: String,
+    #[serde(default)]
     pub headers: std::collections::HashMap<String, String>,
-    pub events: Vec<String>,
+    pub events: Vec<WebhookEventName>,
     pub enabled: bool,
+    #[serde(default)]
     pub secret: Option<String>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default)]
+    pub retry_count: u32,
+    #[serde(default)]
+    pub timeout_seconds: u64,
+    #[serde(default)]
     pub last_triggered: Option<chrono::DateTime<chrono::Utc>>,
-    pub trigger_count: u32,
-    pub success_count: u32,
-    pub failure_count: u32,
+    #[serde(default)]
+    pub success_count: u64,
+    #[serde(default)]
+    pub failure_count: u64,
+}
+
+/// A webhook event subscription: a built-in event (`"vm_started"`) or a
+/// custom one (`{"custom": "name"}`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum WebhookEventName {
+    Builtin(String),
+    Custom { custom: String },
+}
+
+impl WebhookEventName {
+    pub fn label(&self) -> String {
+        match self {
+            WebhookEventName::Builtin(s) => s.clone(),
+            WebhookEventName::Custom { custom } => format!("custom:{custom}"),
+        }
+    }
 }
 
 // (Duplicate alert/notification functions removed - already defined above)

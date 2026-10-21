@@ -32,3 +32,7 @@ urlencoding = "2.1"
 # job) and deserializes real responses into the UI's own api.rs types.
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 tokio = { workspace = true }
+# event-webhook signatures are checked against the stored secret
+hex = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
