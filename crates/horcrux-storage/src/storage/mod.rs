@@ -115,6 +115,49 @@ fn file_volume_info(name: &str, path: &Path) -> Option<VolumeInfo> {
     })
 }
 
+/// Volumes from `zfs list -H -p -t volume -o name,volsize,used` output
+/// (tab-separated; lines with fewer than three fields are skipped).
+fn parse_zfs_volumes(text: &str) -> Vec<VolumeInfo> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() < 3 {
+            continue;
+        }
+        let name = f[0].rsplit('/').next().unwrap_or(f[0]);
+        out.push(VolumeInfo {
+            name: name.to_string(),
+            path: format!("/dev/zvol/{}", f[0]),
+            format: "zvol".into(),
+            size_bytes: f[1].parse().unwrap_or(0),
+            allocated_bytes: f[2].parse().unwrap_or(0),
+        });
+    }
+    out
+}
+
+/// Volumes from `lvs --noheadings --units b --nosuffix --separator '|'
+/// -o lv_name,lv_size <vg>` output (lines without a name and a size are
+/// skipped).
+fn parse_lvs_volumes(text: &str, vg: &str) -> Vec<VolumeInfo> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let f: Vec<&str> = line.trim().split('|').collect();
+        if f.len() < 2 || f[0].is_empty() {
+            continue;
+        }
+        let size = f[1].trim().parse().unwrap_or(0);
+        out.push(VolumeInfo {
+            name: f[0].to_string(),
+            path: format!("/dev/{}/{}", vg, f[0]),
+            format: "lv".into(),
+            size_bytes: size,
+            allocated_bytes: size,
+        });
+    }
+    out
+}
+
 fn unsupported(op: &str, t: &StorageType) -> horcrux_common::Error {
     horcrux_common::Error::InvalidConfig(format!("{op} is not supported on {t:?} storage pools"))
 }
@@ -524,20 +567,7 @@ impl StorageManager {
                     ],
                 )
                 .await?;
-                for line in text.lines() {
-                    let f: Vec<&str> = line.split('\t').collect();
-                    if f.len() < 3 {
-                        continue;
-                    }
-                    let name = f[0].rsplit('/').next().unwrap_or(f[0]);
-                    out.push(VolumeInfo {
-                        name: name.to_string(),
-                        path: format!("/dev/zvol/{}", f[0]),
-                        format: "zvol".into(),
-                        size_bytes: f[1].parse().unwrap_or(0),
-                        allocated_bytes: f[2].parse().unwrap_or(0),
-                    });
-                }
+                out.extend(parse_zfs_volumes(&text));
             }
             StorageType::Lvm => {
                 let text = run_tool(
@@ -555,20 +585,7 @@ impl StorageManager {
                     ],
                 )
                 .await?;
-                for line in text.lines() {
-                    let f: Vec<&str> = line.trim().split('|').collect();
-                    if f.len() < 2 || f[0].is_empty() {
-                        continue;
-                    }
-                    let size = f[1].trim().parse().unwrap_or(0);
-                    out.push(VolumeInfo {
-                        name: f[0].to_string(),
-                        path: format!("/dev/{}/{}", pool.path, f[0]),
-                        format: "lv".into(),
-                        size_bytes: size,
-                        allocated_bytes: size,
-                    });
-                }
+                out.extend(parse_lvs_volumes(&text, &pool.path));
             }
             StorageType::Ceph => {
                 let text = run_tool("rbd", &["ls", "-l", "--format", "json", &pool.path]).await?;
@@ -1226,6 +1243,182 @@ mod tests {
         // Capacity is re-measured on load.
         let (total, _) = fs_capacity_gb(d.to_str().unwrap()).unwrap();
         assert_eq!(pools[0].total, total);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn file_volume_info_reports_allocated_bytes_in_512_byte_blocks() {
+        use std::io::Write;
+        use std::os::unix::fs::MetadataExt;
+        let d = scratch("alloc");
+        let f = d.join("raw-1.qcow2");
+        let mut fh = std::fs::File::create(&f).unwrap();
+        fh.write_all(&vec![0xa5u8; 256 * 1024]).unwrap();
+        fh.sync_all().unwrap();
+        drop(fh);
+        let blocks = std::fs::metadata(&f).unwrap().blocks();
+        assert!(blocks > 0, "written file reports no blocks");
+        let v = file_volume_info("raw-1", &f).unwrap();
+        assert_eq!(v.format, "raw");
+        assert_eq!(v.size_bytes, 256 * 1024);
+        // st_blocks is always in 512-byte units, whatever the fs block size.
+        assert_eq!(v.allocated_bytes, blocks * 512);
+        assert!(v.allocated_bytes >= 256 * 1024);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn file_volume_paths_per_pool_type() {
+        let p = |t| pool("p", t, "/srv/pool");
+        for t in [
+            StorageType::Directory,
+            StorageType::Nfs,
+            StorageType::Cifs,
+            StorageType::GlusterFs,
+        ] {
+            assert_eq!(
+                StorageManager::file_volume_path(&p(t), "d1").unwrap(),
+                Some(PathBuf::from("/srv/pool/d1.qcow2"))
+            );
+        }
+        // btrfs keeps each volume in its own `vm-<name>` subvolume.
+        assert_eq!(
+            StorageManager::file_volume_path(&p(StorageType::BtrFs), "d1").unwrap(),
+            Some(PathBuf::from("/srv/pool/vm-d1/d1.qcow2"))
+        );
+        assert_eq!(
+            StorageManager::volume_location(&p(StorageType::BtrFs), "d1").unwrap(),
+            "/srv/pool/vm-d1/d1.qcow2"
+        );
+        for t in [StorageType::Zfs, StorageType::Lvm, StorageType::Ceph] {
+            assert_eq!(StorageManager::file_volume_path(&p(t), "d1").unwrap(), None);
+        }
+    }
+
+    #[tokio::test]
+    async fn btrfs_pools_list_volumes_from_their_subvolume_dirs() {
+        let d = scratch("btrfs-list");
+        std::fs::create_dir_all(d.join("vm-a1")).unwrap();
+        std::fs::write(d.join("vm-a1").join("a1.qcow2"), b"raw").unwrap();
+        std::fs::create_dir_all(d.join("vm-empty")).unwrap();
+        std::fs::write(d.join("stray.qcow2"), b"x").unwrap();
+        let m = StorageManager::new();
+        m.pools.write().await.insert(
+            "b".into(),
+            pool("b", StorageType::BtrFs, d.to_str().unwrap()),
+        );
+        let vols = m.list_volumes("b").await.unwrap();
+        assert_eq!(vols.len(), 1);
+        assert_eq!(vols[0].name, "a1");
+        assert_eq!(vols[0].path, format!("{}/vm-a1/a1.qcow2", d.display()));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn zfs_volume_listing_parses_name_size_used() {
+        let text = "tank/vms/disk-1\t10737418240\t4096\n\
+                    garbage\n\
+                    tank/vms/two\t5\n\
+                    \n\
+                    tank/vms/disk-2\t2147483648\t123\textra\n";
+        let v = parse_zfs_volumes(text);
+        assert_eq!(
+            v,
+            [
+                VolumeInfo {
+                    name: "disk-1".into(),
+                    path: "/dev/zvol/tank/vms/disk-1".into(),
+                    format: "zvol".into(),
+                    size_bytes: 10737418240,
+                    allocated_bytes: 4096,
+                },
+                VolumeInfo {
+                    name: "disk-2".into(),
+                    path: "/dev/zvol/tank/vms/disk-2".into(),
+                    format: "zvol".into(),
+                    size_bytes: 2147483648,
+                    allocated_bytes: 123,
+                },
+            ]
+        );
+        assert!(parse_zfs_volumes("").is_empty());
+    }
+
+    #[test]
+    fn lvs_volume_listing_parses_name_and_size() {
+        let text = "  root|10737418240\n\
+                    \n\
+                    lonely\n\
+                    |42\n\
+                    data|  1048576 \n";
+        let v = parse_lvs_volumes(text, "vg0");
+        assert_eq!(
+            v,
+            [
+                VolumeInfo {
+                    name: "root".into(),
+                    path: "/dev/vg0/root".into(),
+                    format: "lv".into(),
+                    size_bytes: 10737418240,
+                    allocated_bytes: 10737418240,
+                },
+                VolumeInfo {
+                    name: "data".into(),
+                    path: "/dev/vg0/data".into(),
+                    format: "lv".into(),
+                    size_bytes: 1048576,
+                    allocated_bytes: 1048576,
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn network_fs_pools_delete_only_the_volume_file() {
+        for (i, t) in [StorageType::Nfs, StorageType::Cifs, StorageType::GlusterFs]
+            .into_iter()
+            .enumerate()
+        {
+            let d = scratch(&format!("netdel-{i}"));
+            std::fs::write(d.join("gone.qcow2"), b"x").unwrap();
+            std::fs::write(d.join("keep.qcow2"), b"y").unwrap();
+            let m = StorageManager::new();
+            m.pools
+                .write()
+                .await
+                .insert("n".into(), pool("n", t.clone(), d.to_str().unwrap()));
+            m.delete_volume("n", "gone").await.unwrap_or_else(|e| {
+                panic!("{t:?}: delete failed: {e}");
+            });
+            assert!(!d.join("gone.qcow2").exists(), "{t:?}");
+            // The pool directory itself (and its other volumes) stays.
+            assert!(d.join("keep.qcow2").is_file(), "{t:?}");
+            let _ = std::fs::remove_dir_all(&d);
+        }
+    }
+
+    #[tokio::test]
+    async fn resize_to_same_size_or_exactly_the_free_space_is_allowed() {
+        let gb = 1024 * 1024 * 1024;
+        let d = scratch("resize-edge");
+        let m = StorageManager::new();
+        let mut p = pool("r", StorageType::Directory, d.to_str().unwrap());
+        p.available = 10;
+        m.pools.write().await.insert("r".into(), p);
+        m.create_volume("r", "v1", 1).await.unwrap();
+        // Only 1 GB left: growing 1 -> 2 GB needs exactly that.
+        m.pools.write().await.get_mut("r").unwrap().available = 1;
+        m.resize_volume("r", "v1", 2).await.unwrap();
+        assert_eq!(qcow2_virtual_size(&d.join("v1.qcow2")), Some(2 * gb));
+        // Same size with no free space left is a no-op grow, not a shrink.
+        m.pools.write().await.get_mut("r").unwrap().available = 0;
+        m.resize_volume("r", "v1", 2).await.unwrap();
+        assert_eq!(qcow2_virtual_size(&d.join("v1.qcow2")), Some(2 * gb));
+        // One more GB than is free is refused.
+        assert!(matches!(
+            m.resize_volume("r", "v1", 3).await,
+            Err(horcrux_common::Error::InvalidConfig(_))
+        ));
         let _ = std::fs::remove_dir_all(&d);
     }
 }
