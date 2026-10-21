@@ -1103,18 +1103,32 @@ impl ContainerManager {
                 // A Result rather than `return` in the fallback arm: with
                 // neither lxd nor incus compiled in, the code below must not
                 // become unreachable (USE-flag builds use -D warnings).
+                // The target name goes to `lxc|incus copy <src> <target>` as
+                // a positional: a flag-like name (`-csecurity.privileged=true`)
+                // must be refused (422) here like on create, not left to the
+                // CLI's argument parser.
                 let cloned: Result<()> = match source_container.runtime {
                     #[cfg(feature = "lxd")]
                     ContainerRuntime::Lxd => {
-                        self.lxd_manager
-                            .clone_container(&source_container.name, target_name, snapshot)
-                            .await
+                        match crate::console::lxd::validate_instance_create(target_name, "") {
+                            Err(e) => Err(e),
+                            Ok(()) => {
+                                self.lxd_manager
+                                    .clone_container(&source_container.name, target_name, snapshot)
+                                    .await
+                            }
+                        }
                     }
                     #[cfg(feature = "incus")]
                     ContainerRuntime::Incus => {
-                        self.incus_manager
-                            .clone_container(&source_container.name, target_name, snapshot)
-                            .await
+                        match crate::console::lxd::validate_instance_create(target_name, "") {
+                            Err(e) => Err(e),
+                            Ok(()) => {
+                                self.incus_manager
+                                    .clone_container(&source_container.name, target_name, snapshot)
+                                    .await
+                            }
+                        }
                     }
                     #[allow(unreachable_patterns)]
                     _ => Err(crate::features::runtime_not_compiled(

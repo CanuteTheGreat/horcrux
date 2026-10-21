@@ -380,6 +380,33 @@ def run_ct():
     st, body = req("POST", f"/containers/{CT}/console-ticket?runtime=docker", expect=None, raw=True)
     check(st in (422, 400), f"docker console-ticket refused: {st} {body[:120]}")
 
+    step("Clone: flag-like target names are refused (422), a valid clone works")
+    req("POST", f"/containers/{CT}/stop", expect=None)
+    wait_for("container stopped",
+             lambda: "STOPPED" in incus(f"list {CT} --format csv -c s", False).upper() or None, 60)
+    before = incus("list --format csv -c n", False)
+    for bad in ["-csecurity.privileged=true", "--config=security.privileged=true", "-x",
+                "a b", "a/b", "qa_b7"]:
+        st, body = req("POST", f"/containers/{CT}/clone",
+                       {"target_id": "hx-clone-bad", "target_name": bad}, expect=None, raw=True)
+        check(st == 422 and "Invalid instance name" in body,
+              f"clone to {bad!r} refused with 422: {st} {body[:160]}")
+    check(incus("list --format csv -c n", False) == before,
+          "no Incus instance created by a refused clone")
+    privileged = sh("for i in $(incus list --format csv -c n </dev/null); do "
+                    "incus config get $i security.privileged </dev/null; done", check_rc=False)
+    check("true" not in privileged, f"no instance became privileged ({privileged!r})")
+    st, _ = req("GET", "/containers/hx-clone-bad", expect=None)
+    check(st == 404, f"refused clone not registered ({st})")
+    clone = CT + "-copy"
+    incus(f"delete -f {clone}", check_rc=False)
+    req("DELETE", f"/containers/{clone}", expect=None)
+    req("POST", f"/containers/{CT}/clone", {"target_id": clone, "target_name": clone})
+    check(clone in incus("list --format csv -c n", False).split(),
+          f"valid clone {clone} exists in Incus")
+    req("DELETE", f"/containers/{clone}", expect=None)
+    incus(f"delete -f {clone}", check_rc=False)
+
     if os.environ.get("KEEP") != "1":
         step("cleanup")
         req("POST", f"/containers/{CT}/stop", expect=None)
