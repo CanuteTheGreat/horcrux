@@ -2787,7 +2787,9 @@ re-notified) until its condition clears.
 
 #### List Notification Channels
 
-Lists configured notification channels.
+Lists the legacy alert-manager channels (Monitoring > Notifications uses
+`/api/notifications/channels`, below). The SMTP password, webhook
+`auth_token` and webhook header values come back as `"********"`.
 
 ```http
 GET /api/alerts/notifications
@@ -2808,6 +2810,15 @@ Authorization: Bearer <token>
   }
 ]
 ```
+
+`GET /api/notifications/channels` (and `/:id`) needs only Sys.Audit, so it
+never returns a credential: e-mail passwords, webhook auth secrets and header
+values, and PagerDuty integration/routing keys come back as `"********"`;
+Slack, Teams and Discord webhook URLs (the URL is the posting credential)
+keep only scheme and host, e.g. `"https://hooks.slack.com/********"`.
+`PUT /api/notifications/channels/:id` keeps the stored value for any field
+sent back masked, so an edit form can re-send what it was given; a masked
+header the stored channel doesn't have is dropped.
 
 #### Add Notification Channel
 

@@ -54,6 +54,40 @@ pub enum NotificationChannel {
     },
 }
 
+impl NotificationChannel {
+    /// Copy for API responses: the SMTP password, the webhook auth token and
+    /// every webhook header value become [`SECRET_MASK`]. Listing channels
+    /// (`GET /api/alerts/notifications`) needs only Sys.Audit.
+    ///
+    /// [`SECRET_MASK`]: crate::notification_channels::SECRET_MASK
+    pub fn masked(&self) -> Self {
+        use crate::notification_channels::SECRET_MASK;
+        let hide = |v: &mut String| {
+            if !v.is_empty() {
+                *v = SECRET_MASK.to_string();
+            }
+        };
+        let mut c = self.clone();
+        match &mut c {
+            NotificationChannel::Email { config, .. } => {
+                if let Some(p) = config.password.as_mut() {
+                    hide(p);
+                }
+            }
+            NotificationChannel::Webhook { config, .. } => {
+                if let Some(t) = config.auth_token.as_mut() {
+                    hide(t);
+                }
+                for (_, v) in config.headers.iter_mut() {
+                    hide(v);
+                }
+            }
+            NotificationChannel::Syslog { .. } => {}
+        }
+        c
+    }
+}
+
 /// Send notification for an alert
 pub async fn send_notification(channel: &NotificationChannel, alert: &Alert) -> Result<()> {
     match channel {
@@ -301,5 +335,41 @@ mod tests {
 
         let json = serde_json::to_string(&channel).unwrap();
         assert!(json.contains("\"type\":\"email\""));
+    }
+
+    #[test]
+    fn masked_hides_password_token_and_headers() {
+        let email = NotificationChannel::Email {
+            name: "mail".into(),
+            enabled: true,
+            min_severity: AlertSeverity::Warning,
+            config: EmailConfig {
+                smtp_server: "smtp.example.org".into(),
+                smtp_port: 587,
+                from_address: "a@example.org".into(),
+                to_addresses: vec!["b@example.org".into()],
+                username: Some("u".into()),
+                password: Some("pw-s3cret".into()),
+                use_tls: true,
+            },
+        };
+        let hook = NotificationChannel::Webhook {
+            name: "hook".into(),
+            enabled: true,
+            min_severity: AlertSeverity::Info,
+            config: WebhookConfig {
+                url: "https://example.org/h".into(),
+                method: "POST".into(),
+                headers: vec![("X-Api-Key".into(), "hdr-s3cret".into())],
+                auth_token: Some("tok-s3cret".into()),
+            },
+        };
+        for ch in [email, hook] {
+            let json = serde_json::to_string(&ch.masked()).unwrap();
+            assert!(!json.contains("s3cret"), "{json}");
+            assert!(json.contains("********"), "{json}");
+            // The stored channel itself is untouched.
+            assert!(serde_json::to_string(&ch).unwrap().contains("s3cret"));
+        }
     }
 }

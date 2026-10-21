@@ -90,64 +90,150 @@ impl ChannelConfig {
     }
 
     /// Copy with secrets replaced by [`SECRET_MASK`] (for API responses).
+    ///
+    /// Besides passwords and tokens this covers the Slack/Teams/Discord
+    /// webhook URLs (the URL *is* the posting credential; only its
+    /// scheme and host are shown), the PagerDuty routing key and every
+    /// custom header value of a generic webhook (typically an API token).
+    /// Reading channels needs only Sys.Audit, so none of these may leave.
     fn masked(&self) -> Self {
-        let mask = |s: &str| {
-            if s.is_empty() {
-                String::new()
-            } else {
-                SECRET_MASK.to_string()
-            }
-        };
         let mut c = self.clone();
         match &mut c {
             ChannelConfig::Email { password, .. } => *password = mask(password),
-            ChannelConfig::Webhook { auth: Some(a), .. } => match a {
-                WebhookAuth::BasicAuth { password, .. } => *password = mask(password),
-                WebhookAuth::BearerToken { token } => *token = mask(token),
-                WebhookAuth::ApiKey { key, .. } => *key = mask(key),
-            },
-            _ => {}
+            ChannelConfig::Slack { webhook_url, .. }
+            | ChannelConfig::Teams { webhook_url }
+            | ChannelConfig::Discord { webhook_url, .. } => *webhook_url = mask_url(webhook_url),
+            ChannelConfig::PagerDuty {
+                integration_key,
+                routing_key,
+                ..
+            } => {
+                *integration_key = mask(integration_key);
+                *routing_key = mask(routing_key);
+            }
+            ChannelConfig::Webhook { headers, auth, .. } => {
+                for v in headers.values_mut() {
+                    *v = mask(v);
+                }
+                match auth {
+                    Some(WebhookAuth::BasicAuth { password, .. }) => *password = mask(password),
+                    Some(WebhookAuth::BearerToken { token }) => *token = mask(token),
+                    Some(WebhookAuth::ApiKey { key, .. }) => *key = mask(key),
+                    None => {}
+                }
+            }
         }
         c
     }
 
-    /// Put stored secrets back where an update sent the mask.
+    /// Put stored secrets back where an update sent the mask (as the web
+    /// UI's edit form does: it re-sends what it was given). A masked header
+    /// the stored channel doesn't have is dropped rather than sent as the
+    /// literal mask.
     fn unmask_from(&mut self, stored: &ChannelConfig) {
+        fn keep(new: &mut String, old: &str) {
+            if *new == SECRET_MASK {
+                *new = old.to_string();
+            }
+        }
+        fn keep_url(new: &mut String, old: &str) {
+            if *new == SECRET_MASK || (!old.is_empty() && *new == mask_url(old)) {
+                *new = old.to_string();
+            }
+        }
         match (self, stored) {
             (
                 ChannelConfig::Email { password, .. },
                 ChannelConfig::Email {
                     password: old_pw, ..
                 },
-            ) if password == SECRET_MASK => *password = old_pw.clone(),
+            ) => keep(password, old_pw),
             (
-                ChannelConfig::Webhook { auth: Some(a), .. },
-                ChannelConfig::Webhook {
-                    auth: Some(old), ..
+                ChannelConfig::Slack { webhook_url, .. },
+                ChannelConfig::Slack {
+                    webhook_url: old, ..
                 },
-            ) => match (a, old) {
-                (
-                    WebhookAuth::BasicAuth { password, .. },
-                    WebhookAuth::BasicAuth { password: p, .. },
-                ) if password == SECRET_MASK => *password = p.clone(),
-                (WebhookAuth::BearerToken { token }, WebhookAuth::BearerToken { token: t })
-                    if token == SECRET_MASK =>
-                {
-                    *token = t.clone()
+            )
+            | (ChannelConfig::Teams { webhook_url }, ChannelConfig::Teams { webhook_url: old })
+            | (
+                ChannelConfig::Discord { webhook_url, .. },
+                ChannelConfig::Discord {
+                    webhook_url: old, ..
+                },
+            ) => keep_url(webhook_url, old),
+            (
+                ChannelConfig::PagerDuty {
+                    integration_key,
+                    routing_key,
+                    ..
+                },
+                ChannelConfig::PagerDuty {
+                    integration_key: old_ik,
+                    routing_key: old_rk,
+                    ..
+                },
+            ) => {
+                // The UI's form has one key field and sends it as both; a
+                // channel created over the API may have only one of them.
+                let old_key = if old_rk.is_empty() { old_ik } else { old_rk };
+                if *integration_key == SECRET_MASK {
+                    *integration_key = if old_ik.is_empty() {
+                        old_key.clone()
+                    } else {
+                        old_ik.clone()
+                    };
                 }
-                (WebhookAuth::ApiKey { key, .. }, WebhookAuth::ApiKey { key: k, .. })
-                    if key == SECRET_MASK =>
-                {
-                    *key = k.clone()
+                if *routing_key == SECRET_MASK {
+                    *routing_key = old_key.clone();
                 }
-                _ => {}
-            },
+            }
+            (
+                ChannelConfig::Webhook { headers, auth, .. },
+                ChannelConfig::Webhook {
+                    headers: old_headers,
+                    auth: old_auth,
+                    ..
+                },
+            ) => {
+                headers.retain(|k, v| {
+                    if v != SECRET_MASK {
+                        return true;
+                    }
+                    match old_headers.get(k) {
+                        Some(old) => {
+                            *v = old.clone();
+                            true
+                        }
+                        None => false,
+                    }
+                });
+                match (auth, old_auth) {
+                    (
+                        Some(WebhookAuth::BasicAuth { password, .. }),
+                        Some(WebhookAuth::BasicAuth { password: p, .. }),
+                    ) => keep(password, p),
+                    (
+                        Some(WebhookAuth::BearerToken { token }),
+                        Some(WebhookAuth::BearerToken { token: t }),
+                    ) => keep(token, t),
+                    (
+                        Some(WebhookAuth::ApiKey { key, .. }),
+                        Some(WebhookAuth::ApiKey { key: k, .. }),
+                    ) => keep(key, k),
+                    _ => {}
+                }
+            }
             _ => {}
         }
     }
 
     fn validate(&self) -> Result<(), String> {
         fn http_url(what: &str, u: &str) -> Result<(), String> {
+            if u.contains(SECRET_MASK) {
+                // A masked URL from a list/get response, sent where there is
+                // no stored URL to restore (a new channel, or a type change).
+                return Err(format!("{} is masked; enter the real URL", what));
+            }
             match url::Url::parse(u.trim()) {
                 Ok(p) if p.scheme() == "http" || p.scheme() == "https" => Ok(()),
                 _ => Err(format!("{} must be an http(s) URL, got '{}'", what, u)),
@@ -197,6 +283,35 @@ impl ChannelConfig {
                 }
             }
         }
+    }
+}
+
+fn mask(s: &str) -> String {
+    if s.is_empty() {
+        String::new()
+    } else {
+        SECRET_MASK.to_string()
+    }
+}
+
+/// `https://hooks.slack.com/services/T0/B0/xyz` -> `https://hooks.slack.com/********`:
+/// enough to tell channels apart, nothing that can post.
+fn mask_url(u: &str) -> String {
+    if u.is_empty() {
+        return String::new();
+    }
+    match url::Url::parse(u.trim()) {
+        Ok(p) if p.host_str().is_some() => {
+            let port = p.port().map(|n| format!(":{}", n)).unwrap_or_default();
+            format!(
+                "{}://{}{}/{}",
+                p.scheme(),
+                p.host_str().unwrap_or_default(),
+                port,
+                SECRET_MASK
+            )
+        }
+        _ => SECRET_MASK.to_string(),
     }
 }
 
@@ -854,5 +969,122 @@ mod tests {
             use_tls: false,
         };
         assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn webhook_urls_keys_and_headers_are_masked_and_restored() {
+        let slack = ChannelConfig::Slack {
+            webhook_url: "https://hooks.slack.com/services/T0/B0/xyzzy".into(),
+            channel: Some("#ops".into()),
+            username: None,
+            icon_emoji: None,
+        };
+        let shown = slack.masked();
+        match &shown {
+            ChannelConfig::Slack { webhook_url, .. } => {
+                assert_eq!(webhook_url, "https://hooks.slack.com/********");
+            }
+            _ => unreachable!(),
+        }
+        let mut back = shown.clone();
+        back.unmask_from(&slack);
+        assert_eq!(back, slack);
+        // A new URL replaces the stored one; the bare mask keeps it.
+        let mut new = ChannelConfig::Slack {
+            webhook_url: "https://hooks.slack.com/services/T0/B0/new".into(),
+            channel: None,
+            username: None,
+            icon_emoji: None,
+        };
+        new.unmask_from(&slack);
+        assert!(
+            matches!(&new, ChannelConfig::Slack { webhook_url, .. } if webhook_url.ends_with("/new"))
+        );
+        let mut bare = ChannelConfig::Teams {
+            webhook_url: SECRET_MASK.into(),
+        };
+        let teams = ChannelConfig::Teams {
+            webhook_url: "https://example.webhook.office.com:8443/webhookb2/abc".into(),
+        };
+        assert_eq!(
+            teams.masked(),
+            ChannelConfig::Teams {
+                webhook_url: "https://example.webhook.office.com:8443/********".into()
+            }
+        );
+        bare.unmask_from(&teams);
+        assert_eq!(bare, teams);
+        // A masked URL with nothing to restore it from is refused, not stored.
+        assert!(teams.masked().validate().is_err());
+        let discord = ChannelConfig::Discord {
+            webhook_url: "https://discord.com/api/webhooks/1/tok".into(),
+            username: None,
+            avatar_url: None,
+        };
+        let shown = discord.masked();
+        assert!(!serde_json::to_string(&shown).unwrap().contains("tok"));
+        let mut back = shown;
+        back.unmask_from(&discord);
+        assert_eq!(back, discord);
+
+        // PagerDuty: created over the API with only a routing key; the UI
+        // sends its single key field (the masked integration key) as both.
+        let pd = ChannelConfig::PagerDuty {
+            integration_key: String::new(),
+            routing_key: "R0UTE".into(),
+            severity: "error".into(),
+        };
+        let shown = pd.masked();
+        assert!(!serde_json::to_string(&shown).unwrap().contains("R0UTE"));
+        let mut from_ui = ChannelConfig::PagerDuty {
+            integration_key: SECRET_MASK.into(),
+            routing_key: SECRET_MASK.into(),
+            severity: "error".into(),
+        };
+        from_ui.unmask_from(&pd);
+        assert_eq!(
+            from_ui,
+            ChannelConfig::PagerDuty {
+                integration_key: "R0UTE".into(),
+                routing_key: "R0UTE".into(),
+                severity: "error".into(),
+            }
+        );
+
+        // Generic webhook: header values are masked; a masked header the
+        // stored channel lacks is dropped, not sent as "********".
+        let mut headers = HashMap::new();
+        headers.insert("X-Api-Key".to_string(), "k3y".to_string());
+        let wh = ChannelConfig::Webhook {
+            url: "https://example.org/hook".into(),
+            method: "POST".into(),
+            headers,
+            auth: Some(WebhookAuth::BearerToken {
+                token: "t0k".into(),
+            }),
+        };
+        let shown = wh.masked();
+        let json = serde_json::to_string(&shown).unwrap();
+        assert!(!json.contains("k3y") && !json.contains("t0k"), "{json}");
+        let mut back = shown.clone();
+        if let ChannelConfig::Webhook { headers, .. } = &mut back {
+            headers.insert("X-Stray".into(), SECRET_MASK.into());
+            headers.insert("X-New".into(), "v".into());
+        }
+        back.unmask_from(&wh);
+        match back {
+            ChannelConfig::Webhook { headers, auth, .. } => {
+                assert_eq!(headers.get("X-Api-Key").map(String::as_str), Some("k3y"));
+                assert_eq!(headers.get("X-New").map(String::as_str), Some("v"));
+                assert!(!headers.contains_key("X-Stray"));
+                assert_eq!(
+                    auth,
+                    Some(WebhookAuth::BearerToken {
+                        token: "t0k".into()
+                    })
+                );
+            }
+            _ => unreachable!(),
+        }
     }
 }

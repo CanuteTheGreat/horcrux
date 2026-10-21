@@ -224,7 +224,11 @@ pub fn NotificationsPage() -> impl IntoView {
                 "discord" => NotificationChannelConfig::Discord {
                     webhook_url: form_discord_webhook_url.get(),
                     username: Some(form_discord_username.get()).filter(|s| !s.is_empty()),
-                    avatar_url: None,
+                    // The form has no avatar field: keep what's stored.
+                    avatar_url: match &channel.config {
+                        NotificationChannelConfig::Discord { avatar_url, .. } => avatar_url.clone(),
+                        _ => None,
+                    },
                 },
                 "pagerduty" => NotificationChannelConfig::PagerDuty {
                     integration_key: form_pagerduty_routing_key.get(),
@@ -235,7 +239,13 @@ pub fn NotificationsPage() -> impl IntoView {
                     url: form_webhook_url.get(),
                     method: form_webhook_method.get(),
                     headers: parse_headers(&form_webhook_headers.get()),
-                    auth: None,
+                    // The form has no auth fields: send back what the API gave us
+                    // (masked; the server keeps the stored secret). Sending
+                    // None here erased the channel's token on every edit.
+                    auth: match &channel.config {
+                        NotificationChannelConfig::Webhook { auth, .. } => auth.clone(),
+                        _ => None,
+                    },
                 },
                 _ => {
                     set_error_message.set(Some("Unknown channel type".to_string()));
@@ -374,10 +384,15 @@ pub fn NotificationsPage() -> impl IntoView {
             }
             NotificationChannelConfig::PagerDuty {
                 integration_key,
-                routing_key: _,
+                routing_key,
                 severity,
             } => {
-                set_form_pagerduty_routing_key.set(integration_key.clone());
+                // API-created channels may carry only the routing key.
+                set_form_pagerduty_routing_key.set(if integration_key.is_empty() {
+                    routing_key.clone()
+                } else {
+                    integration_key.clone()
+                });
                 set_form_pagerduty_severity.set(severity.clone());
             }
             NotificationChannelConfig::Webhook {

@@ -4335,7 +4335,7 @@ async fn list_notification_channels(
     State(state): State<Arc<AppState>>,
 ) -> Json<Vec<NotificationChannel>> {
     let channels = state.alert_manager.list_notification_channels().await;
-    Json(channels)
+    Json(channels.iter().map(NotificationChannel::masked).collect())
 }
 
 async fn add_notification_channel(
