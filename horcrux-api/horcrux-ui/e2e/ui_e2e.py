@@ -810,6 +810,40 @@ def storage_volume_checks(page, vid):
     page.goto(f"{BASE}/vms/create")
     expect(page.locator("#vm-create-disk0-storage option", has_text="e2e-ui-pool")).to_have_count(1, timeout=30000)
 
+    # ---- Create VM: "Add disk" rows, disk1 on the pool -----------------------
+    # (the first click used to loop forever re-rendering the rows and crash
+    # the tab; edits in one row must survive adding/removing others)
+    page.locator(".form-group", has_text="VM Name").locator("input").fill("e2e-ui-multidisk")
+    page.locator(".form-group", has_text="Memory (MB)").locator("input").fill("512")
+    page.locator(".form-group", has_text="Disk Size (GB)").locator("input").fill("10")
+    page.locator("#vm-create-add-disk").click()
+    expect(page.locator(".vm-create-disk")).to_have_count(1, timeout=10000)
+    disk1 = page.locator(".vm-create-disk[data-disk='1']")
+    expect(page.locator("#vm-create-disk1-storage option", has_text="e2e-ui-pool")).to_have_count(1)
+    page.select_option("#vm-create-disk1-storage", pid)
+    disk1.locator(".vm-create-disk-size").fill("1")
+    disk1.locator(".vm-create-disk-size").dispatch_event("change")
+    page.select_option("#vm-create-disk1-bus", "scsi")
+    # a second row, removed again: disk1 keeps its pool, size and bus
+    page.locator("#vm-create-add-disk").click()
+    expect(page.locator(".vm-create-disk")).to_have_count(2, timeout=10000)
+    page.locator(".vm-create-disk[data-disk='2']").get_by_role("button", name="Remove").click()
+    expect(page.locator(".vm-create-disk")).to_have_count(1, timeout=10000)
+    expect(page.locator("#vm-create-disk1-storage")).to_have_value(pid)
+    expect(disk1.locator(".vm-create-disk-size")).to_have_value("1")
+    expect(page.locator("#vm-create-disk1-bus")).to_have_value("scsi")
+    page.locator("button[type=submit]").click()
+    page.wait_for_url(f"{BASE}/vms", timeout=120000)
+    mvm = next(v for v in api_get("/api/vms", tok) if v["name"] == "e2e-ui-multidisk")
+    assert len(mvm["disks"]) == 2, mvm["disks"]
+    md = mvm["disks"][1]
+    assert md.get("storage") == pid and md["path"].startswith(pool_dir + "/"), md
+    assert md["size_gb"] == 1 and md["disk_type"] == "scsi", md
+    assert os.path.isfile(md["path"]), md
+    assert not mvm["disks"][0].get("storage") and not mvm["disks"][0]["path"].startswith(pool_dir), mvm["disks"][0]
+    _req("DELETE", f"/api/vms/{mvm['id']}", tok)
+    assert not os.path.exists(md["path"]), md
+
     # Clean up: detach + delete the pool disk, then the pool.
     _req("DELETE", f"/api/vms/{vid}/disks/{n_disks}?delete_file=true", tok)
     assert not os.path.exists(d["path"])

@@ -32,7 +32,15 @@ pub fn VmCreate() -> impl IntoView {
         disk_type: "virtio".into(),
         ..Default::default()
     });
-    let extra_disks = create_rw_signal(Vec::<horcrux_common::VmDisk>::new());
+    // Each extra disk is its own signal, so editing a row only touches that
+    // row; the list signal changes only on Add/Remove. (Syncing row edits
+    // back into one Vec<VmDisk> from a per-row effect re-rendered the rows,
+    // which re-created the effects, which wrote again - an endless loop that
+    // crashed the tab on the first "Add disk".)
+    let extra_disks = create_rw_signal(Vec::<RwSignal<horcrux_common::VmDisk>>::new());
+    // Row signals are created in the click handler; own them by this
+    // component so they are disposed with the page.
+    let owner = Owner::current();
     let (host_options, set_host_options) = create_signal(None::<api::VmHostOptions>);
     spawn_local(async move {
         if let Ok(o) = api::get_vm_host_options().await {
@@ -92,7 +100,9 @@ pub fn VmCreate() -> impl IntoView {
             disks: if matches!(hypervisor.get(), VmHypervisor::Qemu) {
                 let mut d0 = disk0.get();
                 d0.size_gb = disk_size.get();
-                std::iter::once(d0).chain(extra_disks.get()).collect()
+                std::iter::once(d0)
+                    .chain(extra_disks.get().iter().map(|d| d.get()))
+                    .collect()
             } else {
                 Vec::new()
             },
@@ -267,13 +277,8 @@ pub fn VmCreate() -> impl IntoView {
                             <super::vm_hardware::DiskOptionFields disk=disk0 prefix="vm-create-disk0"/>
                             <super::vm_hardware::DiskStorageSelect disk=disk0 options=host_options id="vm-create-disk0-storage"/>
                         </div>
-                        {move || extra_disks.get().into_iter().enumerate().map(|(i, d)| {
+                        {move || extra_disks.get().into_iter().enumerate().map(|(i, row)| {
                             let n = i + 1;
-                            let row = create_rw_signal(d);
-                            create_effect(move |_| {
-                                let v = row.get();
-                                extra_disks.update(|ds| if let Some(x) = ds.get_mut(i) { if *x != v { *x = v } });
-                            });
                             view! {
                                 <div class="form-row vm-create-disk" data-disk=n>
                                     <strong>{format!("disk{n}")}</strong>
@@ -289,11 +294,18 @@ pub fn VmCreate() -> impl IntoView {
                         }).collect_view()}
                         <button type="button" id="vm-create-add-disk" class="btn btn-sm btn-secondary"
                             disabled={move || extra_disks.get().len() + 1 >= horcrux_common::MAX_VM_DISKS}
-                            on:click=move |_| extra_disks.update(|ds| ds.push(horcrux_common::VmDisk {
-                                size_gb: 8,
-                                disk_type: "virtio".into(),
-                                ..Default::default()
-                            }))>"Add disk"</button>
+                            on:click=move |_| {
+                                let disk = horcrux_common::VmDisk {
+                                    size_gb: 8,
+                                    disk_type: "virtio".into(),
+                                    ..Default::default()
+                                };
+                                let row = match owner {
+                                    Some(o) => with_owner(o, || create_rw_signal(disk)),
+                                    None => create_rw_signal(disk),
+                                };
+                                extra_disks.update(|ds| ds.push(row));
+                            }>"Add disk"</button>
                     </fieldset>
                 </Show>
 
