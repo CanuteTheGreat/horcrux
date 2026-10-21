@@ -339,7 +339,9 @@ Content-Type: application/json
 **Status Codes**:
 - `201 Created` - VM created successfully
 - `409 CONFLICT` - VM with this name already exists
-- `422 VALIDATION_ERROR` - Invalid configuration
+- `422 VALIDATION_ERROR` - Invalid configuration, including an `id` that is
+  not 1-64 ASCII letters, digits and `-` (not starting with `-`); the ID
+  names the VM's disk files and pidfile
 
 ### Start VM
 
@@ -658,7 +660,7 @@ Content-Type: application/json
 
 **Parameters**:
 - `name` (required) - Name for the cloned VM
-- `id` (optional) - VM ID for the clone (auto-generated if not provided)
+- `id` (optional) - VM ID for the clone (auto-generated if not provided); same rules as a Create VM `id` (422 otherwise)
 - `mode` (optional) - Clone mode: `full` (independent copy) or `linked` (COW snapshot, QCOW2 only) (default: `full`)
 - `description` (optional) - Description for the clone
 - `start` (optional) - Start the VM after cloning (default: false)

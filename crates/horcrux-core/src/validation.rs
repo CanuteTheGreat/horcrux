@@ -75,16 +75,29 @@ pub fn validate_vm_name(name: &str) -> ValidationResult<()> {
     Ok(())
 }
 
-/// VM ID validation
+/// Longest VM ID accepted (it becomes part of file names: `<id>.qcow2`,
+/// `<id>-disk<N>.qcow2`, `/var/run/horcrux-vm-<id>.pid`).
+pub const MAX_VM_ID_LENGTH: usize = 64;
+
+/// VM ID validation. The ID names the VM's disk files in the storage
+/// directory and its pidfile, so it must be a single plain file-name
+/// component: ASCII letters, digits and `-`, not starting with `-`.
 pub fn validate_vm_id(id: &str) -> ValidationResult<()> {
     if id.is_empty() {
         return Err(Error::Validation("VM ID cannot be empty".to_string()));
     }
 
-    // VM IDs are typically numeric or alphanumeric
-    if !id.chars().all(|c| c.is_alphanumeric() || c == '-') {
+    if id.len() > MAX_VM_ID_LENGTH {
+        return Err(Error::Validation(format!(
+            "VM ID too long (max {} characters)",
+            MAX_VM_ID_LENGTH
+        )));
+    }
+
+    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') || id.starts_with('-') {
         return Err(Error::Validation(
-            "VM ID can only contain alphanumeric characters and hyphens".to_string(),
+            "VM ID can only contain letters, digits and hyphens, and cannot start with a hyphen"
+                .to_string(),
         ));
     }
 
@@ -594,6 +607,40 @@ mod tests {
             long.as_str(),
         ] {
             let r = validate_volume_name(bad);
+            assert!(
+                matches!(r, Err(Error::Validation(_))),
+                "{bad:?} should be refused, got {r:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_vm_id() {
+        for ok in [
+            "100",
+            "vm-1792544756",
+            "test-vm-1",
+            "persist-vm-0a1b2c3d",
+            "6f1c7e1e-3b8e-4c43-9d3c-0d6e0b9a3f11",
+        ] {
+            assert!(validate_vm_id(ok).is_ok(), "{ok:?} should be accepted");
+        }
+        let long = "a".repeat(MAX_VM_ID_LENGTH + 1);
+        for bad in [
+            "",
+            "../../etc/cron.d/x",
+            "/etc/passwd",
+            "a/b",
+            "..",
+            "a.b",
+            "a_b",
+            "-rf",
+            "a b",
+            "a\nb",
+            "vm\u{e9}",
+            long.as_str(),
+        ] {
+            let r = validate_vm_id(bad);
             assert!(
                 matches!(r, Err(Error::Validation(_))),
                 "{bad:?} should be refused, got {r:?}"

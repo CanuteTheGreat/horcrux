@@ -2260,7 +2260,10 @@ async fn clone_vm_cross_node(
     let cloned_vm = manager
         .clone_cross_node(&source_vm, cross_node_config)
         .await
-        .map_err(|e| ApiError::Internal(format!("Cross-node clone failed: {}", e)))?;
+        .map_err(|e| match e {
+            horcrux_common::Error::Validation(_) => ApiError::from(e),
+            e => ApiError::Internal(format!("Cross-node clone failed: {}", e)),
+        })?;
 
     // Save to database
     state

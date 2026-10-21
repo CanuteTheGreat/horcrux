@@ -77,6 +77,12 @@ impl CrossNodeCloneManager {
             source_vm.id, config.source_node, config.target_node
         );
 
+        // The new ID names the disk files on the target node and goes into
+        // the remote commands: refuse anything but a plain name up front.
+        if let Some(id) = &config.clone_options.id {
+            crate::validation::validate_vm_id(id)?;
+        }
+
         // Verify SSH connectivity
         self.verify_ssh_connectivity(&config).await?;
 

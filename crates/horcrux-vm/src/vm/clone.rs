@@ -71,6 +71,8 @@ impl VmCloneManager {
 
         // Generate new VM ID if not provided
         let new_vm_id = options.id.unwrap_or_else(|| Uuid::new_v4().to_string());
+        // It names the clone's disk files (`<storage>/<id>.qcow2`).
+        crate::validation::validate_vm_id(&new_vm_id)?;
 
         // Ensure storage directory exists
         tokio::fs::create_dir_all(&self.storage_path)

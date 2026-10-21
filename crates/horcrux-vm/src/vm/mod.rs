@@ -223,6 +223,10 @@ impl VmManager {
                     .to_string(),
             ));
         }
+        // The ID names the disk files (`<storage>/<id>.qcow2`) and the
+        // pidfile: `../../etc/x` would write a disk image outside the
+        // storage directory.
+        crate::validation::validate_vm_id(&config.id)?;
         let mut vms = self.vms.write().await;
 
         // Check if VM with this ID already exists
@@ -652,6 +656,23 @@ mod tests {
         let manager = VmManager::new();
         let vms = manager.list_vms().await;
         assert_eq!(vms.len(), 0);
+    }
+
+    /// A VM ID that is not a plain file-name component is refused before
+    /// any disk is created (it names `<storage>/<id>.qcow2`).
+    #[tokio::test]
+    async fn create_vm_refuses_path_like_ids() {
+        let manager = VmManager::new();
+        for id in ["../../etc/cron.d/evil", "/tmp/evil", "a/b", "-x", ""] {
+            let cfg = create_test_vm_config(id, "evil");
+            match manager.create_vm(cfg).await {
+                Err(horcrux_common::Error::Validation(msg)) => {
+                    assert!(msg.contains("VM ID"), "{id:?}: {msg}")
+                }
+                other => panic!("{id:?} must be refused, got {other:?}"),
+            }
+        }
+        assert!(manager.list_vms().await.is_empty());
     }
 
     /// USE=-qemu/-lxd/-incus: creating a VM on a hypervisor that was not
