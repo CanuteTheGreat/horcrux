@@ -1827,7 +1827,10 @@ mod tests {
             .await
             .expect("a stale default-directory image is recreated (needs qemu-img)");
         assert_eq!(made.disk_path, default_disk);
-        assert_eq!(QemuManager::virtual_size(&default_disk).await.unwrap(), 1 << 30);
+        assert_eq!(
+            QemuManager::virtual_size(&default_disk).await.unwrap(),
+            1 << 30
+        );
     }
 
     #[test]
