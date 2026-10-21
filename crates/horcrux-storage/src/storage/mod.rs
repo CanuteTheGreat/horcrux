@@ -61,6 +61,26 @@ pub fn fs_capacity_gb(path: &str) -> Option<(u64, u64)> {
     ))
 }
 
+/// How the manager measures a pool's filesystem: `fs_capacity_gb`
+/// (tests substitute a fake to pin or move the numbers).
+pub type CapacityProbe = fn(&str) -> Option<(u64, u64)>;
+
+/// A statvfs on a hung NFS/CIFS/GlusterFS mount can block for minutes:
+/// past this the pool keeps its last known numbers.
+const CAPACITY_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Pools whose capacity is the filesystem's (statvfs on the pool path).
+fn measured_by_statvfs(t: &StorageType) -> bool {
+    matches!(
+        t,
+        StorageType::Directory
+            | StorageType::Nfs
+            | StorageType::Cifs
+            | StorageType::GlusterFs
+            | StorageType::BtrFs
+    )
+}
+
 /// Defence in depth: every backend re-checks each name it joins onto a pool
 /// path with the one shared validator (`validation::validate_volume_name`),
 /// so a volume or snapshot can never be created/deleted outside its pool
@@ -194,6 +214,11 @@ pub struct StorageManager {
     iscsi_lun_counters: Arc<RwLock<HashMap<String, u32>>>,
     /// Durable copy of `pools`; `None` for a purely in-memory manager.
     store: Option<ConfigStore>,
+    /// Measures filesystem-backed pools (statvfs).
+    capacity_probe: CapacityProbe,
+    /// Pools whose last measurement hasn't returned yet (hung mount): not
+    /// probed again until it does, so blocked threads don't pile up.
+    measuring: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 }
 
 impl Default for StorageManager {
@@ -218,6 +243,8 @@ impl StorageManager {
             s3: s3::S3Manager::new(),
             iscsi_lun_counters: Arc::new(RwLock::new(HashMap::new())),
             store: None,
+            capacity_probe: fs_capacity_gb,
+            measuring: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         }
     }
 
@@ -234,7 +261,7 @@ impl StorageManager {
                 .load_values::<StoragePool>(kinds::STORAGE_POOL)
                 .await?
             {
-                Self::refresh_capacity(&mut pool);
+                Self::refresh_capacity(mgr.capacity_probe, &mut pool);
                 pools.insert(pool.id.clone(), pool);
             }
             tracing::info!("Loaded {} storage pool(s) from database", pools.len());
@@ -243,27 +270,87 @@ impl StorageManager {
         Ok(mgr)
     }
 
+    /// Use `probe` instead of statvfs to measure pools (tests).
+    pub fn with_capacity_probe(mut self, probe: CapacityProbe) -> Self {
+        self.capacity_probe = probe;
+        self
+    }
+
     /// Measure real capacity for filesystem-backed pools.
-    fn refresh_capacity(pool: &mut StoragePool) {
-        if matches!(
-            pool.storage_type,
-            StorageType::Directory | StorageType::Nfs | StorageType::Cifs | StorageType::BtrFs
-        ) {
-            if let Some((total, available)) = fs_capacity_gb(&pool.path) {
+    fn refresh_capacity(probe: CapacityProbe, pool: &mut StoragePool) {
+        if measured_by_statvfs(&pool.storage_type) {
+            if let Some((total, available)) = probe(&pool.path) {
                 pool.total = total;
                 pool.available = available;
             }
         }
     }
 
-    /// List all storage pools
+    /// Re-measure filesystem-backed pools (all, or just `only`) so lists
+    /// and space checks see the space actually free now - capacity used to
+    /// be measured only at pool add and API start, so a pool filled since
+    /// still showed (and accepted volumes against) its old free space.
+    /// statvfs runs off the async workers with a timeout: a pool whose
+    /// mount doesn't answer keeps its last numbers.
+    async fn refresh_pools(&self, only: Option<&str>) {
+        let targets: Vec<(String, String)> = {
+            let pools = self.pools.read().await;
+            pools
+                .values()
+                .filter(|p| measured_by_statvfs(&p.storage_type))
+                .filter(|p| only.is_none_or(|id| p.id == id))
+                .map(|p| (p.id.clone(), p.path.clone()))
+                .collect()
+        };
+        let deadline = tokio::time::Instant::now() + CAPACITY_PROBE_TIMEOUT;
+        let mut running = Vec::new();
+        for (id, path) in targets {
+            {
+                let mut busy = self.measuring.lock().unwrap_or_else(|e| e.into_inner());
+                if !busy.insert(id.clone()) {
+                    continue; // the previous measurement is still stuck
+                }
+            }
+            let probe = self.capacity_probe;
+            let measuring = self.measuring.clone();
+            let key = id.clone();
+            let task = tokio::task::spawn_blocking(move || {
+                let r = probe(&path);
+                measuring
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&key);
+                r
+            });
+            running.push((id, task));
+        }
+        for (id, task) in running {
+            match tokio::time::timeout_at(deadline, task).await {
+                Ok(Ok(Some((total, available)))) => {
+                    if let Some(p) = self.pools.write().await.get_mut(&id) {
+                        p.total = total;
+                        p.available = available;
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => tracing::warn!(
+                    "Storage pool {id}: capacity check timed out (mount not answering); \
+                     keeping the last known numbers"
+                ),
+            }
+        }
+    }
+
+    /// List all storage pools (filesystem pools freshly measured)
     pub async fn list_pools(&self) -> Vec<StoragePool> {
+        self.refresh_pools(None).await;
         let pools = self.pools.read().await;
         pools.values().cloned().collect()
     }
 
-    /// Get a specific storage pool
+    /// Get a specific storage pool (freshly measured)
     pub async fn get_pool(&self, id: &str) -> Result<StoragePool> {
+        self.refresh_pools(Some(id)).await;
         let pools = self.pools.read().await;
         pools
             .get(id)
@@ -334,7 +421,7 @@ impl StorageManager {
         // was), so every volume create in a directory pool failed with
         // "Not enough space ... Available: 0GB".
         let mut pool = pool;
-        Self::refresh_capacity(&mut pool);
+        Self::refresh_capacity(self.capacity_probe, &mut pool);
 
         config_store::put_opt(&self.store, kinds::STORAGE_POOL, &pool.id, &pool).await?;
         let pool_clone = pool.clone();
@@ -366,6 +453,8 @@ impl StorageManager {
         size_gb: u64,
     ) -> Result<String> {
         check_names(&[volume_name])?;
+        // The space check below must see the space free now.
+        self.refresh_pools(Some(pool_id)).await;
         let pools = self.pools.read().await;
         let pool = pools.get(pool_id).ok_or_else(|| {
             horcrux_common::Error::NotFound(format!("Storage pool {} not found", pool_id))
@@ -664,6 +753,8 @@ impl StorageManager {
         new_size_gb: u64,
     ) -> Result<()> {
         check_names(&[volume_name])?;
+        // The grow check below must see the space free now.
+        self.refresh_pools(Some(pool_id)).await;
         let pool = self.get_pool_or_404(pool_id).await?;
         let gb = 1024 * 1024 * 1024;
         let size_arg = format!("{new_size_gb}G");
@@ -898,6 +989,118 @@ mod tests {
         (nums.next().unwrap(), nums.next().unwrap())
     }
 
+    /// A manager whose pools keep the capacity a test sets (no statvfs).
+    fn pinned() -> StorageManager {
+        StorageManager::new().with_capacity_probe(|_| None)
+    }
+
+    /// Fake filesystem for `moving_capacity`: (total, available) GB.
+    static FAKE_TOTAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    static FAKE_AVAIL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    fn fake_fs(_: &str) -> Option<(u64, u64)> {
+        use std::sync::atomic::Ordering::SeqCst;
+        Some((FAKE_TOTAL.load(SeqCst), FAKE_AVAIL.load(SeqCst)))
+    }
+
+    /// Pool capacity is re-measured on every list/get and before each
+    /// space check (it used to be measured only at pool add / API start,
+    /// so a pool that filled up afterwards kept accepting volumes and the
+    /// Storage page showed the old free space); GlusterFS pools are
+    /// measured too; block pools keep their numbers.
+    #[tokio::test]
+    async fn moving_capacity() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let d = scratch("moving-cap");
+        let m = StorageManager::new().with_capacity_probe(fake_fs);
+        FAKE_TOTAL.store(10, SeqCst);
+        FAKE_AVAIL.store(5, SeqCst);
+        let p = m
+            .add_pool(pool("mc", StorageType::Directory, d.to_str().unwrap()))
+            .await
+            .unwrap();
+        assert_eq!((p.total, p.available), (10, 5));
+
+        // The filesystem fills up behind Horcrux's back.
+        FAKE_AVAIL.store(1, SeqCst);
+        assert_eq!(m.get_pool("mc").await.unwrap().available, 1);
+        let listed = m.list_pools().await;
+        assert_eq!((listed[0].total, listed[0].available), (10, 1));
+        FAKE_AVAIL.store(2, SeqCst);
+        // create_volume checks against the space free now: 2 GB fits, 3 not.
+        assert!(matches!(
+            m.create_volume("mc", "big", 3).await,
+            Err(horcrux_common::Error::InvalidConfig(_))
+        ));
+        assert!(!d.join("big.qcow2").exists());
+        m.create_volume("mc", "v1", 1).await.unwrap();
+        // Grow: re-measured before the check too.
+        FAKE_AVAIL.store(0, SeqCst);
+        assert!(matches!(
+            m.resize_volume("mc", "v1", 2).await,
+            Err(horcrux_common::Error::InvalidConfig(_))
+        ));
+        FAKE_AVAIL.store(4, SeqCst);
+        m.resize_volume("mc", "v1", 2).await.unwrap();
+
+        // GlusterFS pools are filesystem pools: measured like the rest.
+        let g = scratch("moving-cap-gluster");
+        m.pools.write().await.insert(
+            "g".into(),
+            pool("g", StorageType::GlusterFs, g.to_str().unwrap()),
+        );
+        assert_eq!(m.get_pool("g").await.unwrap().available, 4);
+        let mut gp = pool("g2", StorageType::GlusterFs, g.to_str().unwrap());
+        StorageManager::refresh_capacity(fake_fs, &mut gp);
+        assert_eq!((gp.total, gp.available), (10, 4));
+
+        // Block pools (ZFS/LVM/Ceph/iSCSI) and S3 aren't statvfs'd.
+        for t in [
+            StorageType::Zfs,
+            StorageType::Lvm,
+            StorageType::Ceph,
+            StorageType::Iscsi,
+            StorageType::S3,
+        ] {
+            let mut bp = pool("b", t.clone(), "tank/vms");
+            bp.available = 7;
+            m.pools.write().await.insert("b".into(), bp.clone());
+            assert_eq!(m.get_pool("b").await.unwrap().available, 7, "{t:?}");
+            StorageManager::refresh_capacity(fake_fs, &mut bp);
+            assert_eq!(bp.available, 7, "{t:?}");
+        }
+        let _ = std::fs::remove_dir_all(&d);
+        let _ = std::fs::remove_dir_all(&g);
+    }
+
+    /// A pool whose mount doesn't answer keeps its last numbers, the call
+    /// returns after the probe timeout, and the stuck pool is not probed
+    /// again while its first measurement still hangs.
+    #[tokio::test]
+    async fn hung_mount_keeps_last_capacity() {
+        static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        fn hang(_: &str) -> Option<(u64, u64)> {
+            CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_secs(4));
+            Some((99, 99))
+        }
+        let m = StorageManager::new().with_capacity_probe(hang);
+        let mut p = pool("h", StorageType::Nfs, "/mnt/hung");
+        p.available = 3;
+        m.pools.write().await.insert("h".into(), p);
+        let t0 = std::time::Instant::now();
+        assert_eq!(m.get_pool("h").await.unwrap().available, 3);
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(4),
+            "timed out, not blocked"
+        );
+        assert_eq!(m.list_pools().await[0].available, 3);
+        assert_eq!(
+            CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "not re-probed"
+        );
+    }
+
     #[test]
     fn capacity_matches_df() {
         // A filesystem with a few GB at least (the build tree), so the GB
@@ -945,7 +1148,7 @@ mod tests {
     #[tokio::test]
     async fn volumes_respect_available_space_and_pool_state() {
         let d = scratch("vol");
-        let m = StorageManager::new();
+        let m = pinned();
         let mut p = pool("v", StorageType::Directory, d.to_str().unwrap());
         p.available = 2;
         m.pools.write().await.insert("v".into(), p);
@@ -1010,7 +1213,7 @@ mod tests {
         let d = root.join("pool");
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(root.join("victim.qcow2"), b"keep me").unwrap();
-        let m = StorageManager::new();
+        let m = pinned();
         let mut p = pool("t", StorageType::Directory, d.to_str().unwrap());
         p.available = 100;
         m.pools.write().await.insert("t".into(), p);
@@ -1136,7 +1339,7 @@ mod tests {
     #[tokio::test]
     async fn directory_volumes_list_resize_and_delete() {
         let d = scratch("vols");
-        let m = StorageManager::new();
+        let m = pinned();
         let mut p = pool("v", StorageType::Directory, d.to_str().unwrap());
         p.available = 10;
         m.pools.write().await.insert("v".into(), p);
@@ -1401,7 +1604,7 @@ mod tests {
     async fn resize_to_same_size_or_exactly_the_free_space_is_allowed() {
         let gb = 1024 * 1024 * 1024;
         let d = scratch("resize-edge");
-        let m = StorageManager::new();
+        let m = pinned();
         let mut p = pool("r", StorageType::Directory, d.to_str().unwrap());
         p.available = 10;
         m.pools.write().await.insert("r".into(), p);
