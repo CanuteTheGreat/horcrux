@@ -361,6 +361,62 @@ pub fn validate_volume_name(name: &str) -> ValidationResult<()> {
     Ok(())
 }
 
+/// Longest SDN (CNI) network name / network policy id accepted.
+pub const MAX_CNI_NAME_LENGTH: usize = 64;
+
+/// SDN (CNI) network name, network policy id/namespace, CNI container id:
+/// the check every CNI path builder runs before joining a name onto the
+/// CNI conf dir (`<conf_dir>/<name>.conflist`), host-local's lease dir
+/// (`/var/lib/cni/networks/<name>`) or an nftables comment.
+///
+/// Same rule as [`validate_volume_name`] (the CNI spec's own network-name
+/// pattern is `^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$`): 1..=64 of `[A-Za-z0-9._-]`,
+/// starting with a letter, digit or `_`, no `..`. So `../../tmp/x`, `a/b`
+/// and absolute paths are refused instead of writing a conflist anywhere
+/// on the host as root.
+pub fn validate_cni_name(what: &str, name: &str) -> ValidationResult<()> {
+    if name.is_empty() {
+        return Err(Error::Validation(format!("{} cannot be empty", what)));
+    }
+    if name.len() > MAX_CNI_NAME_LENGTH {
+        return Err(Error::Validation(format!(
+            "{} too long (max {} characters)",
+            what, MAX_CNI_NAME_LENGTH
+        )));
+    }
+    if !name
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    {
+        return Err(Error::Validation(format!(
+            "Invalid {} {:?}: only letters, digits, '.', '_' and '-' are allowed",
+            what.to_lowercase(),
+            name
+        )));
+    }
+    let first = name.as_bytes()[0];
+    if !(first.is_ascii_alphanumeric() || first == b'_') {
+        return Err(Error::Validation(format!(
+            "Invalid {} {:?}: must start with a letter, digit or '_'",
+            what.to_lowercase(),
+            name
+        )));
+    }
+    if name.contains("..") {
+        return Err(Error::Validation(format!(
+            "Invalid {} {:?}: '..' is not allowed",
+            what.to_lowercase(),
+            name
+        )));
+    }
+    Ok(())
+}
+
+/// SDN (CNI) network name (see [`validate_cni_name`]).
+pub fn validate_cni_network_name(name: &str) -> ValidationResult<()> {
+    validate_cni_name("Network name", name)
+}
+
 /// Description validation
 pub fn validate_description(description: &str) -> ValidationResult<()> {
     if description.len() > MAX_DESCRIPTION_LENGTH {
@@ -610,6 +666,34 @@ mod tests {
             assert!(
                 matches!(r, Err(Error::Validation(_))),
                 "{bad:?} should be refused, got {r:?}"
+            );
+        }
+    }
+
+    /// Daily QA 2026-10-21: `{"name":"../../../tmp/qa-sdn-escape"}` made root
+    /// write /tmp/qa-sdn-escape.conflist. CNI names follow the volume rule.
+    #[test]
+    fn cni_network_names_cannot_leave_the_conf_dir() {
+        for ok in ["horcrux-default", "qa-sdn", "net_1", "a.b", "6f1c7e1e-3b8e"] {
+            assert!(validate_cni_network_name(ok).is_ok(), "{ok:?}");
+        }
+        let long = "n".repeat(MAX_CNI_NAME_LENGTH + 1);
+        for bad in [
+            "",
+            "..",
+            "../../../tmp/qa-sdn-escape",
+            "a/b",
+            "/etc/cni/net.d/x",
+            ".hidden",
+            "-x",
+            "a b",
+            "x..y",
+            "a\"b",
+            long.as_str(),
+        ] {
+            assert!(
+                matches!(validate_cni_network_name(bad), Err(Error::Validation(_))),
+                "{bad:?} should be refused"
             );
         }
     }

@@ -2944,6 +2944,7 @@ pub async fn delete_kubernetes_secret(
 pub mod backup;
 pub mod dashboards;
 pub mod s3;
+pub mod sdn;
 
 /// Snapshot-schedule retention (used by the snapshot pages).
 #[derive(Debug, Clone, Serialize, Deserialize)]

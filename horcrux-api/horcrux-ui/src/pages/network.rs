@@ -21,23 +21,10 @@ pub struct FirewallRule {
     pub position: i32,
 }
 
-/// Horcrux SDN CNI network (backed by /api/cni/networks — real backend in
-/// horcrux-api/src/sdn/cni.rs, previously implemented but never surfaced in
-/// this UI; the "Networks" tab below called a non-existent /api/networks
-/// endpoint instead).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CniNetwork {
-    pub name: String,
-    pub plugin_type: String,
-    pub bridge: Option<String>,
-    pub ipam: CniIpam,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CniIpam {
-    pub subnet: Option<String>,
-    pub gateway: Option<String>,
-}
+// Horcrux SDN CNI networks and their attachments: types and calls live in
+// api/sdn.rs (checked against the live API by tests/api_contract.rs).
+use crate::api::sdn as sdn_api;
+use crate::api::sdn::{CniAttachment, CniNetwork};
 
 #[derive(Debug, Clone, Serialize)]
 struct CreateCniNetworkReq {
@@ -91,6 +78,15 @@ pub fn NetworkManagement() -> impl IntoView {
     let (show_create_rule, set_show_create_rule) = create_signal(false);
     let (show_create_cni, set_show_create_cni) = create_signal(false);
     let (show_create_policy, set_show_create_policy) = create_signal(false);
+    let (cni_attachments, set_cni_attachments) = create_signal(Vec::<CniAttachment>::new());
+    // Network the "Attach container" dialog is open for.
+    let (attach_target, set_attach_target) = create_signal(None::<String>);
+    let (attach_candidates, set_attach_candidates) =
+        create_signal(Vec::<crate::api::Container>::new());
+    let attach_ct_ref: NodeRef<html::Select> = create_node_ref();
+    let attach_if_ref: NodeRef<html::Input> = create_node_ref();
+    let attach_ns_ref: NodeRef<html::Input> = create_node_ref();
+    let attach_labels_ref: NodeRef<html::Input> = create_node_ref();
 
     let rule_name_ref: NodeRef<html::Input> = create_node_ref();
     let rule_priority_ref: NodeRef<html::Input> = create_node_ref();
@@ -124,6 +120,9 @@ pub fn NetworkManagement() -> impl IntoView {
             // Fetch Horcrux SDN CNI networks (real backend, previously unused by any page)
             if let Ok(data) = fetch_json::<Vec<CniNetwork>>("/api/cni/networks").await {
                 set_cni_networks.set(data);
+            }
+            if let Ok(data) = sdn_api::list_attachments().await {
+                set_cni_attachments.set(data);
             }
 
             // Fetch Horcrux SDN network policies (real backend, previously unused by any page)
@@ -239,6 +238,88 @@ pub fn NetworkManagement() -> impl IntoView {
 
     // Create SDN CNI network (surfaces horcrux-api/src/sdn/cni.rs, which has
     // a real, tested, routed API but no UI anywhere in the app until now)
+    let refresh_cni = move || {
+        spawn_local(async move {
+            if let Ok(data) = sdn_api::list_networks().await {
+                set_cni_networks.set(data);
+            }
+            if let Ok(data) = sdn_api::list_attachments().await {
+                set_cni_attachments.set(data);
+            }
+        });
+    };
+
+    // "Attach container" dialog: running Horcrux containers to pick from.
+    let open_attach = move |network: String| {
+        set_attach_target.set(Some(network));
+        spawn_local(async move {
+            match crate::api::get_containers().await {
+                Ok(list) => set_attach_candidates.set(
+                    list.into_iter()
+                        .filter(|c| c.status.eq_ignore_ascii_case("running"))
+                        .collect(),
+                ),
+                Err(e) => set_error.set(Some(format!("Could not list containers: {}", e.message))),
+            }
+        });
+    };
+
+    let attach_container = move |_| {
+        let Some(network_name) = attach_target.get_untracked() else {
+            return;
+        };
+        let container_id = attach_ct_ref.get().map(|el| el.value()).unwrap_or_default();
+        if container_id.is_empty() {
+            set_error.set(Some("Pick a running container to attach".to_string()));
+            return;
+        }
+        let opt = |v: Option<String>| v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let req = sdn_api::AttachRequest {
+            container_id,
+            network_name,
+            interface_name: opt(attach_if_ref.get().map(|el| el.value())),
+            namespace: opt(attach_ns_ref.get().map(|el| el.value())),
+            labels: sdn_api::parse_labels(
+                &attach_labels_ref
+                    .get()
+                    .map(|el| el.value())
+                    .unwrap_or_default(),
+            ),
+        };
+        spawn_local(async move {
+            match sdn_api::attach(&req).await {
+                Ok(a) => {
+                    set_attach_target.set(None);
+                    set_notice.set(Some(format!(
+                        "Attached {} to {} as {} ({})",
+                        a.container_id, a.network_name, a.interface_name, a.ip_address
+                    )));
+                    refresh_cni();
+                }
+                Err(e) => set_error.set(Some(format!("Attach failed: {}", e.message))),
+            }
+        });
+    };
+
+    let detach_container = move |container_id: String, network_name: String| {
+        spawn_local(async move {
+            let req = sdn_api::DetachRequest {
+                container_id,
+                network_name,
+            };
+            match sdn_api::detach(&req).await {
+                Ok(_) => {
+                    set_notice.set(Some(format!(
+                        "Detached {} from {}",
+                        req.container_id, req.network_name
+                    )));
+                    refresh_cni();
+                }
+                Err(e) => set_error.set(Some(format!("Detach failed: {}", e.message))),
+            }
+        });
+    };
+
     let create_cni_network = move |_| {
         let name = cni_name_ref.get().map(|el| el.value()).unwrap_or_default();
         if name.is_empty() {
@@ -596,12 +677,19 @@ pub fn NetworkManagement() -> impl IntoView {
                                             <th>"Bridge"</th>
                                             <th>"Subnet"</th>
                                             <th>"Gateway"</th>
+                                            <th>"Attached"</th>
                                             <th>"Actions"</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {move || cni_networks.get().into_iter().map(|net| {
                                             let name_del = net.name.clone();
+                                            let name_att = net.name.clone();
+                                            let attached = cni_attachments
+                                                .get()
+                                                .iter()
+                                                .filter(|a| a.network_name == net.name)
+                                                .count();
                                             view! {
                                                 <tr>
                                                     <td>{&net.name}</td>
@@ -609,10 +697,62 @@ pub fn NetworkManagement() -> impl IntoView {
                                                     <td>{net.bridge.clone().unwrap_or_else(|| "-".to_string())}</td>
                                                     <td><code>{net.ipam.subnet.clone().unwrap_or_else(|| "-".to_string())}</code></td>
                                                     <td><code>{net.ipam.gateway.clone().unwrap_or_else(|| "-".to_string())}</code></td>
+                                                    <td class="cni-attached-count">{attached}</td>
                                                     <td class="actions">
+                                                        <button class="btn btn-sm btn-primary cni-attach-btn"
+                                                                on:click=move |_| open_attach(name_att.clone())>
+                                                            "Attach container"
+                                                        </button>
                                                         <button class="btn btn-sm btn-danger"
                                                                 on:click=move |_| delete_cni_network(name_del.clone())>
                                                             "Delete"
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            }
+                                        }).collect_view()}
+                                    </tbody>
+                                </table>
+                            }.into_view()
+                        }}
+
+                        <h3>"Attached containers"</h3>
+                        {move || if cni_attachments.get().is_empty() {
+                            view! {
+                                <p class="empty-hint">"No container is attached to an SDN network. Use \"Attach container\" on a network above."</p>
+                            }.into_view()
+                        } else {
+                            view! {
+                                <table class="data-table cni-attachments-table">
+                                    <thead>
+                                        <tr>
+                                            <th>"Container"</th>
+                                            <th>"Network"</th>
+                                            <th>"Interface"</th>
+                                            <th>"IP"</th>
+                                            <th>"MAC"</th>
+                                            <th>"Policy namespace / labels"</th>
+                                            <th>"Actions"</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {move || cni_attachments.get().into_iter().map(|a| {
+                                            let ct = a.container_id.clone();
+                                            let nw = a.network_name.clone();
+                                            let mut labels: Vec<String> = a.labels.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+                                            labels.sort();
+                                            view! {
+                                                <tr>
+                                                    <td>{&a.container_id}</td>
+                                                    <td>{&a.network_name}</td>
+                                                    <td>{&a.interface_name}</td>
+                                                    <td><code>{&a.ip_address}</code></td>
+                                                    <td><code>{&a.mac_address}</code></td>
+                                                    <td>{format!("{} {}", a.namespace, labels.join(", "))}</td>
+                                                    <td class="actions">
+                                                        <button class="btn btn-sm btn-danger cni-detach-btn"
+                                                                on:click=move |_| detach_container(ct.clone(), nw.clone())>
+                                                            "Detach"
                                                         </button>
                                                     </td>
                                                 </tr>
@@ -627,6 +767,49 @@ pub fn NetworkManagement() -> impl IntoView {
             } else {
                 view! { <div></div> }.into_view()
             }}
+
+            // Attach a container to an SDN network
+            {move || attach_target.get().map(|network| view! {
+                <div class="modal-overlay" on:click=move |_| set_attach_target.set(None)>
+                    <div class="modal" id="cni-attach-modal" on:click=|e| e.stop_propagation()>
+                        <div class="modal-header">
+                            <h3>{format!("Attach a container to {}", network)}</h3>
+                            <button class="btn-close" on:click=move |_| set_attach_target.set(None)>"x"</button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="form-group">
+                                <label>"Container (running)"</label>
+                                <select node_ref=attach_ct_ref class="form-control" id="cni-attach-container">
+                                    {move || attach_candidates.get().into_iter().map(|c| {
+                                        let label = format!("{} ({}, {})", c.name, c.id, c.runtime);
+                                        view! { <option value={c.id.clone()}>{label}</option> }
+                                    }).collect_view()}
+                                </select>
+                                {move || attach_candidates.get().is_empty().then(|| view! {
+                                    <p class="form-hint">"No running container. Start one on the Containers page first."</p>
+                                })}
+                            </div>
+                            <div class="form-group">
+                                <label>"Interface name in the container"</label>
+                                <input node_ref=attach_if_ref type="text" class="form-control" placeholder="net0 (first free netN)"/>
+                            </div>
+                            <div class="form-group">
+                                <label>"Policy namespace"</label>
+                                <input node_ref=attach_ns_ref type="text" class="form-control" placeholder="default"/>
+                            </div>
+                            <div class="form-group">
+                                <label>"Labels (for network policy selectors)"</label>
+                                <input node_ref=attach_labels_ref type="text" class="form-control" placeholder="app=web, tier=frontend"/>
+                            </div>
+                            <p class="form-hint">"VMs are not CNI endpoints: once a container has brought this network's bridge up, give a VM a NIC on that bridge (VM > Hardware > Network)."</p>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-secondary" on:click=move |_| set_attach_target.set(None)>"Cancel"</button>
+                            <button class="btn btn-primary" id="cni-attach-submit" on:click=attach_container>"Attach"</button>
+                        </div>
+                    </div>
+                </div>
+            })}
 
             // SDN Network Policies Tab (horcrux-api/src/sdn/policy.rs — same
             // previously-stranded-code gap as the CNI tab above)

@@ -3573,3 +3573,146 @@ async fn dashboards_round_trip_and_panels_query_real_metrics() {
     let (code, _) = get_raw(&c, &token, &format!("/monitoring/dashboards/{}", d.id)).await;
     assert_eq!(code, 404);
 }
+
+/// Networking > SDN: CNI networks, attachments (the UI's container picker
+/// body), detach and the refusals the page shows. The CI Test job has no
+/// CNI plugins, so the real attach runs in tests/sdn_cni_e2e.sh, which sets
+/// HORCRUX_CONTRACT_SDN_NETNS to a real network namespace and runs this
+/// test against its server.
+#[tokio::test]
+async fn sdn_cni_networks_and_attachments_read_into_ui_types() {
+    use reqwest::Method;
+    let c = client();
+    let token = login(&c).await;
+    let net = format!("contract-sdn-{}", std::process::id() % 100000);
+    let _ = send_json(
+        &c,
+        &token,
+        Method::DELETE,
+        &format!("/cni/networks/{net}"),
+        None,
+    )
+    .await;
+
+    // The page's create form body; a bad subnet and a traversal name are 400s.
+    let (code, body) = post(
+        &c,
+        &token,
+        "/cni/networks",
+        json!({"name": net, "plugin_type": "bridge", "bridge": "ctsdn0",
+               "subnet": "10.252.9.0/24", "gateway": "10.252.9.1"}),
+    )
+    .await;
+    assert_eq!(code, 200, "create: {body}");
+    let created: api::sdn::CniNetwork = serde_json::from_value(body).expect("UI CniNetwork");
+    assert_eq!(created.ipam.subnet.as_deref(), Some("10.252.9.0/24"));
+    for bad in [
+        json!({"name": "../../../tmp/contract-escape", "plugin_type": "bridge", "subnet": "10.252.8.0/24"}),
+        json!({"name": "contract-bad", "plugin_type": "bridge", "subnet": "not-a-cidr"}),
+        json!({"name": "contract-bad", "plugin_type": "bridge", "subnet": "10.252.8.0/24", "gateway": "10.9.9.9"}),
+    ] {
+        let (code, body) = post(&c, &token, "/cni/networks", bad.clone()).await;
+        assert_eq!(code, 400, "{bad} -> {body}");
+    }
+    let (code, _) = post(
+        &c,
+        &token,
+        "/cni/networks",
+        json!({"name": net, "plugin_type": "bridge", "subnet": "10.252.9.0/24"}),
+    )
+    .await;
+    assert_eq!(code, 409, "duplicate network name");
+
+    let nets: Vec<api::sdn::CniNetwork> = fetch(&c, &token, "/cni/networks").await;
+    assert!(nets.iter().any(|n| n.name == net));
+    let _: Vec<api::sdn::CniAttachment> = fetch(&c, &token, "/cni/attachments").await;
+
+    // Picker body for a container that doesn't exist: 404, nothing recorded.
+    let req = api::sdn::AttachRequest {
+        container_id: "contract-no-such-ct".into(),
+        network_name: net.clone(),
+        ..Default::default()
+    };
+    let (code, body) = post(
+        &c,
+        &token,
+        "/cni/attach",
+        serde_json::to_value(&req).unwrap(),
+    )
+    .await;
+    assert_eq!(code, 404, "attach unknown container: {body}");
+
+    if let Ok(netns) = std::env::var("HORCRUX_CONTRACT_SDN_NETNS") {
+        // Real bridge + host-local plugins (sdn_cni_e2e.sh).
+        let (code, body) = post(
+            &c,
+            &token,
+            "/cni/attach",
+            json!({"container_id": "contract-ns", "network_name": net, "netns_path": netns,
+                   "labels": {"app": "contract"}}),
+        )
+        .await;
+        assert_eq!(code, 200, "real attach: {body}");
+        let a: api::sdn::CniAttachment = serde_json::from_value(body).expect("UI CniAttachment");
+        assert!(a.ip_address.starts_with("10.252.9."), "{a:?}");
+        assert_eq!(a.interface_name, "net0");
+        let list: Vec<api::sdn::CniAttachment> = fetch(&c, &token, "/cni/attachments").await;
+        assert!(list
+            .iter()
+            .any(|x| x.container_id == "contract-ns" && x.network_name == net));
+        let (code, body) = send_json(
+            &c,
+            &token,
+            Method::DELETE,
+            &format!("/cni/networks/{net}"),
+            None,
+        )
+        .await;
+        assert_eq!(code, 409, "delete while attached: {body}");
+        let det = api::sdn::DetachRequest {
+            container_id: "contract-ns".into(),
+            network_name: net.clone(),
+        };
+        let (code, body) = post(
+            &c,
+            &token,
+            "/cni/detach",
+            serde_json::to_value(&det).unwrap(),
+        )
+        .await;
+        assert_eq!(code, 200, "detach: {body}");
+    } else {
+        eprintln!("HORCRUX_CONTRACT_SDN_NETNS unset: real CNI attach runs in sdn_cni_e2e.sh");
+    }
+    let det = api::sdn::DetachRequest {
+        container_id: "contract-ns".into(),
+        network_name: net.clone(),
+    };
+    let (code, _) = post(
+        &c,
+        &token,
+        "/cni/detach",
+        serde_json::to_value(&det).unwrap(),
+    )
+    .await;
+    assert_eq!(code, 404, "detach of something not attached");
+
+    let (code, body) = send_json(
+        &c,
+        &token,
+        Method::DELETE,
+        &format!("/cni/networks/{net}"),
+        None,
+    )
+    .await;
+    assert_eq!(code, 200, "delete: {body}");
+    let (code, _) = send_json(
+        &c,
+        &token,
+        Method::DELETE,
+        "/cni/networks/..%2F..%2Ftmp%2Fx",
+        None,
+    )
+    .await;
+    assert!(code == 400 || code == 404, "traversal delete -> {code}");
+}

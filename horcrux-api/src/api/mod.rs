@@ -19,6 +19,7 @@ pub mod notifications;
 pub mod prometheus_export;
 #[cfg(feature = "s3-gateway")]
 pub mod s3_gateway;
+pub mod sdn_cni;
 pub mod storage_volumes;
 pub mod tls;
 pub mod vm_hw;
