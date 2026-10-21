@@ -112,6 +112,35 @@ async fn used_by(state: &AppState, location: &str) -> Option<String> {
         .map(|vm| format!("{} ({})", vm.name, vm.id))
 }
 
+/// 409 if the volume is a VM's disk, or the base image (anywhere in the
+/// backing chain) of a linked clone's disk: deleting or rewriting it
+/// would leave those VMs unbootable ("Could not open backing file").
+/// Same check as deleting a VM or a template with linked clones.
+async fn refuse_in_use(
+    state: &AppState,
+    name: &str,
+    location: &str,
+    what: &str,
+) -> Result<(), ApiError> {
+    if let Some(vm) = used_by(state, location).await {
+        return Err(ApiError::Conflict(format!(
+            "Volume {name} is a disk of VM {vm}; {what}"
+        )));
+    }
+    let dependents = state
+        .vm_manager
+        .vms_backed_by(std::path::Path::new(location))
+        .await;
+    if !dependents.is_empty() {
+        return Err(ApiError::Conflict(format!(
+            "Volume {name} is the base image of the linked clone(s) {}; delete those VMs \
+             first",
+            dependents.join(", ")
+        )));
+    }
+    Ok(())
+}
+
 async fn delete_volume(
     State(state): State<Arc<AppState>>,
     Path((pool_id, name)): Path<(String, String)>,
@@ -123,11 +152,7 @@ async fn delete_volume(
         .await
         .map_err(|_| ApiError::NotFound(format!("Storage pool {pool_id} not found")))?;
     let location = crate::storage::StorageManager::volume_location(&pool, &name).map_err(err)?;
-    if let Some(vm) = used_by(&state, &location).await {
-        return Err(ApiError::Conflict(format!(
-            "Volume {name} is a disk of VM {vm}; detach it from the VM first"
-        )));
-    }
+    refuse_in_use(&state, &name, &location, "detach it from the VM first").await?;
     state
         .storage_manager
         .delete_volume(&pool_id, &name)
@@ -154,11 +179,13 @@ async fn resize_volume(
         .await
         .map_err(|_| ApiError::NotFound(format!("Storage pool {pool_id} not found")))?;
     let location = crate::storage::StorageManager::volume_location(&pool, &name).map_err(err)?;
-    if let Some(vm) = used_by(&state, &location).await {
-        return Err(ApiError::Conflict(format!(
-            "Volume {name} is a disk of VM {vm}; grow it on the VM's Hardware page"
-        )));
-    }
+    refuse_in_use(
+        &state,
+        &name,
+        &location,
+        "grow it on the VM's Hardware page",
+    )
+    .await?;
     state
         .storage_manager
         .resize_volume(&pool_id, &name, req.size)

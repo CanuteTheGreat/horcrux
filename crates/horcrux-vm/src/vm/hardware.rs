@@ -449,6 +449,24 @@ impl VmManager {
         if index >= disks.len() {
             return Err(Error::NotFound(format!("VM {id} has no disk{index}")));
         }
+        if delete_file {
+            // Deleting the image under a linked clone (an overlay whose
+            // backing chain reaches it) leaves that clone unbootable.
+            let path = disks[index].path.clone();
+            let dependents = self
+                .linked_dependents(&vms, "", std::path::Path::new(&path))
+                .await;
+            if !dependents.is_empty() {
+                return Err(Error::Conflict(format!(
+                    "disk{index} ({path}) is the base image of the linked clone(s) {}; \
+                     detach it without deleting the file, or delete those VMs first",
+                    dependents.join(", ")
+                )));
+            }
+        }
+        let vm = vms
+            .get_mut(id)
+            .ok_or_else(|| Error::VmNotFound(id.to_string()))?;
         let removed = disks.remove(index);
         vm.disks = disks;
         let config = vm.to_config();

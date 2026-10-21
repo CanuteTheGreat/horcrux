@@ -288,3 +288,130 @@ async fn vm_disks_can_live_on_a_storage_pool() {
     assert_eq!(list.as_array().unwrap().len(), 0, "{list}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A pool volume that is the base image of a linked clone's disk (the
+/// clone's overlay has it as backing file) can't be deleted or grown from
+/// the Storage page, and Detach with "delete file" can't remove it from
+/// the source VM either - both used to delete it and leave the clone
+/// unbootable ("Could not open backing file"). Once the clone is gone the
+/// volume can be deleted.
+#[tokio::test]
+async fn linked_clone_base_volumes_are_protected() {
+    let dir = scratch("vol-linked-base");
+    let mut srv = Server::new(&dir);
+    srv.start();
+    srv.wait_healthy().await;
+    let api = srv.api().await;
+    let pool_dir = dir.join("basepool");
+    std::fs::create_dir_all(&pool_dir).unwrap();
+    let pool = api
+        .ok(
+            reqwest::Method::POST,
+            "/storage/pools",
+            Some(json!({"name": "base", "storage_type": "directory",
+                        "path": pool_dir.to_string_lossy()})),
+        )
+        .await;
+    let pid = pool["id"].as_str().unwrap().to_string();
+
+    // lbase: disk0 in the VM directory, disk1 on the pool.
+    let (s, vm) = api
+        .post(
+            "/vms",
+            json!({"id": "lbase", "name": "lbase", "hypervisor": "qemu",
+            "architecture": "x86_64", "cpus": 1, "memory": 256, "disk_size": 1,
+            "status": "stopped", "display": {"protocol": "none"}}),
+        )
+        .await;
+    assert_eq!(s, 201, "create vm: {vm}");
+    let (s, vm) = api
+        .post(
+            "/vms/lbase/disks",
+            json!({"size_gb": 1, "bus": "virtio", "storage": pid}),
+        )
+        .await;
+    assert_eq!(s, 201, "add disk: {vm}");
+    let base = pool_dir.join("lbase-disk1.qcow2");
+    assert_eq!(vm["disks"][1]["path"], base.to_string_lossy().as_ref());
+
+    // Linked clone: its disk1 is an overlay on the pool volume.
+    let (s, clone) = api
+        .post(
+            "/vms/lbase/clone",
+            json!({"id": "lclone", "name": "lclone", "mode": "linked"}),
+        )
+        .await;
+    assert_eq!(s, 200, "linked clone: {clone}");
+    let (_, c) = api.get("/vms/lclone").await;
+    let overlay = c["disks"][1]["path"].as_str().unwrap().to_string();
+    let info = std::process::Command::new("qemu-img")
+        .args(["info", "--output=json", "-U", &overlay])
+        .output()
+        .unwrap();
+    let info: serde_json::Value = serde_json::from_slice(&info.stdout).unwrap();
+    let canon = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    assert_eq!(
+        info["full-backing-filename"]
+            .as_str()
+            .or_else(|| info["backing-filename"].as_str())
+            .map(|b| canon(std::path::Path::new(b))),
+        Some(canon(&base)),
+        "clone disk1 is backed by the pool volume: {info}"
+    );
+
+    // Detach from lbase deleting the file: refused, nothing changed.
+    let (s, r) = api
+        .call(
+            reqwest::Method::DELETE,
+            "/vms/lbase/disks/1?delete_file=true",
+            None,
+        )
+        .await;
+    assert_eq!(s, 409, "detach + delete a linked clone's base: {r}");
+    assert!(r.to_string().contains("lclone"), "{r}");
+    assert!(base.is_file());
+    let (_, vm) = api.get("/vms/lbase").await;
+    assert_eq!(vm["disks"].as_array().unwrap().len(), 2, "still attached");
+
+    // Detach keeping the file (the QA's path to an unowned base volume).
+    let (s, r) = api
+        .call(reqwest::Method::DELETE, "/vms/lbase/disks/1", None)
+        .await;
+    assert_eq!(s, 200, "detach keeping the file: {r}");
+    assert!(base.is_file());
+
+    // Storage page Delete / Grow on it: 409 naming the clone.
+    let (s, r) = api
+        .call(
+            reqwest::Method::DELETE,
+            &format!("/storage/pools/{pid}/volumes/lbase-disk1"),
+            None,
+        )
+        .await;
+    assert_eq!(s, 409, "delete a linked clone's base volume: {r}");
+    assert!(r.to_string().contains("lclone"), "{r}");
+    assert!(base.is_file(), "base volume kept");
+    let (s, r) = api
+        .post(
+            &format!("/storage/pools/{pid}/volumes/lbase-disk1/resize"),
+            json!({"size": 2}),
+        )
+        .await;
+    assert_eq!(s, 409, "grow a linked clone's base volume: {r}");
+    let ok = std::process::Command::new("qemu-img")
+        .args(["info", "-U", &overlay])
+        .status()
+        .unwrap();
+    assert!(ok.success(), "the clone's overlay still opens");
+
+    // Clone gone -> the volume is free to delete.
+    assert!((200..300).contains(&api.delete("/vms/lclone").await));
+    assert_eq!(
+        api.delete(&format!("/storage/pools/{pid}/volumes/lbase-disk1"))
+            .await,
+        200
+    );
+    assert!(!base.exists());
+    assert!((200..300).contains(&api.delete("/vms/lbase").await));
+    let _ = std::fs::remove_dir_all(&dir);
+}
