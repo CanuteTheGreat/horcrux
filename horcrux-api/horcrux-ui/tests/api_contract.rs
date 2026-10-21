@@ -3716,3 +3716,92 @@ async fn sdn_cni_networks_and_attachments_read_into_ui_types() {
     .await;
     assert!(code == 400 || code == 404, "traversal delete -> {code}");
 }
+
+/// Networking > SDN Policies: the create form's body, the enforcement
+/// banner, update, the enforced-chain view and delete, in the UI's types.
+/// (Real traffic being blocked is checked by tests/sdn_cni_e2e.sh.)
+#[tokio::test]
+async fn sdn_policies_read_into_ui_types() {
+    use reqwest::Method;
+    let c = client();
+    let token = login(&c).await;
+    let id = format!("contract-pol-{}", std::process::id() % 100000);
+    let _ = send_json(
+        &c,
+        &token,
+        Method::DELETE,
+        &format!("/network-policies/{id}"),
+        None,
+    )
+    .await;
+
+    let body = json!({
+        "id": id, "name": "contract deny", "namespace": "default",
+        "pod_selector": {"match_labels": {"app": "contract-none"}, "match_expressions": []},
+        "policy_types": ["Ingress"],
+        "ingress": [{"from": [{"PodSelector": {"match_labels": {"app": "web"}, "match_expressions": []}}],
+                     "ports": [{"protocol": "TCP", "port": 5432, "end_port": null}]}],
+        "egress": [], "enabled": true
+    });
+    let (code, resp) = post(&c, &token, "/network-policies", body.clone()).await;
+    assert_eq!(code, 200, "create: {resp}");
+    let r: api::sdn::PolicyChangeResponse =
+        serde_json::from_value(resp).expect("UI PolicyChangeResponse");
+    assert_eq!(r.enforcement.table, "bridge horcrux_netpol");
+    let (code, _) = post(&c, &token, "/network-policies", body.clone()).await;
+    assert_eq!(code, 409, "duplicate policy id");
+    let mut bad = body.clone();
+    bad["id"] = json!("../x");
+    let (code, _) = post(&c, &token, "/network-policies", bad).await;
+    assert_eq!(code, 400, "bad policy id");
+
+    let _: api::sdn::EnforcementStatus = fetch(&c, &token, "/network-policies/enforcement").await;
+    let (code, text) = send_json(
+        &c,
+        &token,
+        Method::POST,
+        "/network-policies/enforcement",
+        None,
+    )
+    .await;
+    assert_eq!(code, 200, "re-apply: {text}");
+    let _: api::sdn::EnforcementStatus = decode("re-apply", &text);
+
+    let mut upd = body.clone();
+    upd["name"] = json!("contract deny v2");
+    let (code, text) = send_json(
+        &c,
+        &token,
+        Method::PUT,
+        &format!("/network-policies/{id}"),
+        Some(upd),
+    )
+    .await;
+    assert_eq!(code, 200, "update: {text}");
+    let _: api::sdn::PolicyChangeResponse = decode("update", &text);
+    let got: Value = fetch(&c, &token, &format!("/network-policies/{id}")).await;
+    assert_eq!(got["name"], "contract deny v2");
+    // Selects no attachment here: no chains.
+    let view: Vec<String> = fetch(&c, &token, &format!("/network-policies/{id}/nftables")).await;
+    assert!(view.is_empty(), "{view:?}");
+
+    let (code, text) = send_json(
+        &c,
+        &token,
+        Method::DELETE,
+        &format!("/network-policies/{id}"),
+        None,
+    )
+    .await;
+    assert_eq!(code, 200, "delete: {text}");
+    let _: api::sdn::PolicyChangeResponse = decode("delete", &text);
+    let (code, _) = send_json(
+        &c,
+        &token,
+        Method::DELETE,
+        &format!("/network-policies/{id}"),
+        None,
+    )
+    .await;
+    assert_eq!(code, 404);
+}

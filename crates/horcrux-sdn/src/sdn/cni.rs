@@ -6,7 +6,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::process::Command;
+
+use crate::db::config_store::{self, kinds, ConfigStore};
+use crate::db::Database;
 
 /// CNI plugin configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -335,6 +339,12 @@ pub struct CniManager {
     cni_conf_dir: PathBuf,
     networks: HashMap<String, CniConfig>,
     attachments: HashMap<String, Vec<CniAttachment>>,
+    /// Durable copy of networks and attachments; `None` = in-memory only.
+    store: Option<ConfigStore>,
+}
+
+fn attachment_key(container_id: &str, network_name: &str) -> String {
+    format!("{}/{}", container_id, network_name)
 }
 
 impl CniManager {
@@ -344,7 +354,50 @@ impl CniManager {
             cni_conf_dir,
             networks: HashMap::new(),
             attachments: HashMap::new(),
+            store: None,
         }
+    }
+
+    /// CNI manager backed by the database: networks and attachments survive
+    /// an API restart (they used to be lost, leaving their conflists
+    /// orphaned in the conf dir and containers attached to networks
+    /// Horcrux no longer knew). Each stored network's conflist is written
+    /// again, so a missing or stale file is repaired at startup.
+    pub async fn with_database(
+        cni_bin_dir: PathBuf,
+        cni_conf_dir: PathBuf,
+        db: Arc<Database>,
+    ) -> Result<Self> {
+        let store = ConfigStore::new(&db);
+        let mut mgr = Self::new(cni_bin_dir, cni_conf_dir);
+        for (id, config) in store.load::<CniConfig>(kinds::CNI_NETWORK).await? {
+            if let Err(e) = validate_network(&config) {
+                tracing::warn!("Skipping stored CNI network {}: {}", id, e);
+                continue;
+            }
+            if let Err(e) = mgr.write_conflist(&config).await {
+                tracing::warn!("CNI network {}: conflist not rewritten: {}", id, e);
+            }
+            mgr.networks.insert(config.name.clone(), config);
+        }
+        let mut count = 0usize;
+        for att in store
+            .load_values::<CniAttachment>(kinds::CNI_ATTACHMENT)
+            .await?
+        {
+            mgr.attachments
+                .entry(att.container_id.clone())
+                .or_default()
+                .push(att);
+            count += 1;
+        }
+        tracing::info!(
+            "Loaded {} CNI network(s) and {} attachment(s) from database",
+            mgr.networks.len(),
+            count
+        );
+        mgr.store = Some(store);
+        Ok(mgr)
     }
 
     /// `<conf_dir>/<name>.conflist`, only for a valid network name: the
@@ -400,6 +453,12 @@ impl CniManager {
             )));
         }
         let conf_file = self.write_conflist(&config).await?;
+        if let Err(e) =
+            config_store::put_opt(&self.store, kinds::CNI_NETWORK, &config.name, &config).await
+        {
+            let _ = tokio::fs::remove_file(&conf_file).await;
+            return Err(e);
+        }
         self.networks.insert(config.name.clone(), config);
         tracing::info!("Created CNI network: {}", conf_file.display());
 
@@ -596,6 +655,22 @@ impl CniManager {
             labels,
         };
 
+        if let Err(e) = config_store::put_opt(
+            &self.store,
+            kinds::CNI_ATTACHMENT,
+            &attachment_key(container_id, network_name),
+            &attachment,
+        )
+        .await
+        {
+            // Not recorded durably: undo the plugin rather than leave an
+            // attachment that would be forgotten on the next restart.
+            let _ = self
+                .run_plugin("DEL", &network, container_id, interface_name, netns_path)
+                .await;
+            return Err(e);
+        }
+
         self.attachments
             .entry(container_id.to_string())
             .or_default()
@@ -685,6 +760,12 @@ impl CniManager {
             )));
         }
 
+        config_store::delete_opt(
+            &self.store,
+            kinds::CNI_ATTACHMENT,
+            &attachment_key(container_id, network_name),
+        )
+        .await?;
         if let Some(attachments) = self.attachments.get_mut(container_id) {
             attachments.retain(|a| a.network_name != network_name);
             if attachments.is_empty() {
@@ -777,6 +858,7 @@ impl CniManager {
             )));
         }
 
+        config_store::delete_opt(&self.store, kinds::CNI_NETWORK, name).await?;
         self.networks.remove(name);
 
         if conf_file.exists() {
@@ -1088,6 +1170,48 @@ mod tests {
         m.delete_network("qa-sdn").await.unwrap();
         assert!(m.get_network("qa-sdn").is_none());
         assert!(!dir.path().join("conf/qa-sdn.conflist").exists());
+    }
+
+    /// Daily QA 2026-10-21: networks were lost on an API restart (conflist
+    /// orphaned on disk). With the database they come back, with their
+    /// attachments, and a missing conflist is written again.
+    #[tokio::test]
+    async fn networks_and_attachments_survive_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}", dir.path().join("t.db").display());
+        let db = Arc::new(Database::new(&url).await.unwrap());
+        db.migrate().await.unwrap();
+        let log = dir.path().join("calls.log");
+        let bin = dir.path().join("bin");
+        let conf = dir.path().join("conf");
+        fake_plugin(&bin, &log, BRIDGE_ADD_RESULT);
+
+        let mut m = CniManager::with_database(bin.clone(), conf.clone(), db.clone())
+            .await
+            .unwrap();
+        m.create_network(net("qa-sdn")).await.unwrap();
+        m.create_network(net("qa-gone")).await.unwrap();
+        m.add_container("ct-a", "qa-sdn", "eth1", "/proc/self/ns/net")
+            .await
+            .unwrap();
+        m.delete_network("qa-gone").await.unwrap();
+        drop(m);
+        std::fs::remove_file(conf.join("qa-sdn.conflist")).unwrap();
+
+        let mut m = CniManager::with_database(bin, conf.clone(), db)
+            .await
+            .unwrap();
+        let names: Vec<String> = m.list_networks().into_iter().map(|n| n.name).collect();
+        assert_eq!(names, vec!["qa-sdn".to_string()]);
+        assert!(conf.join("qa-sdn.conflist").exists(), "conflist rewritten");
+        assert!(!conf.join("qa-gone.conflist").exists());
+        let atts = m.list_attachments("ct-a");
+        assert_eq!(atts.len(), 1);
+        assert_eq!(atts[0].netns_path, "/proc/self/ns/net");
+        // Still refused after the restart, and detach still works.
+        assert!(m.delete_network("qa-sdn").await.is_err());
+        m.del_container("ct-a", "qa-sdn", "", "").await.unwrap();
+        m.delete_network("qa-sdn").await.unwrap();
     }
 
     /// A result we can't use after a successful ADD is rolled back with DEL

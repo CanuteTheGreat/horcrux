@@ -21,6 +21,7 @@ pub mod fabric;
 pub mod ipam;
 pub mod ovs;
 pub mod policy;
+pub mod policy_nft;
 pub mod templates;
 pub mod vlan;
 pub mod vxlan;

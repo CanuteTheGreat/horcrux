@@ -335,6 +335,27 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Firewall apply (real nftables)"
           bash horcrux-api/tests/firewall_nft_e2e.sh target/debug/horcrux-api
 
+      - name: SDN networks + policies (real CNI plugins, real nftables)
+        # sdn_cni_e2e.sh runs the built API in a privileged sibling
+        # container with the real bridge/host-local CNI plugins: attaches
+        # network namespaces through the API, checks a deny-ingress policy
+        # really blocks traffic (bridge horcrux_netpol) and an allow rule
+        # lets its port through, that networks, attachments and policies
+        # survive an API restart and are re-enforced, that detach releases
+        # the IPAM leases, and runs the UI contract test's sdn_ part with a
+        # real netns to attach.
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "SDN networks + policies"
+          contract=$(cargo test --all-features --workspace --no-run --message-format=json 2>/dev/null \
+            | python3 -c 'import json,sys
+          for l in sys.stdin:
+              m = json.loads(l)
+              if m.get("reason") == "compiler-artifact" and m.get("executable") and "/api_contract-" in m["executable"]:
+                  print(m["executable"])' | tail -1)
+          echo "UI contract test binary: ${contract:-<none>}"
+          test -n "$contract"
+          bash horcrux-api/tests/sdn_cni_e2e.sh target/debug/horcrux-api "$contract"
+
       - name: VM networking + hardware (real taps, VLAN, PXE, live CD-ROM)
         # NET_ADMIN + /dev/net/tun sibling container with real QEMU: Host
         # Bridges API (create, re-create at start), ISO download, a VM NIC

@@ -10,8 +10,12 @@
 //!   netns default to the recorded ones; DEL releases the IPAM lease)
 //! - `POST /api/cni/check`, `GET /api/cni/attachments[/:container_id]`,
 //!   `GET /api/cni/capabilities/:plugin_type`
-//! - `/api/network-policies...` (list, create, get, delete, namespace list,
-//!   generated iptables/nftables text)
+//! - `/api/network-policies...` (list, create, get, update, delete,
+//!   namespace list, generated iptables text, the enforced nftables chains)
+//!   and `/api/network-policies/enforcement` (last install result; POST
+//!   installs again). Policies are enforced in nftables (`bridge
+//!   horcrux_netpol`, see `sdn::policy_nft`) after every policy or
+//!   attachment change and at startup.
 //!
 //! Every network name goes through `validation::validate_cni_network_name`
 //! here (400) and again in `CniManager`'s path builder.
@@ -55,8 +59,14 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(list_network_policies).post(create_network_policy),
         )
         .route(
+            "/api/network-policies/enforcement",
+            get(get_enforcement).post(reapply_enforcement),
+        )
+        .route(
             "/api/network-policies/:id",
-            get(get_network_policy).delete(delete_network_policy),
+            get(get_network_policy)
+                .put(update_network_policy)
+                .delete(delete_network_policy),
         )
         .route(
             "/api/network-policies/namespace/:namespace",
@@ -372,6 +382,8 @@ async fn attach_container_to_network(
         )
         .await
         .map_err(err)?;
+    drop(manager);
+    enforce_state(&state).await;
     Ok(Json(attachment))
 }
 
@@ -418,6 +430,7 @@ async fn detach_container_from_network(
         )
         .await
         .map_err(err)?;
+    enforce_state(&state).await;
     Ok(Json("Container detached from network"))
 }
 
@@ -489,25 +502,76 @@ async fn get_cni_plugin_capabilities(
 
 // Network Policy handlers
 
+/// Install the stored policies over the current attachments in nftables
+/// (`bridge horcrux_netpol`) and remember the outcome. Called after every
+/// policy or attachment change and at startup. Locks are taken one at a
+/// time (policies, then attachments), never nested.
+pub async fn enforce(
+    policies: &tokio::sync::RwLock<sdn::policy::NetworkPolicyManager>,
+    cni: &tokio::sync::RwLock<sdn::cni::CniManager>,
+) -> sdn::policy_nft::EnforcementStatus {
+    let list = policies.read().await.list_policies();
+    let endpoints = cni.read().await.all_attachments();
+    let status = sdn::policy_nft::apply(&list, &endpoints).await;
+    policies.write().await.set_enforcement(status.clone());
+    status
+}
+
+async fn enforce_state(state: &AppState) -> sdn::policy_nft::EnforcementStatus {
+    enforce(&state.network_policy_manager, &state.cni_manager).await
+}
+
+/// Reply of create/update/delete: what happened in the kernel too.
+#[derive(Debug, serde::Serialize)]
+pub struct PolicyChangeResponse {
+    pub message: String,
+    pub enforcement: sdn::policy_nft::EnforcementStatus,
+}
+
 async fn list_network_policies(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<sdn::policy::NetworkPolicy>>, ApiError> {
-    Ok(Json(
-        state.network_policy_manager.read().await.list_policies(),
-    ))
+    let mut list = state.network_policy_manager.read().await.list_policies();
+    list.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+    Ok(Json(list))
 }
 
 async fn create_network_policy(
     State(state): State<Arc<AppState>>,
-    Json(policy): Json<sdn::policy::NetworkPolicy>,
-) -> Result<Json<&'static str>, ApiError> {
+    Json(mut policy): Json<sdn::policy::NetworkPolicy>,
+) -> Result<Json<PolicyChangeResponse>, ApiError> {
+    if policy.id.trim().is_empty() {
+        policy.id = uuid::Uuid::new_v4().to_string();
+    }
     state
         .network_policy_manager
         .write()
         .await
-        .create_policy(policy)
+        .add_policy(policy)
+        .await
         .map_err(err)?;
-    Ok(Json("Network policy created"))
+    Ok(Json(PolicyChangeResponse {
+        message: "Network policy created".into(),
+        enforcement: enforce_state(&state).await,
+    }))
+}
+
+async fn update_network_policy(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(policy): Json<sdn::policy::NetworkPolicy>,
+) -> Result<Json<PolicyChangeResponse>, ApiError> {
+    state
+        .network_policy_manager
+        .write()
+        .await
+        .update_policy(&id, policy)
+        .await
+        .map_err(err)?;
+    Ok(Json(PolicyChangeResponse {
+        message: "Network policy updated".into(),
+        enforcement: enforce_state(&state).await,
+    }))
 }
 
 async fn get_network_policy(
@@ -527,14 +591,40 @@ async fn get_network_policy(
 async fn delete_network_policy(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-) -> Result<Json<&'static str>, ApiError> {
+) -> Result<Json<PolicyChangeResponse>, ApiError> {
     state
         .network_policy_manager
         .write()
         .await
-        .delete_policy(&id)
+        .remove_policy(&id)
+        .await
         .map_err(err)?;
-    Ok(Json("Network policy deleted"))
+    Ok(Json(PolicyChangeResponse {
+        message: "Network policy deleted".into(),
+        enforcement: enforce_state(&state).await,
+    }))
+}
+
+/// `GET /api/network-policies/enforcement`: last install result.
+async fn get_enforcement(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<sdn::policy_nft::EnforcementStatus>, ApiError> {
+    Ok(Json(
+        state
+            .network_policy_manager
+            .read()
+            .await
+            .enforcement()
+            .clone(),
+    ))
+}
+
+/// `POST /api/network-policies/enforcement`: install again (e.g. after the
+/// host's ruleset was flushed by hand).
+async fn reapply_enforcement(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<sdn::policy_nft::EnforcementStatus>, ApiError> {
+    Ok(Json(enforce_state(&state).await))
 }
 
 async fn list_policies_in_namespace(
@@ -563,17 +653,26 @@ async fn get_policy_iptables_rules(
     ))
 }
 
+/// The nftables chains this policy contributes to in the enforced table
+/// (`bridge horcrux_netpol`): one per selected endpoint and direction, its
+/// allow rules and the final drop. Empty when it selects no attachment.
 async fn get_policy_nftables_rules(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<String>>, ApiError> {
-    Ok(Json(
-        state
-            .network_policy_manager
-            .read()
-            .await
-            .generate_nftables_rules(&id),
-    ))
+    let (list, stateful) = {
+        let m = state.network_policy_manager.read().await;
+        if m.get_policy(&id).is_none() {
+            return Err(ApiError::NotFound(format!(
+                "Network policy {} not found",
+                id
+            )));
+        }
+        (m.list_policies(), m.enforcement().stateful)
+    };
+    let endpoints = state.cni_manager.read().await.all_attachments();
+    let rs = sdn::policy_nft::build_ruleset(&list, &endpoints, stateful);
+    Ok(Json(sdn::policy_nft::policy_view(&rs, &id)))
 }
 
 #[cfg(test)]

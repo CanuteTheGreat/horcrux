@@ -44,6 +44,11 @@ pub mod kinds {
     pub const NODE_IDENTITY: &str = "node_identity";
     pub const BACKUP_JOB: &str = "backup_job";
     pub const BACKUP: &str = "backup";
+    /// SDN CNI network definitions (their conflists are rewritten from these).
+    pub const CNI_NETWORK: &str = "cni_network";
+    /// Containers attached to CNI networks, keyed `container_id/network`.
+    pub const CNI_ATTACHMENT: &str = "cni_attachment";
+    pub const NETWORK_POLICY: &str = "network_policy";
 }
 
 /// Durable key/value store of JSON configuration documents.

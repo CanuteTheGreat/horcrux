@@ -457,6 +457,20 @@ def main():
         page.locator(".modal-footer").get_by_role("button", name="Create").click()
         expect(page.get_by_text(SDN_NET).first).to_be_visible(timeout=30000)
         assert any(n["name"] == SDN_NET for n in api_get("/api/cni/networks", token())), "CNI network not in API"
+        # Attach dialog: a picker of running containers (the real attach with
+        # CNI plugins is tests/sdn_cni_e2e.sh), and no attachments yet.
+        page.locator("tr", has_text=SDN_NET).get_by_role("button", name="Attach container").click()
+        expect(page.locator("#cni-attach-modal")).to_be_visible(timeout=10000)
+        running = [c["id"] for c in api_get("/api/containers", token()) or [] if c.get("status") == "running"]
+        if running:
+            expect(page.locator(f"#cni-attach-container option[value='{running[0]}']")).to_have_count(1, timeout=10000)
+        else:
+            expect(page.get_by_text("No running container")).to_be_visible(timeout=10000)
+        page.locator("#cni-attach-modal").get_by_role("button", name="Cancel").click()
+        expect(page.get_by_text("No container is attached to an SDN network")).to_be_visible(timeout=10000)
+        # Policies tab says whether the rules reached nftables.
+        page.get_by_role("button", name="SDN Policies").click()
+        expect(page.locator("#policy-enforcement")).to_be_visible(timeout=30000)
 
         # ---- firewall Apply really reaches the API -------------------------
         page.get_by_role("button", name="Firewall").click()

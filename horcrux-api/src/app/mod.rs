@@ -195,16 +195,22 @@ pub async fn run() -> anyhow::Result<()> {
     let webhook_manager = Arc::new(webhooks::WebhookManager::new());
     info!("Webhook manager initialized");
 
-    // Initialize CNI manager
-    let cni_manager = Arc::new(tokio::sync::RwLock::new(sdn::cni::CniManager::new(
-        horcrux_config.cni.bin_dir.clone(),
-        horcrux_config.cni.conf_dir.clone(),
-    )));
+    // Initialize CNI manager: networks and attachments come back from the
+    // database (their conflists are rewritten).
+    let cni_manager = Arc::new(tokio::sync::RwLock::new(
+        sdn::cni::CniManager::with_database(
+            horcrux_config.cni.bin_dir.clone(),
+            horcrux_config.cni.conf_dir.clone(),
+            database.clone(),
+        )
+        .await
+        .expect("Failed to load CNI networks"),
+    ));
 
     // Create default CNI network if CNI directories exist
     if horcrux_config.cni.enabled && horcrux_config.cni.bin_dir.exists() {
         match cni_manager.write().await.create_default_network().await {
-            Ok(_) => info!("CNI default network created"),
+            Ok(_) => info!("CNI default network ready"),
             Err(e) => tracing::warn!("Failed to create default CNI network: {}", e),
         }
     } else if !horcrux_config.cni.bin_dir.exists() {
@@ -214,10 +220,14 @@ pub async fn run() -> anyhow::Result<()> {
         );
     }
 
-    // Initialize Network Policy manager
+    // Initialize Network Policy manager (persisted) and install the stored
+    // policies in nftables (the kernel ruleset doesn't survive a reboot).
     let network_policy_manager = Arc::new(tokio::sync::RwLock::new(
-        sdn::policy::NetworkPolicyManager::new(),
+        sdn::policy::NetworkPolicyManager::with_database(database.clone())
+            .await
+            .expect("Failed to load network policies"),
     ));
+    api::sdn_cni::enforce(&network_policy_manager, &cni_manager).await;
     info!("Network policy manager initialized");
 
     // Initialize VM Snapshot manager

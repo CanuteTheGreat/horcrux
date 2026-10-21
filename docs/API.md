@@ -1162,166 +1162,140 @@ Authorization: Bearer <token>
 
 #### Attach Container to Network
 
-Attaches a container to a CNI network.
+Runs the network's CNI plugin (ADD) for a container and records the
+attachment. Give either a Horcrux container id (its network namespace is
+looked up from Docker/Podman/LXC/LXD/Incus; the container must be running)
+or a raw `netns_path` (`/proc/<pid>/ns/net` or `/run/netns/<name>`).
+`interface_name` defaults to the first free `netN`; `namespace` (default
+`default`) and `labels` are what network policies select on.
 
 ```http
 POST /api/cni/attach
-Authorization: Bearer <token>
+Authorization: Bearer ***
 Content-Type: application/json
 
 {
-  "container_id": "container-123",
+  "container_id": "web1",
   "network_name": "web-network",
-  "interface_name": "eth0"
+  "namespace": "default",
+  "labels": {"app": "web"}
 }
 ```
 
-**Response**:
+**Response** (409 if already attached, 404 for an unknown network or container):
 ```json
 {
-  "container_id": "container-123",
-  "network": "web-network",
-  "ip_address": "10.50.0.10",
-  "gateway": "10.50.0.1"
+  "container_id": "web1",
+  "network_name": "web-network",
+  "interface_name": "net0",
+  "ip_address": "10.50.0.2",
+  "mac_address": "6a:0b:3c:11:22:33",
+  "gateway": "10.50.0.1",
+  "netns_path": "/proc/4242/ns/net",
+  "guest": "web1",
+  "namespace": "default",
+  "labels": {"app": "web"}
 }
 ```
+
+`GET /api/cni/attachments` lists every attachment, `GET
+/api/cni/attachments/{container_id}` one container's. Deleting a network
+that still has attachments answers 409.
 
 #### Detach Container from Network
 
-Detaches a container from a CNI network.
+Runs the plugin's DEL with the recorded interface and namespace (this also
+releases the host-local IP lease) and forgets the attachment.
 
 ```http
 POST /api/cni/detach
-Authorization: Bearer <token>
+Authorization: Bearer ***
 Content-Type: application/json
 
 {
-  "container_id": "container-123",
-  "network_name": "web-network",
-  "interface_name": "eth0"
+  "container_id": "web1",
+  "network_name": "web-network"
 }
 ```
 
 ### Network Policies
 
-#### List Network Policies
+Kubernetes-style policies over CNI attachments. A policy selects the
+attachments in its `namespace` whose labels match `pod_selector`; for each
+direction in `policy_types` (default: Ingress, plus Egress when there are
+egress rules) only traffic matching one of its rules is allowed. They are
+enforced in the kernel in the nftables table `bridge horcrux_netpol`,
+rebuilt after every policy or attachment change and at startup; policies,
+networks and attachments are stored in the database.
 
-Lists all network policies.
+#### List Network Policies
 
 ```http
 GET /api/network-policies
-Authorization: Bearer <token>
-```
-
-**Response**:
-```json
-[
-  {
-    "id": "policy-1",
-    "name": "web-tier-policy",
-    "namespace": "production",
-    "pod_selector": {
-      "tier": "web"
-    },
-    "ingress": [
-      {
-        "from": [
-          {"pod_selector": {"tier": "frontend"}}
-        ],
-        "ports": [
-          {"protocol": "TCP", "port": 80}
-        ]
-      }
-    ],
-    "egress": [
-      {
-        "to": [
-          {"pod_selector": {"tier": "database"}}
-        ],
-        "ports": [
-          {"protocol": "TCP", "port": 5432}
-        ]
-      }
-    ]
-  }
-]
+Authorization: Bearer ***
 ```
 
 #### Create Network Policy
 
-Creates a new network policy (Kubernetes-style).
+`id` is generated when empty. Peers are `{"PodSelector": {...}}`,
+`{"NamespaceSelector": {...}}` or `{"IpBlock": {"cidr": "...", "except": []}}`.
 
 ```http
 POST /api/network-policies
-Authorization: Bearer <token>
+Authorization: Bearer ***
 Content-Type: application/json
 
 {
-  "name": "web-tier-policy",
-  "namespace": "production",
-  "pod_selector": {
-    "tier": "web"
-  },
+  "id": "db-from-web",
+  "name": "db only from web",
+  "namespace": "default",
+  "pod_selector": {"match_labels": {"app": "db"}, "match_expressions": []},
+  "policy_types": ["Ingress"],
   "ingress": [
     {
-      "from": [
-        {"pod_selector": {"tier": "frontend"}}
-      ],
-      "ports": [
-        {"protocol": "TCP", "port": 80}
-      ]
+      "from": [{"PodSelector": {"match_labels": {"app": "web"}, "match_expressions": []}}],
+      "ports": [{"protocol": "TCP", "port": 5432, "end_port": null}]
     }
   ],
-  "policy_types": ["Ingress", "Egress"]
+  "egress": [],
+  "enabled": true
 }
 ```
 
-**Response**:
+**Response** (create, `PUT /api/network-policies/{id}` and delete answer the same way):
 ```json
 {
-  "id": "policy-1",
-  "name": "web-tier-policy",
-  "message": "Network policy created successfully"
+  "message": "Network policy created",
+  "enforcement": {
+    "applied": true,
+    "table": "bridge horcrux_netpol",
+    "stateful": true,
+    "endpoints": 1,
+    "rules": 1,
+    "error": null,
+    "applied_at": "2026-10-21T13:05:47Z"
+  }
 }
 ```
 
-#### Get Network Policy
+`GET /api/network-policies/enforcement` returns the last `enforcement`
+result; `POST` to it installs the rules again.
 
-Gets details for a specific network policy.
+#### Get / Update / Delete Network Policy
 
 ```http
 GET /api/network-policies/{id}
-Authorization: Bearer <token>
-```
-
-#### Delete Network Policy
-
-Deletes a network policy.
-
-```http
+PUT /api/network-policies/{id}
 DELETE /api/network-policies/{id}
-Authorization: Bearer <token>
+Authorization: Bearer ***
 ```
 
-#### Get Policy iptables Rules
+#### Get Policy Rules
 
-Gets the generated iptables rules for a policy.
-
-```http
-GET /api/network-policies/{id}/iptables
-Authorization: Bearer <token>
-```
-
-**Response**:
-```json
-{
-  "policy_id": "policy-1",
-  "rules": [
-    "iptables -A INPUT -s 10.50.0.0/24 -p tcp --dport 80 -j ACCEPT",
-    "iptables -A OUTPUT -d 10.60.0.0/24 -p tcp --dport 5432 -j ACCEPT"
-  ]
-}
-```
+`GET /api/network-policies/{id}/nftables` lists the enforced chains this
+policy contributes to (one per selected attachment and direction: its allow
+rules and the final drop). `GET /api/network-policies/{id}/iptables` returns
+an equivalent iptables translation as text (not applied).
 
 ---
 

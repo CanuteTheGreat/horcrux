@@ -62,6 +62,30 @@ pub struct DetachRequest {
     pub network_name: String,
 }
 
+/// `GET /api/network-policies/enforcement` (and `enforcement` in the reply
+/// of a policy create/update/delete): did the rules reach nftables?
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EnforcementStatus {
+    pub applied: bool,
+    pub table: String,
+    pub stateful: bool,
+    pub endpoints: usize,
+    pub rules: usize,
+    pub error: Option<String>,
+    pub applied_at: Option<String>,
+}
+
+/// Reply of a policy create/update/delete.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PolicyChangeResponse {
+    pub message: String,
+    pub enforcement: EnforcementStatus,
+}
+
+pub async fn get_enforcement() -> Result<EnforcementStatus, ApiError> {
+    fetch_json("/network-policies/enforcement").await
+}
+
 pub async fn list_networks() -> Result<Vec<CniNetwork>, ApiError> {
     fetch_json("/cni/networks").await
 }

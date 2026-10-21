@@ -3,18 +3,52 @@
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
+
+use crate::db::config_store::{self, kinds, ConfigStore};
+use crate::db::Database;
 
 /// Network policy specification
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkPolicy {
     pub id: String,
     pub name: String,
+    #[serde(default = "default_namespace")]
     pub namespace: String,
+    #[serde(default)]
     pub pod_selector: LabelSelector,
+    /// Empty = Kubernetes' default: Ingress, plus Egress when there are
+    /// egress rules.
+    #[serde(default)]
     pub policy_types: Vec<PolicyType>,
+    #[serde(default)]
     pub ingress: Vec<IngressRule>,
+    #[serde(default)]
     pub egress: Vec<EgressRule>,
+    #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+fn default_namespace() -> String {
+    "default".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl NetworkPolicy {
+    /// The directions this policy restricts (see `policy_types`).
+    pub fn effective_types(&self) -> Vec<PolicyType> {
+        if !self.policy_types.is_empty() {
+            return self.policy_types.clone();
+        }
+        let mut t = vec![PolicyType::Ingress];
+        if !self.egress.is_empty() {
+            t.push(PolicyType::Egress);
+        }
+        t
+    }
 }
 
 /// Policy type (ingress or egress)
@@ -27,7 +61,9 @@ pub enum PolicyType {
 /// Label selector for pod matching
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LabelSelector {
+    #[serde(default)]
     pub match_labels: HashMap<String, String>,
+    #[serde(default)]
     pub match_expressions: Vec<LabelExpression>,
 }
 
@@ -50,14 +86,18 @@ pub enum LabelOperator {
 /// Ingress rule
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngressRule {
+    #[serde(default)]
     pub from: Vec<PeerSelector>,
+    #[serde(default)]
     pub ports: Vec<NetworkPolicyPort>,
 }
 
 /// Egress rule
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EgressRule {
+    #[serde(default)]
     pub to: Vec<PeerSelector>,
+    #[serde(default)]
     pub ports: Vec<NetworkPolicyPort>,
 }
 
@@ -95,12 +135,75 @@ pub struct NetworkPolicyManager {
     // Mapping from pod ID to (namespace, labels), used to evaluate peer
     // selectors (`from`/`to`) in is_connection_allowed()
     pod_metadata: HashMap<String, (String, HashMap<String, String>)>,
+    /// Durable copy of the policies; `None` = in-memory only.
+    store: Option<ConfigStore>,
+    /// Result of the last attempt to install the rules in nftables.
+    enforcement: super::policy_nft::EnforcementStatus,
 }
 
 impl Default for NetworkPolicyManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn bad(msg: String) -> horcrux_common::Error {
+    horcrux_common::Error::Validation(msg)
+}
+
+/// Whether `labels` satisfy `selector` (an empty selector selects all).
+pub fn selector_matches(selector: &LabelSelector, labels: &HashMap<String, String>) -> bool {
+    NetworkPolicyManager::new().matches_selector(selector, labels)
+}
+
+/// Check a policy before it is stored or turned into nftables rules: a safe
+/// id and namespace (they end up in nft comments), a name, CIDRs that parse
+/// (`except` inside its block), and sane ports.
+pub fn validate_policy(policy: &NetworkPolicy) -> Result<()> {
+    crate::validation::validate_cni_name("Policy id", &policy.id)?;
+    crate::validation::validate_cni_name("Namespace", &policy.namespace)?;
+    if policy.name.trim().is_empty() {
+        return Err(bad("Policy name cannot be empty".into()));
+    }
+    if policy.name.len() > 253 {
+        return Err(bad("Policy name too long (max 253 characters)".into()));
+    }
+    let peers = policy
+        .ingress
+        .iter()
+        .flat_map(|r| r.from.iter())
+        .chain(policy.egress.iter().flat_map(|r| r.to.iter()));
+    for peer in peers {
+        if let PeerSelector::IpBlock { cidr, except } = peer {
+            let (net, prefix) = super::cni::parse_cidr(cidr)?;
+            for e in except {
+                let (ex, _) = super::cni::parse_cidr(e)?;
+                if !super::cni::cidr_contains(net, prefix, ex) {
+                    return Err(bad(format!("except {} is not inside {}", e, cidr)));
+                }
+            }
+        }
+    }
+    let ports = policy
+        .ingress
+        .iter()
+        .flat_map(|r| r.ports.iter())
+        .chain(policy.egress.iter().flat_map(|r| r.ports.iter()));
+    for p in ports {
+        if p.port == Some(0) {
+            return Err(bad("Port 0 is not a valid port".into()));
+        }
+        if let Some(end) = p.end_port {
+            match p.port {
+                Some(start) if end >= start => {}
+                Some(start) => {
+                    return Err(bad(format!("end_port {} is below port {}", end, start)))
+                }
+                None => return Err(bad("end_port needs a port".into())),
+            }
+        }
+    }
+    Ok(())
 }
 
 impl NetworkPolicyManager {
@@ -110,16 +213,86 @@ impl NetworkPolicyManager {
             pod_policies: HashMap::new(),
             namespace_policies: HashMap::new(),
             pod_metadata: HashMap::new(),
+            store: None,
+            enforcement: Default::default(),
         }
     }
 
-    /// Create a network policy
+    /// Policy manager backed by the database: policies survive an API
+    /// restart (they used to be in memory only and silently vanished).
+    pub async fn with_database(db: Arc<Database>) -> Result<Self> {
+        let store = ConfigStore::new(&db);
+        let mut mgr = Self::new();
+        for policy in store
+            .load_values::<NetworkPolicy>(kinds::NETWORK_POLICY)
+            .await?
+        {
+            if let Err(e) = validate_policy(&policy) {
+                tracing::warn!("Skipping stored network policy {}: {}", policy.id, e);
+                continue;
+            }
+            mgr.create_policy(policy)?;
+        }
+        tracing::info!(
+            "Loaded {} network policy(ies) from database",
+            mgr.policies.len()
+        );
+        mgr.store = Some(store);
+        Ok(mgr)
+    }
+
+    /// Validate, refuse a duplicate id (409), store and add a policy.
+    pub async fn add_policy(&mut self, policy: NetworkPolicy) -> Result<()> {
+        validate_policy(&policy)?;
+        if self.policies.contains_key(&policy.id) {
+            return Err(horcrux_common::Error::AlreadyExists(format!(
+                "Network policy {} already exists",
+                policy.id
+            )));
+        }
+        config_store::put_opt(&self.store, kinds::NETWORK_POLICY, &policy.id, &policy).await?;
+        self.create_policy(policy)
+    }
+
+    /// Replace an existing policy (404 when unknown; the id can't change).
+    pub async fn update_policy(&mut self, id: &str, mut policy: NetworkPolicy) -> Result<()> {
+        if !self.policies.contains_key(id) {
+            return Err(horcrux_common::Error::NotFound(format!(
+                "Network policy {} not found",
+                id
+            )));
+        }
+        policy.id = id.to_string();
+        validate_policy(&policy)?;
+        config_store::put_opt(&self.store, kinds::NETWORK_POLICY, id, &policy).await?;
+        self.delete_policy(id)?;
+        self.create_policy(policy)
+    }
+
+    /// Remove a stored policy (404 when unknown).
+    pub async fn remove_policy(&mut self, id: &str) -> Result<()> {
+        if !self.policies.contains_key(id) {
+            return Err(horcrux_common::Error::NotFound(format!(
+                "Network policy {} not found",
+                id
+            )));
+        }
+        config_store::delete_opt(&self.store, kinds::NETWORK_POLICY, id).await?;
+        self.delete_policy(id)
+    }
+
+    /// Create a network policy (in memory; `add_policy` also validates and
+    /// stores it). An existing id is replaced.
     pub fn create_policy(&mut self, policy: NetworkPolicy) -> Result<()> {
         // Validate policy
         if policy.name.is_empty() {
             return Err(horcrux_common::Error::System(
                 "Policy name cannot be empty".to_string(),
             ));
+        }
+        if self.policies.contains_key(&policy.id) {
+            let id = policy.id.clone();
+            self.delete_policy(&id)?;
         }
 
         // Add to namespace index
@@ -508,6 +681,15 @@ impl NetworkPolicyManager {
 
     // Helper methods
 
+    /// Result of the last attempt to install the policies in nftables.
+    pub fn enforcement(&self) -> &super::policy_nft::EnforcementStatus {
+        &self.enforcement
+    }
+
+    pub fn set_enforcement(&mut self, status: super::policy_nft::EnforcementStatus) {
+        self.enforcement = status;
+    }
+
     fn matches_selector(&self, selector: &LabelSelector, labels: &HashMap<String, String>) -> bool {
         // Check match_labels
         for (key, value) in &selector.match_labels {
@@ -848,6 +1030,72 @@ mod tests {
         assert!(!rules
             .iter()
             .any(|r| r == "nft add rule inet horcrux policy_policy3 tcp dport 443 accept"));
+    }
+
+    /// Daily QA 2026-10-21: the policy list was empty after an API restart.
+    #[tokio::test]
+    async fn policies_survive_a_restart_and_are_validated() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}", dir.path().join("t.db").display());
+        let db = Arc::new(Database::new(&url).await.unwrap());
+        db.migrate().await.unwrap();
+        let mk = |id: &str| NetworkPolicy {
+            id: id.to_string(),
+            name: "qa-deny-ingress".to_string(),
+            namespace: "default".to_string(),
+            pod_selector: LabelSelector::default(),
+            policy_types: vec![PolicyType::Ingress],
+            ingress: vec![],
+            egress: vec![],
+            enabled: true,
+        };
+        let mut m = NetworkPolicyManager::with_database(db.clone())
+            .await
+            .unwrap();
+        m.add_policy(mk("p1")).await.unwrap();
+        m.add_policy(mk("p2")).await.unwrap();
+        assert!(matches!(
+            m.add_policy(mk("p1")).await,
+            Err(horcrux_common::Error::AlreadyExists(_))
+        ));
+        let mut changed = mk("p2");
+        changed.name = "renamed".into();
+        m.update_policy("p2", changed).await.unwrap();
+        m.remove_policy("p1").await.unwrap();
+        assert!(matches!(
+            m.remove_policy("p1").await,
+            Err(horcrux_common::Error::NotFound(_))
+        ));
+        for bad in ["../x", "a b", ""] {
+            assert!(m.add_policy(mk(bad)).await.is_err(), "{bad:?}");
+        }
+        let mut bad_cidr = mk("p3");
+        bad_cidr.ingress = vec![IngressRule {
+            from: vec![PeerSelector::IpBlock {
+                cidr: "not-a-cidr".into(),
+                except: vec![],
+            }],
+            ports: vec![],
+        }];
+        assert!(m.add_policy(bad_cidr).await.is_err());
+        let mut bad_port = mk("p4");
+        bad_port.ingress = vec![IngressRule {
+            from: vec![],
+            ports: vec![NetworkPolicyPort {
+                protocol: Protocol::TCP,
+                port: Some(90),
+                end_port: Some(80),
+            }],
+        }];
+        assert!(m.add_policy(bad_port).await.is_err());
+        drop(m);
+
+        let m = NetworkPolicyManager::with_database(db).await.unwrap();
+        let all = m.list_policies();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].id, "p2");
+        assert_eq!(all[0].name, "renamed");
+        assert_eq!(m.list_policies_in_namespace("default").len(), 1);
     }
 
     #[test]

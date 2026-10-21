@@ -106,6 +106,10 @@ pub fn NetworkManagement() -> impl IntoView {
     let policy_namespace_ref: NodeRef<html::Input> = create_node_ref();
     let policy_ingress_ref: NodeRef<html::Input> = create_node_ref();
     let policy_egress_ref: NodeRef<html::Input> = create_node_ref();
+    let policy_selector_ref: NodeRef<html::Input> = create_node_ref();
+    let policy_allow_from_ref: NodeRef<html::Input> = create_node_ref();
+    let policy_allow_port_ref: NodeRef<html::Input> = create_node_ref();
+    let (enforcement, set_enforcement) = create_signal(None::<sdn_api::EnforcementStatus>);
 
     // Fetch data on mount
     create_effect(move |_| {
@@ -128,6 +132,9 @@ pub fn NetworkManagement() -> impl IntoView {
             // Fetch Horcrux SDN network policies (real backend, previously unused by any page)
             if let Ok(data) = fetch_json::<Vec<NetworkPolicy>>("/api/network-policies").await {
                 set_net_policies.set(data);
+            }
+            if let Ok(s) = sdn_api::get_enforcement().await {
+                set_enforcement.set(Some(s));
             }
 
             set_loading.set(false);
@@ -245,6 +252,9 @@ pub fn NetworkManagement() -> impl IntoView {
             }
             if let Ok(data) = sdn_api::list_attachments().await {
                 set_cni_attachments.set(data);
+            }
+            if let Ok(s) = sdn_api::get_enforcement().await {
+                set_enforcement.set(Some(s));
             }
         });
     };
@@ -375,6 +385,9 @@ pub fn NetworkManagement() -> impl IntoView {
                     {
                         set_net_policies.set(data);
                     }
+                    if let Ok(s) = sdn_api::get_enforcement().await {
+                        set_enforcement.set(Some(s));
+                    }
                 }
                 Err(e) => set_error.set(Some(format!("Delete failed: {}", e.message))),
             }
@@ -416,28 +429,63 @@ pub fn NetworkManagement() -> impl IntoView {
             policy_types.push("Ingress".to_string());
         }
 
+        let selector = sdn_api::parse_labels(
+            &policy_selector_ref
+                .get()
+                .map(|el| el.value())
+                .unwrap_or_default(),
+        );
+        let allow_from = sdn_api::parse_labels(
+            &policy_allow_from_ref
+                .get()
+                .map(|el| el.value())
+                .unwrap_or_default(),
+        );
+        let allow_port = policy_allow_port_ref
+            .get()
+            .map(|el| el.value())
+            .and_then(|v| v.trim().parse::<u16>().ok());
+        // Optional allow rule: from endpoints with these labels, and/or to
+        // this TCP port. Without one, the policy denies all ingress.
+        let ingress = if allow_from.is_empty() && allow_port.is_none() {
+            Vec::new()
+        } else {
+            let from = if allow_from.is_empty() {
+                Vec::new()
+            } else {
+                vec![
+                    serde_json::json!({"PodSelector": {"match_labels": allow_from, "match_expressions": []}}),
+                ]
+            };
+            let ports = allow_port
+                .map(|p| vec![serde_json::json!({"protocol": "TCP", "port": p, "end_port": null})])
+                .unwrap_or_default();
+            vec![serde_json::json!({"from": from, "ports": ports})]
+        };
+
         let req = CreateNetworkPolicyReq {
             id: uuid::Uuid::new_v4().to_string(),
             name,
             namespace,
             pod_selector: PolicySelector {
-                match_labels: std::collections::HashMap::new(),
+                match_labels: selector,
                 match_expressions: Vec::new(),
             },
             policy_types,
-            ingress: Vec::new(),
+            ingress,
             egress: Vec::new(),
             enabled: true,
         };
 
         spawn_local(async move {
-            match post_json::<serde_json::Value, CreateNetworkPolicyReq>(
+            match post_json::<sdn_api::PolicyChangeResponse, CreateNetworkPolicyReq>(
                 "/api/network-policies",
                 &req,
             )
             .await
             {
-                Ok(_) => {
+                Ok(resp) => {
+                    set_enforcement.set(Some(resp.enforcement));
                     set_show_create_policy.set(false);
                     if let Ok(data) =
                         fetch_json::<Vec<NetworkPolicy>>("/api/network-policies").await
@@ -823,6 +871,33 @@ pub fn NetworkManagement() -> impl IntoView {
                             </button>
                         </div>
 
+                        // Whether the policies are really in the kernel.
+                        {move || enforcement.get().map(|s| {
+                            if s.applied {
+                                view! {
+                                    <div class="alert alert-success" id="policy-enforcement">
+                                        {format!(
+                                            "Enforced in nftables (table {}): {} endpoint(s), {} allow rule(s){}",
+                                            s.table,
+                                            s.endpoints,
+                                            s.rules,
+                                            if s.stateful { "" } else { " - no bridge conntrack: replies need their own allow rules" }
+                                        )}
+                                    </div>
+                                }.into_view()
+                            } else {
+                                view! {
+                                    <div class="alert alert-error" id="policy-enforcement">
+                                        {format!(
+                                            "NOT enforced: {}",
+                                            s.error.unwrap_or_else(|| "unknown error".into())
+                                        )}
+                                    </div>
+                                }.into_view()
+                            }
+                        })}
+                        <p class="form-hint">"Policies apply to containers attached to SDN networks (SDN Networks tab), matched by policy namespace and labels. An Ingress policy with no allow rule blocks all traffic to the containers it selects."</p>
+
                         {move || if net_policies.get().is_empty() {
                             view! {
                                 <div class="empty-state">
@@ -952,6 +1027,18 @@ pub fn NetworkManagement() -> impl IntoView {
                                     <input node_ref=policy_egress_ref type="checkbox"/>
                                     " Applies to Egress"
                                 </label>
+                            </div>
+                            <div class="form-group">
+                                <label>"Selects containers with labels (empty = all in the namespace)"</label>
+                                <input node_ref=policy_selector_ref type="text" class="form-control" placeholder="app=db"/>
+                            </div>
+                            <div class="form-group">
+                                <label>"Allow ingress from containers with labels (optional)"</label>
+                                <input node_ref=policy_allow_from_ref type="text" class="form-control" placeholder="app=web"/>
+                            </div>
+                            <div class="form-group">
+                                <label>"Allow ingress to TCP port (optional)"</label>
+                                <input node_ref=policy_allow_port_ref type="number" class="form-control" placeholder="5432"/>
                             </div>
                         </div>
                         <div class="modal-footer">
