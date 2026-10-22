@@ -164,7 +164,7 @@ impl VmManager {
 
     /// Clone of a QEMU VM's runtime handle, for actions that must not hold
     /// the VM map's lock while they wait for the guest.
-    async fn qemu_vm(&self, id: &str) -> Result<qemu::QemuVm> {
+    pub(super) async fn qemu_vm(&self, id: &str) -> Result<qemu::QemuVm> {
         let mut vms = self.vms.write().await;
         self.hydrate(&mut vms, id).await?;
         let vm = vms
@@ -178,7 +178,7 @@ impl VmManager {
         Ok(vm.clone())
     }
 
-    async fn record_status(&self, id: &str, status: VmStatus) -> Result<VmConfig> {
+    pub async fn record_status(&self, id: &str, status: VmStatus) -> Result<VmConfig> {
         let mut vms = self.vms.write().await;
         let vm = vms
             .get_mut(id)

@@ -437,6 +437,9 @@ pub async fn run() -> anyhow::Result<()> {
     #[cfg(feature = "cluster")]
     api::ha_loop::spawn(state.clone());
 
+    // Save/resume of guests across host shutdown: token, boot pass, running snapshot.
+    api::guest_state::engine::spawn(state.clone());
+
     // OpenTelemetry export (saved settings + periodic export).
     start_otel_exporter(state.clone());
 
@@ -516,6 +519,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::migration_jobs::routes())
         .merge(api::migration_peer::routes())
         .merge(api::node_summary::routes())
+        .merge(api::guest_state::routes())
         .merge(api::node_disks::routes())
         .merge(api::vm_hw::routes())
         .merge(api::storage_volumes::routes())
@@ -581,6 +585,8 @@ pub async fn run() -> anyhow::Result<()> {
         .with_state(state.clone())
         // Compiled-in features (USE flags), read by the UI to hide the rest
         .merge(features::routes())
+        // Host shutdown/boot hook: token-authenticated, loopback tooling.
+        .merge(api::guest_state::agent::routes().with_state(state.clone()))
         // Merge OpenAPI / Swagger UI routes (public, for documentation)
         .merge(openapi::openapi_routes())
         // Merge protected routes (with auth middleware)
@@ -1820,7 +1826,14 @@ async fn start_vm(
         .map(|vm| format!("{:?}", vm.status))
         .unwrap_or_else(|_| "unknown".to_string());
 
-    let vm = state.vm_manager.start_vm(&id).await?;
+    // A guest with saved state resumes from it (starting it cold would make
+    // the saved state stale).
+    let vm = if api::guest_state::engine::has_saved(&state, api::guest_state::GuestKind::Vm, &id) {
+        api::guest_state::engine::resume_guest(&state, api::guest_state::GuestKind::Vm, &id).await?;
+        state.vm_manager.get_vm(&id).await?
+    } else {
+        state.vm_manager.start_vm(&id).await?
+    };
     #[cfg(feature = "cluster")]
     ha_user_intent(&state, &id, ha::HaState::Started).await;
     emit_vm_state(&state, &vm, &old_status).await;
@@ -2902,7 +2915,17 @@ async fn start_container(
     Path(id): Path<String>,
 ) -> Result<Json<horcrux_common::ContainerConfig>, ApiError> {
     let old_status = state.container_manager.get_container(&id).await?.status;
-    let container = state.container_manager.start_container(&id).await?;
+    let container = if api::guest_state::engine::has_saved(
+        &state,
+        api::guest_state::GuestKind::Container,
+        &id,
+    ) {
+        api::guest_state::engine::resume_guest(&state, api::guest_state::GuestKind::Container, &id)
+            .await?;
+        state.container_manager.get_container(&id).await?
+    } else {
+        state.container_manager.start_container(&id).await?
+    };
 
     // Broadcast status change event
     state

@@ -14,6 +14,7 @@ pub mod migrate;
 /// Handles QEMU/KVM, LXD, and Incus virtual machine lifecycle
 pub mod qemu;
 pub mod replication;
+pub mod savestate;
 pub mod snapshot;
 pub mod snapshot_quota;
 pub mod snapshot_scheduler;
