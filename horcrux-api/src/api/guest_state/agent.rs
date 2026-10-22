@@ -179,3 +179,47 @@ pub async fn cli_main(args: &[String]) -> i32 {
         1
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// The unit must be ordered after the API, the container runtimes and
+    /// storage/network (so that on shutdown it stops before them), save on
+    /// stop and never kill the guests with its own cgroup.
+    #[test]
+    fn systemd_unit_orders_stop_before_storage_and_network() {
+        let unit = include_str!("../../../../deploy/systemd/horcrux-guests.service");
+        let after = unit
+            .lines()
+            .find(|l| l.starts_with("After="))
+            .expect("After=");
+        for dep in [
+            "horcrux.service",
+            "network-online.target",
+            "local-fs.target",
+            "remote-fs.target",
+            "docker.service",
+            "incus.service",
+        ] {
+            assert!(after.contains(dep), "After= must list {dep}");
+        }
+        assert!(unit.contains("ExecStop=/usr/bin/horcrux-api guests stop"));
+        assert!(unit.contains("ExecStart=/usr/bin/horcrux-api guests boot"));
+        assert!(unit.contains("KillMode=none"));
+        assert!(unit.contains("RemainAfterExit=yes"));
+        let stop = unit
+            .lines()
+            .find_map(|l| l.strip_prefix("TimeoutStopSec="))
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap();
+        assert!(stop >= 600, "enough time to save every guest");
+    }
+
+    #[test]
+    fn openrc_service_needs_the_api_and_storage() {
+        let rc = include_str!("../../../../deploy/openrc/horcrux-guests");
+        assert!(rc.starts_with("#!/sbin/openrc-run"));
+        assert!(rc.contains("need horcrux localmount"));
+        assert!(rc.contains("horcrux-api guests stop"));
+        assert!(rc.contains("horcrux-api guests boot"));
+    }
+}

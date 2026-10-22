@@ -7130,3 +7130,155 @@ pub async fn delete_fencing_device(id: &str) -> Result<(), ApiError> {
 pub async fn list_ha_events() -> Result<Vec<HaEventView>, ApiError> {
     fetch_json("/ha/events?limit=50").await
 }
+
+
+// ---------------------------------------------------------------------------
+// Guest power: save state on host shutdown, resume on boot
+// (`/api/nodes/guest-power`, `/api/{vms,containers}/:id/{save,resume}-state`).
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct NodePower {
+    pub stop_action: String,
+    pub start_action: String,
+    pub start_delay_secs: u32,
+    pub save_dir: Option<String>,
+    pub save_timeout_secs: u64,
+    pub shutdown_timeout_secs: u64,
+    pub max_parallel: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct GuestPowerOverride {
+    pub stop_action: Option<String>,
+    pub start_action: Option<String>,
+    pub start_delay_secs: Option<u32>,
+    pub start_order: Option<i32>,
+    pub save_dir: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct GuestPowerEffective {
+    pub stop_action: String,
+    pub start_action: String,
+    pub start_delay_secs: u32,
+    pub start_order: i32,
+    pub save_dir: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SavedState {
+    pub kind: String,
+    pub id: String,
+    pub name: String,
+    pub runtime: String,
+    pub saved_at: String,
+    pub mechanism: String,
+    pub size_bytes: Option<u64>,
+    pub state_dir: String,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PowerResult {
+    pub at: String,
+    pub phase: String,
+    pub action: String,
+    pub ok: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PowerGuest {
+    pub kind: String,
+    pub id: String,
+    pub name: String,
+    pub runtime: String,
+    pub status: String,
+    pub policy: GuestPowerEffective,
+    #[serde(rename = "override")]
+    pub overrides: GuestPowerOverride,
+    pub saved: Option<SavedState>,
+    pub can_save: bool,
+    pub save_blocker: Option<String>,
+    pub last_result: Option<PowerResult>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct CriuInfo {
+    pub available: bool,
+    pub version: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct RuntimeSupport {
+    pub supported: bool,
+    pub mechanism: String,
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PowerCapabilities {
+    pub kvm: bool,
+    pub criu: CriuInfo,
+    pub runtimes: std::collections::BTreeMap<String, RuntimeSupport>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PowerOverview {
+    pub node: NodePower,
+    pub capabilities: PowerCapabilities,
+    pub guests: Vec<PowerGuest>,
+    #[serde(default)]
+    pub last_stop: Option<serde_json::Value>,
+}
+
+fn guest_base(kind: &str) -> &'static str {
+    if kind == "vm" {
+        "vms"
+    } else {
+        "containers"
+    }
+}
+
+pub async fn power_overview() -> Result<PowerOverview, ApiError> {
+    fetch_json("/nodes/guest-power").await
+}
+
+pub async fn put_node_power(p: &NodePower) -> Result<NodePower, ApiError> {
+    put_json("/nodes/guest-power", p).await
+}
+
+pub async fn put_guest_power(
+    kind: &str,
+    id: &str,
+    o: &GuestPowerOverride,
+) -> Result<serde_json::Value, ApiError> {
+    put_json(&format!("/{}/{}/power-policy", guest_base(kind), id), o).await
+}
+
+pub async fn save_guest_state(kind: &str, id: &str) -> Result<SavedState, ApiError> {
+    post_json(
+        &format!("/{}/{}/save-state", guest_base(kind), id),
+        &serde_json::json!({}),
+    )
+    .await
+}
+
+pub async fn resume_guest_state(kind: &str, id: &str) -> Result<PowerGuest, ApiError> {
+    post_json(
+        &format!("/{}/{}/resume-state", guest_base(kind), id),
+        &serde_json::json!({}),
+    )
+    .await
+}
+
+pub async fn discard_guest_state(kind: &str, id: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/{}/{}/saved-state", guest_base(kind), id)).await
+}
+
+pub async fn boot_saved_guests() -> Result<serde_json::Value, ApiError> {
+    post_json("/nodes/guest-power/boot-guests", &serde_json::json!({})).await
+}

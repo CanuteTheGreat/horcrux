@@ -1,0 +1,28 @@
+#!/sbin/openrc-run
+# Copyright 2025 Horcrux Contributors
+# Distributed under the terms of the GNU General Public License v2
+
+description="Horcrux guests: save state on host shutdown, resume on boot"
+
+# OpenRC stops services in the reverse of their start order, so everything
+# named here is still running while this service stops: the API (it does the
+# saving), the container runtimes (CRIU needs them), local/remote storage
+# (the state files are written there) and the network.
+depend() {
+	need horcrux localmount
+	use net netmount docker incus lxd lxc
+	after horcrux docker incus lxd lxc netmount
+}
+
+start() {
+	ebegin "Resuming Horcrux guests"
+	/usr/bin/horcrux-api guests boot
+	eend $?
+}
+
+stop() {
+	ebegin "Saving state of running Horcrux guests"
+	# Never blocks the shutdown: a guest that cannot be saved is shut down.
+	/usr/bin/horcrux-api guests stop
+	eend 0
+}

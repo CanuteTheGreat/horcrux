@@ -1,0 +1,29 @@
+[Unit]
+Description=Horcrux guests: save state on host shutdown, resume on boot
+Documentation=https://github.com/CanuteTheGreat/horcrux/blob/main/docs/SAVE_STATE.md
+# Ordering is what makes this work: units are stopped in the reverse of their
+# start order, so everything listed in After= is still up while this unit's
+# ExecStop runs - the API (which does the saving), the container runtimes
+# (CRIU needs them), local and remote storage (the state files are written
+# there) and the network.
+After=horcrux.service network-online.target local-fs.target remote-fs.target docker.service containerd.service incus.service lxd.service lxc.service
+Wants=horcrux.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+Environment="HORCRUX_CONFIG=/etc/horcrux/config.toml"
+# Boot: wait for the API, then resume saved guests in start order with their
+# delays (no limit: the delays are the administrator's choice).
+ExecStart=/usr/bin/horcrux-api guests boot
+TimeoutStartSec=infinity
+# Shutdown: save every running guest (bounded parallelism, per-guest timeout,
+# fall back to clean shutdown / power off - see Guest Power in the UI).
+ExecStop=/usr/bin/horcrux-api guests stop
+TimeoutStopSec=1800
+# The guests belong to their own runtimes, never to this unit's cgroup.
+KillMode=none
+
+[Install]
+WantedBy=multi-user.target

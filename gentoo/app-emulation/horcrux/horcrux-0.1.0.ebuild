@@ -338,6 +338,7 @@ src_install() {
 	# Install systemd services if enabled
 	if use systemd; then
 		systemd_dounit "${S}/deploy/systemd/horcrux.service"
+		systemd_dounit "${S}/deploy/systemd/horcrux-guests.service"
 		if use monitoring; then
 			systemd_dounit "${S}/deploy/systemd/horcrux-monitoring.service"
 		fi
@@ -346,6 +347,7 @@ src_install() {
 	# Install OpenRC init scripts if not using systemd
 	if ! use systemd; then
 		newinitd "${S}/deploy/openrc/horcrux" horcrux
+		newinitd "${S}/deploy/openrc/horcrux-guests" horcrux-guests
 		if use monitoring; then
 			newinitd "${S}/deploy/openrc/horcrux-monitoring" horcrux-monitoring
 		fi
@@ -394,6 +396,7 @@ pkg_postinst() {
 	if use qemu; then
 		optfeature "UEFI (OVMF) firmware for QEMU VMs" sys-firmware/edk2-bin
 		optfeature "emulated TPM 2.0 for QEMU VMs" app-crypt/swtpm
+		optfeature "saving the state of running containers (Guest Power: CRIU stateful stop)" sys-process/criu
 	fi
 	elog ""
 	elog "Horcrux ${PV} - Gentoo Virtualization Platform"

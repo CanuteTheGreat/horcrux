@@ -79,6 +79,7 @@ pub fn App() -> impl IntoView {
                             <A href="/storage/isos" class="dropdown-item">"ISO Library"</A>
                             <A href="/network" class="dropdown-item">"Network"</A>
                             <A href="/network/bridges" class="dropdown-item">"Host Bridges"</A>
+                            <A href="/system/power" class="dropdown-item">"Guest Power (Save State)"</A>
                             <A href="/gpu" class="dropdown-item">"GPU Passthrough"</A>
                             <IfFeature feature="cluster">
                                 <A href="/ha" class="dropdown-item">"High Availability"</A>
@@ -156,6 +157,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/vms/:id/hardware" view=crate::pages::VmHardwarePage/>
                     <Route path="/storage/isos" view=crate::pages::IsoLibraryPage/>
                     <Route path="/network/bridges" view=crate::pages::HostBridgesPage/>
+                    <Route path="/system/power" view=crate::pages::GuestPowerPage/>
                     <Route path="/containers" view=ContainerList/>
                     <Route path="/containers/create" view=ContainerCreate/>
                     <Route path="/containers/images" view=|| view! { <Gated feature="docker|podman"><ImagesPage/></Gated> }/>

@@ -9,11 +9,30 @@ pub fn VmList() -> impl IntoView {
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
     let (notice, set_notice) = create_signal(None::<String>);
+    // Saved states (Hyper-V-style "Save state"), by VM id.
+    let (saved, set_saved) = create_signal(std::collections::HashMap::<String, api::SavedState>::new());
+    let (blockers, set_blockers) = create_signal(std::collections::HashMap::<String, String>::new());
 
     // Every action used to only log to the browser console and never
     // refreshed the list, so Start/Stop/Delete looked like they did nothing.
     let reload = move || {
         spawn_local(async move {
+            if let Ok(o) = api::power_overview().await {
+                set_saved.set(
+                    o.guests
+                        .iter()
+                        .filter(|g| g.kind == "vm")
+                        .filter_map(|g| g.saved.clone().map(|s| (g.id.clone(), s)))
+                        .collect(),
+                );
+                set_blockers.set(
+                    o.guests
+                        .iter()
+                        .filter(|g| g.kind == "vm" && !g.can_save)
+                        .filter_map(|g| g.save_blocker.clone().map(|b| (g.id.clone(), b)))
+                        .collect(),
+                );
+            }
             match api::get_vms().await {
                 Ok(vm_list) => {
                     set_vms.set(vm_list);
@@ -58,6 +77,27 @@ pub fn VmList() -> impl IntoView {
         spawn_local(async move {
             let r = api::reboot_vm(&vm_id).await.map(|_| ());
             report(format!("VM {} rebooted", vm_id), r);
+        });
+    };
+
+    let save_state = move |vm_id: String| {
+        set_notice.set(Some(format!("Saving state of VM {}...", vm_id)));
+        spawn_local(async move {
+            let r = api::save_guest_state("vm", &vm_id).await.map(|_| ());
+            report(format!("VM {} saved to disk and stopped", vm_id), r);
+        });
+    };
+    let resume_state = move |vm_id: String| {
+        set_notice.set(Some(format!("Resuming VM {} from its saved state...", vm_id)));
+        spawn_local(async move {
+            let r = api::resume_guest_state("vm", &vm_id).await.map(|_| ());
+            report(format!("VM {} resumed", vm_id), r);
+        });
+    };
+    let discard_state = move |vm_id: String| {
+        spawn_local(async move {
+            let r = api::discard_guest_state("vm", &vm_id).await;
+            report(format!("Saved state of VM {} discarded", vm_id), r);
         });
     };
 
@@ -169,6 +209,12 @@ pub fn VmList() -> impl IntoView {
                                         let hardware_href = format!("/vms/{}/hardware", vm.id);
                                         let is_qemu = vm.hypervisor == horcrux_common::VmHypervisor::Qemu;
                                         let vm_id_delete = vm.id.clone();
+                                        let vm_id_save = vm.id.clone();
+                                        let vm_id_resume = vm.id.clone();
+                                        let vm_id_discard = vm.id.clone();
+                                        let saved_state = saved.get().get(&vm.id).cloned();
+                                        let blocker = blockers.get().get(&vm.id).cloned();
+                                        let running = matches!(vm.status, horcrux_common::VmStatus::Running | horcrux_common::VmStatus::Paused);
                                         let vm_for_clone = vm.clone();
                                         let status_class = match vm.status {
                                             horcrux_common::VmStatus::Running => "status-running",
@@ -181,7 +227,12 @@ pub fn VmList() -> impl IntoView {
                                             <tr data-vm-id=vm.id.clone()>
                                                 <td>{&vm.id}</td>
                                                 <td><strong>{&vm.name}</strong></td>
-                                                <td><span class={status_class}>{vm.status.to_string()}</span></td>
+                                                <td><span class={status_class}>{vm.status.to_string()}</span>
+                                                    {saved_state.clone().map(|s| view! {
+                                                        <span class="badge badge-info saved-badge" title=s.mechanism.clone()>{crate::pages::saved_label(&s)}</span>
+                                                    })}
+                                                    {blocker.map(|b| view! { <small class="save-blocker" title=b.clone()>" ⚠ state can't be saved"</small> })}
+                                                </td>
                                                 <td>{format!("{:?}", vm.hypervisor)}</td>
                                                 <td>{vm.cpus}</td>
                                                 <td>{format!("{} MB", vm.memory)}</td>
@@ -191,7 +242,19 @@ pub fn VmList() -> impl IntoView {
                                                     <button
                                                         class="btn btn-sm btn-success"
                                                         on:click=move |_| start_vm(vm_id_start.clone())
-                                                    >"Start"</button>
+                                                    >{if saved_state.is_some() { "Start (resume)" } else { "Start" }}</button>
+                                                    {saved_state.is_some().then(|| view! {
+                                                        <button class="btn btn-sm btn-success vm-resume-state"
+                                                            on:click=move |_| resume_state(vm_id_resume.clone())>"Resume"</button>
+                                                        <button class="btn btn-sm btn-secondary vm-discard-state"
+                                                            title="Delete the saved state; the VM then boots normally"
+                                                            on:click=move |_| discard_state(vm_id_discard.clone())>"Discard state"</button>
+                                                    })}
+                                                    {(running && saved_state.is_none()).then(|| view! {
+                                                        <button class="btn btn-sm btn-warning vm-save-state"
+                                                            title="Save RAM and device state to disk and stop the VM"
+                                                            on:click=move |_| save_state(vm_id_save.clone())>"Save state"</button>
+                                                    })}
                                                     {is_qemu.then(|| view! {
                                                         <button
                                                             class="btn btn-sm btn-warning vm-shutdown"

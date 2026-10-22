@@ -499,6 +499,7 @@ async fn ui_types_read_real_api_responses() {
     check!("/ha/status", api::HaStatus);
     check!("/ha/groups", Vec<api::HaGroup>);
     check!("/storage/disks", Vec<api::DiskInfo>);
+    check!("/nodes/guest-power", api::PowerOverview);
     check!("/storage/smart/disks", Vec<api::SmartDiskInfo>);
     check!("/storage/smart/alerts", Vec<api::SmartAlert>);
     check!("/ha/events", Vec<api::HaEventView>);
@@ -3968,4 +3969,85 @@ async fn event_webhooks_mask_secrets_and_deliver_signed() {
     assert_eq!(status, 404, "second delete");
     let (status, _) = get_raw(&c, &token, &path).await;
     assert_eq!(status, 404, "deleted webhook is gone");
+}
+
+/// Guest power (save state on host shutdown / resume on boot): the UI's
+/// types read the real overview and per-guest routes; a stopped guest has
+/// nothing to save or resume; the policy round-trips.
+#[tokio::test]
+async fn guest_power_routes_read_into_ui_types() {
+    let c = client();
+    let token = login(&c).await;
+    let vm = "contract-power-vm";
+    delete(&c, &token, &format!("/vms/{vm}")).await;
+    let (status, body) = post(
+        &c,
+        &token,
+        "/vms",
+        json!({"id": vm, "name": vm, "hypervisor": "qemu", "architecture": "x86_64",
+               "cpus": 1, "memory": 128, "disk_size": 1, "status": "stopped"}),
+    )
+    .await;
+    assert!(status == 200 || status == 201, "create VM: {status} {body}");
+
+    let ov: api::PowerOverview = fetch(&c, &token, "/nodes/guest-power").await;
+    let g = ov.guests.iter().find(|g| g.id == vm).expect("VM in the power overview");
+    assert_eq!(g.kind, "vm");
+    assert!(g.saved.is_none() && g.can_save);
+    assert!(["save", "shutdown", "poweroff"].contains(&ov.node.stop_action.as_str()));
+
+    // Node default round-trips.
+    let (st, body) = put(&c, &token, "/nodes/guest-power", serde_json::to_value(&ov.node).unwrap()).await;
+    assert_eq!(st, 200, "{body}");
+    let _: api::NodePower = serde_json::from_str(&body).expect("UI NodePower");
+    let mut bad = serde_json::to_value(&ov.node).unwrap();
+    bad["max_parallel"] = json!(0);
+    assert_eq!(put(&c, &token, "/nodes/guest-power", bad).await.0, 422);
+
+    // Per-guest policy.
+    let path = format!("/vms/{vm}/power-policy");
+    let (st, body) = put(
+        &c,
+        &token,
+        &path,
+        json!({"stop_action": "poweroff", "start_action": "always", "start_delay_secs": 7, "start_order": 3}),
+    )
+    .await;
+    assert_eq!(st, 200, "{body}");
+    let ov: api::PowerOverview = fetch(&c, &token, "/nodes/guest-power").await;
+    let g = ov.guests.iter().find(|g| g.id == vm).unwrap();
+    assert_eq!(g.policy.stop_action, "poweroff");
+    assert_eq!(g.policy.start_action, "always");
+    assert_eq!((g.policy.start_delay_secs, g.policy.start_order), (7, 3));
+    assert_eq!(g.overrides.start_delay_secs, Some(7));
+    assert_eq!(put(&c, &token, &path, json!({"stop_action": "explode"})).await.0, 422);
+
+    // Nothing to save / resume / discard on a stopped guest.
+    let (st, _) = post(&c, &token, &format!("/vms/{vm}/save-state"), json!({})).await;
+    assert_eq!(st, 409, "saving a stopped VM");
+    let (st, _) = post(&c, &token, &format!("/vms/{vm}/resume-state"), json!({})).await;
+    assert_eq!(st, 404, "no saved state to resume");
+    let (st, _) = get_raw(&c, &token, &format!("/vms/{vm}/saved-state")).await;
+    assert_eq!(st, 404);
+    let (st, _) = get_raw(&c, &token, "/vms/no-such-vm/power-policy").await;
+    assert_eq!(st, 404);
+
+    // The host-agent hook accepts nothing without its token.
+    let r = c
+        .post(format!("{}/host-agent/stop-guests", api_base()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 403);
+    let r = c
+        .post(format!("{}/host-agent/boot-guests", api_base()))
+        .header("x-horcrux-host-token", "wrong")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 403);
+
+    // Clean up: policy and VM.
+    let _ = put(&c, &token, &path, json!({})).await;
+    delete(&c, &token, &format!("/vms/{vm}")).await;
 }

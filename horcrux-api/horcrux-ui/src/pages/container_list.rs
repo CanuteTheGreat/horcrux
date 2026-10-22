@@ -9,11 +9,32 @@ pub fn ContainerList() -> impl IntoView {
     let (error, set_error) = create_signal(None::<String>);
 
     let (action_error, set_action_error) = create_signal(None::<String>);
+    // Saved states (CRIU "Save state") and why a container can't save, by id.
+    let (saved, set_saved) =
+        create_signal(std::collections::HashMap::<String, api::SavedState>::new());
+    let (blockers, set_blockers) =
+        create_signal(std::collections::HashMap::<String, String>::new());
 
     // Load (and, after every action, re-load) the container list so the
     // table always shows the real post-action state.
     let reload = move || {
         spawn_local(async move {
+            if let Ok(o) = api::power_overview().await {
+                set_saved.set(
+                    o.guests
+                        .iter()
+                        .filter(|g| g.kind == "container")
+                        .filter_map(|g| g.saved.clone().map(|s| (g.id.clone(), s)))
+                        .collect(),
+                );
+                set_blockers.set(
+                    o.guests
+                        .iter()
+                        .filter(|g| g.kind == "container" && !g.can_save)
+                        .filter_map(|g| g.save_blocker.clone().map(|b| (g.id.clone(), b)))
+                        .collect(),
+                );
+            }
             match api::get_containers().await {
                 Ok(container_list) => {
                     set_containers.set(container_list);
@@ -46,6 +67,26 @@ pub fn ContainerList() -> impl IntoView {
             match api::stop_container(&container_id).await {
                 Ok(()) => set_action_error.set(None),
                 Err(e) => set_action_error.set(Some(format!("Stop {container_id}: {}", e.message))),
+            }
+            reload();
+        });
+    };
+
+    // Save state / Resume / Discard (container side of Hyper-V-style saved state).
+    let state_action = move |what: &'static str, container_id: String| {
+        spawn_local(async move {
+            let r = match what {
+                "Save state of" => api::save_guest_state("container", &container_id)
+                    .await
+                    .map(|_| ()),
+                "Resume" => api::resume_guest_state("container", &container_id)
+                    .await
+                    .map(|_| ()),
+                _ => api::discard_guest_state("container", &container_id).await,
+            };
+            match r {
+                Ok(()) => set_action_error.set(None),
+                Err(e) => set_action_error.set(Some(format!("{what} {container_id}: {}", e.message))),
             }
             reload();
         });
@@ -118,6 +159,12 @@ pub fn ContainerList() -> impl IntoView {
                                         let container_id_start = container.id.clone();
                                         let container_id_stop = container.id.clone();
                                         let container_id_delete = container.id.clone();
+                                        let cid_save = container.id.clone();
+                                        let cid_resume = container.id.clone();
+                                        let cid_discard = container.id.clone();
+                                        let saved_state = saved.get().get(&container.id).cloned();
+                                        let blocker = blockers.get().get(&container.id).cloned();
+                                        let running = matches!(container.status.as_str(), "running" | "paused");
                                         let status_class = match container.status.as_str() {
                                             "running" => "status-running",
                                             "stopped" => "status-stopped",
@@ -133,7 +180,12 @@ pub fn ContainerList() -> impl IntoView {
                                                     <span class="runtime-badge">{&container.runtime}</span>
                                                 </td>
                                                 <td><code>{&container.image}</code></td>
-                                                <td><span class={status_class}>{&container.status}</span></td>
+                                                <td><span class={status_class}>{&container.status}</span>
+                                                    {saved_state.clone().map(|s| view! {
+                                                        <span class="badge badge-info saved-badge" title=s.mechanism.clone()>{crate::pages::saved_label(&s)}</span>
+                                                    })}
+                                                    {blocker.map(|b| view! { <small class="save-blocker" title=b.clone()>" ⚠ state can't be saved: "{b.clone()}</small> })}
+                                                </td>
                                                 <td>
                                                     {container.created_at.as_deref().map(crate::utils::format_rfc3339).unwrap_or_else(|| "N/A".to_string())}
                                                 </td>
@@ -141,7 +193,19 @@ pub fn ContainerList() -> impl IntoView {
                                                     <button
                                                         class="btn btn-sm btn-success"
                                                         on:click=move |_| start_container(container_id_start.clone())
-                                                    >"Start"</button>
+                                                    >{if saved_state.is_some() { "Start (resume)" } else { "Start" }}</button>
+                                                    {saved_state.is_some().then(|| view! {
+                                                        <button class="btn btn-sm btn-success ct-resume-state"
+                                                            on:click=move |_| state_action("Resume", cid_resume.clone())>"Resume"</button>
+                                                        <button class="btn btn-sm btn-secondary ct-discard-state"
+                                                            title="Delete the saved state; the container then starts normally"
+                                                            on:click=move |_| state_action("Discard state of", cid_discard.clone())>"Discard state"</button>
+                                                    })}
+                                                    {(running && saved_state.is_none()).then(|| view! {
+                                                        <button class="btn btn-sm btn-warning ct-save-state"
+                                                            title="Checkpoint the running processes (CRIU) and stop; Resume continues them"
+                                                            on:click=move |_| state_action("Save state of", cid_save.clone())>"Save state"</button>
+                                                    })}
                                                     <button
                                                         class="btn btn-sm btn-warning"
                                                         on:click=move |_| stop_container(container_id_stop.clone())

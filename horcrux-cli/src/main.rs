@@ -47,6 +47,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Save state on host shutdown / resume on boot (Hyper-V style)
+    Power {
+        #[command(subcommand)]
+        command: PowerCommands,
+    },
     /// Manage virtual machines
     Vm {
         #[command(subcommand)]
@@ -140,6 +145,54 @@ enum Commands {
         /// Shell type
         #[arg(value_enum)]
         shell: clap_complete::Shell,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum PowerCommands {
+    /// Node defaults, CRIU availability and every guest's saved state
+    Status,
+    /// Save a running guest's state to disk and stop it
+    Save {
+        /// vm or container
+        kind: String,
+        id: String,
+    },
+    /// Resume a guest from its saved state
+    Resume { kind: String, id: String },
+    /// Delete a guest's saved state (it then starts normally)
+    Discard { kind: String, id: String },
+    /// Set a guest's automatic stop/start action (overrides the node default)
+    Policy {
+        kind: String,
+        id: String,
+        /// save | shutdown | poweroff
+        #[arg(long)]
+        stop: Option<String>,
+        /// resume_if_running | always | nothing
+        #[arg(long)]
+        start: Option<String>,
+        /// Start delay in seconds
+        #[arg(long)]
+        delay: Option<u32>,
+        /// Start order (lower first)
+        #[arg(long)]
+        order: Option<i32>,
+        /// Remove all overrides (follow the node default)
+        #[arg(long)]
+        clear: bool,
+    },
+    /// Set the node default actions
+    NodeDefault {
+        #[arg(long)]
+        stop: Option<String>,
+        #[arg(long)]
+        start: Option<String>,
+        #[arg(long)]
+        delay: Option<u32>,
+        /// Directory for saved states ("" = default)
+        #[arg(long)]
+        dir: Option<String>,
     },
 }
 
@@ -1128,6 +1181,9 @@ async fn main() -> Result<()> {
 
     // Execute command
     match cli.command {
+        Commands::Power { command } => {
+            commands::power::handle_power_command(command, &api_client, &cli.output).await?
+        }
         Commands::Vm { command } => {
             commands::vm::handle_vm_command(command, &api_client, &cli.output).await?
         }

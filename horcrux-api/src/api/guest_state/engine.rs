@@ -3,7 +3,7 @@ use super::policy::{self, Effective, StartAction, StopAction};
 use crate::container::savestate as ctsave;
 use crate::vm::savestate::VmSaveOutcome;
 use crate::AppState;
-use horcrux_common::{ContainerRuntime, ContainerStatus, Error, Result, VmHypervisor, VmStatus};
+use horcrux_common::{ContainerRuntime, Error, Result, VmHypervisor, VmStatus};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
