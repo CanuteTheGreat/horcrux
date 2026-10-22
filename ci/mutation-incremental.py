@@ -9,7 +9,16 @@ Why: the colo lane has 2 slots on one CPU-bound host. Full mutation passes (1-3 
 night for ~20 repos queued 10+ h. Most nights only a few functions changed, so a full pass mostly
 re-proves yesterday's result.
 
-State (one per mutation job id), restored/saved with actions/cache on the colo runner:
+State (one per mutation job id). SHARED STORE (2026-10-22): the baseline lives on the orphan branch
+`mutation-baseline` of the repo itself (one `<id>/baseline.json` per job id, no workflow files on it so no CI
+fires), read by `plan` and written after every green `gate`/skip, so every runner (rw-man-01..05) sees the same
+last green sha and known survivors. Until then it was a per-runner actions/cache entry: a nightly landing on
+another runner restored an old baseline (or none: "Cache not found" -> a diff of the last 26 h with no known
+survivors) and went red on old survivors or mutated a huge change set. The branch is read/written with the
+checkout's own credentials (plain git plumbing: fetch, commit-tree, non-force push, retried on a race), only
+inside Forgejo Actions (GITHUB_ACTIONS=true), pushes only from the default branch (main/master) runs. The
+actions/cache copy stays as a fallback when the branch can't be reached (MUT_BASELINE_STORE=cache disables the
+branch). The local layout the rest of this script uses is unchanged:
     .mutation-baseline/<id>/baseline.json
         {"id", "sha": last green commit, "last_full": "YYYY-MM-DD" (UTC) of the last green full
          run, "survivors": [keys of mutants that survived that run]}
@@ -41,10 +50,12 @@ Commands
         the new baseline (sha = HEAD). Score floors stay with each repo's own floor script and
         apply to full runs (a score over a diff subset means nothing).
 """
-import argparse, ast, datetime, fnmatch, glob, json, os, re, subprocess, sys
+import argparse, ast, datetime, fnmatch, glob, json, os, re, subprocess, sys, tempfile, time
 import xml.etree.ElementTree as ET
 
 STATE_ROOT = ".mutation-baseline"
+STORE_BRANCH = "mutation-baseline"
+PUSH_REFS = ("main", "master")
 
 
 def git(*args, cwd=None, check=True):
@@ -52,6 +63,98 @@ def git(*args, cwd=None, check=True):
     if check and r.returncode != 0:
         raise SystemExit(f"git {' '.join(args)} failed: {r.stderr.strip()}")
     return r.stdout if r.returncode == 0 else None
+
+
+# ------------------------------------------------------------------ shared baseline store (git branch)
+def store_enabled():
+    return os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("MUT_BASELINE_STORE", "branch") == "branch"
+
+
+def store_fetch():
+    """Fetch the store branch; returns its tip sha, or None (no branch yet / unreachable)."""
+    r = subprocess.run(["git", "fetch", "--quiet", "--no-tags", "--depth=1", "origin",
+                        f"+refs/heads/{STORE_BRANCH}:refs/remotes/origin/{STORE_BRANCH}"], capture_output=True, text=True)
+    if r.returncode != 0:
+        why = r.stderr.strip().splitlines()[-1] if r.stderr.strip() else "?"
+        print(f"mutation baseline store: no '{STORE_BRANCH}' branch fetched ({why})")
+        return None
+    return git("rev-parse", f"refs/remotes/origin/{STORE_BRANCH}", check=False, ).strip() or None
+
+
+def store_pull():
+    """Materialise every <id>/baseline.json of the store branch under .mutation-baseline/ (remote wins over
+    the runner-local cache copy). Returns the number restored."""
+    if not store_enabled():
+        return 0
+    tip = store_fetch()
+    if not tip:
+        return 0
+    n = 0
+    for path in (git("ls-tree", "-r", "--name-only", tip, check=False) or "").splitlines():
+        if not path.endswith("/baseline.json") or path.count("/") != 1:
+            continue
+        text = git("show", f"{tip}:{path}", check=False)
+        try:
+            b = json.loads(text or "")
+        except ValueError:
+            continue
+        i = path.split("/")[0]
+        os.makedirs(state_dir(i), exist_ok=True)
+        with open(os.path.join(state_dir(i), "baseline.json"), "w") as f:
+            json.dump(b, f, indent=1, sort_keys=True)
+        n += 1
+    print(f"mutation baseline store: restored {n} baseline(s) from branch {STORE_BRANCH} @ {tip[:10]}")
+    return n
+
+
+def store_push(i):
+    """Publish .mutation-baseline/<i>/baseline.json to the store branch (non-force, retried on a race)."""
+    if not store_enabled():
+        return
+    ref = os.environ.get("GITHUB_REF_NAME") or ""
+    if ref not in PUSH_REFS and os.environ.get("MUT_BASELINE_PUSH_ANY") != "1":
+        print(f"mutation baseline store: not pushing from '{ref}' (only {'/'.join(PUSH_REFS)})")
+        return
+    data = open(os.path.join(state_dir(i), "baseline.json")).read()
+    path = f"{i}/baseline.json"
+    ident = {"GIT_AUTHOR_NAME": "mutation-baseline", "GIT_AUTHOR_EMAIL": "ci@errant.solutions",
+             "GIT_COMMITTER_NAME": "mutation-baseline", "GIT_COMMITTER_EMAIL": "ci@errant.solutions"}
+    for attempt in range(1, 7):
+        tip = store_fetch()
+        idx = os.path.join(os.path.abspath(".git") if os.path.isdir(".git") else tempfile.gettempdir(),
+                           f"mut-baseline-index-{os.getpid()}")
+        env = dict(os.environ, GIT_INDEX_FILE=idx, **ident)
+        def g(*a, inp=None):
+            return subprocess.run(["git", *a], capture_output=True, text=True, env=env, input=inp)
+        try:
+            if tip:
+                g("read-tree", tip)
+            else:
+                g("read-tree", "--empty")
+            blob = g("hash-object", "-w", "--stdin", inp=data).stdout.strip()
+            g("update-index", "--add", "--cacheinfo", f"100644,{blob},{path}")
+            tree = g("write-tree").stdout.strip()
+            if tip and git("rev-parse", f"{tip}^{{tree}}", check=False).strip() == tree:
+                print(f"mutation baseline store: {path} already current")
+                return
+            msg = f"{i}: baseline {json.loads(data).get('sha', '')[:10]} ({os.environ.get('GITHUB_RUN_ID', 'local')} on {os.uname().nodename})"
+            c = g("commit-tree", tree, *( ["-p", tip] if tip else []), "-m", msg)
+            if c.returncode != 0:
+                print(f"::warning::mutation baseline store: commit-tree failed: {c.stderr.strip()}")
+                return
+            r = subprocess.run(["git", "push", "--quiet", "origin", f"{c.stdout.strip()}:refs/heads/{STORE_BRANCH}"],
+                               capture_output=True, text=True)
+        finally:
+            try:
+                os.remove(idx)
+            except OSError:
+                pass
+        if r.returncode == 0:
+            print(f"mutation baseline store: pushed {path} -> {STORE_BRANCH} ({attempt} attempt(s))")
+            return
+        print(f"mutation baseline store: push attempt {attempt} failed: {r.stderr.strip().splitlines()[-1] if r.stderr.strip() else '?'}")
+        time.sleep(min(2 * attempt, 10))
+    print(f"::warning::mutation baseline store: could not publish {path}; only this runner's cache has it")
 
 
 def today():
@@ -118,6 +221,7 @@ def pit_targets(changed):
 
 def cmd_plan(a):
     head = git("rev-parse", "HEAD").strip()
+    store_pull()
     b = load(a.id)
     now = today()
     base, why = None, ""
@@ -180,6 +284,7 @@ def cmd_plan(a):
         nb.setdefault("survivors", [])
         nb.setdefault("last_full", None)
         save(a.id, nb)
+        store_push(a.id)
         export(MUT_MODE="skip", MUT_BASE=base, MUT_DIFF=diff_path, MUT_CHANGED=changed_path, MUT_TARGETS="", MUT_STATE=sd)
         print(f"mutation {a.id}: SKIP - nothing it mutates changed since {base[:10]} ({why}); baseline -> {head[:10]}")
         return
@@ -388,6 +493,7 @@ def cmd_gate(a):
     if a.mode == "full":
         nb = dict(b, id=a.id, sha=head, survivors=sorted(cur), last_full=today().isoformat())
         save(a.id, nb)
+        store_push(a.id)
         print(f"mutation gate {a.id}: full run recorded ({len(cur)} survivor(s)); baseline -> {head[:10]}")
         return
     known = set(b.get("survivors", []))
@@ -400,6 +506,7 @@ def cmd_gate(a):
     nb = dict(b, id=a.id, sha=head)
     nb["survivors"] = sorted(known | cur)
     save(a.id, nb)
+    store_push(a.id)
     print(f"mutation gate {a.id}: incremental run clean ({len(cur)} survivor(s), all known from the last full run{'' if seen else '; no mutants in the changed code'}); baseline -> {head[:10]}")
 
 
