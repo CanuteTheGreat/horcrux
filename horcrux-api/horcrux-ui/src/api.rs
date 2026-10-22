@@ -7146,6 +7146,8 @@ pub struct NodePower {
     pub save_timeout_secs: u64,
     pub shutdown_timeout_secs: u64,
     pub max_parallel: usize,
+    pub drain_on_shutdown: bool,
+    pub drain_timeout_secs: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
@@ -7281,4 +7283,162 @@ pub async fn discard_guest_state(kind: &str, id: &str) -> Result<(), ApiError> {
 
 pub async fn boot_saved_guests() -> Result<serde_json::Value, ApiError> {
     post_json("/nodes/guest-power/boot-guests", &serde_json::json!({})).await
+}
+
+
+// ---------------------------------------------------------------------------
+// Cluster maintenance (drain), rebalance and placement rules
+// (`/api/nodes/maintenance`, `/api/cluster/rebalance`, `/api/cluster/moves`).
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct PlanMove {
+    pub guest_id: String,
+    pub name: String,
+    pub from: String,
+    pub to: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct PlanUnplaced {
+    pub guest_id: String,
+    pub name: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct MovePlan {
+    #[serde(default)]
+    pub moves: Vec<PlanMove>,
+    #[serde(default)]
+    pub unplaced: Vec<PlanUnplaced>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct MoveOutcome {
+    pub guest_id: String,
+    pub name: String,
+    pub from: String,
+    pub to: String,
+    pub reason: String,
+    pub status: String,
+    pub job_id: Option<String>,
+    pub progress: u32,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct MoveRun {
+    pub kind: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub status: String,
+    #[serde(default)]
+    pub plan: MovePlan,
+    #[serde(default)]
+    pub results: Vec<MoveOutcome>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct MaintenanceState {
+    pub enabled: bool,
+    pub since: Option<String>,
+    pub reason: Option<String>,
+    pub drain: Option<MoveRun>,
+    #[serde(default)]
+    pub clustered: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct RebalanceSettings {
+    pub mode: String,
+    pub max_moves: usize,
+    pub threshold_pct: f64,
+    pub min_interval_secs: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct RebalanceNode {
+    pub name: String,
+    pub online: bool,
+    pub maintenance: bool,
+    pub mem_total_mb: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct RebalanceState {
+    pub settings: RebalanceSettings,
+    pub plan: MovePlan,
+    pub nodes: Vec<RebalanceNode>,
+    pub last: Option<MoveRun>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct PlacementRules {
+    #[serde(default)]
+    pub pin: Option<String>,
+    #[serde(default)]
+    pub affinity_group: Option<String>,
+    #[serde(default)]
+    pub anti_affinity_group: Option<String>,
+    #[serde(default)]
+    pub no_migrate: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct MoveHistoryEntry {
+    pub at: String,
+    pub guest_id: String,
+    pub name: String,
+    pub from: String,
+    pub to: String,
+    pub reason: String,
+    pub ok: bool,
+    pub job_id: Option<String>,
+    pub error: Option<String>,
+}
+
+pub async fn get_maintenance() -> Result<MaintenanceState, ApiError> {
+    fetch_json("/nodes/maintenance").await
+}
+
+pub async fn set_maintenance(enabled: bool, drain: bool) -> Result<MaintenanceState, ApiError> {
+    post_json(
+        "/nodes/maintenance",
+        &serde_json::json!({"enabled": enabled, "drain": drain}),
+    )
+    .await
+}
+
+pub async fn drain_plan() -> Result<MovePlan, ApiError> {
+    fetch_json("/nodes/maintenance/plan").await
+}
+
+pub async fn get_rebalance() -> Result<RebalanceState, ApiError> {
+    fetch_json("/cluster/rebalance").await
+}
+
+pub async fn put_rebalance(s: &RebalanceSettings) -> Result<RebalanceSettings, ApiError> {
+    put_json("/cluster/rebalance", s).await
+}
+
+pub async fn run_rebalance(dry_run: bool) -> Result<MoveRun, ApiError> {
+    post_json(
+        "/cluster/rebalance/run",
+        &serde_json::json!({ "dry_run": dry_run }),
+    )
+    .await
+}
+
+pub async fn list_moves() -> Result<Vec<MoveHistoryEntry>, ApiError> {
+    fetch_json("/cluster/moves").await
+}
+
+pub async fn get_placement(vm: &str) -> Result<PlacementRules, ApiError> {
+    fetch_json(&format!("/vms/{vm}/placement")).await
+}
+
+pub async fn put_placement(vm: &str, r: &PlacementRules) -> Result<PlacementRules, ApiError> {
+    put_json(&format!("/vms/{vm}/placement"), r).await
 }

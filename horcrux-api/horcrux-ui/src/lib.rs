@@ -25,7 +25,7 @@ use pages::{
     CertificatesPage, CloneList, ClusterDashboard, ClusterManagementPage, ConfigMapsPage,
     ContainerCreate, ContainerEventsPage, ContainerExecPage, ContainerList, ContainerLogsPage,
     ContainerNetworksPage, Dashboard, DashboardsPage, DeploymentsPage, DiskManagementPage,
-    GpuManagement, HaDashboard, HaFailoverPage, HaGroupsPage, HelmChartsPage, HelmReleasesPage,
+    GpuManagement, HaDashboard, HaFailoverPage, HaGroupsPage, MaintenancePage, HelmChartsPage, HelmReleasesPage,
     HelmRepositoriesPage, ImagesPage, IngressesPage, KubernetesManagement, Login, LxcContainerPage,
     LxcTemplatesPage, MetricsExplorerPage, MfaPage, MigrationCenterPage, Monitoring,
     NetworkManagement, NotificationsPage, ObservabilityPage, PermissionsPage, PodsPage, RealmsPage,
@@ -83,6 +83,7 @@ pub fn App() -> impl IntoView {
                             <A href="/gpu" class="dropdown-item">"GPU Passthrough"</A>
                             <IfFeature feature="cluster">
                                 <A href="/ha" class="dropdown-item">"High Availability"</A>
+                                <A href="/ha/maintenance" class="dropdown-item">"Maintenance & Rebalance"</A>
                             </IfFeature>
                         </div>
                     </div>
@@ -216,6 +217,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/ha" view=|| view! { <Gated feature="cluster"><HaDashboard/></Gated> }/>
                     <Route path="/ha/cluster" view=|| view! { <Gated feature="cluster"><ClusterManagementPage/></Gated> }/>
                     <Route path="/ha/failover" view=|| view! { <Gated feature="cluster"><HaFailoverPage/></Gated> }/>
+                    <Route path="/ha/maintenance" view=|| view! { <Gated feature="cluster"><MaintenancePage/></Gated> }/>
                     <Route path="/ha/groups" view=|| view! { <Gated feature="cluster"><HaGroupsPage/></Gated> }/>
                     <Route path="/ha/migration" view=|| view! { <Gated feature="cluster"><MigrationCenterPage/></Gated> }/>
                     <Route path="/monitoring/alerts" view=AlertCenterPage/>

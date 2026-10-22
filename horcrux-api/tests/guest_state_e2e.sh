@@ -17,7 +17,7 @@ trap cleanup EXIT
 
 DEV=(--device /dev/net/tun)
 if [ -e /dev/kvm ]; then DEV+=(--device /dev/kvm); echo "KVM: yes"; else echo "KVM: no (TCG)"; fi
-docker run -d --name "$NAME" --hostname gsnode --cap-add NET_ADMIN --cap-add SYS_ADMIN "${DEV[@]}" \
+docker run -d --name "$NAME" --hostname gsnode --privileged "${DEV[@]}" \
   --memory 4g "$IMAGE" sleep 7200 >/dev/null
 curl -sfL --retry 3 -o /tmp/$NAME-cirros.img "$CIRROS_URL"
 docker exec "$NAME" mkdir -p /hx /var/lib/hx/images /var/lib/hx/vms

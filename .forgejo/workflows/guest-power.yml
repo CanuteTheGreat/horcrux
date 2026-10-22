@@ -1,0 +1,86 @@
+name: Guest save state + cluster drain (2 nodes, KVM)
+
+# Save state on host shutdown / resume on boot for real QEMU VMs (RAM marker,
+# process and uptime survive; free-space check; the unit's stop path then the
+# boot path; crash fallback; stale state refused - guest_state_e2e.py) and a
+# two-node cluster drain: maintenance live-migrates VMs away without a restart,
+# the host shutdown drains first, the node returns and the cluster rebalances,
+# and a target killed mid-move leaves exactly one running copy
+# (drain_e2e.py). Real QEMU (KVM, TCG when the runner has no /dev/kvm) and
+# CirrOS guests in sibling containers. The container half of save state (LXC,
+# CRIU) runs in ci.yml's Test job. Runs on rw-man-01's kvm-x86_64 runner on
+# every push that touches the code involved, nightly, and on demand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'horcrux-api/src/api/guest_state/**'
+      - 'horcrux-api/src/api/drain.rs'
+      - 'horcrux-api/src/api/vm_migration.rs'
+      - 'horcrux-api/src/api/migration_peer.rs'
+      - 'crates/horcrux-vm/src/vm/savestate.rs'
+      - 'crates/horcrux-vm/src/vm/qemu.rs'
+      - 'crates/horcrux-cluster/src/cluster/drain.rs'
+      - 'deploy/systemd/horcrux-guests.service'
+      - 'horcrux-api/tests/guest_state_e2e.*'
+      - 'horcrux-api/tests/drain_e2e.*'
+      - 'horcrux-api/tests/hx_node.py'
+      - '.forgejo/workflows/guest-power.yml'
+  workflow_dispatch: {}
+  schedule:
+    - cron: '20 10 * * *'
+
+concurrency:
+  group: guest-power
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  guest-power:
+    name: Save state (VMs) + two-node drain / rebalance
+    runs-on: kvm-x86_64
+    container: catthehacker/ubuntu:act-latest
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: "4"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@stable
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
+          ls -l /dev/kvm || echo "no /dev/kvm: guests run under TCG (slow)"
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-guest-power-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-guest-power-
+
+      - name: Build API (all features)
+        run: cargo build --all-features -p horcrux-api --bin horcrux-api
+
+      - name: Save state / resume of QEMU VMs end to end
+        run: bash horcrux-api/tests/guest_state_e2e.sh target/debug/horcrux-api
+
+      - name: Two-node drain + rebalance end to end
+        run: bash horcrux-api/tests/drain_e2e.sh target/debug/horcrux-api
+
+      - name: Remove leftover siblings
+        if: always()
+        run: |
+          docker ps -a --filter name=horcrux-gs-e2e- --format '{{.Names}}' | xargs -r docker rm -f
+          docker ps -a --filter name=hxdrain- --format '{{.Names}}' | xargs -r docker rm -f
+          docker network ls --filter name=hxdrain- --format '{{.Name}}' | xargs -r docker network rm || true
+          docker volume ls --filter name=hxdrain- --format '{{.Name}}' | xargs -r docker volume rm || true

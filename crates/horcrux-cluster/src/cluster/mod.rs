@@ -1,4 +1,5 @@
 pub mod affinity;
+pub mod drain;
 pub mod arch;
 pub mod balancer;
 /// Clustering support module

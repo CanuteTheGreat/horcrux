@@ -436,6 +436,9 @@ pub async fn run() -> anyhow::Result<()> {
     // HA failure detection, fencing and recovery.
     #[cfg(feature = "cluster")]
     api::ha_loop::spawn(state.clone());
+    // Rebalance when a node joins or returns from maintenance (leader only).
+    #[cfg(feature = "cluster")]
+    api::drain::spawn(state.clone());
 
     // Save/resume of guests across host shutdown: token, boot pass, running snapshot.
     api::guest_state::engine::spawn(state.clone());
@@ -547,6 +550,7 @@ pub async fn run() -> anyhow::Result<()> {
     let protected_routes = protected_routes
         .merge(cluster_routes())
         .merge(api::ha_loop::routes())
+        .merge(api::drain::routes())
         .merge(api::cluster_join::routes());
 
     // LXC parity routes (templates, shutdown/reboot, pct set, resize, snapshots)

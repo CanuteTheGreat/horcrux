@@ -8,6 +8,8 @@ pub mod backup;
 #[cfg(feature = "cluster")]
 pub mod cluster_join;
 pub mod dashboards;
+#[cfg(feature = "cluster")]
+pub mod drain;
 pub mod guest_state;
 #[cfg(feature = "cluster")]
 pub mod ha_loop;

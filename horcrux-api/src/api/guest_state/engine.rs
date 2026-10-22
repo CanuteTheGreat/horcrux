@@ -664,6 +664,28 @@ static BOOT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 pub async fn stop_all(state: &Arc<AppState>) -> Report {
     STOPPING.store(true, Ordering::SeqCst);
     let node = policy::load_node(state).await;
+    // Clustered: move running VMs to other nodes first (live migration);
+    // what stays is handled by the stop action below.
+    let mut moved: Vec<GuestOutcome> = Vec::new();
+    let mut stayed: std::collections::HashMap<String, String> = Default::default();
+    #[cfg(feature = "cluster")]
+    if node.drain_on_shutdown {
+        if let Some((m, s)) = crate::api::drain::drain_for_shutdown(state, node.drain_timeout_secs).await {
+            let known = list_guests(state).await;
+            let _ = known;
+            for (id, to) in m {
+                moved.push(GuestOutcome {
+                    kind: GuestKind::Vm,
+                    name: id.clone(),
+                    id,
+                    action: "migrated".into(),
+                    ok: true,
+                    message: Some(format!("moved to {to} without a restart")),
+                });
+            }
+            stayed = s;
+        }
+    }
     let running: Vec<GuestInfo> = list_guests(state).await.into_iter().filter(|g| g.is_up()).collect();
     info!("host shutdown: {} running guest(s)", running.len());
     let manifest_guests: Vec<ManifestGuest> = running
@@ -696,10 +718,18 @@ pub async fn stop_all(state: &Arc<AppState>) -> Report {
     }
     let mut outcomes = Vec::new();
     for t in tasks {
-        if let Ok(o) = t.await {
+        if let Ok(mut o) = t.await {
+            if let Some(why) = stayed.get(&o.id) {
+                o.message = Some(format!(
+                    "Could not be moved to another node ({why}). {}",
+                    o.message.unwrap_or_default()
+                ));
+            }
             outcomes.push(o);
         }
     }
+    let local_outcomes = outcomes.len();
+    outcomes.extend(moved);
     write_manifest(
         state,
         &Manifest {
@@ -712,7 +742,12 @@ pub async fn stop_all(state: &Arc<AppState>) -> Report {
     );
     let saved = outcomes.iter().filter(|o| o.action == "saved").count();
     Report {
-        message: format!("{} guest(s) handled, {} saved", outcomes.len(), saved),
+        message: format!(
+            "{} guest(s) handled here, {} saved, {} moved to other nodes",
+            local_outcomes,
+            saved,
+            outcomes.len() - local_outcomes
+        ),
         outcomes,
         skipped: false,
     }
@@ -805,6 +840,8 @@ pub async fn boot_all(state: &Arc<AppState>, force: bool) -> Report {
         record(state, o.kind, &o.id, "host-boot", &o.action, o.ok, o.message.clone()).await;
         outcomes.push(o);
     }
+    #[cfg(feature = "cluster")]
+    crate::api::drain::leave_boot_maintenance(state).await;
     let _ = write_atomic(&boot_marker_path(state), serde_json::json!({"boot_id": bid, "at": chrono::Utc::now().to_rfc3339()}).to_string().as_bytes());
     BOOT_DONE.store(true, Ordering::SeqCst);
     STOPPING.store(false, Ordering::SeqCst);

@@ -52,6 +52,12 @@ pub struct NodePolicy {
     pub shutdown_timeout_secs: u64,
     /// Guests handled at the same time at host shutdown.
     pub max_parallel: usize,
+    /// In a cluster, host shutdown first moves running VMs to other nodes
+    /// (live migration); only what cannot move is handled by the stop action.
+    pub drain_on_shutdown: bool,
+    /// How long the shutdown drain may take per move before it gives up on
+    /// that guest (which is then saved locally).
+    pub drain_timeout_secs: u64,
 }
 
 impl Default for NodePolicy {
@@ -64,6 +70,8 @@ impl Default for NodePolicy {
             save_timeout_secs: 300,
             shutdown_timeout_secs: 120,
             max_parallel: 4,
+            drain_on_shutdown: true,
+            drain_timeout_secs: 900,
         }
     }
 }
@@ -81,6 +89,9 @@ impl NodePolicy {
         }
         if self.start_delay_secs > 86400 {
             return Err("start_delay_secs must be at most 86400".into());
+        }
+        if !(30..=86400).contains(&self.drain_timeout_secs) {
+            return Err("drain_timeout_secs must be 30-86400".into());
         }
         check_dir(self.save_dir.as_deref())
     }
