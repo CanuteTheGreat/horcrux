@@ -1,6 +1,6 @@
 [Unit]
 Description=Horcrux Virtualization Management API Server
-Documentation=https://git.canutethegreat.com/CanuteTheGreat/horcrux
+Documentation=https://github.com/CanuteTheGreat/horcrux
 After=network-online.target
 Wants=network-online.target
 

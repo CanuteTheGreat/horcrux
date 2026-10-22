@@ -25,7 +25,8 @@ version = "0.1.5"
 edition = "2021"
 authors = ["Horcrux Contributors"]
 license = "GPL-3.0"
-repository = "https://git.canutethegreat.com/CanuteTheGreat/horcrux"
+repository = "https://github.com/CanuteTheGreat/horcrux"
+homepage = "https://github.com/CanuteTheGreat/horcrux"
 
 [workspace.dependencies]
 # Shared dependencies across workspace

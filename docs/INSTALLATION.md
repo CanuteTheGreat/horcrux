@@ -49,7 +49,7 @@ The easiest way to install Horcrux on Gentoo:
 
 ```bash
 # Clone the repository
-git clone https://git.canutethegreat.com/CanuteTheGreat/horcrux.git
+git clone https://github.com/CanuteTheGreat/horcrux.git
 cd horcrux
 
 # Run the installation script
@@ -105,7 +105,7 @@ which a static musl binary can't).
 
 ```bash
 # Clone repository
-git clone https://git.canutethegreat.com/CanuteTheGreat/horcrux.git
+git clone https://github.com/CanuteTheGreat/horcrux.git
 cd horcrux
 
 # Build release binaries
@@ -530,7 +530,7 @@ After installation:
 - **Logs**: `journalctl -u horcrux-api -f`
 - **CLI Help**: `horcrux --help`
 - **API Docs**: https://localhost:8006/api/docs
-- **Issues**: https://git.canutethegreat.com/CanuteTheGreat/horcrux/issues
+- **Issues**: https://github.com/CanuteTheGreat/horcrux/issues
 
 ---
 

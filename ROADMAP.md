@@ -799,9 +799,9 @@ a per-node placement weight:
 
 ### Community Channels
 
-- **GitHub**: https://git.canutethegreat.com/CanuteTheGreat/horcrux
-- **Discussions**: https://git.canutethegreat.com/CanuteTheGreat/horcrux/discussions
-- **Issues**: https://git.canutethegreat.com/CanuteTheGreat/horcrux/issues
+- **GitHub**: https://github.com/CanuteTheGreat/horcrux
+- **Discussions**: https://github.com/CanuteTheGreat/horcrux/discussions
+- **Issues**: https://github.com/CanuteTheGreat/horcrux/issues
 - **Docs**: https://docs.horcrux.io
 
 ---

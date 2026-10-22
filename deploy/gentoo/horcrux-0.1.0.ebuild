@@ -8,9 +8,9 @@ CRATES=""
 inherit cargo git-r3 optfeature pam systemd
 
 DESCRIPTION="Proxmox VE alternative built natively for Gentoo"
-HOMEPAGE="https://git.canutethegreat.com/CanuteTheGreat/horcrux"
+HOMEPAGE="https://github.com/CanuteTheGreat/horcrux"
 
-EGIT_REPO_URI="https://git.canutethegreat.com/CanuteTheGreat/horcrux.git"
+EGIT_REPO_URI="https://github.com/CanuteTheGreat/horcrux.git"
 EGIT_COMMIT="v${PV}"
 
 # CARGO_CRATE_URIS is populated at emerge time via `cargo vendor` in the

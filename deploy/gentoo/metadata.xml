@@ -99,6 +99,6 @@
 		<flag name="nas-lvm">Enable LVM thin provisioning for NAS storage</flag>
 	</use>
 	<upstream>
-		<bugs-to>https://git.canutethegreat.com/CanuteTheGreat/horcrux/issues</bugs-to>
+		<bugs-to>https://github.com/CanuteTheGreat/horcrux/issues</bugs-to>
 	</upstream>
 </pkgmetadata>

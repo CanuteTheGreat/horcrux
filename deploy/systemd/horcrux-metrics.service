@@ -1,6 +1,6 @@
 [Unit]
 Description=Horcrux Metrics Collection Service
-Documentation=https://git.canutethegreat.com/CanuteTheGreat/horcrux
+Documentation=https://github.com/CanuteTheGreat/horcrux
 After=horcrux-api.service
 Requires=horcrux-api.service
 PartOf=horcrux-api.service
