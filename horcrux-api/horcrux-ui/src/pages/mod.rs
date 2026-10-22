@@ -80,7 +80,9 @@ pub use backup::{
 };
 
 // Re-export HA components
-pub use ha::{ClusterManagementPage, HaDashboard, HaFailoverPage, HaGroupsPage, MigrationCenterPage};
+pub use ha::{
+    ClusterManagementPage, HaDashboard, HaFailoverPage, HaGroupsPage, MigrationCenterPage,
+};
 
 // Re-export monitoring components
 pub use monitoring::{

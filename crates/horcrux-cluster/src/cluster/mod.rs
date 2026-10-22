@@ -445,7 +445,15 @@ impl ClusterManager {
                 )));
             }
         }
-        let next_id = self.nodes.read().await.values().map(|n| n.id).max().unwrap_or(0) + 1;
+        let next_id = self
+            .nodes
+            .read()
+            .await
+            .values()
+            .map(|n| n.id)
+            .max()
+            .unwrap_or(0)
+            + 1;
         let node = Node {
             id: next_id,
             name: name.to_string(),

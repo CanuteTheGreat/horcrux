@@ -22,11 +22,11 @@ mod websocket;
 
 use pages::{
     AlertCenterPage, Alerts, ApiKeysPage, BackupDashboard, BackupJobsPage, BackupVerifyPage,
-    CertificatesPage, CloneList, ClusterDashboard, ClusterManagementPage, HaFailoverPage, ConfigMapsPage,
+    CertificatesPage, CloneList, ClusterDashboard, ClusterManagementPage, ConfigMapsPage,
     ContainerCreate, ContainerEventsPage, ContainerExecPage, ContainerList, ContainerLogsPage,
     ContainerNetworksPage, Dashboard, DashboardsPage, DeploymentsPage, GpuManagement, HaDashboard,
-    HaGroupsPage, HelmChartsPage, HelmReleasesPage, HelmRepositoriesPage, ImagesPage,
-    IngressesPage, KubernetesManagement, Login, LxcContainerPage, LxcTemplatesPage,
+    HaFailoverPage, HaGroupsPage, HelmChartsPage, HelmReleasesPage, HelmRepositoriesPage,
+    ImagesPage, IngressesPage, KubernetesManagement, Login, LxcContainerPage, LxcTemplatesPage,
     MetricsExplorerPage, MfaPage, MigrationCenterPage, Monitoring, NetworkManagement,
     NotificationsPage, ObservabilityPage, PermissionsPage, PodsPage, RealmsPage, ReplicationList,
     RetentionPoliciesPage, RolesPage, SecretsPage, ServicesPage, SessionsPage, SnapshotList,

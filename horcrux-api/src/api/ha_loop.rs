@@ -187,7 +187,10 @@ async fn peer_members(
     Json(m): Json<MemberInfo>,
 ) -> Result<StatusCode, ApiError> {
     require_peer(&user)?;
-    state.cluster_manager.accept_member(&m.name, &m.address).await?;
+    state
+        .cluster_manager
+        .accept_member(&m.name, &m.address)
+        .await?;
     Ok(StatusCode::OK)
 }
 
@@ -599,10 +602,17 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
     if leader.as_deref() != Some(local.as_str()) {
         return;
     }
-    let dead: Vec<(String, i64)> = ls.offline_since.iter().map(|(k, v)| (k.clone(), *v)).collect();
+    let dead: Vec<(String, i64)> = ls
+        .offline_since
+        .iter()
+        .map(|(k, v)| (k.clone(), *v))
+        .collect();
     for (node, since) in dead {
         let affected = state.ha_manager.resources_on(&node).await;
-        if affected.iter().all(|r| !matches!(r.state, HaState::Started | HaState::Migrating)) {
+        if affected
+            .iter()
+            .all(|r| !matches!(r.state, HaState::Started | HaState::Migrating))
+        {
             continue;
         }
         let offline_for = now - since;
@@ -621,7 +631,9 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
             {
                 FencingResult::Success => {}
                 other => {
-                    tracing::error!("HA: fencing {node} did not succeed ({other:?}); not recovering");
+                    tracing::error!(
+                        "HA: fencing {node} did not succeed ({other:?}); not recovering"
+                    );
                     state
                         .ha_manager
                         .note_failure(
@@ -724,8 +736,15 @@ async fn local_restarts(
             },
             Ok(HaAction::Migrate(target)) => {
                 let seq = r.placement_seq + 1;
-                if move_vm(state, ls, local, nodes, online, &r.vm_id, &target, seq, local).await {
-                    tracing::warn!("HA: VM {} relocated to {target} after restart failures", r.vm_id);
+                if move_vm(
+                    state, ls, local, nodes, online, &r.vm_id, &target, seq, local,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        "HA: VM {} relocated to {target} after restart failures",
+                        r.vm_id
+                    );
                 }
             }
             Ok(HaAction::None) => {}
@@ -744,8 +763,16 @@ async fn recover_node(
 ) {
     let plan = state.ha_manager.plan_relocations(failed, online).await;
     for p in plan {
-        tracing::warn!("HA: recovering VM {} of failed node {failed} on {}", p.vm_id, p.target);
-        if !move_vm(state, ls, local, nodes, online, &p.vm_id, &p.target, p.seq, failed).await {
+        tracing::warn!(
+            "HA: recovering VM {} of failed node {failed} on {}",
+            p.vm_id,
+            p.target
+        );
+        if !move_vm(
+            state, ls, local, nodes, online, &p.vm_id, &p.target, p.seq, failed,
+        )
+        .await
+        {
             state.ha_manager.count_failed_relocation(&p.vm_id).await;
         }
     }
@@ -787,7 +814,10 @@ async fn move_vm(
     };
     match res {
         Ok(()) => {
-            state.ha_manager.set_placement(vm_id, target, seq, target != local).await;
+            state
+                .ha_manager
+                .set_placement(vm_id, target, seq, target != local)
+                .await;
             true
         }
         Err(e) => {

@@ -85,14 +85,24 @@ pub fn HaFailoverPage() -> impl IntoView {
         });
     };
     let do_add_device = move |_| {
-        let nz = |s: String| if s.trim().is_empty() { None } else { Some(s.trim().to_string()) };
+        let nz = |s: String| {
+            if s.trim().is_empty() {
+                None
+            } else {
+                Some(s.trim().to_string())
+            }
+        };
         let dev = NewFencingDevice {
             id: f_id.get().trim().to_string(),
             node: f_node.get().trim().to_string(),
             agent_type: f_agent.get(),
             address: f_addr.get().trim().to_string(),
             username: nz(f_user.get()),
-            password: if f_pass.get().is_empty() { None } else { Some(f_pass.get()) },
+            password: if f_pass.get().is_empty() {
+                None
+            } else {
+                Some(f_pass.get())
+            },
             port: None,
             options: Default::default(),
             priority: 1,

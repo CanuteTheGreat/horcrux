@@ -5,13 +5,13 @@ pub mod alert_rules;
 pub mod auth;
 #[cfg(feature = "backup")]
 pub mod backup;
-pub mod dashboards;
-#[cfg(feature = "kubernetes")]
-pub mod helm;
 #[cfg(feature = "cluster")]
 pub mod cluster_join;
+pub mod dashboards;
 #[cfg(feature = "cluster")]
 pub mod ha_loop;
+#[cfg(feature = "kubernetes")]
+pub mod helm;
 pub mod host_net;
 #[cfg(feature = "kubernetes")]
 pub mod k8s_config;

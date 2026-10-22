@@ -103,7 +103,11 @@ async fn join_request(
             .send()
             .await;
         if let Err(e) = r {
-            tracing::warn!("could not tell {} about new member {}: {e}", n.name, req.name);
+            tracing::warn!(
+                "could not tell {} about new member {}: {e}",
+                n.name,
+                req.name
+            );
         }
     }
     Ok(Json(JoinReply {
@@ -145,7 +149,10 @@ async fn join(
         ));
     }
     let local = state.cluster_manager.get_local_node_name().await?;
-    let base = if req.peer.contains(':') && !req.peer.starts_with('[') && req.peer.matches(':').count() == 1 {
+    let base = if req.peer.contains(':')
+        && !req.peer.starts_with('[')
+        && req.peer.matches(':').count() == 1
+    {
         format!("https://{}", req.peer)
     } else {
         format!("https://{}:{}", req.peer, state.config.server.port)

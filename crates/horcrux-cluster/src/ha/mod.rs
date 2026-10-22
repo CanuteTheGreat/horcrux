@@ -1611,7 +1611,11 @@ mod tests {
         let r = m.get_resource("vm1").await.unwrap();
         assert_eq!(r.current_node.as_deref(), Some("n3"));
         assert_eq!((r.placement_seq, r.relocate_count), (1, 1));
-        assert!(m.get_events(Some("vm1"), None).await.iter().any(|e| e.message.contains("recovered on n3")));
+        assert!(m
+            .get_events(Some("vm1"), None)
+            .await
+            .iter()
+            .any(|e| e.message.contains("recovered on n3")));
     }
 
     #[tokio::test]
@@ -1620,18 +1624,27 @@ mod tests {
         assert!(m.plan_relocations("n1", &[]).await.is_empty());
         assert_eq!(m.get_resource("vm1").await.unwrap().state, HaState::Error);
         // A resource in Error is not planned again.
-        assert!(m.plan_relocations("n1", &["n2".to_string()]).await.is_empty());
+        assert!(m
+            .plan_relocations("n1", &["n2".to_string()])
+            .await
+            .is_empty());
     }
 
     #[tokio::test]
     async fn plan_relocations_respects_max_relocate_and_disabled_ha() {
         let m = manager_with_vm_on("n1", 1).await;
         m.set_placement("vm1", "n1", 0, true).await; // one relocation used
-        assert!(m.plan_relocations("n1", &["n2".to_string()]).await.is_empty());
+        assert!(m
+            .plan_relocations("n1", &["n2".to_string()])
+            .await
+            .is_empty());
         assert_eq!(m.get_resource("vm1").await.unwrap().state, HaState::Error);
         let m = manager_with_vm_on("n1", 3).await;
         m.disable().await;
-        assert!(m.plan_relocations("n1", &["n2".to_string()]).await.is_empty());
+        assert!(m
+            .plan_relocations("n1", &["n2".to_string()])
+            .await
+            .is_empty());
     }
 
     #[tokio::test]
@@ -1651,7 +1664,11 @@ mod tests {
         let newer = m.get_resource("vm1").await.unwrap();
         assert!(m1.apply_peer_resource(newer, None).await);
         assert_eq!(
-            m1.get_resource("vm1").await.unwrap().current_node.as_deref(),
+            m1.get_resource("vm1")
+                .await
+                .unwrap()
+                .current_node
+                .as_deref(),
             Some("n2")
         );
     }
@@ -1660,7 +1677,10 @@ mod tests {
     async fn prune_drops_resources_the_owner_stopped_managing() {
         let m = manager_with_vm_on("n1", 3).await;
         assert!(m.prune_resources_of("n2", &[]).await.is_empty());
-        assert_eq!(m.prune_resources_of("n1", &[]).await, vec!["vm1".to_string()]);
+        assert_eq!(
+            m.prune_resources_of("n1", &[]).await,
+            vec!["vm1".to_string()]
+        );
         assert!(m.list_resources().await.is_empty());
     }
 }

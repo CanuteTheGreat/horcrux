@@ -1797,7 +1797,9 @@ async fn emit_vm_state(state: &Arc<AppState>, vm: &VmConfig, old: &str) {
         .trigger_event(webhooks::WebhookEventType::VmStateChanged, data.clone())
         .await;
     let specific = match vm.status {
-        horcrux_common::VmStatus::Running if old != "Paused" => Some(webhooks::WebhookEventType::VmStarted),
+        horcrux_common::VmStatus::Running if old != "Paused" => {
+            Some(webhooks::WebhookEventType::VmStarted)
+        }
         horcrux_common::VmStatus::Stopped => Some(webhooks::WebhookEventType::VmStopped),
         _ => None,
     };
