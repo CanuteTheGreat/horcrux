@@ -1,313 +1,164 @@
 # Horcrux
 
-> **A Proxmox VE Alternative for Gentoo Linux**
+> **A Proxmox VE-style virtualization manager for Gentoo Linux, written in Rust.**
 >
-> Production-ready virtualization platform with enhanced flexibility and modern architecture.
+> **Status: in active development (v0.1.x).** Not yet suitable for production use.
+> APIs, config and on-disk formats can still change between releases. Try it on test hardware.
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Built with Rust](https://img.shields.io/badge/Built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![Platform: Gentoo](https://img.shields.io/badge/Platform-Gentoo-purple.svg)](https://www.gentoo.org/)
 
-**[🌐 Visit the Website](https://canutethegreat.github.io/horcrux/)** | **[📚 Documentation](docs/)** | **[📖 API Docs](https://localhost:8006/api/docs)** | **[🐳 Docker Guide](docs/DOCKER.md)**
+**[Documentation](docs/)** | **[API reference](docs/API_DOCS.md)** | **[Installation](docs/INSTALLATION.md)** | **[Docker guide](docs/DOCKER.md)**
 
-## 🎯 What is Horcrux?
+## What is Horcrux?
 
-Horcrux is a complete virtualization management platform designed specifically for Gentoo Linux. It provides Proxmox VE-compatible functionality while offering **more choice**, **better customization**, and **memory-safe code** through Rust.
+Horcrux is a web-managed virtualization platform that aims at Proxmox VE-style
+functionality (VMs, containers, storage, clustering, firewall, backups, RBAC) on
+Gentoo, with a Rust API server, a Rust/WASM web UI, a CLI and a Terraform provider.
+It differs from Proxmox in a few deliberate ways:
 
-### Key Differentiators
+- **More backends:** QEMU/KVM, LXD and Incus for VMs; LXC, LXD, Incus, Docker and Podman for containers.
+- **Kubernetes management:** connect or provision k3s/kubeadm clusters, workloads, Helm.
+- **Mixed-architecture clusters:** x86_64, aarch64 and riscv64 nodes in one cluster.
+- **Gentoo-native:** ebuilds and USE flags select which features get built.
+- **Rust throughout**, including the web UI (Leptos/WASM).
 
-- ✅ **More Hypervisors** - QEMU/KVM, LXD, Incus (vs Proxmox's QEMU only)
-- ✅ **More Container Runtimes** - LXC, LXD, Incus, Docker, Podman (vs Proxmox's LXC only)
-- ✅ **Kubernetes Integration** - Full K8s cluster management with Helm support
-- ✅ **Mixed-Architecture Clusters** - x86_64, aarch64, riscv64 in same cluster
+## Current status
 
-> **Hardware note:** riscv64 (and aarch64) release binaries are cross-compiled
-> by the release workflow (`.forgejo/scripts/release-build.sh`: cross gcc plus the
-> target's libvirt/libpam), but we have no physical RISC-V hardware to run/test on yet. If you have riscv64
-> hardware (e.g. VisionFive 2, Milk-V, StarFive) and can test/report back, please
-> open an issue — real-world validation on this architecture is genuinely needed.
-- ✅ **Modern Language** - Rust vs Perl for safety and performance
-- ✅ **Gentoo Integration** - USE flags for fine-grained control
-- ✅ **Full Rust UI** - Leptos/WASM frontend (no JavaScript!)
+What is covered by automated tests in the project's CI today:
 
-## 🚀 Features
+- **Build and lint:** formatting, clippy, release builds across feature sets, and a USE-flag feature build matrix.
+- **Unit and integration tests** run against a live `horcrux-api` server.
+- **Against real services, not mocks:** OpenLDAP, Dex (OIDC), PAM and an ACME test CA for auth realms and certificates; real nftables for firewall and SDN policy enforcement; real CNI plugins; real tap/VLAN/PXE VM networking; nested LXC and Incus containers; a k3s cluster with a local chart repository for Helm; the Docker daemon for container tests.
+- **Web UI:** built to WASM and exercised by browser end-to-end tests.
+- **Gentoo:** the container image builds through Portage, and the ebuild installs across a USE-flag matrix.
+- **Security audit** (`cargo audit`) runs on every change.
 
-### Virtualization & Containers
+Known gaps and caveats:
 
-- **3 Hypervisors:**
-  - QEMU/KVM - Industry-standard full virtualization
-  - LXD - Lightweight VM and container platform
-  - Incus - LXD fork with enhanced features
+- **riscv64 / aarch64** release binaries are cross-compiled, but there is no physical RISC-V hardware in the test setup. Reports from real riscv64 boards are welcome.
+- The `Hypervisor` HA fencing agent type is a stub (see `horcrux-api/src/ha/fencing.rs`); the IPMI, iLO/DRAC, SSH, libvirt, watchdog and SNMP-PDU agents are implemented.
+- The mobile UI's Storage and Network pages are placeholders ("coming soon").
+- Several status/summary documents in the repo root are historical session notes and may overstate completeness; treat this README, `docs/` and the CI results as the source of truth. See also [ROADMAP.md](ROADMAP.md) and [MISSING_FEATURES.md](MISSING_FEATURES.md).
+- No third-party security review has been done.
 
-- **5 Container Runtimes:**
-  - LXC - System containers
-  - LXD Containers - Via LXD backend
-  - Incus Containers - Via Incus backend
-  - Docker - OCI containers
-  - Podman - Daemonless containers
+## Features
 
-### Kubernetes Integration
+### Virtualization and containers
 
-- **Cluster Management:**
-  - Connect external clusters via kubeconfig
-  - Provision k3s and kubeadm clusters
-  - Multi-cluster support with health monitoring
-  - Cluster upgrades and node management
+- **Hypervisors:** QEMU/KVM, LXD, Incus.
+- **Container runtimes:** LXC, LXD, Incus, Docker, Podman.
+- **Templates:** full and linked clones, cloud-init.
+- **Console access:** VNC (noVNC in the browser via a WebSocket proxy; QEMU listens on 127.0.0.1 with a per-start password), SPICE, serial console, headless VMs.
 
-- **Workload Management:**
-  - Pods, Deployments, StatefulSets, DaemonSets
-  - Jobs and CronJobs
-  - Scaling and rolling updates
-  - kubectl exec via WebSocket
+### Kubernetes
 
-- **Networking:**
-  - Services (ClusterIP, NodePort, LoadBalancer)
-  - Ingress resources
-  - NetworkPolicies
+- Connect clusters via kubeconfig or provision k3s/kubeadm clusters.
+- Pods, Deployments, StatefulSets, DaemonSets, Jobs/CronJobs, Services, Ingress, NetworkPolicies, ConfigMaps/Secrets, PVCs, StorageClasses.
+- Helm install/upgrade/rollback and repository management; metrics, events, logs, exec over WebSocket.
 
-- **Configuration & Storage:**
-  - ConfigMaps and Secrets
-  - PersistentVolumeClaims
-  - StorageClasses
+See [docs/KUBERNETES.md](docs/KUBERNETES.md).
 
-- **Helm Support:**
-  - Chart installation, upgrade, rollback
-  - Repository management
-  - Release history and values
+### Storage
 
-- **Observability:**
-  - Real-time metrics (nodes, pods)
-  - Event streaming
-  - Container log tailing
+ZFS, Ceph RBD, LVM, directory (qcow2) and iSCSI backends.
 
-See [docs/KUBERNETES.md](docs/KUBERNETES.md) for complete K8s documentation.
+### Clustering and HA
 
-### Storage Backends
-
-- **ZFS** - Snapshots, clones, zvols
-- **Ceph RBD** - Distributed storage with high availability
-- **LVM** - Logical volume management with snapshots
-- **Directory** - File-based storage (qcow2)
-
-### Clustering
-
-- **Corosync/Pacemaker** - Enterprise clustering
-- **Multi-node support** - Unlimited nodes
-- **Quorum** - Split-brain prevention
-- **HA Framework** - Automatic failover (IPMI, iLO/DRAC, SSH, libvirt,
-  watchdog, and SNMP-PDU fencing agents implemented; the `Hypervisor`
-  fencing agent type is a documented stub — see `horcrux-api/src/ha/fencing.rs`)
-- **Live Migration** - Move running QEMU VMs between nodes (disk mirror + QEMU migration, no shared storage needed), or offline with a verified copy; cancel rolls back (see docs/MIGRATION.md)
-- **Mixed-Architecture** - x86_64 + ARM64 + RISC-V in same cluster ⭐ **UNIQUE**
+- Corosync/Pacemaker clustering with quorum checks.
+- HA framework with affinity rules and fencing agents.
+- Live migration of running QEMU VMs (disk mirror + QEMU migration, no shared storage required), or offline migration with a verified copy; cancel rolls back. See [docs/MIGRATION.md](docs/MIGRATION.md).
 
 ### Security
 
-- **Authentication realms** (Proxmox VE model, `user@realm`):
-  - Local users (database-backed)
-  - PAM (host accounts, USE=pam)
-  - LDAP (search-then-bind; plain, StartTLS or LDAPS)
-  - Active Directory
-  - OpenID Connect (authorization code flow with PKCE, state and nonce)
-  - API keys acting with their owner's rights
+- **Realms** (`user@realm`): local, PAM, LDAP (plain/StartTLS/LDAPS), Active Directory, OpenID Connect (PKCE, state, nonce), and API keys.
+- **Second factors:** TOTP, WebAuthn security keys/passkeys, recovery codes; enforceable per user, realm or globally.
+- **RBAC:** Proxmox-style privileges checked on every API route, built-in and custom roles, path ACLs with propagation.
+- **HTTPS by default** on port 8006 using a node-local CA (or your own certificate, or ACME/Let's Encrypt with renewal). Plain HTTP is redirected.
+- **Firewall:** nftables-based, datacenter/node/per-guest rules, security groups, IPv4 and IPv6.
 
-- **Second factors:** authenticator apps (TOTP), security keys and passkeys
-  (WebAuthn), one-time recovery codes; required per user, per realm or for
-  everyone
-
-- **RBAC (Role-Based Access Control):**
-  - Proxmox-style privileges (`VM.Audit`, `VM.PowerMgmt`, `Datastore.Allocate`,
-    `Sys.Modify`, ...) checked on every API route
-  - Built-in roles (`Administrator`, `NoAccess`, `Auditor`, `VMAdmin`, `VMUser`,
-    `DatastoreAdmin`, `DatastoreUser`, `UserAdmin`, `SysAdmin`, `SDNAdmin`) and
-    custom roles
-  - ACL grants of a role on a path (`/vms/<id>`, `/storage/<pool>`, ...) to
-    users or groups, with propagation; lists are filtered to what you may see
-
-- **HTTPS by default:** port 8006 serves TLS from a node-local CA (import
-  `https://<host>:8006/api/tls/ca.pem` once); plain HTTP is redirected (308).
-  Upload your own certificate or use ACME (Let's Encrypt, HTTP-01) with
-  automatic renewal
-
-See **[docs/ACCESS_CONTROL.md](docs/ACCESS_CONTROL.md)**.
-
-- **Distributed Firewall:**
-  - nftables-based
-  - Datacenter, node, and per-VM/container rules
-  - Security groups with presets
-  - IPv4 and IPv6 support
+See [docs/ACCESS_CONTROL.md](docs/ACCESS_CONTROL.md).
 
 ### Operations
 
-- **Backup & Restore:**
-  - Full, incremental, and differential backups
-  - vzdump-compatible format
-  - Scheduled backup jobs
-  - Compression (gzip, zstd, lz4)
+- **Backup and restore:** full/incremental/differential, vzdump-compatible format, scheduled jobs, gzip/zstd/lz4.
+- **Monitoring and alerting:** node and container metrics (/proc, cgroups v1/v2), live dashboard over WebSocket, thresholds, notification channels, alert history.
+- **Web UI:** Rust/WASM dashboard, VM management, alerts, consoles.
+- **CLI** (`horcrux`), **mobile UI** (`horcrux-mobile`) and a **Terraform provider** (`terraform-provider-horcrux`: `horcrux_vm`, `horcrux_container`, `horcrux_storage_pool`, `horcrux_firewall_rule`).
 
-- **Templates:**
-  - Full and linked clones
-  - Cloud-init integration
-  - ISO generation for user-data
-
-- **Monitoring:**
-  - **Real-time metrics** via /proc filesystem and cgroups
-  - **Node metrics**: CPU usage, memory, load averages
-  - **Container metrics**: cgroups v1/v2 support (Docker/Podman)
-  - WebSocket-based live dashboard updates
-  - Time-series data storage
-  - Historical analysis
-
-- **Alerting:**
-  - Threshold-based alerts
-  - Multiple severity levels
-  - Notification channels
-  - Alert history and acknowledgment
-
-- **Console Access** (per-VM display settings):
-  - VNC (QEMU listens on 127.0.0.1 only, per-start password, noVNC in the
-    browser through the WebSocket proxy)
-  - SPICE (password set via QEMU, `.vv` file download for remote-viewer)
-  - Headless VMs
-  - Serial console on every QEMU VM
-  - Video: `std`, `virtio`, `qxl`, `none`
-  - Sound: `intel-hda`, `ich9-intel-hda`, `ac97` (SPICE, x86)
-  - SPICE USB redirection; clipboard sharing needs `spice-vdagent` in the guest
-
-### Web Interface
-
-- **Modern Rust/WASM UI:**
-  - Dashboard with real-time metrics
-  - VM management (create, start, stop, delete)
-  - Alert monitoring
-  - Responsive design
-  - No JavaScript required - pure Rust!
-
-### Mobile UI (`horcrux-mobile`)
-
-Touch-optimized mobile frontend (Rust/Yew/WASM), separate from the main
-desktop Web UI:
-
-- Dashboard, VM list/start/stop, cluster node view, login, user management,
-  backup scheduling
-- Storage and Network pages exist but are marked "coming soon" in-app —
-  not yet wired to real data
-
-### Terraform Provider (`terraform-provider-horcrux`)
-
-A Terraform provider for managing Horcrux resources as infrastructure-as-code:
-
-- Resources: `horcrux_vm`, `horcrux_container`, `horcrux_storage_pool`,
-  `horcrux_firewall_rule`
-- Talks to the Horcrux REST API via its own client
-
-## 📦 Installation
+## Installation
 
 ### Prerequisites
 
-- **OS**: Gentoo Linux (recommended) or any modern Linux distribution
-- **CPU**: 4+ cores with VT-x/AMD-V support (for KVM)
-- **RAM**: 8+ GB
-- **Disk**: 50+ GB free space
-- **Rust**: 1.82.0 or later
+- Gentoo Linux (recommended); other Linux distributions may work but are not the target.
+- CPU with VT-x/AMD-V for KVM; 8+ GB RAM and 50+ GB disk are a sensible minimum for guests.
+- Rust 1.82 or later to build from source.
 
-### Quick Install (Automated) ⚡ RECOMMENDED
-
-The easiest way to install Horcrux on Gentoo:
+### From source (installer script)
 
 ```bash
-# Clone the repository
 git clone https://github.com/CanuteTheGreat/horcrux.git
 cd horcrux
-
-# Run the automated installation script
 sudo ./deploy/install.sh
 ```
 
-This will:
-- ✅ Check system requirements
-- ✅ Create horcrux user and groups
-- ✅ Build from source (5-10 minutes)
-- ✅ Install binaries and Web UI
-- ✅ Configure systemd services
-- ✅ Initialize database
-- ✅ Generate shell completions
+The script checks requirements, creates the `horcrux` user and groups, builds from
+source, installs binaries and the web UI, configures services and initializes the
+database. Then open `https://localhost:8006`.
 
-**Access the Web UI**: https://localhost:8006
+On first start there is no default password: the `admin` password comes from
+`ADMIN_PASSWORD`, or is generated into `/var/lib/horcrux/initial-admin-password`
+(deleted once you change it). Self-registration is off. Scripts must use
+`https://` and trust the node CA from `/api/tls/ca.pem` (or the CLI's `--ca-cert`).
+Details: [docs/ACCESS_CONTROL.md](docs/ACCESS_CONTROL.md). The full guide is
+[docs/INSTALLATION.md](docs/INSTALLATION.md).
 
-> **Changed:** Horcrux now serves HTTPS on port 8006 by default (plain
-> `http://` is redirected with 308; `/api/health` still answers on plain HTTP
-> for probes) and there is **no `admin`/`admin` default** any more. On the
-> first start the `admin` password comes from `ADMIN_PASSWORD` or is
-> generated into `/var/lib/horcrux/initial-admin-password` (deleted when you
-> change it). Self-registration is off. Scripts calling `http://host:8006`
-> must switch to `https://` (trust the node CA from `/api/tls/ca.pem`, or use
-> the CLI's `--ca-cert`). Details: [docs/ACCESS_CONTROL.md](docs/ACCESS_CONTROL.md).
+### Docker (development)
 
-See **[docs/INSTALLATION.md](docs/INSTALLATION.md)** for complete installation guide.
-
-### Docker Quick Start (Development) 🐳
-
-The Docker path builds through this project's own Gentoo/Portage overlay
-(`gentoo/`) inside the container, so USE flags still apply — it is a dev/CI
-convenience for fast iteration, not a separate non-Gentoo deployment target.
+The Docker path builds through the project's own Gentoo/Portage overlay (`gentoo/`),
+so USE flags still apply. It is a development/CI convenience, not a separate
+deployment target.
 
 ```bash
-# Clone and run with Docker
 git clone https://github.com/CanuteTheGreat/horcrux.git
 cd horcrux
 docker-compose up -d
 
-# API running at https://localhost:8006 (node-local CA)
 curl -k https://localhost:8006/api/tls/ca.pem -o horcrux-ca.pem
 curl --cacert horcrux-ca.pem https://localhost:8006/api/health
-
-# Create your first VM
-docker-compose --profile cli run horcrux-cli vm create \
-  --name my-vm --cpus 2 --memory 2048 --disk-size 20
 ```
 
-See [docs/DOCKER.md](docs/DOCKER.md) for complete Docker documentation.
+See [docs/DOCKER.md](docs/DOCKER.md).
 
-### Gentoo Ebuild Installation
+### Gentoo ebuild
 
 ```bash
-# Add to local overlay
 sudo mkdir -p /var/db/repos/local/app-emulation/horcrux
 sudo cp deploy/gentoo/horcrux-0.1.0.ebuild /var/db/repos/local/app-emulation/horcrux/
-
-# Generate manifest
 cd /var/db/repos/local/app-emulation/horcrux
 sudo ebuild horcrux-0.1.0.ebuild manifest
-
-# Install with USE flags
 sudo USE="qemu lxc docker" emerge -av app-emulation/horcrux
-
-# Enable and start services
-sudo systemctl enable horcrux-api
-sudo systemctl start horcrux-api
+sudo systemctl enable --now horcrux-api
 ```
 
-### USE Flags
+A live `horcrux-9999.ebuild` is also in `deploy/gentoo/`.
+
+### USE flags
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `qemu` | QEMU/KVM virtualization support | ✓ |
-| `lxc` | LXC container support | ✓ |
-| `docker` | Docker integration | ✗ |
-| `podman` | Podman integration | ✗ |
-| `cluster` | Clustering and HA features | ✗ |
-| `backup` | Backup compression | ✗ |
-| `gpu` | GPU passthrough support | ✗ |
+| `qemu` | QEMU/KVM virtualization | on |
+| `lxc` | LXC containers | on |
+| `docker` | Docker integration | off |
+| `podman` | Podman integration | off |
+| `cluster` | Clustering and HA | off |
+| `backup` | Backup compression | off |
+| `gpu` | GPU passthrough | off |
 
-### Manual Installation
+## Configuration
 
-See **[docs/INSTALLATION.md](docs/INSTALLATION.md)** for detailed manual installation steps.
-
-## 🔧 Configuration
-
-### API Server
-
-Edit `/etc/horcrux/config.toml`:
+Edit `/etc/horcrux/config.toml` (example in `deploy/config.toml.example`):
 
 ```toml
 [server]
@@ -325,225 +176,89 @@ cluster_name = "production"
 session_timeout = 7200  # 2 hours
 ```
 
-### Firewall
+## Using it
+
+### API
+
+The server publishes an OpenAPI spec and Swagger UI on your own node at
+`/api/openapi.yaml` and `/api/docs` once it is running. The spec is also in the
+repo at [docs/openapi.yaml](docs/openapi.yaml); guides are
+[docs/API_DOCS.md](docs/API_DOCS.md) and [docs/API.md](docs/API.md).
 
 ```bash
-# Log in (TOKEN = the "ticket" field)
 TOKEN=$(curl -s --cacert horcrux-ca.pem -X POST https://localhost:8006/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username": "admin", "password": "<your admin password>"}' | jq -r .ticket)
 
-# Create firewall rule
-curl --cacert horcrux-ca.pem -X POST https://localhost:8006/api/firewall/rules \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{
-    "name": "allow-ssh",
-    "action": "Accept",
-    "protocol": "Tcp",
-    "port": 22,
-    "enabled": true
-  }'
-
-# Apply rules
-curl --cacert horcrux-ca.pem -X POST https://localhost:8006/api/firewall/apply \
-  -H "Authorization: Bearer $TOKEN"
+curl --cacert horcrux-ca.pem -H "Authorization: Bearer $TOKEN" https://localhost:8006/api/vms
 ```
 
-## 📚 Documentation
-
-### Interactive API Documentation
-
-Horcrux provides **interactive API documentation** powered by Swagger UI:
-
-- 🌐 **Swagger UI**: https://localhost:8006/api/docs
-- 📄 **OpenAPI Spec**: https://localhost:8006/api/openapi.yaml
-- 📖 **API Guide**: [docs/API_DOCS.md](docs/API_DOCS.md)
-
-Test all 150+ API endpoints directly in your browser with authentication and example payloads!
-
-### Command-Line Interface
-
-The `horcrux` CLI provides comprehensive management capabilities:
+### CLI
 
 ```bash
-# VM management
 horcrux vm list
 horcrux vm create --name myvm --memory 2048 --cpus 2 --disk 20
 horcrux vm start vm-100
-
-# Container management
-horcrux container create --name web --runtime docker --image nginx
-horcrux container exec web-1 bash
-
-# Snapshot management
 horcrux snapshot create vm-100 --name "before-upgrade" --include-memory
-horcrux snapshot tree vm-100
-
-# Cloning
 horcrux clone create vm-100 --name clone1 --full --start
-
-# Replication
-horcrux replication create vm-100 --target-node node2 --schedule daily
-
-# Shell completion support
 horcrux completions bash > /etc/bash_completion.d/horcrux
 ```
 
-See [docs/CLI.md](docs/CLI.md) for complete CLI documentation.
+See [docs/CLI.md](docs/CLI.md).
 
-### REST API Examples
-
-```bash
-# Create VM
-POST /api/vms
-{
-  "id": "vm-100",
-  "name": "web-server",
-  "hypervisor": "Qemu",
-  "architecture": "X86_64",
-  "cpus": 4,
-  "memory": 8192,
-  "disk_size": 50
-}
-
-# Start VM
-POST /api/vms/vm-100/start
-
-# Create snapshot
-POST /api/vms/vm-100/snapshots
-{
-  "name": "backup-2025-10-11",
-  "include_memory": true
-}
-```
-
-For complete API documentation, see [docs/API.md](docs/API.md).
-
-## 🧪 Testing
+## Testing
 
 ```bash
-# Run all tests
-./test-runner.sh
-
-# Run unit tests only
-cargo test --lib
-
-# Run integration tests
+./test-runner.sh        # everything
+cargo test --lib        # unit tests
 cargo test --test integration_tests
-
-# Run specific test
-cargo test test_vm_lifecycle
 ```
 
-## 🏗️ Architecture
+Many integration tests need real services (nftables, LXC, Incus, k3s, LDAP...) and
+are meant to run in CI; the unit tests run anywhere.
+
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────┐
 │           Web UI (Leptos/WASM)              │
-│   Dashboard | VMs | Alerts | Console        │
 └───────────────────┬─────────────────────────┘
-                    │ REST API
+                    │ REST API / WebSocket
 ┌───────────────────┴─────────────────────────┐
 │         Horcrux API Server (Axum)           │
-├─────────────────────────────────────────────┤
 │  VM │ Container │ Storage │ Cluster │ Auth  │
-├─────────────────────────────────────────────┤
-│ Backup │ Monitor │ Alerts │ Firewall │ ...  │
+│ Backup │ Monitor │ Alerts │ Firewall │ SDN  │
 └───────────────────┬─────────────────────────┘
-                    │
 ┌───────────────────┴─────────────────────────┐
-│        Hypervisors & Storage Backends        │
+│        Hypervisors & Storage Backends       │
 │  QEMU │ LXD │ Incus │ Docker │ Podman       │
-│  ZFS │ Ceph │ LVM │ Directory               │
+│  ZFS │ Ceph │ LVM │ iSCSI │ Directory       │
 └─────────────────────────────────────────────┘
 ```
 
-## 📈 Performance & Statistics
+## Contributing
 
-- **50,000+ lines** of production Rust code
-- **230+ REST API endpoints** covering all operations (including 80+ K8s endpoints)
-- **340+ unit tests** (all passing ✓)
-- **Async/await** throughout for maximum concurrency
-- **Zero-copy** where possible for efficiency
-- **Memory-safe** Rust with compile-time checks
-- **Resource efficient**: 200MB RAM (vs 500MB for Proxmox), 50MB disk (vs 2GB)
-- **Fast UI**: WASM-based, < 1 second load time
-
-## 📊 Project Status
-
-| Component | Status | Lines of Code | Tests |
-|-----------|--------|---------------|-------|
-| **Core API** | ✅ Production Ready | 30,000+ | 340+ passing |
-| **VM Management** | ✅ Complete | 5,000+ | 53 tests |
-| **Container Support** | ✅ Complete | 3,000+ | - |
-| **Kubernetes** | ✅ Complete | 6,000+ | - |
-| **Storage Backends** | ✅ Complete | 3,000+ | - |
-| **Networking (SDN)** | ✅ Complete | 2,000+ | - |
-| **Authentication** | ✅ Complete | 1,500+ | 5 tests |
-| **Monitoring & Alerts** | ✅ Complete | 1,500+ | - |
-| **High Availability** | ✅ Complete | 900+ | - |
-| **Live Migration** | ✅ Complete | 2,500+ | - |
-| **Web UI** | ✅ Complete | 2,000+ | - |
-| **Documentation** | ✅ Complete | 12,000+ | - |
-| **Client Libraries** | ✅ Complete | 2,500+ | - |
-
-### Documentation Coverage
-
-- ✅ **Interactive API Docs**: Swagger UI at `/api/docs` with 230+ endpoints
-- ✅ **Kubernetes Guide**: Comprehensive K8s integration docs (docs/KUBERNETES.md)
-- ✅ **OpenAPI Specification**: Complete OpenAPI 3.0 spec (1,700+ lines)
-- ✅ **CLI Documentation**: Comprehensive guide for all commands
-- ✅ **API Reference**: 3,000+ lines (100+ endpoints documented)
-- ✅ **Quick Start Guide**: 500+ lines
-- ✅ **Docker Guide**: 400+ lines
-- ✅ **Technical Status**: Comprehensive production readiness report
-- ✅ **Feature Comparison**: Detailed Horcrux vs Proxmox VE analysis
-- ✅ **Python Client**: 1,000+ lines with full API coverage
-- ✅ **Shell Client**: 600 lines with 50+ functions
-- ✅ **Code Examples**: 1,100+ lines (Python & Shell)
-- ✅ **Professional Website**: GitHub Pages deployed
-
-## 🤝 Contributing
-
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-### Development Setup
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```bash
-# Install Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Install WASM target
 rustup target add wasm32-unknown-unknown
-
-# Install trunk for UI development
 cargo install trunk
-
-# Run in development mode
-cargo run  # API server
-cd horcrux-api/horcrux-ui && trunk serve  # UI
+cargo run                                   # API server
+cd horcrux-api/horcrux-ui && trunk serve    # UI
 ```
 
-## 📄 License
+## License
 
-Horcrux is licensed under the [GNU General Public License v3.0](LICENSE).
+GPL-3.0. See [LICENSE](LICENSE).
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
-- Inspired by Proxmox VE's excellent virtualization platform
-- Built with amazing Rust ecosystem tools:
-  - [Axum](https://github.com/tokio-rs/axum) - Web framework
-  - [Leptos](https://github.com/leptos-rs/leptos) - Reactive UI
-  - [Tokio](https://tokio.rs/) - Async runtime
-  - [Serde](https://serde.rs/) - Serialization
+Inspired by Proxmox VE. Built with [Axum](https://github.com/tokio-rs/axum),
+[Leptos](https://github.com/leptos-rs/leptos), [Tokio](https://tokio.rs/) and [Serde](https://serde.rs/).
 
-## 📞 Support
+## Support
 
-- 🌐 [Website](https://canutethegreat.github.io/horcrux/)
-- 📖 [Documentation](docs/)
-- 🐛 [Issue Tracker](https://github.com/CanuteTheGreat/horcrux/issues)
-- 💬 [Discussions](https://github.com/CanuteTheGreat/horcrux/discussions)
-
----
-
-**Made with ❤️ for the Gentoo community**
+- [Documentation](docs/)
+- [Issue tracker](https://github.com/CanuteTheGreat/horcrux/issues)
+- [Discussions](https://github.com/CanuteTheGreat/horcrux/discussions)
