@@ -1,6 +1,6 @@
 //! Webhook notification system
 //! Sends HTTP POST requests to configured endpoints when events occur
-use crate::notification_channels::SECRET_MASK;
+use crate::notification_channels::{mask_url, restore_masked_url, SECRET_MASK};
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -111,6 +111,11 @@ impl WebhookConfig {
         if self.name.trim().is_empty() {
             return invalid("webhook name must not be empty".into());
         }
+        if self.url.contains(SECRET_MASK) {
+            // The masked URL of a list/get response, sent where there is no
+            // stored URL to restore (a create, or an edit of another host).
+            return invalid("webhook url is masked; enter the real URL".into());
+        }
         match url::Url::parse(&self.url) {
             Ok(u) if (u.scheme() == "http" || u.scheme() == "https") && u.has_host() => {}
             _ => {
@@ -144,10 +149,13 @@ impl WebhookConfig {
     }
 
     /// Copy for API responses: the secret and every header value replaced
-    /// by [`SECRET_MASK`]. Reading webhooks only needs Sys.Audit, and these
-    /// let the reader forge signed events or call the receiver directly.
+    /// by [`SECRET_MASK`], and the URL cut to scheme, host and port (its
+    /// path, query or `user:pass@` is often the receiver's credential).
+    /// Reading webhooks only needs Sys.Audit, and these let the reader forge
+    /// signed events or call the receiver directly.
     pub fn masked(&self) -> Self {
         let mut c = self.clone();
+        c.url = mask_url(&c.url);
         if c.secret.as_deref().is_some_and(|s| !s.is_empty()) {
             c.secret = Some(SECRET_MASK.to_string());
         }
@@ -163,6 +171,7 @@ impl WebhookConfig {
     /// masked header the stored webhook doesn't have is dropped rather than
     /// sent as the literal mask.
     fn unmask_from(&mut self, stored: &WebhookConfig) {
+        restore_masked_url(&mut self.url, &stored.url);
         if self.secret.as_deref() == Some(SECRET_MASK) {
             self.secret = stored.secret.clone();
         }
@@ -682,7 +691,10 @@ mod tests {
     #[tokio::test]
     async fn api_views_never_show_the_secret_or_header_values() {
         let m = WebhookManager::new();
-        let mut c = hook("s", "https://hooks.example.org/x");
+        let mut c = hook(
+            "s",
+            "https://bot:pw-key@hooks.example.org/x/path-key?t=q-key",
+        );
         c.secret = Some("hmac-key".into());
         c.headers
             .insert("Authorization".into(), "Bearer tok".into());
@@ -695,8 +707,12 @@ mod tests {
             assert_eq!(s.config.secret.as_deref(), Some(SECRET_MASK));
             assert_eq!(s.config.headers["Authorization"], SECRET_MASK);
             assert_eq!(s.config.headers["X-Empty"], "");
+            assert_eq!(s.config.url, "https://hooks.example.org/********");
             let text = serde_json::to_string(s).unwrap();
-            assert!(!text.contains("hmac-key") && !text.contains("Bearer tok"));
+            assert!(
+                !text.contains("-key") && !text.contains("Bearer tok"),
+                "{text}"
+            );
         }
         // No secret stays no secret.
         m.add_webhook(hook("n", "https://hooks.example.org/y"))
@@ -709,11 +725,19 @@ mod tests {
     #[tokio::test]
     async fn an_update_keeps_masked_secrets_and_the_path_id() {
         let m = WebhookManager::new();
-        let mut c = hook("u", "https://hooks.example.org/x");
+        let mut c = hook("u", "https://hooks.example.org/x?token=t");
         c.secret = Some("hmac-key".into());
         c.headers
             .insert("Authorization".into(), "Bearer tok".into());
         m.add_webhook(c).await.unwrap();
+        // A create can't carry a masked URL: there is nothing to restore.
+        let masked = m.summary("u").await.unwrap().config;
+        let mut copy = masked.clone();
+        copy.id = "copy".into();
+        assert!(matches!(
+            m.add_webhook(copy).await,
+            Err(horcrux_common::Error::Validation(_))
+        ));
 
         // What the UI sends back: the masked view, edited, with a stray id.
         let mut edit = m.summary("u").await.unwrap().config;
@@ -725,6 +749,7 @@ mod tests {
 
         let stored = m.get_webhook("u").await.unwrap();
         assert_eq!(stored.id, "u");
+        assert_eq!(stored.url, "https://hooks.example.org/x?token=t");
         assert_eq!(stored.name, "renamed");
         assert_eq!(stored.secret.as_deref(), Some("hmac-key"));
         assert_eq!(stored.headers["Authorization"], "Bearer tok");
@@ -755,7 +780,7 @@ mod tests {
         ));
         assert_eq!(
             m.get_webhook("u").await.unwrap().url,
-            "https://hooks.example.org/x"
+            "https://hooks.example.org/x?token=t"
         );
         assert!(matches!(
             m.update_webhook("nope", edit).await,

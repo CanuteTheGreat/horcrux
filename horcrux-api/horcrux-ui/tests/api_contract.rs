@@ -1107,6 +1107,16 @@ async fn notification_channels_deliver_for_real() {
         } => assert_ne!(token, "s3cret-token", "token must be masked"),
         other => panic!("webhook config came back as {other:?}"),
     }
+    match &wh.config {
+        api::NotificationChannelConfig::Webhook { url, .. } => {
+            assert_eq!(
+                url,
+                &format!("http://{hook_addr}/********"),
+                "url must be masked"
+            )
+        }
+        other => panic!("webhook config came back as {other:?}"),
+    }
     let (status, body) = test(&c, &token, &wh.id).await;
     assert_eq!(status, 204, "webhook test: {body}");
     let got = next(&mut hooks, "webhook test").await;
@@ -1133,6 +1143,10 @@ async fn notification_channels_deliver_for_real() {
     assert_eq!(upd.name, "contract-webhook-renamed");
     assert_eq!(test(&c, &token, &wh.id).await.0, 204);
     let got = next(&mut hooks, "webhook test after edit").await;
+    assert_eq!(
+        got.path, "/hook",
+        "the masked url re-sent by the edit kept the real one"
+    );
     assert_eq!(got.header("authorization"), Some("Bearer s3cret-token"));
 
     // ---- Slack / Discord / Teams payload shapes ---------------------------
@@ -3889,6 +3903,8 @@ async fn event_webhooks_mask_secrets_and_deliver_signed() {
     assert!(w.last_triggered.is_none());
     assert_eq!(w.secret.as_deref(), Some("********"));
     assert_eq!(w.headers["Authorization"], "********");
+    // The URL's path can be the receiver's credential: host and port only.
+    assert_eq!(w.url, format!("http://{addr}/********"));
 
     // Test reaches this webhook, signed with the stored secret.
     let received = |got: &Captured| {

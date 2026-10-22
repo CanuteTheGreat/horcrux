@@ -2815,10 +2815,14 @@ Authorization: Bearer <token>
 never returns a credential: e-mail passwords, webhook auth secrets and header
 values, and PagerDuty integration/routing keys come back as `"********"`;
 Slack, Teams and Discord webhook URLs (the URL is the posting credential)
-keep only scheme and host, e.g. `"https://hooks.slack.com/********"`.
+and generic webhook URLs (receivers often take a token in the path, query or
+`user:pass@`) keep only scheme, host and port, e.g.
+`"https://hooks.slack.com/********"`. The same applies to the URLs returned
+by `GET /api/webhooks` and `GET /api/alerts/notifications`.
 `PUT /api/notifications/channels/:id` keeps the stored value for any field
 sent back masked, so an edit form can re-send what it was given; a masked
-header the stored channel doesn't have is dropped.
+header the stored channel doesn't have is dropped. A masked URL with nothing
+to restore it from (a create, or a different host) is refused.
 
 #### Add Notification Channel
 

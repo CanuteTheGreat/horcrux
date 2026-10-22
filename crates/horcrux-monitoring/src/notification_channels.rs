@@ -93,8 +93,11 @@ impl ChannelConfig {
     ///
     /// Besides passwords and tokens this covers the Slack/Teams/Discord
     /// webhook URLs (the URL *is* the posting credential; only its
-    /// scheme and host are shown), the PagerDuty routing key and every
-    /// custom header value of a generic webhook (typically an API token).
+    /// scheme and host are shown), the PagerDuty routing key, and for a
+    /// generic webhook its URL the same way (receivers commonly take the
+    /// credential in the path, query or `user:pass@`, e.g. Home Assistant,
+    /// n8n or Zapier hooks) and every custom header value (typically an API
+    /// token).
     /// Reading channels needs only Sys.Audit, so none of these may leave.
     fn masked(&self) -> Self {
         let mut c = self.clone();
@@ -111,7 +114,10 @@ impl ChannelConfig {
                 *integration_key = mask(integration_key);
                 *routing_key = mask(routing_key);
             }
-            ChannelConfig::Webhook { headers, auth, .. } => {
+            ChannelConfig::Webhook {
+                url, headers, auth, ..
+            } => {
+                *url = mask_url(url);
                 for v in headers.values_mut() {
                     *v = mask(v);
                 }
@@ -136,11 +142,6 @@ impl ChannelConfig {
                 *new = old.to_string();
             }
         }
-        fn keep_url(new: &mut String, old: &str) {
-            if *new == SECRET_MASK || (!old.is_empty() && *new == mask_url(old)) {
-                *new = old.to_string();
-            }
-        }
         match (self, stored) {
             (
                 ChannelConfig::Email { password, .. },
@@ -160,7 +161,7 @@ impl ChannelConfig {
                 ChannelConfig::Discord {
                     webhook_url: old, ..
                 },
-            ) => keep_url(webhook_url, old),
+            ) => restore_masked_url(webhook_url, old),
             (
                 ChannelConfig::PagerDuty {
                     integration_key,
@@ -188,13 +189,17 @@ impl ChannelConfig {
                 }
             }
             (
-                ChannelConfig::Webhook { headers, auth, .. },
                 ChannelConfig::Webhook {
+                    url, headers, auth, ..
+                },
+                ChannelConfig::Webhook {
+                    url: old_url,
                     headers: old_headers,
                     auth: old_auth,
                     ..
                 },
             ) => {
+                restore_masked_url(url, old_url);
                 headers.retain(|k, v| {
                     if v != SECRET_MASK {
                         return true;
@@ -295,8 +300,10 @@ fn mask(s: &str) -> String {
 }
 
 /// `https://hooks.slack.com/services/T0/B0/xyz` -> `https://hooks.slack.com/********`:
-/// enough to tell channels apart, nothing that can post.
-fn mask_url(u: &str) -> String {
+/// enough to tell channels apart, nothing that can post. The userinfo, path,
+/// query and fragment are all dropped, since any of them can carry the
+/// receiver's credential.
+pub(crate) fn mask_url(u: &str) -> String {
     if u.is_empty() {
         return String::new();
     }
@@ -312,6 +319,15 @@ fn mask_url(u: &str) -> String {
             )
         }
         _ => SECRET_MASK.to_string(),
+    }
+}
+
+/// Undo [`mask_url`] on an update: a URL sent back as the bare mask or as
+/// exactly the masked form of the stored one keeps the stored URL. Anything
+/// else is a real edit and replaces it.
+pub(crate) fn restore_masked_url(new: &mut String, old: &str) {
+    if !old.is_empty() && (*new == SECRET_MASK || *new == mask_url(old)) {
+        *new = old.to_string();
     }
 }
 
@@ -1086,5 +1102,58 @@ mod tests {
             }
             _ => unreachable!(),
         }
+    }
+
+    #[test]
+    fn generic_webhook_url_is_masked_and_restored() {
+        // Path, query and userinfo all carry credentials in the wild.
+        let stored = ChannelConfig::Webhook {
+            url: "https://ops:pw-s3cret@ha.example.org:8443/api/webhook/id-s3cret?token=q-s3cret#f-s3cret"
+                .into(),
+            method: "POST".into(),
+            headers: HashMap::new(),
+            auth: None,
+        };
+        let shown = stored.masked();
+        match &shown {
+            ChannelConfig::Webhook { url, .. } => {
+                assert_eq!(url, "https://ha.example.org:8443/********")
+            }
+            _ => unreachable!(),
+        }
+        let json = serde_json::to_string(&shown).unwrap();
+        assert!(!json.contains("s3cret") && !json.contains("ops"), "{json}");
+
+        // Re-sent as shown (the UI's edit form), or as the bare mask: the
+        // stored URL survives, so the channel still validates and delivers.
+        for sent in ["https://ha.example.org:8443/********", SECRET_MASK] {
+            let mut back = shown.clone();
+            if let ChannelConfig::Webhook { url, .. } = &mut back {
+                *url = sent.into();
+            }
+            back.unmask_from(&stored);
+            assert_eq!(back, stored, "sent {sent}");
+            assert!(back.validate().is_ok());
+        }
+
+        // A real edit replaces it; a masked URL for a different host is not
+        // ours to restore and is refused rather than stored literally.
+        let mut back = shown.clone();
+        if let ChannelConfig::Webhook { url, .. } = &mut back {
+            *url = "https://new.example.org/hook".into();
+        }
+        back.unmask_from(&stored);
+        match &back {
+            ChannelConfig::Webhook { url, .. } => assert_eq!(url, "https://new.example.org/hook"),
+            _ => unreachable!(),
+        }
+        let mut back = shown.clone();
+        if let ChannelConfig::Webhook { url, .. } = &mut back {
+            *url = "https://other.example.org/********".into();
+        }
+        back.unmask_from(&stored);
+        assert!(back.validate().is_err());
+        // Nothing to restore from (a new channel): refused too.
+        assert!(shown.validate().is_err());
     }
 }

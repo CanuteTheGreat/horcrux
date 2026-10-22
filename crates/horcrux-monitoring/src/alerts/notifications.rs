@@ -75,6 +75,9 @@ impl NotificationChannel {
                 }
             }
             NotificationChannel::Webhook { config, .. } => {
+                // The URL can carry the credential itself (path, query,
+                // `user:pass@`); show only scheme, host and port.
+                config.url = crate::notification_channels::mask_url(&config.url);
                 if let Some(t) = config.auth_token.as_mut() {
                     hide(t);
                 }
@@ -358,12 +361,18 @@ mod tests {
             enabled: true,
             min_severity: AlertSeverity::Info,
             config: WebhookConfig {
-                url: "https://example.org/h".into(),
+                url: "https://u:pw-s3cret@example.org/h/s3cret?k=s3cret".into(),
                 method: "POST".into(),
                 headers: vec![("X-Api-Key".into(), "hdr-s3cret".into())],
                 auth_token: Some("tok-s3cret".into()),
             },
         };
+        match hook.masked() {
+            NotificationChannel::Webhook { config, .. } => {
+                assert_eq!(config.url, "https://example.org/********")
+            }
+            _ => unreachable!(),
+        }
         for ch in [email, hook] {
             let json = serde_json::to_string(&ch.masked()).unwrap();
             assert!(!json.contains("s3cret"), "{json}");
