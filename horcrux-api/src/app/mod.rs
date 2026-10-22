@@ -516,6 +516,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::migration_jobs::routes())
         .merge(api::migration_peer::routes())
         .merge(api::node_summary::routes())
+        .merge(api::node_disks::routes())
         .merge(api::vm_hw::routes())
         .merge(api::storage_volumes::routes())
         .merge(api::sdn_cni::routes())

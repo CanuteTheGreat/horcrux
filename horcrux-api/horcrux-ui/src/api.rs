@@ -5590,70 +5590,6 @@ pub async fn get_disk_partitions(disk_id: &str) -> Result<Vec<PartitionInfo>, Ap
     fetch_json(&format!("/storage/disks/{}/partitions", disk_id)).await
 }
 
-pub async fn create_partition(
-    disk_id: &str,
-    size_bytes: u64,
-    filesystem: &str,
-) -> Result<PartitionInfo, ApiError> {
-    post_json(
-        &format!("/storage/disks/{}/partitions", disk_id),
-        &serde_json::json!({
-            "size_bytes": size_bytes,
-            "filesystem": filesystem
-        }),
-    )
-    .await
-}
-
-pub async fn delete_partition(disk_id: &str, partition_id: &str) -> Result<(), ApiError> {
-    delete_json(&format!(
-        "/storage/disks/{}/partitions/{}",
-        disk_id, partition_id
-    ))
-    .await
-}
-
-pub async fn format_partition(
-    disk_id: &str,
-    partition_id: &str,
-    filesystem: &str,
-) -> Result<(), ApiError> {
-    post_json(
-        &format!(
-            "/storage/disks/{}/partitions/{}/format",
-            disk_id, partition_id
-        ),
-        &serde_json::json!({"filesystem": filesystem}),
-    )
-    .await
-}
-
-pub async fn mount_partition(
-    disk_id: &str,
-    partition_id: &str,
-    mount_point: &str,
-) -> Result<(), ApiError> {
-    post_json(
-        &format!(
-            "/storage/disks/{}/partitions/{}/mount",
-            disk_id, partition_id
-        ),
-        &serde_json::json!({"mount_point": mount_point}),
-    )
-    .await
-}
-
-pub async fn unmount_partition(disk_id: &str, partition_id: &str) -> Result<(), ApiError> {
-    post_json(
-        &format!(
-            "/storage/disks/{}/partitions/{}/unmount",
-            disk_id, partition_id
-        ),
-        &(),
-    )
-    .await
-}
-
 // Storage pool volumes (per-pool routes; see horcrux-api/src/api/storage_volumes.rs)
 /// `GET /api/storage/pools/:id/volumes` item.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -5729,7 +5665,7 @@ pub async fn get_smart_alerts() -> Result<Vec<SmartAlert>, ApiError> {
     fetch_json("/storage/smart/alerts").await
 }
 
-pub async fn acknowledge_smart_alert(alert_id: &str) -> Result<(), ApiError> {
+pub async fn acknowledge_smart_alert(alert_id: &str) -> Result<serde_json::Value, ApiError> {
     put_json(
         &format!("/storage/smart/alerts/{}/acknowledge", alert_id),
         &(),
@@ -5737,7 +5673,10 @@ pub async fn acknowledge_smart_alert(alert_id: &str) -> Result<(), ApiError> {
     .await
 }
 
-pub async fn start_smart_test(disk_id: &str, test_type: &str) -> Result<(), ApiError> {
+pub async fn start_smart_test(
+    disk_id: &str,
+    test_type: &str,
+) -> Result<serde_json::Value, ApiError> {
     post_json(
         &format!("/storage/smart/disks/{}/test", disk_id),
         &serde_json::json!({"test_type": test_type}),
@@ -5749,11 +5688,11 @@ pub async fn get_smart_test_status(disk_id: &str) -> Result<serde_json::Value, A
     fetch_json(&format!("/storage/smart/disks/{}/test/status", disk_id)).await
 }
 
-pub async fn enable_smart_monitoring(disk_id: &str) -> Result<(), ApiError> {
+pub async fn enable_smart_monitoring(disk_id: &str) -> Result<serde_json::Value, ApiError> {
     post_json(&format!("/storage/smart/disks/{}/enable", disk_id), &()).await
 }
 
-pub async fn disable_smart_monitoring(disk_id: &str) -> Result<(), ApiError> {
+pub async fn disable_smart_monitoring(disk_id: &str) -> Result<serde_json::Value, ApiError> {
     post_json(&format!("/storage/smart/disks/{}/disable", disk_id), &()).await
 }
 

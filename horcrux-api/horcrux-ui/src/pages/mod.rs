@@ -56,7 +56,7 @@ pub use monitoring::Monitoring;
 pub use network::NetworkManagement;
 pub use replication_list::ReplicationList;
 pub use snapshot_list::SnapshotList;
-pub use storage::StorageManagement;
+pub use storage::{DiskManagementPage, SmartMonitoringPage, StorageManagement};
 pub use vm_create::VmCreate;
 pub use vm_hardware::VmHardwarePage;
 pub use vm_list::VmList;

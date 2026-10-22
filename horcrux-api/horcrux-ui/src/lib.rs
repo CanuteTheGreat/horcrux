@@ -24,14 +24,14 @@ use pages::{
     AlertCenterPage, Alerts, ApiKeysPage, BackupDashboard, BackupJobsPage, BackupVerifyPage,
     CertificatesPage, CloneList, ClusterDashboard, ClusterManagementPage, ConfigMapsPage,
     ContainerCreate, ContainerEventsPage, ContainerExecPage, ContainerList, ContainerLogsPage,
-    ContainerNetworksPage, Dashboard, DashboardsPage, DeploymentsPage, GpuManagement, HaDashboard,
-    HaFailoverPage, HaGroupsPage, HelmChartsPage, HelmReleasesPage, HelmRepositoriesPage,
-    ImagesPage, IngressesPage, KubernetesManagement, Login, LxcContainerPage, LxcTemplatesPage,
-    MetricsExplorerPage, MfaPage, MigrationCenterPage, Monitoring, NetworkManagement,
-    NotificationsPage, ObservabilityPage, PermissionsPage, PodsPage, RealmsPage, ReplicationList,
-    RetentionPoliciesPage, RolesPage, SecretsPage, ServicesPage, SessionsPage, SnapshotList,
-    SnapshotManagerPage, StacksPage, StorageManagement, TemplateManagerPage, UserMenu, UsersPage,
-    VmConsole, VmCreate, VmList, VolumesPage,
+    ContainerNetworksPage, Dashboard, DashboardsPage, DeploymentsPage, DiskManagementPage,
+    GpuManagement, HaDashboard, HaFailoverPage, HaGroupsPage, HelmChartsPage, HelmReleasesPage,
+    HelmRepositoriesPage, ImagesPage, IngressesPage, KubernetesManagement, Login, LxcContainerPage,
+    LxcTemplatesPage, MetricsExplorerPage, MfaPage, MigrationCenterPage, Monitoring,
+    NetworkManagement, NotificationsPage, ObservabilityPage, PermissionsPage, PodsPage, RealmsPage,
+    ReplicationList, RetentionPoliciesPage, RolesPage, SecretsPage, ServicesPage, SessionsPage,
+    SmartMonitoringPage, SnapshotList, SnapshotManagerPage, StacksPage, StorageManagement,
+    TemplateManagerPage, UserMenu, UsersPage, VmConsole, VmCreate, VmList, VolumesPage,
 };
 
 #[component]
@@ -74,6 +74,8 @@ pub fn App() -> impl IntoView {
                         <span class="navbar-item dropdown-trigger">"Infrastructure ▾"</span>
                         <div class="dropdown-content">
                             <A href="/storage" class="dropdown-item">"Storage"</A>
+                            <A href="/storage/disks" class="dropdown-item">"Disks"</A>
+                            <A href="/storage/smart" class="dropdown-item">"SMART Health"</A>
                             <A href="/storage/isos" class="dropdown-item">"ISO Library"</A>
                             <A href="/network" class="dropdown-item">"Network"</A>
                             <A href="/network/bridges" class="dropdown-item">"Host Bridges"</A>
@@ -185,6 +187,8 @@ pub fn App() -> impl IntoView {
                     <Route path="/kubernetes/:cluster_id/:namespace/configmaps" view=|| view! { <Gated feature="kubernetes"><ConfigMapsPage/></Gated> }/>
                     <Route path="/kubernetes/:cluster_id/:namespace/secrets" view=|| view! { <Gated feature="kubernetes"><SecretsPage/></Gated> }/>
                     <Route path="/storage" view=StorageManagement/>
+                    <Route path="/storage/disks" view=DiskManagementPage/>
+                    <Route path="/storage/smart" view=SmartMonitoringPage/>
                     <Route path="/network" view=NetworkManagement/>
                     <Route path="/gpu" view=GpuManagement/>
                     <Route path="/snapshots" view=SnapshotList/>

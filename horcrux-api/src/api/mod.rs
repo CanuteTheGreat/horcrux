@@ -19,6 +19,7 @@ pub mod lane_m;
 pub mod metrics;
 pub mod migration_jobs;
 pub mod migration_peer;
+pub mod node_disks;
 pub mod node_summary;
 pub mod notifications;
 pub mod prometheus_export;

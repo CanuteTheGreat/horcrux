@@ -54,6 +54,8 @@ pub mod kinds {
     pub const HA_VM_REPLICA: &str = "ha_vm_replica";
     /// Event webhooks (secrets included; the API masks them).
     pub const WEBHOOK: &str = "webhook";
+    /// Acknowledged SMART alerts (by alert id).
+    pub const SMART_ALERT_ACK: &str = "smart_alert_ack";
     pub const FENCING_DEVICE: &str = "fencing_device";
 }
 
