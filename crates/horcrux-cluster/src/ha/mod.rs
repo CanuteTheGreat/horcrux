@@ -55,6 +55,11 @@ pub struct HaResource {
     /// passthrough.
     #[serde(default)]
     pub required_passthrough_devices: Vec<PassthroughDeviceRequirement>,
+    /// Bumped every time the cluster moves this resource to another node.
+    /// A node that comes back after being replaced sees a higher number on
+    /// its peers and gives up its stale copy of the VM (see `ha_loop`).
+    #[serde(default)]
+    pub placement_seq: u64,
 }
 
 /// HA group configuration
@@ -354,6 +359,7 @@ impl HaManager {
             last_state_change: Utc::now(),
             architecture: config.architecture,
             required_passthrough_devices: config.required_passthrough_devices,
+            placement_seq: 0,
         };
 
         tracing::info!(
@@ -435,7 +441,7 @@ impl HaManager {
             }
 
             // Find a suitable node for migration
-            let target_node = self.find_best_node_for_migration(resource).await?;
+            let target_node = self.find_best_node_for_migration(resource, None).await?;
 
             if let Some(target) = target_node {
                 tracing::info!("Migrating VM {} from {} to {}", vm_id, failed_node, target);
@@ -517,7 +523,7 @@ impl HaManager {
 
         // Restart limit reached, try migration if under relocate limit
         if resource.relocate_count < resource.max_relocate {
-            let target_node = self.find_best_node_for_migration(resource).await?;
+            let target_node = self.find_best_node_for_migration(resource, None).await?;
 
             if let Some(target) = target_node {
                 resource.state = HaState::Migrating;
@@ -592,7 +598,12 @@ impl HaManager {
     ///   so (same as unknown architecture) it still falls through to the
     ///   legacy path -- callers that care about passthrough correctness
     ///   should always populate node_resources via `update_node_resources`.
-    async fn find_best_node_for_migration(&self, resource: &HaResource) -> Result<Option<String>> {
+    async fn find_best_node_for_migration(
+        &self,
+        resource: &HaResource,
+        online: Option<&[String]>,
+    ) -> Result<Option<String>> {
+        let usable = |n: &str| online.map(|o| o.iter().any(|x| x == n)).unwrap_or(true);
         let groups = self.groups.read().await;
 
         let group = groups.get(&resource.group).ok_or_else(|| {
@@ -604,7 +615,7 @@ impl HaManager {
         // Prefer the preferred node if available, architecture-compatible,
         // AND has every required passthrough device currently available.
         if let Some(ref preferred) = resource.preferred_node {
-            if group.nodes.contains(preferred) {
+            if group.nodes.contains(preferred) && usable(preferred) {
                 let compatible = match node_resources.get(preferred) {
                     Some(res) => {
                         res.architecture.can_run(&resource.architecture)
@@ -628,6 +639,7 @@ impl HaManager {
             .nodes
             .iter()
             .filter(|node| Some(node.as_str()) != resource.current_node.as_deref())
+            .filter(|node| usable(node.as_str()))
             .collect();
 
         // Split into nodes we have live resource data for (used for smart
@@ -741,6 +753,215 @@ impl HaManager {
         drop(resources);
         self.sync_resource(vm_id).await;
         Ok(())
+    }
+}
+
+/// One VM the cluster has decided to restart on another node.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Relocation {
+    pub vm_id: String,
+    pub from: String,
+    pub target: String,
+    /// The resource's `placement_seq` once the move has happened.
+    pub seq: u64,
+}
+
+impl HaManager {
+    /// Decide where every started resource of a dead node restarts, among
+    /// the `online` nodes only. Resources that ran out of relocations or
+    /// have no eligible node go to `Error` (and an event is logged). Nothing
+    /// is moved yet: the caller recovers each plan entry and then calls
+    /// [`HaManager::set_placement`].
+    pub async fn plan_relocations(&self, failed_node: &str, online: &[String]) -> Vec<Relocation> {
+        if !self.is_enabled().await {
+            return Vec::new();
+        }
+        let affected: Vec<HaResource> = self
+            .resources
+            .read()
+            .await
+            .values()
+            .filter(|r| {
+                r.current_node.as_deref() == Some(failed_node)
+                    && matches!(r.state, HaState::Started | HaState::Migrating)
+            })
+            .cloned()
+            .collect();
+        let mut plan = Vec::new();
+        for r in affected {
+            let (new_state, target, msg) = if r.relocate_count >= r.max_relocate {
+                (
+                    Some(HaState::Error),
+                    None,
+                    format!("exceeded {} relocations", r.max_relocate),
+                )
+            } else {
+                match self.find_best_node_for_migration(&r, Some(online)).await {
+                    Ok(Some(t)) => (None, Some(t), String::new()),
+                    Ok(None) => (
+                        Some(HaState::Error),
+                        None,
+                        format!("no online node of group {} can run it", r.group),
+                    ),
+                    Err(e) => (Some(HaState::Error), None, e.to_string()),
+                }
+            };
+            if let Some(st) = new_state {
+                let changed = {
+                    let mut res = self.resources.write().await;
+                    match res.get_mut(&r.vm_id) {
+                        Some(x) if x.state != st => {
+                            x.state = st.clone();
+                            x.last_state_change = Utc::now();
+                            true
+                        }
+                        _ => false,
+                    }
+                };
+                if changed {
+                    self.log_event(HaEvent {
+                        timestamp: Utc::now(),
+                        vm_id: r.vm_id.clone(),
+                        event_type: HaEventType::Failed,
+                        old_state: r.state.clone(),
+                        new_state: st,
+                        node: failed_node.to_string(),
+                        message: format!("cannot recover from failed node {failed_node}: {msg}"),
+                    })
+                    .await;
+                    self.sync_resource(&r.vm_id).await;
+                }
+                continue;
+            }
+            if let Some(target) = target {
+                plan.push(Relocation {
+                    vm_id: r.vm_id.clone(),
+                    from: failed_node.to_string(),
+                    target,
+                    seq: r.placement_seq + 1,
+                });
+            }
+        }
+        plan
+    }
+
+    /// Record that `vm_id` now runs on `node` (placement `seq`), started.
+    pub async fn set_placement(&self, vm_id: &str, node: &str, seq: u64, relocated: bool) {
+        let from = {
+            let mut res = self.resources.write().await;
+            let Some(r) = res.get_mut(vm_id) else { return };
+            if r.placement_seq > seq {
+                return;
+            }
+            let from = r.current_node.clone().unwrap_or_default();
+            r.current_node = Some(node.to_string());
+            r.placement_seq = seq;
+            r.state = HaState::Started;
+            r.last_state_change = Utc::now();
+            r.restart_count = 0;
+            if relocated {
+                r.relocate_count += 1;
+            }
+            from
+        };
+        if relocated {
+            self.log_event(HaEvent {
+                timestamp: Utc::now(),
+                vm_id: vm_id.to_string(),
+                event_type: HaEventType::Migrated,
+                old_state: HaState::Started,
+                new_state: HaState::Started,
+                node: node.to_string(),
+                message: format!("recovered on {node} after {from} failed"),
+            })
+            .await;
+        }
+        self.sync_resource(vm_id).await;
+    }
+
+    /// Resources currently placed on `node`.
+    pub async fn resources_on(&self, node: &str) -> Vec<HaResource> {
+        self.resources
+            .read()
+            .await
+            .values()
+            .filter(|r| r.current_node.as_deref() == Some(node))
+            .cloned()
+            .collect()
+    }
+
+    /// Take over a peer's view of a resource (and its group). Ignored when
+    /// the local copy has a newer placement. Returns whether it was applied.
+    pub async fn apply_peer_resource(&self, incoming: HaResource, group: Option<HaGroup>) -> bool {
+        if let Some(g) = group {
+            self.groups.write().await.insert(g.name.clone(), g.clone());
+            let _ = config_store::put_opt(&self.store, kinds::HA_GROUP, &g.name, &g).await;
+        }
+        let vm_id = incoming.vm_id.clone();
+        {
+            let mut res = self.resources.write().await;
+            if let Some(local) = res.get(&vm_id) {
+                if local.placement_seq > incoming.placement_seq {
+                    return false;
+                }
+            }
+            res.insert(vm_id.clone(), incoming);
+        }
+        self.sync_resource(&vm_id).await;
+        true
+    }
+
+    /// Drop resources placed on `node` that are not in `keep` (the node
+    /// stopped managing them). Returns the removed ids.
+    pub async fn prune_resources_of(&self, node: &str, keep: &[String]) -> Vec<String> {
+        let gone: Vec<String> = self
+            .resources
+            .read()
+            .await
+            .values()
+            .filter(|r| r.current_node.as_deref() == Some(node) && !keep.contains(&r.vm_id))
+            .map(|r| r.vm_id.clone())
+            .collect();
+        for id in &gone {
+            self.resources.write().await.remove(id);
+            self.sync_resource(id).await;
+        }
+        gone
+    }
+
+    /// Group definition by name.
+    pub async fn get_group(&self, name: &str) -> Option<HaGroup> {
+        self.groups.read().await.get(name).cloned()
+    }
+
+    /// Persist and log a resource-level problem (e.g. recovery refused).
+    pub async fn note_failure(&self, vm_id: &str, node: &str, message: String) {
+        self.log_event(HaEvent {
+            timestamp: Utc::now(),
+            vm_id: vm_id.to_string(),
+            event_type: HaEventType::Failed,
+            old_state: HaState::Started,
+            new_state: HaState::Started,
+            node: node.to_string(),
+            message,
+        })
+        .await;
+    }
+
+    /// Count a failed recovery attempt against the resource's relocation
+    /// budget (goes to `Error` once it is used up).
+    pub async fn count_failed_relocation(&self, vm_id: &str) {
+        {
+            let mut res = self.resources.write().await;
+            if let Some(r) = res.get_mut(vm_id) {
+                r.relocate_count += 1;
+                if r.relocate_count >= r.max_relocate {
+                    r.state = HaState::Error;
+                    r.last_state_change = Utc::now();
+                }
+            }
+        }
+        self.sync_resource(vm_id).await;
     }
 }
 
@@ -1337,6 +1558,110 @@ mod tests {
 
         let resource = manager.get_resource("403").await.unwrap();
         assert_eq!(resource.state, HaState::Error);
+    }
+
+    async fn manager_with_vm_on(node: &str, max_relocate: u32) -> HaManager {
+        let m = HaManager::new();
+        m.add_group(HaGroup {
+            name: "g".into(),
+            nodes: vec!["n1".into(), "n2".into(), "n3".into()],
+            restricted: false,
+            no_failback: false,
+        })
+        .await
+        .unwrap();
+        m.add_resource(HaConfig {
+            vm_id: "vm1".into(),
+            group: "g".into(),
+            max_restart: 3,
+            max_relocate,
+            state: HaState::Started,
+            architecture: Architecture::X86_64,
+            required_passthrough_devices: Vec::new(),
+        })
+        .await
+        .unwrap();
+        m.update_resource_state("vm1", HaState::Started, Some(node.into()))
+            .await
+            .unwrap();
+        m.enable().await;
+        m
+    }
+
+    #[tokio::test]
+    async fn plan_relocations_only_uses_online_nodes_and_bumps_seq() {
+        let m = manager_with_vm_on("n1", 3).await;
+        // n2 is offline too: the only online candidate is n3.
+        let plan = m.plan_relocations("n1", &["n3".to_string()]).await;
+        assert_eq!(
+            plan,
+            vec![Relocation {
+                vm_id: "vm1".into(),
+                from: "n1".into(),
+                target: "n3".into(),
+                seq: 1
+            }]
+        );
+        // Planning moves nothing by itself.
+        assert_eq!(
+            m.get_resource("vm1").await.unwrap().current_node.as_deref(),
+            Some("n1")
+        );
+        m.set_placement("vm1", "n3", 1, true).await;
+        let r = m.get_resource("vm1").await.unwrap();
+        assert_eq!(r.current_node.as_deref(), Some("n3"));
+        assert_eq!((r.placement_seq, r.relocate_count), (1, 1));
+        assert!(m.get_events(Some("vm1"), None).await.iter().any(|e| e.message.contains("recovered on n3")));
+    }
+
+    #[tokio::test]
+    async fn plan_relocations_without_online_candidate_errors_the_resource() {
+        let m = manager_with_vm_on("n1", 3).await;
+        assert!(m.plan_relocations("n1", &[]).await.is_empty());
+        assert_eq!(m.get_resource("vm1").await.unwrap().state, HaState::Error);
+        // A resource in Error is not planned again.
+        assert!(m.plan_relocations("n1", &["n2".to_string()]).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn plan_relocations_respects_max_relocate_and_disabled_ha() {
+        let m = manager_with_vm_on("n1", 1).await;
+        m.set_placement("vm1", "n1", 0, true).await; // one relocation used
+        assert!(m.plan_relocations("n1", &["n2".to_string()]).await.is_empty());
+        assert_eq!(m.get_resource("vm1").await.unwrap().state, HaState::Error);
+        let m = manager_with_vm_on("n1", 3).await;
+        m.disable().await;
+        assert!(m.plan_relocations("n1", &["n2".to_string()]).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn stale_placement_from_a_returning_node_is_rejected() {
+        let m = manager_with_vm_on("n2", 3).await;
+        m.set_placement("vm1", "n2", 1, true).await;
+        let mut stale = m.get_resource("vm1").await.unwrap();
+        stale.current_node = Some("n1".into());
+        stale.placement_seq = 0;
+        assert!(!m.apply_peer_resource(stale, None).await);
+        assert_eq!(
+            m.get_resource("vm1").await.unwrap().current_node.as_deref(),
+            Some("n2")
+        );
+        // The newer view wins on the node that was replaced.
+        let m1 = manager_with_vm_on("n1", 3).await;
+        let newer = m.get_resource("vm1").await.unwrap();
+        assert!(m1.apply_peer_resource(newer, None).await);
+        assert_eq!(
+            m1.get_resource("vm1").await.unwrap().current_node.as_deref(),
+            Some("n2")
+        );
+    }
+
+    #[tokio::test]
+    async fn prune_drops_resources_the_owner_stopped_managing() {
+        let m = manager_with_vm_on("n1", 3).await;
+        assert!(m.prune_resources_of("n2", &[]).await.is_empty());
+        assert_eq!(m.prune_resources_of("n1", &[]).await, vec!["vm1".to_string()]);
+        assert!(m.list_resources().await.is_empty());
     }
 }
 

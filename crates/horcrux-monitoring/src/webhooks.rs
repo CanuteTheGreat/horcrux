@@ -14,6 +14,10 @@ pub enum WebhookEventType {
     VmCreated,
     VmStarted,
     VmStopped,
+    /// Any VM state change (running/stopped/paused), with old and new state.
+    VmStateChanged,
+    /// HA restarted a VM on another node.
+    HaFailover,
     VmDeleted,
     VmMigrationStarted,
     VmMigrationCompleted,
@@ -38,6 +42,8 @@ impl WebhookEventType {
             WebhookEventType::VmCreated => "vm.created",
             WebhookEventType::VmStarted => "vm.started",
             WebhookEventType::VmStopped => "vm.stopped",
+            WebhookEventType::VmStateChanged => "vm.state_changed",
+            WebhookEventType::HaFailover => "ha.failover",
             WebhookEventType::VmDeleted => "vm.deleted",
             WebhookEventType::VmMigrationStarted => "vm.migration.started",
             WebhookEventType::VmMigrationCompleted => "vm.migration.completed",
@@ -236,6 +242,8 @@ pub struct WebhookManager {
     deliveries: Arc<RwLock<Vec<WebhookDelivery>>>,
     stats: Arc<RwLock<HashMap<String, WebhookStats>>>,
     client: reqwest::Client,
+    /// Durable copy of the webhook configurations; `None` = in memory only.
+    store: Option<crate::db::config_store::ConfigStore>,
 }
 
 impl Default for WebhookManager {
@@ -254,7 +262,37 @@ impl WebhookManager {
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .unwrap(),
+            store: None,
         }
+    }
+
+    /// Webhook manager backed by the database: loads the saved webhooks and
+    /// writes every change through (they used to vanish on restart).
+    pub async fn with_database(db: &crate::db::Database) -> Result<Self> {
+        let store = crate::db::config_store::ConfigStore::new(db);
+        let mut mgr = Self::new();
+        {
+            let mut hooks = mgr.webhooks.write().await;
+            for w in store
+                .load_values::<WebhookConfig>(crate::db::config_store::kinds::WEBHOOK)
+                .await?
+            {
+                hooks.insert(w.id.clone(), w);
+            }
+            tracing::info!("Loaded {} webhook(s) from database", hooks.len());
+        }
+        mgr.store = Some(store);
+        Ok(mgr)
+    }
+
+    async fn persist(&self, config: &WebhookConfig) -> Result<()> {
+        crate::db::config_store::put_opt(
+            &self.store,
+            crate::db::config_store::kinds::WEBHOOK,
+            &config.id,
+            config,
+        )
+        .await
     }
 
     /// Add a webhook configuration. An id that is already taken is refused
@@ -272,6 +310,7 @@ impl WebhookManager {
                 config.id
             )));
         }
+        self.persist(&config).await?;
         webhooks.insert(config.id.clone(), config.clone());
 
         tracing::info!("Added webhook: {} ({})", config.name, config.id);
@@ -284,6 +323,12 @@ impl WebhookManager {
         if webhooks.remove(id).is_none() {
             return Err(horcrux_common::Error::NotFound(format!("webhook {}", id)));
         }
+        crate::db::config_store::delete_opt(
+            &self.store,
+            crate::db::config_store::kinds::WEBHOOK,
+            id,
+        )
+        .await?;
         drop(webhooks);
         self.stats.write().await.remove(id);
 
@@ -342,6 +387,7 @@ impl WebhookManager {
         config.unmask_from(stored);
         config.validate()?;
 
+        self.persist(&config).await?;
         webhooks.insert(id.to_string(), config);
         tracing::info!("Updated webhook: {}", id);
         Ok(())
@@ -414,6 +460,7 @@ impl WebhookManager {
             deliveries: self.deliveries.clone(),
             stats: self.stats.clone(),
             client: self.client.clone(),
+            store: None,
         }
     }
 

@@ -45,6 +45,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/vms/:id/shutdown", post(shutdown))
         .route("/api/vms/:id/reboot", post(reboot))
         .route("/api/vms/:id/reset", post(reset))
+        .route("/api/vms/:id/pause", post(pause))
+        .route("/api/vms/:id/resume", post(resume))
         .route("/api/vms/:id/disks", post(add_disk))
         .route(
             "/api/vms/:id/disks/:index",
@@ -393,6 +395,51 @@ async fn reset(
     Path(id): Path<String>,
 ) -> Result<Json<VmConfig>, ApiError> {
     Ok(Json(state.vm_manager.reset_vm(&id).await?))
+}
+
+/// Freeze the VM's vCPUs (status "paused"); `POST .../resume` continues it.
+async fn pause(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<VmConfig>, ApiError> {
+    let before = state.vm_manager.get_vm(&id).await?;
+    let vm = state.vm_manager.pause_vm(&id).await?;
+    let _ = state
+        .webhook_manager
+        .trigger_event(
+            crate::webhooks::WebhookEventType::VmStateChanged,
+            serde_json::json!({"vm_id": vm.id, "name": vm.name,
+                "old_state": format!("{:?}", before.status), "new_state": format!("{:?}", vm.status)}),
+        )
+        .await;
+    state.ws_state.broadcast_vm_status(
+        id,
+        format!("{:?}", before.status),
+        format!("{:?}", vm.status),
+    );
+    Ok(Json(vm))
+}
+
+async fn resume(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<VmConfig>, ApiError> {
+    let before = state.vm_manager.get_vm(&id).await?;
+    let vm = state.vm_manager.resume_vm(&id).await?;
+    let _ = state
+        .webhook_manager
+        .trigger_event(
+            crate::webhooks::WebhookEventType::VmStateChanged,
+            serde_json::json!({"vm_id": vm.id, "name": vm.name,
+                "old_state": format!("{:?}", before.status), "new_state": format!("{:?}", vm.status)}),
+        )
+        .await;
+    state.ws_state.broadcast_vm_status(
+        id,
+        format!("{:?}", before.status),
+        format!("{:?}", vm.status),
+    );
+    Ok(Json(vm))
 }
 
 async fn list_vm_firewall(

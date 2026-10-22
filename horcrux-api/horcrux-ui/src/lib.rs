@@ -22,7 +22,7 @@ mod websocket;
 
 use pages::{
     AlertCenterPage, Alerts, ApiKeysPage, BackupDashboard, BackupJobsPage, BackupVerifyPage,
-    CertificatesPage, CloneList, ClusterDashboard, ClusterManagementPage, ConfigMapsPage,
+    CertificatesPage, CloneList, ClusterDashboard, ClusterManagementPage, HaFailoverPage, ConfigMapsPage,
     ContainerCreate, ContainerEventsPage, ContainerExecPage, ContainerList, ContainerLogsPage,
     ContainerNetworksPage, Dashboard, DashboardsPage, DeploymentsPage, GpuManagement, HaDashboard,
     HaGroupsPage, HelmChartsPage, HelmReleasesPage, HelmRepositoriesPage, ImagesPage,
@@ -209,6 +209,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/backup/templates" view=TemplateManagerPage/>
                     <Route path="/ha" view=|| view! { <Gated feature="cluster"><HaDashboard/></Gated> }/>
                     <Route path="/ha/cluster" view=|| view! { <Gated feature="cluster"><ClusterManagementPage/></Gated> }/>
+                    <Route path="/ha/failover" view=|| view! { <Gated feature="cluster"><HaFailoverPage/></Gated> }/>
                     <Route path="/ha/groups" view=|| view! { <Gated feature="cluster"><HaGroupsPage/></Gated> }/>
                     <Route path="/ha/migration" view=|| view! { <Gated feature="cluster"><MigrationCenterPage/></Gated> }/>
                     <Route path="/monitoring/alerts" view=AlertCenterPage/>

@@ -447,6 +447,16 @@ pub fn HaDashboard() -> impl IntoView {
                                         </div>
                                     </a>
 
+                                    <a href="/ha/failover" class="block p-6 border border-gray-200 rounded-lg hover:shadow-md transition-shadow">
+                                        <div class="flex items-center">
+                                            <i class="fas fa-bolt text-2xl text-red-500 mr-4"></i>
+                                            <div>
+                                                <h3 class="font-medium text-gray-900">"Failover & Fencing"</h3>
+                                                <p class="text-sm text-gray-600">"Create/join a cluster, fencing devices, HA events"</p>
+                                            </div>
+                                        </div>
+                                    </a>
+
                                     <a href="/ha/groups" class="block p-6 border border-gray-200 rounded-lg hover:shadow-md transition-shadow">
                                         <div class="flex items-center">
                                             <i class="fas fa-shield-alt text-2xl text-green-500 mr-4"></i>

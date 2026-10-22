@@ -76,6 +76,46 @@ struct Claims {
 
 static JWT_SECRET: OnceLock<String> = OnceLock::new();
 
+/// Secret that signs and verifies node-to-node service tokens (`cluster-*`
+/// roles) once this node has joined a cluster: the joined cluster's secret,
+/// kept in `<data_dir>/cluster.secret`. Without it service tokens use the
+/// node's own token secret (nodes that were given the same `JWT_SECRET`).
+static CLUSTER_SECRET: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+/// The secret this node's service tokens are signed with (and which it
+/// hands to a node joining its cluster).
+pub fn cluster_service_secret() -> String {
+    CLUSTER_SECRET
+        .read()
+        .ok()
+        .and_then(|g| g.clone())
+        .unwrap_or_else(|| get_jwt_secret().to_string())
+}
+
+/// Adopt a cluster's service secret (join): persisted so it survives restarts.
+pub fn set_cluster_secret(data_dir: &std::path::Path, secret: &str) -> std::io::Result<()> {
+    if secret.len() < 16 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "cluster secret too short",
+        ));
+    }
+    std::fs::create_dir_all(data_dir)?;
+    write_private(&data_dir.join("cluster.secret"), secret.as_bytes())?;
+    if let Ok(mut g) = CLUSTER_SECRET.write() {
+        *g = Some(secret.to_string());
+    }
+    Ok(())
+}
+
+/// Forget the adopted cluster secret (leave cluster).
+pub fn clear_cluster_secret(data_dir: &std::path::Path) {
+    let _ = std::fs::remove_file(data_dir.join("cluster.secret"));
+    if let Ok(mut g) = CLUSTER_SECRET.write() {
+        *g = None;
+    }
+}
+
 /// Load the token signing secret: `JWT_SECRET` if set, otherwise a random
 /// secret generated on first start and kept in `<data_dir>/jwt.secret`
 /// (mode 0600). There is no built-in default any more - a published default
@@ -108,6 +148,13 @@ pub fn init_jwt_secret(data_dir: &std::path::Path) -> std::io::Result<()> {
         }
     };
     let _ = JWT_SECRET.set(secret);
+    if let Ok(s) = std::fs::read_to_string(data_dir.join("cluster.secret")) {
+        if s.trim().len() >= 16 {
+            if let Ok(mut g) = CLUSTER_SECRET.write() {
+                *g = Some(s.trim().to_string());
+            }
+        }
+    }
     Ok(())
 }
 
@@ -172,7 +219,10 @@ pub async fn auth_middleware<S: super::AuthState>(
     {
         let claims = validate_jwt_token(token)
             .map_err(|e| unauthorized("invalid_token", format!("Invalid JWT token: {}", e)))?;
-        if claims.role == CLUSTER_NODE_ROLE || claims.role == CLUSTER_MIGRATION_ROLE {
+        if claims.role == CLUSTER_NODE_ROLE
+            || claims.role == CLUSTER_MIGRATION_ROLE
+            || claims.role == CLUSTER_HA_ROLE
+        {
             // Node-to-node service tokens are scoped: the usage token to the
             // usage endpoint, the migration token to the migration peer API.
             if claims.role == CLUSTER_NODE_ROLE
@@ -189,6 +239,12 @@ pub async fn auth_middleware<S: super::AuthState>(
                 return Err(unauthorized(
                     "insufficient_scope",
                     "cluster-migration service tokens are only valid for /api/migration/peer/",
+                ));
+            }
+            if claims.role == CLUSTER_HA_ROLE && !cluster_ha_may_access(request.uri().path()) {
+                return Err(unauthorized(
+                    "insufficient_scope",
+                    "cluster-ha service tokens are only valid for /api/ha/peer/",
                 ));
             }
             request.extensions_mut().insert(AuthUser {
@@ -282,10 +338,23 @@ fn validate_jwt_token(token: &str) -> Result<Claims, String> {
     let mut validation = Validation::new(Algorithm::HS256);
     validation.validate_exp = true;
 
-    let token_data = decode::<Claims>(token, &decoding_key, &validation)
-        .map_err(|e| format!("JWT validation failed: {}", e))?;
-
-    Ok(token_data.claims)
+    match decode::<Claims>(token, &decoding_key, &validation) {
+        Ok(t) => Ok(t.claims),
+        Err(e) => {
+            // A joined node's peers sign service tokens with the cluster
+            // secret; only service roles are accepted that way.
+            let cluster = cluster_service_secret();
+            if cluster != secret {
+                let key = DecodingKey::from_secret(cluster.as_bytes());
+                if let Ok(t) = decode::<Claims>(token, &key, &validation) {
+                    if t.claims.role.starts_with("cluster-") {
+                        return Ok(t.claims);
+                    }
+                }
+            }
+            Err(format!("JWT validation failed: {}", e))
+        }
+    }
 }
 
 /// Role carried by the node-to-node service token the cluster usage monitor
@@ -303,6 +372,35 @@ pub const CLUSTER_MIGRATION_ROLE: &str = "cluster-migration";
 
 /// Routes a `cluster-migration` token is accepted on.
 pub const CLUSTER_MIGRATION_PATH_PREFIX: &str = "/api/migration/peer/";
+
+/// Role of the service token HA supervisors send each other (placement
+/// sync, VM recovery). Valid only on [`CLUSTER_HA_PATH_PREFIX`] routes.
+pub const CLUSTER_HA_ROLE: &str = "cluster-ha";
+
+/// Routes a `cluster-ha` token is accepted on.
+pub const CLUSTER_HA_PATH_PREFIX: &str = "/api/ha/peer/";
+
+/// Whether a `cluster-ha` token may call `path`.
+pub fn cluster_ha_may_access(path: &str) -> bool {
+    path.starts_with(CLUSTER_HA_PATH_PREFIX)
+}
+
+/// Generate the short-lived service token for one HA peer request.
+pub fn generate_cluster_ha_token(local_hostname: &str) -> Result<String, String> {
+    let subject = format!("{}:{}", CLUSTER_HA_ROLE, local_hostname);
+    sign(
+        Claims {
+            sub: subject.clone(),
+            username: subject,
+            role: CLUSTER_HA_ROLE.to_string(),
+            exp: 0,
+            iat: 0,
+            sid: None,
+            scope: None,
+        },
+        CLUSTER_MIGRATION_TOKEN_TTL_SECS,
+    )
+}
 
 /// Lifetime of a `cluster-migration` token: one is minted per request, so
 /// this only has to cover the start of that request (a long disk upload is
@@ -395,7 +493,12 @@ fn sign(mut claims: Claims, ttl_secs: usize) -> Result<String, String> {
     let now = chrono::Utc::now().timestamp() as usize;
     claims.iat = now;
     claims.exp = now + ttl_secs;
-    let encoding_key = EncodingKey::from_secret(get_jwt_secret().as_bytes());
+    let signing = if claims.role.starts_with("cluster-") {
+        cluster_service_secret()
+    } else {
+        get_jwt_secret().to_string()
+    };
+    let encoding_key = EncodingKey::from_secret(signing.as_bytes());
     encode(&Header::new(Algorithm::HS256), &claims, &encoding_key)
         .map_err(|e| format!("Failed to generate JWT: {}", e))
 }

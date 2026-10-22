@@ -1,0 +1,72 @@
+name: HA failover (3 nodes, real QEMU)
+
+# Cluster create/join over the API, HA failure detection, recovery on another
+# node, split-brain protection (returning node, partitioned node self-fences),
+# crash restart and fencing devices - see horcrux-api/tests/ha_failover_e2e.py.
+# Three sibling containers on one docker network sharing a volume as shared
+# storage, each with its own token secret.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/horcrux-cluster/src/**'
+      - 'crates/horcrux-auth/src/middleware/**'
+      - 'crates/horcrux-vm/src/vm/**'
+      - 'horcrux-api/src/api/ha_loop.rs'
+      - 'horcrux-api/src/api/cluster_join.rs'
+      - 'horcrux-api/tests/ha_failover_e2e.*'
+      - '.forgejo/workflows/ha-failover.yml'
+  workflow_dispatch: {}
+  schedule:
+    - cron: '20 10 * * *'
+
+concurrency:
+  group: ha-failover
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ha-failover:
+    name: Three-node HA failover (create/join, recovery, fencing, self-fence)
+    runs-on: kvm-x86_64
+    container: catthehacker/ubuntu:act-latest
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: "4"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@stable
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libvirt-dev libpam0g-dev
+          ls -l /dev/kvm || echo "no /dev/kvm: guests run under TCG (slow)"
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-ha-failover-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-ha-failover-
+
+      - name: Build API (cluster)
+        run: cargo build --features cluster -p horcrux-api --bin horcrux-api
+
+      - name: Three-node HA failover end to end
+        run: bash horcrux-api/tests/ha_failover_e2e.sh target/debug/horcrux-api
+
+      - name: Remove leftover node siblings
+        if: always()
+        run: |
+          docker ps -a --filter name=hxha- --format '{{.Names}}' | xargs -r docker rm -f
+          docker network ls --filter name=hxha- --format '{{.Name}}' | xargs -r docker network rm || true
+          docker volume ls --filter name=hxha- --format '{{.Name}}' | xargs -r docker volume rm || true

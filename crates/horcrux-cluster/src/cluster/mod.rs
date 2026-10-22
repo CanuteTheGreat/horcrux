@@ -197,11 +197,11 @@ impl ClusterManager {
                     return;
                 }
             };
-            let mut ticker = tokio::time::interval(usage::POLL_INTERVAL);
+            let mut ticker = tokio::time::interval(usage::poll_interval());
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             tracing::info!(
                 "Starting cluster node usage monitor (interval: {}s)",
-                usage::POLL_INTERVAL.as_secs()
+                usage::poll_interval().as_secs()
             );
             loop {
                 ticker.tick().await;
@@ -309,7 +309,19 @@ impl ClusterManager {
     pub async fn status_report(&self, total_vms: usize) -> ClusterStatusReport {
         let name = self._config.read().await.as_ref().map(|c| c.name.clone());
         let nodes = self.list_nodes().await;
-        let has_quorum = self.corosync.check_quorum().await.ok();
+        // Corosync's verdict when it is running; otherwise the heartbeat
+        // majority (more than half of the registered nodes answering).
+        let has_quorum = match self.corosync.check_quorum().await {
+            Ok(q) => Some(q),
+            Err(_) if !nodes.is_empty() => {
+                let online = nodes
+                    .iter()
+                    .filter(|n| n.is_local || n.status == NodeStatus::Online)
+                    .count();
+                Some(online * 2 > nodes.len())
+            }
+            Err(_) => None,
+        };
         ClusterStatusReport::from_nodes(name, &nodes, has_quorum, total_vms)
     }
 
@@ -334,81 +346,124 @@ impl ClusterManager {
         Ok(hostname)
     }
 
-    /// Initialize a new cluster
-    #[allow(dead_code)]
-    pub async fn create_cluster(&self, cluster_name: String, node_name: String) -> Result<()> {
-        let mut config = self._config.write().await;
+    /// Name of the cluster this node created or joined, if any.
+    pub async fn cluster_name(&self) -> Option<String> {
+        self._config.read().await.as_ref().map(|c| c.name.clone())
+    }
 
+    /// Found a new cluster with this node as its first member. `address` is
+    /// how the other nodes will reach this node's API. Membership and
+    /// liveness are Horcrux's own (node registry + heartbeat); Corosync is
+    /// not needed.
+    pub async fn create_cluster(
+        &self,
+        cluster_name: String,
+        node_name: String,
+        address: String,
+    ) -> Result<Node> {
+        let mut config = self._config.write().await;
         if config.is_some() {
-            return Err(horcrux_common::Error::InvalidConfig(
-                "Cluster already exists".to_string(),
+            return Err(horcrux_common::Error::Conflict(
+                "This node is already part of a cluster".to_string(),
             ));
         }
-
-        // Create initial node with auto-detected architecture
-        let node = Node::new_local(1, node_name.clone(), "127.0.0.1".to_string());
-
-        // Initialize Corosync
-        self.corosync.init_cluster(&cluster_name, &node).await?;
-
-        let mut nodes = HashMap::new();
-        nodes.insert(node_name.clone(), node.clone());
-
+        crate::validation::validate_hostname(&cluster_name)
+            .map_err(|e| horcrux_common::Error::InvalidConfig(format!("cluster name: {e}")))?;
+        let mut nodes_map = self.nodes.write().await;
+        let next_id = nodes_map.values().map(|n| n.id).max().unwrap_or(0) + 1;
+        let mut node = Node::new_local(next_id, node_name.clone(), address);
+        node.node_id = Some(self.local_node_id.clone());
+        // An already registered entry for this host is replaced by the
+        // real one (it carries the address the peers must use).
         let new_config = ClusterConfig {
             name: cluster_name,
             nodes: vec![node.clone()],
             quorum_votes: 1,
         };
         self.persist_config(&new_config).await?;
+        config_store::put_opt(&self.store, kinds::CLUSTER_NODE, &node.name, &node).await?;
+        nodes_map.insert(node.name.clone(), node.clone());
         *config = Some(new_config);
-
-        let mut nodes_map = self.nodes.write().await;
-        if let Some(store) = &self.store {
-            for old in nodes_map.keys() {
-                store.delete(kinds::CLUSTER_NODE, old).await?;
-            }
-            store.put(kinds::CLUSTER_NODE, &node.name, &node).await?;
-        }
-        *nodes_map = nodes;
-
-        Ok(())
+        Ok(node)
     }
 
-    /// Join an existing cluster
-    #[allow(dead_code)]
+    /// Join the cluster `cluster_name` whose members (as the existing
+    /// cluster listed them, this node included) are `members`.
     pub async fn join_cluster(
         &self,
         cluster_name: String,
-        node_name: String,
-        master_ip: String,
+        local_name: &str,
+        members: Vec<Node>,
     ) -> Result<()> {
-        let config = self._config.read().await;
-
+        let mut config = self._config.write().await;
         if config.is_some() {
-            return Err(horcrux_common::Error::InvalidConfig(
-                "Already part of a cluster".to_string(),
+            return Err(horcrux_common::Error::Conflict(
+                "This node is already part of a cluster".to_string(),
             ));
         }
-
-        drop(config);
-
-        // Join via Corosync
-        self.corosync
-            .join_cluster(&cluster_name, &node_name, &master_ip)
-            .await?;
-
-        // Fetch cluster configuration from master
-        // (In a real implementation, this would be an API call to the master node)
-        let mut config = self._config.write().await;
+        if members.iter().all(|m| m.name != local_name) {
+            return Err(horcrux_common::Error::InvalidConfig(format!(
+                "the cluster did not list this node ({local_name}) as a member"
+            )));
+        }
+        let mut nodes_map = self.nodes.write().await;
+        for mut m in members {
+            m.is_local = m.name == local_name;
+            if m.is_local {
+                m.node_id = Some(self.local_node_id.clone());
+                m.status = NodeStatus::Online;
+            } else {
+                m.status = NodeStatus::Unknown;
+                m.node_id = None; // pinned from the first heartbeat
+                m.last_seen = None;
+            }
+            config_store::put_opt(&self.store, kinds::CLUSTER_NODE, &m.name, &m).await?;
+            nodes_map.insert(m.name.clone(), m);
+        }
         let new_config = ClusterConfig {
             name: cluster_name,
-            nodes: vec![],
+            nodes: nodes_map.values().cloned().collect(),
             quorum_votes: 1,
         };
         self.persist_config(&new_config).await?;
         *config = Some(new_config);
-
         Ok(())
+    }
+
+    /// Register a node that asked to join (or that a peer told us about);
+    /// an existing entry with the same name and address is left alone.
+    pub async fn accept_member(&self, name: &str, address: &str) -> Result<Node> {
+        {
+            let nodes = self.nodes.read().await;
+            if let Some(n) = nodes.get(name) {
+                if n.ip == address {
+                    return Ok(n.clone());
+                }
+                return Err(horcrux_common::Error::Conflict(format!(
+                    "a node named {name} is already in the cluster at {}",
+                    n.ip
+                )));
+            }
+        }
+        let next_id = self.nodes.read().await.values().map(|n| n.id).max().unwrap_or(0) + 1;
+        let node = Node {
+            id: next_id,
+            name: name.to_string(),
+            ip: address.to_string(),
+            status: NodeStatus::Unknown,
+            priority: 100,
+            is_local: false,
+            architecture: node::Architecture::Unknown,
+            cpu_cores: 0,
+            memory_total: 0,
+            cpu_usage: None,
+            memory_used: None,
+            last_seen: None,
+            node_id: None,
+            status_reason: None,
+        };
+        self.add_node(node.clone()).await?;
+        Ok(node)
     }
 
     /// Add a node to the cluster

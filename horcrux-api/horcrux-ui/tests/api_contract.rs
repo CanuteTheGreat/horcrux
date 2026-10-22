@@ -498,6 +498,9 @@ async fn ui_types_read_real_api_responses() {
     check!("/ha/resources", Vec<api::HaResource>);
     check!("/ha/status", api::HaStatus);
     check!("/ha/groups", Vec<api::HaGroup>);
+    check!("/ha/events", Vec<api::HaEventView>);
+    check!("/ha/fencing/devices", Vec<api::FencingDeviceView>);
+    check!("/cluster/status", api::ClusterStatusView);
     check!("/webhooks", Vec<api::WebhookConfig>);
     check!("/storage/pools", Vec<api::StoragePoolInfo>);
     check!("/stacks", Vec<api::StackSummary>);

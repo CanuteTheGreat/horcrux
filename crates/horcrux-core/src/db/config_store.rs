@@ -49,6 +49,12 @@ pub mod kinds {
     /// Containers attached to CNI networks, keyed `container_id/network`.
     pub const CNI_ATTACHMENT: &str = "cni_attachment";
     pub const NETWORK_POLICY: &str = "network_policy";
+    /// VM definitions an HA resource's owner publishes to its peers, so any
+    /// node can restart the VM when the owner dies.
+    pub const HA_VM_REPLICA: &str = "ha_vm_replica";
+    /// Event webhooks (secrets included; the API masks them).
+    pub const WEBHOOK: &str = "webhook";
+    pub const FENCING_DEVICE: &str = "fencing_device";
 }
 
 /// Durable key/value store of JSON configuration documents.

@@ -33,6 +33,28 @@ pub const FETCH_TIMEOUT: Duration = Duration::from_secs(4);
 /// polls, so a single dropped request doesn't flap the node's status.
 pub const STALE_AFTER_SECS: i64 = 30;
 
+/// Poll interval in effect: `HORCRUX_CLUSTER_POLL_SECS` or [`POLL_INTERVAL`].
+pub fn poll_interval() -> Duration {
+    env_secs("HORCRUX_CLUSTER_POLL_SECS")
+        .map(Duration::from_secs)
+        .unwrap_or(POLL_INTERVAL)
+}
+
+/// Staleness limit in effect: `HORCRUX_CLUSTER_STALE_SECS` or
+/// [`STALE_AFTER_SECS`].
+pub fn stale_after_secs() -> i64 {
+    env_secs("HORCRUX_CLUSTER_STALE_SECS")
+        .map(|v| v as i64)
+        .unwrap_or(STALE_AFTER_SECS)
+}
+
+fn env_secs(name: &str) -> Option<u64> {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|v| *v >= 1)
+}
+
 /// Gap between the two /proc/stat reads when there is no previous sample
 /// to diff against (first sample after startup).
 const FIRST_SAMPLE_WINDOW: Duration = Duration::from_millis(250);
@@ -122,7 +144,7 @@ pub fn apply_poll(node: &mut Node, outcome: PollOutcome, now: i64) {
 fn mark_missed(node: &mut Node, why: String, now: i64) {
     let recently_seen = node
         .last_seen
-        .map(|seen| now - seen <= STALE_AFTER_SECS)
+        .map(|seen| now - seen <= stale_after_secs())
         .unwrap_or(false);
     node.status_reason = Some(why);
     if !recently_seen {

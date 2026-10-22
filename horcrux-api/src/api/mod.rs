@@ -8,6 +8,10 @@ pub mod backup;
 pub mod dashboards;
 #[cfg(feature = "kubernetes")]
 pub mod helm;
+#[cfg(feature = "cluster")]
+pub mod cluster_join;
+#[cfg(feature = "cluster")]
+pub mod ha_loop;
 pub mod host_net;
 #[cfg(feature = "kubernetes")]
 pub mod k8s_config;
@@ -15,6 +19,7 @@ pub mod lane_m;
 pub mod metrics;
 pub mod migration_jobs;
 pub mod migration_peer;
+pub mod node_summary;
 pub mod notifications;
 pub mod prometheus_export;
 #[cfg(feature = "s3-gateway")]

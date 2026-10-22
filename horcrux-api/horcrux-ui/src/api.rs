@@ -7104,3 +7104,90 @@ pub async fn delete_vm_firewall(vm_id: &str, rule_id: &str) -> Result<(), ApiErr
     ))
     .await
 }
+
+// ---- HA failover: cluster create/join, fencing devices, HA events ---------
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FencingDeviceView {
+    pub id: String,
+    pub node: String,
+    pub agent_type: String,
+    pub address: String,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub has_password: bool,
+    #[serde(default)]
+    pub priority: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NewFencingDevice {
+    pub id: String,
+    pub node: String,
+    pub agent_type: String,
+    pub address: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub port: Option<u16>,
+    pub options: std::collections::HashMap<String, String>,
+    pub priority: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HaEventView {
+    pub timestamp: String,
+    pub vm_id: String,
+    pub node: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ClusterStatusView {
+    pub name: Option<String>,
+    pub total_nodes: usize,
+    pub online_nodes: usize,
+    pub has_quorum: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateClusterRequest {
+    pub name: String,
+    pub address: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct JoinClusterRequest {
+    pub peer: String,
+    pub username: String,
+    pub password: String,
+    pub address: String,
+}
+
+pub async fn get_cluster_status_view() -> Result<ClusterStatusView, ApiError> {
+    fetch_json("/cluster/status").await
+}
+
+pub async fn create_cluster(request: &CreateClusterRequest) -> Result<(), ApiError> {
+    post_json_no_response("/cluster/create", request).await
+}
+
+pub async fn join_cluster(request: &JoinClusterRequest) -> Result<(), ApiError> {
+    post_json_no_response("/cluster/join", request).await
+}
+
+pub async fn list_fencing_devices() -> Result<Vec<FencingDeviceView>, ApiError> {
+    fetch_json("/ha/fencing/devices").await
+}
+
+pub async fn add_fencing_device(device: &NewFencingDevice) -> Result<(), ApiError> {
+    post_json_no_response("/ha/fencing/devices", device).await
+}
+
+pub async fn delete_fencing_device(id: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/ha/fencing/devices/{}", id)).await
+}
+
+pub async fn list_ha_events() -> Result<Vec<HaEventView>, ApiError> {
+    fetch_json("/ha/events?limit=50").await
+}

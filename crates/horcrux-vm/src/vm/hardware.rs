@@ -253,6 +253,44 @@ impl VmManager {
         Ok(vm.to_config())
     }
 
+    /// Freeze a running QEMU VM's vCPUs (`qm suspend --skiplock`, QMP `stop`);
+    /// memory and devices stay as they are. Undo with [`Self::resume_vm`].
+    pub async fn pause_vm(&self, id: &str) -> Result<VmConfig> {
+        self.set_run_state(id, "stop", VmStatus::Paused).await
+    }
+
+    /// Continue a paused QEMU VM (QMP `cont`).
+    pub async fn resume_vm(&self, id: &str) -> Result<VmConfig> {
+        self.set_run_state(id, "cont", VmStatus::Running).await
+    }
+
+    async fn set_run_state(&self, id: &str, command: &str, to: VmStatus) -> Result<VmConfig> {
+        let mut vms = self.vms.write().await;
+        self.hydrate(&mut vms, id).await?;
+        let vm = vms
+            .get_mut(id)
+            .ok_or_else(|| Error::VmNotFound(id.to_string()))?;
+        if vm.hypervisor != VmHypervisor::Qemu {
+            return Err(Error::Conflict(format!(
+                "pause/resume is for QEMU VMs; {id} is not one"
+            )));
+        }
+        if !QemuManager::process_running(&vm.id) {
+            return Err(Error::Conflict(format!("VM {id} is not running")));
+        }
+        qmp_command(
+            &DisplayRuntime::qmp_socket(&vm.disk_path),
+            serde_json::json!({ "execute": command }),
+        )
+        .await?;
+        vm.status = to;
+        let config = vm.to_config();
+        if let Some(db) = &self.db {
+            db.update_vm(&config).await?;
+        }
+        Ok(config)
+    }
+
     /// Add a new, empty disk to a stopped QEMU VM (`qm set --scsi1 local:32`):
     /// a qcow2 image of `size_gb` in the VM storage directory, attached on
     /// the given bus at the next start.

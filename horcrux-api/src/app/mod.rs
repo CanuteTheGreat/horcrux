@@ -192,7 +192,11 @@ pub async fn run() -> anyhow::Result<()> {
     info!("Prometheus metrics initialized");
 
     // Initialize webhook manager
-    let webhook_manager = Arc::new(webhooks::WebhookManager::new());
+    let webhook_manager = Arc::new(
+        webhooks::WebhookManager::with_database(&database)
+            .await
+            .expect("Failed to load webhooks"),
+    );
     info!("Webhook manager initialized");
 
     // Initialize CNI manager: networks and attachments come back from the
@@ -429,6 +433,9 @@ pub async fn run() -> anyhow::Result<()> {
     state
         .cluster_manager
         .start_usage_monitor(horcrux_config.server.port);
+    // HA failure detection, fencing and recovery.
+    #[cfg(feature = "cluster")]
+    api::ha_loop::spawn(state.clone());
 
     // OpenTelemetry export (saved settings + periodic export).
     start_otel_exporter(state.clone());
@@ -508,6 +515,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::lane_m::routes(&state).await?)
         .merge(api::migration_jobs::routes())
         .merge(api::migration_peer::routes())
+        .merge(api::node_summary::routes())
         .merge(api::vm_hw::routes())
         .merge(api::storage_volumes::routes())
         .merge(api::sdn_cni::routes())
@@ -531,7 +539,10 @@ pub async fn run() -> anyhow::Result<()> {
     #[cfg(feature = "backup")]
     let protected_routes = protected_routes.merge(api::backup::routes(&state));
     #[cfg(feature = "cluster")]
-    let protected_routes = protected_routes.merge(cluster_routes());
+    let protected_routes = protected_routes
+        .merge(cluster_routes())
+        .merge(api::ha_loop::routes())
+        .merge(api::cluster_join::routes());
 
     // LXC parity routes (templates, shutdown/reboot, pct set, resize, snapshots)
     #[cfg(feature = "lxc")]
@@ -1747,8 +1758,52 @@ async fn create_vm(
     state
         .ws_state
         .broadcast_vm_created(vm.id.clone(), vm_name, username);
+    let _ = state
+        .webhook_manager
+        .trigger_event(
+            webhooks::WebhookEventType::VmCreated,
+            serde_json::json!({"vm_id": vm.id, "name": vm.name}),
+        )
+        .await;
 
     Ok((StatusCode::CREATED, Json(vm)))
+}
+
+/// An operator started/stopped an HA-managed VM: that is the state HA must
+/// keep it in (a stopped one is not "failed" and is not restarted).
+#[cfg(feature = "cluster")]
+async fn ha_user_intent(state: &Arc<AppState>, vm_id: &str, want: ha::HaState) {
+    if state.ha_manager.get_resource(vm_id).await.is_some() {
+        let _ = state
+            .ha_manager
+            .update_resource_state(vm_id, want, None)
+            .await;
+    }
+}
+
+/// Tell event webhooks a VM changed state (`vm.state_changed`, plus the
+/// specific `vm.started` / `vm.stopped`).
+async fn emit_vm_state(state: &Arc<AppState>, vm: &VmConfig, old: &str) {
+    let new = format!("{:?}", vm.status);
+    if old == new {
+        return;
+    }
+    let data = serde_json::json!({
+        "vm_id": vm.id, "name": vm.name, "old_state": old, "new_state": new,
+        "node": state.cluster_manager.get_local_node_name().await.unwrap_or_default(),
+    });
+    let _ = state
+        .webhook_manager
+        .trigger_event(webhooks::WebhookEventType::VmStateChanged, data.clone())
+        .await;
+    let specific = match vm.status {
+        horcrux_common::VmStatus::Running if old != "Paused" => Some(webhooks::WebhookEventType::VmStarted),
+        horcrux_common::VmStatus::Stopped => Some(webhooks::WebhookEventType::VmStopped),
+        _ => None,
+    };
+    if let Some(ev) = specific {
+        let _ = state.webhook_manager.trigger_event(ev, data).await;
+    }
 }
 
 async fn start_vm(
@@ -1763,6 +1818,9 @@ async fn start_vm(
         .unwrap_or_else(|_| "unknown".to_string());
 
     let vm = state.vm_manager.start_vm(&id).await?;
+    #[cfg(feature = "cluster")]
+    ha_user_intent(&state, &id, ha::HaState::Started).await;
+    emit_vm_state(&state, &vm, &old_status).await;
 
     // Broadcast VM status change
     state
@@ -1784,6 +1842,9 @@ async fn stop_vm(
         .unwrap_or_else(|_| "unknown".to_string());
 
     let vm = state.vm_manager.stop_vm(&id).await?;
+    #[cfg(feature = "cluster")]
+    ha_user_intent(&state, &id, ha::HaState::Stopped).await;
+    emit_vm_state(&state, &vm, &old_status).await;
 
     // Broadcast VM status change
     state
@@ -1821,7 +1882,16 @@ async fn delete_vm(
     let username = auth_user
         .map(|u| u.username.clone())
         .unwrap_or_else(|| "system".to_string());
-    state.ws_state.broadcast_vm_deleted(id, vm_name, username);
+    state
+        .ws_state
+        .broadcast_vm_deleted(id.clone(), vm_name.clone(), username);
+    let _ = state
+        .webhook_manager
+        .trigger_event(
+            webhooks::WebhookEventType::VmDeleted,
+            serde_json::json!({"vm_id": id, "name": vm_name}),
+        )
+        .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -4658,6 +4728,7 @@ async fn add_ha_resource(
             req.vm_id
         )));
     }
+    let vm_id_for_ha = req.vm_id.clone();
     let config = ha::HaConfig {
         vm_id: req.vm_id,
         group: req.group,
@@ -4669,6 +4740,16 @@ async fn add_ha_resource(
     };
 
     state.ha_manager.add_resource(config).await?;
+    // The resource lives where the VM is; HA only acts once switched on
+    // (adding the first resource is the operator asking for it).
+    let local = state.cluster_manager.get_local_node_name().await?;
+    state
+        .ha_manager
+        .update_resource_state(&vm_id_for_ha, ha::HaState::Started, Some(local))
+        .await?;
+    if !state.ha_manager.is_enabled().await {
+        state.ha_manager.enable().await;
+    }
 
     Ok(StatusCode::CREATED)
 }

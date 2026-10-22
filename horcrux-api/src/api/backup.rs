@@ -91,6 +91,21 @@ async fn job_finished(state: Arc<AppState>, job: BackupJob, report: JobRunReport
             }
         }
     }
+    if !report.ok {
+        let failed: Vec<serde_json::Value> = report
+            .results
+            .iter()
+            .filter(|r| r.error.is_some())
+            .map(|r| serde_json::json!({"target": r.target_id, "error": r.error}))
+            .collect();
+        let _ = state
+            .webhook_manager
+            .trigger_event(
+                crate::webhooks::WebhookEventType::BackupFailed,
+                serde_json::json!({"job_id": job.id, "failed": failed}),
+            )
+            .await;
+    }
     let send = match job.notify.as_deref() {
         Some("always") => true,
         Some("failure") => !report.ok,
