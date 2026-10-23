@@ -77,7 +77,7 @@ async fn tags_search_and_tree_follow_permissions() {
     let (_, r) = api.get("/search?pool=team-a").await;
     assert_eq!(ids(&r), vec!["vm:web1"]);
     assert_eq!(r[0]["tags"], json!(["prod", "web"]));
-    let (_, r) = api.get("/search?status=running").await;
+    let (_, r) = api.get("/search?kind=vm&status=running").await;
     assert!(r.as_array().unwrap().is_empty());
     let (_, r) = api.get("/search?q=team-a&kind=pool").await;
     assert_eq!(ids(&r), vec!["pool:team-a"]);

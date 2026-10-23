@@ -17,7 +17,15 @@ docker run -d --name "$NAME" --privileged --memory 1g --memory-swap 1g "$IMAGE" 
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api
 docker cp "$(dirname "$0")/system_admin_e2e.py" "$NAME":/tmp/system_admin_e2e.py
 docker cp "$(dirname "$0")/fixtures/ceph" "$NAME":/tmp/ceph-fx
-docker exec "$NAME" bash -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+# `apt-get update` exits 0 even when a mirror index failed to download (then
+# universe packages like openrc have "no installation candidate"): retry until
+# the package is really known.
+docker exec "$NAME" bash -c 'for i in 1 2 3 4 5; do
+  apt-get update -qq >/dev/null 2>&1
+  apt-cache policy openrc | grep -q "Candidate: [0-9]" && break
+  echo "apt index incomplete (attempt $i), retrying"; sleep 10
+done
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
   openrc chrony tzdata iproute2 curl python3 libvirt0 nftables >/dev/null'
 
 docker exec "$NAME" bash -c '
