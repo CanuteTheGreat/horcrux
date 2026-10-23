@@ -365,7 +365,7 @@ jobs:
         # looks at the host (hostname, ip addr, rc-status, dpkg, /etc files).
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "System administration"
-          bash horcrux-api/tests/system_admin_e2e.sh target/debug/horcrux-api
+          bash horcrux-api/tests/system_admin_e2e.sh target/debug/horcrux-api debian:trixie
 
       - name: VM devices (balloon, guest agent channel, USB controller, real QEMU)
         # vm_devices_e2e.sh boots a VM with a virtio-balloon, the guest agent's

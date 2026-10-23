@@ -13,7 +13,7 @@ NAME="horcrux-sysadm-e2e-$$"
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-docker run -d --name "$NAME" --privileged --memory 1g --memory-swap 1g "$IMAGE" sleep 1800 >/dev/null
+docker run -d --init --name "$NAME" --privileged --memory 1g --memory-swap 1g "$IMAGE" sleep 1800 >/dev/null
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api
 docker cp "$(dirname "$0")/system_admin_e2e.py" "$NAME":/tmp/system_admin_e2e.py
 docker cp "$(dirname "$0")/fixtures/ceph" "$NAME":/tmp/ceph-fx
