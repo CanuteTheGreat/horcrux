@@ -219,6 +219,9 @@ log("== 4. unclean crash: QEMU killed, no clean stop")
 time.sleep(25)   # the running-guests snapshot is refreshed every 20 s
 mf = json.loads(sh("cat /var/lib/hx/saved-state/running.json"))
 check(not mf["clean"] and "gs-save" in {x["id"] for x in mf["guests"]}, "periodic snapshot lists the running guests")
+# The crash takes the API down with the guests (the periodic snapshot must
+# not be refreshed after it): kill the API first, then every QEMU.
+sh("kill -9 $(cat /var/lib/hx/api.pid)", ok=False)
 sh("pkill -9 -f '[h]orcrux-vm-gs-save.pid'; pkill -9 -f '[h]orcrux-vm-gs-shut.pid'; pkill -9 -f '[h]orcrux-vm-gs-always.pid'; true", ok=False)
 sh("rm -f /var/run/horcrux-vm-gs-*.pid")
 reboot_host()
