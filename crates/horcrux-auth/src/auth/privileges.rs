@@ -105,6 +105,7 @@ pub const KNOWN_AREAS: &[&str] = &[
     "templates",
     "audit",
     "storage",
+    "ceph",
     "gpu",
     "tls",
     "vault",
@@ -309,6 +310,7 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
 
         "audit" => need(P::SysAudit, "/"),
 
+        "ceph" => read_write(m, P::DatastoreAudit, P::DatastoreAllocate, "/storage"),
         "storage" => match (arg(1), arg(2), arg(3)) {
             ("pools", "", _) => {
                 if is_read(m) {

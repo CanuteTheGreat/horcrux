@@ -1,0 +1,32 @@
+[
+ {
+  "pool": 1,
+  "pool_name": ".mgr",
+  "create_time": "2026-10-01T10:00:00.000000+0000",
+  "flags": 1,
+  "size": 3,
+  "min_size": 2,
+  "crush_rule": 0,
+  "pg_num": 1,
+  "pg_placement_num": 1,
+  "type": 1,
+  "application_metadata": {
+   "mgr": {}
+  }
+ },
+ {
+  "pool": 2,
+  "pool_name": "vmdata",
+  "create_time": "2026-10-02T10:00:00.000000+0000",
+  "flags": 8193,
+  "size": 3,
+  "min_size": 2,
+  "crush_rule": 0,
+  "pg_num": 32,
+  "pg_placement_num": 32,
+  "type": 1,
+  "application_metadata": {
+   "rbd": {}
+  }
+ }
+]

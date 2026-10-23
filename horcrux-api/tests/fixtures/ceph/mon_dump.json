@@ -1,0 +1,65 @@
+{
+ "epoch": 3,
+ "fsid": "3f1c8a0e-9d2b-4a53-8f0e-0a9a5d3b7c11",
+ "modified": "2026-10-02T09:00:00.000000Z",
+ "min_mon_release_name": "reef",
+ "mons": [
+  {
+   "rank": 0,
+   "name": "a",
+   "public_addrs": {
+    "addrvec": [
+     {
+      "type": "v2",
+      "addr": "10.0.0.11:3300",
+      "nonce": 0
+     },
+     {
+      "type": "v1",
+      "addr": "10.0.0.11:6789",
+      "nonce": 0
+     }
+    ]
+   },
+   "addr": "10.0.0.11:6789/0"
+  },
+  {
+   "rank": 1,
+   "name": "b",
+   "public_addrs": {
+    "addrvec": [
+     {
+      "type": "v2",
+      "addr": "10.0.0.12:3300",
+      "nonce": 0
+     },
+     {
+      "type": "v1",
+      "addr": "10.0.0.12:6789",
+      "nonce": 0
+     }
+    ]
+   },
+   "addr": "10.0.0.12:6789/0"
+  },
+  {
+   "rank": 2,
+   "name": "c",
+   "public_addrs": {
+    "addrvec": [
+     {
+      "type": "v2",
+      "addr": "10.0.0.13:3300",
+      "nonce": 0
+     }
+    ]
+   },
+   "addr": "10.0.0.13:3300/0"
+  }
+ ],
+ "quorum": [
+  0,
+  1,
+  2
+ ]
+}

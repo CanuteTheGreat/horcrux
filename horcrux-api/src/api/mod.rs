@@ -6,6 +6,7 @@ pub mod audit_view;
 pub mod auth;
 #[cfg(feature = "backup")]
 pub mod backup;
+pub mod ceph_admin;
 #[cfg(feature = "cluster")]
 pub mod cluster_join;
 pub mod dashboards;

@@ -16,6 +16,7 @@ trap cleanup EXIT
 docker run -d --name "$NAME" --privileged --memory 1g --memory-swap 1g "$IMAGE" sleep 1800 >/dev/null
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api
 docker cp "$(dirname "$0")/system_admin_e2e.py" "$NAME":/tmp/system_admin_e2e.py
+docker cp "$(dirname "$0")/fixtures/ceph" "$NAME":/tmp/ceph-fx
 docker exec "$NAME" bash -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
   openrc chrony tzdata iproute2 curl python3 libvirt0 nftables >/dev/null'
 

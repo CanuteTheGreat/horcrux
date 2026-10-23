@@ -2,6 +2,7 @@ mod alerts;
 pub mod audit;
 pub mod auth;
 pub mod backup;
+pub mod ceph;
 mod clone_list;
 mod console;
 mod container_console;

@@ -1,0 +1,6 @@
+{
+ "epoch": 57,
+ "fsid": "3f1c8a0e-9d2b-4a53-8f0e-0a9a5d3b7c11",
+ "flags": "noout,sortbitwise,recovery_deletes,purged_snapdirs,pglog_hardlimit",
+ "max_osd": 3
+}

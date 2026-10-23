@@ -1,0 +1,77 @@
+{
+ "fsid": "3f1c8a0e-9d2b-4a53-8f0e-0a9a5d3b7c11",
+ "health": {
+  "status": "HEALTH_WARN",
+  "checks": {
+   "OSD_DOWN": {
+    "severity": "HEALTH_WARN",
+    "summary": {
+     "message": "1 osds down",
+     "count": 1
+    },
+    "muted": false
+   },
+   "PG_DEGRADED": {
+    "severity": "HEALTH_WARN",
+    "summary": {
+     "message": "Degraded data redundancy: 12/96 objects degraded (12.500%), 9 pgs degraded",
+     "count": 9
+    },
+    "muted": false
+   }
+  }
+ },
+ "election_epoch": 14,
+ "quorum": [
+  0,
+  1,
+  2
+ ],
+ "quorum_names": [
+  "a",
+  "b",
+  "c"
+ ],
+ "monmap": {
+  "epoch": 3,
+  "min_mon_release_name": "reef",
+  "num_mons": 3
+ },
+ "osdmap": {
+  "epoch": 57,
+  "num_osds": 3,
+  "num_up_osds": 2,
+  "osd_up_since": 1790000000,
+  "num_in_osds": 3,
+  "osd_in_since": 1790000000,
+  "num_remapped_pgs": 0
+ },
+ "pgmap": {
+  "pgs_by_state": [
+   {
+    "state_name": "active+clean",
+    "count": 23
+   },
+   {
+    "state_name": "active+undersized+degraded",
+    "count": 9
+   }
+  ],
+  "num_pgs": 32,
+  "num_pools": 2,
+  "num_objects": 32,
+  "data_bytes": 134217728,
+  "bytes_used": 805306368,
+  "bytes_avail": 2684354560,
+  "bytes_total": 3489660928
+ },
+ "mgrmap": {
+  "available": true,
+  "num_standbys": 1,
+  "modules": [
+   "iostat",
+   "restful"
+  ],
+  "services": {}
+ }
+}

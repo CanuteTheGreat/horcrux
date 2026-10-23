@@ -479,6 +479,67 @@ def main():
     ok("--depclean sys-apps/foo" in open("/tmp/emerge.log").read(), "remove uses --depclean")
     expect(422, "POST", "/system/packages/..%2F..%2Fetc/install")
 
+    step("Ceph management (the `ceph` CLI is a shim that serves recorded Ceph JSON and logs its arguments; no live cluster in CI)")
+    st = expect(200, "GET", "/ceph/status")
+    ok(not st["available"] and st["health"] == "NOT_INSTALLED", "without Ceph installed the status says so")
+    expect(503, "GET", "/ceph/osds")
+    open("/usr/local/bin/ceph", "w").write("""#!/bin/sh
+echo "ceph $*" >> /tmp/ceph.log
+fx=/tmp/ceph-fx
+case "$*" in
+ "status "*) cat $fx/status.json;;
+ "mon dump "*) cat $fx/mon_dump.json;;
+ "osd tree "*) cat $fx/osd_tree.json;;
+ "osd pool ls detail "*) cat $fx/pools.json;;
+ "df "*) cat $fx/df.json;;
+ "osd crush rule dump "*) cat $fx/crush_rules.json;;
+ "osd dump "*) cat $fx/osd_dump.json;;
+ "osd out "*|"osd in "*|"osd set "*|"osd unset "*|"osd pool create "*|"osd pool set "*|"osd pool application enable "*|"osd pool delete "*) echo done;;
+ *) echo "unknown: $*" >&2; exit 22;;
+esac
+""")
+    os.chmod("/usr/local/bin/ceph", 0o755)
+    cl = lambda: open("/tmp/ceph.log").read()
+    st = expect(200, "GET", "/ceph/status")
+    ok(st["reachable"] and st["health"] == "HEALTH_WARN" and st["osds_up"] == 2 and st["osds_total"] == 3 and st["mons_in_quorum"] == ["a", "b", "c"],
+       "status parses the cluster's JSON")
+    ok([h["name"] for h in st["health_checks"]] == ["OSD_DOWN", "PG_DEGRADED"], "health checks listed")
+    osds = expect(200, "GET", "/ceph/osds")
+    ok([(o["name"], o["host"], o["status"], o["is_in"]) for o in osds] == [("osd.0", "pve1", "up", True), ("osd.1", "pve1", "down", False), ("osd.2", "pve2", "up", True)], "OSDs with host and state")
+    ok(len(expect(200, "GET", "/ceph/monitors")) == 3, "monitors")
+    pl = expect(200, "GET", "/ceph/pools")
+    ok([p["name"] for p in pl] == [".mgr", "vmdata"] and pl[1]["stored_bytes"] == 134217728 and pl[1]["applications"] == ["rbd"], "pools joined with usage")
+    ok(len(expect(200, "GET", "/ceph/crush-rules")) == 2, "CRUSH rules")
+    fl = {f["name"]: f["set"] for f in expect(200, "GET", "/ceph/flags")}
+    ok(fl["noout"] and not fl["norebalance"], "flags from the OSD map")
+
+    expect(200, "POST", "/ceph/osds/1/in")
+    ok("osd in 1" in cl(), "OSD in runs `ceph osd in 1`")
+    expect(200, "POST", "/ceph/osds/2/out")
+    expect(404, "POST", "/ceph/osds/9/out")
+    expect(400, "POST", "/ceph/osds/1/explode")
+    expect(400, "POST", "/ceph/osds/x/in")
+
+    expect(200, "POST", "/ceph/pools", {"name": "newpool", "pg_num": 64, "size": 2, "application": "rbd"})
+    log = cl()
+    ok("osd pool create newpool 64" in log and "osd pool set newpool size 2" in log and "osd pool application enable newpool rbd" in log, "pool create runs create + size + application")
+    expect(409, "POST", "/ceph/pools", {"name": "vmdata", "pg_num": 32})
+    expect(422, "POST", "/ceph/pools", {"name": "bad pool", "pg_num": 32})
+    expect(422, "POST", "/ceph/pools", {"name": "x", "pg_num": 33})
+    expect(400, "DELETE", "/ceph/pools/vmdata")
+    expect(400, "DELETE", "/ceph/pools/vmdata?confirm=other")
+    expect(400, "DELETE", "/ceph/pools/.mgr?confirm=.mgr")
+    expect(404, "DELETE", "/ceph/pools/nosuch?confirm=nosuch")
+    expect(200, "DELETE", "/ceph/pools/vmdata?confirm=vmdata")
+    ok("osd pool delete vmdata vmdata --yes-i-really-really-mean-it" in cl(), "pool delete needs its name twice, like Ceph")
+    r = expect(200, "POST", "/ceph/flags/norebalance", {"set": True})
+    ok("osd set norebalance" in cl(), "flag set runs `ceph osd set`")
+    expect(200, "POST", "/ceph/flags/noout", {"set": False})
+    ok("osd unset noout" in cl(), "flag clear runs `ceph osd unset`")
+    expect(400, "POST", "/ceph/flags/everything", {"set": True})
+    types = {t["task_type"] for t in expect(200, "GET", "/tasks?limit=200")}
+    ok({"ceph-osd", "ceph-pool", "ceph-flag"} <= types, "Ceph changes are in the task log")
+
     print("[sysadmin-e2e] ALL OK", flush=True)
 
 

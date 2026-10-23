@@ -248,6 +248,9 @@ impl AuditLogger {
 
         let json = serde_json::to_string(event).unwrap_or_default();
         file.write_all(format!("{}\n", json).as_bytes()).await?;
+        // tokio's File hands the write to a blocking thread: without a flush a
+        // dropped handle can lose the last line (events missing after a restart).
+        file.flush().await?;
 
         Ok(())
     }

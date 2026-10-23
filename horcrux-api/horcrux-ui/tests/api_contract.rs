@@ -508,6 +508,7 @@ async fn ui_types_read_real_api_responses() {
     check!("/system/health", api::SystemHealth);
     check!("/system/diagnostics", api::SystemDiagnostics);
     check!("/tasks", Vec<api::TaskRecord>);
+    check!("/ceph/status", api::ceph::CephStatus);
     check!("/audit/search", api::AuditPage);
     check!("/audit/filter-options", api::AuditFilterOptions);
     check!("/audit/security-events", Vec<api::AuditEvent>);

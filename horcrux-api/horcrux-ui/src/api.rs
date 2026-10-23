@@ -2903,6 +2903,7 @@ pub async fn delete_kubernetes_secret(
 // Backup & restore: types and calls live in api/backup.rs (lane D)
 // =============================================================================
 pub mod backup;
+pub mod ceph;
 pub mod dashboards;
 pub mod s3;
 pub mod sdn;
