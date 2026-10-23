@@ -71,6 +71,20 @@ pub struct Plan {
     pub unplaced: Vec<Unplaced>,
 }
 
+/// Nodes HA may restart a dead node's guests on: the online ones that are
+/// not in maintenance (an administrator who emptied a node for service does
+/// not want guests landing back on it, the same rule drain and rebalance use).
+pub fn recovery_targets(
+    online: &[String],
+    maintenance: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    online
+        .iter()
+        .filter(|n| !maintenance.contains(*n))
+        .cloned()
+        .collect()
+}
+
 struct World<'a> {
     nodes: &'a [PlanNode],
     guests: &'a [PlanGuest],
@@ -293,6 +307,20 @@ pub fn plan_rebalance(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn recovery_never_targets_a_node_in_maintenance() {
+        let online = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let maint: std::collections::HashSet<String> = ["b".to_string()].into();
+        assert_eq!(recovery_targets(&online, &maint), vec!["a", "c"]);
+        let all: std::collections::HashSet<String> = online.iter().cloned().collect();
+        assert!(recovery_targets(&online, &all).is_empty());
+        assert_eq!(
+            recovery_targets(&online, &Default::default()),
+            online,
+            "no maintenance: every online node stays a target"
+        );
+    }
+
     use super::*;
 
     fn node(n: &str, mem: u64) -> PlanNode {

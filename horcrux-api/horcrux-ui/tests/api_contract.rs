@@ -4117,6 +4117,26 @@ async fn guest_power_routes_read_into_ui_types() {
             post(&c, &token, "/ha/peer/placement", json!({})).await.0,
             403
         );
+        // ... and so do the maintenance probe HA uses and the container
+        // transport of drain / rebalance.
+        for path in [
+            "/ha/peer/maintenance",
+            "/ha/peer/ct/abort/x",
+            "/ha/peer/ct/receive/x",
+        ] {
+            assert_eq!(post(&c, &token, path, json!({})).await.0, 403, "{path}");
+        }
+        assert_eq!(
+            post(
+                &c,
+                &token,
+                "/ha/peer/ct/prepare",
+                json!({"id": "x", "name": "x", "runtime": "docker", "from": "n"})
+            )
+            .await
+            .0,
+            403
+        );
     }
 
     // The host-agent hook accepts nothing without its token.

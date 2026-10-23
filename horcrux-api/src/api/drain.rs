@@ -6,7 +6,7 @@
 //!   shared storage not copied), placed by free RAM, architecture, pin,
 //!   affinity and anti-affinity (`cluster/drain.rs`). Whatever cannot be moved
 //!   (no node has room, a rule forbids it, the migration failed or timed out,
-//!   containers - they have no cross-node transport yet) stays where it is and
+//!   a container whose target lacks its runtime) stays where it is and
 //!   is handled by the local stop action (Save state by default), so a host
 //!   shutdown never loses a guest. The host shutdown hook runs this drain
 //!   first when `drain_on_shutdown` is on (node default, on).
@@ -67,6 +67,7 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(get_placement).put(put_placement),
         )
         .route("/api/ha/peer/placement", post(peer_placement))
+        .route("/api/ha/peer/maintenance", post(peer_maintenance))
         .route("/api/ha/peer/move", post(peer_move))
         .route("/api/ha/peer/rebalance-settings", post(peer_settings))
 }
@@ -327,11 +328,8 @@ pub async fn local_info(state: &Arc<AppState>) -> PeerInfo {
             memory_mb: c.memory,
             cpus: c.cpus,
             arch: arch_name(),
-            immovable: Some(
-                "containers cannot be moved between Horcrux nodes yet; their state is saved locally"
-                    .into(),
-            ),
-            rules: Rules::default(),
+            immovable: None,
+            rules: load_rules(state, &c.id).await,
         });
     }
     PeerInfo {
@@ -415,6 +413,23 @@ async fn peer_post<B: Serialize, T: serde::de::DeserializeOwned>(
     serde_json::from_str(&text).map_err(|e| e.to_string())
 }
 
+/// The local node's name plus the way to call another node's peer API.
+pub struct PeerCtx {
+    pub local: String,
+    state: Arc<AppState>,
+}
+
+impl PeerCtx {
+    pub async fn post<B: Serialize, T: serde::de::DeserializeOwned>(
+        &self,
+        node: &Node,
+        path: &str,
+        body: &B,
+    ) -> Result<T, String> {
+        peer_post(&self.state, &self.local, node, path, body).await
+    }
+}
+
 /// Every online node and every guest in the cluster.
 pub async fn snapshot(state: &Arc<AppState>) -> (String, Vec<PlanNode>, Vec<PlanGuest>) {
     let me = local_info(state).await;
@@ -436,8 +451,38 @@ pub async fn snapshot(state: &Arc<AppState>) -> (String, Vec<PlanNode>, Vec<Plan
 
 // --------------------------------------------------------------- execution
 
-/// Live-migrate one VM from this node and wait for the result.
+/// Move one guest from this node: a container over the container transport
+/// (`ct_move.rs`), a VM by live migration; wait for the result.
 async fn move_here(state: &Arc<AppState>, m: &Move, timeout_secs: u64) -> MoveResult {
+    if state.vm_manager.get_vm(&m.guest_id).await.is_err()
+        && state
+            .container_manager
+            .get_container(&m.guest_id)
+            .await
+            .is_ok()
+    {
+        let local = state
+            .cluster_manager
+            .get_local_node_name()
+            .await
+            .unwrap_or_default();
+        let r = MoveResult {
+            guest_id: m.guest_id.clone(),
+            name: m.name.clone(),
+            from: m.from.clone(),
+            to: m.to.clone(),
+            reason: m.reason.clone(),
+            status: "running".into(),
+            ..Default::default()
+        };
+        let ctx = PeerCtx {
+            local,
+            state: state.clone(),
+        };
+        let r = super::ct_move::move_container_here(state, &ctx, r, timeout_secs).await;
+        record_move(state, &r).await;
+        return r;
+    }
     let mut r = MoveResult {
         guest_id: m.guest_id.clone(),
         name: m.name.clone(),
@@ -1107,6 +1152,50 @@ async fn peer_placement(
     Ok(Json(local_info(&state).await))
 }
 
+#[derive(Serialize, Deserialize)]
+struct MaintFlag {
+    maintenance: bool,
+}
+
+async fn peer_maintenance(
+    State(state): State<Arc<AppState>>,
+    user: Option<Extension<AuthUser>>,
+) -> Result<Json<MaintFlag>, ApiError> {
+    require_peer(&user)?;
+    Ok(Json(MaintFlag {
+        maintenance: load_maintenance(&state).await.enabled,
+    }))
+}
+
+/// The nodes of the cluster that are in maintenance, this one included
+/// (asked of every online peer; a peer that does not answer in time counts as
+/// not in maintenance - HA's own online view already decides if it is up).
+pub async fn maintenance_nodes(
+    state: &Arc<AppState>,
+    nodes: &[Node],
+    local: &str,
+) -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    if load_maintenance(state).await.enabled {
+        set.insert(local.to_string());
+    }
+    let peers = peer_nodes(nodes, local);
+    let answers = futures::future::join_all(peers.iter().map(|n| async move {
+        let r = tokio::time::timeout(
+            Duration::from_secs(3),
+            peer_get::<MaintFlag>(state, local, n, "/api/ha/peer/maintenance"),
+        )
+        .await;
+        (
+            n.name.clone(),
+            matches!(r, Ok(Ok(MaintFlag { maintenance: true }))),
+        )
+    }))
+    .await;
+    set.extend(answers.into_iter().filter(|(_, m)| *m).map(|(n, _)| n));
+    set
+}
+
 async fn peer_move(
     State(state): State<Arc<AppState>>,
     user: Option<Extension<AuthUser>>,
@@ -1114,12 +1203,15 @@ async fn peer_move(
 ) -> Result<Json<MoveResult>, ApiError> {
     require_peer(&user)?;
     let local = state.cluster_manager.get_local_node_name().await?;
-    let name = state
-        .vm_manager
-        .get_vm(&req.guest_id)
-        .await
-        .map(|v| v.name)
-        .unwrap_or_default();
+    let name = match state.vm_manager.get_vm(&req.guest_id).await {
+        Ok(v) => v.name,
+        Err(_) => state
+            .container_manager
+            .get_container(&req.guest_id)
+            .await
+            .map(|c| c.name)
+            .unwrap_or_default(),
+    };
     let m = Move {
         guest_id: req.guest_id,
         name,

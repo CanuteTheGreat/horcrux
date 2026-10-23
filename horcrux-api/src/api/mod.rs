@@ -9,6 +9,8 @@ pub mod backup;
 pub mod ceph_admin;
 #[cfg(feature = "cluster")]
 pub mod cluster_join;
+#[cfg(feature = "cluster")]
+pub mod ct_move;
 pub mod dashboards;
 #[cfg(feature = "cluster")]
 pub mod drain;

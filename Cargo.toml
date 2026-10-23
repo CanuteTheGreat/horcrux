@@ -55,7 +55,7 @@ argon2 = { version = "0.5", features = ["std"] }
 hostname = "0.4"
 num_cpus = "1.16"
 virt = { version = "0.4" }
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
 base64 = "0.22"
 urlencoding = "2.1"
 async-trait = "0.1"

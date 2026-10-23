@@ -562,6 +562,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(cluster_routes())
         .merge(api::ha_loop::routes())
         .merge(api::drain::routes())
+        .merge(api::ct_move::routes())
         .merge(api::cluster_join::routes());
 
     // LXC parity routes (templates, shutdown/reboot, pct set, resize, snapshots)

@@ -31,7 +31,7 @@ cleanup() {
 trap cleanup EXIT
 
 DEV=(--device /dev/net/tun)
-if [ -e /dev/kvm ]; then DEV+=(--device /dev/kvm); echo "KVM: yes"; else echo "KVM: no (TCG)"; fi
+if [ -e /dev/kvm ] && [ "${HX_NO_KVM:-0}" != 1 ]; then DEV+=(--device /dev/kvm); echo "KVM: yes"; else echo "KVM: no (TCG)"; fi
 docker network create "$NET" >/dev/null
 docker volume create "$VOL" >/dev/null
 for n in "$N1" "$N2"; do
