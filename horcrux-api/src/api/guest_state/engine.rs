@@ -680,7 +680,11 @@ async fn clean_shutdown(state: &Arc<AppState>, g: &GuestInfo, secs: u64) -> Resu
             }
             #[cfg(not(feature = "lxc"))]
             {
-                state.container_manager.stop_container(&g.id).await.map(|_| ())
+                state
+                    .container_manager
+                    .stop_container(&g.id)
+                    .await
+                    .map(|_| ())
             }
         }
         GuestKind::Container => state
