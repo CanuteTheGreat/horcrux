@@ -18,6 +18,8 @@ trap cleanup EXIT
 docker run -d --name "$NAME" --cap-add NET_ADMIN --memory 1g "$IMAGE" sleep 900 >/dev/null
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api
 docker exec "$NAME" bash -c '(command -v nft && ldconfig -p | grep -q libvirt.so.0) >/dev/null || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nftables curl libvirt0 >/dev/null)'
+docker exec "$NAME" bash -c 'command -v python3 >/dev/null || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 >/dev/null)'
+docker cp "$(dirname "$0")/firewall_objects_e2e.py" "$NAME":/tmp/firewall_objects_e2e.py
 
 docker exec "$NAME" bash -c '
 set -euo pipefail
@@ -41,3 +43,6 @@ fi
 grep -q "table inet horcrux\|table ip horcrux\|table horcrux" /tmp/fw/ruleset || { echo "no horcrux table"; cat /tmp/fw/ruleset; exit 1; }
 echo "firewall apply: rule present in kernel nftables ruleset"
 '
+
+# IP sets, aliases, macros and default policies, checked against the kernel ruleset
+docker exec "$NAME" python3 /tmp/firewall_objects_e2e.py || { docker exec "$NAME" tail -50 /tmp/fw/api.log; exit 1; }

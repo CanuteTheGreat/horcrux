@@ -698,6 +698,60 @@ pub struct Principal {
     pub roles: HashMap<String, Vec<Privilege>>,
 }
 
+/// Resource pools (`config_objects` kind `resource_pool`, JSON
+/// `{id, vms[], containers[], storages[]}`): a grant on `/pool/<id>` applies
+/// to every member, as if it had been made on the member's own path.
+async fn with_pool_grants(pool: &SqlitePool, mut acl: Vec<AclEntry>) -> Result<Vec<AclEntry>> {
+    if !acl
+        .iter()
+        .any(|e| e.path.trim_start_matches('/').starts_with("pool/"))
+    {
+        return Ok(acl);
+    }
+    let rows = sqlx::query("SELECT data FROM config_objects WHERE kind = 'resource_pool'")
+        .fetch_all(pool)
+        .await
+        .map_err(db_err("resource pools"))?;
+    let mut extra = Vec::new();
+    for r in rows {
+        let data: String = r.get("data");
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) else {
+            continue;
+        };
+        let Some(id) = v["id"].as_str() else { continue };
+        let pool_path = format!("/pool/{id}");
+        let members: Vec<String> = [
+            ("vms", "/vms"),
+            ("containers", "/containers"),
+            ("storages", "/storage"),
+        ]
+        .iter()
+        .flat_map(|(k, base)| {
+            v[*k]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|m| m.as_str().map(|m| format!("{base}/{m}")))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+        for e in acl
+            .iter()
+            .filter(|e| acl::normalize_path(&e.path) == pool_path)
+        {
+            for m in &members {
+                extra.push(AclEntry {
+                    path: m.clone(),
+                    propagate: true,
+                    ..e.clone()
+                });
+            }
+        }
+    }
+    acl.extend(extra);
+    Ok(acl)
+}
+
 impl Principal {
     pub async fn load(pool: &SqlitePool, user_id: &str) -> Result<Self> {
         let groups = user_groups(pool, user_id).await?;
@@ -718,6 +772,7 @@ impl Principal {
                     .map_err(db_err("group acl"))?;
             acl.extend(rows.iter().map(row_to_acl));
         }
+        let acl = with_pool_grants(pool, acl).await?;
         Ok(Self {
             user_id: user_id.to_string(),
             groups,

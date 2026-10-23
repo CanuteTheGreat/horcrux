@@ -79,8 +79,11 @@ pub fn App() -> impl IntoView {
                             <A href="/storage/smart" class="dropdown-item">"SMART Health"</A>
                             <A href="/storage/ceph" class="dropdown-item">"Ceph"</A>
                             <A href="/storage/isos" class="dropdown-item">"ISO Library"</A>
+                            <A href="/storage/content" class="dropdown-item">"Storage Content"</A>
+                            <A href="/pools" class="dropdown-item">"Resource Pools"</A>
                             <A href="/network" class="dropdown-item">"Network"</A>
                             <A href="/network/bridges" class="dropdown-item">"Host Bridges"</A>
+                            <A href="/network/firewall-objects" class="dropdown-item">"Firewall Objects"</A>
                             <A href="/network/sdn" class="dropdown-item">"SDN (Zones, VNets, IPAM)"</A>
                             <A href="/system/power" class="dropdown-item">"Guest Power (Save State)"</A>
                             <A href="/system/health" class="dropdown-item">"Node Health"</A>
@@ -169,6 +172,9 @@ pub fn App() -> impl IntoView {
                     <Route path="/vms/:id/console" view=VmConsole/>
                     <Route path="/vms/:id/hardware" view=crate::pages::VmHardwarePage/>
                     <Route path="/storage/isos" view=crate::pages::IsoLibraryPage/>
+                    <Route path="/storage/content" view=crate::pages::StorageContentPage/>
+                    <Route path="/pools" view=crate::pages::ResourcePoolsPage/>
+                    <Route path="/network/firewall-objects" view=crate::pages::FirewallObjectsPage/>
                     <Route path="/network/bridges" view=crate::pages::HostBridgesPage/>
                     <Route path="/network/sdn" view=crate::pages::sdn_zones::SdnZonesPage/>
                     <Route path="/system/power" view=crate::pages::GuestPowerPage/>

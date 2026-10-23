@@ -106,6 +106,7 @@ pub const KNOWN_AREAS: &[&str] = &[
     "audit",
     "storage",
     "ceph",
+    "pools",
     "gpu",
     "tls",
     "vault",
@@ -311,6 +312,18 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
         "audit" => need(P::SysAudit, "/"),
 
         "ceph" => read_write(m, P::DatastoreAudit, P::DatastoreAllocate, "/storage"),
+        // Resource pools: seeing a pool takes Pool.Audit on it (or anywhere
+        // below /pool); creating one Pool.Allocate on /pool; changing one
+        // Pool.Allocate on that pool.
+        "pools" => match (arg(1), m) {
+            ("", "GET") => Requirement::AnyBelow {
+                privilege: P::PoolAudit,
+                prefix: "/pool".into(),
+            },
+            ("", _) => need(P::PoolAllocate, "/pool"),
+            (id, "GET") => need(P::PoolAudit, format!("/pool/{id}")),
+            (id, _) => need(P::PoolAllocate, format!("/pool/{id}")),
+        },
         "storage" => match (arg(1), arg(2), arg(3)) {
             ("pools", "", _) => {
                 if is_read(m) {

@@ -26,6 +26,9 @@ pub mod kinds {
     pub const STORAGE_POOL: &str = "storage_pool";
     pub const FIREWALL_RULE: &str = "firewall_rule";
     pub const SECURITY_GROUP: &str = "firewall_security_group";
+    pub const FIREWALL_IPSET: &str = "firewall_ipset";
+    pub const FIREWALL_ALIAS: &str = "firewall_alias";
+    pub const FIREWALL_OPTIONS: &str = "firewall_options";
     pub const HA_RESOURCE: &str = "ha_resource";
     pub const HA_GROUP: &str = "ha_group";
     pub const HA_SETTINGS: &str = "ha_settings";

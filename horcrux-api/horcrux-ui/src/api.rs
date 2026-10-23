@@ -6072,6 +6072,213 @@ pub async fn delete_iso(name: &str) -> Result<(), ApiError> {
     delete_json(&format!("/storage/isos/{}", urlencoding::encode(name))).await
 }
 
+// Storage content types (Infrastructure > Storage Content) - horcrux-api/src/api/storage_content.rs.
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ContentTypeInfo {
+    pub id: String,
+    pub label: String,
+    pub dir: String,
+    pub extensions: Vec<String>,
+    pub uploadable: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ContentItem {
+    pub content: String,
+    pub name: String,
+    pub size: u64,
+    pub path: String,
+    pub modified: i64,
+}
+
+pub async fn get_content_types() -> Result<Vec<ContentTypeInfo>, ApiError> {
+    fetch_json("/storage/content-types").await
+}
+
+pub async fn list_pool_content(pool: &str, content: &str) -> Result<Vec<ContentItem>, ApiError> {
+    fetch_json(&format!(
+        "/storage/pools/{}/content?content={}",
+        urlencoding::encode(pool),
+        urlencoding::encode(content)
+    ))
+    .await
+}
+
+pub async fn delete_pool_content(pool: &str, content: &str, name: &str) -> Result<(), ApiError> {
+    delete_json(&format!(
+        "/storage/pools/{}/content/{}/{}",
+        urlencoding::encode(pool),
+        urlencoding::encode(content),
+        urlencoding::encode(name)
+    ))
+    .await
+}
+
+/// Upload a browser `File` as the raw request body (streamed by the browser,
+/// not read into memory).
+pub async fn upload_pool_content(
+    pool: &str,
+    content: &str,
+    file: web_sys::File,
+) -> Result<ContentItem, ApiError> {
+    let url = resolve_api_url(&format!(
+        "/storage/pools/{}/upload?content={}&filename={}",
+        urlencoding::encode(pool),
+        urlencoding::encode(content),
+        urlencoding::encode(&file.name())
+    ));
+    let response = with_auth(reqwasm::http::Request::post(&url))
+        .body(file)
+        .send()
+        .await
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
+    if response.ok() {
+        let text = response.text().await.map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
+        decode_body(&text)
+    } else {
+        Err(http_error(response).await)
+    }
+}
+
+// Resource pools (Datacenter > Pools) - horcrux-api/src/api/resource_pools.rs.
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct ResourcePool {
+    pub id: String,
+    #[serde(default)]
+    pub comment: String,
+    #[serde(default)]
+    pub vms: Vec<String>,
+    #[serde(default)]
+    pub containers: Vec<String>,
+    #[serde(default)]
+    pub storages: Vec<String>,
+}
+
+pub async fn list_resource_pools() -> Result<Vec<ResourcePool>, ApiError> {
+    fetch_json("/pools").await
+}
+
+pub async fn create_resource_pool(pool: &ResourcePool) -> Result<ResourcePool, ApiError> {
+    post_json("/pools", pool).await
+}
+
+pub async fn update_resource_pool(pool: &ResourcePool) -> Result<ResourcePool, ApiError> {
+    put_json(
+        &format!("/pools/{}", urlencoding::encode(&pool.id)),
+        &serde_json::json!({
+            "comment": pool.comment,
+            "vms": pool.vms,
+            "containers": pool.containers,
+            "storages": pool.storages,
+        }),
+    )
+    .await
+}
+
+pub async fn delete_resource_pool(id: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/pools/{}", urlencoding::encode(id))).await
+}
+
+// Firewall objects (Network > Firewall Objects) - horcrux-api/src/api/firewall_objects.rs.
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct FwIpSet {
+    pub name: String,
+    #[serde(default)]
+    pub comment: String,
+    #[serde(default)]
+    pub entries: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct FwAlias {
+    pub name: String,
+    pub cidr: String,
+    #[serde(default)]
+    pub comment: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct FwOptions {
+    pub policy_in: String,
+    pub policy_out: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct FwMacro {
+    pub name: String,
+    pub description: String,
+    pub rules: Vec<(String, String)>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct FwLogEntry {
+    pub time: String,
+    pub iface_in: String,
+    pub iface_out: String,
+    pub src: String,
+    pub dst: String,
+    pub proto: String,
+    pub sport: String,
+    pub dport: String,
+    pub raw: String,
+}
+
+pub async fn list_fw_ipsets() -> Result<Vec<FwIpSet>, ApiError> {
+    fetch_json("/firewall/ipsets").await
+}
+pub async fn create_fw_ipset(set: &FwIpSet) -> Result<FwIpSet, ApiError> {
+    post_json("/firewall/ipsets", set).await
+}
+pub async fn delete_fw_ipset(name: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/firewall/ipsets/{}", urlencoding::encode(name))).await
+}
+pub async fn add_fw_ipset_entry(name: &str, cidr: &str) -> Result<FwIpSet, ApiError> {
+    post_json(
+        &format!("/firewall/ipsets/{}/entries", urlencoding::encode(name)),
+        &serde_json::json!({ "cidr": cidr }),
+    )
+    .await
+}
+pub async fn remove_fw_ipset_entry(name: &str, cidr: &str) -> Result<(), ApiError> {
+    delete_json(&format!(
+        "/firewall/ipsets/{}/entries/{}",
+        urlencoding::encode(name),
+        urlencoding::encode(cidr)
+    ))
+    .await
+}
+pub async fn list_fw_aliases() -> Result<Vec<FwAlias>, ApiError> {
+    fetch_json("/firewall/aliases").await
+}
+pub async fn create_fw_alias(a: &FwAlias) -> Result<FwAlias, ApiError> {
+    post_json("/firewall/aliases", a).await
+}
+pub async fn delete_fw_alias(name: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/firewall/aliases/{}", urlencoding::encode(name))).await
+}
+pub async fn list_fw_macros() -> Result<Vec<FwMacro>, ApiError> {
+    fetch_json("/firewall/macros").await
+}
+pub async fn get_fw_options() -> Result<FwOptions, ApiError> {
+    fetch_json("/firewall/options").await
+}
+pub async fn set_fw_options(o: &FwOptions) -> Result<FwOptions, ApiError> {
+    put_json("/firewall/options", o).await
+}
+pub async fn get_fw_log(limit: usize) -> Result<Vec<FwLogEntry>, ApiError> {
+    fetch_json(&format!("/firewall/log?limit={limit}")).await
+}
+pub async fn apply_datacenter_firewall() -> Result<(), ApiError> {
+    post_json_no_response("/firewall/datacenter/apply", &serde_json::json!({})).await
+}
+
 /// Human-readable byte size.
 pub fn human_bytes(n: u64) -> String {
     const U: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];

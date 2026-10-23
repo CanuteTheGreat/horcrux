@@ -12,6 +12,7 @@ pub mod cluster_join;
 pub mod dashboards;
 #[cfg(feature = "cluster")]
 pub mod drain;
+pub mod firewall_objects;
 pub mod guest_state;
 #[cfg(feature = "cluster")]
 pub mod ha_loop;
@@ -29,10 +30,12 @@ pub mod node_shell;
 pub mod node_summary;
 pub mod notifications;
 pub mod prometheus_export;
+pub mod resource_pools;
 #[cfg(feature = "s3-gateway")]
 pub mod s3_gateway;
 pub mod sdn_cni;
 pub mod sdn_zones;
+pub mod storage_content;
 pub mod storage_volumes;
 pub mod system_admin;
 pub mod tasks;

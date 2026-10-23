@@ -1,7 +1,11 @@
 //! Firewall management module
 //! Provides distributed firewall with datacenter, node, VM, and container level rules
 mod nftables;
+pub mod objects;
 mod security_groups;
+
+/// Prefix of the kernel log lines nft writes for rules with `log` set.
+pub const LOG_PREFIX: &str = "hx-fw: ";
 
 use crate::db::config_store::{self, kinds, ConfigStore};
 use crate::db::Database;
@@ -119,6 +123,9 @@ pub struct FirewallManager {
     container_rules: Arc<RwLock<HashMap<String, Vec<FirewallRule>>>>,
     security_groups: Arc<RwLock<HashMap<String, SecurityGroup>>>,
     nftables: nftables::NftablesManager,
+    /// Host chains (`dc`, `node`) that have been applied, so object changes
+    /// can refresh them.
+    applied_host: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     /// Durable copy of rules and security groups; `None` = in-memory only.
     store: Option<ConfigStore>,
 }
@@ -138,6 +145,7 @@ impl FirewallManager {
             container_rules: Arc::new(RwLock::new(HashMap::new())),
             security_groups: Arc::new(RwLock::new(HashMap::new())),
             nftables: nftables::NftablesManager::new(),
+            applied_host: Arc::default(),
             store: None,
         }
     }
@@ -175,6 +183,33 @@ impl FirewallManager {
                 count,
                 groups.len()
             );
+        }
+        let ipsets = store
+            .load_values::<objects::IpSet>(kinds::FIREWALL_IPSET)
+            .await?;
+        let aliases = store
+            .load_values::<objects::Alias>(kinds::FIREWALL_ALIAS)
+            .await?;
+        let options = store
+            .load_values::<objects::FwOptions>(kinds::FIREWALL_OPTIONS)
+            .await?
+            .into_iter()
+            .next();
+        {
+            let mut o = mgr
+                .nftables
+                .objects
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
+            for set in ipsets {
+                o.ipsets.insert(set.name.clone(), set);
+            }
+            for a in aliases {
+                o.aliases.insert(a.name.clone(), a);
+            }
+            if let Some(opt) = options {
+                o.options = opt;
+            }
         }
         mgr.store = Some(store);
         Ok(mgr)
@@ -246,6 +281,11 @@ impl FirewallManager {
 
     /// Add a firewall rule
     pub async fn add_rule(&self, scope: FirewallScope, rule: FirewallRule) -> Result<()> {
+        self.nftables
+            .objects
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .check_rule_refs(&rule.source, &rule.dest, &rule.dport)?;
         // Rule ids are the handle for delete and the persistence key, so they
         // must be unique within a scope (a duplicate used to be appended
         // silently and then removed together with the original).
@@ -454,12 +494,206 @@ impl FirewallManager {
     pub async fn apply_rules(&self, scope: FirewallScope) -> Result<()> {
         let rules = self.list_rules(scope.clone()).await;
         match &scope {
-            FirewallScope::Datacenter => self.nftables.apply_host_rules("dc", &rules).await?,
-            FirewallScope::Node(_) => self.nftables.apply_host_rules("node", &rules).await?,
+            FirewallScope::Datacenter => {
+                self.nftables.apply_host_rules("dc", &rules).await?;
+                self.applied_host.lock().unwrap().insert("dc".into());
+            }
+            FirewallScope::Node(_) => {
+                self.nftables.apply_host_rules("node", &rules).await?;
+                self.applied_host.lock().unwrap().insert("node".into());
+            }
             FirewallScope::Vm(vm_id) => self.nftables.sync_vm_rules(vm_id, &rules).await?,
             FirewallScope::Container(ct_id) => self.nftables.sync_ct_rules(ct_id, &rules).await?,
         }
         Ok(())
+    }
+
+    // ---- IP sets, aliases, host options -------------------------------
+
+    pub fn list_ipsets(&self) -> Vec<objects::IpSet> {
+        let o = self
+            .nftables
+            .objects
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        o.ipsets.values().cloned().collect()
+    }
+
+    pub fn list_aliases(&self) -> Vec<objects::Alias> {
+        let o = self
+            .nftables
+            .objects
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        o.aliases.values().cloned().collect()
+    }
+
+    pub fn options(&self) -> objects::FwOptions {
+        self.nftables
+            .objects
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .options
+            .clone()
+    }
+
+    /// Create or replace an IP set (entries are validated), then refresh the
+    /// rules that use it in the kernel.
+    pub async fn put_ipset(&self, set: objects::IpSet) -> Result<()> {
+        if !objects::valid_name(&set.name) {
+            return Err(horcrux_common::Error::InvalidConfig(
+                "IP set name: letters, digits, '-' and '_', starting with a letter".into(),
+            ));
+        }
+        if let Some(bad) = set.entries.iter().find(|e| !objects::valid_cidr(e)) {
+            return Err(horcrux_common::Error::InvalidConfig(format!(
+                "{bad:?} is not an IPv4 address or CIDR"
+            )));
+        }
+        config_store::put_opt(&self.store, kinds::FIREWALL_IPSET, &set.name, &set).await?;
+        self.nftables
+            .objects
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .ipsets
+            .insert(set.name.clone(), set);
+        self.reapply_after_object_change().await;
+        Ok(())
+    }
+
+    /// Delete an IP set that no rule refers to.
+    pub async fn delete_ipset(&self, name: &str) -> Result<bool> {
+        if let Some(scope) = self.rule_using(&format!("+{name}")).await {
+            return Err(horcrux_common::Error::InvalidConfig(format!(
+                "IP set {name} is used by a rule in scope {scope}"
+            )));
+        }
+        let existed = self
+            .nftables
+            .objects
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .ipsets
+            .remove(name)
+            .is_some();
+        config_store::delete_opt(&self.store, kinds::FIREWALL_IPSET, name).await?;
+        Ok(existed)
+    }
+
+    pub async fn put_alias(&self, alias: objects::Alias) -> Result<()> {
+        if !objects::valid_name(&alias.name) || alias.name == "any" {
+            return Err(horcrux_common::Error::InvalidConfig(
+                "alias name: letters, digits, '-' and '_', starting with a letter".into(),
+            ));
+        }
+        if !objects::valid_cidr(&alias.cidr) {
+            return Err(horcrux_common::Error::InvalidConfig(format!(
+                "{:?} is not an IPv4 address or CIDR",
+                alias.cidr
+            )));
+        }
+        config_store::put_opt(&self.store, kinds::FIREWALL_ALIAS, &alias.name, &alias).await?;
+        self.nftables
+            .objects
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .aliases
+            .insert(alias.name.clone(), alias);
+        self.reapply_after_object_change().await;
+        Ok(())
+    }
+
+    pub async fn delete_alias(&self, name: &str) -> Result<bool> {
+        if let Some(scope) = self.rule_using(name).await {
+            return Err(horcrux_common::Error::InvalidConfig(format!(
+                "alias {name} is used by a rule in scope {scope}"
+            )));
+        }
+        let existed = self
+            .nftables
+            .objects
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .aliases
+            .remove(name)
+            .is_some();
+        config_store::delete_opt(&self.store, kinds::FIREWALL_ALIAS, name).await?;
+        Ok(existed)
+    }
+
+    /// Set the host default policies; applied right away to host chains that
+    /// are already installed.
+    pub async fn set_options(&self, opt: objects::FwOptions) -> Result<()> {
+        opt.validate()?;
+        config_store::put_opt(&self.store, kinds::FIREWALL_OPTIONS, "options", &opt).await?;
+        self.nftables
+            .objects
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .options = opt;
+        self.reapply_after_object_change().await;
+        Ok(())
+    }
+
+    /// The scope of a rule whose source or dest is exactly `reference`.
+    async fn rule_using(&self, reference: &str) -> Option<String> {
+        let mut scopes = vec![FirewallScope::Datacenter];
+        scopes.extend(
+            self.node_rules
+                .read()
+                .await
+                .keys()
+                .cloned()
+                .map(FirewallScope::Node),
+        );
+        scopes.extend(
+            self.vm_rules
+                .read()
+                .await
+                .keys()
+                .cloned()
+                .map(FirewallScope::Vm),
+        );
+        scopes.extend(
+            self.container_rules
+                .read()
+                .await
+                .keys()
+                .cloned()
+                .map(FirewallScope::Container),
+        );
+        for scope in scopes {
+            for r in self.list_rules(scope.clone()).await {
+                let hit = |a: &Option<String>| a.as_deref().map(str::trim) == Some(reference);
+                if hit(&r.source) || hit(&r.dest) {
+                    return Some(scope.key());
+                }
+            }
+        }
+        None
+    }
+
+    /// Guest rule sets and already-applied host chains are rebuilt so the
+    /// kernel matches the objects. Failures (no nft, no CAP_NET_ADMIN) are
+    /// logged: the objects are stored either way and apply on the next apply.
+    async fn reapply_after_object_change(&self) {
+        self.reapply_guest_rules().await;
+        let host: Vec<String> = self.applied_host.lock().unwrap().iter().cloned().collect();
+        for prefix in host {
+            let scope = if prefix == "dc" {
+                FirewallScope::Datacenter
+            } else {
+                // node rules of every node that has some
+                let nodes: Vec<String> = self.node_rules.read().await.keys().cloned().collect();
+                for n in nodes {
+                    let _ = self.apply_rules(FirewallScope::Node(n)).await;
+                }
+                continue;
+            };
+            if let Err(e) = self.apply_rules(scope).await {
+                tracing::warn!("Failed to refresh the datacenter firewall: {e}");
+            }
+        }
     }
 
     /// Forget every rule of a VM or container that is gone (deleted, or
