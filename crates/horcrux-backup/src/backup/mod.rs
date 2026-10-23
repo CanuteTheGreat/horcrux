@@ -17,6 +17,7 @@
 //! A copy-before-write block job (true no-pause snapshot) is not
 //! implemented yet.
 pub mod archive;
+pub mod dedup;
 pub mod providers;
 pub mod retention;
 pub mod scheduler;
@@ -57,6 +58,9 @@ pub enum Compression {
     Lzo,
     #[default]
     Zstd,
+    /// Horcrux's own deduplicating chunk store (see `dedup.rs`): backups
+    /// after the first only write the chunks that changed.
+    Dedup,
 }
 
 /// Target type for backup
@@ -576,6 +580,30 @@ impl BackupManager {
             }
         }
         self.store.delete_backup(&b.id).await?;
+        if b.compression == Compression::Dedup {
+            if let Some(dir) = b.path.parent().map(Path::to_path_buf) {
+                // chunks only this backup used go with it
+                // young chunks may belong to a backup that is still being
+                // written (no index yet): keep them for an hour
+                let grace = std::env::var("HORCRUX_BACKUP_GC_GRACE_SECS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(3600);
+                match tokio::task::spawn_blocking(move || {
+                    dedup::gc(&dir, std::time::Duration::from_secs(grace))
+                })
+                .await
+                {
+                    Ok(Ok((n, bytes))) => {
+                        tracing::info!(
+                            "Backup chunk store: {n} unused chunk(s), {bytes} bytes freed"
+                        )
+                    }
+                    Ok(Err(e)) => tracing::warn!("Backup chunk store cleanup: {e}"),
+                    Err(e) => tracing::warn!("Backup chunk store cleanup task: {e}"),
+                }
+            }
+        }
         tracing::info!("Backup {} deleted", b.id);
         Ok(())
     }
@@ -692,17 +720,24 @@ impl BackupManager {
 
         let mut names = vec![MANIFEST_NAME.to_string()];
         names.extend(manifest.files.iter().map(|f| f.name.clone()));
+        let dedup_stats: Option<dedup::DedupStats>;
         {
             let dir = staging.0.clone();
             let out = archive_path.clone();
             let comp = config.compression.clone();
-            tokio::task::spawn_blocking(move || archive::write_archive(&dir, &names, &out, &comp))
-                .await
-                .map_err(|e| Error::System(format!("archive task failed: {e}")))??;
+            dedup_stats = tokio::task::spawn_blocking(move || {
+                archive::write_archive(&dir, &names, &out, &comp)
+            })
+            .await
+            .map_err(|e| Error::System(format!("archive task failed: {e}")))??;
         }
         drop(staging);
 
-        let (sha256, size) = archive::sha256_file_async(archive_path.clone()).await?;
+        let (sha256, mut size) = archive::sha256_file_async(archive_path.clone()).await?;
+        if let Some(st) = &dedup_stats {
+            // what this backup added to the storage: its index + new chunks
+            size += st.new_bytes;
+        }
         let backup = Backup {
             id: backup_id,
             target_type,

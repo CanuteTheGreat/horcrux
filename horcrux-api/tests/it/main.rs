@@ -16,6 +16,7 @@ mod auth_e2e_tests;
 mod auth_rate_limit;
 mod auth_realms_e2e;
 mod backup_api_e2e;
+mod backup_dedup_tests;
 mod backup_tests;
 mod cluster_tests;
 mod console_tests;

@@ -58,6 +58,7 @@ pub fn file_extension(c: &Compression) -> &'static str {
         Compression::Gzip => "tar.gz",
         Compression::Lzo => "tar.lzo",
         Compression::Zstd => "tar.zst",
+        Compression::Dedup => super::dedup::INDEX_EXT,
     }
 }
 
@@ -70,7 +71,7 @@ fn compressor(
     &'static [&'static str],
 )> {
     match c {
-        Compression::None => None,
+        Compression::None | Compression::Dedup => None,
         Compression::Gzip => Some(("gzip", &["-c"], &["-d", "-c"])),
         Compression::Lzo => Some(("lzop", &["-c"], &["-d", "-c"])),
         Compression::Zstd => Some(("zstd", &["-q", "-T0", "-c"], &["-q", "-d", "-c"])),
@@ -145,7 +146,15 @@ pub async fn run_async(prog: &'static str, args: Vec<String>) -> Result<std::pro
 /// Write `files` (relative to `dir`) into a (compressed) tar at `out`.
 /// Writes to `<out>.partial` and renames on success, so a crash never
 /// leaves a truncated archive under the final name.
-pub fn write_archive(dir: &Path, files: &[String], out: &Path, c: &Compression) -> Result<()> {
+pub fn write_archive(
+    dir: &Path,
+    files: &[String],
+    out: &Path,
+    c: &Compression,
+) -> Result<Option<super::dedup::DedupStats>> {
+    if *c == Compression::Dedup {
+        return super::dedup::write_dedup(dir, files, out).map(Some);
+    }
     let partial = PathBuf::from(format!("{}.partial", out.display()));
     let result = (|| -> Result<()> {
         match compressor(c) {
@@ -202,11 +211,14 @@ pub fn write_archive(dir: &Path, files: &[String], out: &Path, c: &Compression) 
     if result.is_err() {
         let _ = std::fs::remove_file(&partial);
     }
-    result
+    result.map(|()| None)
 }
 
 /// Extract the whole archive into `dir` (which must exist).
 pub fn extract_archive(archive: &Path, dir: &Path, c: &Compression) -> Result<()> {
+    if *c == Compression::Dedup {
+        return super::dedup::extract_dedup(archive, dir);
+    }
     match compressor(c) {
         None => {
             run(

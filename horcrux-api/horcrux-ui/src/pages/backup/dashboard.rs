@@ -282,6 +282,7 @@ pub fn BackupDashboard() -> impl IntoView {
                             <option value="gzip" selected=move || compression.get() == "gzip">"gzip"</option>
                             <option value="lzo" selected=move || compression.get() == "lzo">"lzo"</option>
                             <option value="none" selected=move || compression.get() == "none">"none"</option>
+                            <option value="dedup" selected=move || compression.get() == "dedup">"dedup (incremental, shared chunks)"</option>
                         </select>
                     </div>
                     <div class="form-group">

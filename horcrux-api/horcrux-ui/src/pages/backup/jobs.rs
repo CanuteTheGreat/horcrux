@@ -312,7 +312,7 @@ pub fn BackupJobsPage() -> impl IntoView {
                         <div class="form-group">
                             <label for="job-compression">"Compression"</label>
                             <select id="job-compression" on:change=move |ev| set_f_comp.set(event_target_value(&ev))>
-                                {["zstd", "gzip", "lzo", "none"].into_iter().map(|m| view! {
+                                {["zstd", "gzip", "lzo", "none", "dedup"].into_iter().map(|m| view! {
                                     <option value=m selected=move || f_comp.get() == m>{m}</option>
                                 }).collect_view()}
                             </select>

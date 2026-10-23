@@ -256,4 +256,34 @@ h["adv"]["protection"] = False
 call("PUT", f"/vms/{VM}/config", {"hardware": h})
 call("DELETE", f"/vms/{VM}")
 check(call("GET", f"/vms/{VM}", ok=None)[0] == 404, "an unprotected VM can be deleted")
+
+# --- audio: a sound card over SPICE (QEMU's audiodev + the HDA/AC97 device) --------
+AUD = "adv-audio-vm"
+call("POST", f"/vms/{AUD}/stop", ok=None)
+call("DELETE", f"/vms/{AUD}", ok=None)
+for card, qdev in (("intel-hda", "intel-hda"), ("ich9-intel-hda", "ich9-intel-hda"), ("ac97", "AC97")):
+    st, _ = call("POST", "/vms", {
+        "id": AUD, "name": AUD, "hypervisor": "qemu", "architecture": "x86_64",
+        "cpus": 1, "memory": 128, "disk_size": 1, "status": "stopped",
+        "display": {"protocol": "spice", "video": "qxl", "sound": card},
+        "hardware": {"nets": []},
+    }, ok=None)
+    check(st in (200, 201), f"VM with sound card {card} is created ({st})")
+    call("POST", f"/vms/{AUD}/start")
+    _, v = call("GET", f"/vms/{AUD}")
+    aq = os.path.splitext(v["disks"][0]["path"])[0] + ".qmp.sock"
+    qtree = hmp(aq, "info qtree")
+    check(f'dev: {qdev}' in qtree, f"QEMU has the {qdev} sound device")
+    if card != "ac97":
+        check("hda-duplex" in qtree, "with an HDA duplex codec (playback + recording)")
+    check("-audiodev spice,id=snd0" in qemu_cmdline(), "audio is carried over SPICE")
+    call("POST", f"/vms/{AUD}/stop")
+    call("DELETE", f"/vms/{AUD}")
+# sound without SPICE is refused plainly
+st, e = call("POST", "/vms", {
+    "id": AUD, "name": AUD, "hypervisor": "qemu", "architecture": "x86_64",
+    "cpus": 1, "memory": 128, "disk_size": 1, "status": "stopped",
+    "display": {"protocol": "vnc", "video": "std", "sound": "intel-hda"}, "hardware": {"nets": []},
+}, ok=None)
+check(st in (400, 422) and "SPICE" in json.dumps(e), "a sound card on a VNC display is refused with the reason")
 print("[vm-advanced-e2e] ALL OK", flush=True)

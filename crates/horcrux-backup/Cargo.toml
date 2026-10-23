@@ -14,6 +14,7 @@ horcrux-storage = { path = "../horcrux-storage" }
 horcrux-cluster = { path = "../horcrux-cluster" }
 async-trait = { workspace = true }
 chrono = { workspace = true }
+flate2 = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
 nix = { workspace = true }
