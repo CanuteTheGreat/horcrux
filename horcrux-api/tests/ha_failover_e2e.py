@@ -9,14 +9,16 @@ each with its own token secret), real QEMU:
     online (the join handed over the cluster's service secret).
  2. A VM with its disk on shared storage is made an HA resource: the other
     nodes learn it (replicated definition + group).
- 3. FAILURE: node1 is killed (QEMU and all). The surviving majority
-    detects it, waits out the self-fence time and restarts the VM on
-    another node; an HA event records the recovery.
+ 3. FAILURE: node1 is killed (QEMU and all) while node2 is in maintenance.
+    The surviving majority detects it, waits out the self-fence time and
+    restarts the VM on another node - node3, never the node in maintenance;
+    an HA event records the recovery.
  4. node1 COMES BACK with its stale record: it learns the VM moved and does
     not start a second copy.
  5. PARTITION: the node now running the VM loses the network. It
     SELF-FENCES (its QEMU is killed) and the VM is recovered elsewhere;
-    after the partition heals there is still exactly one running copy.
+    after the partition heals there is still exactly one running copy (and
+    again not on node2, which is still in maintenance).
  6. A guest/QEMU crash is restarted by HA; a VM the operator stops stays
     stopped.
  7. Fencing devices: add/list/remove through the API (secrets not echoed).
@@ -155,12 +157,18 @@ wait("node2 and node3 know the HA resource placed on node1",
      lambda: all((ha_res(k) or {}).get("current_node") == "node1" for k in (2, 3)), 60)
 
 # --- 3. node failure ---------------------------------------------------------
-log("== 3. node1 dies: the VM is restarted elsewhere")
+log("== 3. node1 dies: the VM is restarted elsewhere - never on a node in maintenance")
+# node2 is online but in maintenance (an administrator emptied it for service):
+# HA recovery must skip it, here and again in step 5.
+st, b = api(2, "POST", "/nodes/maintenance", {"enabled": True, "drain": False})
+check(st == 200 and b["enabled"], f"node2 is in maintenance ({st})")
+time.sleep(3)
 t0 = time.time()
 subprocess.run(["docker", "kill", NODES[1]], check=True, capture_output=True)
 new = wait("VM runs on node2 or node3", lambda: running_on((2, 3)), 150)
 log(f"  recovered after {int(time.time() - t0)}s on node{new[0]}")
 check(len(new) == 1, "exactly one running copy")
+check(new == [3], f"recovery skipped node2 (in maintenance): the VM runs on node{new[0]}")
 owner = new[0]
 r = ha_res(owner)
 check(r["current_node"] == NAME[owner] and r["state"] == "Started", f"HA resource now placed on {NAME[owner]} ({r['current_node']}, {r['state']})")
@@ -183,10 +191,13 @@ others = [k for k in (1, 2, 3) if k != owner]
 wait(f"node{owner} killed its own VM (self-fence)", lambda: not qemu_running(owner), 90)
 new2 = wait("VM recovered on a surviving node", lambda: running_on(others), 150)
 check(len(new2) == 1, "exactly one running copy while partitioned")
+check(new2 == [1], f"node2 is still in maintenance: the VM was recovered on node1, not node2 (node{new2[0]})")
 subprocess.run(["docker", "network", "connect", NET, NODES[owner]], check=True, capture_output=True)
 time.sleep(25)
 check(len(running_on()) == 1 and running_on() == new2, f"after healing still one copy, on node{new2[0]} ({running_on()})")
 owner = new2[0]
+st, b = api(2, "POST", "/nodes/maintenance", {"enabled": False, "drain": False})
+check(st == 200 and not b["enabled"], f"node2 leaves maintenance ({st})")
 wait("the healed node adopted the new placement", lambda: all((ha_res(k) or {}).get("current_node") == NAME[owner] for k in (1, 2, 3)), 60)
 
 # --- 6. crash restart / operator stop ---------------------------------------

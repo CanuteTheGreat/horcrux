@@ -502,10 +502,19 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
     let total = nodes.len().max(online.len());
     let quorum = online.len() * 2 > total;
 
+    // Nodes in maintenance are online but take no guests: HA never picks
+    // them as a recovery or relocation target.
+    let maintenance = if online.len() > 1 {
+        super::drain::maintenance_nodes(state, &nodes, &local).await
+    } else {
+        Default::default()
+    };
+    let targets = crate::cluster::drain::recovery_targets(&online, &maintenance);
+
     // Feed live node figures to placement.
     let all = state.ha_manager.list_resources().await;
     for n in &nodes {
-        if online.contains(&n.name) {
+        if targets.contains(&n.name) {
             state
                 .ha_manager
                 .update_node_resources(NodeResources {
@@ -657,7 +666,14 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
                 continue;
             }
         }
-        recover_node(state, ls, &local, &nodes, &online, &node).await;
+        if targets.is_empty() {
+            tracing::warn!(
+                "HA: node {node} is down but every online node is in maintenance: \
+                 its guests wait until one takes guests again"
+            );
+            continue;
+        }
+        recover_node(state, ls, &local, &nodes, &targets, &node).await;
     }
 }
 
