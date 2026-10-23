@@ -59,6 +59,11 @@ pub mod kinds {
     pub const FENCING_DEVICE: &str = "fencing_device";
     /// Host network interface settings applied from System > Network.
     pub const SYSTEM_IFACE: &str = "system_iface";
+    /// SDN zones / VNets / subnets / IPAM allocations (node-local).
+    pub const SDN_ZONE: &str = "sdn_zone";
+    pub const SDN_VNET: &str = "sdn_vnet";
+    pub const SDN_SUBNET: &str = "sdn_subnet";
+    pub const SDN_IPAM: &str = "sdn_ipam";
 }
 
 /// Durable key/value store of JSON configuration documents.

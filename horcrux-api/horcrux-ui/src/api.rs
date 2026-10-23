@@ -1235,45 +1235,6 @@ pub struct MetricResult {
     pub values: Vec<MetricDataPoint>,
 }
 
-/// Component for building PromQL queries
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum QueryComponent {
-    Metric {
-        name: String,
-        labels: std::collections::HashMap<String, String>,
-    },
-    Function {
-        name: String,
-        args: Vec<String>,
-        modifiers: Vec<String>,
-    },
-    Operator {
-        operator: String,
-    },
-}
-
-/// PromQL function definition
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PromQLFunction {
-    pub name: String,
-    pub description: String,
-    pub syntax: String,
-    pub category: String,
-    pub example: String,
-}
-
-/// Query validation result
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct QueryValidationResult {
-    pub valid: bool,
-    #[serde(default)]
-    pub message: String,
-    pub errors: Vec<String>,
-    pub warnings: Vec<String>,
-    #[serde(default)]
-    pub suggestions: Vec<String>,
-}
-
 // =============================================================================
 // Authentication & User Management APIs
 // =============================================================================
@@ -2945,6 +2906,7 @@ pub mod backup;
 pub mod dashboards;
 pub mod s3;
 pub mod sdn;
+pub mod sdn_zones;
 
 /// Snapshot-schedule retention (used by the snapshot pages).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3583,40 +3545,6 @@ pub enum HealthCheckStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum PlacementPolicy {
-    Balanced,
-    Consolidated,
-    AntiAffinity,
-    Custom,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateHaGroupRequest {
-    pub name: String,
-    pub description: Option<String>,
-    pub priority: u32,
-    pub failover_domain: Vec<String>,
-    pub placement_policy: PlacementPolicy,
-    pub vm_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum MigrationType {
-    Live,
-    Offline,
-    Online,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum MigrationStatus {
-    Pending,
-    Running,
-    Completed,
-    Failed,
-    Cancelled,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MigrationRequest {
     pub target_node: String,
     pub migration_type: Option<String>,
@@ -3945,119 +3873,7 @@ pub struct MetricDefinition {
     pub category: String, // system, application, network, storage
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MetricSample {
-    pub timestamp: String,
-    pub value: f64,
-    pub labels: std::collections::HashMap<String, String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MetricSeries {
-    pub metric: String,
-    pub samples: Vec<MetricSample>,
-    pub min_value: f64,
-    pub max_value: f64,
-    pub avg_value: f64,
-    pub sample_count: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct QueryHistoryEntry {
-    pub id: String,
-    pub query: String,
-    #[serde(default)]
-    pub time_range: String,
-    pub query_type: String, // promql, logql, sql
-    pub timestamp: String,
-    #[serde(default)]
-    pub executed_at: chrono::DateTime<chrono::Utc>,
-    pub execution_time_ms: f64,
-    pub result_count: u64,
-    pub status: String, // success, error, timeout
-    pub error_message: Option<String>,
-    pub user: String,
-    pub source: String, // metrics_explorer, dashboard, alert_rule, api
-    pub tags: Vec<String>,
-    pub favorite: bool,
-    pub shared: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct QueryTemplate {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub query: String,
-    pub category: String,
-    pub variables: Vec<QueryVariable>,
-    pub created_by: String,
-    pub created_at: String,
-    pub usage_count: u64,
-    pub public: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct QueryVariable {
-    pub name: String,
-    pub description: String,
-    pub var_type: String, // string, number, metric, label_value
-    pub default_value: Option<String>,
-    pub options: Vec<String>,
-    pub required: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CreateQueryTemplateRequest {
-    pub name: String,
-    pub description: String,
-    pub query: String,
-    pub category: String,
-    pub public: bool,
-    pub variables: Vec<QueryVariable>,
-}
-
 // Metrics API Functions
-pub async fn get_metrics_catalog() -> Result<Vec<MetricDefinition>, ApiError> {
-    fetch_json("/metrics/catalog").await
-}
-
-pub async fn get_metric_samples(
-    metric_name: String,
-    time_range: String,
-) -> Result<MetricSeries, ApiError> {
-    fetch_json(&format!(
-        "/metrics/{}/samples?range={}",
-        metric_name, time_range
-    ))
-    .await
-}
-
-pub async fn get_query_history(time_range: String) -> Result<Vec<QueryHistoryEntry>, ApiError> {
-    fetch_json(&format!("/metrics/query-history?range={}", time_range)).await
-}
-
-pub async fn toggle_query_favorite(entry_id: String) -> Result<(), ApiError> {
-    post_json(
-        &format!("/metrics/query-history/{}/favorite", entry_id),
-        &(),
-    )
-    .await
-}
-
-pub async fn get_query_templates() -> Result<Vec<QueryTemplate>, ApiError> {
-    fetch_json("/metrics/query-templates").await
-}
-
-pub async fn create_query_template(
-    request: CreateQueryTemplateRequest,
-) -> Result<QueryTemplate, ApiError> {
-    post_json("/metrics/query-templates", &request).await
-}
-
-pub async fn delete_query_history_entry(entry_id: String) -> Result<(), ApiError> {
-    delete_json(&format!("/metrics/query-history/{}", entry_id)).await
-}
 
 pub async fn get_alert_rules() -> Result<Vec<AlertRule>, ApiError> {
     fetch_json("/alerts/rules").await
@@ -4603,676 +4419,107 @@ pub struct LogEntry {
 // Custom Dashboard System Data Structures
 // ============================================================================
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CustomDashboard {
-    pub id: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub category: String,
-    pub layout: String,
-    pub refresh_interval: u32,
-    pub public: bool,
-    pub tags: Vec<String>,
-    pub widget_count: u32,
-    pub usage_count: u32,
-    pub rating: Option<f64>,
-    pub created_by: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CreateDashboardRequest {
-    pub name: String,
-    pub description: Option<String>,
-    pub category: String,
-    pub layout: String,
-    pub refresh_interval: u32,
-    pub public: bool,
-    pub tags: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct UpdateDashboardRequest {
-    pub name: Option<String>,
-    pub description: Option<String>,
-    pub category: Option<String>,
-    pub layout: Option<String>,
-    pub refresh_interval: Option<u32>,
-    pub public: Option<bool>,
-    pub tags: Option<Vec<String>>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CloneDashboardRequest {
-    pub name: String,
-    pub copy_widgets: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ImportDashboardRequest {
-    pub source_dashboard_id: String,
-    pub name: String,
-    pub import_widgets: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DashboardWidget {
-    pub id: String,
-    pub dashboard_id: String,
-    pub dashboard_name: String,
-    pub title: String,
-    pub widget_type: String,
-    pub metric: String,
-    pub width: u32,
-    pub height: u32,
-    pub position_x: u32,
-    pub position_y: u32,
-    pub config: WidgetConfig,
-    pub created_at: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-pub struct WidgetConfig {
-    pub colors: Option<Vec<String>>,
-    pub theme: Option<String>,
-    pub show_legend: Option<bool>,
-    pub show_grid: Option<bool>,
-    pub time_range: Option<String>,
-    pub aggregation: Option<String>,
-    pub threshold: Option<f64>,
-    pub unit: Option<String>,
-    pub decimal_places: Option<u32>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CreateWidgetRequest {
-    pub title: String,
-    pub widget_type: String,
-    pub metric: String,
-    pub width: u32,
-    pub height: u32,
-    pub position_x: u32,
-    pub position_y: u32,
-    pub config: WidgetConfig,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ChartTemplate {
-    pub id: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub category: String,
-    pub chart_type: String,
-    pub config: serde_json::Value,
-    pub usage_count: u32,
-    pub custom: bool,
-    pub created_at: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CreateChartTemplateRequest {
-    pub name: String,
-    pub description: Option<String>,
-    pub category: String,
-    pub chart_type: String,
-    pub config: serde_json::Value,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DashboardCategory {
-    pub name: String,
-    pub description: Option<String>,
-    pub dashboard_count: u32,
-}
-
 // ============================================================================
 // Custom Dashboard System API Functions
 // ============================================================================
 
-/// Get all custom dashboards
-pub async fn get_custom_dashboards() -> Result<Vec<CustomDashboard>, ApiError> {
-    fetch_json("/dashboards/custom").await
-}
-
-/// Get specific custom dashboard
-pub async fn get_custom_dashboard(id: &str) -> Result<CustomDashboard, ApiError> {
-    fetch_json(&format!("/dashboards/custom/{}", id)).await
-}
-
-/// Create custom dashboard
-pub async fn create_custom_dashboard(
-    request: CreateDashboardRequest,
-) -> Result<CustomDashboard, ApiError> {
-    post_json("/dashboards/custom", &request).await
-}
-
-/// Update custom dashboard
-pub async fn update_custom_dashboard(
-    id: &str,
-    request: UpdateDashboardRequest,
-) -> Result<CustomDashboard, ApiError> {
-    put_json(&format!("/dashboards/custom/{}", id), &request).await
-}
-
-/// Delete custom dashboard
-pub async fn delete_custom_dashboard(id: &str) -> Result<(), ApiError> {
-    delete_json(&format!("/dashboards/custom/{}", id)).await
-}
-
-/// Clone custom dashboard
-pub async fn clone_custom_dashboard(
-    id: &str,
-    request: CloneDashboardRequest,
-) -> Result<CustomDashboard, ApiError> {
-    post_json(&format!("/dashboards/custom/{}/clone", id), &request).await
-}
-
-/// Export dashboard
-pub async fn export_dashboard(id: &str) -> Result<String, ApiError> {
-    fetch_text(&format!("/dashboards/custom/{}/export", id)).await
-}
-
-/// Import dashboard
-pub async fn import_dashboard(
-    request: ImportDashboardRequest,
-) -> Result<CustomDashboard, ApiError> {
-    post_json("/dashboards/custom/import", &request).await
-}
-
-/// Get dashboard widgets
-pub async fn get_dashboard_widgets(dashboard_id: &str) -> Result<Vec<DashboardWidget>, ApiError> {
-    fetch_json(&format!("/dashboards/custom/{}/widgets", dashboard_id)).await
-}
-
-/// Add widget to dashboard
-pub async fn add_dashboard_widget(
-    dashboard_id: &str,
-    request: CreateWidgetRequest,
-) -> Result<DashboardWidget, ApiError> {
-    post_json(
-        &format!("/dashboards/custom/{}/widgets", dashboard_id),
-        &request,
-    )
-    .await
-}
-
-/// Update widget position
-pub async fn update_widget_position(
-    dashboard_id: &str,
-    widget_id: &str,
-    x: u32,
-    y: u32,
-) -> Result<(), ApiError> {
-    put_json(
-        &format!(
-            "/dashboards/custom/{}/widgets/{}/position",
-            dashboard_id, widget_id
-        ),
-        &serde_json::json!({"x": x, "y": y}),
-    )
-    .await
-}
-
-/// Remove widget from dashboard
-pub async fn remove_dashboard_widget(dashboard_id: &str, widget_id: &str) -> Result<(), ApiError> {
-    delete_json(&format!(
-        "/dashboards/custom/{}/widgets/{}",
-        dashboard_id, widget_id
-    ))
-    .await
-}
-
-/// Save dashboard layout
-pub async fn save_dashboard_layout(
-    dashboard_id: &str,
-    widgets: Vec<DashboardWidget>,
-) -> Result<(), ApiError> {
-    put_json(
-        &format!("/dashboards/custom/{}/layout", dashboard_id),
-        &widgets,
-    )
-    .await
-}
-
-/// Get all widgets across dashboards
-pub async fn get_all_widgets() -> Result<Vec<DashboardWidget>, ApiError> {
-    fetch_json("/dashboards/widgets").await
-}
-
-/// Bulk delete widgets
-pub async fn bulk_delete_widgets(widget_ids: Vec<String>) -> Result<(), ApiError> {
-    post_json("/dashboards/widgets/bulk-delete", &widget_ids).await
-}
-
-/// Bulk move widgets
-pub async fn bulk_move_widgets(
-    widget_ids: Vec<String>,
-    target_dashboard_id: String,
-) -> Result<(), ApiError> {
-    post_json(
-        "/dashboards/widgets/bulk-move",
-        &serde_json::json!({"widget_ids": widget_ids, "target_dashboard_id": target_dashboard_id}),
-    )
-    .await
-}
-
-/// Get chart templates
-pub async fn get_chart_templates() -> Result<Vec<ChartTemplate>, ApiError> {
-    fetch_json("/dashboards/chart-templates").await
-}
-
-/// Create chart template
-pub async fn create_chart_template(
-    request: CreateChartTemplateRequest,
-) -> Result<ChartTemplate, ApiError> {
-    post_json("/dashboards/chart-templates", &request).await
-}
-
-/// Delete chart template
-pub async fn delete_chart_template(id: &str) -> Result<(), ApiError> {
-    delete_json(&format!("/dashboards/chart-templates/{}", id)).await
-}
-
-/// Export chart template
-pub async fn export_chart_template(id: &str) -> Result<String, ApiError> {
-    fetch_text(&format!("/dashboards/chart-templates/{}/export", id)).await
-}
-
-/// Get featured dashboards
-pub async fn get_featured_dashboards() -> Result<Vec<CustomDashboard>, ApiError> {
-    fetch_json("/dashboards/gallery/featured").await
-}
-
-/// Get public dashboards
-pub async fn get_public_dashboards() -> Result<Vec<CustomDashboard>, ApiError> {
-    fetch_json("/dashboards/gallery/public").await
-}
-
-/// Get dashboard categories
-pub async fn get_dashboard_categories() -> Result<Vec<DashboardCategory>, ApiError> {
-    fetch_json("/dashboards/categories").await
-}
-
 // ============================================================================
-// Audit Log & Compliance Data Structures
+// Audit log (mirrors horcrux-api `api::audit_view` and the main router's
+// /audit/security-events, /audit/failed-logins, /audit/brute-force)
 // ============================================================================
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AuditEvent {
-    pub id: String,
     pub timestamp: String,
     pub event_type: String,
     pub severity: String,
     pub user: Option<String>,
     pub source_ip: Option<String>,
-    pub user_agent: Option<String>,
-    pub resource_type: Option<String>,
-    pub resource_id: Option<String>,
+    pub resource: Option<String>,
     pub action: String,
-    pub details: serde_json::Value,
-    pub success: bool,
-    pub error_message: Option<String>,
+    pub result: String,
+    pub details: Option<String>,
     pub session_id: Option<String>,
-    pub correlation_id: Option<String>,
-    pub tags: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AuditQuery {
+    pub event_type: String,
+    pub user: String,
+    pub severity: String,
+    pub result: String,
+    pub search: String,
+    pub limit: usize,
+    pub offset: usize,
+}
+
+impl AuditQuery {
+    /// `a=b&c=d` for the non-empty fields.
+    pub fn to_query(&self) -> String {
+        let mut p: Vec<String> = Vec::new();
+        for (k, v) in [
+            ("event_type", &self.event_type),
+            ("user", &self.user),
+            ("severity", &self.severity),
+            ("result", &self.result),
+            ("search", &self.search),
+        ] {
+            if !v.is_empty() && v != "all" {
+                p.push(format!("{}={}", k, urlencoding::encode(v)));
+            }
+        }
+        if self.limit > 0 {
+            p.push(format!("limit={}", self.limit));
+        }
+        if self.offset > 0 {
+            p.push(format!("offset={}", self.offset));
+        }
+        p.join("&")
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AuditFilter {
-    pub start_time: Option<String>,
-    pub end_time: Option<String>,
-    pub event_types: Vec<String>,
-    pub users: Vec<String>,
-    pub resource_types: Vec<String>,
-    pub actions: Vec<String>,
-    pub severity_levels: Vec<String>,
-    pub success_filter: Option<bool>,
-    pub source_ips: Vec<String>,
-    pub search_term: Option<String>,
-    pub correlation_id: Option<String>,
+pub struct AuditPage {
+    pub total: usize,
+    pub events: Vec<AuditEvent>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AuditFilterOptions {
     pub event_types: Vec<String>,
     pub users: Vec<String>,
-    pub resource_types: Vec<String>,
-    pub actions: Vec<String>,
+    pub severities: Vec<String>,
+    pub results: Vec<String>,
+    pub source_ips: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AuditExportRequest {
-    pub format: String,
-    pub filter: AuditFilter,
-    pub fields: Vec<String>,
-    pub include_details: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct SecurityEvent {
-    pub id: String,
-    pub timestamp: String,
-    pub event_type: String,
-    pub severity: String,
-    pub source_ip: String,
-    pub target_user: Option<String>,
-    pub target_resource: Option<String>,
-    pub description: String,
-    pub details: serde_json::Value,
-    pub status: String,
-    pub assigned_to: Option<String>,
-    pub resolution: Option<String>,
-    pub related_events: Vec<String>,
-    pub indicators: Vec<SecurityIndicator>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct SecurityIndicator {
-    pub indicator_type: String,
-    pub value: String,
-    pub confidence: f64,
-    pub description: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct SecurityThreat {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub severity: String,
-    pub affected_events: Vec<String>,
-    pub detection_time: String,
-    pub status: String,
-    pub mitigations: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct SecurityStats {
-    pub total_events_24h: u64,
-    pub critical_events_24h: u64,
-    pub blocked_ips_24h: u64,
-    pub failed_logins_24h: u64,
-    pub active_threats: u64,
-    pub events_by_type: std::collections::HashMap<String, u64>,
-    pub events_by_severity: std::collections::HashMap<String, u64>,
-    pub top_source_ips: Vec<(String, u64)>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ComplianceFramework {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub version: String,
-    pub enabled: bool,
-    pub total_controls: u32,
-    pub passing_controls: u32,
-    pub failing_controls: u32,
-    pub not_applicable_controls: u32,
-    pub last_assessment: String,
-    pub score: f64,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ComplianceControl {
-    pub id: String,
-    pub framework_id: String,
-    pub control_id: String,
-    pub title: String,
-    pub description: String,
-    pub category: String,
-    pub severity: String,
-    pub status: String,
-    pub evidence: Vec<ComplianceEvidence>,
-    pub recommendations: Vec<String>,
-    pub last_checked: String,
-    pub manual_override: Option<ManualOverride>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ComplianceEvidence {
-    pub evidence_type: String,
-    pub source: String,
-    pub timestamp: String,
-    pub data: serde_json::Value,
-    pub verified: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ManualOverride {
-    pub status: String,
-    pub reason: String,
-    pub user: String,
-    pub timestamp: String,
-    pub expires: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ComplianceReport {
-    pub id: String,
-    pub framework_id: String,
-    pub framework_name: String,
-    pub report_type: String,
-    pub generated_at: String,
-    pub generated_by: String,
-    pub period_start: String,
-    pub period_end: String,
-    pub overall_score: f64,
-    pub status: String,
-    pub download_url: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct GenerateReportRequest {
-    pub framework_id: String,
-    pub report_type: String,
-    pub period_start: String,
-    pub period_end: String,
-    pub include_evidence: bool,
-    pub format: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct Investigation {
-    pub id: String,
-    pub title: String,
-    pub description: String,
-    pub status: String,
-    pub severity: String,
-    pub created_at: String,
-    pub updated_at: String,
-    pub created_by: String,
-    pub assigned_to: Option<String>,
-    pub related_events: Vec<String>,
-    pub timeline: Vec<TimelineEntry>,
-    pub findings: Vec<Finding>,
-    pub artifacts: Vec<Artifact>,
-    pub tags: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct TimelineEntry {
-    pub id: String,
-    pub timestamp: String,
-    pub event_type: String,
-    pub description: String,
-    pub source: String,
-    pub details: serde_json::Value,
-    pub important: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct Finding {
-    pub id: String,
-    pub title: String,
-    pub description: String,
-    pub finding_type: String,
-    pub severity: String,
-    pub evidence: Vec<String>,
-    pub created_at: String,
-    pub created_by: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct Artifact {
-    pub id: String,
-    pub name: String,
-    pub artifact_type: String,
-    pub description: String,
-    pub size_bytes: u64,
-    pub hash: String,
-    pub collected_at: String,
-    pub collected_by: String,
-    pub download_url: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct CreateInvestigationRequest {
-    pub title: String,
-    pub description: String,
-    pub severity: String,
-    pub related_events: Vec<String>,
-    pub tags: Vec<String>,
-}
-
-// Audit Log API Functions
-pub async fn get_audit_events(
-    filter: AuditFilter,
-    page: u64,
-    page_size: u64,
-) -> Result<(Vec<AuditEvent>, u64), ApiError> {
-    let request = serde_json::json!({
-        "filter": filter,
-        "page": page,
-        "page_size": page_size
-    });
-    post_json("/audit/events/search", &request).await
+pub async fn search_audit(q: &AuditQuery) -> Result<AuditPage, ApiError> {
+    fetch_json(&format!("/audit/search?{}", q.to_query())).await
 }
 
 pub async fn get_audit_filter_options() -> Result<AuditFilterOptions, ApiError> {
     fetch_json("/audit/filter-options").await
 }
 
-pub async fn export_audit_events(request: AuditExportRequest) -> Result<String, ApiError> {
-    post_json("/audit/export", &request).await
+/// The export as text (CSV or JSON) with the same filters.
+pub async fn export_audit(q: &AuditQuery, format: &str) -> Result<String, ApiError> {
+    fetch_text(&format!("/audit/export?format={}&{}", format, q.to_query())).await
 }
 
-// Security Events API Functions
-pub async fn get_security_events(time_range: String) -> Result<Vec<SecurityEvent>, ApiError> {
-    fetch_json(&format!("/security/events?range={}", time_range)).await
+pub async fn get_audit_security_events() -> Result<Vec<AuditEvent>, ApiError> {
+    fetch_json("/audit/security-events?limit=200").await
 }
 
-pub async fn update_security_event_status(
-    event_id: String,
-    status: String,
-) -> Result<(), ApiError> {
-    put_json(
-        &format!("/security/events/{}/status", event_id),
-        &serde_json::json!({"status": status}),
-    )
-    .await
+pub async fn get_audit_failed_logins() -> Result<Vec<AuditEvent>, ApiError> {
+    fetch_json("/audit/failed-logins?limit=200").await
 }
 
-pub async fn get_active_threats() -> Result<Vec<SecurityThreat>, ApiError> {
-    fetch_json("/security/threats/active").await
-}
-
-pub async fn get_security_stats() -> Result<SecurityStats, ApiError> {
-    fetch_json("/security/stats").await
-}
-
-pub async fn block_ip_address(ip: String) -> Result<(), ApiError> {
-    post_json("/security/block-ip", &serde_json::json!({"ip": ip})).await
-}
-
-// Compliance API Functions
-pub async fn get_compliance_frameworks() -> Result<Vec<ComplianceFramework>, ApiError> {
-    fetch_json("/compliance/frameworks").await
-}
-
-pub async fn get_compliance_controls(
-    framework_id: String,
-) -> Result<Vec<ComplianceControl>, ApiError> {
-    fetch_json(&format!("/compliance/frameworks/{}/controls", framework_id)).await
-}
-
-pub async fn run_compliance_assessment(framework_id: String) -> Result<(), ApiError> {
-    post_json(
-        &format!("/compliance/frameworks/{}/assess", framework_id),
-        &(),
-    )
-    .await
-}
-
-pub async fn set_control_override(
-    control_id: String,
-    override_data: ManualOverride,
-) -> Result<(), ApiError> {
-    put_json(
-        &format!("/compliance/controls/{}/override", control_id),
-        &override_data,
-    )
-    .await
-}
-
-pub async fn get_compliance_reports() -> Result<Vec<ComplianceReport>, ApiError> {
-    fetch_json("/compliance/reports").await
-}
-
-pub async fn generate_compliance_report(
-    request: GenerateReportRequest,
-) -> Result<ComplianceReport, ApiError> {
-    post_json("/compliance/reports/generate", &request).await
+/// Users with at least 5 failed logins in the last 10 minutes.
+pub async fn get_audit_brute_force() -> Result<Vec<String>, ApiError> {
+    fetch_json("/audit/brute-force").await
 }
 
 // Forensics API Functions
-pub async fn get_investigations() -> Result<Vec<Investigation>, ApiError> {
-    fetch_json("/forensics/investigations").await
-}
-
-pub async fn get_investigation(id: String) -> Result<Investigation, ApiError> {
-    fetch_json(&format!("/forensics/investigations/{}", id)).await
-}
-
-pub async fn create_investigation(
-    request: CreateInvestigationRequest,
-) -> Result<Investigation, ApiError> {
-    post_json("/forensics/investigations", &request).await
-}
-
-pub async fn update_investigation_status(id: String, status: String) -> Result<(), ApiError> {
-    put_json(
-        &format!("/forensics/investigations/{}/status", id),
-        &serde_json::json!({"status": status}),
-    )
-    .await
-}
-
-pub async fn add_investigation_finding(
-    investigation_id: String,
-    finding: Finding,
-) -> Result<(), ApiError> {
-    post_json(
-        &format!("/forensics/investigations/{}/findings", investigation_id),
-        &finding,
-    )
-    .await
-}
-
-pub async fn collect_investigation_artifact(
-    investigation_id: String,
-    request: serde_json::Value,
-) -> Result<Artifact, ApiError> {
-    post_json(
-        &format!(
-            "/forensics/investigations/{}/artifacts/collect",
-            investigation_id
-        ),
-        &request,
-    )
-    .await
-}
 
 // ============================================================================
 // MFA Management Data Structures
@@ -5400,10 +4647,6 @@ pub async fn regenerate_mfa_backup_codes() -> Result<Vec<String>, ApiError> {
     post_json("/auth/mfa/backup-codes/regenerate", &()).await
 }
 
-pub async fn revoke_trusted_device(device_id: String) -> Result<(), ApiError> {
-    delete_json(&format!("/auth/mfa/trusted-devices/{}", device_id)).await
-}
-
 /// Remove a second factor; confirm with a current code or the password.
 pub async fn disable_mfa(method_id: String, verification_code: String) -> Result<(), ApiError> {
     let body = if verification_code.chars().all(|c| c.is_ascii_digit())
@@ -5414,10 +4657,6 @@ pub async fn disable_mfa(method_id: String, verification_code: String) -> Result
         serde_json::json!({"password": verification_code})
     };
     post_json_no_response(&format!("/auth/mfa/methods/{}/disable", method_id), &body).await
-}
-
-pub async fn set_primary_mfa_method(method_id: String) -> Result<(), ApiError> {
-    put_json(&format!("/auth/mfa/methods/{}/primary", method_id), &()).await
 }
 
 pub async fn get_mfa_enforcement_policy() -> Result<MfaEnforcementPolicy, ApiError> {
@@ -5736,102 +4975,8 @@ pub struct MigrationStoragePool {
     pub status: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MigratableResource {
-    pub id: String,
-    pub name: String,
-    pub resource_type: String, // vm, container, volume
-    pub size_bytes: u64,
-    pub current_pool: String,
-    pub status: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CreateMigrationRequest {
-    pub source_pool_id: String,
-    pub target_pool_id: String,
-    pub resource_ids: Vec<String>,
-    pub options: MigrationOptions,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MigrationOptions {
-    pub live_migrate: bool,
-    pub verify_data: bool,
-    pub compress_transfer: bool,
-    pub bandwidth_limit_mbps: Option<u32>,
-    pub schedule_time: Option<String>,
-    pub delete_source_after: bool,
-    pub priority: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct StorageMigrationJob {
-    pub id: String,
-    pub source_pool: String,
-    pub target_pool: String,
-    pub status: String, // pending, running, paused, completed, failed, cancelled
-    pub progress: f32,
-    pub started_at: Option<String>,
-    pub completed_at: Option<String>,
-    pub resources: Vec<MigrationResourceStatus>,
-    pub options: MigrationOptions,
-    pub error_message: Option<String>,
-    pub bytes_transferred: u64,
-    pub bytes_total: u64,
-    pub transfer_rate_mbps: Option<f32>,
-    pub estimated_completion: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MigrationResourceStatus {
-    pub resource_id: String,
-    pub resource_name: String,
-    pub status: String, // pending, migrating, verifying, completed, failed
-    pub progress: f32,
-    pub error_message: Option<String>,
-}
-
 pub async fn get_migration_storage_pools() -> Result<Vec<MigrationStoragePool>, ApiError> {
     fetch_json("/storage/pools").await
-}
-
-pub async fn get_migratable_resources(pool_id: &str) -> Result<Vec<MigratableResource>, ApiError> {
-    fetch_json(&format!("/storage/pools/{}/resources", pool_id)).await
-}
-
-pub async fn create_storage_migration(
-    request: CreateMigrationRequest,
-) -> Result<StorageMigrationJob, ApiError> {
-    post_json("/storage/migrations", &request).await
-}
-
-pub async fn get_storage_migrations() -> Result<Vec<StorageMigrationJob>, ApiError> {
-    fetch_json("/storage/migrations").await
-}
-
-pub async fn get_storage_migration(migration_id: &str) -> Result<StorageMigrationJob, ApiError> {
-    fetch_json(&format!("/storage/migrations/{}", migration_id)).await
-}
-
-pub async fn pause_storage_migration(migration_id: &str) -> Result<(), ApiError> {
-    post_json(&format!("/storage/migrations/{}/pause", migration_id), &()).await
-}
-
-pub async fn resume_storage_migration(migration_id: &str) -> Result<(), ApiError> {
-    post_json(&format!("/storage/migrations/{}/resume", migration_id), &()).await
-}
-
-pub async fn cancel_storage_migration(migration_id: &str) -> Result<(), ApiError> {
-    post_json(&format!("/storage/migrations/{}/cancel", migration_id), &()).await
-}
-
-pub async fn retry_storage_migration(migration_id: &str) -> Result<(), ApiError> {
-    post_json(&format!("/storage/migrations/{}/retry", migration_id), &()).await
-}
-
-pub async fn delete_storage_migration(migration_id: &str) -> Result<(), ApiError> {
-    delete_json(&format!("/storage/migrations/{}", migration_id)).await
 }
 
 // Storage Pools API (generic)
@@ -5859,14 +5004,6 @@ pub async fn create_storage_pool(
 
 pub async fn delete_storage_pool(pool_id: &str) -> Result<(), ApiError> {
     delete_json(&format!("/storage/pools/{}", pool_id)).await
-}
-
-pub async fn get_storage_pool_health(pool_id: &str) -> Result<serde_json::Value, ApiError> {
-    fetch_json(&format!("/storage/pools/{}/health", pool_id)).await
-}
-
-pub async fn scan_storage_pool(pool_id: &str) -> Result<(), ApiError> {
-    post_json(&format!("/storage/pools/{}/scan", pool_id), &()).await
 }
 
 // ---------------------------------------------------------------------
@@ -7494,6 +6631,11 @@ pub struct TaskLog {
     pub lines: Vec<String>,
     pub total: usize,
     pub running: bool,
+}
+
+/// Single-use ticket for the node shell WebSocket.
+pub async fn get_node_shell_ticket() -> Result<WsTicketResponse, ApiError> {
+    post_json("/nodes/shell/ticket", &()).await
 }
 
 /// Recent tasks, newest first; `status` empty = all.

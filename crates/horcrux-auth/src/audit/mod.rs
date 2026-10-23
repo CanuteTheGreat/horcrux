@@ -114,12 +114,53 @@ pub struct AuditLogger {
 
 impl AuditLogger {
     pub fn new(log_file: Option<PathBuf>) -> Self {
+        const MAX: usize = 10000; // Keep last 10000 events in memory
+                                  // The log file is the durable record: reload its tail so the audit
+                                  // viewer is not empty after every restart.
+        let events = log_file
+            .as_deref()
+            .map(|p| Self::load_tail(p, MAX))
+            .unwrap_or_default();
         Self {
-            events: Arc::new(RwLock::new(Vec::new())),
+            events: Arc::new(RwLock::new(events)),
             log_file,
-            max_events_memory: 10000, // Keep last 10000 events in memory
+            max_events_memory: MAX,
             enabled: Arc::new(RwLock::new(true)),
         }
+    }
+
+    /// The last `max` events of a JSON-lines audit log (unreadable lines are skipped).
+    pub fn load_tail(path: &std::path::Path, max: usize) -> Vec<AuditEvent> {
+        use std::io::{Read, Seek, SeekFrom};
+        let Ok(mut f) = std::fs::File::open(path) else {
+            return Vec::new();
+        };
+        let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+        let cap = 16 * 1024 * 1024u64;
+        let start = len.saturating_sub(cap);
+        if f.seek(SeekFrom::Start(start)).is_err() {
+            return Vec::new();
+        }
+        let mut buf = String::new();
+        let mut bytes = Vec::new();
+        let _ = f.read_to_end(&mut bytes);
+        buf.push_str(&String::from_utf8_lossy(&bytes));
+        let mut lines = buf.lines();
+        if start > 0 {
+            lines.next(); // cut-off first line
+        }
+        let mut v: Vec<AuditEvent> = lines
+            .filter_map(|l| serde_json::from_str::<AuditEvent>(l).ok())
+            .collect();
+        if v.len() > max {
+            v.drain(0..v.len() - max);
+        }
+        v
+    }
+
+    /// Every event in memory, oldest first.
+    pub async fn all(&self) -> Vec<AuditEvent> {
+        self.events.read().await.clone()
     }
 
     /// Enable audit logging
@@ -490,5 +531,42 @@ mod tests {
         let counts = logger.get_event_counts().await;
         assert_eq!(counts.get("Login"), Some(&2));
         assert_eq!(counts.get("VmCreated"), Some(&1));
+    }
+
+    #[tokio::test]
+    async fn events_written_to_the_log_file_come_back_after_a_restart() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.log");
+        let first = AuditLogger::new(Some(path.clone()));
+        for i in 0..3 {
+            first
+                .log(create_event(
+                    AuditEventType::Login,
+                    AuditSeverity::Info,
+                    Some(format!("user{i}")),
+                    None,
+                    "login".to_string(),
+                    AuditResult::Success,
+                ))
+                .await;
+        }
+        // a torn/garbage line must not hide the rest
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"{not json\n")
+            .unwrap();
+        let second = AuditLogger::new(Some(path.clone()));
+        let all = second.all().await;
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[2].user.as_deref(), Some("user2"));
+        assert_eq!(
+            AuditLogger::load_tail(&path, 2).len(),
+            2,
+            "limited to the newest"
+        );
+        assert!(AuditLogger::load_tail(&dir.path().join("none"), 5).is_empty());
     }
 }

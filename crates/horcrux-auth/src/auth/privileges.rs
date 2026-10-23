@@ -341,6 +341,9 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
             "templates" => read_write(m, P::DatastoreAudit, P::DatastoreAllocateSpace, "/storage"),
             _ => read_write(m, P::SysAudit, P::SysModify, "/nodes"),
         },
+        // The node shell is a root shell: always Sys.Modify, even for the
+        // WebSocket GET that redeems the ticket.
+        "nodes" if arg(1) == "shell" => need(P::SysModify, "/nodes"),
         "gpu" | "system" | "nodes" | "host-agent" => {
             read_write(m, P::SysAudit, P::SysModify, "/nodes")
         }

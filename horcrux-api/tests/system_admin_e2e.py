@@ -76,11 +76,16 @@ def task_log(upid):
     return "\n".join(expect(200, "GET", f"/tasks/{upid}/log")["lines"])
 
 
-def main():
+def login():
     global TOKEN
+    TOKEN = None
     st, r = call("POST", "/auth/login", {"username": "admin", "password": "admin"})
     assert st == 200, (st, r)
     TOKEN = r.get("ticket") or r.get("token")
+
+
+def main():
+    login()
 
     step("host name, time zone, locale")
     cfg = expect(200, "GET", "/system/config")
@@ -233,6 +238,214 @@ def main():
     ok(set(allr) >= {"disk-space", "memory", "kvm", "qemu", "database"}, "run-all returns every test")
     rep = expect(200, "GET", "/system/diagnostics/report?format=markdown", raw=True)
     ok(rep.startswith("# Diagnostics for hx-sysadm"), "markdown report")
+
+    step("SDN zones, VNets, subnets, IPAM (real bridges, VLAN/VXLAN devices, nftables)")
+    expect(200, "POST", "/sdn/zones", {"id": "lab", "zone_type": "simple"})
+    expect(409, "POST", "/sdn/zones", {"id": "lab", "zone_type": "simple"})
+    expect(422, "POST", "/sdn/zones", {"id": "bad1", "zone_type": "evpn"})
+    expect(422, "POST", "/sdn/zones", {"id": "bad2", "zone_type": "vlan"})
+    expect(422, "POST", "/sdn/zones", {"id": "bad3", "zone_type": "vxlan", "peers": ["not-an-ip"]})
+    expect(200, "POST", "/sdn/vnets", {"id": "web", "zone": "lab", "vlan_aware": True})
+    out = sh("ip -d link show web").stdout
+    ok("bridge" in out and "vlan_filtering 1" in out and "UP" in out.split("\n")[0], "a simple VNet is a real, VLAN-aware, up bridge")
+    expect(409, "POST", "/sdn/vnets", {"id": "web", "zone": "lab"})
+    dflt_if = sh("ip -o -4 route show default").stdout.split()
+    if "dev" in dflt_if:
+        expect(409, "POST", "/sdn/vnets", {"id": dflt_if[dflt_if.index("dev") + 1][:8], "zone": "lab"})
+        ok(True, "a VNet may not adopt an existing interface")
+    expect(422, "POST", "/sdn/vnets", {"id": "Bad", "zone": "lab"})
+    expect(422, "POST", "/sdn/vnets", {"id": "nozone", "zone": "missing"})
+
+    expect(200, "POST", "/sdn/zones", {"id": "vl", "zone_type": "vlan", "uplink": "hxdummy0"})
+    expect(200, "POST", "/sdn/vnets", {"id": "dmz", "zone": "vl", "tag": 30})
+    out = sh("ip -d link show dmzv30").stdout
+    ok("vlan" in out and "id 30" in out and "master dmz" in out, "a VLAN VNet gets a tagged sub-interface of the uplink, enslaved to its bridge")
+    expect(409, "POST", "/sdn/vnets", {"id": "dmz2", "zone": "vl", "tag": 30})
+    expect(422, "POST", "/sdn/vnets", {"id": "dmz3", "zone": "vl"})
+    expect(200, "POST", "/sdn/zones", {"id": "badup", "zone_type": "vlan", "uplink": "nosuch9"})
+    r = expect(500, "POST", "/sdn/vnets", {"id": "bad", "zone": "badup", "tag": 5})
+    ok(call("GET", "/sdn/vnets")[1] and all(v["id"] != "bad" for v in expect(200, "GET", "/sdn/vnets")) and sh("ip link show bad", check=False).returncode != 0, "a failed apply leaves no VNet and no half-built bridge")
+    expect(200, "DELETE", "/sdn/zones/badup")
+
+    expect(200, "POST", "/sdn/zones", {"id": "ov", "zone_type": "vxlan", "peers": ["192.0.2.21", "192.0.2.22"], "mtu": 1450})
+    expect(200, "POST", "/sdn/vnets", {"id": "tun", "zone": "ov", "tag": 4242})
+    out = sh("ip -d link show vx4242").stdout
+    ok("vxlan" in out and "id 4242" in out and "dstport 4789" in out and "master tun" in out, "a VXLAN VNet is a real vxlan device in the bridge")
+    fdb = sh("bridge fdb show dev vx4242").stdout
+    ok("dst 192.0.2.21" in fdb and "dst 192.0.2.22" in fdb, "head-end replication to both peers")
+    z = expect(200, "GET", "/sdn/zones/ov")
+    expect(200, "PUT", "/sdn/zones/ov", {**z, "peers": ["192.0.2.22", "192.0.2.23"]})
+    fdb = sh("bridge fdb show dev vx4242").stdout
+    ok("dst 192.0.2.23" in fdb and "dst 192.0.2.21" not in fdb, "changing the zone peers updates the kernel flood list")
+    expect(409, "PUT", "/sdn/zones/ov", {**z, "zone_type": "simple"})
+
+    expect(422, "POST", "/sdn/vnets/web/subnets", {"cidr": "10.77.0.5/24"})
+    expect(422, "POST", "/sdn/vnets/web/subnets", {"cidr": "10.77.0.0/24", "snat": True})
+    expect(422, "POST", "/sdn/vnets/web/subnets", {"cidr": "10.77.0.0/24", "gateway": "10.88.0.1"})
+    sub = expect(200, "POST", "/sdn/vnets/web/subnets", {"cidr": "10.77.0.0/24", "gateway": "10.77.0.1", "snat": True})
+    sid = sub["id"]
+    ok(sid == "web-10.77.0.0-24" and "10.77.0.1/24" in sh("ip -4 addr show web").stdout, "the gateway address is on the bridge")
+    nft = sh("nft list table inet horcrux_sdn").stdout
+    ok("masquerade" in nft and "10.77.0.0/24" in nft and 'oifname != "web"' in nft, "SNAT is a real nftables masquerade rule")
+    ok(open("/proc/sys/net/ipv4/ip_forward").read().strip() == "1", "IPv4 forwarding enabled")
+    expect(422, "POST", "/sdn/vnets/web/subnets", {"cidr": "10.77.0.128/25"})
+    expect(404, "POST", "/sdn/vnets/nosuch/subnets", {"cidr": "10.80.0.0/24"})
+    st = {s["vnet"]: s for s in expect(200, "GET", "/sdn/status")}
+    ok(st["web"]["bridge_present"] and "10.77.0.1/24" in st["web"]["addresses"], "status reports the bridge and its address")
+    ok(st["dmz"]["carrier"] == "dmzv30" and st["dmz"]["carrier_present"] and "dmzv30" in st["dmz"]["ports"], "status reports the VLAN carrier as a bridge port")
+    ok(st["tun"]["carrier"] == "vx4242" and st["tun"]["carrier_present"], "status reports the VXLAN carrier")
+
+    a1 = expect(200, "POST", f"/sdn/subnets/{sid}/ipam", {"hostname": "vm1", "mac": "AA:BB:CC:00:00:01"})
+    ok(a1["ip"] == "10.77.0.2" and a1["mac"] == "aa:bb:cc:00:00:01", "IPAM gives the lowest free address (not the gateway)")
+    a2 = expect(200, "POST", f"/sdn/subnets/{sid}/ipam", {"hostname": "vm2", "ip": "10.77.0.50"})
+    ok(a2["ip"] == "10.77.0.50", "IPAM honours a requested address")
+    expect(409, "POST", f"/sdn/subnets/{sid}/ipam", {"hostname": "vm1"})
+    expect(409, "POST", f"/sdn/subnets/{sid}/ipam", {"ip": "10.77.0.50"})
+    expect(422, "POST", f"/sdn/subnets/{sid}/ipam", {"ip": "10.99.0.5"})
+    expect(422, "POST", f"/sdn/subnets/{sid}/ipam", {"mac": "nope"})
+    view = expect(200, "GET", f"/sdn/subnets/{sid}/ipam")
+    ok(view["used"] == 3 and view["total"] == 254 and view["free"] == 251, "IPAM counts the gateway, vm1 and vm2")
+    expect(409, "DELETE", f"/sdn/subnets/{sid}/ipam/10.77.0.1")
+    expect(409, "DELETE", f"/sdn/vnets/web")
+    expect(409, "DELETE", f"/sdn/subnets/{sid}")
+    expect(409, "DELETE", "/sdn/zones/lab")
+
+    # the kernel forgot (as after a reboot): apply recreates everything
+    sh("ip link del web; ip link del vx4242; ip link del tun")
+    res = expect(200, "POST", "/sdn/apply")
+    ok(all(r["ok"] for r in res), f"apply reports success ({res})")
+    ok("10.77.0.1/24" in sh("ip -4 addr show web").stdout and "id 4242" in sh("ip -d link show vx4242").stdout
+       and "dst 192.0.2.23" in sh("bridge fdb show dev vx4242").stdout, "apply rebuilt bridges, address, VXLAN device and peers")
+    # and a real API restart does the same by itself
+    sh("ip link del web; ip link del tun; nft delete table inet horcrux_sdn")
+    sh("kill $(cat /tmp/sa/api.pid); sleep 2; bash /tmp/sa/start-api.sh")
+    login()
+    end = time.time() + 40
+    while time.time() < end and sh("ip link show web >/dev/null 2>&1 && ip link show tun >/dev/null 2>&1 && nft list table inet horcrux_sdn >/dev/null 2>&1", check=False).returncode != 0:
+        time.sleep(2)
+    ok("10.77.0.1/24" in sh("ip -4 addr show web").stdout and "masquerade" in sh("nft list table inet horcrux_sdn").stdout, "after an API restart the VNets, address and SNAT come back by themselves")
+    ok(len(expect(200, "GET", f"/sdn/subnets/{sid}/ipam")["allocations"]) == 3, "IPAM allocations survived the restart")
+
+    expect(200, "DELETE", f"/sdn/subnets/{sid}/ipam/10.77.0.2")
+    expect(200, "DELETE", f"/sdn/subnets/{sid}/ipam/10.77.0.50")
+    expect(404, "DELETE", f"/sdn/subnets/{sid}/ipam/10.77.0.50")
+    expect(200, "DELETE", f"/sdn/subnets/{sid}")
+    ok("10.77.0.1" not in sh("ip -4 addr show web").stdout and sh("nft list table inet horcrux_sdn", check=False).returncode != 0, "deleting the subnet removes the address and the SNAT table")
+    for v in ("web", "dmz", "tun"):
+        expect(200, "DELETE", f"/sdn/vnets/{v}")
+    ok(all(sh(f"ip link show {l}", check=False).returncode != 0 for l in ("web", "dmz", "dmzv30", "tun", "vx4242")), "deleting the VNets removed their bridges and carriers")
+    for z in ("lab", "vl", "ov"):
+        expect(200, "DELETE", f"/sdn/zones/{z}")
+    ok(expect(200, "GET", "/sdn/zones") == [], "all zones gone")
+
+    step("audit log (search, filters, export, survives a restart)")
+    pg = expect(200, "GET", "/audit/search?user=admin&event_type=Login&limit=50")
+    ok(pg["total"] >= 2 and all(e["user"] == "admin" and e["event_type"] == "Login" for e in pg["events"]),
+       f"login events are searchable ({pg['total']} found)")
+    ok(pg["events"][0]["timestamp"] >= pg["events"][-1]["timestamp"], "newest first")
+    ok(pg["total"] >= 2, "the login from before the API restart was reloaded from the audit log file")
+    ok(expect(200, "GET", "/audit/search?search=zz-no-such-thing-zz")["total"] == 0, "free-text search")
+    ok(len(expect(200, "GET", "/audit/search?limit=1")["events"]) == 1, "limit")
+    fo = expect(200, "GET", "/audit/filter-options")
+    ok("admin" in fo["users"] and "Login" in fo["event_types"], "filter options list what is in the log")
+    csv = expect(200, "GET", "/audit/export?format=csv&user=admin", raw=True)
+    ok(csv.startswith("timestamp,event_type,severity,user,") and '"admin"' in csv, "CSV export")
+    js = json.loads(expect(200, "GET", "/audit/export?format=json&event_type=Login", raw=True))
+    ok(js and js[0]["event_type"] == "Login", "JSON export")
+    expect(400, "GET", "/audit/export?format=xml")
+    call("POST", "/auth/login", {"username": "admin", "password": "wrong-password"})
+    ok(len(expect(200, "GET", "/audit/failed-logins?limit=10")) >= 1 or expect(200, "GET", "/audit/search?event_type=LoginFailed")["total"] >= 1, "a failed login is recorded")
+
+    step("node shell (a real PTY login shell over the WebSocket)")
+    import base64, socket, struct
+    tk = expect(200, "POST", "/nodes/shell/ticket")
+    ok(tk["ws_path"].endswith(tk["ticket"]), "a ticket is minted")
+
+    def ws_connect(path):
+        raw = socket.create_connection(("127.0.0.1", 8006), timeout=20)
+        sock = CTX.wrap_socket(raw, server_hostname="127.0.0.1")
+        key = base64.b64encode(os.urandom(16)).decode()
+        sock.sendall((f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1:8006\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                      f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\nAuthorization: Bearer {TOKEN}\r\n\r\n").encode())
+        head = b""
+        while b"\r\n\r\n" not in head:
+            c = sock.recv(1)
+            if not c:
+                break
+            head += c
+        return sock, head.decode(errors="replace")
+
+    def ws_send(sock, payload, opcode=1):
+        data = payload.encode() if isinstance(payload, str) else payload
+        mask = os.urandom(4)
+        n = len(data)
+        hdr = bytes([0x80 | opcode]) + (bytes([0x80 | n]) if n < 126 else bytes([0x80 | 126]) + struct.pack(">H", n))
+        sock.sendall(hdr + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
+
+    def ws_read(sock, until, secs=20):
+        buf = b""
+        end = time.time() + secs
+        sock.settimeout(2)
+        while time.time() < end and until not in buf.decode(errors="replace"):
+            try:
+                h = sock.recv(2)
+            except socket.timeout:
+                continue
+            if len(h) < 2:
+                break
+            ln = h[1] & 0x7F
+            if ln == 126:
+                ln = struct.unpack(">H", sock.recv(2))[0]
+            elif ln == 127:
+                ln = struct.unpack(">Q", sock.recv(8))[0]
+            data = b""
+            while len(data) < ln:
+                data += sock.recv(ln - len(data))
+            if h[0] & 0x0F in (1, 2):
+                buf += data
+        return buf.decode(errors="replace")
+
+    sock, head = ws_connect(tk["ws_path"])
+    ok(" 101 " in head.split("\r\n")[0], f"the WebSocket upgrades ({head.splitlines()[0] if head else head})")
+    ws_send(sock, '{"resize":[100,30]}')
+    ws_send(sock, "echo hxshell-$((6*7)); tty; id -un; stty size\r")
+    out = ws_read(sock, "30 100")
+    ok("hxshell-42" in out, "commands run in the shell")
+    ok("/dev/pts/" in out, "it has a real controlling PTY")
+    ok("30 100" in out, "the window size from the resize message reached the PTY")
+    ws_send(sock, "echo secret=${ADMIN_PASSWORD:-unset}\r")
+    ok("secret=unset" in ws_read(sock, "secret=unset"), "the API's environment secrets are not passed to the shell")
+    def shell_pids():
+        out = []
+        for d in os.listdir("/proc"):
+            if d.isdigit():
+                try:
+                    argv = open(f"/proc/{d}/cmdline", "rb").read().split(b"\0")
+                    if argv[0].endswith((b"bash", b"/sh")) and argv[1:2] == [b"-l"]:
+                        out.append(d)
+                except OSError:
+                    pass
+        return out
+
+    pids = shell_pids()
+    ok(len(pids) == 1, f"one login shell process exists ({pids})")
+    pid = pids[0]
+    sock.close()
+    for _ in range(20):
+        if sh(f"kill -0 {pid} 2>/dev/null", check=False).returncode != 0:
+            break
+        time.sleep(0.5)
+    ok(sh(f"kill -0 {pid} 2>/dev/null", check=False).returncode != 0, "closing the browser socket ends the shell")
+    sock2, head2 = ws_connect(tk["ws_path"])
+    ok(" 404 " in head2.split("\r\n")[0], "a ticket works only once")
+    sock2.close()
+    for _ in range(20):
+        tl = expect(200, "GET", "/tasks?type=node-shell")
+        if tl:
+            break
+        time.sleep(0.5)
+    ok(tl and tl[0]["user"] == "admin", "the session is in the task log")
+    ok("shell session for admin" in task_log(tl[0]["upid"]), "with who and how long")
 
     step("packages (Portage branch; emerge itself is a recording shim)")
     # Real Portage is only in the Gentoo image job; here the vdb/repo layout

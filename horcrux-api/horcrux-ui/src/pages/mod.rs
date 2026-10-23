@@ -21,12 +21,12 @@ mod iso_library;
 pub mod kubernetes;
 mod login;
 pub mod lxc;
-pub mod metrics;
 mod monitoring;
 pub mod nas;
 mod network;
 mod power;
 mod replication_list;
+pub mod sdn_zones;
 mod snapshot_list;
 pub mod storage;
 pub mod system;
@@ -97,8 +97,7 @@ pub use monitoring::{
 // Re-export dashboard components
 
 // Re-export audit components
-
-// Re-export metrics components
+pub use audit::AuditLogPage;
 
 // Re-export storage components
 

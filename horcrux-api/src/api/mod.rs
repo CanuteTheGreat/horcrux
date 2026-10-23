@@ -2,6 +2,7 @@
 //! router by a single line in app/mod.rs (the router, formerly main.rs).
 
 pub mod alert_rules;
+pub mod audit_view;
 pub mod auth;
 #[cfg(feature = "backup")]
 pub mod backup;
@@ -23,12 +24,14 @@ pub mod metrics;
 pub mod migration_jobs;
 pub mod migration_peer;
 pub mod node_disks;
+pub mod node_shell;
 pub mod node_summary;
 pub mod notifications;
 pub mod prometheus_export;
 #[cfg(feature = "s3-gateway")]
 pub mod s3_gateway;
 pub mod sdn_cni;
+pub mod sdn_zones;
 pub mod storage_volumes;
 pub mod system_admin;
 pub mod tasks;

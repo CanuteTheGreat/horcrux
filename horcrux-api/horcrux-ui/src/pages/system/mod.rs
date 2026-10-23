@@ -4,4 +4,5 @@ pub mod health;
 pub mod logs;
 pub mod package_manager;
 pub mod services;
+pub mod shell;
 pub mod tasks;
