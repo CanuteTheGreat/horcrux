@@ -442,13 +442,25 @@ async fn move_here(state: &Arc<AppState>, m: &Move, timeout_secs: u64) -> MoveRe
         with_local_disks: true,
         timeout_secs: Some(timeout_secs),
     };
-    let job_id = match super::vm_migration::start(state, cfg).await {
-        Ok(j) => j,
-        Err(e) => {
-            r.status = "failed".into();
-            r.error = Some(format!("{e:?}"));
-            record_move(state, &r).await;
-            return r;
+    // The migration manager runs one migration at a time unless told
+    // otherwise: wait for our turn instead of failing the move.
+    let wait_until = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+    let job_id = loop {
+        match super::vm_migration::start(state, cfg.clone()).await {
+            Ok(j) => break j,
+            Err(e) => {
+                let text = format!("{e:?}");
+                if text.contains("Maximum concurrent migrations")
+                    && tokio::time::Instant::now() < wait_until
+                {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    continue;
+                }
+                r.status = "failed".into();
+                r.error = Some(text);
+                record_move(state, &r).await;
+                return r;
+            }
         }
     };
     r.job_id = Some(job_id.clone());
@@ -538,6 +550,12 @@ async fn execute(
                         error: Some(format!("{} is not a node of this cluster", m.from)), ..Default::default() },
                 }
             };
+            // The source node recorded the move it ran; the node that
+            // orchestrated it keeps a record too, so the history shows every
+            // move it asked for.
+            if m.from != local {
+                record_move(&st, &out).await;
+            }
             res.lock().unwrap()[i] = out;
             prog(&res.lock().unwrap());
         }));
@@ -559,8 +577,10 @@ struct PeerMove {
 
 // ------------------------------------------------------------------- drain
 
+/// Whether this node has peers (`list_nodes` holds the other members; the
+/// local node may or may not be listed too).
 pub fn is_clustered(nodes: &[Node]) -> bool {
-    nodes.len() >= 2
+    nodes.iter().any(|n| !n.is_local)
 }
 
 /// Put this node in maintenance and move its running VMs away. Returns the

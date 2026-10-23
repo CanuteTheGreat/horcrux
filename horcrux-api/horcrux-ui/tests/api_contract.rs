@@ -4032,6 +4032,45 @@ async fn guest_power_routes_read_into_ui_types() {
     let (st, _) = get_raw(&c, &token, "/vms/no-such-vm/power-policy").await;
     assert_eq!(st, 404);
 
+    // Cluster maintenance / rebalance / placement (USE=cluster builds).
+    let (st, _) = get_raw(&c, &token, "/nodes/maintenance").await;
+    if st == 200 {
+        let m: api::MaintenanceState = fetch(&c, &token, "/nodes/maintenance").await;
+        assert!(!m.enabled && !m.clustered, "a single node is not in maintenance: {m:?}");
+        let _: api::MovePlan = fetch(&c, &token, "/nodes/maintenance/plan").await;
+        let r: api::RebalanceState = fetch(&c, &token, "/cluster/rebalance").await;
+        assert!(["off", "on_return", "auto"].contains(&r.settings.mode.as_str()));
+        assert_eq!(r.nodes.len(), 1, "one node: {:?}", r.nodes);
+        assert!(r.plan.moves.is_empty(), "nothing to rebalance on one node");
+        let _: Vec<api::MoveHistoryEntry> = fetch(&c, &token, "/cluster/moves").await;
+        // Entering maintenance needs somewhere to move guests to.
+        let (st, _) = post(&c, &token, "/nodes/maintenance", json!({"enabled": true, "drain": true})).await;
+        assert_eq!(st, 409, "maintenance on a single node");
+        let mut bad = serde_json::to_value(&r.settings).unwrap();
+        bad["mode"] = json!("sometimes");
+        assert_eq!(put(&c, &token, "/cluster/rebalance", bad).await.0, 422);
+        // Placement rules round-trip into the UI type.
+        let pl = format!("/vms/{vm}/placement");
+        let (st, body) = put(
+            &c,
+            &token,
+            &pl,
+            json!({"affinity_group": "web", "anti_affinity_group": "db-a", "no_migrate": true}),
+        )
+        .await;
+        assert_eq!(st, 200, "{body}");
+        let rules: api::PlacementRules = fetch(&c, &token, &pl).await;
+        assert_eq!(rules.affinity_group.as_deref(), Some("web"));
+        assert!(rules.no_migrate);
+        assert_eq!(
+            put(&c, &token, &pl, json!({"affinity_group": "g", "anti_affinity_group": "g"})).await.0,
+            422
+        );
+        let _ = put(&c, &token, &pl, json!({})).await;
+        // Peer-only routes refuse a user token.
+        assert_eq!(get_raw(&c, &token, "/ha/peer/placement").await.0, 403);
+    }
+
     // The host-agent hook accepts nothing without its token.
     let r = c
         .post(format!("{}/host-agent/stop-guests", api_base()))

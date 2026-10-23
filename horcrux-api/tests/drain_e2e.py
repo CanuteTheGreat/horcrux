@@ -137,9 +137,10 @@ for a, b in ((N1, N2), (N2, N1)):
 
 
 def both_online():
-    for a in (N1, N2):
+    # Each node lists its peer (the local node may or may not be listed).
+    for a, peer in ((N1, "node2"), (N2, "node1")):
         st, nodes = api(a, "GET", "/cluster/nodes")
-        if st != 200 or len(nodes) < 2 or any(n["status"].lower() != "online" for n in nodes):
+        if st != 200 or not any(n["name"] == peer and n["status"].lower() == "online" for n in nodes):
             return False
     return True
 
@@ -235,7 +236,7 @@ check(vm_cfg(N2, "dr-a") is None, "dr-a is gone from node2 (moved, not copied)")
 check(qemus("dr-a") == 1, "one running copy of dr-a in the cluster")
 check(float(uptime(N1, back)) < 3600, "dr-a is alive on node1 after the rebalance")
 st, hist = api(N1, "GET", "/cluster/moves?guest=dr-a")
-check(any(h["reason"] == "on-return" and h["to"] == "node1" and h["ok"] for h in hist),
+check(any(h["reason"] == "rebalance" and h["to"] == "node1" and h["ok"] for h in hist),
       f"history shows the rebalance move to node1: {hist[:2]}")
 check(vm_cfg(N2, "dr-main")["status"] == "running", "dr-main stays on node2 (already even)")
 

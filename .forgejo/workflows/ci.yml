@@ -366,7 +366,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "VM networking + hardware"
           bash horcrux-api/tests/vm_nic_e2e.sh target/debug/horcrux-api
 
-      - name: Guest save state (LXC containers: CRIU, fallback without it)
+      - name: "Guest save state (LXC containers - CRIU, fallback without it)"
         # guest_state_ct_e2e.sh: the fallback half (no CRIU: clean shutdown +
         # restart with the reason shown) always runs; with CRIU installed
         # and `criu check` passing, the real checkpoint/restore half runs
