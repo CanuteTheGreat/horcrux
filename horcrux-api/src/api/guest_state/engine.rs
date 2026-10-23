@@ -669,11 +669,20 @@ async fn clean_shutdown(state: &Arc<AppState>, g: &GuestInfo, secs: u64) -> Resu
                 .map(|_| ())
         }
         GuestKind::Vm => state.vm_manager.stop_vm(&g.id).await.map(|_| ()),
-        GuestKind::Container if g.ct_runtime == Some(ContainerRuntime::Lxc) => state
-            .container_manager
-            .shutdown_container(&g.id, secs as u32, true)
-            .await
-            .map(|_| ()),
+        GuestKind::Container if g.ct_runtime == Some(ContainerRuntime::Lxc) => {
+            #[cfg(feature = "lxc")]
+            {
+                state
+                    .container_manager
+                    .shutdown_container(&g.id, secs as u32, true)
+                    .await
+                    .map(|_| ())
+            }
+            #[cfg(not(feature = "lxc"))]
+            {
+                state.container_manager.stop_container(&g.id).await.map(|_| ())
+            }
+        }
         GuestKind::Container => state
             .container_manager
             .stop_container(&g.id)
@@ -758,7 +767,9 @@ pub async fn stop_all(state: &Arc<AppState>) -> Report {
     let node = policy::load_node(state).await;
     // Clustered: move running VMs to other nodes first (live migration);
     // what stays is handled by the stop action below.
+    #[allow(unused_mut)]
     let mut moved: Vec<GuestOutcome> = Vec::new();
+    #[allow(unused_mut)]
     let mut stayed: std::collections::HashMap<String, String> = Default::default();
     #[cfg(feature = "cluster")]
     if node.drain_on_shutdown {
