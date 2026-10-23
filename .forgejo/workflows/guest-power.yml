@@ -7,9 +7,19 @@ name: Guest save state + cluster drain (2 nodes, KVM)
 # the host shutdown drains first, the node returns and the cluster rebalances,
 # and a target killed mid-move leaves exactly one running copy
 # (drain_e2e.py). Real QEMU (KVM, TCG when the runner has no /dev/kvm) and
-# CirrOS guests in sibling containers. The container half of save state (LXC,
-# CRIU) runs in ci.yml's Test job. Runs on rw-man-01's kvm-x86_64 runner on
-# every push that touches the code involved, nightly, and on demand.
+# CirrOS guests in sibling containers.
+#
+# Containers (LXC, Incus, Docker, Podman) need a kernel where CRIU works,
+# which a container on the runner is not: they run in throwaway Debian VMs
+# (own kernel, KVM) that have all four runtimes and CRIU installed
+# (hx_vm.sh): save state / resume with a process that must survive
+# (guest_state_ct_vm_e2e.py - never skipped, `criu check` must pass) and, in
+# two clustered VMs, drain / rebalance moving containers between nodes live
+# (CRIU; `incus move`), cold when the target has no CRIU, and with rollback
+# when the target cannot take them (drain_ct_vm_e2e.py). Nightly (and on
+# demand) the VM save/resume + drain e2e also run once under TCG.
+# Runs on rw-man-01's kvm-x86_64 runner on every push that touches the code
+# involved, nightly, and on demand.
 on:
   push:
     branches: [main]
@@ -21,10 +31,17 @@ on:
       - 'crates/horcrux-vm/src/vm/savestate.rs'
       - 'crates/horcrux-vm/src/vm/qemu.rs'
       - 'crates/horcrux-cluster/src/cluster/drain.rs'
+      - 'crates/horcrux-container/src/container/savestate.rs'
+      - 'crates/horcrux-container/src/container/transfer.rs'
+      - 'crates/horcrux-container/src/container/lxc_config.rs'
+      - 'horcrux-api/src/api/ct_move.rs'
       - 'deploy/systemd/horcrux-guests.service'
       - 'horcrux-api/tests/guest_state_e2e.*'
       - 'horcrux-api/tests/drain_e2e.*'
       - 'horcrux-api/tests/hx_node.py'
+      - 'horcrux-api/tests/hx_vm*.sh'
+      - 'horcrux-api/tests/guest_state_ct_vm_e2e.*'
+      - 'horcrux-api/tests/drain_ct_vm_e2e.*'
       - '.forgejo/workflows/guest-power.yml'
   workflow_dispatch: {}
   schedule:
@@ -39,10 +56,10 @@ env:
 
 jobs:
   guest-power:
-    name: Save state (VMs) + two-node drain / rebalance
+    name: Save state (VMs, containers with CRIU) + two-node drain / rebalance
     runs-on: kvm-x86_64
     container: catthehacker/ubuntu:act-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       CARGO_BUILD_JOBS: "4"
     steps:
@@ -77,9 +94,32 @@ jobs:
       - name: Two-node drain + rebalance end to end
         run: bash horcrux-api/tests/drain_e2e.sh target/debug/horcrux-api
 
+      - name: Cache the Debian test-VM image (runtimes + CRIU installed)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/hx-vm
+          key: hx-vm-trixie-${{ hashFiles('horcrux-api/tests/hx_vm_provision.sh') }}
+          restore-keys: |
+            hx-vm-trixie-
+
+      - name: "Containers: save state / resume with real CRIU (LXC, Incus, Docker, Podman)"
+        run: bash horcrux-api/tests/guest_state_ct_vm_e2e.sh target/debug/horcrux-api
+
+      - name: "Containers: cross-node moves in a two-node drain / rebalance (live, cold, rollback)"
+        run: bash horcrux-api/tests/drain_ct_vm_e2e.sh target/debug/horcrux-api
+
+      - name: "VMs under TCG (no /dev/kvm): save / resume and drain"
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        env:
+          HX_NO_KVM: "1"
+        run: |
+          bash horcrux-api/tests/guest_state_e2e.sh target/debug/horcrux-api
+          bash horcrux-api/tests/drain_e2e.sh target/debug/horcrux-api
+
       - name: Remove leftover siblings
         if: always()
         run: |
+          pkill -f qemu-system-x86_64 || true
           docker ps -a --filter name=horcrux-gs-e2e- --format '{{.Names}}' | xargs -r docker rm -f
           docker ps -a --filter name=hxdrain- --format '{{.Names}}' | xargs -r docker rm -f
           docker network ls --filter name=hxdrain- --format '{{.Name}}' | xargs -r docker network rm || true
