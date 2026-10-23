@@ -145,6 +145,93 @@ pub fn check_host_firmware(hw: &VmHardware) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// Directories a hookscript may live in (storage pools' `snippets`, and the
+/// node's own) and directories a virtiofs share may come from (pool paths).
+async fn advanced_roots(state: &AppState) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let mut snippets = vec![PathBuf::from(&state.config.paths.data_dir).join("snippets")];
+    let mut pools = Vec::new();
+    for p in state.storage_manager.list_pools().await {
+        if p.path.starts_with('/') {
+            snippets.push(PathBuf::from(&p.path).join("snippets"));
+            pools.push(PathBuf::from(&p.path));
+        }
+    }
+    (snippets, pools)
+}
+
+/// Host-side checks of the advanced hardware: tty exists, virtiofs shares
+/// come from a storage pool directory and virtiofsd is installed, the
+/// hookscript is an executable snippet (so VM.Config can't run arbitrary
+/// host programs).
+pub async fn check_host_advanced(state: &AppState, hw: &VmHardware) -> Result<(), ApiError> {
+    use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+    let adv = &hw.adv;
+    for p in &adv.serial {
+        if let Some(d) = &p.device {
+            let ok = std::fs::metadata(d)
+                .map(|m| m.file_type().is_char_device())
+                .unwrap_or(false);
+            if !ok {
+                return Err(ApiError::BadRequest(format!(
+                    "serial device {d} does not exist on this host"
+                )));
+            }
+        }
+    }
+    if adv.virtiofs.is_empty() && adv.hookscript.is_none() {
+        return Ok(());
+    }
+    let (snippets, pools) = advanced_roots(state).await;
+    for v in &adv.virtiofs {
+        let real = std::fs::canonicalize(&v.path).map_err(|_| {
+            ApiError::BadRequest(format!(
+                "virtiofs share {}: {} is not a directory on this host",
+                v.tag, v.path
+            ))
+        })?;
+        let inside = pools
+            .iter()
+            .filter_map(|p| std::fs::canonicalize(p).ok())
+            .any(|p| real.starts_with(&p));
+        if !real.is_dir() || !inside {
+            return Err(ApiError::BadRequest(format!(
+                "virtiofs share {}: {} must be a directory inside a storage pool",
+                v.tag, v.path
+            )));
+        }
+    }
+    if !adv.virtiofs.is_empty() && crate::vm::advanced::virtiofsd_binary().is_none() {
+        return Err(ApiError::BadRequest(
+            "virtiofs needs virtiofsd, which is not installed on this host (Debian/Ubuntu: \
+             virtiofsd; Gentoo: app-emulation/virtiofsd)"
+                .into(),
+        ));
+    }
+    if let Some(h) = &adv.hookscript {
+        let real = std::fs::canonicalize(h)
+            .map_err(|_| ApiError::BadRequest(format!("hookscript {h} does not exist")))?;
+        let inside = snippets
+            .iter()
+            .filter_map(|p| std::fs::canonicalize(p).ok())
+            .any(|p| real.starts_with(&p));
+        if !inside {
+            return Err(ApiError::BadRequest(format!(
+                "hookscript {h} must be a snippet (upload it to a storage pool's snippets \
+                 content type)"
+            )));
+        }
+        let mode = std::fs::metadata(&real)
+            .map(|m| m.permissions().mode())
+            .unwrap_or(0);
+        if !real.is_file() || mode & 0o100 == 0 {
+            return Err(ApiError::BadRequest(format!(
+                "hookscript {h} must be an executable file"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Linux bridges on this host.
 pub fn host_bridges() -> Vec<HostBridge> {
     let mut out = Vec::new();
@@ -243,6 +330,7 @@ async fn scan_isos(state: &AppState) -> Vec<IsoFile> {
 /// when a tag is set) and the CD-ROM ISO is a file in the ISO library.
 pub async fn check_host_hardware(state: &AppState, hw: &VmHardware) -> Result<(), ApiError> {
     check_host_firmware(hw)?;
+    check_host_advanced(state, hw).await?;
     for (i, nic) in hw.nets.iter().enumerate() {
         match crate::vm::qemu::HostNet::system().bridge_vlan_aware(&nic.bridge) {
             None => {

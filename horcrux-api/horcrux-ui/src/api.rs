@@ -6279,6 +6279,77 @@ pub async fn apply_datacenter_firewall() -> Result<(), ApiError> {
     post_json_no_response("/firewall/datacenter/apply", &serde_json::json!({})).await
 }
 
+// Inventory: search, tags, tree (Resources, VM detail) - horcrux-api/src/api/inventory.rs.
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct InvResource {
+    pub kind: String,
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    pub tags: Vec<String>,
+    pub pool: Option<String>,
+    pub link: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct InvTreeNode {
+    pub kind: String,
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    pub tags: Vec<String>,
+    pub link: String,
+    pub children: Vec<InvTreeNode>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct InvTagCount {
+    pub tag: String,
+    pub count: usize,
+}
+
+pub async fn search_resources(
+    q: &str,
+    kind: &str,
+    tag: &str,
+    status: &str,
+) -> Result<Vec<InvResource>, ApiError> {
+    fetch_json(&format!(
+        "/search?q={}&kind={}&tag={}&status={}",
+        urlencoding::encode(q),
+        urlencoding::encode(kind),
+        urlencoding::encode(tag),
+        urlencoding::encode(status)
+    ))
+    .await
+}
+
+pub async fn get_resource_tree() -> Result<InvTreeNode, ApiError> {
+    fetch_json("/tree").await
+}
+
+pub async fn list_inventory_tags() -> Result<Vec<InvTagCount>, ApiError> {
+    fetch_json("/tags").await
+}
+
+pub async fn put_guest_tags(
+    kind: &str,
+    id: &str,
+    tags: &[String],
+) -> Result<Vec<String>, ApiError> {
+    let base = if kind == "container" {
+        "containers"
+    } else {
+        "vms"
+    };
+    put_json(
+        &format!("/{base}/{}/tags", urlencoding::encode(id)),
+        &serde_json::json!({ "tags": tags }),
+    )
+    .await
+}
+
 /// Human-readable byte size.
 pub fn human_bytes(n: u64) -> String {
     const U: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];

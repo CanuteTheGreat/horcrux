@@ -74,6 +74,7 @@ pub fn App() -> impl IntoView {
                     <div class="navbar-dropdown">
                         <span class="navbar-item dropdown-trigger">"Infrastructure ▾"</span>
                         <div class="dropdown-content">
+                            <A href="/resources" class="dropdown-item">"Resources (search, tags, tree)"</A>
                             <A href="/storage" class="dropdown-item">"Storage"</A>
                             <A href="/storage/disks" class="dropdown-item">"Disks"</A>
                             <A href="/storage/smart" class="dropdown-item">"SMART Health"</A>
@@ -169,6 +170,8 @@ pub fn App() -> impl IntoView {
                     <Route path="/" view=Dashboard/>
                     <Route path="/vms" view=VmList/>
                     <Route path="/vms/create" view=VmCreate/>
+                    <Route path="/vms/:id" view=crate::pages::VmDetailPage/>
+                    <Route path="/resources" view=crate::pages::ResourcesPage/>
                     <Route path="/vms/:id/console" view=VmConsole/>
                     <Route path="/vms/:id/hardware" view=crate::pages::VmHardwarePage/>
                     <Route path="/storage/isos" view=crate::pages::IsoLibraryPage/>

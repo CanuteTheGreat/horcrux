@@ -212,6 +212,7 @@ pub fn VmList() -> impl IntoView {
                                         let vm_id_shutdown = vm.id.clone();
                                         let vm_id_reboot = vm.id.clone();
                                         let hardware_href = format!("/vms/{}/hardware", vm.id);
+                                        let detail_href = format!("/vms/{}", vm.id);
                                         let is_qemu = vm.hypervisor == horcrux_common::VmHypervisor::Qemu;
                                         let vm_id_delete = vm.id.clone();
                                         let vm_id_save = vm.id.clone();
@@ -276,6 +277,7 @@ pub fn VmList() -> impl IntoView {
                                                         title="Stop immediately (like pulling the power)"
                                                         on:click=move |_| stop_vm(vm_id_stop.clone())
                                                     >"Stop"</button>
+                                                    <A href=detail_href class="btn btn-sm btn-secondary vm-detail-link">"Details"</A>
                                                     <A href=hardware_href class="btn btn-sm btn-secondary vm-hardware-link">"Hardware"</A>
                                                     <button
                                                         class="btn btn-sm btn-secondary"

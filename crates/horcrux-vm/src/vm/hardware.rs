@@ -45,6 +45,7 @@ pub fn prepare_hardware(config: &mut VmConfig) -> Result<()> {
     }
     // USB ids are stored lower-case, 4 digits: QEMU device ids derive from them.
     super::devices::normalize_usb(&mut config.hardware.usb)?;
+    super::advanced::prepare(config)?;
     for nic in &mut config.hardware.nets {
         if nic.mac.is_none() {
             let mut m = generate_mac();
@@ -119,8 +120,18 @@ impl VmManager {
                     "CPU and memory of LXD/Incus VMs are managed by LXD/Incus".into(),
                 ));
             }
+            // A locked VM changes nothing but its lock.
+            if vm.hardware.adv.lock.is_some() && next.hardware.adv.lock.is_some() {
+                return Err(Error::Conflict(format!(
+                    "VM {id} is locked: unlock it before changing its configuration"
+                )));
+            }
             let mut hw_without_cdrom = next.hardware.clone();
             hw_without_cdrom.cdrom = vm.hardware.cdrom.clone();
+            // protection, lock and hookscript apply at once, even while running
+            hw_without_cdrom.adv.protection = vm.hardware.adv.protection;
+            hw_without_cdrom.adv.lock = vm.hardware.adv.lock.clone();
+            hw_without_cdrom.adv.hookscript = vm.hardware.adv.hookscript.clone();
             let cold_change =
                 next.cpus != vm.cpus || next.memory != vm.memory || hw_without_cdrom != vm.hardware;
             if running && cold_change {
@@ -199,9 +210,11 @@ impl VmManager {
     /// so.
     pub async fn shutdown_vm(&self, id: &str, timeout: Duration, force: bool) -> Result<VmConfig> {
         let vm = self.qemu_vm(id).await?;
+        super::advanced::check_unlocked(id, &vm.hardware.adv, "shut it down")?;
         if !QemuManager::process_running(&vm.id) {
             return Err(Error::Conflict(format!("VM {id} is not running")));
         }
+        super::advanced::run_hook_lenient(&vm.hardware.adv, &vm.id, "pre-stop").await;
         qmp_command(
             &DisplayRuntime::qmp_socket(&vm.disk_path),
             serde_json::json!({"execute": "system_powerdown"}),
@@ -480,6 +493,12 @@ impl VmManager {
             .get_mut(id)
             .ok_or_else(|| Error::VmNotFound(id.to_string()))?;
         require_stopped_qemu(vm, "removing a disk")?;
+        super::advanced::check_unlocked(id, &vm.hardware.adv, "remove a disk")?;
+        if vm.hardware.adv.protection {
+            return Err(Error::Conflict(format!(
+                "VM {id} has the protection flag: clear it before removing a disk"
+            )));
+        }
         let mut disks = vm.all_disks();
         if index == 0 {
             return Err(Error::Validation(

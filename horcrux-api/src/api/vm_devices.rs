@@ -5,6 +5,7 @@
 //! * `POST /api/vms/:id/agent/:action`      ping | fsfreeze | fsthaw | fsfreeze-status
 //!   | fstrim | shutdown | reboot | time
 //! * `GET  /api/nodes/usb`                  host USB devices that can be passed through
+//! * `POST /api/vms/:id/hotplug/cpu {cpus}` / `.../hotplug/memory {add_mb}`  grow a running VM
 //! * `POST /api/vms/:id/usb`                add a host device (hot-plug when running)
 //! * `DELETE /api/vms/:id/usb/:vendor/:product`
 //!
@@ -31,6 +32,38 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/nodes/usb", get(host_usb))
         .route("/api/vms/:id/usb", post(attach_usb))
         .route("/api/vms/:id/usb/:vendor/:product", delete(detach_usb))
+        .route("/api/vms/:id/hotplug/cpu", post(hotplug_cpu))
+        .route("/api/vms/:id/hotplug/memory", post(hotplug_memory))
+}
+
+#[derive(Deserialize)]
+struct HotplugCpu {
+    /// Total CPUs wanted (above the current count, up to max CPUs).
+    cpus: u32,
+}
+
+#[derive(Deserialize)]
+struct HotplugMemory {
+    /// MB to add, in multiples of 128.
+    add_mb: u64,
+}
+
+/// Add CPUs to a running VM (the new count is stored).
+async fn hotplug_cpu(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(r): Json<HotplugCpu>,
+) -> Result<Json<VmConfig>, ApiError> {
+    Ok(Json(state.vm_manager.hotplug_cpus(&id, r.cpus).await?))
+}
+
+/// Add a memory DIMM to a running VM (the new size is stored).
+async fn hotplug_memory(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(r): Json<HotplugMemory>,
+) -> Result<Json<VmConfig>, ApiError> {
+    Ok(Json(state.vm_manager.hotplug_memory(&id, r.add_mb).await?))
 }
 
 /// The guest agent is a separate program in the guest: when it is not

@@ -107,6 +107,9 @@ pub const KNOWN_AREAS: &[&str] = &[
     "storage",
     "ceph",
     "pools",
+    "tags",
+    "search",
+    "tree",
     "gpu",
     "tls",
     "vault",
@@ -312,6 +315,8 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
         "audit" => need(P::SysAudit, "/"),
 
         "ceph" => read_write(m, P::DatastoreAudit, P::DatastoreAllocate, "/storage"),
+        // Inventory views: the handlers show only what the caller may see.
+        "tags" | "search" | "tree" => Requirement::Authenticated,
         // Resource pools: seeing a pool takes Pool.Audit on it (or anywhere
         // below /pool); creating one Pool.Allocate on /pool; changing one
         // Pool.Allocate on that pool.

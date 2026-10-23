@@ -23,6 +23,7 @@ mod depth_restart_crash;
 mod depth_upgrade;
 mod depth_vm_journey;
 mod integration_tests;
+mod inventory_tests;
 mod k8s_restart_tests;
 mod migration_tests;
 mod nightly_stress_tests;

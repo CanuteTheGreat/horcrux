@@ -700,6 +700,7 @@ pub fn VmHardwarePage() -> impl IntoView {
                 }>
                     <HardwareFields hardware=hardware options=options running=running/>
                     <crate::pages::vm_devices::DeviceSwitches hardware=hardware running=running/>
+                    <crate::pages::vm_advanced::AdvancedHardware hardware=hardware running=running/>
                 </Show>
                 <div class="form-actions">
                     <button type="submit" id="vm-hw-save" class="btn btn-primary" disabled=busy>"Save"</button>
@@ -710,6 +711,7 @@ pub fn VmHardwarePage() -> impl IntoView {
             <Show when=is_qemu>
                 <VmDisks vm_id=Signal::derive(vm_id) vm=vm set_vm=set_vm running=running options=options/>
                 <crate::pages::vm_devices::VmLiveDevices vm_id=Signal::derive(vm_id) vm=vm set_vm=set_vm hardware=hardware running=running/>
+                <crate::pages::vm_advanced::VmHotplug vm_id=Signal::derive(vm_id) set_vm=set_vm running=running/>
                 <GuestFirewall guest_id=Signal::derive(vm_id) container=false/>
             </Show>
         </div>

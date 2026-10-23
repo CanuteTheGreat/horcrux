@@ -377,6 +377,17 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "VM devices"
           bash horcrux-api/tests/vm_devices_e2e.sh target/debug/horcrux-api
 
+      - name: "VM advanced hardware (serial, virtiofs, ivshmem, SMBIOS, NUMA, hotplug, hookscript, real QEMU)"
+        # vm_advanced_e2e.sh boots a VM with two extra serial ports (a socket
+        # and a host tty), a real virtiofsd share, ivshmem, SMBIOS strings, a
+        # VM Generation ID and NUMA nodes, hot-adds a CPU and a memory DIMM,
+        # runs a hookscript uploaded as a snippet at every lifecycle phase and
+        # checks lock/protection; each API call is checked against QMP, the
+        # QEMU command line and the host.
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "VM advanced hardware"
+          bash horcrux-api/tests/vm_advanced_e2e.sh target/debug/horcrux-api
+
       - name: VM networking + hardware (real taps, VLAN, PXE, live CD-ROM)
         # NET_ADMIN + /dev/net/tun sibling container with real QEMU: Host
         # Bridges API (create, re-create at start), ISO download, a VM NIC

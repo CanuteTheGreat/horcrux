@@ -239,6 +239,244 @@ pub struct VmHardware {
     /// Host USB devices handed to the guest (by vendor:product id).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub usb: Vec<UsbDevice>,
+    /// Serial ports, virtiofs shares, shared memory, SMBIOS, VM Generation
+    /// ID, NUMA and CPU/memory hotplug limits, protection, lock, hookscript.
+    #[serde(default, skip_serializing_if = "VmAdvanced::is_default")]
+    pub adv: VmAdvanced,
+}
+
+/// Advanced per-VM settings (see `VmHardware::adv`). Every field is off by
+/// default and absent from the stored config until used.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct VmAdvanced {
+    /// Extra serial ports: a Unix socket on the host, or a host tty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub serial: Vec<VmSerialPort>,
+    /// Host directories shared into the guest with virtiofs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub virtiofs: Vec<VmVirtiofs>,
+    /// Inter-VM shared memory (ivshmem) backed by `/dev/shm`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ivshmem: Option<VmIvshmem>,
+    /// SMBIOS type 1 (system) strings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smbios: Option<VmSmbios>,
+    /// VM Generation ID GUID (`auto` generates one when saved).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vmgenid: Option<String>,
+    /// One NUMA node per CPU socket, memory split evenly.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub numa: bool,
+    /// Upper bound for CPU hotplug (`-smp maxcpus`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_cpus: Option<u32>,
+    /// Upper bound for memory hotplug in MB (`-m maxmem`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_memory_mb: Option<u64>,
+    /// Refuse deleting the VM or removing its disks.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub protection: bool,
+    /// `manual`: refuse start/stop/delete/config changes until unlocked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock: Option<String>,
+    /// Executable run around the VM's lifecycle: `<vmid> pre-start|post-start|pre-stop|post-stop`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hookscript: Option<String>,
+}
+
+impl VmAdvanced {
+    pub fn is_default(&self) -> bool {
+        *self == VmAdvanced::default()
+    }
+}
+
+/// An extra serial port of a VM.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct VmSerialPort {
+    /// Host tty to pass through (`/dev/ttyUSB0`); None = a Unix socket
+    /// `<disk>.serialN.sock` on the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+}
+
+/// A host directory shared with the guest (`mount -t virtiofs <tag> /mnt`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VmVirtiofs {
+    pub tag: String,
+    pub path: String,
+}
+
+/// Shared memory device; VMs using the same `name` see the same memory.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VmIvshmem {
+    pub name: String,
+    /// Power of two, 1-1024.
+    pub size_mb: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct VmSmbios {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manufacturer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+}
+
+pub const MAX_VM_SERIAL: usize = 4;
+pub const MAX_VM_VIRTIOFS: usize = 4;
+
+fn safe_path(what: &str, p: &str) -> std::result::Result<(), String> {
+    let ok = p.starts_with('/')
+        && !p.split('/').any(|seg| seg == "..")
+        && p.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'_' | b'.' | b'-' | b'+'));
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "{what} {p:?}: an absolute path of letters, digits and / _ . - + (no ..)"
+        ))
+    }
+}
+
+impl VmAdvanced {
+    /// Everything that doesn't need the host. `cpus`/`sockets` are the VM's.
+    pub fn validate(
+        &self,
+        arch: &VmArchitecture,
+        cpus: u32,
+        sockets: Option<u32>,
+    ) -> std::result::Result<(), String> {
+        let x86 = *arch == VmArchitecture::X86_64;
+        if self.serial.len() > MAX_VM_SERIAL {
+            return Err(format!("at most {MAX_VM_SERIAL} extra serial ports"));
+        }
+        let mut hosts: Vec<&String> = Vec::new();
+        for p in &self.serial {
+            if let Some(d) = &p.device {
+                safe_path("serial device", d)?;
+                if !d.starts_with("/dev/tty") {
+                    return Err(format!("serial device {d:?} must be a /dev/tty* device"));
+                }
+                if hosts.contains(&d) {
+                    return Err(format!("serial device {d} is listed twice"));
+                }
+                hosts.push(d);
+            }
+        }
+        if self.virtiofs.len() > MAX_VM_VIRTIOFS {
+            return Err(format!("at most {MAX_VM_VIRTIOFS} virtiofs shares"));
+        }
+        let mut tags: Vec<&String> = Vec::new();
+        for v in &self.virtiofs {
+            let ok = !v.tag.is_empty()
+                && v.tag.len() <= 36
+                && v.tag
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'));
+            if !ok {
+                return Err(format!(
+                    "virtiofs tag {:?}: 1-36 letters, digits, _ and -",
+                    v.tag
+                ));
+            }
+            if tags.contains(&&v.tag) {
+                return Err(format!("virtiofs tag {} is used twice", v.tag));
+            }
+            tags.push(&v.tag);
+            safe_path("virtiofs path", &v.path)?;
+            if v.path == "/" {
+                return Err("sharing / with a guest is not allowed".into());
+            }
+        }
+        if !self.virtiofs.is_empty() && !x86 {
+            return Err("virtiofs is offered for x86_64 guests".into());
+        }
+        if let Some(i) = &self.ivshmem {
+            let ok = !i.name.is_empty()
+                && i.name.len() <= 32
+                && i.name
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+            if !ok {
+                return Err("ivshmem name: 1-32 lower-case letters, digits and -".into());
+            }
+            if !(1..=1024).contains(&i.size_mb) || !i.size_mb.is_power_of_two() {
+                return Err("ivshmem size must be a power of two, 1-1024 MB".into());
+            }
+        }
+        if let Some(sm) = &self.smbios {
+            for (what, v) in [
+                ("manufacturer", &sm.manufacturer),
+                ("product", &sm.product),
+                ("version", &sm.version),
+                ("serial", &sm.serial),
+                ("family", &sm.family),
+            ] {
+                if let Some(v) = v {
+                    if v.len() > 64 || !v.bytes().all(|b| (0x20..0x7f).contains(&b)) {
+                        return Err(format!(
+                            "SMBIOS {what}: at most 64 printable ASCII characters"
+                        ));
+                    }
+                }
+            }
+        }
+        if let Some(g) = &self.vmgenid {
+            if g != "auto" && !valid_guid(g) {
+                return Err("VM Generation ID must be a GUID (or auto)".into());
+            }
+            if !x86 {
+                return Err("VM Generation ID is offered for x86_64 guests".into());
+            }
+        }
+        if self.numa && !x86 {
+            return Err("NUMA is offered for x86_64 guests".into());
+        }
+        if let Some(m) = self.max_cpus {
+            if !x86 {
+                return Err("CPU hotplug is offered for x86_64 guests".into());
+            }
+            if m < cpus || m > 512 {
+                return Err(format!("max CPUs must be {cpus}-512"));
+            }
+            if let Some(s) = sockets {
+                if !m.is_multiple_of(s) {
+                    return Err(format!(
+                        "max CPUs ({m}) must divide evenly over {s} sockets"
+                    ));
+                }
+            }
+        }
+        if self.max_memory_mb.is_some() && !x86 {
+            return Err("memory hotplug is offered for x86_64 guests".into());
+        }
+        if let Some(l) = &self.lock {
+            if l != "manual" {
+                return Err("lock must be \"manual\"".into());
+            }
+        }
+        if let Some(h) = &self.hookscript {
+            safe_path("hookscript", h)?;
+        }
+        Ok(())
+    }
+}
+
+/// `8-4-4-4-12` hex digits.
+pub fn valid_guid(g: &str) -> bool {
+    let parts: Vec<&str> = g.split('-').collect();
+    parts.len() == 5
+        && parts
+            .iter()
+            .zip([8, 4, 4, 4, 12])
+            .all(|(p, n)| p.len() == n && p.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 /// A host USB device passed through to a VM.
@@ -415,6 +653,14 @@ impl VmHardware {
         }
         // A physical device can only belong to one guest.
         hw.usb.clear();
+        // A host tty belongs to one guest; the clone is a different machine
+        // (new Generation ID, not locked/protected, no shared memory ties).
+        hw.adv.serial.retain(|p| p.device.is_none());
+        if hw.adv.vmgenid.is_some() {
+            hw.adv.vmgenid = Some("auto".into());
+        }
+        hw.adv.protection = false;
+        hw.adv.lock = None;
         hw
     }
 
@@ -489,12 +735,15 @@ impl VmHardware {
     ) -> std::result::Result<(), String> {
         self.validate()?;
         if let Some(s) = self.sockets {
-            if !cpus.is_multiple_of(s) {
+            // with CPU hotplug the topology covers the maximum
+            let total = self.adv.max_cpus.unwrap_or(cpus);
+            if !total.is_multiple_of(s) {
                 return Err(format!(
-                    "{cpus} CPUs can't be split evenly over {s} sockets"
+                    "{total} CPUs can't be split evenly over {s} sockets"
                 ));
             }
         }
+        self.adv.validate(arch, cpus, self.sockets)?;
         if *arch != VmArchitecture::X86_64 {
             if !self.machine.is_default() {
                 return Err("the q35 chipset is for x86_64 VMs".into());

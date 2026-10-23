@@ -19,6 +19,7 @@ pub mod ha_loop;
 #[cfg(feature = "kubernetes")]
 pub mod helm;
 pub mod host_net;
+pub mod inventory;
 #[cfg(feature = "kubernetes")]
 pub mod k8s_config;
 pub mod lane_m;

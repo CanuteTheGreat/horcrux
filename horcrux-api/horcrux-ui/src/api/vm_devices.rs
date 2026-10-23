@@ -105,3 +105,21 @@ pub async fn detach_usb(vm: &str, vendor: &str, product: &str) -> Result<(), Api
     ))
     .await
 }
+
+/// Add CPUs to a running VM (`POST /api/vms/:id/hotplug/cpu`).
+pub async fn hotplug_cpu(vm: &str, cpus: u32) -> Result<horcrux_common::VmConfig, ApiError> {
+    post_json(
+        &format!("/vms/{}/hotplug/cpu", urlencoding::encode(vm)),
+        &serde_json::json!({ "cpus": cpus }),
+    )
+    .await
+}
+
+/// Add memory to a running VM (`POST /api/vms/:id/hotplug/memory`).
+pub async fn hotplug_memory(vm: &str, add_mb: u64) -> Result<horcrux_common::VmConfig, ApiError> {
+    post_json(
+        &format!("/vms/{}/hotplug/memory", urlencoding::encode(vm)),
+        &serde_json::json!({ "add_mb": add_mb }),
+    )
+    .await
+}

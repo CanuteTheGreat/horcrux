@@ -173,13 +173,7 @@ pub fn qemu_command(
     }
 
     // CPU topology and memory.
-    args.extend(["-m".into(), vm.memory.to_string(), "-smp".into()]);
-    args.push(match vm.hardware.sockets {
-        Some(s) if s > 1 && vm.cpus.is_multiple_of(s) => {
-            format!("{},sockets={s},cores={},threads=1", vm.cpus, vm.cpus / s)
-        }
-        _ => vm.cpus.to_string(),
-    });
+    args.extend(super::advanced::cpu_mem_args(vm));
 
     // UEFI: read-only OVMF code + the VM's own variable store (qcow2).
     if uses_ovmf(vm) {
@@ -250,6 +244,7 @@ pub fn qemu_command(
     }
 
     args.extend(device_args(&vm.hardware, &vm.disk_path));
+    args.extend(super::advanced::device_args(vm));
 
     // Serial console, QMP, display protocol, video and sound.
     args.extend(super::display::qemu_args(
@@ -702,6 +697,7 @@ pub async fn cleanup_after_exit(vm: &QemuVm) {
     let _ = tokio::fs::remove_file(pidfile(&vm.id)).await;
     super::display::DisplayRuntime::remove(&vm.disk_path).await;
     HostNet::system().remove_taps(&vm.id).await;
+    super::advanced::after_exit(vm).await;
 }
 
 /// Checks across a VM's disks: no two share a file, and the buses with a
@@ -1047,6 +1043,8 @@ impl QemuManager {
                 )));
             }
         }
+        // Hookscript: a failing pre-start stops the start.
+        super::advanced::run_hook(&vm.hardware.adv, &vm.id, "pre-start").await?;
         // UEFI: OVMF must be installed; the VM gets its variable store.
         let ovmf = if uses_ovmf(vm) {
             let o = super::firmware::find_ovmf().ok_or_else(super::firmware::ovmf_missing)?;
@@ -1062,6 +1060,12 @@ impl QemuManager {
         // Tap devices on the configured bridges (before QEMU opens them).
         if let Err(e) = HostNet::system().setup_taps(vm).await {
             super::firmware::stop_swtpm(&vm.disk_path).await;
+            return Err(e);
+        }
+        // virtiofs: one virtiofsd per share, serving the socket QEMU connects to.
+        if let Err(e) = super::advanced::start_virtiofsd(vm).await {
+            super::firmware::stop_swtpm(&vm.disk_path).await;
+            HostNet::system().remove_taps(&vm.id).await;
             return Err(e);
         }
         let kvm = tokio::fs::metadata("/dev/kvm").await.is_ok();
@@ -1089,6 +1093,7 @@ impl QemuManager {
             super::display::DisplayRuntime::remove(&vm.disk_path).await;
             HostNet::system().remove_taps(&vm.id).await;
             super::firmware::stop_swtpm(&vm.disk_path).await;
+            super::advanced::stop_virtiofsd(vm).await;
             return Err(horcrux_common::Error::System(format!(
                 "Failed to start VM: {}",
                 stderr
@@ -1117,6 +1122,7 @@ impl QemuManager {
             return Err(e);
         }
 
+        super::advanced::run_hook_lenient(&vm.hardware.adv, &vm.id, "post-start").await;
         info!("VM {} started successfully", vm.id);
         Ok(())
     }
@@ -1132,6 +1138,7 @@ impl QemuManager {
             )));
         }
 
+        super::advanced::run_hook_lenient(&vm.hardware.adv, &vm.id, "pre-stop").await;
         // Read PID from pidfile
         let pidfile = pidfile(&vm.id);
         let pid_str = tokio::fs::read_to_string(&pidfile)
@@ -1164,6 +1171,7 @@ impl QemuManager {
         tokio::fs::remove_file(&pidfile).await.ok(); // Ignore errors if file doesn't exist
         super::display::DisplayRuntime::remove(&vm.disk_path).await;
         HostNet::system().remove_taps(&vm.id).await;
+        super::advanced::after_exit(vm).await;
 
         info!("VM {} stopped successfully", vm.id);
         Ok(())
@@ -1192,6 +1200,7 @@ impl QemuManager {
         let _ = tokio::fs::remove_file(pidfile(&vm.id)).await;
         HostNet::system().remove_taps(&vm.id).await;
         super::firmware::remove_state(&vm.disk_path).await;
+        super::advanced::stop_virtiofsd(vm).await;
 
         // Delete the disk images (already gone is fine: the rest is
         // cleaned). The first disk last, since the others' side files

@@ -285,6 +285,11 @@ async fn upload(
         let _ = tokio::fs::remove_file(&part).await;
         return Err(e);
     }
+    if ct.id == "snippets" {
+        // snippets double as VM hookscripts, which must be executable
+        use std::os::unix::fs::PermissionsExt;
+        let _ = tokio::fs::set_permissions(&part, std::fs::Permissions::from_mode(0o755)).await;
+    }
     // hard_link + remove loses races cleanly (rename would overwrite)
     if let Err(e) = tokio::fs::hard_link(&part, &target).await {
         let _ = tokio::fs::remove_file(&part).await;

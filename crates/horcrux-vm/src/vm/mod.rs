@@ -1,3 +1,4 @@
+pub mod advanced;
 pub mod clone;
 pub mod clone_progress;
 pub mod cross_node_clone;
@@ -415,6 +416,7 @@ impl VmManager {
         {
             vm.status = VmStatus::Stopped;
         }
+        advanced::check_unlocked(id, &vm.hardware.adv, "start it")?;
         let started: Result<()> = match vm.hypervisor {
             #[cfg(feature = "qemu")]
             VmHypervisor::Qemu => self.qemu.start_vm(vm).await,
@@ -455,6 +457,7 @@ impl VmManager {
             }
         }
 
+        advanced::check_unlocked(id, &vm.hardware.adv, "stop it")?;
         let stopped: Result<()> = match vm.hypervisor {
             VmHypervisor::Qemu => self.qemu.stop_vm(vm).await,
             #[cfg(feature = "lxd")]
@@ -552,6 +555,12 @@ impl VmManager {
         let _ = self.hydrate(&mut vms, id).await;
 
         if let Some(vm) = vms.get(id) {
+            advanced::check_unlocked(id, &vm.hardware.adv, "delete it")?;
+            if vm.hardware.adv.protection {
+                return Err(horcrux_common::Error::Conflict(format!(
+                    "VM {id} has the protection flag: clear it before deleting the VM"
+                )));
+            }
             if vm.hypervisor == VmHypervisor::Qemu {
                 // A running VM used to lose its database row while QEMU kept
                 // running on a disk nobody could manage any more.
