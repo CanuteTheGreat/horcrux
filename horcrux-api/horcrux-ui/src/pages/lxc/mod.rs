@@ -209,6 +209,7 @@ pub fn LxcContainerPage() -> impl IntoView {
     let (nesting, set_nesting) = create_signal(false);
     let (keyctl, set_keyctl) = create_signal(false);
     let (fuse, set_fuse) = create_signal(false);
+    let (checkpoint, set_checkpoint) = create_signal(false);
     let (onboot, set_onboot) = create_signal(false);
     let (order, set_order) = create_signal(String::new());
     let (nameserver, set_nameserver) = create_signal(String::new());
@@ -232,6 +233,7 @@ pub fn LxcContainerPage() -> impl IntoView {
         set_nesting.set(o.features.nesting);
         set_keyctl.set(o.features.keyctl);
         set_fuse.set(o.features.fuse);
+        set_checkpoint.set(o.features.checkpoint);
         set_onboot.set(o.onboot);
         set_order.set(o.startup_order.map(|n| n.to_string()).unwrap_or_default());
         set_nameserver.set(o.nameserver.clone().unwrap_or_default());
@@ -297,6 +299,7 @@ pub fn LxcContainerPage() -> impl IntoView {
                 nesting: nesting.get(),
                 keyctl: keyctl.get(),
                 fuse: fuse.get(),
+                checkpoint: checkpoint.get(),
             },
             onboot: onboot.get(),
             startup_order: spec::opt_num("Boot order", &order.get())?,
@@ -420,6 +423,7 @@ pub fn LxcContainerPage() -> impl IntoView {
                     <label><input id="lxc-nesting" type="checkbox" prop:checked=nesting on:change=move |ev| set_nesting.set(event_target_checked(&ev))/>" nesting"</label>
                     <label><input id="lxc-keyctl" type="checkbox" prop:checked=keyctl on:change=move |ev| set_keyctl.set(event_target_checked(&ev))/>" keyctl"</label>
                     <label><input id="lxc-fuse" type="checkbox" prop:checked=fuse on:change=move |ev| set_fuse.set(event_target_checked(&ev))/>" fuse"</label>
+                    <label title="Save state (CRIU) needs a privileged container without a console or ttys; applies at the next start"><input id="lxc-checkpoint" type="checkbox" prop:checked=checkpoint on:change=move |ev| set_checkpoint.set(event_target_checked(&ev))/>" checkpointable (Save state)"</label>
                     <label><input id="lxc-onboot" type="checkbox" prop:checked=onboot on:change=move |ev| set_onboot.set(event_target_checked(&ev))/>" start at boot"</label>
                     <div class="form-group"><label>"Boot order"</label>
                         <input id="lxc-order" type="number" min="0" prop:value=order on:input=move |ev| set_order.set(event_target_value(&ev))/></div>

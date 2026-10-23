@@ -355,6 +355,7 @@ impl ContainerManager {
     /// are adopted so they can be managed from the UI.
     pub async fn list_containers(&self) -> Vec<ContainerConfig> {
         self.reconcile_docker().await;
+        self.reconcile_podman().await;
         self.reconcile_lxc().await;
         self.reconcile_instances().await;
         let containers = self.containers.read().await;
@@ -424,6 +425,67 @@ impl ContainerManager {
         containers.retain(|id, t| {
             t.runtime != ContainerRuntime::Docker
                 || seen_names.contains(&t.name)
+                || skip.skip(id)
+                || skip.skip(&t.name)
+        });
+    }
+
+    /// No Podman backend compiled in: nothing to reconcile.
+    #[cfg(not(feature = "podman"))]
+    pub async fn reconcile_podman(&self) {}
+
+    /// Bring the Podman part of the map in line with `podman ps`, so Podman
+    /// containers survive API restarts (they used to vanish from the list and
+    /// from the guest-power boot pass) and ones created with the CLI show up.
+    /// A no-op when podman is not usable on this host.
+    #[cfg(feature = "podman")]
+    pub async fn reconcile_podman(&self) {
+        let listed_at = in_flight_epoch(&self.creating);
+        let live = match self.podman_manager.list_live().await {
+            Ok(l) => l,
+            Err(_) => return,
+        };
+        let mut containers = self.containers.write().await;
+        let skip = in_flight_snapshot(&self.creating, listed_at);
+        let mut seen = HashSet::new();
+        for c in &live {
+            seen.insert(c.name.clone());
+            let hid = c.horcrux_id.clone().unwrap_or_else(|| c.name.clone());
+            if skip.skip(&hid) || skip.skip(&c.name) {
+                continue;
+            }
+            if let Some(t) = containers
+                .values_mut()
+                .find(|t| t.runtime == ContainerRuntime::Podman && t.name == c.name)
+            {
+                t.status = c.status.clone();
+                if t.created_at.is_none() {
+                    t.created_at = c.created_at.clone();
+                }
+                continue;
+            }
+            if containers.contains_key(&hid) {
+                continue;
+            }
+            containers.insert(
+                hid.clone(),
+                Container {
+                    id: hid,
+                    name: c.name.clone(),
+                    runtime: ContainerRuntime::Podman,
+                    memory: 0,
+                    cpus: 0,
+                    rootfs: c.image.clone(),
+                    status: c.status.clone(),
+                    options: ContainerOptions::default(),
+                    created_at: c.created_at.clone(),
+                    lxc: None,
+                },
+            );
+        }
+        containers.retain(|id, t| {
+            t.runtime != ContainerRuntime::Podman
+                || seen.contains(&t.name)
                 || skip.skip(id)
                 || skip.skip(&t.name)
         });
@@ -558,6 +620,7 @@ impl ContainerManager {
     /// Get a specific container by ID
     pub async fn get_container(&self, id: &str) -> Result<ContainerConfig> {
         self.reconcile_docker().await;
+        self.reconcile_podman().await;
         self.reconcile_lxc().await;
         self.reconcile_instances().await;
         let containers = self.containers.read().await;

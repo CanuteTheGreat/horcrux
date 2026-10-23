@@ -1116,7 +1116,14 @@ async fn view_of(
                     s
                 }
             };
-            (s.supported, s.reason)
+            let (mut ok, mut reason) = (s.supported, s.reason);
+            if ok {
+                if let Some(why) = ctsave::instance_blocker(rt, &g.name).await {
+                    ok = false;
+                    reason = Some(why);
+                }
+            }
+            (ok, reason)
         }
         (None, false) => (
             g.instance_cli.is_some(),

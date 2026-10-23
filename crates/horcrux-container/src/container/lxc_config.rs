@@ -181,8 +181,18 @@ pub fn render_config(i: &ConfigInput) -> String {
         let _ = writeln!(c, "lxc.apparmor.profile = unconfined");
     }
     let _ = writeln!(c, "lxc.seccomp.profile = {dir}/seccomp.conf");
-    let _ = writeln!(c, "lxc.console.logfile = {dir}/console.log");
-    let _ = writeln!(c, "lxc.console.size = 1MB");
+    if o.features.checkpoint {
+        // Checkpointable (Save state, CRIU): no console and no ttys. CRIU
+        // cannot dump ttys whose masters live in lxc-start ("tty: Unable to
+        // find a master") and lxc-checkpoint refuses to restore a container
+        // that had a console ("lxc.console.path configured on source host but
+        // not target").
+        let _ = writeln!(c, "lxc.console.path = none");
+        let _ = writeln!(c, "lxc.tty.max = 0");
+    } else {
+        let _ = writeln!(c, "lxc.console.logfile = {dir}/console.log");
+        let _ = writeln!(c, "lxc.console.size = 1MB");
+    }
 
     let _ = writeln!(c, "\n# Resources");
     if i.memory_mb > 0 {
@@ -583,6 +593,7 @@ mod tests {
                 nesting: true,
                 keyctl: true,
                 fuse: true,
+                ..Default::default()
             },
             onboot: true,
             startup_order: Some(2),

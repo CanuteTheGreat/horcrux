@@ -167,6 +167,7 @@ impl LxcForm {
                 nesting: self.nesting,
                 keyctl: self.keyctl,
                 fuse: self.fuse,
+                ..Default::default()
             },
             onboot: self.onboot,
             nameserver: opt_text(&self.nameserver),

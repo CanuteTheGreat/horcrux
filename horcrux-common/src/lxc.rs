@@ -123,6 +123,12 @@ pub struct LxcFeatures {
     /// Expose /dev/fuse.
     #[serde(default, skip_serializing_if = "is_false")]
     pub fuse: bool,
+    /// Make the container checkpointable (Save state with CRIU): no console
+    /// and no ttys (CRIU cannot dump or restore ones whose masters live in
+    /// lxc-start), so the Console tab and the console log are off. Needs a
+    /// privileged container: CRIU cannot dump user-namespaced ones.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub checkpoint: bool,
 }
 
 /// One network interface (`netN` in Proxmox).
@@ -324,6 +330,7 @@ impl LxcFeatures {
                 "nesting" => f.nesting = on,
                 "keyctl" => f.keyctl = on,
                 "fuse" => f.fuse = on,
+                "checkpoint" => f.checkpoint = on,
                 other => return Err(format!("unknown feature '{other}'")),
             }
         }
@@ -416,6 +423,13 @@ impl LxcOptions {
             if !valid_hostname(h) {
                 return Err(format!("invalid hostname '{h}'"));
             }
+        }
+        if self.features.checkpoint && self.unprivileged {
+            return Err(
+                "features.checkpoint (Save state) needs a privileged container: CRIU cannot \
+                 checkpoint user-namespaced ones (set unprivileged to false)"
+                    .into(),
+            );
         }
         if self.unprivileged {
             if self.idmap_size() == 0 {
@@ -675,6 +689,7 @@ mod tests {
                 nesting: true,
                 keyctl: true,
                 fuse: true,
+                ..Default::default()
             },
             nameserver: Some("1.1.1.1 2606:4700:4700::1111".into()),
             searchdomain: Some("example.com".into()),
@@ -798,7 +813,8 @@ mod tests {
             LxcFeatures {
                 nesting: true,
                 keyctl: false,
-                fuse: true
+                fuse: true,
+                ..Default::default()
             }
         );
         assert!(LxcFeatures::parse_spec("mknod=1").is_err());

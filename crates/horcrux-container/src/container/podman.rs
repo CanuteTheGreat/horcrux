@@ -5,6 +5,16 @@ use horcrux_common::{ContainerConfig, ContainerRuntime, ContainerStatus, Result}
 use tokio::process::Command;
 use tracing::{error, info};
 
+/// A container as `podman ps` lists it.
+#[derive(Debug, Clone)]
+pub struct PodmanSummary {
+    pub name: String,
+    pub status: ContainerStatus,
+    pub image: String,
+    pub created_at: Option<String>,
+    pub horcrux_id: Option<String>,
+}
+
 /// Podman container manager
 pub struct PodmanManager {}
 
@@ -17,6 +27,56 @@ impl Default for PodmanManager {
 impl PodmanManager {
     pub fn new() -> Self {
         Self {}
+    }
+
+    /// Every container `podman` knows (running or not), for reconciling the
+    /// API's map after a restart. Err when podman is not usable here.
+    pub async fn list_live(&self) -> Result<Vec<PodmanSummary>> {
+        let out = Command::new("podman")
+            .args(["ps", "-a", "--format", "json"])
+            .output()
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("podman ps: {e}")))?;
+        if !out.status.success() {
+            return Err(horcrux_common::Error::System(
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            ));
+        }
+        let rows: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap_or_default();
+        Ok(rows
+            .iter()
+            .map(|r| {
+                let name = r["Names"]
+                    .as_array()
+                    .and_then(|a| a.first())
+                    .and_then(|n| n.as_str())
+                    .or_else(|| r["Names"].as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let state = r["State"].as_str().unwrap_or("").to_ascii_lowercase();
+                PodmanSummary {
+                    status: match state.as_str() {
+                        "running" => ContainerStatus::Running,
+                        "paused" => ContainerStatus::Paused,
+                        "exited" | "created" | "stopped" | "configured" => ContainerStatus::Stopped,
+                        _ => ContainerStatus::Unknown,
+                    },
+                    image: r["Image"].as_str().unwrap_or_default().to_string(),
+                    created_at: match &r["Created"] {
+                        serde_json::Value::String(s) => Some(s.clone()),
+                        serde_json::Value::Number(n) => n
+                            .as_i64()
+                            .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
+                            .map(|t| t.to_rfc3339()),
+                        _ => None,
+                    },
+                    horcrux_id: r["Labels"][super::HORCRUX_ID_LABEL]
+                        .as_str()
+                        .map(str::to_string),
+                    name,
+                }
+            })
+            .collect())
     }
 
     /// Create a new Podman container
