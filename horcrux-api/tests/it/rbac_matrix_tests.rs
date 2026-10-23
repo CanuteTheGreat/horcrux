@@ -144,9 +144,14 @@ fn registered_routes() -> Vec<(String, String)> {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     // The router and handlers: src/app/ (formerly main.rs) and src/api/.
     let mut files = vec![];
-    for dir in ["app", "api"] {
-        for e in std::fs::read_dir(src.join(dir)).unwrap().flatten() {
-            files.push(e.path());
+    let mut dirs: Vec<std::path::PathBuf> = ["app", "api"].iter().map(|d| src.join(d)).collect();
+    while let Some(d) = dirs.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            if e.path().is_dir() {
+                dirs.push(e.path());
+            } else {
+                files.push(e.path());
+            }
         }
     }
     let route = regex::Regex::new(r#"\.route\(\s*"([^"]+)",\s*((?:[^()]|\([^()]*\))*)\)"#).unwrap();

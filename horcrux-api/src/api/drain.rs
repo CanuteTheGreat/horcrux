@@ -66,7 +66,7 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/api/vms/:id/placement",
             get(get_placement).put(put_placement),
         )
-        .route("/api/ha/peer/placement", get(peer_placement))
+        .route("/api/ha/peer/placement", post(peer_placement))
         .route("/api/ha/peer/move", post(peer_move))
         .route("/api/ha/peer/rebalance-settings", post(peer_settings))
 }
@@ -375,8 +375,9 @@ async fn peer_get<T: serde::de::DeserializeOwned>(
     let token = crate::middleware::auth::generate_cluster_ha_token(local)?;
     let r = client()
         .map_err(|e| e.to_string())?
-        .get(format!("{}{path}", node.api_url(state.config.server.port)))
+        .post(format!("{}{path}", node.api_url(state.config.server.port)))
         .bearer_auth(token)
+        .json(&serde_json::json!({}))
         .send()
         .await
         .map_err(|e| e.to_string())?;

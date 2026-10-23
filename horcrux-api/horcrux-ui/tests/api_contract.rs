@@ -4099,7 +4099,10 @@ async fn guest_power_routes_read_into_ui_types() {
         );
         let _ = put(&c, &token, &pl, json!({})).await;
         // Peer-only routes refuse a user token.
-        assert_eq!(get_raw(&c, &token, "/ha/peer/placement").await.0, 403);
+        assert_eq!(
+            post(&c, &token, "/ha/peer/placement", json!({})).await.0,
+            403
+        );
     }
 
     // The host-agent hook accepts nothing without its token.

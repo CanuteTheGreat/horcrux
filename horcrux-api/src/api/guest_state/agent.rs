@@ -9,12 +9,7 @@
 use super::engine;
 use crate::error::ApiError;
 use crate::AppState;
-use axum::{
-    extract::State,
-    http::HeaderMap,
-    routing::{get, post},
-    Json, Router,
-};
+use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
 use std::path::Path;
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
@@ -26,7 +21,7 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/host-agent/stop-guests", post(stop_guests))
         .route("/api/host-agent/boot-guests", post(boot_guests))
-        .route("/api/host-agent/status", get(status))
+        .route("/api/host-agent/status", post(status))
 }
 
 /// Create the token file if missing (mode 0600).
@@ -95,10 +90,10 @@ async fn status(
 /// (exit 0 with a warning); a boot that cannot reach it exits 1.
 pub async fn cli_main(args: &[String]) -> i32 {
     let cmd = args.first().map(String::as_str).unwrap_or("");
-    let (path, method, wait) = match cmd {
-        "stop" => ("stop-guests", "POST", 0u64),
-        "boot" => ("boot-guests", "POST", 300),
-        "status" => ("status", "GET", 0),
+    let (path, wait) = match cmd {
+        "stop" => ("stop-guests", 0u64),
+        "boot" => ("boot-guests", 300),
+        "status" => ("status", 0),
         _ => {
             eprintln!("usage: horcrux-api guests <stop|boot|status>");
             return 2;
@@ -150,11 +145,7 @@ pub async fn cli_main(args: &[String]) -> i32 {
         }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
-    let req = if method == "POST" {
-        client.post(format!("{base}/api/host-agent/{path}"))
-    } else {
-        client.get(format!("{base}/api/host-agent/{path}"))
-    };
+    let req = client.post(format!("{base}/api/host-agent/{path}"));
     let resp = match req.header(TOKEN_HEADER, token).send().await {
         Ok(r) => r,
         Err(e) => {
