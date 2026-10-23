@@ -31,6 +31,7 @@ mod snapshot_list;
 pub mod storage;
 pub mod system;
 mod vm_create;
+pub mod vm_devices;
 mod vm_display;
 mod vm_hardware;
 mod vm_list;

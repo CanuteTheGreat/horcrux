@@ -59,6 +59,11 @@ impl DisplayRuntime {
         disk.with_extension("qmp.sock")
     }
 
+    /// Host end of the guest agent's virtio-serial channel.
+    pub fn qga_socket(disk: &Path) -> PathBuf {
+        disk.with_extension("qga.sock")
+    }
+
     /// Plan the consoles for a VM about to start (allocates free ports).
     pub fn plan(disk: &Path, display: &VmDisplay) -> Result<Self> {
         let (vnc_port, spice_port, spice_listen) = match display.protocol {
@@ -116,6 +121,7 @@ impl DisplayRuntime {
             Self::state_path(disk),
             Self::serial_socket(disk),
             Self::qmp_socket(disk),
+            Self::qga_socket(disk),
         ] {
             let _ = tokio::fs::remove_file(p).await;
         }

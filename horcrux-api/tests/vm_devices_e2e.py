@@ -137,6 +137,9 @@ hw["usb"] = [{"vendor_id": "046D", "product_id": "C52B"}]
 _, vm = call("PUT", f"/vms/{VM}/config", {"hardware": hw})
 call("POST", f"/vms/{VM}/start")
 qsock = base + ".qmp.sock"
+print("peripherals:", sorted(peripherals(qsock)), flush=True)
+print(subprocess.run("ps -eo args | grep '[q]emu-system'", shell=True, capture_output=True, text=True).stdout[-1500:], flush=True)
+print("vm hardware:", json.dumps(call("GET", f"/vms/{VM}")[1]["hardware"]), flush=True)
 check("hxusb_046d_c52b" in peripherals(qsock), "a passed-through device is a usb-host device on the xHCI controller at start")
 # a stopped VM's device can be removed through the API
 call("POST", f"/vms/{VM}/stop")

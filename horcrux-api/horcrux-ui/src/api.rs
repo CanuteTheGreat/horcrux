@@ -2907,6 +2907,7 @@ pub mod dashboards;
 pub mod s3;
 pub mod sdn;
 pub mod sdn_zones;
+pub mod vm_devices;
 
 /// Snapshot-schedule retention (used by the snapshot pages).
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -36,6 +36,7 @@ pub mod storage_volumes;
 pub mod system_admin;
 pub mod tasks;
 pub mod tls;
+pub mod vm_devices;
 pub mod vm_hw;
 pub mod vm_import;
 pub mod vm_migration;

@@ -106,12 +106,11 @@ pub async fn qga_exec(socket: &Path, command: &str, args: Value, secs: u64) -> R
             }
             if let Ok(v) = serde_json::from_str::<Value>(line.trim()) {
                 if let Some(e) = v.get("error") {
-                    return Err(format!(
-                        "{}",
-                        e.get("desc")
-                            .and_then(|d| d.as_str())
-                            .unwrap_or("guest agent error")
-                    ));
+                    return Err(e
+                        .get("desc")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("guest agent error")
+                        .to_string());
                 }
                 if v.get("return").is_some() {
                     return Ok(v["return"].clone());
@@ -266,6 +265,14 @@ pub fn host_usb_devices_in(root: &Path) -> Vec<HostUsbDevice> {
 
 pub fn host_usb_devices() -> Vec<HostUsbDevice> {
     host_usb_devices_in(Path::new("/"))
+}
+
+/// Store USB ids lower-case, 4 digits: QEMU device ids derive from them.
+pub fn normalize_usb(list: &mut [UsbDevice]) -> Result<()> {
+    for d in list.iter_mut() {
+        *d = d.normalized().map_err(Error::Validation)?;
+    }
+    Ok(())
 }
 
 /// QEMU device id of a passed-through device (stable, so it can be removed later).
@@ -555,6 +562,24 @@ mod tests {
     }
 
     #[test]
+    fn saved_usb_ids_are_normalized() {
+        let mut l = vec![UsbDevice {
+            vendor_id: "046D".into(),
+            product_id: "0xC52B".into(),
+        }];
+        normalize_usb(&mut l).unwrap();
+        assert_eq!(
+            l,
+            vec![UsbDevice {
+                vendor_id: "046d".into(),
+                product_id: "c52b".into()
+            }]
+        );
+        l[0].vendor_id = "zz".into();
+        assert!(normalize_usb(&mut l).is_err());
+    }
+
+    #[test]
     fn agent_replies_become_rows() {
         let n = json!([
             {"name": "lo", "ip-addresses": [{"ip-address": "127.0.0.1", "ip-address-type": "ipv4", "prefix": 8}]},
@@ -588,8 +613,8 @@ mod tests {
             ("1-2", "046D", "C52B", "00", "USB Receiver"),
             ("1-1", "1d6b", "0002", "09", "Hub"),
         ] {
-            w(dev, "idVendor", &format!("{v}\\n"));
-            w(dev, "idProduct", &format!("{p}\\n"));
+            w(dev, "idVendor", &format!("{v}\n"));
+            w(dev, "idProduct", &format!("{p}\n"));
             w(dev, "bDeviceClass", cls);
             w(dev, "product", prod);
             w(dev, "busnum", "1");

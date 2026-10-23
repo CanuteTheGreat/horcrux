@@ -166,7 +166,7 @@ jobs:
           if apt-cache show qemu-system-modules-spice >/dev/null 2>&1; then
             spice_mods="qemu-system-modules-spice"
           fi
-          sudo apt-get install -y build-essential clang mold libvirt-dev libpam0g-dev qemu-system-x86 qemu-system-arm qemu-utils zstd $spice_mods
+          sudo apt-get install -y build-essential clang mold libvirt-dev libpam0g-dev qemu-system-x86 qemu-system-arm qemu-utils qemu-guest-agent zstd $spice_mods
           # Fail here, not deep in a test, if this QEMU can't do SPICE.
           qemu-system-x86_64 --version
           qemu-system-x86_64 -audiodev help | grep -qx spice || { echo "qemu-system-x86_64 lacks SPICE (no spice audiodev)" >&2; exit 1; }
@@ -366,6 +366,16 @@ jobs:
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "System administration"
           bash horcrux-api/tests/system_admin_e2e.sh target/debug/horcrux-api
+
+      - name: VM devices (balloon, guest agent channel, USB controller, real QEMU)
+        # vm_devices_e2e.sh boots a VM with a virtio-balloon, the guest agent's
+        # virtio-serial socket and an xHCI controller with a passed-through
+        # device, and checks the API against QMP (peripherals, query-balloon,
+        # the chardev) and the files QEMU creates; a guest without the agent
+        # is reported plainly (503), not hung on.
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "VM devices"
+          bash horcrux-api/tests/vm_devices_e2e.sh target/debug/horcrux-api
 
       - name: VM networking + hardware (real taps, VLAN, PXE, live CD-ROM)
         # NET_ADMIN + /dev/net/tun sibling container with real QEMU: Host

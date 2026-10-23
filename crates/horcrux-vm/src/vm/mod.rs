@@ -1,6 +1,7 @@
 pub mod clone;
 pub mod clone_progress;
 pub mod cross_node_clone;
+pub mod devices;
 pub mod display;
 pub mod firmware;
 pub mod hardware;

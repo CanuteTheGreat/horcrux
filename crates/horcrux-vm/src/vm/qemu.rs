@@ -249,6 +249,8 @@ pub fn qemu_command(
         ]);
     }
 
+    args.extend(device_args(&vm.hardware, &vm.disk_path));
+
     // Serial console, QMP, display protocol, video and sound.
     args.extend(super::display::qemu_args(
         &vm.display,
@@ -289,6 +291,46 @@ pub const CDROM_DEVICE_ID: &str = "cdrom0";
 /// monitoring can find it.
 pub fn tap_name(vm_id: &str, index: usize) -> String {
     horcrux_common::vm_tap_name(vm_id, index)
+}
+
+/// Ballooning, guest agent channel and USB (controller + passed-through
+/// host devices).
+pub fn device_args(hw: &horcrux_common::VmHardware, disk: &std::path::Path) -> Vec<String> {
+    let mut a: Vec<String> = Vec::new();
+    if hw.balloon {
+        a.extend([
+            "-device".into(),
+            "virtio-balloon-pci,id=balloon0,deflate-on-oom=on".into(),
+        ]);
+    }
+    if hw.guest_agent {
+        a.extend([
+            "-chardev".into(),
+            format!(
+                "socket,id=qga0,path={},server=on,wait=off",
+                escape(&super::display::DisplayRuntime::qga_socket(disk).to_string_lossy())
+            ),
+            "-device".into(),
+            "virtio-serial-pci,id=hxserial".into(),
+            "-device".into(),
+            "virtserialport,chardev=qga0,name=org.qemu.guest_agent.0,id=qga".into(),
+        ]);
+    }
+    if hw.usb_controller || !hw.usb.is_empty() {
+        a.extend(["-device".into(), "qemu-xhci,id=hxusb".into()]);
+        for d in &hw.usb {
+            a.extend([
+                "-device".into(),
+                format!(
+                    "usb-host,bus=hxusb.0,vendorid=0x{},productid=0x{},id={}",
+                    d.vendor_id,
+                    d.product_id,
+                    super::devices::usb_device_id(d)
+                ),
+            ]);
+        }
+    }
+    a
 }
 
 /// Network arguments for `vm`: one tap netdev + NIC device per configured
@@ -983,7 +1025,11 @@ impl QemuManager {
         // Consoles: serial Unix socket (+ <disk>.serial.log), QMP, and the
         // VM's display protocol / video / sound (see vm/display.rs).
         let runtime = super::display::DisplayRuntime::plan(&vm.disk_path, &vm.display)?;
-        for stale in [&runtime.serial_socket, &runtime.qmp_socket] {
+        for stale in [
+            &runtime.serial_socket,
+            &runtime.qmp_socket,
+            &super::display::DisplayRuntime::qga_socket(&vm.disk_path),
+        ] {
             let _ = tokio::fs::remove_file(stale).await;
         }
         if let Some(iso) = &vm.hardware.cdrom {

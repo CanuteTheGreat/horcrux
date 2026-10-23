@@ -699,6 +699,7 @@ pub fn VmHardwarePage() -> impl IntoView {
                     <p class="form-help">"LXD/Incus VMs get their network and devices from their LXD/Incus profile."</p>
                 }>
                     <HardwareFields hardware=hardware options=options running=running/>
+                    <crate::pages::vm_devices::DeviceSwitches hardware=hardware running=running/>
                 </Show>
                 <div class="form-actions">
                     <button type="submit" id="vm-hw-save" class="btn btn-primary" disabled=busy>"Save"</button>
@@ -708,6 +709,7 @@ pub fn VmHardwarePage() -> impl IntoView {
 
             <Show when=is_qemu>
                 <VmDisks vm_id=Signal::derive(vm_id) vm=vm set_vm=set_vm running=running options=options/>
+                <crate::pages::vm_devices::VmLiveDevices vm_id=Signal::derive(vm_id) vm=vm set_vm=set_vm hardware=hardware running=running/>
                 <GuestFirewall guest_id=Signal::derive(vm_id) container=false/>
             </Show>
         </div>

@@ -597,6 +597,7 @@ mod tests {
             machine: horcrux_common::MachineType::Q35,
             firmware: horcrux_common::Firmware::Ovmf,
             tpm: true,
+            ..Default::default()
         };
         db.update_vm(&vm).await.unwrap();
         assert_eq!(db.get_vm("hw-vm").await.unwrap().hardware, vm.hardware);

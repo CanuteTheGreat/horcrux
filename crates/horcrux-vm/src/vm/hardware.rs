@@ -43,6 +43,8 @@ pub fn prepare_hardware(config: &mut VmConfig) -> Result<()> {
             nic.mac = Some(m);
         }
     }
+    // USB ids are stored lower-case, 4 digits: QEMU device ids derive from them.
+    super::devices::normalize_usb(&mut config.hardware.usb)?;
     for nic in &mut config.hardware.nets {
         if nic.mac.is_none() {
             let mut m = generate_mac();

@@ -224,7 +224,54 @@ pub struct VmHardware {
     /// Emulated TPM 2.0 chip (swtpm; its state lives next to the first disk).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tpm: bool,
+    /// Memory ballooning (virtio-balloon): the host can take memory back
+    /// from the running guest and give it back (`POST /api/vms/:id/balloon`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub balloon: bool,
+    /// QEMU guest agent channel (virtio-serial socket on the host); the
+    /// agent itself runs in the guest (`qemu-guest-agent`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub guest_agent: bool,
+    /// An xHCI USB controller, so host USB devices can be passed through and
+    /// hot-plugged. Implied by a non-empty `usb` list.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub usb_controller: bool,
+    /// Host USB devices handed to the guest (by vendor:product id).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub usb: Vec<UsbDevice>,
 }
+
+/// A host USB device passed through to a VM.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UsbDevice {
+    /// USB vendor id, 4 hex digits (`046d`)
+    pub vendor_id: String,
+    /// USB product id, 4 hex digits (`c52b`)
+    pub product_id: String,
+}
+
+impl UsbDevice {
+    /// Lower-case, 4-digit ids or an error naming the bad one.
+    pub fn normalized(&self) -> std::result::Result<UsbDevice, String> {
+        let norm = |what: &str, v: &str| -> std::result::Result<String, String> {
+            let v = v.trim().trim_start_matches("0x").to_ascii_lowercase();
+            if v.len() == 4 && v.chars().all(|c| c.is_ascii_hexdigit()) {
+                Ok(v)
+            } else {
+                Err(format!(
+                    "USB {what} id {v:?} must be 4 hex digits (e.g. 046d)"
+                ))
+            }
+        };
+        Ok(UsbDevice {
+            vendor_id: norm("vendor", &self.vendor_id)?,
+            product_id: norm("product", &self.product_id)?,
+        })
+    }
+}
+
+/// At most this many passed-through USB devices per VM.
+pub const MAX_VM_USB: usize = 8;
 
 /// x86 chipset (`-machine`).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -366,6 +413,8 @@ impl VmHardware {
         for n in &mut hw.nets {
             n.mac = None;
         }
+        // A physical device can only belong to one guest.
+        hw.usb.clear();
         hw
     }
 
@@ -414,6 +463,20 @@ impl VmHardware {
             if !(1..=16).contains(&s) {
                 return Err("sockets must be 1-16".into());
             }
+        }
+        if self.usb.len() > MAX_VM_USB {
+            return Err(format!("a VM can have at most {MAX_VM_USB} USB devices"));
+        }
+        let mut seen: Vec<UsbDevice> = Vec::new();
+        for d in &self.usb {
+            let n = d.normalized()?;
+            if seen.contains(&n) {
+                return Err(format!(
+                    "USB device {}:{} is listed twice",
+                    n.vendor_id, n.product_id
+                ));
+            }
+            seen.push(n);
         }
         Ok(())
     }
@@ -1089,6 +1152,45 @@ mod tests {
         hw.boot.pop();
         hw.nets = (0..=MAX_VM_NICS).map(|_| nic("br0")).collect();
         assert!(hw.validate().is_err());
+    }
+
+    #[test]
+    fn usb_devices_are_normalized_unique_and_bounded() {
+        let dev = |v: &str, p: &str| UsbDevice {
+            vendor_id: v.into(),
+            product_id: p.into(),
+        };
+        assert_eq!(
+            dev("0x046D", " C52B").normalized().unwrap(),
+            dev("046d", "c52b")
+        );
+        assert!(dev("46d", "c52b").normalized().is_err());
+        assert!(dev("046d", "zzzz")
+            .normalized()
+            .unwrap_err()
+            .contains("product"));
+        let mut hw = VmHardware {
+            usb: vec![dev("046d", "c52b"), dev("0x046D", "C52B")],
+            ..Default::default()
+        };
+        assert!(hw.validate().unwrap_err().contains("twice"));
+        hw.usb = (0..=MAX_VM_USB)
+            .map(|i| dev("1d6b", &format!("{i:04x}")))
+            .collect();
+        assert!(hw.validate().unwrap_err().contains("at most"));
+        hw.usb = vec![dev("046d", "c52b")];
+        assert!(hw.validate().is_ok());
+        assert!(
+            hw.for_clone().usb.is_empty(),
+            "a clone doesn't get the physical device"
+        );
+        // new fields stay out of old configs
+        let j = serde_json::to_value(VmHardware::default()).unwrap();
+        assert!(
+            j.get("balloon").is_none() && j.get("usb").is_none() && j.get("guest_agent").is_none()
+        );
+        let old: VmHardware = serde_json::from_str(r#"{"nets":[]}"#).unwrap();
+        assert!(!old.balloon && !old.guest_agent && old.usb.is_empty());
     }
 
     #[test]
