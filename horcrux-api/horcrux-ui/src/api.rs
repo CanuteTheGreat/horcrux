@@ -4371,23 +4371,47 @@ pub async fn control_service(service_name: &str, action: &str) -> Result<(), Api
 
 // Removing old get_system_logs - using the extended version with filters below
 
+/// A background task the server started (see the Tasks page).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TaskRef {
+    pub upid: String,
+    #[serde(default)]
+    pub pending: Option<usize>,
+}
+
+/// Package names can contain `/` and `+` (`app-editors/vim`); keep them in one path segment.
+fn enc_segment(s: &str) -> String {
+    s.replace('%', "%25")
+        .replace('/', "%2F")
+        .replace('+', "%2B")
+        .replace(' ', "%20")
+}
+
 /// Search packages
 pub async fn search_packages(query: &str) -> Result<Vec<PackageInfo>, ApiError> {
-    fetch_json(&format!("/system/packages/search?q={}", query)).await
+    fetch_json(&format!("/system/packages/search?q={}", enc_segment(query))).await
 }
 
 /// Install package
-pub async fn install_package(package_name: &str) -> Result<(), ApiError> {
-    post_json(&format!("/system/packages/{}/install", package_name), &()).await
+pub async fn install_package(package_name: &str) -> Result<TaskRef, ApiError> {
+    post_json(
+        &format!("/system/packages/{}/install", enc_segment(package_name)),
+        &(),
+    )
+    .await
 }
 
 /// Remove package
-pub async fn remove_package(package_name: &str) -> Result<(), ApiError> {
-    post_json(&format!("/system/packages/{}/remove", package_name), &()).await
+pub async fn remove_package(package_name: &str) -> Result<TaskRef, ApiError> {
+    post_json(
+        &format!("/system/packages/{}/remove", enc_segment(package_name)),
+        &(),
+    )
+    .await
 }
 
 /// Update package database
-pub async fn update_package_database() -> Result<(), ApiError> {
+pub async fn update_package_database() -> Result<TaskRef, ApiError> {
     post_json("/system/packages/update", &()).await
 }
 
@@ -4475,17 +4499,21 @@ pub async fn get_installed_packages() -> Result<Vec<PackageInfo>, ApiError> {
 }
 
 /// Upgrade package
-pub async fn upgrade_package(package_name: &str) -> Result<(), ApiError> {
-    post_json(&format!("/system/packages/{}/upgrade", package_name), &()).await
+pub async fn upgrade_package(package_name: &str) -> Result<TaskRef, ApiError> {
+    post_json(
+        &format!("/system/packages/{}/upgrade", enc_segment(package_name)),
+        &(),
+    )
+    .await
 }
 
 /// Upgrade all packages
-pub async fn upgrade_all_packages() -> Result<u32, ApiError> {
+pub async fn upgrade_all_packages() -> Result<TaskRef, ApiError> {
     post_json("/system/packages/upgrade-all", &()).await
 }
 
 /// Bulk install packages
-pub async fn bulk_install_packages(package_names: Vec<String>) -> Result<(), ApiError> {
+pub async fn bulk_install_packages(package_names: Vec<String>) -> Result<TaskRef, ApiError> {
     post_json("/system/packages/bulk-install", &package_names).await
 }
 
@@ -7439,4 +7467,48 @@ pub async fn get_placement(vm: &str) -> Result<PlacementRules, ApiError> {
 
 pub async fn put_placement(vm: &str, r: &PlacementRules) -> Result<PlacementRules, ApiError> {
     put_json(&format!("/vms/{vm}/placement"), r).await
+}
+
+// ============================================================================
+// Task log
+// ============================================================================
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct TaskRecord {
+    pub upid: String,
+    pub node: String,
+    pub task_type: String,
+    #[serde(default)]
+    pub target: Option<String>,
+    pub user: String,
+    pub status: String,
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+    pub start_time: i64,
+    #[serde(default)]
+    pub end_time: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TaskLog {
+    pub lines: Vec<String>,
+    pub total: usize,
+    pub running: bool,
+}
+
+/// Recent tasks, newest first; `status` empty = all.
+pub async fn list_tasks(status: &str) -> Result<Vec<TaskRecord>, ApiError> {
+    if status.is_empty() {
+        fetch_json("/tasks?limit=200").await
+    } else {
+        fetch_json(&format!("/tasks?limit=200&status={}", status)).await
+    }
+}
+
+pub async fn get_task_log(upid: &str) -> Result<TaskLog, ApiError> {
+    fetch_json(&format!("/tasks/{}/log", upid)).await
+}
+
+pub async fn stop_task(upid: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/tasks/{}", upid)).await
 }

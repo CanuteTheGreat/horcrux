@@ -524,6 +524,8 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::node_summary::routes())
         .merge(api::guest_state::routes())
         .merge(api::node_disks::routes())
+        .merge(api::system_admin::routes(&state))
+        .merge(api::tasks::routes())
         .merge(api::vm_hw::routes())
         .merge(api::storage_volumes::routes())
         .merge(api::sdn_cni::routes())

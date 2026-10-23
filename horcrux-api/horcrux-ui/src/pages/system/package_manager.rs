@@ -12,7 +12,6 @@ pub fn PackageManagerPage() -> impl IntoView {
     let (show_updates_only, set_show_updates_only) = create_signal(false);
     let (selected_packages, set_selected_packages) =
         create_signal(std::collections::HashSet::<String>::new());
-    let (package_manager_type, set_package_manager_type) = create_signal("auto".to_string());
 
     // Package operations
     let refresh_packages = create_action(move |_: &()| async move {
@@ -32,9 +31,11 @@ pub fn PackageManagerPage() -> impl IntoView {
         set_error_message.set(None);
 
         match update_package_database().await {
-            Ok(_) => {
-                set_success_message.set(Some("Package database updated successfully".to_string()));
-                refresh_packages.dispatch(());
+            Ok(t) => {
+                set_success_message.set(Some(format!(
+                    "Package database sync started as task {} (follow it on the Tasks page)",
+                    t.upid
+                )));
             }
             Err(e) => {
                 set_error_message.set(Some(format!("Failed to update package database: {}", e)))
@@ -51,12 +52,11 @@ pub fn PackageManagerPage() -> impl IntoView {
             set_error_message.set(None);
 
             match install_package(&package_name).await {
-                Ok(_) => {
+                Ok(t) => {
                     set_success_message.set(Some(format!(
-                        "Package '{}' installed successfully",
-                        package_name
+                        "Installing '{}' as task {} (follow it on the Tasks page)",
+                        package_name, t.upid
                     )));
-                    refresh_packages.dispatch(());
                 }
                 Err(e) => set_error_message.set(Some(format!(
                     "Failed to install package '{}': {}",
@@ -75,12 +75,11 @@ pub fn PackageManagerPage() -> impl IntoView {
             set_error_message.set(None);
 
             match remove_package(&package_name).await {
-                Ok(_) => {
+                Ok(t) => {
                     set_success_message.set(Some(format!(
-                        "Package '{}' removed successfully",
-                        package_name
+                        "Removing '{}' as task {} (follow it on the Tasks page)",
+                        package_name, t.upid
                     )));
-                    refresh_packages.dispatch(());
                 }
                 Err(e) => set_error_message.set(Some(format!(
                     "Failed to remove package '{}': {}",
@@ -99,12 +98,11 @@ pub fn PackageManagerPage() -> impl IntoView {
             set_error_message.set(None);
 
             match upgrade_package(&package_name).await {
-                Ok(_) => {
+                Ok(t) => {
                     set_success_message.set(Some(format!(
-                        "Package '{}' upgraded successfully",
-                        package_name
+                        "Upgrading '{}' as task {} (follow it on the Tasks page)",
+                        package_name, t.upid
                     )));
-                    refresh_packages.dispatch(());
                 }
                 Err(e) => set_error_message.set(Some(format!(
                     "Failed to upgrade package '{}': {}",
@@ -121,12 +119,12 @@ pub fn PackageManagerPage() -> impl IntoView {
         set_error_message.set(None);
 
         match upgrade_all_packages().await {
-            Ok(upgraded_count) => {
+            Ok(t) => {
                 set_success_message.set(Some(format!(
-                    "Successfully upgraded {} packages",
-                    upgraded_count
+                    "Upgrade of all packages started as task {} ({} pending; follow it on the Tasks page)",
+                    t.upid,
+                    t.pending.unwrap_or(0)
                 )));
-                refresh_packages.dispatch(());
             }
             Err(e) => set_error_message.set(Some(format!("Failed to upgrade packages: {}", e))),
         }
@@ -144,17 +142,43 @@ pub fn PackageManagerPage() -> impl IntoView {
         set_error_message.set(None);
 
         match bulk_install_packages(packages_to_install.clone()).await {
-            Ok(_) => {
+            Ok(t) => {
                 set_success_message.set(Some(format!(
-                    "Successfully installed {} packages",
-                    packages_to_install.len()
+                    "Installing {} packages as task {} (follow it on the Tasks page)",
+                    packages_to_install.len(),
+                    t.upid
                 )));
                 set_selected_packages.set(std::collections::HashSet::new());
-                refresh_packages.dispatch(());
             }
             Err(e) => set_error_message.set(Some(format!("Failed to install packages: {}", e))),
         }
 
+        set_loading.set(false);
+    });
+
+    // Packages that are not installed only appear through a repository search.
+    let search_repo_action = create_action(move |_: &()| async move {
+        let q = search_query.get_untracked();
+        if q.trim().len() < 2 {
+            set_error_message.set(Some("Type at least 2 characters to search".to_string()));
+            return;
+        }
+        set_loading.set(true);
+        set_error_message.set(None);
+        match search_packages(q.trim()).await {
+            Ok(found) => {
+                let n = found.len();
+                set_packages.update(|list| {
+                    for f in found {
+                        if !list.iter().any(|p| p.name == f.name) {
+                            list.push(f);
+                        }
+                    }
+                });
+                set_success_message.set(Some(format!("{} matches in the repositories", n)));
+            }
+            Err(e) => set_error_message.set(Some(format!("Search failed: {}", e))),
+        }
         set_loading.set(false);
     });
 
@@ -305,26 +329,16 @@ pub fn PackageManagerPage() -> impl IntoView {
                             placeholder="Search packages..."
                             class="search-input"
                         />
+                        <button
+                            class="btn btn-secondary"
+                            on:click=move |_| search_repo_action.dispatch(())
+                            disabled=loading
+                        >
+                            "Search repository"
+                        </button>
                     </div>
 
                     <div class="filter-controls">
-                        <label>"Package Manager:"</label>
-                        <select
-                            prop:value=package_manager_type
-                            on:change=move |ev| {
-                                set_package_manager_type.set(event_target_value(&ev));
-                                refresh_packages.dispatch(());
-                            }
-                        >
-                            <option value="auto">"Auto-detect"</option>
-                            <option value="apt">"APT (Debian/Ubuntu)"</option>
-                            <option value="yum">"YUM (RHEL/CentOS)"</option>
-                            <option value="dnf">"DNF (Fedora)"</option>
-                            <option value="pacman">"Pacman (Arch)"</option>
-                            <option value="portage">"Portage (Gentoo)"</option>
-                            <option value="zypper">"Zypper (openSUSE)"</option>
-                        </select>
-
                         <label>"Status Filter:"</label>
                         <select
                             prop:value=package_filter

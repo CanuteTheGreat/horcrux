@@ -81,6 +81,13 @@ pub fn App() -> impl IntoView {
                             <A href="/network" class="dropdown-item">"Network"</A>
                             <A href="/network/bridges" class="dropdown-item">"Host Bridges"</A>
                             <A href="/system/power" class="dropdown-item">"Guest Power (Save State)"</A>
+                            <A href="/system/health" class="dropdown-item">"Node Health"</A>
+                            <A href="/system/config" class="dropdown-item">"Node Configuration"</A>
+                            <A href="/system/services" class="dropdown-item">"Node Services"</A>
+                            <A href="/system/logs" class="dropdown-item">"System Log"</A>
+                            <A href="/system/packages" class="dropdown-item">"Packages"</A>
+                            <A href="/system/diagnostics" class="dropdown-item">"Diagnostics"</A>
+                            <A href="/tasks" class="dropdown-item">"Tasks"</A>
                             <A href="/gpu" class="dropdown-item">"GPU Passthrough"</A>
                             <IfFeature feature="cluster">
                                 <A href="/ha" class="dropdown-item">"High Availability"</A>
@@ -160,6 +167,13 @@ pub fn App() -> impl IntoView {
                     <Route path="/storage/isos" view=crate::pages::IsoLibraryPage/>
                     <Route path="/network/bridges" view=crate::pages::HostBridgesPage/>
                     <Route path="/system/power" view=crate::pages::GuestPowerPage/>
+                    <Route path="/system/health" view=crate::pages::system::health::SystemHealthPage/>
+                    <Route path="/system/config" view=crate::pages::system::configuration::SystemConfigurationPage/>
+                    <Route path="/system/services" view=crate::pages::system::services::ServicesPage/>
+                    <Route path="/system/logs" view=crate::pages::system::logs::SystemLogsPage/>
+                    <Route path="/system/packages" view=crate::pages::system::package_manager::PackageManagerPage/>
+                    <Route path="/system/diagnostics" view=crate::pages::system::diagnostics::DiagnosticsPage/>
+                    <Route path="/tasks" view=crate::pages::system::tasks::TasksPage/>
                     <Route path="/containers" view=ContainerList/>
                     <Route path="/containers/create" view=ContainerCreate/>
                     <Route path="/containers/images" view=|| view! { <Gated feature="docker|podman"><ImagesPage/></Gated> }/>

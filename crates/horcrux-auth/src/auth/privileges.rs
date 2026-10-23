@@ -406,7 +406,8 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
             }
         }
         "ws" => need(P::SysAudit, "/"),
-        "tasks" => Requirement::Authenticated,
+        // task logs can carry package/service output
+        "tasks" => read_write(m, P::SysAudit, P::SysModify, "/nodes"),
 
         // Unknown area: deny by default (administrators only).
         _ => read_write(m, P::SysAudit, P::SysModify, "/"),

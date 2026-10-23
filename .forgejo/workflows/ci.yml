@@ -356,6 +356,17 @@ jobs:
           test -n "$contract"
           bash horcrux-api/tests/sdn_cni_e2e.sh target/debug/horcrux-api "$contract"
 
+      - name: System administration (real OpenRC, chrony, apt, dummy NIC, /etc files)
+        # system_admin_e2e.sh runs the built API as root in a privileged
+        # sibling container with a real OpenRC and drives host name / zone /
+        # locale, interface address + MTU, resolv.conf, chrony, services
+        # (start/stop/enable on a real init script), the syslog viewer, apt
+        # packages as tasks, the task log and diagnostics; every check also
+        # looks at the host (hostname, ip addr, rc-status, dpkg, /etc files).
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "System administration"
+          bash horcrux-api/tests/system_admin_e2e.sh target/debug/horcrux-api
+
       - name: VM networking + hardware (real taps, VLAN, PXE, live CD-ROM)
         # NET_ADMIN + /dev/net/tun sibling container with real QEMU: Host
         # Bridges API (create, re-create at start), ISO download, a VM NIC

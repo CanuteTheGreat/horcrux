@@ -502,6 +502,13 @@ async fn ui_types_read_real_api_responses() {
     check!("/nodes/guest-power", api::PowerOverview);
     check!("/storage/smart/disks", Vec<api::SmartDiskInfo>);
     check!("/storage/smart/alerts", Vec<api::SmartAlert>);
+    check!("/system/config", api::SystemConfiguration);
+    check!("/system/network/interfaces", Vec<api::NetworkInterface>);
+    check!("/system/network/dns", api::DnsConfiguration);
+    check!("/system/time/ntp", api::NtpConfiguration);
+    check!("/system/health", api::SystemHealth);
+    check!("/system/diagnostics", api::SystemDiagnostics);
+    check!("/tasks", Vec<api::TaskRecord>);
     check!("/ha/events", Vec<api::HaEventView>);
     check!("/ha/fencing/devices", Vec<api::FencingDeviceView>);
     check!("/cluster/status", api::ClusterStatusView);

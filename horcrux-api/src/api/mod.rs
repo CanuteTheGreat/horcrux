@@ -30,6 +30,8 @@ pub mod prometheus_export;
 pub mod s3_gateway;
 pub mod sdn_cni;
 pub mod storage_volumes;
+pub mod system_admin;
+pub mod tasks;
 pub mod tls;
 pub mod vm_hw;
 pub mod vm_import;

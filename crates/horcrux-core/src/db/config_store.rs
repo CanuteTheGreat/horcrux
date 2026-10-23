@@ -57,6 +57,8 @@ pub mod kinds {
     /// Acknowledged SMART alerts (by alert id).
     pub const SMART_ALERT_ACK: &str = "smart_alert_ack";
     pub const FENCING_DEVICE: &str = "fencing_device";
+    /// Host network interface settings applied from System > Network.
+    pub const SYSTEM_IFACE: &str = "system_iface";
 }
 
 /// Durable key/value store of JSON configuration documents.
