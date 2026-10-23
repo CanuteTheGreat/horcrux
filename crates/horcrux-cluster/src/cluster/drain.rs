@@ -83,7 +83,10 @@ impl<'a> World<'a> {
         Self {
             nodes,
             guests,
-            at: guests.iter().map(|g| (g.id.clone(), g.node.clone())).collect(),
+            at: guests
+                .iter()
+                .map(|g| (g.id.clone(), g.node.clone()))
+                .collect(),
         }
     }
 
@@ -103,7 +106,12 @@ impl<'a> World<'a> {
         self.committed(&n.name) as f64 / n.mem_total_mb as f64
     }
 
-    fn members_on(&self, group_of: impl Fn(&PlanGuest) -> Option<&String>, g: &PlanGuest, node: &str) -> usize {
+    fn members_on(
+        &self,
+        group_of: impl Fn(&PlanGuest) -> Option<&String>,
+        g: &PlanGuest,
+        node: &str,
+    ) -> usize {
         let Some(grp) = group_of(g) else { return 0 };
         self.guests
             .iter()
@@ -124,7 +132,10 @@ impl<'a> World<'a> {
             return Some(format!("{} is in maintenance", t.name));
         }
         if t.arch != g.arch {
-            return Some(format!("{} is {} but the guest needs {}", t.name, t.arch, g.arch));
+            return Some(format!(
+                "{} is {} but the guest needs {}",
+                t.name, t.arch, g.arch
+            ));
         }
         if let Some(p) = &g.rules.pin {
             if *p != t.name {
@@ -132,7 +143,10 @@ impl<'a> World<'a> {
             }
         }
         if self.members_on(|x| x.rules.anti_affinity_group.as_ref(), g, &t.name) > 0 {
-            return Some(format!("anti-affinity: a guest of its group already runs on {}", t.name));
+            return Some(format!(
+                "anti-affinity: a guest of its group already runs on {}",
+                t.name
+            ));
         }
         let cap = (t.mem_total_mb as f64 * (1.0 - HEADROOM)) as u64;
         if self.committed(&t.name) + g.memory_mb > cap {
@@ -171,7 +185,8 @@ pub fn plan_drain(source: &str, nodes: &[PlanNode], guests: &[PlanGuest]) -> Pla
             continue;
         }
         if g.rules.no_migrate {
-            plan.unplaced.push(unplaced("marked never to migrate".into()));
+            plan.unplaced
+                .push(unplaced("marked never to migrate".into()));
             continue;
         }
         if let Some(p) = &g.rules.pin {
@@ -186,11 +201,13 @@ pub fn plan_drain(source: &str, nodes: &[PlanNode], guests: &[PlanGuest]) -> Pla
             match w.refuse(g, n) {
                 Some(r) => reasons.push(r),
                 None => {
-                    let together = w.members_on(|x| x.rules.affinity_group.as_ref(), g, &n.name) > 0;
-                    let after = (w.committed(&n.name) + g.memory_mb) as f64 / n.mem_total_mb.max(1) as f64;
+                    let together =
+                        w.members_on(|x| x.rules.affinity_group.as_ref(), g, &n.name) > 0;
+                    let after =
+                        (w.committed(&n.name) + g.memory_mb) as f64 / n.mem_total_mb.max(1) as f64;
                     // affinity first (true sorts before false via negation), then load
                     let key = (!together, after);
-                    if best.as_ref().map_or(true, |(_, k)| key < *k) {
+                    if best.as_ref().is_none_or(|(_, k)| key < *k) {
                         best = Some((n, key));
                     }
                 }
@@ -229,7 +246,10 @@ pub fn plan_rebalance(
     let mut w = World::new(nodes, guests);
     let mut plan = Plan::default();
     let mut moved: Vec<String> = Vec::new();
-    let usable: Vec<&PlanNode> = nodes.iter().filter(|n| n.online && !n.maintenance).collect();
+    let usable: Vec<&PlanNode> = nodes
+        .iter()
+        .filter(|n| n.online && !n.maintenance)
+        .collect();
     if usable.len() < 2 {
         return plan;
     }
@@ -252,11 +272,9 @@ pub fn plan_rebalance(
         cands.sort_by(|a, b| b.memory_mb.cmp(&a.memory_mb).then(a.id.cmp(&b.id)));
         let pick = cands.into_iter().find(|g| {
             // Keep affinity groups together: don't split a group apart.
-            let split = g
-                .rules
-                .affinity_group
-                .as_ref()
-                .map_or(false, |_| w.members_on(|x| x.rules.affinity_group.as_ref(), g, &hi.name) > 0);
+            let split = g.rules.affinity_group.as_ref().is_some_and(|_| {
+                w.members_on(|x| x.rules.affinity_group.as_ref(), g, &hi.name) > 0
+            });
             !split && w.refuse(g, lo).is_none()
         });
         let Some(g) = pick else { break };
@@ -333,8 +351,15 @@ mod tests {
         let ok = guest("ok", "a", 500);
         let p = plan_drain("a", &nodes, &[pinned, big, ok]);
         assert_eq!(p.moves.len(), 1);
-        assert_eq!((p.moves[0].guest_id.as_str(), p.moves[0].to.as_str()), ("ok", "small"));
-        let why: HashMap<_, _> = p.unplaced.iter().map(|u| (u.guest_id.as_str(), u.reason.as_str())).collect();
+        assert_eq!(
+            (p.moves[0].guest_id.as_str(), p.moves[0].to.as_str()),
+            ("ok", "small")
+        );
+        let why: HashMap<_, _> = p
+            .unplaced
+            .iter()
+            .map(|u| (u.guest_id.as_str(), u.reason.as_str()))
+            .collect();
         assert!(why["pinned"].contains("pinned"));
         assert!(why["big"].contains("no room"), "{}", why["big"]);
         assert!(why["big"].contains("maintenance") && why["big"].contains("aarch64"));
@@ -370,7 +395,10 @@ mod tests {
         let mut g = guest("g", "a", 500);
         g.rules.affinity_group = Some("app".into());
         let p = plan_drain("a", &nodes, &[mate, g]);
-        assert_eq!(p.moves[0].to, "b", "b already hosts the group although c is emptier");
+        assert_eq!(
+            p.moves[0].to, "b",
+            "b already hosts the group although c is emptier"
+        );
     }
 
     #[test]
@@ -385,9 +413,11 @@ mod tests {
         let p = plan_drain("a", &nodes, &[ct, nm, stopped]);
         assert!(p.moves.is_empty());
         assert_eq!(p.unplaced.len(), 2, "a stopped guest is not drained");
-        assert!(plan_drain("a", &[node("a", 8000)], &[guest("g", "a", 1)]).unplaced[0]
-            .reason
-            .contains("no other node"));
+        assert!(
+            plan_drain("a", &[node("a", 8000)], &[guest("g", "a", 1)]).unplaced[0]
+                .reason
+                .contains("no other node")
+        );
     }
 
     #[test]
@@ -397,12 +427,19 @@ mod tests {
         let p = plan_rebalance(&nodes, &guests, 10, 15.0);
         // 6000/0/0 -> 2000 each is 4 moves; stops once the spread is < 15 points
         assert!(p.moves.len() >= 3 && p.moves.len() <= 4, "{:?}", p.moves);
-        assert!(p.moves.iter().all(|m| m.from == "a" && m.reason == "rebalance"));
+        assert!(p
+            .moves
+            .iter()
+            .all(|m| m.from == "a" && m.reason == "rebalance"));
         let capped = plan_rebalance(&nodes, &guests, 2, 15.0);
         assert_eq!(capped.moves.len(), 2, "max_moves is honoured");
         assert!(plan_rebalance(&nodes, &guests, 0, 15.0).moves.is_empty());
         // a balanced cluster stays as it is
-        let even = [guest("x", "a", 1000), guest("y", "b", 1000), guest("z", "c", 1000)];
+        let even = [
+            guest("x", "a", 1000),
+            guest("y", "b", 1000),
+            guest("z", "c", 1000),
+        ];
         assert!(plan_rebalance(&nodes, &even, 5, 15.0).moves.is_empty());
     }
 
@@ -413,10 +450,20 @@ mod tests {
         pinned.rules.pin = Some("a".into());
         let mut nm = guest("n", "a", 1000);
         nm.rules.no_migrate = true;
-        assert!(plan_rebalance(&nodes, &[pinned, nm], 5, 10.0).moves.is_empty());
-        assert!(plan_rebalance(&[node("a", 100)], &[guest("g", "a", 50)], 5, 1.0).moves.is_empty());
+        assert!(plan_rebalance(&nodes, &[pinned, nm], 5, 10.0)
+            .moves
+            .is_empty());
+        assert!(
+            plan_rebalance(&[node("a", 100)], &[guest("g", "a", 50)], 5, 1.0)
+                .moves
+                .is_empty()
+        );
         let mut off = node("b", 10000);
         off.maintenance = true;
-        assert!(plan_rebalance(&[node("a", 10000), off], &[guest("g", "a", 5000)], 5, 1.0).moves.is_empty());
+        assert!(
+            plan_rebalance(&[node("a", 10000), off], &[guest("g", "a", 5000)], 5, 1.0)
+                .moves
+                .is_empty()
+        );
     }
 }

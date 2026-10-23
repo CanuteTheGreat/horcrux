@@ -211,7 +211,10 @@ fn delete_saved(state: &AppState, s: &SavedGuest) {
     let dir = Path::new(&s.state_dir);
     let ours = dir
         .file_name()
-        .map(|n| n.to_string_lossy().starts_with(&format!("{}-", s.kind.prefix())))
+        .map(|n| {
+            n.to_string_lossy()
+                .starts_with(&format!("{}-", s.kind.prefix()))
+        })
         .unwrap_or(false);
     if ours && !s.state_dir.is_empty() {
         let _ = std::fs::remove_dir_all(dir);
@@ -306,7 +309,15 @@ fn lock_guest(k: GuestKind, id: &str) -> Result<BusyGuard> {
 
 // ----------------------------------------------------------------- results
 
-async fn record(state: &Arc<AppState>, k: GuestKind, id: &str, phase: &str, action: &str, ok: bool, msg: Option<String>) {
+async fn record(
+    state: &Arc<AppState>,
+    k: GuestKind,
+    id: &str,
+    phase: &str,
+    action: &str,
+    ok: bool,
+    msg: Option<String>,
+) {
     let r = GuestResult {
         at: chrono::Utc::now().to_rfc3339(),
         phase: phase.into(),
@@ -343,7 +354,13 @@ async fn cli(bin: &str, args: &[&str], timeout: Duration) -> Result<String> {
             .output(),
     )
     .await
-    .map_err(|_| Error::System(format!("`{bin} {}` timed out after {} s", args.join(" "), timeout.as_secs())))?
+    .map_err(|_| {
+        Error::System(format!(
+            "`{bin} {}` timed out after {} s",
+            args.join(" "),
+            timeout.as_secs()
+        ))
+    })?
     .map_err(|e| Error::System(format!("cannot run {bin}: {e}")))?;
     if !out.status.success() {
         return Err(Error::System(format!(
@@ -359,7 +376,12 @@ async fn cli(bin: &str, args: &[&str], timeout: Duration) -> Result<String> {
 pub async fn prepare_stateful(state: &Arc<AppState>, k: GuestKind, id: &str) {
     if let Ok(g) = find_guest(state, k, id).await {
         if let Some(c) = g.instance_cli {
-            let _ = cli(c, &["config", "set", &g.name, "migration.stateful=true"], Duration::from_secs(30)).await;
+            let _ = cli(
+                c,
+                &["config", "set", &g.name, "migration.stateful=true"],
+                Duration::from_secs(30),
+            )
+            .await;
         }
     }
 }
@@ -385,7 +407,18 @@ pub async fn save_guest(
     let r = save_locked(state, k, id, dir_override, None).await;
     match &r {
         Ok(_) => record(state, k, id, "manual-save", "saved", true, None).await,
-        Err(e) => record(state, k, id, "manual-save", "failed", false, Some(e.to_string())).await,
+        Err(e) => {
+            record(
+                state,
+                k,
+                id,
+                "manual-save",
+                "failed",
+                false,
+                Some(e.to_string()),
+            )
+            .await
+        }
     }
     r
 }
@@ -410,8 +443,13 @@ async fn save_locked(
     let eff = policy::effective(state, k, id).await;
     let base = match dir_override.as_deref().filter(|d| !d.trim().is_empty()) {
         Some(d) => {
-            if !d.starts_with('/') || d.contains(['\'', '\n', '\0']) || d.split('/').any(|p| p == "..") {
-                return Err(Error::Validation("the saved-state directory must be an absolute path".into()));
+            if !d.starts_with('/')
+                || d.contains(['\'', '\n', '\0'])
+                || d.split('/').any(|p| p == "..")
+            {
+                return Err(Error::Validation(
+                    "the saved-state directory must be an absolute path".into(),
+                ));
             }
             PathBuf::from(d)
         }
@@ -456,7 +494,12 @@ async fn save_locked(
             let c = g.instance_cli.ok_or_else(|| {
                 Error::Validation(format!("{} VMs cannot be saved to a file", g.runtime))
             })?;
-            let _ = cli(c, &["config", "set", &g.name, "migration.stateful=true"], Duration::from_secs(30)).await;
+            let _ = cli(
+                c,
+                &["config", "set", &g.name, "migration.stateful=true"],
+                Duration::from_secs(30),
+            )
+            .await;
             cli(c, &["stop", &g.name, "--stateful"], timeout).await.map_err(|e| {
                 Error::System(format!(
                     "{e}. A {c} VM can only be saved if it was started with migration.stateful=true \
@@ -476,7 +519,11 @@ async fn save_locked(
                 }
             }
             let ck = dir.join("ckpt");
-            match state.container_manager.save_container_state(id, &ck, timeout).await {
+            match state
+                .container_manager
+                .save_container_state(id, &ck, timeout)
+                .await
+            {
                 Ok(o) => {
                     saved.mechanism = o.mechanism;
                     saved.size_bytes = o.size_bytes;
@@ -502,7 +549,18 @@ pub async fn resume_guest(state: &Arc<AppState>, k: GuestKind, id: &str) -> Resu
     let r = resume_locked(state, k, id).await;
     match &r {
         Ok(_) => record(state, k, id, "manual-resume", "resumed", true, None).await,
-        Err(e) => record(state, k, id, "manual-resume", "failed", false, Some(format!("{e} (the saved state was kept)"))).await,
+        Err(e) => {
+            record(
+                state,
+                k,
+                id,
+                "manual-resume",
+                "failed",
+                false,
+                Some(format!("{e} (the saved state was kept)")),
+            )
+            .await
+        }
     }
     r
 }
@@ -526,7 +584,10 @@ async fn resume_locked(state: &Arc<AppState>, k: GuestKind, id: &str) -> Result<
                 (Some(f), Some(o)) => (PathBuf::from(f), o),
                 _ => return Err(Error::System("the saved-state record is incomplete".into())),
             };
-            state.vm_manager.resume_from_file(id, &file, out, timeout).await?;
+            state
+                .vm_manager
+                .resume_from_file(id, &file, out, timeout)
+                .await?;
         }
         GuestKind::Vm => {
             let c = g.instance_cli.unwrap_or("incus");
@@ -538,7 +599,10 @@ async fn resume_locked(state: &Arc<AppState>, k: GuestKind, id: &str) -> Result<
                 .container_manager
                 .resume_container_state(id, &dir.join("ckpt"), timeout)
                 .await?;
-            state.container_manager.discard_container_state(id, &dir.join("ckpt")).await;
+            state
+                .container_manager
+                .discard_container_state(id, &dir.join("ckpt"))
+                .await;
         }
     }
     delete_saved(state, &saved);
@@ -556,7 +620,12 @@ pub async fn discard_guest(state: &Arc<AppState>, k: GuestKind, id: &str) -> Res
     let g = find_guest(state, k, id).await?;
     if !g.is_up() {
         if let Some(c) = g.instance_cli {
-            cli(c, &["start", "--stateless", &g.name], Duration::from_secs(120)).await?;
+            cli(
+                c,
+                &["start", "--stateless", &g.name],
+                Duration::from_secs(120),
+            )
+            .await?;
             cli(c, &["stop", "--force", &g.name], Duration::from_secs(120)).await?;
             if k == GuestKind::Vm {
                 let _ = state.vm_manager.record_status(id, VmStatus::Stopped).await;
@@ -579,7 +648,11 @@ pub async fn discard_guest(state: &Arc<AppState>, k: GuestKind, id: &str) -> Res
 async fn start_plain(state: &Arc<AppState>, g: &GuestInfo) -> Result<()> {
     match g.kind {
         GuestKind::Vm => state.vm_manager.start_vm(&g.id).await.map(|_| ()),
-        GuestKind::Container => state.container_manager.start_container(&g.id).await.map(|_| ()),
+        GuestKind::Container => state
+            .container_manager
+            .start_container(&g.id)
+            .await
+            .map(|_| ()),
     }
 }
 
@@ -601,14 +674,22 @@ async fn clean_shutdown(state: &Arc<AppState>, g: &GuestInfo, secs: u64) -> Resu
             .shutdown_container(&g.id, secs as u32, true)
             .await
             .map(|_| ()),
-        GuestKind::Container => state.container_manager.stop_container(&g.id).await.map(|_| ()),
+        GuestKind::Container => state
+            .container_manager
+            .stop_container(&g.id)
+            .await
+            .map(|_| ()),
     }
 }
 
 async fn poweroff(state: &Arc<AppState>, g: &GuestInfo) -> Result<()> {
     match g.kind {
         GuestKind::Vm => state.vm_manager.stop_vm(&g.id).await.map(|_| ()),
-        GuestKind::Container => state.container_manager.stop_container(&g.id).await.map(|_| ()),
+        GuestKind::Container => state
+            .container_manager
+            .stop_container(&g.id)
+            .await
+            .map(|_| ()),
     }
 }
 
@@ -630,7 +711,11 @@ async fn stop_one(state: &Arc<AppState>, g: GuestInfo, eff: Effective) -> GuestO
             Ok(_) => match save_locked(state, g.kind, &g.id, None, None).await {
                 Ok(_) => return out("saved", true, None),
                 Err(e) => {
-                    warn!("{} {}: cannot save state: {e}; shutting down instead", g.kind.prefix(), g.id);
+                    warn!(
+                        "{} {}: cannot save state: {e}; shutting down instead",
+                        g.kind.prefix(),
+                        g.id
+                    );
                     warning = Some(format!("State could not be saved: {e}. The guest was shut down instead and will be started again."));
                 }
             },
@@ -650,7 +735,14 @@ async fn stop_one(state: &Arc<AppState>, g: GuestInfo, eff: Effective) -> GuestO
     }
     match poweroff(state, &g).await {
         Ok(_) => out("poweroff", true, warning),
-        Err(e) => out("failed", false, Some(format!("{}{e}", warning.map(|w| format!("{w} ")).unwrap_or_default()))),
+        Err(e) => out(
+            "failed",
+            false,
+            Some(format!(
+                "{}{e}",
+                warning.map(|w| format!("{w} ")).unwrap_or_default()
+            )),
+        ),
     }
 }
 
@@ -670,9 +762,9 @@ pub async fn stop_all(state: &Arc<AppState>) -> Report {
     let mut stayed: std::collections::HashMap<String, String> = Default::default();
     #[cfg(feature = "cluster")]
     if node.drain_on_shutdown {
-        if let Some((m, s)) = crate::api::drain::drain_for_shutdown(state, node.drain_timeout_secs).await {
-            let known = list_guests(state).await;
-            let _ = known;
+        if let Some((m, s)) =
+            crate::api::drain::drain_for_shutdown(state, node.drain_timeout_secs).await
+        {
             for (id, to) in m {
                 moved.push(GuestOutcome {
                     kind: GuestKind::Vm,
@@ -686,11 +778,19 @@ pub async fn stop_all(state: &Arc<AppState>) -> Report {
             stayed = s;
         }
     }
-    let running: Vec<GuestInfo> = list_guests(state).await.into_iter().filter(|g| g.is_up()).collect();
+    let running: Vec<GuestInfo> = list_guests(state)
+        .await
+        .into_iter()
+        .filter(|g| g.is_up())
+        .collect();
     info!("host shutdown: {} running guest(s)", running.len());
     let manifest_guests: Vec<ManifestGuest> = running
         .iter()
-        .map(|g| ManifestGuest { kind: g.kind, id: g.id.clone(), name: g.name.clone() })
+        .map(|g| ManifestGuest {
+            kind: g.kind,
+            id: g.id.clone(),
+            name: g.name.clone(),
+        })
         .collect();
     // Written first: if this pass is cut short, the boot still knows.
     write_manifest(
@@ -712,7 +812,16 @@ pub async fn stop_all(state: &Arc<AppState>) -> Report {
             let _permit = sem.acquire_owned().await;
             let eff = policy::effective(&st, g.kind, &g.id).await;
             let o = stop_one(&st, g, eff).await;
-            record(&st, o.kind, &o.id, "host-stop", &o.action, o.ok, o.message.clone()).await;
+            record(
+                &st,
+                o.kind,
+                &o.id,
+                "host-stop",
+                &o.action,
+                o.ok,
+                o.message.clone(),
+            )
+            .await;
             o
         }));
     }
@@ -788,7 +897,11 @@ pub async fn boot_all(state: &Arc<AppState>, force: bool) -> Report {
             .and_then(|v| v["boot_id"].as_str().map(str::to_string));
         if done.as_deref() == Some(bid.as_str()) {
             BOOT_DONE.store(true, Ordering::SeqCst);
-            return Report { skipped: true, message: "the boot pass already ran for this boot".into(), ..Default::default() };
+            return Report {
+                skipped: true,
+                message: "the boot pass already ran for this boot".into(),
+                ..Default::default()
+            };
         }
     }
     let was: Vec<ManifestGuest> = read_manifest(state).map(|m| m.guests).unwrap_or_default();
@@ -806,12 +919,21 @@ pub async fn boot_all(state: &Arc<AppState>, force: bool) -> Report {
     let mut outcomes = Vec::new();
     for (_, delay, g, act, saved) in plan {
         let mk = |action: &str, ok: bool, message: Option<String>| GuestOutcome {
-            kind: g.kind, id: g.id.clone(), name: g.name.clone(), action: action.into(), ok, message,
+            kind: g.kind,
+            id: g.id.clone(),
+            name: g.name.clone(),
+            action: action.into(),
+            ok,
+            message,
         };
         let o = match act {
             BootAction::Skip => {
                 if saved {
-                    mk("kept", true, Some("start action is Nothing: the saved state was kept".into()))
+                    mk(
+                        "kept",
+                        true,
+                        Some("start action is Nothing: the saved state was kept".into()),
+                    )
                 } else {
                     continue;
                 }
@@ -837,16 +959,34 @@ pub async fn boot_all(state: &Arc<AppState>, force: bool) -> Report {
                 }
             }
         };
-        record(state, o.kind, &o.id, "host-boot", &o.action, o.ok, o.message.clone()).await;
+        record(
+            state,
+            o.kind,
+            &o.id,
+            "host-boot",
+            &o.action,
+            o.ok,
+            o.message.clone(),
+        )
+        .await;
         outcomes.push(o);
     }
     #[cfg(feature = "cluster")]
     crate::api::drain::leave_boot_maintenance(state).await;
-    let _ = write_atomic(&boot_marker_path(state), serde_json::json!({"boot_id": bid, "at": chrono::Utc::now().to_rfc3339()}).to_string().as_bytes());
+    let _ = write_atomic(
+        &boot_marker_path(state),
+        serde_json::json!({"boot_id": bid, "at": chrono::Utc::now().to_rfc3339()})
+            .to_string()
+            .as_bytes(),
+    );
     BOOT_DONE.store(true, Ordering::SeqCst);
     STOPPING.store(false, Ordering::SeqCst);
     let failed = outcomes.iter().filter(|o| !o.ok).count();
-    Report { message: format!("{} guest(s) handled, {} failed", outcomes.len(), failed), outcomes, skipped: false }
+    Report {
+        message: format!("{} guest(s) handled, {} failed", outcomes.len(), failed),
+        outcomes,
+        skipped: false,
+    }
 }
 
 /// Background work: the host-agent token, the boot pass at API start (unless
@@ -861,7 +1001,10 @@ pub fn spawn(state: Arc<AppState>) {
         if std::env::var("HORCRUX_GUEST_AUTOSTART").as_deref() != Ok("0") {
             // Let host bridges and container runtimes come up first.
             tokio::time::sleep(Duration::from_secs(
-                std::env::var("HORCRUX_GUEST_BOOT_DELAY_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(8),
+                std::env::var("HORCRUX_GUEST_BOOT_DELAY_SECS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(8),
             ))
             .await;
             let r = boot_all(&st, false).await;
@@ -876,7 +1019,11 @@ pub fn spawn(state: Arc<AppState>) {
                     .await
                     .into_iter()
                     .filter(|g| g.is_up())
-                    .map(|g| ManifestGuest { kind: g.kind, id: g.id, name: g.name })
+                    .map(|g| ManifestGuest {
+                        kind: g.kind,
+                        id: g.id,
+                        name: g.name,
+                    })
                     .collect();
                 write_manifest(
                     &state,
@@ -958,14 +1105,20 @@ async fn view_of(
         }
         (None, false) => (
             g.instance_cli.is_some(),
-            if g.instance_cli.is_some() { None } else { Some(format!("{} VMs cannot be saved", g.runtime)) },
+            if g.instance_cli.is_some() {
+                None
+            } else {
+                Some(format!("{} VMs cannot be saved", g.runtime))
+            },
         ),
     };
     GuestView {
         policy: policy::effective(state, g.kind, &g.id).await,
         overrides: policy::load_override(state, g.kind, &g.id).await,
         saved: load_saved(state, g.kind, &g.id),
-        last_result: results.get(&format!("{}:{}", g.kind.prefix(), g.id)).cloned(),
+        last_result: results
+            .get(&format!("{}:{}", g.kind.prefix(), g.id))
+            .cloned(),
         kind: g.kind,
         id: g.id,
         name: g.name,
@@ -1020,7 +1173,11 @@ mod tests {
             boot_id: "b".into(),
             written_at: "t".into(),
             clean: true,
-            guests: vec![ManifestGuest { kind: GuestKind::Vm, id: "1".into(), name: "n".into() }],
+            guests: vec![ManifestGuest {
+                kind: GuestKind::Vm,
+                id: "1".into(),
+                name: "n".into(),
+            }],
             outcomes: vec![],
         };
         let back: Manifest = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();

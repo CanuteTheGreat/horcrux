@@ -18,9 +18,9 @@ pub mod lxc_template;
 pub mod lxd;
 #[cfg(feature = "podman")]
 pub mod podman;
+pub mod savestate;
 #[cfg(any(feature = "docker", feature = "podman"))]
 pub mod stack;
-pub mod savestate;
 pub mod veth;
 #[cfg(any(feature = "docker", feature = "podman"))]
 pub mod volume;

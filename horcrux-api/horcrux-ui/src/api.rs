@@ -7131,7 +7131,6 @@ pub async fn list_ha_events() -> Result<Vec<HaEventView>, ApiError> {
     fetch_json("/ha/events?limit=50").await
 }
 
-
 // ---------------------------------------------------------------------------
 // Guest power: save state on host shutdown, resume on boot
 // (`/api/nodes/guest-power`, `/api/{vms,containers}/:id/{save,resume}-state`).
@@ -7284,7 +7283,6 @@ pub async fn discard_guest_state(kind: &str, id: &str) -> Result<(), ApiError> {
 pub async fn boot_saved_guests() -> Result<serde_json::Value, ApiError> {
     post_json("/nodes/guest-power/boot-guests", &serde_json::json!({})).await
 }
-
 
 // ---------------------------------------------------------------------------
 // Cluster maintenance (drain), rebalance and placement rules

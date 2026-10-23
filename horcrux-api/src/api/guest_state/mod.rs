@@ -36,17 +36,17 @@ use std::sync::Arc;
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/nodes/guest-power", get(overview).put(put_node_policy))
-        .route("/api/nodes/guest-power/boot-guests", post(admin_boot_guests))
+        .route(
+            "/api/nodes/guest-power/boot-guests",
+            post(admin_boot_guests),
+        )
         .route(
             "/api/vms/:id/power-policy",
             get(vm_get_policy).put(vm_put_policy),
         )
         .route("/api/vms/:id/save-state", post(vm_save))
         .route("/api/vms/:id/resume-state", post(vm_resume))
-        .route(
-            "/api/vms/:id/saved-state",
-            get(vm_saved).delete(vm_discard),
-        )
+        .route("/api/vms/:id/saved-state", get(vm_saved).delete(vm_discard))
         .route(
             "/api/containers/:id/power-policy",
             get(ct_get_policy).put(ct_put_policy),

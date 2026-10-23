@@ -259,14 +259,20 @@ mod tests {
         assert_eq!(e.start_action, StartAction::Nothing);
         assert_eq!((e.start_delay_secs, e.start_order), (30, 1));
         assert_eq!(e.save_dir, PathBuf::from("/mnt/slow"));
-        let dflt = combine(&NodePolicy::default(), &GuestOverride::default(), "/d".into());
+        let dflt = combine(
+            &NodePolicy::default(),
+            &GuestOverride::default(),
+            "/d".into(),
+        );
         assert_eq!(dflt.save_dir, PathBuf::from("/d"));
     }
 
     #[test]
     fn validation_rejects_bad_values() {
-        let mut n = NodePolicy::default();
-        n.max_parallel = 0;
+        let n = NodePolicy {
+            max_parallel: 0,
+            ..Default::default()
+        };
         assert!(n.validate().is_err());
         let n = NodePolicy {
             save_dir: Some("relative/dir".into()),
@@ -282,7 +288,10 @@ mod tests {
 
     #[test]
     fn serde_names_are_stable() {
-        assert_eq!(serde_json::to_string(&StopAction::Poweroff).unwrap(), "\"poweroff\"");
+        assert_eq!(
+            serde_json::to_string(&StopAction::Poweroff).unwrap(),
+            "\"poweroff\""
+        );
         assert_eq!(
             serde_json::to_string(&StartAction::ResumeIfRunning).unwrap(),
             "\"resume_if_running\""

@@ -39,7 +39,7 @@ use axum::{
 };
 use horcrux_common::{VmHypervisor, VmStatus};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -51,12 +51,21 @@ const MAX_HISTORY: usize = 500;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/api/nodes/maintenance", get(get_maintenance).post(set_maintenance))
+        .route(
+            "/api/nodes/maintenance",
+            get(get_maintenance).post(set_maintenance),
+        )
         .route("/api/nodes/maintenance/plan", get(drain_plan))
-        .route("/api/cluster/rebalance", get(get_rebalance).put(put_rebalance))
+        .route(
+            "/api/cluster/rebalance",
+            get(get_rebalance).put(put_rebalance),
+        )
         .route("/api/cluster/rebalance/run", post(run_rebalance))
         .route("/api/cluster/moves", get(list_moves))
-        .route("/api/vms/:id/placement", get(get_placement).put(put_placement))
+        .route(
+            "/api/vms/:id/placement",
+            get(get_placement).put(put_placement),
+        )
         .route("/api/ha/peer/placement", get(peer_placement))
         .route("/api/ha/peer/move", post(peer_move))
         .route("/api/ha/peer/rebalance-settings", post(peer_settings))
@@ -242,7 +251,11 @@ async fn record_move(state: &AppState, r: &MoveResult) {
         r.from,
         r.to,
         r.reason,
-        if rec.ok { "done" } else { rec.error.as_deref().unwrap_or("failed") }
+        if rec.ok {
+            "done"
+        } else {
+            rec.error.as_deref().unwrap_or("failed")
+        }
     );
     let st = store(state);
     let id = format!("{}-{}", chrono::Utc::now().timestamp_millis(), r.guest_id);
@@ -300,9 +313,8 @@ pub async fn local_info(state: &Arc<AppState>) -> PeerInfo {
             memory_mb: v.memory,
             cpus: v.cpus,
             arch: format!("{:?}", v.architecture),
-            immovable: (!qemu).then(|| {
-                "LXD/Incus VMs are moved by LXD/Incus itself, not by Horcrux".to_string()
-            }),
+            immovable: (!qemu)
+                .then(|| "LXD/Incus VMs are moved by LXD/Incus itself, not by Horcrux".to_string()),
             rules: load_rules(state, &v.id).await,
         });
     }
@@ -329,7 +341,9 @@ pub async fn local_info(state: &Arc<AppState>) -> PeerInfo {
             maintenance,
             arch: arch_name(),
             mem_total_mb: mem_total_mb(),
-            cpu_cores: std::thread::available_parallelism().map(|n| n.get() as u32).unwrap_or(1),
+            cpu_cores: std::thread::available_parallelism()
+                .map(|n| n.get() as u32)
+                .unwrap_or(1),
         },
         guests,
     }
@@ -367,7 +381,11 @@ async fn peer_get<T: serde::de::DeserializeOwned>(
         .await
         .map_err(|e| e.to_string())?;
     if !r.status().is_success() {
-        return Err(format!("{}: {}", r.status(), r.text().await.unwrap_or_default()));
+        return Err(format!(
+            "{}: {}",
+            r.status(),
+            r.text().await.unwrap_or_default()
+        ));
     }
     r.json::<T>().await.map_err(|e| e.to_string())
 }
@@ -475,7 +493,11 @@ async fn move_here(state: &Arc<AppState>, m: &Move, timeout_secs: u64) -> MoveRe
                 }
                 MigrationState::Failed | MigrationState::Cancelled => {
                     r.status = "failed".into();
-                    r.error = Some(j.error.clone().unwrap_or_else(|| "migration did not complete".into()));
+                    r.error = Some(
+                        j.error
+                            .clone()
+                            .unwrap_or_else(|| "migration did not complete".into()),
+                    );
                     break;
                 }
                 _ => r.progress = j.progress as u32,
@@ -526,8 +548,13 @@ async fn execute(
     let sem = Arc::new(tokio::sync::Semaphore::new(parallel.max(1)));
     let mut tasks = Vec::new();
     for (i, m) in moves.iter().cloned().enumerate() {
-        let (st, sem, res, prog, local) =
-            (state.clone(), sem.clone(), results.clone(), progress.clone(), local.to_string());
+        let (st, sem, res, prog, local) = (
+            state.clone(),
+            sem.clone(),
+            results.clone(),
+            progress.clone(),
+            local.to_string(),
+        );
         tasks.push(tokio::spawn(async move {
             let _p = sem.acquire_owned().await;
             res.lock().unwrap()[i].status = "running".into();
@@ -537,17 +564,42 @@ async fn execute(
             } else {
                 let all = st.cluster_manager.list_nodes().await;
                 match all.iter().find(|n| n.name == m.from) {
-                    Some(n) => match peer_post::<_, MoveResult>(&st, &local, n, "/api/ha/peer/move",
-                        &PeerMove { guest_id: m.guest_id.clone(), to: m.to.clone(), reason: m.reason.clone(), timeout_secs })
-                        .await
+                    Some(n) => match peer_post::<_, MoveResult>(
+                        &st,
+                        &local,
+                        n,
+                        "/api/ha/peer/move",
+                        &PeerMove {
+                            guest_id: m.guest_id.clone(),
+                            to: m.to.clone(),
+                            reason: m.reason.clone(),
+                            timeout_secs,
+                        },
+                    )
+                    .await
                     {
                         Ok(r) => r,
-                        Err(e) => MoveResult { guest_id: m.guest_id.clone(), name: m.name.clone(), from: m.from.clone(),
-                            to: m.to.clone(), reason: m.reason.clone(), status: "failed".into(), error: Some(e), ..Default::default() },
+                        Err(e) => MoveResult {
+                            guest_id: m.guest_id.clone(),
+                            name: m.name.clone(),
+                            from: m.from.clone(),
+                            to: m.to.clone(),
+                            reason: m.reason.clone(),
+                            status: "failed".into(),
+                            error: Some(e),
+                            ..Default::default()
+                        },
                     },
-                    None => MoveResult { guest_id: m.guest_id.clone(), name: m.name.clone(), from: m.from.clone(),
-                        to: m.to.clone(), reason: m.reason.clone(), status: "failed".into(),
-                        error: Some(format!("{} is not a node of this cluster", m.from)), ..Default::default() },
+                    None => MoveResult {
+                        guest_id: m.guest_id.clone(),
+                        name: m.name.clone(),
+                        from: m.from.clone(),
+                        to: m.to.clone(),
+                        reason: m.reason.clone(),
+                        status: "failed".into(),
+                        error: Some(format!("{} is not a node of this cluster", m.from)),
+                        ..Default::default()
+                    },
                 }
             };
             // The source node recorded the move it ran; the node that
@@ -592,7 +644,12 @@ pub async fn drain_node(state: &Arc<AppState>, reason: &str, timeout_secs: u64) 
         enabled: true,
         since: Some(started.clone()),
         reason: Some(reason.to_string()),
-        drain: Some(Run { kind: "drain".into(), started_at: started.clone(), status: "planning".into(), ..Default::default() }),
+        drain: Some(Run {
+            kind: "drain".into(),
+            started_at: started.clone(),
+            status: "planning".into(),
+            ..Default::default()
+        }),
     };
     save_maintenance(state, &m).await;
     let (local, nodes, guests) = snapshot(state).await;
@@ -607,15 +664,19 @@ pub async fn drain_node(state: &Arc<AppState>, reason: &str, timeout_secs: u64) 
     };
     m.drain = Some(run.clone());
     save_maintenance(state, &m).await;
-    let cell_state = state.clone();
     let base = m.clone();
     let plan_c = plan.clone();
     let results = execute(state, &local, &plan.moves, 2, timeout_secs, move |res| {
         let mut mm = base.clone();
-        mm.drain = Some(Run { kind: "drain".into(), started_at: base.since.clone().unwrap_or_default(),
-            status: "running".into(), plan: plan_c.clone(), results: res.to_vec(), finished_at: None });
+        mm.drain = Some(Run {
+            kind: "drain".into(),
+            started_at: base.since.clone().unwrap_or_default(),
+            status: "running".into(),
+            plan: plan_c.clone(),
+            results: res.to_vec(),
+            finished_at: None,
+        });
         *maint_cell().lock().unwrap() = mm;
-        let _ = &cell_state;
     })
     .await;
     run.results = results;
@@ -638,10 +699,18 @@ fn leader(nodes: &[PlanNode]) -> Option<String> {
 
 static REBALANCE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-async fn rebalance_run(state: &Arc<AppState>, st: &Settings, dry: bool, max: Option<usize>, kind: &str) -> Run {
+async fn rebalance_run(
+    state: &Arc<AppState>,
+    st: &Settings,
+    dry: bool,
+    max: Option<usize>,
+    kind: &str,
+) -> Run {
     // One rebalance executes at a time (the on-return trigger, the leader's
     // loop and "Rebalance now" must not move the same guest twice).
-    let _guard = if dry { None } else {
+    let _guard = if dry {
+        None
+    } else {
         match REBALANCE_LOCK.try_lock() {
             Ok(g) => Some(g),
             Err(_) => {
@@ -656,11 +725,20 @@ async fn rebalance_run(state: &Arc<AppState>, st: &Settings, dry: bool, max: Opt
         }
     };
     let (local, nodes, guests) = snapshot(state).await;
-    let plan = plan_rebalance(&nodes, &guests, max.unwrap_or(st.max_moves), st.threshold_pct);
+    let plan = plan_rebalance(
+        &nodes,
+        &guests,
+        max.unwrap_or(st.max_moves),
+        st.threshold_pct,
+    );
     let mut run = Run {
         kind: kind.into(),
         started_at: now(),
-        status: if dry || plan.moves.is_empty() { "done".into() } else { "running".into() },
+        status: if dry || plan.moves.is_empty() {
+            "done".into()
+        } else {
+            "running".into()
+        },
         plan: plan.clone(),
         results: vec![],
         finished_at: None,
@@ -696,7 +774,10 @@ pub fn spawn(state: Arc<AppState>) {
         let mut last_run = std::time::Instant::now() - Duration::from_secs(86400);
         loop {
             tokio::time::sleep(Duration::from_secs(
-                std::env::var("HORCRUX_REBALANCE_TICK_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(15),
+                std::env::var("HORCRUX_REBALANCE_TICK_SECS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(15),
             ))
             .await;
             let st = load_settings(&state).await;
@@ -713,16 +794,20 @@ pub fn spawn(state: Arc<AppState>) {
                 known = None;
                 continue;
             }
-            let now_map: HashMap<String, bool> =
-                nodes.iter().filter(|n| n.online).map(|n| (n.name.clone(), n.maintenance)).collect();
+            let now_map: HashMap<String, bool> = nodes
+                .iter()
+                .filter(|n| n.online)
+                .map(|n| (n.name.clone(), n.maintenance))
+                .collect();
             let arrived = match &known {
                 None => false, // first look: nothing to compare with
                 Some(prev) => now_map.iter().any(|(n, maint)| {
-                    !maint && match prev.get(n) {
-                        None => true,           // joined / came back online
-                        Some(true) => true,     // left maintenance
-                        Some(false) => false,
-                    }
+                    !maint
+                        && match prev.get(n) {
+                            None => true,       // joined / came back online
+                            Some(true) => true, // left maintenance
+                            Some(false) => false,
+                        }
                 }),
             };
             known = Some(now_map);
@@ -731,7 +816,14 @@ pub fn spawn(state: Arc<AppState>) {
             if busy || !(arrived || (st.mode == "auto" && due)) {
                 continue;
             }
-            let r = rebalance_run(&state, &st, false, None, if arrived { "on-return" } else { "auto" }).await;
+            let r = rebalance_run(
+                &state,
+                &st,
+                false,
+                None,
+                if arrived { "on-return" } else { "auto" },
+            )
+            .await;
             last_run = std::time::Instant::now();
             if !r.plan.moves.is_empty() {
                 tracing::info!("rebalance ({}): {} move(s)", r.kind, r.plan.moves.len());
@@ -750,9 +842,14 @@ struct MaintenanceView {
     clustered: bool,
 }
 
-async fn get_maintenance(State(state): State<Arc<AppState>>) -> Result<Json<MaintenanceView>, ApiError> {
+async fn get_maintenance(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<MaintenanceView>, ApiError> {
     let clustered = is_clustered(&state.cluster_manager.list_nodes().await);
-    Ok(Json(MaintenanceView { m: load_maintenance(&state).await, clustered }))
+    Ok(Json(MaintenanceView {
+        m: load_maintenance(&state).await,
+        clustered,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -780,7 +877,9 @@ async fn set_maintenance(
         }
         if req.drain {
             let st = state.clone();
-            let timeout = crate::api::guest_state::policy::load_node(&st).await.drain_timeout_secs;
+            let timeout = crate::api::guest_state::policy::load_node(&st)
+                .await
+                .drain_timeout_secs;
             // Runs in the background; the UI polls GET /nodes/maintenance.
             tokio::spawn(async move {
                 drain_node(&st, "maintenance", timeout).await;
@@ -789,14 +888,29 @@ async fn set_maintenance(
             let mut m = load_maintenance(&state).await;
             m.enabled = true;
             m.since = Some(now());
-            m.drain = Some(Run { kind: "drain".into(), started_at: now(), status: "planning".into(), ..Default::default() });
+            m.drain = Some(Run {
+                kind: "drain".into(),
+                started_at: now(),
+                status: "planning".into(),
+                ..Default::default()
+            });
             *maint_cell().lock().unwrap() = m;
         } else {
-            let m = Maintenance { enabled: true, since: Some(now()), reason: Some("maintenance".into()), drain: None };
+            let m = Maintenance {
+                enabled: true,
+                since: Some(now()),
+                reason: Some("maintenance".into()),
+                drain: None,
+            };
             save_maintenance(&state, &m).await;
         }
     } else {
-        let m = Maintenance { enabled: false, since: None, reason: None, drain: load_maintenance(&state).await.drain };
+        let m = Maintenance {
+            enabled: false,
+            since: None,
+            reason: None,
+            drain: load_maintenance(&state).await.drain,
+        };
         save_maintenance(&state, &m).await;
         // The node is back: the cluster may want to even out (on_return/auto).
         let st = load_settings(&state).await;
@@ -826,11 +940,18 @@ struct RebalanceView {
     last: Option<Run>,
 }
 
-async fn get_rebalance(State(state): State<Arc<AppState>>) -> Result<Json<RebalanceView>, ApiError> {
+async fn get_rebalance(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<RebalanceView>, ApiError> {
     let settings = load_settings(&state).await;
     let (_, nodes, guests) = snapshot(&state).await;
     let plan = plan_rebalance(&nodes, &guests, settings.max_moves, settings.threshold_pct);
-    Ok(Json(RebalanceView { settings, plan, nodes, last: rebalance_cell().lock().unwrap().clone() }))
+    Ok(Json(RebalanceView {
+        settings,
+        plan,
+        nodes,
+        last: rebalance_cell().lock().unwrap().clone(),
+    }))
 }
 
 async fn put_rebalance(
@@ -843,7 +964,15 @@ async fn put_rebalance(
     if let Ok(local) = state.cluster_manager.get_local_node_name().await {
         let all = state.cluster_manager.list_nodes().await;
         for n in peer_nodes(&all, &local) {
-            if let Err(e) = peer_post::<_, serde_json::Value>(&state, &local, &n, "/api/ha/peer/rebalance-settings", &s).await {
+            if let Err(e) = peer_post::<_, serde_json::Value>(
+                &state,
+                &local,
+                &n,
+                "/api/ha/peer/rebalance-settings",
+                &s,
+            )
+            .await
+            {
                 tracing::warn!("rebalance settings not sent to {}: {e}", n.name);
             }
         }
@@ -868,7 +997,8 @@ async fn run_rebalance(
     if req.max_moves == Some(0) || req.max_moves.is_some_and(|m| m > 32) {
         return Err(ApiError::ValidationError("max_moves must be 1-32".into()));
     }
-    if !req.dry_run && state.migration_manager.list_active().await.len() >= st.max_moves.max(1) * 4 {
+    if !req.dry_run && state.migration_manager.list_active().await.len() >= st.max_moves.max(1) * 4
+    {
         return Err(ApiError::Conflict("migrations are already running".into()));
     }
     let r = if req.dry_run {
@@ -883,7 +1013,14 @@ async fn run_rebalance(
                 rebalance_run(&s2, &st2, false, mm, "manual").await;
             });
         }
-        Run { status: if run.plan.moves.is_empty() { "done".into() } else { "running".into() }, ..run }
+        Run {
+            status: if run.plan.moves.is_empty() {
+                "done".into()
+            } else {
+                "running".into()
+            },
+            ..run
+        }
     };
     Ok(Json(r))
 }
@@ -901,13 +1038,16 @@ async fn list_moves(
         .load_values::<MoveRecord>(MOVES)
         .await?
         .into_iter()
-        .filter(|m| q.guest.as_ref().map_or(true, |g| *g == m.guest_id))
+        .filter(|m| q.guest.as_ref().is_none_or(|g| *g == m.guest_id))
         .collect();
     v.reverse();
     Ok(Json(v))
 }
 
-async fn get_placement(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<Rules>, ApiError> {
+async fn get_placement(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<Rules>, ApiError> {
     state.vm_manager.get_vm(&id).await?;
     Ok(Json(load_rules(&state, &id).await))
 }
@@ -918,9 +1058,16 @@ async fn put_placement(
     Json(r): Json<Rules>,
 ) -> Result<Json<Rules>, ApiError> {
     state.vm_manager.get_vm(&id).await?;
-    for (what, g) in [("affinity_group", &r.affinity_group), ("anti_affinity_group", &r.anti_affinity_group)] {
-        if g.as_deref().is_some_and(|g| g.len() > 64 || g.contains(char::is_whitespace)) {
-            return Err(ApiError::ValidationError(format!("{what}: up to 64 characters, no spaces")));
+    for (what, g) in [
+        ("affinity_group", &r.affinity_group),
+        ("anti_affinity_group", &r.anti_affinity_group),
+    ] {
+        if g.as_deref()
+            .is_some_and(|g| g.len() > 64 || g.contains(char::is_whitespace))
+        {
+            return Err(ApiError::ValidationError(format!(
+                "{what}: up to 64 characters, no spaces"
+            )));
         }
     }
     if r.affinity_group.is_some() && r.affinity_group == r.anti_affinity_group {
@@ -930,9 +1077,15 @@ async fn put_placement(
     }
     if let Some(p) = &r.pin {
         let nodes = state.cluster_manager.list_nodes().await;
-        let local = state.cluster_manager.get_local_node_name().await.unwrap_or_default();
+        let local = state
+            .cluster_manager
+            .get_local_node_name()
+            .await
+            .unwrap_or_default();
         if *p != local && !nodes.iter().any(|n| &n.name == p) {
-            return Err(ApiError::ValidationError(format!("{p} is not a node of this cluster")));
+            return Err(ApiError::ValidationError(format!(
+                "{p} is not a node of this cluster"
+            )));
         }
     }
     if r == Rules::default() {
@@ -960,8 +1113,19 @@ async fn peer_move(
 ) -> Result<Json<MoveResult>, ApiError> {
     require_peer(&user)?;
     let local = state.cluster_manager.get_local_node_name().await?;
-    let name = state.vm_manager.get_vm(&req.guest_id).await.map(|v| v.name).unwrap_or_default();
-    let m = Move { guest_id: req.guest_id, name, from: local, to: req.to, reason: req.reason };
+    let name = state
+        .vm_manager
+        .get_vm(&req.guest_id)
+        .await
+        .map(|v| v.name)
+        .unwrap_or_default();
+    let m = Move {
+        guest_id: req.guest_id,
+        name,
+        from: local,
+        to: req.to,
+        reason: req.reason,
+    };
     Ok(Json(move_here(&state, &m, req.timeout_secs).await))
 }
 
@@ -999,10 +1163,12 @@ pub async fn drain_for_shutdown(
         if r.status == "done" {
             moved.insert(r.guest_id.clone(), r.to.clone());
         } else {
-            stayed.insert(r.guest_id.clone(), r.error.clone().unwrap_or_else(|| "move failed".into()));
+            stayed.insert(
+                r.guest_id.clone(),
+                r.error.clone().unwrap_or_else(|| "move failed".into()),
+            );
         }
     }
-    let _: HashSet<&String> = HashSet::new();
     Some((moved, stayed))
 }
 
@@ -1016,7 +1182,12 @@ pub async fn leave_boot_maintenance(state: &Arc<AppState>) {
     }
     save_maintenance(
         state,
-        &Maintenance { enabled: false, since: None, reason: None, drain: m.drain },
+        &Maintenance {
+            enabled: false,
+            since: None,
+            reason: None,
+            drain: m.drain,
+        },
     )
     .await;
     tracing::info!("node back from its shutdown drain: maintenance off");

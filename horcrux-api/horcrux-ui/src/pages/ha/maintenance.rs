@@ -131,7 +131,9 @@ pub fn MaintenancePage() -> impl IntoView {
     let leave = move |_| {
         spawn_local(async move {
             match api::set_maintenance(false, false).await {
-                Ok(_) => set_notice.set(Some("Maintenance off: this node takes guests again".into())),
+                Ok(_) => {
+                    set_notice.set(Some("Maintenance off: this node takes guests again".into()))
+                }
                 Err(e) => set_error.set(Some(e.message)),
             }
             reload();

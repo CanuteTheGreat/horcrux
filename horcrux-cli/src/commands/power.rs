@@ -43,9 +43,15 @@ pub async fn handle_power_command(
             output::print_info(&format!(
                 "CRIU: {}",
                 if c["criu"]["available"].as_bool().unwrap_or(false) {
-                    format!("available ({})", c["criu"]["version"].as_str().unwrap_or("?"))
+                    format!(
+                        "available ({})",
+                        c["criu"]["version"].as_str().unwrap_or("?")
+                    )
                 } else {
-                    format!("unavailable - {}", c["criu"]["error"].as_str().unwrap_or(""))
+                    format!(
+                        "unavailable - {}",
+                        c["criu"]["error"].as_str().unwrap_or("")
+                    )
                 }
             ));
             output::print_info(&format!(

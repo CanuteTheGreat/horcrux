@@ -3991,13 +3991,23 @@ async fn guest_power_routes_read_into_ui_types() {
     assert!(status == 200 || status == 201, "create VM: {status} {body}");
 
     let ov: api::PowerOverview = fetch(&c, &token, "/nodes/guest-power").await;
-    let g = ov.guests.iter().find(|g| g.id == vm).expect("VM in the power overview");
+    let g = ov
+        .guests
+        .iter()
+        .find(|g| g.id == vm)
+        .expect("VM in the power overview");
     assert_eq!(g.kind, "vm");
     assert!(g.saved.is_none() && g.can_save);
     assert!(["save", "shutdown", "poweroff"].contains(&ov.node.stop_action.as_str()));
 
     // Node default round-trips.
-    let (st, body) = put(&c, &token, "/nodes/guest-power", serde_json::to_value(&ov.node).unwrap()).await;
+    let (st, body) = put(
+        &c,
+        &token,
+        "/nodes/guest-power",
+        serde_json::to_value(&ov.node).unwrap(),
+    )
+    .await;
     assert_eq!(st, 200, "{body}");
     let _: api::NodePower = serde_json::from_str(&body).expect("UI NodePower");
     let mut bad = serde_json::to_value(&ov.node).unwrap();
@@ -4020,7 +4030,12 @@ async fn guest_power_routes_read_into_ui_types() {
     assert_eq!(g.policy.start_action, "always");
     assert_eq!((g.policy.start_delay_secs, g.policy.start_order), (7, 3));
     assert_eq!(g.overrides.start_delay_secs, Some(7));
-    assert_eq!(put(&c, &token, &path, json!({"stop_action": "explode"})).await.0, 422);
+    assert_eq!(
+        put(&c, &token, &path, json!({"stop_action": "explode"}))
+            .await
+            .0,
+        422
+    );
 
     // Nothing to save / resume / discard on a stopped guest.
     let (st, _) = post(&c, &token, &format!("/vms/{vm}/save-state"), json!({})).await;
@@ -4036,7 +4051,10 @@ async fn guest_power_routes_read_into_ui_types() {
     let (st, _) = get_raw(&c, &token, "/nodes/maintenance").await;
     if st == 200 {
         let m: api::MaintenanceState = fetch(&c, &token, "/nodes/maintenance").await;
-        assert!(!m.enabled && !m.clustered, "a single node is not in maintenance: {m:?}");
+        assert!(
+            !m.enabled && !m.clustered,
+            "a single node is not in maintenance: {m:?}"
+        );
         let _: api::MovePlan = fetch(&c, &token, "/nodes/maintenance/plan").await;
         let r: api::RebalanceState = fetch(&c, &token, "/cluster/rebalance").await;
         assert!(["off", "on_return", "auto"].contains(&r.settings.mode.as_str()));
@@ -4044,7 +4062,13 @@ async fn guest_power_routes_read_into_ui_types() {
         assert!(r.plan.moves.is_empty(), "nothing to rebalance on one node");
         let _: Vec<api::MoveHistoryEntry> = fetch(&c, &token, "/cluster/moves").await;
         // Entering maintenance needs somewhere to move guests to.
-        let (st, _) = post(&c, &token, "/nodes/maintenance", json!({"enabled": true, "drain": true})).await;
+        let (st, _) = post(
+            &c,
+            &token,
+            "/nodes/maintenance",
+            json!({"enabled": true, "drain": true}),
+        )
+        .await;
         assert_eq!(st, 409, "maintenance on a single node");
         let mut bad = serde_json::to_value(&r.settings).unwrap();
         bad["mode"] = json!("sometimes");
@@ -4063,7 +4087,14 @@ async fn guest_power_routes_read_into_ui_types() {
         assert_eq!(rules.affinity_group.as_deref(), Some("web"));
         assert!(rules.no_migrate);
         assert_eq!(
-            put(&c, &token, &pl, json!({"affinity_group": "g", "anti_affinity_group": "g"})).await.0,
+            put(
+                &c,
+                &token,
+                &pl,
+                json!({"affinity_group": "g", "anti_affinity_group": "g"})
+            )
+            .await
+            .0,
             422
         );
         let _ = put(&c, &token, &pl, json!({})).await;

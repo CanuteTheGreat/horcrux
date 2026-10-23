@@ -86,7 +86,9 @@ pub fn ContainerList() -> impl IntoView {
             };
             match r {
                 Ok(()) => set_action_error.set(None),
-                Err(e) => set_action_error.set(Some(format!("{what} {container_id}: {}", e.message))),
+                Err(e) => {
+                    set_action_error.set(Some(format!("{what} {container_id}: {}", e.message)))
+                }
             }
             reload();
         });

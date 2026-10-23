@@ -10,8 +10,10 @@ pub fn VmList() -> impl IntoView {
     let (error, set_error) = create_signal(None::<String>);
     let (notice, set_notice) = create_signal(None::<String>);
     // Saved states (Hyper-V-style "Save state"), by VM id.
-    let (saved, set_saved) = create_signal(std::collections::HashMap::<String, api::SavedState>::new());
-    let (blockers, set_blockers) = create_signal(std::collections::HashMap::<String, String>::new());
+    let (saved, set_saved) =
+        create_signal(std::collections::HashMap::<String, api::SavedState>::new());
+    let (blockers, set_blockers) =
+        create_signal(std::collections::HashMap::<String, String>::new());
 
     // Every action used to only log to the browser console and never
     // refreshed the list, so Start/Stop/Delete looked like they did nothing.
@@ -88,7 +90,10 @@ pub fn VmList() -> impl IntoView {
         });
     };
     let resume_state = move |vm_id: String| {
-        set_notice.set(Some(format!("Resuming VM {} from its saved state...", vm_id)));
+        set_notice.set(Some(format!(
+            "Resuming VM {} from its saved state...",
+            vm_id
+        )));
         spawn_local(async move {
             let r = api::resume_guest_state("vm", &vm_id).await.map(|_| ());
             report(format!("VM {} resumed", vm_id), r);

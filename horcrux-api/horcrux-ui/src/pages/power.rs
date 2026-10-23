@@ -21,7 +21,11 @@ pub fn human_size(b: u64) -> String {
 
 /// "Saved 12.3 MB, 2026-10-22 16:03" for the guest lists.
 pub fn saved_label(s: &api::SavedState) -> String {
-    let when = s.saved_at.get(..16).unwrap_or(&s.saved_at).replace('T', " ");
+    let when = s
+        .saved_at
+        .get(..16)
+        .unwrap_or(&s.saved_at)
+        .replace('T', " ");
     match s.size_bytes {
         Some(b) => format!("Saved {} · {} UTC", human_size(b), when),
         None => format!("Saved · {} UTC", when),
@@ -193,8 +197,18 @@ fn GuestPowerRow(
 ) -> impl IntoView {
     let stop = create_rw_signal(g.overrides.stop_action.clone().unwrap_or_default());
     let start = create_rw_signal(g.overrides.start_action.clone().unwrap_or_default());
-    let delay = create_rw_signal(g.overrides.start_delay_secs.map(|d| d.to_string()).unwrap_or_default());
-    let order = create_rw_signal(g.overrides.start_order.map(|d| d.to_string()).unwrap_or_default());
+    let delay = create_rw_signal(
+        g.overrides
+            .start_delay_secs
+            .map(|d| d.to_string())
+            .unwrap_or_default(),
+    );
+    let order = create_rw_signal(
+        g.overrides
+            .start_order
+            .map(|d| d.to_string())
+            .unwrap_or_default(),
+    );
     let up = g.status == "running" || g.status == "paused";
     let kind = g.kind.clone();
     let id = g.id.clone();
@@ -321,7 +335,10 @@ mod tests {
             note: None,
         };
         assert_eq!(saved_label(&s), "Saved 2.0 MB · 2026-10-22 16:03 UTC");
-        let t = api::SavedState { size_bytes: None, ..s };
+        let t = api::SavedState {
+            size_bytes: None,
+            ..s
+        };
         assert!(saved_label(&t).starts_with("Saved · 2026-10-22"));
     }
 }

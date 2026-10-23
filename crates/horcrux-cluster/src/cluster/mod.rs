@@ -1,10 +1,10 @@
 pub mod affinity;
-pub mod drain;
 pub mod arch;
 pub mod balancer;
 /// Clustering support module
 /// Provides multi-node cluster management, HA, and VM migration using Corosync
 pub mod corosync;
+pub mod drain;
 pub mod membership;
 pub mod migration;
 pub mod node;

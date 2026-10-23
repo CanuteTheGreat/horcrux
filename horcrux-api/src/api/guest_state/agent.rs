@@ -9,7 +9,12 @@
 use super::engine;
 use crate::error::ApiError;
 use crate::AppState;
-use axum::{extract::State, http::HeaderMap, routing::{get, post}, Json, Router};
+use axum::{
+    extract::State,
+    http::HeaderMap,
+    routing::{get, post},
+    Json, Router,
+};
 use std::path::Path;
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
@@ -104,7 +109,11 @@ pub async fn cli_main(args: &[String]) -> i32 {
         "0.0.0.0" | "::" | "" => "127.0.0.1".to_string(),
         h => h.to_string(),
     };
-    let scheme = if cfg.server.tls_enabled { "https" } else { "http" };
+    let scheme = if cfg.server.tls_enabled {
+        "https"
+    } else {
+        "http"
+    };
     let base = format!("{scheme}://{host}:{}", cfg.server.port);
     let token = match std::fs::read_to_string(engine::token_path(&cfg.paths.data_dir)) {
         Ok(t) => t.trim().to_string(),
@@ -171,7 +180,10 @@ pub async fn cli_main(args: &[String]) -> i32 {
         }
         println!("{}", body["message"].as_str().unwrap_or(""));
     } else {
-        println!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&body).unwrap_or_default()
+        );
     }
     if ok || cmd == "stop" {
         0

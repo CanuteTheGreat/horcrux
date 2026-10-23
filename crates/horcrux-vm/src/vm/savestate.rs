@@ -200,31 +200,59 @@ impl VmManager {
                    "arguments": {"max-bandwidth": 1u64 << 40}}),
         )
         .await;
-        if let Err(e) = qmp_command(&sock, json!({"execute": "migrate", "arguments": {"uri": uri}}))
-            .await
+        if let Err(e) = qmp_command(
+            &sock,
+            json!({"execute": "migrate", "arguments": {"uri": uri}}),
+        )
+        .await
         {
-            return Err(undo(&sock, &tmp, was_running, format!("QEMU refused to save the state: {e}")).await);
+            return Err(undo(
+                &sock,
+                &tmp,
+                was_running,
+                format!("QEMU refused to save the state: {e}"),
+            )
+            .await);
         }
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
             let m = match qmp_command(&sock, json!({"execute": "query-migrate"})).await {
                 Ok(m) => m,
-                Err(e) => return Err(undo(&sock, &tmp, was_running, format!("lost QEMU while saving the state: {e}")).await),
+                Err(e) => {
+                    return Err(undo(
+                        &sock,
+                        &tmp,
+                        was_running,
+                        format!("lost QEMU while saving the state: {e}"),
+                    )
+                    .await)
+                }
             };
             match m["status"].as_str() {
                 Some("completed") => break,
                 Some("failed") | Some("cancelled") => {
                     let why = m["error-desc"].as_str().unwrap_or("no reason given");
-                    return Err(undo(&sock, &tmp, was_running, format!("saving the state failed: {why}")).await);
+                    return Err(undo(
+                        &sock,
+                        &tmp,
+                        was_running,
+                        format!("saving the state failed: {why}"),
+                    )
+                    .await);
                 }
                 _ => {}
             }
             if tokio::time::Instant::now() >= deadline {
                 let _ = qmp_command(&sock, json!({"execute": "migrate_cancel"})).await;
-                return Err(undo(&sock, &tmp, was_running, format!(
-                    "saving the state did not finish within {} s",
-                    timeout.as_secs()
-                ))
+                return Err(undo(
+                    &sock,
+                    &tmp,
+                    was_running,
+                    format!(
+                        "saving the state did not finish within {} s",
+                        timeout.as_secs()
+                    ),
+                )
                 .await);
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
@@ -340,7 +368,9 @@ impl VmManager {
         )
         .await
         {
-            return Err(abort_resume(&vm, format!("QEMU refused to load the saved state: {e}")).await);
+            return Err(
+                abort_resume(&vm, format!("QEMU refused to load the saved state: {e}")).await,
+            );
         }
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
@@ -362,17 +392,24 @@ impl VmManager {
                         .unwrap_or_default();
                     if m["status"].as_str() == Some("failed") {
                         let why = m["error-desc"].as_str().unwrap_or("no reason given");
-                        return Err(abort_resume(&vm, format!("loading the saved state failed: {why}")).await);
+                        return Err(abort_resume(
+                            &vm,
+                            format!("loading the saved state failed: {why}"),
+                        )
+                        .await);
                     }
                     let _ = qmp_command(&sock, json!({"execute": "cont"})).await;
                 }
                 _ => {}
             }
             if tokio::time::Instant::now() >= deadline {
-                return Err(abort_resume(&vm, format!(
-                    "loading the saved state did not finish within {} s",
-                    timeout.as_secs()
-                ))
+                return Err(abort_resume(
+                    &vm,
+                    format!(
+                        "loading the saved state did not finish within {} s",
+                        timeout.as_secs()
+                    ),
+                )
                 .await);
             }
             tokio::time::sleep(Duration::from_millis(200)).await;

@@ -25,13 +25,14 @@ use pages::{
     CertificatesPage, CloneList, ClusterDashboard, ClusterManagementPage, ConfigMapsPage,
     ContainerCreate, ContainerEventsPage, ContainerExecPage, ContainerList, ContainerLogsPage,
     ContainerNetworksPage, Dashboard, DashboardsPage, DeploymentsPage, DiskManagementPage,
-    GpuManagement, HaDashboard, HaFailoverPage, HaGroupsPage, MaintenancePage, HelmChartsPage, HelmReleasesPage,
+    GpuManagement, HaDashboard, HaFailoverPage, HaGroupsPage, HelmChartsPage, HelmReleasesPage,
     HelmRepositoriesPage, ImagesPage, IngressesPage, KubernetesManagement, Login, LxcContainerPage,
-    LxcTemplatesPage, MetricsExplorerPage, MfaPage, MigrationCenterPage, Monitoring,
-    NetworkManagement, NotificationsPage, ObservabilityPage, PermissionsPage, PodsPage, RealmsPage,
-    ReplicationList, RetentionPoliciesPage, RolesPage, SecretsPage, ServicesPage, SessionsPage,
-    SmartMonitoringPage, SnapshotList, SnapshotManagerPage, StacksPage, StorageManagement,
-    TemplateManagerPage, UserMenu, UsersPage, VmConsole, VmCreate, VmList, VolumesPage,
+    LxcTemplatesPage, MaintenancePage, MetricsExplorerPage, MfaPage, MigrationCenterPage,
+    Monitoring, NetworkManagement, NotificationsPage, ObservabilityPage, PermissionsPage, PodsPage,
+    RealmsPage, ReplicationList, RetentionPoliciesPage, RolesPage, SecretsPage, ServicesPage,
+    SessionsPage, SmartMonitoringPage, SnapshotList, SnapshotManagerPage, StacksPage,
+    StorageManagement, TemplateManagerPage, UserMenu, UsersPage, VmConsole, VmCreate, VmList,
+    VolumesPage,
 };
 
 #[component]

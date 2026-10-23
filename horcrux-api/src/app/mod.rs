@@ -1833,7 +1833,8 @@ async fn start_vm(
     // A guest with saved state resumes from it (starting it cold would make
     // the saved state stale).
     let vm = if api::guest_state::engine::has_saved(&state, api::guest_state::GuestKind::Vm, &id) {
-        api::guest_state::engine::resume_guest(&state, api::guest_state::GuestKind::Vm, &id).await?;
+        api::guest_state::engine::resume_guest(&state, api::guest_state::GuestKind::Vm, &id)
+            .await?;
         state.vm_manager.get_vm(&id).await?
     } else {
         state.vm_manager.start_vm(&id).await?
@@ -2919,17 +2920,19 @@ async fn start_container(
     Path(id): Path<String>,
 ) -> Result<Json<horcrux_common::ContainerConfig>, ApiError> {
     let old_status = state.container_manager.get_container(&id).await?.status;
-    let container = if api::guest_state::engine::has_saved(
-        &state,
-        api::guest_state::GuestKind::Container,
-        &id,
-    ) {
-        api::guest_state::engine::resume_guest(&state, api::guest_state::GuestKind::Container, &id)
+    let container =
+        if api::guest_state::engine::has_saved(&state, api::guest_state::GuestKind::Container, &id)
+        {
+            api::guest_state::engine::resume_guest(
+                &state,
+                api::guest_state::GuestKind::Container,
+                &id,
+            )
             .await?;
-        state.container_manager.get_container(&id).await?
-    } else {
-        state.container_manager.start_container(&id).await?
-    };
+            state.container_manager.get_container(&id).await?
+        } else {
+            state.container_manager.start_container(&id).await?
+        };
 
     // Broadcast status change event
     state

@@ -120,7 +120,11 @@ async fn probe_criu() -> CriuStatus {
                     "CRIU is installed but `criu check` fails on this host (the kernel or \
                      container environment lacks checkpoint/restore support): {}",
                     if detail.is_empty() {
-                        text.trim().lines().last().unwrap_or("no output").to_string()
+                        text.trim()
+                            .lines()
+                            .last()
+                            .unwrap_or("no output")
+                            .to_string()
                     } else {
                         detail.join("; ")
                     }
@@ -197,10 +201,12 @@ pub async fn support(runtime: &ContainerRuntime) -> Support {
                 && !low.contains("no such container")
                 && (low.contains("experimental") || low.contains("unknown command"))
             {
-                return no("Docker's checkpoint/restore is an experimental feature and is \
+                return no(
+                    "Docker's checkpoint/restore is an experimental feature and is \
                      switched off on this node: set \"experimental\": true in \
                      /etc/docker/daemon.json and restart Docker"
-                    .into());
+                        .into(),
+                );
             }
         }
     }
@@ -229,13 +235,15 @@ pub fn dir_size(p: &Path) -> u64 {
 
 /// Run `cmd` for at most `timeout`; Ok(stdout) or an error with its output.
 async fn run(cmd: &mut Command, what: &str, timeout: Duration) -> Result<String> {
-    let child = cmd
-        .stdin(Stdio::null())
-        .kill_on_drop(true)
-        .output();
+    let child = cmd.stdin(Stdio::null()).kill_on_drop(true).output();
     let out = tokio::time::timeout(timeout, child)
         .await
-        .map_err(|_| Error::System(format!("{what} did not finish within {} s", timeout.as_secs())))?
+        .map_err(|_| {
+            Error::System(format!(
+                "{what} did not finish within {} s",
+                timeout.as_secs()
+            ))
+        })?
         .map_err(|e| Error::System(format!("failed to run {what}: {e}")))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -359,8 +367,7 @@ impl ContainerManager {
                 };
                 // Stateful stop needs this key on the instance.
                 let _ = run(
-                    Command::new(cli)
-                        .args(["config", "set", &c.name, "migration.stateful=true"]),
+                    Command::new(cli).args(["config", "set", &c.name, "migration.stateful=true"]),
                     "set migration.stateful",
                     Duration::from_secs(30),
                 )

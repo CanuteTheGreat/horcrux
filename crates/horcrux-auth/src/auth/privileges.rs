@@ -62,8 +62,16 @@ fn is_read(method: &str) -> bool {
 }
 
 const POWER_ACTIONS: &[&str] = &[
-    "start", "stop", "shutdown", "reboot", "reset", "pause", "resume", "suspend",
-    "save-state", "resume-state",
+    "start",
+    "stop",
+    "shutdown",
+    "reboot",
+    "reset",
+    "pause",
+    "resume",
+    "suspend",
+    "save-state",
+    "resume-state",
 ];
 
 /// Areas with an explicit rule below. Kept as a list so the route-coverage
@@ -333,7 +341,9 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
             "templates" => read_write(m, P::DatastoreAudit, P::DatastoreAllocateSpace, "/storage"),
             _ => read_write(m, P::SysAudit, P::SysModify, "/nodes"),
         },
-        "gpu" | "system" | "nodes" | "host-agent" => read_write(m, P::SysAudit, P::SysModify, "/nodes"),
+        "gpu" | "system" | "nodes" | "host-agent" => {
+            read_write(m, P::SysAudit, P::SysModify, "/nodes")
+        }
         "tls" => match arg(1) {
             // the node's CA certificate: public, needed before logging in
             "ca.pem" => Requirement::Public,
