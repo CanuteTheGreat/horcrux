@@ -240,12 +240,14 @@ impl MigrationManager {
         // remote node queried over SSH, matching the SSH-based node access
         // pattern used elsewhere in this codebase e.g.
         // vm::cross_node_clone::verify_ssh_connectivity).
-        checks.push(Self::check_cpu_compatibility(
-            source_node,
-            target_node,
-            *migration_type == MigrationType::Live,
-        )
-        .await);
+        checks.push(
+            Self::check_cpu_compatibility(
+                source_node,
+                target_node,
+                *migration_type == MigrationType::Live,
+            )
+            .await,
+        );
 
         // Check 7: Memory availability on target - query the target's
         // available RAM (via /proc/meminfo, same parsing as
@@ -1039,7 +1041,10 @@ impl MigrationManager {
 
     /// Some(reason) when the two vendors are known and differ.
     fn cpu_vendor_conflict(source: &str, target: &str) -> Option<String> {
-        let (s, t) = (Self::cpu_vendor_family(source), Self::cpu_vendor_family(target));
+        let (s, t) = (
+            Self::cpu_vendor_family(source),
+            Self::cpu_vendor_family(target),
+        );
         if s != "unknown" && t != "unknown" && s != t {
             Some(format!("CPU vendor mismatch ({} -> {})", source, target))
         } else {
@@ -1248,7 +1253,8 @@ mod tests {
 
     #[test]
     fn test_parse_cpuinfo_vendor() {
-        let amd = "vendor_id\t: AuthenticAMD\nmodel name\t: AMD EPYC 7302\nflags\t\t: fpu sse2 avx2\n";
+        let amd =
+            "vendor_id\t: AuthenticAMD\nmodel name\t: AMD EPYC 7302\nflags\t\t: fpu sse2 avx2\n";
         let (m, f, v) = MigrationManager::parse_cpuinfo(amd).unwrap();
         assert_eq!(m, "AMD EPYC 7302");
         assert!(f.contains("avx2"));
