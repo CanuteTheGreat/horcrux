@@ -244,13 +244,24 @@ impl ChannelConfig {
                 _ => Err(format!("{} must be an http(s) URL, got '{}'", what, u)),
             }
         }
+        // A secret that is still the placeholder has nothing to be restored
+        // from (a create, or a type change): refuse it rather than store and
+        // deliver the literal mask as a password / token / header value.
+        fn not_masked(what: &str, v: &str) -> Result<(), String> {
+            if v == SECRET_MASK {
+                return Err(format!("{} is masked; enter the real value", what));
+            }
+            Ok(())
+        }
         match self {
             ChannelConfig::Email {
                 address,
                 smtp_server,
                 smtp_port,
+                password,
                 ..
             } => {
+                not_masked("SMTP password", password)?;
                 if smtp_server.trim().is_empty() || *smtp_port == 0 {
                     return Err("SMTP server and port are required".into());
                 }
@@ -274,14 +285,34 @@ impl ChannelConfig {
                 routing_key,
                 severity,
             } => {
+                not_masked("PagerDuty integration key", integration_key)?;
+                not_masked("PagerDuty routing key", routing_key)?;
                 if integration_key.trim().is_empty() && routing_key.trim().is_empty() {
                     return Err("PagerDuty routing/integration key is required".into());
                 }
                 pd_severity(severity)?;
                 Ok(())
             }
-            ChannelConfig::Webhook { url, method, .. } => {
+            ChannelConfig::Webhook {
+                url,
+                method,
+                headers,
+                auth,
+            } => {
                 http_url("webhook URL", url)?;
+                for (k, v) in headers {
+                    not_masked(&format!("header '{}'", k), v)?;
+                }
+                match auth {
+                    Some(WebhookAuth::BasicAuth { password, .. }) => {
+                        not_masked("basic auth password", password)?
+                    }
+                    Some(WebhookAuth::BearerToken { token }) => {
+                        not_masked("bearer token", token)?
+                    }
+                    Some(WebhookAuth::ApiKey { key, .. }) => not_masked("API key", key)?,
+                    None => {}
+                }
                 match method.to_uppercase().as_str() {
                     "POST" | "PUT" | "PATCH" | "GET" => Ok(()),
                     m => Err(format!("unsupported webhook method '{}'", m)),
@@ -1155,5 +1186,66 @@ mod tests {
         assert!(back.validate().is_err());
         // Nothing to restore from (a new channel): refused too.
         assert!(shown.validate().is_err());
+    }
+
+    #[test]
+    fn masked_secrets_are_refused_without_a_stored_value() {
+        let wh = |headers: &[(&str, &str)], auth: Option<WebhookAuth>| ChannelConfig::Webhook {
+            url: "https://h.example.org/hook".into(),
+            method: "POST".into(),
+            headers: headers
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            auth,
+        };
+        assert!(wh(&[("X-A", "real")], None).validate().is_ok());
+        assert!(wh(&[("X-A", SECRET_MASK)], None).validate().is_err());
+        for auth in [
+            WebhookAuth::BearerToken {
+                token: SECRET_MASK.into(),
+            },
+            WebhookAuth::BasicAuth {
+                username: "u".into(),
+                password: SECRET_MASK.into(),
+            },
+            WebhookAuth::ApiKey {
+                key: SECRET_MASK.into(),
+                header: "X-Key".into(),
+            },
+        ] {
+            assert!(wh(&[], Some(auth)).validate().is_err());
+        }
+        let email = |pw: &str| ChannelConfig::Email {
+            address: "a@errant.solutions".into(),
+            smtp_server: "smtp.example.org".into(),
+            smtp_port: 587,
+            username: "u".into(),
+            password: pw.into(),
+            use_tls: true,
+        };
+        assert!(email("pw").validate().is_ok());
+        assert!(email(SECRET_MASK).validate().is_err());
+        let pd = |k: &str| ChannelConfig::PagerDuty {
+            integration_key: k.into(),
+            routing_key: k.into(),
+            severity: "error".into(),
+        };
+        assert!(pd("key").validate().is_ok());
+        assert!(pd(SECRET_MASK).validate().is_err());
+
+        // Same type update re-sending the mask still restores the stored
+        // secret; a type change (nothing to restore) is refused.
+        let stored = wh(
+            &[("X-A", "real")],
+            Some(WebhookAuth::BearerToken { token: "tok".into() }),
+        );
+        let mut back = stored.masked();
+        back.unmask_from(&stored);
+        assert_eq!(back, stored);
+        assert!(back.validate().is_ok());
+        let mut changed = email(SECRET_MASK);
+        changed.unmask_from(&stored);
+        assert!(changed.validate().is_err());
     }
 }

@@ -430,288 +430,31 @@ pub fn NotificationsPage() -> impl IntoView {
         _ => "📡",
     };
 
-    // Initial load
-    create_effect(move |_| {
-        load_data.dispatch(());
-    });
-
-    view! {
-        <div class="notifications-page">
-            <div class="page-header">
-                <h1>"Notification Channels"</h1>
-                <div class="header-actions">
-                    <button
-                        class="btn btn-primary"
-                        on:click=move |_| set_show_create_modal.set(true)
-                        disabled=loading
-                    >
-                        "Create Channel"
-                    </button>
-                    <button
-                        class="btn btn-secondary"
-                        on:click=move |_| load_data.dispatch(())
-                        disabled=loading
-                    >
-                        "Refresh"
-                    </button>
-                </div>
-            </div>
-
-            {move || notice.get().map(|msg| view! {
-                <div class="alert alert-success" id="notifications-notice">{msg}</div>
-            })}
-            {move || error_message.get().map(|msg| view! {
-                <div class="alert alert-error">{msg}</div>
-            })}
-
-            <div class="notification-tabs">
-                <div class="tab-buttons">
-                    <button
-                        class={move || if active_tab.get() == "channels" { "tab-button active" } else { "tab-button" }}
-                        on:click=move |_| set_active_tab.set("channels".to_string())
-                    >
-                        "Notification Channels ("{notification_channels.get().len()}")"
-                    </button>
-                    <button
-                        class={move || if active_tab.get() == "webhooks" { "tab-button active" } else { "tab-button" }}
-                        on:click=move |_| set_active_tab.set("webhooks".to_string())
-                    >
-                        "Webhooks ("{webhook_configs.get().len()}")"
-                    </button>
-                </div>
-
-                <div class="tab-content">
-                    {move || match active_tab.get().as_str() {
-                        "channels" => view! {
-                            <div class="channels-section">
-                                {move || if loading.get() {
-                                    view! { <div class="loading">"Loading notification channels..."</div> }.into_view()
-                                } else if notification_channels.get().is_empty() {
-                                    view! { <div class="empty-state">"No notification channels configured"</div> }.into_view()
-                                } else {
-                                    view! {
-                                        <div class="channels-grid">
-                                            {notification_channels.get().into_iter().map(|channel| {
-                                                let channel_clone = channel.clone();
-                                                let channel_clone2 = channel.clone();
-                                                let channel_clone3 = channel.clone();
-                                                let status_color = get_channel_status_color(&channel);
-                                                let icon = get_channel_icon(&channel.channel_type);
-                                                let name = channel.name.clone();
-                                                let channel_type = channel.channel_type.clone();
-                                                let enabled = channel.enabled;
-                                                let enabled_text = if enabled { "Enabled" } else { "Disabled" };
-                                                let description = channel.description.clone();
-                                                let success_count = channel.success_count;
-                                                let failure_count = channel.failure_count;
-                                                let last_used = channel.last_used;
-                                                let config = channel.config.clone();
-
-                                                let card_name = channel.name.clone();
-                                                view! {
-                                                    <div class="channel-card" data-channel-name=card_name>
-                                                        <div class="card-header">
-                                                            <div class="channel-info">
-                                                                <div class="channel-title">
-                                                                    <span class="channel-icon">{icon}</span>
-                                                                    <h3>{name}</h3>
-                                                                </div>
-                                                                <span class="channel-type">{channel_type}</span>
-                                                                <span class={format!("status-indicator {}", status_color)}>
-                                                                    {enabled_text}
-                                                                </span>
-                                                            </div>
-                                                            <div class="card-actions">
-                                                                <button
-                                                                    class="btn btn-sm btn-secondary"
-                                                                    on:click=move |_| {
-                                                                        set_selected_channel.set(Some(channel_clone.clone()));
-                                                                        init_form_with_channel(&channel_clone);
-                                                                        set_show_edit_modal.set(true);
-                                                                    }
-                                                                >
-                                                                    "Edit"
-                                                                </button>
-                                                                <button
-                                                                    class="btn btn-sm btn-primary"
-                                                                    on:click=move |_| {
-                                                                        set_selected_channel.set(Some(channel_clone2.clone()));
-                                                                        set_show_test_modal.set(true);
-                                                                    }
-                                                                    disabled=!enabled
-                                                                >
-                                                                    "Test"
-                                                                </button>
-                                                                <button
-                                                                    class="btn btn-sm btn-danger"
-                                                                    on:click=move |_| {
-                                                                        if web_sys::window()
-                                                                            .unwrap()
-                                                                            .confirm_with_message(&format!("Delete notification channel '{}'?", channel_clone3.name))
-                                                                            .unwrap_or(false)
-                                                                        {
-                                                                            delete_channel.dispatch(channel_clone3.id.clone());
-                                                                        }
-                                                                    }
-                                                                >
-                                                                    "Delete"
-                                                                </button>
-                                                            </div>
-                                                        </div>
-                                                        <div class="card-content">
-                                                            {description.map(|desc| view! {
-                                                                <div class="channel-description">{desc}</div>
-                                                            })}
-
-                                                            <div class="channel-stats">
-                                                                <div class="stat-item">
-                                                                    <span class="stat-label">"Successful:"</span>
-                                                                    <span class="stat-value success">{success_count}</span>
-                                                                </div>
-                                                                <div class="stat-item">
-                                                                    <span class="stat-label">"Failed:"</span>
-                                                                    <span class="stat-value error">{failure_count}</span>
-                                                                </div>
-                                                                {last_used.map(|lu| view! {
-                                                                    <div class="stat-item">
-                                                                        <span class="stat-label">"Last Used:"</span>
-                                                                        <span class="stat-value">{lu.format("%Y-%m-%d %H:%M UTC").to_string()}</span>
-                                                                    </div>
-                                                                })}
-                                                            </div>
-
-                                                            <div class="channel-config">
-                                                                {match config {
-                                                                    NotificationChannelConfig::Email { address, smtp_server, .. } => view! {
-                                                                        <div class="config-details">
-                                                                            <div class="config-row">
-                                                                                <span class="config-label">"Email:"</span>
-                                                                                <span class="config-value">{address}</span>
-                                                                            </div>
-                                                                            <div class="config-row">
-                                                                                <span class="config-label">"SMTP:"</span>
-                                                                                <span class="config-value">{smtp_server}</span>
-                                                                            </div>
-                                                                        </div>
-                                                                    }.into_view(),
-                                                                    NotificationChannelConfig::Slack { channel: slack_channel, .. } => view! {
-                                                                        <div class="config-details">
-                                                                            {slack_channel.map(|ch| view! {
-                                                                                <div class="config-row">
-                                                                                    <span class="config-label">"Channel:"</span>
-                                                                                    <span class="config-value">{"#"}{ch}</span>
-                                                                                </div>
-                                                                            })}
-                                                                        </div>
-                                                                    }.into_view(),
-                                                                    NotificationChannelConfig::Teams { .. } => view! {
-                                                                        <div class="config-details">
-                                                                            <div class="config-row">
-                                                                                <span class="config-label">"Type:"</span>
-                                                                                <span class="config-value">"Microsoft Teams"</span>
-                                                                            </div>
-                                                                        </div>
-                                                                    }.into_view(),
-                                                                    NotificationChannelConfig::Discord { username, .. } => view! {
-                                                                        <div class="config-details">
-                                                                            {username.map(|usr| view! {
-                                                                                <div class="config-row">
-                                                                                    <span class="config-label">"Username:"</span>
-                                                                                    <span class="config-value">{usr}</span>
-                                                                                </div>
-                                                                            })}
-                                                                        </div>
-                                                                    }.into_view(),
-                                                                    NotificationChannelConfig::PagerDuty { severity, .. } => view! {
-                                                                        <div class="config-details">
-                                                                            <div class="config-row">
-                                                                                <span class="config-label">"Severity:"</span>
-                                                                                <span class="config-value">{severity}</span>
-                                                                            </div>
-                                                                        </div>
-                                                                    }.into_view(),
-                                                                    NotificationChannelConfig::Webhook { method, .. } => view! {
-                                                                        <div class="config-details">
-                                                                            <div class="config-row">
-                                                                                <span class="config-label">"Method:"</span>
-                                                                                <span class="config-value">{method}</span>
-                                                                            </div>
-                                                                        </div>
-                                                                    }.into_view(),
-                                                                }}
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                }
-                                            }).collect::<Vec<_>>()}
-                                        </div>
-                                    }.into_view()
-                                }}
-                            </div>
-                        }.into_view(),
-
-                        "webhooks" => view! {
-                            <div class="webhooks-section">
-                                <p class="section-help">
-                                    "Event webhooks (VM/container lifecycle events) configured through /api/webhooks, with their delivery counters."
-                                </p>
-                                {move || if webhook_configs.get().is_empty() {
-                                    view! { <div class="empty-state">"No event webhooks configured"</div> }.into_view()
-                                } else {
-                                    view! {
-                                        <table class="data-table" id="event-webhooks">
-                                            <thead>
-                                                <tr>
-                                                    <th>"Name"</th>
-                                                    <th>"URL"</th>
-                                                    <th>"Events"</th>
-                                                    <th>"Enabled"</th>
-                                                    <th>"Delivered"</th>
-                                                    <th>"Failed"</th>
-                                                    <th>"Last triggered"</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {webhook_configs.get().into_iter().map(|w| view! {
-                                                    <tr>
-                                                        <td>{w.name}</td>
-                                                        <td>{w.url}</td>
-                                                        <td>{w.events.iter().map(|e| e.label()).collect::<Vec<_>>().join(", ")}</td>
-                                                        <td>{if w.enabled { "yes" } else { "no" }}</td>
-                                                        <td>{w.success_count}</td>
-                                                        <td>{w.failure_count}</td>
-                                                        <td>{w.last_triggered.map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or_else(|| "never".to_string())}</td>
-                                                    </tr>
-                                                }).collect::<Vec<_>>()}
-                                            </tbody>
-                                        </table>
-                                    }.into_view()
-                                }}
-                            </div>
-                        }.into_view(),
-
-                        _ => view! {}.into_view(),
-                    }}
-                </div>
-            </div>
-
-            // Create Channel Modal
-            {move || if show_create_modal.get() {
-                view! {
+    // The create and edit dialogs share one form (the edit dialog is the
+    // create form pre-filled by `init_form_with_channel`).
+    let channel_modal = move |is_edit: bool| {
+        let close_modal = move || {
+            if is_edit {
+                set_show_edit_modal.set(false);
+                set_selected_channel.set(None);
+            } else {
+                set_show_create_modal.set(false);
+            }
+            clear_form();
+        };
+        view! {
                     <div class="modal-overlay" on:click=move |e: MouseEvent| {
                         if e.target().and_then(|t| t.dyn_ref::<web_sys::Element>().map(|el| el.class_name())).unwrap_or_default() == "modal-overlay" {
-                            set_show_create_modal.set(false);
-                            clear_form();
+                            close_modal();
                         }
                     }>
-                        <div class="modal-content large">
+                        <div class="modal-content large" id={if is_edit { "edit-channel-modal" } else { "create-channel-modal" }}>
                             <div class="modal-header">
-                                <h2>"Create Notification Channel"</h2>
+                                <h2>{if is_edit { "Edit Notification Channel" } else { "Create Notification Channel" }}</h2>
                                 <button
                                     class="modal-close"
                                     on:click=move |_| {
-                                        set_show_create_modal.set(false);
-                                        clear_form();
+                                        close_modal();
                                     }
                                 >"x"</button>
                             </div>
@@ -981,19 +724,298 @@ pub fn NotificationsPage() -> impl IntoView {
                                 <button
                                     class="btn btn-secondary"
                                     on:click=move |_| {
-                                        set_show_create_modal.set(false);
-                                        clear_form();
+                                        close_modal();
                                     }
                                 >"Cancel"</button>
                                 <button
                                     class="btn btn-primary"
-                                    on:click=move |_| create_channel.dispatch(())
+                                    on:click=move |_| {
+                                        if is_edit {
+                                            edit_channel.dispatch(())
+                                        } else {
+                                            create_channel.dispatch(())
+                                        }
+                                    }
                                     disabled=move || form_name.get().is_empty() || loading.get()
-                                >"Create Channel"</button>
+                                >{if is_edit { "Save Changes" } else { "Create Channel" }}</button>
                             </div>
                         </div>
-                    </div>
-                }.into_view()
+                    </div>}.into_view()
+    };
+
+    // Initial load
+    create_effect(move |_| {
+        load_data.dispatch(());
+    });
+
+    view! {
+        <div class="notifications-page">
+            <div class="page-header">
+                <h1>"Notification Channels"</h1>
+                <div class="header-actions">
+                    <button
+                        class="btn btn-primary"
+                        on:click=move |_| set_show_create_modal.set(true)
+                        disabled=loading
+                    >
+                        "Create Channel"
+                    </button>
+                    <button
+                        class="btn btn-secondary"
+                        on:click=move |_| load_data.dispatch(())
+                        disabled=loading
+                    >
+                        "Refresh"
+                    </button>
+                </div>
+            </div>
+
+            {move || notice.get().map(|msg| view! {
+                <div class="alert alert-success" id="notifications-notice">{msg}</div>
+            })}
+            {move || error_message.get().map(|msg| view! {
+                <div class="alert alert-error">{msg}</div>
+            })}
+
+            <div class="notification-tabs">
+                <div class="tab-buttons">
+                    <button
+                        class={move || if active_tab.get() == "channels" { "tab-button active" } else { "tab-button" }}
+                        on:click=move |_| set_active_tab.set("channels".to_string())
+                    >
+                        "Notification Channels ("{move || notification_channels.get().len()}")"
+                    </button>
+                    <button
+                        class={move || if active_tab.get() == "webhooks" { "tab-button active" } else { "tab-button" }}
+                        on:click=move |_| set_active_tab.set("webhooks".to_string())
+                    >
+                        "Webhooks ("{move || webhook_configs.get().len()}")"
+                    </button>
+                </div>
+
+                <div class="tab-content">
+                    {move || match active_tab.get().as_str() {
+                        "channels" => view! {
+                            <div class="channels-section">
+                                {move || if loading.get() {
+                                    view! { <div class="loading">"Loading notification channels..."</div> }.into_view()
+                                } else if notification_channels.get().is_empty() {
+                                    view! { <div class="empty-state">"No notification channels configured"</div> }.into_view()
+                                } else {
+                                    view! {
+                                        <div class="channels-grid">
+                                            {notification_channels.get().into_iter().map(|channel| {
+                                                let channel_clone = channel.clone();
+                                                let channel_clone2 = channel.clone();
+                                                let channel_clone3 = channel.clone();
+                                                let status_color = get_channel_status_color(&channel);
+                                                let icon = get_channel_icon(&channel.channel_type);
+                                                let name = channel.name.clone();
+                                                let channel_type = channel.channel_type.clone();
+                                                let enabled = channel.enabled;
+                                                let enabled_text = if enabled { "Enabled" } else { "Disabled" };
+                                                let description = channel.description.clone();
+                                                let success_count = channel.success_count;
+                                                let failure_count = channel.failure_count;
+                                                let last_used = channel.last_used;
+                                                let config = channel.config.clone();
+
+                                                let card_name = channel.name.clone();
+                                                view! {
+                                                    <div class="channel-card" data-channel-name=card_name>
+                                                        <div class="card-header">
+                                                            <div class="channel-info">
+                                                                <div class="channel-title">
+                                                                    <span class="channel-icon">{icon}</span>
+                                                                    <h3>{name}</h3>
+                                                                </div>
+                                                                <span class="channel-type">{channel_type}</span>
+                                                                <span class={format!("status-indicator {}", status_color)}>
+                                                                    {enabled_text}
+                                                                </span>
+                                                            </div>
+                                                            <div class="card-actions">
+                                                                <button
+                                                                    class="btn btn-sm btn-secondary"
+                                                                    on:click=move |_| {
+                                                                        set_selected_channel.set(Some(channel_clone.clone()));
+                                                                        init_form_with_channel(&channel_clone);
+                                                                        set_show_edit_modal.set(true);
+                                                                    }
+                                                                >
+                                                                    "Edit"
+                                                                </button>
+                                                                <button
+                                                                    class="btn btn-sm btn-primary"
+                                                                    on:click=move |_| {
+                                                                        set_selected_channel.set(Some(channel_clone2.clone()));
+                                                                        set_show_test_modal.set(true);
+                                                                    }
+                                                                    disabled=!enabled
+                                                                >
+                                                                    "Test"
+                                                                </button>
+                                                                <button
+                                                                    class="btn btn-sm btn-danger"
+                                                                    on:click=move |_| {
+                                                                        if web_sys::window()
+                                                                            .unwrap()
+                                                                            .confirm_with_message(&format!("Delete notification channel '{}'?", channel_clone3.name))
+                                                                            .unwrap_or(false)
+                                                                        {
+                                                                            delete_channel.dispatch(channel_clone3.id.clone());
+                                                                        }
+                                                                    }
+                                                                >
+                                                                    "Delete"
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                        <div class="card-content">
+                                                            {description.map(|desc| view! {
+                                                                <div class="channel-description">{desc}</div>
+                                                            })}
+
+                                                            <div class="channel-stats">
+                                                                <div class="stat-item">
+                                                                    <span class="stat-label">"Successful:"</span>
+                                                                    <span class="stat-value success">{success_count}</span>
+                                                                </div>
+                                                                <div class="stat-item">
+                                                                    <span class="stat-label">"Failed:"</span>
+                                                                    <span class="stat-value error">{failure_count}</span>
+                                                                </div>
+                                                                {last_used.map(|lu| view! {
+                                                                    <div class="stat-item">
+                                                                        <span class="stat-label">"Last Used:"</span>
+                                                                        <span class="stat-value">{lu.format("%Y-%m-%d %H:%M UTC").to_string()}</span>
+                                                                    </div>
+                                                                })}
+                                                            </div>
+
+                                                            <div class="channel-config">
+                                                                {match config {
+                                                                    NotificationChannelConfig::Email { address, smtp_server, .. } => view! {
+                                                                        <div class="config-details">
+                                                                            <div class="config-row">
+                                                                                <span class="config-label">"Email:"</span>
+                                                                                <span class="config-value">{address}</span>
+                                                                            </div>
+                                                                            <div class="config-row">
+                                                                                <span class="config-label">"SMTP:"</span>
+                                                                                <span class="config-value">{smtp_server}</span>
+                                                                            </div>
+                                                                        </div>
+                                                                    }.into_view(),
+                                                                    NotificationChannelConfig::Slack { channel: slack_channel, .. } => view! {
+                                                                        <div class="config-details">
+                                                                            {slack_channel.map(|ch| view! {
+                                                                                <div class="config-row">
+                                                                                    <span class="config-label">"Channel:"</span>
+                                                                                    <span class="config-value">{"#"}{ch}</span>
+                                                                                </div>
+                                                                            })}
+                                                                        </div>
+                                                                    }.into_view(),
+                                                                    NotificationChannelConfig::Teams { .. } => view! {
+                                                                        <div class="config-details">
+                                                                            <div class="config-row">
+                                                                                <span class="config-label">"Type:"</span>
+                                                                                <span class="config-value">"Microsoft Teams"</span>
+                                                                            </div>
+                                                                        </div>
+                                                                    }.into_view(),
+                                                                    NotificationChannelConfig::Discord { username, .. } => view! {
+                                                                        <div class="config-details">
+                                                                            {username.map(|usr| view! {
+                                                                                <div class="config-row">
+                                                                                    <span class="config-label">"Username:"</span>
+                                                                                    <span class="config-value">{usr}</span>
+                                                                                </div>
+                                                                            })}
+                                                                        </div>
+                                                                    }.into_view(),
+                                                                    NotificationChannelConfig::PagerDuty { severity, .. } => view! {
+                                                                        <div class="config-details">
+                                                                            <div class="config-row">
+                                                                                <span class="config-label">"Severity:"</span>
+                                                                                <span class="config-value">{severity}</span>
+                                                                            </div>
+                                                                        </div>
+                                                                    }.into_view(),
+                                                                    NotificationChannelConfig::Webhook { method, .. } => view! {
+                                                                        <div class="config-details">
+                                                                            <div class="config-row">
+                                                                                <span class="config-label">"Method:"</span>
+                                                                                <span class="config-value">{method}</span>
+                                                                            </div>
+                                                                        </div>
+                                                                    }.into_view(),
+                                                                }}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                }
+                                            }).collect::<Vec<_>>()}
+                                        </div>
+                                    }.into_view()
+                                }}
+                            </div>
+                        }.into_view(),
+
+                        "webhooks" => view! {
+                            <div class="webhooks-section">
+                                <p class="section-help">
+                                    "Event webhooks (VM/container lifecycle events) configured through /api/webhooks, with their delivery counters."
+                                </p>
+                                {move || if webhook_configs.get().is_empty() {
+                                    view! { <div class="empty-state">"No event webhooks configured"</div> }.into_view()
+                                } else {
+                                    view! {
+                                        <table class="data-table" id="event-webhooks">
+                                            <thead>
+                                                <tr>
+                                                    <th>"Name"</th>
+                                                    <th>"URL"</th>
+                                                    <th>"Events"</th>
+                                                    <th>"Enabled"</th>
+                                                    <th>"Delivered"</th>
+                                                    <th>"Failed"</th>
+                                                    <th>"Last triggered"</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {webhook_configs.get().into_iter().map(|w| view! {
+                                                    <tr>
+                                                        <td>{w.name}</td>
+                                                        <td>{w.url}</td>
+                                                        <td>{w.events.iter().map(|e| e.label()).collect::<Vec<_>>().join(", ")}</td>
+                                                        <td>{if w.enabled { "yes" } else { "no" }}</td>
+                                                        <td>{w.success_count}</td>
+                                                        <td>{w.failure_count}</td>
+                                                        <td>{w.last_triggered.map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or_else(|| "never".to_string())}</td>
+                                                    </tr>
+                                                }).collect::<Vec<_>>()}
+                                            </tbody>
+                                        </table>
+                                    }.into_view()
+                                }}
+                            </div>
+                        }.into_view(),
+
+                        _ => view! {}.into_view(),
+                    }}
+                </div>
+            </div>
+
+            // Create / Edit Channel Modal
+            {move || if show_create_modal.get() {
+                channel_modal(false)
+            } else {
+                view! {}.into_view()
+            }}
+            {move || if show_edit_modal.get() {
+                channel_modal(true)
             } else {
                 view! {}.into_view()
             }}

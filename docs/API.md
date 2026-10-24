@@ -2822,7 +2822,9 @@ by `GET /api/webhooks` and `GET /api/alerts/notifications`.
 `PUT /api/notifications/channels/:id` keeps the stored value for any field
 sent back masked, so an edit form can re-send what it was given; a masked
 header the stored channel doesn't have is dropped. A masked URL with nothing
-to restore it from (a create, or a different host) is refused.
+to restore it from (a create, or a different host) is refused, as is a
+masked password, token, key or header value on a create or type change
+(`400 BAD_REQUEST`, like every other invalid channel configuration).
 
 #### Add Notification Channel
 

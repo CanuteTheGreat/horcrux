@@ -74,6 +74,8 @@ BK_VM = "e2e-bk-restored"
 BK_JOB = "e2e-bk-job"
 DISP_VM = "e2e-display-vm"
 NOTIFY = "e2e-notify-hook"
+NOTIFY_EDIT = "e2e-notify-edit"
+NOTIFY_EDITED = "e2e-notify-edited"
 ALERT_RULE = "e2e-alert-rule"
 TPL_VM = "e2e-tpl-vm"
 TPL_NAME = "e2e-tpl"
@@ -163,7 +165,7 @@ def cleanup():
         _req("DELETE", f"/api/vms/{TPL_VM}", tok)
         _req("DELETE", f"/api/cni/networks/{SDN_NET}", tok)
         for ch in api_get("/api/notifications/channels", tok) or []:
-            if ch.get("name") == NOTIFY:
+            if ch.get("name") in (NOTIFY, NOTIFY_EDIT, NOTIFY_EDITED):
                 _req("DELETE", f"/api/notifications/channels/{ch['id']}", tok)
         for r in api_get("/api/alerts/rules", tok) or []:
             if r.get("name") == ALERT_RULE:
@@ -267,6 +269,80 @@ def main():
         assert wait_for(lambda: received, "webhook test delivery"), received
         assert received[0]["event"] == "test", received
         expect(card.locator(".stat-value.success")).to_have_text("1", timeout=30000)
+
+        # ---- Monitoring > Notifications: Edit a webhook channel that has
+        # bearer auth + a header secret. The Edit button used to do nothing;
+        # a renamed channel must keep its secrets and still deliver them. ---
+        hits = []
+
+        class AuthHook(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                self.rfile.read(n)
+                hits.append((self.path, dict(self.headers)))
+                self.send_response(204)
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+
+        auth_hook = http.server.HTTPServer(("127.0.0.1", 0), AuthHook)
+        threading.Thread(target=auth_hook.serve_forever, daemon=True).start()
+        hook_url = f"http://127.0.0.1:{auth_hook.server_port}/e2e-edit?k=urlsecret"
+        chan = {
+            "name": NOTIFY_EDIT, "description": None, "channel_type": "webhook",
+            "enabled": True,
+            "config": {"type": "Webhook", "url": hook_url, "method": "POST",
+                       "headers": {"X-Api-Key": "hdr-secret"},
+                       "auth": {"type": "BearerToken", "token": "tok-e2e"}},
+        }
+        created = _req("POST", "/api/notifications/channels", tok, chan)
+        assert "urlsecret" not in json.dumps(created), created
+        # A masked secret on create is refused, not stored literally.
+        for bad_cfg in (
+            {"headers": {"X-Api-Key": "********"}, "auth": None},
+            {"headers": {}, "auth": {"type": "BearerToken", "token": "********"}},
+        ):
+            bad = json.loads(json.dumps(chan))
+            bad["name"] = NOTIFY_EDIT + "-bad"
+            bad["config"].update(bad_cfg)
+            r = urllib.request.Request(
+                f"{BASE}/api/notifications/channels", data=json.dumps(bad).encode(), method="POST",
+                headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"})
+            try:
+                urlopen(r)
+                raise AssertionError(f"masked secret accepted on create: {bad_cfg}")
+            except urllib.error.HTTPError as e:
+                assert e.code == 400, e.code
+        page.goto(f"{BASE}/monitoring/notifications")
+        card = page.locator(f".channel-card[data-channel-name='{NOTIFY_EDIT}']")
+        expect(card).to_be_visible(timeout=30000)
+        # The tab counter is reactive (it used to stay at its first value).
+        n_channels = len(api_get("/api/notifications/channels", tok))
+        expect(page.locator(".tab-button").first).to_have_text(f"Notification Channels ({n_channels})")
+        card.get_by_role("button", name="Edit").click()
+        modal = page.locator("#edit-channel-modal")
+        expect(modal).to_be_visible(timeout=10000)
+        expect(modal.locator("h2")).to_have_text("Edit Notification Channel")
+        # The form is pre-filled, with the URL and header value masked.
+        url_in = modal.get_by_placeholder("https://api.example.com/webhooks/alerts")
+        expect(url_in).to_have_value(re.compile(r"^http://127\.0\.0\.1:\d+/\*{8}$"))
+        assert "urlsecret" not in modal.inner_text()
+        modal.get_by_placeholder("Enter channel name").fill(NOTIFY_EDITED)
+        modal.get_by_role("button", name="Save Changes").click()
+        card = page.locator(f".channel-card[data-channel-name='{NOTIFY_EDITED}']")
+        expect(card).to_be_visible(timeout=30000)
+        expect(page.locator(f".channel-card[data-channel-name='{NOTIFY_EDIT}']")).to_have_count(0)
+        expect(page.locator("#edit-channel-modal")).to_have_count(0)
+        card.get_by_role("button", name="Test").click()
+        page.get_by_role("button", name="Send Test Notification").click()
+        expect(page.locator("#notifications-notice")).to_contain_text(NOTIFY_EDITED, timeout=30000)
+        got = wait_for(lambda: hits, "edited webhook channel delivery")
+        path, hdrs = got[-1]
+        assert path == "/e2e-edit?k=urlsecret", path
+        assert hdrs.get("Authorization") == "Bearer tok-e2e", hdrs
+        assert hdrs.get("X-Api-Key") == "hdr-secret", hdrs
+        auth_hook.shutdown()
 
         # ---- Monitoring > Alert Center: a rule made in the form really fires
         # (the page used to fail with "invalid type: map, expected a string"
