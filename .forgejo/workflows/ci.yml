@@ -747,11 +747,19 @@ jobs:
         # is no fixed 0.26.x. The grep below fails the job if webpki-roots
         # 1.x in Cargo.lock is ever older than 1.0.10 again. Drop this
         # --ignore once tokio-tungstenite no longer pulls the 0.26 shim.
+        #
+        # RUSTSEC-2026-0387 (crypto-bigint < 0.7.6, timing variability in
+        # constant-time operations, advisory 2026-10-24): crypto-bigint 0.5.5
+        # is only reached through elliptic-curve 0.13 / p256 / ecdsa
+        # (RustCrypto 0.13-era stack). The fix exists only in the 0.7 line,
+        # which needs a coordinated RustCrypto major upgrade (elliptic-curve
+        # 0.14, p256 0.14, ecdsa 0.17) that cargo can't resolve today.
+        # Re-evaluate and drop this --ignore when that stack moves.
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Run security audit"
           grep -A1 '^name = "webpki-roots"$' Cargo.lock | grep -q '^version = "1\.0\.\([1-9][0-9]\)"' \
             || { echo "webpki-roots 1.x in Cargo.lock is older than 1.0.10 (RUSTSEC-2026-0381)"; exit 1; }
-          cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0449 --ignore RUSTSEC-2026-0381
+          cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0449 --ignore RUSTSEC-2026-0381 --ignore RUSTSEC-2026-0387
 
       - name: Memory probe report
         if: always()
