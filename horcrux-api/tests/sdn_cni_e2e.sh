@@ -46,7 +46,7 @@ cat > /tmp/sdn/start-api.sh <<EOS
 HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_DATA_DIR=/tmp/sdn \
 HORCRUX_DATABASE_URL=sqlite:///tmp/sdn/horcrux.db HORCRUX_SSL_DIR=/tmp/sdn/ssl \
 HORCRUX_CNI_BIN_DIR=$CNI_BIN HORCRUX_CNI_CONF_DIR=/tmp/sdn/cni.d \
-ADMIN_PASSWORD=admin RUST_LOG=info \
+ADMIN_PASSWORD=admin RATE_LIMIT_MAX_REQUESTS=100000 AUTH_RATE_LIMIT_MAX_REQUESTS=100000 RUST_LOG=info \
   nohup horcrux-api >> /tmp/sdn/api.log 2>&1 &
 echo \$! > /tmp/sdn/api.pid
 for i in \$(seq 1 60); do curl -skf https://127.0.0.1:8006/api/health >/dev/null && exit 0; sleep 1; done

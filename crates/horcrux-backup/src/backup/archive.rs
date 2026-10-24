@@ -392,6 +392,104 @@ pub fn verify_extracted(dir: &Path, m: &Manifest) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn tool_present(prog: &str) -> bool {
+        std::env::var_os("PATH")
+            .map(|p| std::env::split_paths(&p).any(|d| d.join(prog).is_file()))
+            .unwrap_or(false)
+    }
+
+    /// Two payload files; returns (tempdir, file names).
+    fn payload() -> (tempfile::TempDir, Vec<String>) {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::write(t.path().join("a.bin"), b"alpha payload ".repeat(500)).unwrap();
+        std::fs::write(t.path().join("b.json"), b"{\"k\":\"v\"}").unwrap();
+        (t, vec!["a.bin".to_string(), "b.json".to_string()])
+    }
+
+    fn roundtrip(c: Compression, magic: &[u8]) -> Option<super::super::dedup::DedupStats> {
+        let (src, names) = payload();
+        let store = tempfile::tempdir().unwrap();
+        let out = store.path().join(format!("x.{}", file_extension(&c)));
+        let stats = write_archive(src.path(), &names, &out, &c).unwrap();
+        assert!(out.is_file(), "archive was not written");
+        assert!(
+            !PathBuf::from(format!("{}.partial", out.display())).exists(),
+            "partial file left behind"
+        );
+        let head = std::fs::read(&out).unwrap();
+        assert!(
+            head.starts_with(magic),
+            "unexpected archive header for {c:?}"
+        );
+        if c == Compression::None {
+            // plain tar: "ustar" magic at offset 257
+            assert_eq!(&head[257..262], b"ustar");
+        }
+        let dst = tempfile::tempdir().unwrap();
+        extract_archive(&out, dst.path(), &c).unwrap();
+        for n in &names {
+            assert_eq!(
+                std::fs::read(dst.path().join(n)).unwrap(),
+                std::fs::read(src.path().join(n)).unwrap(),
+                "{n} differs after extract ({c:?})"
+            );
+        }
+        stats
+    }
+
+    #[test]
+    fn compressor_programs_and_arguments_are_exact() {
+        assert!(compressor(&Compression::None).is_none());
+        assert!(compressor(&Compression::Dedup).is_none());
+        assert_eq!(
+            compressor(&Compression::Gzip),
+            Some(("gzip", &["-c"][..], &["-d", "-c"][..]))
+        );
+        assert_eq!(
+            compressor(&Compression::Lzo),
+            Some(("lzop", &["-c"][..], &["-d", "-c"][..]))
+        );
+        assert_eq!(
+            compressor(&Compression::Zstd),
+            Some(("zstd", &["-q", "-T0", "-c"][..], &["-q", "-d", "-c"][..]))
+        );
+    }
+
+    #[test]
+    fn plain_tar_roundtrip_returns_no_dedup_stats() {
+        assert!(roundtrip(Compression::None, b"").is_none());
+    }
+
+    #[test]
+    fn gzip_roundtrip_returns_no_dedup_stats() {
+        assert!(roundtrip(Compression::Gzip, &[0x1f, 0x8b]).is_none());
+    }
+
+    #[test]
+    fn zstd_roundtrip_returns_no_dedup_stats() {
+        if !tool_present("zstd") {
+            eprintln!("zstd not installed: skipping");
+            return;
+        }
+        assert!(roundtrip(Compression::Zstd, &[0x28, 0xb5, 0x2f, 0xfd]).is_none());
+    }
+
+    #[test]
+    fn dedup_roundtrip_returns_real_stats() {
+        let s = roundtrip(Compression::Dedup, b"").expect("dedup reports stats");
+        assert!(s.chunks > 0, "{s:?}");
+        assert_eq!(s.new_chunks, s.chunks, "{s:?}");
+        assert!(s.new_bytes > 0, "{s:?}");
+    }
+
+    #[test]
+    fn extract_failure_is_reported_not_swallowed() {
+        let dst = tempfile::tempdir().unwrap();
+        let missing = dst.path().join("nope.tar");
+        assert!(extract_archive(&missing, dst.path(), &Compression::None).is_err());
+        assert!(extract_archive(&missing, dst.path(), &Compression::Gzip).is_err());
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn helpers_die_with_the_thread_that_spawned_them() {

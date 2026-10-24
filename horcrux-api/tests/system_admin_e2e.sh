@@ -47,7 +47,7 @@ mkdir -p /tmp/sa
 cat > /tmp/sa/start-api.sh <<EOS
 HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_DATA_DIR=/tmp/sa \\
 HORCRUX_DATABASE_URL=sqlite:///tmp/sa/horcrux.db HORCRUX_SSL_DIR=/tmp/sa/ssl \\
-ADMIN_PASSWORD=admin RUST_LOG=info \\
+ADMIN_PASSWORD=admin RATE_LIMIT_MAX_REQUESTS=100000 AUTH_RATE_LIMIT_MAX_REQUESTS=100000 RUST_LOG=info \\
   nohup horcrux-api >> /tmp/sa/api.log 2>&1 &
 echo \$! > /tmp/sa/api.pid
 for i in \$(seq 1 60); do curl -skf https://127.0.0.1:8006/api/health >/dev/null && exit 0; sleep 1; done
