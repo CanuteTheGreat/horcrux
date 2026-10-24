@@ -375,6 +375,98 @@ async fn test_cluster_operations() {
     let _ = expect_2xx(response, "Failed to remove cluster node").await;
 }
 
+/// A node that has not created/joined a cluster still lists itself on
+/// `GET /api/cluster/nodes` (it used to return `[]`), with the same figures
+/// `GET /api/cluster/local-usage` reports; it cannot be removed, a registered
+/// peer can (204) and then vanishes, an unknown name is 404.
+#[tokio::test]
+async fn test_cluster_nodes_lists_local_node_and_remove() {
+    const PEER: &str = "ci-remove-peer";
+    let client = create_client();
+    let token = admin_token(&client).await;
+    let get_nodes = || async {
+        client
+            .get(format!("{}/cluster/nodes", API_BASE))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .expect("list nodes")
+            .json::<Vec<serde_json::Value>>()
+            .await
+            .expect("nodes json")
+    };
+
+    let nodes = get_nodes().await;
+    let locals: Vec<_> = nodes.iter().filter(|n| n["is_local"] == true).collect();
+    assert_eq!(
+        locals.len(),
+        1,
+        "exactly one local node expected: {nodes:?}"
+    );
+    let local = locals[0];
+    let usage: serde_json::Value = client
+        .get(format!("{}/cluster/local-usage", API_BASE))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        local["memory_total"], usage["memory_total"],
+        "{local} vs {usage}"
+    );
+    assert_eq!(local["cpu_cores"], usage["cpu_cores"]);
+    assert_eq!(local["status"], "online");
+    assert!(local["memory_used"].as_u64().unwrap_or(0) > 0, "{local}");
+    let local_name = local["name"].as_str().unwrap().to_string();
+
+    // the local node can't be removed
+    let resp = client
+        .delete(format!("{}/cluster/nodes/{}", API_BASE, local_name))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 409, "removing the local node");
+    assert!(get_nodes()
+        .await
+        .iter()
+        .any(|n| n["name"] == local_name.as_str()));
+
+    // a registered peer can be removed, then it is gone and 404s
+    let _ = client
+        .delete(format!("{}/cluster/nodes/{}", API_BASE, PEER))
+        .bearer_auth(&token)
+        .send()
+        .await;
+    let resp = client
+        .post(format!("{}/cluster/nodes/{}", API_BASE, PEER))
+        .bearer_auth(&token)
+        .json(&json!({"address": "192.0.2.55"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    assert!(get_nodes().await.iter().any(|n| n["name"] == PEER));
+    let resp = client
+        .delete(format!("{}/cluster/nodes/{}", API_BASE, PEER))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 204);
+    assert!(!get_nodes().await.iter().any(|n| n["name"] == PEER));
+    let resp = client
+        .delete(format!("{}/cluster/nodes/{}", API_BASE, PEER))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
 /// `GET /api/cluster/status`, `DELETE /api/cluster/nodes/:name` (used by
 /// `horcrux cluster status` / `cluster remove`, and unregistered until
 /// now) and the node heartbeat filling in live CPU/memory usage.

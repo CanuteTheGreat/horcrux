@@ -5,11 +5,13 @@
 //! - `GET  /api/cluster/nodes`               -> `Vec<ClusterNode>`
 //! - `GET  /api/cluster/architecture`        -> `ClusterArchitecture`
 //! - `POST /api/cluster/nodes/:name`         <- `AddNodeRequest` (201, no body)
+//! - `DELETE /api/cluster/nodes/:name`       (Remove button; 204)
 //! - `PATCH /api/cluster/nodes/:name/priority` <- `{priority}`
 //! - `POST /api/cluster/find-node`           <- `FindNodeRequest` -> node name
 use crate::api::{
     add_cluster_node, find_best_node_for_vm, get_cluster_architecture, get_cluster_nodes, get_vms,
-    set_node_priority, AddNodeRequest, ClusterArchitecture, ClusterNode, FindNodeRequest,
+    remove_cluster_node, set_node_priority, AddNodeRequest, ClusterArchitecture, ClusterNode,
+    FindNodeRequest,
 };
 use horcrux_common::VmConfig;
 use leptos::*;
@@ -47,6 +49,13 @@ fn vm_arch_string(vm: &VmConfig) -> String {
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
         .unwrap_or_else(|| "x86_64".to_string())
+}
+
+/// Ask the user to confirm (the browser's own dialog).
+fn confirm(msg: &str) -> bool {
+    web_sys::window()
+        .and_then(|w| w.confirm_with_message(msg).ok())
+        .unwrap_or(false)
 }
 
 #[component]
@@ -182,6 +191,23 @@ pub fn ClusterManagementPage() -> impl IntoView {
                 Err(e) => set_error.set(Some(format!("Failed to set weight: {}", e))),
             }
         }),
+    };
+
+    let remove_node = move |name: String| {
+        if !confirm(&format!(
+            "Remove node {name} from the cluster? Its registration is deleted; the machine itself is not touched."
+        )) {
+            return;
+        }
+        spawn_local(async move {
+            match remove_cluster_node(&name).await {
+                Ok(()) => {
+                    load_cluster_data();
+                    flash(format!("Node '{}' removed", name));
+                }
+                Err(e) => set_error.set(Some(format!("Failed to remove node: {}", e))),
+            }
+        });
     };
 
     let find_best_node = move || {
@@ -376,6 +402,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">"Status"</th>
                                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">"Resources"</th>
                                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">"Weight / Priority"</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">"Actions"</th>
                                     </tr>
                                 </thead>
                                 <tbody class="bg-white divide-y divide-gray-200">
@@ -389,7 +416,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                             };
                                             view! {
                                                 <tr>
-                                                    <td colspan="4" class="px-6 py-8 text-center text-gray-500">{msg}</td>
+                                                    <td colspan="5" class="px-6 py-8 text-center text-gray-500">{msg}</td>
                                                 </tr>
                                             }.into_view()
                                         } else {
@@ -398,6 +425,8 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                                 let (weight_input, set_weight_input) =
                                                     create_signal(node.priority.to_string());
                                                 let name_for_save = node.name.clone();
+                                                let name_for_remove = node.name.clone();
+                                                let is_local = node.is_local;
                                                 view! {
                                                     <tr>
                                                         <td class="px-6 py-4 whitespace-nowrap">
@@ -443,6 +472,20 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                                                     "Set"
                                                                 </button>
                                                             </div>
+                                                        </td>
+                                                        <td class="px-6 py-4 whitespace-nowrap">
+                                                            {if is_local {
+                                                                view! { <span class="text-xs text-gray-400" title="The node you are connected to cannot be removed">"this node"</span> }.into_view()
+                                                            } else {
+                                                                view! {
+                                                                    <button
+                                                                        class="text-red-600 hover:text-red-900 px-2 py-1 rounded hover:bg-red-50"
+                                                                        on:click=move |_| remove_node(name_for_remove.clone())
+                                                                    >
+                                                                        "Remove"
+                                                                    </button>
+                                                                }.into_view()
+                                                            }}
                                                         </td>
                                                     </tr>
                                                 }

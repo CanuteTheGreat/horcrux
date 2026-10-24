@@ -27,7 +27,7 @@ ARG TARGETARCH=amd64
 
 FROM gentoo/stage3:${TARGETARCH}-systemd AS builder
 
-ARG HORCRUX_USE="qemu cli monitoring systemd webui"
+ARG HORCRUX_USE="qemu cli cluster monitoring systemd webui"
 
 # Portage's stage3 default FEATURES enable ipc-sandbox/network-sandbox/
 # pid-sandbox, which require unprivileged user-namespace unshare() calls

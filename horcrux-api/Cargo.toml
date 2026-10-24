@@ -129,7 +129,7 @@ k8s-openapi = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
 
 [features]
-default = ["qemu", "lxc", "docker", "backup", "pam"]
+default = ["qemu", "lxc", "docker", "backup", "cluster", "pam"]
 
 # Virtualization backends
 qemu = ["virt", "horcrux-core/qemu", "horcrux-monitoring/qemu", "horcrux-vm/qemu"]  # QEMU/KVM support with libvirt

@@ -533,6 +533,12 @@ pub async fn get_cluster_nodes() -> Result<Vec<ClusterNode>, ApiError> {
     fetch_json("/cluster/nodes").await
 }
 
+/// Remove a node from the cluster (`DELETE /api/cluster/nodes/:name`:
+/// 204; 404 unknown node; 409 for the local node).
+pub async fn remove_cluster_node(name: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/cluster/nodes/{}", name)).await
+}
+
 /// Set a node's placement/HA weight (0-1000).
 pub async fn set_node_priority(name: &str, priority: u32) -> Result<(), ApiError> {
     #[derive(Serialize)]

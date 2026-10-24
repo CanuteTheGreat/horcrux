@@ -35,7 +35,7 @@ SLOT="0"
 # NAS services: timemachine, s3-gateway, iscsi-target, rsync-server
 # NAS storage: nas-zfs, nas-btrfs, nas-mdraid, nas-lvm
 IUSE="
-	+backup cli cluster docker incus kubernetes ldap lxc lxd +monitoring +pam podman +qemu systemd +webui
+	+backup cli +cluster docker incus kubernetes ldap lxc lxd +monitoring +pam podman +qemu systemd +webui
 	nas smb nfs-server afp webdav ftp
 	ldap-server kerberos ad
 	timemachine s3-gateway iscsi-target rsync-server
@@ -87,10 +87,6 @@ RDEPEND="
 		app-arch/zstd
 		app-arch/gzip
 		app-arch/lzop
-	)
-	cluster? (
-		sys-cluster/corosync
-		sys-cluster/pacemaker
 	)
 	dev-libs/openssl:0=
 	pam? ( sys-libs/pam )

@@ -150,10 +150,10 @@ A live `horcrux-9999.ebuild` is also in `deploy/gentoo/`.
 |------|-------------|---------|
 | `qemu` | QEMU/KVM virtualization | on |
 | `lxc` | LXC containers | on |
-| `docker` | Docker integration | off |
+| `docker` | Docker integration | on |
 | `podman` | Podman integration | off |
-| `cluster` | Clustering and HA | off |
-| `backup` | Backup compression | off |
+| `cluster` | Clustering and HA (`/ha/*` pages, node list, create/join, failover) | on |
+| `backup` | Backup compression | on |
 | `gpu` | GPU passthrough | off |
 
 ## Configuration

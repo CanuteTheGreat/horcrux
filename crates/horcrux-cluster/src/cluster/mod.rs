@@ -47,6 +47,16 @@ pub struct ClusterManager {
     local_node_id: String,
 }
 
+/// The address other hosts would reach this one on: the source address of
+/// the default route (a UDP `connect` sends nothing), else loopback.
+fn primary_address() -> String {
+    std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|s| s.connect("192.0.2.1:9").map(|_| s))
+        .and_then(|s| s.local_addr())
+        .map(|a| a.ip().to_string())
+        .unwrap_or_else(|_| "127.0.0.1".to_string())
+}
+
 /// A new random node identity (the kernel's UUID generator).
 fn new_node_id() -> String {
     std::fs::read_to_string("/proc/sys/kernel/random/uuid")
@@ -524,6 +534,32 @@ impl ClusterManager {
         nodes.values().cloned().collect()
     }
 
+    /// The node list as the API shows it: the registered nodes, plus this
+    /// host when it is not registered yet (a fresh node that has neither
+    /// created nor joined a cluster). The synthesized entry has id 0, is
+    /// `is_local`, carries the same live CPU/memory figures as
+    /// `GET /api/cluster/local-usage`, and is not stored anywhere, so
+    /// create/join still register the real entry (which then replaces it).
+    pub async fn list_nodes_with_local(&self) -> Vec<Node> {
+        let mut nodes = self.list_nodes().await;
+        let local_name = self.get_local_node_name().await.unwrap_or_default();
+        if nodes.iter().any(|n| n.is_local || n.name == local_name) {
+            return nodes;
+        }
+        let mut local = Node::new_local(0, local_name, primary_address());
+        local.node_id = Some(self.local_node_id.clone());
+        if let Some(u) = self.local_usage().await {
+            local.cpu_usage = Some(u.cpu_usage.clamp(0.0, 100.0));
+            local.memory_used = Some(u.memory_used);
+            local.cpu_cores = u.cpu_cores;
+            local.memory_total = u.memory_total;
+            local.architecture = u.architecture;
+            local.last_seen = Some(u.timestamp);
+        }
+        nodes.push(local);
+        nodes
+    }
+
     /// Get cluster status
     pub async fn get_cluster_status(&self) -> Result<ClusterStatus> {
         let config = self._config.read().await;
@@ -702,13 +738,14 @@ impl ClusterManager {
 
     /// Get cluster architecture summary
     pub async fn get_architecture_summary(&self) -> ArchitectureSummary {
-        let nodes = self.nodes.read().await;
+        // Same node set as `GET /api/cluster/nodes` (this host included).
+        let nodes = self.list_nodes_with_local().await;
 
         let mut x86_64_count = 0;
         let mut aarch64_count = 0;
         let mut other_count = 0;
 
-        for node in nodes.values() {
+        for node in nodes.iter() {
             match node.architecture {
                 node::Architecture::X86_64 => x86_64_count += 1,
                 node::Architecture::Aarch64 => aarch64_count += 1,
@@ -921,6 +958,42 @@ mod tests {
         assert_eq!(report.nodes_reporting_usage, 0);
         assert_eq!(report.name.as_deref(), Some("c1"));
         assert_eq!(report.has_quorum, Some(true));
+    }
+
+    #[tokio::test]
+    async fn list_with_local_includes_this_host_on_a_fresh_node() {
+        let mgr = ClusterManager::new();
+        assert!(mgr.list_nodes().await.is_empty());
+        let nodes = mgr.list_nodes_with_local().await;
+        assert_eq!(nodes.len(), 1);
+        let me = &nodes[0];
+        assert!(me.is_local);
+        assert_eq!(me.status, NodeStatus::Online);
+        assert_eq!(me.name, mgr.get_local_node_name().await.unwrap());
+        assert_eq!(me.node_id.as_deref(), Some(mgr.local_node_id()));
+        assert!(!me.ip.is_empty());
+        if let Some(u) = mgr.local_usage().await {
+            assert_eq!(me.memory_total, u.memory_total);
+            assert!(me.memory_used.is_some() && me.cpu_usage.is_some());
+        }
+        // not stored: the registry stays empty
+        assert!(mgr.list_nodes().await.is_empty());
+        let arch = mgr.get_architecture_summary().await;
+        assert_eq!(arch.x86_64_nodes + arch.aarch64_nodes + arch.other_nodes, 1);
+    }
+
+    #[tokio::test]
+    async fn list_with_local_does_not_duplicate_a_registered_local_node() {
+        let mgr = ClusterManager::new();
+        let mut local = node("me", 2, 1 << 30, None, true);
+        local.is_local = true;
+        mgr.add_node(local).await.unwrap();
+        mgr.add_node(node("peer", 2, 1 << 30, None, true))
+            .await
+            .unwrap();
+        let nodes = mgr.list_nodes_with_local().await;
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes.iter().filter(|n| n.is_local).count(), 1);
     }
 
     #[tokio::test]

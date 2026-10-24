@@ -37,7 +37,7 @@ KEYWORDS="~amd64 ~arm64 ~riscv"  # not yet stabilized; promote once field-tested
 # NAS services: timemachine, s3-gateway, iscsi-target, rsync-server
 # NAS storage: nas-zfs, nas-btrfs, nas-mdraid, nas-lvm
 IUSE="
-	+backup cli cluster docker incus kubernetes ldap lxc lxd +monitoring +pam podman +qemu systemd +webui
+	+backup cli +cluster docker incus kubernetes ldap lxc lxd +monitoring +pam podman +qemu systemd +webui
 	nas smb nfs-server afp webdav ftp
 	ldap-server kerberos ad
 	timemachine s3-gateway iscsi-target rsync-server
@@ -93,10 +93,6 @@ RDEPEND="
 		app-arch/zstd
 		app-arch/gzip
 		app-arch/lzop
-	)
-	cluster? (
-		sys-cluster/corosync
-		sys-cluster/pacemaker
 	)
 	kubernetes? ( app-admin/helm )
 	dev-libs/openssl:0=
@@ -396,6 +392,7 @@ pkg_postinst() {
 	if use qemu; then
 		optfeature "UEFI (OVMF) firmware for QEMU VMs" sys-firmware/edk2-bin
 		optfeature "emulated TPM 2.0 for QEMU VMs" app-crypt/swtpm
+		optfeature "Corosync quorum checks for clusters (USE=cluster works without it)" sys-cluster/corosync
 		optfeature "saving the state of running containers (Guest Power: CRIU stateful stop)" sys-process/criu
 	fi
 	elog ""

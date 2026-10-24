@@ -726,6 +726,7 @@ def main():
         template_checks(page)
         vm_hardware_checks(page, vid)
         storage_volume_checks(page, vid)
+        cluster_nodes_checks(context)
 
         browser.close()
 
@@ -733,6 +734,71 @@ def main():
     assert not bad, f"console errors: {bad}"
     assert not missing_resources, f"page loads fetched missing resources (404): {sorted(set(missing_resources))}"
     print("UI E2E: all checks passed")
+
+
+def cluster_nodes_checks(context):
+    """/ha/cluster on a fresh node: the local node is listed (the API used
+    to return [] until a cluster was created), it has no Remove button, and a
+    registered peer can be removed through a confirm dialog."""
+    tok = token()
+    nodes = api_get("/api/cluster/nodes", tok)
+    local = [n for n in nodes if n["is_local"]]
+    assert len(local) == 1, f"GET /api/cluster/nodes must list this node once: {nodes}"
+    usage = api_get("/api/cluster/local-usage", tok)
+    assert local[0]["memory_total"] == usage["memory_total"] > 0, (local[0], usage)
+    assert local[0]["cpu_cores"] == usage["cpu_cores"] > 0, (local[0], usage)
+
+    page = context.new_page()  # own dialog handling (the main page accepts all)
+    dialogs = []
+    answer = {"accept": False}
+
+    def on_dialog(d):
+        dialogs.append(d.message)
+        d.accept() if answer["accept"] else d.dismiss()
+
+    page.on("dialog", on_dialog)
+    peer = "e2e-peer"
+    try:
+        api_status_delete = urllib.request.Request(
+            f"{BASE}/api/cluster/nodes/{peer}", method="DELETE",
+            headers={"Authorization": f"Bearer {tok}"})
+        try:
+            urlopen(api_status_delete)
+        except urllib.error.HTTPError as e:
+            assert e.code == 404, e.code
+        page.goto(f"{BASE}/ha/cluster")
+        me = page.locator("tbody tr", has_text="(this node)")
+        expect(me).to_have_count(1, timeout=30000)
+        expect(page.get_by_text("No cluster nodes configured")).to_have_count(0)
+        expect(me).to_contain_text(local[0]["name"])
+        expect(me.get_by_text("online", exact=True)).to_be_visible()
+        expect(me.get_by_role("button", name="Remove")).to_have_count(0)
+
+        # add a peer through the dialog, then remove it
+        page.get_by_role("button", name="Add Node").first.click()
+        page.get_by_placeholder("node-02").fill(peer)
+        page.get_by_placeholder("192.168.1.100").fill("192.0.2.77")
+        page.get_by_role("button", name="Add Node").last.click()
+        row = page.locator("tbody tr", has_text=peer)
+        expect(row).to_have_count(1, timeout=30000)
+
+        # Cancel in the confirm dialog: nothing happens
+        row.get_by_role("button", name="Remove").click()
+        page.wait_for_timeout(1000)
+        assert dialogs and f"Remove node {peer}" in dialogs[-1], dialogs
+        expect(row).to_have_count(1)
+        assert any(n["name"] == peer for n in api_get("/api/cluster/nodes", tok))
+
+        # Confirm: DELETE /api/cluster/nodes/e2e-peer
+        answer["accept"] = True
+        row.get_by_role("button", name="Remove").click()
+        expect(page.locator("tbody tr", has_text=peer)).to_have_count(0, timeout=30000)
+        expect(page.get_by_text(f"Node '{peer}' removed")).to_be_visible()
+        assert not any(n["name"] == peer for n in api_get("/api/cluster/nodes", tok))
+        expect(page.locator("tbody tr", has_text="(this node)")).to_have_count(1)
+    finally:
+        page.close()
+    print("UI E2E: /ha/cluster lists this node, Remove node (confirm/cancel/delete) passed")
 
 
 def vm_hardware_checks(page, vid):

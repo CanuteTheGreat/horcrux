@@ -95,6 +95,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-cargo-check-v2-
 
+      - name: Default build serves /ha/* (cluster is a default feature)
+        # A default `cargo build` / the shipped image must include `cluster`,
+        # else every /ha/* page says "Not available in this build".
+        run: |
+          grep -E '^default = \[.*"cluster"' horcrux-api/Cargo.toml
+          grep -E '^\s+\+backup cli \+cluster ' gentoo/app-emulation/horcrux/horcrux-9999.ebuild
+
       - name: Check formatting
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Check formatting"

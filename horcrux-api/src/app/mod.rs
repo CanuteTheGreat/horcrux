@@ -4266,7 +4266,9 @@ async fn create_container_events_ticket(
 // Cluster API handlers
 
 async fn list_cluster_nodes(State(state): State<Arc<AppState>>) -> Json<Vec<Node>> {
-    let nodes = state.cluster_manager.list_nodes().await;
+    // Includes this host even before it created/joined a cluster, like
+    // `GET /api/cluster/local-usage`.
+    let nodes = state.cluster_manager.list_nodes_with_local().await;
     Json(nodes)
 }
 
