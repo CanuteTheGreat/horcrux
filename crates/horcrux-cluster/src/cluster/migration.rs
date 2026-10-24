@@ -240,7 +240,12 @@ impl MigrationManager {
         // remote node queried over SSH, matching the SSH-based node access
         // pattern used elsewhere in this codebase e.g.
         // vm::cross_node_clone::verify_ssh_connectivity).
-        checks.push(Self::check_cpu_compatibility(source_node, target_node).await);
+        checks.push(Self::check_cpu_compatibility(
+            source_node,
+            target_node,
+            *migration_type == MigrationType::Live,
+        )
+        .await);
 
         // Check 7: Memory availability on target - query the target's
         // available RAM (via /proc/meminfo, same parsing as
@@ -842,7 +847,11 @@ impl MigrationManager {
     /// `metrics::system` use for other real-hardware queries. Remote
     /// node info is pulled over SSH using the same pattern as
     /// `vm::cross_node_clone::get_disk_size`.
-    async fn check_cpu_compatibility(source_node: &str, target_node: &str) -> MigrationCheck {
+    async fn check_cpu_compatibility(
+        source_node: &str,
+        target_node: &str,
+        live: bool,
+    ) -> MigrationCheck {
         let local_hostname = hostname::get()
             .map(|h| h.to_string_lossy().to_string())
             .unwrap_or_default();
@@ -865,7 +874,7 @@ impl MigrationManager {
             Self::remote_cpu_info(target_node).await
         };
 
-        let (source_model, source_flags) = match source_info {
+        let (source_model, source_flags, source_vendor) = match source_info {
             Some(info) => info,
             None => {
                 return MigrationCheck {
@@ -877,7 +886,7 @@ impl MigrationManager {
             }
         };
 
-        let (target_model, target_flags) = match target_info {
+        let (target_model, target_flags, target_vendor) = match target_info {
             Some(info) => info,
             None => {
                 return MigrationCheck {
@@ -888,6 +897,25 @@ impl MigrationManager {
                 };
             }
         };
+
+        // AMD <-> Intel can never live-migrate (different vendor-specific
+        // virtualization state and feature semantics): cold migrate only.
+        // Not overridable by allow_cpu_incompatible.
+        if let Some(msg) = Self::cpu_vendor_conflict(&source_vendor, &target_vendor) {
+            return MigrationCheck {
+                check_name: "cpu_compatibility".to_string(),
+                passed: !live,
+                message: if live {
+                    format!(
+                        "{}: live migration {} -> {} is not possible, use cold migration",
+                        msg, source_node, target_node
+                    )
+                } else {
+                    format!("{} (cold migration is fine)", msg)
+                },
+                blocking: live,
+            };
+        }
 
         // The target must support at least every CPU feature flag the
         // source exposes to the guest; missing flags can crash a live VM
@@ -930,14 +958,14 @@ impl MigrationManager {
     }
 
     /// Read CPU model name + feature flags from the local `/proc/cpuinfo`.
-    fn local_cpu_info() -> Option<(String, HashSet<String>)> {
+    fn local_cpu_info() -> Option<(String, HashSet<String>, String)> {
         let content = std::fs::read_to_string("/proc/cpuinfo").ok()?;
         Self::parse_cpuinfo(&content)
     }
 
     /// Read CPU model name + feature flags from a remote node's
     /// `/proc/cpuinfo` over SSH.
-    async fn remote_cpu_info(node: &str) -> Option<(String, HashSet<String>)> {
+    async fn remote_cpu_info(node: &str) -> Option<(String, HashSet<String>, String)> {
         let output = tokio::process::Command::new("ssh")
             .arg("-o")
             .arg("BatchMode=yes")
@@ -961,9 +989,10 @@ impl MigrationManager {
     /// Parse `/proc/cpuinfo` text into (model name, flag set), taking the
     /// first "model name" and "flags" lines found (all cores on a node
     /// report identical values).
-    fn parse_cpuinfo(content: &str) -> Option<(String, HashSet<String>)> {
+    fn parse_cpuinfo(content: &str) -> Option<(String, HashSet<String>, String)> {
         let mut model = None;
         let mut flags = None;
+        let mut vendor = None;
 
         for line in content.lines() {
             if model.is_none() {
@@ -980,7 +1009,14 @@ impl MigrationManager {
                     }
                 }
             }
-            if model.is_some() && flags.is_some() {
+            if vendor.is_none() {
+                if let Some(rest) = line.strip_prefix("vendor_id") {
+                    if let Some((_, value)) = rest.split_once(':') {
+                        vendor = Some(value.trim().to_string());
+                    }
+                }
+            }
+            if model.is_some() && flags.is_some() && vendor.is_some() {
                 break;
             }
         }
@@ -988,7 +1024,27 @@ impl MigrationManager {
         Some((
             model.unwrap_or_else(|| "unknown".to_string()),
             flags.unwrap_or_default(),
+            vendor.unwrap_or_default(),
         ))
+    }
+
+    /// Normalise a /proc/cpuinfo `vendor_id` to a CPU family bucket.
+    fn cpu_vendor_family(vendor: &str) -> &'static str {
+        match vendor {
+            "GenuineIntel" => "intel",
+            "AuthenticAMD" | "HygonGenuine" => "amd",
+            _ => "unknown",
+        }
+    }
+
+    /// Some(reason) when the two vendors are known and differ.
+    fn cpu_vendor_conflict(source: &str, target: &str) -> Option<String> {
+        let (s, t) = (Self::cpu_vendor_family(source), Self::cpu_vendor_family(target));
+        if s != "unknown" && t != "unknown" && s != t {
+            Some(format!("CPU vendor mismatch ({} -> {})", source, target))
+        } else {
+            None
+        }
     }
 
     /// Check that the target node has enough available RAM for the VM
@@ -1190,10 +1246,27 @@ mod tests {
         assert!(check.blocking);
     }
 
+    #[test]
+    fn test_parse_cpuinfo_vendor() {
+        let amd = "vendor_id\t: AuthenticAMD\nmodel name\t: AMD EPYC 7302\nflags\t\t: fpu sse2 avx2\n";
+        let (m, f, v) = MigrationManager::parse_cpuinfo(amd).unwrap();
+        assert_eq!(m, "AMD EPYC 7302");
+        assert!(f.contains("avx2"));
+        assert_eq!(v, "AuthenticAMD");
+    }
+
+    #[test]
+    fn test_cpu_vendor_conflict() {
+        assert!(MigrationManager::cpu_vendor_conflict("AuthenticAMD", "GenuineIntel").is_some());
+        assert!(MigrationManager::cpu_vendor_conflict("GenuineIntel", "AuthenticAMD").is_some());
+        assert!(MigrationManager::cpu_vendor_conflict("GenuineIntel", "GenuineIntel").is_none());
+        assert!(MigrationManager::cpu_vendor_conflict("", "GenuineIntel").is_none());
+    }
+
     #[tokio::test]
     async fn test_cpu_compatibility_same_node() {
         // Comparing a node against itself must always report compatible.
-        let check = MigrationManager::check_cpu_compatibility("localhost", "localhost").await;
+        let check = MigrationManager::check_cpu_compatibility("localhost", "localhost", true).await;
         assert_eq!(check.check_name, "cpu_compatibility");
     }
 
