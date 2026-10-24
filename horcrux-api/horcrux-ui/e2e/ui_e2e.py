@@ -289,6 +289,7 @@ def main():
         auth_hook = http.server.HTTPServer(("127.0.0.1", 0), AuthHook)
         threading.Thread(target=auth_hook.serve_forever, daemon=True).start()
         hook_url = f"http://127.0.0.1:{auth_hook.server_port}/e2e-edit?k=urlsecret"
+        tok = token()
         chan = {
             "name": NOTIFY_EDIT, "description": None, "channel_type": "webhook",
             "enabled": True,
