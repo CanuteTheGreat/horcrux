@@ -537,6 +537,7 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
                     architecture: n.architecture.clone(),
                     available_passthrough_devices: Vec::new(),
                     placement_weight: n.priority,
+                    cpu_vendor: n.cpu_vendor.clone(),
                 })
                 .await;
         } else {

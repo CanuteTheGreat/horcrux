@@ -31,6 +31,7 @@ fn create_test_node(name: &str, cpu: f32, memory: f32, vm_count: usize) -> NodeR
         architecture: Architecture::X86_64,
         available_passthrough_devices: Vec::new(),
         placement_weight: 100,
+        cpu_vendor: String::new(),
     }
 }
 

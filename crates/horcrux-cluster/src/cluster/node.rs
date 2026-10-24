@@ -190,6 +190,12 @@ pub struct Node {
     /// usage unknown: ...". `None` after a normal report.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_reason: Option<String>,
+    /// CPU family bucket of this node: "intel", "amd" or "" (unknown).
+    /// Live migration between "intel" and "amd" can never work, so the
+    /// balancer never recommends it. Unknown is permissive (older records,
+    /// remote nodes that haven't reported).
+    #[serde(default)]
+    pub cpu_vendor: String,
 }
 
 /// Node status
@@ -218,6 +224,7 @@ impl Node {
             last_seen: None,
             node_id: None,
             status_reason: None,
+            cpu_vendor: String::new(),
         }
     }
 
@@ -238,6 +245,7 @@ impl Node {
             last_seen: None,
             node_id: None,
             status_reason: None,
+            cpu_vendor: detect_cpu_vendor_family(),
         }
     }
 
@@ -369,8 +377,31 @@ impl AddNodeRequest {
             last_seen: None,
             node_id: None,
             status_reason: None,
+            cpu_vendor: String::new(),
         }
     }
+}
+
+/// Map a /proc/cpuinfo `vendor_id` to "intel" / "amd" / "" (unknown).
+pub fn cpu_vendor_family_of(vendor_id: &str) -> &'static str {
+    match vendor_id.trim() {
+        "GenuineIntel" => "intel",
+        "AuthenticAMD" | "HygonGenuine" => "amd",
+        _ => "",
+    }
+}
+
+/// CPU vendor family of the machine we are running on ("" if unknown).
+pub fn detect_cpu_vendor_family() -> String {
+    std::fs::read_to_string("/proc/cpuinfo")
+        .ok()
+        .and_then(|c| {
+            c.lines()
+                .find(|l| l.starts_with("vendor_id"))
+                .and_then(|l| l.split_once(':'))
+                .map(|(_, v)| cpu_vendor_family_of(v).to_string())
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

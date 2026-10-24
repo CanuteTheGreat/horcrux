@@ -480,6 +480,7 @@ impl ClusterManager {
             last_seen: None,
             node_id: None,
             status_reason: None,
+            cpu_vendor: String::new(),
         };
         self.add_node(node.clone()).await?;
         Ok(node)
