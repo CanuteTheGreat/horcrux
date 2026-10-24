@@ -12,6 +12,10 @@ pub const HEADROOM: f64 = 0.10;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlanNode {
+    /// CPU vendor family ("intel" / "amd" / "" = unknown, permissive).
+    /// Running guests never move between two known, different families.
+    #[serde(default)]
+    pub cpu_vendor: String,
     pub name: String,
     pub online: bool,
     /// In maintenance: takes no new guests.
@@ -150,6 +154,20 @@ impl<'a> World<'a> {
                 "{} is {} but the guest needs {}",
                 t.name, t.arch, g.arch
             ));
+        }
+        if g.running && !t.cpu_vendor.is_empty() {
+            let src = self
+                .nodes
+                .iter()
+                .find(|n| n.name == self.at[&g.id])
+                .map(|n| n.cpu_vendor.as_str())
+                .unwrap_or("");
+            if !src.is_empty() && src != t.cpu_vendor {
+                return Some(format!(
+                    "{} has a {} CPU but the guest runs on {}: live migration across CPU vendors is not possible (cold move only)",
+                    t.name, t.cpu_vendor, src
+                ));
+            }
         }
         if let Some(p) = &g.rules.pin {
             if *p != t.name {
@@ -325,6 +343,7 @@ mod tests {
 
     fn node(n: &str, mem: u64) -> PlanNode {
         PlanNode {
+            cpu_vendor: String::new(),
             name: n.into(),
             online: true,
             maintenance: false,
@@ -391,6 +410,26 @@ mod tests {
         assert!(why["pinned"].contains("pinned"));
         assert!(why["big"].contains("no room"), "{}", why["big"]);
         assert!(why["big"].contains("maintenance") && why["big"].contains("aarch64"));
+    }
+
+    #[test]
+    fn running_guests_never_drain_across_cpu_vendors() {
+        let mut a = node("a", 8000);
+        a.cpu_vendor = "amd".into();
+        let mut intel = node("intel", 8000);
+        intel.cpu_vendor = "intel".into();
+        let mut amd2 = node("amd2", 4000);
+        amd2.cpu_vendor = "amd".into();
+        let unknown = node("unknown", 2000);
+        let nodes = [a, intel, amd2, unknown];
+        let p = plan_drain("a", &nodes, &[guest("g", "a", 500)]);
+        assert_eq!(p.moves.len(), 1);
+        assert_ne!(p.moves[0].to, "intel");
+        let only_intel = [nodes[0].clone(), nodes[1].clone()];
+        let p = plan_drain("a", &only_intel, &[guest("g", "a", 500)]);
+        assert!(p.moves.is_empty());
+        let why = &p.unplaced[0].reason;
+        assert!(why.contains("CPU vendors"), "{why}");
     }
 
     #[test]

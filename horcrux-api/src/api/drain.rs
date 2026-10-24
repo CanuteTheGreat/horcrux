@@ -334,6 +334,7 @@ pub async fn local_info(state: &Arc<AppState>) -> PeerInfo {
     }
     PeerInfo {
         node: PlanNode {
+            cpu_vendor: crate::cluster::node::detect_cpu_vendor_family(),
             name,
             online: true,
             maintenance,
