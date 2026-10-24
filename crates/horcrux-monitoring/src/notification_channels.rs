@@ -307,9 +307,7 @@ impl ChannelConfig {
                     Some(WebhookAuth::BasicAuth { password, .. }) => {
                         not_masked("basic auth password", password)?
                     }
-                    Some(WebhookAuth::BearerToken { token }) => {
-                        not_masked("bearer token", token)?
-                    }
+                    Some(WebhookAuth::BearerToken { token }) => not_masked("bearer token", token)?,
                     Some(WebhookAuth::ApiKey { key, .. }) => not_masked("API key", key)?,
                     None => {}
                 }
@@ -1238,7 +1236,9 @@ mod tests {
         // secret; a type change (nothing to restore) is refused.
         let stored = wh(
             &[("X-A", "real")],
-            Some(WebhookAuth::BearerToken { token: "tok".into() }),
+            Some(WebhookAuth::BearerToken {
+                token: "tok".into(),
+            }),
         );
         let mut back = stored.masked();
         back.unmask_from(&stored);
