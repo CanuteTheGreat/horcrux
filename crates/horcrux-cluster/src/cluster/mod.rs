@@ -509,9 +509,19 @@ impl ClusterManager {
     pub async fn remove_node(&self, node_name: &str) -> Result<()> {
         let mut nodes = self.nodes.write().await;
 
-        let node = nodes.get(node_name).ok_or_else(|| {
-            horcrux_common::Error::NotFound(format!("Node {} not found", node_name))
-        })?;
+        let Some(node) = nodes.get(node_name) else {
+            // This host is listed (see `list_nodes_with_local`) even when
+            // it was never registered: refuse like a registered local node.
+            if self.get_local_node_name().await.ok().as_deref() == Some(node_name) {
+                return Err(horcrux_common::Error::Conflict(
+                    "Cannot remove local node from cluster".to_string(),
+                ));
+            }
+            return Err(horcrux_common::Error::NotFound(format!(
+                "Node {} not found",
+                node_name
+            )));
+        };
 
         if node.is_local {
             return Err(horcrux_common::Error::Conflict(
@@ -1008,6 +1018,20 @@ mod tests {
             Err(horcrux_common::Error::NotFound(_)) => {}
             other => panic!("expected NotFound, got {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn remove_node_refuses_unregistered_local_host() {
+        let mgr = ClusterManager::new();
+        let me = mgr.get_local_node_name().await.unwrap();
+        assert!(matches!(
+            mgr.remove_node(&me).await,
+            Err(horcrux_common::Error::Conflict(_))
+        ));
+        assert!(matches!(
+            mgr.remove_node("someone-else").await,
+            Err(horcrux_common::Error::NotFound(_))
+        ));
     }
 
     #[tokio::test]
