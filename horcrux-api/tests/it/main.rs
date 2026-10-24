@@ -36,3 +36,4 @@ mod sdn_tests;
 mod storage_content_tests;
 mod storage_volume_tests;
 mod vm_clone_tests;
+mod webhook_events_tests;

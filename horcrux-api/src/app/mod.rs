@@ -4285,7 +4285,15 @@ async fn add_cluster_node(
         .unwrap_or(0)
         + 1;
     let node = request.into_node(name, next_id);
+    let joined = node.name.clone();
     state.cluster_manager.add_node(node).await?;
+    let _ = state
+        .webhook_manager
+        .trigger_event(
+            webhooks::WebhookEventType::NodeJoined,
+            serde_json::json!({"node": joined}),
+        )
+        .await;
     Ok(StatusCode::CREATED)
 }
 
@@ -4296,6 +4304,13 @@ async fn remove_cluster_node(
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     state.cluster_manager.remove_node(&name).await?;
+    let _ = state
+        .webhook_manager
+        .trigger_event(
+            webhooks::WebhookEventType::NodeLeft,
+            serde_json::json!({"node": name}),
+        )
+        .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -4697,6 +4712,16 @@ async fn add_storage_pool(
         .add_pool(pool)
         .await
         .map_err(ApiError::from)?;
+    let _ = state
+        .webhook_manager
+        .trigger_event(
+            webhooks::WebhookEventType::StoragePoolAdded,
+            serde_json::json!({
+                "pool_id": pool.id, "name": pool.name, "path": pool.path,
+                "storage_type": format!("{:?}", pool.storage_type),
+            }),
+        )
+        .await;
     Ok(Json(pool))
 }
 
@@ -4709,6 +4734,13 @@ async fn remove_storage_pool(
         .remove_pool(&id)
         .await
         .map_err(ApiError::from)?;
+    let _ = state
+        .webhook_manager
+        .trigger_event(
+            webhooks::WebhookEventType::StoragePoolRemoved,
+            serde_json::json!({"pool_id": id}),
+        )
+        .await;
     Ok(StatusCode::OK)
 }
 

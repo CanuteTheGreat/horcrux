@@ -61,6 +61,7 @@ pub struct AlertManager {
     /// Channels managed on Monitoring > Notifications (persisted, see
     /// notification_channels.rs); every fired alert is delivered to them too.
     channel_store: std::sync::OnceLock<Arc<crate::notification_channels::NotificationChannelStore>>,
+    webhooks: std::sync::OnceLock<Arc<crate::webhooks::WebhookManager>>,
     max_history: usize,
     /// `rule_id:target` -> unix time the condition first held, for rules
     /// with a `duration_seconds` that has not elapsed yet.
@@ -83,6 +84,7 @@ impl AlertManager {
             alert_history: Arc::new(RwLock::new(Vec::new())),
             notification_channels: Arc::new(RwLock::new(Vec::new())),
             channel_store: std::sync::OnceLock::new(),
+            webhooks: std::sync::OnceLock::new(),
             max_history: 1000, // Keep last 1000 alerts
             pending: Arc::new(RwLock::new(HashMap::new())),
             store: None,
@@ -184,6 +186,33 @@ impl AlertManager {
         store: Arc<crate::notification_channels::NotificationChannelStore>,
     ) {
         let _ = self.channel_store.set(store);
+    }
+
+    /// Fire `alert.triggered` / `alert.resolved` event webhooks too.
+    pub fn attach_webhooks(&self, webhooks: Arc<crate::webhooks::WebhookManager>) {
+        let _ = self.webhooks.set(webhooks);
+    }
+
+    /// Tell event webhooks about an alert (delivery runs in spawned tasks,
+    /// so this never waits on a receiver).
+    async fn emit_webhook(&self, kind: crate::webhooks::WebhookEventType, alert: &Alert) {
+        if let Some(w) = self.webhooks.get() {
+            let _ = w
+                .trigger_event(
+                    kind,
+                    serde_json::json!({
+                        "alert_id": alert.id,
+                        "rule_id": alert.rule_id,
+                        "rule_name": alert.rule_name,
+                        "severity": format!("{:?}", alert.severity),
+                        "message": alert.message,
+                        "target": alert.target,
+                        "metric_value": alert.metric_value,
+                        "threshold": alert.threshold,
+                    }),
+                )
+                .await;
+        }
     }
 
     /// Add an alert rule
@@ -402,6 +431,8 @@ impl AlertManager {
 
         // Send notifications
         self.send_notifications(&alert).await;
+        self.emit_webhook(crate::webhooks::WebhookEventType::AlertTriggered, &alert)
+            .await;
 
         // Add to history
         self.push_history(alert).await;
@@ -660,6 +691,63 @@ mod tests {
         assert_eq!(history[0].status, AlertStatus::Resolved, "newest first");
         assert_eq!(history[1].status, AlertStatus::Firing);
         assert_eq!(history[0].id, history[1].id);
+    }
+
+    #[tokio::test]
+    async fn a_firing_alert_reaches_event_webhooks_once() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut s, _)) = l.accept().await else {
+                    return;
+                };
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 16384];
+                    let n = s.read(&mut buf).await.unwrap_or(0);
+                    let _ = tx.send(String::from_utf8_lossy(&buf[..n]).to_string());
+                    let _ = s
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                        )
+                        .await;
+                });
+            }
+        });
+        let hooks = Arc::new(crate::webhooks::WebhookManager::new());
+        hooks
+            .add_webhook(crate::webhooks::WebhookConfig {
+                name: "alerts".into(),
+                url: format!("http://127.0.0.1:{port}/hook"),
+                events: vec![crate::webhooks::WebhookEventType::AlertTriggered],
+                retry_count: 0,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let mgr = AlertManager::new();
+        mgr.attach_webhooks(hooks);
+        mgr.add_rule(cpu_rule("r1", 80.0, 0)).await.unwrap();
+        mgr.evaluate_metric(MetricType::CpuUsage, "vm-1", 95.0)
+            .await;
+        let req = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv())
+            .await
+            .expect("webhook delivery")
+            .unwrap();
+        assert!(req.contains("\"event_type\":\"alert.triggered\""), "{req}");
+        assert!(req.contains("\"target\":\"vm-1\""), "{req}");
+        // still firing: no second page
+        mgr.evaluate_metric(MetricType::CpuUsage, "vm-1", 96.0)
+            .await;
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(800), rx.recv())
+                .await
+                .is_err(),
+            "an ongoing alert must not re-notify"
+        );
     }
 
     #[tokio::test]

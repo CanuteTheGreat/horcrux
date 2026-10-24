@@ -251,6 +251,16 @@ async fn audit(
     action: &str,
     details: Option<String>,
 ) {
+    if matches!(kind, AuditEventType::LoginFailed) {
+        // `auth.failed` event webhooks (never waits on a receiver).
+        let _ = state
+            .webhook_manager
+            .trigger_event(
+                crate::webhooks::WebhookEventType::AuthenticationFailed,
+                serde_json::json!({"user": user, "source_ip": ip, "reason": details}),
+            )
+            .await;
+    }
     state
         .audit_logger
         .log(AuditEvent {

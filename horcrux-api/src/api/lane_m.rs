@@ -14,6 +14,9 @@ pub async fn routes(state: &Arc<AppState>) -> anyhow::Result<Router<Arc<AppState
             .map_err(|e| anyhow::anyhow!("loading notification channels: {:?}", e))?,
     );
     state.alert_manager.attach_channel_store(channels.clone());
+    state
+        .alert_manager
+        .attach_webhooks(state.webhook_manager.clone());
 
     let metrics = Arc::new(crate::metrics_explorer::MetricsStore::new());
     crate::metrics_explorer::start_sampler(
