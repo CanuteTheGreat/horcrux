@@ -279,7 +279,7 @@ def main():
             def do_POST(self):
                 n = int(self.headers.get("Content-Length") or 0)
                 self.rfile.read(n)
-                hits.append((self.path, dict(self.headers)))
+                hits.append((self.path, {k.lower(): v for k, v in self.headers.items()}))
                 self.send_response(204)
                 self.end_headers()
 
@@ -297,7 +297,7 @@ def main():
                        "headers": {"X-Api-Key": "hdr-secret"},
                        "auth": {"type": "BearerToken", "token": "tok-e2e"}},
         }
-        created = _req("POST", "/api/notifications/channels", tok, chan)
+        created = _req("POST", "/api/notifications/channels", token(), chan)
         assert "urlsecret" not in json.dumps(created), created
         # A masked secret on create is refused, not stored literally.
         for bad_cfg in (
@@ -309,7 +309,7 @@ def main():
             bad["config"].update(bad_cfg)
             r = urllib.request.Request(
                 f"{BASE}/api/notifications/channels", data=json.dumps(bad).encode(), method="POST",
-                headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"})
+                headers={"Authorization": f"Bearer {token()}", "Content-Type": "application/json"})
             try:
                 urlopen(r)
                 raise AssertionError(f"masked secret accepted on create: {bad_cfg}")
@@ -319,7 +319,7 @@ def main():
         card = page.locator(f".channel-card[data-channel-name='{NOTIFY_EDIT}']")
         expect(card).to_be_visible(timeout=30000)
         # The tab counter is reactive (it used to stay at its first value).
-        n_channels = len(api_get("/api/notifications/channels", tok))
+        n_channels = len(api_get("/api/notifications/channels", token()))
         expect(page.locator(".tab-button").first).to_have_text(f"Notification Channels ({n_channels})")
         card.get_by_role("button", name="Edit").click()
         modal = page.locator("#edit-channel-modal")
@@ -341,8 +341,8 @@ def main():
         got = wait_for(lambda: hits, "edited webhook channel delivery")
         path, hdrs = got[-1]
         assert path == "/e2e-edit?k=urlsecret", path
-        assert hdrs.get("Authorization") == "Bearer tok-e2e", hdrs
-        assert hdrs.get("X-Api-Key") == "hdr-secret", hdrs
+        assert hdrs.get("authorization") == "Bearer tok-e2e", hdrs
+        assert hdrs.get("x-api-key") == "hdr-secret", hdrs
         auth_hook.shutdown()
 
         # ---- Monitoring > Alert Center: a rule made in the form really fires
