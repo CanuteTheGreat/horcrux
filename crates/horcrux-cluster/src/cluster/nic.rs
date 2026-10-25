@@ -36,7 +36,7 @@ impl NicInfo {
 
 /// Human label, e.g. 25000 -> "25 GbE", 2500 -> "2.5 GbE", 20000 -> "20 GbE".
 pub fn speed_label(mbps: u64) -> String {
-    if mbps % 1000 == 0 {
+    if mbps.is_multiple_of(1000) {
         format!("{} GbE", mbps / 1000)
     } else if mbps >= 1000 {
         format!("{:.1} GbE", mbps as f64 / 1000.0)
