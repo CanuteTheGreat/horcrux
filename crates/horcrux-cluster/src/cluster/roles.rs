@@ -57,18 +57,12 @@ pub fn eligible(caps: &NodeCaps, need: &GuestNeeds) -> Result<(), String> {
     }
     if let Some(max) = caps.max_guest_vcpus {
         if need.vcpus > max {
-            return Err(format!(
-                "guest needs {} vCPUs, node limit is {}",
-                need.vcpus, max
-            ));
+            return Err(format!("guest needs {} vCPUs, node limit is {}", need.vcpus, max));
         }
     }
     if let Some(max) = caps.max_guest_memory {
         if need.memory > max {
-            return Err(format!(
-                "guest needs {} bytes RAM, node limit is {}",
-                need.memory, max
-            ));
+            return Err(format!("guest needs {} B RAM, limit {}", need.memory, max));
         }
     }
     for l in &need.required_labels {
@@ -86,10 +80,7 @@ pub fn osd_allowed(caps: &NodeCaps, uplink_mbps: u64, min_mbps: u64) -> Result<(
         return Err("node role is not storage".to_string());
     }
     if uplink_mbps < min_mbps {
-        return Err(format!(
-            "uplink {} Mbps is below the {} Mbps minimum for OSDs",
-            uplink_mbps, min_mbps
-        ));
+        return Err(format!("uplink {} < min {} Mbps", uplink_mbps, min_mbps));
     }
     Ok(())
 }
@@ -175,8 +166,10 @@ mod tests {
             ..Default::default()
         };
         assert!(osd_allowed(&storage, 25_000, 10_000).is_ok());
-        assert!(osd_allowed(&storage, 1_000, 10_000).unwrap_err().contains("below"));
-        assert!(osd_allowed(&weak(), 25_000, 10_000).unwrap_err().contains("storage"));
+        let slow = osd_allowed(&storage, 1_000, 10_000);
+        assert!(slow.unwrap_err().contains("min"));
+        let wrong = osd_allowed(&weak(), 25_000, 10_000);
+        assert!(wrong.unwrap_err().contains("storage"));
     }
 
     #[test]
