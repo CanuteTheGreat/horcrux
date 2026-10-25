@@ -10,6 +10,7 @@ pub mod migration;
 pub mod nic;
 pub mod node;
 pub mod quorum;
+pub mod roles;
 pub mod state_sync;
 pub mod usage;
 
