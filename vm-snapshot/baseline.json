@@ -1,7 +1,7 @@
 {
  "id": "vm-snapshot",
  "last_full": "2026-10-19",
- "sha": "0e703f40115bd72de4acdde0466fd32eac780691",
+ "sha": "7044ea74e43bdffd19f5db41d5d711c8662279b3",
  "survivors": [
   "crates/horcrux-vm/src/vm/snapshot.rs: replace != with == in VmSnapshotManager::create_live_snapshot"
  ]
