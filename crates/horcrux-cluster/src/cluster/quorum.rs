@@ -51,7 +51,9 @@ pub fn plan(voters: &[Voter]) -> QuorumPlan {
         ));
     }
     if voters.iter().any(|v| v.votes > 1) {
-        warnings.push("weighted votes in use: losing a heavy node costs more than one vote".to_string());
+        warnings.push(
+            "weighted votes in use: losing a heavy node costs more than one vote".to_string(),
+        );
     }
     let max_vote = voters.iter().map(|v| v.votes).max().unwrap_or(0);
     if total > 0 && max_vote >= quorum {
@@ -70,7 +72,10 @@ pub fn plan(voters: &[Voter]) -> QuorumPlan {
 /// Render the corosync `quorum { }` block for a plan.
 pub fn corosync_quorum_block(plan: &QuorumPlan) -> String {
     let mut s = String::from("quorum {\n    provider: corosync_votequorum\n");
-    s.push_str(&format!("    expected_votes: {}\n", plan.total_votes.max(1)));
+    s.push_str(&format!(
+        "    expected_votes: {}\n",
+        plan.total_votes.max(1)
+    ));
     if plan.auto_tie_breaker {
         // lowest node id survives a 50/50 split
         s.push_str("    auto_tie_breaker: 1\n    auto_tie_breaker_node: lowest\n");
@@ -85,7 +90,11 @@ mod tests {
 
     fn voters(n: u32) -> Vec<Voter> {
         (1..=n)
-            .map(|i| Voter { name: format!("n{i}"), node_id: i, votes: 1 })
+            .map(|i| Voter {
+                name: format!("n{i}"),
+                node_id: i,
+                votes: 1,
+            })
             .collect()
     }
 
@@ -132,7 +141,15 @@ mod tests {
     #[test]
     fn empty_and_two_node_warn() {
         assert!(plan(&[]).warnings.iter().any(|w| w.contains("never")));
-        assert!(plan(&voters(2)).warnings.iter().any(|w| w.contains("witness")));
-        assert_eq!(corosync_quorum_block(&plan(&[])).matches("expected_votes: 1").count(), 1);
+        assert!(plan(&voters(2))
+            .warnings
+            .iter()
+            .any(|w| w.contains("witness")));
+        assert_eq!(
+            corosync_quorum_block(&plan(&[]))
+                .matches("expected_votes: 1")
+                .count(),
+            1
+        );
     }
 }
