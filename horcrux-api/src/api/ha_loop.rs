@@ -205,6 +205,40 @@ async fn peer_recover(
     Ok(StatusCode::OK)
 }
 
+/// VM ids being recovered on this node right now. Their QEMU process exists
+/// before the new placement is recorded, so the stale-copy sweep must not
+/// mistake the freshly started guest for a leftover and kill it.
+static RECOVERING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn is_recovering(vm_id: &str) -> bool {
+    RECOVERING
+        .lock()
+        .map(|g| g.iter().any(|v| v == vm_id))
+        .unwrap_or(false)
+}
+
+/// Marks `vm_id` as recovering until dropped.
+struct RecoveryGuard(String);
+
+impl RecoveryGuard {
+    fn new(vm_id: &str) -> Self {
+        if let Ok(mut g) = RECOVERING.lock() {
+            g.push(vm_id.to_string());
+        }
+        RecoveryGuard(vm_id.to_string())
+    }
+}
+
+impl Drop for RecoveryGuard {
+    fn drop(&mut self) {
+        if let Ok(mut g) = RECOVERING.lock() {
+            if let Some(i) = g.iter().position(|v| v == &self.0) {
+                g.remove(i);
+            }
+        }
+    }
+}
+
 /// Bring an HA VM up on this node from the replicated definition.
 async fn recover_here(
     state: &Arc<AppState>,
@@ -252,6 +286,7 @@ async fn recover_here(
         cfg.status = horcrux_common::VmStatus::Stopped;
         state.vm_manager.import_vm(cfg).await?;
     }
+    let _recovering = RecoveryGuard::new(vm_id);
     if !QemuManager::process_running(vm_id) {
         state.vm_manager.start_vm(vm_id).await?;
     }
@@ -551,7 +586,7 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
     // 2. stale copies of VMs the cluster placed elsewhere.
     for r in state.ha_manager.list_resources().await {
         if let Some(node) = r.current_node.as_deref() {
-            if node != local && QemuManager::process_running(&r.vm_id) {
+            if node != local && !is_recovering(&r.vm_id) && QemuManager::process_running(&r.vm_id) {
                 tracing::warn!(
                     "HA: VM {} runs here but is placed on {node}; stopping the stale copy",
                     r.vm_id
@@ -845,5 +880,21 @@ async fn move_vm(
                 .await;
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod recovery_guard_tests {
+    use super::*;
+
+    #[test]
+    fn guard_marks_vm_until_dropped() {
+        assert!(!is_recovering("guard-vm"));
+        {
+            let _g = RecoveryGuard::new("guard-vm");
+            assert!(is_recovering("guard-vm"));
+            assert!(!is_recovering("other-vm"));
+        }
+        assert!(!is_recovering("guard-vm"));
     }
 }
