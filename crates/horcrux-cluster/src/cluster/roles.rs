@@ -57,7 +57,10 @@ pub fn eligible(caps: &NodeCaps, need: &GuestNeeds) -> Result<(), String> {
     }
     if let Some(max) = caps.max_guest_vcpus {
         if need.vcpus > max {
-            return Err(format!("guest needs {} vCPUs, node limit is {}", need.vcpus, max));
+            return Err(format!(
+                "guest needs {} vCPUs, node limit is {}",
+                need.vcpus, max
+            ));
         }
     }
     if let Some(max) = caps.max_guest_memory {
@@ -174,7 +177,10 @@ mod tests {
 
     #[test]
     fn role_serde_lowercase() {
-        assert_eq!(serde_json::to_string(&NodeRole::Witness).unwrap(), "\"witness\"");
+        assert_eq!(
+            serde_json::to_string(&NodeRole::Witness).unwrap(),
+            "\"witness\""
+        );
         let c: NodeCaps = serde_json::from_str(r#"{"role":"storage"}"#).unwrap();
         assert_eq!(c.role, NodeRole::Storage);
         assert!(c.labels.is_empty());
