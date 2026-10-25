@@ -34,7 +34,7 @@ pub fn quorum_threshold(total_votes: u32) -> u32 {
 pub fn plan(voters: &[Voter]) -> QuorumPlan {
     let total: u32 = voters.iter().map(|v| v.votes).sum();
     let quorum = quorum_threshold(total);
-    let even = total > 0 && total % 2 == 0;
+    let even = total > 0 && total.is_multiple_of(2);
     let mut warnings = Vec::new();
     if total == 0 {
         warnings.push("no voting nodes: cluster can never be quorate".to_string());
