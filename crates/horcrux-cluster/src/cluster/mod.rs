@@ -8,6 +8,7 @@ pub mod drain;
 pub mod membership;
 pub mod migration;
 pub mod nic;
+pub mod quorum;
 pub mod node;
 pub mod state_sync;
 pub mod usage;
