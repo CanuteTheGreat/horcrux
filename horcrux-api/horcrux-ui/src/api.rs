@@ -962,6 +962,8 @@ pub struct ReplicationJob {
     pub enabled: bool,
     pub last_sync: Option<String>,
     pub status: String,
+    /// Error of the last failed run (shown under the status in the row).
+    pub last_error: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -975,6 +977,10 @@ struct ReplicationJobWire {
     enabled: bool,
     #[serde(default)]
     last_run: Option<i64>,
+    #[serde(default)]
+    last_status: Option<String>,
+    #[serde(default)]
+    last_error: Option<String>,
 }
 
 /// "hourly" | {"daily":{"hour":2}} | {"weekly":{"day":1,"hour":3}} | ...
@@ -1012,13 +1018,14 @@ impl From<ReplicationJobWire> for ReplicationJob {
             schedule: describe_replication_schedule(&w.schedule),
             enabled: w.enabled,
             last_sync: w.last_run.map(crate::utils::format_unix_secs),
-            status: if !w.enabled {
-                "disabled".to_string()
-            } else if w.last_run.is_some() {
-                "ok".to_string()
-            } else {
-                "scheduled".to_string()
+            status: match w.last_status.as_deref() {
+                Some("failed") => "failed".to_string(),
+                Some("running") => "running".to_string(),
+                _ if !w.enabled => "disabled".to_string(),
+                _ if w.last_run.is_some() => "ok".to_string(),
+                _ => "scheduled".to_string(),
             },
+            last_error: w.last_error.filter(|e| !e.is_empty()),
         }
     }
 }

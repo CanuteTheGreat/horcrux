@@ -31,6 +31,7 @@ mod nightly_stress_tests;
 mod oidc_integration_tests;
 mod persistence_restart_tests;
 mod rbac_matrix_tests;
+mod replication_api_tests;
 mod resource_pool_tests;
 mod sdn_tests;
 mod storage_content_tests;

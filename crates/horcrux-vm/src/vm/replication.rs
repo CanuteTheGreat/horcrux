@@ -33,6 +33,14 @@ pub struct ReplicationJob {
     pub last_run: Option<i64>,
     pub next_run: i64,
     pub created_at: i64,
+    /// Outcome of the most recent run: `running`, `ok` or `failed`
+    /// (`None` = never run). Persisted so a background failure stays
+    /// visible on the job after the request that started it has returned.
+    #[serde(default)]
+    pub last_status: Option<String>,
+    /// Error message of the most recent failed run (cleared by a success).
+    #[serde(default)]
+    pub last_error: Option<String>,
 }
 
 /// Replication schedule
@@ -107,6 +115,22 @@ impl ReplicationManager {
             {
                 jobs.insert(job.id.clone(), job);
             }
+            // A run that was in flight when the process stopped never
+            // finished: show it as failed instead of "running" forever.
+            for job in jobs.values_mut() {
+                if job.last_status.as_deref() == Some("running") {
+                    job.last_status = Some("failed".to_string());
+                    job.last_error =
+                        Some("interrupted: the API restarted during the run".to_string());
+                    config_store::put_opt(
+                        &Some(store.clone()),
+                        kinds::REPLICATION_JOB,
+                        &job.id,
+                        &*job,
+                    )
+                    .await?;
+                }
+            }
             info!("Loaded {} replication job(s) from database", jobs.len());
         }
         mgr.store = Some(store);
@@ -152,7 +176,7 @@ impl ReplicationManager {
         let mut jobs = self.jobs.write().await;
 
         if !jobs.contains_key(job_id) {
-            return Err(horcrux_common::Error::System(format!(
+            return Err(horcrux_common::Error::NotFound(format!(
                 "Replication job {} not found",
                 job_id
             )));
@@ -164,10 +188,38 @@ impl ReplicationManager {
         Ok(())
     }
 
+    /// Check, before anything is started, that a run can possibly work:
+    /// `ssh` and `zfs` are installed on this node and the target is usable.
+    /// Reported to the caller of "execute" instead of failing later in the
+    /// background.
+    fn check_preconditions(job: &ReplicationJob) -> Result<()> {
+        let target = job.target_node.trim();
+        if target.is_empty() || target.starts_with('-') || target.contains(char::is_whitespace) {
+            return Err(horcrux_common::Error::InvalidConfig(format!(
+                "Replication job {} has an invalid target node '{}'",
+                job.id, job.target_node
+            )));
+        }
+        for bin in ["zfs", "ssh"] {
+            if !binary_in_path(bin) {
+                return Err(horcrux_common::Error::InvalidConfig(format!(
+                    "Cannot replicate: the '{}' command is not installed on this node{}",
+                    bin,
+                    if bin == "zfs" {
+                        " (replication uses ZFS send/receive)"
+                    } else {
+                        " (needed to reach the target node)"
+                    }
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Execute a replication job
     pub async fn execute_replication(&self, job_id: &str) -> Result<ReplicationState> {
         let job = self.get_job(job_id).await.ok_or_else(|| {
-            horcrux_common::Error::System(format!("Replication job {} not found", job_id))
+            horcrux_common::Error::NotFound(format!("Replication job {} not found", job_id))
         })?;
 
         if !job.enabled {
@@ -176,6 +228,8 @@ impl ReplicationManager {
                 job_id
             )));
         }
+
+        Self::check_preconditions(&job)?;
 
         // Create initial state
         let state = ReplicationState {
@@ -190,28 +244,79 @@ impl ReplicationManager {
             error: None,
         };
 
-        let mut active = self.active_replications.write().await;
-        active.insert(job.id.clone(), state.clone());
-        drop(active);
+        {
+            let mut active = self.active_replications.write().await;
+            if let Some(existing) = active.get(&job.id) {
+                if matches!(
+                    existing.status,
+                    ReplicationStatus::Preparing
+                        | ReplicationStatus::Transferring
+                        | ReplicationStatus::Finalizing
+                ) {
+                    return Err(horcrux_common::Error::Conflict(format!(
+                        "Replication job {} is already running",
+                        job_id
+                    )));
+                }
+            }
+            active.insert(job.id.clone(), state.clone());
+        }
+        self.record_outcome(&job.id, Some("running"), None).await;
 
         // Execute replication in background
         let manager = Arc::new(self.clone());
         let job_clone = job.clone();
-        let job_id_clone = job_id.to_string();
 
         tokio::spawn(async move {
-            if let Err(e) = manager.perform_replication(job_clone).await {
-                error!("Replication failed for job {}: {}", job_id_clone, e);
-
-                let mut active = manager.active_replications.write().await;
-                if let Some(state) = active.get_mut(&job_id_clone) {
-                    state.status = ReplicationStatus::Failed;
-                    state.error = Some(e.to_string());
-                }
-            }
+            let m = manager.clone();
+            manager
+                .run_and_record(&job_clone.id, || m.perform_replication(job_clone.clone()))
+                .await;
         });
 
         Ok(state)
+    }
+
+    /// Run `op` (the replication itself) and persist how it ended on the
+    /// job: `last_status` ok/failed, `last_error`, plus the live state.
+    async fn run_and_record<F, Fut>(&self, job_id: &str, op: F)
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<()>>,
+    {
+        match op().await {
+            Ok(()) => {
+                self.record_outcome(job_id, Some("ok"), None).await;
+            }
+            Err(e) => {
+                error!("Replication failed for job {}: {}", job_id, e);
+                let msg = e.to_string();
+                self.update_state(job_id, |state| {
+                    state.status = ReplicationStatus::Failed;
+                    state.error = Some(msg.clone());
+                })
+                .await;
+                self.record_outcome(job_id, Some("failed"), Some(msg)).await;
+            }
+        }
+    }
+
+    /// Persist the run outcome on the job (best effort: a store error is
+    /// logged, the in-memory job is still updated).
+    async fn record_outcome(&self, job_id: &str, status: Option<&str>, err: Option<String>) {
+        let mut jobs = self.jobs.write().await;
+        if let Some(job) = jobs.get_mut(job_id) {
+            job.last_status = status.map(str::to_string);
+            job.last_error = err;
+            if let Err(e) =
+                config_store::put_opt(&self.store, kinds::REPLICATION_JOB, &job.id, &*job).await
+            {
+                warn!(
+                    "Failed to persist replication job {} outcome: {}",
+                    job_id, e
+                );
+            }
+        }
     }
 
     /// Perform the actual replication
@@ -623,6 +728,20 @@ impl ReplicationManager {
     }
 }
 
+/// True if `name` is an executable file in one of the `PATH` directories.
+fn binary_in_path(name: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths).any(|dir| {
+                std::fs::metadata(dir.join(name))
+                    .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
 // Make Clone available for Arc wrapping
 impl Clone for ReplicationManager {
     fn clone(&self) -> Self {
@@ -656,6 +775,8 @@ mod tests {
             last_run: None,
             next_run: 0,
             created_at: 0,
+            last_status: None,
+            last_error: None,
         };
 
         let result = manager.create_job(job).await;
@@ -678,5 +799,89 @@ mod tests {
         // Manual should never auto-run
         let next = ReplicationManager::calculate_next_run(&ReplicationSchedule::Manual, now);
         assert_eq!(next, i64::MAX);
+    }
+
+    fn test_job(id: &str) -> ReplicationJob {
+        ReplicationJob {
+            id: id.to_string(),
+            name: id.to_string(),
+            source_vm_id: "100".to_string(),
+            source_snapshot: "snap".to_string(),
+            target_node: "node2".to_string(),
+            target_pool: "tank".to_string(),
+            schedule: ReplicationSchedule::Manual,
+            bandwidth_limit_mbps: None,
+            retention_count: 7,
+            enabled: true,
+            last_run: None,
+            next_run: 0,
+            created_at: 0,
+            last_status: None,
+            last_error: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_run_is_persisted_on_the_job_and_survives_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}", dir.path().join("repl.db").display());
+        let db = Arc::new(Database::new(&url).await.unwrap());
+        db.migrate().await.unwrap();
+        let mgr = ReplicationManager::with_database(db.clone()).await.unwrap();
+        mgr.create_job(test_job("rep-fail")).await.unwrap();
+
+        mgr.record_outcome("rep-fail", Some("running"), None).await;
+        mgr.run_and_record("rep-fail", || async {
+            Err(horcrux_common::Error::System(
+                "Failed to start zfs send: No such file or directory".to_string(),
+            ))
+        })
+        .await;
+
+        let job = mgr.get_job("rep-fail").await.unwrap();
+        assert_eq!(job.last_status.as_deref(), Some("failed"));
+        assert!(job.last_error.as_deref().unwrap().contains("zfs send"));
+
+        // durable: a new manager on the same database sees the failure
+        let reloaded = ReplicationManager::with_database(db.clone()).await.unwrap();
+        let job = reloaded.get_job("rep-fail").await.unwrap();
+        assert_eq!(job.last_status.as_deref(), Some("failed"));
+        assert!(job.last_error.as_deref().unwrap().contains("zfs send"));
+
+        // a later success clears the error
+        reloaded
+            .run_and_record("rep-fail", || async { Ok(()) })
+            .await;
+        let job = reloaded.get_job("rep-fail").await.unwrap();
+        assert_eq!(job.last_status.as_deref(), Some("ok"));
+        assert!(job.last_error.is_none());
+
+        // a run left "running" by a restart is reported as failed on load
+        reloaded
+            .record_outcome("rep-fail", Some("running"), None)
+            .await;
+        let after_restart = ReplicationManager::with_database(db).await.unwrap();
+        let job = after_restart.get_job("rep-fail").await.unwrap();
+        assert_eq!(job.last_status.as_deref(), Some("failed"));
+        assert!(job.last_error.as_deref().unwrap().contains("interrupted"));
+    }
+
+    #[tokio::test]
+    async fn unknown_job_is_not_found_and_bad_target_is_rejected() {
+        let mgr = ReplicationManager::new();
+        assert!(matches!(
+            mgr.execute_replication("nope").await,
+            Err(horcrux_common::Error::NotFound(_))
+        ));
+        assert!(matches!(
+            mgr.delete_job("nope").await,
+            Err(horcrux_common::Error::NotFound(_))
+        ));
+        let mut job = test_job("bad-target");
+        job.target_node = "-oProxyCommand=x".to_string();
+        assert!(matches!(
+            ReplicationManager::check_preconditions(&job),
+            Err(horcrux_common::Error::InvalidConfig(_))
+        ));
     }
 }

@@ -573,3 +573,20 @@ body {
     .page-header { flex-wrap: wrap; gap: 0.5rem; }
     .data-table { display: block; overflow-x: auto; }
 }
+
+.status-success {
+    color: var(--success);
+    font-weight: 600;
+}
+
+.status-error {
+    color: var(--danger);
+    font-weight: 600;
+}
+
+.replication-error {
+    font-size: 0.85em;
+    font-weight: normal;
+    max-width: 28em;
+    overflow-wrap: anywhere;
+}

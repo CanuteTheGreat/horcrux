@@ -7,6 +7,9 @@ pub fn ReplicationList() -> impl IntoView {
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
     let (notice, set_notice) = create_signal(None::<String>);
+    // Failure of an action (Execute Now / Delete): shown as a banner that
+    // survives the list refresh, unlike `error` (list load failure).
+    let (action_error, set_action_error) = create_signal(None::<String>);
     let (show_create, set_show_create) = create_signal(false);
     let (vms, set_vms) = create_signal(Vec::<horcrux_common::VmConfig>::new());
     let (f_vm, set_f_vm) = create_signal(String::new());
@@ -43,8 +46,19 @@ pub fn ReplicationList() -> impl IntoView {
     let execute_job = move |job_id: String| {
         spawn_local(async move {
             match api::execute_replication(&job_id).await {
-                Ok(()) => set_notice.set(Some(format!("Replication {} started", job_id))),
-                Err(e) => set_error.set(Some(format!("Run failed: {}", e.message))),
+                Ok(()) => {
+                    set_action_error.set(None);
+                    set_notice.set(Some(format!("Replication {} started", job_id)));
+                    // The run is asynchronous: refresh shortly so a failure
+                    // (stored on the job) shows up in the row.
+                    for ms in [1500u64, 5000] {
+                        set_timeout(reload, std::time::Duration::from_millis(ms));
+                    }
+                }
+                Err(e) => {
+                    set_notice.set(None);
+                    set_action_error.set(Some(format!("Run failed: {}", e.message)));
+                }
             }
             reload();
         });
@@ -60,7 +74,7 @@ pub fn ReplicationList() -> impl IntoView {
         {
             spawn_local(async move {
                 if let Err(e) = api::delete_replication(&job_id).await {
-                    set_error.set(Some(format!("Delete failed: {}", e.message)));
+                    set_action_error.set(Some(format!("Delete failed: {}", e.message)));
                 }
                 reload();
             });
@@ -106,7 +120,8 @@ pub fn ReplicationList() -> impl IntoView {
                 </div>
             </div>
 
-            {move || notice.get().map(|n| view! { <div class="alert alert-success">{n}</div> })}
+            {move || notice.get().map(|n| view! { <div class="alert alert-success" id="replication-notice">{n}</div> })}
+            {move || action_error.get().map(|e| view! { <div class="alert alert-error" id="replication-action-error">{e}</div> })}
 
             <Show when=move || show_create.get()>
                 <form class="form form-section" id="create-replication-form" on:submit=submit_create>
@@ -207,7 +222,12 @@ pub fn ReplicationList() -> impl IntoView {
                                                 <td>
                                                     {job.last_sync.as_ref().map(|t| t.to_string()).unwrap_or_else(|| "Never".to_string())}
                                                 </td>
-                                                <td><span class={status_class}>{&job.status}</span></td>
+                                                <td>
+                                                    <span class={status_class}>{&job.status}</span>
+                                                    {job.last_error.clone().map(|e| view! {
+                                                        <div class="replication-error status-error" title=e.clone()>{e}</div>
+                                                    })}
+                                                </td>
                                                 <td class="actions">
                                                     <button
                                                         class="btn btn-sm btn-primary"

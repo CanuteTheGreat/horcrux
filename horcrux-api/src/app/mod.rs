@@ -2501,6 +2501,8 @@ async fn create_replication_job(
         created_at: chrono::Utc::now().timestamp(),
         last_run: None,
         next_run: 0, // Will be set by create_job
+        last_status: None,
+        last_error: None,
     };
 
     // Validate source VM exists
