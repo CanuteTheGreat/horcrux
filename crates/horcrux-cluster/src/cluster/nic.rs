@@ -8,7 +8,9 @@ use std::fs;
 use std::path::Path;
 
 /// Speeds Horcrux recognises (Mbit/s): 1/2.5/5/10/25/40/50/100 GbE.
-pub const KNOWN_SPEEDS_MBPS: [u64; 9] = [100, 1_000, 2_500, 5_000, 10_000, 25_000, 40_000, 50_000, 100_000];
+pub const KNOWN_SPEEDS_MBPS: [u64; 9] = [
+    100, 1_000, 2_500, 5_000, 10_000, 25_000, 40_000, 50_000, 100_000,
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NicInfo {
@@ -57,7 +59,10 @@ fn parse_speed(raw: &str) -> Option<u64> {
 /// Whether a bond mode aggregates bandwidth across slaves.
 fn bond_aggregates(mode: &str) -> bool {
     let m = mode.split_whitespace().next().unwrap_or("");
-    matches!(m, "802.3ad" | "balance-rr" | "balance-xor" | "balance-tlb" | "balance-alb")
+    matches!(
+        m,
+        "802.3ad" | "balance-rr" | "balance-xor" | "balance-tlb" | "balance-alb"
+    )
 }
 
 /// Scan `<root>/class/net` and return physical NICs and bonds (lo, veth,
@@ -84,19 +89,29 @@ pub fn scan_nics(root: &Path) -> Vec<NicInfo> {
         } else {
             Vec::new()
         };
-        let up = read_trim(&dir.join("operstate")).map(|s| s == "up").unwrap_or(false);
+        let up = read_trim(&dir.join("operstate"))
+            .map(|s| s == "up")
+            .unwrap_or(false);
         out.push(NicInfo {
             name: name.clone(),
             speed_mbps: read_trim(&dir.join("speed")).and_then(|s| parse_speed(&s)),
-            mtu: read_trim(&dir.join("mtu")).and_then(|s| s.parse().ok()).unwrap_or(1500),
+            mtu: read_trim(&dir.join("mtu"))
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1500),
             up,
             driver: fs::read_link(dir.join("device/driver"))
                 .ok()
                 .and_then(|p| p.file_name().map(|f| f.to_string_lossy().to_string())),
             is_bond,
-            bond_mode: if is_bond { read_trim(&dir.join("bonding/mode")) } else { None },
+            bond_mode: if is_bond {
+                read_trim(&dir.join("bonding/mode"))
+            } else {
+                None
+            },
             slaves,
-            sriov_vfs: read_trim(&dir.join("device/sriov_numvfs")).and_then(|s| s.parse().ok()).unwrap_or(0),
+            sriov_vfs: read_trim(&dir.join("device/sriov_numvfs"))
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0),
         });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -107,13 +122,26 @@ pub fn scan_nics(root: &Path) -> Vec<NicInfo> {
         let speeds: Vec<u64> = nic
             .slaves
             .iter()
-            .filter_map(|s| snapshot.iter().find(|n| &n.name == s).and_then(|n| n.speed_mbps))
+            .filter_map(|s| {
+                snapshot
+                    .iter()
+                    .find(|n| &n.name == s)
+                    .and_then(|n| n.speed_mbps)
+            })
             .collect();
         if speeds.is_empty() {
             continue;
         }
-        let aggregate = nic.bond_mode.as_deref().map(bond_aggregates).unwrap_or(false);
-        nic.speed_mbps = Some(if aggregate { speeds.iter().sum() } else { *speeds.iter().max().unwrap() });
+        let aggregate = nic
+            .bond_mode
+            .as_deref()
+            .map(bond_aggregates)
+            .unwrap_or(false);
+        nic.speed_mbps = Some(if aggregate {
+            speeds.iter().sum()
+        } else {
+            *speeds.iter().max().unwrap()
+        });
     }
     // Slaves of a bond are not independent endpoints.
     let enslaved: Vec<String> = out.iter().flat_map(|n| n.slaves.clone()).collect();
@@ -123,7 +151,10 @@ pub fn scan_nics(root: &Path) -> Vec<NicInfo> {
 
 /// Fastest usable link on the node, in Mbit/s.
 pub fn best_speed_mbps(nics: &[NicInfo]) -> Option<u64> {
-    nics.iter().filter(|n| n.up).filter_map(|n| n.speed_mbps).max()
+    nics.iter()
+        .filter(|n| n.up)
+        .filter_map(|n| n.speed_mbps)
+        .max()
 }
 
 /// Bandwidth cap (Mbit/s) for background traffic (live-migration, Ceph
@@ -150,10 +181,17 @@ pub fn check_storage_nic(nic: &NicInfo, min_mbps: u64) -> Vec<String> {
         _ => {}
     }
     if nic.mtu < 9000 {
-        w.push(format!("{}: MTU {} (jumbo frames, MTU 9000, recommended for Ceph/migration)", nic.name, nic.mtu));
+        w.push(format!(
+            "{}: MTU {} (jumbo frames, MTU 9000, recommended for Ceph/migration)",
+            nic.name, nic.mtu
+        ));
     }
     if nic.is_bond && nic.slaves.len() < 2 {
-        w.push(format!("{}: bond has {} slave(s), no redundancy", nic.name, nic.slaves.len()));
+        w.push(format!(
+            "{}: bond has {} slave(s), no redundancy",
+            nic.name,
+            nic.slaves.len()
+        ));
     }
     w
 }
@@ -189,7 +227,10 @@ mod tests {
         let l: Vec<String> = KNOWN_SPEEDS_MBPS.iter().map(|s| speed_label(*s)).collect();
         assert_eq!(
             l,
-            vec!["100 MbE", "1 GbE", "2.5 GbE", "5 GbE", "10 GbE", "25 GbE", "40 GbE", "50 GbE", "100 GbE"]
+            vec![
+                "100 MbE", "1 GbE", "2.5 GbE", "5 GbE", "10 GbE", "25 GbE", "40 GbE", "50 GbE",
+                "100 GbE"
+            ]
         );
         assert_eq!(speed_label(20_000), "20 GbE");
     }
