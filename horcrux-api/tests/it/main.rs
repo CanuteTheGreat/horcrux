@@ -26,6 +26,7 @@ mod depth_vm_journey;
 mod integration_tests;
 mod inventory_tests;
 mod k8s_restart_tests;
+mod mdev_tests;
 mod migration_tests;
 mod nightly_stress_tests;
 mod oidc_integration_tests;

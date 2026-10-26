@@ -11,6 +11,7 @@ pub mod hold;
 pub mod incus;
 #[cfg(feature = "lxd")]
 pub mod lxd;
+pub mod mdev;
 pub mod migrate;
 /// Virtual machine management module
 /// Handles QEMU/KVM, LXD, and Incus virtual machine lifecycle
@@ -20,7 +21,6 @@ pub mod savestate;
 pub mod snapshot;
 pub mod snapshot_quota;
 pub mod snapshot_scheduler;
-pub mod vgpu;
 
 pub use qemu::{QemuManager, QemuVm};
 

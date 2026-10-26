@@ -25,6 +25,7 @@ pub mod inventory;
 #[cfg(feature = "kubernetes")]
 pub mod k8s_config;
 pub mod lane_m;
+pub mod mdev;
 pub mod metrics;
 pub mod migration_jobs;
 pub mod migration_peer;

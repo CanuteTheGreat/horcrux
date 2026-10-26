@@ -7,9 +7,7 @@ Horcrux provides comprehensive GPU passthrough support including PCI passthrough
 - [Overview](#overview)
 - [Prerequisites](#prerequisites)
 - [PCI Passthrough](#pci-passthrough)
-- [NVIDIA vGPU](#nvidia-vgpu)
-- [AMD MxGPU](#amd-mxgpu)
-- [Intel GVT-g](#intel-gvt-g)
+- [vGPU / mediated devices](#vgpu--mediated-devices-nvidia-vgpu-intel-gvt-g-amd-mxgpu)
 - [API Reference](#api-reference)
 - [Troubleshooting](#troubleshooting)
 
@@ -27,9 +25,9 @@ Horcrux supports multiple GPU virtualization technologies:
 | Technology | Vendor | VMs per GPU | Live Migration |
 |------------|--------|-------------|----------------|
 | PCI Passthrough | All | 1 | No |
-| NVIDIA vGPU | NVIDIA | Multiple | Yes |
-| AMD MxGPU | AMD | Multiple | Limited |
-| Intel GVT-g | Intel | Up to 7 | No |
+| NVIDIA vGPU (mdev) | NVIDIA | Multiple | No |
+| AMD MxGPU (mdev) | AMD | Multiple | No |
+| Intel GVT-g (mdev) | Intel | Up to 7 | No |
 
 ## Prerequisites
 
@@ -133,26 +131,26 @@ Response:
 curl -X POST http://localhost:8006/api/gpu/devices/0000:01:00.0/bind-vfio
 ```
 
-### 4. Create VM with GPU Passthrough
+### 4. Give the device to a VM
+
+The device goes into the VM's hardware (`hostpci`), while the VM is stopped
+or when it is created. A PCI address needs the device bound to `vfio-pci`
+(step 3) and an IOMMU group; Horcrux checks both when you save and again when
+the VM starts, and says which one is missing.
 
 ```bash
-# Via API
-curl -X POST http://localhost:8006/api/vms \
+curl -X PUT http://localhost:8006/api/vms/vm-100/config \
   -H "Content-Type: application/json" \
-  -d '{
-    "id": "vm-100",
-    "name": "gpu-workstation",
-    "cpus": 8,
-    "memory": 16384,
-    "disk_size": 100,
-    "gpu_passthrough": {
-      "pci_address": "0000:01:00.0",
-      "rom_file": "/usr/share/vgabios/nvidia.rom",
-      "multifunction": true,
-      "primary_gpu": true
-    }
-  }'
+  -d '{"hardware": {"hostpci": [
+        {"device": "0000:01:00.0", "primary_gpu": true},
+        {"device": "0000:01:00.1"}]}}'
 ```
+
+QEMU gets `-device vfio-pci,host=0000:01:00.0,id=hostpci0,x-vga=on`. Pass the
+GPU's audio function (and every other device of its IOMMU group, step 5) too.
+At most 8 devices per VM, at most one `primary_gpu`; clones don't inherit
+devices (a device belongs to one guest). A VM with passthrough devices can't
+be live-migrated.
 
 ### 5. Check IOMMU Group Devices
 
@@ -176,229 +174,59 @@ Response:
 ]
 ```
 
-## NVIDIA vGPU
+## vGPU / mediated devices (NVIDIA vGPU, Intel GVT-g, AMD MxGPU)
 
-NVIDIA vGPU allows multiple VMs to share a single GPU with dedicated framebuffer.
-
-### Prerequisites
-
-- NVIDIA GRID/Tesla GPU (A100, A30, A40, T4, etc.)
-- NVIDIA vGPU software license
-- NVIDIA vGPU Manager installed on host
-
-### Setup
-
-1. **Install NVIDIA vGPU Manager**:
+These all work through the kernel's mediated device (mdev) framework: the host
+driver exposes **types** (profiles) per GPU, you create an mdev of a type, and
+a VM uses it like a PCI device. Horcrux reads and writes
+`/sys/class/mdev_bus` and `/sys/bus/mdev/devices` directly; the vendor driver
+(NVIDIA vGPU manager with its licence, `i915` with `kvmgt`, AMD's GIM) must
+already be installed and loaded - Horcrux does not install drivers.
 
 ```bash
-# Download from NVIDIA Licensing Portal
-chmod +x NVIDIA-vGPU-Linux-*.run
-./NVIDIA-vGPU-Linux-*.run --dkms
-```
+# what the host can create (parent GPU, type id, name, free instances)
+curl http://localhost:8006/api/gpu/mdev/types
 
-2. **List vGPU Profiles**:
-
-```bash
-# Via API
-curl http://localhost:8006/api/vgpu/devices
-```
-
-Response:
-```json
-[
-  {
-    "pci_id": "0000:01:00.0",
-    "vendor": "NVIDIA",
-    "device_name": "Tesla A100",
-    "vgpu_type": "nvidia",
-    "available_profiles": [
-      {
-        "name": "nvidia-256",
-        "vgpu_type": "GRID A100-4C",
-        "framebuffer_mb": 4096,
-        "max_instances": 16,
-        "description": "4GB framebuffer, compute workloads"
-      },
-      {
-        "name": "nvidia-512",
-        "vgpu_type": "GRID A100-8C",
-        "framebuffer_mb": 8192,
-        "max_instances": 8,
-        "description": "8GB framebuffer, graphics workloads"
-      }
-    ]
-  }
-]
-```
-
-3. **Create VM with vGPU**:
-
-```bash
-curl -X POST http://localhost:8006/api/vms \
+# create one (uuid is generated unless you pass "uuid")
+curl -X POST http://localhost:8006/api/gpu/mdev/devices \
   -H "Content-Type: application/json" \
-  -d '{
-    "id": "vm-101",
-    "name": "vgpu-workstation",
-    "cpus": 4,
-    "memory": 8192,
-    "disk_size": 50,
-    "vgpu": {
-      "enabled": true,
-      "vgpu_type": "nvidia",
-      "device_id": "0000:01:00.0",
-      "profile": "nvidia-256",
-      "migration_enabled": true
-    }
-  }'
-```
+  -d '{"parent": "0000:00:02.0", "type": "i915-GVTg_V5_4"}'
+# -> {"uuid": "6b1f3a6e-...", "parent": "0000:00:02.0", "mdev_type": "i915-GVTg_V5_4"}
 
-### Live Migration with vGPU
-
-NVIDIA vGPU supports live migration:
-
-```bash
-curl -X POST http://localhost:8006/api/vms/vm-101/migrate \
+# give it to a VM (hostpci accepts the mdev UUID)
+curl -X PUT http://localhost:8006/api/vms/vm-100/config \
   -H "Content-Type: application/json" \
-  -d '{
-    "target_node": "node2",
-    "live": true
-  }'
+  -d '{"hardware": {"hostpci": [{"device": "6b1f3a6e-5d0b-4b5f-9f61-0123456789ab"}]}}'
+
+# list (shows the VM using each one) and remove
+curl http://localhost:8006/api/gpu/mdev/devices
+curl -X DELETE http://localhost:8006/api/gpu/mdev/devices/6b1f3a6e-5d0b-4b5f-9f61-0123456789ab
 ```
 
-## AMD MxGPU
+QEMU gets `-device vfio-pci,sysfsdev=/sys/bus/mdev/devices/<uuid>,id=hostpciN`.
+Creation is refused with a reason when the type or parent doesn't exist (404),
+no instance is left (409) or the UUID exists; removal is refused (409) while a
+VM lists the device. mdev devices don't survive a host reboot: create them
+again before starting the VM (a VM start fails with "mediated device ... does
+not exist" otherwise).
 
-AMD MxGPU uses SR-IOV to partition supported GPUs.
-
-### Prerequisites
-
-- AMD FirePro S7150 series or newer with MxGPU support
-- SR-IOV enabled in BIOS
-
-### Setup
-
-1. **Enable SR-IOV**:
-
-```bash
-# Check SR-IOV support
-lspci -vvv -s 0000:03:00.0 | grep -i sr-iov
-
-# Enable virtual functions
-echo 4 > /sys/bus/pci/devices/0000:03:00.0/sriov_numvfs
-```
-
-2. **Create VM with MxGPU**:
-
-```bash
-curl -X POST http://localhost:8006/api/vms \
-  -H "Content-Type: application/json" \
-  -d '{
-    "id": "vm-102",
-    "name": "mxgpu-workstation",
-    "cpus": 4,
-    "memory": 8192,
-    "disk_size": 50,
-    "vgpu": {
-      "enabled": true,
-      "vgpu_type": "amd",
-      "device_id": "0000:03:00.1"
-    }
-  }'
-```
-
-## Intel GVT-g
-
-Intel GVT-g allows sharing integrated Intel GPUs.
-
-### Prerequisites
-
-- Intel 5th generation (Broadwell) or newer CPU with integrated graphics
-- Kernel 4.14 or newer with GVT-g support
-
-### Setup
-
-1. **Enable GVT-g**:
-
-Add to kernel parameters:
-```
-i915.enable_gvt=1
-```
-
-2. **Create vGPU**:
-
-```bash
-# List available profiles
-ls /sys/class/mdev_bus/0000:00:02.0/mdev_supported_types/
-
-# Available profiles:
-# - i915-GVTg_V5_4 (low memory)
-# - i915-GVTg_V5_8 (high memory)
-```
-
-3. **Create VM with GVT-g**:
-
-```bash
-curl -X POST http://localhost:8006/api/vms \
-  -H "Content-Type: application/json" \
-  -d '{
-    "id": "vm-103",
-    "name": "gvtg-workstation",
-    "cpus": 2,
-    "memory": 4096,
-    "disk_size": 30,
-    "vgpu": {
-      "enabled": true,
-      "vgpu_type": "intel",
-      "device_id": "0000:00:02.0",
-      "profile": "i915-GVTg_V5_8"
-    }
-  }'
-```
+Tested: the sysfs handling and the QEMU arguments against fixture trees in CI,
+and the HTTP contract (validation, refusals) against a real server. Not tested
+in CI: a real vGPU/GVT-g guest, which needs the hardware.
 
 ## API Reference
 
 ### GPU Device Endpoints
+- `GET /api/gpu/devices`, `POST /api/gpu/devices/scan`, `GET /api/gpu/devices/:pci_address`
+- `POST /api/gpu/devices/:pci_address/bind-vfio`, `.../unbind-vfio`, `GET .../iommu-group`
+- `GET /api/gpu/iommu-status`
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/gpu/devices` | GET | List all GPU devices |
-| `/api/gpu/devices/scan` | POST | Rescan for GPU devices |
-| `/api/gpu/devices/:pci` | GET | Get specific GPU device |
-| `/api/gpu/devices/:pci/bind-vfio` | POST | Bind GPU to vfio-pci |
-| `/api/gpu/devices/:pci/unbind-vfio` | POST | Unbind GPU from vfio-pci |
-| `/api/gpu/devices/:pci/iommu-group` | GET | Get IOMMU group devices |
-| `/api/gpu/iommu-status` | GET | Check IOMMU status |
+### Mediated device (vGPU) Endpoints
+- `GET /api/gpu/mdev/types`
+- `GET /api/gpu/mdev/devices`, `POST /api/gpu/mdev/devices`, `DELETE /api/gpu/mdev/devices/:uuid`
 
-### vGPU Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/vgpu/devices` | GET | List vGPU-capable devices |
-| `/api/vgpu/profiles` | GET | List available vGPU profiles |
-| `/api/vms/:id/vgpu` | POST | Attach vGPU to VM |
-| `/api/vms/:id/vgpu` | DELETE | Detach vGPU from VM |
-
-### GPU Passthrough Config Structure
-
-```json
-{
-  "pci_address": "0000:01:00.0",
-  "rom_file": "/path/to/vbios.rom",  // Optional: GPU VBIOS ROM
-  "multifunction": true,              // Pass all functions in IOMMU group
-  "primary_gpu": true                 // Make this the primary display
-}
-```
-
-### vGPU Config Structure
-
-```json
-{
-  "enabled": true,
-  "vgpu_type": "nvidia",              // nvidia, amd, intel, passthrough
-  "device_id": "0000:01:00.0",        // PCI device ID
-  "profile": "nvidia-256",            // vGPU profile name
-  "migration_enabled": true           // Enable live migration (NVIDIA only)
-}
-```
+### VM hardware
+`PUT /api/vms/:id/config` with `hardware.hostpci: [{"device": "<pci address or mdev uuid>", "primary_gpu": false}]`.
 
 ## Troubleshooting
 

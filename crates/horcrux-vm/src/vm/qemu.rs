@@ -325,6 +325,9 @@ pub fn device_args(hw: &horcrux_common::VmHardware, disk: &std::path::Path) -> V
             ]);
         }
     }
+    for (i, d) in hw.hostpci.iter().enumerate() {
+        a.extend(super::mdev::device_args(i, d));
+    }
     a
 }
 
@@ -1043,6 +1046,11 @@ impl QemuManager {
                 )));
             }
         }
+        // Passed-through PCI / mediated devices must be ready (vfio-pci,
+        // IOMMU group): QEMU's own failure is far less readable.
+        for d in &vm.hardware.hostpci {
+            super::mdev::check_device(std::path::Path::new("/sys"), d)?;
+        }
         // Hookscript: a failing pre-start stops the start.
         super::advanced::run_hook(&vm.hardware.adv, &vm.id, "pre-start").await?;
         // UEFI: OVMF must be installed; the VM gets its variable store.
@@ -1595,6 +1603,36 @@ mod tests {
             assert!(a.contains(want), "missing {want}\nin {a}");
         }
         assert!(!a.contains("-boot "), "bootindex replaces -boot order: {a}");
+    }
+
+    #[test]
+    fn host_pci_and_mediated_devices_become_vfio_pci_devices() {
+        use horcrux_common::VmHostPci;
+        let mut v = vm(VmArchitecture::X86_64, VmDisplay::default());
+        let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
+        assert!(!qemu_command(&v, &rt, true, None)
+            .1
+            .join(" ")
+            .contains("vfio-pci"));
+        v.hardware.hostpci = vec![
+            VmHostPci {
+                device: "01:00.0".into(),
+                primary_gpu: true,
+            },
+            VmHostPci {
+                device: "6b1f3a6e-5d0b-4b5f-9f61-0123456789ab".into(),
+                primary_gpu: false,
+            },
+        ];
+        let a = qemu_command(&v, &rt, true, None).1.join(" ");
+        assert!(
+            a.contains("-device vfio-pci,host=0000:01:00.0,id=hostpci0,x-vga=on"),
+            "{a}"
+        );
+        assert!(
+            a.contains("-device vfio-pci,sysfsdev=/sys/bus/mdev/devices/6b1f3a6e-5d0b-4b5f-9f61-0123456789ab,id=hostpci1"),
+            "{a}"
+        );
     }
 
     #[test]

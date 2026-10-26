@@ -239,6 +239,10 @@ pub struct VmHardware {
     /// Host USB devices handed to the guest (by vendor:product id).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub usb: Vec<UsbDevice>,
+    /// Host PCI devices (GPUs, NICs, NVMe, ...) and mediated devices
+    /// (NVIDIA vGPU, Intel GVT-g) handed to the guest through vfio-pci.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hostpci: Vec<VmHostPci>,
     /// Serial ports, virtiofs shares, shared memory, SMBIOS, VM Generation
     /// ID, NUMA and CPU/memory hotplug limits, protection, lock, hookscript.
     #[serde(default, skip_serializing_if = "VmAdvanced::is_default")]
@@ -479,6 +483,72 @@ pub fn valid_guid(g: &str) -> bool {
             .all(|(p, n)| p.len() == n && p.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
+/// Most host PCI / mediated devices one VM can get.
+pub const MAX_VM_HOSTPCI: usize = 8;
+
+/// A host PCI device or mediated device passed through to a VM.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VmHostPci {
+    /// A PCI address (`0000:01:00.0`, the domain may be left out) of a
+    /// device bound to `vfio-pci`, or the UUID of a mediated device
+    /// (`/api/gpu/mdev/devices`).
+    pub device: String,
+    /// The guest's primary VGA adapter (`x-vga=on`); at most one per VM.
+    #[serde(default)]
+    pub primary_gpu: bool,
+}
+
+/// What a [`VmHostPci::device`] string names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostPciKind {
+    /// `DDDD:BB:DD.F`, lower case.
+    Pci(String),
+    /// A mediated device UUID, lower case.
+    Mdev(String),
+}
+
+impl VmHostPci {
+    /// Parse the device string: a PCI address (domain defaults to 0000) or a
+    /// UUID. Nothing else is accepted, so the value is safe to put into a
+    /// QEMU `-device` argument and a sysfs path.
+    pub fn kind(&self) -> std::result::Result<HostPciKind, String> {
+        let d = self.device.trim().to_ascii_lowercase();
+        let hex = |s: &str, n: usize| s.len() == n && s.chars().all(|c| c.is_ascii_hexdigit());
+        // UUID 8-4-4-4-12
+        let parts: Vec<&str> = d.split('-').collect();
+        if parts.len() == 5
+            && [8usize, 4, 4, 4, 12]
+                .iter()
+                .zip(&parts)
+                .all(|(n, p)| hex(p, *n))
+        {
+            return Ok(HostPciKind::Mdev(d));
+        }
+        // [DDDD:]BB:DD.F
+        let (domain, rest) = match d.matches(':').count() {
+            2 => d.split_once(':').unwrap(),
+            1 => ("0000", d.as_str()),
+            _ => ("", ""),
+        };
+        if let Some((bus_dev, func)) = rest.rsplit_once('.') {
+            if let Some((bus, dev)) = bus_dev.split_once(':') {
+                if hex(domain, 4)
+                    && hex(bus, 2)
+                    && hex(dev, 2)
+                    && func.len() == 1
+                    && func.chars().all(|c| ('0'..='7').contains(&c))
+                {
+                    return Ok(HostPciKind::Pci(format!("{domain}:{bus}:{dev}.{func}")));
+                }
+            }
+        }
+        Err(format!(
+            "hostpci device {:?} is neither a PCI address (0000:01:00.0) nor a mediated device UUID",
+            self.device
+        ))
+    }
+}
+
 /// A host USB device passed through to a VM.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UsbDevice {
@@ -653,6 +723,7 @@ impl VmHardware {
         }
         // A physical device can only belong to one guest.
         hw.usb.clear();
+        hw.hostpci.clear();
         // A host tty belongs to one guest; the clone is a different machine
         // (new Generation ID, not locked/protected, no shared memory ties).
         hw.adv.serial.retain(|p| p.device.is_none());
@@ -723,6 +794,22 @@ impl VmHardware {
                 ));
             }
             seen.push(n);
+        }
+        if self.hostpci.len() > MAX_VM_HOSTPCI {
+            return Err(format!(
+                "a VM can have at most {MAX_VM_HOSTPCI} host PCI devices"
+            ));
+        }
+        let mut kinds: Vec<HostPciKind> = Vec::new();
+        for d in &self.hostpci {
+            let k = d.kind()?;
+            if kinds.contains(&k) {
+                return Err(format!("host PCI device {} is listed twice", d.device));
+            }
+            kinds.push(k);
+        }
+        if self.hostpci.iter().filter(|d| d.primary_gpu).count() > 1 {
+            return Err("only one host PCI device can be the primary GPU".into());
         }
         Ok(())
     }
@@ -1186,6 +1273,59 @@ pub enum FirewallProtocol {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_pci_addresses_and_mdev_uuids_are_validated() {
+        let h = |d: &str| VmHostPci {
+            device: d.into(),
+            primary_gpu: false,
+        };
+        assert_eq!(
+            h("01:00.0").kind(),
+            Ok(HostPciKind::Pci("0000:01:00.0".into()))
+        );
+        assert_eq!(
+            h(" 0000:0A:00.7 ").kind(),
+            Ok(HostPciKind::Pci("0000:0a:00.7".into()))
+        );
+        assert_eq!(
+            h("6B1F3A6E-5D0B-4B5F-9F61-0123456789AB").kind(),
+            Ok(HostPciKind::Mdev(
+                "6b1f3a6e-5d0b-4b5f-9f61-0123456789ab".into()
+            ))
+        );
+        for bad in [
+            "",
+            "01:00.8",
+            "1:00.0",
+            "0000:01:00",
+            "zz:00.0",
+            "0000:01:00.0,x-vga=on",
+            "../../etc",
+            "6b1f3a6e-5d0b-4b5f-9f61-0123456789a",
+        ] {
+            assert!(h(bad).kind().is_err(), "{bad:?} must be refused");
+        }
+        let mut hw = VmHardware {
+            hostpci: vec![h("01:00.0"), h("0000:02:00.0")],
+            ..Default::default()
+        };
+        assert!(hw.validate().is_ok());
+        hw.hostpci.push(h("0000:01:00.0"));
+        assert!(hw.validate().unwrap_err().contains("twice"));
+        hw.hostpci.pop();
+        hw.hostpci.iter_mut().for_each(|d| d.primary_gpu = true);
+        assert!(hw.validate().unwrap_err().contains("primary"));
+        hw.hostpci = (0..9).map(|i| h(&format!("0{i}:00.0"))).collect();
+        assert!(hw.validate().unwrap_err().contains("at most"));
+        // a device belongs to one guest: clones don't get it
+        hw.hostpci = vec![h("01:00.0")];
+        assert!(hw.for_clone().hostpci.is_empty());
+        // stored configs without the field still load, and it is omitted when empty
+        let none: VmHardware = serde_json::from_str("{}").unwrap();
+        assert!(none.hostpci.is_empty());
+        assert!(!serde_json::to_string(&none).unwrap().contains("hostpci"));
+    }
 
     #[test]
     fn container_options_validation() {

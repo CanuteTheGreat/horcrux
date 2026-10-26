@@ -532,6 +532,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::sdn_zones::routes(&state))
         .merge(api::vm_hw::routes())
         .merge(api::vm_devices::routes())
+        .merge(api::mdev::routes())
         .merge(api::storage_volumes::routes())
         .merge(api::storage_content::routes())
         .merge(api::resource_pools::routes())

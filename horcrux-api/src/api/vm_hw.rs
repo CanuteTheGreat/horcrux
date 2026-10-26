@@ -331,6 +331,9 @@ async fn scan_isos(state: &AppState) -> Vec<IsoFile> {
 pub async fn check_host_hardware(state: &AppState, hw: &VmHardware) -> Result<(), ApiError> {
     check_host_firmware(hw)?;
     check_host_advanced(state, hw).await?;
+    for d in &hw.hostpci {
+        crate::vm::mdev::check_device(std::path::Path::new("/sys"), d)?;
+    }
     for (i, nic) in hw.nets.iter().enumerate() {
         match crate::vm::qemu::HostNet::system().bridge_vlan_aware(&nic.bridge) {
             None => {
