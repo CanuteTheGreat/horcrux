@@ -1021,6 +1021,8 @@ Content-Type: application/json
 - `cifs` - CIFS/SMB network storage
 - `ceph` - Ceph RBD
 - `glusterfs` - GlusterFS
+- `cephfs` - a mounted CephFS (shared file storage; the pool path is the mount point, which must be a `ceph` / `ceph-fuse` mount: `mount -t ceph mon1,mon2:/ /mnt/cephfs -o name=hx,secretfile=...`)
+- `btrfs`, `s3` (backups/objects only)
 
 **Response**:
 ```json
@@ -3141,3 +3143,15 @@ POST /api/vms/import/ovf           {"source": "...", "id": "web1", "name": "Web 
 and creates nothing; `import` converts the disks with `qemu-img` and answers 201 with
 `{vm, plan, warnings}`. 400 for an unusable archive/descriptor/disk (the message names it),
 403 for a source outside the allowed directories. See [OVF_IMPORT.md](OVF_IMPORT.md).
+
+## ESXi import
+
+```http
+POST /api/vms/import/esxi/list      {"host": "esxi1.lab", "port": 443, "username": "root", "password": "...", "verify_tls": false}
+POST /api/vms/import/esxi/preview   {..., "datastore": "datastore1", "folder": "web01"}
+POST /api/vms/import/esxi           {..., "datastore": "datastore1", "folder": "web01", "id": "web1", "name": "Web 1", "bridge": "vmbr0", "storage": "<pool id>"}
+```
+
+`list` answers `[{name, vms: [{folder, vmx}]}]`; `preview` and `import` answer like the OVF import
+(`{plan, id}` / 201 `{vm, plan, warnings}`). 400 for a wrong password or unusable VM, 409 for a powered-on
+VM or one with snapshots, 403 for loopback/link-local hosts. See [OVF_IMPORT.md](OVF_IMPORT.md).

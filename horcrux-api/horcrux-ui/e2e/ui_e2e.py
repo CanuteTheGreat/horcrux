@@ -741,6 +741,7 @@ def main():
         passthrough_checks(page, vid)
         metric_server_checks(page)
         ovf_import_checks(page)
+        esxi_import_checks(page)
         storage_volume_checks(page, vid)
         cluster_nodes_checks(context)
 
@@ -803,7 +804,7 @@ def metric_server_checks(page):
     class H(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
             n = int(self.headers.get("content-length", 0))
-            got.append((self.path, dict(self.headers), self.rfile.read(n).decode()))
+            got.append((self.path, {k.lower(): v for k, v in self.headers.items()}, self.rfile.read(n).decode()))
             self.send_response(mode["status"])
             body = b"" if mode["status"] == 204 else b'{"message":"token rejected"}'
             self.send_header("content-length", str(len(body)))
@@ -860,7 +861,7 @@ def metric_server_checks(page):
     assert len(got) > n0, got
     path, hdrs, body = got[-1]
     assert path.startswith("/api/v2/write?org=lab&bucket=hx"), path
-    assert hdrs.get("Authorization") == "Token E2E-TOKEN", hdrs
+    assert hdrs.get("authorization") == "Token E2E-TOKEN", hdrs
     assert "horcrux_node,node=" in body and "memory_total_bytes=" in body, body
     expect(row.locator(".ms-status")).to_contain_text("points", timeout=30000)
     # edit (token field shows the mask) keeps the stored token
@@ -871,7 +872,7 @@ def metric_server_checks(page):
     expect(page.locator("#ms-notice")).to_contain_text("Saved", timeout=30000)
     row.locator(".ms-test").click()
     expect(page.locator("#ms-notice")).to_contain_text("data points", timeout=30000)
-    assert got[-1][1].get("Authorization") == "Token E2E-TOKEN", got[-1][1]
+    assert got[-1][1].get("authorization") == "Token E2E-TOKEN", got[-1][1]
     # a target that refuses: the row says why
     mode["status"] = 401
     row.locator(".ms-test").click()
@@ -974,6 +975,107 @@ def ovf_import_checks(page):
     page.locator("#ovf-preview").click()
     expect(page.locator("#ovf-error")).to_contain_text("local import sources", timeout=30000)
     _req("DELETE", "/api/vms/ovf-e2e-ovf-guest", tok)
+    srv.shutdown()
+    shutil.rmtree(work, ignore_errors=True)
+
+
+def esxi_import_checks(page):
+    """VMs > Import from ESXi against a mock ESXi datastore browser (HTTPS,
+    self-signed, basic auth): list, preview, import (disk bytes survive),
+    a wrong password shows why."""
+    import base64 as b64
+    import shutil
+    import tempfile
+    tok = token()
+    work = tempfile.mkdtemp(prefix="e2e-esxi-")
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=esxi.test",
+                    "-keyout", f"{work}/k.pem", "-out", f"{work}/c.pem"], check=True, capture_output=True)
+    flat = bytes(i % 249 for i in range(1 << 20))
+    q = "?dcPath=ha%2ddatacenter&amp;dsName=datastore1"
+
+    def page_of(items):
+        return ("<html><body><table>" + "".join(f'<tr><td><a href="{h}">{t}</a></td></tr>' for h, t in items)
+                + "</table></body></html>").encode()
+    vmx = ('displayName = "esxi-e2e"\nguestOS = "ubuntu-64"\nnumvcpus = "2"\nmemsize = "512"\n'
+           'scsi0.present = "TRUE"\nscsi0:0.present = "TRUE"\nscsi0:0.fileName = "e2e.vmdk"\n'
+           'ethernet0.present = "TRUE"\nethernet0.virtualDev = "vmxnet3"\nethernet0.networkName = "LAN"\n').encode()
+    site = {
+        "/folder": page_of([(f"/folder{q}", "datastore1")]),
+        "/folder@ds": page_of([(f"/folder/esxi-e2e{q}", "esxi-e2e/")]),
+        "/folder/esxi-e2e@ds": page_of([(f"/folder/esxi-e2e/e2e.vmx{q}", "e2e.vmx"), (f"/folder/esxi-e2e/e2e.vmdk{q}", "e2e.vmdk"),
+                                        (f"/folder/esxi-e2e/e2e-flat.vmdk{q}", "e2e-flat.vmdk")]),
+        "/folder/esxi-e2e/e2e.vmx": vmx,
+        "/folder/esxi-e2e/e2e.vmdk": b'createType="vmfsThin"\nRW 2048 VMFS "e2e-flat.vmdk"\n',
+        "/folder/esxi-e2e/e2e-flat.vmdk": flat,
+    }
+    want_auth = "Basic " + b64.b64encode(b"root:esxi-pass").decode()
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def _serve(self, head):
+            from urllib.parse import urlsplit, unquote
+            u = urlsplit(self.path)
+            path = unquote(u.path)
+            key = path + "@ds" if "dsName=" in u.query and (path + "@ds") in site else path
+            if self.headers.get("Authorization") != want_auth:
+                code, body = 401, b"no"
+            elif key in site:
+                code, body = 200, site[key]
+            else:
+                code, body = 404, b"missing"
+            self.send_response(code)
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            if not head:
+                self.wfile.write(body)
+
+        def do_GET(self):
+            self._serve(False)
+
+        def do_HEAD(self):
+            self._serve(True)
+
+        def log_message(self, *a):
+            pass
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    probe.connect(("192.0.2.1", 9))
+    mirror = probe.getsockname()[0]
+    probe.close()
+    srv = http.server.ThreadingHTTPServer((mirror, 0), H)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(f"{work}/c.pem", f"{work}/k.pem")
+    srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    for v in api_get("/api/vms", tok):
+        if v["id"].startswith("ovf-esxi-e2e"):
+            _req("DELETE", f"/api/vms/{v['id']}", tok)
+
+    page.goto(f"{BASE}/vms")
+    page.get_by_role("link", name="Import from ESXi").click()
+    page.wait_for_url(f"{BASE}/vms/import-esxi")
+    page.fill("#esxi-host", f"{mirror}:{srv.server_address[1]}")
+    page.fill("#esxi-pass", "wrong")
+    page.locator("#esxi-list").click()
+    expect(page.locator("#esxi-error")).to_contain_text("refused the user name / password", timeout=30000)
+    page.fill("#esxi-pass", "esxi-pass")
+    page.locator("#esxi-list").click()
+    row = page.locator("tr.esxi-vm[data-folder='esxi-e2e']")
+    expect(row).to_be_visible(timeout=30000)
+    row.locator(".esxi-preview").click()
+    expect(page.locator("#esxi-plan")).to_contain_text("esxi-e2e -> VM ovf-esxi-e2e", timeout=30000)
+    expect(page.locator("#esxi-plan")).to_contain_text("2 CPU(s), 512 MB memory")
+    expect(page.locator("li.esxi-disk")).to_contain_text("scsi0:0 on scsi")
+    expect(page.locator("#esxi-warnings")).to_contain_text("vmxnet3")
+    assert not [v for v in api_get("/api/vms", tok) if v["id"].startswith("ovf-esxi-e2e")], "preview created a VM"
+    page.locator("#esxi-import").click()
+    expect(page.locator("#esxi-done")).to_contain_text("Imported as VM ovf-esxi-e2e", timeout=180000)
+    vm = next(v for v in api_get("/api/vms", tok) if v["id"] == "ovf-esxi-e2e")
+    assert vm["cpus"] == 2 and vm["memory"] == 512, vm
+    raw = os.path.join(work, "back.raw")
+    subprocess.run(["qemu-img", "convert", "-O", "raw", vm["disks"][0]["path"], raw], check=True, capture_output=True)
+    with open(raw, "rb") as f:
+        assert f.read(1 << 20) == flat, "disk bytes did not survive the copy + conversion"
+    _req("DELETE", "/api/vms/ovf-esxi-e2e", tok)
     srv.shutdown()
     shutil.rmtree(work, ignore_errors=True)
 

@@ -14,6 +14,7 @@ pub mod ct_move;
 pub mod dashboards;
 #[cfg(feature = "cluster")]
 pub mod drain;
+pub mod esxi;
 pub mod firewall_objects;
 pub mod guest_state;
 #[cfg(feature = "cluster")]

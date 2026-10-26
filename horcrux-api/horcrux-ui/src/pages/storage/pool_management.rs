@@ -302,6 +302,11 @@ pub fn StorageManagement() -> impl IntoView {
                                     <option value="Ceph">"Ceph RBD"</option>
                                     <option value="Nfs">"NFS"</option>
                                     <option value="Iscsi">"iSCSI"</option>
+                                    <option value="CephFs">"CephFS (mounted)"</option>
+                                    <option value="Cifs">"CIFS / SMB"</option>
+                                    <option value="GlusterFs">"GlusterFS"</option>
+                                    <option value="BtrFs">"BtrFS"</option>
+                                    <option value="S3">"S3 (backups)"</option>
                                 </select>
                             </div>
                             <div class="form-group">

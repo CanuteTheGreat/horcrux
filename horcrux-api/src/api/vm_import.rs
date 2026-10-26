@@ -254,7 +254,14 @@ pub(crate) fn error_chain(e: &dyn std::error::Error) -> String {
 /// help either - the proxy resolves it again and may get another answer.
 /// Downloads always connect directly from the node.
 pub(crate) fn download_client() -> reqwest::Result<reqwest::Client> {
+    download_client_with(false)
+}
+
+/// [`download_client`], optionally accepting self-signed certificates (an
+/// ESXi host); the address guards stay.
+pub(crate) fn download_client_with(accept_invalid_certs: bool) -> reqwest::Result<reqwest::Client> {
     reqwest::Client::builder()
+        .danger_accept_invalid_certs(accept_invalid_certs)
         .no_proxy()
         .dns_resolver(Arc::new(GuardedResolver))
         .redirect(reqwest::redirect::Policy::custom(|attempt| {

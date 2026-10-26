@@ -683,13 +683,13 @@ fn extract<R: Read + Seek>(r: &mut R, e: &TarEntry, to: &FsPath) -> std::io::Res
 // ------------------------------------------------------------------ source
 
 /// The descriptor text and where each disk file can be read from.
-struct Source {
-    ovf: String,
+pub(crate) struct Source {
+    pub(crate) ovf: String,
     /// `.ova`: the archive and its index; `.ovf`: the directory with the disks.
-    ova: Option<(PathBuf, Vec<TarEntry>)>,
-    dir: Option<PathBuf>,
+    pub(crate) ova: Option<(PathBuf, Vec<TarEntry>)>,
+    pub(crate) dir: Option<PathBuf>,
     /// Temporary download, removed on drop.
-    _tmp: TempFiles,
+    pub(crate) _tmp: TempFiles,
 }
 
 async fn open_source(state: &AppState, source: &str, stage: &FsPath) -> Result<Source, ApiError> {
@@ -858,7 +858,7 @@ fn slug(name: &str) -> String {
     }
 }
 
-fn stage_dir(state: &AppState) -> Result<PathBuf, ApiError> {
+pub(crate) fn stage_dir(state: &AppState) -> Result<PathBuf, ApiError> {
     let d = state
         .config
         .paths
@@ -868,7 +868,7 @@ fn stage_dir(state: &AppState) -> Result<PathBuf, ApiError> {
     Ok(d)
 }
 
-async fn free_id(state: &AppState, want: &str) -> String {
+pub(crate) async fn free_id(state: &AppState, want: &str) -> String {
     let base = format!("ovf-{}", slug(want));
     let mut id = base.clone();
     let mut n = 2;
@@ -914,10 +914,10 @@ struct ImportRequest {
 }
 
 #[derive(Serialize)]
-struct ImportResponse {
-    vm: VmConfig,
-    plan: OvfPlan,
-    warnings: Vec<String>,
+pub(crate) struct ImportResponse {
+    pub vm: VmConfig,
+    pub plan: OvfPlan,
+    pub warnings: Vec<String>,
 }
 
 async fn import(
@@ -939,6 +939,15 @@ async fn import(
     }
 }
 
+/// What the caller may override, and where the VM came from (for the log).
+pub(crate) struct Overrides {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub bridge: Option<String>,
+    pub storage: Option<String>,
+    pub label: String,
+}
+
 async fn run_import(
     state: &Arc<AppState>,
     req: &ImportRequest,
@@ -947,6 +956,25 @@ async fn run_import(
 ) -> Result<ImportResponse, ApiError> {
     let src = open_source(state, &req.source, stage).await?;
     let plan = plan_from_ovf(&src.ovf).map_err(ApiError::BadRequest)?;
+    let ov = Overrides {
+        id: req.id.clone(),
+        name: req.name.clone(),
+        bridge: req.bridge.clone(),
+        storage: req.storage.clone(),
+        label: req.source.clone(),
+    };
+    import_plan(state, &ov, plan, &src, stage, created).await
+}
+
+/// Convert the plan's disks and create the VM (shared by OVF/OVA and ESXi).
+pub(crate) async fn import_plan(
+    state: &Arc<AppState>,
+    req: &Overrides,
+    plan: OvfPlan,
+    src: &Source,
+    stage: &FsPath,
+    created: &mut Option<String>,
+) -> Result<ImportResponse, ApiError> {
     let mut warnings = plan.warnings.clone();
     let id = match req.id.as_deref().map(str::trim).filter(|i| !i.is_empty()) {
         Some(i) => {
@@ -1101,7 +1129,7 @@ async fn run_import(
     tracing::info!(
         "VM {}: imported from {} ({} disk(s))",
         vm.id,
-        req.source,
+        req.label,
         plan.disks.len()
     );
     *created = None;

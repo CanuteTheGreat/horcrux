@@ -58,8 +58,36 @@ extents are other files (so a crafted OVA cannot copy a host file into a disk). 
 sources must be under the images directory or a pool directory; URLs may not point at the
 node itself or at link-local / cloud-metadata addresses.
 
+## Importing straight from an ESXi host
+
+**Virtual Machines > Import from ESXi** (`/vms/import-esxi`) lists the VMs of a standalone ESXi
+host, previews one and copies it over HTTPS (the host's datastore browser, `https://<host>/folder/...`,
+HTTP basic auth with an ESXi account such as `root`), then converts the disks and creates the VM
+with the same mapping, safety checks and rollback as the OVF importer.
+
+```http
+POST /api/vms/import/esxi/list      {"host": "esxi1.lab", "username": "root", "password": "...", "verify_tls": false}
+POST /api/vms/import/esxi/preview   {..., "datastore": "datastore1", "folder": "web01"}
+POST /api/vms/import/esxi           {..., "datastore": "datastore1", "folder": "web01", "id": "web1", "bridge": "vmbr0", "storage": "<pool id>"}
+```
+
+- The VM must be **powered off** (a `.lck` file in its folder makes the import answer 409) and have
+  **no snapshots** (a delta disk, `parentFileNameHint`, or a non-flat/thin disk type answers 409 and
+  names the disk: delete or consolidate the snapshots in ESXi first). Only `.vmdk` disks in the VM's
+  own folder are imported; RDMs and disks elsewhere are refused.
+- The `.vmx` is mapped like an OVF: `numvcpus`, `memsize`, `firmware = "efi"`, SCSI/SATA/IDE/NVMe
+  disk buses, `ethernetN.virtualDev` (e1000/e1000e stay `e1000`, others `virtio`, Windows `e1000`),
+  CD-ROM / sound / USB reported as warnings.
+- Certificates: ESXi ships a self-signed one, so verification is off unless you tick **Verify
+  certificate**. The credentials are used for the request only (not stored, not logged, not echoed).
+- The node itself, loopback and link-local / cloud-metadata addresses are refused (403), like URL
+  imports. A VM on vCenter: export it as OVA and use the OVF importer, or point the importer at the ESXi
+  host that runs it. `host` may carry a port (`esxi1.lab:8443`).
+- Disk space for a copy of the VM's disks is needed in the data directory during the import
+  (the staging copy is deleted disk by disk as it is converted).
+
 ## Not covered
 
 Multi-file `.vmdk` (split extents) and `.ovf` with a manifest check (`.mf` is ignored),
 vApp / multi-VM collections beyond the first VM, and OVF properties (guest customisation
-`ovf-env`). ESXi hosts are imported through their export (OVF/OVA), not directly.
+`ovf-env`), live (powered-on) import from ESXi, vCenter inventories.

@@ -67,3 +67,92 @@ pub async fn import(
     )
     .await
 }
+
+// ---- ESXi host importer (mirrors horcrux-api `api::esxi`)
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct EsxiVm {
+    pub folder: String,
+    pub vmx: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct EsxiDatastore {
+    pub name: String,
+    pub vms: Vec<EsxiVm>,
+}
+
+/// `host` or `host:port` (a single colon followed by digits).
+pub fn split_host_port(h: &str) -> (String, Option<u16>) {
+    let h = h.trim();
+    match h.split_once(':') {
+        Some((host, port)) if !port.contains(':') && !host.is_empty() => {
+            match port.parse::<u16>() {
+                Ok(p) => (host.to_string(), Some(p)),
+                Err(_) => (h.to_string(), None),
+            }
+        }
+        _ => (h.to_string(), None),
+    }
+}
+
+fn esxi_conn(host: &str, user: &str, pass: &str, verify: bool) -> serde_json::Value {
+    let (host, port) = split_host_port(host);
+    serde_json::json!({
+        "host": host, "port": port, "username": user.trim(), "password": pass, "verify_tls": verify,
+    })
+}
+
+pub async fn esxi_list(
+    host: &str,
+    user: &str,
+    pass: &str,
+    verify: bool,
+) -> Result<Vec<EsxiDatastore>, ApiError> {
+    post_json(
+        "/vms/import/esxi/list",
+        &esxi_conn(host, user, pass, verify),
+    )
+    .await
+}
+
+fn esxi_target(
+    (host, user, pass, verify): (&str, &str, &str, bool),
+    datastore: &str,
+    folder: &str,
+) -> serde_json::Value {
+    let mut v = esxi_conn(host, user, pass, verify);
+    v["datastore"] = datastore.into();
+    v["folder"] = folder.into();
+    v
+}
+
+pub async fn esxi_preview(
+    conn: (&str, &str, &str, bool),
+    datastore: &str,
+    folder: &str,
+) -> Result<OvfPreview, ApiError> {
+    post_json(
+        "/vms/import/esxi/preview",
+        &esxi_target(conn, datastore, folder),
+    )
+    .await
+}
+
+pub async fn esxi_import(
+    conn: (&str, &str, &str, bool),
+    datastore: &str,
+    folder: &str,
+    id: &str,
+    name: &str,
+    bridge: &str,
+    storage: &str,
+) -> Result<OvfImported, ApiError> {
+    let opt = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
+    let mut v = esxi_target(conn, datastore, folder);
+    v["id"] = serde_json::json!(opt(id));
+    v["name"] = serde_json::json!(opt(name));
+    v["bridge"] = serde_json::json!(opt(bridge));
+    v["storage"] = serde_json::json!(opt(storage));
+    post_json("/vms/import/esxi", &v).await
+}

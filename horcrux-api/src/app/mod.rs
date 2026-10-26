@@ -536,6 +536,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::metric_servers::routes(&state))
         .merge(api::passthrough::routes())
         .merge(api::ovf::routes())
+        .merge(api::esxi::routes())
         .merge(api::storage_volumes::routes())
         .merge(api::storage_content::routes())
         .merge(api::resource_pools::routes())
@@ -4695,6 +4696,7 @@ async fn add_storage_pool(
         "cifs" => storage::StorageType::Cifs,
         "nfs" => storage::StorageType::Nfs,
         "glusterfs" => storage::StorageType::GlusterFs,
+        "cephfs" => storage::StorageType::CephFs,
         "btrfs" => storage::StorageType::BtrFs,
         "s3" => storage::StorageType::S3,
         _ => {

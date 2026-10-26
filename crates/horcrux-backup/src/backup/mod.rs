@@ -448,11 +448,11 @@ impl BackupManager {
                     use crate::storage::StorageType::*;
                     let fs_backed = matches!(
                         pool.storage_type,
-                        Directory | Nfs | Cifs | BtrFs | GlusterFs | Zfs
+                        Directory | Nfs | Cifs | BtrFs | GlusterFs | CephFs | Zfs
                     ) && pool.path.starts_with('/');
                     if !fs_backed {
                         return Err(Error::Validation(format!(
-                            "storage pool '{spec}' ({:?}) cannot hold backup archives; use a directory, NFS, CIFS, BtrFS, GlusterFS or mounted ZFS pool",
+                            "storage pool '{spec}' ({:?}) cannot hold backup archives; use a directory, NFS, CIFS, CephFS, BtrFS, GlusterFS or mounted ZFS pool",
                             pool.storage_type
                         )));
                     }

@@ -223,7 +223,7 @@ fn holds_vm_disks(p: &crate::storage::StoragePool) -> bool {
     p.enabled
         && matches!(
             p.storage_type,
-            T::Directory | T::Nfs | T::Cifs | T::GlusterFs
+            T::Directory | T::Nfs | T::Cifs | T::GlusterFs | T::CephFs
         )
         && std::path::Path::new(&p.path).is_absolute()
         && std::path::Path::new(&p.path).is_dir()

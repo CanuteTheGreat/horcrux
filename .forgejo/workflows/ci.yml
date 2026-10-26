@@ -143,8 +143,14 @@ jobs:
     # parallel rustc processes leave headroom under the cap. Job-level so
     # the server build, the test build and the --no-run lookups all share
     # one profile and nothing is rebuilt between steps.
+    #
+    # 2026-10-26: the job's cgroup is now 6 GiB (mem-probe: "limit
+    # 6442450944") and the all-features test build peaked at 6.00 GiB / 5.7
+    # anon with 4 rustc in parallel (run 6711: the SDN step's `cargo test
+    # --no-run` was killed, exit 101, no compiler output because stderr is
+    # discarded there). 2 parallel rustc keep the peak ~1.5 GiB lower.
     env:
-      CARGO_BUILD_JOBS: "4"
+      CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@v4
 

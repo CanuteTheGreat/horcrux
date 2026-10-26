@@ -1,5 +1,6 @@
 pub mod btrfs;
 pub mod ceph;
+pub mod cephfs;
 pub mod cifs;
 pub mod directory;
 pub mod glusterfs;
@@ -28,6 +29,8 @@ use tokio::sync::RwLock;
 pub enum StorageType {
     Zfs,
     Ceph,
+    /// A mounted CephFS (file-based, shared between the nodes).
+    CephFs,
     Lvm,
     Iscsi,
     Directory,
@@ -77,6 +80,7 @@ fn measured_by_statvfs(t: &StorageType) -> bool {
             | StorageType::Nfs
             | StorageType::Cifs
             | StorageType::GlusterFs
+            | StorageType::CephFs
             | StorageType::BtrFs
     )
 }
@@ -208,6 +212,7 @@ pub struct StorageManager {
     cifs: cifs::CifsManager,
     nfs: nfs::NfsManager,
     glusterfs: glusterfs::GlusterFsManager,
+    cephfs: cephfs::CephFsManager,
     btrfs: btrfs::BtrFsManager,
     s3: s3::S3Manager,
     // Track next LUN ID for each iSCSI target
@@ -239,6 +244,7 @@ impl StorageManager {
             cifs: cifs::CifsManager::new(),
             nfs: nfs::NfsManager::new(),
             glusterfs: glusterfs::GlusterFsManager::new(),
+            cephfs: cephfs::CephFsManager::new(),
             btrfs: btrfs::BtrFsManager::new(),
             s3: s3::S3Manager::new(),
             iscsi_lun_counters: Arc::new(RwLock::new(HashMap::new())),
@@ -379,6 +385,7 @@ impl StorageManager {
             StorageType::Cifs => self.cifs.validate_pool(&pool).await?,
             StorageType::Nfs => self.nfs.validate_pool(&pool).await?,
             StorageType::GlusterFs => self.glusterfs.validate_pool(&pool).await?,
+            StorageType::CephFs => self.cephfs.validate_pool(&pool).await?,
             StorageType::BtrFs => self.btrfs.validate_pool(&pool).await?,
             StorageType::S3 => {
                 // S3 validation: verify path contains valid bucket configuration
@@ -546,6 +553,12 @@ impl StorageManager {
                     .create_volume(&pool.path, volume_name, size_gb)
                     .await?
             }
+            StorageType::CephFs => {
+                // For CephFS, create the file in the mounted file system
+                self.cephfs
+                    .create_volume(&pool.path, volume_name, size_gb)
+                    .await?
+            }
             StorageType::BtrFs => {
                 // For BtrFS, create subvolume
                 self.btrfs
@@ -574,7 +587,8 @@ impl StorageManager {
             StorageType::Directory
             | StorageType::Nfs
             | StorageType::Cifs
-            | StorageType::GlusterFs => Some(base.join(format!("{name}.qcow2"))),
+            | StorageType::GlusterFs
+            | StorageType::CephFs => Some(base.join(format!("{name}.qcow2"))),
             StorageType::BtrFs => Some(
                 base.join(format!("vm-{name}"))
                     .join(format!("{name}.qcow2")),
@@ -604,7 +618,8 @@ impl StorageManager {
             StorageType::Directory
             | StorageType::Nfs
             | StorageType::Cifs
-            | StorageType::GlusterFs => {
+            | StorageType::GlusterFs
+            | StorageType::CephFs => {
                 let rd = std::fs::read_dir(&pool.path).map_err(|e| {
                     horcrux_common::Error::System(format!("Cannot read {}: {}", pool.path, e))
                 })?;
@@ -732,6 +747,7 @@ impl StorageManager {
                 StorageType::Nfs => self.nfs.delete_volume(&p).await,
                 StorageType::Cifs => self.cifs.delete_volume(&p).await,
                 StorageType::GlusterFs => self.glusterfs.delete_volume(&p).await,
+                StorageType::CephFs => self.cephfs.delete_volume(&p).await,
                 _ => self.btrfs.delete_volume(&p).await,
             };
         }
@@ -851,6 +867,11 @@ impl StorageManager {
                     "NFS storage does not support snapshots".to_string(),
                 ))
             }
+            StorageType::CephFs => {
+                return Err(horcrux_common::Error::InvalidConfig(
+                    "CephFS storage does not support snapshots".to_string(),
+                ))
+            }
             StorageType::GlusterFs => {
                 // GlusterFS snapshot takes volume_path and snapshot_name
                 let volume_path = format!("{}/{}", pool.path, volume_name);
@@ -922,6 +943,11 @@ impl StorageManager {
             StorageType::Nfs => {
                 return Err(horcrux_common::Error::InvalidConfig(
                     "NFS storage does not support snapshots".to_string(),
+                ))
+            }
+            StorageType::CephFs => {
+                return Err(horcrux_common::Error::InvalidConfig(
+                    "CephFS storage does not support snapshots".to_string(),
                 ))
             }
             StorageType::GlusterFs => {
@@ -1478,6 +1504,7 @@ mod tests {
             StorageType::Nfs,
             StorageType::Cifs,
             StorageType::GlusterFs,
+            StorageType::CephFs,
         ] {
             assert_eq!(
                 StorageManager::file_volume_path(&p(t), "d1").unwrap(),
@@ -1578,9 +1605,14 @@ mod tests {
 
     #[tokio::test]
     async fn network_fs_pools_delete_only_the_volume_file() {
-        for (i, t) in [StorageType::Nfs, StorageType::Cifs, StorageType::GlusterFs]
-            .into_iter()
-            .enumerate()
+        for (i, t) in [
+            StorageType::Nfs,
+            StorageType::Cifs,
+            StorageType::GlusterFs,
+            StorageType::CephFs,
+        ]
+        .into_iter()
+        .enumerate()
         {
             let d = scratch(&format!("netdel-{i}"));
             std::fs::write(d.join("gone.qcow2"), b"x").unwrap();

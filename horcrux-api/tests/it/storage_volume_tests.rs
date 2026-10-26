@@ -415,3 +415,44 @@ async fn linked_clone_base_volumes_are_protected() {
     assert!((200..300).contains(&api.delete("/vms/lbase").await));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// CephFS pools: only an actual CephFS mount is accepted, an unmounted
+/// directory is refused with the command that mounts it, and nothing is
+/// stored for the refused pool. (CI has no Ceph cluster: the accepted
+/// path is covered by the mount-table unit tests in `storage::cephfs`.)
+#[tokio::test]
+async fn cephfs_pool_needs_a_cephfs_mount() {
+    let dir = scratch("storage-cephfs");
+    let mut srv = Server::new(&dir);
+    srv.start();
+    srv.wait_healthy().await;
+    let api = srv.api().await;
+    let plain = dir.join("not-a-mount");
+    std::fs::create_dir_all(&plain).unwrap();
+    for path in [
+        plain.to_string_lossy().to_string(),
+        "relative/dir".into(),
+        "/no/such/dir".into(),
+    ] {
+        let (s, v) = api
+            .post(
+                "/storage/pools",
+                json!({"name": "cfs", "storage_type": "cephfs", "path": path}),
+            )
+            .await;
+        assert!(s == 400 || s == 422 || s == 500, "{path}: {s} {v}");
+        assert_ne!(s, 201, "{path}: {v}");
+    }
+    let (_, v) = api
+        .post(
+            "/storage/pools",
+            json!({"name": "cfs", "storage_type": "cephfs", "path": plain.to_string_lossy()}),
+        )
+        .await;
+    assert!(v.to_string().contains("mount point"), "{v}");
+    let (_, pools) = api.get("/storage/pools").await;
+    assert!(
+        pools.as_array().unwrap().iter().all(|p| p["name"] != "cfs"),
+        "refused pool was stored: {pools}"
+    );
+}
