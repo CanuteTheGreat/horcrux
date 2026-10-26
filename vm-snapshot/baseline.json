@@ -1,8 +1,10 @@
 {
  "id": "vm-snapshot",
- "last_full": "2026-10-19",
- "sha": "7044ea74e43bdffd19f5db41d5d711c8662279b3",
+ "last_full": "2026-10-26",
+ "sha": "78749cfd463cdf33f84e3c7f82a5abc457bb758d",
  "survivors": [
-  "crates/horcrux-vm/src/vm/snapshot.rs: replace != with == in VmSnapshotManager::create_live_snapshot"
+  "crates/horcrux-vm/src/vm/snapshot.rs: replace != with == in VmSnapshotManager::create_live_snapshot",
+  "crates/horcrux-vm/src/vm/snapshot.rs: replace VmSnapshotManager::get_disk_size -> Result<u64> with Ok(0)",
+  "crates/horcrux-vm/src/vm/snapshot.rs: replace VmSnapshotManager::get_disk_size -> Result<u64> with Ok(1)"
  ]
 }
