@@ -2785,6 +2785,32 @@ Content-Type: application/json
 **Response**: `200 OK`. An acknowledged alert stays active (and is not
 re-notified) until its condition clears.
 
+#### Silence an alert
+
+```http
+POST   /api/alerts/{alert_id}/silence   {"minutes": 60, "comment": "planned work"}
+DELETE /api/alerts/{alert_id}/silence   -> 204
+GET    /api/alerts/silences
+```
+
+`alert_id` is the `id` of an active alert. The alert's rule + target is muted for
+1 minute to 30 days: the alert stays active and listed, but no notification channel
+or event webhook is used for it (also when it resolves and fires again) until the
+silence ends or is deleted (404 when it is not silenced). Silences survive a restart.
+
+#### Preview an alert condition
+
+```http
+POST /api/alerts/preview
+{"metric_type": "cpu_usage", "operator": "greaterthan", "threshold": 80,
+ "target_pattern": "*", "duration_seconds": 300}
+```
+
+Evaluates the unsaved condition against this node's live readings; nothing is stored
+or fired. Returns `targets` (each with `value` and whether the condition `holds`),
+`would_fire`, `channels` (enabled notification channels that would get it) and a
+`note` (e.g. disk/network I/O rules are not evaluated, or no target matches).
+
 #### List Notification Channels
 
 Lists the legacy alert-manager channels (Monitoring > Notifications uses
@@ -3076,3 +3102,42 @@ For code examples in different languages, see:
 
 **Last Updated**: 2025-10-09
 **API Version**: 1.0
+
+
+## Metric servers (InfluxDB / Graphite)
+
+External metric export, like Proxmox's "Metric Server". Needs Sys.Modify to change,
+Sys.Audit to read. Tokens and passwords are returned as `********`; sending the mask
+back on `PUT` keeps the stored value.
+
+```http
+GET/POST   /api/observability/metric-servers
+GET/PUT/DELETE /api/observability/metric-servers/{id}
+POST       /api/observability/metric-servers/{id}/test     -> {"points": 12} | 502 {error from the target}
+```
+
+```json
+{"name": "influx", "type": "influxdb", "host": "metrics.lab", "port": 8086,
+ "protocol": "http", "api_version": "v2", "organization": "lab", "bucket": "horcrux",
+ "token": "...", "interval_secs": 30, "enabled": true, "verify_tls": true}
+{"name": "graphite", "type": "graphite", "host": "carbon.lab", "port": 2003,
+ "protocol": "tcp", "prefix": "horcrux", "interval_secs": 30}
+```
+
+InfluxDB 1.x: `api_version: "v1"`, `database`, optional `username`/`password`;
+`protocol: "udp"` works for 1.x only. Defaults: InfluxDB port 8086 / http / v2, Graphite
+2003 / tcp / prefix `horcrux`, interval 30 s (5-3600). Each list entry carries `status`
+(`last_success`, `last_error`, `points_sent`).
+
+
+## OVF / OVA import
+
+```http
+POST /api/vms/import/ovf/preview   {"source": "<path under the images dir / a pool, or http(s) URL>"}
+POST /api/vms/import/ovf           {"source": "...", "id": "web1", "name": "Web 1", "bridge": "vmbr0", "storage": "<pool id>"}
+```
+
+`preview` answers `{plan: {name, os, cpus, memory_mb, firmware, disks[{file, capacity_bytes, bus, label}], nics[{model, network}], warnings[]}, id}`
+and creates nothing; `import` converts the disks with `qemu-img` and answers 201 with
+`{vm, plan, warnings}`. 400 for an unusable archive/descriptor/disk (the message names it),
+403 for a source outside the allowed directories. See [OVF_IMPORT.md](OVF_IMPORT.md).

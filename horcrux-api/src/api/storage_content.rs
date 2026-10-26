@@ -84,7 +84,7 @@ pub const CONTENT_TYPES: &[ContentType] = &[
         id: "images",
         label: "VM disk image",
         dir: "images",
-        extensions: &[".qcow2", ".raw", ".img", ".vmdk"],
+        extensions: &[".qcow2", ".raw", ".img", ".vmdk", ".ova", ".ovf"],
         uploadable: true,
     },
     ContentType {

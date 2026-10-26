@@ -770,6 +770,19 @@ horcrux-cli alerts rule create \
 
 ---
 
+## Silencing and previewing alerts
+
+On **Monitoring > Alert Center**:
+
+- **Preview** (in the rule form) evaluates the unsaved condition against this node's live
+  readings and says how many targets would fire and how many enabled channels they would
+  notify; nothing is stored or sent.
+- **Silence** (Active Alerts tab, duration 15 min to 1 week; API up to 30 days) mutes the
+  alert's rule + target: it stays listed as "silenced until ...", but no channel or event
+  webhook is used for it, also if it resolves and fires again before the silence ends.
+  **Unsilence** lifts it. Silences survive a restart. Acknowledge is different: it marks an
+  alert as seen, a silence stops the notifications.
+
 ## Support
 
 - **Documentation**: https://docs.horcrux.io/alerts

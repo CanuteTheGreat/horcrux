@@ -131,6 +131,39 @@ Response:
 curl -X POST http://localhost:8006/api/gpu/devices/0000:01:00.0/bind-vfio
 ```
 
+Any PCI device can be passed through (NICs, HBAs, NVMe, USB controllers, SR-IOV
+virtual functions), not only GPUs. **Infrastructure > GPU / PCI Passthrough**
+(`/gpu`) lists every PCI device with its class, driver and IOMMU group, shows which
+VM uses it, and binds / releases it (`driver_override` + `vfio-pci`, so identical
+sibling cards keep their host driver). The page warns when other non-bridge
+devices of the IOMMU group are still on a host driver (the group is only passable
+when all of them are on vfio-pci). On a VM, **Hardware > Host PCI devices** picks
+from the vfio-bound devices and unused mediated devices, or takes an address.
+
+```bash
+curl .../api/gpu/pci/status                       # IOMMU / vfio-pci / mdev support
+curl .../api/gpu/pci/devices                      # every device, group, blockers, vms
+curl -X POST .../api/gpu/pci/devices/0000:41:00.0/bind-vfio
+curl -X POST .../api/gpu/pci/devices/0000:41:00.0/unbind-vfio   # 409 while a VM lists it
+```
+
+### Migration, save state and HA
+
+A VM with host PCI / mediated devices owns hardware of one host:
+
+- **Live migration is refused** (409, with the reason) for a running VM; stop it and
+  migrate offline. The target needs the same device bound to vfio-pci to start it
+  (the start check says what is missing).
+- **Drain / rebalance** report such a running VM as not movable (its state cannot be
+  saved either, so the host shutdown action falls back to a clean shutdown).
+- **Save state** is refused for it (`can_save: false` with the reason in
+  Infrastructure > Guest Power).
+- **HA recovery** only starts it on a node where every device exists and is bound to
+  vfio-pci (an mdev UUID only exists on the node that created it); otherwise the
+  recovery fails with that reason, is recorded as an HA event and retried on the
+  next candidate. Bind the same-address device on the standby nodes (or use
+  identical hardware) for HA to work.
+
 ### 4. Give the device to a VM
 
 The device goes into the VM's hardware (`hostpci`), while the VM is stopped
@@ -220,6 +253,10 @@ in CI: a real vGPU/GVT-g guest, which needs the hardware.
 - `GET /api/gpu/devices`, `POST /api/gpu/devices/scan`, `GET /api/gpu/devices/:pci_address`
 - `POST /api/gpu/devices/:pci_address/bind-vfio`, `.../unbind-vfio`, `GET .../iommu-group`
 - `GET /api/gpu/iommu-status`
+
+### PCI inventory (any device)
+- `GET /api/gpu/pci/status`, `GET /api/gpu/pci/devices`
+- `POST /api/gpu/pci/devices/:addr/bind-vfio`, `POST .../unbind-vfio`
 
 ### Mediated device (vGPU) Endpoints
 - `GET /api/gpu/mdev/types`

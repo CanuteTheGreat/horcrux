@@ -27,12 +27,12 @@ use pages::{
     ContainerNetworksPage, Dashboard, DashboardsPage, DeploymentsPage, DiskManagementPage,
     GpuManagement, HaDashboard, HaFailoverPage, HaGroupsPage, HelmChartsPage, HelmReleasesPage,
     HelmRepositoriesPage, ImagesPage, IngressesPage, KubernetesManagement, Login, LxcContainerPage,
-    LxcTemplatesPage, MaintenancePage, MetricsExplorerPage, MfaPage, MigrationCenterPage,
-    Monitoring, NetworkManagement, NotificationsPage, ObservabilityPage, PermissionsPage, PodsPage,
-    RealmsPage, ReplicationList, RetentionPoliciesPage, RolesPage, SecretsPage, ServicesPage,
-    SessionsPage, SmartMonitoringPage, SnapshotList, SnapshotManagerPage, StacksPage,
-    StorageManagement, TemplateManagerPage, UserMenu, UsersPage, VmConsole, VmCreate, VmList,
-    VolumesPage,
+    LxcTemplatesPage, MaintenancePage, MetricServersPage, MetricsExplorerPage, MfaPage,
+    MigrationCenterPage, Monitoring, NetworkManagement, NotificationsPage, ObservabilityPage,
+    PermissionsPage, PodsPage, RealmsPage, ReplicationList, RetentionPoliciesPage, RolesPage,
+    SecretsPage, ServicesPage, SessionsPage, SmartMonitoringPage, SnapshotList,
+    SnapshotManagerPage, StacksPage, StorageManagement, TemplateManagerPage, UserMenu, UsersPage,
+    VmConsole, VmCreate, VmImportOvfPage, VmList, VolumesPage,
 };
 
 #[component]
@@ -96,7 +96,7 @@ pub fn App() -> impl IntoView {
                             <A href="/system/packages" class="dropdown-item">"Packages"</A>
                             <A href="/system/diagnostics" class="dropdown-item">"Diagnostics"</A>
                             <A href="/tasks" class="dropdown-item">"Tasks"</A>
-                            <A href="/gpu" class="dropdown-item">"GPU Passthrough"</A>
+                            <A href="/gpu" class="dropdown-item">"GPU / PCI Passthrough"</A>
                             <IfFeature feature="cluster">
                                 <A href="/ha" class="dropdown-item">"High Availability"</A>
                                 <A href="/ha/maintenance" class="dropdown-item">"Maintenance & Rebalance"</A>
@@ -143,6 +143,7 @@ pub fn App() -> impl IntoView {
                             <A href="/monitoring" class="dropdown-item">"Overview"</A>
                             <A href="/monitoring/alerts" class="dropdown-item">"Alert Center"</A>
                             <A href="/monitoring/notifications" class="dropdown-item">"Notifications"</A>
+                            <A href="/monitoring/metric-servers" class="dropdown-item">"Metric Servers"</A>
                             <A href="/monitoring/dashboards" class="dropdown-item">"Dashboards"</A>
                             <A href="/monitoring/metrics" class="dropdown-item">"Metrics Explorer"</A>
                         </div>
@@ -170,6 +171,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/" view=Dashboard/>
                     <Route path="/vms" view=VmList/>
                     <Route path="/vms/create" view=VmCreate/>
+                    <Route path="/vms/import-ovf" view=VmImportOvfPage/>
                     <Route path="/vms/:id" view=crate::pages::VmDetailPage/>
                     <Route path="/resources" view=crate::pages::ResourcesPage/>
                     <Route path="/vms/:id/console" view=VmConsole/>
@@ -254,6 +256,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/ha/migration" view=|| view! { <Gated feature="cluster"><MigrationCenterPage/></Gated> }/>
                     <Route path="/monitoring/alerts" view=AlertCenterPage/>
                     <Route path="/monitoring/notifications" view=NotificationsPage/>
+                    <Route path="/monitoring/metric-servers" view=MetricServersPage/>
                     <Route path="/monitoring/dashboards" view=DashboardsPage/>
                     <Route path="/monitoring/metrics" view=MetricsExplorerPage/>
                     <Route path="/monitoring/observability" view=ObservabilityPage/>

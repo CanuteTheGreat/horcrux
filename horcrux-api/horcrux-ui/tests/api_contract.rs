@@ -4158,3 +4158,64 @@ async fn guest_power_routes_read_into_ui_types() {
     let _ = put(&c, &token, &path, json!({})).await;
     delete(&c, &token, &format!("/vms/{vm}")).await;
 }
+
+/// Host devices page, VM hardware passthrough panel, Metric Servers page and
+/// the Alert Center's silence / preview: every response is read into the
+/// page's own types from the real API.
+#[tokio::test]
+async fn passthrough_metric_servers_and_alert_silence_read_into_ui_types() {
+    use horcrux_ui::api::{metric_servers as ms, passthrough as pt};
+    let c = client();
+    let token = login(&c).await;
+
+    let _: pt::PciStatus = fetch(&c, &token, "/gpu/pci/status").await;
+    let pci: Vec<pt::PciDevice> = fetch(&c, &token, "/gpu/pci/devices").await;
+    println!("contract: {} PCI devices", pci.len());
+    let _: Vec<pt::MdevType> = fetch(&c, &token, "/gpu/mdev/types").await;
+    let _: Vec<pt::MdevDevice> = fetch(&c, &token, "/gpu/mdev/devices").await;
+
+    // metric server: create (secrets masked), list, test refusal, delete
+    let (status, body) = post(
+        &c,
+        &token,
+        "/observability/metric-servers",
+        json!({"name": "contract-graphite", "type": "graphite", "host": "127.0.0.1", "port": 1,
+               "interval_secs": 3600}),
+    )
+    .await;
+    assert_eq!(status, 201, "{body}");
+    let created: ms::MetricServer = decode("metric server", &body.to_string());
+    let list: Vec<ms::MetricServer> = fetch(&c, &token, "/observability/metric-servers").await;
+    assert!(list
+        .iter()
+        .any(|s| s.id == created.id && s.kind == "graphite"));
+    // nothing listens on port 1: the test send says so (502), not a hang
+    let (status, body) = post(
+        &c,
+        &token,
+        &format!("/observability/metric-servers/{}/test", created.id),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 502, "{body}");
+    delete(
+        &c,
+        &token,
+        &format!("/observability/metric-servers/{}", created.id),
+    )
+    .await;
+
+    // alerts
+    let _: Vec<api::AlertSilence> = fetch(&c, &token, "/alerts/silences").await;
+    let (status, body) = post(
+        &c,
+        &token,
+        "/alerts/preview",
+        json!({"metric_type": "node_load", "operator": "greaterthan", "threshold": -1.0,
+               "target_pattern": "*", "duration_seconds": 0}),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let p: api::AlertPreview = decode("alert preview", &body.to_string());
+    assert_eq!(p.would_fire, p.targets.len());
+}

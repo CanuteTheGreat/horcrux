@@ -701,6 +701,7 @@ pub fn VmHardwarePage() -> impl IntoView {
                     <HardwareFields hardware=hardware options=options running=running/>
                     <crate::pages::vm_devices::DeviceSwitches hardware=hardware running=running/>
                     <crate::pages::vm_advanced::AdvancedHardware hardware=hardware running=running/>
+                    <crate::pages::vm_passthrough::HostPciPanel hardware=hardware running=running/>
                 </Show>
                 <div class="form-actions">
                     <button type="submit" id="vm-hw-save" class="btn btn-primary" disabled=busy>"Save"</button>

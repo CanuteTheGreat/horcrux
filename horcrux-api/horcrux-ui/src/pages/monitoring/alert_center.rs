@@ -53,6 +53,9 @@ pub fn AlertCenterPage() -> impl IntoView {
     let (active_alerts, set_active_alerts) = create_signal(Vec::<ActiveAlert>::new());
     let (alert_history, set_alert_history) = create_signal(Vec::<ActiveAlert>::new());
     let (channel_count, set_channel_count) = create_signal(0usize);
+    let (silences, set_silences) = create_signal(Vec::<AlertSilence>::new());
+    let (preview, set_preview) = create_signal(None::<AlertPreview>);
+    let silence_minutes = create_rw_signal("60".to_string());
     let (selected_rule, set_selected_rule) = create_signal(None::<AlertRule>);
     // None = closed, Some(None) = create, Some(Some(id)) = edit
     let (form_open, set_form_open) = create_signal(None::<Option<String>>);
@@ -130,6 +133,9 @@ pub fn AlertCenterPage() -> impl IntoView {
         match get_alert_history(200).await {
             Ok(history) => set_alert_history.set(history),
             Err(e) => errors.push(format!("Failed to load alert history: {}", e)),
+        }
+        if let Ok(sil) = get_alert_silences().await {
+            set_silences.set(sil)
         }
         if let Ok(channels) = get_notification_channels().await {
             set_channel_count.set(channels.iter().filter(|c| c.enabled).count())
@@ -244,6 +250,54 @@ pub fn AlertCenterPage() -> impl IntoView {
         }
     });
 
+    let silence = create_action(move |alert: &ActiveAlert| {
+        let alert = alert.clone();
+        async move {
+            let minutes = silence_minutes.get_untracked().parse().unwrap_or(60);
+            match silence_alert(&alert.id, minutes, "").await {
+                Ok(_) => {
+                    set_notice.set(Some(format!(
+                        "Alert '{}' on {} silenced for {} min",
+                        alert.rule_name, alert.target, minutes
+                    )));
+                    load_data.dispatch(())
+                }
+                Err(e) => set_error_message.set(Some(format!("Failed to silence alert: {}", e))),
+            }
+        }
+    });
+    let unsilence = create_action(move |alert: &ActiveAlert| {
+        let alert = alert.clone();
+        async move {
+            match unsilence_alert(&alert.id).await {
+                Ok(()) => {
+                    set_notice.set(Some(format!("Silence of '{}' lifted", alert.rule_name)));
+                    load_data.dispatch(())
+                }
+                Err(e) => set_error_message.set(Some(format!("Failed to lift silence: {}", e))),
+            }
+        }
+    });
+    let run_preview = create_action(move |_: &()| async move {
+        let cond = AlertCondition {
+            metric_type: form_metric.get_untracked(),
+            operator: form_operator.get_untracked(),
+            threshold: form_threshold.get_untracked(),
+            target_pattern: form_target.get_untracked(),
+            duration_seconds: form_duration.get_untracked(),
+        };
+        match preview_alert_condition(&cond).await {
+            Ok(p) => {
+                set_error_message.set(None);
+                set_preview.set(Some(p))
+            }
+            Err(e) => {
+                set_preview.set(None);
+                set_error_message.set(Some(format!("Preview failed: {}", e)))
+            }
+        }
+    });
+
     create_effect(move |_| {
         load_data.dispatch(());
     });
@@ -347,10 +401,28 @@ pub fn AlertCenterPage() -> impl IntoView {
             return view! { <div class="empty-state">"No active alerts"</div> }.into_view();
         }
         view! {
+            <div class="form-row" id="silence-duration">
+                <label for="silence-minutes">"Silence for "</label>
+                <select id="silence-minutes" prop:value=silence_minutes on:change=move |ev| silence_minutes.set(event_target_value(&ev))>
+                    <option value="15">"15 minutes"</option>
+                    <option value="60">"1 hour"</option>
+                    <option value="240">"4 hours"</option>
+                    <option value="1440">"1 day"</option>
+                    <option value="10080">"1 week"</option>
+                </select>
+                <small>"A silenced alert stays listed but sends no notification or webhook until the time is up."</small>
+            </div>
             <div class="active-alerts-list">
                 {alerts.into_iter().map(|alert| {
                     let is_firing = alert.status == "firing";
                     let for_ack = alert.clone();
+                    let for_silence = alert.clone();
+                    let for_unsilence = alert.clone();
+                    let until = silences
+                        .get()
+                        .iter()
+                        .find(|x| x.rule_id == alert.rule_id && x.target == alert.target)
+                        .map(|x| x.until);
                     let minutes = (js_sys::Date::now() as i64 / 1000 - alert.fired_at).max(0) / 60;
                     view! {
                         <div class="active-alert-card" data-rule-name={alert.rule_name.clone()}>
@@ -370,6 +442,19 @@ pub fn AlertCenterPage() -> impl IntoView {
                                             on:click=move |_| acknowledge.dispatch(for_ack.clone())
                                         >"Acknowledge"</button>
                                     })}
+                                    {match until {
+                                        Some(u) => view! {
+                                            <span class="status-badge alert-silenced">{format!("silenced until {}", format_unix_time(u))}</span>
+                                            <button class="btn btn-sm alert-unsilence"
+                                                on:click=move |_| unsilence.dispatch(for_unsilence.clone())
+                                            >"Unsilence"</button>
+                                        }.into_view(),
+                                        None => view! {
+                                            <button class="btn btn-sm btn-secondary alert-silence"
+                                                on:click=move |_| silence.dispatch(for_silence.clone())
+                                            >"Silence"</button>
+                                        }.into_view(),
+                                    }}
                                 </div>
                             </div>
                             <div class="alert-content">
@@ -532,6 +617,23 @@ pub fn AlertCenterPage() -> impl IntoView {
                                     on:change=move |ev| set_form_enabled.set(event_target_checked(&ev)) />
                                 "Enable this rule"
                             </label>
+                        </div>
+                        <div class="form-group">
+                            <button id="rule-preview" type="button" class="btn btn-secondary"
+                                on:click=move |_| run_preview.dispatch(())>"Preview against this node now"</button>
+                            {move || preview.get().map(|p| view! {
+                                <div id="rule-preview-result" class="info-box">
+                                    <strong>{format!("{} of {} matching target(s) would fire", p.would_fire, p.targets.len())}</strong>
+                                    {(p.duration_seconds > 0).then(|| format!(" (after holding {} s)", p.duration_seconds))}
+                                    {format!(", notifying {} enabled channel(s)", p.channels)}
+                                    <ul>
+                                        {p.targets.iter().map(|t| view! {
+                                            <li>{format!("{}: {:.2} - {}", t.target, t.value, if t.holds { "condition holds" } else { "condition does not hold" })}</li>
+                                        }).collect_view()}
+                                    </ul>
+                                    {p.note.clone().map(|n| view! { <p class="form-hint">{n}</p> })}
+                                </div>
+                            })}
                         </div>
                         <p class="form-hint">
                             "Fired alerts are sent to every enabled channel under Monitoring > Notifications ("

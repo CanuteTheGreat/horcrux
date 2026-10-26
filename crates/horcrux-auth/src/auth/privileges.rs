@@ -227,6 +227,7 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
                     need(P::VmAllocate, "/vms")
                 };
             }
+            // OVF/OVA import creates a VM
             if id == "import" {
                 return need(P::VmAllocate, "/vms");
             }

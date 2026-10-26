@@ -51,8 +51,27 @@ pub struct Alert {
     pub acknowledged_by: Option<String>,
 }
 
+/// A muted `rule_id:target` pair: the alert is still tracked and shown, but
+/// no notification or webhook is sent for it until `until`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Silence {
+    pub rule_id: String,
+    pub target: String,
+    /// Unix seconds the silence ends.
+    pub until: i64,
+    pub created_at: i64,
+    pub created_by: String,
+    #[serde(default)]
+    pub comment: String,
+}
+
+/// Longest silence (30 days).
+pub const MAX_SILENCE_SECS: i64 = 30 * 24 * 3600;
+
 /// Alert manager
 pub struct AlertManager {
+    /// `rule_id:target` -> silence
+    silences: Arc<RwLock<HashMap<String, Silence>>>,
     rules: Arc<RwLock<HashMap<String, AlertRule>>>,
     active_alerts: Arc<RwLock<HashMap<String, Alert>>>,
     /// `(persistence key, entry)`, oldest first.
@@ -87,6 +106,7 @@ impl AlertManager {
             webhooks: std::sync::OnceLock::new(),
             max_history: 1000, // Keep last 1000 alerts
             pending: Arc::new(RwLock::new(HashMap::new())),
+            silences: Arc::new(RwLock::new(HashMap::new())),
             store: None,
         }
     }
@@ -125,6 +145,15 @@ impl AlertManager {
             let excess = history.len().saturating_sub(mgr.max_history);
             for (key, _) in history.drain(..excess) {
                 let _ = store.delete(kinds::ALERT_HISTORY, &key).await;
+            }
+            let now = chrono::Utc::now().timestamp();
+            let mut silences = mgr.silences.write().await;
+            for (key, sil) in store.load::<Silence>(kinds::ALERT_SILENCE).await? {
+                if sil.until > now {
+                    silences.insert(key, sil);
+                } else {
+                    let _ = store.delete(kinds::ALERT_SILENCE, &key).await;
+                }
             }
             tracing::info!(
                 "Loaded {} active alert(s) and {} alert history entr(ies) from database",
@@ -429,10 +458,18 @@ impl AlertManager {
         self.persist_active(&alert_key, &alert).await;
         drop(active_alerts);
 
-        // Send notifications
-        self.send_notifications(&alert).await;
-        self.emit_webhook(crate::webhooks::WebhookEventType::AlertTriggered, &alert)
-            .await;
+        // Send notifications (not while the pair is silenced)
+        if self.is_silenced(&alert_key).await {
+            tracing::info!(
+                "Alert {} for {} fired while silenced: no notification",
+                alert.rule_name,
+                alert.target
+            );
+        } else {
+            self.send_notifications(&alert).await;
+            self.emit_webhook(crate::webhooks::WebhookEventType::AlertTriggered, &alert)
+                .await;
+        }
 
         // Add to history
         self.push_history(alert).await;
@@ -481,6 +518,94 @@ impl AlertManager {
         );
 
         Ok(())
+    }
+
+    /// Is `rule_id:target` muted right now?
+    pub async fn is_silenced(&self, key: &str) -> bool {
+        let now = chrono::Utc::now().timestamp();
+        self.silences
+            .read()
+            .await
+            .get(key)
+            .is_some_and(|s| s.until > now)
+    }
+
+    /// Mute the rule/target of an active alert (by alert id) for `secs`
+    /// seconds. The alert stays listed; nothing is sent for it (also when
+    /// it resolves and fires again) until the silence ends.
+    pub async fn silence_alert(
+        &self,
+        alert_id: &str,
+        secs: i64,
+        user: &str,
+        comment: &str,
+    ) -> Result<Silence> {
+        if !(60..=MAX_SILENCE_SECS).contains(&secs) {
+            return Err(horcrux_common::Error::Validation(
+                "a silence lasts 1 minute to 30 days".into(),
+            ));
+        }
+        let (key, rule_id, target) = {
+            let active = self.active_alerts.read().await;
+            let (k, a) = active
+                .iter()
+                .find(|(_, a)| a.id == alert_id)
+                .ok_or_else(|| {
+                    horcrux_common::Error::NotFound(format!("no active alert {alert_id}"))
+                })?;
+            (k.clone(), a.rule_id.clone(), a.target.clone())
+        };
+        let now = chrono::Utc::now().timestamp();
+        let sil = Silence {
+            rule_id,
+            target,
+            until: now + secs,
+            created_at: now,
+            created_by: user.to_string(),
+            comment: comment.chars().take(200).collect(),
+        };
+        self.silences.write().await.insert(key.clone(), sil.clone());
+        config_store::put_opt(&self.store, kinds::ALERT_SILENCE, &key, &sil).await?;
+        tracing::info!("Alert {} silenced by {user} for {secs}s", key);
+        Ok(sil)
+    }
+
+    /// End the silence of an active alert's rule/target.
+    pub async fn unsilence_alert(&self, alert_id: &str) -> Result<()> {
+        let key = {
+            let active = self.active_alerts.read().await;
+            active
+                .iter()
+                .find(|(_, a)| a.id == alert_id)
+                .map(|(k, _)| k.clone())
+                .ok_or_else(|| {
+                    horcrux_common::Error::NotFound(format!("no active alert {alert_id}"))
+                })?
+        };
+        if self.silences.write().await.remove(&key).is_none() {
+            return Err(horcrux_common::Error::NotFound(
+                "that alert is not silenced".into(),
+            ));
+        }
+        config_store::delete_opt(&self.store, kinds::ALERT_SILENCE, &key).await
+    }
+
+    /// Silences that are still running (expired ones are dropped).
+    pub async fn list_silences(&self) -> Vec<Silence> {
+        let now = chrono::Utc::now().timestamp();
+        let mut m = self.silences.write().await;
+        let gone: Vec<String> = m
+            .iter()
+            .filter(|(_, s)| s.until <= now)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in gone {
+            m.remove(&k);
+            let _ = config_store::delete_opt(&self.store, kinds::ALERT_SILENCE, &k).await;
+        }
+        let mut v: Vec<Silence> = m.values().cloned().collect();
+        v.sort_by_key(|s| s.until);
+        v
     }
 
     /// Get all active alerts
@@ -569,7 +694,7 @@ impl AlertManager {
     }
 
     /// Check if pattern matches target
-    fn matches_target(pattern: &str, target: &str) -> bool {
+    pub fn matches_target(pattern: &str, target: &str) -> bool {
         if pattern == "*" {
             return true;
         }
@@ -804,6 +929,36 @@ mod tests {
         assert_eq!(active[0].status, AlertStatus::Acknowledged);
         assert_eq!(active[0].acknowledged_by.as_deref(), Some("admin"));
         assert_eq!(mgr.get_alert_history(None).await.len(), 1, "fired once");
+    }
+
+    #[tokio::test]
+    async fn silence_mutes_a_rule_target_until_it_ends_and_validates() {
+        let mgr = AlertManager::new();
+        mgr.add_rule(cpu_rule("r1", 80.0, 0)).await.unwrap();
+        assert!(mgr.silence_alert("nope", 600, "a", "").await.is_err());
+        mgr.evaluate_metric_at(MetricType::CpuUsage, "vm-1", 95.0, 1000)
+            .await;
+        let id = mgr.get_active_alerts().await[0].id.clone();
+        for bad in [0, 59, MAX_SILENCE_SECS + 1, -5] {
+            assert!(mgr.silence_alert(&id, bad, "a", "").await.is_err(), "{bad}");
+        }
+        let s = mgr
+            .silence_alert(&id, 600, "admin", "planned")
+            .await
+            .unwrap();
+        assert_eq!((s.rule_id.as_str(), s.target.as_str()), ("r1", "vm-1"));
+        assert!(mgr.is_silenced("r1:vm-1").await && !mgr.is_silenced("r1:vm-2").await);
+        assert_eq!(mgr.list_silences().await.len(), 1);
+        // a silenced pair that resolves and fires again is still silenced
+        mgr.evaluate_metric_at(MetricType::CpuUsage, "vm-1", 10.0, 1010)
+            .await;
+        mgr.evaluate_metric_at(MetricType::CpuUsage, "vm-1", 99.0, 1020)
+            .await;
+        assert!(mgr.is_silenced("r1:vm-1").await);
+        let id2 = mgr.get_active_alerts().await[0].id.clone();
+        mgr.unsilence_alert(&id2).await.unwrap();
+        assert!(!mgr.is_silenced("r1:vm-1").await);
+        assert!(mgr.unsilence_alert(&id2).await.is_err(), "already lifted");
     }
 
     #[tokio::test]

@@ -38,6 +38,8 @@ pub mod kinds {
     /// Firing/acknowledged alerts, keyed `rule_id:target`.
     pub const ALERT_ACTIVE: &str = "alert_active";
     /// Alert history entries (fired/resolved), keyed by an ordered sequence.
+    /// Silenced `rule_id:target` pairs (no notifications until they expire).
+    pub const ALERT_SILENCE: &str = "alert_silence";
     pub const ALERT_HISTORY: &str = "alert_history";
     pub const REPLICATION_JOB: &str = "replication_job";
     pub const SNAPSHOT_SCHEDULE: &str = "snapshot_schedule";
@@ -63,6 +65,8 @@ pub mod kinds {
     /// Host network interface settings applied from System > Network.
     pub const SYSTEM_IFACE: &str = "system_iface";
     /// SDN zones / VNets / subnets / IPAM allocations (node-local).
+    /// External metric servers (InfluxDB / Graphite; secrets included, the API masks them).
+    pub const METRIC_SERVER: &str = "metric_server";
     pub const SDN_ZONE: &str = "sdn_zone";
     pub const SDN_VNET: &str = "sdn_vnet";
     pub const SDN_SUBNET: &str = "sdn_subnet";

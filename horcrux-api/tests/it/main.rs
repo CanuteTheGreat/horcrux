@@ -11,6 +11,7 @@
 
 mod support;
 
+mod alert_silence_tests;
 mod alerts_tests;
 mod auth_e2e_tests;
 mod auth_rate_limit;
@@ -27,9 +28,11 @@ mod integration_tests;
 mod inventory_tests;
 mod k8s_restart_tests;
 mod mdev_tests;
+mod metric_servers_tests;
 mod migration_tests;
 mod nightly_stress_tests;
 mod oidc_integration_tests;
+mod ovf_import_tests;
 mod persistence_restart_tests;
 mod rbac_matrix_tests;
 mod replication_api_tests;

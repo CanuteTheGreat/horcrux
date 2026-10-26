@@ -196,6 +196,28 @@ struct Plan {
     job_id: Mutex<String>,
 }
 
+/// Why a running VM cannot be live-migrated because of host devices it owns
+/// (PCI passthrough / mediated devices keep device state in hardware that
+/// QEMU cannot save or move). A stopped VM can still move offline: the
+/// target must have the same device bound to `vfio-pci` to start it.
+pub fn live_pinned(vm: &VmConfig, live_requested: bool, running: bool) -> Option<String> {
+    if !live_requested || vm.hardware.hostpci.is_empty() || !running {
+        return None;
+    }
+    Some(format!(
+        "VM {} uses host PCI/mediated device(s) ({}): a running VM with passthrough hardware \
+         cannot be live-migrated. Stop it and migrate offline (the target node needs the same \
+         device bound to vfio-pci), or remove the device from its hardware",
+        vm.id,
+        vm.hardware
+            .hostpci
+            .iter()
+            .map(|d| d.device.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
+}
+
 /// Start migrating `config.vm_id` to `config.target_node`; returns the job id.
 pub async fn start(
     state: &Arc<AppState>,
@@ -208,6 +230,13 @@ pub async fn start(
              cluster); Horcrux migrates its QEMU VMs"
                 .into(),
         ));
+    }
+    if let Some(why) = live_pinned(
+        &vm,
+        config.migration_type != MigrationType::Offline,
+        crate::vm::QemuManager::process_running(&vm.id),
+    ) {
+        return Err(ApiError::Conflict(why));
     }
     let local = state
         .cluster_manager
@@ -1061,6 +1090,29 @@ fn yank_instances(list: &serde_json::Value) -> Vec<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn vm_with(hostpci: serde_json::Value) -> VmConfig {
+        serde_json::from_value(json!({
+            "id": "g1", "name": "g1", "hypervisor": "qemu", "architecture": "x86_64",
+            "cpus": 1, "memory": 256, "disk_size": 1, "status": "running",
+            "hardware": {"hostpci": hostpci}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn running_vm_with_passthrough_is_not_live_migratable() {
+        let pt = vm_with(json!([{"device": "0000:01:00.0"}]));
+        let why = live_pinned(&pt, true, true).unwrap();
+        assert!(
+            why.contains("0000:01:00.0") && why.contains("offline"),
+            "{why}"
+        );
+        // offline move, a stopped VM, or no passthrough device: allowed
+        assert!(live_pinned(&pt, false, true).is_none());
+        assert!(live_pinned(&pt, true, false).is_none());
+        assert!(live_pinned(&vm_with(json!([])), true, true).is_none());
+    }
 
     /// Only the connections to the target are yanked, never the VM's
     /// consoles (chardevs).

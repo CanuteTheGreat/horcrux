@@ -4,13 +4,17 @@
 //! node's metrics (rules used to be stored but never evaluated, so no alert
 //! ever fired).
 
-use crate::alerts::{Alert, AlertManager, AlertRule, AlertStatus, MetricType};
+use crate::alerts::{
+    Alert, AlertCondition, AlertManager, AlertRule, AlertStatus, MetricType, Silence,
+};
 use crate::error::ApiError;
+use crate::middleware::auth::AuthUser;
 use crate::AppState;
 use axum::{
     extract::{Path, State},
-    routing::{post, put},
-    Json, Router,
+    http::StatusCode,
+    routing::{get, post, put},
+    Extension, Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -20,6 +24,138 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/alerts/rules/:rule_id", put(update_rule))
         .route("/api/alerts/rules/:rule_id/toggle", put(toggle_rule))
         .route("/api/alerts/rules/:rule_id/test", post(test_rule))
+        .route("/api/alerts/silences", get(list_silences))
+        .route(
+            "/api/alerts/:alert_id/silence",
+            post(silence_alert).delete(unsilence_alert),
+        )
+        .route("/api/alerts/preview", post(preview))
+}
+
+/// Running silences (rule + target + end), newest end last.
+async fn list_silences(State(state): State<Arc<AppState>>) -> Json<Vec<Silence>> {
+    Json(state.alert_manager.list_silences().await)
+}
+
+#[derive(Deserialize)]
+struct SilenceRequest {
+    /// How long to mute, in minutes (1 to 43200 = 30 days).
+    minutes: u64,
+    #[serde(default)]
+    comment: String,
+}
+
+/// Mute the rule/target of an active alert: it stays listed but sends no
+/// notification or webhook until the silence ends.
+async fn silence_alert(
+    State(state): State<Arc<AppState>>,
+    user: Option<Extension<AuthUser>>,
+    Path(alert_id): Path<String>,
+    Json(req): Json<SilenceRequest>,
+) -> Result<Json<Silence>, ApiError> {
+    let by = user
+        .map(|Extension(u)| u.username)
+        .unwrap_or_else(|| "unknown".into());
+    let secs = i64::try_from(req.minutes)
+        .ok()
+        .and_then(|m| m.checked_mul(60))
+        .unwrap_or(i64::MAX);
+    Ok(Json(
+        state
+            .alert_manager
+            .silence_alert(&alert_id, secs, &by, &req.comment)
+            .await?,
+    ))
+}
+
+async fn unsilence_alert(
+    State(state): State<Arc<AppState>>,
+    Path(alert_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state.alert_manager.unsilence_alert(&alert_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Serialize)]
+struct PreviewTarget {
+    target: String,
+    /// Current reading of the metric.
+    value: f64,
+    /// Would the condition hold right now?
+    holds: bool,
+}
+
+#[derive(Serialize)]
+struct PreviewResult {
+    /// Targets the rule's pattern matches, with their current value.
+    targets: Vec<PreviewTarget>,
+    /// How many of them would start firing (after `duration_seconds`).
+    would_fire: usize,
+    duration_seconds: u64,
+    /// Enabled notification channels a firing alert would reach.
+    channels: usize,
+    /// Why nothing can fire, or a caveat.
+    note: Option<String>,
+}
+
+/// "What would this rule do right now?" Evaluates a not-yet-saved condition
+/// against the node's live readings; nothing fires and nothing is stored.
+async fn preview(
+    State(state): State<Arc<AppState>>,
+    Json(cond): Json<AlertCondition>,
+) -> Result<Json<PreviewResult>, ApiError> {
+    if cond.target_pattern.trim().is_empty() {
+        return Err(ApiError::BadRequest(
+            "target pattern is required (use * for every target)".into(),
+        ));
+    }
+    if !cond.threshold.is_finite() {
+        return Err(ApiError::BadRequest("Threshold must be a number".into()));
+    }
+    let node = hostname::get()
+        .map(|h| h.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "localhost".into());
+    let data_dir = state.config.paths.data_dir.clone();
+    let vm_count = state.vm_manager.list_vms().await.len();
+    let mut prev = None;
+    let _ = node_samples(&node, &data_dir, vm_count, &mut prev);
+    if cond.metric_type == MetricType::CpuUsage {
+        // a CPU percentage needs two readings
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    }
+    let samples = node_samples(&node, &data_dir, vm_count, &mut prev);
+    let targets: Vec<PreviewTarget> = samples
+        .into_iter()
+        .filter(|(m, t, _)| {
+            *m == cond.metric_type && AlertManager::matches_target(&cond.target_pattern, t)
+        })
+        .map(|(_, target, value)| PreviewTarget {
+            holds: cond.evaluate(value),
+            target,
+            value,
+        })
+        .collect();
+    let note = if matches!(cond.metric_type, MetricType::DiskIo | MetricType::NetworkIo) {
+        Some("Disk I/O and network I/O rules are not evaluated: this rule would never fire".into())
+    } else if targets.is_empty() {
+        Some(format!(
+            "No target matches {:?} for this metric (node readings are named after the node, {node})",
+            cond.target_pattern
+        ))
+    } else {
+        None
+    };
+    let channels = match state.alert_manager.channel_store() {
+        Some(s) => s.list().await.iter().filter(|c| c.enabled).count(),
+        None => 0,
+    };
+    Ok(Json(PreviewResult {
+        would_fire: targets.iter().filter(|t| t.holds).count(),
+        targets,
+        duration_seconds: cond.duration_seconds,
+        channels,
+        note,
+    }))
 }
 
 async fn update_rule(

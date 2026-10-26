@@ -314,8 +314,16 @@ pub async fn local_info(state: &Arc<AppState>) -> PeerInfo {
             memory_mb: v.memory,
             cpus: v.cpus,
             arch: format!("{:?}", v.architecture),
-            immovable: (!qemu)
-                .then(|| "LXD/Incus VMs are moved by LXD/Incus itself, not by Horcrux".to_string()),
+            immovable: if !qemu {
+                Some("LXD/Incus VMs are moved by LXD/Incus itself, not by Horcrux".to_string())
+            } else if !v.hardware.hostpci.is_empty() {
+                Some(format!(
+                    "uses host PCI/mediated device(s) ({}): cannot be live-migrated; its state is saved instead",
+                    v.hardware.hostpci.iter().map(|d| d.device.as_str()).collect::<Vec<_>>().join(", ")
+                ))
+            } else {
+                None
+            },
             rules: load_rules(state, &v.id).await,
         });
     }

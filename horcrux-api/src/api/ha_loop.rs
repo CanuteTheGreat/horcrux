@@ -281,6 +281,17 @@ async fn recover_here(
             )));
         }
     }
+    // Passthrough devices belong to one host: recovery needs the same
+    // device (bound to vfio-pci) here, else say so instead of a half-start.
+    for d in &replica.hardware.hostpci {
+        crate::vm::mdev::check_device(std::path::Path::new("/sys"), d).map_err(|e| {
+            ApiError::Conflict(format!(
+                "VM {vm_id} uses passthrough device {} that {local} cannot give it ({e}); HA \
+                 recovery of such a VM only works on a node with the same device bound to vfio-pci",
+                d.device
+            ))
+        })?;
+    }
     if state.vm_manager.get_vm(vm_id).await.is_err() {
         let mut cfg = replica.clone();
         cfg.status = horcrux_common::VmStatus::Stopped;

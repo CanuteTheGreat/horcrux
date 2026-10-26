@@ -26,6 +26,7 @@ pub mod inventory;
 pub mod k8s_config;
 pub mod lane_m;
 pub mod mdev;
+pub mod metric_servers;
 pub mod metrics;
 pub mod migration_jobs;
 pub mod migration_peer;
@@ -33,6 +34,8 @@ pub mod node_disks;
 pub mod node_shell;
 pub mod node_summary;
 pub mod notifications;
+pub mod ovf;
+pub mod passthrough;
 pub mod prometheus_export;
 pub mod resource_pools;
 #[cfg(feature = "s3-gateway")]

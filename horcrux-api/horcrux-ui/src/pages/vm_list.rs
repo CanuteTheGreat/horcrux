@@ -177,6 +177,7 @@ pub fn VmList() -> impl IntoView {
             <div class="page-header">
                 <h1>"Virtual Machines"</h1>
                 <A href="/vms/create" class="btn btn-primary">"Create VM"</A>
+                <A href="/vms/import-ovf" class="btn">"Import OVF / OVA"</A>
             </div>
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="vm-notice">{n}</div> })}
 

@@ -359,6 +359,10 @@ def main():
         page.fill("#rule-threshold", "-1")
         page.fill("#rule-duration", "0")
         page.locator("#rule-severity").select_option("critical")
+        # Preview: the unsaved condition is evaluated against this node's live load
+        page.locator("#rule-preview").click()
+        expect(page.locator("#rule-preview-result")).to_contain_text("1 of 1 matching target(s) would fire", timeout=30000)
+        assert not [r for r in api_get("/api/alerts/rules", token()) if r["name"] == ALERT_RULE], "preview must not save"
         page.locator("#rule-submit").click()
         rcard = page.locator(f".alert-rule-card[data-rule-name='{ALERT_RULE}']")
         expect(rcard).to_be_visible(timeout=30000)
@@ -388,6 +392,14 @@ def main():
         wait_for(fired, "rule to fire", timeout=90)
         expect(active).to_contain_text("firing")
         assert wait_for(lambda: events("alert"), "fired alert delivery"), received
+        # Silence: stays listed, marked silenced, the API holds the silence; then lifted
+        active.get_by_role("button", name="Silence").click()
+        expect(active).to_contain_text("silenced until", timeout=30000)
+        sil = api_get("/api/alerts/silences", token())
+        assert len(sil) == 1 and sil[0]["target"] and sil[0]["created_by"] == "admin", sil
+        active.get_by_role("button", name="Unsilence").click()
+        expect(active).not_to_contain_text("silenced until", timeout=30000)
+        assert api_get("/api/alerts/silences", token()) == []
         active.get_by_role("button", name="Acknowledge").click()
         expect(active).to_contain_text("acknowledged", timeout=30000)
         expect(active).to_contain_text("admin")
@@ -726,6 +738,9 @@ def main():
         users_edit_checks(page)
         template_checks(page)
         vm_hardware_checks(page, vid)
+        passthrough_checks(page, vid)
+        metric_server_checks(page)
+        ovf_import_checks(page)
         storage_volume_checks(page, vid)
         cluster_nodes_checks(context)
 
@@ -735,6 +750,232 @@ def main():
     assert not bad, f"console errors: {bad}"
     assert not missing_resources, f"page loads fetched missing resources (404): {sorted(set(missing_resources))}"
     print("UI E2E: all checks passed")
+
+
+def passthrough_checks(page, vid):
+    """Host Devices page (IOMMU status, PCI table, mediated devices) and the
+    VM Hardware passthrough panel. CI runners have no vfio devices, so the
+    device itself is refused by the host - and the UI shows why."""
+    tok = token()
+    page.goto(f"{BASE}/gpu")
+    expect(page.locator("#pci-status")).to_contain_text("IOMMU", timeout=30000)
+    st = api_get("/api/gpu/pci/status", tok)
+    expect(page.locator("#pci-status")).to_contain_text(st["message"][:40])
+    expect(page.locator("#pci-table")).to_be_visible()
+    devs = api_get("/api/gpu/pci/devices", tok)
+    page.select_option("#pci-class", "bridge")
+    want = len([d for d in devs if d["class_name"] == "bridge"])
+    if want:
+        expect(page.locator("tr.pci-row")).to_have_count(want, timeout=30000)
+        # a bridge is never offered for passthrough
+        expect(page.locator(".pci-bind")).to_have_count(0)
+    else:
+        expect(page.locator("#pci-empty")).to_be_visible(timeout=30000)
+    expect(page.locator("#mdev-section")).to_be_visible()
+    mt = api_get("/api/gpu/mdev/types", tok)
+    if not mt:
+        expect(page.locator("#mdev-none")).to_be_visible()
+    # VM Hardware > Host PCI devices: add by address, host refuses on Save
+    page.goto(f"{BASE}/vms/{vid}/hardware")
+    expect(page.locator("#vm-hostpci-fieldset")).to_be_visible(timeout=30000)
+    expect(page.locator("#vm-hostpci-none")).to_be_visible()
+    page.fill("#vm-hostpci-manual", "0000:ff:1f.7")
+    page.locator("#vm-hostpci-add-manual").click()
+    expect(page.locator(".vm-hostpci-row[data-device='0000:ff:1f.7']")).to_have_count(1)
+    page.locator("#vm-hw-save").click()
+    expect(page.locator("#vm-hw-error")).to_contain_text("does not exist", timeout=30000)
+    assert not api_get(f"/api/vms/{vid}", tok)["hardware"].get("hostpci"), "refused device was stored"
+    page.locator(".vm-hostpci-remove").click()
+    expect(page.locator("#vm-hostpci-none")).to_be_visible()
+    # PCI/mdev VMs are pinned: the migration API says why (running + hostpci
+    # cannot be set up here without a device, so the unit tests cover that)
+
+
+def metric_server_checks(page):
+    """Monitoring > Metric Servers: add an InfluxDB 2.x server in the form,
+    send a test (a real receiver gets the line protocol with the token), the
+    row shows the result, edit keeps the token, a refusing target shows its
+    error, Graphite over TCP, delete."""
+    tok = token()
+    got = []
+    mode = {"status": 204}
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            n = int(self.headers.get("content-length", 0))
+            got.append((self.path, dict(self.headers), self.rfile.read(n).decode()))
+            self.send_response(mode["status"])
+            body = b"" if mode["status"] == 204 else b'{"message":"token rejected"}'
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    gl = socket.socket()
+    gl.bind(("127.0.0.1", 0))
+    gl.listen(5)
+    glines = []
+
+    def graphite_accept():
+        while True:
+            try:
+                c, _ = gl.accept()
+            except OSError:
+                return
+            data = b""
+            while True:
+                chunk = c.recv(65536)
+                if not chunk:
+                    break
+                data += chunk
+            glines.append(data.decode())
+            c.close()
+
+    threading.Thread(target=graphite_accept, daemon=True).start()
+    for old in api_get("/api/observability/metric-servers", tok):
+        _req("DELETE", f"/api/observability/metric-servers/{old['id']}", tok)
+
+    page.goto(f"{BASE}/monitoring/metric-servers")
+    expect(page.locator("#ms-empty")).to_be_visible(timeout=30000)
+    page.locator("#ms-add-influx").click()
+    page.fill("#ms-name", "e2e-influx")
+    page.fill("#ms-host", "127.0.0.1")
+    page.fill("#ms-port", str(srv.server_address[1]))
+    page.fill("#ms-org", "lab")
+    page.fill("#ms-bucket", "hx")
+    page.fill("#ms-token", "E2E-TOKEN")
+    page.fill("#ms-interval", "3600")
+    page.locator("#ms-save").click()
+    row = page.locator("tr.ms-row[data-name='e2e-influx']")
+    expect(row).to_be_visible(timeout=30000)
+    shown = json.dumps(api_get("/api/observability/metric-servers", tok))
+    assert "E2E-TOKEN" not in shown, shown
+    n0 = len(got)
+    row.locator(".ms-test").click()
+    expect(page.locator("#ms-notice")).to_contain_text("data points", timeout=30000)
+    assert len(got) > n0, got
+    path, hdrs, body = got[-1]
+    assert path.startswith("/api/v2/write?org=lab&bucket=hx"), path
+    assert hdrs.get("Authorization") == "Token E2E-TOKEN", hdrs
+    assert "horcrux_node,node=" in body and "memory_total_bytes=" in body, body
+    expect(row.locator(".ms-status")).to_contain_text("points", timeout=30000)
+    # edit (token field shows the mask) keeps the stored token
+    row.locator(".ms-edit").click()
+    expect(page.locator("#ms-token")).to_have_value("********")
+    page.fill("#ms-interval", "1800")
+    page.locator("#ms-save").click()
+    expect(page.locator("#ms-notice")).to_contain_text("Saved", timeout=30000)
+    row.locator(".ms-test").click()
+    expect(page.locator("#ms-notice")).to_contain_text("data points", timeout=30000)
+    assert got[-1][1].get("Authorization") == "Token E2E-TOKEN", got[-1][1]
+    # a target that refuses: the row says why
+    mode["status"] = 401
+    row.locator(".ms-test").click()
+    expect(page.locator("#ms-error")).to_contain_text("401", timeout=30000)
+    expect(row.locator(".ms-status")).to_contain_text("failed", timeout=30000)
+    mode["status"] = 204
+    # Graphite over TCP
+    page.locator("#ms-add-graphite").click()
+    page.fill("#ms-name", "e2e-graphite")
+    page.fill("#ms-host", "127.0.0.1")
+    page.fill("#ms-port", str(gl.getsockname()[1]))
+    page.fill("#ms-prefix", "e2e.hx")
+    page.fill("#ms-interval", "3600")
+    page.locator("#ms-save").click()
+    grow = page.locator("tr.ms-row[data-name='e2e-graphite']")
+    expect(grow).to_be_visible(timeout=30000)
+    grow.locator(".ms-test").click()
+    expect(page.locator("#ms-notice")).to_contain_text("data points", timeout=30000)
+    wait_for(lambda: glines, "graphite delivery")
+    assert "e2e.hx.nodes." in glines[-1] and ".cpu_percent " in glines[-1], glines[-1]
+    # delete both
+    for r in (row, grow):
+        r.locator(".ms-delete").click()
+    expect(page.locator("tr.ms-row")).to_have_count(0, timeout=30000)
+    srv.shutdown()
+    gl.close()
+
+
+def ovf_import_checks(page):
+    """VMs > Import OVF / OVA: an OVA (real qemu-img VMDK + descriptor, served
+    from a URL like a vendor download) is previewed in the UI (mapped CPU,
+    memory, disk bus, NIC, warnings) and imported; the VM exists with a
+    converted qcow2 disk of the same size."""
+    import shutil
+    import tempfile
+    tok = token()
+    work = tempfile.mkdtemp(prefix="e2e-ovf-")
+    raw = os.path.join(work, "d.raw")
+    with open(raw, "wb") as f:
+        f.write(bytes(i % 251 for i in range(1 << 20)))
+    subprocess.run(["qemu-img", "resize", "-f", "raw", raw, "1G"], check=True, capture_output=True)
+    subprocess.run(["qemu-img", "convert", "-f", "raw", "-O", "vmdk", "-o", "subformat=streamOptimized",
+                    raw, os.path.join(work, "e2e-disk1.vmdk")], check=True, capture_output=True)
+    ovf = """<?xml version="1.0"?>
+<Envelope xmlns="http://schemas.dmtf.org/ovf/envelope/1" xmlns:ovf="http://schemas.dmtf.org/ovf/envelope/1"
+ xmlns:rasd="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ResourceAllocationSettingData">
+ <References><File ovf:href="e2e-disk1.vmdk" ovf:id="f1"/></References>
+ <DiskSection><Info>d</Info><Disk ovf:capacity="1" ovf:capacityAllocationUnits="byte * 2^30" ovf:diskId="d1" ovf:fileRef="f1"/></DiskSection>
+ <VirtualSystem ovf:id="e2e"><Info>vm</Info><Name>E2E OVF Guest</Name>
+  <OperatingSystemSection ovf:id="94"><Info>os</Info><Description>Debian GNU/Linux 12 (64-bit)</Description></OperatingSystemSection>
+  <VirtualHardwareSection><Info>hw</Info>
+   <Item><rasd:ElementName>cpu</rasd:ElementName><rasd:InstanceID>1</rasd:InstanceID><rasd:ResourceType>3</rasd:ResourceType><rasd:VirtualQuantity>2</rasd:VirtualQuantity></Item>
+   <Item><rasd:AllocationUnits>byte * 2^20</rasd:AllocationUnits><rasd:ElementName>mem</rasd:ElementName><rasd:InstanceID>2</rasd:InstanceID><rasd:ResourceType>4</rasd:ResourceType><rasd:VirtualQuantity>384</rasd:VirtualQuantity></Item>
+   <Item><rasd:ElementName>scsi</rasd:ElementName><rasd:InstanceID>3</rasd:InstanceID><rasd:ResourceSubType>lsilogic</rasd:ResourceSubType><rasd:ResourceType>6</rasd:ResourceType></Item>
+   <Item><rasd:ElementName>disk</rasd:ElementName><rasd:HostResource>ovf:/disk/d1</rasd:HostResource><rasd:InstanceID>4</rasd:InstanceID><rasd:Parent>3</rasd:Parent><rasd:ResourceType>17</rasd:ResourceType></Item>
+   <Item><rasd:Connection>LAN</rasd:Connection><rasd:ElementName>nic</rasd:ElementName><rasd:InstanceID>5</rasd:InstanceID><rasd:ResourceSubType>VmxNet3</rasd:ResourceSubType><rasd:ResourceType>10</rasd:ResourceType></Item>
+   <Item><rasd:ElementName>cd</rasd:ElementName><rasd:InstanceID>6</rasd:InstanceID><rasd:ResourceType>15</rasd:ResourceType></Item>
+  </VirtualHardwareSection></VirtualSystem></Envelope>"""
+    with open(os.path.join(work, "e2e.ovf"), "w") as f:
+        f.write(ovf)
+    subprocess.run(["tar", "-cf", os.path.join(work, "e2e.ova"), "-C", work, "e2e.ovf", "e2e-disk1.vmdk"], check=True)
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    probe.connect(("192.0.2.1", 9))
+    mirror = probe.getsockname()[0]
+    probe.close()
+    handler = lambda *a, **k: http.server.SimpleHTTPRequestHandler(*a, directory=work, **k)
+    srv = http.server.ThreadingHTTPServer((mirror, 0), handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://{mirror}:{srv.server_address[1]}/e2e.ova"
+    for v in api_get("/api/vms", tok):
+        if v["id"].startswith("ovf-e2e-ovf-guest"):
+            _req("DELETE", f"/api/vms/{v['id']}", tok)
+
+    page.goto(f"{BASE}/vms")
+    page.get_by_role("link", name="Import OVF / OVA").click()
+    page.wait_for_url(f"{BASE}/vms/import-ovf")
+    page.fill("#ovf-source", url)
+    page.locator("#ovf-preview").click()
+    plan = page.locator("#ovf-plan")
+    expect(plan).to_contain_text("E2E OVF Guest", timeout=60000)
+    expect(plan).to_contain_text("2 CPU(s), 384 MB memory")
+    expect(page.locator("tr.ovf-disk")).to_have_count(1)
+    expect(page.locator("tr.ovf-disk")).to_contain_text("scsi")
+    expect(page.locator("#ovf-nics")).to_contain_text("virtio")
+    expect(page.locator("#ovf-warnings")).to_contain_text("CD-ROM")
+    assert not [v for v in api_get("/api/vms", tok) if v["name"] == "E2E OVF Guest"], "preview created a VM"
+    page.locator("#ovf-import").click()
+    expect(page.locator("#ovf-done")).to_contain_text("Imported as VM ovf-e2e-ovf-guest", timeout=180000)
+    vm = next(v for v in api_get("/api/vms", tok) if v["id"] == "ovf-e2e-ovf-guest")
+    assert vm["cpus"] == 2 and vm["memory"] == 384 and vm["disks"][0]["disk_type"] == "scsi", vm
+    info = subprocess.run(["qemu-img", "info", "--output=json", vm["disks"][0]["path"]],
+                          check=True, capture_output=True, text=True).stdout
+    assert '"format": "qcow2"' in info and "1073741824" in info, info
+    page.get_by_role("link", name="Open its hardware").click()
+    page.wait_for_url(f"{BASE}/vms/ovf-e2e-ovf-guest/hardware")
+    expect(page.locator("#vm-hw-cpus")).to_have_value("2", timeout=30000)
+    # a refused source: the page says why
+    page.goto(f"{BASE}/vms/import-ovf")
+    page.fill("#ovf-source", "/etc/passwd")
+    page.locator("#ovf-preview").click()
+    expect(page.locator("#ovf-error")).to_contain_text("local import sources", timeout=30000)
+    _req("DELETE", "/api/vms/ovf-e2e-ovf-guest", tok)
+    srv.shutdown()
+    shutil.rmtree(work, ignore_errors=True)
 
 
 def cluster_nodes_checks(context):

@@ -100,3 +100,46 @@ async fn hostpci_is_validated_refused_without_the_device_and_mdev_routes_answer(
         400 | 404 | 422
     ));
 }
+
+#[tokio::test]
+async fn pci_inventory_routes_answer_and_refuse_bad_requests() {
+    let dir = scratch("pci");
+    let mut srv = Server::new(&dir);
+    srv.start();
+    srv.wait_healthy().await;
+    let api = srv.api().await;
+
+    let (s, v) = api.get("/gpu/pci/status").await;
+    assert_eq!(s, 200, "{v}");
+    assert!(
+        v["iommu_enabled"].is_boolean() && v["message"].is_string(),
+        "{v}"
+    );
+    let (s, v) = api.get("/gpu/pci/devices").await;
+    assert_eq!(s, 200, "{v}");
+    let devs = v.as_array().expect("array");
+    for d in devs.iter().take(5) {
+        assert!(
+            d["address"].is_string() && d["class_name"].is_string(),
+            "{d}"
+        );
+        assert!(d["vms"].as_array().is_some_and(|a| a.is_empty()), "{d}");
+    }
+    // not a PCI address / no such device / traversal
+    let (s, _) = api
+        .post("/gpu/pci/devices/nonsense/bind-vfio", json!({}))
+        .await;
+    assert!(s == 400 || s == 422, "{s}");
+    let (s, _) = api
+        .post("/gpu/pci/devices/0000:ff:1f.7/bind-vfio", json!({}))
+        .await;
+    assert_eq!(s, 404);
+    let (s, _) = api
+        .post("/gpu/pci/devices/0000:ff:1f.7/unbind-vfio", json!({}))
+        .await;
+    assert_eq!(s, 404);
+    let (s, _) = api
+        .post("/gpu/pci/devices/..%2F..%2Fetc/bind-vfio", json!({}))
+        .await;
+    assert!(matches!(s, 400 | 404 | 422), "{s}");
+}

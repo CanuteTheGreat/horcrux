@@ -110,7 +110,7 @@ pub fn checked_format(info: &serde_json::Value) -> Result<String, String> {
     Ok(fmt.to_string())
 }
 
-async fn qemu_img(args: &[&str]) -> Result<String, ApiError> {
+pub(crate) async fn qemu_img(args: &[&str]) -> Result<String, ApiError> {
     let out = Command::new("qemu-img")
         .args(args)
         .output()
@@ -127,7 +127,7 @@ async fn qemu_img(args: &[&str]) -> Result<String, ApiError> {
 }
 
 /// Removes the temporary files on every exit path.
-struct TempFiles(Vec<PathBuf>);
+pub(crate) struct TempFiles(pub Vec<PathBuf>);
 impl Drop for TempFiles {
     fn drop(&mut self) {
         for p in &self.0 {
@@ -269,7 +269,7 @@ pub(crate) fn download_client() -> reqwest::Result<reqwest::Client> {
         .build()
 }
 
-async fn download(url: &str, to: &FsPath) -> Result<(), ApiError> {
+pub(crate) async fn download(url: &str, to: &FsPath) -> Result<(), ApiError> {
     use tokio::io::AsyncWriteExt;
     let parsed = reqwest::Url::parse(url)
         .map_err(|e| ApiError::BadRequest(format!("download {url}: {e}")))?;

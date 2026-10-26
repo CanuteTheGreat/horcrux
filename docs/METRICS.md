@@ -524,6 +524,25 @@ vm_metrics_interval = 30    # Increase from 10
 - [ ] Anomaly detection (ML-based)
 - [ ] Predictive resource usage
 
+## External metric servers (InfluxDB / Graphite)
+
+**Monitoring > Metric Servers** (`/monitoring/metric-servers`, API in API.md) pushes this
+node's metrics to an InfluxDB or Graphite server every `interval_secs`:
+
+| Measurement (Influx) / path (Graphite) | Fields |
+|---|---|
+| `horcrux_node,node=` / `<prefix>.nodes.<node>.` | `cpu_percent`, `cpu_cores`, `memory_used_bytes`, `memory_total_bytes` |
+| `horcrux_vm,node=,vmid=,name=` / `<prefix>.vms.<node>.<vmid>.` | `cpu_percent`, `memory_used_bytes`, `memory_total_bytes`, `disk_read/write_bytes_per_sec`, `net_rx/tx_bytes_per_sec` |
+| `horcrux_storage,node=,storage=,type=` / `<prefix>.storage.<node>.<storage>.` | `total_bytes`, `used_bytes`, `available_bytes` |
+
+InfluxDB gets line protocol (nanosecond timestamps; 2.x `/api/v2/write` with a token, 1.x
+`/write?db=` with optional basic auth, 1.x also over UDP); Graphite gets the plaintext
+protocol over TCP or UDP (path parts are sanitised: dots and spaces become `_`).
+Run one Horcrux node per target or point all nodes at the same server: every node
+reports itself under its own `node`. "Send test" delivers one batch now and shows the
+target's error (HTTP status and body, refused connection); the table shows the last
+success / error per server. Prometheus scraping (`/metrics`) is unchanged.
+
 ## References
 
 - Linux `/proc` filesystem: https://man7.org/linux/man-pages/man5/proc.5.html

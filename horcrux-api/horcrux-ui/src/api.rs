@@ -2918,6 +2918,9 @@ pub async fn delete_kubernetes_secret(
 pub mod backup;
 pub mod ceph;
 pub mod dashboards;
+pub mod metric_servers;
+pub mod ovf;
+pub mod passthrough;
 pub mod s3;
 pub mod sdn;
 pub mod sdn_zones;
@@ -4002,6 +4005,65 @@ pub async fn acknowledge_alert(alert: &ActiveAlert, user: &str) -> Result<(), Ap
         &serde_json::json!({ "user": user }),
     )
     .await
+}
+
+/// A running silence (`GET /api/alerts/silences`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AlertSilence {
+    pub rule_id: String,
+    pub target: String,
+    /// Unix seconds the silence ends
+    pub until: i64,
+    pub created_at: i64,
+    pub created_by: String,
+    #[serde(default)]
+    pub comment: String,
+}
+
+pub async fn get_alert_silences() -> Result<Vec<AlertSilence>, ApiError> {
+    fetch_json("/alerts/silences").await
+}
+
+/// Mute an active alert's rule/target (`POST /api/alerts/:id/silence`).
+pub async fn silence_alert(
+    alert_id: &str,
+    minutes: u64,
+    comment: &str,
+) -> Result<AlertSilence, ApiError> {
+    post_json(
+        &format!("/alerts/{}/silence", urlencoding::encode(alert_id)),
+        &serde_json::json!({ "minutes": minutes, "comment": comment }),
+    )
+    .await
+}
+
+pub async fn unsilence_alert(alert_id: &str) -> Result<(), ApiError> {
+    delete_json(&format!(
+        "/alerts/{}/silence",
+        urlencoding::encode(alert_id)
+    ))
+    .await
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AlertPreviewTarget {
+    pub target: String,
+    pub value: f64,
+    pub holds: bool,
+}
+
+/// `POST /api/alerts/preview`: what a not-yet-saved condition would do now.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AlertPreview {
+    pub targets: Vec<AlertPreviewTarget>,
+    pub would_fire: usize,
+    pub duration_seconds: u64,
+    pub channels: usize,
+    pub note: Option<String>,
+}
+
+pub async fn preview_alert_condition(c: &AlertCondition) -> Result<AlertPreview, ApiError> {
+    post_json("/alerts/preview", c).await
 }
 
 /// Create notification channel

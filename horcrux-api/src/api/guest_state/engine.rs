@@ -41,6 +41,8 @@ pub struct GuestInfo {
     pub ct_runtime: Option<ContainerRuntime>,
     /// `incus` / `lxc` CLI for LXD/Incus VMs and containers.
     pub instance_cli: Option<&'static str>,
+    /// A VM with host PCI / mediated devices: QEMU cannot save its state.
+    pub passthrough: bool,
 }
 
 impl GuestInfo {
@@ -257,6 +259,7 @@ fn vm_info(v: &horcrux_common::VmConfig) -> GuestInfo {
             VmHypervisor::Lxd => Some("lxc"),
             _ => None,
         },
+        passthrough: !v.hardware.hostpci.is_empty(),
     }
 }
 
@@ -271,6 +274,7 @@ fn ct_info(c: &horcrux_common::ContainerConfig) -> GuestInfo {
         qemu: false,
         ct_runtime: Some(c.runtime.clone()),
         instance_cli: cli_of(&c.runtime),
+        passthrough: false,
     }
 }
 
@@ -423,6 +427,10 @@ pub async fn save_guest(
     r
 }
 
+const PASSTHROUGH_NO_SAVE: &str =
+    "the VM has host PCI/mediated devices (passthrough): QEMU cannot \
+    save the state of a VM that owns hardware, remove the device or shut the VM down";
+
 async fn save_locked(
     state: &Arc<AppState>,
     k: GuestKind,
@@ -439,6 +447,9 @@ async fn save_locked(
     }
     if !g.is_up() {
         return Err(Error::Conflict(format!("{} is not running", g.name)));
+    }
+    if g.passthrough {
+        return Err(Error::Conflict(PASSTHROUGH_NO_SAVE.into()));
     }
     let eff = policy::effective(state, k, id).await;
     let base = match dir_override.as_deref().filter(|d| !d.trim().is_empty()) {
@@ -1106,6 +1117,7 @@ async fn view_of(
     results: &BTreeMap<String, GuestResult>,
 ) -> GuestView {
     let (can_save, save_blocker) = match (&g.ct_runtime, g.qemu) {
+        (_, true) if g.passthrough => (false, Some(PASSTHROUGH_NO_SAVE.to_string())),
         (_, true) => (true, None),
         (Some(rt), _) => {
             let s = match sup.get(&g.runtime) {

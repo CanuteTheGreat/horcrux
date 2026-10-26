@@ -41,7 +41,9 @@ mod vm_detail;
 pub mod vm_devices;
 mod vm_display;
 mod vm_hardware;
+pub mod vm_import_ovf;
 mod vm_list;
+pub mod vm_passthrough;
 
 pub use alerts::Alerts;
 pub use clone_list::CloneList;
@@ -74,6 +76,7 @@ pub use storage_content::StorageContentPage;
 pub use vm_create::VmCreate;
 pub use vm_detail::VmDetailPage;
 pub use vm_hardware::VmHardwarePage;
+pub use vm_import_ovf::VmImportOvfPage;
 pub use vm_list::VmList;
 
 // Re-export auth components
@@ -102,7 +105,8 @@ pub use ha::{
 
 // Re-export monitoring components
 pub use monitoring::{
-    AlertCenterPage, DashboardsPage, MetricsExplorerPage, NotificationsPage, ObservabilityPage,
+    AlertCenterPage, DashboardsPage, MetricServersPage, MetricsExplorerPage, NotificationsPage,
+    ObservabilityPage,
 };
 
 // Re-export system components
