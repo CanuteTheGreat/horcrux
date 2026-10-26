@@ -282,8 +282,14 @@ def run_runtime(name):
         check(r and r["status"] == "failed", f"{name}: the move failed ({r and r.get('error')})")
         check(rt.running("node1") and not rt.exists("node2"), f"{name}: it runs on node1 again, node2 holds nothing")
         check(copies(rt) == 1, f"{name}: exactly one running copy after the failed move")
-        time.sleep(3)
+        # A CRIU-restored process can take a few seconds to resume ticking
+        # (flaked once as 12 -> 12 after 3 s): poll rather than sleep.
         nb, mb = rt.read("node1")
+        for _ in range(10):
+            if nb > before[0]:
+                break
+            time.sleep(2)
+            nb, mb = rt.read("node1")
         check(mb == m0 and nb > before[0], f"{name}: and it is the original process (marker {mb}, {before[0]} -> {nb})")
         st, c1 = api("node1", "GET", f"/containers/{rt.id}")
         check(st == 200 and c1["status"] == "running", f"{name}: node1's API tracks it as running")
