@@ -453,6 +453,13 @@ impl ContainerManager {
             .and_then(|m| m.image)
             .filter(|t| t.starts_with("horcrux-move/"));
         self.discard_container_state(id, &stage.join("ckpt")).await;
+        // The export stopped (checkpointed) the source, but the tracked status
+        // may still say Running until the next reconcile; runtimes refuse to
+        // delete a container the record calls running (podman did, racing the
+        // reconcile loop).
+        if let Some(c) = self.containers.write().await.get_mut(id) {
+            c.status = ContainerStatus::Stopped;
+        }
         let r = self.delete_container(id).await;
         let _ = tokio::fs::remove_dir_all(stage).await;
         if let Some(tag) = image {
