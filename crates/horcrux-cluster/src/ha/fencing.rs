@@ -25,6 +25,8 @@ pub enum FencingAgentType {
     Ilo,
     /// Fence via DRAC
     Drac,
+    /// Fence via the DMTF Redfish API (Dell iDRAC9, HPE iLO5+, any Redfish BMC)
+    Redfish,
     /// Fence via libvirt (for VM testing)
     Libvirt,
     /// Manual fencing (requires operator intervention)
@@ -74,6 +76,44 @@ pub enum FencingAction {
     On,
     Reboot,
     Status,
+}
+
+/// Base URL for a Redfish BMC (HTTPS; bare host, host:port or full URL accepted).
+fn redfish_base_url(address: &str, port: Option<u16>) -> String {
+    let a = address.trim_end_matches('/');
+    if a.starts_with("http://") || a.starts_with("https://") {
+        return a.to_string();
+    }
+    match port {
+        Some(p) => format!("https://{}:{}", a, p),
+        None => format!("https://{}", a),
+    }
+}
+
+/// DMTF ResetType for a fencing action (ForceOff = immediate, no OS shutdown).
+fn redfish_reset_type(action: &FencingAction) -> &'static str {
+    match action {
+        FencingAction::Off => "ForceOff",
+        FencingAction::On => "On",
+        FencingAction::Reboot => "ForceRestart",
+        FencingAction::Status => "None",
+    }
+}
+
+/// Last path segment of the first `Members[].@odata.id` in a Systems collection.
+fn redfish_first_system_id(body: &serde_json::Value) -> Option<String> {
+    let id = body.get("Members")?.as_array()?.first()?.get("@odata.id")?.as_str()?;
+    id.trim_end_matches('/').rsplit('/').next().map(|s| s.to_string())
+}
+
+/// Map a non-2xx HTTP status to a human-readable fencing failure.
+fn redfish_http_error(status: u16, address: &str) -> Option<String> {
+    match status {
+        200..=299 => None,
+        401 | 403 => Some(format!("Redfish authentication failed for {} (HTTP {})", address, status)),
+        404 => Some(format!("Redfish endpoint not found on {} (HTTP 404)", address)),
+        s => Some(format!("Redfish request to {} returned HTTP {}", address, s)),
+    }
 }
 
 /// Fencing manager for node isolation
@@ -239,6 +279,7 @@ impl FencingManager {
             // fencing path used by fence_ilo / fence_drac5 style agents.
             FencingAgentType::Ilo => self.fence_ipmi(device, &action).await,
             FencingAgentType::Drac => self.fence_ipmi(device, &action).await,
+            FencingAgentType::Redfish => self.fence_redfish(device, &action).await,
             FencingAgentType::Ssh => self.fence_ssh(device, &action).await,
             FencingAgentType::Libvirt => self.fence_libvirt(device, &action).await,
             FencingAgentType::Watchdog => self.fence_watchdog(device, &action).await,
@@ -350,6 +391,89 @@ impl FencingManager {
             ),
             Ok(Err(e)) => FencingResult::Failed(format!("Failed to spawn ipmitool: {}", e)),
             Err(_) => FencingResult::Timeout,
+        }
+    }
+
+    /// Redfish fencing (iDRAC9 on R6525, iLO5+, any DMTF Redfish BMC).
+    ///
+    /// Options: `system_id` (default: first member of /redfish/v1/Systems,
+    /// i.e. `System.Embedded.1` on iDRAC), `verify_tls=true` to require a
+    /// trusted certificate (BMCs ship self-signed certs, so default off).
+    async fn fence_redfish(&self, device: &FencingDevice, action: &FencingAction) -> FencingResult {
+        let verify = device.options.get("verify_tls").map(|v| v == "true").unwrap_or(false);
+        let client = match reqwest::Client::builder()
+            .danger_accept_invalid_certs(!verify)
+            .timeout(std::time::Duration::from_secs(self.timeout_secs as u64))
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => return FencingResult::Failed(format!("Redfish client error: {}", e)),
+        };
+        let base = redfish_base_url(&device.address, device.port);
+        let auth = |rb: reqwest::RequestBuilder| match &device.username {
+            Some(u) => rb.basic_auth(u, device.password.as_deref()),
+            None => rb,
+        };
+        let fail = |e: reqwest::Error| {
+            if e.is_timeout() {
+                FencingResult::Timeout
+            } else {
+                FencingResult::Failed(format!("Redfish request to {} failed: {}", device.address, e))
+            }
+        };
+
+        let system_id = match device.options.get("system_id") {
+            Some(id) => id.clone(),
+            None => {
+                let resp = match auth(client.get(format!("{}/redfish/v1/Systems", base))).send().await {
+                    Ok(r) => r,
+                    Err(e) => return fail(e),
+                };
+                if let Some(msg) = redfish_http_error(resp.status().as_u16(), &device.address) {
+                    return FencingResult::Failed(msg);
+                }
+                let body: serde_json::Value = match resp.json().await {
+                    Ok(b) => b,
+                    Err(e) => return FencingResult::Failed(format!("Bad Redfish Systems reply: {}", e)),
+                };
+                match redfish_first_system_id(&body) {
+                    Some(id) => id,
+                    None => {
+                        return FencingResult::Failed(
+                            "Redfish Systems collection has no members".to_string(),
+                        )
+                    }
+                }
+            }
+        };
+
+        if matches!(action, FencingAction::Status) {
+            let url = format!("{}/redfish/v1/Systems/{}", base, system_id);
+            let resp = match auth(client.get(url)).send().await {
+                Ok(r) => r,
+                Err(e) => return fail(e),
+            };
+            if let Some(msg) = redfish_http_error(resp.status().as_u16(), &device.address) {
+                return FencingResult::Failed(msg);
+            }
+            return match resp.json::<serde_json::Value>().await {
+                Ok(b) if b.get("PowerState").and_then(|v| v.as_str()).is_some() => FencingResult::Success,
+                Ok(_) => FencingResult::Failed("Redfish system has no PowerState".to_string()),
+                Err(e) => FencingResult::Failed(format!("Bad Redfish system reply: {}", e)),
+            };
+        }
+
+        let url = format!(
+            "{}/redfish/v1/Systems/{}/Actions/ComputerSystem.Reset",
+            base, system_id
+        );
+        let body = serde_json::json!({ "ResetType": redfish_reset_type(action) });
+        match auth(client.post(url).json(&body)).send().await {
+            Ok(r) => match redfish_http_error(r.status().as_u16(), &device.address) {
+                None => FencingResult::Success,
+                Some(msg) => FencingResult::Failed(msg),
+            },
+            Err(e) => fail(e),
         }
     }
 
@@ -661,5 +785,82 @@ mod tests {
 
         manager.enable().await;
         assert!(manager.is_enabled().await);
+    }
+
+    #[test]
+    fn test_redfish_helpers() {
+        assert_eq!(redfish_base_url("10.0.0.5", None), "https://10.0.0.5");
+        assert_eq!(redfish_base_url("idrac1", Some(8443)), "https://idrac1:8443");
+        assert_eq!(redfish_base_url("http://127.0.0.1:9/", None), "http://127.0.0.1:9");
+        assert_eq!(redfish_reset_type(&FencingAction::Off), "ForceOff");
+        assert_eq!(redfish_reset_type(&FencingAction::On), "On");
+        assert_eq!(redfish_reset_type(&FencingAction::Reboot), "ForceRestart");
+        let b = serde_json::json!({"Members":[{"@odata.id":"/redfish/v1/Systems/System.Embedded.1"}]});
+        assert_eq!(redfish_first_system_id(&b).as_deref(), Some("System.Embedded.1"));
+        assert_eq!(redfish_first_system_id(&serde_json::json!({"Members":[]})), None);
+        assert!(redfish_http_error(204, "h").is_none());
+        assert!(redfish_http_error(401, "h").unwrap().contains("authentication"));
+        assert!(redfish_http_error(500, "h").unwrap().contains("500"));
+    }
+
+    #[tokio::test]
+    async fn test_redfish_fence_against_mock_bmc() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = Arc::new(RwLock::new(Vec::<String>::new()));
+        let seen2 = seen.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                let mut buf = vec![0u8; 4096];
+                let n = sock.read(&mut buf).await.unwrap();
+                let mut req = String::from_utf8_lossy(&buf[..n]).to_string();
+                if req.starts_with("POST") && !req.contains("ResetType") {
+                    if let Ok(Ok(m)) = tokio::time::timeout(
+                        std::time::Duration::from_millis(500),
+                        sock.read(&mut buf),
+                    )
+                    .await
+                    {
+                        req.push_str(&String::from_utf8_lossy(&buf[..m]));
+                    }
+                }
+                let first = req.lines().next().unwrap_or("").to_string();
+                let body = if first.starts_with("GET /redfish/v1/Systems ") {
+                    r#"{"Members":[{"@odata.id":"/redfish/v1/Systems/System.Embedded.1"}]}"#
+                } else {
+                    r#"{"PowerState":"On"}"#
+                };
+                let status = if first.starts_with("POST") { "204 No Content" } else { "200 OK" };
+                let resp = format!(
+                    "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status,
+                    body.len(),
+                    body
+                );
+                seen2
+                    .write()
+                    .await
+                    .push(format!("{} || {}", first, req.contains("ForceOff")));
+                let _ = sock.write_all(resp.as_bytes()).await;
+            }
+        });
+        let mgr = FencingManager::new();
+        let dev = FencingDevice {
+            id: "idrac".into(),
+            agent_type: FencingAgentType::Redfish,
+            node: "r6525-1".into(),
+            address: format!("http://127.0.0.1:{}", port),
+            username: Some("root".into()),
+            password: Some("x".into()),
+            port: None,
+            options: HashMap::new(),
+            priority: 1,
+        };
+        assert!(matches!(mgr.execute_fence(&dev, FencingAction::Status).await, FencingResult::Success));
+        assert!(matches!(mgr.execute_fence(&dev, FencingAction::Off).await, FencingResult::Success));
+        let log = seen.read().await.clone();
+        assert!(log.iter().any(|l| l.starts_with("POST /redfish/v1/Systems/System.Embedded.1/Actions/ComputerSystem.Reset") && l.ends_with("true")), "{:?}", log);
     }
 }
