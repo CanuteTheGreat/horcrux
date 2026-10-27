@@ -1,6 +1,7 @@
 pub mod affinity;
 pub mod arch;
 pub mod balancer;
+pub mod ceph_placement;
 /// Clustering support module
 /// Provides multi-node cluster management, HA, and VM migration using Corosync
 pub mod corosync;
