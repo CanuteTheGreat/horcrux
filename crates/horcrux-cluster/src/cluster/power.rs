@@ -114,7 +114,7 @@ pub fn wol_magic_packet(mac: [u8; 6]) -> Vec<u8> {
 
 /// Parse "aa:bb:cc:dd:ee:ff" (or '-' separated).
 pub fn parse_mac(s: &str) -> Option<[u8; 6]> {
-    let parts: Vec<&str> = s.split(|c| c == ':' || c == '-').collect();
+    let parts: Vec<&str> = s.split([':', '-']).collect();
     if parts.len() != 6 {
         return None;
     }
