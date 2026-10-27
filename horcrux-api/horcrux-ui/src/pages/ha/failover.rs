@@ -197,7 +197,7 @@ pub fn HaFailoverPage() -> impl IntoView {
                     <input class="border p-2" placeholder="node to fence" data-testid="fence-node" prop:value=f_node on:input=move |e| set_f_node.set(event_target_value(&e))/>
                     <select class="border p-2" data-testid="fence-agent" on:change=move |e| set_f_agent.set(event_target_value(&e))>
                         <option value="Ipmi">"IPMI"</option><option value="Ilo">"HP iLO"</option>
-                        <option value="Drac">"Dell iDRAC"</option><option value="Ssh">"SSH"</option>
+                        <option value="Drac">"Dell DRAC5-8 (IPMI)"</option><option value="Redfish">"Redfish (iDRAC9 / iLO5+)"</option><option value="Ssh">"SSH"</option>
                         <option value="Libvirt">"libvirt"</option><option value="SnmpPdu">"SNMP PDU"</option>
                         <option value="Manual">"Manual"</option>
                     </select>
