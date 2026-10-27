@@ -27,7 +27,12 @@ pub struct CephPlan {
 }
 
 /// Plan OSD and MON placement. `mon_count` is forced odd (rounded down, min 1).
-pub fn plan(nodes: &[CephCandidate], min_osd_mbps: u64, min_mon_mbps: u64, mon_count: usize) -> CephPlan {
+pub fn plan(
+    nodes: &[CephCandidate],
+    min_osd_mbps: u64,
+    min_mon_mbps: u64,
+    mon_count: usize,
+) -> CephPlan {
     let mut out = CephPlan::default();
     for n in nodes {
         match osd_allowed(&n.caps, n.uplink_mbps, min_osd_mbps) {
@@ -38,11 +43,13 @@ pub fn plan(nodes: &[CephCandidate], min_osd_mbps: u64, min_mon_mbps: u64, mon_c
             Ok(()) => out.osd_nodes.push(n.name.clone()),
         }
     }
-    let want = if mon_count % 2 == 0 { mon_count.saturating_sub(1) } else { mon_count }.max(1);
-    // Candidates: any node with enough uplink. Prefer non-OSD nodes first? No:
-    // spread across distinct nodes, preferring faster uplinks, then name.
-    let mut cand: Vec<&CephCandidate> =
-        nodes.iter().filter(|n| n.uplink_mbps >= min_mon_mbps).collect();
+    let want = mon_count.saturating_sub(1 - (mon_count & 1)).max(1);
+    // Candidates: any node with enough uplink, distinct by construction,
+    // preferring faster uplinks, then name.
+    let mut cand: Vec<&CephCandidate> = nodes
+        .iter()
+        .filter(|n| n.uplink_mbps >= min_mon_mbps)
+        .collect();
     cand.sort_by(|a, b| b.uplink_mbps.cmp(&a.uplink_mbps).then(a.name.cmp(&b.name)));
     out.mon_nodes = cand.iter().take(want).map(|n| n.name.clone()).collect();
     if out.mon_nodes.len() < want {
@@ -52,7 +59,7 @@ pub fn plan(nodes: &[CephCandidate], min_osd_mbps: u64, min_mon_mbps: u64, mon_c
             want
         ));
     }
-    if out.mon_nodes.len() % 2 == 0 && !out.mon_nodes.is_empty() {
+    if out.mon_nodes.len() & 1 == 0 && !out.mon_nodes.is_empty() {
         out.mon_nodes.pop();
         out.warnings.push("MON count made odd".to_string());
     }
@@ -73,7 +80,10 @@ mod tests {
     fn n(name: &str, role: NodeRole, mbps: u64, disks: u32) -> CephCandidate {
         CephCandidate {
             name: name.into(),
-            caps: NodeCaps { role, ..Default::default() },
+            caps: NodeCaps {
+                role,
+                ..Default::default()
+            },
             uplink_mbps: mbps,
             data_disks: disks,
         }
@@ -81,7 +91,9 @@ mod tests {
 
     #[test]
     fn owner_cluster_shape() {
-        let mut v: Vec<_> = (1..=4).map(|i| n(&format!("r6525-{i}"), NodeRole::Storage, 25_000, 8)).collect();
+        let mut v: Vec<_> = (1..=4)
+            .map(|i| n(&format!("r6525-{i}"), NodeRole::Storage, 25_000, 8))
+            .collect();
         v.push(n("r430-1", NodeRole::Compute, 10_000, 0));
         v.push(n("old-1", NodeRole::Witness, 1_000, 0));
         let p = plan(&v, 10_000, 1_000, 3);
@@ -105,7 +117,9 @@ mod tests {
 
     #[test]
     fn even_mon_count_rounds_down_and_mons_distinct() {
-        let v: Vec<_> = (1..=6).map(|i| n(&format!("n{i}"), NodeRole::Compute, 10_000, 0)).collect();
+        let v: Vec<_> = (1..=6)
+            .map(|i| n(&format!("n{i}"), NodeRole::Compute, 10_000, 0))
+            .collect();
         let p = plan(&v, 10_000, 1_000, 4);
         assert_eq!(p.mon_nodes.len(), 3);
         let mut s = p.mon_nodes.clone();
@@ -116,7 +130,10 @@ mod tests {
 
     #[test]
     fn too_few_mon_candidates_warns() {
-        let v = vec![n("a", NodeRole::Compute, 100, 0), n("b", NodeRole::Compute, 10_000, 0)];
+        let v = vec![
+            n("a", NodeRole::Compute, 100, 0),
+            n("b", NodeRole::Compute, 10_000, 0),
+        ];
         let p = plan(&v, 10_000, 1_000, 3);
         assert_eq!(p.mon_nodes, vec!["b".to_string()]);
         assert!(p.warnings.iter().any(|w| w.contains("MON")));
