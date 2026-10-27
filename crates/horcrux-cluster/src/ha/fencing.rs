@@ -102,17 +102,34 @@ fn redfish_reset_type(action: &FencingAction) -> &'static str {
 
 /// Last path segment of the first `Members[].@odata.id` in a Systems collection.
 fn redfish_first_system_id(body: &serde_json::Value) -> Option<String> {
-    let id = body.get("Members")?.as_array()?.first()?.get("@odata.id")?.as_str()?;
-    id.trim_end_matches('/').rsplit('/').next().map(|s| s.to_string())
+    let id = body
+        .get("Members")?
+        .as_array()?
+        .first()?
+        .get("@odata.id")?
+        .as_str()?;
+    id.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .map(|s| s.to_string())
 }
 
 /// Map a non-2xx HTTP status to a human-readable fencing failure.
 fn redfish_http_error(status: u16, address: &str) -> Option<String> {
     match status {
         200..=299 => None,
-        401 | 403 => Some(format!("Redfish authentication failed for {} (HTTP {})", address, status)),
-        404 => Some(format!("Redfish endpoint not found on {} (HTTP 404)", address)),
-        s => Some(format!("Redfish request to {} returned HTTP {}", address, s)),
+        401 | 403 => Some(format!(
+            "Redfish authentication failed for {} (HTTP {})",
+            address, status
+        )),
+        404 => Some(format!(
+            "Redfish endpoint not found on {} (HTTP 404)",
+            address
+        )),
+        s => Some(format!(
+            "Redfish request to {} returned HTTP {}",
+            address, s
+        )),
     }
 }
 
@@ -400,7 +417,11 @@ impl FencingManager {
     /// i.e. `System.Embedded.1` on iDRAC), `verify_tls=true` to require a
     /// trusted certificate (BMCs ship self-signed certs, so default off).
     async fn fence_redfish(&self, device: &FencingDevice, action: &FencingAction) -> FencingResult {
-        let verify = device.options.get("verify_tls").map(|v| v == "true").unwrap_or(false);
+        let verify = device
+            .options
+            .get("verify_tls")
+            .map(|v| v == "true")
+            .unwrap_or(false);
         let client = match reqwest::Client::builder()
             .danger_accept_invalid_certs(!verify)
             .timeout(std::time::Duration::from_secs(self.timeout_secs as u64))
@@ -418,14 +439,20 @@ impl FencingManager {
             if e.is_timeout() {
                 FencingResult::Timeout
             } else {
-                FencingResult::Failed(format!("Redfish request to {} failed: {}", device.address, e))
+                FencingResult::Failed(format!(
+                    "Redfish request to {} failed: {}",
+                    device.address, e
+                ))
             }
         };
 
         let system_id = match device.options.get("system_id") {
             Some(id) => id.clone(),
             None => {
-                let resp = match auth(client.get(format!("{}/redfish/v1/Systems", base))).send().await {
+                let resp = match auth(client.get(format!("{}/redfish/v1/Systems", base)))
+                    .send()
+                    .await
+                {
                     Ok(r) => r,
                     Err(e) => return fail(e),
                 };
@@ -434,7 +461,9 @@ impl FencingManager {
                 }
                 let body: serde_json::Value = match resp.json().await {
                     Ok(b) => b,
-                    Err(e) => return FencingResult::Failed(format!("Bad Redfish Systems reply: {}", e)),
+                    Err(e) => {
+                        return FencingResult::Failed(format!("Bad Redfish Systems reply: {}", e))
+                    }
                 };
                 match redfish_first_system_id(&body) {
                     Some(id) => id,
@@ -457,7 +486,9 @@ impl FencingManager {
                 return FencingResult::Failed(msg);
             }
             return match resp.json::<serde_json::Value>().await {
-                Ok(b) if b.get("PowerState").and_then(|v| v.as_str()).is_some() => FencingResult::Success,
+                Ok(b) if b.get("PowerState").and_then(|v| v.as_str()).is_some() => {
+                    FencingResult::Success
+                }
                 Ok(_) => FencingResult::Failed("Redfish system has no PowerState".to_string()),
                 Err(e) => FencingResult::Failed(format!("Bad Redfish system reply: {}", e)),
             };
@@ -790,16 +821,31 @@ mod tests {
     #[test]
     fn test_redfish_helpers() {
         assert_eq!(redfish_base_url("10.0.0.5", None), "https://10.0.0.5");
-        assert_eq!(redfish_base_url("idrac1", Some(8443)), "https://idrac1:8443");
-        assert_eq!(redfish_base_url("http://127.0.0.1:9/", None), "http://127.0.0.1:9");
+        assert_eq!(
+            redfish_base_url("idrac1", Some(8443)),
+            "https://idrac1:8443"
+        );
+        assert_eq!(
+            redfish_base_url("http://127.0.0.1:9/", None),
+            "http://127.0.0.1:9"
+        );
         assert_eq!(redfish_reset_type(&FencingAction::Off), "ForceOff");
         assert_eq!(redfish_reset_type(&FencingAction::On), "On");
         assert_eq!(redfish_reset_type(&FencingAction::Reboot), "ForceRestart");
-        let b = serde_json::json!({"Members":[{"@odata.id":"/redfish/v1/Systems/System.Embedded.1"}]});
-        assert_eq!(redfish_first_system_id(&b).as_deref(), Some("System.Embedded.1"));
-        assert_eq!(redfish_first_system_id(&serde_json::json!({"Members":[]})), None);
+        let b =
+            serde_json::json!({"Members":[{"@odata.id":"/redfish/v1/Systems/System.Embedded.1"}]});
+        assert_eq!(
+            redfish_first_system_id(&b).as_deref(),
+            Some("System.Embedded.1")
+        );
+        assert_eq!(
+            redfish_first_system_id(&serde_json::json!({"Members":[]})),
+            None
+        );
         assert!(redfish_http_error(204, "h").is_none());
-        assert!(redfish_http_error(401, "h").unwrap().contains("authentication"));
+        assert!(redfish_http_error(401, "h")
+            .unwrap()
+            .contains("authentication"));
         assert!(redfish_http_error(500, "h").unwrap().contains("500"));
     }
 
@@ -832,7 +878,11 @@ mod tests {
                 } else {
                     r#"{"PowerState":"On"}"#
                 };
-                let status = if first.starts_with("POST") { "204 No Content" } else { "200 OK" };
+                let status = if first.starts_with("POST") {
+                    "204 No Content"
+                } else {
+                    "200 OK"
+                };
                 let resp = format!(
                     "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     status,
@@ -858,9 +908,21 @@ mod tests {
             options: HashMap::new(),
             priority: 1,
         };
-        assert!(matches!(mgr.execute_fence(&dev, FencingAction::Status).await, FencingResult::Success));
-        assert!(matches!(mgr.execute_fence(&dev, FencingAction::Off).await, FencingResult::Success));
+        assert!(matches!(
+            mgr.execute_fence(&dev, FencingAction::Status).await,
+            FencingResult::Success
+        ));
+        assert!(matches!(
+            mgr.execute_fence(&dev, FencingAction::Off).await,
+            FencingResult::Success
+        ));
         let log = seen.read().await.clone();
-        assert!(log.iter().any(|l| l.starts_with("POST /redfish/v1/Systems/System.Embedded.1/Actions/ComputerSystem.Reset") && l.ends_with("true")), "{:?}", log);
+        assert!(
+            log.iter().any(|l| l.starts_with(
+                "POST /redfish/v1/Systems/System.Embedded.1/Actions/ComputerSystem.Reset"
+            ) && l.ends_with("true")),
+            "{:?}",
+            log
+        );
     }
 }
