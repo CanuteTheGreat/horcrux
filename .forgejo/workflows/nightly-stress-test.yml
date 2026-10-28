@@ -115,7 +115,7 @@ jobs:
           stale=$(docker ps -a --filter "name=horcrux-stress" --format '{{.Names}}' || true)
           if [ -n "$stale" ]; then
             echo "::warning::removing stale stress containers from an earlier run: $(echo $stale)"
-            for c in $stale; do docker rm -f "$c"; done
+            for c in $stale; do docker rm -fv "$c"; done
           else
             echo "no stale horcrux-stress containers"
           fi
@@ -294,7 +294,7 @@ jobs:
         run: |
           rm -rf /tmp/horcrux-stress /tmp/horcrux-stress-data /tmp/horcrux-stress-cni
           rm -f /tmp/horcrux-stress-api.pid /tmp/horcrux-stress-api.log
-          docker ps -a --filter "name=horcrux-stress" -q | xargs -r docker rm -f || true
+          docker ps -a --filter "name=horcrux-stress" -q | xargs -r docker rm -fv || true
           for ns in hcx-stress-a1 hcx-stress-a2 hcx-stress-b1 hcx-stress-b2; do
             ip netns del "$ns" 2>/dev/null || true
           done

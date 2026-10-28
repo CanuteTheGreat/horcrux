@@ -265,7 +265,7 @@ jobs:
         # assertion failure (see their teardown blocks), this is a backstop.
         run: |
           rm -rf /tmp/horcrux-nightly
-          docker ps -a --filter "name=horcrux-nightly" -q | xargs -r docker rm -f || true
+          docker ps -a --filter "name=horcrux-nightly" -q | xargs -r docker rm -fv || true
           for ns in hcx-nightly-ns1 hcx-nightly-ns2; do
             ip netns del "$ns" 2>/dev/null || true
           done
