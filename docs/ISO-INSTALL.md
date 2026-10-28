@@ -104,3 +104,11 @@ A `v*` release gets a stable ISO attached (non-pre-release asset
 If any criterion fails, nothing is attached and the failure is recorded in the `daily-status` marker
 (mode `stable`). The previous release stays as is. Tags must be cut by the maintainers; the workflow
 never creates tags or bumps versions.
+
+## Known gaps
+
+* **Secure Boot**: not supported (see above). A shim + MOK-enrolment chain (own signing key for GRUB and the kernel) is the next step.
+* **Real hardware**: only QEMU/KVM (OVMF + SeaBIOS, USB-storage and CD boot) is tested automatically. The ThinkPad and Surface Pro notes above are expectations, not results.
+* The live image has no ZFS, no desktop and no Wi-Fi GUI (`iwctl` only); the Portage tree is stripped from the image, so run `emerge-webrsync` before using `emerge` on a live/installed system.
+* Default console login is `root` / project name; sshd allows root password login. Change it first.
+* Only the ext4 install path is covered by the automated test.

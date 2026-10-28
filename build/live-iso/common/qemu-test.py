@@ -195,7 +195,10 @@ def main():
     t1 = time.time()
     vm2 = VM("2-installed", qemu_args(a, disk, None, nvars, a.fwd_port), a.out)
     try:
-        step("installed-boots-to-login", vm2.expect(r"login:", 360), f"{int(time.time()-t1)}s")
+        ok = vm2.expect(r"login:", 360)
+        if not ok:
+            vm2.shot("login-timeout")
+        step("installed-boots-to-login", ok, f"{int(time.time()-t1)}s")
         vm2.shot("login-prompt")
         logged = False
         for _ in range(6):   # getty may restart / swallow the first keystrokes
