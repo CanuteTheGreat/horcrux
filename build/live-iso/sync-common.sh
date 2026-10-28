@@ -5,7 +5,7 @@
 #   sync-common.sh --from <horcrux-repo>   (vendor) copy the master's common/ here and verify
 #   sync-common.sh --check                 verify common/ matches its recorded TREE.sha256 (catches hand edits)
 #   sync-common.sh --upstream              (vendor) also compare with Horcrux main over the Forgejo API (skips if unreachable)
-# CI runs --check in both repos (and --upstream in Patronus); a mismatch fails the unit-test gate, never mails.
+# CI runs --check in both repos (a mismatch fails the unit-test gate, never mails) and --upstream in Patronus (only WARNS when behind Horcrux main).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); C=$HERE/common
 # mode is normalised to executable/not (a CI checkout under umask 002 gives 664 where a dev box gives 644)
@@ -23,6 +23,9 @@ case "${1:-}" in
               url="${GITHUB_SERVER_URL:-https://git.canutethegreat.com}/api/v1/repos/CanuteTheGreat/horcrux/raw/build/live-iso/common/TREE.sha256?ref=main"
               up=$(curl -fsS -H "Authorization: token ${FORGEJO_TOKEN:-${UPSTREAM_TOKEN:-}}" "$url" 2>/dev/null | tr -d '[:space:]' || true)
               [ -n "$up" ] || { echo "upstream TREE.sha256 not reachable from this job; skipped"; exit 0; }
-              [ "$up" = "$(cat "$C/TREE.sha256")" ] && echo "matches Horcrux main ($up)" || { echo "::error::common/ is out of date versus Horcrux main ($up): run sync-common.sh --from <horcrux checkout>"; exit 1; } ;;
+              if [ "$up" = "$(cat "$C/TREE.sha256")" ]; then echo "matches Horcrux main ($up)"
+              else # in-flight work in Horcrux (installer / boot menu) that Patronus has not re-synced yet must not block the daily ISO:
+                   # the vendored copy is internally consistent (--check above), so build it and just say it is behind.
+                   echo "::warning::common/ is behind Horcrux main ($up): run sync-common.sh --from <horcrux checkout> (not fatal)"; fi ;;
   *) sed -n 2,8p "$0"; exit 2 ;;
 esac
