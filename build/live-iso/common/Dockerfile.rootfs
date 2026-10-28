@@ -40,6 +40,14 @@ RUN --mount=type=cache,target=/var/cache/binpkgs,sharing=locked \
     set -e; pk=$(grep -v '^#' /tmp/packages-late.txt | tr '\n' ' '); \
     if [ -n "$(echo $pk)" ]; then emerge --noreplace $pk; fi
 
+# Small extras (console menu: argon2 CLI + sqlite3) in their own layer: editing the list does not redo the big emerge
+COPY common/packages-extra.txt /tmp/packages-extra.txt
+RUN --mount=type=cache,target=/var/cache/binpkgs,sharing=locked \
+    --mount=type=cache,target=/var/cache/distfiles,sharing=locked \
+    --mount=type=cache,target=/var/cache/ccache,sharing=locked \
+    set -e; pk=$(grep -v '^#' /tmp/packages-extra.txt | tr '\n' ' '); \
+    if [ -n "$(echo $pk)" ]; then emerge --noreplace $pk; fi
+
 # Project application (binaries, UI, installer, init scripts ...)
 COPY --from=app /out/ /
 COPY project/overlay/ /

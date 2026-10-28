@@ -285,6 +285,8 @@ def s_account(t, st, step):
                validate=lambda v, a: S.ssh_key_problem(v), hint="Optional: paste one ssh-ed25519/ssh-rsa line for root key login"),
          Field("pwauth", "Allow SSH password login", "check", c["ssh_password_auth"],
                hint="OFF is recommended: root can then log in over SSH with a key only"),
+         Field("conopen", "Open console menu (no login on the console)", "check", c["console_open"],
+               hint="OFF (default): the console asks for the root password first. ON = OPNsense style: anyone at the console can use the menu"),
          Field("warn", "WARNING: password SSH login exposes the system to password guessing from the network.", "label", "", hint="warn",
                visible=lambda v: v["pwauth"])]
 
@@ -305,6 +307,7 @@ def s_account(t, st, step):
     c["email"] = v["email"].strip()
     c["ssh_keys"] = [v["key"].strip()] if v["key"].strip() else []
     c["ssh_password_auth"] = bool(v["pwauth"])
+    c["console_open"] = bool(v["conopen"])
     return "next"
 
 
@@ -324,6 +327,7 @@ def summary_lines(st):
         out.append(("Management NIC", f"{n['iface'] or '-'}: " + (f"{n['address']} gw {n['gateway']} dns {n['dns']}" if n["mode"] == "static" else "DHCP")
                     + (" (Wi-Fi)" if c["wifi"] else "")))
     out.append(("E-mail", c["email"] or "-"))
+    out.append(("Console menu", "OPEN (no login)" if c["console_open"] else "after root login"))
     out.append(("SSH", ("key" if c["ssh_keys"] else "no key") + (", PASSWORD login ON" if c["ssh_password_auth"] else ", password login off")))
     return out
 

@@ -1,0 +1,3 @@
+#!/bin/sh
+# agetty -n -l program for the OPEN console menu (installer option "open console menu"): no login prompt.
+exec /bin/login -f root

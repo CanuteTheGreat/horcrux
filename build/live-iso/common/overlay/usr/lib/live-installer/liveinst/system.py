@@ -54,6 +54,8 @@ def load_profile(path="/etc/live-installer/profile.toml"):
     p.setdefault("services", [])
     p.setdefault("web_scheme", "https")
     p.setdefault("default_hostname", p["name"] + ".localdomain")
+    p.setdefault("web_port", 8443)
+    p.setdefault("config_paths", [f"/etc/{p['name']}"])
     return p
 
 
@@ -290,6 +292,19 @@ def wifi_scan(iface):
     return nets
 
 
+def write_wifi_profile(root, ssid, psk):
+    """iwd network profile for the installed/running system (root = target dir, '/' on the live/installed system)."""
+    fn = ssid if re.fullmatch(r"[A-Za-z0-9 _-]+", ssid) else "=" + ssid.encode().hex()
+    sec = "psk" if psk else "open"
+    d = os.path.join(root, "var/lib/iwd")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, f"{fn}.{sec}")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write("[Security]\nPassphrase=" + psk + "\n" if psk else "")
+    return path
+
+
 def wifi_connect(iface, ssid, psk):
     cmd = ["iwctl"] + (["--passphrase", psk] if psk else []) + ["station", iface, "connect", ssid]
     rc, out = sh(cmd, timeout=40)
@@ -400,6 +415,7 @@ def default_config(profile):
         "wifi": None,
         "root_password": "", "root_hash": "", "web_password": "",
         "ssh_keys": [], "ssh_password_auth": False, "email": "",
+        "console_open": False,
     }
 
 
@@ -417,6 +433,7 @@ def config_from_answers(profile, path):
     keys = g.get("ssh_keys", g.get("ssh_key", []))
     c["ssh_keys"] = [keys] if isinstance(keys, str) else list(keys)
     c["ssh_password_auth"] = bool(g.get("ssh_password_auth", False))
+    c["console_open"] = bool(g.get("console_menu_open", False))
     d = a.get("disk", {})
     c["fs"] = d.get("filesystem", "ext4")
     c["zfs_raid"] = d.get("zfs_raid", "single")
@@ -735,6 +752,13 @@ class Installer:
         # live-only services are not wanted on the installed system
         for s in ("live-installer",):
             self.run(["rc-update", "del", s, "default"], chroot=True, check=False)
+        # post-install console menu: login first (default) or OPNsense-style open console
+        if c.get("console_open"):
+            self.write("/etc/live-installer/console-open", "1\n")
+            ip = f"{T}/etc/inittab"
+            if os.path.exists(ip):
+                t = re.sub(r"(?m)^c1:.*$", "c1:12345:respawn:/sbin/agetty --noclear -n -l /usr/libexec/console-menu-session 38400 tty1 linux", open(ip).read())
+                open(ip, "w").write(t)
         self.write("/etc/motd", self.motd())
         self.write("/etc/live-installer/installed", time.strftime("%FT%TZ", time.gmtime()) + "\n")
         for s in p["services"]:
@@ -768,11 +792,7 @@ class Installer:
         self.write("/etc/dhcpcd.conf", open(f"{self.target}/etc/dhcpcd.conf").read() + "\n".join(dh) + "\n") \
             if os.path.exists(f"{self.target}/etc/dhcpcd.conf") else self.write("/etc/dhcpcd.conf", "\n".join(dh) + "\n")
         if wifi:
-            ssid = wifi["ssid"]
-            fn = ssid if re.fullmatch(r"[A-Za-z0-9 _-]+", ssid) else "=" + ssid.encode().hex()
-            sec = "psk" if wifi.get("psk") else "open"
-            body = "[Security]\nPassphrase=" + wifi["psk"] + "\n" if wifi.get("psk") else ""
-            self.write(f"/var/lib/iwd/{fn}.{sec}", body, 0o600)
+            write_wifi_profile(self.target, wifi["ssid"], wifi.get("psk", ""))
             self.write("/etc/iwd/main.conf", "[General]\nEnableNetworkConfiguration=true\n")
             self.run(["rc-update", "add", "iwd", "default"], chroot=True, check=False)
         if p["network_mode"] == "wan-lan":
@@ -784,18 +804,8 @@ class Installer:
         txt = open(path).read() if os.path.exists(path) else ""
         wan = c["wan"].get("iface") or (c["wifi"] and c["wifi"].get("iface")) or ""
         lan = c["lan"].get("iface") or ""
-        lines = [l for l in txt.splitlines() if not re.match(r"\s*(wan_interfaces?|lan_interfaces?)\s*=", l) and l.strip() != "# written by live-installer"]
-        roles = ["# written by live-installer", f'wan_interface = "{wan}"' if wan else "", f'lan_interface = "{lan}"' if lan else ""]
-        roles = [r for r in roles if r]
-        out, placed = [], False
-        for l in lines:
-            out.append(l)
-            if l.strip() == "[network]" and not placed:
-                out += roles
-                placed = True
-        if not placed:
-            out += ["", "[network]"] + roles
-        open(path, "w").write("\n".join(out) + "\n")
+        from .consolemenu import apply_roles
+        open(path, "w").write(apply_roles(txt, wan, lan))
         self.run(["chgrp", "patronus", "/etc/patronus/patronus.toml"], chroot=True, check=False)
         self.run(["chmod", "0640", "/etc/patronus/patronus.toml"], chroot=True, check=False)
 

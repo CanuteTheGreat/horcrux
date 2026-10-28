@@ -1,0 +1,3 @@
+# Small tools added after the big emerge layer (a change here does not rebuild the layers above)
+app-crypt/argon2
+dev-db/sqlite

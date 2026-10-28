@@ -11,3 +11,10 @@ default_hostname = "horcrux.localdomain"
 admin_password_file = "/etc/horcrux/admin-password"
 admin_password_owner = "root"
 services = ["horcrux-api", "libvirtd", "docker", "dbus", "sshd", "dhcpcd"]
+# console menu (installed system)
+web_service = "horcrux-api"
+db_path = "/var/lib/horcrux/horcrux.db"
+db_table = "users"
+config_paths = ["/etc/horcrux", "/var/lib/horcrux/horcrux.db"]
+factory_reset_files = ["/var/lib/horcrux/initial-admin-password"]
+reapply_services = []

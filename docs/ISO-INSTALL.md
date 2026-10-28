@@ -205,6 +205,44 @@ If any criterion fails, nothing is attached and the failure is recorded in the `
 (mode `stable`). The previous release stays as is. Tags must be cut by the maintainers; the workflow
 never creates tags or bumps versions.
 
+## Console menu (installed system)
+
+After the install, the system console (VGA tty1, and the serial line `ttyS0` when the install was done from a
+serial/automated boot entry) shows an OPNsense-style menu instead of a bare shell. By default the console asks for
+the root password first (log in, the menu starts); tick **Open console menu** in the installer (or
+`console_menu_open = true` in `answer.toml` `[global]`) for the OPNsense behaviour where anyone at the console gets
+the menu without a login. tty2-6 and SSH always give a normal login shell. `touch /etc/live-installer/no-console-menu`
+turns the menu off.
+
+| Option | What it does |
+|---|---|
+| 1 Assign interfaces | Pick the management NIC, then set its address (same dialog as option 2). Link state is shown per NIC; `d` = identify a port by unplug/replug. |
+| 2 Set interface IP address | DHCP or static (address/prefix, gateway, DNS) for one NIC; Wi-Fi NICs can (re)connect through iwd. Written to `/etc/dhcpcd.conf` (managed block) and applied at once. |
+| 3 Reset the admin password | Sets a new web `admin` password directly in the product's database (argon2id), drops web sessions, optionally also sets the root console password. |
+| 4 Reset to factory defaults | Type `RESET` to confirm; first writes a backup, then deletes the configuration database, re-applies the product's boot units and starts it with a new password. Interface roles and addresses are kept. |
+| 5 / 6 | Power off / restart the machine (asks first). |
+| 7 Ping host | Validated host name or address only (no shell metacharacters). |
+| 8 Shell | Root shell; `exit` returns to the menu. |
+| 9 Web UI URL and status | URL, uptime, service states, root fs, effective SSH settings, latest backups. |
+| 10 Restore a configuration backup | Lists `/var/backups/horcrux/*.tar.gz` and `*.tar.gz` on any attached USB stick. Refuses archives of another product, with paths outside the product's config paths, or with links; takes a `pre-restore` backup first. |
+| 11 Create a configuration backup | `/var/backups/horcrux/horcrux-config-manual-<time>.tar.gz` (consistent SQLite copy while the service runs), optionally copied to a USB stick. |
+
+Screens (real QEMU captures from the CI run, UEFI, VGA console): the login on a protected console, then the menu.
+
+![VGA login](images/console-menu/vga-login.png)
+![VGA console menu](images/console-menu/vga-menu.png)
+
+Tests (QEMU, UEFI + BIOS, serial and VGA): the serial runs drive options 9, 7 (including a rejected `x;reboot`), 2,
+3, 11, 4, 10 and 5, and log in to the web UI with the new password after each reset (the old one must fail); the VGA run
+logs in on tty1 by keyboard and checks that `console-menu` is the process on tty1. Both products.
+
+## Shared installer source
+
+`build/live-iso/common` in Horcrux is the master; Patronus `gentoo/live-iso/common` is a vendored copy.
+`sync-common.sh --write-hash` (Horcrux, after editing) records `common/TREE.sha256`; `sync-common.sh --from <horcrux checkout>`
+(Patronus) copies it. CI runs `--check` in both repos (and `--upstream` in Patronus) before the unit tests, so hand edits or a
+stale copy are caught.
+
 ## Known gaps
 
 * **Secure Boot**: not supported (see above). A shim + MOK-enrolment chain (own signing key for GRUB and the kernel) is the next step.

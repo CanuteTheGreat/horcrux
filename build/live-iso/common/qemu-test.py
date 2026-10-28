@@ -24,12 +24,13 @@ Exit 0 = every step passed; evidence (serial logs, screens/, PNGs, result.json) 
 import argparse, json, os, re, shutil, socket, ssl, struct, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request, zlib
 
 PROJECTS = {
-    "horcrux": dict(port=8006, health=["/api/health", "/"], pwfile="/var/lib/horcrux/initial-admin-password", old_pw="horcrux",
+    "horcrux": dict(svc="horcrux-api", port=8006, health=["/api/health", "/"], pwfile="/var/lib/horcrux/initial-admin-password", old_pw="horcrux",
                     seedfile="/etc/horcrux/admin-password"),
-    "patronus": dict(port=8443, health=["/login"], pwfile="/var/lib/patronus/initial-admin-password", old_pw="patronus",
+    "patronus": dict(svc="patronus-web", port=8443, health=["/login"], pwfile="/var/lib/patronus/initial-admin-password", old_pw="patronus",
                      seedfile="/var/lib/patronus/initial-admin-password"),
 }
 PW = "Kx9!mQv2-tle-77Zp"          # >= 12 chars, mixed: passes the installer's strength rules
+PW2, PW3 = "Rv7#nQ4-zeta-91Lk", "Tb3$wH8-omega-52Ud"   # console-menu password reset / factory reset
 FWD_WEB, FWD_SSH, FWD_WAN = 18443, 12222, 18444
 
 
@@ -419,7 +420,7 @@ def make_answer_image(path, proj, content):
 def answer_toml(a, pubkey, pwhash):
     p = a.project
     lines = ["[global]", 'keyboard = "us"', 'timezone = "Europe/Berlin"', f'hostname = "{p}-t1.test.lan"', 'email = "ops@example.test"',
-             f'root_password_hash = "{pwhash}"', f'ssh_keys = ["{pubkey}"]', f"ssh_password_auth = {'true' if a.ssh_password_opt_in else 'false'}",
+             f'root_password_hash = "{pwhash}"', f'ssh_keys = ["{pubkey}"]', f"ssh_password_auth = {'true' if a.ssh_password_opt_in else 'false'}", f"console_menu_open = {'true' if a.console_open else 'false'}",
              "", "[disk]", f'filesystem = "{a.fs}"']
     if a.fs == "zfs":
         lines += [f'zfs_raid = "{a.zfs_raid}"', 'disks = ["/dev/vda", "/dev/vdb"]' if a.zfs_raid == "mirror" else 'disks = ["/dev/vda"]']
@@ -648,6 +649,9 @@ class Runner:
         kb.key("TAB")                                      # -> allow SSH password login
         if a.ssh_password_opt_in:
             kb.key("SPACE")
+        kb.key("TAB")                                      # -> open console menu
+        if a.console_open:
+            kb.key("SPACE")
         shot("06b-administrator-account-filled")
         kb.key("TAB"); kb.key("ENTER", 1)
         wait(r"Summary - ready to install", "07-summary")
@@ -739,14 +743,19 @@ class Runner:
         vm = VM("2-installed", self.qemu_args(None, True, nvars), a.out)
         serial = a.flow != "tui-vga"
         try:
-            if serial:
+            if serial and a.console_open:
+                ok = vm.expect_raw(r"Enter an option", 420)
+                if not ok:
+                    vm.shot("login-timeout")
+                self.step("installed-boots-to-open-console-menu", ok, f"{int(time.time()-t1)}s, no login prompt (console menu opened by the installer)")
+            elif serial:
                 ok = vm.expect_raw(r"login:", 420)
                 if not ok:
                     vm.shot("login-timeout")
                 self.step("installed-boots-to-login", ok, f"{int(time.time()-t1)}s")
                 vm.shot("login-prompt")
                 self.serial_login(vm, P["old_pw"], expect_ok=False)
-                self.step("serial-root-login-with-chosen-password", self.serial_login(vm, PW, expect_ok=True))
+                self.step("serial-root-login-with-chosen-password", self.serial_login(vm, PW, expect_ok=True), "lands in the console menu")
             deadline = time.time() + 300
             got = None
             while time.time() < deadline:
@@ -775,15 +784,136 @@ class Runner:
                 sc, code, _ = http(FWD_WAN, "/login", timeout=6)
                 self.step("patronus-wan-web-blocked", code == 0, f"WAN 10.0.2.15:8443 -> {code or 'no answer (dropped/refused)'}")
             vm.shot("installed-running")
+            if serial:
+                self.console_menu_checks(vm)
+            else:
+                self.vga_console_check(vm)
         finally:
             if vm.alive():
                 if serial:
-                    vm.send("halt -p\r")
+                    if not self.menu_off:
+                        ssh(FWD_SSH, self.key, "poweroff", timeout=10)
                 else:
                     ssh(FWD_SSH, self.key, "poweroff", timeout=10)
                 time.sleep(8)
             if vm.alive():
                 vm.p.kill()
+
+
+    # ---- post-install console menu (serial line; same program as on VGA tty1)
+    menu_off = False
+
+    def opt(self, vm, key, dialog=(), done=r"Press Enter to return to the menu", timeout=120):
+        """pick a menu option, answer the prompts in `dialog` [(regex, text)], wait for `done`, return the text seen"""
+        vm.send(key + "\r")
+        seen = ""
+        for pat, ans in dialog:
+            m = vm.expect_raw("(?s).*?" + pat, 60)
+            if not m:
+                return seen + "<<missing prompt: " + pat + ">>"
+            seen += m.group(0).decode(errors="replace")
+            time.sleep(0.3)
+            vm.send(ans + "\r")
+        m = vm.expect_raw("(?s).*?" + done, timeout)
+        seen += m.group(0).decode(errors="replace") if m else "<<timeout waiting for: " + done + ">>"
+        if m and done.startswith("Press Enter"):
+            vm.send("\r")
+            vm.expect_raw("Enter an option", 30)
+        return seen
+
+    def web_login_code(self, pw, wait=0):
+        end = time.time() + wait
+        while True:
+            sc, code, resp = http(FWD_WEB, "/api/auth/login", "POST", {"username": "admin", "password": pw})
+            if code == 200 or time.time() >= end:
+                return code
+            time.sleep(4)
+
+    def console_menu_checks(self, vm):
+        a, P = self.a, self.P
+        scr = vm.screen()
+        vm.snap("console-menu")
+        vm.shot("console-menu")
+        self.step("console-menu-shown", "console menu" in scr and "Assign interfaces" in scr and "Reset the admin password" in scr and "Web UI:" in scr,
+                  "header, interface list, web URL and the numbered options are on the serial console")
+        t = self.opt(vm, "9")
+        self.step("console-menu-status", "Web UI :" in t and "running" in t, re.sub(r"\s+", " ", t)[:120])
+        t = self.opt(vm, "7", [("Host name or IP address to ping", "x;reboot")], done=r"Press Enter to return to the menu")
+        self.step("console-menu-ping-rejects-injection", "Not a valid host name" in t, "x;reboot refused")
+        t = self.opt(vm, "7", [("Host name or IP address to ping", "10.0.2.2")], done=r"packets transmitted", timeout=40)
+        vm.expect_raw("Press Enter to return", 20)
+        vm.send("\r")
+        vm.expect_raw("Enter an option", 20)
+        self.step("console-menu-ping", "packets transmitted" in t, "ping 10.0.2.2 ran")
+        # option 2: re-apply the current address as static on the interface that carries the web UI (keeps the port forward alive)
+        rc, o = ssh(FWD_SSH, self.key, f"ip -o -4 addr show | grep -F ' {self.guest_ip(True)}/'")
+        m = re.search(r"\d+: (\S+)\s+inet (\S+)", o)
+        self.step("console-menu-find-interface", bool(m), o.strip()[:80])
+        nic, addr = m.group(1), m.group(2)
+        dlg = [("Interface to configure", nic), ("IP configuration", "s"), ("IP address/prefix", addr)]
+        if a.project == "horcrux":
+            dlg += [("Gateway", "10.0.2.2"), ("DNS server", "10.0.2.3")]
+        t = self.opt(vm, "2", dlg, timeout=120)
+        rc, o = ssh(FWD_SSH, self.key, f"grep -c 'BEGIN console-menu {nic}' /etc/dhcpcd.conf; ip -4 addr show dev {nic}")
+        self.step("console-menu-set-static-ip", rc == 0 and o.strip().startswith("1") and addr in o and nic in t, f"{nic} {addr} static via /etc/dhcpcd.conf; ssh still works")
+        # option 3: reset the web admin password; the new one must log in (hash compatible with the product), the old one not
+        t = self.opt(vm, "3", [("New admin password", PW2), ("Confirm", PW2), ("same password for the root console", "n")])
+        c_new, c_old = self.web_login_code(PW2, 20), self.web_login_code(PW)
+        self.step("console-menu-reset-password", c_new == 200 and c_old != 200, f"new password -> {c_new}, old password -> {c_old}")
+        # option 11 backup, 4 factory reset, 10 restore
+        t = self.opt(vm, "11", [], done=r"Backup written: \S+")
+        rc, o = ssh(FWD_SSH, self.key, f"ls /var/backups/{a.project}/; tar tzf /var/backups/{a.project}/*manual*.tar.gz | head -20")
+        self.step("console-menu-backup", "MANIFEST.json" in o and (".db" in o), re.sub(r"\s+", " ", o)[:140])
+        vm.expect_raw("Press Enter to return", 20)
+        vm.send("\r")
+        vm.expect_raw("Enter an option", 20)
+        t = self.opt(vm, "4", [("Type RESET", "RESET"), ("New admin password", PW3), ("Confirm", PW3)], done=r"Factory defaults restored", timeout=240)
+        vm.expect_raw("Press Enter to return", 20)
+        vm.send("\r")
+        vm.expect_raw("Enter an option", 20)
+        c3, c2 = self.web_login_code(PW3, 180), self.web_login_code(PW2)
+        if c3 != 200:
+            rc, o = ssh(FWD_SSH, self.key, f"rc-service {self.P['svc']} status; ls -la /var/lib/{a.project}; tail -n 8 /var/log/{a.project}/web-error.log; nft list ruleset 2>&1 | grep -n {P['port']} | head -5; ss -ltn | grep {P['port']}")
+            print("[DIAG] " + o.replace("\n", "\n[DIAG] "))
+        self.step("console-menu-factory-reset", c3 == 200 and c2 != 200, f"factory defaults: new password -> {c3}, password from before the reset -> {c2}")
+        rc, o = ssh(FWD_SSH, self.key, f"sleep 12; test -e {P['seedfile']} && echo present || echo gone")
+        self.step("console-menu-firstboot-file-removed", "gone" in o, f"{P['seedfile']}: {o.strip()}")
+        vm.send("10\r")
+        m = vm.expect_raw(r"(?s).*?Backup to restore", 60)
+        txt = m.group(0).decode(errors="replace") if m else ""
+        mm = re.search(r"(\d+)\) \S*-manual-\S*", txt)
+        self.step("console-menu-restore-lists-backups", bool(mm), re.sub(r"\s+", " ", txt)[-160:])
+        vm.send(mm.group(1) + "\r")
+        vm.expect_raw("Type RESTORE", 30)
+        vm.send("RESTORE\r")
+        ok = vm.expect_raw("Configuration restored", 240)
+        vm.expect_raw("Press Enter to return", 20)
+        vm.send("\r")
+        vm.expect_raw("Enter an option", 20)
+        c2, c3 = self.web_login_code(PW2, 180), self.web_login_code(PW3)
+        self.step("console-menu-restore", bool(ok) and c2 == 200 and c3 != 200, f"after restoring the backup: password from the backup -> {c2}, factory-reset password -> {c3}")
+        vm.snap("console-menu-after")
+        # option 5: power off from the menu
+        vm.send("5\r")
+        vm.expect_raw("Power off", 20)
+        vm.send("y\r")
+        end = time.time() + 90
+        while vm.alive() and time.time() < end:
+            time.sleep(2)
+        self.menu_off = True
+        self.step("console-menu-poweroff", not vm.alive(), "option 5 powered the VM off")
+
+    def vga_console_check(self, vm):
+        """VGA-only run (no serial): log in on tty1 by keyboard; the console menu must be what runs there."""
+        kb = Kbd(vm, True)
+        vm.shot("vga-console-login")
+        for t in ("root\n", PW + "\n"):
+            kb.text(t)
+            time.sleep(4)
+        time.sleep(4)
+        vm.shot("vga-console-menu")
+        rc, o = ssh(FWD_SSH, self.key, "ps -eo tty,args | grep '[c]onsole-menu'")
+        self.step("console-menu-on-vga-tty1", rc == 0 and "tty1" in o, o.strip()[:100])
 
     def serial_login(self, vm, pw, expect_ok):
         for _ in range(6):
@@ -794,7 +924,7 @@ class Runner:
             if vm.expect_raw("Password", 15):
                 vm.send(f"{pw}\r")
                 if expect_ok:
-                    if vm.expect_raw(r"(#|\$) ", 25):
+                    if vm.expect_raw(r"(Enter an option|# |\$ )", 25):
                         return True
                 else:
                     r = vm.expect_raw(r"(Login incorrect|#|\$ )", 20)
@@ -852,6 +982,7 @@ def main():
     ap.add_argument("--ssh-password-opt-in", action="store_true")
     ap.add_argument("--static-ip", default="", help="horcrux management address (empty = DHCP)")
     ap.add_argument("--lan-ip", default="10.77.0.1", help="patronus LAN address")
+    ap.add_argument("--console-open", action="store_true", help="installer option: open console menu (no login on the console)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--mem", type=int, default=4096)
     ap.add_argument("--disk-gb", type=int, default=24)

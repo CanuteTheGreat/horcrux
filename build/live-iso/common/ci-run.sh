@@ -29,6 +29,7 @@ fi
 
 if [ "$result" = pass ]; then
   echo "::group::installer unit tests"
+  bash "$HERE/../sync-common.sh" "${SYNC_MODE:---check}" || fail common-sync "shared live-installer copy is out of sync (see sync-common.sh)"
   python3 -m unittest discover -s "$HERE/tests" 2>&1 | tail -15; [ "${PIPESTATUS[0]}" = 0 ] || fail unit-tests "guided-installer unit tests failed"
   echo "::endgroup::"
 fi
@@ -57,7 +58,7 @@ if [ "$result" = pass ]; then
   # opt-in branch, and (Horcrux) xfs and a 2-disk ZFS mirror.
   if [ "$PROJECT" = horcrux ]; then
     MATRIX=(
-      "bios-cdrom-auto-ext4-dhcp|--mode bios --media cdrom --flow auto --fs ext4"
+      "bios-cdrom-auto-ext4-dhcp-openconsole|--mode bios --media cdrom --flow auto --fs ext4 --console-open"
       "bios-cdrom-tui-serial-xfs-static|--mode bios --media cdrom --flow tui --fs xfs --static-ip 10.0.2.77"
       "uefi-usb-tui-vga-zfs-mirror-static|--mode uefi --media usb --flow tui-vga --fs zfs --zfs-raid mirror --static-ip 10.0.2.88"
       "bios-cdrom-fallback-no-answer-file|--mode bios --media cdrom --flow fallback"
@@ -68,7 +69,7 @@ if [ "$result" = pass ]; then
       "bios-cdrom-auto-sshpw|--mode bios --media cdrom --flow auto --ssh-password-opt-in"
       "bios-cdrom-tui-serial|--mode bios --media cdrom --flow tui"
       "uefi-usb-tui-vga|--mode uefi --media usb --flow tui-vga"
-      "uefi-usb-auto|--mode uefi --media usb --flow auto"
+      "uefi-usb-auto-openconsole|--mode uefi --media usb --flow auto --console-open"
       "bios-cdrom-fallback-no-answer-file|--mode bios --media cdrom --flow fallback"
     )
   fi
