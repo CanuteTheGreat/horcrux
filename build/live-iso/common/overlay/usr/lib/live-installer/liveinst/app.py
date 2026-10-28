@@ -366,17 +366,21 @@ def s_install(t, st, step):
         state["done"] = True
     th = threading.Thread(target=work, daemon=True)
     th.start()
-    t.scr.timeout(400)
-    last = None
+    t.scr.nodelay(True)            # never block in a curses read while the worker runs
+    last, last_draw = None, 0.0
     while not state["done"]:
         snap = (state["pct"], state["note"], len(state["lines"]))
-        if snap != last:           # repaint only on change: a serial line is slow (115200 baud)
+        # repaint only on change (a serial line is slow) and at most ~3x per second; the heartbeat
+        # repaint every 5 s also un-sticks a terminal that missed a frame
+        if (snap != last and time.time() - last_draw > 0.3) or time.time() - last_draw > 5:
             progress_screen(t, step, "Installing", state["pct"], state["lines"], state["note"])
-            last = snap
+            last, last_draw = snap, time.time()
         try:
-            t.scr.get_wch()
+            t.scr.get_wch()        # drain stray key presses
         except curses.error:
             pass
+        time.sleep(0.15)
+    t.scr.nodelay(False)
     t.scr.timeout(-1)
     progress_screen(t, step, "Installing", state["pct"], state["lines"], state["note"])
     if state["err"]:

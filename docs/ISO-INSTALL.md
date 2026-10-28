@@ -164,7 +164,7 @@ Horcrux specifics: ext4 / XFS / ZFS (single or mirror) from the wizard; the root
 ## What is tested automatically
 
 `.forgejo/workflows/live-iso.yml` (daily, and on every `v*` tag) builds the ISO on a rw-man host and runs
-`build/live-iso/common/qemu-test.py` under QEMU/KVM. Four full installs per run:
+`build/live-iso/common/qemu-test.py` under QEMU/KVM. Five QEMU runs per build (four full installs plus the no-answer-file check):
 
 | run | firmware / media | installer | file system | network | SSH |
 |---|---|---|---|---|---|
@@ -172,6 +172,7 @@ Horcrux specifics: ext4 / XFS / ZFS (single or mirror) from the wizard; the root
 | 2 | BIOS + CD | guided TUI over the **serial** console (scripted keystrokes) | XFS | static `10.0.2.77` | key-only |
 | 3 | UEFI + USB stick | guided TUI on the **VGA** console (QMP keystrokes + screenshots) | ZFS mirror, 2 disks | static `10.0.2.88` | key-only |
 | 4 | UEFI + USB stick | answer file (unattended) | ZFS mirror, 2 disks | static `10.0.2.99` | **password opt-in** |
+| 5 | BIOS + CD | *Automated install* entry **without** an answer file: must refuse and start the guided installer on the VGA screen; the disk stays untouched | - | - | - |
 
 Every run then reboots from the installed disk alone (no ISO) and asserts:
 
@@ -197,7 +198,7 @@ A `v*` release gets a stable ISO attached (non-pre-release asset
 1. the repository's own CI is not red (`failure`/`error`) for that commit;
 2. the ISO builds from the tag from scratch-equivalent inputs (Gentoo stage3 + binhost, the tag's source);
 3. ISO size < 2 GiB (Forgejo asset limit) and its SHA256 verifies;
-4. **all four** QEMU installs above pass (both firmware types, both media types, unattended + serial wizard + VGA wizard), including the SSH/web assertions;
+4. **all five** QEMU runs above pass (both firmware types, both media types, unattended + serial wizard + VGA wizard), including the SSH/web assertions;
 5. no step reported `FAIL` in the evidence bundle (attached to the release).
 
 If any criterion fails, nothing is attached and the failure is recorded in the `daily-status` marker
@@ -210,6 +211,6 @@ never creates tags or bumps versions.
 * **Real hardware**: only QEMU/KVM (OVMF + SeaBIOS, USB-storage and CD boot) is tested automatically. The ThinkPad and Surface Pro notes above are expectations, not results. In particular untested: Wi-Fi scan/connect (needs a real adapter; the code path is exercised only by unit logic), the *Auto-detect (replug the cable)* link detection, NVMe/eMMC device naming (`part_path` is unit-tested), the large console font on high-DPI panels (`setfont ter-v32n` when the framebuffer is >= 1600 px wide), touch/Type Cover input.
 * The installer is text mode (curses). A graphical installer is not provided.
 * Installer language: only the *installed system's* locale/keymap are selectable; the wizard text is English.
-* ZFS mirror: /boot (ext4) and the swap partition live on the first disk only, so the box boots only while disk 1 is healthy (the ESP/MBR is installed on both). No RAIDZ, no encryption, no separate data pool yet.
+* ZFS mirror: /boot (ext4) and the swap partition live on the first disk only, so the box boots only while disk 1 is healthy (the ESP/MBR is installed on both). No RAIDZ, no encryption, no separate data pool yet. `zpool status` shows a harmless "pool hostid mismatch" notice (the generic initramfs imports the pool with `zfsforce=1`).
 * The notification e-mail is recorded in `/etc/horcrux/notify-email`; the product does not read it yet.
 * The live image has no desktop; the Portage tree is stripped from the image, so run `emerge-webrsync` before using `emerge` on a live/installed system.

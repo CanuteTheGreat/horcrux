@@ -180,6 +180,8 @@ class VM:
                                           "-display", "none"],
                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.sock = None
+        self.last_rx = time.time()
+        self.poke = False          # serial TUI runs: send Ctrl-L when the line has been silent (see expect_screen)
         for _ in range(100):
             try:
                 s = socket.socket(socket.AF_UNIX)
@@ -202,6 +204,7 @@ class VM:
                 break
             self.log.write(b)
             self.log.flush()
+            self.last_rx = time.time()
             with self.lock:
                 self.raw += b
                 self.vt.feed(b)
@@ -239,6 +242,11 @@ class VM:
                 return True
             if self.p.poll() is not None:
                 return bool(rx.search(self.screen()))
+            if self.poke and time.time() - self.last_rx > 6:
+                # QEMU's emulated 16550 sometimes stops transmitting until the next RX byte; Ctrl-L makes
+                # the installer repaint and kicks the UART. Harmless in every screen.
+                self.send("\x0c")
+                self.last_rx = time.time()
             time.sleep(0.2)
         return False
 
@@ -654,6 +662,7 @@ class Runner:
             ok = vm.expect_screen(pat, 60)
             vm.snap(label)
             self.step(f"tui-screen-{label}", ok, "reached" if ok else "NOT reached; screen:\n" + vm.screen())
+        vm.poke = True
         ok = vm.expect_screen(r"Language, keyboard and time zone", 480)
         self.step("tui-launched-on-serial", ok, "guided installer is on ttyS0" if ok else vm.screen())
         b = ssh_banner(FWD_SSH if a.project == "horcrux" else FWD_SSH + 1)
