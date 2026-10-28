@@ -12,6 +12,16 @@ EVI=$OUT/evidence; rm -rf "$EVI"; mkdir -p "$EVI"
 T0=$(date +%s); sha=${GITHUB_SHA:-$(git rev-parse HEAD)}
 result=pass; failed_step=""; summary=""
 fail() { result=fail; failed_step=$1; summary="$1: $2"; echo "::error::$summary"; }
+# Always-run cleanup (normal end, `fail`, a crash, SIGTERM): the 20-40 GB QEMU evidence disks, OVMF NVRAM and answer
+# images go first (the evidence tgz below only keeps logs/screenshots/result.json), then, in CI, the whole output
+# dir (ISO ~1.5 GB, build logs: everything needed was already published or tarred). A local run that sets OUT keeps
+# its ISO + evidence tgz unless KEEP_OUT is unset and it runs under Actions.
+cleanup() {
+  find "$EVI" \( -name 'target*.qcow2' -o -name 'answers.img' -o -name 'OVMF_VARS.fd' -o -name '*.qmp' \) -delete 2>/dev/null
+  if [ -n "${GITHUB_ACTIONS:-}" ] && [ -z "${KEEP_OUT:-}" ]; then rm -rf "$OUT"; fi
+}
+trap cleanup EXIT
+trap 'exit 143' TERM INT
 
 if [ "$mode" = stable ]; then tag=${GITHUB_REF_NAME:?}; suffix=$tag; else suffix=daily; fi
 
@@ -101,6 +111,6 @@ if [ -n "${FORGEJO_TOKEN:-}" ]; then
   [ "$mode" = daily ] && bash "$HERE/publish.sh" status "$PROJECT" "" "" "$OUT/status.json" || true
 fi
 { echo "### $PROJECT $mode ISO: $result"; echo "$summary"; } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
-# docker hygiene on the shared host (keep BuildKit cache; drop dangling stuff)
+# docker hygiene on the shared host (build.sh already removed this build's containers/images; keep the BuildKit cache)
 docker image prune -f >/dev/null 2>&1 || true
 exit 0

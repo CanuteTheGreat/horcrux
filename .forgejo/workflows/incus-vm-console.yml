@@ -38,6 +38,8 @@ jobs:
     runs-on: kvm-x86_64
     container: catthehacker/ubuntu:act-latest
     timeout-minutes: 75
+    env:
+      HX_RUN_TAG: ${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}   # run-scoped sibling container/network/volume names: exact cleanup, no collision with other jobs
     steps:
       - uses: actions/checkout@v4
 
@@ -103,4 +105,4 @@ jobs:
         if: always()
         run: |
           bash horcrux-api/tests/incus_e2e.sh stop || true
-          docker ps -a --filter name=horcrux-incus-e2e --format '{{.Names}}' | xargs -r docker rm -f
+          docker ps -a --filter "name=horcrux-incus-e2e-$HX_RUN_TAG" --format '{{.Names}}' | xargs -r docker rm -fv

@@ -151,6 +151,7 @@ jobs:
     # discarded there). 2 parallel rustc keep the peak ~1.5 GiB lower.
     env:
       CARGO_BUILD_JOBS: "2"
+      HX_RUN_TAG: ${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}   # run-scoped sibling container/network/volume names: exact cleanup, no collision with other jobs
     steps:
       - uses: actions/checkout@v4
 
@@ -887,13 +888,21 @@ jobs:
         # the binary landed in the image, is executable, and is a real
         # ELF (not e.g. a 0-byte COPY failure or a text/shell stub).
         run: |
-          docker create --name horcrux-smoke horcrux/api:${{ github.sha }}
-          docker cp horcrux-smoke:/usr/local/bin/horcrux-api /tmp/horcrux-api-smoke
-          docker rm -f horcrux-smoke
+          SMOKE="horcrux-smoke-${{ github.run_id }}-${{ github.run_attempt }}"
+          trap 'docker rm -fv "$SMOKE" >/dev/null 2>&1 || true' EXIT
+          docker create --name "$SMOKE" horcrux/api:${{ github.sha }}
+          docker cp "$SMOKE":/usr/local/bin/horcrux-api /tmp/horcrux-api-smoke
+          docker rm -fv "$SMOKE"
           test -s /tmp/horcrux-api-smoke
           file /tmp/horcrux-api-smoke | grep -qi 'ELF'
           test -x /tmp/horcrux-api-smoke
           echo "horcrux-api binary present, non-empty, executable ELF -- smoke test OK"
+
+      - name: Remove this run's image and smoke container
+        if: always()
+        run: |
+          docker rm -fv "horcrux-smoke-${{ github.run_id }}-${{ github.run_attempt }}" >/dev/null 2>&1 || true
+          docker rmi horcrux/api:${{ github.sha }} >/dev/null 2>&1 || true   # layers stay in the (capped) BuildKit cache
 
   use-features:
     name: USE-flag feature builds
@@ -995,6 +1004,8 @@ jobs:
     container: catthehacker/ubuntu:act-latest
     needs: check
     timeout-minutes: 60
+    env:
+      HX_RUN_TAG: ${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}   # run-scoped sibling container/network/volume names: exact cleanup, no collision with other jobs
     steps:
       - uses: actions/checkout@v4
 
@@ -1228,3 +1239,7 @@ jobs:
             --build-arg HORCRUX_USE="cli systemd docker -qemu -monitoring -webui" \
             -t horcrux/use-matrix:${{ github.sha }} .
           docker rmi horcrux/use-matrix:${{ github.sha }} || true
+
+      - name: Remove this run's image
+        if: always()
+        run: docker rmi horcrux/use-matrix:${{ github.sha }} >/dev/null 2>&1 || true

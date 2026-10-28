@@ -13,7 +13,7 @@ set -euo pipefail
 API=${1:?usage: $0 <horcrux-api> <test binary> [image]}
 TESTBIN=${2:?usage: $0 <horcrux-api> <test binary> [image]}
 IMAGE=${3:-catthehacker/ubuntu:act-latest}
-ID="hxr$$"
+ID="hxr${HX_RUN_TAG:-$$}"
 NET="$ID-net"
 TMP=$(mktemp -d)
 

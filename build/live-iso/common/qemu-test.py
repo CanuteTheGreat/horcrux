@@ -984,9 +984,19 @@ def main():
     ap.add_argument("--lan-ip", default="10.77.0.1", help="patronus LAN address")
     ap.add_argument("--console-open", action="store_true", help="installer option: open console menu (no login on the console)")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--keep-disks", action="store_true", help="keep target*.qcow2/answers.img/OVMF_VARS.fd in --out (default: delete them when the run ends, pass or fail; they are 20-40 GB of regenerable state)")
     ap.add_argument("--mem", type=int, default=4096)
     ap.add_argument("--disk-gb", type=int, default=24)
-    Runner(ap.parse_args()).run()
+    args = ap.parse_args()
+    try:
+        Runner(args).run()
+    finally:
+        if not args.keep_disks:
+            for n in ("target.qcow2", "target2.qcow2", "answers.img", "OVMF_VARS.fd"):
+                try:
+                    os.unlink(os.path.join(args.out, n))
+                except OSError:
+                    pass
 
 
 if __name__ == "__main__":

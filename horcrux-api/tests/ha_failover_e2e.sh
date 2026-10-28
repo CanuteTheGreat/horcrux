@@ -10,7 +10,7 @@ set -euo pipefail
 BIN=${1:?usage: $0 <horcrux-api binary> [image]}
 IMAGE=${2:-catthehacker/ubuntu:act-latest}
 HERE=$(cd "$(dirname "$0")" && pwd)
-TAG="${HXHA_TAG:-hxha-$$}"
+TAG="${HXHA_TAG:-hxha-${HX_RUN_TAG:-$$}}"
 NET="$TAG-net"
 VOL="$TAG-shared"
 NODES=("$TAG-n1" "$TAG-n2" "$TAG-n3")

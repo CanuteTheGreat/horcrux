@@ -112,7 +112,7 @@ for c in $(docker ps -aq --filter name=horcrux-ci-k3s-); do
     fi
 done
 
-name="horcrux-ci-k3s-$$"
+name="horcrux-ci-k3s-${HX_RUN_TAG:-$$}"
 docker run -d --name "$name" --privileged --network "$net" --memory 2g \
     --tmpfs /run --tmpfs /var/run \
     "$K3S_IMAGE" server \

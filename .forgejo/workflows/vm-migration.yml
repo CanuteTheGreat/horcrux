@@ -46,6 +46,7 @@ jobs:
     timeout-minutes: 90
     env:
       CARGO_BUILD_JOBS: "4"
+      HX_RUN_TAG: ${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}   # run-scoped sibling container/network/volume names: exact cleanup, no collision with other jobs
     steps:
       - uses: actions/checkout@v4
 
@@ -78,6 +79,6 @@ jobs:
       - name: Remove leftover node siblings
         if: always()
         run: |
-          docker ps -a --filter name=hxmig- --format '{{.Names}}' | xargs -r docker rm -f
-          docker network ls --filter name=hxmig- --format '{{.Name}}' | xargs -r docker network rm || true
-          docker volume ls --filter name=hxmig- --format '{{.Name}}' | xargs -r docker volume rm || true
+          docker ps -a --filter "name=hxmig-$HX_RUN_TAG-" --format '{{.Names}}' | xargs -r docker rm -fv
+          docker network ls --filter "name=hxmig-$HX_RUN_TAG-" --format '{{.Name}}' | xargs -r docker network rm || true
+          docker volume ls --filter "name=hxmig-$HX_RUN_TAG-" --format '{{.Name}}' | xargs -r docker volume rm || true

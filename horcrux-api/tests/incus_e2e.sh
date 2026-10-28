@@ -52,7 +52,7 @@ case "$MODE" in
 esac
 
 BIN=${2:?horcrux-api binary required}
-NAME="horcrux-incus-e2e-$$"
+NAME="horcrux-incus-e2e-${HX_RUN_TAG:-$$}"
 NET_ARGS=()
 DEV_ARGS=()
 PORT=8006

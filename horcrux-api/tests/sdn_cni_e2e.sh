@@ -23,7 +23,7 @@ set -euo pipefail
 BIN=${1:?usage: $0 <horcrux-api binary> [api_contract binary] [image]}
 CONTRACT=${2:-}
 IMAGE=${3:-catthehacker/ubuntu:act-latest}
-NAME="horcrux-sdn-e2e-$$"
+NAME="horcrux-sdn-e2e-${HX_RUN_TAG:-$$}"
 
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT

@@ -13,7 +13,7 @@ set -euo pipefail
 BIN=${1:?usage: $0 <horcrux-api binary> [image]}
 IMAGE=${2:-catthehacker/ubuntu:act-latest}
 HERE=$(cd "$(dirname "$0")" && pwd)
-NAME="horcrux-gsct-e2e-$$"
+NAME="horcrux-gsct-e2e-${HX_RUN_TAG:-$$}"
 LXCP=/var/lib/lxc-gsct-$$
 
 cleanup() {

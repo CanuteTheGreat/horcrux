@@ -9,7 +9,7 @@ set -euo pipefail
 BIN=${1:?usage: $0 <horcrux-api binary> [image]}
 IMAGE=${2:-catthehacker/ubuntu:act-latest}
 HERE=$(cd "$(dirname "$0")" && pwd)
-NAME="horcrux-gs-e2e-$$"
+NAME="horcrux-gs-e2e-${HX_RUN_TAG:-$$}"
 CIRROS_URL=${CIRROS_URL:-https://download.cirros-cloud.net/0.6.2/cirros-0.6.2-x86_64-disk.img}
 
 cleanup() { [ "${KEEP:-0}" = 1 ] || docker rm -f "$NAME" >/dev/null 2>&1 || true; rm -f /tmp/$NAME-cirros.img; }

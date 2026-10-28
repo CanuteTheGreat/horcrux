@@ -52,7 +52,7 @@ if [ "$MODE" = stop ]; then
 fi
 
 BIN=${2:?horcrux-api binary required}
-NAME="horcrux-lxc-e2e-$$"
+NAME="horcrux-lxc-e2e-${HX_RUN_TAG:-$$}"
 NET_ARGS=()
 PORT=8006
 BIND=127.0.0.1

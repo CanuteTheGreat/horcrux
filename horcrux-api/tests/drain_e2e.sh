@@ -14,7 +14,7 @@ set -euo pipefail
 BIN=${1:?usage: $0 <horcrux-api binary> [image]}
 IMAGE=${2:-catthehacker/ubuntu:act-latest}
 HERE=$(cd "$(dirname "$0")" && pwd)
-TAG="${HXDRAIN_TAG:-hxdrain-$$}"
+TAG="${HXDRAIN_TAG:-hxdrain-${HX_RUN_TAG:-$$}}"
 N1="$TAG-n1"
 N2="$TAG-n2"
 NET="$TAG-net"

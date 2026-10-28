@@ -10,7 +10,7 @@
 set -euo pipefail
 BIN=${1:?usage: $0 <horcrux-api binary> [image]}
 IMAGE=${2:-catthehacker/ubuntu:act-latest}
-NAME="horcrux-nft-e2e-$$"
+NAME="horcrux-nft-e2e-${HX_RUN_TAG:-$$}"
 
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
