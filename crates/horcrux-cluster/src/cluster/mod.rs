@@ -486,6 +486,7 @@ impl ClusterManager {
             node_id: None,
             status_reason: None,
             cpu_vendor: String::new(),
+            caps: None,
         };
         self.add_node(node.clone()).await?;
         Ok(node)
@@ -739,6 +740,24 @@ impl ClusterManager {
         updated.priority = priority;
         config_store::put_opt(&self.store, kinds::CLUSTER_NODE, node_name, &updated).await?;
         node.priority = priority;
+        Ok(())
+    }
+
+    /// Persist the operator-set role/labels/limits of a node (`None` clears
+    /// them). Placement (HA, balancer) honours them on its next tick.
+    pub async fn set_node_caps(
+        &self,
+        node_name: &str,
+        caps: Option<roles::NodeCaps>,
+    ) -> Result<()> {
+        let mut nodes = self.nodes.write().await;
+        let node = nodes.get_mut(node_name).ok_or_else(|| {
+            horcrux_common::Error::NotFound(format!("Node {} not found", node_name))
+        })?;
+        let mut updated = node.clone();
+        updated.caps = caps.clone();
+        config_store::put_opt(&self.store, kinds::CLUSTER_NODE, node_name, &updated).await?;
+        node.caps = caps;
         Ok(())
     }
 

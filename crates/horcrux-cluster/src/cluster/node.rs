@@ -196,6 +196,10 @@ pub struct Node {
     /// remote nodes that haven't reported).
     #[serde(default)]
     pub cpu_vendor: String,
+    /// Operator-set role/labels/per-guest limits (see `cluster::roles`).
+    /// `None` = unrestricted compute node (older records).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caps: Option<crate::cluster::roles::NodeCaps>,
 }
 
 /// Node status
@@ -225,6 +229,7 @@ impl Node {
             node_id: None,
             status_reason: None,
             cpu_vendor: String::new(),
+            caps: None,
         }
     }
 
@@ -246,6 +251,7 @@ impl Node {
             node_id: None,
             status_reason: None,
             cpu_vendor: detect_cpu_vendor_family(),
+            caps: None,
         }
     }
 
@@ -378,6 +384,7 @@ impl AddNodeRequest {
             node_id: None,
             status_reason: None,
             cpu_vendor: String::new(),
+            caps: None,
         }
     }
 }

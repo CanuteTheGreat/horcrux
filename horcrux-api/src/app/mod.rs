@@ -1068,6 +1068,10 @@ fn cluster_routes() -> Router<Arc<AppState>> {
             "/api/cluster/nodes/:name/priority",
             axum::routing::patch(set_node_priority),
         )
+        .route(
+            "/api/cluster/nodes/:name/caps",
+            axum::routing::put(set_node_caps),
+        )
         .route("/api/cluster/architecture", get(get_cluster_architecture))
         .route("/api/cluster/find-node", post(find_best_node_for_vm))
         // HA (High Availability) endpoints
@@ -4408,6 +4412,21 @@ async fn set_node_priority(
     state
         .cluster_manager
         .set_node_priority(&node_name, request.priority)
+        .await?;
+    Ok(StatusCode::OK)
+}
+
+/// `PUT /api/cluster/nodes/:name/caps` -- body is a NodeCaps
+/// (`{"role":"witness","labels":[..],"max_guest_vcpus":4,"max_guest_memory":N}`)
+/// or `null` to clear.
+async fn set_node_caps(
+    State(state): State<Arc<AppState>>,
+    Path(node_name): Path<String>,
+    Json(caps): Json<Option<crate::cluster::roles::NodeCaps>>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .cluster_manager
+        .set_node_caps(&node_name, caps)
         .await?;
     Ok(StatusCode::OK)
 }
