@@ -523,13 +523,13 @@ class Runner:
                 # no key press: the default entry (guided installer on the VGA console) must boot by itself
                 self.step("grub-default-entry-boots-installer", True, "waiting for the default GRUB entry (guided installer, VGA)")
             else:
-                ok = vm.expect_raw(r"(GNU GRUB|live system|Install)", 120)
+                ok = vm.expect_raw(r"safe graphics", 120)          # the LAST menu entry: the menu is fully drawn
                 self.step("grub-menu-reached", ok, f"after {int(time.time()-t0)}s")
-                time.sleep(1)
+                time.sleep(2)
                 vm.shot("grub-menu")
                 for _ in range(1 if a.flow == "tui" else 2):    # entry 1 = serial installer, 2 = automated
                     vm.send("\x1b[B")
-                    time.sleep(0.4)
+                    time.sleep(0.6)
                 vm.send("\r")
                 self.step("kernel-boot-started", vm.expect_raw(r"(Linux version|Booting|OpenRC)", 90))
             if a.flow == "auto":
@@ -558,7 +558,8 @@ class Runner:
         a = self.a
         vm = VM("1-fallback", self.qemu_args(a.iso, False, nvars), a.out)
         try:
-            self.step("grub-menu-reached", vm.expect_raw(r"(GNU GRUB|live system|Install)", 120))
+            self.step("grub-menu-reached", vm.expect_raw(r"safe graphics", 120))
+            time.sleep(2)
             for _ in range(2):                              # entry 2 = automated install
                 vm.send("\x1b[B")
                 time.sleep(0.4)
