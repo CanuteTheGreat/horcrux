@@ -9,15 +9,13 @@
 # Gentoo-native image (all architectures, catalyst) is built with
 # build/docker/build-iso-docker.sh / `make -C build gentoo`.
 #
-# A v* tag attaches the ISO + checksums to that tag's Forgejo release; a
-# manual run (workflow_dispatch) builds without publishing.
+# Manual runs only (workflow_dispatch): this minimal busybox image is a build-script
+# smoke test, NOT an installable system. The real live/installer ISO (Gentoo, UEFI+BIOS,
+# installer included) is built, tested and published by live-iso.yml (daily + v* tags).
 
 name: Build ISOs
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       build_type:
@@ -75,8 +73,3 @@ jobs:
       - name: Boot the ISO (live init, writable /dev /run /tmp /var, version)
         run: bash ci/iso-boot-smoke.sh build/iso/*.iso
 
-      - name: Attach to the release
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash .forgejo/scripts/publish-release-assets.sh build/iso/*.iso build/iso/*.sha256 build/iso/*.sha512

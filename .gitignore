@@ -34,3 +34,7 @@ build/iso/
 # Python bytecode (a py_compile check committed one by accident in 9ba8940)
 __pycache__/
 *.py[cod]
+
+# live ISO builder outputs
+build/live-iso/project/overlay/usr/bin/
+iso-out/

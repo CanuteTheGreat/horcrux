@@ -1,0 +1,23 @@
+#!/sbin/openrc-run
+# Unattended install when the kernel command line says so:
+#   <project>.autoinstall=1  [<project>.disk=/dev/vda]  [<project>.halt=0]
+# Runs /usr/libexec/live-install-hook <disk>, logs to /var/log/autoinstall.log
+# and the console, then halts the machine (so a test harness can boot the disk).
+description="Unattended installer (kernel command line triggered)"
+depend() { need localmount; after local sysklogd; }
+start() {
+	proj=$(sed 's/-live$//' /etc/live-iso-label 2>/dev/null)
+	grep -q "${proj}.autoinstall=1" /proc/cmdline || return 0
+	disk=$(tr ' ' '\n' </proc/cmdline | sed -n "s/^${proj}.disk=//p")
+	[ -n "$disk" ] || disk=$(/usr/libexec/live-pick-disk)
+	[ -n "$disk" ] || { eerror "autoinstall: no suitable disk found"; return 1; }
+	einfo "autoinstall: installing to $disk (log: /var/log/autoinstall.log)"
+	(
+		echo "AUTOINSTALL-START $disk"
+		if /usr/libexec/live-install-hook "$disk"; then echo "AUTOINSTALL-OK"; else echo "AUTOINSTALL-FAILED rc=$?"; fi
+	) 2>&1 | tee /var/log/autoinstall.log >/dev/console
+	grep -q "AUTOINSTALL-OK" /var/log/autoinstall.log || return 1
+	if ! grep -q "${proj}.halt=0" /proc/cmdline; then
+		sync; sleep 2; /sbin/halt -p
+	fi
+}

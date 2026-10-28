@@ -1,0 +1,9 @@
+# Horcrux = KVM/containers hypervisor
+app-emulation/qemu
+app-emulation/libvirt
+app-containers/docker
+app-containers/docker-cli
+net-misc/bridge-utils
+sys-apps/dbus
+net-dns/dnsmasq
+app-misc/jq

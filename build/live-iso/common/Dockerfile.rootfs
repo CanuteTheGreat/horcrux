@@ -1,0 +1,45 @@
+# syntax=docker/dockerfile:1.4
+# Gentoo live/installer root filesystem (shared by Horcrux and Patronus).
+#
+# Everything comes from Portage: gentoo/stage3 (openrc) + the official
+# generic x86-64 binhost (Ivy Bridge / Surface Pro safe: no x86-64-v3) for
+# every package whose USE matches, compiled locally only where the default
+# binpkg USE differs (qemu, libvirt, ...). BuildKit cache mounts keep the
+# binpkg dir, distfiles and ccache between builds, so a daily rebuild only
+# compiles what changed.
+ARG APP_IMAGE
+FROM ${APP_IMAGE} AS app
+
+FROM gentoo/stage3:amd64-openrc AS rootfs
+ARG PROJECT=horcrux
+ARG ISO_LABEL=HORCRUX_LIVE
+ARG PROJECT_TITLE=Horcrux
+
+RUN --mount=type=cache,target=/var/cache/distfiles,sharing=locked \
+    emerge-webrsync -q && getuto >/dev/null 2>&1; true
+
+COPY common/portage/ /etc/portage/
+COPY project/portage/ /etc/portage/
+COPY common/packages.txt /tmp/packages.common.txt
+COPY project/packages.txt /tmp/packages.txt
+
+# Everything in one emerge so Portage resolves the whole set once.
+RUN --mount=type=cache,target=/var/cache/binpkgs,sharing=locked \
+    --mount=type=cache,target=/var/cache/distfiles,sharing=locked \
+    --mount=type=cache,target=/var/cache/ccache,sharing=locked \
+    set -e; \
+    emerge --oneshot dev-util/ccache; \
+    emerge --noreplace $(cat /tmp/packages.common.txt /tmp/packages.txt | grep -v '^#' | tr '\n' ' ') ; \
+    ls /lib/modules /boot
+
+# Project application (binaries, UI, installer, init scripts ...)
+COPY --from=app /out/ /
+COPY project/overlay/ /
+COPY common/overlay/ /
+
+COPY common/setup-rootfs.sh /tmp/setup-rootfs.sh
+COPY project/setup.sh /tmp/project-setup.sh
+RUN --mount=type=cache,target=/var/cache/binpkgs,sharing=locked \
+    --mount=type=cache,target=/var/cache/distfiles,sharing=locked \
+    PROJECT="${PROJECT}" ISO_LABEL="${ISO_LABEL}" PROJECT_TITLE="${PROJECT_TITLE}" \
+    sh /tmp/setup-rootfs.sh && sh /tmp/project-setup.sh && rm -f /tmp/*.sh /tmp/packages*.txt

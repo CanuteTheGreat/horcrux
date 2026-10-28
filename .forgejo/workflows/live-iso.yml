@@ -1,0 +1,58 @@
+# Daily + release ISO for horcrux (Gentoo live/installer, x86_64, UEFI+BIOS hybrid).
+#
+#  * schedule : build from main, QEMU boot + unattended install + reboot + web probe
+#               (UEFI+USB and BIOS+CD), publish ONLY if everything passed, to the rolling
+#               PRE-release `daily` (stable URL, assets replaced in place).
+#  * v* tag   : same build + tests from the tag, attached to that release as a stable ISO
+#               (criteria: docs/ISO-INSTALL.md "Stable ISO criteria").
+#  * The job never fails on a build/test problem (a red run e-mails the owner): the result is
+#    written to the `daily-status` release marker and the job summary instead.
+# Runs on kvm-x86_64 (rw-man host, /dev/kvm, host docker); BuildKit cache mounts (binpkgs,
+# distfiles, ccache, cargo target) persist on the host, so a cached daily takes minutes, not hours.
+name: Live ISO
+
+on:
+  schedule:
+    - cron: '0 11 * * *'   # ~04:00 America/Los_Angeles: after the 09:00-10:50 UTC nightlies on the kvm runner
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'daily (publish to the rolling pre-release) or dry (build + test only)'
+        required: false
+        default: 'dry'
+
+concurrency:
+  group: live-iso-horcrux
+  cancel-in-progress: false
+
+jobs:
+  live-iso:
+    name: Build + test + publish live ISO
+    runs-on: kvm-x86_64
+    container: catthehacker/ubuntu:act-latest
+    timeout-minutes: 175
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Build, test, publish
+        env:
+          FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JOBS: '4'
+        run: |
+          set -u
+          case "${GITHUB_REF_TYPE:-}" in
+            tag) mode=stable ;;
+            *)   mode=daily ;;
+          esac
+          if [ "${GITHUB_EVENT_NAME}" = workflow_dispatch ] && [ "${{ github.event.inputs.mode }}" != daily ]; then
+            # dry run: no token => nothing is published
+            FORGEJO_TOKEN= bash build/live-iso/common/ci-run.sh "$mode"
+          else
+            bash build/live-iso/common/ci-run.sh "$mode"
+          fi

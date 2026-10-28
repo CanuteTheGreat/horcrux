@@ -1,0 +1,17 @@
+#!/sbin/openrc-run
+description="Horcrux API server and web UI (https://:8006)"
+command=/usr/bin/horcrux-api
+command_background=yes
+pidfile=/run/horcrux-api.pid
+output_log=/var/log/horcrux/horcrux-api.log
+error_log=/var/log/horcrux/horcrux-api.log
+directory=/var/lib/horcrux
+depend() { need net localmount; use logger libvirtd docker; }
+start_pre() {
+	checkpath -d -m 0755 /var/lib/horcrux /var/log/horcrux /etc/horcrux /etc/horcrux/ssl
+	export HORCRUX_HOST=0.0.0.0 HORCRUX_PORT=8006 HORCRUX_DATA_DIR=/var/lib/horcrux \
+		HORCRUX_DATABASE_URL=sqlite:///var/lib/horcrux/horcrux.db HORCRUX_SSL_DIR=/etc/horcrux/ssl \
+		HORCRUX_UI_DIR=/usr/share/horcrux/ui
+	# optional overrides (e.g. ADMIN_PASSWORD=... before the first start)
+	[ -f /etc/conf.d/horcrux-api ] && . /etc/conf.d/horcrux-api
+}

@@ -1,0 +1,12 @@
+# syntax=docker/dockerfile:1.4
+# ISO assembly toolbox: GRUB (BIOS + UEFI), xorriso, squashfs-tools, mtools.
+FROM gentoo/stage3:amd64-openrc
+COPY common/portage/make.conf /etc/portage/make.conf
+COPY common/portage/package.use /etc/portage/package.use
+RUN --mount=type=cache,target=/var/cache/binpkgs,sharing=locked \
+    --mount=type=cache,target=/var/cache/distfiles,sharing=locked \
+    emerge-webrsync -q ; getuto >/dev/null 2>&1; \
+    emerge --oneshot sys-boot/grub sys-fs/squashfs-tools dev-libs/libisoburn sys-fs/mtools sys-fs/dosfstools app-arch/cpio && \
+    ls /usr/lib/grub/
+COPY common/assemble-iso.sh /usr/local/bin/assemble-iso.sh
+RUN chmod +x /usr/local/bin/assemble-iso.sh

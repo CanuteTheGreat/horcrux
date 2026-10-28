@@ -1,5 +1,8 @@
 # Horcrux Installation Guide
 
+> **Live/installer ISO:** a bootable x86_64 ISO (UEFI + BIOS, USB-writable, installer included) is built daily - see [ISO-INSTALL.md](ISO-INSTALL.md) for the download URL, writing it to USB and Secure Boot status.
+
+
 ## Table of Contents
 
 - [System Requirements](#system-requirements)

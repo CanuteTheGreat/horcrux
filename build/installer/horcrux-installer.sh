@@ -42,7 +42,7 @@ NC='\033[0m'
 BOLD='\033[1m'
 
 # Installation source (set by ISO boot)
-SQUASHFS_PATH="${SQUASHFS_PATH:-/cdrom/rootfs.squashfs}"
+SQUASHFS_PATH="${SQUASHFS_PATH:-/run/initramfs/live/LiveOS/squashfs.img}"
 LIVE_ROOT="${LIVE_ROOT:-/}"
 
 # Target mount point
@@ -446,7 +446,7 @@ install_base_system() {
 
     if [[ ! -f "$SQUASHFS_PATH" ]]; then
         # Try to find squashfs
-        for path in /cdrom/rootfs.squashfs /mnt/cdrom/rootfs.squashfs /run/initramfs/live/rootfs.squashfs; do
+        for path in /run/initramfs/live/LiveOS/squashfs.img /cdrom/LiveOS/squashfs.img /cdrom/rootfs.squashfs /mnt/cdrom/rootfs.squashfs /run/initramfs/live/rootfs.squashfs; do
             if [[ -f "$path" ]]; then
                 SQUASHFS_PATH="$path"
                 break
@@ -681,9 +681,27 @@ install_bootloader() {
         chroot "$TARGET" grub-install "$INSTALL_DISK" 2>&1 || true
     fi
 
-    # Generate GRUB config
+    # Keep the serial console the live system was booted with
+    if grep -q 'console=ttyS0' /proc/cmdline 2>/dev/null; then
+        mkdir -p "$TARGET/etc/default"
+        grep -q '^GRUB_CMDLINE_LINUX=' "$TARGET/etc/default/grub" 2>/dev/null && sed -i '/^GRUB_CMDLINE_LINUX=/d' "$TARGET/etc/default/grub"
+        echo 'GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200n8"' >> "$TARGET/etc/default/grub"
+        echo 'GRUB_TERMINAL="console serial"' >> "$TARGET/etc/default/grub"
+        echo 'GRUB_SERIAL_COMMAND="serial --unit=0 --speed=115200"' >> "$TARGET/etc/default/grub"
+        # and a login prompt on it
+        echo 'rc-update add live-serial default' | chroot "$TARGET" sh >/dev/null 2>&1 || true
+    fi
+    # Generate GRUB config (let udev publish the new partitions' UUID links first, so
+    # grub-mkconfig writes root=UUID=... instead of a device name that can change)
+    udevadm trigger --subsystem-match=block --action=change >/dev/null 2>&1 || true
+    udevadm settle --timeout=10 >/dev/null 2>&1 || true
     log_info "Generating GRUB configuration..."
     chroot "$TARGET" grub-mkconfig -o /boot/grub/grub.cfg 2>&1
+    local root_uuid
+    root_uuid=$(blkid -s UUID -o value "$PART_ROOT")
+    if [[ -n "$root_uuid" ]]; then
+        sed -i "s#root=${PART_ROOT}\b#root=UUID=${root_uuid}#g" "$TARGET/boot/grub/grub.cfg"
+    fi
 
     # Cleanup mounts
     umount "$TARGET/sys" 2>/dev/null || true

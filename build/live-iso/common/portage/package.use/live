@@ -1,0 +1,7 @@
+# initramfs generator used by gentoo-kernel-bin's installkernel hook
+sys-kernel/installkernel dracut
+sys-kernel/linux-firmware redistributable initramfs
+sys-boot/grub device-mapper
+net-dns/dnsmasq script dhcp ipv6
+net-libs/gnutls pkcs11 tools
+sys-fs/squashfs-tools lzma zstd lzo xattr

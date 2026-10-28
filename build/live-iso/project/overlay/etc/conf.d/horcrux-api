@@ -1,0 +1,2 @@
+# ADMIN_PASSWORD="choose-a-long-password"   # first start only; otherwise a random one
+# is written to /var/lib/horcrux/initial-admin-password

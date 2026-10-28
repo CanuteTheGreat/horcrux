@@ -1,0 +1,5 @@
+target
+.git
+build/live-iso
+build/iso
+**/target

@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# ci-run.sh daily|stable   -- run by .forgejo/workflows/live-iso.yml on the kvm-x86_64 runner.
+# build ISO -> QEMU boot/install/reboot/web tests (UEFI+USB, BIOS+CD) -> publish only if ALL passed.
+# ALWAYS exits 0 (a red job would e-mail the owner): the outcome goes to the `daily-status`
+# marker release and the job summary; ~/.hermes iso-status-watch reads the marker.
+set -uo pipefail
+mode=${1:?daily|stable}
+HERE=$(cd "$(dirname "$0")" && pwd); cd "$HERE"
+. "$HERE/../project/project.env"
+OUT=${OUT:-$PWD/../../../iso-out}; mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
+EVI=$OUT/evidence; rm -rf "$EVI"; mkdir -p "$EVI"
+T0=$(date +%s); sha=${GITHUB_SHA:-$(git rev-parse HEAD)}
+result=pass; failed_step=""; summary=""
+fail() { result=fail; failed_step=$1; summary="$1: $2"; echo "::error::$summary"; }
+
+if [ "$mode" = stable ]; then tag=${GITHUB_REF_NAME:?}; suffix=$tag; else suffix=daily; fi
+
+echo "::group::host deps"
+export DEBIAN_FRONTEND=noninteractive
+(apt-get update -qq && apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-utils ovmf python3 curl ca-certificates >/dev/null) || fail deps "apt install failed"
+echo "::endgroup::"
+
+# stable gate: the repo's own CI must not be red on the tagged commit
+if [ "$result" = pass ] && [ "$mode" = stable ]; then
+  st=$(curl -fsS -H "Authorization: token ${FORGEJO_TOKEN:-}" "$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/commits/$sha/status" 2>/dev/null | python3 -c 'import json,sys;print(json.load(sys.stdin).get("state",""))' 2>/dev/null)
+  echo "repo CI state on $sha: ${st:-unknown}"
+  case "$st" in failure|error) fail stable-gate "repo CI is $st on the tagged commit; no stable ISO" ;; esac
+fi
+
+BUILD_S=0
+if [ "$result" = pass ]; then
+  echo "::group::build ISO"
+  t=$(date +%s)
+  JOBS=${JOBS:-4} bash ../build.sh -o "$OUT" -n "$suffix" 2>&1 | tee "$EVI/build.log" | tail -60
+  BUILD_S=$(( $(date +%s)-t ))
+  ISO=$(ls "$OUT"/*-"$suffix"-x86_64.iso 2>/dev/null | head -1)
+  [ -n "$ISO" ] && [ -s "$ISO" ] || fail build "no ISO produced (see build.log)"
+  echo "::endgroup::"
+fi
+
+TEST_S=0
+if [ "$result" = pass ]; then
+  size=$(stat -c %s "$ISO")
+  [ "$size" -lt 2147483648 ] || fail size "ISO is $size bytes, over the 2 GiB Forgejo asset limit"
+  ( cd "$OUT" && sha256sum -c "$(basename "$ISO").sha256" ) || fail checksum "sha256 mismatch"
+fi
+if [ "$result" = pass ]; then
+  t=$(date +%s)
+  for combo in "uefi usb" "bios cdrom"; do
+    set -- $combo
+    echo "::group::QEMU test $1/$2"
+    python3 -u "$HERE/qemu-test.py" --iso "$ISO" --project "$PROJECT" --mode "$1" --media "$2" --out "$EVI/$1-$2" 2>&1 | tee "$EVI/test-$1-$2.log" | tail -30
+    rc=${PIPESTATUS[0]}
+    echo "::endgroup::"
+    [ "$rc" = 0 ] || { fail "qemu-$1-$2" "$(grep -E '^\[FAIL\]' "$EVI/test-$1-$2.log" | head -1)"; break; }
+  done
+  TEST_S=$(( $(date +%s)-t ))
+fi
+[ "$result" = pass ] && summary="PASS: UEFI+USB and BIOS+CD boot, unattended install, reboot, web UI/API answered (build ${BUILD_S}s, test ${TEST_S}s)"
+
+# evidence bundle (serial logs, screenshots, result.json - small)
+( cd "$EVI" && tar czf "$OUT/$PROJECT-$suffix-test-evidence.tgz" --exclude=target.qcow2 --exclude='*.fd' --exclude='*.qmp' . )
+cat > "$OUT/status.json" <<JSON
+{"project":"$PROJECT","mode":"$mode","result":"$result","failed_step":"$failed_step","summary":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$summary"),"sha":"$sha","run_id":"${GITHUB_RUN_ID:-manual}","run_url":"${GITHUB_SERVER_URL:-}/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID:-0}","time":"$(date -u +%FT%TZ)","build_seconds":$BUILD_S,"test_seconds":$TEST_S}
+JSON
+cat "$OUT/status.json"
+
+if [ -n "${FORGEJO_TOKEN:-}" ]; then
+  if [ "$result" = pass ]; then
+    bash "$HERE/publish.sh" "$mode" "$PROJECT" "$ISO" "$OUT/$PROJECT-$suffix-test-evidence.tgz" "$OUT/status.json" || { echo "::error::publish failed"; result=fail; sed -i 's/"result":"pass"/"result":"fail"/; s/"failed_step":""/"failed_step":"publish"/' "$OUT/status.json"; }
+  fi
+  [ "$mode" = daily ] && bash "$HERE/publish.sh" status "$PROJECT" "" "" "$OUT/status.json" || true
+fi
+{ echo "### $PROJECT $mode ISO: $result"; echo "$summary"; } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+# docker hygiene on the shared host (keep BuildKit cache; drop dangling stuff)
+docker image prune -f >/dev/null 2>&1 || true
+exit 0
