@@ -42,17 +42,35 @@ pub fn App() -> impl IntoView {
     // pages of the others are hidden (see features.rs).
     let features = provide_features();
 
+    // Phone layout: the nav is an off-canvas drawer opened by the hamburger, closed by a tap on a link,
+    // a tap outside (backdrop) or Escape.
+    let (nav_open, set_nav_open) = create_signal(false);
+    let _esc = window_event_listener(ev::keydown, move |e| {
+        if e.key() == "Escape" {
+            set_nav_open.set(false);
+        }
+    });
+
     view! {
         <Title text="Horcrux - Virtualization Management"/>
         <Meta name="description" content="Horcrux Virtualization Management Platform"/>
 
         <Router>
-            <nav class="navbar" data-features-loaded=move || features.loaded().to_string()>
+            <div class="nav-backdrop" class:open=move || nav_open.get() on:click=move |_| set_nav_open.set(false)></div>
+            <nav class="navbar" class:nav-open=move || nav_open.get() data-features-loaded=move || features.loaded().to_string()>
+                <button class="menu-toggle" type="button" aria-label="Open menu"
+                    aria-expanded=move || nav_open.get().to_string()
+                    on:click=move |_| set_nav_open.update(|o| *o = !*o)>"☰"</button>
                 <div class="navbar-brand">
+                    <img class="brand-mark" src="/brand/mark.png" alt="" width="40" height="40"/>
                     <h1>"Horcrux"</h1>
                     <span class="tagline">"Gentoo Virtualization Platform"</span>
                 </div>
-                <div class="navbar-menu">
+                <div class="navbar-menu" on:click=move |ev| {
+                    if event_target::<web_sys::Element>(&ev).closest("a").ok().flatten().is_some() {
+                        set_nav_open.set(false);
+                    }
+                }>
                     <A href="/" class="navbar-item">"Dashboard"</A>
                     <div class="navbar-dropdown">
                         <span class="navbar-item dropdown-trigger">"Compute ▾"</span>

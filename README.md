@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="branding/horcrux-logo-official.png" alt="Horcrux" width="260">
+</p>
+
 # Horcrux
 
 > **A Proxmox VE-style virtualization manager for Gentoo Linux, written in Rust.**

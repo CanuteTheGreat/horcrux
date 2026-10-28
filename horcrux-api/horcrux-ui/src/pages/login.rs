@@ -256,6 +256,7 @@ pub fn Login() -> impl IntoView {
 
     view! {
         <div class="login-page">
+            <img class="login-logo" src="/brand/full.png" alt="Horcrux" width="256" height="256"/>
             <div class="login-card">
                 <h1>"Horcrux Login"</h1>
                 <p class="tagline">"Gentoo Virtualization Platform"</p>

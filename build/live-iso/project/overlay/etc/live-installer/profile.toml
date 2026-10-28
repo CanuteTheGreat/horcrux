@@ -18,3 +18,8 @@ db_table = "users"
 config_paths = ["/etc/horcrux", "/var/lib/horcrux/horcrux.db"]
 factory_reset_files = ["/var/lib/horcrux/initial-admin-password"]
 reapply_services = []
+
+# official logo, crop/scale only (branding/README.md); the installer GUI + boot menu read these
+logo_mark = "/usr/share/live-installer/branding/mark-256.png"
+logo_full = "/usr/share/live-installer/branding/full.png"
+logo_wordmark = "/usr/share/live-installer/branding/wordmark.png"
