@@ -11,7 +11,7 @@ start_pre() {
 	grep -q 'console=ttyS0' /proc/cmdline || { einfo "no console=ttyS0, skipping"; return 1; }
 	if grep -q 'rd.live.image' /proc/cmdline; then
 		p=$(sed 's/-live$//' /etc/live-iso-label 2>/dev/null)
-		if grep -q "${p}.installer=1" /proc/cmdline || [ -e /run/live-installer-fallback ]; then
+		if grep -q "${p}.installer=1" /proc/cmdline; then
 			command_args="-L -n -l /usr/libexec/live-installer-session 115200 ttyS0 vt100"
 		else
 			command_args="-L -a root 115200 ttyS0 vt100"

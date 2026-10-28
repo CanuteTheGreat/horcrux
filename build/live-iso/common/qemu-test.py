@@ -10,6 +10,8 @@ flows
            (root_password_hash + ssh key), unattended, powers off.
   tui      GRUB entry "Install (serial console)": the curses installer is driven over the serial
            line with scripted keystrokes (expect-style; a small VT100 emulator reads the screen).
+  fallback "Automated install" entry WITHOUT an answer file: must refuse (no default install) and start the
+           guided installer on the VGA console instead (cheap: boots, checks, no install).
   tui-vga  default GRUB entry, VGA console only: keystrokes through QMP send-key, PNG screenshots of
            every installer screen (docs/ISO-INSTALL.md) via QMP screendump.
 
@@ -496,6 +498,12 @@ class Runner:
             pwhash = subprocess.check_output(["openssl", "passwd", "-6", "-salt", "qemutest1", PW]).decode().strip()
             make_answer_image(self.answers, a.project, answer_toml(a, self.pub, pwhash))
             self.step("answer-file-built", True, f"{a.project.upper()}-ANSWERS (root_password_hash + ssh key)")
+        if a.flow == "fallback":
+            self.fallback(nvars)
+            self.res["ok"] = True
+            json.dump(self.res, open(f"{a.out}/result.json", "w"), indent=1)
+            print("ALL PASS", a.project, a.mode, a.media, a.flow)
+            return
         self.phase1(nvars)
         self.phase2(nvars)
         self.res["ok"] = True
@@ -542,6 +550,28 @@ class Runner:
             while vm.alive() and time.time() - t < 180:
                 time.sleep(1)
             self.step("vm-stopped-after-install", not vm.alive(), f"install phase {int(time.time()-t0)}s")
+        finally:
+            if vm.alive():
+                vm.p.kill()
+
+    def fallback(self, nvars):
+        a = self.a
+        vm = VM("1-fallback", self.qemu_args(a.iso, False, nvars), a.out)
+        try:
+            self.step("grub-menu-reached", vm.expect_raw(r"(GNU GRUB|live system|Install)", 120))
+            for _ in range(2):                              # entry 2 = automated install
+                vm.send("\x1b[B")
+                time.sleep(0.4)
+            vm.send("\r")
+            self.step("no-answer-file-detected", vm.expect_raw(r"No answer file found[^\n]*", 480),
+                      "the automated entry refuses to install without an answer file")
+            self.step("falls-back-to-guided-installer", vm.expect_raw(r"INSTALLER-FALLBACK-INTERACTIVE", 60))
+            end = time.time() + 150
+            while time.time() < end and vm.cyan_pixels(vm.grab()) < 50:
+                time.sleep(3)
+            vm.shot("fallback-installer")
+            self.step("guided-installer-on-vga-after-fallback", time.time() < end, "installer title visible on the VGA console")
+            self.step("nothing-was-written-to-the-disk", os.stat(self.disk).st_blocks * 512 < 5_000_000, "target disk untouched")
         finally:
             if vm.alive():
                 vm.p.kill()
@@ -806,7 +836,7 @@ def main():
     ap.add_argument("--project", required=True, choices=PROJECTS)
     ap.add_argument("--mode", choices=["uefi", "bios"], default="uefi")
     ap.add_argument("--media", choices=["usb", "cdrom"], default="usb")
-    ap.add_argument("--flow", choices=["auto", "tui", "tui-vga"], default="auto")
+    ap.add_argument("--flow", choices=["auto", "tui", "tui-vga", "fallback"], default="auto")
     ap.add_argument("--fs", choices=["ext4", "xfs", "zfs"], default="ext4")
     ap.add_argument("--zfs-raid", choices=["single", "mirror"], default="mirror")
     ap.add_argument("--ssh-password-opt-in", action="store_true")

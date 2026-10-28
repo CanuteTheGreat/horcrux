@@ -27,14 +27,13 @@ start() {
 		einfo "unattended install (answer file)"
 		( /usr/bin/live-installer --answers auto 2>&1; echo "AUTOINSTALL-EXIT rc=$?" ) | tee /var/log/autoinstall.log >/dev/console
 		if grep -q 'ANSWER-FILE\|No answer file' /var/log/autoinstall.log; then
-			ewarn "no usable answer file: starting the guided installer instead"
+			ewarn "no usable answer file: starting the guided installer on the screen instead"
 			echo "INSTALLER-FALLBACK-INTERACTIVE" >/dev/console
-			rm -f /run/live-installer-auto
-			touch /run/live-installer-fallback
+			set_tty1 "--noclear -n -l /usr/libexec/live-installer-session"
 		fi
 		return 0
 	fi
-	if grep -q "${p}.installer=1" /proc/cmdline || [ -e /run/live-installer-fallback ]; then
+	if grep -q "${p}.installer=1" /proc/cmdline; then
 		if [ "$serial" = yes ]; then
 			set_tty1 "--noclear -a root"
 		else

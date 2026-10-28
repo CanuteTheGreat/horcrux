@@ -60,6 +60,7 @@ if [ "$result" = pass ]; then
       "bios-cdrom-auto-ext4-dhcp|--mode bios --media cdrom --flow auto --fs ext4"
       "bios-cdrom-tui-serial-xfs-static|--mode bios --media cdrom --flow tui --fs xfs --static-ip 10.0.2.77"
       "uefi-usb-tui-vga-zfs-mirror-static|--mode uefi --media usb --flow tui-vga --fs zfs --zfs-raid mirror --static-ip 10.0.2.88"
+      "bios-cdrom-fallback-no-answer-file|--mode bios --media cdrom --flow fallback"
       "uefi-usb-auto-zfs-mirror-sshpw|--mode uefi --media usb --flow auto --fs zfs --zfs-raid mirror --static-ip 10.0.2.99 --ssh-password-opt-in"
     )
   else
@@ -68,6 +69,7 @@ if [ "$result" = pass ]; then
       "bios-cdrom-tui-serial|--mode bios --media cdrom --flow tui"
       "uefi-usb-tui-vga|--mode uefi --media usb --flow tui-vga"
       "uefi-usb-auto|--mode uefi --media usb --flow auto"
+      "bios-cdrom-fallback-no-answer-file|--mode bios --media cdrom --flow fallback"
     )
   fi
   failed_list=""
@@ -82,7 +84,7 @@ if [ "$result" = pass ]; then
   done
   TEST_S=$(( $(date +%s)-t ))
 fi
-[ "$result" = pass ] && summary="PASS: ${#MATRIX[@]} QEMU installs (UEFI+USB, BIOS+CD; answer-file, serial TUI, VGA TUI) - installed system refuses password root SSH, accepts the key, serves the web UI on the chosen IP (build ${BUILD_S}s, test ${TEST_S}s)"
+[ "$result" = pass ] && summary="PASS: ${#MATRIX[@]} QEMU runs (4 installs + the no-answer-file fallback) (UEFI+USB, BIOS+CD; answer-file, serial TUI, VGA TUI) - installed system refuses password root SSH, accepts the key, serves the web UI on the chosen IP (build ${BUILD_S}s, test ${TEST_S}s)"
 
 # evidence bundle (serial logs, screenshots, result.json - small)
 ( cd "$EVI" && tar czf "$OUT/$PROJECT-$suffix-test-evidence.tgz" --exclude='target*.qcow2' --exclude='*.fd' --exclude='*.qmp' --exclude=test_key . )
