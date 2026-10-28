@@ -21,7 +21,7 @@ fail() { result=fail; failed_step=$1; summary="$1: $2"; echo "::error::$summary"
 # dir (ISO ~1.5 GB, build logs: everything needed was already published or tarred). A local run that sets OUT keeps
 # its ISO + evidence tgz unless KEEP_OUT is unset and it runs under Actions.
 cleanup() {
-  find "$EVI" \( -name 'target*.qcow2' -o -name 'answers.img' -o -name 'OVMF_VARS.fd' -o -name '*.qmp' \) -delete 2>/dev/null
+  find "$EVI" \( -name 'target*.qcow2' -o -name 'answers.img' -o -name 'OVMF_VARS.fd' -o -name '*.qmp' -o -name '*.raw' -o -name 'base.qcow2' -o -name '*-disk.qcow2' -o -name 'persist-*.raw' \) -delete 2>/dev/null
   if [ -n "${GITHUB_ACTIONS:-}" ] && [ -z "${KEEP_OUT:-}" ]; then rm -rf "$OUT"; fi
 }
 trap cleanup EXIT
@@ -124,6 +124,18 @@ if [ "$result" = pass ]; then
     rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img
     if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -E '^\[FAIL\]' "$EVI/test-$name.log" | head -1)"; fi
   done
+  # boot menu + rescue / forensic / live / persistence modes (UEFI + BIOS): see boot-modes-test.py
+  if [ "${BOOT_MODES_TESTS:-1}" = 1 ]; then
+    for fw in uefi bios; do
+      name=boot-modes-$fw; media=usb; [ $fw = bios ] && media=cdrom
+      echo "::group::QEMU test $name"
+      python3 -u "$HERE/boot-modes-test.py" --iso "$ISO" --project "$PROJECT" --mode $fw --media $media ${NO_MEMTEST:+--no-memtest} --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
+      rc=${PIPESTATUS[0]}
+      echo "::endgroup::"
+      rm -f "$EVI/$name"/*.raw "$EVI/$name"/*.qcow2 "$EVI/$name"/install/target*.qcow2 "$EVI/$name"/install/answers.img
+      if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -E '^\[FAIL\]' "$EVI/test-$name.log" | head -1)"; fi
+    done
+  fi
   TEST_S=$(( $(date +%s)-t ))
 fi
 ACCEL=KVM; [ -e /dev/kvm ] && [ "$ARCH" = "$HOST_ARCH" ] || ACCEL="TCG emulation, no KVM"

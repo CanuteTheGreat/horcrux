@@ -1,3 +1,7 @@
 # Small tools added after the big emerge layer (a change here does not rebuild the layers above)
 app-crypt/argon2
 dev-db/sqlite
+# rescue: LUKS unlock + encrypted persistence
+sys-fs/cryptsetup
+# boot menu: memory test (x86 only; lines prefixed '<arch>? ' are built on that architecture only)
+x86_64? sys-apps/memtest86+

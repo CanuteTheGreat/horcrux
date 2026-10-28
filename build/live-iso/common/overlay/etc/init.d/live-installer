@@ -6,6 +6,7 @@
 description="Live session: guided installer / unattended install / console shells"
 depend() { need localmount; after local sysklogd dhcpcd; before live-serial; }
 
+cmdarg() { grep -o "$1\\.$2=[^ ]*" /proc/cmdline | tail -1 | cut -d= -f2; }
 proj() { sed 's/-live$//' /etc/live-iso-label 2>/dev/null; }
 
 set_tty1() {
@@ -33,7 +34,24 @@ start() {
 		fi
 		return 0
 	fi
-	if grep -q "${p}.installer=1" /proc/cmdline; then
+	# boot menu modes (see common/boot/gen-grub-cfg.sh): the session programs read /run/live-installer/mode
+	mkdir -p /run/live-installer
+	mode=$(cmdarg "$p" installer); resc=$(cmdarg "$p" rescue); live=$(cmdarg "$p" live)
+	if [ -n "$resc" ]; then
+		[ "$resc" = forensic ] && mode=forensic || mode=rescue
+		echo "$mode" > /run/live-installer/mode
+		einfo "rescue session ($mode)"
+		if [ "$serial" = yes ]; then set_tty1 "--noclear -a root"; else set_tty1 "--noclear -n -l /usr/libexec/live-rescue-session"; fi
+		return 0
+	fi
+	if [ -n "$live" ]; then
+		echo live > /run/live-installer/mode
+		set_tty1 "--noclear -n -l /usr/libexec/live-session"
+		return 0
+	fi
+	case "$mode" in gui) ;; expert) ;; 1) mode=text ;; *) mode=text ;; esac
+	echo "$mode" > /run/live-installer/mode
+	if [ -n "$(cmdarg "$p" installer)" ]; then
 		if [ "$serial" = yes ]; then
 			set_tty1 "--noclear -a root"
 		else

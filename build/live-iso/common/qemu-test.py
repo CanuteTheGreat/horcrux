@@ -593,14 +593,14 @@ class Runner:
                 # no key press: the default entry (guided installer on the VGA console) must boot by itself
                 self.step("grub-default-entry-boots-installer", True, "waiting for the default GRUB entry (guided installer, VGA)")
             else:
-                ok = vm.expect_raw(r"safe graphics", 120)          # the LAST menu entry: the menu is fully drawn
+                ok = vm.expect_raw(r"Serial console \(ttyS0", 120)  # the LAST menu line: the menu is fully drawn
                 self.step("grub-menu-reached", ok, f"after {int(time.time()-t0)}s")
                 time.sleep(2)
                 vm.shot("grub-menu")
-                for _ in range(1 if a.flow == "tui" else 2):    # entry 1 = serial installer, 2 = automated
-                    vm.send("\x1b[B")
-                    time.sleep(0.6)
-                vm.send("\r")
+                # boot menu hotkeys (common/boot/gen-grub-cfg.sh): s = serial-console submenu, 2 = text install, 4 = automated
+                vm.send("s")
+                time.sleep(1.5)
+                vm.send("2" if a.flow == "tui" else "4")
                 self.step("kernel-boot-started", vm.expect_raw(r"(Linux version|Booting|OpenRC)", 90))
             if a.flow == "auto":
                 ok = vm.expect_raw(r"AUTOINSTALL-START", 420)
@@ -628,12 +628,11 @@ class Runner:
         a = self.a
         vm = VM("1-fallback", self.qemu_args(a.iso, False, nvars), a.out)
         try:
-            self.step("grub-menu-reached", vm.expect_raw(r"safe graphics", 120))
+            self.step("grub-menu-reached", vm.expect_raw(r"Serial console \(ttyS0", 120))
             time.sleep(2)
-            for _ in range(2):                              # entry 2 = automated install
-                vm.send("\x1b[B")
-                time.sleep(0.4)
-            vm.send("\r")
+            vm.send("s")                                    # serial-console submenu, then 4 = automated install
+            time.sleep(1.5)
+            vm.send("4")
             self.step("no-answer-file-detected", vm.expect_raw(r"No answer file found[^\n]*", 480),
                       "the automated entry refuses to install without an answer file")
             self.step("falls-back-to-guided-installer", vm.expect_raw(r"INSTALLER-FALLBACK-INTERACTIVE", 60))

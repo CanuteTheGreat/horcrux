@@ -1,0 +1,8 @@
+#!/bin/sh
+# login program for the "Try it live" consoles (agetty -n -l): unlock the optional encrypted persistence,
+# show the live web UI address + this session's random admin password, then an autologin root shell.
+dmesg -n 1 2>/dev/null
+export TERM=${TERM:-linux}
+/usr/bin/live-persist unlock-interactive
+/usr/bin/live-persist banner
+exec /bin/login -f root

@@ -3,7 +3,7 @@
 set -eu
 : "${PROJECT:?}" "${ISO_LABEL:?}" "${PROJECT_TITLE:?}"
 
-chmod +x /etc/init.d/live-* /usr/libexec/live-* /usr/libexec/console-menu-session /usr/bin/live-installer 2>/dev/null || true
+chmod +x /etc/init.d/live-* /usr/libexec/live-* /usr/libexec/console-menu-session /usr/bin/live-installer /usr/bin/live-rescue /usr/bin/live-persist 2>/dev/null || true
 
 # --- the stage3 *container* image makes OpenRC think it runs in docker (skips root remount,
 # localmount, devfs ...): this rootfs boots on real hardware / KVM
@@ -18,6 +18,10 @@ for s in modules hostname bootmisc sysctl urandom procfs termencoding root local
 for s in sysklogd cronie dhcpcd iwd local; do add $s default; done
 add live-serial default
 add live-installer default
+# boot-menu modes: forensic rescue (sysinit, before udev), persistence (boot), try-it-live product (default)
+add live-forensic sysinit
+add live-persist boot
+add live-product default
 
 # --- no fstab entries (live: overlay root; installer writes its own) ------
 printf '# live system: root is an overlay; the installer writes the real fstab\ntmpfs /tmp tmpfs defaults,nosuid,nodev 0 0\n' > /etc/fstab

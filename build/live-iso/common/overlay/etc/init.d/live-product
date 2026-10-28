@@ -1,0 +1,12 @@
+#!/sbin/openrc-run
+# "Try it live" (<proj>.live=1): start the full product from RAM with a random admin password for this session.
+# The disks are not touched (no auto-mount, no swap). Services come from live_services in the profile.
+description="Live session: start the product services"
+depend() { need localmount net; after live-persist dhcpcd local sysklogd; before live-serial; }
+start() {
+	grep -q 'rd.live.image' /proc/cmdline || return 0
+	grep -qE '(^| )[a-z0-9]+\.live=' /proc/cmdline || return 0
+	mkdir -p /run/live-installer
+	( /usr/bin/live-persist product start >/var/log/live-product.log 2>&1 ) &
+	return 0
+}

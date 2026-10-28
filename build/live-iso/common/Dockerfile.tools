@@ -14,5 +14,6 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     ls /usr/lib/grub/
 COPY common/assemble-iso.sh /usr/local/bin/assemble-iso.sh
 COPY common/arch/ /usr/local/share/live-arch/
+COPY common/boot/ /usr/local/share/live-boot/
 ENV ARCH=${ARCH}
-RUN chmod +x /usr/local/bin/assemble-iso.sh
+RUN chmod +x /usr/local/bin/assemble-iso.sh /usr/local/share/live-boot/*.sh

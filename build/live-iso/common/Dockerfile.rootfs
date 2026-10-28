@@ -60,7 +60,7 @@ COPY common/packages-extra.txt /tmp/packages-extra.txt
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     --mount=type=cache,id=ccache-${ARCH},target=/var/cache/ccache,sharing=locked \
-    set -e; pk=$(grep -v '^#' /tmp/packages-extra.txt | tr '\n' ' '); \
+    set -e; pk=$(grep -v '^#' /tmp/packages-extra.txt | sed -E "s/^$(uname -m)\\? //; /^[a-z0-9_]+\\? /d" | tr '\n' ' '); \
     if [ -n "$(echo $pk)" ]; then emerge --noreplace $pk; fi
 
 # Project application (binaries, UI, installer, init scripts ...)

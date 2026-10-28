@@ -1,0 +1,36 @@
+#!/sbin/openrc-run
+# Forensic (no-touch) rescue: <proj>.rescue=forensic on the kernel command line.
+# Every disk and partition is made READ-ONLY at the block layer (BLKROSET) - the kernel then refuses writes
+# whatever a tool or a mount option does - swap is never enabled, and MD/LVM auto-assembly/activation is masked.
+# New devices (hot-plug, late probing) get the same treatment through a udev rule written before udev starts.
+# Runs in sysinit before udev; does nothing in any other mode.
+description="Forensic rescue: all disks read-only, no auto-mount, no swap"
+depend() { need dev; before udev; }
+
+is_forensic() { grep -qE '(^| )[a-z0-9]+\.rescue=forensic( |$)' /proc/cmdline; }
+
+start() {
+	is_forensic || return 0
+	mkdir -p /run/udev/rules.d /run/live-installer
+	cat > /run/udev/rules.d/00-forensic-readonly.rules <<'RULES'
+# live-forensic: every real disk / partition is read-only before anything can open it for writing
+ACTION=="add|change", SUBSYSTEM=="block", KERNEL!="loop*|ram*|zram*|dm-*", ENV{DEVTYPE}=="disk|partition", RUN+="/sbin/blockdev --setro $devnode"
+RULES
+	# mask the rules that would assemble RAID / activate LVM volumes on their own (an empty file in /run wins)
+	for r in 64-md-raid-assembly.rules 69-dm-lvm.rules 69-lvm.rules 69-lvm-metad.rules; do : > /run/udev/rules.d/$r; done
+	swapoff -a 2>/dev/null
+	echo forensic > /run/live-installer/mode
+	touch /run/live-installer/forensic
+	forensic_ro_all
+	einfo "forensic mode: disks are read-only at the block layer"
+	return 0
+}
+
+forensic_ro_all() {
+	for d in /sys/class/block/*; do
+		n=${d##*/}
+		case "$n" in loop*|ram*|zram*|dm-*|md*) continue ;; esac
+		[ -e "/dev/$n" ] && blockdev --setro "/dev/$n" 2>/dev/null
+	done
+	return 0
+}

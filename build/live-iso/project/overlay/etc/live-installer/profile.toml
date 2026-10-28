@@ -23,3 +23,5 @@ reapply_services = []
 logo_mark = "/usr/share/live-installer/branding/mark-256.png"
 logo_full = "/usr/share/live-installer/branding/full.png"
 logo_wordmark = "/usr/share/live-installer/branding/wordmark.png"
+# "Try it live" boot entry: services started from RAM (random admin password per session; docker needs real storage)
+live_services = ["horcrux-api", "dbus", "libvirtd"]

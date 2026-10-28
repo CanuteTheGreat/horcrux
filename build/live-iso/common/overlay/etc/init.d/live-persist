@@ -1,0 +1,11 @@
+#!/sbin/openrc-run
+# "Try it live with persistence" (<proj>.live=1 <proj>.persist=1): mount the <PROJECT>-PERSIST partition and overlay
+# /etc /root /home /var/lib /var/log on it. A LUKS2 partition is unlocked later, on the console (live-session).
+description="Live persistence (plain partition; encrypted ones are unlocked on the console)"
+depend() { need localmount; before bootmisc hostname dhcpcd net local live-product; }
+start() {
+	grep -q 'rd.live.image' /proc/cmdline || return 0
+	grep -qE '(^| )[a-z0-9]+\.live=' /proc/cmdline || return 0
+	/usr/bin/live-persist start
+	return 0
+}
