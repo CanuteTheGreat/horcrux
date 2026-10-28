@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use crate::cluster::node::{Architecture, PassthroughDeviceRequirement};
+use crate::cluster::roles::{self, GuestNeeds, NodeCaps};
 use serde::{Deserialize, Serialize};
 
 /// Node resource usage
@@ -41,6 +42,28 @@ pub struct NodeResources {
     /// recommended (cold migration only).
     #[serde(default)]
     pub cpu_vendor: String,
+    /// Operator-set role/limits (see `cluster::roles`). `None` = unconfigured
+    /// node: permissive default (compute, no limits).
+    #[serde(default)]
+    pub caps: Option<NodeCaps>,
+}
+
+impl NodeResources {
+    /// `Ok` if this node may host a guest of the given size; `Err` carries
+    /// the human-readable reason (witness-only node, per-guest vCPU/RAM cap).
+    pub fn guest_eligibility(&self, vcpus: usize, memory_gb: usize) -> Result<(), String> {
+        match &self.caps {
+            None => Ok(()),
+            Some(c) => roles::eligible(
+                c,
+                &GuestNeeds {
+                    vcpus: vcpus as u32,
+                    memory: memory_gb as u64 * 1024 * 1024 * 1024,
+                    required_labels: Vec::new(),
+                },
+            ),
+        }
+    }
 }
 
 fn default_placement_weight() -> u32 {
@@ -242,6 +265,14 @@ impl ClusterBalancer {
                 continue;
             }
 
+            // Never rebalance a guest onto a witness-only node or one whose
+            // per-guest limits it exceeds.
+            if let Some(t) = nodes.iter().find(|n| n.node_name == *underloaded_node) {
+                if t.guest_eligibility(vm.cpu_cores, vm.memory_gb).is_err() {
+                    continue;
+                }
+            }
+
             // Calculate improvement if we migrate this VM
             let improvement =
                 self.calculate_migration_improvement(nodes, vm, overloaded_node, underloaded_node);
@@ -356,6 +387,7 @@ impl ClusterBalancer {
             .iter()
             .filter(|n| n.architecture.can_run(&vm.architecture))
             .filter(|n| n.placement_weight >= vm.min_placement_weight.unwrap_or(0))
+            .filter(|n| n.guest_eligibility(vm.cpu_cores, vm.memory_gb).is_ok())
             .filter(|n| {
                 crate::cluster::node::passthrough_devices_satisfied(
                     &n.available_passthrough_devices,
@@ -436,6 +468,7 @@ mod tests {
             available_passthrough_devices: Vec::new(),
             placement_weight: 100,
             cpu_vendor: String::new(),
+            caps: None,
         }
     }
 
@@ -830,5 +863,34 @@ mod tests {
         idle.cpu_vendor = String::new();
         let recs = balancer.get_recommendations(&[busy, idle], &vms);
         assert_eq!(recs.len(), 1);
+    }
+
+    #[test]
+    fn placement_respects_node_roles_and_guest_limits() {
+        use crate::cluster::roles::NodeRole;
+        let mut witness = create_test_node("witness", 0.0, 0.0, 0);
+        witness.caps = Some(NodeCaps {
+            role: NodeRole::Witness,
+            ..Default::default()
+        });
+        let mut weak = create_test_node("weak", 0.0, 0.0, 0);
+        weak.caps = Some(NodeCaps {
+            max_guest_vcpus: Some(1),
+            ..Default::default()
+        });
+        let strong = create_test_node("strong", 80.0, 80.0, 5);
+        let nodes = vec![witness, weak, strong];
+        let b = ClusterBalancer::new(BalancingPolicy::default());
+        // 2 vCPU guest: idle witness + vCPU-capped node are skipped
+        assert_eq!(
+            b.find_best_node(&nodes, &create_test_vm(1, "x")),
+            Some("strong".to_string())
+        );
+        // only ineligible nodes -> no placement
+        assert_eq!(b.find_best_node(&nodes[..2], &create_test_vm(2, "x")), None);
+        assert!(nodes[0]
+            .guest_eligibility(1, 1)
+            .unwrap_err()
+            .contains("witness"));
     }
 }

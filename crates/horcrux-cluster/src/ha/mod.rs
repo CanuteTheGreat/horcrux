@@ -1087,6 +1087,7 @@ mod tests {
             available_passthrough_devices,
             placement_weight: 100,
             cpu_vendor: String::new(),
+            caps: None,
         }
     }
 
