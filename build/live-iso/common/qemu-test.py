@@ -25,9 +25,12 @@ import argparse, json, os, re, shutil, socket, ssl, struct, subprocess, sys, tem
 
 PROJECTS = {
     "horcrux": dict(svc="horcrux-api", port=8006, health=["/api/health", "/"], pwfile="/var/lib/horcrux/initial-admin-password", old_pw="horcrux",
-                    seedfile="/etc/horcrux/admin-password"),
+                    seedfile="/etc/horcrux/admin-password",
+                    services=["horcrux-api"], forward=False, dbfiles=[], logdirs=["/var/log/horcrux"]),
     "patronus": dict(svc="patronus-web", port=8443, health=["/login"], pwfile="/var/lib/patronus/initial-admin-password", old_pw="patronus",
-                     seedfile="/var/lib/patronus/initial-admin-password"),
+                     seedfile="/var/lib/patronus/initial-admin-password",
+                     services=["patronus-firewall", "patronus-applyd", "patronus-web"], forward=True,
+                     dbfiles=["/var/lib/patronus/config.db"], dbuser="patronus", logdirs=["/var/log/patronus"]),
 }
 PW = "Kx9!mQv2-tle-77Zp"          # >= 12 chars, mixed: passes the installer's strength rules
 PW2, PW3 = "Rv7#nQ4-zeta-91Lk", "Tb3$wH8-omega-52Ud"   # console-menu password reset / factory reset
@@ -499,12 +502,14 @@ class Runner:
         """(kvm?, machine+cpu args) - KVM only when the guest arch is the host's and /dev/kvm exists"""
         kvm = os.path.exists("/dev/kvm") and ARCH == HOST_ARCH
         if ARCH == "x86_64":
-            return kvm, ["-machine", "q35,accel=kvm" if kvm else "q35", "-cpu", "host" if kvm else "max"]
+            # a.cpu is a conservative x86-64-v2 model, NOT "host": binaries built with target-cpu=native passed under
+            # -cpu host on the build machine and then died with "invalid opcode" on a different real CPU.
+            return kvm, ["-machine", "q35,accel=kvm" if kvm else "q35", "-cpu", self.a.cpu]
         if ARCH == "aarch64":
             if kvm:
                 return True, ["-machine", "virt,gic-version=host,accel=kvm", "-cpu", "host"]
             # pauth-impdef: the default QARMA5 pointer-auth emulation is the slowest part of TCG on arm64
-            return False, ["-machine", "virt,gic-version=max", "-accel", "tcg,thread=multi", "-cpu", "max,pauth-impdef=on"]
+            return False, ["-machine", "virt,gic-version=max", "-accel", "tcg,thread=multi", "-cpu", "cortex-a72"]  # generic ARMv8.0-A baseline (no SVE/LSE/pauth); KVM runs on the host CPU
         return kvm, ["-machine", "virt"] + (["-accel", "kvm", "-cpu", "host"] if kvm else ["-accel", "tcg,thread=multi", "-cpu", "rv64"])
 
     def qemu_args(self, iso, installed, nvars):
@@ -569,6 +574,8 @@ class Runner:
             return
         self.phase1(nvars)
         self.phase2(nvars)
+        if a.restarts:
+            self.restart_phase(nvars)
         self.res["ok"] = True
         json.dump(self.res, open(f"{a.out}/result.json", "w"), indent=1)
         print("ALL PASS", a.project, a.mode, a.media, a.flow, a.fs)
@@ -822,6 +829,7 @@ class Runner:
             sc, code, body = http(FWD_WEB, "/")
             self.step("web-ui-root", code == 200 and b"<" in body, f"{sc} / -> {code} ({len(body)} bytes)")
             self.ssh_checks()
+            self.health("first-boot")
             if a.flow == "auto":
                 rc, pw = ssh(FWD_SSH, self.key, f"cat {P['pwfile']}")
                 webpw = pw.strip().splitlines()[-1] if rc == 0 and pw.strip() else ""
@@ -986,6 +994,71 @@ class Runner:
                     return False
         return False
 
+    # ---- service health (first boot AND every guest reboot): services up, forwarding on, no DB/CPU errors in the logs
+    DB_ERR = r"readonly database|read-only database|database is locked|unable to open database|database disk image is malformed"
+
+    def health_script(self):
+        P = self.P
+        sh = [f'for s in {" ".join(P["services"])}; do st=$(rc-service $s status 2>&1); case "$st" in *started*) ;; *) echo "BAD service $s: $st";; esac; done',
+              'c=$(rc-status --crashed 2>/dev/null); [ -z "$c" ] || echo "BAD crashed services: $c"']
+        if P.get("forward"):
+            sh += ['[ "$(cat /proc/sys/net/ipv4/ip_forward)" = 1 ] || echo "BAD net.ipv4.ip_forward=$(cat /proc/sys/net/ipv4/ip_forward)"',
+                   '[ "$(cat /proc/sys/net/ipv6/conf/all/forwarding)" = 1 ] || echo "BAD net.ipv6.conf.all.forwarding=$(cat /proc/sys/net/ipv6/conf/all/forwarding)"',
+                   'nft list table inet patronus >/dev/null 2>&1 || echo "BAD nft table inet patronus is not loaded"']
+        for f in P.get("dbfiles", []):
+            sh.append(f'[ -e {f} ] || echo "BAD {f} missing"; su -s /bin/sh {P["dbuser"]} -c "test -w {f}" || echo "BAD {f} is not writable by {P["dbuser"]}: $(stat -c %U:%G:%a {f})"')
+        logs = " ".join(P.get("logdirs", []) + ["/var/log/messages", "/var/log/syslog"])
+        sh.append(f'grep -rIiE "{self.DB_ERR}" {logs} 2>/dev/null | head -3 | sed "s/^/BAD db error in log: /"')
+        sh.append('dmesg 2>/dev/null | grep -iE "invalid opcode|traps: .*(trap|ip:)" | head -3 | sed "s/^/BAD cpu fault: /"')
+        sh.append("echo HEALTH-DONE")
+        return "\n".join(sh)
+
+    def health(self, label, wait=240):
+        """poll until every check passes (services settle after boot); a failure prints what was wrong"""
+        end, last = time.time() + wait, ""
+        while True:
+            rc, out = ssh(FWD_SSH, self.key, self.health_script(), timeout=60)
+            bad = [l for l in out.splitlines() if l.startswith("BAD")]
+            if "HEALTH-DONE" in out and not bad:
+                self.step(f"health-{label}", True, f"{', '.join(self.P['services'])} started" + (", ip_forward=1, nft table loaded" if self.P.get("forward") else "") + ", no DB errors in logs")
+                return
+            last = " | ".join(bad) or out.strip()[-200:]
+            # log/db errors do not heal by waiting
+            if time.time() > end or any(l.startswith(("BAD db error", "BAD cpu fault")) for l in bad):
+                self.step(f"health-{label}", False, last[:400])
+                return
+            time.sleep(6)
+
+    def restart_phase(self, nvars):
+        """boot the installed disk again and restart it from inside the guest a.restarts times; health after every boot"""
+        a = self.a
+        vm = VM("3-boot0", self.qemu_args(None, True, nvars), a.out)      # NVRAM kept: real firmware remembers its boot entries
+        try:
+            for n in range(a.restarts + 1):
+                t = time.time()
+                ok = False
+                while time.time() - t < 420 and vm.alive():
+                    if ssh(FWD_SSH, self.key, "true", timeout=15)[0] == 0:
+                        ok = True
+                        break
+                    time.sleep(5)
+                self.step(f"boot{n}-ssh-up", ok, f"{int(time.time()-t)}s")
+                self.health(f"boot{n}")
+                if n == a.restarts:
+                    break
+                ssh(FWD_SSH, self.key, "sync; (sleep 1; " + "re" + "boot) >/dev/null 2>&1 &", timeout=15)
+                for _ in range(120):                                         # -no-reboot: QEMU exits when the guest resets
+                    if not vm.alive():
+                        break
+                    time.sleep(1)
+                self.step(f"boot{n}-guest-reset", not vm.alive(), "the guest's own restart command reset the VM")
+                vm = VM(f"3-boot{n+1}", self.qemu_args(None, True, nvars), a.out)
+            ssh(FWD_SSH, self.key, "poweroff", timeout=10)
+            time.sleep(8)
+        finally:
+            if vm.alive():
+                vm.p.kill()
+
     def ssh_checks(self):
         a = self.a
         rc, out = ssh(FWD_SSH, None, "true", extra=["-o", "PreferredAuthentications=none", "-o", "PubkeyAuthentication=no", "-o", "BatchMode=yes"])
@@ -1043,6 +1116,9 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--keep-disks", action="store_true", help="keep target*.qcow2/answers.img/OVMF_VARS.fd in --out (default: delete them when the run ends, pass or fail; they are 20-40 GB of regenerable state)")
     ap.add_argument("--mem", type=int, default=4096)
+    ap.add_argument("--cpu", default=os.environ.get("QEMU_TEST_CPU", "qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt,+cx16"),
+                    help="QEMU CPU model. Default = x86-64-v2 (no AVX/BMI): catches binaries built for a host-tuned CPU. Never `host`.")
+    ap.add_argument("--restarts", type=int, default=0, help="after the install checks: boot the installed disk again and restart it N times from inside the guest, asserting service health after each boot")
     ap.add_argument("--disk-gb", type=int, default=24)
     args = ap.parse_args()
     ARCH = args.arch

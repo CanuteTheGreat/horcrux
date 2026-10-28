@@ -67,13 +67,18 @@ if [ "$result" = pass ]; then
 fi
 if [ "$result" = pass ]; then
   t=$(date +%s)
+  # Every run boots the guest with a conservative x86-64-v2 CPU model (qemu-test.py --cpu, default
+  # qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt,+cx16), NEVER -cpu host: a binary built with target-cpu=native passed
+  # under -cpu host and then crashed with "invalid opcode" on a different real CPU. --restarts 2 = install, then
+  # restart the installed system twice from inside the guest and assert services started, ip_forward=1 (Patronus)
+  # and no database errors in the logs after the first boot and after each restart.
   # The matrix covers both firmware types, both media types, the unattended answer-file install, the
   # guided installer driven over the serial line AND on the VGA console (screenshots), the SSH
   # opt-in branch, and (Horcrux) xfs and a 2-disk ZFS mirror.
   if [ "$ARCH" = x86_64 ]; then
   if [ "$PROJECT" = horcrux ]; then
     MATRIX=(
-      "bios-cdrom-auto-ext4-dhcp-openconsole|--mode bios --media cdrom --flow auto --fs ext4 --console-open"
+      "bios-cdrom-auto-ext4-dhcp-openconsole|--mode bios --media cdrom --flow auto --fs ext4 --console-open --restarts 2"
       "bios-cdrom-tui-serial-xfs-static|--mode bios --media cdrom --flow tui --fs xfs --static-ip 10.0.2.77"
       "uefi-usb-tui-vga-zfs-mirror-static|--mode uefi --media usb --flow tui-vga --fs zfs --zfs-raid mirror --static-ip 10.0.2.88"
       "bios-cdrom-fallback-no-answer-file|--mode bios --media cdrom --flow fallback"
@@ -81,10 +86,10 @@ if [ "$result" = pass ]; then
     )
   else
     MATRIX=(
-      "bios-cdrom-auto-sshpw|--mode bios --media cdrom --flow auto --ssh-password-opt-in"
+      "bios-cdrom-auto-sshpw|--mode bios --media cdrom --flow auto --ssh-password-opt-in --restarts 2"
       "bios-cdrom-tui-serial|--mode bios --media cdrom --flow tui"
       "uefi-usb-tui-vga|--mode uefi --media usb --flow tui-vga"
-      "uefi-usb-auto-openconsole|--mode uefi --media usb --flow auto --console-open"
+      "uefi-usb-auto-openconsole|--mode uefi --media usb --flow auto --console-open --restarts 2"
       "bios-cdrom-fallback-no-answer-file|--mode bios --media cdrom --flow fallback"
     )
   fi

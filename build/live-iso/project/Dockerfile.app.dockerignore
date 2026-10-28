@@ -3,3 +3,4 @@ target
 build/live-iso
 build/iso
 **/target
+!build/live-iso/common/check-cpu-baseline.py
