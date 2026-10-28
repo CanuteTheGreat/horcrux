@@ -16,6 +16,7 @@ sys-block/parted
 sys-apps/pciutils
 sys-apps/usbutils
 sys-apps/kbd
+media-fonts/terminus-font
 net-misc/rsync
 net-misc/dhcpcd
 net-misc/openssh

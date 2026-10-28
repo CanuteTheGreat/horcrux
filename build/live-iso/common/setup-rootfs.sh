@@ -3,7 +3,7 @@
 set -eu
 : "${PROJECT:?}" "${ISO_LABEL:?}" "${PROJECT_TITLE:?}"
 
-chmod +x /etc/init.d/live-* /usr/libexec/live-* 2>/dev/null || true
+chmod +x /etc/init.d/live-* /usr/libexec/live-* /usr/bin/live-installer 2>/dev/null || true
 
 # --- the stage3 *container* image makes OpenRC think it runs in docker (skips root remount,
 # localmount, devfs ...): this rootfs boots on real hardware / KVM
@@ -14,9 +14,10 @@ sed -i 's/^#\?rc_sys=.*/rc_sys=""/' /etc/rc.conf
 add() { rc-update add "$1" "$2" >/dev/null 2>&1 || echo "warn: rc-update add $1 $2 failed"; }
 for s in devfs dmesg udev; do add $s sysinit; done
 for s in modules hostname bootmisc sysctl urandom procfs termencoding root localmount swclock; do add $s boot; done
-for s in sysklogd cronie sshd dhcpcd iwd local; do add $s default; done
+# sshd is deliberately NOT enabled on the live image (the installer enables it on the installed system)
+for s in sysklogd cronie dhcpcd iwd local; do add $s default; done
 add live-serial default
-add live-autoinstall default
+add live-installer default
 
 # --- no fstab entries (live: overlay root; installer writes its own) ------
 printf '# live system: root is an overlay; the installer writes the real fstab\ntmpfs /tmp tmpfs defaults,nosuid,nodev 0 0\n' > /etc/fstab
@@ -36,10 +37,17 @@ echo "${PROJECT}-live" > /etc/live-iso-label
 echo "${ISO_LABEL}" > /etc/live-iso-volid
 
 # --- accounts / ssh ------------------------------------------------------------
-echo 'root:'"${PROJECT}" | chpasswd
-sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/; s/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+# No default password anywhere: root is LOCKED on the live image (consoles autologin, see
+# live-installer service; sshd is off). The installer sets the real password / SSH key.
+passwd -l root >/dev/null
+sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/; s/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+grep -q '^PermitRootLogin prohibit-password' /etc/ssh/sshd_config || echo 'PermitRootLogin prohibit-password' >> /etc/ssh/sshd_config
+grep -q '^PasswordAuthentication no' /etc/ssh/sshd_config || echo 'PasswordAuthentication no' >> /etc/ssh/sshd_config
 mkdir -p /etc/sudoers.d && echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/wheel && chmod 440 /etc/sudoers.d/wheel
 grep -q ttyS0 /etc/securetty 2>/dev/null || echo ttyS0 >> /etc/securetty 2>/dev/null || true
+# Wi-Fi is handled by iwd (it also does DHCP for wlan), wired NICs by dhcpcd
+mkdir -p /etc/iwd && printf '[General]\nEnableNetworkConfiguration=true\n' > /etc/iwd/main.conf
+grep -q '^denyinterfaces' /etc/dhcpcd.conf 2>/dev/null || printf '\ndenyinterfaces wlan* wlp*\n' >> /etc/dhcpcd.conf
 
 # --- kernel + live initramfs ------------------------------------------------------
 kver=$(ls /lib/modules | sort -V | tail -1)
@@ -50,9 +58,11 @@ hostonly="no"
 hostonly_cmdline="no"
 add_dracutmodules+=" dmsquash-live "
 omit_dracutmodules+=" plymouth network-manager nfs iscsi biosdevname "
-add_drivers+=" squashfs overlay loop iso9660 sr_mod usb_storage uas sd_mod nvme ahci xhci_pci xhci_hcd ehci_pci uhci_hcd ext4 vfat nls_cp437 nls_iso8859_1 virtio_blk virtio_scsi virtio_pci "
+add_drivers+=" squashfs overlay loop iso9660 sr_mod usb_storage uas sd_mod nvme vmd ahci xhci_pci xhci_hcd ehci_pci uhci_hcd ext4 xfs vfat nls_cp437 nls_iso8859_1 virtio_blk virtio_scsi virtio_pci mmc_block sdhci sdhci_pci sdhci_acpi "
 compress="gzip"
 DR
+# root on ZFS (Horcrux): put the zfs dracut module into the generic initramfs when it is installed
+if [ -d /usr/lib/dracut/modules.d/90zfs ]; then echo 'add_dracutmodules+=" zfs "' >> /etc/dracut.conf.d/live.conf; fi
 dracut -f --no-hostonly --kver "$kver" "/boot/initramfs-${kver}.img" "$kver"
 ls -l /boot
 ls /boot/vmlinuz-* >/dev/null

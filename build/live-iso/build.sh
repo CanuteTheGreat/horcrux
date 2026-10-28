@@ -14,8 +14,8 @@ while getopts o:n: o; do case $o in o) OUT=$OPTARG;; n) SUFFIX=$OPTARG;; *) exit
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 export DOCKER_BUILDKIT=1
 T0=$(date +%s); lap() { echo "== [$(( $(date +%s)-T0 ))s] $*"; }
-TAG=${REUSE_ROOTFS:-$PROJECT-live-$$}
-cd "$HERE"; [ -x project/prepare.sh ] && (cd "$HERE" && sh project/prepare.sh)
+TAG=${REUSE_ROOTFS:-${BUILD_TAG:-$PROJECT-live-$$}}   # BUILD_TAG + KEEP_IMAGES=1: dev loop, keep the images for REUSE_ROOTFS
+cd "$HERE"; [ -x project/prepare.sh ] && (cd "$HERE" && sh project/prepare.sh) || true
 
 if [ -z "${REUSE_ROOTFS:-}" ]; then
 lap "stage 1: application (cargo/trunk)"
@@ -28,12 +28,13 @@ lap "stage 3: assembly toolbox"
 docker build -q -f common/Dockerfile.tools -t live-iso-tools:latest .
 lap "stage 4: export rootfs + assemble ISO (no bind mounts: works from a job container using the host docker)"
 ISO_NAME=$ISO_PREFIX-$SUFFIX-x86_64.iso
+docker rm -f $TAG-asm >/dev/null 2>&1 || true
 cid=$(docker create $TAG-rootfs /bin/true)
 docker export "$cid" | docker run -i --name $TAG-asm --memory=8g --cpus=$JOBS live-iso-tools:latest \
     sh -c "mkdir -p /work/root /out && tar -x -C /work/root --exclude='dev/*' && assemble-iso.sh /work/root /out/$ISO_NAME '$ISO_LABEL' '$PROJECT_TITLE' '$PROJECT'"
 docker rm "$cid" >/dev/null
 docker cp $TAG-asm:/out/$ISO_NAME "$OUT/$ISO_NAME"
 docker rm -f $TAG-asm >/dev/null
-[ -n "${REUSE_ROOTFS:-}" ] || docker rmi $TAG-app $TAG-rootfs >/dev/null 2>&1 || true
+[ -n "${REUSE_ROOTFS:-}" ] || [ -n "${KEEP_IMAGES:-}" ] || docker rmi $TAG-app $TAG-rootfs >/dev/null 2>&1 || true
 ( cd "$OUT" && sha256sum "$ISO_NAME" > "$ISO_NAME.sha256" && cat "$ISO_NAME.sha256" )
 lap "done: $OUT/$ISO_NAME ($(du -h "$OUT/$ISO_NAME" | cut -f1))"

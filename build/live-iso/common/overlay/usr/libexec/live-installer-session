@@ -1,0 +1,9 @@
+#!/bin/sh
+# login program for the installer consoles (agetty -n -l): run the guided installer, then a live shell
+dmesg -n 1 2>/dev/null
+export TERM=${TERM:-linux}
+if [ "$TERM" = linux ] || [ -z "$TERM" ]; then :; fi
+/usr/bin/live-installer
+echo
+echo "Live system shell (root). Run 'live-installer' to start the installer again, 'reboot' to restart."
+exec /bin/login -f root

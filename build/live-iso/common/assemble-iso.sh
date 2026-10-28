@@ -26,20 +26,28 @@ if serial --unit=0 --speed=115200; then
 fi
 search --no-floppy --label --set=root ${VOLID}
 
-menuentry "${TITLE} - live system" {
+menuentry "Install ${TITLE} (guided installer)" {
+    linux /boot/vmlinuz ${CMD} loglevel=3 ${PROJ}.installer=1
+    initrd /boot/initramfs.img
+}
+menuentry "Install ${TITLE} - serial console (ttyS0 115200)" {
+    linux /boot/vmlinuz ${CMD} loglevel=3 console=tty0 console=ttyS0,115200n8 ${PROJ}.installer=1
+    initrd /boot/initramfs.img
+}
+menuentry "Automated install from an answer file (ERASES the target disk)" {
+    linux /boot/vmlinuz ${CMD} loglevel=3 console=tty0 console=ttyS0,115200n8 ${PROJ}.autoinstall=1
+    initrd /boot/initramfs.img
+}
+menuentry "${TITLE} - live system (no install)" {
     linux /boot/vmlinuz ${CMD}
     initrd /boot/initramfs.img
 }
-menuentry "${TITLE} - live system (serial console ttyS0)" {
+menuentry "${TITLE} - live system, serial console (ttyS0)" {
     linux /boot/vmlinuz ${CMD} console=tty0 console=ttyS0,115200n8
     initrd /boot/initramfs.img
 }
-menuentry "${TITLE} - live system (safe graphics: nomodeset)" {
-    linux /boot/vmlinuz ${CMD} nomodeset
-    initrd /boot/initramfs.img
-}
-menuentry "${TITLE} - AUTOMATIC INSTALL to first internal disk (ERASES IT)" {
-    linux /boot/vmlinuz ${CMD} console=tty0 console=ttyS0,115200n8 ${PROJ}.autoinstall=1
+menuentry "Install ${TITLE} - safe graphics (nomodeset)" {
+    linux /boot/vmlinuz ${CMD} loglevel=3 nomodeset ${PROJ}.installer=1
     initrd /boot/initramfs.img
 }
 CFG

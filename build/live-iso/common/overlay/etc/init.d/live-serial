@@ -1,11 +1,22 @@
 #!/sbin/openrc-run
-# Serial console login, only when the kernel was told to use one
-# (console=ttyS0 on the command line: QEMU tests, headless boxes).
-description="Login prompt on ttyS0 when console=ttyS0 is set"
+# Serial console on ttyS0 (only when console=ttyS0 is on the kernel command line).
+#   live + <proj>.installer=1 : the guided installer
+#   live otherwise            : autologin root shell (root password is locked; sshd is off)
+#   installed system          : normal login prompt
+description="Serial console on ttyS0"
 supervisor=supervise-daemon
 command=/sbin/agetty
-command_args="-L 115200 ttyS0 vt100"
-depend() { after local; }
+depend() { after local live-installer; }
 start_pre() {
 	grep -q 'console=ttyS0' /proc/cmdline || { einfo "no console=ttyS0, skipping"; return 1; }
+	if grep -q 'rd.live.image' /proc/cmdline; then
+		p=$(sed 's/-live$//' /etc/live-iso-label 2>/dev/null)
+		if grep -q "${p}.installer=1" /proc/cmdline || [ -e /run/live-installer-fallback ]; then
+			command_args="-L -n -l /usr/libexec/live-installer-session 115200 ttyS0 vt100"
+		else
+			command_args="-L -a root 115200 ttyS0 vt100"
+		fi
+	else
+		command_args="-L 115200 ttyS0 vt100"
+	fi
 }

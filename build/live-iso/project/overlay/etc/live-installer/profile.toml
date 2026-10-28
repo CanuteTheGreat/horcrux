@@ -1,0 +1,13 @@
+# Horcrux profile for the shared guided installer (live-installer)
+name = "horcrux"
+title = "Horcrux"
+network_mode = "management"          # one management NIC
+filesystems = ["ext4", "xfs", "zfs"]
+swap_mb = 4096
+web_scheme = "https"
+web_port = 8006
+default_hostname = "horcrux.localdomain"
+# read by horcrux-api (init script) on the first start, then deleted
+admin_password_file = "/etc/horcrux/admin-password"
+admin_password_owner = "root"
+services = ["horcrux-api", "libvirtd", "docker", "dbus", "sshd", "dhcpcd"]

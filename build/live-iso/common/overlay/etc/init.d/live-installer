@@ -1,0 +1,47 @@
+#!/sbin/openrc-run
+# Live-session console setup. Does nothing on an installed system.
+#   <proj>.installer=1   guided installer on tty1 (or on ttyS0 when console=ttyS0 is on the command line)
+#   <proj>.autoinstall=1 unattended install driven by an answer file (see docs/ISO-INSTALL.md)
+#   neither              root shell on the consoles (the live system; sshd is OFF, root password is locked)
+description="Live session: guided installer / unattended install / console shells"
+depend() { need localmount; after local sysklogd dhcpcd; before live-serial; }
+
+proj() { sed 's/-live$//' /etc/live-iso-label 2>/dev/null; }
+
+set_tty1() {
+	# $1 = full agetty argument string for tty1
+	sed -i '/^c1:/d' /etc/inittab
+	echo "c1:12345:respawn:/sbin/agetty $1 tty1 linux" >> /etc/inittab
+	telinit q 2>/dev/null
+	pkill -f 'agetty.* tty1' 2>/dev/null
+	return 0
+}
+
+start() {
+	grep -q 'rd.live.image' /proc/cmdline || return 0
+	p=$(proj)
+	serial=no; grep -q 'console=ttyS0' /proc/cmdline && serial=yes
+	dmesg -n 1 2>/dev/null
+	if grep -q "${p}.autoinstall=1" /proc/cmdline; then
+		set_tty1 "--noclear -a root"
+		einfo "unattended install (answer file)"
+		( /usr/bin/live-installer --answers auto 2>&1; echo "AUTOINSTALL-EXIT rc=$?" ) | tee /var/log/autoinstall.log >/dev/console
+		if grep -q 'ANSWER-FILE\|No answer file' /var/log/autoinstall.log; then
+			ewarn "no usable answer file: starting the guided installer instead"
+			echo "INSTALLER-FALLBACK-INTERACTIVE" >/dev/console
+			rm -f /run/live-installer-auto
+			touch /run/live-installer-fallback
+		fi
+		return 0
+	fi
+	if grep -q "${p}.installer=1" /proc/cmdline || [ -e /run/live-installer-fallback ]; then
+		if [ "$serial" = yes ]; then
+			set_tty1 "--noclear -a root"
+		else
+			set_tty1 "--noclear -n -l /usr/libexec/live-installer-session"
+		fi
+	else
+		set_tty1 "--noclear -a root"
+	fi
+	return 0
+}

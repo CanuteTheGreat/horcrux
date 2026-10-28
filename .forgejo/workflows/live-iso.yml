@@ -33,7 +33,7 @@ jobs:
     name: Build + test + publish live ISO
     runs-on: kvm-x86_64
     container: catthehacker/ubuntu:act-latest
-    timeout-minutes: 175
+    timeout-minutes: 300
     steps:
       - name: Checkout
         uses: actions/checkout@v4

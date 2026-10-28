@@ -22,6 +22,7 @@ COPY common/portage/ /etc/portage/
 COPY project/portage/ /etc/portage/
 COPY common/packages.txt /tmp/packages.common.txt
 COPY project/packages.txt /tmp/packages.txt
+COPY project/packages-late.txt /tmp/packages-late.txt
 
 # Everything in one emerge so Portage resolves the whole set once.
 RUN --mount=type=cache,target=/var/cache/binpkgs,sharing=locked \
@@ -31,6 +32,13 @@ RUN --mount=type=cache,target=/var/cache/binpkgs,sharing=locked \
     emerge --oneshot dev-util/ccache; \
     emerge --noreplace $(cat /tmp/packages.common.txt /tmp/packages.txt | grep -v '^#' | tr '\n' ' ') ; \
     ls /lib/modules /boot
+
+# Packages that build kernel modules (ZFS) need the kernel from the step above already installed
+RUN --mount=type=cache,target=/var/cache/binpkgs,sharing=locked \
+    --mount=type=cache,target=/var/cache/distfiles,sharing=locked \
+    --mount=type=cache,target=/var/cache/ccache,sharing=locked \
+    set -e; pk=$(grep -v '^#' /tmp/packages-late.txt | tr '\n' ' '); \
+    if [ -n "$(echo $pk)" ]; then emerge --noreplace $pk; fi
 
 # Project application (binaries, UI, installer, init scripts ...)
 COPY --from=app /out/ /

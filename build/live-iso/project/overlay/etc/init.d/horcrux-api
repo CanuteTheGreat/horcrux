@@ -14,4 +14,9 @@ start_pre() {
 		HORCRUX_UI_DIR=/usr/share/horcrux/ui
 	# optional overrides (e.g. ADMIN_PASSWORD=... before the first start)
 	[ -f /etc/conf.d/horcrux-api ] && . /etc/conf.d/horcrux-api
+	# the guided installer leaves the admin password here for the FIRST start only; it is
+	# deleted once the API is up (see /etc/local.d/50-installer-firstboot.start)
+	if [ -s /etc/horcrux/admin-password ] && [ ! -s /var/lib/horcrux/horcrux.db ]; then
+		export ADMIN_PASSWORD="$(head -n1 /etc/horcrux/admin-password)"
+	fi
 }

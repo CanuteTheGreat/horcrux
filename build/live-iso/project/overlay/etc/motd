@@ -1,10 +1,8 @@
 
   Horcrux (Gentoo-based live / installer)
   ----------------------------------------
-  Install to disk : horcrux-installer          (interactive)
-                    horcrux-installer -a -d /dev/DISK   (automatic, ERASES the disk)
-  Web UI / API    : https://<this-ip>:8006     user: admin
-                    password: cat /var/lib/horcrux/initial-admin-password
-  Console login   : root / horcrux  (change it!)
+  Install to disk : live-installer              (guided installer)
+  Live console    : root is passwordless here (physical access only); sshd is OFF
   Wi-Fi           : iwctl   (then: station wlan0 connect <ssid>)
+  After installing: https://<ip>:8006  user: admin  (the password you chose)
 
