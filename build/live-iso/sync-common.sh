@@ -8,7 +8,8 @@
 # CI runs --check in both repos (and --upstream in Patronus); a mismatch fails the unit-test gate, never mails.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); C=$HERE/common
-tree_hash() { ( cd "$1" && find . -type f ! -name TREE.sha256 ! -path '*/__pycache__/*' ! -name '*.pyc' -printf '%m %p\n' | LC_ALL=C sort | while read -r m f; do echo "$m $f $(sha256sum "$f" | cut -d' ' -f1)"; done | sha256sum | cut -d' ' -f1 ); }
+# mode is normalised to executable/not (a CI checkout under umask 002 gives 664 where a dev box gives 644)
+tree_hash() { ( cd "$1" && find . -type f ! -name TREE.sha256 ! -path '*/__pycache__/*' ! -name '*.pyc' -printf '%p\n' | LC_ALL=C sort | while read -r f; do if [ -x "$f" ]; then m=755; else m=644; fi; echo "$m $f $(sha256sum "$f" | cut -d' ' -f1)"; done | sha256sum | cut -d' ' -f1 ); }
 case "${1:-}" in
   --write-hash) tree_hash "$C" > "$C/TREE.sha256"; echo "common/TREE.sha256 = $(cat "$C/TREE.sha256")" ;;
   --from) src=${2:?path to the Horcrux checkout}/build/live-iso/common
