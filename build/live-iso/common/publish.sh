@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# publish.sh <mode> <project> <iso> <evidence.tgz> <status-json>
+# publish.sh <mode> <project> <iso> <evidence.tgz> <status-json>      (ARCH env: x86_64 (default) | aarch64 | riscv64)
 #   mode=daily   -> rolling PRE-release tag `daily` (stable asset names, replaced in place)
 #   mode=stable  -> attach to the release of the pushed v* tag (creates it if missing)
-#   mode=status  -> only update the `daily-status` marker release body (no assets)
+#   mode=status  -> only update the status marker release body (no assets): `daily-status` (x86_64) or `daily-status-<arch>`
 # Env: FORGEJO_TOKEN, GITHUB_SERVER_URL, GITHUB_REPOSITORY, GITHUB_REF_NAME (tag, stable), GITHUB_SHA.
 # Existing releases are edited, never deleted/recreated, so watchers are not re-notified.
 set -euo pipefail
@@ -11,6 +11,8 @@ mode=$1; project=$2; iso=${3:-}; evidence=${4:-}; statusfile=${5:-}
 api="$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY"
 auth=(-H "Authorization: token $FORGEJO_TOKEN")
 sha=${GITHUB_SHA:-$(git rev-parse HEAD)}
+ARCH=${ARCH:-x86_64}
+DAILY_TAG=${DAILY_TAG:-daily}      # tests publish to a throw-away tag
 
 rel_id() { curl -fsS "${auth[@]}" "$api/releases/tags/$1" 2>/dev/null | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])' 2>/dev/null || true; }
 ensure_release() { # tag name prerelease body
@@ -38,35 +40,51 @@ put_asset() { # id file [name]
 
 case "$mode" in
 status)
-  id=$(ensure_release daily-status "$project daily build status (machine-readable)" true "pending")
+  marker=${DAILY_TAG}-status; [ "$ARCH" = x86_64 ] || marker=${DAILY_TAG}-status-$ARCH
+  id=$(ensure_release "$marker" "$project daily build status $ARCH (machine-readable)" true "pending")
   patch_body "$id" "$(cat "$statusfile")" ;;
 daily)
   size=$(du -h "$iso" | cut -f1); sum=$(cut -d' ' -f1 "$iso.sha256")
-  body="Rolling **pre-release** build of the $project live/installer ISO from \`main\` ($sha), $(date -u +%F\ %T) UTC.
-Replaced in place by the daily workflow after the QEMU boot + unattended install + reboot + web-probe test passed.
-
-- ISO: \`$project-daily-x86_64.iso\` ($size)
-- SHA256: \`$sum\`
-- Write to USB: see docs/ISO-INSTALL.md (Secure Boot must be OFF)
-
-$(cat "$statusfile" 2>/dev/null | python3 -c 'import json,sys;d=json.load(sys.stdin);print("Test result: "+d.get("summary",""))' 2>/dev/null)"
-  id=$(ensure_release daily "$project daily ISO (rolling, pre-release)" true "$body")
+  name=$project-daily-$ARCH.iso
+  id=$(ensure_release "$DAILY_TAG" "$project daily ISO (rolling, pre-release)" true "pending")
   [ -n "$id" ] || { echo "cannot create release"; exit 1; }
-  put_asset "$id" "$iso" "$project-daily-x86_64.iso"
-  printf '%s  %s\n' "$sum" "$project-daily-x86_64.iso" > /tmp/daily.sha256
-  put_asset "$id" /tmp/daily.sha256 "$project-daily-x86_64.iso.sha256"
-  [ -z "$evidence" ] || put_asset "$id" "$evidence" "$project-daily-test-evidence.tgz"
+  put_asset "$id" "$iso" "$name"
+  printf '%s  %s\n' "$sum" "$name" > /tmp/daily-$ARCH.sha256
+  put_asset "$id" /tmp/daily-$ARCH.sha256 "$name.sha256"
+  [ -z "$evidence" ] || put_asset "$id" "$evidence" "$project-daily-$ARCH-test-evidence.tgz"
+  # pre-multi-arch asset names (x86_64 only), removed once so a stale file never looks current
+  if [ "$ARCH" = x86_64 ]; then
+    for old in "$project-daily-test-evidence.tgz"; do
+      for a in $(curl -fsS "${auth[@]}" "$api/releases/$id/assets" | python3 -c 'import json,sys;print(" ".join(str(a["id"]) for a in json.load(sys.stdin) if a["name"]==sys.argv[1]))' "$old"); do curl -fsS -X DELETE "${auth[@]}" "$api/releases/$id/assets/$a" || true; done
+    done
+  fi
+  # release text: one line per architecture that has an ISO attached (each arch job rewrites it, assets are the truth)
+  body=$(curl -fsS "${auth[@]}" "$api/releases/$id/assets" | ARCH=$ARCH SUMMARY="$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d.get("summary",""))' "$statusfile" 2>/dev/null)" SHA=$sha PROJECT=$project python3 -c '
+import json, os, sys, time
+a = json.load(sys.stdin); p = os.environ["PROJECT"]
+rows = []
+for x in sorted(a, key=lambda x: x["name"]):
+    n = x["name"]
+    if n.startswith(p + "-daily-") and n.endswith(".iso"):
+        arch = n[len(p) + 7:-4]
+        rows.append("- **%s**: `%s` (%d MiB), SHA256 in `%s.sha256`" % (arch, n, x["size"] >> 20, n))
+print("Rolling **pre-release** build of the %s live/installer ISO from `main` (%s), updated %s UTC." % (p, os.environ["SHA"][:10], time.strftime("%F %T", time.gmtime())))
+print("Each architecture is replaced in place by its own daily job, only after the QEMU boot + install + reboot + web-probe tests passed on that architecture.\n")
+print("\n".join(rows)); print()
+print("Last test result (%s): %s" % (os.environ["ARCH"], os.environ["SUMMARY"]))
+print("\nWrite to USB: see docs/ISO-INSTALL.md (Secure Boot must be OFF). x86_64: UEFI or BIOS; aarch64 / riscv64: UEFI only.")
+')
   patch_body "$id" "$body" true
-  echo "DOWNLOAD $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/daily/$project-daily-x86_64.iso" ;;
+  echo "DOWNLOAD $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$DAILY_TAG/$name" ;;
 stable)
   tag=${GITHUB_REF_NAME:?}
   id=$(ensure_release "$tag" "$tag" false "Release $tag")
   [ -n "$id" ] || { echo "no release for $tag"; exit 1; }
-  n=$project-$tag-x86_64.iso
+  n=$project-$tag-$ARCH.iso
   put_asset "$id" "$iso" "$n"
-  printf '%s  %s\n' "$(cut -d' ' -f1 "$iso.sha256")" "$n" > /tmp/stable.sha256
-  put_asset "$id" /tmp/stable.sha256 "$n.sha256"
-  [ -z "$evidence" ] || put_asset "$id" "$evidence" "$project-$tag-iso-test-evidence.tgz"
+  printf '%s  %s\n' "$(cut -d' ' -f1 "$iso.sha256")" "$n" > /tmp/stable-$ARCH.sha256
+  put_asset "$id" /tmp/stable-$ARCH.sha256 "$n.sha256"
+  [ -z "$evidence" ] || put_asset "$id" "$evidence" "$project-$tag-$ARCH-iso-test-evidence.tgz"
   echo "DOWNLOAD $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$tag/$n" ;;
 *) echo "bad mode"; exit 2 ;;
 esac

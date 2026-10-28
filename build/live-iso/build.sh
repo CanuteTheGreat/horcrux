@@ -1,5 +1,6 @@
 #!/bin/bash
-# Gentoo live/installer ISO builder (x86_64, UEFI + BIOS hybrid).
+# Gentoo live/installer ISO builder: x86_64 (UEFI + BIOS hybrid), aarch64 / riscv64 (UEFI only).
+#   ARCH=x86_64|aarch64|riscv64 (default: the host's; per-arch facts in common/arch/<arch>.env)
 #   build/live-iso/build.sh [-o OUTDIR] [-n ISO-NAME-SUFFIX]
 # Needs docker (BuildKit) only. No privileged containers, no AWS.
 # Layers: <project> app image -> gentoo rootfs image -> export -> assemble ISO.
@@ -11,6 +12,15 @@ OUT=$REPO/build/iso; SUFFIX=$(date +%Y.%m.%d)
 JOBS=${JOBS:-4}
 while getopts o:n: o; do case $o in o) OUT=$OPTARG;; n) SUFFIX=$OPTARG;; *) exit 2;; esac; done
 . "$HERE/project/project.env"
+case $(uname -m) in x86_64|amd64) HOST_ARCH=x86_64;; aarch64|arm64) HOST_ARCH=aarch64;; riscv64) HOST_ARCH=riscv64;; *) HOST_ARCH=$(uname -m);; esac
+ARCH=${ARCH:-$HOST_ARCH}
+[ -f "$HERE/common/arch/$ARCH.env" ] || { echo "unsupported ARCH=$ARCH (see common/arch/)"; exit 2; }
+. "$HERE/common/arch/$ARCH.env"
+# Native builds only (x86_64 on rw-man-01..03, aarch64 on rw-man-04/05). A foreign ARCH needs --platform + binfmt
+# (qemu-user); the app stage then cannot use the host toolchain images, so it is refused unless forced.
+if [ "$ARCH" != "$HOST_ARCH" ] && [ -z "${ALLOW_EMULATED:-}" ]; then echo "ARCH=$ARCH on a $HOST_ARCH host needs emulation: set ALLOW_EMULATED=1 (slow)"; exit 2; fi
+PLAT=""; [ "$ARCH" != "$HOST_ARCH" ] && PLAT="--platform $DOCKER_PLATFORM"
+ARCHARGS="--build-arg ARCH=$ARCH --build-arg STAGE3_TAG=$STAGE3_TAG"
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 export DOCKER_BUILDKIT=1
 T0=$(date +%s); lap() { echo "== [$(( $(date +%s)-T0 ))s] $*"; }
@@ -31,20 +41,21 @@ cd "$HERE"; [ -x project/prepare.sh ] && (cd "$HERE" && sh project/prepare.sh) |
 
 if [ -z "${REUSE_ROOTFS:-}" ]; then
 lap "stage 1: application (cargo/trunk)"
-docker build -q -f project/Dockerfile.app --build-arg JOBS=$JOBS -t $TAG-app "$REPO"
+docker build $PLAT -f project/Dockerfile.app --build-arg JOBS=$JOBS -t $TAG-app "$REPO" > "$OUT/app-build.log" 2>&1 \
+    || { echo "application build failed (full log: $OUT/app-build.log)"; tail -40 "$OUT/app-build.log"; exit 1; }
 lap "stage 2: gentoo rootfs (stage3 + binhost + ccache)"
-docker build -f common/Dockerfile.rootfs --build-arg APP_IMAGE=$TAG-app --build-arg PROJECT=$PROJECT \
+docker build $PLAT $ARCHARGS -f common/Dockerfile.rootfs --build-arg APP_IMAGE=$TAG-app --build-arg PROJECT=$PROJECT \
     --build-arg ISO_LABEL=$ISO_LABEL --build-arg PROJECT_TITLE="$PROJECT_TITLE" -t $TAG-rootfs . 2>&1 | tee "$OUT/rootfs-build.log" | tail -40
 fi
 lap "stage 3: assembly toolbox"
 # Per-build tag: a shared live-iso-tools:latest could be untagged by the runner disk guard (or replaced by a
 # parallel build) between this build and the docker run below (Horcrux run 7066: "pull access denied").
-docker build -q -f common/Dockerfile.tools -t $TAG-tools .
+docker build $PLAT $ARCHARGS -q -f common/Dockerfile.tools -t $TAG-tools .
 lap "stage 4: export rootfs + assemble ISO (no bind mounts: works from a job container using the host docker)"
-ISO_NAME=$ISO_PREFIX-$SUFFIX-x86_64.iso
+ISO_NAME=$ISO_PREFIX-$SUFFIX-$ARCH.iso
 docker rm -f $TAG-asm >/dev/null 2>&1 || true
 cid=$(docker create $TAG-rootfs /bin/true)
-docker export "$cid" | docker run -i --name $TAG-asm --memory=8g --cpus=$JOBS $TAG-tools \
+docker export "$cid" | docker run -i $PLAT -e ARCH=$ARCH --name $TAG-asm --memory=8g --cpus=$JOBS $TAG-tools \
     sh -c "mkdir -p /work/root /out && tar -x -C /work/root --exclude='dev/*' && assemble-iso.sh /work/root /out/$ISO_NAME '$ISO_LABEL' '$PROJECT_TITLE' '$PROJECT'"
 docker rm -v "$cid" >/dev/null; cid=
 docker cp $TAG-asm:/out/$ISO_NAME "$OUT/$ISO_NAME"

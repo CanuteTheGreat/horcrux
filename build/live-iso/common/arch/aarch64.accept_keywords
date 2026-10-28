@@ -1,0 +1,5 @@
+# per-arch /etc/portage/package.accept_keywords/arch : packages that are only ~testing on this arch
+# (Patronus firewall appliance: conntrack-tools has no stable arm64 keyword)
+net-firewall/conntrack-tools ~arm64
+net-libs/libnetfilter_cthelper ~arm64
+net-libs/libnetfilter_cttimeout ~arm64

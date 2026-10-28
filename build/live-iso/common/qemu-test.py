@@ -33,6 +33,21 @@ PW = "Kx9!mQv2-tle-77Zp"          # >= 12 chars, mixed: passes the installer's s
 PW2, PW3 = "Rv7#nQ4-zeta-91Lk", "Tb3$wH8-omega-52Ud"   # console-menu password reset / factory reset
 FWD_WEB, FWD_SSH, FWD_WAN = 18443, 12222, 18444
 
+# ----------------------------------------------------------------------------- architectures
+import platform as _platform
+HOST_ARCH = {"amd64": "x86_64", "arm64": "aarch64"}.get(_platform.machine().lower(), _platform.machine().lower())
+ARCHS = {
+    "x86_64": dict(qemu="qemu-system-x86_64", serial="ttyS0", bios=True, nic="virtio-net-pci", gpu=["-device", "VGA"]),
+    "aarch64": dict(qemu="qemu-system-aarch64", serial="ttyAMA0", bios=False, nic="virtio-net-pci,romfile=", gpu=["-device", "virtio-gpu-pci"]),
+    "riscv64": dict(qemu="qemu-system-riscv64", serial="ttyS0", bios=False, nic="virtio-net-pci,romfile=", gpu=["-device", "virtio-gpu-pci"]),
+}
+SLOW = 1.0
+
+
+def T(sec):
+    """a timeout in seconds, scaled for emulation speed"""
+    return sec * SLOW
+
 
 # ----------------------------------------------------------------------------- png / screens
 def png_from_ppm(ppm_path, png_path):
@@ -179,7 +194,7 @@ class VM:
         self.p = subprocess.Popen(args + ["-qmp", f"unix:{self.qmp_path},server,nowait",
                                           "-chardev", f"socket,id=ser0,path={self.ser_path},server=on,wait=off", "-serial", "chardev:ser0",
                                           "-display", "none"],
-                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=open(f"{out}/{name}-qemu.err", "wb"))
         self.sock = None
         self.last_rx = time.time()
         self.poke = False          # serial TUI runs: send Ctrl-L when the line has been silent (see expect_screen)
@@ -222,7 +237,7 @@ class VM:
 
     def expect_raw(self, pat, timeout, consume=True):
         rx = re.compile(pat.encode() if isinstance(pat, str) else pat)
-        end = time.time() + timeout
+        end = time.time() + T(timeout)
         while time.time() < end:
             with self.lock:
                 m = rx.search(self.raw)
@@ -237,7 +252,7 @@ class VM:
 
     def expect_screen(self, pat, timeout):
         rx = re.compile(pat)
-        end = time.time() + timeout
+        end = time.time() + T(timeout)
         while time.time() < end:
             if rx.search(self.screen()):
                 return True
@@ -357,12 +372,34 @@ class Kbd:
 
 
 # ----------------------------------------------------------------------------- helpers
-def find_ovmf():
-    for code, vars_ in (("/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/OVMF/OVMF_VARS_4M.fd"),
-                        ("/usr/share/OVMF/OVMF_CODE.fd", "/usr/share/OVMF/OVMF_VARS.fd")):
-        if os.path.exists(code):
+FIRMWARE = {   # (CODE, VARS) candidates per arch, first existing pair wins
+    "x86_64": [("/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/OVMF/OVMF_VARS_4M.fd"),
+               ("/usr/share/OVMF/OVMF_CODE.fd", "/usr/share/OVMF/OVMF_VARS.fd")],
+    "aarch64": [("/usr/share/AAVMF/AAVMF_CODE.fd", "/usr/share/AAVMF/AAVMF_VARS.fd"),
+                ("/usr/share/AAVMF/AAVMF_CODE.no-secboot.fd", "/usr/share/AAVMF/AAVMF_VARS.fd"),
+                ("/usr/share/edk2/aarch64/QEMU_EFI-pflash.raw", "/usr/share/edk2/aarch64/vars-template-pflash.raw")],
+    "riscv64": [("/usr/share/qemu-efi-riscv64/RISCV_VIRT_CODE.fd", "/usr/share/qemu-efi-riscv64/RISCV_VIRT_VARS.fd"),
+                ("/usr/share/edk2/riscv/RISCV_VIRT_CODE.fd", "/usr/share/edk2/riscv/RISCV_VIRT_VARS.fd")],
+}
+ARCH = HOST_ARCH      # set from --arch in main()
+
+
+def find_ovmf(arch=None):
+    """UEFI firmware (CODE, VARS template) for the guest architecture (OVMF / AAVMF / edk2-riscv)"""
+    for code, vars_ in FIRMWARE[arch or ARCH]:
+        if os.path.exists(code) and os.path.exists(vars_):
             return code, vars_
-    raise SystemExit("no OVMF found")
+    raise SystemExit(f"no UEFI firmware found for {arch or ARCH} (apt: ovmf / qemu-efi-aarch64 / qemu-efi-riscv64)")
+
+
+def pflash_vars(dst):
+    """fresh writable copy of the firmware VARS; aarch64/riscv64 pflash banks must be exactly as large as CODE"""
+    code, vars_ = find_ovmf()
+    shutil.copy(vars_, dst)
+    want = os.path.getsize(code)
+    if ARCH != "x86_64" and os.path.getsize(dst) < want:
+        with open(dst, "ab") as f:
+            f.truncate(want)
 
 
 def http(port, path, method="GET", body=None, timeout=10):
@@ -441,7 +478,7 @@ def answer_toml(a, pubkey, pwhash):
 class Runner:
     def __init__(self, a):
         self.a = a
-        self.res = {"project": a.project, "mode": a.mode, "media": a.media, "flow": a.flow, "fs": a.fs, "steps": {}}
+        self.res = {"project": a.project, "arch": a.arch, "mode": a.mode, "media": a.media, "flow": a.flow, "fs": a.fs, "steps": {}}
         self.P = PROJECTS[a.project]
         self.finished_vga = False
 
@@ -458,32 +495,49 @@ class Runner:
             return a.lan_ip
         return (a.static_ip or "10.0.2.15") if installed else "10.0.2.15"
 
+    def accel(self):
+        """(kvm?, machine+cpu args) - KVM only when the guest arch is the host's and /dev/kvm exists"""
+        kvm = os.path.exists("/dev/kvm") and ARCH == HOST_ARCH
+        if ARCH == "x86_64":
+            return kvm, ["-machine", "q35,accel=kvm" if kvm else "q35", "-cpu", "host" if kvm else "max"]
+        if ARCH == "aarch64":
+            if kvm:
+                return True, ["-machine", "virt,gic-version=host,accel=kvm", "-cpu", "host"]
+            # pauth-impdef: the default QARMA5 pointer-auth emulation is the slowest part of TCG on arm64
+            return False, ["-machine", "virt,gic-version=max", "-accel", "tcg,thread=multi", "-cpu", "max,pauth-impdef=on"]
+        return kvm, ["-machine", "virt"] + (["-accel", "kvm", "-cpu", "host"] if kvm else ["-accel", "tcg,thread=multi", "-cpu", "rv64"])
+
     def qemu_args(self, iso, installed, nvars):
-        a = self.a
-        kvm = os.path.exists("/dev/kvm")
-        args = ["qemu-system-x86_64", "-machine", "q35,accel=kvm" if kvm else "q35", "-cpu", "host" if kvm else "max",
-                "-smp", "2", "-m", str(a.mem), "-drive", f"file={self.disk},if=virtio,format=qcow2"]
+        a, A = self.a, ARCHS[ARCH]
+        kvm, mach = self.accel()
+        args = [A["qemu"]] + mach + ["-smp", "2", "-m", str(a.mem), "-drive", f"file={self.disk},if=virtio,format=qcow2"]
         if a.fs == "zfs" and a.zfs_raid == "mirror":
             args += ["-drive", f"file={self.disk2},if=virtio,format=qcow2"]
+        nic = A["nic"]
         if a.project == "horcrux":
             ip = self.guest_ip(installed)
             args += ["-netdev", f"user,id=n0,hostfwd=tcp:127.0.0.1:{FWD_WEB}-{ip}:{self.P['port']},hostfwd=tcp:127.0.0.1:{FWD_SSH}-{ip}:22",
-                     "-device", "virtio-net-pci,netdev=n0,mac=52:54:00:00:00:01"]
+                     "-device", f"{nic},netdev=n0,mac=52:54:00:00:00:01"]
         else:
             # n0 = WAN (QEMU user net, DHCP), n1 = LAN (own user net; the firewall's LAN address is static)
             wan = f"hostfwd=tcp:127.0.0.1:{FWD_WAN}-10.0.2.15:{self.P['port']},hostfwd=tcp:127.0.0.1:{FWD_SSH + 1}-10.0.2.15:22"
-            args += ["-netdev", f"user,id=n0,{wan}", "-device", "virtio-net-pci,netdev=n0,mac=52:54:00:00:00:01",
+            args += ["-netdev", f"user,id=n0,{wan}", "-device", f"{nic},netdev=n0,mac=52:54:00:00:00:01",
                      "-netdev", f"user,id=n1,net=10.77.0.0/24,host=10.77.0.2,hostfwd=tcp:127.0.0.1:{FWD_WEB}-{a.lan_ip}:{self.P['port']},hostfwd=tcp:127.0.0.1:{FWD_SSH}-{a.lan_ip}:22",
-                     "-device", "virtio-net-pci,netdev=n1,mac=52:54:00:00:00:02"]
-        args += ["-device", "VGA", "-no-reboot", "-device", "qemu-xhci,id=xhci"]
+                     "-device", f"{nic},netdev=n1,mac=52:54:00:00:00:02"]
+        args += A["gpu"] + ["-no-reboot", "-device", "qemu-xhci,id=xhci"]
+        if ARCH != "x86_64":
+            args += ["-device", "usb-kbd,bus=xhci.0"]            # no PS/2 on virt: the VGA flows type through USB HID
         if a.mode == "uefi":
             code, _ = find_ovmf()
             args += ["-drive", f"if=pflash,format=raw,readonly=on,file={code}", "-drive", f"if=pflash,format=raw,file={nvars}"]
         if iso:
             if a.media == "usb":
                 args += ["-drive", f"if=none,id=stick,file={iso},format=raw,readonly=on", "-device", "usb-storage,bus=xhci.0,drive=stick,bootindex=0"]
-            else:
+            elif ARCH == "x86_64":
                 args += ["-drive", f"if=none,id=cd,file={iso},format=raw,media=cdrom,readonly=on", "-device", "ide-cd,bus=ide.0,drive=cd,bootindex=0"]
+            else:   # virt has no IDE: an optical drive on virtio-scsi
+                args += ["-device", "virtio-scsi-pci,id=scsi0", "-drive", f"if=none,id=cd,file={iso},format=raw,media=cdrom,readonly=on",
+                         "-device", "scsi-cd,bus=scsi0.0,drive=cd,bootindex=0"]
             if a.flow == "auto":
                 args += ["-drive", f"if=none,id=ans,file={self.answers},format=raw", "-device", "usb-storage,bus=xhci.0,drive=ans"]
         return args
@@ -496,7 +550,7 @@ class Runner:
         for d in (self.disk,) + ((self.disk2,) if a.fs == "zfs" and a.zfs_raid == "mirror" else ()):
             subprocess.check_call(["qemu-img", "create", "-q", "-f", "qcow2", d, f"{a.disk_gb}G"])
         if a.mode == "uefi":
-            shutil.copy(find_ovmf()[1], nvars)
+            pflash_vars(nvars)
         self.key = f"{a.out}/test_key"
         for f in (self.key, self.key + ".pub"):
             if os.path.exists(f):
@@ -556,7 +610,7 @@ class Runner:
             else:
                 self.drive_tui_vga(vm, kb)
             t = time.time()
-            while vm.alive() and time.time() - t < 180:
+            while vm.alive() and time.time() - t < T(180):
                 time.sleep(1)
             self.step("vm-stopped-after-install", not vm.alive(), f"install phase {int(time.time()-t0)}s")
         finally:
@@ -576,7 +630,7 @@ class Runner:
             self.step("no-answer-file-detected", vm.expect_raw(r"No answer file found[^\n]*", 480),
                       "the automated entry refuses to install without an answer file")
             self.step("falls-back-to-guided-installer", vm.expect_raw(r"INSTALLER-FALLBACK-INTERACTIVE", 60))
-            end = time.time() + 150
+            end = time.time() + T(150)
             while time.time() < end and vm.cyan_pixels(vm.grab()) < 50:
                 time.sleep(3)
             vm.shot("fallback-installer")
@@ -668,7 +722,7 @@ class Runner:
             self.step(f"tui-screen-{label}", ok, "reached" if ok else "NOT reached; screen:\n" + vm.screen())
         vm.poke = True
         ok = vm.expect_screen(r"Language, keyboard and time zone", 480)
-        self.step("tui-launched-on-serial", ok, "guided installer is on ttyS0" if ok else vm.screen())
+        self.step("tui-launched-on-serial", ok, f"guided installer is on {ARCHS[ARCH]['serial']}" if ok else vm.screen())
         b = ssh_banner(FWD_SSH if a.project == "horcrux" else FWD_SSH + 1)
         self.step("live-sshd-off", not b.startswith("SSH-"), f"banner on the live system: {b!r}")
         self.screens(vm, kb, wait)
@@ -687,7 +741,7 @@ class Runner:
 
         def stable(timeout):
             """wait until the VGA screen stops changing (two identical grabs 1.5 s apart)"""
-            end, prev = time.time() + timeout, None
+            end, prev = time.time() + T(timeout), None
             while time.time() < end:
                 g = vm.grab()
                 h = hash(g) if g else None
@@ -699,7 +753,7 @@ class Runner:
 
         def wait(pat, label):
             if st["h"] is None:                     # first screen: wait until the installer's cyan title shows up
-                end = time.time() + 400
+                end = time.time() + T(400)
                 while time.time() < end and vm.cyan_pixels(vm.grab()) < 50:
                     time.sleep(3)
                 self.step("vga-installer-started", time.time() < end, "installer title visible on the VGA console")
@@ -717,7 +771,7 @@ class Runner:
         time.sleep(20)
         vm.shot("08-installing")
         t = time.time()
-        while vm.alive() and time.time() - t < 1700:
+        while vm.alive() and time.time() - t < T(1700):
             time.sleep(20)
             if time.time() - t > 120 and self.disk_idle():
                 vm.shot("09-finished")
@@ -738,7 +792,7 @@ class Runner:
     def phase2(self, nvars):
         a, P = self.a, self.P
         if a.mode == "uefi":
-            shutil.copy(find_ovmf()[1], nvars)              # fresh NVRAM = first boot of the disk, firmware re-scans
+            pflash_vars(nvars)                                # fresh NVRAM = first boot of the disk, firmware re-scans
         t1 = time.time()
         vm = VM("2-installed", self.qemu_args(None, True, nvars), a.out)
         serial = a.flow != "tui-vga"
@@ -756,7 +810,7 @@ class Runner:
                 vm.shot("login-prompt")
                 self.serial_login(vm, P["old_pw"], expect_ok=False)
                 self.step("serial-root-login-with-chosen-password", self.serial_login(vm, PW, expect_ok=True), "lands in the console menu")
-            deadline = time.time() + 300
+            deadline = time.time() + T(300)
             got = None
             while time.time() < deadline:
                 sc, code, body = http(FWD_WEB, P["health"][0])
@@ -897,7 +951,7 @@ class Runner:
         vm.send("5\r")
         vm.expect_raw("Power off", 20)
         vm.send("y\r")
-        end = time.time() + 90
+        end = time.time() + T(90)
         while vm.alive() and time.time() < end:
             time.sleep(2)
         self.menu_off = True
@@ -971,9 +1025,12 @@ class Runner:
 
 
 def main():
+    global ARCH, SLOW
     ap = argparse.ArgumentParser()
     ap.add_argument("--iso", required=True)
     ap.add_argument("--project", required=True, choices=PROJECTS)
+    ap.add_argument("--arch", choices=list(ARCHS), default=HOST_ARCH, help="guest architecture (default: this host's)")
+    ap.add_argument("--slow", type=float, default=0, help="timeout multiplier for emulation (default: env QEMU_SLOW, else 1 with KVM / 3 native TCG / 10 cross TCG)")
     ap.add_argument("--mode", choices=["uefi", "bios"], default="uefi")
     ap.add_argument("--media", choices=["usb", "cdrom"], default="usb")
     ap.add_argument("--flow", choices=["auto", "tui", "tui-vga", "fallback"], default="auto")
@@ -988,6 +1045,12 @@ def main():
     ap.add_argument("--mem", type=int, default=4096)
     ap.add_argument("--disk-gb", type=int, default=24)
     args = ap.parse_args()
+    ARCH = args.arch
+    if args.mode == "bios" and not ARCHS[ARCH]["bios"]:
+        ap.error(f"{ARCH} has no legacy BIOS: use --mode uefi")
+    kvm = os.path.exists("/dev/kvm") and ARCH == HOST_ARCH
+    SLOW = args.slow or float(os.environ.get("QEMU_SLOW", 0) or 0) or (1.0 if kvm else 3.0 if ARCH == HOST_ARCH else 10.0)
+    print(f"arch={ARCH} host={HOST_ARCH} accel={'kvm' if kvm else 'tcg'} timeout-factor={SLOW}", flush=True)
     try:
         Runner(args).run()
     finally:

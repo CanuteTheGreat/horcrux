@@ -1,0 +1,1 @@
+# per-arch /etc/portage/package.accept_keywords/arch : packages that are only ~testing on this arch

@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# ci-run.sh daily|stable   -- run by .forgejo/workflows/live-iso.yml on the kvm-x86_64 runner.
-# build ISO -> QEMU boot/install/reboot/web tests (UEFI+USB, BIOS+CD) -> publish only if ALL passed.
+# ci-run.sh daily|stable   -- run by .forgejo/workflows/live-iso.yml, once per architecture (ARCH env; default = the host's):
+#   x86_64 on the kvm-x86_64 runner (KVM), aarch64 on the arm64 runner (native build, QEMU TCG: Graviton has no /dev/kvm).
+# build ISO -> QEMU boot/install/reboot/web tests (x86: UEFI+USB, BIOS+CD; arm64/riscv64: UEFI) -> publish only if ALL passed.
 # ALWAYS exits 0 (a red job would e-mail the owner): the outcome goes to the `daily-status`
 # marker release and the job summary; ~/.hermes iso-status-watch reads the marker.
 set -uo pipefail
 mode=${1:?daily|stable}
 HERE=$(cd "$(dirname "$0")" && pwd); cd "$HERE"
 . "$HERE/../project/project.env"
+case $(uname -m) in x86_64|amd64) HOST_ARCH=x86_64;; aarch64|arm64) HOST_ARCH=aarch64;; riscv64) HOST_ARCH=riscv64;; *) HOST_ARCH=$(uname -m);; esac
+ARCH=${ARCH:-$HOST_ARCH}; export ARCH
+. "$HERE/arch/$ARCH.env" || { echo "unsupported ARCH=$ARCH"; exit 0; }
 OUT=${OUT:-$PWD/../../../iso-out}; mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 EVI=$OUT/evidence; rm -rf "$EVI"; mkdir -p "$EVI"
 T0=$(date +%s); sha=${GITHUB_SHA:-$(git rev-parse HEAD)}
@@ -27,7 +31,7 @@ if [ "$mode" = stable ]; then tag=${GITHUB_REF_NAME:?}; suffix=$tag; else suffix
 
 echo "::group::host deps"
 export DEBIAN_FRONTEND=noninteractive
-(apt-get update -qq && apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-utils ovmf python3 curl ca-certificates openssh-client sshpass e2fsprogs openssl >/dev/null) || fail deps "apt install failed"
+(apt-get update -qq && apt-get install -y -qq --no-install-recommends $QEMU_PKGS qemu-utils python3 curl ca-certificates openssh-client sshpass e2fsprogs openssl >/dev/null) || fail deps "apt install failed"
 echo "::endgroup::"
 
 # stable gate: the repo's own CI must not be red on the tagged commit
@@ -48,9 +52,9 @@ BUILD_S=0
 if [ "$result" = pass ]; then
   echo "::group::build ISO"
   t=$(date +%s)
-  JOBS=${JOBS:-4} bash ../build.sh -o "$OUT" -n "$suffix" 2>&1 | tee "$EVI/build.log" | tail -60
+  ARCH=$ARCH JOBS=${JOBS:-4} bash ../build.sh -o "$OUT" -n "$suffix" 2>&1 | tee "$EVI/build.log" | tail -60
   BUILD_S=$(( $(date +%s)-t ))
-  ISO=$(ls "$OUT"/*-"$suffix"-x86_64.iso 2>/dev/null | head -1)
+  ISO=$(ls "$OUT"/*-"$suffix"-$ARCH.iso 2>/dev/null | head -1)
   [ -n "$ISO" ] && [ -s "$ISO" ] || fail build "no ISO produced (see build.log)"
   echo "::endgroup::"
 fi
@@ -66,6 +70,7 @@ if [ "$result" = pass ]; then
   # The matrix covers both firmware types, both media types, the unattended answer-file install, the
   # guided installer driven over the serial line AND on the VGA console (screenshots), the SSH
   # opt-in branch, and (Horcrux) xfs and a 2-disk ZFS mirror.
+  if [ "$ARCH" = x86_64 ]; then
   if [ "$PROJECT" = horcrux ]; then
     MATRIX=(
       "bios-cdrom-auto-ext4-dhcp-openconsole|--mode bios --media cdrom --flow auto --fs ext4 --console-open"
@@ -83,11 +88,32 @@ if [ "$result" = pass ]; then
       "bios-cdrom-fallback-no-answer-file|--mode bios --media cdrom --flow fallback"
     )
   fi
+  else
+  # arm64 / riscv64: UEFI only, QEMU TCG (a run takes ~15 min on a Graviton core). USB stick + optical drive,
+  # answer file / serial TUI / VGA TUI / no-answer-file fallback, and (Horcrux) the ZFS mirror.
+  if [ "$PROJECT" = horcrux ]; then
+    MATRIX=(
+      "uefi-usb-auto-ext4-dhcp-openconsole|--mode uefi --media usb --flow auto --fs ext4 --console-open"
+      "uefi-cdrom-tui-serial-xfs-static|--mode uefi --media cdrom --flow tui --fs xfs --static-ip 10.0.2.77"
+      "uefi-usb-tui-vga-ext4|--mode uefi --media usb --flow tui-vga --fs ext4"
+      "uefi-cdrom-fallback-no-answer-file|--mode uefi --media cdrom --flow fallback"
+      "uefi-usb-auto-zfs-mirror-sshpw|--mode uefi --media usb --flow auto --fs zfs --zfs-raid mirror --static-ip 10.0.2.99 --ssh-password-opt-in"
+    )
+  else
+    MATRIX=(
+      "uefi-usb-auto-sshpw|--mode uefi --media usb --flow auto --ssh-password-opt-in"
+      "uefi-cdrom-tui-serial|--mode uefi --media cdrom --flow tui"
+      "uefi-usb-tui-vga|--mode uefi --media usb --flow tui-vga"
+      "uefi-cdrom-auto-openconsole|--mode uefi --media cdrom --flow auto --console-open"
+      "uefi-cdrom-fallback-no-answer-file|--mode uefi --media cdrom --flow fallback"
+    )
+  fi
+  fi
   failed_list=""
   for entry in "${MATRIX[@]}"; do
     name=${entry%%|*}; args=${entry#*|}
     echo "::group::QEMU test $name"
-    python3 -u "$HERE/qemu-test.py" --iso "$ISO" --project "$PROJECT" $args --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
+    python3 -u "$HERE/qemu-test.py" --iso "$ISO" --project "$PROJECT" --arch "$ARCH" $args --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
     rc=${PIPESTATUS[0]}
     echo "::endgroup::"
     rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img
@@ -95,18 +121,19 @@ if [ "$result" = pass ]; then
   done
   TEST_S=$(( $(date +%s)-t ))
 fi
-[ "$result" = pass ] && summary="PASS: ${#MATRIX[@]} QEMU runs (4 installs + the no-answer-file fallback) (UEFI+USB, BIOS+CD; answer-file, serial TUI, VGA TUI) - installed system refuses password root SSH, accepts the key, serves the web UI on the chosen IP (build ${BUILD_S}s, test ${TEST_S}s)"
+ACCEL=KVM; [ -e /dev/kvm ] && [ "$ARCH" = "$HOST_ARCH" ] || ACCEL="TCG emulation, no KVM"
+[ "$result" = pass ] && summary="PASS ($ARCH, QEMU $ACCEL): ${#MATRIX[@]} QEMU runs (boot, install, reboot; $([ "$ARCH" = x86_64 ] && echo 'UEFI+USB, BIOS+CD; answer-file, serial TUI, VGA TUI, no-answer-file fallback' || echo 'UEFI, USB + optical; answer-file, serial TUI, VGA TUI, no-answer-file fallback')) - installed system refuses password root SSH, accepts the key, serves the web UI on the chosen IP (build ${BUILD_S}s, test ${TEST_S}s)"
 
 # evidence bundle (serial logs, screenshots, result.json - small)
-( cd "$EVI" && tar czf "$OUT/$PROJECT-$suffix-test-evidence.tgz" --exclude='target*.qcow2' --exclude='*.fd' --exclude='*.qmp' --exclude=test_key . )
+( cd "$EVI" && tar czf "$OUT/$PROJECT-$suffix-$ARCH-test-evidence.tgz" --exclude='target*.qcow2' --exclude='*.fd' --exclude='*.qmp' --exclude=test_key . )
 cat > "$OUT/status.json" <<JSON
-{"project":"$PROJECT","mode":"$mode","result":"$result","failed_step":"$failed_step","summary":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$summary"),"sha":"$sha","run_id":"${GITHUB_RUN_ID:-manual}","run_url":"${GITHUB_SERVER_URL:-}/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID:-0}","time":"$(date -u +%FT%TZ)","build_seconds":$BUILD_S,"test_seconds":$TEST_S}
+{"project":"$PROJECT","arch":"$ARCH","mode":"$mode","result":"$result","failed_step":"$failed_step","summary":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$summary"),"sha":"$sha","run_id":"${GITHUB_RUN_ID:-manual}","run_url":"${GITHUB_SERVER_URL:-}/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID:-0}","time":"$(date -u +%FT%TZ)","build_seconds":$BUILD_S,"test_seconds":$TEST_S}
 JSON
 cat "$OUT/status.json"
 
 if [ -n "${FORGEJO_TOKEN:-}" ]; then
   if [ "$result" = pass ]; then
-    bash "$HERE/publish.sh" "$mode" "$PROJECT" "$ISO" "$OUT/$PROJECT-$suffix-test-evidence.tgz" "$OUT/status.json" || { echo "::error::publish failed"; result=fail; sed -i 's/"result":"pass"/"result":"fail"/; s/"failed_step":""/"failed_step":"publish"/' "$OUT/status.json"; }
+    bash "$HERE/publish.sh" "$mode" "$PROJECT" "$ISO" "$OUT/$PROJECT-$suffix-$ARCH-test-evidence.tgz" "$OUT/status.json" || { echo "::error::publish failed"; result=fail; sed -i 's/"result":"pass"/"result":"fail"/; s/"failed_step":""/"failed_step":"publish"/' "$OUT/status.json"; }
   fi
   [ "$mode" = daily ] && bash "$HERE/publish.sh" status "$PROJECT" "" "" "$OUT/status.json" || true
 fi

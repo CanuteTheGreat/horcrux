@@ -1,50 +1,65 @@
 # syntax=docker/dockerfile:1.4
 # Gentoo live/installer root filesystem (shared by Horcrux and Patronus).
 #
-# Everything comes from Portage: gentoo/stage3 (openrc) + the official
-# generic x86-64 binhost (Ivy Bridge / Surface Pro safe: no x86-64-v3) for
-# every package whose USE matches, compiled locally only where the default
+# Everything comes from Portage: gentoo/stage3 (openrc, arch from STAGE3_TAG) + the official
+# per-arch binhost (common/arch/<arch>.binrepos.conf; x86_64 = generic x86-64, Ivy Bridge / Surface Pro
+# safe, no x86-64-v3) for every package whose USE matches, compiled locally only where the default
 # binpkg USE differs (qemu, libvirt, ...). BuildKit cache mounts keep the
 # binpkg dir, distfiles and ccache between builds, so a daily rebuild only
 # compiles what changed.
 ARG APP_IMAGE
+ARG STAGE3_TAG=amd64-openrc
 FROM ${APP_IMAGE} AS app
 
-FROM gentoo/stage3:amd64-openrc AS rootfs
+FROM gentoo/stage3:${STAGE3_TAG} AS rootfs
+ARG ARCH=x86_64
 ARG PROJECT=horcrux
 ARG ISO_LABEL=HORCRUX_LIVE
 ARG PROJECT_TITLE=Horcrux
 
-RUN --mount=type=cache,target=/var/cache/distfiles,sharing=locked \
+RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     emerge-webrsync -q && getuto >/dev/null 2>&1; true
 
+# Per-arch binhost + make.conf fragment. The cache mounts below are keyed by ARCH too, so a host that
+# builds several architectures never mixes their binpkgs.
+COPY common/arch/${ARCH}.binrepos.conf /etc/portage/binrepos.conf/gentoo.conf
+COPY common/arch/${ARCH}.make.conf /etc/portage/make.conf.arch
+COPY common/arch/${ARCH}.accept_keywords /etc/portage/package.accept_keywords/arch
 COPY common/portage/ /etc/portage/
+# Guard: the binhost must serve THIS toolchain (its Packages header CHOST == the rootfs CHOST), else
+# portage would silently skip every binpkg (or, worse, fetch foreign ones) and compile the world.
+RUN set -e; uri=$(sed -n 's/^sync-uri *= *//p' /etc/portage/binrepos.conf/gentoo.conf); \
+    want=$(portageq envvar CHOST); \
+    got=$(curl -fsSL "$uri/Packages" | sed -n 's/^CHOST: //p' | head -1); \
+    echo "binhost $uri serves CHOST=$got, rootfs CHOST=$want"; \
+    [ "$got" = "$want" ] || { echo "binhost/CHOST mismatch"; exit 1; }
+
 COPY project/portage/ /etc/portage/
 COPY common/packages.txt /tmp/packages.common.txt
 COPY project/packages.txt /tmp/packages.txt
 COPY project/packages-late.txt /tmp/packages-late.txt
 
 # Everything in one emerge so Portage resolves the whole set once.
-RUN --mount=type=cache,target=/var/cache/binpkgs,sharing=locked \
-    --mount=type=cache,target=/var/cache/distfiles,sharing=locked \
-    --mount=type=cache,target=/var/cache/ccache,sharing=locked \
+RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
+    --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
+    --mount=type=cache,id=ccache-${ARCH},target=/var/cache/ccache,sharing=locked \
     set -e; \
     emerge --oneshot dev-util/ccache; \
     emerge --noreplace $(cat /tmp/packages.common.txt /tmp/packages.txt | grep -v '^#' | tr '\n' ' ') ; \
     ls /lib/modules /boot
 
 # Packages that build kernel modules (ZFS) need the kernel from the step above already installed
-RUN --mount=type=cache,target=/var/cache/binpkgs,sharing=locked \
-    --mount=type=cache,target=/var/cache/distfiles,sharing=locked \
-    --mount=type=cache,target=/var/cache/ccache,sharing=locked \
+RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
+    --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
+    --mount=type=cache,id=ccache-${ARCH},target=/var/cache/ccache,sharing=locked \
     set -e; pk=$(grep -v '^#' /tmp/packages-late.txt | tr '\n' ' '); \
     if [ -n "$(echo $pk)" ]; then emerge --noreplace $pk; fi
 
 # Small extras (console menu: argon2 CLI + sqlite3) in their own layer: editing the list does not redo the big emerge
 COPY common/packages-extra.txt /tmp/packages-extra.txt
-RUN --mount=type=cache,target=/var/cache/binpkgs,sharing=locked \
-    --mount=type=cache,target=/var/cache/distfiles,sharing=locked \
-    --mount=type=cache,target=/var/cache/ccache,sharing=locked \
+RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
+    --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
+    --mount=type=cache,id=ccache-${ARCH},target=/var/cache/ccache,sharing=locked \
     set -e; pk=$(grep -v '^#' /tmp/packages-extra.txt | tr '\n' ' '); \
     if [ -n "$(echo $pk)" ]; then emerge --noreplace $pk; fi
 
@@ -55,7 +70,7 @@ COPY common/overlay/ /
 
 COPY common/setup-rootfs.sh /tmp/setup-rootfs.sh
 COPY project/setup.sh /tmp/project-setup.sh
-RUN --mount=type=cache,target=/var/cache/binpkgs,sharing=locked \
-    --mount=type=cache,target=/var/cache/distfiles,sharing=locked \
+RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
+    --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     PROJECT="${PROJECT}" ISO_LABEL="${ISO_LABEL}" PROJECT_TITLE="${PROJECT_TITLE}" \
     sh /tmp/setup-rootfs.sh && sh /tmp/project-setup.sh && rm -f /tmp/*.sh /tmp/packages*.txt

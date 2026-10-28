@@ -3,7 +3,7 @@
 set -eu
 : "${PROJECT:?}" "${ISO_LABEL:?}" "${PROJECT_TITLE:?}"
 
-chmod +x /etc/init.d/live-* /usr/libexec/live-* /usr/bin/live-installer 2>/dev/null || true
+chmod +x /etc/init.d/live-* /usr/libexec/live-* /usr/libexec/console-menu-session /usr/bin/live-installer 2>/dev/null || true
 
 # --- the stage3 *container* image makes OpenRC think it runs in docker (skips root remount,
 # localmount, devfs ...): this rootfs boots on real hardware / KVM
@@ -25,7 +25,9 @@ printf '# live system: root is an overlay; the installer writes the real fstab\n
 # --- identity ---------------------------------------------------------------
 echo "${PROJECT}" > /etc/hostname
 printf 'hostname="%s"\n' "${PROJECT}" > /etc/conf.d/hostname
-sed -i 's/^#\?s0:.*//' /etc/inittab
+# no stock serial getty: the live-serial service owns the console UART (stage3 ships s0:/ttyS0 on x86 and
+# f0:/ttyAMA0 on arm64; a second getty on the same UART steals input and prints stray login prompts)
+sed -i -E '/^#?[a-z][0-9a-z]*:[0-9]*:respawn:\/sbin\/agetty .*tty(S|AMA|AML|MXC|USB)[0-9]+ /d' /etc/inittab
 cat > /etc/os-release <<OSR
 NAME="${PROJECT_TITLE}"
 ID=${PROJECT}
@@ -44,7 +46,7 @@ sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/; s/^#\?Passwo
 grep -q '^PermitRootLogin prohibit-password' /etc/ssh/sshd_config || echo 'PermitRootLogin prohibit-password' >> /etc/ssh/sshd_config
 grep -q '^PasswordAuthentication no' /etc/ssh/sshd_config || echo 'PasswordAuthentication no' >> /etc/ssh/sshd_config
 mkdir -p /etc/sudoers.d && echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/wheel && chmod 440 /etc/sudoers.d/wheel
-grep -q ttyS0 /etc/securetty 2>/dev/null || echo ttyS0 >> /etc/securetty 2>/dev/null || true
+for t in ttyS0 ttyS1 ttyAMA0 hvc0; do grep -qx $t /etc/securetty 2>/dev/null || echo $t >> /etc/securetty 2>/dev/null || true; done
 # Wi-Fi is handled by iwd (it also does DHCP for wlan), wired NICs by dhcpcd
 mkdir -p /etc/iwd && printf '[General]\nEnableNetworkConfiguration=true\n' > /etc/iwd/main.conf
 grep -q '^denyinterfaces' /etc/dhcpcd.conf 2>/dev/null || printf '\ndenyinterfaces wlan* wlp*\n' >> /etc/dhcpcd.conf

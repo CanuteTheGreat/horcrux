@@ -1,7 +1,7 @@
 # Installing Horcrux from the live ISO
 
-Horcrux ships a Gentoo-based **live + installer ISO** (x86_64, UEFI **and** legacy BIOS, hybrid:
-the same file boots from a CD/VM *and* from a USB stick). It contains a **guided installer** (a text-mode wizard that works on a VGA/laptop screen and on a serial
+Horcrux ships a Gentoo-based **live + installer ISO** (x86_64 UEFI **and** legacy BIOS, aarch64 UEFI; hybrid:
+the same file boots from a CD/VM *and* from a USB stick; see "Architectures"). It contains a **guided installer** (a text-mode wizard that works on a VGA/laptop screen and on a serial
 console), an **unattended installer** driven by an answer file, and a live system you can look around in.
 There is no default password anywhere: the installer makes you set one, and SSH on the installed system is
 key-only unless you opt in.
@@ -15,6 +15,37 @@ key-only unless you opt in.
 | **Stable** build (only for `v*` releases that met the criteria below) | `.../releases/download/<tag>/horcrux-<tag>-x86_64.iso` |
 
 Always verify: `sha256sum -c horcrux-daily-x86_64.iso.sha256` (run it next to the downloaded files).
+
+## Architectures
+
+| arch | boot | serial console | built on | tested with | assets |
+|---|---|---|---|---|---|
+| **x86_64** | UEFI **and** legacy BIOS (hybrid ISO) | `ttyS0` | rw-man-01 (`kvm-x86_64` runner) | QEMU/KVM, OVMF + SeaBIOS | `horcrux-daily-x86_64.iso` |
+| **aarch64** | UEFI only (GRUB `arm64-efi`, `EFI/BOOT/BOOTAA64.EFI`); there is no BIOS on arm64 | `ttyAMA0` (PL011) | rw-man-04/05 (`arm64` runner, native Graviton build, no emulation) | QEMU `virt` + AAVMF; **TCG** (the Graviton hosts have no `/dev/kvm`), timeouts x3 | `horcrux-daily-aarch64.iso` |
+| riscv64 | UEFI only (GRUB `riscv64-efi`) | `ttyS0` | not built in CI yet | not tested | - |
+
+Per-architecture facts (stage3 tag, GRUB target, EFI file name, serial device, squashfs filter, the **per-arch
+binhost**) live in `build/live-iso/common/arch/<arch>.env|.binrepos.conf|.make.conf`. The rootfs build checks that
+the binhost serves the rootfs's own `CHOST` (so an aarch64 build can never pull x86 packages or silently fall back
+to compiling everything), and the BuildKit cache mounts are keyed by arch. Download URLs:
+
+| | URL |
+|---|---|
+| daily aarch64 | `https://git.canutethegreat.com/CanuteTheGreat/horcrux/releases/download/daily/horcrux-daily-aarch64.iso` (+ `.sha256`) |
+| stable aarch64 | `.../releases/download/<tag>/horcrux-<tag>-aarch64.iso` |
+
+Each architecture has its own job, its own assets and its own status marker (`daily-status` for x86_64,
+`daily-status-aarch64`), so a failing arch never blocks the other. Test evidence is attached per arch
+(`horcrux-daily-<arch>-test-evidence.tgz`). Build one yourself on a native host: `ARCH=aarch64 build/live-iso/build.sh -o ./iso`
+(`ALLOW_EMULATED=1` is needed to build a foreign arch under qemu-user; not supported for the app stage).
+On arm64 machines the ISO is written to the stick exactly as on x86 (`dd`); firmware must be UEFI (Secure Boot off).
+Test it in QEMU: `qemu-system-aarch64 -machine virt -cpu max -m 4G -drive if=pflash,format=raw,readonly=on,file=AAVMF_CODE.fd -drive if=pflash,format=raw,file=VARS.fd -device qemu-xhci -device usb-storage,drive=iso -drive if=none,id=iso,file=horcrux-daily-aarch64.iso,format=raw -device virtio-gpu-pci -device usb-kbd -serial stdio`.
+
+**riscv64** is not in CI: there is no RISC-V runner, the official binhost has only ~600 riscv64 packages (about 40 of the
+ones the image needs would compile from source under emulation: QEMU, libvirt, docker, ZFS, GRUB, dracut, ...), no
+`rust:bookworm` image and no `trunk` binary exist for it, and the registered binfmt handler needed for emulated builds is not present on the
+runners. The code paths are ready (`arch/riscv64.env`, harness `--arch riscv64`); what is missing is a native builder or a
+cross-compile stage for the app plus a long-running weekly emulated job.
 
 ## Write it to a USB stick (this ERASES the stick)
 

@@ -1,25 +1,25 @@
 #!/sbin/openrc-run
-# Serial console on ttyS0 (only when console=ttyS0 is on the kernel command line).
+# Serial console on the UART named by console= on the kernel command line (ttyS0, ttyAMA0 on aarch64, hvc0 ...).
 #   live + <proj>.installer=1 : the guided installer
 #   live otherwise            : autologin root shell (root password is locked; sshd is off)
 #   installed system          : normal login prompt
-description="Serial console on ttyS0"
+description="Serial console (the kernel console= UART)"
 supervisor=supervise-daemon
 command=/sbin/agetty
 depend() { after local live-installer; }
 start_pre() {
-	grep -q 'console=ttyS0' /proc/cmdline || { einfo "no console=ttyS0, skipping"; return 1; }
+	tty=$(/usr/libexec/live-serial-dev) || { einfo "no serial console= on the kernel command line, skipping"; return 1; }
 	if grep -q 'rd.live.image' /proc/cmdline; then
 		p=$(sed 's/-live$//' /etc/live-iso-label 2>/dev/null)
 		if grep -q "${p}.installer=1" /proc/cmdline; then
-			command_args="-L -n -l /usr/libexec/live-installer-session 115200 ttyS0 vt100"
+			command_args="-L -n -l /usr/libexec/live-installer-session 115200 $tty vt100"
 		else
-			command_args="-L -a root 115200 ttyS0 vt100"
+			command_args="-L -a root 115200 $tty vt100"
 		fi
 	elif [ -e /etc/live-installer/console-open ]; then
 		# installed system, console menu opened by the installer: no login prompt
-		command_args="-L -n -l /usr/libexec/console-menu-session 115200 ttyS0 vt100"
+		command_args="-L -n -l /usr/libexec/console-menu-session 115200 $tty vt100"
 	else
-		command_args="-L 115200 ttyS0 vt100"
+		command_args="-L 115200 $tty vt100"
 	fi
 }

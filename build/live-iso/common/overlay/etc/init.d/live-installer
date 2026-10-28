@@ -1,6 +1,6 @@
 #!/sbin/openrc-run
 # Live-session console setup. Does nothing on an installed system.
-#   <proj>.installer=1   guided installer on tty1 (or on ttyS0 when console=ttyS0 is on the command line)
+#   <proj>.installer=1   guided installer on tty1 (or on the serial UART when console= names one)
 #   <proj>.autoinstall=1 unattended install driven by an answer file (see docs/ISO-INSTALL.md)
 #   neither              root shell on the consoles (the live system; sshd is OFF, root password is locked)
 description="Live session: guided installer / unattended install / console shells"
@@ -20,7 +20,7 @@ set_tty1() {
 start() {
 	grep -q 'rd.live.image' /proc/cmdline || return 0
 	p=$(proj)
-	serial=no; grep -q 'console=ttyS0' /proc/cmdline && serial=yes
+	serial=no; /usr/libexec/live-serial-dev >/dev/null && serial=yes
 	dmesg -n 1 2>/dev/null
 	if grep -q "${p}.autoinstall=1" /proc/cmdline; then
 		set_tty1 "--noclear -a root"

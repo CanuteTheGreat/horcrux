@@ -5,6 +5,6 @@ case $- in *i*) _cm_i=1 ;; *) _cm_i= ;; esac
 if [ -n "$_cm_i" ] && [ -z "$CONSOLE_MENU_INNER" ] && [ "$(id -u)" = 0 ] \
    && [ -e /etc/live-installer/installed ] && [ ! -e /etc/live-installer/no-console-menu ]; then
 	case "$(tty 2>/dev/null)" in
-		/dev/tty1|/dev/ttyS0|/dev/hvc0) CONSOLE_MENU_INNER=1; export CONSOLE_MENU_INNER; /usr/bin/console-menu; exit 0 ;;
+		/dev/tty1|/dev/ttyS[0-9]*|/dev/ttyAMA[0-9]*|/dev/hvc0) CONSOLE_MENU_INNER=1; export CONSOLE_MENU_INNER; /usr/bin/console-menu; exit 0 ;;
 	esac
 fi

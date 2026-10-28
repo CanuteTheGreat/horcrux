@@ -5,7 +5,8 @@
 FROM rust:1-bookworm AS app
 RUN apt-get update && apt-get install -y --no-install-recommends clang libvirt-dev libpam0g-dev pkg-config curl ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN rustup target add wasm32-unknown-unknown
-RUN curl -fsSL https://github.com/trunk-rs/trunk/releases/latest/download/trunk-x86_64-unknown-linux-gnu.tar.gz | tar xz -C /usr/local/bin
+# static (musl) build: the glibc one needs a newer libc than bookworm
+RUN curl -fsSL https://github.com/trunk-rs/trunk/releases/latest/download/trunk-$(uname -m)-unknown-linux-musl.tar.gz | tar xz -C /usr/local/bin
 WORKDIR /src
 COPY . .
 ENV CARGO_TARGET_DIR=/cache/target CARGO_PROFILE_RELEASE_DEBUG=0
