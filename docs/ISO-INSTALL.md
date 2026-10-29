@@ -269,7 +269,7 @@ to disable Secure Boot hold *Volume Up* while powering on -> Security -> Secure 
 The ISO is built for generic x86-64 (no AVX2 requirement; the Surface test runs `-cpu IvyBridge`), so it runs on Ivy Bridge. 4 GB RAM is enough for the live
 system and installer (the live root is a RAM overlay; the image is read from the stick). There is **no wired NIC**: the
 installer works offline (installs from the image), but the web UI needs the network afterwards - plug a USB Ethernet
-adapter or join Wi-Fi (`nmtui` on the installed Surface desktop, `iwctl`/the installer's Wi-Fi screen on the live system); the Marvell 88W8797 `mwifiex_pcie` firmware ships in `linux-firmware`.
+adapter or join Wi-Fi (`nmtui` on the installed Surface desktop, `iwctl`/the installer's Wi-Fi screen on the live system); the Marvell 88W8797 `mwifiex` firmware (SDIO/USB/PCIe variants) ships in `linux-firmware`.
 The Type Cover keyboard works if it presents as USB-HID (use a USB keyboard through a hub if the console does not react).
 
 **Surface variant ISO** (`HW_PROFILE=surface build/live-iso/build.sh`, asset `horcrux-surface-<date>-x86_64.iso`): the same installer, plus the hardware profile

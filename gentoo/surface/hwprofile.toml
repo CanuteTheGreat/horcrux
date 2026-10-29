@@ -28,7 +28,7 @@ kernel = "mainline"      # no linux-surface patches needed (see gentoo/surface/R
 # Buggy ACPI _LID on SP1/SP2: after S3 the kernel believes the lid is closed -> endless suspend/resume loop.
 # linux-surface issue #381; mainline has no DMI quirk for it.
 kernel_cmdline = ["button.lid_init_state=open"]
-notes = "Ivy Bridge i5-3317U (no AVX2/FMA), HD 4000, 4 GB, Marvell 88W8797 Wi-Fi/BT, Wacom pen + touch over USB-HID"
+notes = "Ivy Bridge i5-3317U (no AVX2/FMA), HD 4000, 4 GB, Marvell 88W8797 Wi-Fi/BT (mwifiex: SDIO/USB/PCIe all present in the kernel), pen + touch over USB-HID"
 
 [[models]]
 id = "surface-pro-3"

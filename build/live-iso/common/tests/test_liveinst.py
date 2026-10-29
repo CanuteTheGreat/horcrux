@@ -335,7 +335,12 @@ class LuksRoot(unittest.TestCase):
     def test_verify_initramfs(self):
         ok = "cryptsetup\nusbhid.ko\nhid-multitouch.ko\nhid-microsoft.ko\nxhci-pci.ko\ndm-crypt.ko"
         self.assertEqual(LR.verify_initramfs(ok), [])
-        self.assertEqual(LR.verify_initramfs("cryptsetup\nusbhid.ko"), ["hid-multitouch", "hid-microsoft", "xhci", "dm-crypt"])
+        self.assertEqual(LR.verify_initramfs("cryptsetup\nusbhid.ko"), ["dm-crypt", "xhci", "hid-multitouch", "hid-microsoft"])
+        # Gentoo dist kernel: usbhid / xhci-pci built in, dm-crypt + hid_* are modules
+        cfg = "CONFIG_USB_HID=y\nCONFIG_USB_XHCI_PCI=y\nCONFIG_DM_CRYPT=m\n"
+        lst = "cryptsetup\ndm-crypt.ko\nhid-multitouch.ko\nhid-microsoft.ko"
+        self.assertEqual(LR.verify_initramfs(lst, cfg), [])
+        self.assertEqual(LR.verify_initramfs("cryptsetup\nhid-microsoft.ko", cfg), ["dm-crypt", "hid-multitouch"])
 
     def test_validate(self):
         c = {"fs": "xfs-luks", "luks_passphrase": "short", "disks": ["/dev/sda"]}

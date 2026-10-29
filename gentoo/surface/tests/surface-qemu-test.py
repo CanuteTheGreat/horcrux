@@ -152,7 +152,7 @@ class T:
             self.step("hardware-profile-autodetected", "hardware profile: surface / surface-pro-1" in log, "installer log: 'hardware profile: surface / surface-pro-1'")
             m = re.search(r"memory cost (\d+) MiB \(RAM (\d+) MB\)", log)
             self.step("luks-argon2id-memory-sane", bool(m) and int(m.group(1)) <= 1024 and int(m.group(1)) * 4 <= int(m.group(2)), m.group(0) if m else "no memory-cost line")
-            self.step("initramfs-has-keyboard-stack", "rebuilding the initramfs" in log and not re.search(r"dracut: .*(failed|cannot)", log, re.I), "rebuilt in the target with crypt + usbhid + hid_multitouch + hid_microsoft")
+            self.step("initramfs-has-keyboard-stack", "all reachable at the passphrase prompt" in log, "installer's lsinitrd check: cryptsetup, dm-crypt, usbhid, xhci, hid-multitouch, hid-microsoft")
             self.step("installer-finished", ok and b"AUTOINSTALL-OK" in ok.group(0), ok.group(0).decode() if ok else "timeout")
             vm.shot("install-done")
             end = time.time() + 240
@@ -203,8 +203,8 @@ class T:
         s("root-is-xfs-on-dm-crypt", re.search(r"^xfs /dev/mapper/hxroot", flat, re.M) is not None, flat.splitlines()[0] if flat else "")
         mo = flat.splitlines()[0] if flat else ""
         s("xfs-mount-options-default-no-discard", "discard" not in mo, mo)
-        s("boot-is-ext4-unencrypted", "ext4" in flat.splitlines()[1:2][0:1].__str__(), "/boot ext4")
-        s("luks2-argon2id", "argon2id" in flat and "Version:       \t2" in flat.replace("  ", " ").replace(" \t", "       \t") or ("argon2id" in flat and "2" in re.findall(r"Version:\s+(\d)", flat)), re.sub(r"\s+", " ", " ".join(l for l in flat.splitlines() if "Memory" in l or "PBKDF" in l)))
+        s("boot-is-ext4-unencrypted", flat.splitlines()[1].strip() == "ext4", "/boot ext4 on its own partition")
+        s("luks2-argon2id", "argon2id" in flat and re.search(r"Version:\s+2", flat) is not None, re.sub(r"\s+", " ", " ".join(l for l in flat.splitlines() if "Memory" in l or "PBKDF" in l or "Version" in l)))
         mem = re.search(r"Memory:\s+(\d+)", flat)
         s("luks-memory-cost-within-cap", bool(mem) and int(mem.group(1)) <= 1048576, f"{mem.group(1)} KiB" if mem else "not found")
         s("lid-quirk-on-cmdline", "button.lid_init_state=open" in flat, "SP1/SP2 buggy _LID workaround from the hardware profile")
@@ -221,9 +221,10 @@ class T:
         rc, out = self.ssh("rc-service NetworkManager status; command -v nmtui nmcli wvkbd-mobintl sway foot swaybar surface-hidpi surface-status; "
                            "cat /etc/NetworkManager/conf.d/10-surface.conf | grep powersave; rc-service iwd status 2>&1 | head -1")
         s("networkmanager-and-desktop-tools", "started" in out and all(x in out for x in ("nmtui", "wvkbd-mobintl", "/sway", "foot", "swaybar")) and "wifi.powersave = 2" in out, re.sub(r"\s+", " ", out)[:240])
-        rc, out = self.ssh("rc-service horcrux-api status; ls /boot/initramfs-*; lsinitrd /boot/initramfs-* 2>/dev/null | grep -cE 'usbhid|hid-multitouch|hid-microsoft|xhci-pci|cryptsetup'")
+        rc, out = self.ssh("rc-service horcrux-api status")
         s("horcrux-api-runs-on-ivybridge", "started" in out, "horcrux-api service started under -cpu IvyBridge")
-        s("initramfs-contains-hid-and-crypt", re.search(r"(\d+)\s*$", out.strip()) is not None and int(re.search(r"(\d+)\s*$", out.strip()).group(1)) >= 5, "lsinitrd: usbhid, hid-multitouch, hid-microsoft, xhci-pci, cryptsetup")
+        rc, out = self.ssh("lsinitrd /boot/initramfs-*.img 2>/dev/null | grep -oE 'cryptsetup|dm-crypt|hid-multitouch|hid-microsoft' | sort -u | tr '\\n' ' '; echo; grep -E 'CONFIG_(USB_HID|USB_XHCI_PCI|HID_GENERIC)=' /boot/config-* | sed 's/.*://' | tr '\\n' ' '")
+        s("initramfs-contains-hid-and-crypt", all(x in out for x in ("cryptsetup", "dm-crypt", "hid-multitouch", "hid-microsoft", "CONFIG_USB_HID=y", "CONFIG_USB_XHCI_PCI=y")), re.sub(r"\s+", " ", out))
         # desktop session (autologin on tty1 -> sway)
         end, ok = time.time() + 240, False
         while time.time() < end:

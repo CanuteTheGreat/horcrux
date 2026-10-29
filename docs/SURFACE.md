@@ -9,7 +9,7 @@ Status: **built and emulated, not yet run on the real device.** Everything below
 | | |
 |---|---|
 | SP1 / SP2 (Ivy Bridge, 2013) | **mainline kernel** (`gentoo-kernel-bin`) + the quirks listed here |
-| SP3 and newer, Surface Laptop/Book/Go | linux-surface patched kernel recommended (`gentoo/surface/kernel/`: pinned series for **7.2.x**, patches verified to apply; not shipped on the ISO) |
+| SP3 and newer, Surface Laptop/Book/Go | linux-surface patched kernel recommended (`gentoo/surface/kernel/`: pinned series **6.18** = the ISO's kernel `6.18.57-gentoo-dist-bin`, and 7.2; all 15/16 patches verified to apply with `patch -Np1`; not shipped on the ISO) |
 
 ### Evidence
 
@@ -17,8 +17,8 @@ Status: **built and emulated, not yet run on the real device.** Everything below
    maintainer *archseer*: "there's not a lot of SP1/2 users anymore, and they largely **work out of the box without the
    need for our patches**." The wiki's feature matrix lists SP1 with every feature working and *none* of the footnotes
    "requires linux-surface kernel" (those are attached to touchscreen/pen on SP4 and newer).
-2. **What the patch set contains** (`linux-surface/linux-surface` @ `8c62d84`, `patches/7.2`, 15 patches, BASE `v7.2.13`; the
-   config fragment `configs/surface-7.2.config` enables exactly these): Surface Aggregator Module (`SURFACE_AGGREGATOR*`, `SURFACE_HID`,
+2. **What the patch set contains** (`linux-surface/linux-surface` @ `8c62d84`, `patches/6.18` (16 patches, BASE `v6.18.59`) and `patches/7.2` (15, BASE `v7.2.13`); the
+   config fragments `configs/surface-6.18.config` / `surface-7.2.config` enable exactly these): Surface Aggregator Module (`SURFACE_AGGREGATOR*`, `SURFACE_HID`,
    `SURFACE_KBD`, battery/charger/temp/fan over SAM: SP5+/Laptop/Book 2+), **IPTS** and **ITHC** touch (SP4+/SL: Intel's touch
    processor), cameras (IPU3, OV5693/OV8865: SP4+), `SURFACE_3_*`, `SURFACE_PRO3_BUTTON`, `SURFACE_GPE`, `INTEL_THC_HID`/`QUICKSPI`,
    the secure-boot/lockdown patches, `ath10k`, AMD GPIO. **None of these exist on the SP1** (no SAM, no IPTS, no cameras
@@ -28,13 +28,17 @@ Status: **built and emulated, not yet run on the real device.** Everything below
    `HID_QUIRK_NO_INIT_REPORTS` for them; the touchscreen runs on `hid-multitouch`, the pen on `wacom`/`hid-multitouch`.
    linux-surface's `0010-surface-typecover.patch` only touches the **2017** Type Cover USB id, Surface Go 3's USB delay and
    the backlight. No patch changes anything an SP1 uses.
-4. **Wi-Fi: mwifiex_pcie with the Marvell 88W8797.** linux-surface's `0003-mwifiex.patch` adds a DMI table with a PCI-bridge
-   reset/"no bridge D3" quirk for **Surface Pro 4, 5, 5 LTE, 6, Book 1/2, Laptop 1/2**. Mainline 7.2 already carries
-   the older `QUIRK_FW_RST_D3COLD` table for the same models. **The SP1 is in neither table**; the wiki's "Marvell 88W8897
-   quirks" page lists per-device workarounds (ASPM L1.x, D3cold reset) for SP3-SP6/Book/Laptop only. So the SP1 needs
-   no driver patch. What the page does say for *all* Marvell-PCIe Surfaces is that card power saving misbehaves after
-   suspend: we therefore ship `wifi.powersave = 2` (off) in NetworkManager. The firmware (`mrvl/pcie8897_uapsta.bin` /
-   `mwifiex_pcie` family) is in `linux-firmware`, redistributable, already on the ISO.
+4. **Wi-Fi: Marvell 88W8797 via `mwifiex` (transport still to be confirmed on the device).** Mainline's `mwifiex_pcie` knows only the 88W8766P (`11ab:2b30`),
+   the **88W8897 (`11ab:2b38`)** and the 88W8997 (`11ab:2b42`) (`pcie.h`, v6.18/v7.2); **there is no 88W8797 PCIe id**. The 88W8797 is supported by
+   `mwifiex_sdio` (SDIO id `0x9129`, firmware `mrvl/sd8797_uapsta.bin`) and `mwifiex_usb` (`usb8797_uapsta.bin`), and its Bluetooth by `btmrvl_sdio`. The brief's
+   "mwifiex_pcie" is probably the SP3/SP4 chip (88W8897) carried over; which bus the SP1's chip really sits on is one of the things only the device can say
+   (`horcrux-surface-report` prints `lspci -nnk`, `lsusb` and `/sys/bus/sdio`). **Verified in the ISO's kernel/rootfs:** `mwifiex_pcie`, `mwifiex_sdio`, `mwifiex_usb`,
+   `btmrvl_sdio`, `sdhci-pci` modules and all three firmware files are present, so any of the three paths loads without a rebuild.
+   linux-surface's `0003-mwifiex.patch` adds a DMI table with a PCI-bridge reset/"no bridge D3" quirk for **Surface Pro 4, 5, 5 LTE, 6, Book 1/2, Laptop 1/2** (the PCIe
+   88W8897 machines); mainline carries the older `QUIRK_FW_RST_D3COLD` table for the same models. **The SP1 is in neither table**, and the wiki's "Marvell 88W8897
+   quirks" page lists per-device workarounds (ASPM L1.x, D3cold reset) for SP3-SP6/Book/Laptop only. So the SP1 needs no driver patch. What that page does say for
+   *all* Marvell Surfaces is that card power saving misbehaves after suspend: we therefore ship `wifi.powersave = 2` (off) in NetworkManager. Firmware is in
+   `linux-firmware` (redistributable), already on the ISO.
 5. **ACPI quirk the SP1 does need** (issue #381 itself): buggy `_LID` in the DSDT; after S3 the kernel reports the lid as closed and the
    desktop suspends again, forever. Mainline has no DMI quirk; the documented fix is `button.lid_init_state=open`, which the
    hardware profile adds to the installed kernel command line of `surface-pro-1`.
@@ -48,9 +52,9 @@ Status: **built and emulated, not yet run on the real device.** Everything below
 | need | how |
 |---|---|
 | lid/suspend loop | kernel cmdline `button.lid_init_state=open` (hardware profile, only on SP1/SP2) |
-| Wi-Fi stability | NetworkManager `wifi.powersave=2`; mwifiex firmware from linux-firmware; fall-backs if the real unit misbehaves: `pcie_aspm=off`, `iw dev wlan0 set power_save off`, USB Wi-Fi dongle |
+| Wi-Fi stability | NetworkManager `wifi.powersave=2`; all mwifiex transports + firmware from linux-firmware; fall-backs if the real unit misbehaves: `pcie_aspm=off` (PCIe case), `iw dev wlan0 set power_save off`, USB Wi-Fi dongle |
 | touch + pen | in-kernel `hid-multitouch` + `wacom`; sway maps touchscreen and pen to the internal panel (`surface-hidpi`) |
-| Type Cover / keyboard | `usbhid`/`hid-microsoft`/`hid-multitouch`, **also inside the initramfs** so the LUKS passphrase can be typed |
+| Type Cover / keyboard | `usbhid` and `xhci-pci` are **built into** the Gentoo kernel (6.18: `CONFIG_USB_HID=y`, `CONFIG_USB_XHCI_PCI=y`, `HID_GENERIC=y`); `hid-microsoft`/`hid-multitouch`/`dm-crypt` are modules and are forced **into the initramfs**; the installer fails the install if `lsinitrd` + the kernel config do not show all of them |
 | graphics | i915 (HD 4000, Mesa `crocus`/`swrast`); the initramfs includes `i915` for a native-resolution passphrase screen |
 | 1920x1080 on 10.6" | `surface-hidpi` reads the EDID size (~208 ppi) and sets sway scale 1.5; foot/wvkbd/bar fonts are sized for touch |
 
@@ -86,7 +90,7 @@ Verified in QEMU: hardware autodetect from DMI, XFS+LUKS install, argon2id param
 controller disabled** (so the initramfs HID stack is proven), zram, fstrim through dm-crypt, `button.lid_init_state=open`, sway/wvkbd/swaybar session,
 IvyBridge CPU model. Screenshots: `docs/images/surface/`.
 
-Device-only (cannot be emulated): that the **real** SP1's touchscreen and Wacom pen enumerate and are accurate; mwifiex_pcie firmware load and Wi-Fi stability
+Device-only (cannot be emulated): that the **real** SP1's touchscreen and Wacom pen enumerate and are accurate; which bus the Wi-Fi chip is on (SDIO, USB or PCIe), firmware load and Wi-Fi stability
 (and whether the SP1 needs `pcie_aspm=off`); Type Cover (SP1 generation) at the LUKS prompt over the real USB path; real suspend/resume with the lid quirk;
 HD 4000 acceleration under Mesa; HiDPI scale feel; battery reporting; UEFI quirks (boot from USB via the hub, Secure Boot off).
 `horcrux-surface-report` (in the image) collects exactly these facts for the remote hand-off.

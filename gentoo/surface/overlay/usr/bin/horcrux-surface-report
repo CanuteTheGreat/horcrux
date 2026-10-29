@@ -24,8 +24,11 @@ sec "input devices (expect: touchscreen, Wacom/pen, Type Cover keyboard+touchpad
 grep -E '^(N: Name|H: Handlers)' /proc/bus/input/devices
 for m in hid_multitouch wacom hid_microsoft usbhid; do printf '%s: %s\n' $m "$(lsmod | grep -c "^$m ")"; done
 command -v libinput >/dev/null && libinput list-devices 2>/dev/null | grep -E '^(Device|Capabilities|Kernel)'
-sec "Wi-Fi (mwifiex_pcie, Marvell 88W8797)"
+sec "Wi-Fi (Marvell 88W8797 via mwifiex: which bus is it on? pcie 11ab:2b38 / sdio / usb)"
 lspci -nnk 2>/dev/null | grep -iA3 -E 'marvell|network'
+for d in /sys/bus/sdio/devices/*; do [ -e "$d" ] && printf 'sdio %s: %s\n' "$d" "$(cat $d/vendor $d/device 2>/dev/null | tr '\n' ' ')"; done
+lsusb 2>/dev/null | grep -i -E '1286|marvell'
+lsmod | grep -E 'mwifiex|btmrvl|btusb'
 dmesg 2>/dev/null | grep -iE 'mwifiex|mrvl|marvell' | tail -25
 ls /lib/firmware/mrvl/ 2>/dev/null | tr '\n' ' '; echo
 nmcli -t dev 2>/dev/null; nmcli -f IN-USE,SSID,SIGNAL,SECURITY dev wifi 2>/dev/null | head -10

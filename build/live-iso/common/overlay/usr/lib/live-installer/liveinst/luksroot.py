@@ -74,8 +74,7 @@ def dracut_conf():
             'hostonly="no"\nhostonly_cmdline="no"\n'
             'add_dracutmodules+=" crypt dm "\n'
             'omit_dracutmodules+=" plymouth network-manager nfs iscsi biosdevname dmsquash-live "\n'
-            f'add_drivers+=" {INITRAMFS_DRIVERS} "\n'
-            'compress="zstd"\n')
+            f'add_drivers+=" {INITRAMFS_DRIVERS} "\n')
 
 
 def fstab_text(root_uuid_dev, boot_uuid, esp_uuid, efi=True):
@@ -167,14 +166,29 @@ def configure_stage(inst):
     kver = kvers[-1]
     inst.log(f"rebuilding the initramfs for {kver} with crypt + USB/HID keyboard drivers")
     inst.run(["dracut", "--force", "--no-hostonly", "--kver", kver, f"/boot/initramfs-{kver}.img", kver], chroot=True)
-    inst.run(["sh", "-c", f"lsinitrd /boot/initramfs-{kver}.img 2>/dev/null | grep -E 'cryptsetup|usbhid|hid-multitouch|hid-microsoft|xhci' | head -20"], chroot=True, check=False)
+    import subprocess
+    r = subprocess.run(["chroot", inst.target, "lsinitrd", f"/boot/initramfs-{kver}.img"], capture_output=True, text=True)
+    cfgp = f"{inst.target}/boot/config-{kver}"
+    cfg = open(cfgp).read() if os.path.exists(cfgp) else ""
+    missing = verify_initramfs(r.stdout, cfg)
+    inst.log("initramfs check (cryptsetup, dm-crypt, usbhid, xhci, hid-multitouch, hid-microsoft): " + ("all reachable at the passphrase prompt" if not missing else "MISSING " + ", ".join(missing)))
+    if missing:
+        raise RuntimeError("the new initramfs lacks " + ", ".join(missing) + ": the disk could not be unlocked at boot")
 
 
-def verify_initramfs(img_listing):
-    """static check on `lsinitrd` output: the keyboard stack and cryptsetup are inside. Returns missing item names."""
-    need = {"cryptsetup": r"cryptsetup", "usbhid": r"usbhid", "hid-multitouch": r"hid-multitouch", "hid-microsoft": r"hid-microsoft",
-            "xhci": r"xhci-(pci|hcd)", "dm-crypt": r"dm-crypt"}
-    return [k for k, rx in need.items() if not re.search(rx, img_listing)]
+def verify_initramfs(img_listing, kernel_config=""):
+    """static check on `lsinitrd` output (+ the kernel's /boot/config-*): the keyboard stack and cryptsetup are reachable at the
+    passphrase prompt. A driver is fine when its .ko is in the initramfs OR the kernel has it built in (=y; the Gentoo dist kernel
+    builds usbhid/xhci-pci/xfs in). Returns the missing item names."""
+    need = {"cryptsetup": (r"cryptsetup", None), "dm-crypt": (r"dm-crypt", "CONFIG_DM_CRYPT"),
+            "usbhid": (r"usbhid", "CONFIG_USB_HID"), "xhci": (r"xhci-(pci|hcd)", "CONFIG_USB_XHCI_PCI"),
+            "hid-multitouch": (r"hid-multitouch", None), "hid-microsoft": (r"hid-microsoft", None)}
+    missing = []
+    for k, (rx, cfg) in need.items():
+        if re.search(rx, img_listing) or (cfg and re.search(rf"^{cfg}=y$", kernel_config, re.M)):
+            continue
+        missing.append(k)
+    return missing
 
 
 def grub_cmdline_stage(inst):
