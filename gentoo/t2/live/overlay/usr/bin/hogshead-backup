@@ -1,0 +1,42 @@
+#!/bin/sh
+# hogshead-backup: copy files from the OLD (LUKS+LVM+ext4) install to a destination before the disk is wiped.
+# The old root is mounted READ-ONLY. DEST is a directory or an rsync/ssh target (user@host:/path).
+usage() { cat <<U
+usage: hogshead-backup [-n] [-f LISTFILE] [-r ROOT-DEVICE] [-k] DEST [PATH...]
+  DEST        local dir (e.g. /mnt/usbdisk/hogshead) or [user@]host:/dir  (rsync over ssh)
+  PATH...     absolute paths inside the OLD system to copy (default: the list in /etc/hogshead/backup-paths.txt)
+  -f FILE     read the PATH list from FILE (one per line, # comments allowed)
+  -r DEV      old root device (default: first ext4/xfs/btrfs logical volume found after the unlock)
+  -n          dry run (rsync -n): show what would be copied
+  -k          keep the old root mounted afterwards (at /mnt/hogshead-old)
+The disk must be unlocked first: run hogshead-unlock at the keyboard (we never handle the passphrase).
+U
+}
+DRY=""; LIST=/etc/hogshead/backup-paths.txt; ROOTDEV=""; KEEP=0
+while getopts nf:r:kh o; do case $o in n) DRY=-n;; f) LIST=$OPTARG;; r) ROOTDEV=$OPTARG;; k) KEEP=1;; *) usage; exit 2;; esac; done
+shift $((OPTIND-1))
+[ $# -ge 1 ] || { usage; exit 2; }
+DEST=$1; shift
+[ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
+if [ -z "$ROOTDEV" ]; then
+  vgchange -ay >/dev/null 2>&1
+  for lv in $(lvs --noheadings -o lv_path 2>/dev/null); do
+    case $(blkid -o value -s TYPE "$lv" 2>/dev/null) in ext4|xfs|btrfs) ROOTDEV=$lv; break;; esac
+  done
+fi
+if [ -z "$ROOTDEV" ]; then
+  echo "No unlocked old root found. At the laptop keyboard run:  hogshead-unlock"; exit 1
+fi
+MP=/mnt/hogshead-old; mkdir -p $MP
+cleanup() { [ "$KEEP" = 1 ] || { umount $MP 2>/dev/null; }; rm -f "$TMPL"; }
+TMPL=$(mktemp); trap cleanup EXIT
+mountpoint -q $MP || mount -o ro,noload "$ROOTDEV" $MP || mount -o ro "$ROOTDEV" $MP || { echo "mount failed"; exit 1; }
+echo "old root $ROOTDEV mounted read-only at $MP"
+if [ $# -gt 0 ]; then printf '%s\n' "$@" > "$TMPL"; else grep -v '^[[:space:]]*\(#\|$\)' "$LIST" > "$TMPL"; fi
+sed -i 's#^/*##' "$TMPL"
+EXC=""; [ -r /etc/hogshead/backup-exclude.txt ] && EXC="--exclude-from=/etc/hogshead/backup-exclude.txt"
+echo "copying:"; sed 's/^/  \//' "$TMPL"; echo "-> $DEST"
+rsync -r -aHAX --numeric-ids --partial --info=progress2,stats1 $DRY $EXC --files-from="$TMPL" "$MP/" "$DEST"
+rc=$?
+[ $rc = 0 ] && echo "backup finished OK" || echo "rsync exit code $rc (23/24 = some files unreadable/vanished: check the output above)"
+exit $rc

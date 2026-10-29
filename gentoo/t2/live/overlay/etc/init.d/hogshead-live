@@ -1,0 +1,19 @@
+#!/sbin/openrc-run
+description="hogshead live: extra keys from a HSKEYS stick, serial console login when console=ttyS0"
+depend() { before sshd; need localmount; after udev; }
+start() {
+  ebegin "hogshead-live"
+  mkdir -p /run/hogshead-keys /root/.ssh; chmod 700 /root/.ssh
+  dev=$(blkid -L HSKEYS 2>/dev/null)
+  if [ -n "$dev" ]; then
+    mkdir -p /run/hsk && mount -o ro "$dev" /run/hsk 2>/dev/null && {
+      [ -f /run/hsk/authorized_keys ] && cat /run/hsk/authorized_keys >> /root/.ssh/authorized_keys
+      [ -f /run/hsk/ts-authkey ] && install -m 0600 /run/hsk/ts-authkey /run/hogshead-keys/ts-authkey
+      umount /run/hsk; }
+  fi
+  chmod 600 /root/.ssh/authorized_keys 2>/dev/null
+  if grep -q 'console=ttyS0' /proc/cmdline; then
+    ( while :; do /sbin/agetty --autologin root --noclear -L 115200 ttyS0 vt100; sleep 1; done ) >/dev/null 2>&1 &
+  fi
+  eend 0
+}

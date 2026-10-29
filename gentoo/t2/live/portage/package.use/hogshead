@@ -1,0 +1,7 @@
+# the kernel is built from /usr/src/linux by us, not by the dist-kernel machinery
+sys-fs/zfs -dist-kernel rootfs
+sys-fs/zfs-kmod -dist-kernel
+sys-kernel/linux-firmware -dist-kernel
+sys-kernel/installkernel dracut
+# NetworkManager's wifi backend talks to wpa_supplicant over D-Bus
+net-wireless/wpa_supplicant dbus

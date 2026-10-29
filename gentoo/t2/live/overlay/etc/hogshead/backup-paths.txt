@@ -1,0 +1,8 @@
+# default PATH list for hogshead-backup (paths inside the OLD system). Edit before running, or pass paths on the command line.
+/home
+/root
+/etc
+/var/lib/tailscale
+/opt
+/srv
+/usr/local

@@ -1,0 +1,10 @@
+#!/sbin/openrc-run
+description="Tailscale node agent (ephemeral state, nothing persists on the live system)"
+command=/usr/bin/tailscaled
+command_args="--state=mem: --socket=/run/tailscale/tailscaled.sock --port=41641"
+command_background=true
+pidfile=/run/tailscaled.pid
+output_log=/var/log/tailscaled.log
+error_log=/var/log/tailscaled.log
+depend() { after NetworkManager; }
+start_pre() { checkpath -d -m 0755 /run/tailscale; modprobe tun 2>/dev/null; return 0; }

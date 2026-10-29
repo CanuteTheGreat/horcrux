@@ -1,0 +1,5 @@
+priv/
+*.iso
+fw/
+ts-authkey
+authorized_keys

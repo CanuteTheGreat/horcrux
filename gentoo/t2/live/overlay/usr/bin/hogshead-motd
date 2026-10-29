@@ -1,0 +1,20 @@
+#!/bin/bash
+# Status + next steps (shown at the autologin console; run `hogshead-motd` again any time).
+B=$'\e[1m'; G=$'\e[32m'; Y=$'\e[33m'; N=$'\e[0m'
+lan=$(ip -4 -o addr show scope global 2>/dev/null | awk '$2!="tailscale0"{split($4,a,"/"); printf "%s(%s) ", a[1], $2}')
+ts=$(tailscale --socket=/run/tailscale/tailscaled.sock ip -4 2>/dev/null | head -1)
+wifi=$(nmcli -t -f DEVICE,TYPE,STATE dev 2>/dev/null | awk -F: '$2=="wifi"{print $1": "$3}')
+echo
+echo "${B}HOGSHEAD live USB${N}  (Gentoo, kernel $(uname -r), OpenZFS $(cat /sys/module/zfs/version 2>/dev/null || echo 'not loaded'))"
+echo "----------------------------------------------------------------------"
+echo " ${G}1)${N} Join Wi-Fi:           ${B}nmtui${N}   (Activate a connection -> pick the network -> password)"
+echo " ${G}2)${N} Let Claude in:        ${B}hogshead-remote${N}   (starts sshd + Tailscale, prints the IPs)"
+echo " Disk (you type the passphrase here, never over ssh):"
+echo "      ${B}hogshead-unlock${N}   open the old LUKS on /dev/nvme0n1p3"
+echo "      ${B}hogshead-backup${N} DEST   copy the old system's files (see --help)"
+echo
+echo " LAN IP:        ${lan:-none yet (run nmtui, or plug in Ethernet)}"
+echo " Wi-Fi:         ${wifi:-no wifi device (firmware not loaded?)}"
+echo " Tailscale IP:  ${ts:-not up (run hogshead-remote)}"
+echo " ssh:           key-only, root@<ip>   (no-Tailscale fallback: ssh root@<LAN IP> from the same network)"
+echo

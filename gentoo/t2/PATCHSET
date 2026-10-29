@@ -1,0 +1,11 @@
+# t2linux patch set + kernel pin used by gentoo/t2 (keep in sync with docs/T2-MACS.md)
+# OpenZFS 2.4.4 declares Linux-Maximum 7.2, so the kernel is the newest 7.2.x, not 7.3.
+T2_PATCHES_REPO=https://github.com/t2linux/linux-t2-patches.git
+# last commit on `main` before the 7.3 rebase ("Update APFS driver to v0.3.22-2"); its version file says KVER=7.2.10
+T2_PATCHES_COMMIT=e16720782ee30fac38486b6c58d32443899c136a
+# Gentoo's patched tree this applies to (all 23 non-APFS patches apply with no fuzz and no rejects)
+KERNEL_PKG="=sys-kernel/gentoo-sources-7.2.13"
+KERNEL_SRC_DIR=linux-7.2.13-gentoo
+LOCALVERSION=-t2-horcrux
+# APFS (8001/8002) is skipped: macOS is gone and the driver is out-of-tree code we do not want to carry
+SKIP_PATCHES="8001-* 8002-*"

@@ -1,0 +1,4 @@
+.cache/
+.local/share/Trash/
+snap/*/common/.cache/
+node_modules/

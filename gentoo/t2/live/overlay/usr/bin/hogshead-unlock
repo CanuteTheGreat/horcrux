@@ -1,0 +1,20 @@
+#!/bin/sh
+# hogshead-unlock: open the old Ubuntu LUKS volume. YOU type the passphrase at the laptop keyboard; nobody else ever sees it.
+#   hogshead-unlock [LUKS-DEVICE (default /dev/nvme0n1p3)] [mapper-name (default hogshead-crypt)]
+set -u
+DEV=${1:-/dev/nvme0n1p3}; NAME=${2:-hogshead-crypt}
+[ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
+if [ -n "${SSH_CONNECTION:-}" ] || [ ! -t 0 ]; then
+  echo "Run this at the laptop's own keyboard, not over ssh: the passphrase must never leave this machine."
+  exit 2
+fi
+[ -b "$DEV" ] || { echo "$DEV not found. Disks:"; lsblk -f; exit 1; }
+cryptsetup isLuks "$DEV" || { echo "$DEV is not a LUKS volume"; exit 1; }
+modprobe dm_crypt 2>/dev/null
+if [ -e /dev/mapper/$NAME ]; then echo "/dev/mapper/$NAME is already open."; else
+  echo "Opening $DEV as $NAME - type your disk passphrase (nothing is echoed):"
+  cryptsetup open "$DEV" "$NAME" || { echo "unlock failed"; exit 1; }
+fi
+vgscan --mknodes >/dev/null 2>&1; vgchange -ay >/dev/null 2>&1
+echo; echo "Unlocked. Logical volumes:"; lvs 2>/dev/null
+echo; echo "Next: hogshead-backup DEST     (or mount it yourself: mount -o ro /dev/<vg>/<lv> /mnt)"
