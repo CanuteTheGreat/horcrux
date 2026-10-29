@@ -313,16 +313,18 @@ class ZRun(qt.Runner):
             before = {"counter": int(lines[0]), "pid": lines[1].strip(), "marker": lines[2].strip(), "boot_id": lines[3].strip()}
             self.step("marker-and-process-written", before["counter"] >= 3, f"counter={before['counter']} pid={before['pid']}")
             rc, o = self.sh("loginctl hibernate; echo rc=$?", timeout=40)
-            lc_ok = "rc=0" in o
-            if not lc_ok:                      # elogind refused: record it as a finding, but still try the kernel interface
+            # elogind starts the hibernation and the guest dies under the ssh session: "closed by remote host" / no output = it worked;
+            # an explicit non-zero rc means loginctl refused (then the kernel interface is tried so the rest still runs)
+            refused = "rc=" in o and "rc=0" not in o
+            if refused:
                 self.step("loginctl-hibernate", False, o.strip().replace("\n", " | ")[:300])
                 self.sh("echo disk > /sys/power/state", timeout=30)
-            else:
-                self.step("loginctl-hibernate", True, "elogind started the hibernation")
             t = time.time()
             while vm.alive() and time.time() - t < qt.T(180):
                 time.sleep(2)
             gone = not vm.alive()
+            if not refused:
+                self.step("loginctl-hibernate", gone, "`loginctl hibernate` (elogind) wrote the image and powered the guest off: " + o.strip().replace("\n", " | ")[:100])
             self.step("hibernate-powered-off", gone, f"VM powered off after writing the image ({int(time.time() - t)}s)")
             if not gone:
                 vm.p.kill()
