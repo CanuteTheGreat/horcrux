@@ -84,6 +84,62 @@ The CPU is an i5-3317U: AVX yes, **AVX2/FMA/BMI1/BMI2 no**.
 * The default QEMU CPU of the test harness is `qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt,+cx16`; the Surface test runs **`-cpu IvyBridge`** and asserts
   `grep avx2 /proc/cpuinfo` = 0, no `invalid opcode` in `dmesg` after a full boot with horcrux-api, sway, NetworkManager, wvkbd running.
 
+## Test evidence (QEMU, `gentoo/surface/tests/surface-qemu-test.py`, 34 steps, all passing)
+
+`-machine q35,i8042=off -cpu IvyBridge -m 4096`, OVMF (UEFI), DMI faked as `Microsoft Corporation / Surface with Windows 8 Pro`, USB keyboard + USB tablet only.
+Key numbers from the final run: LUKS2 argon2id memory cost 635 MiB (cryptsetup trims the requested 729 MiB to fit its 2 s target; cap 1 GiB);
+passphrase accepted only via the USB keyboard after one wrong try; XFS mount options `rw,relatime,inode64,logbufs=8,logbsize=32k,noquota` (no `discard`);
+`fstrim -v /` trimmed 22 GiB through dm-crypt; zram0 3.8 GiB zstd is the only swap; **no `avx2`/`fma`/`bmi` in `/proc/cpuinfo` and no `invalid opcode` in dmesg**;
+at the desktop (sway + wvkbd + swaybar + NetworkManager + horcrux-api + docker + libvirt + tailscaled all running) **594 MiB used of 3892 MiB** (sway itself 27 MiB RSS).
+Install phase 247 s on KVM; power-on to unlocked boot 89 s.
+
+| step | result |
+|---|---|
+| `answer-file-built` | xfs-luks + desktop user, NO hardware profile named (autodetect must find it) |
+| `grub-menu-reached` | 4s, cpu=IvyBridge, 4096 MiB, DMI Microsoft Corporation / Surface with Windows 8 Pro |
+| `live-userland-up` | answer file found |
+| `plan-is-xfs-luks` | AUTOINSTALL-PLAN disks=/dev/vda fs=xfs-luks host=surface-t1.test.lan net=enp0s2
+ |
+| `hardware-profile-autodetected` | installer log: 'hardware profile: surface / surface-pro-1' |
+| `luks-argon2id-memory-sane` | memory cost 729 MiB (RAM 3892 MB) |
+| `initramfs-has-keyboard-stack` | installer's lsinitrd check: cryptsetup, dm-crypt, usbhid, xhci, hid-multitouch, hid-microsoft |
+| `installer-finished` | AUTOINSTALL-OK |
+| `vm-stopped-after-install` | 247s total |
+| `luks-prompt-idle-on-vga` | 28s: console text stable (passphrase prompt), no serial console on this boot |
+| `prompt-returns-after-wrong-passphrase` | still locked, asks again |
+| `unlocked-with-usb-keyboard-and-booted` | 89s after power-on; ssh key login works (PS/2 controller disabled) |
+| `root-is-xfs-on-dm-crypt` | xfs /dev/mapper/hxroot rw,relatime,inode64,logbufs=8,logbsize=32k,noquota |
+| `xfs-mount-options-default-no-discard` | xfs /dev/mapper/hxroot rw,relatime,inode64,logbufs=8,logbsize=32k,noquota |
+| `boot-is-ext4-unencrypted` | /boot ext4 on its own partition |
+| `luks2-argon2id` | Version: 2 PBKDF: argon2id Memory: 635144 |
+| `luks-memory-cost-within-cap` | 635144 KiB |
+| `lid-quirk-on-cmdline` | SP1/SP2 buggy _LID workaround from the hardware profile |
+| `no-serial-console-carried-over` | installed cmdline is VGA-only: the passphrase prompt is on tty0 |
+| `cpu-has-no-avx2-fma-bmi` | 0 model name : Intel Xeon E3-12xx v2 (Ivy Bridge) 0 2  |
+| `no-sigill-in-dmesg` | no 'invalid opcode' traps while running the whole stack |
+| `zram-is-the-only-swap` | /dev/zram0 partition 3.8G 0B 100 --- /dev/zram0 zstd 3.8G 4K 68B 20K [SWAP] --- 100 0 --- Mem: 3892 579 3192 1 |
+| `fstrim-works-through-dm-crypt` | /etc/cron.weekly/fstrim * status: started /: 22 GiB (23604473856 bytes) trimmed /boot: 849.7 MiB (890953728 by |
+| `networkmanager-started-iwd-dhcpcd-off` |  * status: started * status: stopped * status: stopped  |
+| `networkmanager-and-desktop-tools` | /usr/bin/nmtui /usr/bin/nmcli /usr/bin/wvkbd-mobintl /usr/bin/sway /usr/bin/foot /usr/bin/swaybar /usr/bin/sur |
+| `horcrux-api-runs-on-ivybridge` | horcrux-api service started under -cpu IvyBridge |
+| `initramfs-contains-hid-and-crypt` | cryptsetup dm-crypt hid-microsoft hid-multitouch CONFIG_HID_GENERIC=y CONFIG_USB_HID=y CONFIG_USB_XHCI_PCI=y  |
+| `desktop-session-running-for-autologin-user` | sway + wvkbd + swaybar pids: ['3163', '3196', '3194'] |
+| `sway-has-an-output` | Virtual-1 1280 800 1.0 Found 54 layouts Found 2 layers Virtual-1: 1280px, 32cm -> 102 ppi, scale 1.0 |
+| `sway-config-has-no-errors` | sway -C (config validation) |
+| `terminal-window-opens` | foot started inside the user's sway session (screenshot desktop-terminal.png) |
+| `onscreen-keyboard-toggles` | wvkbd shown via surface-osk (screenshot desktop-onscreen-keyboard.png) |
+| `memory-at-desktop-recorded` | Mem: 3892 594 3105 21 519 3297 |
+| `ssh-root-key-only` | PermitRootLogin prohibit-password PasswordAuthentication no  |
+
+Screenshots: ![GRUB menu](images/surface/01-grub-menu.png)
+![LUKS prompt answered by a USB keyboard](images/surface/02-luks-passphrase-prompt-usb-keyboard.png)
+![wrong passphrase: asks again](images/surface/03-luks-wrong-passphrase-asks-again.png)
+![desktop](images/surface/04-desktop.png)
+![terminal](images/surface/05-desktop-terminal.png)
+![on-screen keyboard](images/surface/06-desktop-onscreen-keyboard.png)
+
+(The VM screen is 1280x800 with no EDID size, so the scale stays 1.0; on the 1920x1080/10.6" panel `surface-hidpi` computes ~208 ppi -> 1.5, unit-tested.)
+
 ## Verified vs device-only
 
 Verified in QEMU: hardware autodetect from DMI, XFS+LUKS install, argon2id parameters, LUKS prompt answered by a **USB keyboard with the PS/2
