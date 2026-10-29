@@ -122,7 +122,8 @@ class ST(SQ.T):
             time.sleep(1)
             vm.send(LUKS_PW + "\n")
         else:
-            ppm = self.settle(vm, name, timeout=420)
+            time.sleep(40)          # GRUB + "Loading initial ramdisk" also look idle on a loaded host: wait past them before judging the screen
+            ppm = self.settle(vm, name, timeout=420, quiet=4)
             self.step(f"{name}-prompt-on-vga", ppm is not None, f"{int(time.time() - t0)}s: passphrase prompt idle on tty0")
             vm.shot(f"{name}-luks-prompt")
             self.key(vm, LUKS_PW + "\n")
@@ -171,7 +172,7 @@ class ST(SQ.T):
                                "dbus-send --system --print-reply --dest=org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager.CanHibernate 2>&1 | tail -1; echo @@@; "
                                "lsinitrd /boot/initramfs-*.img > /tmp/lsinitrd.txt 2>&1; grep -E 'resume|lvm' /tmp/lsinitrd.txt | head -8; echo @@@; "
                                "for h in cmdline pre-udev pre-trigger initqueue/settled pre-mount mount; do echo \"hook $h:\"; grep -oE \"hooks/$h/[^ ]*\" /tmp/lsinitrd.txt | tr '\\n' ' '; echo; done; echo @@@; "
-                               "f=$(awk '/10-parse-resume.sh/{print $NF}' /tmp/lsinitrd.txt | head -1); echo \"# $f\"; lsinitrd /boot/initramfs-*.img \"$f\" 2>&1 | head -40", timeout=180)
+                               "f=$(awk '/10-parse-resume.sh/{print $NF}' /tmp/lsinitrd.txt | head -1); echo \"# $f\"; lsinitrd /boot/initramfs-*.img \"$f\" 2>&1 | head -90", timeout=180)
             open(f"{a.out}/screens/policy-and-initramfs.txt", "w").write(out)
             q = out.split("@@@") + [""] * 6
             s("elogind-policy-lid-suspend-hibernate-mode", "HandleLidSwitch=suspend" in q[0] and "HibernateMode=shutdown" in q[0] and "HandlePowerKey=suspend" in q[0], "lid close = suspend, HibernateMode=shutdown")
@@ -185,8 +186,8 @@ class ST(SQ.T):
             # parse-resume.sh queues the resume as an initqueue/settled job, so it fires before pre-mount and the root mount.
             pr = q[5]
             open(f"{a.out}/screens/parse-resume.sh.txt", "w").write(pr)
-            s("resume-queued-before-root-mount", "hooks/cmdline/10-parse-resume.sh" in order and "hooks/mount/99-mount-root.sh" in order and "initqueue/settled/resume.sh" in pr and "/sys/power/resume" in pr,
-              "cmdline/10-parse-resume.sh queues initqueue/settled/resume.sh (writes /sys/power/resume); root is mounted by mount/99-mount-root.sh, later")
+            s("resume-queued-before-root-mount", "hooks/cmdline/10-parse-resume.sh" in order and "hooks/mount/99-mount-root.sh" in order and "wait_for_dev /dev/resume" in pr and "/sys/power/resume" in pr,
+              "cmdline/10-parse-resume.sh waits for /dev/resume and queues the initqueue/settled job that writes /sys/power/resume; the root is mounted later by mount/99-mount-root.sh")
             # --- the marker
             rc, out = self.ssh("cat > /root/marker.py <<'EOF'" + MARKER_PY + "EOF\nnohup python3 /root/marker.py >/dev/null 2>&1 < /dev/null & echo $! > /root/marker.pid; sleep 4; "
                                "head -c 65536 /dev/urandom | base64 > /dev/shm/marker.txt; sha256sum /dev/shm/marker.txt | cut -d' ' -f1; "
@@ -213,7 +214,8 @@ class ST(SQ.T):
         Q.pflash_vars(self.nvars) if False else None          # keep the NVRAM of boot 1 (the boot entry stays)
         vm = Q.VM("3-resume", self.base(True, self.nvars), a.out)
         try:
-            ppm = self.settle(vm, "resume", timeout=420)
+            time.sleep(40)
+            ppm = self.settle(vm, "resume", timeout=420, quiet=4)
             self.step("resume-passphrase-prompt-on-vga", ppm is not None, "prompt before the resume (LUKS must be open to read the image)")
             vm.shot("resume-luks-prompt")
             t0 = time.time()

@@ -92,6 +92,7 @@ passphrase accepted only via the USB keyboard after one wrong try; XFS mount opt
 `fstrim -v /` trimmed 22 GiB through dm-crypt; zram0 3.8 GiB zstd is the only swap; **no `avx2`/`fma`/`bmi` in `/proc/cpuinfo` and no `invalid opcode` in dmesg**;
 at the desktop (sway + wvkbd + swaybar + NetworkManager + horcrux-api + docker + libvirt + tailscaled all running) **594 MiB used of 3892 MiB** (sway itself 27 MiB RSS).
 Install phase 247 s on KVM; power-on to unlocked boot 89 s.
+*(That run is the zram-only 2026-10-28 first ISO: root `hxroot`, one swap. Since the swap work the root is `/dev/mapper/hxvg-root` and there are two swaps; the table below is that first run, the current run is in "Swap/hibernate: QEMU evidence".)*
 
 | step | result |
 |---|---|
@@ -180,16 +181,37 @@ Kernel arguments: `rd.luks.uuid=… rd.luks.name=…=hxroot rd.lvm.vg=hxvg root=
 **Not covered**: ZFS-on-root (other agent: LUKS2 swap partition, resume before the pool import); resume with Secure Boot on (kernel lockdown disables hibernation; Secure Boot must be off anyway);
 suspend itself and real battery percentages (device-only, see below).
 
-@@SWAPEVIDENCE@@
+### Swap/hibernate: QEMU evidence (`gentoo/surface/tests/surface-swap-test.py`, ISO `horcrux-surface-test-20261028-swap`, `-cpu IvyBridge -m 4096`, UEFI, USB keyboard only)
+
+**Hibernate + resume (Surface DMI; the answer file has NO `swap` key: the hardware profile decides), 40 steps, all pass.**
+
+| step | result |
+|---|---|
+| installer | `swap: 4.5 GiB hibernate swap ... (hardware profile surface says swap = hibernate)`; `LVM inside LUKS: VG hxvg, swap LV 4608 MiB`; `initramfs check (... lvm, resume): all reachable` |
+| boot 1 | one passphrase (typed on the USB keyboard, PS/2 off) → `root hxvg 17.48g`, `swap hxvg 4.50g`; `/proc/swaps`: `/dev/zram0 3986212 KiB pri 100` + `/dev/dm-1 4718588 KiB pri 10`; cmdline `rd.luks.uuid=… rd.lvm.vg=hxvg root=/dev/mapper/hxvg-root rootfstype=xfs resume=UUID=2edfbd20-… button.lid_init_state=open`; `/sys/power/resume` = `252:1`, `disk = [platform] shutdown …` |
+| policy | running elogind (D-Bus properties, so the drop-ins were read): `HandlePowerKey=suspend`, `HandleLidSwitch=suspend`, `HandleLidSwitchDocked=ignore`, `CanHibernate=yes`; `UPower.conf`: `UsePercentageForPolicy=true`, `PercentageAction=5`, `CriticalPowerAction=Hibernate` |
+| initramfs | `lsinitrd`: `lvm` + `resume` present; `hooks/cmdline/10-parse-resume.sh` (`wait_for_dev /dev/resume`, writes `/sys/power/resume`; dracut runs `cmdline` → `initqueue` → `pre-mount` → `mount/99-mount-root.sh`) |
+| marker | a tmpfs file (`/dev/shm/marker.txt`, 64 KiB, sha256 recorded) + a python process holding a random 1 MiB token only in its memory and counting once a second (counter 4), `boot_id` recorded |
+| `loginctl hibernate` | QEMU powered itself off after the image was written (44 s on a busy host; 8 s on an idle one) |
+| boot 2 | passphrase prompt on the VGA console, typed **once** → ssh answers 83 s later; **same `boot_id`** (a cold boot gets a new one), **same pid and start time**, counter 4 → 19 (it kept counting), the token still hashes to the recorded sha256, the tmpfs file's sha256 is unchanged, uptime 110 s → 310 s (continues), dmesg `PM: hibernation: … hibernation exit`, `dm-1` + `zram0` swaps active, no filesystem errors, root writable |
+| boot 3 | clean poweroff, then a normal (cold) boot: ONE passphrase, a new `boot_id`, `/dev/shm` empty (the image was invalidated: no resume loop), the file written after the resume survived |
+
+**Server (generic DMI, no battery, chassis type 1; same answer file): 16 steps, all pass.** `swap: none (server: no battery, chassis type 1)`; `/proc/swaps` empty, `Swap: 0 0 0`, no `lvs`/`vgs`,
+root `/dev/mapper/hxroot` (plain LUKS → XFS), 3 partitions and no swap signature (`blkid | grep -ci swap` = 0), no `swap` in fstab, no `resume=`/`rd.lvm` on the command line, no portable policy or dracut resume config.
+**Override (Surface DMI + `swap = "none"`): 16 steps, all pass**: `swap: none (swap = none requested)`, no LVM, no disk swap, zram only.
+The pre-existing 34-step Surface test (`surface-qemu-test.py`) was updated (root on `hxvg-root`; zram first + the encrypted swap LV) and still passes.
+Unit tests (`build/live-iso/common/tests/test_portableswap.py`, 25 tests): chassis types 8/9/10/11/14/30/31/32 portable, 1-7/13/17/23/25 not; system battery counts, a wireless-mouse battery (`scope=Device`), AC and a UPS do not;
+size 3.8 GB → 4608 MiB, 8 GB → 9 GiB, 16 GB → 18 GiB; overrides both ways; ZFS refused; disk-fit; answer-file key; fstab/cmdline/dracut/elogind/UPower text; LVM kernel arguments.
+**Not testable in QEMU** (no battery or chassis-type device in QEMU 8.2): the live DMI-chassis and battery detection (unit-tested against a fake sysfs), UPower actually firing at 5 % (the action it calls, `loginctl hibernate`, is what the test runs), a physical lid event, ACPI S3 suspend, and the real SP1's resume.
 
 ## Verified vs device-only
 
 Verified in QEMU: hardware autodetect from DMI, XFS+LUKS install, argon2id parameters, LUKS prompt answered by a **USB keyboard with the PS/2
-controller disabled** (so the initramfs HID stack is proven), zram, fstrim through dm-crypt, `button.lid_init_state=open`, sway/wvkbd/swaybar session,
+controller disabled** (so the initramfs HID stack is proven), zram, **hibernate → power off → one passphrase → resume with the RAM contents intact** (see "Swap and hibernate"), fstrim through dm-crypt, `button.lid_init_state=open`, sway/wvkbd/swaybar session,
 IvyBridge CPU model. Screenshots: `docs/images/surface/`.
 
 Device-only (cannot be emulated): that the **real** SP1's touchscreen and Wacom pen enumerate and are accurate; which bus the Wi-Fi chip is on (SDIO, USB or PCIe), firmware load and Wi-Fi stability
-(and whether the SP1 needs `pcie_aspm=off`); Type Cover (SP1 generation) at the LUKS prompt over the real USB path; real suspend/resume with the lid quirk;
+(and whether the SP1 needs `pcie_aspm=off`); Type Cover (SP1 generation) at the LUKS prompt over the real USB path; real suspend/resume with the lid quirk and a real hibernate/resume (SP1 ACPI S4 is not used: `HibernateMode=shutdown`); UPower's 5 % action on the real battery;
 HD 4000 acceleration under Mesa; HiDPI scale feel; battery reporting; UEFI quirks (boot from USB via the hub, Secure Boot off).
 `horcrux-surface-report` (in the image) collects exactly these facts for the remote hand-off.
 

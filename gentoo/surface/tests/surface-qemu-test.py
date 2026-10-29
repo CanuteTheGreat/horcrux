@@ -233,7 +233,7 @@ class T:
         swaps = out.split("---")[0].split()
         devs = [w for w in swaps if w.startswith("/")]
         # portable swap (docs/SURFACE.md): zram first (pri 100) + the encrypted swap LV (pri 10) that holds the hibernation image
-        s("zram-first-then-encrypted-swap-lv", len(devs) == 2 and devs[0] == "/dev/zram0" and devs[1].startswith("/dev/dm-") and "started" in out.split("---")[-1], re.sub(r"\s+", " ", out)[:200])
+        s("zram-first-then-encrypted-swap-lv", len(devs) == 2 and "/dev/zram0" in devs and any(d.startswith("/dev/dm-") for d in devs) and re.search(r"/dev/zram0\s+partition\s+\S+\s+\S+\s+100\b", out) is not None and re.search(r"/dev/dm-\d+\s+partition\s+\S+\s+\S+\s+10\b", out) is not None and "started" in out.split("---")[-1], re.sub(r"\s+", " ", out)[:200])
         rc, out = self.ssh("ls /etc/cron.weekly/fstrim && rc-service cronie status; fstrim -v / 2>&1; fstrim -v /boot 2>&1 | tail -1")
         s("fstrim-works-through-dm-crypt", re.search(r"^/: [\d.]+ \w+ \(\d+ bytes\) trimmed", out, re.M) is not None, re.sub(r"\s+", " ", out)[:200])
         rc, nm = self.ssh("rc-service NetworkManager status")
