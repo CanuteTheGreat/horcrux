@@ -249,9 +249,8 @@ class ZRun(qt.Runner):
         try:
             ok = self.vga_stable(vm, "passphrase-prompt-vga")
             self.step("boot2-vga-prompt-screen", ok, "VGA console settled at the passphrase prompt (see 3-boot2-passphrase-prompt-vga.png); no serial console, PS/2 off")
-            kb.text(PASSPHRASE, pause=0.05)
-            kb.key("ENTER")
-            self.step("boot2-ssh-after-usb-keyboard-passphrase", self.wait_ssh(), "passphrase typed on the USB keyboard")
+            up = self.unlock_usb(vm, kb, "boot2")
+            self.step("boot2-ssh-after-usb-keyboard-passphrase", up, "passphrase typed on the USB keyboard")
             rc, o = self.sh("zpool get -H -o value bootfs rpool; findmnt -no SOURCE /; test -e /root/marker-after-snapshot && echo MARKER || echo NOMARKER; "
                             "horcrux-be list; dmesg | grep -ci 'i8042' ")
             self.step("rolled-back-to-previous-boot-environment", "rpool/ROOT/rolledback" in o and "NOMARKER" in o, o.strip().replace("\n", " | ")[:300])
@@ -266,12 +265,24 @@ class ZRun(qt.Runner):
 
 
     # --- boot 3 (--hibernate): ONE passphrase, hibernate, power off, boot, ONE passphrase, resume
+    def unlock_usb(self, vm, kb, label):
+        """type the passphrase on the USB keyboard; on a loaded host the screen can look settled while GRUB/the kernel is still
+        loading and the keys are lost: type again (a wrong/missing passphrase just re-prompts) before giving up"""
+        for attempt in (1, 2, 3):
+            kb.text(PASSPHRASE, pause=0.05)
+            kb.key("ENTER")
+            if self.wait_ssh(timeout=150 if attempt < 3 else 420):
+                if attempt > 1:
+                    print(f"  ({label}: passphrase had to be typed {attempt} times: keys sent before the prompt exists are lost)", flush=True)
+                return True
+            vm.shot(f"{label}-retype-{attempt}")
+        return False
+
     def type_passphrase_usb(self, vm, label):
         ok = self.vga_stable(vm, label)
         kb = qt.Kbd(vm, True)
-        kb.text(PASSPHRASE, pause=0.05)
-        kb.key("ENTER")
-        return ok
+        up = self.unlock_usb(vm, kb, label)
+        return ok, up
 
     def hibernate_phase(self, nvars):
         a = self.z
@@ -279,8 +290,8 @@ class ZRun(qt.Runner):
         qt.pflash_vars(nvars)
         vm = qt.VM("4-boot3-hibernate", self.qemu_args(None, True, nvars), a.out)
         try:
-            self.type_passphrase_usb(vm, "passphrase-prompt-before-hibernate")
-            self.step("boot3-single-passphrase-ssh", self.wait_ssh(), "ONE passphrase typed (LUKS swap + ZFS): a second prompt would have blocked boot")
+            _ok, up = self.type_passphrase_usb(vm, "passphrase-prompt-before-hibernate")
+            self.step("boot3-single-passphrase-ssh", up, "ONE passphrase typed (LUKS swap + ZFS): a second prompt would have blocked boot")
             rc, o = self.sh("swapon --noheadings --bytes --show=NAME,SIZE,PRIO; echo ---; cryptsetup status hxswap | head -8; echo ---; "
                             "cat /sys/power/resume; echo ---; test -e /run/hx/key && echo KEYLEFT || echo nokey; echo ---; "
                             "grep -E 'resume=|rd.hx.swap=' /proc/cmdline | tr ' ' '\\n' | grep -E 'resume|hx'; echo ---; "
@@ -338,8 +349,7 @@ class ZRun(qt.Runner):
         qt.pflash_vars(nvars)
         vm = qt.VM("5-boot4-resume", self.qemu_args(None, True, nvars), a.out)
         try:
-            self.type_passphrase_usb(vm, "passphrase-prompt-resume-boot")
-            ok = self.wait_ssh()
+            _ok, ok = self.type_passphrase_usb(vm, "passphrase-prompt-resume-boot")
             self.step("resume-boot-single-passphrase-ssh", ok, "back on the network after ONE passphrase")
             rc, o = self.sh("echo BOOT_NOW=$(cat /proc/sys/kernel/random/boot_id); echo BOOT_BEFORE=$(cat /dev/shm/boot_id_before 2>/dev/null); "
                             "echo MARKER=$(cat /dev/shm/marker 2>/dev/null); echo C1=$(cat /dev/shm/counter 2>/dev/null); "
