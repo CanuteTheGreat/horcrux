@@ -6,6 +6,7 @@ import threading
 import time
 
 from . import system as S
+from . import portableswap
 from . import tui
 from .tui import Field, Abort, run_form, run_disk_picker, message, progress_screen
 
@@ -37,6 +38,18 @@ def s_locale(t, st, step):
     return "next"
 
 
+def swap_field(c):
+    """the swap choice, shown with what auto would do on THIS machine (battery / DMI chassis type); the same stage backs the GUI"""
+    hp, _hm = S.hwprofile.detect()
+    auto = portableswap.plan(dict(c, swap="auto"), S.mem_mb(), hp)
+    opts = [("auto", "Automatic: " + portableswap.describe(auto)),
+            ("hibernate", f"Hibernate swap, {portableswap.fmt_gib(portableswap.swap_mb(S.mem_mb()))} (laptop, tablet, desktop)"),
+            ("none", "No swap (servers)")]
+    return Field("swap", "Swap / hibernate", "choice", c.get("swap", "auto"), opts,
+                 visible=lambda v: v["fs"] != "zfs",
+                 hint="Portables get an encrypted hibernate swap (RAM x 1.125) so sleep survives a flat battery; servers get none. zram stays the first swap")
+
+
 def s_fs(t, st, step):
     c, p = st.c, st.p
     opts = {"ext4": "ext4 (robust)", "xfs": "XFS", "zfs": "ZFS (checksums, snapshots, mirror)",
@@ -46,7 +59,8 @@ def s_fs(t, st, step):
                visible=lambda v: v["fs"] == "zfs"),
          Field("lpw", "Disk passphrase", "password", c.get("luks_passphrase", ""), width=40, visible=lambda v: v["fs"] == "xfs-luks",
                hint="Typed at every boot (the Type Cover / a USB keyboard works). Min 12 chars. Lose it = lose the data"),
-         Field("lpw2", "Confirm passphrase", "password", c.get("luks_passphrase", ""), width=40, visible=lambda v: v["fs"] == "xfs-luks")]
+         Field("lpw2", "Confirm passphrase", "password", c.get("luks_passphrase", ""), width=40, visible=lambda v: v["fs"] == "xfs-luks"),
+         swap_field(c)]
 
     def check(a):
         if a["fs"] == "xfs-luks":
@@ -63,6 +77,7 @@ def s_fs(t, st, step):
         return "back"
     c["fs"], c["zfs_raid"] = v["fs"], v["zfs_raid"]
     c["luks_passphrase"] = v["lpw"] if c["fs"] == "xfs-luks" else ""
+    c["swap"] = v["swap"] if c["fs"] != "zfs" else "auto"
     if c["fs"] == "zfs" and not st.dry and S.sh("modprobe zfs && test -e /dev/zfs")[0] != 0:
         message(t, "ZFS not available", "The ZFS kernel module could not be loaded on this machine. Choose ext4 or XFS.", "err")
         return "again"
@@ -346,12 +361,18 @@ def s_account(t, st, step):
     return "next"
 
 
+def swap_summary(c):
+    hp, _hm = S.hwprofile.detect()
+    return portableswap.describe(portableswap.plan(c, S.mem_mb(), hp))
+
+
 def summary_lines(st):
     c, p = st.c, st.p
     out = [("Boot mode", "UEFI" if S.efi_boot() else "legacy BIOS"),
            ("Language / keyboard", f"{c['locale']} / {c['keymap']}"), ("Time zone", c["timezone"]),
            ("Target disk(s)", ", ".join(c["disks"])),
            ("File system", c["fs"] + (f" ({c['zfs_raid']})" if c["fs"] == "zfs" else "")),
+           ("Swap", swap_summary(c)),
            ("Hostname", c["hostname"])]
     if p["network_mode"] == "wan-lan":
         w, l = c["wan"], c["lan"]
@@ -550,7 +571,7 @@ def unattended(profile, answers_path, halt=True):
             for e in errs:
                 say("ANSWER-FILE-ERROR " + e)
             raise S.InstallError("invalid answer file")
-        say(f"AUTOINSTALL-PLAN disks={','.join(c['disks'])} fs={c['fs']} host={c['hostname']} net={c['mgmt']['iface'] or (c['wan']['iface'] + '/' + c['lan']['iface'])}")
+        say(f"AUTOINSTALL-PLAN disks={','.join(c['disks'])} fs={c['fs']} swap={c.get('swap', 'auto')} host={c['hostname']} net={c['mgmt']['iface'] or (c['wan']['iface'] + '/' + c['lan']['iface'])}")
         last = {"n": -1}
 
         def prog(pct, note):

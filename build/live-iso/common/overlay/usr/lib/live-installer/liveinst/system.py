@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import time
 
-from . import arch, hwprofile, luksroot
+from . import arch, hwprofile, luksroot, portableswap
 
 LOG = "/var/log/live-installer.log"
 
@@ -417,6 +417,7 @@ def default_config(profile):
     return {
         "locale": "en_US.UTF-8", "keymap": "us", "timezone": "UTC",
         "disks": [], "fs": _default_fs(profile), "zfs_raid": "single", "luks_passphrase": "",
+        "swap": "auto",              # auto (portable = hibernate swap, server = none) | none | hibernate  (portableswap.py)
         "desktop": {"enable": False, "user": "", "password": "", "password_hash": "", "autologin": False}, "hw": "auto",
         "hostname": profile["default_hostname"],
         "mgmt": {"iface": "", "mode": "dhcp", "address": "", "gateway": "", "dns": ""},
@@ -447,6 +448,7 @@ def config_from_answers(profile, path):
     d = a.get("disk", {})
     c["fs"] = d.get("filesystem", "ext4")
     c["luks_passphrase"] = d.get("luks_passphrase", "")
+    c["swap"] = str(d.get("swap", g.get("swap", "auto"))).lower()
     de = a.get("desktop", {})
     if de:
         c["desktop"].update({k: de[k] for k in ("enable", "user", "password", "password_hash", "autologin") if k in de})
@@ -480,6 +482,7 @@ def validate_config(profile, c, unattended=False, require_secret=True):
     if c["fs"] != "zfs" and len(c["disks"]) > 1:
         errs.append("only ZFS uses more than one disk")
     errs += luksroot.validate(c)
+    errs += portableswap.validate(c)
     de = c.get("desktop") or {}
     if de.get("enable") and not de.get("user"):
         errs.append("desktop: a user name is required")
@@ -532,6 +535,7 @@ class Installer:
         self.logf = None
         self.hw_profile = self.hw_model = None
         self.luks_uuid = ""
+        self.swap_mode, self.swap_mb, self.swap_why, self.swap_dev, self.swap_uuid = "none", 0, "", "", ""
 
     # -- plumbing -----------------------------------------------------
     def log(self, line):
@@ -579,6 +583,7 @@ class Installer:
     def go(self):
         c, p = self.c, self.p
         self.log(f"== live-installer: {p['title']} on {', '.join(c['disks'])} ({'UEFI' if self.efi else 'BIOS'}), fs={c['fs']}")
+        portableswap.resolve(self)       # portable (battery / laptop chassis / desktop / Surface) = hibernate swap, server = none
         self.prog(2, "Partitioning")
         self.partition()
         self.prog(8, "Creating file systems")
@@ -609,12 +614,8 @@ class Installer:
 
     def partition(self):
         if self.luks():
-            self.swap_mb = 0              # zram only
-            return luksroot.partition_stage(self)
-        swap = self.p["swap_mb"]
-        if swap:
-            ram = mem_mb()
-            swap = max(1024, min(swap, ram)) if ram else swap
+            return luksroot.partition_stage(self)        # swap (if any) is an LV inside the LUKS volume, made by mkfs_stage
+        swap = self.swap_mb if self.swap_mode == "hibernate" else 0      # servers: no swap partition; portables: >= RAM for the image
         self.swap_mb = swap
         for disk in self.c["disks"]:
             self.run(["sh", "-c", f"swapoff -a 2>/dev/null; wipefs -a {shquote(disk)} >/dev/null 2>&1; sgdisk -Z {shquote(disk)} >/dev/null 2>&1; true"], check=False)
@@ -807,6 +808,11 @@ class Installer:
             self.hw_profile, self.hw_model = hp, hm
             if hp:
                 self.log(f"hardware profile: {hp['id']} / {(hm or {}).get('id', 'generic')}")
+        if self.swap_mode == "hibernate" and not self.luks() and not self.zfs():
+            self.swap_dev = self.layout(c["disks"][0])[3]
+            portableswap.prepare(self)
+            self.write("/etc/fstab", portableswap.fstab_line("UUID=" + self.swap_uuid), append=True)
+            portableswap.rebuild_initramfs(self)
         if self.luks():
             luksroot.configure_stage(self)
         if self.hw_profile:
@@ -862,7 +868,8 @@ class Installer:
         serial_ok = not (self.hw_profile and self.hw_profile.get("defaults", {}).get("keep_serial_console") is False)
         extra = arch.console_args() if serial_ok else ""     # a tablet has no UART: its LUKS prompt must be on tty0
         extra = " ".join(x for x in (extra, luksroot.grub_cmdline_stage(self) if self.luks() else "",
-                                     " ".join(hwprofile.kernel_cmdline(self.hw_profile, self.hw_model))) if x)
+                                     " ".join(hwprofile.kernel_cmdline(self.hw_profile, self.hw_model)),
+                                     portableswap.kernel_args(self) if not self.luks() else "") if x)
         self.write("/etc/default/grub", "\n".join([
             f'GRUB_DISTRIBUTOR="{p["title"]}"', 'GRUB_TIMEOUT=3', f'GRUB_CMDLINE_LINUX="{extra}"',
             'GRUB_DISABLE_OS_PROBER=true',
