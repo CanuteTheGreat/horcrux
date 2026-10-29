@@ -5,3 +5,7 @@ sys-boot/grub device-mapper
 net-dns/dnsmasq script dhcp ipv6
 net-libs/gnutls pkcs11 tools
 sys-fs/squashfs-tools lzma zstd lzo xattr
+
+# the guided installer's portable xfs-luks layout is LUKS2 -> LVM (hibernate swap LV): needs pvcreate/vgcreate/lvcreate, which
+# sys-fs/lvm2 only installs with USE=lvm (default off: just dmsetup)
+sys-fs/lvm2 lvm

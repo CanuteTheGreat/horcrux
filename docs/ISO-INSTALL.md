@@ -102,7 +102,17 @@ before you type `ERASE` on the summary screen.
 
    ![language, keyboard, time zone](images/installer/horcrux/01-language-keyboard-timezone.png)
 
-2. **File system** - **XFS in a LUKS2 container** (the default on machines with **less than 8 GB RAM**), ext4, XFS, or ZFS (single disk or a two-disk **mirror**, pool `rpool`, lz4 compression; the default on 8 GB and up). XFS+LUKS asks for a disk passphrase (>= 12 characters, typed at every boot), uses a 1 GiB unencrypted ESP + 1 GiB unencrypted `/boot` + LUKS2 (argon2id, memory cost 3/16 of RAM capped at 1 GiB) holding XFS, has **no swap partition** (zram only) and trims weekly (`fstrim`, no `discard` mount option). The initramfs carries the USB/HID keyboard drivers (`xhci`, `usbhid`, `hid_multitouch`, `hid_microsoft`) so a Type Cover or USB keyboard works at the passphrase prompt. See [SURFACE.md](SURFACE.md).
+2. **File system** - **XFS in a LUKS2 container** (the default on machines with **less than 8 GB RAM**), ext4, XFS, or ZFS (single disk or a two-disk **mirror**, pool `rpool`, lz4 compression; the default on 8 GB and up). XFS+LUKS asks for a disk passphrase (>= 12 characters, typed at every boot), uses a 1 GiB unencrypted ESP + 1 GiB unencrypted `/boot` + LUKS2 (argon2id, memory cost 3/16 of RAM capped at 1 GiB) holding XFS, and trims weekly (`fstrim`, no `discard` mount option). The initramfs carries the USB/HID keyboard drivers (`xhci`, `usbhid`, `hid_multitouch`, `hid_microsoft`) so a Type Cover or USB keyboard works at the passphrase prompt. See [SURFACE.md](SURFACE.md).
+
+   **Swap / hibernate** (same page, shown for every file system except ZFS; `swap = auto|none|hibernate` in the answer file):
+
+   | | |
+   |---|---|
+   | **Server** (no battery, DMI chassis type is not a portable one) | **no swap at all**: no swap partition, no LVM, no zram, nothing in `fstab`. `auto` resolves to this. |
+   | **Portable** (a *system* battery in `/sys/class/power_supply`, or DMI chassis type 8 Portable / 9 Laptop / 10 Notebook / 11 Handheld / 14 Sub Notebook / 30 Tablet / 31 Convertible / 32 Detachable; or a hardware profile such as Surface; or the *desktop* install type) | **encrypted hibernate swap of RAM x 1.125 rounded up to whole GiB** (4 GB tablet -> 4.5 GiB, 8 GB -> 9 GiB, 16 GB -> 18 GiB). On XFS+LUKS the LUKS2 container holds **LVM** (VG `hxvg`: LV `root` = XFS, LV `swap`), so the one passphrase unlocks both and the initramfs resumes from the swap LV *before any file system is mounted*. On ext4/XFS it is the plain swap partition (the image is **not encrypted** there: choose XFS+LUKS for a laptop). Peripheral batteries (wireless mouse/keyboard, scope `Device`) and a UPS do not count. |
+
+   The installer shows what `auto` would do on this machine (the first option reads e.g. *Automatic: 4.5 GiB hibernate swap ... (hardware profile surface says swap = hibernate)*) and repeats it on the summary page; `Hibernate swap` / `No swap` override it. With `hibernate` the installer refuses a disk smaller than swap + 16 GiB; with `auto` it falls back to no swap and says so in the log. ZFS is not offered the choice yet (encrypted ZFS gets its own LUKS2 swap partition from the same stage: `liveinst/portableswap.py`).
+   Portable installs also get: `resume=UUID=` on the kernel command line and the dracut `resume` module, elogind policy (lid close = suspend, power key = suspend, long press = power off, `HibernateMode=shutdown`, so `loginctl hibernate` works), and UPower's critical-battery action = **Hibernate** (when UPower is on the image). zram swap (priority 100) stays the first swap where the profile ships it; the disk swap has priority 10.
 
    ![file system](images/installer/horcrux/02b-filesystem-zfs-mirror.png)
 
@@ -160,6 +170,7 @@ ssh_password_auth = false                 # default false: key-only root SSH
 [disk]
 filesystem = "ext4"                       # ext4 | xfs | zfs | xfs-luks (then also: luks_passphrase = "...", >= 12 chars)
 disks = ["first"]                         # or ["/dev/nvme0n1"]; "first" = first internal non-USB disk >= 8 GB
+swap = "auto"                             # auto (default: portable = encrypted hibernate swap, server = none) | none | hibernate
 zfs_raid = "mirror"                       # with filesystem = "zfs": single | mirror (needs two disks)
 
 [network.management]
@@ -303,7 +314,7 @@ The Type Cover keyboard works if it presents as USB-HID (use a USB keyboard thro
 `gentoo/surface/` - the installer detects Microsoft Surface by DMI (`Microsoft Corporation` + `Surface with Windows 8 Pro` / `Surface Pro` / `Surface Pro 2`; any other `Surface*` gets the generic profile),
 defaults to **XFS + LUKS**, adds the `button.lid_init_state=open` kernel option (buggy SP1/SP2 ACPI lid), and installs a lightweight touch desktop (sway, on-screen keyboard, pen/touch mapping, NetworkManager, zram) instead of a GNOME-class one that does not fit in 4 GB. Stock Gentoo kernel, **no linux-surface patches** for the SP1 (reasoning and sources in [SURFACE.md](SURFACE.md)). Emulated end to end (QEMU IvyBridge, 4 GiB, UEFI, USB-only keyboard at the LUKS prompt); the real tablet is still untested (touch, pen, Wi-Fi, Type Cover at the prompt, suspend).
 
-Horcrux specifics: XFS+LUKS / ext4 / XFS / ZFS (single or mirror) from the wizard; the root partition fills the disk after ESP/BIOS-boot (512 MB / 1 MB), `/boot` (1 GB) and swap (up to 4 GB; XFS+LUKS: 1 GiB ESP, 1 GiB `/boot`, no swap partition). VM guests need VT-x (present on both laptops; on the Surface Pro 1 nested guests will be slow). ZFS wants more than 4 GB RAM (its ARC competes with guests): machines with less than 8 GB get **XFS+LUKS** by default, never ZFS.
+Horcrux specifics: XFS+LUKS / ext4 / XFS / ZFS (single or mirror) from the wizard; the root partition fills the disk after ESP/BIOS-boot (512 MB / 1 MB), `/boot` (1 GB) and swap (up to 4 GB; XFS+LUKS: 1 GiB ESP, 1 GiB `/boot`, no swap partition on servers; portables get an LVM swap volume inside the LUKS container, see above). VM guests need VT-x (present on both laptops; on the Surface Pro 1 nested guests will be slow). ZFS wants more than 4 GB RAM (its ARC competes with guests): machines with less than 8 GB get **XFS+LUKS** by default, never ZFS.
 
 ## What is tested automatically
 

@@ -23,7 +23,7 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     cp -r /tmp/hw/portage/. /etc/portage/; \
     pk=$(grep -v '^#' /tmp/hw/packages.txt | tr '\n' ' '); \
     emerge --noreplace $pk sys-fs/cryptsetup; \
-    emerge --oneshot --changed-use sys-auth/pambase sys-auth/seatd; \
+    emerge --oneshot --changed-use sys-auth/pambase sys-auth/seatd sys-fs/lvm2; \
     rm -rf /var/db/repos/gentoo/* /var/cache/distfiles/* /var/tmp/portage /var/log/emerge* /tmp/hw 2>/dev/null || true
 
 # config + scripts: cheap layers (no emerge). project/overlay + common/overlay again (same order as Dockerfile.rootfs): the base image may predate the newest installer code / profile.toml

@@ -235,6 +235,13 @@ def resolve(inst, ram_mb=None):
     p = plan(inst.c, ram, hp)
     if p["mode"] == "hibernate" and p["requested"] == "auto" and inst.p.get("portable_swap") is False:
         p = dict(p, mode="none", mb=0, why="this product profile sets portable_swap = false (appliance)")
+    if p["mode"] == "hibernate":
+        miss = missing_tools(inst.c)
+        if miss:
+            msg = "this ISO lacks " + ", ".join(miss) + " (sys-fs/lvm2 without USE=lvm): no LVM swap volume possible"
+            if p["requested"] == "hibernate":
+                raise RuntimeError(msg + "; use a newer ISO or swap = none")
+            p = dict(p, mode="none", mb=0, why=msg)
     inst.swap_mode, inst.swap_mb, inst.swap_why, inst.swap_dev = p["mode"], p["mb"], p["why"], ""
     if p["mode"] == "hibernate":
         prob = fit_problem(p["mb"], disk_mb(inst.c["disks"][0]))
@@ -258,6 +265,18 @@ def layout_supported(cfg):
         except ImportError:
             return False
     return False
+
+
+LVM_TOOLS = ("pvcreate", "vgcreate", "lvcreate", "vgchange")
+
+
+def missing_tools(cfg, path=None):
+    """tools the chosen layout needs on the live image: xfs-luks portable = LVM (sys-fs/lvm2 built with USE=lvm; without it only dmsetup exists)"""
+    if cfg.get("fs", "xfs-luks") != "xfs-luks":
+        return []
+    import shutil
+    path = path or "/usr/sbin:/sbin:/usr/bin:/bin"
+    return [t for t in LVM_TOOLS if not shutil.which(t, path=path)]
 
 
 def uuid_of(dev):

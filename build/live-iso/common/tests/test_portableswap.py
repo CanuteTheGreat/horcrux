@@ -123,6 +123,18 @@ class Plan(unittest.TestCase):
         self.assertTrue(PS.describe({"mode": "none", "mb": 0, "why": "server: x"}).startswith("none"))
 
 
+class Tools(unittest.TestCase):
+    def test_missing_lvm_tools_are_reported(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(PS.missing_tools({"fs": "xfs-luks"}, path=d), list(PS.LVM_TOOLS))
+            self.assertEqual(PS.missing_tools({"fs": "ext4"}, path=d), [])          # plain swap partition needs no LVM
+            for t in PS.LVM_TOOLS:
+                p = os.path.join(d, t)
+                open(p, "w").write("#!/bin/sh\n")
+                os.chmod(p, 0o755)
+            self.assertEqual(PS.missing_tools({"fs": "xfs-luks"}, path=d), [])
+
+
 class Config(unittest.TestCase):
     def test_answer_file_swap_key(self):
         for val, want in (("hibernate", "hibernate"), ("None", "none"), ("auto", "auto")):
