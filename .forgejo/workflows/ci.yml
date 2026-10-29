@@ -360,12 +360,13 @@ jobs:
         # real netns to attach.
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "SDN networks + policies"
-          contract=$(cargo test --all-features --workspace --no-run --message-format=json 2>/dev/null \
+          contract=$(cargo test --all-features --workspace --no-run --message-format=json 2>/tmp/contract-build.err \
             | python3 -c 'import json,sys
           for l in sys.stdin:
               m = json.loads(l)
               if m.get("reason") == "compiler-artifact" and m.get("executable") and "/api_contract-" in m["executable"]:
-                  print(m["executable"])' | tail -1)
+                  print(m["executable"])' | tail -1) \
+            || { echo "contract build failed; cargo stderr tail:"; tail -60 /tmp/contract-build.err; false; }
           echo "UI contract test binary: ${contract:-<none>}"
           test -n "$contract"
           bash horcrux-api/tests/sdn_cni_e2e.sh target/debug/horcrux-api "$contract"
@@ -434,12 +435,13 @@ jobs:
         # contract test's LXC part against that server.
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "LXC containers (real nested LXC, Proxmox pct parity)"
-          contract=$(cargo test --all-features --workspace --no-run --message-format=json 2>/dev/null \
+          contract=$(cargo test --all-features --workspace --no-run --message-format=json 2>/tmp/contract-build.err \
             | python3 -c 'import json,sys
           for l in sys.stdin:
               m = json.loads(l)
               if m.get("reason") == "compiler-artifact" and m.get("executable") and "/api_contract-" in m["executable"]:
-                  print(m["executable"])' | tail -1)
+                  print(m["executable"])' | tail -1) \
+            || { echo "contract build failed; cargo stderr tail:"; tail -60 /tmp/contract-build.err; false; }
           echo "UI contract test binary: ${contract:-<none>}"
           test -n "$contract"
           bash horcrux-api/tests/lxc_e2e.sh test target/debug/horcrux-api "$contract"
@@ -454,12 +456,13 @@ jobs:
         # test's console-ticket part runs against that server.
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Incus containers (real nested Incus, in-browser consoles)"
-          contract=$(cargo test --all-features --workspace --no-run --message-format=json 2>/dev/null \
+          contract=$(cargo test --all-features --workspace --no-run --message-format=json 2>/tmp/contract-build.err \
             | python3 -c 'import json,sys
           for l in sys.stdin:
               m = json.loads(l)
               if m.get("reason") == "compiler-artifact" and m.get("executable") and "/api_contract-" in m["executable"]:
-                  print(m["executable"])' | tail -1)
+                  print(m["executable"])' | tail -1) \
+            || { echo "contract build failed; cargo stderr tail:"; tail -60 /tmp/contract-build.err; false; }
           echo "UI contract test binary: ${contract:-<none>}"
           test -n "$contract"
           bash horcrux-api/tests/incus_e2e.sh ct target/debug/horcrux-api "$contract"
