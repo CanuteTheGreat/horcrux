@@ -7,10 +7,10 @@ What it proves (evidence: result.json, screens/*.png, serial logs in --out):
   * CPU model IvyBridge (AVX but NO AVX2/FMA/BMI) + 4 GiB RAM + UEFI: every binary on the ISO and the installed system runs
   * DMI is faked as the real SP1 (`-smbios type=1,manufacturer="Microsoft Corporation",product="Surface with Windows 8 Pro"`):
     the installer's hardware-profile autodetect must pick surface / surface-pro-1 by itself (no profile in the answer file)
-  * unattended install of XFS-in-LUKS2 (argon2id, memory cost <= 1 GiB), no swap partition
+  * unattended install of XFS-in-LUKS2 (argon2id, memory cost <= 1 GiB) -> LVM (root + 4.5 GiB hibernate swap LV); the hibernate/resume cycle is surface-swap-test.py
   * the installed disk is booted with NO PS/2 keyboard (`i8042=off`): the LUKS passphrase can only be typed on a USB-HID
     keyboard, i.e. the initramfs really carries xhci + usbhid + hid_*; a wrong passphrase first, then the right one
-  * after unlock: XFS root without `discard`, zram swap, fstrim works through dm-crypt, NetworkManager/nmtui, the
+  * after unlock: XFS root without `discard`, zram swap + encrypted swap LV, fstrim works through dm-crypt, NetworkManager/nmtui, the
     `button.lid_init_state=open` quirk, sway + wvkbd + swaybar running for the autologin user, screenshots of the LUKS
     prompt, the desktop and the on-screen keyboard
 Reuses the harness classes of build/live-iso/common/qemu-test.py. Python stdlib + qemu + ovmf + openssh-client + openssl + e2fsprogs.
@@ -215,7 +215,7 @@ class T:
         rc, out = self.ssh("findmnt -no FSTYPE,SOURCE,OPTIONS /; findmnt -no FSTYPE /boot; cat /proc/cmdline; "
                            "cryptsetup status hxroot | head -8; cryptsetup luksDump $(cryptsetup status hxroot | sed -n 's/ *device: *//p') | grep -E 'Version|PBKDF|Memory|cipher:' | head -8")
         flat = out.replace("\r", "")
-        s("root-is-xfs-on-dm-crypt", re.search(r"^xfs /dev/mapper/hxroot", flat, re.M) is not None, flat.splitlines()[0] if flat else "")
+        s("root-is-xfs-on-dm-crypt", re.search(r"^xfs /dev/mapper/hxvg-root", flat, re.M) is not None, flat.splitlines()[0] if flat else "")
         mo = flat.splitlines()[0] if flat else ""
         s("xfs-mount-options-default-no-discard", "discard" not in mo, mo)
         s("boot-is-ext4-unencrypted", flat.splitlines()[1].strip() == "ext4", "/boot ext4 on its own partition")
@@ -232,7 +232,8 @@ class T:
                            "blkid | grep -ci swap; rc-service zram-swap status")
         swaps = out.split("---")[0].split()
         devs = [w for w in swaps if w.startswith("/")]
-        s("zram-is-the-only-swap", devs == ["/dev/zram0"] and "started" in out.split("---")[-1] and "[SWAP]" in out, re.sub(r"\s+", " ", out)[:200])
+        # portable swap (docs/SURFACE.md): zram first (pri 100) + the encrypted swap LV (pri 10) that holds the hibernation image
+        s("zram-first-then-encrypted-swap-lv", len(devs) == 2 and devs[0] == "/dev/zram0" and devs[1].startswith("/dev/dm-") and "started" in out.split("---")[-1], re.sub(r"\s+", " ", out)[:200])
         rc, out = self.ssh("ls /etc/cron.weekly/fstrim && rc-service cronie status; fstrim -v / 2>&1; fstrim -v /boot 2>&1 | tail -1")
         s("fstrim-works-through-dm-crypt", re.search(r"^/: [\d.]+ \w+ \(\d+ bytes\) trimmed", out, re.M) is not None, re.sub(r"\s+", " ", out)[:200])
         rc, nm = self.ssh("rc-service NetworkManager status")

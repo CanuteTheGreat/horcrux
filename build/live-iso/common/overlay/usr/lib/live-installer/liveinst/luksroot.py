@@ -3,7 +3,11 @@
 Layout (GPT, one disk):  1 = ESP (FAT32, 1 GiB; BIOS-boot 1 MiB on legacy BIOS)   unencrypted
                          2 = /boot (ext4, 1 GiB)                                  unencrypted (kernel + initramfs)
                          3 = LUKS2 -> /dev/mapper/hxroot -> XFS                   everything else
-No swap partition (zram only, see the hardware profile), no LVM.
+Server installs: no swap at all, no LVM. Portable installs (battery / laptop chassis / Surface profile / desktop type, `swap = auto|hibernate`):
+LUKS2 -> LVM, VG "hxvg" with an XFS root LV and an encrypted swap LV (RAM x 1.125) that holds the hibernation image; ONE passphrase
+unlocks both, the dracut resume hook runs before the root is mounted (portableswap.py). Why LVM and not a swapfile on the XFS: resume must
+happen before ANY file system is mounted (an XFS mount, even read-only, replays its log and so changes the disk the image was taken from),
+and a swapfile needs the XFS mounted first; a swap LV is a plain block device the initramfs can resume from with the root still closed.
 
 Everything that is pure (sizes, command lines, kernel arguments, dracut/fstab text) is a plain function so the
 unit tests can check it without a disk; the Installer calls the thin `*_stage` helpers at its stage hooks.
@@ -14,12 +18,15 @@ import time
 
 FS_ID = "xfs-luks"
 MAPPER = "hxroot"
+VG = "hxvg"
+ROOT_LV = f"/dev/mapper/{VG}-root"
+SWAP_LV = f"/dev/mapper/{VG}-swap"
 # Everything the initramfs needs to ASK FOR AND ACCEPT a passphrase on a machine whose only keyboard is a USB/HID
 # device (Surface Type Cover, T2 Mac keyboards ...): HID core + USB host controllers + multitouch/microsoft keyboards.
 INITRAMFS_DRIVERS = (
     "usbhid hid_generic hid hid_multitouch hid_microsoft hid_apple hid_cherry hid_logitech_dj "
     "xhci_pci xhci_hcd ehci_pci ehci_hcd uhci_hcd ohci_pci "
-    "atkbd i8042 i915 dm_crypt xfs ext4 vfat nls_cp437 nls_iso8859_1 aesni_intel sha256_ssse3 "
+    "atkbd i8042 i915 dm_mod dm_crypt xfs ext4 vfat nls_cp437 nls_iso8859_1 aesni_intel sha256_ssse3 "
     "nvme ahci sd_mod mmc_block sdhci_pci virtio_blk virtio_pci"
 )
 ARGON_MEM_CAP_KIB = 1024 * 1024          # 1 GiB: cryptsetup's own maximum, and what 4 GB machines can spare
@@ -63,9 +70,20 @@ def luks_open_cmd(dev):
     return ["cryptsetup", "open", "--allow-discards", "--key-file=-", dev, MAPPER]
 
 
-def kernel_args(luks_uuid, extra=""):
-    a = [f"rd.luks.uuid={luks_uuid}", f"rd.luks.name={luks_uuid}={MAPPER}", f"rd.luks.allow-discards={luks_uuid}",
-         f"root=/dev/mapper/{MAPPER}", "rootfstype=xfs"]
+def root_dev(lvm=False):
+    return ROOT_LV if lvm else f"/dev/mapper/{MAPPER}"
+
+
+def lvm_on(inst):
+    """portable install: the LUKS volume holds an LVM volume group (root + swap) instead of the bare XFS"""
+    return getattr(inst, "swap_mode", "none") == "hibernate"
+
+
+def kernel_args(luks_uuid, extra="", lvm=False):
+    a = [f"rd.luks.uuid={luks_uuid}", f"rd.luks.name={luks_uuid}={MAPPER}", f"rd.luks.allow-discards={luks_uuid}"]
+    if lvm:
+        a.append(f"rd.lvm.vg={VG}")
+    a += [f"root={root_dev(lvm)}", "rootfstype=xfs"]
     return " ".join(a + ([extra] if extra else []))
 
 
@@ -89,10 +107,12 @@ def dracut_conf(drivers=None):
             f'add_drivers+=" {drivers} "\n')
 
 
-def fstab_text(root_uuid_dev, boot_uuid, esp_uuid, efi=True):
+def fstab_text(root_uuid_dev, boot_uuid, esp_uuid, efi=True, swap_dev=None):
     lines = ["# written by live-installer (xfs-luks)",
              f"{root_uuid_dev}\t/\txfs\tdefaults\t0 1",          # no `discard`: fstrim runs weekly instead
              f"UUID={boot_uuid}\t/boot\text4\tdefaults\t0 2"]
+    if swap_dev:
+        lines.append(f"{swap_dev}\tnone\tswap\tsw,pri=10\t0 0")     # zram-swap is pri 100: it is always used first
     if efi and esp_uuid:
         lines.append(f"UUID={esp_uuid}\t/boot/efi\tvfat\tumask=0077\t0 2")
     lines.append("tmpfs\t/tmp\ttmpfs\tdefaults,nosuid,nodev\t0 0")
@@ -141,13 +161,23 @@ def mkfs_stage(inst, ram_mb):
     inst.log(f"LUKS2 argon2id, memory cost {pbkdf_memory_kib(ram_mb) // 1024} MiB (RAM {ram_mb} MB)")
     inst.run(luks_format_cmd(L[3], ram_mb), input_=pw)
     inst.run(luks_open_cmd(L[3]), input_=pw)
-    inst.run(["mkfs.xfs", "-f", "-L", "root", f"/dev/mapper/{MAPPER}"])
+    if lvm_on(inst):
+        pv = f"/dev/mapper/{MAPPER}"
+        inst.log(f"LVM inside LUKS: VG {VG}, swap LV {inst.swap_mb} MiB + root LV (rest)")
+        inst.run(["pvcreate", "-ff", "-y", pv])
+        inst.run(["vgcreate", "-y", VG, pv])
+        inst.run(["lvcreate", "-y", "-L", f"{inst.swap_mb}M", "-n", "swap", VG])
+        inst.run(["lvcreate", "-y", "-l", "100%FREE", "-n", "root", VG])
+        inst.run("udevadm settle --timeout=20 || true", check=False)
+        inst.run(["mkswap", "-L", "swap", SWAP_LV])
+        inst.swap_dev = SWAP_LV
+    inst.run(["mkfs.xfs", "-f", "-L", "root", root_dev(lvm_on(inst))])
 
 
 def mount_stage(inst):
     L = inst.layout(inst.c["disks"][0])
     os.makedirs(inst.target, exist_ok=True)
-    inst.run(["mount", f"/dev/mapper/{MAPPER}", inst.target])
+    inst.run(["mount", root_dev(lvm_on(inst)), inst.target])
     os.makedirs(inst.target + "/boot", exist_ok=True)
     inst.run(["mount", L[2], inst.target + "/boot"])
     if inst.efi:
@@ -168,8 +198,12 @@ def configure_stage(inst):
     if not luks_uuid:
         raise RuntimeError("cannot read the LUKS UUID of " + L[3])
     inst.luks_uuid = luks_uuid
-    root_uuid = blkid(f"/dev/mapper/{MAPPER}")
-    inst.write("/etc/fstab", fstab_text(f"UUID={root_uuid}" if root_uuid else f"/dev/mapper/{MAPPER}", blkid(L[2]), blkid(L[1]) if inst.efi else "", inst.efi))
+    root_uuid = blkid(root_dev(lvm_on(inst)))
+    inst.write("/etc/fstab", fstab_text(f"UUID={root_uuid}" if root_uuid else root_dev(lvm_on(inst)), blkid(L[2]), blkid(L[1]) if inst.efi else "", inst.efi,
+                                        SWAP_LV if lvm_on(inst) else None))
+    if lvm_on(inst):
+        from . import portableswap
+        portableswap.prepare(inst, extra_dracut_modules="lvm dm")     # resume hook + power policy, before the initramfs is built
     inst.write("/etc/crypttab", crypttab_text(luks_uuid))
     kvers = sorted(os.listdir(f"{inst.target}/lib/modules"))
     kver = kvers[-1]
@@ -191,19 +225,22 @@ def configure_stage(inst):
     r = subprocess.run(["chroot", inst.target, "lsinitrd", f"/boot/initramfs-{kver}.img"], capture_output=True, text=True)
     cfgp = f"{inst.target}/boot/config-{kver}"
     cfg = open(cfgp).read() if os.path.exists(cfgp) else ""
-    missing = verify_initramfs(r.stdout, cfg)
-    inst.log("initramfs check (cryptsetup, dm-crypt, usbhid, xhci, hid-multitouch, hid-microsoft): " + ("all reachable at the passphrase prompt" if not missing else "MISSING " + ", ".join(missing)))
+    missing = verify_initramfs(r.stdout, cfg, lvm=lvm_on(inst))
+    inst.log("initramfs check (cryptsetup, dm-crypt, usbhid, xhci, hid-multitouch, hid-microsoft" + (", lvm, resume" if lvm_on(inst) else "") + "): "
+             + ("all reachable at the passphrase prompt" if not missing else "MISSING " + ", ".join(missing)))
     if missing:
         raise RuntimeError("the new initramfs lacks " + ", ".join(missing) + ": the disk could not be unlocked at boot")
 
 
-def verify_initramfs(img_listing, kernel_config=""):
+def verify_initramfs(img_listing, kernel_config="", lvm=False):
     """static check on `lsinitrd` output (+ the kernel's /boot/config-*): the keyboard stack and cryptsetup are reachable at the
     passphrase prompt. A driver is fine when its .ko is in the initramfs OR the kernel has it built in (=y; the Gentoo dist kernel
     builds usbhid/xhci-pci/xfs in). Returns the missing item names."""
     need = {"cryptsetup": (r"cryptsetup", None), "dm-crypt": (r"dm-crypt", "CONFIG_DM_CRYPT"),
             "usbhid": (r"usbhid", "CONFIG_USB_HID"), "xhci": (r"xhci-(pci|hcd)", "CONFIG_USB_XHCI_PCI"),
             "hid-multitouch": (r"hid-multitouch", None), "hid-microsoft": (r"hid-microsoft", None)}
+    if lvm:
+        need.update({"lvm": (r"(^|/)lvm\b", None), "resume hook": (r"(parse-)?resume\.sh", None)})
     missing = []
     for k, (rx, cfg) in need.items():
         if re.search(rx, img_listing) or (cfg and re.search(rf"^{cfg}=y$", kernel_config, re.M)):
@@ -213,8 +250,14 @@ def verify_initramfs(img_listing, kernel_config=""):
 
 
 def grub_cmdline_stage(inst):
-    return kernel_args(inst.luks_uuid)
+    extra = ""
+    if lvm_on(inst):
+        from . import portableswap
+        extra = portableswap.kernel_args(inst)       # resume=UUID=<swap LV>
+    return kernel_args(inst.luks_uuid, extra, lvm=lvm_on(inst))
 
 
 def finish_stage(inst):
+    if lvm_on(inst):
+        inst.run(f"swapoff {SWAP_LV} 2>/dev/null; vgchange -an {VG} 2>/dev/null; true", check=False)
     inst.run(f"cryptsetup close {MAPPER} 2>/dev/null; true", check=False)

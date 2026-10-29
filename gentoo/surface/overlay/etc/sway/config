@@ -76,6 +76,6 @@ bar {
 }
 
 # idle: dim then lock (battery)
-exec swayidle -w timeout 600 'swaylock -f -c 10151c' timeout 900 'swaymsg "output * power off"' resume 'swaymsg "output * power on"'
+exec swayidle -w before-sleep 'swaylock -f -c 10151c' timeout 600 'swaylock -f -c 10151c' timeout 900 'swaymsg "output * power off"' resume 'swaymsg "output * power on"'
 
 include /etc/sway/config.d/*

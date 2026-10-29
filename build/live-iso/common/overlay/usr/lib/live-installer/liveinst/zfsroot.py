@@ -3,7 +3,8 @@
 Disk layout (erase-disk install, one or two disks):
   p1  ESP     1 GiB FAT32 (unencrypted)      p2  /boot  2 GiB ext4 (unencrypted: GRUB cannot read encrypted ZFS)
   p4  rest    zpool `rpool` (ashift=12, zstd, autotrim, optional aes-256-gcm with a passphrase typed by the user)
-No swap partition: ZFS swap is unsafe, a zram device is configured instead.
+Servers: no swap partition (ZFS swap is unsafe), a zram device is configured instead. Encrypted laptops/desktops add
+  p3 = LUKS2 hibernation swap (zfsswap.py, the pool passphrase unlocks it too: ONE prompt, resume BEFORE the pool import).
 
 The passphrase only exists in the installer's memory and a 0600 file on tmpfs for the duration of `zpool create`;
 it is never logged, never written to the installed system, and the key is prompted for at every boot.
@@ -16,6 +17,7 @@ BE = "horcrux"
 KEY_FILE = "/run/horcrux-zfs.key"
 ENC_ALGO = "aes-256-gcm"
 MIN_PASSPHRASE = 12
+PORTABLE_SWAP = True        # encrypted pool + LUKS2 hibernation swap partition (zfsswap.py); read by portableswap.layout_supported
 
 
 def passphrase_problem(p):
@@ -155,6 +157,8 @@ def write_grubcfg(inst, extra_cmdline=""):
 
 
 def finish(inst):
+    inst.run(["swapoff", "-a"], check=False)
+    inst.run(["cryptsetup", "close", "hxswap"], check=False)      # the hibernation swap mapping (zfsswap.py), if any
     inst.run(["zfs", "umount", "-a"], check=False)
     inst.run(["zpool", "export", POOL], check=False)
 

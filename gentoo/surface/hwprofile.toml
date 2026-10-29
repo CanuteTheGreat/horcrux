@@ -5,7 +5,7 @@ id = "surface"
 title = "Microsoft Surface"
 
 # Services the profile turns on/off on the installed system (NetworkManager replaces iwd+dhcpcd so that nmtui and the
-# desktop's Wi-Fi menu manage the one Wi-Fi stack; zram-swap is the only swap).
+# desktop's Wi-Fi menu manage the one Wi-Fi stack; zram-swap = the fast swap; the encrypted disk swap is only for the hibernation image).
 services_add = ["elogind:boot", "dbus:default", "NetworkManager:default", "zram-swap:default", "cronie:default", "tailscale:default"]
 services_del = ["iwd", "dhcpcd", "live-serial"]
 
@@ -14,7 +14,8 @@ sys_vendor = ["Microsoft Corporation"]
 product_prefix = ["Surface"]
 
 [defaults]
-fs = "xfs-luks"          # 4 GB-class tablets: XFS in LUKS2, zram only, no ZFS (ARC would eat the RAM)
+fs = "xfs-luks"          # 4 GB-class tablets: XFS in LUKS2 (-> LVM: root + hibernate swap LV), no ZFS (ARC would eat the RAM)
+swap = "hibernate"       # portable: encrypted swap of RAM x 1.125 (4 GB -> 4.5 GiB) for hibernate; zram stays the first swap
 desktop = true
 keep_serial_console = false   # no UART on a tablet: the installed system keeps console=tty0 only (LUKS prompt + USB keyboard on the screen)
 

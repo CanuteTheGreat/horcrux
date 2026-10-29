@@ -252,3 +252,58 @@ class Desktop(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ZfsHibernateSwap(unittest.TestCase):
+    """encrypted-ZFS laptop: LUKS2 swap partition, ONE passphrase, resume BEFORE the pool import (zfsswap.py + dracut module)"""
+
+    def test_plan_zfs_portable(self):
+        from liveinst import portableswap as PS
+        cfg = {"fs": "zfs", "zfs_encrypt": True, "install_type": "desktop"}
+        p = PS.plan(cfg, 16000)
+        self.assertEqual((p["mode"], p["mb"]), ("hibernate", 18432))         # 16 GB RAM -> 18 GiB
+        self.assertEqual(PS.plan(dict(cfg, install_type="server"), 16000, detect=lambda: (False, "server"))["mode"], "none")
+        self.assertEqual(PS.plan(dict(cfg, zfs_encrypt=False), 16000)["mode"], "none")   # never an unencrypted RAM image
+        self.assertEqual(PS.plan(dict(cfg, swap="none"), 16000)["mode"], "none")
+
+    def test_pure_helpers(self):
+        from liveinst import zfsswap as ZS
+        self.assertEqual(ZS.sgdisk_part(18432), ["-n", "3:0:+18432M", "-t", "3:8309", "-c", "3:cryptswap"])
+        self.assertEqual(ZS.cmdline("LU", "SW"), "resume=UUID=SW rd.hx.swap=LU")
+        self.assertIn("pri=10", ZS.fstab_line())
+        self.assertIn("/dev/mapper/hxswap", ZS.fstab_line())
+        self.assertIn("horcrux-unlock", ZS.dracut_conf())
+        self.assertIn("resume", ZS.dracut_conf())
+        cmd = ZS.luks_format_cmd("/dev/vda3", 16000)
+        self.assertIn("luks2", cmd)
+        self.assertIn("--key-file=-", cmd)                  # passphrase on stdin, never argv
+        self.assertTrue(int(cmd[cmd.index("--pbkdf-memory") + 1]) <= 512 * 1024)
+
+    def test_initramfs_listing_checks(self):
+        from liveinst import zfsswap as ZS
+        good = ("usr/lib/dracut/hooks/cmdline/40-parse-hx.sh\nusr/sbin/hx-unlock\nusr/lib/dracut/hooks/pre-mount/50-hx-zfskey.sh\n"
+                "usr/lib/dracut/hooks/pre-mount/90-zfs-load-key.sh\nusr/lib/dracut/hooks/mount/98-mount-zfs.sh\nusr/lib/dracut/resume.sh\n"
+                "usr/sbin/cryptsetup\nlib/modules/7.2.13/extra/zfs.ko\nlib/modules/7.2.13/kernel/drivers/md/dm-crypt.ko\n")
+        self.assertEqual(ZS.initramfs_problems(good), [])
+        self.assertTrue(ZS.hook_order_ok(good))
+        self.assertIn("hx-unlock", ZS.initramfs_problems(good.replace("usr/sbin/hx-unlock\n", "")))
+        # the import must NOT come before the resume attempt: a zfs hook below pre-mount 50 would be a corruption risk
+        bad = good.replace("mount/98-mount-zfs.sh", "mount/40-mount-zfs.sh")
+        self.assertFalse(ZS.hook_order_ok(bad))
+
+    def test_dracut_module_files(self):
+        base = os.path.join(HERE, "..", "overlay", "usr", "lib", "dracut", "modules.d", "91horcrux-unlock")
+        names = sorted(os.listdir(base))
+        for n in ("module-setup.sh", "parse-hx.sh", "hx-unlock.sh", "hx-try.sh", "hx-zfskey.sh", "hx-cleanup.sh"):
+            self.assertIn(n, names)
+            self.assertTrue(os.access(os.path.join(base, n), os.X_OK), n)
+        key = open(os.path.join(base, "hx-zfskey.sh")).read()
+        self.assertIn("zfs load-key -L file:///run/hx/key", key)
+        self.assertLess(key.index("zpool import"), key.index("load-key"))
+        self.assertIn("shred -u /run/hx/key", key)            # the key never survives into the real system
+        setup = open(os.path.join(base, "module-setup.sh")).read()
+        self.assertIn("inst_hook pre-mount 50", setup)        # after 74resume's pre-mount 10, before 90zfs's mount 98
+        self.assertNotIn("passphrase", open(os.path.join(base, "hx-try.sh")).read().split("read -r pp")[0].replace("# stdin = the passphrase", ""))
+
+    def test_zfsroot_declares_support(self):
+        self.assertTrue(Z.PORTABLE_SWAP)
