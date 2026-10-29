@@ -67,13 +67,15 @@ def model(dmi="/sys/class/dmi/id"):
 # --------------------------------------------------------------------------
 # generated configuration
 # --------------------------------------------------------------------------
-def dracut_conf():
+def dracut_conf(root="/"):
+    # lvm only when the image has it (Surface-style LVM swap); `dracut` ABORTS on a module that cannot be installed
+    lvm = " lvm" if os.path.exists(os.path.join(root, "usr/sbin/lvm")) or os.path.exists(os.path.join(root, "sbin/lvm")) else ""
     return ("# Horcrux T2 profile: the internal keyboard/trackpad of a T2 Mac is a USB device behind the T2 and\n"
             "# only appears once apple-bce (t2bce_*) is loaded. Without these lines the LUKS prompt is unusable.\n"
             'hostonly="no"\n'
             'add_drivers+=" ' + " ".join(INITRAMFS_DRIVERS) + ' "\n'
             'force_drivers+=" ' + " ".join(EARLY_DRIVERS) + ' "\n'
-            'add_dracutmodules+=" crypt lvm dm "\n'
+            'add_dracutmodules+=" crypt' + lvm + ' dm "\n'
             'omit_dracutmodules+=" plymouth "\n')
 
 
@@ -262,7 +264,7 @@ def install_audio(inst):
 
 def write_config(inst):
     """write the T2 dracut / modprobe / modules-load config into the installed tree (inst.write)"""
-    inst.write("/etc/dracut.conf.d/90-horcrux-t2.conf", dracut_conf())
+    inst.write("/etc/dracut.conf.d/90-horcrux-t2.conf", dracut_conf(inst.target))
     inst.write("/etc/modprobe.d/90-horcrux-t2.conf", modprobe_conf())
     inst.write("/etc/modules-load.d/horcrux-t2.conf", modules_load_conf())
     if install_audio(inst):
@@ -276,7 +278,9 @@ def write_config(inst):
 def rebuild_initramfs(inst, kver):
     """dracut for the T2 kernel, then HARD CHECK that the apple-bce stack is inside (keyboard at the LUKS prompt)"""
     img = f"/boot/initramfs-{kver}.img"
-    inst.run(["dracut", "--force", "--no-hostonly", "--kver", kver, img, kver], chroot=True)
+    gcc = f"{inst.target}/usr/lib/gcc"       # no Portage tree in the target: dracut's zfs module asks gcc-config for the CHOST
+    chost = sorted(os.listdir(gcc))[0] if os.path.isdir(gcc) and os.listdir(gcc) else "x86_64-pc-linux-gnu"
+    inst.run(["dracut", "--force", "--no-hostonly", "--kver", kver, img, kver], chroot=True, env={"CHOST": chost})
     out = []
     inst.run(["lsinitrd", img], chroot=True, line_cb=lambda l: out.append(l))
     miss = initramfs_check(out)
