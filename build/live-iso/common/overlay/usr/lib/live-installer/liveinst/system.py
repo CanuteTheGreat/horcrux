@@ -597,6 +597,9 @@ class Installer:
     def go(self):
         c, p = self.c, self.p
         self.log(f"== live-installer: {p['title']} on {', '.join(c['disks'])} ({'UEFI' if self.efi else 'BIOS'}), fs={c['fs']}")
+        if self.t2:
+            from . import t2
+            t2.preflight(self)
         self.prog(2, "Partitioning")
         self.partition()
         self.prog(8, "Creating file systems")

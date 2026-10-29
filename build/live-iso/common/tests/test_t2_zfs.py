@@ -73,6 +73,27 @@ def make_tar(path, members):
             t.addfile(ti, io.BytesIO(data))
 
 
+class Preflight(unittest.TestCase):
+    def test_image_without_t2_kernel_refuses_before_touching_the_disk(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "lib/modules/6.18.57-gentoo-dist-bin"))
+            self.assertFalse(T2.image_has_t2_kernel(d))
+            os.makedirs(os.path.join(d, "lib/modules/7.2.13-t2-horcrux"))
+            self.assertTrue(T2.image_has_t2_kernel(d))
+
+    def test_bundled_kernel_tarball_counts(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "usr/share/horcrux/t2"))
+            open(os.path.join(d, "usr/share/horcrux/t2/kernel-7.2.13-t2.tar.zst"), "w").close()
+            self.assertTrue(T2.image_has_t2_kernel(d))
+
+    def test_target_kernel_version_picks_t2(self):
+        with tempfile.TemporaryDirectory() as d:
+            for v in ("6.18.57-gentoo-dist-bin", "7.2.13-t2-horcrux"):
+                os.makedirs(os.path.join(d, "lib/modules", v))
+            self.assertEqual(T2.target_kernel_version(d), "7.2.13-t2-horcrux")
+
+
 class Firmware(unittest.TestCase):
     def test_import_from_flat_tar_and_filters_the_rest(self):
         with tempfile.TemporaryDirectory() as d:

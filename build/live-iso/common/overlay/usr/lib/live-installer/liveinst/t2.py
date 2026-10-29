@@ -334,3 +334,16 @@ def apply(inst):
     rebuild_initramfs(inst, kver)
     inst.cmdline_extra = (inst.cmdline_extra + " " + grub_cmdline_extra()).strip()
     inst.kernel_glob = "*t2*"
+
+
+def image_has_t2_kernel(root="/"):
+    """the running image carries a T2 kernel (…-t2… in /lib/modules) or a bundled kernel tarball"""
+    return bool(target_kernel_version(root)) or bool(glob.glob(os.path.join(root, T2_ASSETS.lstrip("/"), "kernel-*.tar*")))
+
+
+def preflight(inst):
+    """called before the disk is touched: never erase a disk when the result could not boot with its keyboard"""
+    from .system import InstallError
+    if not image_has_t2_kernel("/") and (inst.c.get("zfs_encrypt") or not inst.c.get("t2_allow_no_kernel")):
+        raise InstallError("this image has no T2 kernel (apple-bce): the internal keyboard would not work at the disk-passphrase "
+                           "prompt. Use the Apple T2 image of Horcrux. (nothing was written to the disk)")

@@ -57,7 +57,7 @@ class ZRun(qt.Runner):
     # --- answers
     def toml(self, pubkey, pwhash):
         t = ["[global]", 'keyboard = "us"', 'timezone = "UTC"', 'hostname = "zfs-enc.test.lan"', 'email = "ops@example.test"',
-             f'root_password_hash = "{pwhash}"', f'ssh_keys = ["{pubkey}"]', "ssh_password_auth = false", 't2 = "no"']
+             f'root_password_hash = "{pwhash}"', f'ssh_keys = ["{pubkey}"]', "ssh_password_auth = false", f't2 = "{self.z.t2}"']
         if self.z.desktop:
             t.append('install_type = "desktop"')
         t += ["", "[disk]", 'filesystem = "zfs"', 'zfs_raid = "single"', 'disks = ["/dev/vda"]', "encryption = true",
@@ -83,6 +83,8 @@ class ZRun(qt.Runner):
         pwhash = subprocess.check_output(["openssl", "passwd", "-6", "-salt", "qemutest1", qt.PW]).decode().strip()
         qt.make_answer_image(self.answers, "horcrux", self.toml(self.pub, pwhash))
         self.step("answer-file-built", True, "encryption=true, passphrase typed by the harness only")
+        if a.fake_t2 and a.expect_t2_refusal:
+            return self.t2_guard(nvars)
         self.phase1(nvars)
         self.boot1(nvars)
         self.boot2(nvars)
@@ -92,6 +94,33 @@ class ZRun(qt.Runner):
             print("FAILED STEPS:", ", ".join(self.failed))
             sys.exit(1)
         print("ALL PASS zfs-encrypted", "desktop" if a.desktop else "server")
+
+    def t2_guard(self, nvars):
+        """public image has no T2 kernel: on a (fake) T2 Mac the installer must refuse an ENCRYPTED install instead of
+        producing a system whose passphrase prompt has no keyboard"""
+        a = self.z
+        vm = qt.VM("1-t2guard", self.qemu_args(a.iso, False, nvars), a.out)
+        try:
+            self.step("grub-menu-reached", vm.expect_raw(r"safe graphics", 120))
+            time.sleep(2)
+            for _ in range(2):
+                vm.send("\x1b[B")
+                time.sleep(0.6)
+            vm.send("\r")
+            self.step("live-userland-up", vm.expect_raw(r"AUTOINSTALL-START", 420), "live system booted, answer file found")
+            m = vm.expect_raw(r"AUTOINSTALL-(OK|FAILED[^\n]*)", 900, consume=False)
+            txt = m.group(0).decode(errors="replace") if m else "timeout"
+            self.step("t2-detected-and-install-refused-without-t2-kernel", m and b"FAILED" in m.group(0) and b"T2 kernel" in m.group(0), txt[:200])
+            seen = vm.expect_raw(r"Apple T2 Mac detected[^\n]*", 5, consume=False)
+            self.step("t2-profile-announced", seen, seen.group(0).decode(errors="replace") if seen else "no announcement")
+        finally:
+            if vm.alive():
+                vm.p.kill()
+        self.res["ok"] = not getattr(self, "failed", [])
+        json.dump(self.res, open(f"{a.out}/result.json", "w"), indent=1)
+        if getattr(self, "failed", []):
+            sys.exit(1)
+        print("ALL PASS t2 guard")
 
     # --- helpers
     def wait_ssh(self, timeout=420):
@@ -236,6 +265,9 @@ def main():
     ap.add_argument("--iso", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--desktop", action="store_true")
+    ap.add_argument("--fake-t2", action="store_true", help="force the T2 path with answer-file t2=yes (this QEMU cannot present PCI id 106b:1801; detection itself is unit-tested with a fake sysfs)")
+    ap.add_argument("--expect-t2-refusal", action="store_true", help="(with --fake-t2) the image has no T2 kernel: assert the installer refuses")
+    ap.add_argument("--t2", default="no", help="answer file t2 = no|auto|yes (default no: the normal tests ignore a T2 device)")
     ap.add_argument("--mem", type=int, default=4096)
     ap.add_argument("--cpu", default=os.environ.get("QEMU_TEST_CPU", "qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt,+cx16"))
     ap.add_argument("--disk-gb", type=int, default=24)
