@@ -19,3 +19,11 @@ Required kernel cmdline: `pm_async=off` (suspend). Also used on the reference ma
 ## Apple firmware
 
 Never in the ISO. The installer offers import from an existing install (`/lib/firmware/brcm/*apple*`) or from a t2linux `firmware.tar`.
+
+## What ships (installer + images)
+
+* `VARIANT=t2 build.sh` (or `VARIANT=desktop,t2`) adds the T2 kernel to the finished image (`project/variants/t2/Dockerfile`, reusing `gentoo/t2/kernel/*`): gentoo-sources 7.2.13 + pinned t2linux set, `zfs.ko` 2.3.9 built for it, the stock kernel removed so the live USB boots the T2 kernel, `pm_async=off intel_iommu=on iommu=pt` on the live kernel line (`/etc/live-iso-cmdline`), and an initramfs with apple-bce + HID loaded early. **The image build fails** if `lsinitrd` does not list `t2bce_core`, `t2bce_dma`, `t2bce_vhci` and `hid-apple` (`liveinst.t2.initramfs_check`); the listing is kept in the image as `/etc/live-iso-t2-initramfs.lst`.
+* The installer detects PCI `106b:1801` (`liveinst/t2.py`), refuses before touching the disk when the image has no T2 kernel, rebuilds the target initramfs with `/etc/dracut.conf.d/90-horcrux-t2.conf`, re-checks it, adds `pm_async=off intel_iommu=on iommu=pt` to the boot-environment kernel line, enables `t2fanrd` and `tiny-dfr` (OpenRC), installs the t2linux audio profile sets and imports Wi-Fi/Bluetooth firmware from an existing install (`/lib/firmware/brcm/*apple*`) or a `firmware.tar` (path/size/symlink filtered). `horcrux-t2-firmware PATH` does the same on a running system.
+* Apple firmware is never in the public image (`liveinst.t2.iso_ships_apple_firmware`, asserted by the QEMU test). The owner's private live ISO (`gentoo/t2/live`) is the only image that carries it.
+* Not emulatable in QEMU: the T2 hardware itself. The QEMU tests prove the installer path (forced with answer-file `t2 = "yes"`), the initramfs gate, ZFS on the T2 kernel, and typing the passphrase on a USB-only keyboard.
+
