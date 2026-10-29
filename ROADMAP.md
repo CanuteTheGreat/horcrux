@@ -1,5 +1,7 @@
 # Horcrux Platform - Development Roadmap
 
+> **Superseded for release planning:** the live stable-1.0 checklist is [docs/ROADMAP.md](docs/ROADMAP.md). This older file is a feature backlog and may be out of date.
+
 **Version**: 0.1.0 → 1.0.0
 **Last Updated**: 2025-10-12
 **Status**: Post-Enhancement Phase → Testing & Validation Complete

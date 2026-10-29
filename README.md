@@ -13,7 +13,7 @@
 [![Built with Rust](https://img.shields.io/badge/Built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![Platform: Gentoo](https://img.shields.io/badge/Platform-Gentoo-purple.svg)](https://www.gentoo.org/)
 
-**[Documentation](docs/)** | **[API reference](docs/API_DOCS.md)** | **[Installation](docs/INSTALLATION.md)** | **[Docker guide](docs/DOCKER.md)**
+**[Documentation](docs/)** | **[Roadmap to 1.0](docs/ROADMAP.md)** | **[API reference](docs/API_DOCS.md)** | **[Installation](docs/INSTALLATION.md)** | **[Docker guide](docs/DOCKER.md)**
 
 ## What is Horcrux?
 
@@ -27,6 +27,8 @@ It differs from Proxmox in a few deliberate ways:
 - **Mixed-architecture clusters:** x86_64, aarch64 and riscv64 nodes in one cluster.
 - **Gentoo-native:** ebuilds and USE flags select which features get built.
 - **Rust throughout**, including the web UI (Leptos/WASM).
+
+Commercial support is **planned after a stable 1.0** (a paid stable update channel with best-effort email support; the free channel stays complete). Design: [docs/stable-channel.md](docs/stable-channel.md).
 
 ## Current status
 
@@ -44,7 +46,7 @@ Known gaps and caveats:
 - **riscv64 / aarch64** release binaries are cross-compiled, but there is no physical RISC-V hardware in the test setup. Reports from real riscv64 boards are welcome.
 - The `Hypervisor` HA fencing agent type is a stub (see `horcrux-api/src/ha/fencing.rs`); the IPMI, iLO/DRAC, SSH, libvirt, watchdog and SNMP-PDU agents are implemented.
 - The mobile UI's Storage and Network pages are placeholders ("coming soon").
-- Several status/summary documents in the repo root are historical session notes and may overstate completeness; treat this README, `docs/` and the CI results as the source of truth. See also [ROADMAP.md](ROADMAP.md) and [MISSING_FEATURES.md](MISSING_FEATURES.md).
+- Several status/summary documents in the repo root are historical session notes and may overstate completeness; treat this README, `docs/` and the CI results as the source of truth. See also the [stable 1.0 roadmap and checklist](docs/ROADMAP.md), the older [ROADMAP.md](ROADMAP.md) and [MISSING_FEATURES.md](MISSING_FEATURES.md).
 - No third-party security review has been done.
 
 ## Features
