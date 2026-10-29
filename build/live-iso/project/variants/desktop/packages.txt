@@ -16,7 +16,7 @@ net-misc/nextcloud-client
 net-vpn/tailscale
 # --- virtualization (libvirt/qemu are already in the base image)
 app-emulation/virt-manager
-sys-firmware/edk2-bin
+# OVMF (sys-firmware/edk2-bin) is already pulled in by the base image's qemu (it pins edk2-bin-202408)
 # --- dev / tools
 dev-util/rustup
 dev-vcs/git

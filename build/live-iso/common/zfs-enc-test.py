@@ -41,7 +41,18 @@ class ZRun(qt.Runner):
         if self.no_ps2 and not iso:
             i = args.index("-machine")
             args[i + 1] = args[i + 1] + ",i8042=off"
+            args += ["-device", "usb-kbd,bus=xhci.0"]     # the ONLY keyboard: like the T2 Mac, whose keyboard is a USB device
         return args
+
+    def step(self, name, ok, info=""):
+        """record + print; a failed step does NOT stop the run once the installed system is up (all findings in one pass)"""
+        self.res["steps"][name] = {"ok": bool(ok), "info": info}
+        print(f"[{'PASS' if ok else 'FAIL'}] {name} {info}", flush=True)
+        json.dump(self.res, open(f"{self.a.out}/result.json", "w"), indent=1)
+        if not ok:
+            self.failed = getattr(self, "failed", []) + [name]
+            if name in ("answer-file-built", "installer-finished", "boot1-passphrase-prompt", "boot1-ssh-after-passphrase", "vm-stopped-after-install"):
+                sys.exit(1)
 
     # --- answers
     def toml(self, pubkey, pwhash):
@@ -75,8 +86,11 @@ class ZRun(qt.Runner):
         self.phase1(nvars)
         self.boot1(nvars)
         self.boot2(nvars)
-        self.res["ok"] = True
+        self.res["ok"] = not getattr(self, "failed", [])
         json.dump(self.res, open(f"{a.out}/result.json", "w"), indent=1)
+        if getattr(self, "failed", []):
+            print("FAILED STEPS:", ", ".join(self.failed))
+            sys.exit(1)
         print("ALL PASS zfs-encrypted", "desktop" if a.desktop else "server")
 
     # --- helpers
@@ -150,7 +164,9 @@ class ZRun(qt.Runner):
         names = [l.split("\t")[0] for l in o.splitlines()]
         need = ["rpool/ROOT/horcrux", "rpool/home", "rpool/var/log", "rpool/var/lib/libvirt"]
         self.step("datasets", all(n in names for n in need) and "rpool/var/lib/libvirt\t/var/lib/libvirt\t64K" in o, ", ".join(names))
-        rc, o = self.sh("findmnt -no SOURCE /; findmnt -no FSTYPE,SOURCE /boot /boot/efi; cat /proc/cmdline")
+        rc, dbg = self.sh("cat /etc/fstab; echo ---; findmnt -o TARGET,SOURCE,FSTYPE | head -30; echo ---; rc-status -a 2>&1 | head -40; dmesg | grep -iE 'fstab|zfs|mount' | tail -10")
+        open(f"{a.out}/debug-boot1.txt", "w").write(dbg)
+        rc, o = self.sh("findmnt -no SOURCE /; findmnt -no FSTYPE /boot; findmnt -no FSTYPE /boot/efi; cat /proc/cmdline")
         self.step("root-on-zfs-boot-environment", "rpool/ROOT/horcrux" in o and "ext4" in o and "vfat" in o, o.replace("\n", " | ")[:200])
         rc, o = self.sh("swapon --noheadings --show=NAME,TYPE; echo ---; zfs list -H -t volume; true")
         self.step("no-swap-on-zfs", "zd" not in o.split("---")[0] and "/dev/zvol" not in o, f"swap: {o.split('---')[0].strip() or 'none (zram-init not in image)'}")
@@ -186,7 +202,7 @@ class ZRun(qt.Runner):
             ok = self.vga_stable(vm, "passphrase-prompt-vga")
             self.step("boot2-vga-prompt-screen", ok, "VGA console settled at the passphrase prompt (see 3-boot2-passphrase-prompt-vga.png); no serial console, PS/2 off")
             kb.text(PASSPHRASE, pause=0.05)
-            kb.key("ret")
+            kb.key("ENTER")
             self.step("boot2-ssh-after-usb-keyboard-passphrase", self.wait_ssh(), "passphrase typed on the USB keyboard")
             rc, o = self.sh("zpool get -H -o value bootfs rpool; findmnt -no SOURCE /; test -e /root/marker-after-snapshot && echo MARKER || echo NOMARKER; "
                             "horcrux-be list; dmesg | grep -ci 'i8042' ")

@@ -40,13 +40,15 @@ src_install() {
 	insinto /opt
 	doins -r opt/brave.com
 	local f
-	for f in brave brave-browser chrome_crashpad_handler; do
+	for f in brave brave-browser chrome_crashpad_handler chrome-management-service default-app-block; do
 		[[ -e opt/brave.com/brave/${f} ]] && fperms 0755 /opt/brave.com/brave/${f}
 	done
-	[[ -e opt/brave.com/brave/chrome-sandbox ]] && fperms 4755 /opt/brave.com/brave/chrome-sandbox
+	fperms 4755 /opt/brave.com/brave/chrome-sandbox
 	dosym ../../opt/brave.com/brave/brave-browser /usr/bin/brave-browser
 	dosym brave-browser /usr/bin/brave
-	insinto /usr/share
-	doins -r usr/share/applications usr/share/icons 2>/dev/null || true
-	[[ -d usr/share/gnome-control-center ]] && doins -r usr/share/gnome-control-center
+	domenu usr/share/applications/brave-browser.desktop
+	local s
+	for s in 16 24 32 48 64 128 256; do
+		newicon -s ${s} opt/brave.com/brave/product_logo_${s}.png brave-browser.png
+	done
 }

@@ -7,7 +7,7 @@ ARG ARCH=x86_64
 ARG VARIANT=desktop
 
 RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
-    emerge-webrsync -q || emerge --sync -q
+    unset ARCH; emerge-webrsync -q || emerge --sync -q
 
 COPY project/variants/desktop/portage/ /etc/portage/
 COPY project/variants/desktop/repo/ /var/db/repos/horcrux-desktop/
@@ -16,11 +16,11 @@ COPY project/variants/desktop/packages.txt /tmp/packages-desktop.txt
 # profile with the GNOME defaults (OpenRC flavour: elogind, no systemd), Manifest for the local Brave ebuild, one emerge
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
-    set -e; \
+    set -e; unset ARCH; \
     eselect profile set default/linux/amd64/23.0/desktop/gnome; \
     ( cd /var/db/repos/horcrux-desktop/www-client/brave-bin && ebuild brave-bin-*.ebuild manifest ); \
     export FEATURES="-ccache"; \
-    emerge --noreplace $(grep -v '^#' /tmp/packages-desktop.txt | tr '\n' ' ')
+    emerge --update --newuse $(grep -v '^#' /tmp/packages-desktop.txt | tr '\n' ' ')
 
 COPY project/variants/desktop/overlay/ /
 

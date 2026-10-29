@@ -2,7 +2,7 @@
 gnome-base/gdm elogind wayland -systemd
 gnome-base/gnome-light wayland
 gnome-base/gnome-shell -systemd
-net-misc/networkmanager iwd wifi -wpa_supplicant -modemmanager -ppp
+net-misc/networkmanager iwd wifi bluetooth modemmanager -wpa_supplicant -ppp
 media-video/pipewire sound-server pipewire-alsa -jack-sdk
 media-video/wireplumber elogind -systemd
 net-misc/nextcloud-client -dolphin
@@ -11,3 +11,4 @@ app-emulation/virt-manager -gui
 sys-apps/fwupd -systemd
 net-print/cups -systemd
 net-wireless/bluez cups -systemd
+net-libs/ngtcp2 gnutls
