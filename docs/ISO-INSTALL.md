@@ -12,6 +12,7 @@ key-only unless you opt in.
 |---|---|
 | Latest **daily** test build (rolling pre-release, replaced after the QEMU test passed) | `https://horcrux.errant.solutions/download/horcrux-daily-x86_64.iso` |
 | SHA256 of the daily | `https://horcrux.errant.solutions/download/horcrux-daily-x86_64.iso.sha256` |
+| Latest daily **Desktop** build (GNOME, encrypted-ZFS + hibernate, Apple T2 ready, x86_64; no Apple firmware) | `https://horcrux.errant.solutions/download/horcrux-desktop-daily-x86_64.iso` (+ `.sha256`) |
 | **Stable** build (only for `v*` releases that met the criteria below) | `https://horcrux.errant.solutions/download/horcrux-<tag>-x86_64.iso` (tag like `v0.2.0`) |
 
 Always verify: `sha256sum -c horcrux-daily-x86_64.iso.sha256` (run it next to the downloaded files).
@@ -265,7 +266,7 @@ unchanged; encrypted persistence refuses a wrong passphrase, unlocks with the ri
 Layout: 1 GiB FAT32 ESP + 2 GiB ext4 `/boot` (both unencrypted, GRUB must read them) + pool `rpool` on the rest
 (`ashift=12`, `compression=zstd`, `autotrim=on`, `encryption=aes-256-gcm`, `keyformat=passphrase`, `pbkdf2iters=1000000`).
 Datasets: `ROOT/horcrux` (the boot environment), `home`, `var/log`, `var/lib/libvirt` (`recordsize=64K`), `var/lib/docker` when Docker is part of the profile.
-No swap on ZFS: a zram device (`zram-init`) is configured. The passphrase is asked by the initramfs at every boot. It only
+Servers: no swap on ZFS, a zram device (`zram-init`) is configured. Laptops/desktops (*Swap / hibernate* = auto on a battery/laptop chassis or the Desktop install type): see "Hibernate on encrypted ZFS" below. The passphrase is asked by the initramfs at every boot. It only
 lives in the installer's memory and a 0600 file on tmpfs while `zpool create` runs (then overwritten and removed); it is never
 logged or written to the installed system. A lost passphrase cannot be recovered.
 
@@ -280,10 +281,20 @@ be dead at the passphrase prompt), `pm_async=off`, `tiny-dfr` (Touch Bar), `t2fa
 Wi-Fi/Bluetooth firmware is never on the ISO: the installer offers to import it from an existing install
 (`/lib/firmware/brcm/*apple*`) or from a `firmware.tar`; later with `horcrux-t2-firmware PATH`.
 
-**Desktop image** (`VARIANT=desktop build.sh`, asset `horcrux-desktop-<date>-x86_64.iso`): GNOME on Wayland (OpenRC + elogind,
+**Desktop image** (`VARIANT=desktop build.sh`; daily asset `horcrux-desktop-daily-x86_64.iso`, built and tested by the daily workflow as its own job: BIOS+CD ext4, UEFI+USB ZFS mirror, and the encrypted-ZFS desktop flow with the GDM greeter asserted on the VGA console): GNOME on Wayland (OpenRC + elogind,
 GDM), NetworkManager (iwd), PipeWire, Firefox, Brave (local overlay ebuild), terminator, vim, Nextcloud client, Tailscale,
 virt-manager/virt-install, keepalived, ClamAV, rustup, CUPS, Bluetooth, fwupd, thermald, power-profiles-daemon. The installer
 shows the *Desktop user* screen on this image only (answer file: `install_type = "desktop"` + `[user]`).
+**Hibernate on encrypted ZFS** (`swap = auto|none|hibernate`, answer file `[disk] swap`; `auto` = on for the Desktop install type or a
+machine with a battery/portable chassis, off on servers). Partition 3 is a **LUKS2 swap partition** (RAM rounded up to GiB x 1.125,
+e.g. 16 GB -> 18 GiB), never a zvol: OpenZFS cannot hibernate to a zvol. zram stays the first swap (priority 16383), the disk swap
+(priority 10) holds the hibernation image. **One passphrase:** the swap and the pool share it; the initramfs (dracut module
+`horcrux-unlock`) asks once, opens the swap, and hands the same passphrase to `zfs load-key` through a 0600 tmpfs file that is shredded
+at once (if that fails, the stock ZFS prompt follows). **Order:** swap unlocked -> **resume** -> only then `zpool import` (importing
+first and resuming afterwards corrupts the pool); the installer aborts when the initramfs hooks are not in that order. `loginctl
+hibernate` works (elogind, `HibernateMode=shutdown`); lid = suspend, critical battery = hibernate.
+QEMU test (`zfs-enc-test.py --desktop --hibernate`): install, passphrase once, marker + running process, hibernate, power off, boot,
+passphrase once, same boot id, marker and process back, `zpool status` clean, scrub clean.
 
 ## Secure Boot
 

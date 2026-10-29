@@ -35,7 +35,7 @@ concurrency:
 
 jobs:
   live-iso:
-    name: Build + test + publish live ISO (${{ matrix.arch }})
+    name: Build + test + publish live ISO (${{ matrix.arch }}${{ matrix.variant && format(' {0}', matrix.variant) || '' }})
     strategy:
       fail-fast: false
       matrix:
@@ -44,6 +44,11 @@ jobs:
             runner: kvm-x86_64
           - arch: aarch64
             runner: arm64
+          # Desktop variant (GNOME, encrypted ZFS + hibernate, Apple T2 ready, no Apple firmware): its own asset
+          # horcrux-desktop-daily-x86_64.iso (~2.0 GB: the build refuses to publish it when it reaches 2 GiB)
+          - arch: x86_64
+            runner: kvm-x86_64
+            variant: desktop
     runs-on: ${{ matrix.runner }}
     container: catthehacker/ubuntu:act-latest
     timeout-minutes: 300
@@ -58,6 +63,7 @@ jobs:
           FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}   # public GitHub mirror release (second publish step)
           ARCH: ${{ matrix.arch }}
+          VARIANT: ${{ matrix.variant }}
           JOBS: '4'
         run: |
           set -u

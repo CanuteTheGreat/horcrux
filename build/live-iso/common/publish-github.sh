@@ -17,6 +17,7 @@ upl=https://uploads.github.com/repos/$repo
 H=(-H "Authorization: Bearer $GH_RELEASE_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
 sha=${GITHUB_SHA:-$(git rev-parse HEAD)}
 ARCH=${ARCH:-x86_64}
+VARIANT=${VARIANT:-}; VPFX=${VARIANT:+$VARIANT-}
 DAILY_TAG=${DAILY_TAG:-daily}
 LIMIT=2147483648
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
@@ -69,21 +70,22 @@ put_asset() { # id file name   (delete the same-named asset, then upload)
 case "$mode" in
 daily)
   [ -s "$iso" ] || { echo "no ISO at $iso"; exit 1; }
-  sum=$(cut -d' ' -f1 "$iso.sha256"); name=$project-daily-$ARCH.iso
+  sum=$(cut -d' ' -f1 "$iso.sha256"); name=$project-${VPFX}daily-$ARCH.iso
   id=$(ensure_release "$DAILY_TAG" "$project daily ISO (rolling, pre-release)" true "pending")
   [ -n "$id" ] || { echo "cannot create GitHub release $DAILY_TAG"; exit 1; }
   put_asset "$id" "$iso" "$name"
   printf '%s  %s\n' "$sum" "$name" > "$tmp/$name.sha256"
   put_asset "$id" "$tmp/$name.sha256" "$name.sha256"
-  [ -z "$evidence" ] || put_asset "$id" "$evidence" "$project-daily-$ARCH-test-evidence.tgz"
+  [ -z "$evidence" ] || put_asset "$id" "$evidence" "$project-${VPFX}daily-$ARCH-test-evidence.tgz"
   body=$(assets_json "$id" | ARCH=$ARCH SUMMARY="$(pyj 'import json,sys;print(json.load(open(sys.argv[1])).get("summary",""))' "$statusfile" 2>/dev/null || true)" SHA=$sha PROJECT=$project python3 -c '
-import json, os, sys, time
+import json, os, re, sys, time
 a = json.load(sys.stdin); p = os.environ["PROJECT"]
 rows = []
 for x in sorted(a, key=lambda x: x["name"]):
     n = x["name"]
-    if n.startswith(p + "-daily-") and n.endswith(".iso"):
-        rows.append("- **%s**: `%s` (%d MiB), SHA256 in `%s.sha256`" % (n[len(p) + 7:-4], n, x["size"] >> 20, n))
+    m = re.match(re.escape(p) + r"-((?:desktop-)?)daily-(.+)\.iso$", n)
+    if m:
+        rows.append("- **%s%s**: `%s` (%d MiB), SHA256 in `%s.sha256`" % (m.group(2), " (Desktop: GNOME, encrypted ZFS, Apple T2 ready)" if m.group(1) else "", n, x["size"] >> 20, n))
 print("Rolling **pre-release** build of the %s live/installer ISO from `main` (%s), updated %s UTC." % (p, os.environ["SHA"][:10], time.strftime("%F %T", time.gmtime())))
 print("Each architecture is replaced in place by its own daily job, only after the QEMU boot + install + reboot + web-probe tests passed on that architecture.\n")
 print("\n".join(rows)); print()

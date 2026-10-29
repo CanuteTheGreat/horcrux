@@ -10,6 +10,9 @@ HERE=$(cd "$(dirname "$0")" && pwd); cd "$HERE"
 . "$HERE/../project/project.env"
 case $(uname -m) in x86_64|amd64) HOST_ARCH=x86_64;; aarch64|arm64) HOST_ARCH=aarch64;; riscv64) HOST_ARCH=riscv64;; *) HOST_ARCH=$(uname -m);; esac
 ARCH=${ARCH:-$HOST_ARCH}; export ARCH
+# Optional image variant (VARIANT=desktop): same pipeline, its own ISO/asset names (<p>-desktop-daily-<arch>.iso), status marker and a
+# smaller QEMU matrix + the encrypted-ZFS desktop test (GDM greeter on VGA, boot-environment rollback, hibernate/resume).
+VARIANT=${VARIANT:-}; export VARIANT; VPFX=${VARIANT:+$VARIANT-}
 . "$HERE/arch/$ARCH.env" || { echo "unsupported ARCH=$ARCH"; exit 0; }
 OUT=${OUT:-$PWD/../../../iso-out}; mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 EVI=$OUT/evidence; rm -rf "$EVI"; mkdir -p "$EVI"
@@ -52,7 +55,7 @@ BUILD_S=0
 if [ "$result" = pass ]; then
   echo "::group::build ISO"
   t=$(date +%s)
-  ARCH=$ARCH JOBS=${JOBS:-4} bash ../build.sh -o "$OUT" -n "$suffix" 2>&1 | tee "$EVI/build.log" | tail -60
+  ARCH=$ARCH VARIANT=$VARIANT JOBS=${JOBS:-4} bash ../build.sh -o "$OUT" -n "$suffix" 2>&1 | tee "$EVI/build.log" | tail -60
   BUILD_S=$(( $(date +%s)-t ))
   ISO=$(ls "$OUT"/*-"$suffix"-$ARCH.iso 2>/dev/null | head -1)
   [ -n "$ISO" ] && [ -s "$ISO" ] || fail build "no ISO produced (see build.log)"
@@ -114,6 +117,14 @@ if [ "$result" = pass ]; then
     )
   fi
   fi
+  if [ -n "$VARIANT" ]; then
+    # the variant adds a desktop on top of the same installer: the server matrix is run in its short form (BIOS+CD ext4, UEFI+USB ZFS mirror)
+    # and the variant's own test below does the rest
+    MATRIX=(
+      "bios-cdrom-auto-ext4-dhcp-openconsole|--mode bios --media cdrom --flow auto --fs ext4 --console-open --restarts 1"
+      "uefi-usb-auto-zfs-mirror-sshpw|--mode uefi --media usb --flow auto --fs zfs --zfs-raid mirror --static-ip 10.0.2.99 --ssh-password-opt-in"
+    )
+  fi
   failed_list=""
   for entry in "${MATRIX[@]}"; do
     name=${entry%%|*}; args=${entry#*|}
@@ -124,8 +135,19 @@ if [ "$result" = pass ]; then
     rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img
     if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -E '^\[FAIL\]' "$EVI/test-$name.log" | head -1)"; fi
   done
+  if [ "$VARIANT" = desktop ] && [ "$ARCH" = x86_64 ]; then
+    # encrypted ZFS desktop: passphrase on a USB keyboard at the VGA prompt, GDM greeter ASSERTED on the VGA console, boot-environment
+    # rollback, then the portable hibernate flow (one passphrase, hibernate, power off, boot, resume: marker + process survive, scrub clean)
+    name=zfs-enc-desktop-hibernate
+    echo "::group::QEMU test $name"
+    python3 -u "$HERE/zfs-enc-test.py" --iso "$ISO" --out "$EVI/$name" --desktop --hibernate 2>&1 | tee "$EVI/test-$name.log" | tail -60
+    rc=${PIPESTATUS[0]}
+    echo "::endgroup::"
+    rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img
+    if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -E '^\[FAIL\]' "$EVI/test-$name.log" | head -1)"; fi
+  fi
   # boot menu + rescue / forensic / live / persistence modes (UEFI + BIOS): see boot-modes-test.py
-  if [ "${BOOT_MODES_TESTS:-1}" = 1 ]; then
+  if [ "${BOOT_MODES_TESTS:-1}" = 1 ] && [ -z "$VARIANT" ]; then
     for fw in uefi bios; do
       [ $fw = bios ] && [ "${HAS_BIOS:-1}" = 0 ] && continue
       name=boot-modes-$fw; media=usb; [ $fw = bios ] && media=cdrom
@@ -143,15 +165,15 @@ ACCEL=KVM; [ -e /dev/kvm ] && [ "$ARCH" = "$HOST_ARCH" ] || ACCEL="TCG emulation
 [ "$result" = pass ] && summary="PASS ($ARCH, QEMU $ACCEL): ${#MATRIX[@]} QEMU runs (boot, install, reboot; $([ "$ARCH" = x86_64 ] && echo 'UEFI+USB, BIOS+CD; answer-file, serial TUI, VGA TUI, no-answer-file fallback' || echo 'UEFI, USB + optical; answer-file, serial TUI, VGA TUI, no-answer-file fallback')) - installed system refuses password root SSH, accepts the key, serves the web UI on the chosen IP (build ${BUILD_S}s, test ${TEST_S}s)"
 
 # evidence bundle (serial logs, screenshots, result.json - small)
-( cd "$EVI" && tar czf "$OUT/$PROJECT-$suffix-$ARCH-test-evidence.tgz" --exclude='target*.qcow2' --exclude='*.fd' --exclude='*.qmp' --exclude=test_key . )
+( cd "$EVI" && tar czf "$OUT/$PROJECT-$VPFX$suffix-$ARCH-test-evidence.tgz" --exclude='target*.qcow2' --exclude='*.fd' --exclude='*.qmp' --exclude=test_key . )
 cat > "$OUT/status.json" <<JSON
-{"project":"$PROJECT","arch":"$ARCH","mode":"$mode","result":"$result","failed_step":"$failed_step","summary":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$summary"),"sha":"$sha","run_id":"${GITHUB_RUN_ID:-manual}","run_url":"${GITHUB_SERVER_URL:-}/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID:-0}","time":"$(date -u +%FT%TZ)","build_seconds":$BUILD_S,"test_seconds":$TEST_S}
+{"project":"$PROJECT","arch":"$ARCH","mode":"$mode","variant":"$VARIANT","result":"$result","failed_step":"$failed_step","summary":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$summary"),"sha":"$sha","run_id":"${GITHUB_RUN_ID:-manual}","run_url":"${GITHUB_SERVER_URL:-}/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID:-0}","time":"$(date -u +%FT%TZ)","build_seconds":$BUILD_S,"test_seconds":$TEST_S}
 JSON
 cat "$OUT/status.json"
 
 if [ -n "${FORGEJO_TOKEN:-}" ]; then
   if [ "$result" = pass ]; then
-    bash "$HERE/publish.sh" "$mode" "$PROJECT" "$ISO" "$OUT/$PROJECT-$suffix-$ARCH-test-evidence.tgz" "$OUT/status.json" || { echo "::error::publish failed"; result=fail; sed -i 's/"result":"pass"/"result":"fail"/; s/"failed_step":""/"failed_step":"publish"/' "$OUT/status.json"; }
+    bash "$HERE/publish.sh" "$mode" "$PROJECT" "$ISO" "$OUT/$PROJECT-$VPFX$suffix-$ARCH-test-evidence.tgz" "$OUT/status.json" || { echo "::error::publish failed"; result=fail; sed -i 's/"result":"pass"/"result":"fail"/; s/"failed_step":""/"failed_step":"publish"/' "$OUT/status.json"; }
   fi
   [ "$mode" = daily ] && bash "$HERE/publish.sh" status "$PROJECT" "" "" "$OUT/status.json" || true
 fi
@@ -159,7 +181,7 @@ fi
 # Forgejo publish above ran and everything passed; a failure here is a warning in the summary, not a red job.
 gh_note=""
 if [ -n "${FORGEJO_TOKEN:-}" ] && [ -n "${GH_RELEASE_TOKEN:-}" ] && [ "$result" = pass ]; then
-  bash "$HERE/publish-github.sh" "$mode" "$PROJECT" "$ISO" "$OUT/$PROJECT-$suffix-$ARCH-test-evidence.tgz" "$OUT/status.json" \
+  bash "$HERE/publish-github.sh" "$mode" "$PROJECT" "$ISO" "$OUT/$PROJECT-$VPFX$suffix-$ARCH-test-evidence.tgz" "$OUT/status.json" \
     && gh_note="GitHub release updated." || { gh_note="GitHub publish FAILED (Forgejo publish is unaffected)."; echo "::warning::$gh_note"; }
 fi
 { echo "### $PROJECT $mode ISO: $result"; echo "$summary"; [ -z "$gh_note" ] || echo "$gh_note"; } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"

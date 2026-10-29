@@ -12,6 +12,7 @@ api="$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY"
 auth=(-H "Authorization: token $FORGEJO_TOKEN")
 sha=${GITHUB_SHA:-$(git rev-parse HEAD)}
 ARCH=${ARCH:-x86_64}
+VARIANT=${VARIANT:-}; VPFX=${VARIANT:+$VARIANT-}      # image variant (desktop): own asset names + status marker
 DAILY_TAG=${DAILY_TAG:-daily}      # tests publish to a throw-away tag
 
 rel_id() { curl -fsS "${auth[@]}" "$api/releases/tags/$1" 2>/dev/null | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])' 2>/dev/null || true; }
@@ -40,33 +41,34 @@ put_asset() { # id file [name]
 
 case "$mode" in
 status)
-  marker=${DAILY_TAG}-status; [ "$ARCH" = x86_64 ] || marker=${DAILY_TAG}-status-$ARCH
+  marker=${DAILY_TAG}-status; [ "$ARCH" = x86_64 ] || marker=${DAILY_TAG}-status-$ARCH; [ -z "$VARIANT" ] || marker=${DAILY_TAG}-status-$VARIANT-$ARCH
   id=$(ensure_release "$marker" "$project daily build status $ARCH (machine-readable)" true "pending")
   patch_body "$id" "$(cat "$statusfile")" ;;
 daily)
   size=$(du -h "$iso" | cut -f1); sum=$(cut -d' ' -f1 "$iso.sha256")
-  name=$project-daily-$ARCH.iso
+  name=$project-${VPFX}daily-$ARCH.iso
   id=$(ensure_release "$DAILY_TAG" "$project daily ISO (rolling, pre-release)" true "pending")
   [ -n "$id" ] || { echo "cannot create release"; exit 1; }
   put_asset "$id" "$iso" "$name"
-  printf '%s  %s\n' "$sum" "$name" > /tmp/daily-$ARCH.sha256
-  put_asset "$id" /tmp/daily-$ARCH.sha256 "$name.sha256"
-  [ -z "$evidence" ] || put_asset "$id" "$evidence" "$project-daily-$ARCH-test-evidence.tgz"
+  printf '%s  %s\n' "$sum" "$name" > /tmp/daily-${VPFX}$ARCH.sha256
+  put_asset "$id" /tmp/daily-${VPFX}$ARCH.sha256 "$name.sha256"
+  [ -z "$evidence" ] || put_asset "$id" "$evidence" "$project-${VPFX}daily-$ARCH-test-evidence.tgz"
   # pre-multi-arch asset names (x86_64 only), removed once so a stale file never looks current
-  if [ "$ARCH" = x86_64 ]; then
+  if [ "$ARCH" = x86_64 ] && [ -z "$VARIANT" ]; then
     for old in "$project-daily-test-evidence.tgz"; do
       for a in $(curl -fsS "${auth[@]}" "$api/releases/$id/assets" | python3 -c 'import json,sys;print(" ".join(str(a["id"]) for a in json.load(sys.stdin) if a["name"]==sys.argv[1]))' "$old"); do curl -fsS -X DELETE "${auth[@]}" "$api/releases/$id/assets/$a" || true; done
     done
   fi
   # release text: one line per architecture that has an ISO attached (each arch job rewrites it, assets are the truth)
   body=$(curl -fsS "${auth[@]}" "$api/releases/$id/assets" | ARCH=$ARCH SUMMARY="$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d.get("summary",""))' "$statusfile" 2>/dev/null)" SHA=$sha PROJECT=$project python3 -c '
-import json, os, sys, time
+import json, os, re, sys, time
 a = json.load(sys.stdin); p = os.environ["PROJECT"]
 rows = []
 for x in sorted(a, key=lambda x: x["name"]):
     n = x["name"]
-    if n.startswith(p + "-daily-") and n.endswith(".iso"):
-        arch = n[len(p) + 7:-4]
+    m = re.match(re.escape(p) + r"-((?:desktop-)?)daily-(.+)\.iso$", n)
+    if m:
+        arch = m.group(2) + (" (Desktop: GNOME, encrypted ZFS, Apple T2 ready)" if m.group(1) else "")
         rows.append("- **%s**: `%s` (%d MiB), SHA256 in `%s.sha256`" % (arch, n, x["size"] >> 20, n))
 print("Rolling **pre-release** build of the %s live/installer ISO from `main` (%s), updated %s UTC." % (p, os.environ["SHA"][:10], time.strftime("%F %T", time.gmtime())))
 print("Each architecture is replaced in place by its own daily job, only after the QEMU boot + install + reboot + web-probe tests passed on that architecture.\n")

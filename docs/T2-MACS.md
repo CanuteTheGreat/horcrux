@@ -27,3 +27,10 @@ Never in the ISO. The installer offers import from an existing install (`/lib/fi
 * Apple firmware is never in the public image (`liveinst.t2.iso_ships_apple_firmware`, asserted by the QEMU test). The owner's private live ISO (`gentoo/t2/live`) is the only image that carries it.
 * Not emulatable in QEMU: the T2 hardware itself. The QEMU tests prove the installer path (forced with answer-file `t2 = "yes"`), the initramfs gate, ZFS on the T2 kernel, and typing the passphrase on a USB-only keyboard.
 
+## Hibernate (encrypted ZFS)
+
+A T2 laptop install gets the LUKS2 hibernation swap (see docs/ISO-INSTALL.md "Hibernate on encrypted ZFS"): one passphrase prompt on the
+internal keyboard (apple-bce loads first), resume before the pool import. Tested in QEMU only. Not tested on real T2 hardware:
+whether the T2/NVMe/GPU come back after resume, `pm_async=off` interplay, Touch Bar after resume. Build variant `desktop,t2`
+(`VARIANT=desktop,t2 build.sh`) carries the T2 kernel; the public daily Desktop image has no T2 kernel and the installer refuses an
+ENCRYPTED install on a T2 Mac with it (the keyboard would be dead at the prompt).
