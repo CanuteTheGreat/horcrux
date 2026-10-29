@@ -491,7 +491,13 @@ class Rescue:
             if rc != 0:
                 raise RescueError(f"{' '.join(c)} failed: {o.strip()[-300:]}")
         extra = "console=tty0 console=ttyS0,115200n8" if "console=ttyS0" in self.cmdline else ""
-        if rec["kind"] == "zfs":
+        if rec["kind"] == "zfs" and os.path.isdir(root + "/boot/be") and os.path.exists(root + "/usr/bin/horcrux-be"):
+            # boot-environment layout (liveinst/be.py): kernels live in /boot/be/<name>/, grub.cfg lists every BE
+            rc, o = self.chroot_run(root, ["horcrux-be", "grubcfg"])
+            log.append(f"horcrux-be grubcfg -> rc={rc}")
+            if rc != 0:
+                raise RescueError("horcrux-be grubcfg failed: " + o.strip()[-300:])
+        elif rec["kind"] == "zfs":
             kvers = sorted(os.listdir(root + "/lib/modules"))
             boot_dev = self.run(["findmnt", "-n", "-o", "SOURCE", root + "/boot"])[1].strip()
             buuid = S.sh(["blkid", "-s", "UUID", "-o", "value", boot_dev])[1].strip() if boot_dev else ""
