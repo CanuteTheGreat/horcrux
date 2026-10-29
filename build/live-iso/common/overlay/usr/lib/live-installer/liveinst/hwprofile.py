@@ -103,7 +103,6 @@ def apply_profile(inst, profile, model):
     """Run on the installed system after the base configuration. Everything is optional and idempotent."""
     c = inst.c
     d = c.get("desktop") or {}
-    inst.log(f"hardware profile: {profile['id']} / {(model or {}).get('id', 'generic')}")
     for s in profile.get("services_add", []):
         name, _, lvl = s.partition(":")
         inst.run(["rc-update", "add", name, lvl or "default"], chroot=True, check=False)

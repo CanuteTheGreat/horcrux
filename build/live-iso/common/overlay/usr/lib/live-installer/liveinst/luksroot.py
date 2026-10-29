@@ -69,12 +69,24 @@ def kernel_args(luks_uuid, extra=""):
     return " ".join(a + ([extra] if extra else []))
 
 
-def dracut_conf():
+def filter_drivers(names, modules_dep, modules_builtin=""):
+    """keep only the drivers that exist as loadable modules of this kernel: dracut-install ABORTS the whole initramfs on one
+    missing name (sha256_ssse3 does not exist as a module on the Gentoo dist kernel), and built-in ones need no listing."""
+    have = set()
+    for line in modules_dep.splitlines():
+        m = re.match(r"(?:.*/)?([^/:]+?)\.ko(?:\.\w+)?:", line)
+        if m:
+            have.add(m.group(1).replace("-", "_"))
+    return [n for n in names.split() if n.replace("-", "_") in have]
+
+
+def dracut_conf(drivers=None):
+    drivers = INITRAMFS_DRIVERS if drivers is None else drivers
     return ("# written by live-installer (xfs-luks): the initramfs must unlock the root with a USB/HID keyboard\n"
             'hostonly="no"\nhostonly_cmdline="no"\n'
             'add_dracutmodules+=" crypt dm "\n'
             'omit_dracutmodules+=" plymouth network-manager nfs iscsi biosdevname dmsquash-live "\n'
-            f'add_drivers+=" {INITRAMFS_DRIVERS} "\n')
+            f'add_drivers+=" {drivers} "\n')
 
 
 def fstab_text(root_uuid_dev, boot_uuid, esp_uuid, efi=True):
@@ -159,13 +171,22 @@ def configure_stage(inst):
     root_uuid = blkid(f"/dev/mapper/{MAPPER}")
     inst.write("/etc/fstab", fstab_text(f"UUID={root_uuid}" if root_uuid else f"/dev/mapper/{MAPPER}", blkid(L[2]), blkid(L[1]) if inst.efi else "", inst.efi))
     inst.write("/etc/crypttab", crypttab_text(luks_uuid))
-    inst.write("/etc/dracut.conf.d/90-xfs-luks.conf", dracut_conf())
-    inst.write("/etc/cron.weekly/fstrim", FSTRIM_CRON, 0o755)
-    inst.run(["rc-update", "add", "cronie", "default"], chroot=True, check=False)
     kvers = sorted(os.listdir(f"{inst.target}/lib/modules"))
     kver = kvers[-1]
+    try:
+        dep = open(f"{inst.target}/lib/modules/{kver}/modules.dep").read()
+    except OSError:
+        dep = ""
+    avail = filter_drivers(INITRAMFS_DRIVERS, dep) if dep else []
+    inst.log("initramfs drivers forced in: " + " ".join(avail) + " (the rest is built into the kernel or absent)")
+    inst.write("/etc/dracut.conf.d/90-xfs-luks.conf", dracut_conf(" ".join(avail)))
+    inst.write("/etc/cron.weekly/fstrim", FSTRIM_CRON, 0o755)
+    inst.run(["rc-update", "add", "cronie", "default"], chroot=True, check=False)
     inst.log(f"rebuilding the initramfs for {kver} with crypt + USB/HID keyboard drivers")
-    inst.run(["dracut", "--force", "--no-hostonly", "--kver", kver, f"/boot/initramfs-{kver}.img", kver], chroot=True)
+    # dracut asks gcc-config for libgcc_s, which asks Portage for CHOST: the ISO has no Portage tree, so hand it over
+    gcc = f"{inst.target}/usr/lib/gcc"
+    chost = sorted(os.listdir(gcc))[0] if os.path.isdir(gcc) and os.listdir(gcc) else "x86_64-pc-linux-gnu"
+    inst.run(["dracut", "--force", "--no-hostonly", "--kver", kver, f"/boot/initramfs-{kver}.img", kver], chroot=True, env={"CHOST": chost})
     import subprocess
     r = subprocess.run(["chroot", inst.target, "lsinitrd", f"/boot/initramfs-{kver}.img"], capture_output=True, text=True)
     cfgp = f"{inst.target}/boot/config-{kver}"

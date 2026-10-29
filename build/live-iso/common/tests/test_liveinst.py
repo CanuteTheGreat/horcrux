@@ -364,3 +364,15 @@ class LuksRoot(unittest.TestCase):
         self.assertEqual(S.validate_config(prof, c), [])
         c["luks_passphrase"] = "x"
         self.assertTrue(any("LUKS" in e for e in S.validate_config(prof, c)))
+
+
+class DracutDrivers(unittest.TestCase):
+    DEP = ("kernel/drivers/hid/hid-multitouch.ko: kernel/drivers/hid/hid.ko\nkernel/drivers/hid/hid-microsoft.ko:\n"
+           "kernel/drivers/md/dm-crypt.ko:\nkernel/drivers/gpu/drm/i915/i915.ko.zst: x\n")
+
+    def test_filter_drivers_drops_missing_and_builtin(self):
+        out = LR.filter_drivers("usbhid hid_multitouch hid_microsoft sha256_ssse3 dm_crypt i915 xfs", self.DEP)
+        self.assertEqual(out, ["hid_multitouch", "hid_microsoft", "dm_crypt", "i915"])   # usbhid/xfs are built in; sha256_ssse3 does not exist
+
+    def test_dracut_conf_uses_filtered_list(self):
+        self.assertIn('add_drivers+=" dm_crypt "', LR.dracut_conf("dm_crypt"))

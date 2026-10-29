@@ -805,6 +805,8 @@ class Installer:
             if c.get("hw", "auto") not in ("auto", "none"):
                 hp = next((x for x in hwprofile.load_profiles() if x.get("id") == c["hw"]), hp)
             self.hw_profile, self.hw_model = hp, hm
+            if hp:
+                self.log(f"hardware profile: {hp['id']} / {(hm or {}).get('id', 'generic')}")
         if self.luks():
             luksroot.configure_stage(self)
         if self.hw_profile:
