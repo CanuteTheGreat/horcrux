@@ -120,7 +120,8 @@ class T:
     def run(self):
         a = self.a
         self.disk, self.answers, nvars = f"{a.out}/target.qcow2", f"{a.out}/answers.img", f"{a.out}/OVMF_VARS.fd"
-        subprocess.check_call(["qemu-img", "create", "-q", "-f", "qcow2", self.disk, f"{a.disk_gb}G"])
+        if not a.skip_install:
+            subprocess.check_call(["qemu-img", "create", "-q", "-f", "qcow2", self.disk, f"{a.disk_gb}G"])
         Q.ARCH = "x86_64"
         Q.pflash_vars(nvars)
         self.key_path = f"{a.out}/test_key"
@@ -132,7 +133,8 @@ class T:
         pwhash = subprocess.check_output(["openssl", "passwd", "-6", "-salt", "qemutest1", Q.PW]).decode().strip()
         Q.make_answer_image(self.answers, "horcrux", self.answer(pwhash, pub))
         self.step("answer-file-built", True, "xfs-luks + desktop user, NO hardware profile named (autodetect must find it)")
-        self.install(nvars)
+        if not a.skip_install:
+            self.install(nvars)
         Q.pflash_vars(nvars)                                 # fresh NVRAM = the firmware rescans, like a real first boot
         self.boot_installed(nvars)
 
@@ -244,14 +246,16 @@ class T:
                 ok = True
                 break
             time.sleep(5)
-        if not ok:
+        if True:
             rc, dg = self.ssh("id " + USER + "; loginctl list-sessions 2>&1 | head; rc-service elogind status 2>&1; ls -la /run/user /dev/dri 2>&1; "
-                              "grep -n c1: /etc/inittab; ps -ef | grep -E 'agetty|login|sway' | grep -v grep; cat /home/" + USER + "/.local/state/sway.log 2>&1 | tail -15; "
+                              "grep -n c1: /etc/inittab; ps -ef | grep -E 'agetty|login|sway' | grep -v grep; cat /home/" + USER + "/.local/state/sway.log 2>&1 | tail -40; "
                               "grep -c elogind /etc/pam.d/system-login")
             open(f"{self.a.out}/screens/desktop-diagnostics.txt", "w").write(dg)
         s("desktop-session-running-for-autologin-user", ok, f"sway + wvkbd + swaybar pids: {out.split()}")
         time.sleep(6)
         vm.shot("desktop")
+        rc, dg2 = self.user_sh("echo SWAYSOCK=$SWAYSOCK; ls -la $XDG_RUNTIME_DIR; sway -C 2>&1 | head -20; swaymsg -t get_outputs -r 2>&1 | head -c 600; echo; swaymsg -t get_inputs -r 2>&1 | head -c 400")
+        open(f"{self.a.out}/screens/desktop-diagnostics2.txt", "w").write(dg2)
         rc, out = self.user_sh("swaymsg -t get_outputs -r | python3 -c \"import json,sys; o=json.load(sys.stdin)[0]; print(o['name'], o['current_mode']['width'], o['current_mode']['height'], o['scale'])\"; cat ~/.local/state/sway.log | tail -3")
         s("sway-has-an-output", re.search(r"\w+ \d+ \d+ [\d.]+", out) is not None, out.strip()[:200])
         rc, out = self.user_sh("surface-osk show; sleep 2; pgrep -x wvkbd-mobintl")
@@ -274,6 +278,7 @@ def main():
     ap.add_argument("--cpu", default="IvyBridge")
     ap.add_argument("--disk-gb", type=int, default=24)
     ap.add_argument("--keep-disks", action="store_true")
+    ap.add_argument("--skip-install", action="store_true", help="debug: boot the target.qcow2 kept by an earlier --keep-disks run, no install phase")
     a = ap.parse_args()
     try:
         t = T(a)

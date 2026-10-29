@@ -213,3 +213,10 @@ echo "options vfio-pci ids=XXXX:XXXX" > /etc/modprobe.d/vfio.conf
 - Enterprise NVMe or SAN storage
 - Redundant networking
 - IPMI/BMC for remote management
+
+## Hardware profiles (live/installer ISO variants)
+
+`gentoo/<profile>/` holds everything the ISO builder and the installer need for one family of machines (packages, USE, overlay files, kernel notes,
+DMI match + installer defaults in `hwprofile.toml`). Build with `HW_PROFILE=<profile> build/live-iso/build.sh`; the installer picks the profile
+itself from DMI (`liveinst/hwprofile.py`). Current profiles: [`surface/`](surface/README.md) (Microsoft Surface, focus Surface Pro 1;
+reasoning in [docs/SURFACE.md](../docs/SURFACE.md)); the T2 Mac profile lives under `gentoo/t2/` (see docs/T2-MACS.md).
