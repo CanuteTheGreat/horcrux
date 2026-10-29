@@ -60,6 +60,7 @@ class InitramfsConfig(unittest.TestCase):
                 "usr/lib/modules/7.2.13-t2/kernel/drivers/staging/apple-bce/t2bce_vhci.ko.zst",
                 "usr/lib/modules/7.2.13-t2/kernel/drivers/staging/apple-bce/t2bce_dma.ko.zst",
                 "usr/lib/modules/7.2.13-t2/kernel/drivers/hid/hid-apple.ko.zst"]
+        self.assertEqual(T2.initramfs_check("\n".join(good)), [])                     # real names: hid-apple.ko, t2bce_core.ko
         self.assertEqual(T2.initramfs_check("\n".join(good).replace("hid-apple", "hid_apple")), [])
         self.assertEqual(T2.initramfs_check(good[:2]), ["t2bce_dma", "hid_apple"])
         self.assertIn("t2bce_core", T2.initramfs_check("nothing"))

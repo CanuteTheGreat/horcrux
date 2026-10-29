@@ -33,7 +33,7 @@ cleanup_build() {
   docker rm -fv "$TAG-asm" >/dev/null 2>&1 || true
   [ -z "$cid" ] || docker rm -fv "$cid" >/dev/null 2>&1 || true
   docker rmi "$TAG-tools" >/dev/null 2>&1 || true
-  [ -z "${VARIANT:-}" ] || [ -n "${KEEP_IMAGES:-}" ] || docker rmi "$TAG-rootfs-$VARIANT" >/dev/null 2>&1 || true
+  [ -z "${VIMGS:-}" ] || [ -n "${KEEP_IMAGES:-}" ] || docker rmi $VIMGS >/dev/null 2>&1 || true
   [ -n "${REUSE_ROOTFS:-}" ] || [ -n "${KEEP_IMAGES:-}" ] || docker rmi "$TAG-app" "$TAG-rootfs" >/dev/null 2>&1 || true
 }
 trap cleanup_build EXIT
@@ -48,16 +48,20 @@ lap "stage 2: gentoo rootfs (stage3 + binhost + ccache)"
 docker build $PLAT $ARCHARGS -f common/Dockerfile.rootfs --build-arg APP_IMAGE=$TAG-app --build-arg PROJECT=$PROJECT \
     --build-arg ISO_LABEL=$ISO_LABEL --build-arg PROJECT_TITLE="$PROJECT_TITLE" -t $TAG-rootfs . 2>&1 | tee "$OUT/rootfs-build.log" | tail -40
 fi
-# Optional image variant (VARIANT=desktop): a second layer on top of the finished rootfs, project/variants/<name>/Dockerfile.
-# The server image stays the default; the variant image is a separate ISO (<prefix>-<variant>-<date>-<arch>.iso).
-ROOTFS_IMG=$TAG-rootfs; VNAME=""
+# Optional image variants, applied in order on top of the finished rootfs: VARIANT=desktop | t2 | desktop,t2
+# (project/variants/<name>/Dockerfile, ARG BASE = the previous image). The server image stays the default; a variant image
+# is a separate ISO (<prefix>-<variant>[-<variant>]-<date>-<arch>.iso). `t2` needs the repo's gentoo/t2 (named build context).
+ROOTFS_IMG=$TAG-rootfs; VNAME=""; VIMGS=""
 if [ -n "${VARIANT:-}" ] && [ "$VARIANT" != server ]; then
-  [ -f "project/variants/$VARIANT/Dockerfile" ] || { echo "unknown VARIANT=$VARIANT (no project/variants/$VARIANT/Dockerfile)"; exit 2; }
-  lap "stage 2b: variant $VARIANT"
-  docker build $PLAT $ARCHARGS -f "project/variants/$VARIANT/Dockerfile" --build-arg BASE=$TAG-rootfs --build-arg VARIANT=$VARIANT \
-      -t $TAG-rootfs-$VARIANT . 2>&1 | tee "$OUT/variant-$VARIANT-build.log" | tail -40
-  [ "${PIPESTATUS[0]}" = 0 ] || { echo "variant build failed (log: $OUT/variant-$VARIANT-build.log)"; exit 1; }
-  ROOTFS_IMG=$TAG-rootfs-$VARIANT; VNAME=$VARIANT-
+  for v in $(echo "$VARIANT" | tr ',' ' '); do
+    [ -f "project/variants/$v/Dockerfile" ] || { echo "unknown VARIANT=$v (no project/variants/$v/Dockerfile)"; exit 2; }
+    lap "stage 2b: variant $v"
+    VCTX=""; [ -d "$REPO/gentoo/t2" ] && VCTX="--build-context t2=$REPO/gentoo/t2"
+    docker build $PLAT $ARCHARGS $VCTX -f "project/variants/$v/Dockerfile" --build-arg BASE=$ROOTFS_IMG --build-arg VARIANT=$v \
+        -t $TAG-rootfs-$v . 2>&1 | tee "$OUT/variant-$v-build.log" | tail -40
+    [ "${PIPESTATUS[0]}" = 0 ] || { echo "variant $v build failed (log: $OUT/variant-$v-build.log)"; exit 1; }
+    ROOTFS_IMG=$TAG-rootfs-$v; VNAME="$VNAME$v-"; VIMGS="$VIMGS $TAG-rootfs-$v"
+  done
 fi
 lap "stage 3: assembly toolbox"
 # Per-build tag: a shared live-iso-tools:latest could be untagged by the runner disk guard (or replaced by a

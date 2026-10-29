@@ -1,0 +1,4 @@
+# the T2 kernel is built from /usr/src/linux by this variant, not by the dist-kernel machinery (same as gentoo/t2/live/portage)
+sys-fs/zfs -dist-kernel rootfs
+sys-fs/zfs-kmod -dist-kernel
+sys-kernel/linux-firmware -dist-kernel

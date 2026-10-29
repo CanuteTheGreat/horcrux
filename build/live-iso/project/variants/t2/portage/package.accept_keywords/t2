@@ -1,0 +1,4 @@
+# OpenZFS 2.3.9 declares Linux-Maximum 7.2 (docs/T2-MACS.md); the kernel is the newest 7.2.x of the Gentoo tree
+=sys-fs/zfs-2.3.9 ~amd64
+=sys-fs/zfs-kmod-2.3.9 ~amd64
+=sys-kernel/gentoo-sources-7.2.13 ~amd64

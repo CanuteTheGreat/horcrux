@@ -96,15 +96,14 @@ def grub_cmdline_extra():
 
 
 def initramfs_check(listing):
-    """Verify an initramfs listing (lsinitrd output or a list of paths) contains the apple-bce stack.
-    Returns the list of missing things (empty = ok). This is a hard gate of the installer."""
+    """Verify an initramfs listing (lsinitrd output or a list of paths) contains the apple-bce stack + hid_apple.
+    Module file names use '-' or '_' (hid-apple.ko, t2bce_core.ko): both are accepted. Returns the missing modules
+    (empty = ok). This is a hard gate of the installer and of the T2 image build."""
     text = "\n".join(listing) if not isinstance(listing, str) else listing
     missing = []
     for mod in ("t2bce_core", "t2bce_vhci", "t2bce_dma", "hid_apple"):
-        if not re.search(rf"{mod}\.ko(\.\w+)?\b", text):
+        if not re.search(r"(?<![A-Za-z0-9])" + mod.replace("_", "[-_]") + r"\.ko(\.\w+)?\b", text):
             missing.append(mod)
-    if not re.search(r"(rd\.driver\.pre|force_drivers|modprobe\.d|dracut\.conf)", text) and False:
-        missing.append("early-load")
     return missing
 
 

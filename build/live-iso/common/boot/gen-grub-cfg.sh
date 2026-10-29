@@ -25,7 +25,8 @@ case "$ARCH" in
   x86_64)  UART=${SERIAL_DEV:-ttyS0};   GRUB_SERIAL=${GRUB_SERIAL:-1} ;;
   *)       UART=${SERIAL_DEV:-ttyS0};   GRUB_SERIAL=${GRUB_SERIAL:-0} ;;
 esac
-CMD="root=live:LABEL=${VOLID} rd.live.image rd.live.overlay.overlayfs=1 rootfstype=auto ro quiet loglevel=3"
+# LIVE_EXTRA_CMD: image-specific kernel arguments (assemble-iso.sh reads /etc/live-iso-cmdline of the rootfs; Apple T2: pm_async=off)
+CMD="root=live:LABEL=${VOLID} rd.live.image rd.live.overlay.overlayfs=1 rootfstype=auto ro quiet loglevel=3${LIVE_EXTRA_CMD:+ $LIVE_EXTRA_CMD}"
 SERIAL_ARGS="console=tty0 console=${UART},115200n8"
 FORENSIC_ARGS="rd.md=0 rd.lvm=0 rd.luks=0 rd.dm=0"
 
