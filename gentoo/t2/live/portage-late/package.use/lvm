@@ -1,0 +1,3 @@
+# the actual LVM tools (pvcreate, lvs, vgchange ...): needed to open the old Ubuntu LVM
+# (kept out of portage/: that dir is part of the `base` layer, and any change there rebuilds the 50 min kernel layer)
+sys-fs/lvm2 lvm

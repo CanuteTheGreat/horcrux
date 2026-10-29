@@ -231,6 +231,23 @@ def incus(cmd, check_rc=True):
     return sh(f"incus {cmd}", check_rc)
 
 
+def ensure_incusd():
+    """Revive incusd if it died. The Debian-packaged Incus 6.0.0 daemon can
+    panic ("concurrent write to websocket connection") when an `incus exec`
+    client hangs up mid-session, which is exactly what closing the browser
+    terminal does. That is an upstream bug, not Horcrux's: the container
+    keeps running under its own monitor and a restarted incusd re-adopts it,
+    so restart it (loudly) instead of failing every later step."""
+    if subprocess.run("incus list --format csv -c n", shell=True, capture_output=True,
+                      stdin=subprocess.DEVNULL, timeout=60).returncode == 0:
+        return
+    log("WARN: incusd is not answering (upstream concurrent-websocket-write panic); restarting it")
+    sh("tail -5 /tmp/incusd.log", False)
+    sh("PATH=/usr/libexec/incus:$PATH nohup /usr/libexec/incus/incusd --group root "
+       ">> /tmp/incusd.log 2>&1 &", False)
+    sh("incus admin waitready --timeout=120")
+
+
 # ---- shell login on a console (getty) -------------------------------------
 def console_login_and_run(ws, what, timeout=180):
     """Get a shell on a getty console and prove a command round-trip."""
@@ -381,6 +398,7 @@ def run_ct():
     check(st in (422, 400), f"docker console-ticket refused: {st} {body[:120]}")
 
     step("Clone: flag-like target names are refused (422), a valid clone works")
+    ensure_incusd()
     req("POST", f"/containers/{CT}/stop", expect=None)
     wait_for("container stopped",
              lambda: "STOPPED" in incus(f"list {CT} --format csv -c s", False).upper() or None, 60)

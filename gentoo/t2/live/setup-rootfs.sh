@@ -4,13 +4,17 @@ set -eu
 chmod +x /usr/bin/hogshead-* /etc/init.d/tailscaled /etc/init.d/hogshead-live
 rm -f /.dockerenv
 sed -i 's/^#\?rc_sys=.*/rc_sys=""/' /etc/rc.conf
-add() { rc-update add "$1" "$2" >/dev/null 2>&1 || { echo "FATAL: rc-update add $1 $2"; exit 1; }; }
+add() { rc-update add "$1" "$2" >/dev/null 2>&1 || { echo "FATAL: rc-update add $1 $2 (no such service?)"; ls /etc/init.d | tr '\n' ' '; exit 1; }; }
+addopt() { rc-update add "$1" "$2" >/dev/null 2>&1 || echo "warn: rc-update add $1 $2 failed (optional)"; }
 for s in devfs dmesg udev; do add $s sysinit; done
-for s in modules hostname bootmisc sysctl urandom procfs termencoding root localmount swclock consolefont; do add $s boot; done
+for s in modules hostname bootmisc sysctl procfs termencoding root localmount swclock consolefont; do add $s boot; done
+for s in seedrng urandom; do addopt $s boot; done
 for s in sysklogd dbus NetworkManager hogshead-live sshd local; do add $s default; done
 # NOTE: tailscaled is NOT enabled: `hogshead-remote` starts it
 printf '# live system: overlay root\ntmpfs /tmp tmpfs defaults,nosuid,nodev 0 0\n' > /etc/fstab
 echo hogshead-live > /etc/hostname
+# swclock restores the last saved time at boot: give it the build date instead of the stage3's
+mkdir -p /lib/rc/cache && touch /lib/rc/cache/shutdowntime
 cat > /etc/os-release <<OSR
 NAME="Hogshead live (Horcrux/Gentoo, T2 kernel)"
 ID=hogshead-live
