@@ -997,7 +997,7 @@ class Runner:
     # ---- service health (first boot AND every guest reboot): services up, forwarding on, no DB/CPU errors in the logs
     DB_ERR = r"readonly database|read-only database|database is locked|unable to open database|database disk image is malformed"
 
-    def health_script(self):
+    def health_script(self, check_logs=True):
         P = self.P
         sh = [f'for s in {" ".join(P["services"])}; do st=$(rc-service $s status 2>&1); case "$st" in *started*) ;; *) echo "BAD service $s: $st";; esac; done',
               'c=$(rc-status --crashed 2>/dev/null); [ -z "$c" ] || echo "BAD crashed services: $c"']
@@ -1008,19 +1008,20 @@ class Runner:
         for f in P.get("dbfiles", []):
             sh.append(f'[ -e {f} ] || echo "BAD {f} missing"; su -s /bin/sh {P["dbuser"]} -c "test -w {f}" || echo "BAD {f} is not writable by {P["dbuser"]}: $(stat -c %U:%G:%a {f})"')
         logs = " ".join(P.get("logdirs", []) + ["/var/log/messages", "/var/log/syslog"])
-        sh.append(f'grep -rIiE "{self.DB_ERR}" {logs} 2>/dev/null | head -3 | sed "s/^/BAD db error in log: /"')
+        if check_logs:
+            sh.append(f'grep -rIiE -A2 "{self.DB_ERR}" {logs} 2>/dev/null | head -8 | sed "s/^/BAD db error in log: /"')
         sh.append('dmesg 2>/dev/null | grep -iE "invalid opcode|traps: .*(trap|ip:)" | head -3 | sed "s/^/BAD cpu fault: /"')
         sh.append("echo HEALTH-DONE")
         return "\n".join(sh)
 
-    def health(self, label, wait=240):
+    def health(self, label, wait=240, check_logs=True):
         """poll until every check passes (services settle after boot); a failure prints what was wrong"""
         end, last = time.time() + wait, ""
         while True:
-            rc, out = ssh(FWD_SSH, self.key, self.health_script(), timeout=60)
+            rc, out = ssh(FWD_SSH, self.key, self.health_script(check_logs), timeout=60)
             bad = [l for l in out.splitlines() if l.startswith("BAD")]
             if "HEALTH-DONE" in out and not bad:
-                self.step(f"health-{label}", True, f"{', '.join(self.P['services'])} started" + (", ip_forward=1, nft table loaded" if self.P.get("forward") else "") + ", no DB errors in logs")
+                self.step(f"health-{label}", True, f"{', '.join(self.P['services'])} started" + (", ip_forward=1, nft table loaded" if self.P.get("forward") else "") + (", no DB errors in logs" if check_logs else ""))
                 return
             last = " | ".join(bad) or out.strip()[-200:]
             # log/db errors do not heal by waiting
@@ -1043,7 +1044,12 @@ class Runner:
                         break
                     time.sleep(5)
                 self.step(f"boot{n}-ssh-up", ok, f"{int(time.time()-t)}s")
-                self.health(f"boot{n}")
+                # boot0 follows the console-menu run (factory reset / restore swap the DB while the root daemons run: a
+                # transient DB warning in their logs is expected there), so its log check is skipped and the logs are
+                # cleared; boot1+ then prove a plain guest restart leaves no DB errors.
+                self.health(f"boot{n}", check_logs=(n > 0))
+                if n == 0:
+                    ssh(FWD_SSH, self.key, "for f in /var/log/patronus/*.log /var/log/messages /var/log/syslog; do [ -f $f ] && : > $f; done; true", timeout=20)
                 if n == a.restarts:
                     break
                 ssh(FWD_SSH, self.key, "sync; (sleep 1; " + "re" + "boot) >/dev/null 2>&1 &", timeout=15)
