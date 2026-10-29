@@ -1,0 +1,29 @@
+#!/sbin/openrc-run
+# zram compressed swap: the ONLY swap on low-RAM installs (xfs-luks has no swap partition).
+description="zram compressed swap"
+depend() {
+	need localmount
+	after modules
+}
+start() {
+	ebegin "Setting up zram swap"
+	[ -r /etc/conf.d/zram-swap ] && . /etc/conf.d/zram-swap
+	modprobe zram >/dev/null 2>&1
+	mem_kb=$(sed -n 's/^MemTotal:[[:space:]]*\([0-9]*\) kB/\1/p' /proc/meminfo)
+	size_kb=$(( mem_kb * ${zram_percent:-100} / 100 ))
+	max_kb=$(( ${zram_max_mb:-8192} * 1024 ))
+	[ "$size_kb" -gt "$max_kb" ] && size_kb=$max_kb
+	dev=$(zramctl --find --size "${size_kb}KiB" --algorithm "${zram_algo:-zstd}" 2>/dev/null) || dev=$(zramctl --find --size "${size_kb}KiB")
+	if [ -z "$dev" ]; then eend 1 "no zram device"; return 1; fi
+	mkswap -L zram-swap "$dev" >/dev/null && swapon --priority 100 "$dev"
+	echo "$dev" > /run/zram-swap.dev
+	eend $?
+}
+stop() {
+	ebegin "Removing zram swap"
+	if [ -f /run/zram-swap.dev ]; then
+		dev=$(cat /run/zram-swap.dev)
+		swapoff "$dev" 2>/dev/null; zramctl --reset "$dev" 2>/dev/null; rm -f /run/zram-swap.dev
+	fi
+	eend 0
+}

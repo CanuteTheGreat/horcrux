@@ -1,0 +1,2 @@
+# let the video group dim the panel (surface-brightness, Type Cover brightness keys)
+ACTION=="add", SUBSYSTEM=="backlight", RUN+="/bin/chgrp video /sys/class/backlight/%k/brightness", RUN+="/bin/chmod g+w /sys/class/backlight/%k/brightness"

@@ -2,7 +2,7 @@
 name = "horcrux"
 title = "Horcrux"
 network_mode = "management"          # one management NIC
-filesystems = ["ext4", "xfs", "zfs"]
+filesystems = ["xfs-luks", "ext4", "xfs", "zfs"]
 swap_mb = 4096
 web_scheme = "https"
 web_port = 8006

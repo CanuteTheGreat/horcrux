@@ -32,7 +32,8 @@ cid=
 cleanup_build() {
   docker rm -fv "$TAG-asm" >/dev/null 2>&1 || true
   [ -z "$cid" ] || docker rm -fv "$cid" >/dev/null 2>&1 || true
-  docker rmi "$TAG-tools" >/dev/null 2>&1 || true
+  docker rmi "$TAG-tools" "$TAG-hw" >/dev/null 2>&1 || true
+  rm -rf "$HERE/.hw"
   [ -z "${VIMGS:-}" ] || [ -n "${KEEP_IMAGES:-}" ] || docker rmi $VIMGS >/dev/null 2>&1 || true
   [ -n "${REUSE_ROOTFS:-}" ] || [ -n "${KEEP_IMAGES:-}" ] || docker rmi "$TAG-app" "$TAG-rootfs" >/dev/null 2>&1 || true
 }
@@ -63,12 +64,21 @@ if [ -n "${VARIANT:-}" ] && [ "$VARIANT" != server ]; then
     ROOTFS_IMG=$TAG-rootfs-$v; VNAME="$VNAME$v-"; VIMGS="$VIMGS $TAG-rootfs-$v"
   done
 fi
+if [ -n "${HW_PROFILE:-}" ]; then
+lap "stage 2b: hardware profile layer ($HW_PROFILE, gentoo/$HW_PROFILE)"
+[ -d "$REPO/gentoo/$HW_PROFILE" ] || { echo "no such hardware profile: gentoo/$HW_PROFILE"; exit 2; }
+rm -rf "$HERE/.hw"; cp -a "$REPO/gentoo/$HW_PROFILE" "$HERE/.hw"
+docker build $PLAT $ARCHARGS -f common/Dockerfile.profile --build-arg BASE=$ROOTFS_IMG --build-arg HW_PROFILE=$HW_PROFILE -t $TAG-hw . 2>&1 | tee "$OUT/profile-build.log" | tail -30
+rm -rf "$HERE/.hw"
+docker image inspect $TAG-hw >/dev/null 2>&1 || { echo "profile layer failed (see $OUT/profile-build.log)"; exit 1; }
+ROOTFS_IMG=$TAG-hw
+fi
 lap "stage 3: assembly toolbox"
 # Per-build tag: a shared live-iso-tools:latest could be untagged by the runner disk guard (or replaced by a
 # parallel build) between this build and the docker run below (Horcrux run 7066: "pull access denied").
 docker build $PLAT $ARCHARGS -q -f common/Dockerfile.tools -t $TAG-tools .
 lap "stage 4: export rootfs + assemble ISO (no bind mounts: works from a job container using the host docker)"
-ISO_NAME=$ISO_PREFIX-${VNAME}$SUFFIX-$ARCH.iso
+ISO_NAME=$ISO_PREFIX${HW_PROFILE:+-$HW_PROFILE}-${VNAME}$SUFFIX-$ARCH.iso
 docker rm -f $TAG-asm >/dev/null 2>&1 || true
 cid=$(docker create $ROOTFS_IMG /bin/true)
 docker export "$cid" | docker run -i $PLAT -e ARCH=$ARCH --name $TAG-asm --memory=8g --cpus=$JOBS $TAG-tools \

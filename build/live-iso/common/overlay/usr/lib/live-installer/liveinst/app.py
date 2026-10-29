@@ -39,7 +39,8 @@ def s_locale(t, st, step):
 
 def s_fs(t, st, step):
     c, p = st.c, st.p
-    opts = {"ext4": "ext4 (default, robust)", "xfs": "XFS", "zfs": "ZFS (checksums, snapshots, boot environments, mirror)"}
+    opts = {"ext4": "ext4 (default, robust)", "xfs": "XFS", "zfs": "ZFS (checksums, snapshots, boot environments, mirror)",
+            "xfs-luks": "XFS in an encrypted LUKS2 volume (recommended for < 8 GB RAM)"}
     f = [Field("fs", "Root file system", "choice", c["fs"], [(x, opts.get(x, x)) for x in p["filesystems"]]),
          Field("zfs_raid", "ZFS layout", "choice", c["zfs_raid"], [("single", "single disk"), ("mirror", "mirror (RAID1, two disks)")],
                visible=lambda v: v["fs"] == "zfs"),
@@ -47,9 +48,17 @@ def s_fs(t, st, step):
                hint="Recommended for laptops. The passphrase is asked at every boot; /boot and the EFI partition stay unencrypted"),
          Field("pp", "Disk passphrase", "password", c["zfs_passphrase"], width=40, visible=lambda v: v["fs"] == "zfs" and v["enc"],
                hint="Min 12 characters. NOT recoverable: if you forget it the data is gone"),
-         Field("pp2", "Confirm passphrase", "password", c["zfs_passphrase"], width=40, visible=lambda v: v["fs"] == "zfs" and v["enc"])]
+         Field("pp2", "Confirm passphrase", "password", c["zfs_passphrase"], width=40, visible=lambda v: v["fs"] == "zfs" and v["enc"]),
+         Field("lpw", "Disk passphrase", "password", c.get("luks_passphrase", ""), width=40, visible=lambda v: v["fs"] == "xfs-luks",
+               hint="Typed at every boot (the Type Cover / a USB keyboard works). Min 12 chars. Lose it = lose the data"),
+         Field("lpw2", "Confirm passphrase", "password", c.get("luks_passphrase", ""), width=40, visible=lambda v: v["fs"] == "xfs-luks")]
 
     def check(a):
+        if a["fs"] == "xfs-luks":
+            if a["lpw"] != a["lpw2"]:
+                return "The two passphrases do not match."
+            if len(a["lpw"]) < 12:
+                return "The disk passphrase needs at least 12 characters."
         if a["fs"] == "zfs" and a["enc"]:
             if a["pp"] != a["pp2"]:
                 return "The two passphrases do not match."
@@ -57,13 +66,15 @@ def s_fs(t, st, step):
             return zfsroot.passphrase_problem(a["pp"])
         return None
     b, v = run_form(t, step, "File system",
-                    "ext4 and XFS use one disk. ZFS uses the whole disk as a pool 'rpool' with boot environments (roll back a bad "
-                    "update from the boot menu); a mirror needs two disks. ZFS can encrypt everything except /boot.", f, validate_all=check)
+                    "ext4 and XFS use one disk. XFS+LUKS encrypts everything but /boot and uses zram instead of a swap partition. "
+                    "ZFS uses the whole disk as a pool 'rpool' with boot environments (roll back a bad update from the boot menu); "
+                    "a mirror needs two disks and /boot lives on the first disk only. ZFS can encrypt everything except /boot.", f, validate_all=check)
     if b == "Back":
         return "back"
     c["fs"], c["zfs_raid"] = v["fs"], v["zfs_raid"]
     c["zfs_encrypt"] = bool(v["fs"] == "zfs" and v["enc"])
     c["zfs_passphrase"] = v["pp"] if c["zfs_encrypt"] else ""
+    c["luks_passphrase"] = v["lpw"] if c["fs"] == "xfs-luks" else ""
     if c["fs"] == "zfs" and not st.dry and S.sh("modprobe zfs && test -e /dev/zfs")[0] != 0:
         message(t, "ZFS not available", "The ZFS kernel module could not be loaded on this machine. Choose ext4 or XFS.", "err")
         return "again"
@@ -88,7 +99,7 @@ def s_t2(t, st, step):
     return "next"
 
 
-def s_desktop(t, st, step):
+def s_gnome(t, st, step):
     from . import desktop
     c = st.c
     f = [Field("user", "User name", "text", c["user_name"], width=30, validate=lambda v, a: desktop.user_problem(v)),
@@ -107,6 +118,27 @@ def s_desktop(t, st, step):
         return "back"
     c["user_name"], c["user_fullname"], c["user_password"] = v["user"], v["full"] or v["user"], v["pw"]
     c["user_autologin"] = bool(v["auto"])
+    return "next"
+
+
+def s_desktop(t, st, step):
+    """only on a machine with a hardware profile that ships a desktop (Surface): user + autologin"""
+    c = st.c
+    d = c["desktop"]
+    f = [Field("user", "User name", "text", d.get("user") or "surface", width=30, validate=lambda v, a: None if S.re.fullmatch(r"[a-z_][a-z0-9_-]{0,30}", v or "") else "lower-case letters, digits, - and _"),
+         Field("pw", "Password", "password", d.get("password", ""), width=40, hint="Min 12 chars. Needed to log in and for sudo"),
+         Field("pw2", "Confirm password", "password", d.get("password", ""), width=40),
+         Field("auto", "Log in automatically on the console", "check", d.get("autologin", False),
+               hint="OFF (default): the Type Cover / on-screen keyboard login prompt is shown. ON: the desktop starts right after the disk passphrase")]
+
+    def check(a):
+        if a["pw"] != a["pw2"]:
+            return "The two passwords do not match."
+        return S.password_problem(a["pw"], c["hostname"])
+    b, v = run_form(t, step, "Desktop user", "A touch-friendly desktop (sway, on-screen keyboard, pen) is installed for this machine.", f, validate_all=check)
+    if b == "Back":
+        return "back"
+    d.update({"enable": True, "user": v["user"], "password": v["pw"], "autologin": bool(v["auto"])})
     return "next"
 
 
@@ -481,6 +513,9 @@ def flow(profile, st=None):
     if len(profile["filesystems"]) > 1:
         scr.append(s_fs)
     scr.append(s_disk)
+    hp, _hm = S.hwprofile.detect()
+    if hp and hp.get("defaults", {}).get("desktop"):
+        scr.append(s_desktop)
     if profile["network_mode"] == "wan-lan":
         scr += [s_ifaces, s_addr]
     else:
@@ -491,7 +526,7 @@ def flow(profile, st=None):
         c = st.c if st is not None else None
         if c is not None:
             c["install_type"] = "desktop"
-        scr.append(s_desktop)
+        scr.append(s_gnome)
     scr += [s_account, s_summary, s_install, s_done]
     return scr
 
