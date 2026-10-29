@@ -52,7 +52,9 @@ def fix_links(body, page_dir):
 def md_to_html(text):
     md = markdown.Markdown(extensions=["tables", "fenced_code", "toc", "sane_lists"],
                            extension_configs={"toc": {"permalink": False}})
-    return md.convert(text)
+    out = md.convert(text)
+    # tables sit in a scroll box so wide ones scroll sideways on phones instead of widening the page
+    return out.replace("<table>", '<div class="tw"><table>').replace("</table>", "</table></div>")
 
 def page(page_dir, title, body, active="", desc=None):
     r = lambda to: rel(page_dir, to)
@@ -144,7 +146,7 @@ def main():
 <p>The measurable exit criteria for 1.0, and how far each one is, are on the <a href="{rel('', 'roadmap/')}">roadmap checklist</a>.</p></section>
 <section class="wrap" id="download"><h2>Download</h2>
 <p>Daily builds are test builds of the <code>main</code> branch, replaced in place. A build is published only after QEMU boot, install, reboot and web probe tests passed. They are not releases: use test hardware or a VM. There is no stable release yet. Secure Boot must be off.</p>
-<table class="dl"><thead><tr><th>Architecture</th><th>ISO</th><th>Checksum</th></tr></thead><tbody>{dl_rows}</tbody></table>
+<div class="tw"><table class="dl"><thead><tr><th>Architecture</th><th>ISO</th><th>Checksum</th></tr></thead><tbody>{dl_rows}</tbody></table></div>
 <p>{CFG['dl_note']} Verify with <code>sha256sum -c</code>, write to a USB stick with <code>dd</code> (see the <a href="{rel('', 'docs/iso-install/')}">install guide</a>), or boot it in a VM. <a href="{DL}daily/{CFG['evidence']}">Test evidence</a> (serial logs and screenshots) is attached to every build.</p></section>
 <section class="wrap"><h2>The installer</h2><p>A text-mode wizard, on a VGA screen or a serial console. These are real captures from the CI test. A graphical installer is in progress.</p><div class="shots">{sh}</div></section>
 <section class="wrap"><h2>Commercial support</h2>

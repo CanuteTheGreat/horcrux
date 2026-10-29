@@ -33,7 +33,8 @@ h3{font-size:1.1rem;margin:1.2rem 0 .4rem}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:24px}
 .two ul{padding-left:1.2em;margin:.3em 0}
 .two li{margin:.35em 0}
-table{border-collapse:collapse;width:100%;margin:12px 0;display:block;overflow-x:auto}
+table{border-collapse:collapse;width:100%;margin:12px 0}
+.tw{overflow-x:auto;max-width:100%}
 th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
 th{background:#101216}
 .dl td:nth-child(2){word-break:break-all}
