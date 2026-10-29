@@ -127,9 +127,10 @@ if [ "$result" = pass ]; then
   # boot menu + rescue / forensic / live / persistence modes (UEFI + BIOS): see boot-modes-test.py
   if [ "${BOOT_MODES_TESTS:-1}" = 1 ]; then
     for fw in uefi bios; do
+      [ $fw = bios ] && [ "${HAS_BIOS:-1}" = 0 ] && continue
       name=boot-modes-$fw; media=usb; [ $fw = bios ] && media=cdrom
       echo "::group::QEMU test $name"
-      python3 -u "$HERE/boot-modes-test.py" --iso "$ISO" --project "$PROJECT" --mode $fw --media $media ${NO_MEMTEST:+--no-memtest} --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
+      python3 -u "$HERE/boot-modes-test.py" --iso "$ISO" --project "$PROJECT" --arch "$ARCH" --mode $fw --media $media ${NO_MEMTEST:+--no-memtest} --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
       rc=${PIPESTATUS[0]}
       echo "::endgroup::"
       rm -f "$EVI/$name"/*.raw "$EVI/$name"/*.qcow2 "$EVI/$name"/install/target*.qcow2 "$EVI/$name"/install/answers.img
