@@ -226,6 +226,19 @@ class ZRun(qt.Runner):
         self.step("rollback-boot-environment-created", rc == 0 and "rpool/ROOT/rolledback" in o, o.strip().replace("\n", " | ")[-300:])
         self.sh("cat /boot/grub/grub.cfg > /root/grub.cfg.copy")
 
+    def wait_exit(self, vm, secs=120):
+        """let the guest power off by itself (the next phase boots the same qcow2: QEMU's write lock must be gone)"""
+        t = time.time()
+        while vm.alive() and time.time() - t < qt.T(secs):
+            time.sleep(1)
+        if vm.alive():
+            vm.p.kill()
+        try:
+            vm.p.wait(timeout=20)
+        except Exception:
+            pass
+        time.sleep(2)
+
     # --- boot 2: USB keyboard, VGA only, rolled-back BE
     def boot2(self, nvars):
         a = self.z
@@ -246,7 +259,7 @@ class ZRun(qt.Runner):
             if a.desktop:
                 self.desktop_checks(vm)
             self.sh("poweroff", timeout=10)
-            time.sleep(8)
+            self.wait_exit(vm)
         finally:
             if vm.alive():
                 vm.p.kill()
@@ -318,6 +331,7 @@ class ZRun(qt.Runner):
                 vm.p.kill()
         if not gone:
             return
+        time.sleep(3)
         # boot again: ONE passphrase; the kernel resumes the saved memory BEFORE the pool is imported
         qt.pflash_vars(nvars)
         vm = qt.VM("5-boot4-resume", self.qemu_args(None, True, nvars), a.out)
@@ -343,7 +357,7 @@ class ZRun(qt.Runner):
             rc, o = self.sh("zpool scrub -w rpool; zpool status rpool | grep -E 'scan:|errors:|state:'", timeout=int(qt.T(600)))
             self.step("scrub-clean-after-resume", rc == 0 and "with 0 errors" in o and "No known data errors" in o, o.strip().replace("\n", " | ")[:300])
             self.sh("poweroff", timeout=10)
-            time.sleep(8)
+            self.wait_exit(vm)
         finally:
             if vm.alive():
                 vm.p.kill()
