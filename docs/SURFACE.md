@@ -149,7 +149,7 @@ Owner rule: *swap is fine on portables and is needed for sleep/resume; the no-sw
 **Detection** (`swap = auto`, the default; visible in the TUI file-system page and the summary, overridable there and in the answer file
 with `[disk] swap = "auto" | "none" | "hibernate"`): hardware profile `swap = "hibernate"` (Surface), the *desktop* install type, a **system battery**
 in `/sys/class/power_supply` (peripheral batteries with `scope=Device` and UPS devices do not count), or DMI `chassis_type` 8/9/10/11/14/30/31/32
-→ hibernate swap. Anything else (a server: no battery, chassis 1/2/3/4/5/6/7/13/17/23...) → **no swap at all**: no swap partition, no LVM, no `resume=`, no zram.
+→ hibernate swap. Anything else (a server: no battery, chassis 1/2/3/4/5/6/7/13/17/23...) → **no swap at all**: no swap partition, no LVM, no `resume=`; zram (RAM) is the only swap.
 
 **Size**: RAM rounded **up** to whole GiB × 1.125 (MemTotal is ~100-300 MB below the installed size): 4 GB → **4.5 GiB (4608 MiB)**, 8 GB → 9, 16 GB → 18; floor 2 GiB.
 The image is at most all of RAM (zram's compressed pages go into it as they are), so RAM + 12.5 % always fits.

@@ -15,7 +15,7 @@ start_pre() {
 			command_args="-L -n -l /usr/libexec/live-rescue-session 115200 $tty vt100"
 		elif grep -q "${p}.live=" /proc/cmdline; then
 			command_args="-L -n -l /usr/libexec/live-session 115200 $tty vt100"
-		elif grep -q "${p}.installer=" /proc/cmdline; then
+		elif grep -q "${p}.installer=" /proc/cmdline && ! grep -q "${p}.installer=gui" /proc/cmdline; then
 			command_args="-L -n -l /usr/libexec/live-installer-session 115200 $tty vt100"
 		else
 			command_args="-L -a root 115200 $tty vt100"

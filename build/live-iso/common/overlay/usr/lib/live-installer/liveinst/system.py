@@ -51,7 +51,7 @@ def load_profile(path="/etc/live-installer/profile.toml"):
     import tomllib
     with open(path, "rb") as f:
         p = tomllib.load(f)
-    p.setdefault("filesystems", ["ext4", "xfs"])
+    p.setdefault("filesystems", ["xfs", "ext4"])
     p.setdefault("swap_mb", 0)
     p.setdefault("network_mode", "management")
     p.setdefault("services", [])
@@ -407,16 +407,27 @@ def find_answer_file(proj, cmdline):
 # --------------------------------------------------------------------------
 # config model shared by the TUI and the answer file
 # --------------------------------------------------------------------------
+def zfs_available():
+    """can this live system use ZFS (module built for the running kernel + userland)? LIVEINST_ZFS=0|1 overrides (dev/dry-run, tests)"""
+    env = os.environ.get("LIVEINST_ZFS")
+    if env in ("0", "1"):
+        return env == "1"
+    if os.path.isdir("/sys/module/zfs"):
+        return True
+    return shutil.which("zpool") is not None and subprocess.run(["modinfo", "-n", "zfs"], capture_output=True).returncode == 0
+
+
 def _default_fs(profile):
-    """XFS+LUKS on low-RAM machines (< 8 GB), ZFS elsewhere when the image has it, else ext4 (hwprofile.default_fs)"""
+    """ZFS by default; XFS (+LUKS) fallback when RAM < 8 GB / no ZFS module / image without ZFS. Never ext4 (hwprofile.choose_fs)"""
     hw_p, _m = hwprofile.detect()
-    return hwprofile.default_fs(profile.get("filesystems", ["ext4"]), mem_mb(), hw_p)
+    return hwprofile.choose_fs(profile.get("filesystems", ["xfs"]), mem_mb(), hw_p, zfs_available())
 
 
 def default_config(profile):
+    fs, fs_why = _default_fs(profile)
     return {
         "locale": "en_US.UTF-8", "keymap": "us", "timezone": "UTC",
-        "disks": [], "fs": _default_fs(profile), "zfs_raid": "single", "luks_passphrase": "",
+        "disks": [], "fs": fs, "fs_why": fs_why, "zfs_raid": "single", "luks_passphrase": "",
         "swap": "auto",              # auto (portable = hibernate swap, server = none) | none | hibernate  (portableswap.py)
         "desktop": {"enable": False, "user": "", "password": "", "password_hash": "", "autologin": False}, "hw": "auto",
         "hostname": profile["default_hostname"],
@@ -434,6 +445,9 @@ def default_config(profile):
         # install profile: server | desktop (desktop needs the desktop image variant)
         "install_type": "server",
         "user_name": "", "user_fullname": "", "user_hash": "", "user_password": "", "user_autologin": False,
+        "services_off": [], "ssh_enabled": True,
+        "sysctl_hardening": bool(profile.get("sysctl_hardening", True)),
+        "use": {"preset": "recommended", "flags": {}},
     }
 
 
@@ -452,8 +466,27 @@ def config_from_answers(profile, path):
     c["ssh_keys"] = [keys] if isinstance(keys, str) else list(keys)
     c["ssh_password_auth"] = bool(g.get("ssh_password_auth", False))
     c["console_open"] = bool(g.get("console_menu_open", False))
+    c["install_type"] = str(g.get("install_type", "server")).lower()
+    h = a.get("hardening", {})
+    c["ssh_enabled"] = bool(h.get("ssh", True))
+    c["sysctl_hardening"] = bool(h.get("sysctl", c["sysctl_hardening"]))
+    if "ssh_password_auth" in h:
+        c["ssh_password_auth"] = bool(h["ssh_password_auth"])
+    if "console_menu_open" in h:
+        c["console_open"] = bool(h["console_menu_open"])
+    sv = a.get("services", {})
+    c["services_off"] = list(sv.get("disable", []))
+    u = a.get("use_flags", {})
+    c["use"] = {"preset": str(u.get("preset", "recommended")).lower(), "flags": {}}
+    for fl in u.get("enable", []):
+        c["use"]["flags"][fl] = True
+    for fl in u.get("disable", []):
+        c["use"]["flags"][fl] = False
+    c["use"]["from_answers"] = bool(u)
     d = a.get("disk", {})
-    c["fs"] = d.get("filesystem", "ext4")
+    if d.get("filesystem"):
+        c["fs"], c["fs_why"] = d["filesystem"], "chosen in the answer file"
+    # no filesystem in the answer file = the machine's default (ZFS, XFS fallback), never ext4
     c["luks_passphrase"] = d.get("luks_passphrase", "")
     c["swap"] = str(d.get("swap", g.get("swap", "auto"))).lower()
     de = a.get("desktop", {})
@@ -487,6 +520,12 @@ def config_from_answers(profile, path):
 def validate_config(profile, c, unattended=False, require_secret=True):
     """Return a list of problems (empty = ok)."""
     errs = []
+    if c.get("install_type", "server") != "server":
+        errs.append(f"install_type {c['install_type']!r} is not available yet (only 'server')")
+    bad_off = [x for x in c.get("services_off", []) if x not in profile.get("services_optional", [])]
+    if bad_off:
+        errs.append("services.disable may only name optional services: " + ", ".join(bad_off))
+    errs += use_problems(profile, c)
     if c["fs"] not in profile["filesystems"]:
         errs.append(f"filesystem {c['fs']} not offered ({', '.join(profile['filesystems'])})")
     if hostname_problem(c["hostname"]):
@@ -546,6 +585,19 @@ def validate_config(profile, c, unattended=False, require_secret=True):
                 if n.get("dns") and dns_problem(n["dns"]):
                     errs.append(f"{s} dns: " + dns_problem(n["dns"]))
     return errs
+
+
+def use_problems(profile, c):
+    """Answer-file / GUI hard errors for the USE selection (preset names, Portage sanity check)."""
+    from . import useflags
+    u = c.get("use") or {}
+    if u.get("preset", "recommended") not in [x[0] for x in useflags.PRESETS] + ["custom"]:
+        return [f"use_flags.preset {u.get('preset')!r} unknown (recommended, minimal, full)"]
+    meta = useflags.load_meta()
+    if not meta:
+        return ["use_flags given but the ISO carries no Portage metadata"] if u.get("flags") else []
+    flags = useflags.effective_choices(meta, profile, u)
+    return ["use_flags: " + i.text for i in useflags.check(meta, profile, flags) if i.level == "error"]
 
 
 def part_path(disk, n):
@@ -616,12 +668,25 @@ class Installer:
         os.chmod(p, mode)
 
     # -- stages ---------------------------------------------------------
+    def ctx(self):
+        from .stages import Ctx
+        if not hasattr(self, "_ctx"):
+            self._ctx = Ctx(self.p, self.c, efi=self.efi)
+        return self._ctx
+
     def go(self):
+        """Run every stage in sequence (stages.APPLY_ORDER); TUI, GUI and the answer file all come through here."""
+        from . import stages
         c, p = self.c, self.p
-        self.log(f"== live-installer: {p['title']} on {', '.join(c['disks'])} ({'UEFI' if self.efi else 'BIOS'}), fs={c['fs']}")
+        self.log(f"== live-installer: {p['title']} ({c['install_type']}) on {', '.join(c['disks'])} ({'UEFI' if self.efi else 'BIOS'}), fs={c['fs']}")
         if self.t2:
             from . import t2
             t2.preflight(self)
+        stages.run_stages(self)
+        self.prog(100, "Done")
+
+    # per-stage entry points (stages.Stage.apply calls stage_<id>)
+    def stage_disk(self):
         portableswap.resolve(self)       # portable (battery / laptop chassis / desktop / Surface) = hibernate swap, server = none
         self.prog(2, "Partitioning")
         self.partition()
@@ -629,10 +694,41 @@ class Installer:
         self.mkfs()
         self.prog(12, "Mounting")
         self.mount()
+
+    def stage_extract(self):
         self.prog(14, "Copying the system (this takes a few minutes)")
         self.copy_system()
-        self.prog(80, "Configuring the new system")
-        self.configure()
+        self.prog(78, "Preparing the new system")
+        self.prepare_chroot()
+
+    def stage_keymap(self):
+        self.prog(79, "Language, keyboard, time zone")
+        self.cfg_locale()
+
+    def stage_hostname(self):
+        self.cfg_hostname()
+
+    def stage_rootpass(self):
+        self.prog(81, "Accounts")
+        self.cfg_accounts()
+
+    def stage_netconfig(self):
+        self.prog(83, "Network")
+        self.configure_network()
+
+    def stage_services(self):
+        self.cfg_services()
+
+    def stage_hardening(self):
+        self.prog(85, "Hardening")
+        self.cfg_hardening()
+
+    def stage_use_flags(self):
+        self.prog(87, "Software settings (USE flags)")
+        self.cfg_use_flags()
+
+    def stage_finish(self):
+        self.cfg_finish_config()
         self.prog(90, "Installing the boot loader")
         self.bootloader()
         self.prog(97, "Finishing")
@@ -646,7 +742,7 @@ class Installer:
         return luksroot.is_luks(self.c)
 
     def layout(self, disk):
-        """Partition numbers: 1 = ESP/BIOS-boot, 2 = /boot, 3 = swap, 4 = root (xfs-luks: 1 ESP, 2 /boot, 3 = LUKS, no swap)."""
+        """Partition numbers: 1 = ESP/BIOS-boot, 2 = /boot, 3 = swap (ONLY when a portable gets hibernate swap; otherwise absent), 4 = root (xfs-luks: 1 ESP, 2 /boot, 3 = LUKS, no swap)."""
         if self.luks():
             return luksroot.layout(disk, part_path, self.efi)
         return {n: part_path(disk, n) for n in (1, 2, 3, 4)}
@@ -663,10 +759,8 @@ class Installer:
             if self.zfs():
                 if swap:    # encrypted ZFS laptop: LUKS2 hibernation swap as partition 3 (zfsswap.py); servers: zram only
                     args += zfsswap.sgdisk_part(swap)
-            elif swap:
+            elif swap:        # servers/firewalls/hypervisors: NO swap partition (zram only); partition 3 simply does not exist, root stays number 4
                 args += ["-n", f"3:0:+{swap}M", "-t", "3:8200", "-c", "3:swap"]
-            else:
-                args += ["-n", "3:0:+64M", "-t", "3:8200", "-c", "3:swap-unused"]
             args += ["-n", "4:0:0", "-t", "4:bf00" if self.zfs() else "4:8300", "-c", "4:root", disk]
             self.run(args)
             self.run(["partprobe", disk], check=False)
@@ -749,19 +843,16 @@ class Installer:
         self.run(["unsquashfs", "-percentage", "-f", "-d", self.target, img], line_cb=cb)
 
     # -- configuration -------------------------------------------------------
-    def configure(self):
-        c, p, T = self.c, self.p, self.target
-        name = p["name"]
+    def prepare_chroot(self):
+        T = self.target
         for d in ("dev", "proc", "sys", "run"):
             os.makedirs(f"{T}/{d}", exist_ok=True)
         for src in ("dev", "proc", "sys"):
             self.run(["mount", "--rbind", "/" + src, f"{T}/{src}"], check=False)
             self.run(["mount", "--make-rslave", f"{T}/{src}"], check=False)
-        host = c["hostname"].lower()
-        short = host.split(".")[0]
-        self.write("/etc/hostname", short + "\n")
-        self.write("/etc/conf.d/hostname", f'hostname="{short}"\n')
-        self.write("/etc/hosts", f"127.0.0.1 localhost\n::1 localhost\n127.0.1.1 {host} {short}\n")
+
+    def cfg_locale(self):
+        c, T = self.c, self.target
         self.write("/etc/timezone", c["timezone"] + "\n")
         if os.path.exists(f"{T}/usr/share/zoneinfo/{c['timezone']}"):
             lt = f"{T}/etc/localtime"
@@ -771,17 +862,26 @@ class Installer:
         self.write("/etc/conf.d/keymaps", f'keymap="{c["keymap"]}"\n')
         self.write("/etc/env.d/02locale", f'LANG="{c["locale"]}"\n')
         self.run(["env-update"], chroot=True, check=False)
+        if c["locale"] not in ("en_US.UTF-8", "C.UTF-8"):
+            self.write("/etc/locale.gen", f"{c['locale']} UTF-8\nen_US.UTF-8 UTF-8\n", append=True)
+            self.run(["locale-gen"], chroot=True, check=False)
+
+    def cfg_hostname(self):
+        host = self.c["hostname"].lower()
+        short = host.split(".")[0]
+        self.write("/etc/hostname", short + "\n")
+        self.write("/etc/conf.d/hostname", f'hostname="{short}"\n')
+        self.write("/etc/hosts", f"127.0.0.1 localhost\n::1 localhost\n127.0.1.1 {host} {short}\n")
+
+    def cfg_accounts(self):
+        c, p, T = self.c, self.p, self.target
+        name = p["name"]
         if self.zfs():
             # the pool was created on the live system: give the installed system the same host id
             if os.path.exists("/etc/hostid"):
                 shutil.copy("/etc/hostid", f"{T}/etc/hostid")
             for svc in ("zfs-import", "zfs-mount"):
                 self.run(["rc-update", "add", svc, "boot"], chroot=True, check=False)
-        if c["locale"] not in ("en_US.UTF-8", "C.UTF-8"):
-            self.write("/etc/locale.gen", f"{c['locale']} UTF-8\nen_US.UTF-8 UTF-8\n", append=True)
-            self.run(["locale-gen"], chroot=True, check=False)
-
-        # ---- accounts -----------------------------------------------------
         if c["root_hash"]:
             self.run(["chpasswd", "-e"], chroot=True, input_=f"root:{c['root_hash']}\n")
         elif c["root_password"]:
@@ -792,8 +892,33 @@ class Installer:
         if keys:
             self.write("/root/.ssh/authorized_keys", "\n".join(keys) + "\n", 0o600)
             os.chmod(f"{T}/root/.ssh", 0o700)
+        # web admin password (first boot)
+        pf = p.get("admin_password_file")
+        if c["web_password"] and pf:
+            self.write(pf, c["web_password"] + "\n", 0o600)
+            owner = p.get("admin_password_owner", "root")
+            self.run(["chown", f"{owner}:{owner}" if owner != "root" else "root:root", pf], chroot=True, check=False)
+            if p.get("admin_password_cleanup", True):
+                self.write("/etc/local.d/50-installer-firstboot.start", FIRSTBOOT.format(port=p["web_port"], files=pf), 0o755)
+        if c["email"]:
+            self.write(f"/etc/{name}/notify-email", c["email"] + "\n", 0o644)
 
-        # ---- sshd: key-only unless the operator opted in ---------------------
+    def cfg_services(self):
+        c, p = self.c, self.p
+        # live-only services are not wanted on the installed system
+        for s_ in ("live-installer",):
+            self.run(["rc-update", "del", s_, "default"], chroot=True, check=False)
+        for s_ in p["services"]:
+            if s_ == "sshd" or s_ in c["services_off"]:
+                continue
+            self.run(["rc-update", "add", s_, "default"], chroot=True, check=False)
+        # serial console keeps working when the installer was driven over a serial line
+        if arch.serial_console():
+            self.run(["rc-update", "add", "live-serial", "default"], chroot=True, check=False)
+
+    def cfg_hardening(self):
+        c, T = self.c, self.target
+        # ---- sshd: key-only unless the operator opted in ----
         cfgp = f"{T}/etc/ssh/sshd_config"
         txt = open(cfgp).read() if os.path.exists(cfgp) else ""
         txt = re.sub(r"(?m)^\s*#?\s*(PermitRootLogin|PasswordAuthentication|KbdInteractiveAuthentication|PermitEmptyPasswords)\b.*\n", "", txt)
@@ -809,24 +934,9 @@ class Installer:
             body = open(fp).read()
             if re.search(r"(?im)^\s*(PermitRootLogin|PasswordAuthentication)\b", body):
                 open(fp, "w").write(re.sub(r"(?im)^\s*(PermitRootLogin|PasswordAuthentication)\b.*$", r"# \g<0>", body))
-        self.run(["rc-update", "add", "sshd", "default"], chroot=True, check=False)
-
-        # ---- network ----------------------------------------------------------------
-        self.configure_network()
-
-        # ---- web admin password (first boot) ------------------------------------------
-        pf = p.get("admin_password_file")
-        if c["web_password"] and pf:
-            self.write(pf, c["web_password"] + "\n", 0o600)
-            owner = p.get("admin_password_owner", "root")
-            self.run(["chown", f"{owner}:{owner}" if owner != "root" else "root:root", pf], chroot=True, check=False)
-            if p.get("admin_password_cleanup", True):
-                self.write("/etc/local.d/50-installer-firstboot.start", FIRSTBOOT.format(port=p["web_port"], files=pf), 0o755)
-        if c["email"]:
-            self.write(f"/etc/{name}/notify-email", c["email"] + "\n", 0o644)
-        # live-only services are not wanted on the installed system
-        for s in ("live-installer",):
-            self.run(["rc-update", "del", s, "default"], chroot=True, check=False)
+        self.run(["rc-update", "add" if c["ssh_enabled"] else "del", "sshd", "default"], chroot=True, check=False)
+        if c["sysctl_hardening"]:
+            self.write("/etc/sysctl.d/90-live-installer-hardening.conf", SYSCTL_HARDENING)
         # post-install console menu: login first (default) or OPNsense-style open console
         if c.get("console_open"):
             self.write("/etc/live-installer/console-open", "1\n")
@@ -834,13 +944,26 @@ class Installer:
             if os.path.exists(ip):
                 t = re.sub(r"(?m)^c1:.*$", "c1:12345:respawn:/sbin/agetty --noclear -n -l /usr/libexec/console-menu-session 38400 tty1 linux", open(ip).read())
                 open(ip, "w").write(t)
+
+    def cfg_use_flags(self):
+        from . import useflags
+        c = self.c
+        meta = useflags.load_meta()
+        flags = useflags.effective_choices(meta, self.p, c["use"]) if meta else dict(c["use"].get("flags", {}))
+        if flags:
+            self.write("/etc/portage/package.use/00-live-installer", useflags.package_use_text(flags))
+            if meta:
+                imp = useflags.impact(meta, flags)
+                self.write("/etc/live-installer/use-rebuild-pending",
+                           "".join(f"{pk}\n" for pk, _m in imp["list"]))
+                self.log(useflags.summary_line(meta, flags))
+        self.write("/etc/live-installer/use-preset", c["use"].get("preset", "recommended") + "\n")
+
+    def cfg_finish_config(self):
+        c, p = self.c, self.p
+        self.write("/etc/live-installer/install-type", c["install_type"] + "\n")
         self.write("/etc/motd", self.motd())
         self.write("/etc/live-installer/installed", time.strftime("%FT%TZ", time.gmtime()) + "\n")
-        for s in p["services"]:
-            self.run(["rc-update", "add", s, "default"], chroot=True, check=False)
-        # serial console keeps working when the installer was driven over a serial line
-        if arch.serial_console():
-            self.run(["rc-update", "add", "live-serial", "default"], chroot=True, check=False)
         self.hw_profile, self.hw_model = (None, None)
         if c.get("hw", "auto") != "none":
             hp, hm = hwprofile.detect()
@@ -849,6 +972,8 @@ class Installer:
             self.hw_profile, self.hw_model = hp, hm
             if hp:
                 self.log(f"hardware profile: {hp['id']} / {(hm or {}).get('id', 'generic')}")
+        if os.path.exists(f"{self.target}/etc/init.d/zram-swap"):     # compressed RAM swap: the ONLY swap on servers/firewalls (no swap partition, no swapfile)
+            self.run(["rc-update", "add", "zram-swap", "default"], chroot=True, check=False)
         if self.swap_mode == "hibernate" and not self.luks() and not self.zfs():
             self.swap_dev = self.layout(c["disks"][0])[3]
             portableswap.prepare(self)
@@ -859,6 +984,53 @@ class Installer:
         if self.hw_profile:
             hwprofile.apply_profile(self, self.hw_profile, self.hw_model)
         self.profile_extras()
+
+        desk = bool(self.hw_profile and self.hw_profile.get("defaults", {}).get("desktop"))      # a hardware profile with a desktop (Surface) may need the GUI libraries
+        if not TYPE_KEEP_GUI.get(c["install_type"], False) and not desk:
+            self.strip_live_gui()
+
+    def strip_live_gui(self):
+        """The graphical installer stack is live-only on a Server: remove it from the installed system.
+
+        Portage cannot run in the target (the tree is not shipped), so unmerge by hand from the package
+        database: delete every file a package's CONTENTS lists, empty directories, then its database entry."""
+        T = self.target
+        lst = os.path.join(T, "etc/live-installer/live-only-packages")
+        if not os.path.exists(lst):
+            return
+        pkgs = [x.strip().lstrip("=") for x in open(lst).read().split() if "/" in x]
+        removed = 0
+        for pf in pkgs:
+            vdb = os.path.join(T, "var/db/pkg", pf)
+            contents = os.path.join(vdb, "CONTENTS")
+            if not os.path.exists(contents):
+                continue
+            dirs = []
+            for line in open(contents, errors="replace"):
+                parts = line.rstrip("\n").split(" ")
+                if parts[0] in ("obj", "sym") and len(parts) > 1:
+                    path = parts[1]
+                    if parts[0] == "sym":
+                        path = line.split(" ", 1)[1].split(" -> ")[0]
+                    try:
+                        os.unlink(os.path.join(T, path.lstrip("/")))
+                        removed += 1
+                    except OSError:
+                        pass
+                elif parts[0] == "dir" and len(parts) > 1:
+                    dirs.append(line.rstrip("\n").split(" ", 1)[1])
+            for d in sorted(dirs, key=len, reverse=True):
+                try:
+                    os.rmdir(os.path.join(T, d.lstrip("/")))
+                except OSError:
+                    pass
+            shutil.rmtree(vdb, ignore_errors=True)
+        self.log(f"removed the live-only graphical installer stack: {len(pkgs)} packages, {removed} files")
+        for f in ("etc/live-installer/live-only-packages",):
+            try:
+                os.unlink(os.path.join(T, f))
+            except OSError:
+                pass
 
     def profile_extras(self):
         """T2 Mac profile, desktop profile, ZFS boot-environment config (new modules, see t2.py / desktop.py / zfsroot.py)"""
@@ -1012,6 +1184,25 @@ def fsuuid(dev):
     rc, out = sh(["blkid", "-s", "UUID", "-o", "value", dev])
     return out.strip() if rc == 0 else ""
 
+
+TYPE_KEEP_GUI = {"server": False, "workstation": True, "desktop": True}
+
+SYSCTL_HARDENING = """# live-installer: Server hardening (not applied to a Workstation install)
+kernel.kptr_restrict = 2
+kernel.dmesg_restrict = 1
+kernel.unprivileged_bpf_disabled = 1
+net.core.bpf_jit_harden = 2
+fs.protected_hardlinks = 1
+fs.protected_symlinks = 1
+fs.protected_fifos = 2
+fs.protected_regular = 2
+net.ipv4.tcp_syncookies = 1
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv6.conf.all.accept_redirects = 0
+"""
 
 FIRSTBOOT = """#!/bin/sh
 # one-shot: remove the first-boot web-admin password file once the service is up

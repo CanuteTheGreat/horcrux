@@ -52,7 +52,7 @@ start() {
 	case "$mode" in gui) ;; expert) ;; 1) mode=text ;; *) mode=text ;; esac
 	echo "$mode" > /run/live-installer/mode
 	if [ -n "$(cmdarg "$p" installer)" ]; then
-		if [ "$serial" = yes ]; then
+		if [ "$serial" = yes ] && [ "$mode" != gui ]; then      # gui: tty1 keeps the graphical session, the UART gets a root shell (tests/support)
 			set_tty1 "--noclear -a root"
 		else
 			set_tty1 "--noclear -n -l /usr/libexec/live-installer-session"

@@ -64,7 +64,7 @@ class Tests:
         self.title = a.project.capitalize()
         os.makedirs(a.out, exist_ok=True)
         self.nvars = f"{a.out}/OVMF_VARS.fd"
-        self.ns = argparse.Namespace(project=a.project, mode=a.mode, media=a.media, flow="tui", fs="ext4", zfs_raid="single", static_ip="", lan_ip="10.77.0.1",
+        self.ns = argparse.Namespace(project=a.project, mode=a.mode, media=a.media, flow="tui", fs="ext4", fs_default=False, install_only=False, zfs_raid="single", static_ip="", lan_ip="10.77.0.1",
                                      mem=3072, ssh_password_opt_in=False, console_open=False, out=a.out, disk_gb=12, arch=a.arch,
                                      cpu=a.cpu, restarts=0)
         self.serial = qt.ARCHS[a.arch]["serial"]
@@ -243,7 +243,7 @@ class Tests:
         finally:
             self.finish(vm, False)
 
-    MODES = [("1", "gui", r"boot mode: gui[\s\S]*graphical installer not available", "Graphical install -> text installer placeholder (GUI hook empty)"),
+    MODES = [("1", "gui", None, "Graphical install -> GTK installer running in the cage kiosk on tty1 (the UART gets a root shell)"),
              ("2", "text", r"boot mode: text[\s\S]*(Language, keyboard|installer)", "Install (text mode)"),
              ("3", "expert", r"boot mode: expert", "Advanced (expert) install"),
              ("9", "safe", r"boot mode: text", "Safe graphics (nomodeset) -> text installer"),
@@ -259,8 +259,19 @@ class Tests:
                 if not self.menu_ready(vm):
                     self.step(f"mode-{name}", False, "no menu")
                 self.pick(vm, key)
-                ok = vm.expect_raw(pat, T(300))
-                self.step(f"mode-{name}", ok, what)
+                if pat is None:                                 # graphical install: the UART is a root shell, the GUI runs on tty1
+                    ok = self.shell(vm)
+                    end = time.time() + T(180)
+                    out = ""
+                    while ok and time.time() < end:
+                        rc, out = self.run(vm, "echo MODE=$(cat /run/live-installer/mode) $(pgrep -f 'cage -s -- /usr/bin/live-installer' | head -1 | sed 's/^/CAGE=/')")
+                        if re.search(r"CAGE=\d+", out):
+                            break
+                        time.sleep(3)
+                    self.step(f"mode-{name}", ok and re.search(r"MODE=gui\b", out) and re.search(r"CAGE=\d+", out), what)
+                else:
+                    ok = vm.expect_raw(pat, T(300))
+                    self.step(f"mode-{name}", ok, what)
             finally:
                 self.finish(vm, False)
         if not self.a.no_memtest:

@@ -2,7 +2,7 @@
 name = "horcrux"
 title = "Horcrux"
 network_mode = "management"          # one management NIC
-filesystems = ["xfs-luks", "ext4", "xfs", "zfs"]
+filesystems = ["zfs", "xfs-luks", "xfs", "ext4"]
 swap_mb = 4096
 web_scheme = "https"
 web_port = 8006
@@ -25,3 +25,11 @@ logo_full = "/usr/share/live-installer/branding/full.png"
 logo_wordmark = "/usr/share/live-installer/branding/wordmark.png"
 # "Try it live" boot entry: services started from RAM (random admin password per session; docker needs real storage)
 live_services = ["horcrux-api", "dbus", "libvirtd"]
+
+# installer pages (stages.py): optional services the user may switch off, hardening defaults, USE-flag page
+brand_color = "#6a3fa0"
+services_optional = ["docker", "libvirtd"]
+service_info = { docker = "container runtime (Docker)", libvirtd = "KVM/QEMU virtual machine manager (libvirt)" }
+# product-critical USE flags: the USE page refuses to change them (entries: "flag" or "category/package:flag")
+use_critical = ["app-emulation/libvirt:qemu", "app-emulation/qemu:kvm", "app-containers/docker:overlay2"]
+use_critical_why = { "app-emulation/libvirt:qemu" = "Horcrux manages virtual machines through libvirt's QEMU driver", "app-emulation/qemu:kvm" = "KVM acceleration is what makes Horcrux VMs usable" }

@@ -156,6 +156,7 @@ class Config(unittest.TestCase):
         c["swap"] = "hibernate"
         self.assertFalse(any("swap" in e for e in S.validate_config(PROFILE, c)))
 
+    @unittest.skipUnless(os.path.exists(os.path.join(HERE, "..", "..", "..", "..", "gentoo", "surface", "hwprofile.toml")), "Surface profile is in the Horcrux repo only")
     def test_surface_profile_asks_for_hibernate(self):
         import tomllib
         p = tomllib.load(open(os.path.join(HERE, "..", "..", "..", "..", "gentoo", "surface", "hwprofile.toml"), "rb"))

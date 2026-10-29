@@ -3,7 +3,7 @@
 set -eu
 : "${PROJECT:?}" "${ISO_LABEL:?}" "${PROJECT_TITLE:?}"
 
-chmod +x /etc/init.d/live-* /usr/libexec/live-* /usr/libexec/console-menu-session /usr/bin/live-installer /usr/bin/live-rescue /usr/bin/live-persist 2>/dev/null || true
+chmod +x /etc/init.d/live-* /etc/init.d/zram-swap /usr/libexec/live-* /usr/libexec/console-menu-session /usr/bin/live-installer /usr/bin/live-rescue /usr/bin/live-persist 2>/dev/null || true
 
 # --- the stage3 *container* image makes OpenRC think it runs in docker (skips root remount,
 # localmount, devfs ...): this rootfs boots on real hardware / KVM
@@ -72,6 +72,11 @@ if [ -d /usr/lib/dracut/modules.d/90zfs ]; then echo 'add_dracutmodules+=" zfs "
 dracut -f --no-hostonly --kver "$kver" "/boot/initramfs-${kver}.img" "$kver"
 ls -l /boot
 ls /boot/vmlinuz-* >/dev/null
+
+# --- installer data (needs the Portage tree: runs BEFORE the slimming below) --------------------------------------
+# USE-flag descriptions + installed-package USE/REQUIRED_USE/dependency constraints for the installer's USE page
+python3 /tmp/mk-portage-meta.py /usr/share/live-installer/portage-meta.json.xz
+rm -rf /var/db/repos/live-local /etc/portage/repos.conf/live-local.conf
 
 # --- slim the image -----------------------------------------------------------------
 emerge --quiet --unmerge dev-util/ccache >/dev/null 2>&1 || true

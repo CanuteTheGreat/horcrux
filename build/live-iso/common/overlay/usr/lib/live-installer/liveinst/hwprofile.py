@@ -76,17 +76,30 @@ def low_ram(mem_mb):
     return 0 < mem_mb < LOW_RAM_MB
 
 
-def default_fs(filesystems, mem_mb, profile=None):
-    """Interactive default: XFS+LUKS on low-RAM machines (and wherever a hardware profile asks for it), else ZFS when the
-    image has it (checksums, snapshots), else ext4."""
+def choose_fs(filesystems, mem_mb, profile=None, zfs_ok=True):
+    """(fs, why): the default root file system and the reason, shown on the disk page.
+    DEFAULT = ZFS. FALLBACK = XFS (in LUKS2 where the profile offers it) when ZFS is unsuitable: < 8 GB RAM, the ZFS module is
+    not available for this kernel/arch, or the image does not ship ZFS. ext4 is never the default (a manual choice only)."""
     want = (profile or {}).get("defaults", {}).get("fs")
     if want in filesystems:
-        return want
-    if low_ram(mem_mb) and "xfs-luks" in filesystems:
-        return "xfs-luks"
-    if "zfs" in filesystems:
-        return "zfs"
-    return "ext4"
+        return want, f"hardware profile {profile.get('id', '?')} asks for it"
+    reasons = []
+    if "zfs" not in filesystems:
+        reasons.append("this image does not ship ZFS")
+    elif low_ram(mem_mb):
+        reasons.append(f"only {mem_mb / 1024:.1f} GB RAM (ZFS wants 8 GB or more)")
+    elif not zfs_ok:
+        reasons.append("the ZFS kernel module is not available for this kernel/architecture")
+    if not reasons:
+        return "zfs", "ZFS (checksums, snapshots): 8 GB or more RAM and the ZFS module is available"
+    for fb in ("xfs-luks", "xfs", "ext4"):
+        if fb in filesystems:
+            return fb, "XFS" + (" in an encrypted LUKS2 volume" if fb == "xfs-luks" else "") + " instead of ZFS: " + "; ".join(reasons) if fb != "ext4" else "ext4 (no XFS offered): " + "; ".join(reasons)
+    return filesystems[0], "; ".join(reasons)
+
+
+def default_fs(filesystems, mem_mb, profile=None, zfs_ok=True):
+    return choose_fs(filesystems, mem_mb, profile, zfs_ok)[0]
 
 
 def kernel_cmdline(profile, model):

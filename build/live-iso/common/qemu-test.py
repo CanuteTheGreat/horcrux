@@ -21,7 +21,7 @@ address), plus file system / host name / time zone / ZFS mirror state.
 Python stdlib + qemu + openssh-client (+ sshpass, mke2fs) only.
 Exit 0 = every step passed; evidence (serial logs, screens/, PNGs, result.json) goes to --out.
 """
-import argparse, json, os, re, shutil, socket, ssl, struct, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request, zlib
+import argparse, json, os, re, shutil, socket, ssl, struct, subprocess, uuid, sys, tempfile, threading, time, urllib.error, urllib.request, zlib
 
 PROJECTS = {
     "horcrux": dict(svc="horcrux-api", port=8006, health=["/api/health", "/"], pwfile="/var/lib/horcrux/initial-admin-password", old_pw="horcrux",
@@ -35,6 +35,7 @@ PROJECTS = {
 PW = "Kx9!mQv2-tle-77Zp"          # >= 12 chars, mixed: passes the installer's strength rules
 PW2, PW3 = "Rv7#nQ4-zeta-91Lk", "Tb3$wH8-omega-52Ud"   # console-menu password reset / factory reset
 FWD_WEB, FWD_SSH, FWD_WAN = 18443, 12222, 18444
+FWD_BIND = os.environ.get("QT_FWD_BIND", "127.0.0.1")     # 0.0.0.0 inside a container whose ports are published (screenshots of the web UI from outside)
 
 # ----------------------------------------------------------------------------- architectures
 import platform as _platform
@@ -316,7 +317,10 @@ class VM:
         if not m:
             return 0
         px = ppm[m.end():]
-        return sum(1 for i in range(0, min(len(px), 3 * 1280 * 40), 3) if px[i] < 90 and px[i + 1] > 150 and px[i + 2] > 150)
+        w = int(m.group(1))
+        if w < 1000:             # the 800x600 frame of the early boot console (before the mode switch): never the installer
+            return 0
+        return sum(1 for i in range(0, min(len(px), 3 * w * 40), 3) if px[i] < 90 and px[i + 1] > 150 and px[i + 2] > 150)
 
     def snap(self, label):
         """text snapshot of the serial screen (evidence)"""
@@ -346,9 +350,9 @@ def qcodes(ch):
 
 class Kbd:
     """Send keys the same way for serial (escape sequences) and VGA (QMP send-key)."""
-    SER = {"UP": "\x1b[A", "DOWN": "\x1b[B", "RIGHT": "\x1b[C", "LEFT": "\x1b[D", "TAB": "\t", "ENTER": "\r", "ESC": "\x1b", "CLEAR": "\x15", "SPACE": " "}
+    SER = {"UP": "\x1b[A", "DOWN": "\x1b[B", "RIGHT": "\x1b[C", "LEFT": "\x1b[D", "TAB": "\t", "ENTER": "\r", "ESC": "\x1b", "CLEAR": "\x15", "SPACE": " ", "2": "2"}
     VGA = {"UP": ["up"], "DOWN": ["down"], "RIGHT": ["right"], "LEFT": ["left"], "TAB": ["tab"], "ENTER": ["ret"], "ESC": ["esc"],
-           "CLEAR": ["ctrl", "u"], "SPACE": ["spc"]}
+           "CLEAR": ["ctrl", "u"], "SPACE": ["spc"], "2": ["2"]}
 
     def __init__(self, vm, vga):
         self.vm, self.vga = vm, vga
@@ -403,6 +407,26 @@ def pflash_vars(dst):
     if ARCH != "x86_64" and os.path.getsize(dst) < want:
         with open(dst, "ab") as f:
             f.truncate(want)
+
+
+def grub_entries(iso):
+    """menu entry titles of the ISO's grub.cfg, in order (robust against the boot menu being reordered)"""
+    import mmap
+    with open(iso, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as m:
+        pos = m.find(b"set default=0")
+        if pos < 0:
+            pos = m.find(b"menuentry \"")
+        blob = m[max(0, pos - 4000): pos + 12000]
+    return [t.decode(errors="replace") for t in re.findall(rb'menuentry "([^"]+)"', blob)]
+
+
+def grub_index(iso, *pats):
+    """index of the first menu entry whose title matches every regex in pats"""
+    ents = grub_entries(iso)
+    for i, t in enumerate(ents):
+        if all(re.search(p, t, re.I) for p in pats):
+            return i
+    raise SystemExit(f"no GRUB entry matching {pats} in {ents}")
 
 
 def http(port, path, method="GET", body=None, timeout=10):
@@ -461,12 +485,15 @@ def answer_toml(a, pubkey, pwhash):
     p = a.project
     lines = ["[global]", 'keyboard = "us"', 'timezone = "Europe/Berlin"', f'hostname = "{p}-t1.test.lan"', 'email = "ops@example.test"',
              f'root_password_hash = "{pwhash}"', f'ssh_keys = ["{pubkey}"]', f"ssh_password_auth = {'true' if a.ssh_password_opt_in else 'false'}", f"console_menu_open = {'true' if a.console_open else 'false'}",
-             "", "[disk]", f'filesystem = "{a.fs}"']
+             "", "[disk]"] + ([] if a.fs_default else [f'filesystem = "{a.fs}"'])     # default run: no filesystem key = the installer's own default
+    if a.fs == "xfs-luks":
+        lines += [f'luks_passphrase = "{PW}"']
     if a.fs == "zfs":
         lines += [f'zfs_raid = "{a.zfs_raid}"', 'disks = ["/dev/vda", "/dev/vdb"]' if a.zfs_raid == "mirror" else 'disks = ["/dev/vda"]']
     else:
         lines += ['disks = ["/dev/vda"]']
-    lines += [""]
+    lines += ["", "[hardening]", "ssh = true", "sysctl = true", "",
+              "[use_flags]", 'preset = "minimal"', ""]          # answer-file use_flags: Minimal preset (checked against the Portage metadata)
     if p == "horcrux":
         lines += ["[network.management]"]
         if a.static_ip:
@@ -484,6 +511,7 @@ class Runner:
         self.res = {"project": a.project, "arch": a.arch, "mode": a.mode, "media": a.media, "flow": a.flow, "fs": a.fs, "steps": {}}
         self.P = PROJECTS[a.project]
         self.finished_vga = False
+        self.shots = []
 
     def step(self, name, ok, info=""):
         self.res["steps"][name] = {"ok": bool(ok), "info": info}
@@ -521,17 +549,22 @@ class Runner:
         nic = A["nic"]
         if a.project == "horcrux":
             ip = self.guest_ip(installed)
-            args += ["-netdev", f"user,id=n0,hostfwd=tcp:127.0.0.1:{FWD_WEB}-{ip}:{self.P['port']},hostfwd=tcp:127.0.0.1:{FWD_SSH}-{ip}:22",
+            args += ["-netdev", f"user,id=n0,hostfwd=tcp:{FWD_BIND}:{FWD_WEB}-{ip}:{self.P['port']},hostfwd=tcp:{FWD_BIND}:{FWD_SSH}-{ip}:22",
                      "-device", f"{nic},netdev=n0,mac=52:54:00:00:00:01"]
         else:
             # n0 = WAN (QEMU user net, DHCP), n1 = LAN (own user net; the firewall's LAN address is static)
-            wan = f"hostfwd=tcp:127.0.0.1:{FWD_WAN}-10.0.2.15:{self.P['port']},hostfwd=tcp:127.0.0.1:{FWD_SSH + 1}-10.0.2.15:22"
+            wan = f"hostfwd=tcp:{FWD_BIND}:{FWD_WAN}-10.0.2.15:{self.P['port']},hostfwd=tcp:{FWD_BIND}:{FWD_SSH + 1}-10.0.2.15:22"
             args += ["-netdev", f"user,id=n0,{wan}", "-device", f"{nic},netdev=n0,mac=52:54:00:00:00:01",
-                     "-netdev", f"user,id=n1,net=10.77.0.0/24,host=10.77.0.2,hostfwd=tcp:127.0.0.1:{FWD_WEB}-{a.lan_ip}:{self.P['port']},hostfwd=tcp:127.0.0.1:{FWD_SSH}-{a.lan_ip}:22",
+                     "-netdev", f"user,id=n1,net=10.77.0.0/24,host=10.77.0.2,hostfwd=tcp:{FWD_BIND}:{FWD_WEB}-{a.lan_ip}:{self.P['port']},hostfwd=tcp:{FWD_BIND}:{FWD_SSH}-{a.lan_ip}:22",
                      "-device", f"{nic},netdev=n1,mac=52:54:00:00:00:02"]
-        args += A["gpu"] + ["-no-reboot", "-device", "qemu-xhci,id=xhci"]
+        gpu = A["gpu"]
+        if a.flow == "gui":        # virtio-gpu at a fixed size (virtio-vga also gives a BIOS machine a VGA console)
+            gpu = ["-device", ("virtio-vga" if ARCH == "x86_64" else "virtio-gpu-pci") + ",xres=1280,yres=800"]
+        args += gpu + ["-no-reboot", "-device", "qemu-xhci,id=xhci"]
         if ARCH != "x86_64":
             args += ["-device", "usb-kbd,bus=xhci.0"]            # no PS/2 on virt: the VGA flows type through USB HID
+        if a.flow == "gui":
+            args += ["-device", "usb-tablet,bus=xhci.0"]            # absolute pointer: mouse clicks on the GUI
         if a.mode == "uefi":
             code, _ = find_ovmf()
             args += ["-drive", f"if=pflash,format=raw,readonly=on,file={code}", "-drive", f"if=pflash,format=raw,file={nvars}"]
@@ -572,10 +605,21 @@ class Runner:
             json.dump(self.res, open(f"{a.out}/result.json", "w"), indent=1)
             print("ALL PASS", a.project, a.mode, a.media, a.flow)
             return
-        self.phase1(nvars)
-        self.phase2(nvars)
-        if a.restarts:
-            self.restart_phase(nvars)
+        try:
+            self.phase1(nvars)
+            self.disk_checks()
+            if a.install_only:
+                self.step("install-only", True, "stopped after the install: the disk layout was checked without booting it")
+                self.res["ok"] = True
+                json.dump(self.res, open(f"{a.out}/result.json", "w"), indent=1)
+                print("ALL PASS", a.project, a.mode, a.media, a.flow, a.fs, "(install only)")
+                return
+            self.phase2(nvars)
+            if a.restarts:
+                self.restart_phase(nvars)
+        finally:
+            if self.shots:
+                json.dump(self.shots, open(f"{a.out}/gui-shots.json", "w"), indent=1)
         self.res["ok"] = True
         json.dump(self.res, open(f"{a.out}/result.json", "w"), indent=1)
         print("ALL PASS", a.project, a.mode, a.media, a.flow, a.fs)
@@ -590,17 +634,19 @@ class Runner:
             if a.flow == "tui-vga":
                 time.sleep(9 if a.mode == "uefi" else 3)         # firmware, then the GRUB menu (5 s countdown)
                 vm.shot("00-grub-menu")
-                # no key press: the default entry (guided installer on the VGA console) must boot by itself
-                self.step("grub-default-entry-boots-installer", True, "waiting for the default GRUB entry (guided installer, VGA)")
+                kb.key("2", 0.5)                               # hotkey 2 = Install (text mode); the default entry is the graphical installer
+                self.step("grub-text-install-entry", True, "VGA text installer (hotkey 2)")
             else:
                 ok = vm.expect_raw(r"Serial console \(" + re.escape(ARCHS[a.arch]["serial"]), 120)  # the LAST menu line: the menu is fully drawn
                 self.step("grub-menu-reached", ok, f"after {int(time.time()-t0)}s")
                 time.sleep(2)
                 vm.shot("grub-menu")
                 # boot menu hotkeys (common/boot/gen-grub-cfg.sh): s = serial-console submenu, 2 = text install, 4 = automated
-                vm.send("s")
+                if a.flow == "gui":
+                    self.shots.append((f"{vm.name}-grub-menu.png", "Boot menu (default entry: Graphical install)"))
+                vm.send("s")                        # the serial-console submenu: same entries, kernel console on the UART too
                 time.sleep(1.5)
-                vm.send("2" if a.flow == "tui" else "4")
+                vm.send({"tui": "2", "auto": "4", "gui": "1"}[a.flow])
                 self.step("kernel-boot-started", vm.expect_raw(r"(Linux version|Booting|OpenRC)", 90))
             if a.flow == "auto":
                 ok = vm.expect_raw(r"AUTOINSTALL-START", 420)
@@ -614,6 +660,8 @@ class Runner:
                 vm.shot("auto-finished")
             elif a.flow == "tui":
                 self.drive_tui(vm, kb)
+            elif a.flow == "gui":
+                self.drive_gui(vm)
             else:
                 self.drive_tui_vga(vm, kb)
             t = time.time()
@@ -648,12 +696,13 @@ class Runner:
 
     # keystroke script shared by the serial and the VGA run ----------------------------
     def screens(self, vm, kb, wait):
+        """keystroke script of the text installer (stages: keymap, hostname, disk, password, network, services, hardening, software)"""
         a, p = self.a, self.a.project
         vga = a.flow == "tui-vga"
         mirror = a.fs == "zfs" and a.zfs_raid == "mirror"
         shot = (lambda n: vm.shot(n)) if vga else (lambda n: None)
         wait(r"Language, keyboard and time zone", "01-language-keyboard-timezone")
-        kb.key("TAB"); kb.key("TAB")                       # -> time zone
+        kb.key("TAB"); kb.key("TAB"); kb.key("TAB")        # install type -> language -> keyboard -> time zone
         kb.key("ENTER", 0.8)                               # popup list
         kb.text("Berlin")
         if vga:
@@ -661,62 +710,85 @@ class Runner:
         kb.key("ENTER")                                    # picks Europe/Berlin, focus moves to the buttons
         shot("01c-language-keyboard-timezone-filled")
         kb.key("ENTER", 1)
-        if p == "horcrux":
-            wait(r"\] File system", "02-filesystem")
-            if a.fs != "ext4":
-                kb.key("RIGHT")                            # ext4 -> xfs
-                if a.fs == "zfs":
-                    kb.key("RIGHT"); kb.key("TAB")         # -> zfs, then the layout row
-                    if mirror:
-                        kb.key("RIGHT")
-                    shot("02b-filesystem-zfs-mirror")
-            if a.fs == "zfs":
+        wait(r"\] Host name", "02-hostname")
+        kb.key("CLEAR"); kb.text(f"{p}-t1.test.lan")
+        shot("02b-hostname-filled")
+        kb.key("TAB"); kb.key("ENTER", 1)
+        order = ["zfs", "xfs-luks", "xfs", "ext4"] if p == "horcrux" else ["xfs", "ext4"]       # the Root-file-system choice, in screen order (stages.DiskStage)
+        dflt = "xfs" if p == "patronus" else ("zfs" if a.mem >= 8192 else "xfs-luks")
+        wait(r"\] File system", "03-filesystem")
+        if not a.fs_default:
+            for _ in range((order.index(a.fs) - order.index(dflt)) % len(order)):
+                kb.key("RIGHT")                            # the choice wraps; the default is preselected
+        if a.fs == "zfs":
+            kb.key("TAB")                                  # -> 'Encrypt the disk' check box (ZFS native encryption, off)
+            if mirror:                                     # NOTE: mirror via the text wizard is not exercised by the default runs
+                kb.key("TAB"); kb.key("SPACE")             # 'Show advanced options' -> the ZFS layout row appears
+                kb.key("RIGHT")
+                shot("03b-filesystem-zfs-mirror")
                 kb.key("TAB")
-            else:
-                kb.key("TAB")
-            kb.key("ENTER", 1)
-        wait(r"\] Target disks?", "03-target-disk")
+            kb.key("TAB")                                  # -> 'Show advanced options' (zfs single: next stop = buttons)
+        elif a.fs == "xfs-luks":
+            kb.key("TAB"); kb.text(PW); kb.key("TAB"); kb.text(PW)        # disk passphrase + confirmation
+            shot("03b-filesystem-xfs-luks-passphrase")
+            kb.key("TAB")                                  # -> 'Show advanced options'
+        else:
+            kb.key("TAB")                                  # -> 'Show advanced options' (xfs, ext4)
+        kb.key("TAB")                                      # -> buttons
+        kb.key("ENTER", 1)
+        wait(r"\] Target disks?", "04-target-disk")
         kb.key("SPACE")
         if mirror:
             kb.key("DOWN"); kb.key("SPACE")
-        shot("03b-target-disk-selected")
+        shot("04b-target-disk-selected")
         kb.key("TAB"); kb.key("ENTER", 1)
+        wait(r"Administrator account", "05-administrator-account")
+        kb.text(PW); kb.key("TAB"); kb.text(PW)
+        kb.key("TAB"); kb.text("ops@example.test")
+        kb.key("TAB"); kb.key("SPACE")                     # 'Show advanced options' -> the SSH key row appears and takes the focus
+        kb.text(self.pub)
+        shot("05b-administrator-account-filled")
+        kb.key("TAB"); kb.key("TAB"); kb.key("ENTER", 1)
         if p == "horcrux":
-            wait(r"\] Management network", "04-management-network")
-            kb.key("TAB"); kb.key("CLEAR"); kb.text(f"{p}-t1.test.lan")
+            wait(r"\] Management network", "06-management-network")
             kb.key("TAB")                                  # -> IP configuration
             if a.static_ip:
                 kb.key("RIGHT")                            # static
                 kb.key("TAB"); kb.key("CLEAR"); kb.text(f"{a.static_ip}/24")
                 kb.key("TAB"); kb.key("CLEAR"); kb.text("10.0.2.2")
                 kb.key("TAB"); kb.key("CLEAR"); kb.text("10.0.2.3")
-            shot("04b-management-network-filled")
+            shot("06b-management-network-filled")
             kb.key("TAB"); kb.key("ENTER", 1)
         else:
-            wait(r"\] Interface assignment", "04-interface-assignment")
-            shot("04b-interface-assignment-filled")
+            wait(r"\] Interface assignment", "06-interface-assignment")
+            shot("06b-interface-assignment-filled")
             kb.key("TAB"); kb.key("TAB"); kb.key("ENTER", 1)       # defaults: first NIC = WAN, second = LAN
-            wait(r"WAN / LAN addressing", "05-wan-lan-addressing")
-            kb.key("CLEAR"); kb.text(f"{p}-t1.test.lan")        # host name is the first field here
-            kb.key("TAB"); kb.key("TAB")                           # WAN stays DHCP; -> LAN address
+            wait(r"WAN / LAN addressing", "07-wan-lan-addressing")
+            kb.key("TAB")                                          # WAN stays DHCP; -> LAN address
             kb.key("CLEAR"); kb.text(f"{a.lan_ip}/24")
-            shot("05b-wan-lan-addressing-filled")
+            shot("07b-wan-lan-addressing-filled")
             kb.key("TAB"); kb.key("ENTER", 1)
-        wait(r"Administrator account", "06-administrator-account")
-        kb.text(PW); kb.key("TAB"); kb.text(PW)
-        kb.key("TAB"); kb.text("ops@example.test")
-        kb.key("TAB"); kb.text(self.pub)
-        kb.key("TAB")                                      # -> allow SSH password login
-        if a.ssh_password_opt_in:
-            kb.key("SPACE")
-        kb.key("TAB")                                      # -> open console menu
-        if a.console_open:
-            kb.key("SPACE")
-        shot("06b-administrator-account-filled")
-        kb.key("TAB"); kb.key("ENTER", 1)
-        wait(r"Summary - ready to install", "07-summary")
+        wait(r"\] Services", "08-services")
+        kb.key("TAB")                                      # optional services list -> buttons
+        kb.key("ENTER", 1)
+        wait(r"\] Security hardening", "09-hardening")
+        if a.ssh_password_opt_in or a.console_open:
+            kb.key("TAB"); kb.key("TAB"); kb.key("SPACE")  # 'Show advanced options'; focus lands on the first advanced row
+            if a.ssh_password_opt_in:
+                kb.key("SPACE")
+            kb.key("TAB")                                  # -> open console menu
+            if a.console_open:
+                kb.key("SPACE")
+            shot("09b-hardening-advanced")
+            kb.key("TAB"); kb.key("TAB"); kb.key("ENTER", 1)
+        else:
+            kb.key("TAB"); kb.key("TAB"); kb.key("TAB"); kb.key("ENTER", 1)
+        wait(r"Software \(USE flags\)", "10-software-use-flags")
+        shot("10b-software-use-flags")
+        kb.key("TAB"); kb.key("ENTER", 1)                  # list -> buttons -> Next
+        wait(r"Summary - ready to install", "11-summary")
         kb.text("ERASE")
-        shot("07b-summary-confirmed")
+        shot("11b-summary-confirmed")
         kb.key("TAB"); kb.key("ENTER", 1)
 
     def drive_tui(self, vm, kb):
@@ -760,7 +832,10 @@ class Runner:
         def wait(pat, label):
             if st["h"] is None:                     # first screen: wait until the installer's cyan title shows up
                 end = time.time() + T(400)
-                while time.time() < end and vm.cyan_pixels(vm.grab()) < 50:
+                good = 0
+                while time.time() < end and good < 3:              # 3 consecutive polls: a framebuffer mode-switch can flash random colours (cyan noise)
+                    n = vm.cyan_pixels(vm.grab())
+                    good = good + 1 if 50 <= n <= 1500 else 0
                     time.sleep(3)
                 self.step("vga-installer-started", time.time() < end, "installer title visible on the VGA console")
                 st["h"] = stable(30)
@@ -786,6 +861,314 @@ class Runner:
                 break
         self.step("vga-installer-finished", self.finished_vga, "finish screen reached (target disk written and idle), Reboot pressed")
 
+    # ---- graphical installer (virtio-gpu): keyboard through QMP, assertions through AT-SPI + the status file
+    def gsh(self, vm, cmd, timeout=40):
+        """run a command in the live root shell on the serial console; returns its output"""
+        tag = f"{int(time.time() * 1000) % 10**9}"
+        vm.send(f"{cmd}; echo __D{tag}__$?\r")
+        m, end = None, time.time() + timeout
+        while not m and time.time() < end:
+            m = vm.expect_raw(r"(?s).*?__D" + tag + r"__(\d+)", 5)
+            if not m:
+                vm.send("\x0c")      # an RX byte un-sticks QEMU's 16550 transmitter when the guest wrote a long line
+        if not m:
+            return None, "<timeout>"
+        txt = m.group(0).decode(errors="replace")
+        txt = txt.replace(f"echo __D{tag}__$?", "")
+        return int(m.group(1)), re.sub(r"__D\d+__\d+$", "", txt).strip()
+
+    def gstate(self, vm):
+        rc, out = self.gsh(vm, "python3 -c \"import json;d=json.load(open('/run/live-installer/gui-status.json'));iss=d.pop('issues',[]);d.pop('pages',None);d.pop('t',None);d['issues']=[[i[0],i[1],i[2][:110]] for i in iss];print(json.dumps(d))\" 2>/dev/null")
+        m = re.search(r"\{.*\}", out or "", re.S)
+        try:
+            return json.loads(m.group(0)) if m else {}
+        except ValueError:
+            return {}
+
+    def gwait(self, vm, page, timeout=120, extra=None):
+        end = time.time() + timeout
+        st = {}
+        while time.time() < end:
+            st = self.gstate(vm)
+            if st.get("page") == page and (extra is None or extra(st)):
+                return st
+            time.sleep(2)
+        self.step(f"gui-page-{page}", False, f"not reached; last status {st}")
+
+    def gshot(self, vm, step, desc):
+        time.sleep(1.5)
+        n = len(self.shots) + 1
+        label = f"{n:02d}-{step}"
+        vm.shot(label)
+        self.shots.append((f"{vm.name}-{label}.png", desc))
+
+    def gkey(self, vm, *keys, pause=0.5):
+        vm.qmp("send-key", keys=[{"type": "qcode", "data": k} for k in keys])
+        time.sleep(pause)
+
+    def gtype(self, vm, text):
+        kb = Kbd(vm, True)
+        kb.text(text)
+
+    def atspi(self, vm, *args, timeout=40):
+        q = " ".join("'" + x.replace("'", "'\\''") + "'" for x in args)
+        return self.gsh(vm, f"/usr/libexec/live-installer-atspi {q}", timeout)
+
+    def gfocus(self, vm, name, tries=45):
+        """Tab until the widget whose accessible name starts with `name` has the keyboard focus (real keyboard navigation)"""
+        for i in range(tries):
+            rc, out = self.atspi(vm, "focused")
+            if out and re.search(r"\|" + re.escape(name), out):
+                return True
+            self.gkey(vm, "tab", pause=0.3)
+        return False
+
+    def gnames(self, vm, *names):
+        """AT-SPI: number of accessible nodes and which of `names` are missing (compact output: serial lines stay short)"""
+        rc, out = self.atspi(vm, "names", *names, timeout=60)
+        m = re.search(r"NODES=(\d+) MISSING=(\[[^\]]*\])", out or "")
+        return (int(m.group(1)), json.loads(m.group(2))) if m else (0, list(names))
+
+    def drive_gui(self, vm):
+        a = self.a
+        mirror = a.fs == "zfs" and a.zfs_raid == "mirror"
+        # the graphical session came up on the VGA head; the root shell is on the serial console
+        self.step("gui-grub-menu", True, "default entry = Graphical install; serial-console variant picked for the test shell")
+        ok = vm.expect_raw(r"(Linux version|OpenRC)", 120)
+        end = time.time() + 480
+        up = False
+        while time.time() < end and not up:
+            vm.send("\r")
+            time.sleep(3)
+            rc, out = self.gsh(vm, "echo SHELL-UP", 10)
+            up = rc == 0 and "SHELL-UP" in (out or "")
+        self.step("gui-live-root-shell-on-serial", up, "serial root shell of the live system (sshd stays off)")
+        b = ssh_banner(FWD_SSH if a.project == "horcrux" else FWD_SSH + 1)
+        self.step("live-sshd-off", not b.startswith("SSH-"), f"banner on the live system: {b!r}")
+        st = self.gwait(vm, "keymap", 420)
+        rc, out = self.gsh(vm, "ps -eo comm,args | grep -E '^cage' | head -2; cat /run/live-installer/gui-result 2>/dev/null; ps -eo comm | grep -qx cage && echo CAGE-RUNNING-$((40+2))")
+        self.step("gui-running-in-cage-kiosk", "CAGE-RUNNING-42" in (out or ""), (out or "")[-120:].replace("\n", " "))
+        # AT-SPI: the accessibility tree must expose the sidebar, the headline widgets and the buttons
+        want = ["Next", "Abort", "High contrast", "Larger text", "Server (default)", "1  Keyboard", "11  Finish"]
+        n, missing = 0, want
+        for _ in range(10):                       # the toolkit registers with the accessibility bus a few seconds after the first frame
+            n, missing = self.gnames(vm, *want)
+            if n > 40 and not missing:
+                break
+            time.sleep(6)
+        self.step("gui-atspi-tree", n > 40 and not missing, f"{n} accessible nodes; missing: {missing}")
+        self.gshot(vm, "keyboard", "Language, keyboard and install type (Server default)")
+        # timezone through the keyboard-only picker
+        ok = self.gfocus(vm, "UTC")
+        self.step("gui-keyboard-tab-navigation", ok, "Tab reaches the time zone button (AT-SPI reports the focused widget)")
+        self.gkey(vm, "spc", pause=1)
+        self.gtype(vm, "Berlin")
+        time.sleep(1)
+        self.gshot(vm, "keyboard-timezone-picker", "Time zone picker: type to filter, Enter to choose")
+        self.gkey(vm, "ret", pause=1)
+        self.gshot(vm, "keyboard-filled", "Time zone set to Europe/Berlin")
+        self.gnext(vm, "hostname")
+        self.gshot(vm, "hostname", "Host name")
+        self.gkey(vm, "ctrl", "a")
+        self.gtype(vm, f"{a.project}-t1.test.lan")
+        self.gshot(vm, "hostname-filled", "Host name typed")
+        ok = self.gclick(vm, "Next")                 # a real pointer click (usb-tablet) on the Next button
+        st = self.gwait(vm, "disk", 30)
+        self.step("gui-mouse-click-next", ok and st.get("page") == "disk", "pointer click on 'Next' moved to the disk screen")
+        # ---- disk
+        if a.project == "horcrux":
+            # the proposal depends on the machine (ZFS from 8 GB RAM, encrypted XFS below): default runs leave it alone and only assert it
+            self.gshot(vm, "disk-default", "File system default proposed by the installer, with the reason" + (": " + a.fs if a.fs_default else ""))
+            if not a.fs_default:
+                self.gclick(vm, {"ext4": "ext4", "xfs": "XFS", "zfs": "ZFS", "xfs-luks": "XFS in an encrypted"}[a.fs])
+                time.sleep(1)
+            if a.fs == "xfs-luks":
+                ok = self.gfocus(vm, "Disk passphrase")
+                self.gtype(vm, PW)
+                ok = self.gfocus(vm, "Confirm passphrase") and ok
+                self.gtype(vm, PW)
+                self.step("gui-luks-passphrase-typed", ok, "disk passphrase + confirmation typed with the keyboard")
+            if a.fs == "zfs":
+                self.gexpand(vm)
+                time.sleep(1)
+                if mirror:
+                    self.gfocus(vm, "mirror")
+                    self.gkey(vm, "spc")
+        self.gshot(vm, "disk", "File system and target disk (nothing selected)")
+        self.gexpand(vm)
+        time.sleep(1)
+        self.gshot(vm, "disk-advanced", "Disk page with Advanced options expanded")
+        ok = self.gfocus(vm, "Disk /dev/vda")
+        self.step("gui-disk-checkbox-focus", ok, "keyboard focus on /dev/vda")
+        self.gkey(vm, "spc", pause=1)
+        if mirror:
+            self.gfocus(vm, "Disk /dev/vdb")
+            self.gkey(vm, "spc", pause=1)
+        self.gshot(vm, "disk-selected", "Disk selected: live layout preview (ESP/boot/root, no swap on a server) and the existing contents to be erased")
+        self.gnext(vm, "rootpass")
+        # ---- password
+        self.gshot(vm, "password", "Administrator account")
+        self.gtype(vm, PW)
+        self.gkey(vm, "tab")
+        self.gtype(vm, PW)
+        self.gkey(vm, "tab")
+        self.gtype(vm, "ops@example.test")
+        self.gexpand(vm)
+        time.sleep(1)
+        self.gfocus(vm, "SSH public key")
+        self.gtype(vm, self.pub)
+        self.gshot(vm, "password-advanced", "Administrator account with the SSH key under Advanced options")
+        self.gnext(vm, "netconfig")
+        # ---- network
+        self.gshot(vm, "network", "Network: link state per NIC, addressing")
+        self.gexpand(vm)
+        time.sleep(1)
+        if a.project == "horcrux":
+            if a.static_ip:
+                self.gclick(vm, "Static address")             # radio buttons: a real pointer click (Tab does not reach the 2nd radio of a group)
+                time.sleep(1)
+                self.gfocus(vm, "IP address / prefix")
+                self.gtype(vm, f"{a.static_ip}/24")
+                self.gkey(vm, "tab"); self.gtype(vm, "10.0.2.2")
+                self.gkey(vm, "tab"); self.gtype(vm, "10.0.2.3")
+                self.gshot(vm, "network-static-advanced", "Network with a static address (Advanced options)")
+            else:
+                self.gclick(vm, "Static address")
+                time.sleep(1.5)
+                self.gshot(vm, "network-static-advanced", "Network with 'Static address' chosen: address, gateway and DNS fields appear")
+                self.gclick(vm, "DHCP")
+                time.sleep(1)
+        else:
+            self.gshot(vm, "network-advanced", "WAN/LAN assignment and addressing (Advanced options)")
+            self.gfocus(vm, "LAN address/prefix")
+            self.gkey(vm, "ctrl", "a")
+            self.gtype(vm, f"{a.lan_ip}/24")
+        self.gnext(vm, "services")
+        self.gshot(vm, "services", "Services")
+        self.gnext(vm, "hardening")
+        self.gshot(vm, "hardening", "Security hardening (secure defaults)")
+        self.gexpand(vm)
+        time.sleep(1)
+        if a.ssh_password_opt_in:
+            self.gfocus(vm, "Allow SSH password login"); self.gkey(vm, "spc")
+        if a.console_open:
+            self.gfocus(vm, "Open console menu"); self.gkey(vm, "spc")
+        self.gshot(vm, "hardening-advanced", "Hardening with Advanced options (risky options OFF by default, with warnings)")
+        for name, shot, desc in (("High contrast", "hardening-high-contrast", "High-contrast theme (accessibility switch, top right)"),
+                                 ("Larger text", "hardening-larger-text", "Larger text (accessibility switch, top right)")):
+            ok = self.gfocus(vm, name)
+            self.step(f"gui-a11y-{name.split()[0].lower()}-switch", ok, f"'{name}' reachable with the keyboard")
+            self.gkey(vm, "spc", pause=2)
+            self.gshot(vm, shot, desc)
+            self.gkey(vm, "spc", pause=2)
+        self.gnext(vm, "use_flags")
+        # ---- USE flags
+        st = self.gwait(vm, "use_flags", 60)
+        self.gshot(vm, "use-flags", "Software (USE flags): presets, searchable flag list, Portage sanity check, binary vs source impact")
+        self.step("gui-use-flags-default-has-no-errors", not [i for i in st.get("issues", []) if i[0] == "error"], f"{len(st.get('issues', []))} notes")
+        self.gtype_search(vm, "ssl")
+        self.gfocus(vm, "USE flag ssl:")
+        self.gkey(vm, "spc", pause=2)
+        st = self.gwait(vm, "use_flags", 30, lambda s: any(i[0] == "error" for i in s.get("issues", [])))
+        self.step("gui-use-flags-sanity-check-error", any(i[0] == "error" for i in st.get("issues", [])) and not st.get("next_enabled", True),
+                  "disabling 'ssl' is refused: " + (next((i[2] for i in st.get("issues", []) if i[0] == "error"), "")[:140]))
+        self.gshot(vm, "use-flags-error", "USE flag sanity check ERROR (ssl switched off breaks installed packages) - Next is blocked")
+        self.gkey(vm, "spc", pause=2)                      # back on
+        st = self.gwait(vm, "use_flags", 30, lambda s: not any(i[0] == "error" for i in s.get("issues", [])))
+        self.step("gui-use-flags-error-cleared", st.get("next_enabled", False), "ssl back on: Next enabled again")
+        self.atspi(vm, "press", "Minimal")
+        time.sleep(2)
+        self.gshot(vm, "use-flags-minimal", "Minimal preset applied: source-build impact estimate")
+        self.atspi(vm, "press", "Recommended")
+        time.sleep(2)
+        self.gnext(vm, "review")
+        # ---- review + install
+        self.gshot(vm, "review", "Review: the plan of every stage; disk erase confirmation")
+        self.gfocus(vm, "Confirm erasing the disk")
+        self.gkey(vm, "spc", pause=1)
+        self.gshot(vm, "review-confirmed", "Erase confirmed; Install enabled")
+        self.gnext(vm, "install")
+        taken = set()
+        t = time.time()
+        while time.time() - t < 1700:
+            st = self.gstate(vm)
+            pct = st.get("pct", 0)
+            if st.get("page") == "install":
+                for mark, name in ((1, "progress-start"), (40, "progress-middle")):
+                    if pct >= mark and name not in taken and (name != "progress-start" or pct < 30):
+                        taken.add(name)
+                        self.gshot(vm, name, f"Installing: {pct}% {st.get('note', '')}")
+                if pct >= 90 and "progress-end" not in taken:
+                    taken.add("progress-end")
+                    self.gshot(vm, "progress-end", f"Installing: {pct}% {st.get('note', '')}")
+            if st.get("page") == "finish":
+                break
+            time.sleep(6)
+        self.step("gui-install-finished", st.get("page") == "finish", f"after {int(time.time() - t)}s; progress shots {sorted(taken)}")
+        self.gshot(vm, "finish", "Installation complete: web UI address and login")
+        seen = False
+        for _ in range(8):                        # the accessibility tree follows the page change a moment later
+            rc, _o = self.atspi(vm, "has", "Reboot")
+            if rc == 0:
+                seen = True
+                break
+            time.sleep(4)
+        self.step("gui-reboot-button-in-atspi-tree", seen, "'Reboot' button is exposed to assistive technology")
+        rc, out = self.atspi(vm, "press", "Reboot")
+        if rc == 0 or rc is None:
+            self.step("gui-reboot-pressed", True, "Reboot pressed through AT-SPI (the VM stops: -no-reboot)")
+        else:                                       # fall back to the keyboard: Tab to the button, Enter
+            ok = self.gfocus(vm, "Reboot")
+            self.gkey(vm, "ret")
+            self.step("gui-reboot-pressed", ok, f"AT-SPI press said {out.strip()[:60]!r}; keyboard Tab+Enter on 'Reboot'")
+
+    def gexpand(self, vm):
+        """open the 'Advanced options' expander with the keyboard (Tab to it, Space)"""
+        ok = self.gfocus(vm, "Advanced options")
+        self.gkey(vm, "spc", pause=1)
+        return ok
+
+    def gtype_search(self, vm, text):
+        self.gfocus(vm, "Search USE flags")
+        self.gtype(vm, text)
+        time.sleep(1.5)
+
+    def gclick(self, vm, name, scr=(1280, 800)):
+        """click a button with the (absolute) pointer: position from AT-SPI, events through QMP"""
+        rc, out = self.atspi(vm, "extents", name)
+        m = re.search(r"EXTENTS (-?\d+) (-?\d+) (\d+) (\d+)", out or "")
+        if not m:
+            return False
+        x, y, w, h = map(int, m.groups())
+        ax, ay = int((x + w / 2) * 32767 / scr[0]), int((y + h / 2) * 32767 / scr[1])
+        ev = lambda d: vm.qmp("input-send-event", events=d)       # noqa: E731
+        ev([{"type": "abs", "data": {"axis": "x", "value": ax}}, {"type": "abs", "data": {"axis": "y", "value": ay}}])
+        time.sleep(0.5)
+        ev([{"type": "btn", "data": {"button": "left", "down": True}}])
+        time.sleep(0.15)
+        ev([{"type": "btn", "data": {"button": "left", "down": False}}])
+        time.sleep(0.4)
+        ev([{"type": "abs", "data": {"axis": "x", "value": int(900 * 32767 / scr[0])}}, {"type": "abs", "data": {"axis": "y", "value": int(720 * 32767 / scr[1])}}])   # park the pointer on blank space (not over a label)
+        return True
+
+    def gnext(self, vm, page):
+        """Alt+Right (the Next shortcut), then wait for the next page"""
+        self.gkey(vm, "alt", "right")
+        st = self.gwait(vm, page, 60)
+        self.step(f"gui-page-{page}", True, f"title: {st.get('title')}")
+        return st
+
+    def gui_first_boot_shots(self, vm):
+        """installed system: the VGA console login + console menu, saved with the GUI shots"""
+        kb = Kbd(vm, True)
+        time.sleep(3)
+        self.gshot(vm, "firstboot-login", "First boot: login prompt on the console")
+        for tx in ("root\n", PW + "\n"):
+            kb.text(tx)
+            time.sleep(4)
+        time.sleep(4)
+        self.gshot(vm, "firstboot-console-menu", "First boot: console menu after the root login (assign interfaces, set IP, reset password, ...)")
+
     def disk_idle(self):
         """finish-screen heuristic for the VGA run: >1 GB written to the target (ZFS compresses) and nothing written for 75 s"""
         try:
@@ -793,6 +1176,51 @@ class Runner:
             return st.st_blocks * 512 > 1_000_000_000 and time.time() - st.st_mtime > 75
         except OSError:
             return False
+
+    def disk_checks(self):
+        """the GPT the installer wrote (read from the qcow2 with qemu-img dd, no mount): servers/firewalls have NO swap partition; xfs-luks has a LUKS2 header"""
+        a = self.a
+        hdr = os.path.join(a.out, "gpt-head.bin")
+        try:
+            subprocess.run(["qemu-img", "dd", "-f", "qcow2", "-O", "raw", "bs=512", "count=40", f"if={self.disk}", f"of={hdr}"], check=True, capture_output=True, timeout=120)
+            raw = open(hdr, "rb").read()
+        except (OSError, subprocess.SubprocessError) as e:
+            self.step("disk-gpt-readable", False, f"cannot read the target GPT: {e}")
+            return
+        if raw[512:520] != b"EFI PART":
+            self.step("disk-gpt-readable", False, "no GPT signature")
+            return
+        n, size = struct.unpack_from("<II", raw, 512 + 80)
+        base = struct.unpack_from("<Q", raw, 512 + 72)[0] * 512
+        SWAP = "0657fd6d-a4ab-43c4-84e5-0933c84b4f4f"
+        parts = []
+        for i in range(n):
+            e = raw[base + i * size: base + (i + 1) * size]
+            if len(e) < 128 or e[:16] == bytes(16):
+                continue
+            tguid = str(uuid.UUID(bytes_le=e[:16]))
+            first = struct.unpack_from("<Q", e, 32)[0]
+            name = e[56:128].decode("utf-16le", "ignore").rstrip("\x00")
+            parts.append((i + 1, tguid, first, name))
+        desc = ", ".join(f"{no}:{nm or '-'}" for no, _t, _f, nm in parts)
+        swaps = [pt for pt in parts if pt[1] == SWAP or "swap" in pt[3].lower()]
+        self.step("disk-no-swap-partition", not swaps, f"partitions written: {desc}" + (f"; SWAP PARTITION FOUND: {swaps}" if swaps else "; none of them swap (zram only)"))
+        if a.fs == "xfs-luks":
+            lu = [pt for pt in parts if pt[3] in ("root", "cryptroot") or pt[1] == "ca7d7ccb-63ed-4c53-861c-1742536059cc"]
+            ok = False
+            if lu:
+                try:
+                    r = subprocess.run(["qemu-io", "-r", "-f", "qcow2", "-c", f"read -v {lu[0][2] * 512} 16", self.disk], capture_output=True, text=True, timeout=60)
+                    hexs = re.findall(r"^[0-9a-f]+:\s+((?:[0-9a-f]{2} ){1,16})", r.stdout, re.M)
+                    blk = bytes.fromhex("".join(hexs[:1]).replace(" ", ""))
+                    ok = blk[:6] == b"LUKS\xba\xbe" and blk[6:8] == b"\x00\x02"
+                except (OSError, subprocess.SubprocessError, ValueError):
+                    ok = False
+            self.step("disk-root-is-luks2", ok, f"LUKS2 header at the start of partition {lu[0][0] if lu else '?'}")
+        try:
+            os.unlink(hdr)
+        except OSError:
+            pass
 
     # ---- phase 2: boot the installed system and assert
     def phase2(self, nvars):
@@ -845,6 +1273,13 @@ class Runner:
                 sc, code, _ = http(FWD_WAN, "/login", timeout=6)
                 self.step("patronus-wan-web-blocked", code == 0, f"WAN 10.0.2.15:8443 -> {code or 'no answer (dropped/refused)'}")
             vm.shot("installed-running")
+            if a.flow == "gui":
+                self.gui_first_boot_shots(vm)
+                if a.hold_file:
+                    end = time.time() + 1500
+                    print("HOLD: installed system is up; waiting for", a.hold_file, flush=True)
+                    while time.time() < end and not os.path.exists(a.hold_file) and vm.alive():
+                        time.sleep(3)
             if serial:
                 self.console_menu_checks(vm)
             else:
@@ -1094,8 +1529,32 @@ class Runner:
         got = (rootlogin.group(1) if rootlogin else "?", pwauth.group(1) if pwauth else "?")
         ok = got == ("yes", "yes") if a.ssh_password_opt_in else (got[0] in ("prohibit-password", "without-password") and got[1] == "no")
         self.step("sshd-effective-config", ok, f"PermitRootLogin={got[0]} PasswordAuthentication={got[1]}")
+        if a.flow == "auto":
+            rc, uf = ssh(FWD_SSH, self.key, "cat /etc/portage/package.use/00-live-installer; echo ---; cat /etc/live-installer/use-preset; echo ---; head -3 /etc/live-installer/use-rebuild-pending; echo ---; sysctl -n kernel.kptr_restrict")
+            parts = uf.split("---")
+            self.step("answer-file-use-flags-applied", rc == 0 and len(parts) >= 3 and "*/* -" in parts[0] and "minimal" in parts[1], re.sub(r"\s+", " ", uf)[:220])
+            self.step("hardening-sysctl-applied", parts[-1].strip().endswith("2"), "kernel.kptr_restrict=" + parts[-1].strip()[-3:])
+        rc, g = ssh(FWD_SSH, self.key, "command -v cage; ls /var/db/pkg/gui-wm /var/db/pkg/gui-libs 2>&1 | head -3; python3 -c 'import gi' 2>&1 | tail -1; echo END")
+        self.step("graphical-installer-stack-removed-from-server", "/cage" not in g.split("END")[0].replace("No such", "") and "ModuleNotFound" in g and "gtk" not in g, re.sub(r"\s+", " ", g)[:160])
         self.step("hostname-and-timezone", f"{a.project}-t1" in out and "Europe/Berlin" in out, "host name + Europe/Berlin applied")
-        self.step("root-filesystem", a.fs in out.replace("\r", "").split("\n"), f"/ is {a.fs}")
+        self.step("root-filesystem", ("xfs" if a.fs == "xfs-luks" else a.fs) in out.replace("\r", "").split("\n"), f"/ is {a.fs}" + (" (the installer's own default, never ext4)" if a.fs_default else ""))
+        # OWNER RULE: a server/firewall install has NO on-disk swap (partition, LV or file): zram is the only swap
+        rc, sw = ssh(FWD_SSH, self.key, "echo ACTIVE; swapon --noheadings --raw --show=NAME,TYPE; echo FSTAB; grep -E '^[^#]*[[:space:]]swap[[:space:]]' /etc/fstab; echo BLK; blkid -t TYPE=swap -o device | grep -v '^/dev/zram'; "
+                     "lsblk -rno NAME,PARTTYPE,PARTLABEL | grep -v '^zram' | grep -iE '0657fd6d-a4ab-43c4-84e5-0933c84b4f4f|swap'; echo FILES; find / -xdev -maxdepth 2 \\( -name 'swapfile' -o -name 'swap.img' -o -name '*.swp' -size +1M \\) 2>/dev/null; echo END")
+        sec, cur = {}, None
+        for ln in sw.replace("\r", "").splitlines():
+            if ln.strip() in ("ACTIVE", "FSTAB", "BLK", "FILES", "END"):
+                cur = ln.strip()
+                sec[cur] = ""
+            elif cur:
+                sec[cur] += ln + "\n"
+        sec = {k: v.strip() for k, v in sec.items()}
+        active = [l for l in sec.get("ACTIVE", "").splitlines() if l.strip()]
+        on_disk = [l for l in active if not l.startswith("/dev/zram")]
+        bad = on_disk or sec.get("FSTAB") or sec.get("BLK") or sec.get("FILES")
+        self.step("server-no-ondisk-swap", rc == 0 and "END" in sw and not bad,
+                  "active swap: " + (", ".join(active) or "none") + "; fstab/blkid/partitions/files with swap: " + ("NONE" if not bad else re.sub(r"\s+", " ", sw)[:160]))
+        self.step("server-zram-swap-active", any(l.startswith("/dev/zram") for l in active), "zram is the swap: " + ", ".join(active)[:100])
         if a.fs == "zfs":
             rc, z = ssh(FWD_SSH, self.key, "zpool status rpool; zpool list -H -o name,health rpool")
             ok = "ONLINE" in z and (a.zfs_raid != "mirror" or ("mirror-0" in z and z.count("vd") >= 2))
@@ -1111,13 +1570,16 @@ def main():
     ap.add_argument("--slow", type=float, default=0, help="timeout multiplier for emulation (default: env QEMU_SLOW, else 1 with KVM / 3 native TCG / 10 cross TCG)")
     ap.add_argument("--mode", choices=["uefi", "bios"], default="uefi")
     ap.add_argument("--media", choices=["usb", "cdrom"], default="usb")
-    ap.add_argument("--flow", choices=["auto", "tui", "tui-vga", "fallback"], default="auto")
-    ap.add_argument("--fs", choices=["ext4", "xfs", "zfs"], default="ext4")
-    ap.add_argument("--zfs-raid", choices=["single", "mirror"], default="mirror")
+    ap.add_argument("--flow", choices=["auto", "tui", "tui-vga", "fallback", "gui"], default="auto")
+    ap.add_argument("--fs", choices=["default", "zfs", "xfs-luks", "xfs", "ext4"], default="default",
+                    help="default = do NOT choose: the installer proposes (ZFS with >= 8 GB RAM on Horcrux, XFS+LUKS below 8 GB, XFS on the Patronus image) and the test asserts that proposal")
+    ap.add_argument("--install-only", action="store_true", help="stop after the install and check the written disk (GPT, LUKS header) without booting it (xfs-luks needs a typed passphrase at every boot)")
+    ap.add_argument("--zfs-raid", choices=["single", "mirror"], default=None)
     ap.add_argument("--ssh-password-opt-in", action="store_true")
     ap.add_argument("--static-ip", default="", help="horcrux management address (empty = DHCP)")
     ap.add_argument("--lan-ip", default="10.77.0.1", help="patronus LAN address")
     ap.add_argument("--console-open", action="store_true", help="installer option: open console menu (no login on the console)")
+    ap.add_argument("--hold-file", default="", help="gui flow: before powering the installed system off, wait until this file exists (screenshot of the web UI from outside)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--keep-disks", action="store_true", help="keep target*.qcow2/answers.img/OVMF_VARS.fd in --out (default: delete them when the run ends, pass or fail; they are 20-40 GB of regenerable state)")
     ap.add_argument("--mem", type=int, default=4096)
@@ -1127,6 +1589,10 @@ def main():
     ap.add_argument("--disk-gb", type=int, default=24)
     args = ap.parse_args()
     ARCH = args.arch
+    args.fs_default = args.fs == "default"
+    if args.fs_default:       # the installer's own default: ZFS >= 8 GB RAM (Horcrux), XFS+LUKS below, XFS where the image has no ZFS (Patronus)
+        args.fs = "xfs" if args.project == "patronus" else ("zfs" if args.mem >= 8192 else "xfs-luks")
+    args.zfs_raid = args.zfs_raid or ("single" if args.fs_default else "mirror")
     if args.mode == "bios" and not ARCHS[ARCH]["bios"]:
         ap.error(f"{ARCH} has no legacy BIOS: use --mode uefi")
     kvm = os.path.exists("/dev/kvm") and ARCH == HOST_ARCH

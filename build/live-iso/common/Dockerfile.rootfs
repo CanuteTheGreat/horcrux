@@ -63,12 +63,33 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     set -e; pk=$(grep -v '^#' /tmp/packages-extra.txt | sed -E "s/^$(uname -m)\\? //; /^[a-z0-9_]+\\? /d" | tr '\n' ' '); \
     if [ -n "$(echo $pk)" ]; then emerge --noreplace $pk; fi
 
+# Graphical installer stack (cage kiosk from a local ebuild + GTK4 on Wayland + PyGObject), --oneshot: a Server install
+# removes it again (live-only-packages, computed in setup-rootfs.sh)
+COPY common/portage-local/ /var/db/repos/live-local/
+COPY common/portage-gui/package.use /etc/portage/package.use/gui
+COPY common/packages-gui.txt /tmp/packages-gui.txt
+RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
+    --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
+    --mount=type=cache,id=ccache-${ARCH},target=/var/cache/ccache,sharing=locked \
+    set -e; mkdir -p /etc/portage/repos.conf /etc/live-installer; \
+    printf '[live-local]\nlocation = /var/db/repos/live-local\nauto-sync = no\n' > /etc/portage/repos.conf/live-local.conf; \
+    (cd /var/db/repos/live-local/gui-wm/cage && ebuild cage-0.2.1.ebuild manifest); \
+    dc() { emerge --depclean --pretend --with-bdeps=n 2>&1 | sed -n 's/^All selected packages: //p' | tr ' ' '\n' | grep / | sort; }; \
+    dc > /tmp/orphans.before; \
+    if emerge --oneshot $(grep -v '^#' /tmp/packages-gui.txt | tr '\n' ' '); then \
+      dc > /tmp/orphans.after; comm -13 /tmp/orphans.before /tmp/orphans.after > /etc/live-installer/live-only-packages; \
+      echo "live-only packages: $(wc -l < /etc/live-installer/live-only-packages)"; head -80 /etc/live-installer/live-only-packages; \
+    elif [ "${ARCH}" = riscv64 ] || [ "${ARCH}" = aarch64 ]; then \
+      echo "NOTE: the graphical installer stack could not be built for ${ARCH}: this image has the text installer only"; : > /etc/live-installer/live-only-packages; \
+    else exit 1; fi
+
 # Project application (binaries, UI, installer, init scripts ...)
 COPY --from=app /out/ /
 COPY project/overlay/ /
 COPY common/overlay/ /
 
 COPY common/setup-rootfs.sh /tmp/setup-rootfs.sh
+COPY common/mk-portage-meta.py /tmp/mk-portage-meta.py
 COPY project/setup.sh /tmp/project-setup.sh
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \

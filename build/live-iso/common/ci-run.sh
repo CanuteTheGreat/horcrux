@@ -86,6 +86,8 @@ if [ "$result" = pass ]; then
       "uefi-usb-tui-vga-zfs-mirror-static|--mode uefi --media usb --flow tui-vga --fs zfs --zfs-raid mirror --static-ip 10.0.2.88"
       "bios-cdrom-fallback-no-answer-file|--mode bios --media cdrom --flow fallback"
       "uefi-usb-auto-zfs-mirror-sshpw|--mode uefi --media usb --flow auto --fs zfs --zfs-raid mirror --static-ip 10.0.2.99 --ssh-password-opt-in"
+      "uefi-usb-gui-ext4|--mode uefi --media usb --flow gui --fs ext4"
+      "bios-cdrom-gui-xfs-static|--mode bios --media cdrom --flow gui --fs xfs --static-ip 10.0.2.66"
     )
   else
     MATRIX=(
@@ -94,6 +96,8 @@ if [ "$result" = pass ]; then
       "uefi-usb-tui-vga|--mode uefi --media usb --flow tui-vga"
       "uefi-usb-auto-openconsole|--mode uefi --media usb --flow auto --console-open --restarts 2"
       "bios-cdrom-fallback-no-answer-file|--mode bios --media cdrom --flow fallback"
+      "uefi-usb-gui|--mode uefi --media usb --flow gui"
+      "bios-cdrom-gui|--mode bios --media cdrom --flow gui"
     )
   fi
   else
@@ -162,7 +166,7 @@ if [ "$result" = pass ]; then
   TEST_S=$(( $(date +%s)-t ))
 fi
 ACCEL=KVM; [ -e /dev/kvm ] && [ "$ARCH" = "$HOST_ARCH" ] || ACCEL="TCG emulation, no KVM"
-[ "$result" = pass ] && summary="PASS ($ARCH, QEMU $ACCEL): ${#MATRIX[@]} QEMU runs (boot, install, reboot; $([ "$ARCH" = x86_64 ] && echo 'UEFI+USB, BIOS+CD; answer-file, serial TUI, VGA TUI, no-answer-file fallback' || echo 'UEFI, USB + optical; answer-file, serial TUI, VGA TUI, no-answer-file fallback')) - installed system refuses password root SSH, accepts the key, serves the web UI on the chosen IP (build ${BUILD_S}s, test ${TEST_S}s)"
+[ "$result" = pass ] && summary="PASS ($ARCH, QEMU $ACCEL): ${#MATRIX[@]} QEMU runs (boot, install, reboot; $([ "$ARCH" = x86_64 ] && echo 'UEFI+USB, BIOS+CD; answer-file, serial TUI, VGA TUI, graphical installer driven by keyboard + pointer + AT-SPI, no-answer-file fallback' || echo 'UEFI, USB + optical; answer-file, serial TUI, VGA TUI, graphical installer driven by keyboard + pointer + AT-SPI, no-answer-file fallback')) - installed system refuses password root SSH, accepts the key, serves the web UI on the chosen IP (build ${BUILD_S}s, test ${TEST_S}s)"
 
 # evidence bundle (serial logs, screenshots, result.json - small)
 ( cd "$EVI" && tar czf "$OUT/$PROJECT-$VPFX$suffix-$ARCH-test-evidence.tgz" --exclude='target*.qcow2' --exclude='*.fd' --exclude='*.qmp' --exclude=test_key . )

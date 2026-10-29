@@ -77,9 +77,9 @@ boot the same menu.
 
 | Key | Entry | What it does |
 |---|---|---|
-| `1` | **Graphical install** (default) | Starts the graphical installer through the hook `/usr/libexec/live-installer-gui`. Until that GUI ships in the image the hook is empty and the entry runs the text installer (it prints `graphical installer not available in this image: using the text installer`). |
+| `1` | **Graphical install** (default) | Starts the graphical installer (GTK4 in a cage kiosk) through the hook `/usr/libexec/live-installer-gui`; without a usable display it falls back to the text installer (see *Graphical installer*). |
 | `2` | Install (text mode) | The guided text installer on the screen (tty1). |
-| `3` | Advanced (expert) install | The text installer with `LIVE_INSTALLER_EXPERT=1` (the stage backend reads it to show the expert pages). |
+| `3` | Advanced (expert) install | The text installer with `LIVE_INSTALLER_EXPERT=1`: every screen opens with its *Advanced options* shown. |
 | `4` | Automated install (ERASES the target disk) | Answer-file install, see "Unattended install". No answer file: falls back to the guided installer. |
 | `5` | **Rescue mode** | Finds installed systems and offers repairs, see "Rescue mode". |
 | `6` | **Rescue (forensic, no-touch)** | Nothing is touched: all disks read-only at the block layer, see "Forensic rescue". |
@@ -103,13 +103,13 @@ before you type `ERASE` on the summary screen.
 
    ![language, keyboard, time zone](images/installer/horcrux/01-language-keyboard-timezone.png)
 
-2. **File system** - **XFS in a LUKS2 container** (the default on machines with **less than 8 GB RAM**), ext4, XFS, or ZFS (single disk or a two-disk **mirror**, pool `rpool`, lz4 compression; the default on 8 GB and up). XFS+LUKS asks for a disk passphrase (>= 12 characters, typed at every boot), uses a 1 GiB unencrypted ESP + 1 GiB unencrypted `/boot` + LUKS2 (argon2id, memory cost 3/16 of RAM capped at 1 GiB) holding XFS, and trims weekly (`fstrim`, no `discard` mount option). The initramfs carries the USB/HID keyboard drivers (`xhci`, `usbhid`, `hid_multitouch`, `hid_microsoft`) so a Type Cover or USB keyboard works at the passphrase prompt. See [SURFACE.md](SURFACE.md).
+2. **File system** - the default is **ZFS** (single disk or a two-disk **mirror**, pool `rpool`, lz4 compression). The installer falls back to **XFS** (in a **LUKS2** container where encryption is offered) when ZFS is unsuitable: **less than 8 GB RAM**, the ZFS module is not available for the kernel/architecture (e.g. riscv64), or the image does not ship ZFS (Patronus: plain XFS). The disk page says which and why. ext4 is never the default, only a manual choice. XFS+LUKS asks for a disk passphrase (>= 12 characters, typed at every boot), uses a 1 GiB unencrypted ESP + 1 GiB unencrypted `/boot` + LUKS2 (argon2id, memory cost 3/16 of RAM capped at 1 GiB) holding XFS, and trims weekly (`fstrim`, no `discard` mount option). The initramfs carries the USB/HID keyboard drivers (`xhci`, `usbhid`, `hid_multitouch`, `hid_microsoft`) so a Type Cover or USB keyboard works at the passphrase prompt. See [SURFACE.md](SURFACE.md).
 
    **Swap / hibernate** (same page, shown for every file system except ZFS; `swap = auto|none|hibernate` in the answer file):
 
    | | |
    |---|---|
-   | **Server** (no battery, DMI chassis type is not a portable one) | **no swap at all**: no swap partition, no LVM, no zram, nothing in `fstab`. `auto` resolves to this. |
+   | **Server** (no battery, DMI chassis type is not a portable one) | **no swap at all**: no LVM, no swap partition, no swapfile, no swap entry in `fstab`: only zram (compressed RAM swap, `zram-swap` service). `auto` resolves to this. |
    | **Portable** (a *system* battery in `/sys/class/power_supply`, or DMI chassis type 8 Portable / 9 Laptop / 10 Notebook / 11 Handheld / 14 Sub Notebook / 30 Tablet / 31 Convertible / 32 Detachable; or a hardware profile such as Surface; or the *desktop* install type) | **encrypted hibernate swap of RAM x 1.125 rounded up to whole GiB** (4 GB tablet -> 4.5 GiB, 8 GB -> 9 GiB, 16 GB -> 18 GiB). On XFS+LUKS the LUKS2 container holds **LVM** (VG `hxvg`: LV `root` = XFS, LV `swap`), so the one passphrase unlocks both and the initramfs resumes from the swap LV *before any file system is mounted*. On ext4/XFS it is the plain swap partition (the image is **not encrypted** there: choose XFS+LUKS for a laptop). Peripheral batteries (wireless mouse/keyboard, scope `Device`) and a UPS do not count. |
 
    The installer shows what `auto` would do on this machine (the first option reads e.g. *Automatic: 4.5 GiB hibernate swap ... (hardware profile surface says swap = hibernate)*) and repeats it on the summary page; `Hibernate swap` / `No swap` override it. With `hibernate` the installer refuses a disk smaller than swap + 16 GiB; with `auto` it falls back to no swap and says so in the log. ZFS is not offered the choice yet (encrypted ZFS gets its own LUKS2 swap partition from the same stage: `liveinst/portableswap.py`).
@@ -146,6 +146,77 @@ the nightly test.
 
 After the install: remove the stick and boot. The web UI is at `https://<ip>:8006` (self-signed
 certificate; user `admin`, the password you set).
+
+## Graphical installer (default)
+
+The default boot entry, **Graphical install**, starts a kiosk (the `cage` Wayland compositor, one fullscreen window) running a
+GTK4 installer. It is the same installer as the text one - both walk the same *stages* and write the same answer-file model - with:
+
+* one screen per stage, a **step sidebar**, **Back / Next** (Alt+Left / Alt+Right), and an **Advanced options** expander on every screen that has expert settings;
+* a **live disk-layout preview** (ESP/BIOS-boot, `/boot`, swap, root drawn to scale, next to the partitions that will be destroyed);
+* **link state per NIC** (up / no link / Wi-Fi, address) refreshed live on the network screen;
+* **mouse, keyboard and touch**: large hit targets, an **on-screen keyboard** (top right) for machines without a keyboard, a searchable list instead of drop-downs for long lists (time zone, keyboard layout);
+* **HiDPI**: the interface scales with the screen (override with `LIVEINST_SCALE=2`), plus **High contrast** and **Larger text** switches (top right);
+* product branding (colour and monogram from the product profile).
+
+If there is no usable display (no DRM device, `nomodeset`, a serial console, or the GUI cannot start) the installer **falls back to the text
+installer automatically**. The text installer can also be chosen directly: boot entry *Install (text mode)* (hotkey `2`). In the *Serial console* submenu the
+*Graphical install* entry keeps the GUI on the screen and gives the UART a root shell (support, tests). The keyboard layout chosen on the first screen is applied to the compositor too.
+
+Support and tests: `/usr/libexec/live-installer-atspi tree|press|focus|settext` talks to the GUI through AT-SPI (the accessibility tree
+is complete: every control has a name), and `/run/live-installer/gui-status.json` records the current screen.
+
+### Install stages
+
+The installer is a list of small stages, like FreeBSD's `bsdinstall`. Each stage can describe what it will do (`plan`) without touching
+anything, and applies it in sequence. The GUI, the text installer and the answer file all run the same list; `live-installer --plan --answers
+answer.toml` prints the plan of an answer file.
+
+| stage | what it does |
+|---|---|
+| `keymap` | install type (**Server**, default; *Workstation* is reserved for a later desktop profile), language, keyboard layout, time zone |
+| `hostname` | host name (FQDN) |
+| `disk` | file system, disk(s), partition layout (ext4, XFS, ZFS single/mirror) |
+| `extract` | copy the system image to the new root |
+| `rootpass` | administrator password (web `admin` + console `root`), e-mail, optional SSH key |
+| `netconfig` | interfaces and addressing (link state live; Wi-Fi) |
+| `services` | which optional services start at boot |
+| `hardening` | SSH on/off, key-only (password login is an opt-in with a warning), kernel/network sysctl hardening, login-first vs open console menu |
+| `use_flags` | Portage USE flags (below) |
+| `finish` | boot loader, unmount |
+
+On a **Server** install the graphical stack is removed again from the installed system (it is live-only); a future Workstation install keeps it.
+
+### USE flags
+
+The **Software** screen (graphical and text) lists *every* Portage USE flag with its description, grouped (security, networking,
+virtualization, storage, graphics, audio/video, hardware, compression, languages, documentation/development, internationalization) and searchable by flag, description or package.
+
+* **Presets**: *Recommended* (the tested image defaults; every package stays a pre-built binary), *Minimal* (no desktop/sound/docs/debug features), *Full* (extra protocols, compression, hardware features).
+* **Portage sanity check**, live while you click: `REQUIRED_USE` violations are explained in plain language ("because 'c' is on, 'a' must be on"), USE-dependency and blocker conflicts between installed packages are reported the way Portage would, **product-critical flags** (listed in the profile, e.g. the QEMU/libvirt flags Horcrux needs) are hard errors, and **security warnings** appear when a protective flag (`pam`, `ssl`, `seccomp`, ...) is switched off or a risky one (`debug`, `X` on a server) is switched on. Errors block *Next*.
+* **Binary or source?** The installed system boots from the image's binaries. Every package whose USE set you change must be rebuilt from source later (`emerge`); the page shows how many, with a time and build-space estimate (heuristic, 4 cores). The choices are written to `/etc/portage/package.use/00-live-installer` and the package list to `/etc/live-installer/use-rebuild-pending`.
+* Data source: `/usr/share/live-installer/portage-meta.json.xz` (about 37 KiB), generated at build time from the Portage tree (`use.desc`, `use.local.desc`) and the installed-package database (IUSE, USE, REQUIRED_USE, USE-dependent dependencies, blockers); the Portage tree itself is not shipped.
+
+Answer file keys (all optional; see also the examples above):
+
+```toml
+[global]
+install_type = "server"            # only "server" today
+
+[services]
+disable = ["docker"]               # optional services only (see the services screen)
+
+[hardening]
+ssh = true                         # false = no SSH server
+sysctl = true                      # kernel/network hardening
+ssh_password_auth = false
+console_menu_open = false
+
+[use_flags]
+preset = "minimal"                 # recommended | minimal | full
+enable  = ["spice"]
+disable = ["debug"]                # checked with the same sanity check as the GUI; errors abort with ANSWER-FILE-ERROR
+```
 
 ## Unattended install (answer file)
 
@@ -417,7 +488,7 @@ stale copy are caught.
 * Rescue / forensic mode and Try-it-live are tested on x86_64 (UEFI + BIOS). aarch64 and riscv64 use the same code paths (arch-aware GRUB target / UART names) but are not exercised by the boot-modes test yet; memtest86+ is x86 only.
 * **Secure Boot**: not supported (see above). A shim + MOK-enrolment chain (own signing key for GRUB and the kernel) is the next step.
 * **Real hardware**: only QEMU/KVM (OVMF + SeaBIOS, USB-storage and CD boot) is tested automatically. The ThinkPad and Surface Pro notes above are expectations, not results. In particular untested: Wi-Fi scan/connect (needs a real adapter; the code path is exercised only by unit logic), the *Auto-detect (replug the cable)* link detection, NVMe/eMMC device naming (`part_path` is unit-tested), the large console font on high-DPI panels (`setfont ter-v32n` when the framebuffer is >= 1600 px wide), touch/Type Cover input.
-* The installer is text mode (curses); the *Graphical install* entry currently falls back to it (hook for the GUI: `/usr/libexec/live-installer-gui`).
+* The installer is text mode (curses); the graphical installer (see above) shares its stages and falls back to it when no display works.
 * Installer language: only the *installed system's* locale/keymap are selectable; the wizard text is English.
 * ZFS mirror: /boot (ext4) and the hibernation swap partition live on the first disk only, so the box boots only while disk 1 is healthy (the ESP/MBR is installed on both). No RAIDZ, no separate data pool yet (native encryption is supported, see above). `zpool status` shows a harmless "pool hostid mismatch" notice (the generic initramfs imports the pool with `zfsforce=1`).
 * The notification e-mail is recorded in `/etc/horcrux/notify-email`; the product does not read it yet.

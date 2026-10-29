@@ -1,0 +1,7 @@
+# Graphical installer (cage + GTK4 on Wayland, software rendering): the binhost builds differ in these flags only
+gui-libs/gtk wayland -X
+sys-auth/seatd builtin server
+# Mesa only for libEGL/libgbm/libGL stubs (GTK links libepoxy): no LLVM, no GPU drivers; the compositor draws with pixman
+media-libs/mesa -llvm -X wayland VIDEO_CARDS: -*
+media-libs/freetype harfbuzz
+media-libs/libglvnd X

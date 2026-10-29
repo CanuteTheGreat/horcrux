@@ -1,0 +1,13 @@
+# Graphical installer stack: cage (kiosk compositor, local ebuild) + GTK4 + PyGObject.
+# Installed --oneshot (not in @world) and listed in /etc/live-installer/live-only-packages:
+# a Server install removes them again from the target (a Workstation install keeps them).
+gui-wm/cage
+gui-libs/gtk
+dev-python/pygobject
+dev-python/pycairo
+app-accessibility/at-spi2-core
+media-fonts/dejavu
+x11-themes/adwaita-icon-theme
+sys-auth/seatd
+x11-misc/xkeyboard-config
+sys-apps/dbus
