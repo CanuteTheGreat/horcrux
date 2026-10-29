@@ -5,10 +5,10 @@ Horcrux supports Macs with the Apple T2 chip (MacBookPro15,x/16,x, MacBookAir8,x
 ## Kernel version pin (finding, 2026-10-28)
 
 * t2linux's patch set (`github.com/t2linux/linux-t2-patches`) tracks the newest mainline: `main` = **7.3**.
-* OpenZFS 2.4.4 (newest release; 2.3.9 likewise) declares `Linux-Maximum: 7.2`. Only master (2.4.99) lists 7.3.
-* Root on native-encrypted ZFS therefore needs a kernel **<= 7.2**. Pin: **vanilla 7.2.x (7.2.13 at the time) + the t2linux patch set at commit `76d5932` ("7.2.10")**. Verified 2026-10-28: all 23 patches in that set apply with `patch -Np1` to linux-7.2.13 without rejects (skip `8001/8002` APFS, which are not in that set anyway).
-* Applying the `main` (7.3) set to 7.2 or 7.3-patches to ZFS-supported kernels is NOT possible, and building ZFS master against 7.3 means an unreleased module; revisit when OpenZFS releases 2.4.5/2.5 with `Linux-Maximum: 7.3`.
-* Pitfall: `patch --dry-run` per file reports false failures for multi-diff patches (4001/4003/4004 touch the same file twice). Apply for real, in order, with `-Np1`.
+* OpenZFS 2.4.4 (newest release; 2.3.9 likewise) declares `Linux-Maximum: 7.2`. Only master (2.4.99) lists 7.3. Root on native-encrypted ZFS therefore needs a kernel **<= 7.2**.
+* The Horcrux image kernel is **6.18 LTS** (`gentoo-kernel-bin` 6.18.57 on the 2026-10-28 ISO). Use the same series for the T2 kernel: vanilla 6.18.x + the t2linux set of the time (`linux-t2-patches` commit `4cd1efe`, "6.18.7"). Newer ZFS-capable alternative, verified 2026-10-28: vanilla **7.2.13 + commit `76d5932` ("7.2.10")**: all 23 patches apply with `patch -Np1`, no rejects. The `main`/7.3 set applies to 7.3 only, but 7.3 cannot carry a released ZFS yet; revisit when OpenZFS ships `Linux-Maximum: 7.3`.
+* The kernel package must also build `zfs.ko` for the T2 kernel (the live installer creates the pool with the running kernel, and the installed initramfs imports it): build `sys-fs/zfs-kmod` (or OpenZFS 2.4.4 from source) against the T2 kernel tree in the same image stage.
+* Pitfall: `patch --dry-run` per file reports false failures for multi-diff patches (4001/4003/4004 touch the same file twice). Apply for real, in order, with `-Np1`; skip the APFS patches (8001/8002) and `7003-amdgpu-add-support-for-5K` (does not apply to plain 7.3).
 
 ## Boot path and the keyboard (critical)
 
