@@ -143,13 +143,19 @@ class T:
         a, t0 = self.a, time.time()
         vm = Q.VM("1-install", self.base(False, nvars), a.out)
         try:
-            ok = vm.expect_raw(r"safe graphics", 150)
+            ok = vm.expect_raw(r"(Serial console \(ttyS0|safe graphics)", 150)      # the last menu line: the menu is fully drawn
             self.step("grub-menu-reached", ok, f"{int(time.time() - t0)}s, cpu={a.cpu}, {a.mem} MiB, DMI Microsoft Corporation / Surface with Windows 8 Pro")
             time.sleep(2)
-            for _ in range(2):                               # entry 2 = automated install (serial console: we watch its log)
-                vm.send("\x1b[B")
-                time.sleep(0.6)
-            vm.send("\r")
+            vm.shot("grub-menu")
+            if ok and b"Serial console" in ok.group(0):          # Debian-style menu (common/boot/gen-grub-cfg.sh): s = serial submenu, 4 = automated install
+                vm.send("s")
+                time.sleep(1.5)
+                vm.send("4")
+            else:                                                # older flat menu: entry 2 = automated install
+                for _ in range(2):
+                    vm.send("\x1b[B")
+                    time.sleep(0.6)
+                vm.send("\r")
             self.step("live-userland-up", vm.expect_raw(r"AUTOINSTALL-START", 480), "answer file found")
             plan = vm.expect_raw(r"AUTOINSTALL-PLAN[^\n]*", 60, consume=False)
             self.step("plan-is-xfs-luks", bool(plan) and b"fs=xfs-luks" in plan.group(0), plan.group(0).decode() if plan else "no plan line")
