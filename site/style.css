@@ -62,3 +62,12 @@ footer p{margin:.3em 0}
 }
 .doc p,.doc li,.doc code{overflow-wrap:anywhere}
 .doc pre code{overflow-wrap:normal}
+/* download table: one stacked block per architecture on phones (file names stay whole) */
+@media (max-width:600px){
+ .dl,.dl tbody,.dl tr,.dl td{display:block;width:auto}
+ .dl thead{display:none}
+ .dl tr{padding:.7em 0;border-bottom:1px solid #222}
+ .dl td{border:0;padding:.2em .4em}
+ .dl td:nth-child(2){word-break:normal;overflow-wrap:anywhere}
+ .dl td:nth-child(3),.dl td:nth-child(4){display:inline-block}
+}
