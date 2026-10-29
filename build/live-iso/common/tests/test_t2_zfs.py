@@ -281,12 +281,12 @@ class ZfsHibernateSwap(unittest.TestCase):
 
     def test_initramfs_listing_checks(self):
         from liveinst import zfsswap as ZS
-        good = ("usr/lib/dracut/hooks/cmdline/40-parse-hx.sh\nusr/sbin/hx-unlock\nusr/lib/dracut/hooks/pre-mount/50-hx-zfskey.sh\n"
+        good = ("usr/lib/dracut/hooks/cmdline/40-parse-hx.sh\nusr/bin/hx-unlock\nusr/lib/dracut/hooks/pre-mount/50-hx-zfskey.sh\n"
                 "usr/lib/dracut/hooks/pre-mount/90-zfs-load-key.sh\nusr/lib/dracut/hooks/mount/98-mount-zfs.sh\nusr/lib/dracut/resume.sh\n"
-                "usr/sbin/cryptsetup\nlib/modules/7.2.13/extra/zfs.ko\nlib/modules/7.2.13/kernel/drivers/md/dm-crypt.ko\n")
+                "usr/bin/cryptsetup\nlib/modules/7.2.13/extra/zfs.ko\nlib/modules/7.2.13/kernel/drivers/md/dm-crypt.ko\n")
         self.assertEqual(ZS.initramfs_problems(good), [])
         self.assertTrue(ZS.hook_order_ok(good))
-        self.assertIn("hx-unlock", ZS.initramfs_problems(good.replace("usr/sbin/hx-unlock\n", "")))
+        self.assertIn("hx-unlock", ZS.initramfs_problems(good.replace("usr/bin/hx-unlock\n", "")))
         # the import must NOT come before the resume attempt: a zfs hook below pre-mount 50 would be a corruption risk
         bad = good.replace("mount/98-mount-zfs.sh", "mount/40-mount-zfs.sh")
         self.assertFalse(ZS.hook_order_ok(bad))

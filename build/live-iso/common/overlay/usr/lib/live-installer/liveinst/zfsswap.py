@@ -69,7 +69,7 @@ start() {
 def initramfs_problems(lsinitrd_text):
     """what is missing in the initramfs to hibernate/resume + unlock on one prompt (pure: unit tested)"""
     t = lsinitrd_text
-    need = {"hx-unlock": r"sbin/hx-unlock", "hx-zfskey (pre-mount)": r"pre-mount/50-hx-zfskey|pre-mount/\d+-hx-zfskey",
+    need = {"hx-unlock": r"bin/hx-unlock", "hx-zfskey (pre-mount)": r"pre-mount/50-hx-zfskey|pre-mount/\d+-hx-zfskey",
             "resume hook": r"pre-mount/10-resume|lib/dracut/resume\.sh", "cryptsetup": r"(?:^|/)cryptsetup\s*$|bin/cryptsetup",
             "zfs.ko": r"zfs\.ko", "dm-crypt": r"dm-crypt\.ko"}
     return [k for k, rx in need.items() if not re.search(rx, t, re.M)]
