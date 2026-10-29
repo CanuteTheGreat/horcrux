@@ -347,6 +347,15 @@ class VM:
             return None
 
     @staticmethod
+    def highlight_pixels(ppm):
+        """teal/cyan pixels of the whole frame: the GRUB menu's highlight bar (text or gfxterm); 0 while the screen is firmware/black"""
+        m = re.match(rb"P6\s+(\d+)\s+(\d+)\s+(\d+)\s", ppm or b"")
+        if not m:
+            return 0
+        px = ppm[m.end():]
+        return sum(1 for i in range(0, len(px) - 2, 3) if px[i] < 60 and px[i + 1] > 120 and px[i + 2] > 120)
+
+    @staticmethod
     def cyan_pixels(ppm):
         """the installer's title is bright cyan: count such pixels (login/boot text is grey/white)"""
         m = re.match(rb"P6\s+(\d+)\s+(\d+)\s+(\d+)\s", ppm or b"")
@@ -668,9 +677,15 @@ class Runner:
         kb = Kbd(vm, a.flow == "tui-vga")
         try:
             if a.flow == "tui-vga":
-                time.sleep(9 if a.mode == "uefi" else 3)         # firmware, then the GRUB menu (5 s countdown)
-                vm.shot("00-grub-menu")
+                # firmware, then the GRUB menu (6 s countdown, default entry = the GRAPHICAL installer): a blind sleep lost the race on a
+                # loaded host (the countdown ended, the graphical installer booted, "vga-installer-started" failed). Wait until the highlight
+                # bar is on the screen and press the hotkey at once (any key also stops the countdown).
+                time.sleep(2)
+                end = time.time() + 120
+                while time.time() < end and vm.highlight_pixels(vm.grab()) < 1500:
+                    pass
                 kb.key("2", 0.5)                               # hotkey 2 = Install (text mode); the default entry is the graphical installer
+                vm.shot("00-grub-menu")
                 self.step("grub-text-install-entry", True, "VGA text installer (hotkey 2)")
             else:
                 ok = vm.expect_raw(r"Serial console \(" + re.escape(ARCHS[a.arch]["serial"]), 120)  # the LAST menu line: the menu is fully drawn
