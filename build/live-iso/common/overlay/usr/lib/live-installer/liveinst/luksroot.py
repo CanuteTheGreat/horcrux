@@ -64,7 +64,7 @@ def luks_open_cmd(dev):
 
 
 def kernel_args(luks_uuid, extra=""):
-    a = [f"rd.luks.uuid={luks_uuid}", f"rd.luks.name={luks_uuid}={MAPPER}", f"rd.luks.options={luks_uuid}=discard",
+    a = [f"rd.luks.uuid={luks_uuid}", f"rd.luks.name={luks_uuid}={MAPPER}", f"rd.luks.allow-discards={luks_uuid}",
          f"root=/dev/mapper/{MAPPER}", "rootfstype=xfs"]
     return " ".join(a + ([extra] if extra else []))
 

@@ -40,6 +40,7 @@ DMI = "type=1,manufacturer=Microsoft Corporation,product=Surface with Windows 8 
 class T:
     def __init__(self, a):
         self.a, self.res = a, {"iso": os.path.basename(a.iso), "cpu": a.cpu, "mem": a.mem, "steps": {}}
+        self.failed, self.soft = [], False         # soft = the post-boot checks all run even when one fails
         os.makedirs(a.out + "/screens", exist_ok=True)
 
     def step(self, name, ok, info=""):
@@ -47,7 +48,9 @@ class T:
         print(f"[{'PASS' if ok else 'FAIL'}] {name} {info}", flush=True)
         json.dump(self.res, open(f"{self.a.out}/result.json", "w"), indent=1)
         if not ok:
-            raise SystemExit(1)
+            self.failed.append(name)
+            if not self.soft:
+                raise SystemExit(1)
 
     # --- QEMU command lines ------------------------------------------------------------------------------
     def base(self, installed, nvars):
@@ -196,7 +199,10 @@ class T:
         return self.ssh("true", timeout=8)[0] == 0
 
     def checks(self, vm):
+        self.soft = True
         s = self.step
+        rc, out = self.ssh("rc-status -a 2>&1; echo ---; grep -iE 'zram|swap' /var/log/messages 2>/dev/null | tail -5; echo ---; rc-service zram-swap start 2>&1; swapon --show; ls -la /etc/init.d/zram-swap; ls /etc/runlevels/default /etc/runlevels/boot")
+        open(f"{self.a.out}/screens/services-diagnostics.txt", "w").write(out)
         rc, out = self.ssh("findmnt -no FSTYPE,SOURCE,OPTIONS /; findmnt -no FSTYPE /boot; cat /proc/cmdline; "
                            "cryptsetup status hxroot | head -8; cryptsetup luksDump $(cryptsetup status hxroot | sed -n 's/ *device: *//p') | grep -E 'Version|PBKDF|Memory|cipher:' | head -8")
         flat = out.replace("\r", "")
@@ -215,12 +221,17 @@ class T:
         s("no-sigill-in-dmesg", out.strip().splitlines()[-2].strip() == "0", "no 'invalid opcode' traps while running the whole stack")
         rc, out = self.ssh("swapon --show --noheadings; echo ---; zramctl --noheadings; echo ---; sysctl -n vm.swappiness vm.page-cluster; echo ---; free -m | sed -n 2p; "
                            "blkid | grep -ci swap; rc-service zram-swap status")
-        s("zram-is-the-only-swap", "/dev/zram0" in out and out.count("partition") == 0 and "started" in out, re.sub(r"\s+", " ", out)[:200])
+        swaps = out.split("---")[0].split()
+        devs = [w for w in swaps if w.startswith("/")]
+        s("zram-is-the-only-swap", devs == ["/dev/zram0"] and "started" in out.split("---")[-1] and "[SWAP]" in out, re.sub(r"\s+", " ", out)[:200])
         rc, out = self.ssh("ls /etc/cron.weekly/fstrim && rc-service cronie status; fstrim -v / 2>&1; fstrim -v /boot 2>&1 | tail -1")
-        s("fstrim-works-through-dm-crypt", re.search(r"/: [\d.]+ \w+ \(\d+ bytes\) trimmed", out) is not None or "bytes) trimmed" in out, re.sub(r"\s+", " ", out)[:200])
-        rc, out = self.ssh("rc-service NetworkManager status; command -v nmtui nmcli wvkbd-mobintl sway foot swaybar surface-hidpi surface-status; "
-                           "cat /etc/NetworkManager/conf.d/10-surface.conf | grep powersave; rc-service iwd status 2>&1 | head -1")
-        s("networkmanager-and-desktop-tools", "started" in out and all(x in out for x in ("nmtui", "wvkbd-mobintl", "/sway", "foot", "swaybar")) and "wifi.powersave = 2" in out, re.sub(r"\s+", " ", out)[:240])
+        s("fstrim-works-through-dm-crypt", re.search(r"^/: [\d.]+ \w+ \(\d+ bytes\) trimmed", out, re.M) is not None, re.sub(r"\s+", " ", out)[:200])
+        rc, nm = self.ssh("rc-service NetworkManager status")
+        rc, other = self.ssh("rc-service iwd status 2>&1; rc-service dhcpcd status 2>&1")
+        s("networkmanager-started-iwd-dhcpcd-off", "started" in nm and "started" not in other, re.sub(r"\s+", " ", nm + other))
+        rc, out = self.ssh("command -v nmtui nmcli wvkbd-mobintl sway foot swaybar surface-hidpi surface-status; "
+                           "cat /etc/NetworkManager/conf.d/10-surface.conf | grep powersave")
+        s("networkmanager-and-desktop-tools", all(x in out for x in ("nmtui", "wvkbd-mobintl", "/sway", "foot", "swaybar")) and "wifi.powersave = 2" in out, re.sub(r"\s+", " ", out)[:240])
         rc, out = self.ssh("rc-service horcrux-api status")
         s("horcrux-api-runs-on-ivybridge", "started" in out, "horcrux-api service started under -cpu IvyBridge")
         rc, out = self.ssh("lsinitrd /boot/initramfs-*.img 2>/dev/null | grep -oE 'cryptsetup|dm-crypt|hid-multitouch|hid-microsoft' | sort -u | tr '\\n' ' '; echo; grep -E 'CONFIG_(USB_HID|USB_XHCI_PCI|HID_GENERIC)=' /boot/config-* | sed 's/.*://' | tr '\\n' ' '")
@@ -260,7 +271,13 @@ def main():
     ap.add_argument("--keep-disks", action="store_true")
     a = ap.parse_args()
     try:
-        T(a).run()
+        t = T(a)
+        t.run()
+        if t.failed:
+            print("FAILED STEPS:", ", ".join(t.failed))
+            raise SystemExit(1)
+        t.res["ok"] = True
+        json.dump(t.res, open(f"{a.out}/result.json", "w"), indent=1)
         print("ALL PASS surface xfs-luks")
     finally:
         if not a.keep_disks:

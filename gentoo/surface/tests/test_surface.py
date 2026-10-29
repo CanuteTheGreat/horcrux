@@ -42,6 +42,10 @@ class Profile(unittest.TestCase):
         self.assertIn("Surface Pro", sp1["product_name"])
         self.assertIn("button.lid_init_state=open", sp1["kernel_cmdline"])
         self.assertEqual(p["defaults"]["fs"], "xfs-luks")
+        for key in ("services_add", "services_del"):                   # top-level keys (a key after [defaults] would silently land in that table)
+            self.assertIn(key, p)
+        self.assertIn("zram-swap:default", p["services_add"])
+        self.assertIn("elogind:boot", p["services_add"])
 
     def test_no_systemd_zram_generator_or_x11(self):
         pk = open(os.path.join(ROOT, "packages.txt")).read()

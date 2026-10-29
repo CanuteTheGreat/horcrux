@@ -320,7 +320,7 @@ class LuksRoot(unittest.TestCase):
 
     def test_kernel_args_and_fstab(self):
         k = LR.kernel_args("1234-abcd")
-        for part in ("rd.luks.uuid=1234-abcd", "rd.luks.name=1234-abcd=hxroot", "rd.luks.options=1234-abcd=discard", "root=/dev/mapper/hxroot"):
+        for part in ("rd.luks.uuid=1234-abcd", "rd.luks.name=1234-abcd=hxroot", "rd.luks.allow-discards=1234-abcd", "root=/dev/mapper/hxroot"):
             self.assertIn(part, k)
         f = LR.fstab_text("UUID=r", "b", "e")
         self.assertIn("/\txfs\tdefaults", f)
