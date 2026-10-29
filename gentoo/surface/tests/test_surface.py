@@ -58,6 +58,10 @@ class Profile(unittest.TestCase):
         for need in ("surface-hidpi", "wvkbd-mobintl", "surface-status", "height 48"):
             self.assertIn(need, c)
 
+    def test_sway_config_only_uses_compiled_in_features(self):
+        c = open(os.path.join(ROOT, "overlay/etc/sway/config")).read()
+        self.assertNotIn("tray_output", c)        # the binpkg-matching sway is built without tray support: the line is an error
+
     def test_nm_powersave_off(self):
         self.assertIn("wifi.powersave = 2", open(os.path.join(ROOT, "overlay/etc/NetworkManager/conf.d/10-surface.conf")).read())
 

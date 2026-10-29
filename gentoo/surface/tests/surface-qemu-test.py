@@ -21,6 +21,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -114,7 +115,7 @@ class T:
         inner = ('export XDG_RUNTIME_DIR=/run/user/$(id -u); [ -d $XDG_RUNTIME_DIR ] || XDG_RUNTIME_DIR=/tmp/xdg-$(id -u); '
                  'export SWAYSOCK=$(ls $XDG_RUNTIME_DIR/sway-ipc.*.sock 2>/dev/null | head -1); '
                  'export WAYLAND_DISPLAY=$(ls $XDG_RUNTIME_DIR | grep -m1 "^wayland-[0-9]*$"); ' + cmd)
-        return self.ssh(f"su - {USER} -c {json.dumps(inner)}", timeout=timeout)
+        return self.ssh(f"su - {USER} -c {shlex.quote(inner)}", timeout=timeout)
 
     # --- phases ------------------------------------------------------------------------------------------------
     def run(self):
@@ -258,6 +259,11 @@ class T:
         open(f"{self.a.out}/screens/desktop-diagnostics2.txt", "w").write(dg2)
         rc, out = self.user_sh("swaymsg -t get_outputs -r | python3 -c \"import json,sys; o=json.load(sys.stdin)[0]; print(o['name'], o['current_mode']['width'], o['current_mode']['height'], o['scale'])\"; cat ~/.local/state/sway.log | tail -3")
         s("sway-has-an-output", re.search(r"\w+ \d+ \d+ [\d.]+", out) is not None, out.strip()[:200])
+        s("sway-config-has-no-errors", "Error" not in self.user_sh("sway -C 2>&1")[1], "sway -C (config validation)")
+        rc, out = self.user_sh("(foot -e sh -c 'echo Horcrux on a Surface Pro; free -m; nmcli -t general status; sleep 600' >/dev/null 2>&1 &) ; sleep 5; swaymsg -t get_tree | grep -c app_id")
+        time.sleep(3)
+        vm.shot("desktop-terminal")
+        s("terminal-window-opens", rc == 0, "foot started inside the user's sway session (screenshot desktop-terminal.png)")
         rc, out = self.user_sh("surface-osk show; sleep 2; pgrep -x wvkbd-mobintl")
         time.sleep(3)
         vm.shot("desktop-onscreen-keyboard")

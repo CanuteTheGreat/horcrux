@@ -19,4 +19,4 @@ if grep -qw hypervisor /proc/cpuinfo 2>/dev/null; then
     export WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1
 fi
 mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}" 2>/dev/null
-exec dbus-run-session sway --unsupported-gpu >"${XDG_STATE_HOME:-$HOME/.local/state}/sway.log" 2>&1
+exec dbus-run-session sway >"${XDG_STATE_HOME:-$HOME/.local/state}/sway.log" 2>&1

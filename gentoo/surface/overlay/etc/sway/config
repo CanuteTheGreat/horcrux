@@ -68,7 +68,6 @@ bar {
     height 48
     font pango:DejaVu Sans 14
     status_command surface-status
-    tray_output none
     colors {
         background #10151c
         statusline #e6edf3
