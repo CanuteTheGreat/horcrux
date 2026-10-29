@@ -3,3 +3,8 @@
 net-wireless/wpa_supplicant dbus
 media-libs/freetype harfbuzz
 media-libs/libglvnd X
+# sway needs a seat: logind (elogind) is the session manager on this profile, so the PAM stack must register login
+# sessions with it (pambase) and libseat needs its logind backend (seatd). Without these sway fails with
+# "Failed to start a DRM session" (found by the QEMU test: the stock binpkgs have both flags off).
+sys-auth/pambase elogind
+sys-auth/seatd elogind

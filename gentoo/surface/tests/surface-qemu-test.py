@@ -244,6 +244,11 @@ class T:
                 ok = True
                 break
             time.sleep(5)
+        if not ok:
+            rc, dg = self.ssh("id " + USER + "; loginctl list-sessions 2>&1 | head; rc-service elogind status 2>&1; ls -la /run/user /dev/dri 2>&1; "
+                              "grep -n c1: /etc/inittab; ps -ef | grep -E 'agetty|login|sway' | grep -v grep; cat /home/" + USER + "/.local/state/sway.log 2>&1 | tail -15; "
+                              "grep -c elogind /etc/pam.d/system-login")
+            open(f"{self.a.out}/screens/desktop-diagnostics.txt", "w").write(dg)
         s("desktop-session-running-for-autologin-user", ok, f"sway + wvkbd + swaybar pids: {out.split()}")
         time.sleep(6)
         vm.shot("desktop")
