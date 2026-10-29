@@ -1,0 +1,204 @@
+{
+ "key": "horcrux",
+ "repo": "horcrux",
+ "name": "Horcrux",
+ "version": "0.1.x",
+ "banner": "Daily builds for testing. Not for production.",
+ "tagline": "Horcrux is a free, Gentoo-based hypervisor with a web UI: VMs, containers and clusters. Pre-1.0.",
+ "lead": "A Gentoo-based hypervisor with a web UI, in the style of Proxmox VE: virtual machines, containers, storage and clusters, written in Rust.",
+ "logo_w": 340,
+ "logo_h": 340,
+ "what_html": "<p>Horcrux manages QEMU/KVM, LXD and Incus virtual machines and LXC, LXD, Incus, Docker and Podman containers from one web UI, CLI and API. It adds clustering with live migration and HA, a distributed firewall, backups and RBAC. It is built for Gentoo: the ebuild and USE flags choose which backends get compiled in.</p><p>It is a one-person project in early development. It aims at Proxmox VE-style functionality; it does not claim parity yet.</p>",
+ "status": "Horcrux is version 0.1.x. APIs, configuration and on-disk formats can still change between builds. Use test hardware or a VM.",
+ "works": [
+  "Daily ISO: a QEMU test boots it, installs it (unattended, serial wizard and VGA wizard, ext4, XFS and ZFS mirror, UEFI and BIOS), reboots from disk and logs in to the web UI.",
+  "Nightly tests on real QEMU/KVM guests: snapshots, backup and restore, API restarts and crashes, live migration, HA failover on 3 nodes, save state on host shutdown.",
+  "Unit and integration tests against real services (LDAP, OIDC, nftables, CNI, Docker, k3s) on every change."
+ ],
+ "gaps": [
+  "No stable release. No upgrade or rollback test of an installed system yet.",
+  "The graphical installer is in progress; today the installer is a text wizard.",
+  "Secure Boot is not supported.",
+  "Real-hardware testing has only just started and has already found bugs (a CPU-specific crash, fixed on main).",
+  "aarch64 and riscv64: the aarch64 ISO job exists but no aarch64 build is published right now; riscv64 is not built."
+ ],
+ "isos": [
+  [
+   "x86_64 (UEFI + BIOS, hybrid USB/CD)",
+   "horcrux-daily-x86_64.iso"
+  ]
+ ],
+ "dl_note": "An aarch64 ISO is part of the pipeline but is not currently published.",
+ "evidence": "horcrux-daily-test-evidence.tgz",
+ "shots": [
+  [
+   "installer/horcrux/03b-target-disk-selected.png",
+   "Choosing the target disk"
+  ],
+  [
+   "installer/horcrux/02b-filesystem-zfs-mirror.png",
+   "File system: ext4, XFS or a ZFS mirror"
+  ],
+  [
+   "installer/horcrux/09-finished.png",
+   "Install finished: web UI address"
+  ]
+ ],
+ "docs": [
+  [
+   "ISO-INSTALL.md",
+   "Installing from the ISO"
+  ],
+  [
+   "INSTALLATION.md",
+   "Installation"
+  ],
+  [
+   "ACCESS_CONTROL.md",
+   "Access control"
+  ],
+  [
+   "RBAC.md",
+   "RBAC"
+  ],
+  [
+   "CLI.md",
+   "Command line"
+  ],
+  [
+   "API.md",
+   "API"
+  ],
+  [
+   "LXC.md",
+   "Containers (LXC, Incus)"
+  ],
+  [
+   "SAVE_STATE.md",
+   "Save state on host shutdown"
+  ],
+  [
+   "MIGRATION.md",
+   "Migration"
+  ],
+  [
+   "OVF_IMPORT.md",
+   "OVF import"
+  ],
+  [
+   "GPU_PASSTHROUGH.md",
+   "GPU passthrough"
+  ],
+  [
+   "DOCKER.md",
+   "Docker"
+  ],
+  [
+   "KUBERNETES.md",
+   "Kubernetes"
+  ],
+  [
+   "TERRAFORM.md",
+   "Terraform"
+  ],
+  [
+   "METRICS.md",
+   "Metrics"
+  ],
+  [
+   "LOGGING.md",
+   "Logging"
+  ],
+  [
+   "T2-MACS.md",
+   "T2 Macs"
+  ]
+ ],
+ "docs_index": [
+  [
+   "ISO-INSTALL.md",
+   "Installing from the ISO",
+   "Daily ISO, USB, installer, unattended installs, what is tested"
+  ],
+  [
+   "INSTALLATION.md",
+   "Installation",
+   "Install on an existing Gentoo system"
+  ],
+  [
+   "ACCESS_CONTROL.md",
+   "Access control",
+   "Users, realms, privileges"
+  ],
+  [
+   "RBAC.md",
+   "RBAC",
+   "Roles and permissions"
+  ],
+  [
+   "CLI.md",
+   "Command line",
+   "horcrux-cli"
+  ],
+  [
+   "API.md",
+   "API",
+   "REST API overview"
+  ],
+  [
+   "LXC.md",
+   "Containers",
+   "LXC, LXD and Incus from the UI"
+  ],
+  [
+   "SAVE_STATE.md",
+   "Save state",
+   "Host shutdown handling for guests"
+  ],
+  [
+   "MIGRATION.md",
+   "Migration",
+   "Moving guests between nodes"
+  ],
+  [
+   "OVF_IMPORT.md",
+   "OVF import",
+   "Importing appliances"
+  ],
+  [
+   "GPU_PASSTHROUGH.md",
+   "GPU passthrough",
+   ""
+  ],
+  [
+   "DOCKER.md",
+   "Docker",
+   ""
+  ],
+  [
+   "KUBERNETES.md",
+   "Kubernetes",
+   ""
+  ],
+  [
+   "TERRAFORM.md",
+   "Terraform",
+   ""
+  ],
+  [
+   "METRICS.md",
+   "Metrics",
+   ""
+  ],
+  [
+   "LOGGING.md",
+   "Logging",
+   ""
+  ],
+  [
+   "T2-MACS.md",
+   "T2 Macs",
+   "Kernel pin and patches for T2 Apple hardware"
+  ]
+ ]
+}

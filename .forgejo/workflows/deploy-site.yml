@@ -1,0 +1,104 @@
+name: Deploy Horcrux site
+
+# Builds the static site (site/ + docs/ + branding/) and deploys it to the `horcrux-site` container on
+# ollivanders, served as https://horcrux.errant.solutions (Cloudflare tunnel). Same rrsync + signed-drop + watcher
+# pattern as ssherpa.app (ctg-infrastructure ollivanders/deploy-watchers). Builds NEVER run on ollivanders.
+#
+# Moving to its own domain later: the site uses only relative links. Serve the same image on the new
+# host, then make this host answer with one 301 redirect, and change SITE_HOST below (verify step only).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'docs/**'
+      - 'branding/**'
+      - '.forgejo/workflows/deploy-site.yml'
+  workflow_dispatch: {}
+
+env:
+  SITE_HOST: horcrux.errant.solutions
+
+concurrency:
+  group: deploy-horcrux-site
+  cancel-in-progress: false
+
+jobs:
+  deploy-site:
+    runs-on: linux-cross-x86_64
+    timeout-minutes: 25
+    steps:
+      - name: Install tools
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq rsync openssh-client jq curl python3 python3-markdown
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build the site and check every link
+        run: |
+          set -e
+          python3 site/build.py
+          python3 site/check.py
+          echo "${{ github.sha }}" > site/dist/version.txt
+      - name: Validate the nginx config
+        run: |
+          set -e
+          docker build -t "horcrux-site-configtest:${{ github.sha }}" site
+          docker run --rm "horcrux-site-configtest:${{ github.sha }}" nginx -t
+          docker rmi "horcrux-site-configtest:${{ github.sha }}" >/dev/null
+      - name: Build site image (linux/arm64 for ollivanders; COPY-only, no emulation)
+        run: |
+          set -e
+          docker build --platform linux/arm64 -t "horcrux-site:${{ github.sha }}" site
+          test "$(docker image inspect -f '{{.Architecture}}' "horcrux-site:${{ github.sha }}")" = arm64
+      - name: Drop the signed image for ollivanders' watcher, then wait for its result
+        env:
+          OLLIVANDERS_DEPLOY_KEY: ${{ secrets.OLLIVANDERS_DEPLOY_KEY }}
+          DEPLOY_SIGNING_KEY: ${{ secrets.DEPLOY_SIGNING_KEY }}
+        run: |
+          set -e
+          umask 077
+          printf '%s\n' "$OLLIVANDERS_DEPLOY_KEY" > /tmp/deploy_key
+          trap 'rm -f /tmp/deploy_key /tmp/deploy_signing_key' EXIT
+          RSH="ssh -i /tmp/deploy_key -p 2222 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          DEST="canutethegreat@ollivanders.canutethegreat.com"
+          TARBALL="/tmp/horcrux-site-${{ github.sha }}.tar.gz"
+          docker save "horcrux-site:${{ github.sha }}" | gzip > "$TARBALL"
+          printf '%s\n' "$DEPLOY_SIGNING_KEY" > /tmp/deploy_signing_key
+          ssh-keygen -q -Y sign -f /tmp/deploy_signing_key -n ctg-deploy "$TARBALL"
+          rm -f /tmp/deploy_signing_key
+          rsync -av -e "$RSH" "$TARBALL.sig" "$DEST:pending/horcrux-site-${{ github.sha }}.tar.gz.sig"
+          rsync -av -e "$RSH" "$TARBALL" "$DEST:pending/horcrux-site-${{ github.sha }}.tar.gz"
+          rm -f "$TARBALL" "$TARBALL.sig"
+          echo "Dropped; waiting for the watcher (polls every 10s)..."
+          for i in $(seq 1 54); do
+            sleep 10
+            rsync -I -e "$RSH" "$DEST:status-horcrux-site.json" /tmp/status.json 2>/dev/null || continue
+            if [ "$(jq -r .sha /tmp/status.json 2>/dev/null)" = "${{ github.sha }}" ]; then
+              if [ "$(jq -r .status /tmp/status.json)" = "ok" ]; then echo "Watcher reports success."; exit 0; fi
+              echo "Watcher reports failure: $(jq -r .reason /tmp/status.json)" >&2; exit 1
+            fi
+          done
+          echo "Timed out waiting for the watcher (horcrux-site-deploy-watcher.timer on ollivanders)." >&2
+          exit 1
+      - name: Verify the live site serves this commit
+        run: |
+          # The tunnel can answer 502 for a short while after a container swap: retry ~3 min.
+          check() {
+            fail=0
+            for p in "" roadmap/ stable-channel/ docs/ docs/iso-install/ assets/style.css robots.txt; do
+              code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Cache-Control: no-cache' "https://$SITE_HOST/$p")
+              echo "$code https://$SITE_HOST/$p"; [ "$code" = 200 ] || fail=1
+            done
+            served=$(curl -s -H 'Cache-Control: no-cache' "https://$SITE_HOST/version.txt?ci=${{ github.run_id }}-$attempt" | tr -d '[:space:]')
+            [ "$served" = "${{ github.sha }}" ] && echo "serves ${{ github.sha }}" || { echo "version.txt is '$served'" >&2; fail=1; }
+            code=$(curl -s -o /dev/null -w '%{http_code}' "https://$SITE_HOST/no-such-page-qa")
+            [ "$code" = 404 ] || { echo "404 page answered $code" >&2; fail=1; }
+            return $fail
+          }
+          for attempt in $(seq 1 18); do
+            echo "--- verify attempt $attempt/18"
+            if check; then exit 0; fi
+            [ "$attempt" = 18 ] || sleep 10
+          done
+          echo "$SITE_HOST not serving this commit after ~3 min" >&2; exit 1
