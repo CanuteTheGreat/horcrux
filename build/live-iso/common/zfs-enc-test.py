@@ -169,7 +169,7 @@ class ZRun(qt.Runner):
         qt.pflash_vars(nvars)
         vm = qt.VM("2-boot1", self.qemu_args(None, True, nvars), a.out)
         try:
-            m = vm.expect_raw(r"(?i)(encrypted zfs password|enter passphrase|password for rpool)[^\n]*", 420)
+            m = vm.expect_raw(r"(?i)(encrypted zfs password|enter passphrase|password for rpool|disk passphrase)[^\n]*", 420)
             self.step("boot1-passphrase-prompt", m, m.group(0).decode(errors="replace").strip() if m else "no prompt (system booted without asking?)")
             time.sleep(1)
             vm.send(PASSPHRASE + "\r")
