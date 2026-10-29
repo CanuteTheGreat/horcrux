@@ -60,3 +60,5 @@ footer p{margin:.3em 0}
  .top{position:static}
  .doc table{min-width:620px}
 }
+.doc p,.doc li,.doc code{overflow-wrap:anywhere}
+.doc pre code{overflow-wrap:normal}
