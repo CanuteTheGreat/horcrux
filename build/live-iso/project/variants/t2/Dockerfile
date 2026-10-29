@@ -34,9 +34,15 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     PATCHES=/t2patches KERNEL_SRC_DIR=${KERNEL_SRC_DIR} LOCALVERSION=${LOCALVERSION} sh /t2/kernel/build-kernel.sh > /build-kernel.log 2>&1 \
         || { tail -100 /build-kernel.log; exit 1; }; \
     tail -5 /build-kernel.log; \
-    ln -sfn ${KERNEL_SRC_DIR} /usr/src/linux; \
+    ln -sfn ${KERNEL_SRC_DIR} /usr/src/linux
+
+# separate layer: the ~65 min kernel compile above stays cached when this step needs fixing.
+# NO binpkgs for zfs-kmod: a cached one was built against another kernel release and installs into ITS /lib/modules dir
+RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
+    --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
+    set -e; unset ARCH; export FEATURES="-ccache"; \
     kr=$(cat /boot/.kernelrelease); \
-    emerge --oneshot =sys-fs/zfs-kmod-2.3.9 =sys-fs/zfs-2.3.9; \
+    emerge --oneshot --usepkg=n --getbinpkg=n --buildpkg=n =sys-fs/zfs-kmod-2.3.9 =sys-fs/zfs-2.3.9; \
     find /lib/modules/$kr -name 'zfs.ko*' | grep .; depmod $kr; \
     # the stock kernel goes: its modules/kernel are ~650 MB and the T2 kernel must be the one the live ISO boots
     for old in $(ls /lib/modules | grep -v -- "-t2"); do rm -rf /lib/modules/$old /boot/*-$old* /boot/*-$old; done; \
