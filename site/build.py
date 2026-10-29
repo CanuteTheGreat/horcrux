@@ -12,9 +12,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 CFG = json.load(open(os.path.join(HERE, "site.json")))
 DIST = os.path.join(HERE, "dist")
-SRC = f"https://git.canutethegreat.com/CanuteTheGreat/{CFG['repo']}"
-BLOB = SRC + "/src/branch/main/"
-DL = SRC + "/releases/download/"
+# Public source = the GitHub mirror. The site never links to the owner's personal git host (site/check.py fails the
+# build if any built file mentions it). ISO downloads are stable URLs on this site (/download/..., nginx 302s them to
+# the GitHub release assets, see nginx.conf), so the visible links stay on the product domain.
+SRC = f"https://github.com/CanuteTheGreat/{CFG['repo']}"
+BLOB = SRC + "/blob/main/"
+TREE = SRC + "/tree/main/"
 
 def rel(frm, to):
     """relative URL from page dir `frm` ('' = root) to site path `to` (dir pages end with '/')."""
@@ -33,6 +36,14 @@ for fn, title in CFG["docs"]:
     PAGES[fn] = ("docs/" + re.sub(r"[^a-z0-9]+", "-", fn[:-3].lower()).strip("-") + "/", title)
 
 def fix_links(body, page_dir):
+    # CI plumbing is noise for readers (and not served by the public mirror's UI the way docs are): drop the link, keep the text
+    def unlink(m):
+        url = m.group(1)
+        if re.match(r"^(?:[a-z][a-z0-9+.-]*:|#|//)", url, re.I):
+            return m.group(0)
+        norm = posixpath.normpath(posixpath.join("docs", url.partition("#")[0]))
+        return m.group(2) if norm.startswith((".forgejo/", ".github/", ".gitea/")) else m.group(0)
+    body = re.sub(r'<a href="([^"]*)">(.*?)</a>', unlink, body, flags=re.S)
     def sub(m):
         attr, url = m.group(1), m.group(2)
         if re.match(r"^(?:[a-z][a-z0-9+.-]*:|#|//)", url, re.I):
@@ -46,7 +57,8 @@ def fix_links(body, page_dir):
             return f'{attr}="{rel(page_dir, PAGES[norm[5:]][0])}{frag}"'
         if norm.startswith("docs/images/"):
             return f'{attr}="{rel(page_dir, "docs/images/" + norm[12:])}"'
-        return f'{attr}="{BLOB}{norm}{frag}"'
+        base = TREE if os.path.isdir(os.path.join(ROOT, norm)) else BLOB
+        return f'{attr}="{base}{norm}{frag}"'
     return re.sub(r'(href|src)="([^"]*)"', sub, body)
 
 def md_to_html(text):
@@ -81,7 +93,7 @@ def page(page_dir, title, body, active="", desc=None):
 {body}
 <footer><div class="wrap foot">
 <p>{CFG['name']} is a free, GPL-3.0 project by <a href="https://errant.solutions/">Errant Solutions</a>.
-Source: <a href="{SRC}">Forgejo</a> &middot; <a href="https://github.com/CanuteTheGreat/{CFG['repo']}">GitHub mirror</a>.</p>
+Source: <a href="{SRC}">GitHub</a>.</p>
 <p>Commercial support: planned after 1.0. Nothing is for sale today.</p></div></footer>
 </body></html>
 """
@@ -123,15 +135,17 @@ def main():
                    for fn, t, desc in CFG["docs_index"])
     idx = (f'<main class="wrap doc"><h1>Documentation</h1><p>Rendered from the <code>docs/</code> folder of the repository, '
            f'rebuilt on every change. The folder holds more files than are listed here: '
-           f'<a href="{BLOB}docs/">browse them all</a>. Some of them are older notes and may be out of date; the roadmap checklist is the source of truth for status.</p>'
+           f'<a href="{TREE}docs/">browse them all</a>. Some of them are older notes and may be out of date; the roadmap checklist is the source of truth for status.</p>'
            f'<ul class="doclist">{rows}</ul></main>')
     write("docs/index.html", page("docs/", "Documentation", idx, "docs"))
 
     # landing
     sh = "".join(f'<figure><img src="{rel("", "docs/images/" + p)}" alt="{html.escape(a)}" loading="lazy"><figcaption>{html.escape(a)}</figcaption></figure>'
                  for p, a in CFG["shots"])
+    DLD = rel("", "download/")
     dl_rows = "".join(
-        f'<tr><td>{html.escape(a)}</td><td><a href="{DL}daily/{f}">{f}</a></td><td><a href="{DL}daily/{f}.sha256">sha256</a></td></tr>'
+        f'<tr><td>{html.escape(a)}</td><td><a href="{DLD}{f}">{f}</a></td><td><a href="{DLD}{f}.sha256">sha256</a></td>'
+        f'<td><a href="{DLD}{f[:-4]}-test-evidence.tgz">evidence</a></td></tr>'
         for a, f in CFG["isos"])
     feats = "".join(f"<li>{html.escape(x)}</li>" for x in CFG["works"])
     gaps = "".join(f"<li>{html.escape(x)}</li>" for x in CFG["gaps"])
@@ -146,8 +160,8 @@ def main():
 <p>The measurable exit criteria for 1.0, and how far each one is, are on the <a href="{rel('', 'roadmap/')}">roadmap checklist</a>.</p></section>
 <section class="wrap" id="download"><h2>Download</h2>
 <p>Daily builds are test builds of the <code>main</code> branch, replaced in place. A build is published only after QEMU boot, install, reboot and web probe tests passed. They are not releases: use test hardware or a VM. There is no stable release yet. Secure Boot must be off.</p>
-<div class="tw"><table class="dl"><thead><tr><th>Architecture</th><th>ISO</th><th>Checksum</th></tr></thead><tbody>{dl_rows}</tbody></table></div>
-<p>{CFG['dl_note']} Verify with <code>sha256sum -c</code>, write to a USB stick with <code>dd</code> (see the <a href="{rel('', 'docs/iso-install/')}">install guide</a>), or boot it in a VM. <a href="{DL}daily/{CFG['evidence']}">Test evidence</a> (serial logs and screenshots) is attached to every build.</p></section>
+<div class="tw"><table class="dl"><thead><tr><th>Architecture</th><th>ISO</th><th>Checksum</th><th>Test evidence</th></tr></thead><tbody>{dl_rows}</tbody></table></div>
+<p>{CFG['dl_note']} Verify with <code>sha256sum -c</code>, write to a USB stick with <code>dd</code> (see the <a href="{rel('', 'docs/iso-install/')}">install guide</a>), or boot it in a VM. The test evidence (serial logs and screenshots) is attached to every build.</p></section>
 <section class="wrap"><h2>The installer</h2><p>A text-mode wizard, on a VGA screen or a serial console. These are real captures from the CI test. A graphical installer is in progress.</p><div class="shots">{sh}</div></section>
 <section class="wrap"><h2>Commercial support</h2>
 <p><strong>Planned after 1.0.</strong> The idea, in the style of Proxmox: an optional paid stable update channel with email support in business hours, best effort, no 24/7 guarantee. The free channel stays complete, with every feature. Nothing is for sale now and there is no sign-up. The <a href="{rel('', 'stable-channel/')}">design</a> is public, and it only starts after a stable 1.0 and a period of real use.</p></section>

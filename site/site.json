@@ -20,15 +20,19 @@
   "The graphical installer is in progress; today the installer is a text wizard.",
   "Secure Boot is not supported.",
   "Real-hardware testing has only just started and has already found bugs (a CPU-specific crash, fixed on main).",
-  "aarch64 and riscv64: the aarch64 ISO job exists but no aarch64 build is published right now; riscv64 is not built."
+  "aarch64 is built and tested only under QEMU emulation (no real arm64 hardware yet); riscv64 is not built."
  ],
  "isos": [
   [
    "x86_64 (UEFI + BIOS, hybrid USB/CD)",
    "horcrux-daily-x86_64.iso"
+  ],
+  [
+   "aarch64 (UEFI)",
+   "horcrux-daily-aarch64.iso"
   ]
  ],
- "dl_note": "An aarch64 ISO is part of the pipeline but is not currently published.",
+ "dl_note": "The aarch64 build is tested under QEMU emulation, not on real arm64 hardware.",
  "evidence": "horcrux-daily-test-evidence.tgz",
  "shots": [
   [

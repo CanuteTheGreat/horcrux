@@ -10,9 +10,9 @@ key-only unless you opt in.
 
 | | URL |
 |---|---|
-| Latest **daily** test build (rolling pre-release, replaced after the QEMU test passed) | `https://git.canutethegreat.com/CanuteTheGreat/horcrux/releases/download/daily/horcrux-daily-x86_64.iso` |
-| SHA256 of the daily | `.../releases/download/daily/horcrux-daily-x86_64.iso.sha256` |
-| **Stable** build (only for `v*` releases that met the criteria below) | `.../releases/download/<tag>/horcrux-<tag>-x86_64.iso` |
+| Latest **daily** test build (rolling pre-release, replaced after the QEMU test passed) | `https://horcrux.errant.solutions/download/horcrux-daily-x86_64.iso` |
+| SHA256 of the daily | `https://horcrux.errant.solutions/download/horcrux-daily-x86_64.iso.sha256` |
+| **Stable** build (only for `v*` releases that met the criteria below) | `https://horcrux.errant.solutions/download/horcrux-<tag>-x86_64.iso` (tag like `v0.2.0`) |
 
 Always verify: `sha256sum -c horcrux-daily-x86_64.iso.sha256` (run it next to the downloaded files).
 
@@ -31,8 +31,8 @@ to compiling everything), and the BuildKit cache mounts are keyed by arch. Downl
 
 | | URL |
 |---|---|
-| daily aarch64 | `https://git.canutethegreat.com/CanuteTheGreat/horcrux/releases/download/daily/horcrux-daily-aarch64.iso` (+ `.sha256`) |
-| stable aarch64 | `.../releases/download/<tag>/horcrux-<tag>-aarch64.iso` |
+| daily aarch64 | `https://horcrux.errant.solutions/download/horcrux-daily-aarch64.iso` (+ `.sha256`) |
+| stable aarch64 | `https://horcrux.errant.solutions/download/horcrux-<tag>-aarch64.iso` |
 
 Each architecture has its own job, its own assets and its own status marker (`daily-status` for x86_64,
 `daily-status-aarch64`), so a failing arch never blocks the other. Test evidence is attached per arch
@@ -228,7 +228,7 @@ A `v*` release gets a stable ISO attached (non-pre-release asset
 
 1. the repository's own CI is not red (`failure`/`error`) for that commit;
 2. the ISO builds from the tag from scratch-equivalent inputs (Gentoo stage3 + binhost, the tag's source);
-3. ISO size < 2 GiB (Forgejo asset limit) and its SHA256 verifies;
+3. ISO size < 2 GiB (release asset limit) and its SHA256 verifies;
 4. **all five** QEMU runs above pass (both firmware types, both media types, unattended + serial wizard + VGA wizard), including the SSH/web assertions;
 5. no step reported `FAIL` in the evidence bundle (attached to the release).
 

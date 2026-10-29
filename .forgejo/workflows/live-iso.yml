@@ -56,6 +56,7 @@ jobs:
       - name: Build, test, publish
         env:
           FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}   # public GitHub mirror release (second publish step)
           ARCH: ${{ matrix.arch }}
           JOBS: '4'
         run: |

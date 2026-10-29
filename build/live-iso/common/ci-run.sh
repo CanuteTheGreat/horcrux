@@ -142,7 +142,14 @@ if [ -n "${FORGEJO_TOKEN:-}" ]; then
   fi
   [ "$mode" = daily ] && bash "$HERE/publish.sh" status "$PROJECT" "" "" "$OUT/status.json" || true
 fi
-{ echo "### $PROJECT $mode ISO: $result"; echo "$summary"; } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+# Second publish step: the public GitHub mirror (the product site's /download/ URLs redirect there). Only when the
+# Forgejo publish above ran and everything passed; a failure here is a warning in the summary, not a red job.
+gh_note=""
+if [ -n "${FORGEJO_TOKEN:-}" ] && [ -n "${GH_RELEASE_TOKEN:-}" ] && [ "$result" = pass ]; then
+  bash "$HERE/publish-github.sh" "$mode" "$PROJECT" "$ISO" "$OUT/$PROJECT-$suffix-$ARCH-test-evidence.tgz" "$OUT/status.json" \
+    && gh_note="GitHub release updated." || { gh_note="GitHub publish FAILED (Forgejo publish is unaffected)."; echo "::warning::$gh_note"; }
+fi
+{ echo "### $PROJECT $mode ISO: $result"; echo "$summary"; [ -z "$gh_note" ] || echo "$gh_note"; } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
 # docker hygiene on the shared host (build.sh already removed this build's containers/images; keep the BuildKit cache)
 docker image prune -f >/dev/null 2>&1 || true
 exit 0
