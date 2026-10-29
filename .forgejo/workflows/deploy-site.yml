@@ -43,7 +43,7 @@ jobs:
       - name: Validate the nginx config
         run: |
           set -e
-          docker build -t "horcrux-site-configtest:${{ github.sha }}" site
+          docker build --platform linux/amd64 -t "horcrux-site-configtest:${{ github.sha }}" site
           docker run --rm "horcrux-site-configtest:${{ github.sha }}" nginx -t
           docker rmi "horcrux-site-configtest:${{ github.sha }}" >/dev/null
       - name: Build site image (linux/arm64 for ollivanders; COPY-only, no emulation)
