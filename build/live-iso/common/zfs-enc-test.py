@@ -101,12 +101,11 @@ class ZRun(qt.Runner):
         a = self.z
         vm = qt.VM("1-t2guard", self.qemu_args(a.iso, False, nvars), a.out)
         try:
-            self.step("grub-menu-reached", vm.expect_raw(r"safe graphics", 120))
+            self.step("grub-menu-reached", vm.expect_raw(r"Serial console \(ttyS0", 120))
             time.sleep(2)
-            for _ in range(2):
-                vm.send("\x1b[B")
-                time.sleep(0.6)
-            vm.send("\r")
+            vm.send("s")                       # boot menu hotkeys (common/boot/gen-grub-cfg.sh): serial-console submenu, 4 = automated
+            time.sleep(1.5)
+            vm.send("4")
             self.step("live-userland-up", vm.expect_raw(r"AUTOINSTALL-START", 420), "live system booted, answer file found")
             m = vm.expect_raw(r"AUTOINSTALL-(OK|FAILED[^\n]*)", 900, consume=False)
             txt = m.group(0).decode(errors="replace") if m else "timeout"
