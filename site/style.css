@@ -57,4 +57,5 @@ footer p{margin:.3em 0}
  .two{grid-template-columns:1fr}
  .hero{padding-top:24px}
  .top{position:static}
+ .doc table{min-width:620px}
 }
