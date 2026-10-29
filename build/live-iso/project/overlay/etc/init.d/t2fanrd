@@ -1,0 +1,17 @@
+#!/sbin/openrc-run
+# Fan control for Apple T2 Macs (GnomedDev/T2FanRD). Needs the T2 kernel's applesmc fan interface.
+description="T2 Mac fan control daemon"
+command="/usr/bin/t2fanrd"
+command_background="yes"
+pidfile="/run/t2fanrd.pid"
+output_log="/var/log/t2fanrd.log"
+error_log="/var/log/t2fanrd.log"
+
+depend() {
+	need localmount
+	after modules udev
+}
+
+start_pre() {
+	[ -d /sys/devices/platform/applesmc.768 ] || { eerror "applesmc not present (T2 kernel module missing?)"; return 1; }
+}

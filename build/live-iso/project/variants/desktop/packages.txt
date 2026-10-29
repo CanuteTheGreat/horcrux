@@ -1,0 +1,39 @@
+# Horcrux Desktop variant: GNOME on Wayland (OpenRC + elogind) and the owner's daily-use tools.
+# Atoms verified against ::gentoo on 2026-10-28; Brave comes from the local overlay in ./repo (not in ::gentoo).
+# --- desktop session
+gnome-base/gnome-light
+gnome-base/gdm
+gnome-extra/gnome-tweaks
+sys-auth/elogind
+net-misc/networkmanager
+media-video/pipewire
+media-video/wireplumber
+x11-terms/terminator
+app-editors/vim
+www-client/firefox-bin
+www-client/brave-bin
+net-misc/nextcloud-client
+net-vpn/tailscale
+# --- virtualization (libvirt/qemu are already in the base image)
+app-emulation/virt-manager
+sys-firmware/edk2-bin
+# --- dev / tools
+dev-util/rustup
+dev-vcs/git
+net-misc/sshpass
+dev-libs/libisoburn
+app-cdr/cdrtools
+sys-apps/net-tools
+sys-cluster/keepalived
+app-antivirus/clamav
+# --- hardware / services
+net-print/cups
+net-print/cups-filters
+net-print/cups-browsed
+net-wireless/bluez
+sys-apps/fwupd
+sys-power/thermald
+sys-power/power-profiles-daemon
+sys-power/upower
+net-dns/avahi
+net-misc/chrony

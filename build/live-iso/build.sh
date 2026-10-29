@@ -33,6 +33,7 @@ cleanup_build() {
   docker rm -fv "$TAG-asm" >/dev/null 2>&1 || true
   [ -z "$cid" ] || docker rm -fv "$cid" >/dev/null 2>&1 || true
   docker rmi "$TAG-tools" >/dev/null 2>&1 || true
+  [ -z "${VARIANT:-}" ] || docker rmi "$TAG-rootfs-$VARIANT" >/dev/null 2>&1 || true
   [ -n "${REUSE_ROOTFS:-}" ] || [ -n "${KEEP_IMAGES:-}" ] || docker rmi "$TAG-app" "$TAG-rootfs" >/dev/null 2>&1 || true
 }
 trap cleanup_build EXIT
@@ -47,14 +48,25 @@ lap "stage 2: gentoo rootfs (stage3 + binhost + ccache)"
 docker build $PLAT $ARCHARGS -f common/Dockerfile.rootfs --build-arg APP_IMAGE=$TAG-app --build-arg PROJECT=$PROJECT \
     --build-arg ISO_LABEL=$ISO_LABEL --build-arg PROJECT_TITLE="$PROJECT_TITLE" -t $TAG-rootfs . 2>&1 | tee "$OUT/rootfs-build.log" | tail -40
 fi
+# Optional image variant (VARIANT=desktop): a second layer on top of the finished rootfs, project/variants/<name>/Dockerfile.
+# The server image stays the default; the variant image is a separate ISO (<prefix>-<variant>-<date>-<arch>.iso).
+ROOTFS_IMG=$TAG-rootfs; VNAME=""
+if [ -n "${VARIANT:-}" ] && [ "$VARIANT" != server ]; then
+  [ -f "project/variants/$VARIANT/Dockerfile" ] || { echo "unknown VARIANT=$VARIANT (no project/variants/$VARIANT/Dockerfile)"; exit 2; }
+  lap "stage 2b: variant $VARIANT"
+  docker build $PLAT $ARCHARGS -f "project/variants/$VARIANT/Dockerfile" --build-arg BASE=$TAG-rootfs --build-arg VARIANT=$VARIANT \
+      -t $TAG-rootfs-$VARIANT . 2>&1 | tee "$OUT/variant-$VARIANT-build.log" | tail -40
+  [ "${PIPESTATUS[0]}" = 0 ] || { echo "variant build failed (log: $OUT/variant-$VARIANT-build.log)"; exit 1; }
+  ROOTFS_IMG=$TAG-rootfs-$VARIANT; VNAME=$VARIANT-
+fi
 lap "stage 3: assembly toolbox"
 # Per-build tag: a shared live-iso-tools:latest could be untagged by the runner disk guard (or replaced by a
 # parallel build) between this build and the docker run below (Horcrux run 7066: "pull access denied").
 docker build $PLAT $ARCHARGS -q -f common/Dockerfile.tools -t $TAG-tools .
 lap "stage 4: export rootfs + assemble ISO (no bind mounts: works from a job container using the host docker)"
-ISO_NAME=$ISO_PREFIX-$SUFFIX-$ARCH.iso
+ISO_NAME=$ISO_PREFIX-${VNAME}$SUFFIX-$ARCH.iso
 docker rm -f $TAG-asm >/dev/null 2>&1 || true
-cid=$(docker create $TAG-rootfs /bin/true)
+cid=$(docker create $ROOTFS_IMG /bin/true)
 docker export "$cid" | docker run -i $PLAT -e ARCH=$ARCH --name $TAG-asm --memory=8g --cpus=$JOBS $TAG-tools \
     sh -c "mkdir -p /work/root /out && tar -x -C /work/root --exclude='dev/*' && assemble-iso.sh /work/root /out/$ISO_NAME '$ISO_LABEL' '$PROJECT_TITLE' '$PROJECT'"
 docker rm -v "$cid" >/dev/null; cid=

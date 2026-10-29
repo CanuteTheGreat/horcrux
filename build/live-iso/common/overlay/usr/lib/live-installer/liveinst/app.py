@@ -39,19 +39,74 @@ def s_locale(t, st, step):
 
 def s_fs(t, st, step):
     c, p = st.c, st.p
-    opts = {"ext4": "ext4 (default, robust)", "xfs": "XFS", "zfs": "ZFS (checksums, snapshots, mirror)"}
+    opts = {"ext4": "ext4 (default, robust)", "xfs": "XFS", "zfs": "ZFS (checksums, snapshots, boot environments, mirror)"}
     f = [Field("fs", "Root file system", "choice", c["fs"], [(x, opts.get(x, x)) for x in p["filesystems"]]),
          Field("zfs_raid", "ZFS layout", "choice", c["zfs_raid"], [("single", "single disk"), ("mirror", "mirror (RAID1, two disks)")],
-               visible=lambda v: v["fs"] == "zfs")]
+               visible=lambda v: v["fs"] == "zfs"),
+         Field("enc", "Encrypt the disk (ZFS native, AES-256-GCM)", "check", c["zfs_encrypt"], visible=lambda v: v["fs"] == "zfs",
+               hint="Recommended for laptops. The passphrase is asked at every boot; /boot and the EFI partition stay unencrypted"),
+         Field("pp", "Disk passphrase", "password", c["zfs_passphrase"], width=40, visible=lambda v: v["fs"] == "zfs" and v["enc"],
+               hint="Min 12 characters. NOT recoverable: if you forget it the data is gone"),
+         Field("pp2", "Confirm passphrase", "password", c["zfs_passphrase"], width=40, visible=lambda v: v["fs"] == "zfs" and v["enc"])]
+
+    def check(a):
+        if a["fs"] == "zfs" and a["enc"]:
+            if a["pp"] != a["pp2"]:
+                return "The two passphrases do not match."
+            from . import zfsroot
+            return zfsroot.passphrase_problem(a["pp"])
+        return None
     b, v = run_form(t, step, "File system",
-                    "ext4 and XFS use one disk. ZFS uses the whole disk as a pool 'rpool'; a mirror needs two disks "
-                    "(it survives one disk failing; /boot lives on the first disk only).", f)
+                    "ext4 and XFS use one disk. ZFS uses the whole disk as a pool 'rpool' with boot environments (roll back a bad "
+                    "update from the boot menu); a mirror needs two disks. ZFS can encrypt everything except /boot.", f, validate_all=check)
     if b == "Back":
         return "back"
     c["fs"], c["zfs_raid"] = v["fs"], v["zfs_raid"]
+    c["zfs_encrypt"] = bool(v["fs"] == "zfs" and v["enc"])
+    c["zfs_passphrase"] = v["pp"] if c["zfs_encrypt"] else ""
     if c["fs"] == "zfs" and not st.dry and S.sh("modprobe zfs && test -e /dev/zfs")[0] != 0:
         message(t, "ZFS not available", "The ZFS kernel module could not be loaded on this machine. Choose ext4 or XFS.", "err")
         return "again"
+    return "next"
+
+
+def s_t2(t, st, step):
+    """Apple T2 Mac: tell the user what the profile does and where the Wi-Fi firmware comes from"""
+    from . import t2
+    c = st.c
+    found = [] if st.dry else t2.find_firmware_sources(["/mnt", "/media", "/run/media", "/root", "/home"])
+    opts = [("auto", "Import automatically (first source found)" if found else "No firmware found: skip (add it later)"),
+            ("none", "Skip: no Wi-Fi/Bluetooth until I import it")] + [(f["path"], f"{f['kind']}: {f['path']} ({f['apple']} Apple files)") for f in found]
+    f = [Field("info1", "Apple T2 Mac detected" + (f" ({t2.model()})" if t2.model() else ""), "label", "", hint="warn"),
+         Field("info2", "Installs the T2 kernel (apple-bce keyboard in the passphrase prompt), fan control, Touch Bar and pm_async=off.", "label"),
+         Field("fw", "Wi-Fi / Bluetooth firmware", "choice", c.get("t2_firmware", "auto"), opts,
+               hint="Apple firmware is never on the ISO. Put firmware.tar on a USB stick or point the installer at an old install")]
+    b, v = run_form(t, step, "Apple T2 hardware", "This Mac has the Apple T2 security chip.", f)
+    if b == "Back":
+        return "back"
+    c["t2_firmware"] = v["fw"]
+    return "next"
+
+
+def s_desktop(t, st, step):
+    from . import desktop
+    c = st.c
+    f = [Field("user", "User name", "text", c["user_name"], width=30, validate=lambda v, a: desktop.user_problem(v)),
+         Field("full", "Full name", "text", c["user_fullname"], width=30, optional=True),
+         Field("pw", "Password", "password", c["user_password"], width=40, hint="Min 12 chars, mixed"),
+         Field("pw2", "Confirm password", "password", c["user_password"], width=40),
+         Field("auto", "Log in automatically", "check", c["user_autologin"], hint="Not recommended on an encrypted laptop that you carry around")]
+
+    def check(a):
+        if a["pw"] != a["pw2"]:
+            return "The two passwords do not match."
+        return S.password_problem(a["pw"], c["hostname"])
+    b, v = run_form(t, step, "Desktop user", "The desktop session needs a normal user account (GNOME does not log in as root).",
+                    f, validate_all=check)
+    if b == "Back":
+        return "back"
+    c["user_name"], c["user_fullname"], c["user_password"] = v["user"], v["full"] or v["user"], v["pw"]
+    c["user_autologin"] = bool(v["auto"])
     return "next"
 
 
@@ -316,7 +371,7 @@ def summary_lines(st):
     out = [("Boot mode", "UEFI" if S.efi_boot() else "legacy BIOS"),
            ("Language / keyboard", f"{c['locale']} / {c['keymap']}"), ("Time zone", c["timezone"]),
            ("Target disk(s)", ", ".join(c["disks"])),
-           ("File system", c["fs"] + (f" ({c['zfs_raid']})" if c["fs"] == "zfs" else "")),
+           ("File system", c["fs"] + (f" ({c['zfs_raid']})" if c["fs"] == "zfs" else "") + (", ENCRYPTED (passphrase at every boot)" if c.get("zfs_encrypt") else "")),
            ("Hostname", c["hostname"])]
     if p["network_mode"] == "wan-lan":
         w, l = c["wan"], c["lan"]
@@ -420,7 +475,8 @@ def s_done(t, st, step):
 # --------------------------------------------------------------------------
 # flow
 # --------------------------------------------------------------------------
-def flow(profile):
+def flow(profile, st=None):
+    from . import t2, desktop
     scr = [s_locale]
     if len(profile["filesystems"]) > 1:
         scr.append(s_fs)
@@ -429,6 +485,13 @@ def flow(profile):
         scr += [s_ifaces, s_addr]
     else:
         scr.append(s_mgmt)
+    if st is not None and st.c.get("t2", "auto") != "no" and (t2.detect() or st.c.get("t2") in ("yes", "1", "true")):
+        scr.append(s_t2)
+    if desktop.available():
+        c = st.c if st is not None else None
+        if c is not None:
+            c["install_type"] = "desktop"
+        scr.append(s_desktop)
     scr += [s_account, s_summary, s_install, s_done]
     return scr
 
@@ -444,7 +507,7 @@ def interactive(profile, dry=False):
         S.bring_up(st.nics)
         if not dry and S.large_screen():
             S.sh("setfont ter-v32n", timeout=10)
-        screens = flow(profile)
+        screens = flow(profile, st)
         i = 0
         total = len(screens)
         while 0 <= i < total:

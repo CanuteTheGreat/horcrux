@@ -5,3 +5,5 @@ dev-db/sqlite
 sys-fs/cryptsetup
 # boot menu: memory test (x86 only; lines prefixed '<arch>? ' are built on that architecture only)
 x86_64? sys-apps/memtest86+
+# compressed RAM swap for ZFS installs (no swap on ZFS)
+sys-block/zram-init

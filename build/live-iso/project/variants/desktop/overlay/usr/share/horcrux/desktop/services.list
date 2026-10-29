@@ -1,0 +1,15 @@
+# service runlevel  - enabled by the installer on a Desktop install (OpenRC)
+elogind boot
+dbus default
+NetworkManager default
+xdm default
+bluetooth default
+cupsd default
+cups-browsed default
+avahi-daemon default
+upowerd default
+power-profiles-daemon default
+thermald default
+chronyd default
+tailscaled default
+# off by default (the owner enables them when needed): clamd, freshclam, keepalived, libvirtd is on in the server base

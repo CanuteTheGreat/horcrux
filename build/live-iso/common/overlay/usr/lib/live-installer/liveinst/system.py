@@ -419,6 +419,13 @@ def default_config(profile):
         "root_password": "", "root_hash": "", "web_password": "",
         "ssh_keys": [], "ssh_password_auth": False, "email": "",
         "console_open": False,
+        # ZFS root with native encryption (the passphrase is typed by the user; only held in memory)
+        "zfs_encrypt": False, "zfs_passphrase": "",
+        # Apple T2 Mac support: auto = detect PCI 106b:1801; firmware = auto | none | path to a firmware.tar / brcm dir
+        "t2": "auto", "t2_firmware": "auto",
+        # install profile: server | desktop (desktop needs the desktop image variant)
+        "install_type": "server",
+        "user_name": "", "user_fullname": "", "user_hash": "", "user_password": "", "user_autologin": False,
     }
 
 
@@ -440,6 +447,15 @@ def config_from_answers(profile, path):
     d = a.get("disk", {})
     c["fs"] = d.get("filesystem", "ext4")
     c["zfs_raid"] = d.get("zfs_raid", "single")
+    c["zfs_encrypt"] = bool(d.get("encryption", d.get("encrypt", False)))
+    c["zfs_passphrase"] = d.get("passphrase", "")
+    c["t2"] = str(g.get("t2", "auto"))
+    c["t2_firmware"] = str(g.get("t2_firmware", "auto"))
+    c["install_type"] = str(g.get("install_type", "server"))
+    u = a.get("user", {})
+    c["user_name"], c["user_fullname"] = u.get("name", ""), u.get("fullname", u.get("name", ""))
+    c["user_hash"], c["user_password"] = u.get("password_hash", ""), u.get("password", "")
+    c["user_autologin"] = bool(u.get("autologin", False))
     dl = d.get("disks", d.get("disk", "first"))
     c["disks"] = [dl] if isinstance(dl, str) else list(dl)
     n = a.get("network", {})
@@ -467,6 +483,23 @@ def validate_config(profile, c, unattended=False, require_secret=True):
         errs.append("ZFS mirror needs two different disks")
     if c["fs"] != "zfs" and len(c["disks"]) > 1:
         errs.append("only ZFS uses more than one disk")
+    if c.get("install_type") == "desktop":
+        from . import desktop
+        if desktop.user_problem(c.get("user_name", "")):
+            errs.append("user: " + desktop.user_problem(c.get("user_name", "")))
+        if c.get("user_hash"):
+            if crypt_hash_problem(c["user_hash"]):
+                errs.append("user password hash: " + crypt_hash_problem(c["user_hash"]))
+        elif not c.get("user_password"):
+            errs.append("user: no password")
+    if c.get("zfs_encrypt"):
+        if c["fs"] != "zfs":
+            errs.append("disk encryption is ZFS native encryption: choose the ZFS file system")
+        else:
+            from . import zfsroot
+            pp = zfsroot.passphrase_problem(c.get("zfs_passphrase", ""))
+            if pp:
+                errs.append("disk passphrase: " + pp)
     if require_secret:
         if c["root_hash"]:
             if crypt_hash_problem(c["root_hash"]):
@@ -514,6 +547,9 @@ class Installer:
         self.target = "/mnt/target"
         self.efi = efi_boot()
         self.logf = None
+        from . import t2 as _t2
+        want = str(cfg.get("t2", "auto")).lower()
+        self.t2 = (_t2.detect() if want == "auto" else want in ("1", "yes", "true", "on"))
 
     # -- plumbing -----------------------------------------------------
     def log(self, line):
@@ -585,16 +621,18 @@ class Installer:
         return {n: part_path(disk, n) for n in (1, 2, 3, 4)}
 
     def partition(self):
-        swap = self.p["swap_mb"]
+        swap = 0 if self.zfs() else self.p["swap_mb"]
         if swap:
             ram = mem_mb()
             swap = max(1024, min(swap, ram)) if ram else swap
         self.swap_mb = swap
         for disk in self.c["disks"]:
             self.run(["sh", "-c", f"swapoff -a 2>/dev/null; wipefs -a {shquote(disk)} >/dev/null 2>&1; sgdisk -Z {shquote(disk)} >/dev/null 2>&1; true"], check=False)
-            first = ["-n", "1:0:+512M", "-t", "1:ef00", "-c", "1:ESP"] if self.efi else ["-n", "1:0:+1M", "-t", "1:ef02", "-c", "1:BIOS-boot"]
-            args = ["sgdisk"] + first + ["-n", "2:0:+1G", "-t", "2:8300", "-c", "2:boot"]
-            if swap:
+            first = ["-n", "1:0:+" + ("1G" if self.zfs() else "512M"), "-t", "1:ef00", "-c", "1:ESP"] if self.efi else ["-n", "1:0:+1M", "-t", "1:ef02", "-c", "1:BIOS-boot"]
+            args = ["sgdisk"] + first + ["-n", "2:0:+" + ("2G" if self.zfs() else "1G"), "-t", "2:8300", "-c", "2:boot"]
+            if self.zfs():
+                pass        # no swap partition on a ZFS install: zram (zfsroot.configure)
+            elif swap:
                 args += ["-n", f"3:0:+{swap}M", "-t", "3:8200", "-c", "3:swap"]
             else:
                 args += ["-n", "3:0:+64M", "-t", "3:8200", "-c", "3:swap-unused"]
@@ -620,14 +658,8 @@ class Installer:
         elif c["fs"] == "xfs":
             self.run(["mkfs.xfs", "-f", "-L", "root", L[4]])
         elif c["fs"] == "zfs":
-            devs = [self.layout(d)[4] for d in c["disks"]]
-            self.run("modprobe zfs", check=False)
-            self.run("test -e /etc/hostid || zgenhostid", check=False)
-            vd = (["mirror"] + devs) if c["zfs_raid"] == "mirror" else devs[:1]
-            self.run(["zpool", "create", "-f", "-o", "ashift=12", "-o", "autotrim=on", "-O", "compression=lz4",
-                      "-O", "acltype=posixacl", "-O", "xattr=sa", "-O", "relatime=on", "-O", "mountpoint=none",
-                      "-R", self.target, "rpool"] + vd)
-            self.run(["zfs", "create", "-o", "mountpoint=/", "-o", "canmount=noauto", "rpool/ROOT"])
+            from . import zfsroot
+            zfsroot.mkpool(self)
         else:
             raise InstallError("unknown filesystem " + c["fs"])
 
@@ -636,7 +668,8 @@ class Installer:
         L = self.layout(c["disks"][0])
         os.makedirs(self.target, exist_ok=True)
         if self.zfs():
-            self.run(["zfs", "mount", "rpool/ROOT"])
+            from . import zfsroot
+            zfsroot.mount(self)
         else:
             self.run(["mount", L[4], self.target])
         os.makedirs(self.target + "/boot", exist_ok=True)
@@ -644,6 +677,8 @@ class Installer:
         if self.efi:
             os.makedirs(self.target + "/boot/efi", exist_ok=True)
             self.run(["mount", L[1], self.target + "/boot/efi"])
+        if self.zfs():
+            zfsroot.mount_rest(self)
         if self.swap_mb:
             self.run(["swapon", L[3]], check=False)
 
@@ -769,6 +804,20 @@ class Installer:
         # serial console keeps working when the installer was driven over a serial line
         if arch.serial_console():
             self.run(["rc-update", "add", "live-serial", "default"], chroot=True, check=False)
+        self.profile_extras()
+
+    def profile_extras(self):
+        """T2 Mac profile, desktop profile, ZFS boot-environment config (new modules, see t2.py / desktop.py / zfsroot.py)"""
+        from . import t2, desktop
+        self.cmdline_extra = arch.console_args()
+        self.kernel_glob = "*"
+        if self.t2:
+            t2.apply(self)
+        if self.c.get("install_type") == "desktop":
+            desktop.apply(self)
+        if self.zfs():
+            from . import zfsroot
+            zfsroot.configure(self, self.cmdline_extra, self.kernel_glob)
 
     def motd(self):
         return (f"\n  {self.p['title']} (installed {time.strftime('%F')})\n"
@@ -838,7 +887,8 @@ class Installer:
                 self.run(["grub-install", "--target=i386-pc", disk], chroot=True)
         fsfix = fsuuid(L[4]) if not self.zfs() else ""
         if self.zfs():
-            self.write_zfs_grubcfg(L)
+            from . import zfsroot
+            zfsroot.write_grubcfg(self)
         else:
             self.run(["grub-mkconfig", "-o", "/boot/grub/grub.cfg"], chroot=True)
             if fsfix:
@@ -874,8 +924,8 @@ menuentry "{self.p['title']} (ZFS root)" {{
             self.run(["umount", "-R", "-l", f"{T}/{d}"], check=False)
         self.run(f"umount -R {T}/boot 2>/dev/null; true", check=False)
         if self.zfs():
-            self.run(["zfs", "umount", "-a"], check=False)
-            self.run(["zpool", "export", "rpool"], check=False)
+            from . import zfsroot
+            zfsroot.finish(self)
         else:
             self.run(["umount", "-R", T], check=False)
         self.log("install finished")

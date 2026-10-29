@@ -1,0 +1,13 @@
+# GNOME on Wayland, OpenRC (elogind), no systemd
+gnome-base/gdm elogind wayland -systemd
+gnome-base/gnome-light wayland
+gnome-base/gnome-shell -systemd
+net-misc/networkmanager iwd wifi -wpa_supplicant -modemmanager -ppp
+media-video/pipewire sound-server pipewire-alsa -jack-sdk
+media-video/wireplumber elogind -systemd
+net-misc/nextcloud-client -dolphin
+net-misc/spice-gtk usbredir gtk3
+app-emulation/virt-manager -gui
+sys-apps/fwupd -systemd
+net-print/cups -systemd
+net-wireless/bluez cups -systemd

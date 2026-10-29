@@ -1,0 +1,21 @@
+#!/sbin/openrc-run
+# Touch Bar function-key/media-key row (AsahiLinux/tiny-dfr) on T2 Macs: needs hid_appletb_kbd + appletbdrm.
+description="Touch Bar daemon (tiny-dfr)"
+command="/usr/bin/tiny-dfr"
+pidfile="/run/tiny-dfr.pid"
+supervisor="supervise-daemon"
+respawn_delay=3
+output_log="/var/log/tiny-dfr.log"
+error_log="/var/log/tiny-dfr.log"
+
+depend() {
+	need localmount udev
+	after modules elogind
+}
+
+start_pre() {
+	modprobe -q uinput 2>/dev/null
+	modprobe -q appletbdrm 2>/dev/null
+	modprobe -q hid_appletb_kbd 2>/dev/null
+	true
+}
