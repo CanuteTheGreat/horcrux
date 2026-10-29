@@ -41,6 +41,10 @@ if [ -n "${FW_SHA:-}" ]; then
   [ "$got" = "$FW_SHA" ]; r $? firmware-sha256-kure.bin "$got"
 fi
 
+if [ -n "${TS_SHA:-}" ]; then
+  got=$(sha256sum /etc/hogshead/ts-authkey 2>/dev/null | cut -d' ' -f1); m=$(stat -c %a /etc/hogshead/ts-authkey 2>/dev/null)
+  [ "$got" = "$TS_SHA" ] && [ "$m" = 600 ]; r $? baked-tailscale-authkey "present, mode $m, sha256 matches the key created for this build (value not printed)"
+fi
 # ---- ssh: key-only
 /usr/sbin/sshd -T 2>/dev/null | grep -qix 'passwordauthentication no'; r $? sshd-passwordauth-off ""
 /usr/sbin/sshd -T 2>/dev/null | grep -Eqix 'permitrootlogin (prohibit-password|without-password)'; r $? sshd-root-key-only ""

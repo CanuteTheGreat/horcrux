@@ -33,3 +33,11 @@ Apple Wi-Fi/BT firmware (`brcmfmac4364b3-pcie.apple,*`, `brcmbt*-apple,*`) is ex
 
 ## Building the T2 kernel for the installed system
 `live/Dockerfile` stages `kernel` and `rootfs` already produce `/boot/vmlinuz-<kr>`, `/lib/modules/<kr>` and the matching `zfs.ko`. To reuse them in the installer image: `COPY --from=kernel /boot /lib/modules /usr/src` as in `rootfs` there, then `emerge =sys-fs/zfs-kmod-2.3.9 =sys-fs/zfs-2.3.9` and run dracut with `dracut/*.conf` (add `zfs` module for root-on-ZFS).
+
+## Build notes / pitfalls (learned the hard way)
+- Full kernel compile = ~50 min on an idle 8-core rw-man host (2 h when loaded). BuildKit re-runs it when ANY earlier layer changes: the `base` stage (`live/portage/**`, `make.conf`) feeds the kernel stage, so put late package.use in `live/portage-late/` (copied only in the `rootfs` stage). `build.sh` pins mtimes for the same reason; `KEEP_ROOTFS=tag` keeps the finished image and `REBASE=tag -p PRIV` re-bakes private files in ~4 min.
+- Gentoo's `sys-fs/lvm2` binpkg has no LVM tools without `USE=lvm` (needed by hogshead-backup and the installer).
+- zfs-kmod must be built against OUR kernel (`--usepkg=n --getbinpkg=n`): a cached binpkg built for another kernel release silently yields no `zfs.ko`.
+- `sshd -T` needs an absolute path; the live sshd drop-in sets `SetEnv PATH` so ssh sessions find `/sbin` tools. The live clock is wrong (RTC not trusted): TLS fails until the clock is set (`hogshead-remote` does it from an HTTP `Date:` header).
+- Gentoo's dist config references Gentoo's own module-signing key paths: build-kernel.sh clears them (no module signing; Secure Boot is off on T2 laptops here).
+- QEMU test: `live/qemu-test.py` (USB-attached ISO via OVMF, HSKEYS stick, emulated NVMe LUKS+LVM). 110 checks; evidence for the v1 private ISO in ctg-infrastructure `hosts/hogshead/live-usb-evidence/`.

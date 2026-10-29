@@ -13,7 +13,7 @@ import argparse, os, re, shutil, socket, subprocess, sys, threading, time
 
 ap = argparse.ArgumentParser()
 ap.add_argument('iso'); ap.add_argument('--out', required=True)
-ap.add_argument('--tskey'); ap.add_argument('--fw-sha', default=''); ap.add_argument('--expect-keys', default='')
+ap.add_argument('--tskey'); ap.add_argument('--ts-sha', default=''); ap.add_argument('--fw-sha', default=''); ap.add_argument('--expect-keys', default='')
 ap.add_argument('--kvm', action='store_true'); ap.add_argument('--port', type=int, default=2222)
 ap.add_argument('--boot-timeout', type=int, default=600)
 a = ap.parse_args()
@@ -88,7 +88,11 @@ SSH = ['ssh', '-i', key, '-p', str(a.port), '-o', 'StrictHostKeyChecking=no', '-
        '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'LogLevel=ERROR', 'root@127.0.0.1']
 PFX = 'export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; '
 def gssh(cmd, timeout=300, env=''):
-    return sh(SSH + [env + cmd], timeout=timeout)
+    try:
+        return sh(SSH + [env + cmd], timeout=timeout)
+    except subprocess.TimeoutExpired:
+        log('  (timeout after %ss: %s)' % (timeout, cmd[:60]))
+        return subprocess.CompletedProcess(cmd, 124, '', 'timeout')
 def check(name, ok, detail=''):
     log(('PASS ' if ok else 'FAIL ') + name + (' :: ' + detail if detail else ''))
     if not ok: fails.append(name)
@@ -122,10 +126,10 @@ try:
     pw2 = sh(['sshpass', '-p', 'x', 'ssh', '-p', str(a.port), '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null',
               '-o', 'PreferredAuthentications=password', '-o', 'PubkeyAuthentication=no', '-o', 'ConnectTimeout=10', 'nobody@127.0.0.1', 'true'], timeout=60)
     check('ssh-password-user-refused', pw2.returncode != 0, pw2.stderr.strip()[-120:])
-    dbg = gssh('echo PATH=$PATH; date -u; ls -l /sbin /usr/sbin 2>&1 | head -3; /usr/sbin/sshd -T 2>&1 | grep -i -E "^(setenv|include|authenticationmethods|permitrootlogin|passwordauthentication)"; ls /etc/ssh/sshd_config.d; head -3 /etc/ssh/sshd_config; ls /lib/rc/cache; lsinitrd -f etc/cmdline.d/20-force_driver.conf /boot/initramfs-*.img 2>&1 | head -3; lsinitrd /boot/initramfs-*.img | grep -i -E "force|cmdline.d" | head', timeout=60)
+    dbg = gssh('echo PATH=$PATH; date -u; ls -l /sbin /usr/sbin 2>&1 | head -3; /usr/sbin/sshd -T 2>&1 | grep -i -E "^(setenv|include|authenticationmethods|permitrootlogin|passwordauthentication)"; ls /etc/ssh/sshd_config.d; head -3 /etc/ssh/sshd_config; ls /lib/rc/cache; lsinitrd -f etc/cmdline.d/20-force_drivers.conf /boot/initramfs-*.img 2>&1 | head -3', timeout=240)
     open(os.path.join(OUT, 'debug-env.txt'), 'w').write(dbg.stdout + dbg.stderr); log('  ' + dbg.stdout.replace('\n', '\n  '))
     # 4. guest-side checks
-    g = gssh('sh -s', timeout=600, env='') if False else sh(SSH + [f'FW_SHA={a.fw_sha} EXPECT_KEYS={a.expect_keys} sh -s'], input=PFX + open(os.path.join(HERE, 'guest-checks.sh')).read(), timeout=600)
+    g = gssh('sh -s', timeout=600, env='') if False else sh(SSH + [f'FW_SHA={a.fw_sha} EXPECT_KEYS={a.expect_keys} TS_SHA={a.ts_sha} sh -s'], input=PFX + open(os.path.join(HERE, 'guest-checks.sh')).read(), timeout=600)
     open(os.path.join(OUT, 'guest-checks.txt'), 'w').write(g.stdout + g.stderr)
     for l in g.stdout.splitlines():
         log('  ' + l)
@@ -160,7 +164,7 @@ umount /mnt; vgchange -an ubuntu-vg >/dev/null; cryptsetup close tmpold; echo PR
     r = gssh('mkdir -p /tmp/bk && hogshead-backup /tmp/bk /home/canutethegreat /etc/hostname && cat /tmp/bk/home/canutethegreat/Documents/thesis.txt && cat /tmp/bk/etc/hostname && a=$(sha256sum /tmp/bk/home/canutethegreat/blob.bin | cut -c1-64); b=$(cut -c1-64 /tmp/blob.sha); [ "$a" = "$b" ] && echo SHA-OK; mount | grep hogshead-old; true', timeout=300)
     check('backup-copies-files', r.returncode == 0 and 'precious' in r.stdout and 'SHA-OK' in r.stdout and 'backup finished OK' in r.stdout, r.stdout[-200:].strip())
     check('backup-old-root-mounted-readonly', re.search(r'hogshead-old.*\bro\b|hogshead-old.*[(,]ro[,)]', r.stdout) is None, 'unmounted after the run (no -k)')
-    r = gssh('hogshead-backup -k -n /tmp/x /etc/hostname >/dev/null; mount | grep hogshead-old; echo test > /mnt/hogshead-old/rw-probe 2>&1; umount /mnt/hogshead-old; true', timeout=120)
+    r = gssh('hogshead-backup -k -n /tmp/x /etc/hostname >/dev/null; mount | grep hogshead-old; (echo test > /mnt/hogshead-old/rw-probe) 2>&1; umount /mnt/hogshead-old; true', timeout=120)
     check('old-root-is-read-only', re.search(r'[(,]ro[,)]', r.stdout) is not None and 'ead-only' in r.stdout, r.stdout.strip()[-200:])
     # 6. hogshead-remote (only when a TEST tailscale key was given on the HSKEYS stick)
     if a.tskey:
