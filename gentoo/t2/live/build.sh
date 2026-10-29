@@ -1,6 +1,8 @@
 #!/bin/bash
 # gentoo/t2/live/build.sh - build the hogshead (Apple T2 MacBook) live ISO. Run on an rw-man host (docker + BuildKit only).
 #   gentoo/t2/live/build.sh -o OUTDIR [-p PRIVDIR] [-n NAME]
+#   KEEP_ROOTFS=<tag> keeps the finished rootfs image under that tag; REBASE=<tag> skips stage 1 and only adds the PRIVDIR files
+#   (fw/, authorized_keys, ts-authkey) on top of such a kept image (fast re-bake of a key, no kernel rebuild).
 #   PRIVDIR (never committed): fw/ (Apple brcm firmware), authorized_keys, ts-authkey. Without it the ISO has none of them
 #   (= a shareable T2 live ISO; Wi-Fi then needs firmware imported by the user).
 set -euo pipefail
@@ -17,6 +19,7 @@ cleanup() {
   docker rm -fv "$TAG-asm" >/dev/null 2>&1 || true
   [ -z "$cid" ] || docker rm -fv "$cid" >/dev/null 2>&1 || true
   docker rmi "$TAG-tools" "$TAG-tools2" "$TAG-rootfs" >/dev/null 2>&1 || true
+  [ -z "${KEEP_ROOTFS:-}" ] || true
   rm -rf "$WORK"
 }
 trap cleanup EXIT; trap 'exit 143' TERM INT
@@ -28,12 +31,21 @@ cp -r "$REPO/build/live-iso/common/." "$WORK/ctx/build/live-iso/common/"
 cp -r "$T2" "$WORK/ctx/gentoo/t2"
 if [ -n "$PRIV" ]; then cp -r "$PRIV"/. "$WORK/priv/"; fi
 sh "$T2/kernel/fetch-patches.sh" "$WORK/patches"
+# deterministic mtimes: BuildKit's layer cache must hit on a rebuild (the kernel layer is ~50 min)
+find "$WORK/ctx" "$WORK/patches" "$WORK/priv" -exec touch -h -d @1700000000 {} +
 
+if [ -z "${REBASE:-}" ]; then
 lap "stage 1: kernel ($KERNEL_PKG + t2linux patches) + OpenZFS + userland"
 docker build -f "$WORK/ctx/gentoo/t2/live/Dockerfile" \
   --build-context t2patches="$WORK/patches" --build-context priv="$WORK/priv" \
-  --build-arg KERNEL_PKG="$KERNEL_PKG" --build-arg KERNEL_SRC_DIR="$KERNEL_SRC_DIR" --build-arg LOCALVERSION="$LOCALVERSION" \
+  --build-arg KERNEL_PKG="$KERNEL_PKG" --build-arg KERNEL_SRC_DIR="$KERNEL_SRC_DIR" \
   -t "$TAG-rootfs" "$WORK/ctx" 2>&1 | tee "$OUT/rootfs-build.log" | tail -25
+[ -z "${KEEP_ROOTFS:-}" ] || docker tag "$TAG-rootfs" "$KEEP_ROOTFS"
+else
+lap "stage 1 (rebase): private files on top of $REBASE"
+printf 'FROM %s\nCOPY priv/ /tmp/priv/\nRUN set -e; [ ! -s /tmp/priv/ts-authkey ] || install -m 0600 /tmp/priv/ts-authkey /etc/hogshead/ts-authkey; [ ! -f /tmp/priv/authorized_keys ] || install -m 0600 /tmp/priv/authorized_keys /root/.ssh/authorized_keys; rm -rf /tmp/priv\n' "$REBASE" > "$WORK/Dockerfile.rebase"
+docker build -f "$WORK/Dockerfile.rebase" -t "$TAG-rootfs" "$WORK" 2>&1 | tail -5
+fi
 
 lap "stage 2: assembly toolbox"
 # the tools Dockerfile expects the build/live-iso context layout (common/...)

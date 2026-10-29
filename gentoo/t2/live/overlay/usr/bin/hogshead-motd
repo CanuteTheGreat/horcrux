@@ -1,4 +1,5 @@
 #!/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
 # Status + next steps (shown at the autologin console; run `hogshead-motd` again any time).
 B=$'\e[1m'; G=$'\e[32m'; Y=$'\e[33m'; N=$'\e[0m'
 lan=$(ip -4 -o addr show scope global 2>/dev/null | awk '$2!="tailscale0"{split($4,a,"/"); printf "%s(%s) ", a[1], $2}')

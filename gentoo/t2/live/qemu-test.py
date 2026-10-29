@@ -86,6 +86,7 @@ def mark():
 
 SSH = ['ssh', '-i', key, '-p', str(a.port), '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null',
        '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'LogLevel=ERROR', 'root@127.0.0.1']
+PFX = 'export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; '
 def gssh(cmd, timeout=300, env=''):
     return sh(SSH + [env + cmd], timeout=timeout)
 def check(name, ok, detail=''):
@@ -121,8 +122,10 @@ try:
     pw2 = sh(['sshpass', '-p', 'x', 'ssh', '-p', str(a.port), '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null',
               '-o', 'PreferredAuthentications=password', '-o', 'PubkeyAuthentication=no', '-o', 'ConnectTimeout=10', 'nobody@127.0.0.1', 'true'], timeout=60)
     check('ssh-password-user-refused', pw2.returncode != 0, pw2.stderr.strip()[-120:])
+    dbg = gssh('echo PATH=$PATH; date -u; ls -l /sbin /usr/sbin 2>&1 | head -3; /usr/sbin/sshd -T 2>&1 | grep -i -E "^(setenv|include|authenticationmethods|permitrootlogin|passwordauthentication)"; ls /etc/ssh/sshd_config.d; head -3 /etc/ssh/sshd_config; ls /lib/rc/cache; lsinitrd -f etc/cmdline.d/20-force_driver.conf /boot/initramfs-*.img 2>&1 | head -3; lsinitrd /boot/initramfs-*.img | grep -i -E "force|cmdline.d" | head', timeout=60)
+    open(os.path.join(OUT, 'debug-env.txt'), 'w').write(dbg.stdout + dbg.stderr); log('  ' + dbg.stdout.replace('\n', '\n  '))
     # 4. guest-side checks
-    g = gssh('sh -s', timeout=600, env='') if False else sh(SSH + [f'FW_SHA={a.fw_sha} EXPECT_KEYS={a.expect_keys} sh -s'], input=open(os.path.join(HERE, 'guest-checks.sh')).read(), timeout=600)
+    g = gssh('sh -s', timeout=600, env='') if False else sh(SSH + [f'FW_SHA={a.fw_sha} EXPECT_KEYS={a.expect_keys} sh -s'], input=PFX + open(os.path.join(HERE, 'guest-checks.sh')).read(), timeout=600)
     open(os.path.join(OUT, 'guest-checks.txt'), 'w').write(g.stdout + g.stderr)
     for l in g.stdout.splitlines():
         log('  ' + l)
@@ -138,7 +141,7 @@ mkfs.ext4 -q /dev/ubuntu-vg/ubuntu-lv; mount /dev/ubuntu-vg/ubuntu-lv /mnt
 mkdir -p /mnt/home/canutethegreat/Documents /mnt/etc; echo precious > /mnt/home/canutethegreat/Documents/thesis.txt; echo cfg > /mnt/etc/hostname
 dd if=/dev/urandom of=/mnt/home/canutethegreat/blob.bin bs=1M count=3 status=none; sha256sum /mnt/home/canutethegreat/blob.bin > /tmp/blob.sha
 umount /mnt; vgchange -an ubuntu-vg >/dev/null; cryptsetup close tmpold; echo PREP-OK'''
-    r = sh(SSH + ['sh -s'], input=prep, timeout=300)
+    r = sh(SSH + ['sh -s'], input=PFX + prep, timeout=300)
     check('old-disk-prepared', 'PREP-OK' in r.stdout, (r.stdout + r.stderr)[-200:])
     # refuse over ssh
     r = gssh('hogshead-unlock /dev/nvme0n1p3', timeout=60)
@@ -153,18 +156,21 @@ umount /mnt; vgchange -an ubuntu-vg >/dev/null; cryptsetup close tmpold; echo PR
     check('unlock-opens-luks-and-lvm', bool(m))
     time.sleep(2)
     r = gssh('hogshead-backup -n /tmp/bk-dry /home/canutethegreat/Documents', timeout=120)
-    check('backup-dry-run', r.returncode == 0 and 'thesis.txt' in r.stdout, r.stdout[-200:])
-    r = gssh('mkdir -p /tmp/bk && hogshead-backup /tmp/bk /home/canutethegreat /etc/hostname && cat /tmp/bk/home/canutethegreat/Documents/thesis.txt && cat /tmp/bk/etc/hostname && (cd /tmp/bk/home/canutethegreat && sha256sum -c /tmp/blob.sha 2>&1 | head -1; sed "s# .*/# #" /tmp/blob.sha >/dev/null) ; mount | grep hogshead-old', timeout=300)
-    check('backup-copies-files', r.returncode == 0 and 'precious' in r.stdout, r.stdout[-300:])
+    check('backup-dry-run', r.returncode == 0 and 'DRY RUN' in r.stdout and 'backup finished OK' in r.stdout, r.stdout[-120:].strip())
+    r = gssh('mkdir -p /tmp/bk && hogshead-backup /tmp/bk /home/canutethegreat /etc/hostname && cat /tmp/bk/home/canutethegreat/Documents/thesis.txt && cat /tmp/bk/etc/hostname && a=$(sha256sum /tmp/bk/home/canutethegreat/blob.bin | cut -c1-64); b=$(cut -c1-64 /tmp/blob.sha); [ "$a" = "$b" ] && echo SHA-OK; mount | grep hogshead-old; true', timeout=300)
+    check('backup-copies-files', r.returncode == 0 and 'precious' in r.stdout and 'SHA-OK' in r.stdout and 'backup finished OK' in r.stdout, r.stdout[-200:].strip())
     check('backup-old-root-mounted-readonly', re.search(r'hogshead-old.*\bro\b|hogshead-old.*[(,]ro[,)]', r.stdout) is None, 'unmounted after the run (no -k)')
-    r = gssh('hogshead-backup -k -n /tmp/x /etc/hostname >/dev/null; mount | grep hogshead-old; echo test > /mnt/hogshead-old/rw-probe 2>&1; umount /mnt/hogshead-old', timeout=120)
-    check('old-root-is-read-only', 'ro' in r.stdout and ('Read-only' in r.stdout or 'read-only' in r.stdout), r.stdout.strip()[-200:])
+    r = gssh('hogshead-backup -k -n /tmp/x /etc/hostname >/dev/null; mount | grep hogshead-old; echo test > /mnt/hogshead-old/rw-probe 2>&1; umount /mnt/hogshead-old; true', timeout=120)
+    check('old-root-is-read-only', re.search(r'[(,]ro[,)]', r.stdout) is not None and 'ead-only' in r.stdout, r.stdout.strip()[-200:])
     # 6. hogshead-remote (only when a TEST tailscale key was given on the HSKEYS stick)
     if a.tskey:
         r = gssh('hogshead-remote', timeout=240)
         open(os.path.join(OUT, 'hogshead-remote.txt'), 'w').write(re.sub(r'tskey-[A-Za-z0-9-]+', 'tskey-***', r.stdout + r.stderr))
         ip = re.search(r'Tailscale IP : (100\.\d+\.\d+\.\d+)', r.stdout)
         check('hogshead-remote-joins-tailnet', bool(ip), (ip.group(1) if ip else (r.stdout + r.stderr)[-300:]))
+        if not ip:
+            d = gssh('date; cat /etc/resolv.conf; ip -4 addr | grep inet; curl -sS -m 10 -I https://controlplane.tailscale.com 2>&1 | head -3; tailscale --socket=/run/tailscale/tailscaled.sock status 2>&1 | head -5; tailscale --socket=/run/tailscale/tailscaled.sock netcheck 2>&1 | head -20; tail -40 /var/log/tailscaled.log | sed -E "s/tskey-[A-Za-z0-9-]+/tskey-***/g"', timeout=120)
+            open(os.path.join(OUT, 'tailscale-debug.txt'), 'w').write(d.stdout + d.stderr)
         lan = re.search(r'LAN IP\(s\)\s*:\s*\n\s+(\d+\.\d+\.\d+\.\d+)', r.stdout)
         check('hogshead-remote-prints-lan-ip', bool(lan), lan.group(1) if lan else '')
         r = gssh('tailscale --socket=/run/tailscale/tailscaled.sock status --json | head -c 0; tailscale --socket=/run/tailscale/tailscaled.sock status | head -3; ps aux | grep -c "[t]skey-"', timeout=60)

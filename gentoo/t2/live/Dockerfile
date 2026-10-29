@@ -18,7 +18,6 @@ RUN cat /etc/portage/make.conf.hogshead >> /etc/portage/make.conf && rm /etc/por
 FROM base AS kernel
 ARG KERNEL_PKG
 ARG KERNEL_SRC_DIR
-ARG LOCALVERSION
 RUN --mount=type=cache,id=hs-binpkgs,target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=hs-distfiles,target=/var/cache/distfiles,sharing=locked \
     set -e; \
@@ -31,17 +30,18 @@ RUN --mount=type=cache,id=hs-binpkgs,target=/var/cache/binpkgs,sharing=locked \
     rm -rf /var/tmp/portage/sys-kernel; \
     ls /usr/src
 COPY gentoo/t2/kernel/ /t2/kernel/
-RUN --mount=type=bind,from=t2patches,target=/t2patches \
-    KERNEL_SRC_DIR=${KERNEL_SRC_DIR} LOCALVERSION=${LOCALVERSION} sh /t2/kernel/build-kernel.sh > /build-kernel.log 2>&1 \
+COPY --from=t2patches / /t2patches/
+RUN KERNEL_SRC_DIR=${KERNEL_SRC_DIR} sh /t2/kernel/build-kernel.sh > /build-kernel.log 2>&1 \
     || { tail -100 /build-kernel.log; exit 1; }; \
     tail -5 /build-kernel.log; ln -sfn ${KERNEL_SRC_DIR} /usr/src/linux
 
 # ---------------- userland ----------------
 FROM base AS rootfs
+COPY gentoo/t2/live/portage-late/ /etc/portage/
 COPY gentoo/t2/live/packages.txt /tmp/packages.txt
 RUN --mount=type=cache,id=hs-binpkgs,target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=hs-distfiles,target=/var/cache/distfiles,sharing=locked \
-    set -e; emerge --noreplace $(grep -v '^#' /tmp/packages.txt | tr '\n' ' '); ls /usr/bin/nmtui /usr/bin/cryptsetup
+    set -e; emerge --noreplace $(grep -v '^#' /tmp/packages.txt | tr '\n' ' '); ls /usr/bin/nmtui /usr/bin/cryptsetup /usr/bin/pvcreate /usr/bin/lvs
 
 # kernel (+ build tree for out-of-tree ZFS), then OpenZFS built against it
 COPY --from=kernel /boot/ /boot/
@@ -49,7 +49,7 @@ COPY --from=kernel /lib/modules/ /lib/modules/
 COPY --from=kernel /usr/src/ /usr/src/
 RUN --mount=type=cache,id=hs-binpkgs,target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=hs-distfiles,target=/var/cache/distfiles,sharing=locked \
-    set -e; ls -l /usr/src; emerge --noreplace =sys-fs/zfs-kmod-2.3.9 =sys-fs/zfs-2.3.9; \
+    set -e; ls -l /usr/src; emerge --noreplace --usepkg=n --getbinpkg=n =sys-fs/zfs-kmod-2.3.9; emerge --noreplace =sys-fs/zfs-2.3.9; \
     kr=$(cat /boot/.kernelrelease); find /lib/modules/$kr -name 'zfs.ko*' | grep .; depmod $kr
 
 # tailscale (official static build, sha256-verified)

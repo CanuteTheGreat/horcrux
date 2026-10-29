@@ -1,4 +1,5 @@
 #!/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
 # hogshead-backup: copy files from the OLD (LUKS+LVM+ext4) install to a destination before the disk is wiped.
 # The old root is mounted READ-ONLY. DEST is a directory or an rsync/ssh target (user@host:/path).
 usage() { cat <<U

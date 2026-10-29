@@ -1,4 +1,5 @@
 #!/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
 # hogshead-unlock: open the old Ubuntu LUKS volume. YOU type the passphrase at the laptop keyboard; nobody else ever sees it.
 #   hogshead-unlock [LUKS-DEVICE (default /dev/nvme0n1p3)] [mapper-name (default hogshead-crypt)]
 set -u

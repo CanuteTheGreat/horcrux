@@ -1,4 +1,5 @@
 #!/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
 # hogshead-remote: start sshd (key-only) and bring up Tailscale non-interactively with the baked one-time auth key.
 # Needs a working network first (nmtui for Wi-Fi). Prints the Tailscale and LAN IPs.
 set -u
@@ -20,6 +21,11 @@ ip -4 route show default | head -2
 echo "== sshd (key-only)"
 rc-service sshd status >/dev/null 2>&1 || rc-service sshd start >/dev/null 2>&1
 rc-service sshd status 2>&1 | tail -1
+echo "== clock"
+# the live system has no trustworthy clock until the RTC/NTP is right; TLS (tailscale, curl) fails on a wrong date.
+# Plain-HTTP Date header = no certificate check needed.
+d=$(curl -sI -m 8 http://www.google.com 2>/dev/null | tr -d '\r' | sed -n 's/^[Dd]ate: //p' | head -1)
+if [ -n "$d" ] && date -u -s "$d" >/dev/null 2>&1; then echo "clock set to: $(date -u)"; else echo "clock left as: $(date -u) (no plain-HTTP time source reachable)"; fi
 echo "== tailscale"
 hostname "$HOST" 2>/dev/null
 modprobe tun 2>/dev/null
@@ -35,6 +41,7 @@ else
     if ! ts up --auth-key="file:$KEY" --hostname="$HOST" --accept-dns=false --accept-routes=false --ssh=false --timeout=60s; then
       echo
       echo "Tailscale refused the key (expired after 7 days, or already used?)."
+      echo "--- tailscaled log (tail):"; tail -n 12 /var/log/tailscaled.log 2>/dev/null | sed -E 's/tskey-[A-Za-z0-9-]+/tskey-***/g'
       echo "Fallback: plain LAN ssh (below), or run:  tailscale --socket=$SOCK up --hostname=$HOST   and open the URL."
     fi
   fi

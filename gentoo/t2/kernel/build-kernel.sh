@@ -2,7 +2,9 @@
 # build-kernel.sh: runs INSIDE the build container. Needs /usr/src/<KERNEL_SRC_DIR> (gentoo-sources), the patches in
 # $PATCHES (default /t2patches), the Gentoo dist config in /dist.config and the kernel/ dir of gentoo/t2 in /t2/kernel.
 set -eu
-: "${KERNEL_SRC_DIR:?}" "${LOCALVERSION:?}"
+: "${KERNEL_SRC_DIR:?}"
+# the suffix comes from CONFIG_LOCALVERSION in t2.config; an exported LOCALVERSION would be appended a second time
+unset LOCALVERSION
 PATCHES=${PATCHES:-/t2patches}; K=/usr/src/$KERNEL_SRC_DIR
 cd "$K"
 for p in "$PATCHES"/*.patch; do

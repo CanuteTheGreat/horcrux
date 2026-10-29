@@ -42,8 +42,8 @@ if [ -n "${FW_SHA:-}" ]; then
 fi
 
 # ---- ssh: key-only
-sshd -T 2>/dev/null | grep -qx 'passwordauthentication no'; r $? sshd-passwordauth-off ""
-sshd -T 2>/dev/null | grep -Eqx 'permitrootlogin (prohibit-password|without-password)'; r $? sshd-root-key-only ""
+/usr/sbin/sshd -T 2>/dev/null | grep -qix 'passwordauthentication no'; r $? sshd-passwordauth-off ""
+/usr/sbin/sshd -T 2>/dev/null | grep -Eqix 'permitrootlogin (prohibit-password|without-password)'; r $? sshd-root-key-only ""
 if [ -n "${EXPECT_KEYS:-}" ]; then
   c=$(grep -c '^\(ssh\|ecdsa\)' /root/.ssh/authorized_keys)
   [ "$c" -ge "$EXPECT_KEYS" ]; r $? authorized_keys "$c keys (>= $EXPECT_KEYS expected)"
