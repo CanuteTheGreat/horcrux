@@ -33,7 +33,7 @@ cleanup_build() {
   docker rm -fv "$TAG-asm" >/dev/null 2>&1 || true
   [ -z "$cid" ] || docker rm -fv "$cid" >/dev/null 2>&1 || true
   docker rmi "$TAG-tools" >/dev/null 2>&1 || true
-  [ -z "${VARIANT:-}" ] || docker rmi "$TAG-rootfs-$VARIANT" >/dev/null 2>&1 || true
+  [ -z "${VARIANT:-}" ] || [ -n "${KEEP_IMAGES:-}" ] || docker rmi "$TAG-rootfs-$VARIANT" >/dev/null 2>&1 || true
   [ -n "${REUSE_ROOTFS:-}" ] || [ -n "${KEEP_IMAGES:-}" ] || docker rmi "$TAG-app" "$TAG-rootfs" >/dev/null 2>&1 || true
 }
 trap cleanup_build EXIT

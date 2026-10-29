@@ -25,7 +25,13 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
 COPY project/variants/desktop/overlay/ /
 
 # the Desktop image marks itself (the installer offers the desktop profile only when this exists); slim down again
+# Size: the ISO must stay below the 2 GiB release-asset limit. Firmware for hardware that is not in an x86 laptop/desktop
+# (Snapdragon SoCs, server/SmartNICs) is ~900 MB of the uncompressed image; the server image keeps it.
 RUN set -e; chmod 644 /usr/share/horcrux/desktop/*; \
+    cd /usr/lib/firmware && rm -rf qcom netronome mellanox mrvl qed dpaa2 liquidio cavium cxgb4 bnx2x bnx2; cd /; \
+    # English-only message catalogs + emoji dictionaries (~530 MB uncompressed): the image has to fit below 2 GiB
+    find /usr/share/locale -mindepth 1 -maxdepth 1 ! -name 'en*' ! -name locale.alias -exec rm -rf {} + ; \
+    find /usr/share/ibus/dicts -type f ! -name 'emoji-en*' ! -name 'emoji-ascii*' -delete 2>/dev/null || true; \
     echo "desktop" > /etc/live-iso-variant; \
     rm -rf /var/db/repos/gentoo/* /var/cache/distfiles/* /var/cache/binhost /usr/share/doc /usr/share/gtk-doc /var/tmp/portage /var/log/emerge* 2>/dev/null || true; \
     find / -xdev -name '*.pyc' -path '*/__pycache__/*' -delete 2>/dev/null || true

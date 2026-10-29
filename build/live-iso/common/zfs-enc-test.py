@@ -209,6 +209,8 @@ class ZRun(qt.Runner):
         self.step("horcrux-be-list", rc == 0 and "horcrux" in o, o.strip().replace("\n", " | "))
         rc, o = self.sh("HOME=/root; ( . /etc/portage/bashrc 2>/dev/null; EBUILD_PHASE=setup; horcrux-be auto-snapshot ); zfs list -H -t snapshot -o name | grep pre-upgrade")
         self.step("pre-upgrade-snapshot-hook", "ROOT/horcrux@pre-upgrade-" in o, o.strip().replace("\n", " "))
+        rc, o = self.sh("/etc/kernel/postinst.d/90-horcrux-be && ls -l /boot/be/horcrux/ && grep -c 'be-horcrux' /boot/grub/grub.cfg")
+        self.step("kernel-update-hook-refreshes-boot-environment", rc == 0 and "vmlinuz" in o and "initramfs.img" in o, o.strip().replace("\n", " | ")[:200])
         if a.desktop:
             self.desktop_checks()
 
@@ -256,8 +258,20 @@ class ZRun(qt.Runner):
             time.sleep(6)
         self.step("desktop-gdm-and-gnome-shell-running", "GDM" in o and "SHELL" in o, o.strip().replace("\n", " | ")[:300])
         if vm:
-            time.sleep(5)
+            # the greeter is graphical: wait until the VGA console is no longer the black text console (many distinct colours)
+            end, colours = time.time() + qt.T(150), 0
+            while time.time() < end:
+                ppm = vm.grab()
+                m = re.match(rb"P6\s+(\d+)\s+(\d+)\s+(\d+)\s", ppm or b"")
+                if m:
+                    px = ppm[m.end():]
+                    colours = len({px[i:i + 3] for i in range(0, min(len(px), 3 * 1280 * 800), 3 * 53)})
+                    if colours > 40:
+                        break
+                time.sleep(4)
+            time.sleep(3)
             vm.shot("gdm-login-screen")
+            self.step("gdm-greeter-is-graphical-on-vga", colours > 40, f"{colours} distinct colours sampled on the VGA console (text console has < 10)")
 
 
 def main():

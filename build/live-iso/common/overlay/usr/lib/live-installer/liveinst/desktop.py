@@ -64,6 +64,8 @@ def apply(inst):
                 inst.run(["rc-update", "add", svc, lvl], chroot=True, check=False)
             else:
                 inst.log(f"desktop: service {svc} not in the image, skipped")
+    # OpenRC's display-manager service reads this (xdm is only a compat alias); gdm is the GNOME display manager
+    inst.write("/etc/conf.d/display-manager", 'DISPLAYMANAGER="gdm"\n')
     inst.write("/etc/conf.d/xdm", 'DISPLAYMANAGER="gdm"\n')
     # wired + Wi-Fi by NetworkManager (iwd backend) from now on
     inst.write("/etc/NetworkManager/conf.d/10-horcrux.conf", "[device]\nwifi.backend=iwd\n")

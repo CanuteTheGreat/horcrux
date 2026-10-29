@@ -2,14 +2,14 @@
 elogind boot
 dbus default
 NetworkManager default
-xdm default
+display-manager default
 bluetooth default
 cupsd default
 cups-browsed default
 avahi-daemon default
-upowerd default
+# upower and polkit are D-Bus activated (no init script)
 power-profiles-daemon default
 thermald default
 chronyd default
-tailscaled default
+tailscale default
 # off by default (the owner enables them when needed): clamd, freshclam, keepalived, libvirtd is on in the server base
