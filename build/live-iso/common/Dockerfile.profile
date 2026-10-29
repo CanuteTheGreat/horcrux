@@ -25,7 +25,8 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     emerge --noreplace $pk sys-fs/cryptsetup; \
     rm -rf /var/db/repos/gentoo/* /var/cache/distfiles/* /var/tmp/portage /var/log/emerge* /tmp/hw 2>/dev/null || true
 
-# config + scripts: cheap layers (no emerge). common/overlay again: the base image may predate the newest installer code
+# config + scripts: cheap layers (no emerge). project/overlay + common/overlay again (same order as Dockerfile.rootfs): the base image may predate the newest installer code / profile.toml
+COPY project/overlay/ /
 COPY common/overlay/ /
 COPY .hw/overlay/ /
 COPY .hw/hwprofile.toml /tmp/hwprofile.toml
