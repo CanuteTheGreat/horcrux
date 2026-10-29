@@ -1,0 +1,23 @@
+#!/sbin/openrc-run
+# Gentoo/Alpine/other OpenRC systems' equivalent of rustinion.service (the
+# systemd unit) — same shape: run `rustinion daemon` as root, restart on
+# failure, start after networking is up.
+
+name="rustinion"
+description="Rustinion cross-platform app/OS-update agent (resident mode)"
+command="/usr/bin/rustinion"
+command_args="daemon --interval-minutes 60"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+# Same reasoning as the systemd unit: apt/dnf/pacman/emerge installs and
+# OS-update installs need root; if this ever becomes a security concern,
+# split "check" (unprivileged) from "install" (root) into separate services
+# instead of loosening this.
+command_user="root"
+respawn_delay=30
+respawn_max=0
+
+depend() {
+	need net
+	after net-online
+}

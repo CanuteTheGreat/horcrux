@@ -1,0 +1,4 @@
+# source-built dist kernel without the generic initramfs (the installer builds the dracut initramfs with the T2 + zfs + unlock modules)
+sys-kernel/gentoo-kernel -initramfs
+sys-fs/zfs rootfs dist-kernel
+sys-fs/zfs-kmod dist-kernel
