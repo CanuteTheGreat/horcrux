@@ -1,0 +1,38 @@
+# Hardware profile "surface": installed as /usr/share/live-installer/hwprofiles/surface.toml (read by liveinst/hwprofile.py).
+# Detection is by DMI. Matching is exact on the normalised (case/space-insensitive) product name; any other
+# "Surface ..." product matches by prefix and gets the generic Surface settings (no model quirks).
+id = "surface"
+title = "Microsoft Surface"
+
+[match]
+sys_vendor = ["Microsoft Corporation"]
+product_prefix = ["Surface"]
+
+[defaults]
+fs = "xfs-luks"          # 4 GB-class tablets: XFS in LUKS2, zram only, no ZFS (ARC would eat the RAM)
+desktop = true
+keep_serial_console = false   # no UART on a tablet: the installed system keeps console=tty0 only (LUKS prompt + USB keyboard on the screen)
+
+# Services the profile turns on/off on the installed system (NetworkManager replaces iwd+dhcpcd so that nmtui and the
+# desktop's Wi-Fi menu manage the one Wi-Fi stack; zram-swap is the only swap).
+services_add = ["elogind:boot", "dbus:default", "NetworkManager:default", "zram-swap:default", "cronie:default"]
+services_del = ["iwd", "dhcpcd", "live-serial"]
+
+[[models]]
+id = "surface-pro-1"
+title = "Surface Pro (1st gen, 2013)"
+# DMI product_name as reported by the firmware: SP1 reports "Surface with Windows 8 Pro" (retail name), later
+# firmware/Windows 10 builds "Surface Pro"; SP2 is "Surface Pro 2" and needs the identical treatment (same platform).
+product_name = ["Surface with Windows 8 Pro", "Surface Pro", "Surface Pro 2"]
+kernel = "mainline"      # no linux-surface patches needed (see gentoo/surface/README.md)
+# Buggy ACPI _LID on SP1/SP2: after S3 the kernel believes the lid is closed -> endless suspend/resume loop.
+# linux-surface issue #381; mainline has no DMI quirk for it.
+kernel_cmdline = ["button.lid_init_state=open"]
+notes = "Ivy Bridge i5-3317U (no AVX2/FMA), HD 4000, 4 GB, Marvell 88W8797 Wi-Fi/BT, Wacom pen + touch over USB-HID"
+
+[[models]]
+id = "surface-pro-3"
+title = "Surface Pro 3"
+product_name = ["Surface Pro 3"]
+kernel = "linux-surface"
+notes = "works on mainline except for pen extras; the linux-surface patch set is recommended (not shipped on this ISO)"

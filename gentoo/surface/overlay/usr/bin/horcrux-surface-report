@@ -1,0 +1,49 @@
+#!/bin/sh
+# horcrux-surface-report: collect the facts that can only be known on the REAL Surface (touch, pen, Wi-Fi, lid, graphics,
+# battery, input path at the LUKS prompt) into one text file for the remote hand-off. Read-only; needs root for dmesg.
+#   horcrux-surface-report [OUTFILE]      (default /root/surface-report-<host>-<date>.txt)
+out=${1:-/root/surface-report-$(hostname)-$(date +%Y%m%d-%H%M).txt}
+sec() { printf '\n===== %s =====\n' "$1"; }
+{
+echo "horcrux-surface-report $(date -u +%FT%TZ)"
+sec "DMI (the installer's hardware profile matches on these)"
+for f in sys_vendor product_name product_version product_sku bios_version bios_date; do printf '%s: %s\n' $f "$(cat /sys/class/dmi/id/$f 2>/dev/null)"; done
+echo "installed hw profile: $(cat /etc/live-iso-hwprofile 2>/dev/null)"
+sec "kernel / cmdline / CPU"
+uname -a; cat /proc/cmdline
+grep -m1 'model name' /proc/cpuinfo
+printf 'avx: %s  avx2: %s  fma: %s  bmi2: %s (Ivy Bridge: avx yes, the rest 0)\n' $(for f in avx avx2 fma bmi2; do grep -m1 -c -w $f /proc/cpuinfo; done)
+dmesg 2>/dev/null | grep -ciE 'invalid opcode|trap invalid' | sed 's/^/SIGILL-ish dmesg lines: /'
+sec "memory / swap / storage"
+free -m; swapon --show; zramctl 2>/dev/null; lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT
+cryptsetup status hxroot 2>/dev/null | head -8
+findmnt -no SOURCE,FSTYPE,OPTIONS /
+sec "USB devices (touch/pen/Type Cover enumerate here on the SP1)"
+lsusb 2>/dev/null
+sec "input devices (expect: touchscreen, Wacom/pen, Type Cover keyboard+touchpad)"
+grep -E '^(N: Name|H: Handlers)' /proc/bus/input/devices
+for m in hid_multitouch wacom hid_microsoft usbhid; do printf '%s: %s\n' $m "$(lsmod | grep -c "^$m ")"; done
+command -v libinput >/dev/null && libinput list-devices 2>/dev/null | grep -E '^(Device|Capabilities|Kernel)'
+sec "Wi-Fi (mwifiex_pcie, Marvell 88W8797)"
+lspci -nnk 2>/dev/null | grep -iA3 -E 'marvell|network'
+dmesg 2>/dev/null | grep -iE 'mwifiex|mrvl|marvell' | tail -25
+ls /lib/firmware/mrvl/ 2>/dev/null | tr '\n' ' '; echo
+nmcli -t dev 2>/dev/null; nmcli -f IN-USE,SSID,SIGNAL,SECURITY dev wifi 2>/dev/null | head -10
+iw dev 2>/dev/null | grep -E 'Interface|type'; iw dev wlan0 get power_save 2>/dev/null
+rfkill list 2>/dev/null
+sec "graphics (HD 4000, i915)"
+lspci -nnk 2>/dev/null | grep -iA3 'vga'
+dmesg 2>/dev/null | grep -iE 'i915|drm' | tail -12
+for c in /sys/class/drm/card*-*; do [ -e "$c/status" ] && printf '%s %s %s\n' "$c" "$(cat $c/status)" "$(head -1 $c/modes 2>/dev/null)"; done
+ls /usr/lib64/dri 2>/dev/null | tr '\n' ' '; echo
+sec "power / lid / buttons"
+cat /proc/acpi/button/lid/*/state 2>/dev/null
+for b in /sys/class/power_supply/*; do printf '%s: ' "$b"; cat "$b/status" "$b/capacity" 2>/dev/null | tr '\n' ' '; echo; done
+ls /sys/class/backlight 2>/dev/null
+cat /sys/power/mem_sleep 2>/dev/null
+sec "services"
+rc-status 2>/dev/null
+sec "boot messages with warnings"
+dmesg 2>/dev/null | grep -iE 'fail|error|warn|firmware' | grep -viE 'ACPI BIOS Error.*_OSC' | tail -40
+} > "$out" 2>&1
+echo "$out"

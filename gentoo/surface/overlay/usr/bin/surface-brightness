@@ -1,0 +1,10 @@
+#!/bin/sh
+# surface-brightness +N|-N : change the internal panel backlight by N percent (sysfs; udev rule below makes it group-writable)
+bl=$(ls -d /sys/class/backlight/* 2>/dev/null | head -1)
+[ -n "$bl" ] || exit 0
+max=$(cat "$bl/max_brightness"); cur=$(cat "$bl/brightness")
+step=$(( max * ${1#[+-]} / 100 ))
+case "$1" in -*) new=$(( cur - step )) ;; *) new=$(( cur + step )) ;; esac
+[ "$new" -lt $(( max / 20 )) ] && new=$(( max / 20 ))
+[ "$new" -gt "$max" ] && new=$max
+echo "$new" > "$bl/brightness" 2>/dev/null

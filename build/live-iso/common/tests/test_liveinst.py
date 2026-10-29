@@ -251,3 +251,111 @@ class ProfileDefaults(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------- hardware profiles + XFS-on-LUKS
+from liveinst import hwprofile as HW  # noqa: E402
+from liveinst import luksroot as LR  # noqa: E402
+
+SURFACE_TOML = os.path.join(HERE, "..", "..", "..", "..", "gentoo", "surface", "hwprofile.toml")
+
+
+class HwProfile(unittest.TestCase):
+    def profiles(self):
+        import tomllib
+        return [tomllib.load(open(SURFACE_TOML, "rb"))]
+
+    def test_surface_pro_1_names(self):
+        for name in ("Surface with Windows 8 Pro", "Surface Pro", "surface pro", "Surface  Pro 2"):
+            p, m = HW.detect({"sys_vendor": "Microsoft Corporation", "product_name": name}, self.profiles())
+            self.assertEqual((p["id"], m["id"]), ("surface", "surface-pro-1"), name)
+            self.assertIn("button.lid_init_state=open", HW.kernel_cmdline(p, m))
+
+    def test_other_surface_generic_and_non_surface_none(self):
+        p, m = HW.detect({"sys_vendor": "Microsoft Corporation", "product_name": "Surface Laptop 4"}, self.profiles())
+        self.assertEqual((p["id"], m), ("surface", None))
+        self.assertEqual(HW.kernel_cmdline(p, m), [])
+        self.assertEqual(HW.detect({"sys_vendor": "Microsoft Corporation", "product_name": "Virtual Machine"}, self.profiles()), (None, None))
+        self.assertEqual(HW.detect({"sys_vendor": "Apple Inc.", "product_name": "Surface Pro"}, self.profiles()), (None, None))
+        self.assertEqual(HW.detect({"sys_vendor": "QEMU", "product_name": "Standard PC (Q35 + ICH9, 2009)"}, self.profiles()), (None, None))
+
+    def test_default_fs(self):
+        fs = ["ext4", "xfs", "zfs", "xfs-luks"]
+        self.assertEqual(HW.default_fs(fs, 3800), "xfs-luks")          # 4 GB machine
+        self.assertEqual(HW.default_fs(fs, 5800), "xfs-luks")          # 6 GB
+        self.assertEqual(HW.default_fs(fs, 7700), "zfs")               # "8 GB" machine: MemTotal ~7.7 GB
+        self.assertEqual(HW.default_fs(fs, 64000), "zfs")
+        self.assertEqual(HW.default_fs(["ext4"], 3800), "ext4")        # Patronus
+        p = self.profiles()[0]
+        self.assertEqual(HW.default_fs(fs, 64000, p), "xfs-luks")      # a profile can force it
+        self.assertEqual(HW.default_fs(["ext4", "zfs"], 3800), "zfs")  # image without xfs-luks keeps old behaviour
+
+
+class LuksRoot(unittest.TestCase):
+    def test_argon_memory_capped(self):
+        self.assertEqual(LR.pbkdf_memory_kib(3800) // 1024, 712)
+        self.assertEqual(LR.pbkdf_memory_kib(4096) // 1024, 768)
+        self.assertEqual(LR.pbkdf_memory_kib(8192), 1024 * 1024)
+        self.assertEqual(LR.pbkdf_memory_kib(65536), 1024 * 1024)      # cap 1 GiB
+        self.assertGreaterEqual(LR.pbkdf_memory_kib(100), 64 * 1024)
+        self.assertLessEqual(LR.pbkdf_memory_kib(4096) * 1024, 4096 * 1024 * 1024 // 4)   # never more than a quarter of RAM
+
+    def test_format_cmd(self):
+        c = LR.luks_format_cmd("/dev/sda3", 4096)
+        self.assertIn("luks2", c)
+        self.assertEqual(c[c.index("--pbkdf") + 1], "argon2id")
+        self.assertEqual(c[c.index("--pbkdf-memory") + 1], str(768 * 1024))
+        self.assertIn("--key-file=-", c)                                  # passphrase on stdin, never in argv
+        self.assertNotIn("discard", " ".join(LR.luks_format_cmd("/dev/sda3", 4096)))
+        self.assertIn("--allow-discards", LR.luks_open_cmd("/dev/sda3"))
+
+    def test_sgdisk_layout(self):
+        a = " ".join(LR.sgdisk_args("/dev/sda", True))
+        self.assertIn("1:0:+1G", a)
+        self.assertIn("1:ef00", a)
+        self.assertIn("3:0:0", a)
+        self.assertIn("3:8309", a)                                        # Linux LUKS
+        self.assertNotIn("8200", a)                                       # no swap partition: zram only
+        self.assertIn("1:ef02", " ".join(LR.sgdisk_args("/dev/sda", False)))
+
+    def test_kernel_args_and_fstab(self):
+        k = LR.kernel_args("1234-abcd")
+        for part in ("rd.luks.uuid=1234-abcd", "rd.luks.name=1234-abcd=hxroot", "rd.luks.options=1234-abcd=discard", "root=/dev/mapper/hxroot"):
+            self.assertIn(part, k)
+        f = LR.fstab_text("UUID=r", "b", "e")
+        self.assertIn("/\txfs\tdefaults", f)
+        self.assertNotIn("discard", f)                                    # XFS mount options: defaults only
+        self.assertNotIn("swap", f)
+
+    def test_dracut_has_keyboard_stack(self):
+        d = LR.dracut_conf()
+        for m in ("crypt", "usbhid", "hid_multitouch", "hid_microsoft", "xhci_pci", "i915", "dm_crypt"):
+            self.assertIn(m, d)
+
+    def test_verify_initramfs(self):
+        ok = "cryptsetup\nusbhid.ko\nhid-multitouch.ko\nhid-microsoft.ko\nxhci-pci.ko\ndm-crypt.ko"
+        self.assertEqual(LR.verify_initramfs(ok), [])
+        self.assertEqual(LR.verify_initramfs("cryptsetup\nusbhid.ko"), ["hid-multitouch", "hid-microsoft", "xhci", "dm-crypt"])
+
+    def test_validate(self):
+        c = {"fs": "xfs-luks", "luks_passphrase": "short", "disks": ["/dev/sda"]}
+        self.assertTrue(LR.validate(c))
+        c["luks_passphrase"] = GOOD_PW
+        self.assertEqual(LR.validate(c), [])
+        self.assertEqual(LR.validate({"fs": "ext4"}), [])
+
+    def test_config_defaults_and_answers(self):
+        prof = dict(PROFILE, filesystems=["ext4", "xfs", "zfs", "xfs-luks"])
+        c = S.default_config(prof)
+        self.assertIn(c["fs"], ("zfs", "xfs-luks"))
+        self.assertEqual(c["luks_passphrase"], "")
+        with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as f:
+            f.write('[global]\nroot_password_hash = "%s"\n[disk]\nfilesystem = "xfs-luks"\nluks_passphrase = "%s"\ndisks = ["/dev/vda"]\n'
+                    '[desktop]\nenable = true\nuser = "surface"\nautologin = true\n[hardware]\nprofile = "surface"\n' % (HASH, GOOD_PW))
+        c = S.config_from_answers(prof, f.name)
+        os.unlink(f.name)
+        self.assertEqual((c["fs"], c["luks_passphrase"], c["hw"]), ("xfs-luks", GOOD_PW, "surface"))
+        self.assertTrue(c["desktop"]["enable"] and c["desktop"]["autologin"])
+        self.assertEqual(S.validate_config(prof, c), [])
+        c["luks_passphrase"] = "x"
+        self.assertTrue(any("LUKS" in e for e in S.validate_config(prof, c)))

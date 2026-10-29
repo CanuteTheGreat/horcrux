@@ -32,7 +32,8 @@ cid=
 cleanup_build() {
   docker rm -fv "$TAG-asm" >/dev/null 2>&1 || true
   [ -z "$cid" ] || docker rm -fv "$cid" >/dev/null 2>&1 || true
-  docker rmi "$TAG-tools" >/dev/null 2>&1 || true
+  docker rmi "$TAG-tools" "$TAG-hw" >/dev/null 2>&1 || true
+  rm -rf "$HERE/.hw"
   [ -n "${REUSE_ROOTFS:-}" ] || [ -n "${KEEP_IMAGES:-}" ] || docker rmi "$TAG-app" "$TAG-rootfs" >/dev/null 2>&1 || true
 }
 trap cleanup_build EXIT
@@ -47,14 +48,23 @@ lap "stage 2: gentoo rootfs (stage3 + binhost + ccache)"
 docker build $PLAT $ARCHARGS -f common/Dockerfile.rootfs --build-arg APP_IMAGE=$TAG-app --build-arg PROJECT=$PROJECT \
     --build-arg ISO_LABEL=$ISO_LABEL --build-arg PROJECT_TITLE="$PROJECT_TITLE" -t $TAG-rootfs . 2>&1 | tee "$OUT/rootfs-build.log" | tail -40
 fi
+if [ -n "${HW_PROFILE:-}" ]; then
+lap "stage 2b: hardware profile layer ($HW_PROFILE, gentoo/$HW_PROFILE)"
+[ -d "$REPO/gentoo/$HW_PROFILE" ] || { echo "no such hardware profile: gentoo/$HW_PROFILE"; exit 2; }
+rm -rf "$HERE/.hw"; cp -a "$REPO/gentoo/$HW_PROFILE" "$HERE/.hw"
+docker build $PLAT $ARCHARGS -f common/Dockerfile.profile --build-arg BASE=$TAG-rootfs --build-arg HW_PROFILE=$HW_PROFILE -t $TAG-hw . 2>&1 | tee "$OUT/profile-build.log" | tail -30
+rm -rf "$HERE/.hw"
+docker image inspect $TAG-hw >/dev/null 2>&1 || { echo "profile layer failed (see $OUT/profile-build.log)"; exit 1; }
+ROOTFS_IMG=$TAG-hw
+else ROOTFS_IMG=$TAG-rootfs; fi
 lap "stage 3: assembly toolbox"
 # Per-build tag: a shared live-iso-tools:latest could be untagged by the runner disk guard (or replaced by a
 # parallel build) between this build and the docker run below (Horcrux run 7066: "pull access denied").
 docker build $PLAT $ARCHARGS -q -f common/Dockerfile.tools -t $TAG-tools .
 lap "stage 4: export rootfs + assemble ISO (no bind mounts: works from a job container using the host docker)"
-ISO_NAME=$ISO_PREFIX-$SUFFIX-$ARCH.iso
+ISO_NAME=$ISO_PREFIX${HW_PROFILE:+-$HW_PROFILE}-$SUFFIX-$ARCH.iso
 docker rm -f $TAG-asm >/dev/null 2>&1 || true
-cid=$(docker create $TAG-rootfs /bin/true)
+cid=$(docker create $ROOTFS_IMG /bin/true)
 docker export "$cid" | docker run -i $PLAT -e ARCH=$ARCH --name $TAG-asm --memory=8g --cpus=$JOBS $TAG-tools \
     sh -c "mkdir -p /work/root /out && tar -x -C /work/root --exclude='dev/*' && assemble-iso.sh /work/root /out/$ISO_NAME '$ISO_LABEL' '$PROJECT_TITLE' '$PROJECT'"
 docker rm -v "$cid" >/dev/null; cid=

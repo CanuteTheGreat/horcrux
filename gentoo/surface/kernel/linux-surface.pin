@@ -1,0 +1,6 @@
+# Pinned inputs for the OPTIONAL linux-surface kernel (Surface Pro 3 and newer; NOT used for the Surface Pro 1/2).
+# linux-surface/linux-surface @ 8c62d84193a38bd097238b192a4f7262db8a9f7e (2026-10-27): patches/7.2 is generated from
+# linux-surface/kernel v7.2.13-surface and its BASE file says v7.2.13.
+LS_COMMIT=8c62d84193a38bd097238b192a4f7262db8a9f7e
+LS_SERIES=7.2
+KERNEL_VERSION=7.2.13

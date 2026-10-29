@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+"""surface-hidpi: set the output scale from the panel's physical size and map touch + pen to the internal panel.
+
+Surface Pro 1: 1920x1080 on a 10.6" panel is ~208 ppi -> scale 1.5 (what Windows uses). Run from the sway config
+(`exec_always surface-hidpi`); a monitor without EDID size (or a VM) stays at 1.0.
+"""
+import glob
+import json
+import os
+import subprocess
+import sys
+
+
+def scale_for(ppi):
+    if ppi >= 230:
+        return 2.0
+    if ppi >= 170:
+        return 1.5
+    if ppi >= 135:
+        return 1.25
+    return 1.0
+
+
+def edid_size_cm(blob):
+    """(width_cm, height_cm) from a 128-byte base EDID block; (0, 0) when absent"""
+    if len(blob) < 23 or blob[:8] != bytes([0, 255, 255, 255, 255, 255, 255, 0]):
+        return 0, 0
+    return blob[21], blob[22]
+
+
+def ppi_of(px_w, width_cm):
+    return px_w / (width_cm / 2.54) if width_cm else 0.0
+
+
+def swaymsg(*a):
+    r = subprocess.run(["swaymsg", *a], capture_output=True, text=True)
+    return r.stdout
+
+
+def main():
+    outs = json.loads(swaymsg("-t", "get_outputs", "-r") or "[]")
+    internal = None
+    for o in outs:
+        name = o["name"]
+        w = (o.get("current_mode") or {}).get("width", 0)
+        blob = b""
+        for f in glob.glob(f"/sys/class/drm/card*-{name}/edid"):
+            try:
+                blob = open(f, "rb").read(128)
+            except OSError:
+                pass
+        wcm, _h = edid_size_cm(blob)
+        s = scale_for(ppi_of(w, wcm)) if w else 1.0
+        print(f"{name}: {w}px, {wcm}cm -> {ppi_of(w, wcm):.0f} ppi, scale {s}", file=sys.stderr)
+        if s != 1.0 and not o.get("scale") == s:
+            swaymsg("output", name, "scale", str(s))
+        if name.startswith(("eDP", "LVDS", "DSI")) or internal is None:
+            internal = name
+    if internal:
+        for t in ("type:touchscreen", "type:tablet_tool"):
+            swaymsg("input", t, "map_to_output", internal)
+
+
+if __name__ == "__main__":
+    main()

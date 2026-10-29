@@ -1,0 +1,5 @@
+# Surface profile: USE needed on top of the common live image. The Surface itself never compiles
+# anything (the installer copies the squashfs); small source builds happen once, on the ISO build host.
+net-wireless/wpa_supplicant dbus
+media-libs/freetype harfbuzz
+media-libs/libglvnd X

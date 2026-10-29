@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import time
 
-from . import arch
+from . import arch, hwprofile, luksroot
 
 LOG = "/var/log/live-installer.log"
 
@@ -407,10 +407,17 @@ def find_answer_file(proj, cmdline):
 # --------------------------------------------------------------------------
 # config model shared by the TUI and the answer file
 # --------------------------------------------------------------------------
+def _default_fs(profile):
+    """XFS+LUKS on low-RAM machines (< 8 GB), ZFS elsewhere when the image has it, else ext4 (hwprofile.default_fs)"""
+    hw_p, _m = hwprofile.detect()
+    return hwprofile.default_fs(profile.get("filesystems", ["ext4"]), mem_mb(), hw_p)
+
+
 def default_config(profile):
     return {
         "locale": "en_US.UTF-8", "keymap": "us", "timezone": "UTC",
-        "disks": [], "fs": "ext4", "zfs_raid": "single",
+        "disks": [], "fs": _default_fs(profile), "zfs_raid": "single", "luks_passphrase": "",
+        "desktop": {"enable": False, "user": "", "password": "", "password_hash": "", "autologin": False}, "hw": "auto",
         "hostname": profile["default_hostname"],
         "mgmt": {"iface": "", "mode": "dhcp", "address": "", "gateway": "", "dns": ""},
         "wan": {"iface": "", "mode": "dhcp", "address": "", "gateway": "", "dns": ""},
@@ -439,6 +446,11 @@ def config_from_answers(profile, path):
     c["console_open"] = bool(g.get("console_menu_open", False))
     d = a.get("disk", {})
     c["fs"] = d.get("filesystem", "ext4")
+    c["luks_passphrase"] = d.get("luks_passphrase", "")
+    de = a.get("desktop", {})
+    if de:
+        c["desktop"].update({k: de[k] for k in ("enable", "user", "password", "password_hash", "autologin") if k in de})
+    c["hw"] = a.get("hardware", {}).get("profile", "auto")
     c["zfs_raid"] = d.get("zfs_raid", "single")
     dl = d.get("disks", d.get("disk", "first"))
     c["disks"] = [dl] if isinstance(dl, str) else list(dl)
@@ -467,6 +479,10 @@ def validate_config(profile, c, unattended=False, require_secret=True):
         errs.append("ZFS mirror needs two different disks")
     if c["fs"] != "zfs" and len(c["disks"]) > 1:
         errs.append("only ZFS uses more than one disk")
+    errs += luksroot.validate(c)
+    de = c.get("desktop") or {}
+    if de.get("enable") and not de.get("user"):
+        errs.append("desktop: a user name is required")
     if require_secret:
         if c["root_hash"]:
             if crypt_hash_problem(c["root_hash"]):
@@ -514,6 +530,8 @@ class Installer:
         self.target = "/mnt/target"
         self.efi = efi_boot()
         self.logf = None
+        self.hw_profile = self.hw_model = None
+        self.luks_uuid = ""
 
     # -- plumbing -----------------------------------------------------
     def log(self, line):
@@ -580,11 +598,19 @@ class Installer:
     def zfs(self):
         return self.c["fs"] == "zfs"
 
+    def luks(self):
+        return luksroot.is_luks(self.c)
+
     def layout(self, disk):
-        """Partition numbers: 1 = ESP/BIOS-boot, 2 = /boot, 3 = swap, 4 = root."""
+        """Partition numbers: 1 = ESP/BIOS-boot, 2 = /boot, 3 = swap, 4 = root (xfs-luks: 1 ESP, 2 /boot, 3 = LUKS, no swap)."""
+        if self.luks():
+            return luksroot.layout(disk, part_path, self.efi)
         return {n: part_path(disk, n) for n in (1, 2, 3, 4)}
 
     def partition(self):
+        if self.luks():
+            self.swap_mb = 0              # zram only
+            return luksroot.partition_stage(self)
         swap = self.p["swap_mb"]
         if swap:
             ram = mem_mb()
@@ -606,6 +632,8 @@ class Installer:
 
     def mkfs(self):
         c = self.c
+        if self.luks():
+            return luksroot.mkfs_stage(self, mem_mb())
         d0 = c["disks"][0]
         L = self.layout(d0)
         for disk in c["disks"]:
@@ -633,6 +661,8 @@ class Installer:
 
     def mount(self):
         c = self.c
+        if self.luks():
+            return luksroot.mount_stage(self)
         L = self.layout(c["disks"][0])
         os.makedirs(self.target, exist_ok=True)
         if self.zfs():
@@ -769,6 +799,16 @@ class Installer:
         # serial console keeps working when the installer was driven over a serial line
         if arch.serial_console():
             self.run(["rc-update", "add", "live-serial", "default"], chroot=True, check=False)
+        self.hw_profile, self.hw_model = (None, None)
+        if c.get("hw", "auto") != "none":
+            hp, hm = hwprofile.detect()
+            if c.get("hw", "auto") not in ("auto", "none"):
+                hp = next((x for x in hwprofile.load_profiles() if x.get("id") == c["hw"]), hp)
+            self.hw_profile, self.hw_model = hp, hm
+        if self.luks():
+            luksroot.configure_stage(self)
+        if self.hw_profile:
+            hwprofile.apply_profile(self, self.hw_profile, self.hw_model)
 
     def motd(self):
         return (f"\n  {self.p['title']} (installed {time.strftime('%F')})\n"
@@ -817,12 +857,15 @@ class Installer:
         c, p, T = self.c, self.p, self.target
         name = p["name"]
         L = self.layout(c["disks"][0])
-        extra = arch.console_args()
+        serial_ok = not (self.hw_profile and self.hw_profile.get("defaults", {}).get("keep_serial_console") is False)
+        extra = arch.console_args() if serial_ok else ""     # a tablet has no UART: its LUKS prompt must be on tty0
+        extra = " ".join(x for x in (extra, luksroot.grub_cmdline_stage(self) if self.luks() else "",
+                                     " ".join(hwprofile.kernel_cmdline(self.hw_profile, self.hw_model))) if x)
         self.write("/etc/default/grub", "\n".join([
             f'GRUB_DISTRIBUTOR="{p["title"]}"', 'GRUB_TIMEOUT=3', f'GRUB_CMDLINE_LINUX="{extra}"',
             'GRUB_DISABLE_OS_PROBER=true',
-        ] + (['GRUB_TERMINAL="console serial"', f'GRUB_SERIAL_COMMAND="{arch.grub_serial_lines()}"'] if arch.grub_serial_lines() else [])) + "\n")
-        for dev in (L[1], L[2], L[4]):
+        ] + (['GRUB_TERMINAL="console serial"', f'GRUB_SERIAL_COMMAND="{arch.grub_serial_lines()}"'] if arch.grub_serial_lines() and serial_ok else [])) + "\n")
+        for dev in L.values():
             self.run(f"blkid -s UUID -o value {dev}", check=False)
         self.run("udevadm trigger --subsystem-match=block --action=change; udevadm settle --timeout=10; true", check=False)
         if self.efi:
@@ -836,6 +879,8 @@ class Installer:
         else:
             for disk in c["disks"]:
                 self.run(["grub-install", "--target=i386-pc", disk], chroot=True)
+        if self.luks():
+            return self.bootloader_luks(L)
         fsfix = fsuuid(L[4]) if not self.zfs() else ""
         if self.zfs():
             self.write_zfs_grubcfg(L)
@@ -846,6 +891,16 @@ class Installer:
             # a device name in root= would break on the next boot when disks reorder
             if self.run(["grep", "-q", f"root={L[4]}", f"{T}/boot/grub/grub.cfg"], check=False) == 0:
                 raise InstallError("grub.cfg still names a device in root=")
+
+    def bootloader_luks(self, L):
+        """grub-mkconfig for root-on-LUKS: /boot is a plain ext4 partition, the kernel line carries rd.luks.* + root=/dev/mapper"""
+        T = self.target
+        self.run(["grub-mkconfig", "-o", "/boot/grub/grub.cfg"], chroot=True)
+        cfg = open(f"{T}/boot/grub/grub.cfg").read()
+        if "rd.luks.uuid=" not in cfg:
+            raise InstallError("grub.cfg has no rd.luks.uuid: the installed system could not unlock its root")
+        if not any(os.path.exists(f"{T}/boot/{n}") for n in os.listdir(f"{T}/boot") if n.startswith("initramfs-")):
+            raise InstallError("no initramfs in /boot")
 
     def write_zfs_grubcfg(self, L):
         T = self.target
@@ -878,6 +933,8 @@ menuentry "{self.p['title']} (ZFS root)" {{
             self.run(["zpool", "export", "rpool"], check=False)
         else:
             self.run(["umount", "-R", T], check=False)
+        if self.luks():
+            luksroot.finish_stage(self)
         self.log("install finished")
 
 

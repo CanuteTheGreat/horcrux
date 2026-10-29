@@ -39,19 +39,54 @@ def s_locale(t, st, step):
 
 def s_fs(t, st, step):
     c, p = st.c, st.p
-    opts = {"ext4": "ext4 (default, robust)", "xfs": "XFS", "zfs": "ZFS (checksums, snapshots, mirror)"}
+    opts = {"ext4": "ext4 (robust)", "xfs": "XFS", "zfs": "ZFS (checksums, snapshots, mirror)",
+            "xfs-luks": "XFS in an encrypted LUKS2 volume (recommended for < 8 GB RAM)"}
     f = [Field("fs", "Root file system", "choice", c["fs"], [(x, opts.get(x, x)) for x in p["filesystems"]]),
          Field("zfs_raid", "ZFS layout", "choice", c["zfs_raid"], [("single", "single disk"), ("mirror", "mirror (RAID1, two disks)")],
-               visible=lambda v: v["fs"] == "zfs")]
+               visible=lambda v: v["fs"] == "zfs"),
+         Field("lpw", "Disk passphrase", "password", c.get("luks_passphrase", ""), width=40, visible=lambda v: v["fs"] == "xfs-luks",
+               hint="Typed at every boot (the Type Cover / a USB keyboard works). Min 12 chars. Lose it = lose the data"),
+         Field("lpw2", "Confirm passphrase", "password", c.get("luks_passphrase", ""), width=40, visible=lambda v: v["fs"] == "xfs-luks")]
+
+    def check(a):
+        if a["fs"] == "xfs-luks":
+            if a["lpw"] != a["lpw2"]:
+                return "The two passphrases do not match."
+            if len(a["lpw"]) < 12:
+                return "The disk passphrase needs at least 12 characters."
+        return None
     b, v = run_form(t, step, "File system",
-                    "ext4 and XFS use one disk. ZFS uses the whole disk as a pool 'rpool'; a mirror needs two disks "
-                    "(it survives one disk failing; /boot lives on the first disk only).", f)
+                    "ext4 and XFS use one disk. XFS+LUKS encrypts everything but /boot and uses zram instead of a swap partition. "
+                    "ZFS uses the whole disk as a pool 'rpool'; a mirror needs two disks "
+                    "(it survives one disk failing; /boot lives on the first disk only).", f, validate_all=check)
     if b == "Back":
         return "back"
     c["fs"], c["zfs_raid"] = v["fs"], v["zfs_raid"]
+    c["luks_passphrase"] = v["lpw"] if c["fs"] == "xfs-luks" else ""
     if c["fs"] == "zfs" and not st.dry and S.sh("modprobe zfs && test -e /dev/zfs")[0] != 0:
         message(t, "ZFS not available", "The ZFS kernel module could not be loaded on this machine. Choose ext4 or XFS.", "err")
         return "again"
+    return "next"
+
+
+def s_desktop(t, st, step):
+    """only on a machine with a hardware profile that ships a desktop (Surface): user + autologin"""
+    c = st.c
+    d = c["desktop"]
+    f = [Field("user", "User name", "text", d.get("user") or "surface", width=30, validate=lambda v, a: None if S.re.fullmatch(r"[a-z_][a-z0-9_-]{0,30}", v or "") else "lower-case letters, digits, - and _"),
+         Field("pw", "Password", "password", d.get("password", ""), width=40, hint="Min 12 chars. Needed to log in and for sudo"),
+         Field("pw2", "Confirm password", "password", d.get("password", ""), width=40),
+         Field("auto", "Log in automatically on the console", "check", d.get("autologin", False),
+               hint="OFF (default): the Type Cover / on-screen keyboard login prompt is shown. ON: the desktop starts right after the disk passphrase")]
+
+    def check(a):
+        if a["pw"] != a["pw2"]:
+            return "The two passwords do not match."
+        return S.password_problem(a["pw"], c["hostname"])
+    b, v = run_form(t, step, "Desktop user", "A touch-friendly desktop (sway, on-screen keyboard, pen) is installed for this machine.", f, validate_all=check)
+    if b == "Back":
+        return "back"
+    d.update({"enable": True, "user": v["user"], "password": v["pw"], "autologin": bool(v["auto"])})
     return "next"
 
 
@@ -425,6 +460,9 @@ def flow(profile):
     if len(profile["filesystems"]) > 1:
         scr.append(s_fs)
     scr.append(s_disk)
+    hp, _hm = S.hwprofile.detect()
+    if hp and hp.get("defaults", {}).get("desktop"):
+        scr.append(s_desktop)
     if profile["network_mode"] == "wan-lan":
         scr += [s_ifaces, s_addr]
     else:
