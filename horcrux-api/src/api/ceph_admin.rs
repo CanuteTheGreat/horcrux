@@ -18,7 +18,7 @@ use crate::api::tasks;
 use crate::error::ApiError;
 use crate::AppState;
 use axum::{
-    extract::{Path, Query},
+    extract::{Path, Query, State},
     routing::{get, post},
     Extension, Json, Router,
 };
@@ -38,6 +38,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/ceph/crush-rules", get(crush_rules))
         .route("/api/ceph/flags", get(flags))
         .route("/api/ceph/flags/:flag", post(set_flag))
+        .route("/api/ceph/placement", get(placement))
 }
 
 type Res<T> = Result<Json<T>, ApiError>;
@@ -243,6 +244,84 @@ pub fn parse_monitors(v: &Value) -> Vec<Monitor> {
 
 async fn monitors() -> Res<Vec<Monitor>> {
     Ok(Json(parse_monitors(&ceph(&["mon", "dump"]).await?)))
+}
+
+// ------------------------------------------------------------ placement
+
+#[derive(Debug, Deserialize)]
+struct PlacementQ {
+    /// Minimum uplink for an OSD host (default 10000 = 10 GbE).
+    min_osd_mbps: Option<u64>,
+    /// Minimum uplink for a MON host (default 1000).
+    min_mon_mbps: Option<u64>,
+    mon_count: Option<usize>,
+    /// Remote nodes do not report NICs/disks yet: the operator states what
+    /// they have. Default 0 = unknown, so a remote node is refused as OSD
+    /// host rather than assumed fast.
+    remote_uplink_mbps: Option<u64>,
+    remote_data_disks: Option<u32>,
+}
+
+/// Unused-looking local NVMe namespaces (whole disks only).
+fn local_nvme_disks() -> u32 {
+    std::fs::read_dir("/sys/block")
+        .map(|d| {
+            d.flatten()
+                .filter(|e| {
+                    let n = e.file_name().to_string_lossy().to_string();
+                    n.starts_with("nvme") && !n.contains('p')
+                })
+                .count() as u32
+        })
+        .unwrap_or(0)
+}
+
+/// `GET /api/ceph/placement` -- where OSDs and MONs may go, given node roles
+/// (`PUT /api/cluster/nodes/:name/caps`) and uplink speed. Read-only advice:
+/// OSDs only on storage-role nodes with a fast uplink and data disks, MONs on
+/// an odd number of distinct nodes. Only the local node's NICs and disks are
+/// probed; see the `remote_*` query parameters.
+async fn placement(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<PlacementQ>,
+) -> Json<crate::cluster::ceph_placement::CephPlan> {
+    use crate::cluster::ceph_placement::{plan, CephCandidate};
+    let local_up = crate::cluster::nic::best_speed_mbps(&crate::cluster::nic::scan_nics(
+        std::path::Path::new("/sys"),
+    ))
+    .unwrap_or(0);
+    let local_disks = local_nvme_disks();
+    let nodes = state.cluster_manager.list_nodes_with_local().await;
+    let cands: Vec<CephCandidate> = nodes
+        .iter()
+        .map(|n| CephCandidate {
+            name: n.name.clone(),
+            caps: n.caps.clone().unwrap_or_default(),
+            uplink_mbps: if n.is_local {
+                local_up
+            } else {
+                q.remote_uplink_mbps.unwrap_or(0)
+            },
+            data_disks: if n.is_local {
+                local_disks
+            } else {
+                q.remote_data_disks.unwrap_or(0)
+            },
+        })
+        .collect();
+    let mut p = plan(
+        &cands,
+        q.min_osd_mbps.unwrap_or(10_000),
+        q.min_mon_mbps.unwrap_or(1_000),
+        q.mon_count.unwrap_or(3),
+    );
+    if nodes.iter().any(|n| !n.is_local) && q.remote_uplink_mbps.is_none() {
+        p.warnings.push(
+            "remote nodes' uplink/disks are not probed: pass remote_uplink_mbps and remote_data_disks"
+                .to_string(),
+        );
+    }
+    Json(p)
 }
 
 // ------------------------------------------------------------------ OSDs
