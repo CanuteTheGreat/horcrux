@@ -8,3 +8,5 @@ media-libs/libglvnd X
 # "Failed to start a DRM session" (found by the QEMU test: the stock binpkgs have both flags off).
 sys-auth/pambase elogind
 sys-auth/seatd elogind
+# LVM tools for the swap LV inside LUKS (same flag as common/portage/package.use/live; re-emerged by Dockerfile.profile on bases that predate it)
+sys-fs/lvm2 lvm

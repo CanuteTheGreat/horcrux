@@ -63,8 +63,8 @@ Status: **built and emulated, not yet run on the real device.** Everything below
 * Detection: DMI `sys_vendor = Microsoft Corporation` and `product_name` in {`Surface with Windows 8 Pro`, `Surface Pro`, `Surface Pro 2`} →
   profile `surface`, model `surface-pro-1`. Any other `Surface*` product gets the generic Surface profile (no model quirks).
   Data: `gentoo/surface/hwprofile.toml`; code: `liveinst/hwprofile.py`.
-* Disk: GPT with **ESP 1 GiB (FAT32, unencrypted)** + **/boot 1 GiB (ext4, unencrypted)** + **LUKS2 → XFS** root (no LVM), `xfs` mounted
-  with default options (no `discard`). **zram is the only swap** (100 % of RAM, zstd; OpenRC `zram-swap`). Weekly `fstrim` via cron;
+* Disk: GPT with **ESP 1 GiB (FAT32, unencrypted)** + **/boot 1 GiB (ext4, unencrypted)** + **LUKS2 → LVM → XFS** root (VG `hxvg`: LV `root` + LV `swap` of 4.5 GiB, see "Swap and hibernate"), `xfs` mounted
+  with default options (no `discard`). **zram (100 % of RAM, zstd; OpenRC `zram-swap`, priority 100) is the first swap**, the encrypted swap LV (priority 10) holds the hibernation image. Weekly `fstrim` via cron;
   the LUKS mapping is opened with `allow-discards` so TRIM reaches the SSD (trade-off: free-block pattern is visible to someone with the raw disk).
 * LUKS2 keyslot: `argon2id`, memory cost = 3/16 of RAM, ≤ 1 GiB (4 GB → 768 MiB; 8 GB+ → 1 GiB), 2 lanes, ~2 s on the install machine.
 * The installer offers **XFS + LUKS as the default file system for every machine with < 8 GB RAM** (ZFS stays the default above that;
@@ -139,6 +139,48 @@ Screenshots: ![GRUB menu](images/surface/01-grub-menu.png)
 ![on-screen keyboard](images/surface/06-desktop-onscreen-keyboard.png)
 
 (The VM screen is 1280x800 with no EDID size, so the scale stays 1.0; on the 1920x1080/10.6" panel `surface-hidpi` computes ~208 ppi -> 1.5, unit-tested.)
+
+## Swap and hibernate (added 2026-10-28)
+
+Owner rule: *swap is fine on portables and is needed for sleep/resume; the no-swap rule is for servers.* One shared stage,
+`liveinst/portableswap.py`, decides and configures it for every layout (encrypted ZFS uses it with a LUKS2 swap partition).
+
+**Detection** (`swap = auto`, the default; visible in the TUI file-system page and the summary, overridable there and in the answer file
+with `[disk] swap = "auto" | "none" | "hibernate"`): hardware profile `swap = "hibernate"` (Surface), the *desktop* install type, a **system battery**
+in `/sys/class/power_supply` (peripheral batteries with `scope=Device` and UPS devices do not count), or DMI `chassis_type` 8/9/10/11/14/30/31/32
+→ hibernate swap. Anything else (a server: no battery, chassis 1/2/3/4/5/6/7/13/17/23...) → **no swap at all**: no swap partition, no LVM, no `resume=`, no zram.
+
+**Size**: RAM rounded **up** to whole GiB × 1.125 (MemTotal is ~100-300 MB below the installed size): 4 GB → **4.5 GiB (4608 MiB)**, 8 GB → 9, 16 GB → 18; floor 2 GiB.
+The image is at most all of RAM (zram's compressed pages go into it as they are), so RAM + 12.5 % always fits.
+
+**Layout decision: (a) LUKS2 → LVM with root + swap LVs, not (b) a swapfile on the XFS with `resume_offset`.** Reasons:
+1. *Resume must happen before ANY file system is mounted.* The hibernation image is a snapshot of RAM that assumes the disk is exactly as it was
+   when the image was written. Mounting XFS, even read-only, replays its log and so changes the disk; the swapfile can only be located through the mounted XFS
+   (`resume_offset` is a physical block found with `filefrag`, and the initramfs would have to mount the root to read it, or trust a number that goes stale
+   when the file is ever recreated). A swap LV is a plain block device the initramfs resumes from with the root still closed.
+2. *One passphrase.* LUKS opens once; LVM then activates both LVs (`rd.luks.uuid` appears once on the command line).
+3. dracut's `resume` hook takes `resume=UUID=<swap LV>` (no `resume_offset` bookkeeping); elogind finds the device itself.
+4. Cost: LVM adds `lvm2` to the initramfs (already on the ISO) and the LV sizes are chosen at install time (resizing the swap later is `lvresize`, XFS can only grow anyway).
+   Servers keep the plain LUKS → XFS layout (no LVM).
+A separate LUKS2 swap partition (what the encrypted-ZFS layout uses, because ZFS cannot sit in an LV) would need a second keyslot/keyfile in the initramfs or a second prompt: rejected for XFS.
+
+**Boot order** (verified with `lsinitrd`, below): `cryptsetup` unlocks the one LUKS volume in the initqueue (the only prompt) → LVM activates `hxvg` → dracut's **resume hook runs
+in `pre-mount`** (before the `mount` hook that mounts the root read-write) → if a valid image is on `hxvg-swap` it is loaded and execution continues in the old system, else the boot goes on normally.
+Kernel arguments: `rd.luks.uuid=… rd.luks.name=…=hxroot rd.lvm.vg=hxvg root=/dev/mapper/hxvg-root resume=UUID=<swap LV uuid>`.
+
+**Policy** (written by the installer on portable installs only):
+* `loginctl hibernate` (elogind; `HibernateMode=shutdown`: write the image and power off, not ACPI S4 which old tablets and QEMU do poorly); elogind ignores the zram swap
+  and picks the swap LV.
+* `/etc/elogind/logind.conf.d/10-horcrux-portable.conf`: **lid close = suspend** (on battery and on AC; ignored when docked), **power key = suspend**, long press = power off, hibernate key = hibernate.
+  The sway session locks before any sleep (`swayidle before-sleep`), so a resumed tablet asks for the screen-lock password.
+* **UPower**: `/etc/UPower/UPower.conf` gets `UsePercentageForPolicy=true`, low 15 %, critical 7 %, action at 5 % with `CriticalPowerAction=Hibernate`
+  (needs `sys-power/upower`, which the Surface profile ships; on an image without it the installer logs that there is no automatic critical-battery hibernate).
+* `fstab`: `/dev/mapper/hxvg-swap none swap sw,pri=10`; zram stays `pri=100` so the compressed RAM swap is always used first and the disk swap is only for the image/overflow.
+
+**Not covered**: ZFS-on-root (other agent: LUKS2 swap partition, resume before the pool import); resume with Secure Boot on (kernel lockdown disables hibernation; Secure Boot must be off anyway);
+suspend itself and real battery percentages (device-only, see below).
+
+@@SWAPEVIDENCE@@
 
 ## Verified vs device-only
 
