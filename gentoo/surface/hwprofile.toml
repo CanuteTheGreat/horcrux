@@ -15,7 +15,7 @@ keep_serial_console = false   # no UART on a tablet: the installed system keeps 
 
 # Services the profile turns on/off on the installed system (NetworkManager replaces iwd+dhcpcd so that nmtui and the
 # desktop's Wi-Fi menu manage the one Wi-Fi stack; zram-swap is the only swap).
-services_add = ["elogind:boot", "dbus:default", "NetworkManager:default", "zram-swap:default", "cronie:default"]
+services_add = ["elogind:boot", "dbus:default", "NetworkManager:default", "zram-swap:default", "cronie:default", "tailscale:default"]
 services_del = ["iwd", "dhcpcd", "live-serial"]
 
 [[models]]

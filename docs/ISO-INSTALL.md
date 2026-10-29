@@ -102,7 +102,7 @@ before you type `ERASE` on the summary screen.
 
    ![language, keyboard, time zone](images/installer/horcrux/01-language-keyboard-timezone.png)
 
-2. **File system** - ext4, XFS, or ZFS (single disk or a two-disk **mirror**, pool `rpool`, lz4 compression).
+2. **File system** - **XFS in a LUKS2 container** (the default on machines with **less than 8 GB RAM**), ext4, XFS, or ZFS (single disk or a two-disk **mirror**, pool `rpool`, lz4 compression; the default on 8 GB and up). XFS+LUKS asks for a disk passphrase (>= 12 characters, typed at every boot), uses a 1 GiB unencrypted ESP + 1 GiB unencrypted `/boot` + LUKS2 (argon2id, memory cost 3/16 of RAM capped at 1 GiB) holding XFS, has **no swap partition** (zram only) and trims weekly (`fstrim`, no `discard` mount option). The initramfs carries the USB/HID keyboard drivers (`xhci`, `usbhid`, `hid_multitouch`, `hid_microsoft`) so a Type Cover or USB keyboard works at the passphrase prompt. See [SURFACE.md](SURFACE.md).
 
    ![file system](images/installer/horcrux/02b-filesystem-zfs-mirror.png)
 
@@ -158,7 +158,7 @@ ssh_keys = ["ssh-ed25519 AAAA... admin@laptop"]
 ssh_password_auth = false                 # default false: key-only root SSH
 
 [disk]
-filesystem = "ext4"                       # ext4 | xfs | zfs
+filesystem = "ext4"                       # ext4 | xfs | zfs | xfs-luks (then also: luks_passphrase = "...", >= 12 chars)
 disks = ["first"]                         # or ["/dev/nvme0n1"]; "first" = first internal non-USB disk >= 8 GB
 zfs_raid = "mirror"                       # with filesystem = "zfs": single | mirror (needs two disks)
 
@@ -266,13 +266,17 @@ Hybrid graphics/touchpad/suspend were not exercised; the installer image is cons
 **Surface Pro (gen 1, Ivy Bridge i5-3317U, 4 GB, UEFI + Secure Boot, no Ethernet)** - **not tested on the real device**:
 power off, hold *Volume Down* while pressing power to boot from USB (use a USB hub/adapter for the stick);
 to disable Secure Boot hold *Volume Up* while powering on -> Security -> Secure Boot -> Disabled.
-The ISO is built for generic x86-64 (no AVX2 requirement), so it runs on Ivy Bridge. 4 GB RAM is enough for the live
-system and installer (the live root is a RAM overlay; the 1.5 GB image is read from the stick). There is **no wired NIC**: the
+The ISO is built for generic x86-64 (no AVX2 requirement; the Surface test runs `-cpu IvyBridge`), so it runs on Ivy Bridge. 4 GB RAM is enough for the live
+system and installer (the live root is a RAM overlay; the image is read from the stick). There is **no wired NIC**: the
 installer works offline (installs from the image), but the web UI needs the network afterwards - plug a USB Ethernet
-adapter or join Wi-Fi with `iwctl` (or the installer's Wi-Fi screen) (the Marvell 88W8797 `mwifiex_pcie` firmware ships in `linux-firmware`; unverified on this unit).
-The Type Cover keyboard works if it presents as USB-HID (use a USB keyboard if the console does not react).
+adapter or join Wi-Fi (`nmtui` on the installed Surface desktop, `iwctl`/the installer's Wi-Fi screen on the live system); the Marvell 88W8797 `mwifiex_pcie` firmware ships in `linux-firmware`.
+The Type Cover keyboard works if it presents as USB-HID (use a USB keyboard through a hub if the console does not react).
 
-Horcrux specifics: ext4 / XFS / ZFS (single or mirror) from the wizard; the root partition fills the disk after ESP/BIOS-boot (512 MB / 1 MB), `/boot` (1 GB) and swap (up to 4 GB). VM guests need VT-x (present on both laptops; on the Surface Pro 1 nested guests will be slow). ZFS wants >= 4 GB RAM (the Surface Pro has exactly 4: prefer ext4 there).
+**Surface variant ISO** (`HW_PROFILE=surface build/live-iso/build.sh`, asset `horcrux-surface-<date>-x86_64.iso`): the same installer, plus the hardware profile
+`gentoo/surface/` - the installer detects Microsoft Surface by DMI (`Microsoft Corporation` + `Surface with Windows 8 Pro` / `Surface Pro` / `Surface Pro 2`; any other `Surface*` gets the generic profile),
+defaults to **XFS + LUKS**, adds the `button.lid_init_state=open` kernel option (buggy SP1/SP2 ACPI lid), and installs a lightweight touch desktop (sway, on-screen keyboard, pen/touch mapping, NetworkManager, zram) instead of a GNOME-class one that does not fit in 4 GB. Stock Gentoo kernel, **no linux-surface patches** for the SP1 (reasoning and sources in [SURFACE.md](SURFACE.md)). Emulated end to end (QEMU IvyBridge, 4 GiB, UEFI, USB-only keyboard at the LUKS prompt); the real tablet is still untested (touch, pen, Wi-Fi, Type Cover at the prompt, suspend).
+
+Horcrux specifics: XFS+LUKS / ext4 / XFS / ZFS (single or mirror) from the wizard; the root partition fills the disk after ESP/BIOS-boot (512 MB / 1 MB), `/boot` (1 GB) and swap (up to 4 GB; XFS+LUKS: 1 GiB ESP, 1 GiB `/boot`, no swap partition). VM guests need VT-x (present on both laptops; on the Surface Pro 1 nested guests will be slow). ZFS wants more than 4 GB RAM (its ARC competes with guests): machines with less than 8 GB get **XFS+LUKS** by default, never ZFS.
 
 ## What is tested automatically
 

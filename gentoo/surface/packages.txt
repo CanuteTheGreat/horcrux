@@ -16,3 +16,5 @@ media-sound/alsa-utils
 sys-power/upower
 media-fonts/dejavu
 gui-apps/wvkbd
+net-vpn/tailscale
+sys-fs/cryptsetup
