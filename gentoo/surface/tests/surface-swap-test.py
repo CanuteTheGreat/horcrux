@@ -112,13 +112,20 @@ class ST(SQ.T):
             if vm.alive():
                 vm.p.kill()
 
-    def unlock(self, vm, name, wrong_first=False):
-        """wait for the passphrase prompt on the VGA console, type the passphrase ONCE (USB keyboard only), wait for ssh"""
+    def unlock(self, vm, name, serial=False):
+        """wait for the passphrase prompt, type the passphrase ONCE, wait for ssh. Surface profile: VGA console + USB keyboard only.
+        A plain server install keeps console=ttyS0 (last console= wins): its prompt is on the serial line, typed there."""
         t0 = time.time()
-        ppm = self.settle(vm, name, timeout=420)
-        self.step(f"{name}-prompt-on-vga", ppm is not None, f"{int(time.time() - t0)}s: passphrase prompt idle on tty0")
-        vm.shot(f"{name}-luks-prompt")
-        self.key(vm, LUKS_PW + "\n")
+        if serial:
+            ok = vm.expect_raw(r"Enter passphrase for", 420)
+            self.step(f"{name}-prompt-on-serial", bool(ok), f"{int(time.time() - t0)}s: server install keeps console=ttyS0")
+            time.sleep(1)
+            vm.send(LUKS_PW + "\n")
+        else:
+            ppm = self.settle(vm, name, timeout=420)
+            self.step(f"{name}-prompt-on-vga", ppm is not None, f"{int(time.time() - t0)}s: passphrase prompt idle on tty0")
+            vm.shot(f"{name}-luks-prompt")
+            self.key(vm, LUKS_PW + "\n")
         t1 = time.time()
         while time.time() - t1 < 600 and vm.alive():
             if self.ssh("true", timeout=15)[0] == 0:
@@ -145,11 +152,11 @@ class ST(SQ.T):
             self.step("boot1-one-passphrase-then-up", secs is not None, f"{int(secs) if secs else 0}s; LVM root + swap came up behind ONE passphrase")
             self.soft = True
             s = self.step
-            rc, out = self.ssh("cat /proc/swaps; echo ---; swapon --show --noheadings; echo ---; lvs --noheadings -o lv_name,vg_name,lv_size,lv_attr 2>&1; echo ---; "
-                               "findmnt -no SOURCE,FSTYPE /; echo ---; cat /proc/cmdline; echo ---; grep swap /etc/fstab; echo ---; "
-                               "cat /sys/power/resume /sys/power/disk /sys/power/state; echo ---; lsblk -no NAME,TYPE,FSTYPE | tr -s ' '")
+            rc, out = self.ssh("cat /proc/swaps; echo @@@; swapon --show --noheadings; echo @@@; lvs --noheadings -o lv_name,vg_name,lv_size,lv_attr 2>&1; echo @@@; "
+                               "findmnt -no SOURCE,FSTYPE /; echo @@@; cat /proc/cmdline; echo @@@; grep swap /etc/fstab; echo @@@; "
+                               "cat /sys/power/resume /sys/power/disk /sys/power/state; echo @@@; lsblk -no NAME,TYPE,FSTYPE | tr -s ' '")
             open(f"{a.out}/screens/swap-state-boot1.txt", "w").write(out)
-            p = out.split("---")
+            p = out.split("@@@") + [""] * 6
             procswaps = p[0]
             s("two-swaps-zram-first", re.search(r"/dev/zram0\s+partition\s+\d+\s+\d+\s+100", procswaps) is not None
               and re.search(r"/dev/dm-\d+\s+partition\s+4718588\s+\d+\s+10", procswaps) is not None, re.sub(r"\s+", " ", procswaps)[:200])
@@ -159,25 +166,31 @@ class ST(SQ.T):
             s("cmdline-has-resume-and-lvm", re.search(r"resume=UUID=[0-9a-f-]{36}", cmd) is not None and "rd.lvm.vg=hxvg" in cmd and "ttyS0" not in cmd, cmd.strip()[:300])
             s("fstab-swap-pri10", re.search(r"/dev/mapper/hxvg-swap\s+none\s+swap\s+sw,pri=10", p[5]) is not None, p[5].strip())
             s("power-sysfs-resume-device-set", re.search(r"^\d+:\d+$", p[6].strip().splitlines()[0]) is not None and "shutdown" in p[6], re.sub(r"\s+", " ", p[6]))
-            rc, out = self.ssh("cat /etc/elogind/logind.conf.d/*.conf /etc/elogind/sleep.conf.d/*.conf; echo ---; grep -E '^(CriticalPowerAction|UsePercentageForPolicy|PercentageAction)' /etc/UPower/UPower.conf; echo ---; "
-                               "strings $(command -v elogind-daemon || ls /lib*/elogind/elogind /usr/lib*/elogind/elogind 2>/dev/null | head -1) | grep -c 'logind.conf.d'; echo ---; "
-                               "lsinitrd /boot/initramfs-*.img | grep -E 'resume|lvm' | head -8; echo ---; lsinitrd -f /usr/lib/dracut/hooks/pre-mount/10-resume.sh 2>/dev/null | head -3; "
-                               "for h in cmdline pre-udev pre-trigger initqueue/settled pre-mount mount; do echo \"hook $h:\"; lsinitrd /boot/initramfs-*.img | grep -oE \"hooks/$h/[^ ]*\" | tr '\\n' ' '; echo; done")
+            rc, out = self.ssh("cat /etc/elogind/logind.conf.d/*.conf /etc/elogind/sleep.conf.d/*.conf; echo @@@; grep -E '^(CriticalPowerAction|UsePercentageForPolicy|PercentageAction)' /etc/UPower/UPower.conf; echo @@@; "
+                               "for p in HandlePowerKey HandleLidSwitch HandleLidSwitchDocked; do echo \"$p=$(dbus-send --system --print-reply --dest=org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.DBus.Properties.Get string:org.freedesktop.login1.Manager string:$p 2>&1 | grep -o 'string \".*\"')\"; done; "
+                               "dbus-send --system --print-reply --dest=org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager.CanHibernate 2>&1 | tail -1; echo @@@; "
+                               "lsinitrd /boot/initramfs-*.img > /tmp/lsinitrd.txt 2>&1; grep -E 'resume|lvm' /tmp/lsinitrd.txt | head -8; echo @@@; "
+                               "for h in cmdline pre-udev pre-trigger initqueue/settled pre-mount mount; do echo \"hook $h:\"; grep -oE \"hooks/$h/[^ ]*\" /tmp/lsinitrd.txt | tr '\\n' ' '; echo; done; echo @@@; "
+                               "f=$(awk '/10-parse-resume.sh/{print $NF}' /tmp/lsinitrd.txt | head -1); echo \"# $f\"; lsinitrd /boot/initramfs-*.img \"$f\" 2>&1 | head -40", timeout=180)
             open(f"{a.out}/screens/policy-and-initramfs.txt", "w").write(out)
-            q = out.split("---")
+            q = out.split("@@@") + [""] * 6
             s("elogind-policy-lid-suspend-hibernate-mode", "HandleLidSwitch=suspend" in q[0] and "HibernateMode=shutdown" in q[0] and "HandlePowerKey=suspend" in q[0], "lid close = suspend, HibernateMode=shutdown")
             s("upower-critical-battery-hibernate", "CriticalPowerAction=Hibernate" in q[1] and "UsePercentageForPolicy=true" in q[1], re.sub(r"\s+", " ", q[1]).strip())
-            s("elogind-reads-logind-conf-d", q[2].strip().splitlines()[-1].strip() not in ("", "0"), "elogind binary knows logind.conf.d: " + q[2].strip())
+            s("elogind-effective-policy-via-dbus", 'HandlePowerKey=string "suspend"' in q[2] and 'HandleLidSwitch=string "suspend"' in q[2] and 'HandleLidSwitchDocked=string "ignore"' in q[2] and 'string "yes"' in q[2],
+              "running elogind (drop-ins read): " + re.sub(r"\s+", " ", q[2]).strip())
             s("initramfs-has-resume-and-lvm-hooks", re.search(r"resume", q[3]) is not None and re.search(r"lvm", q[3]) is not None, re.sub(r"\s+", " ", q[3]).strip()[:300])
             order = q[4]
             open(f"{a.out}/screens/initramfs-hook-order.txt", "w").write(order)
-            # the resume hook must run before the root is mounted: it is a pre-mount hook, the root mount is in the `mount` hook
-            s("resume-hook-runs-before-root-mount", re.search(r"hook pre-mount:\s*hooks/pre-mount/\S*resume", order) is not None or re.search(r"hook initqueue/settled:\s*hooks/initqueue/settled/\S*resume", order) is not None,
-              re.sub(r"\s+", " ", order)[:300])
+            # dracut order: cmdline hooks -> initqueue (settled hooks run here, as soon as the udev queue is quiet) -> pre-mount -> mount (99-mount-root).
+            # parse-resume.sh queues the resume as an initqueue/settled job, so it fires before pre-mount and the root mount.
+            pr = q[5]
+            open(f"{a.out}/screens/parse-resume.sh.txt", "w").write(pr)
+            s("resume-queued-before-root-mount", "hooks/cmdline/10-parse-resume.sh" in order and "hooks/mount/99-mount-root.sh" in order and "initqueue/settled/resume.sh" in pr and "/sys/power/resume" in pr,
+              "cmdline/10-parse-resume.sh queues initqueue/settled/resume.sh (writes /sys/power/resume); root is mounted by mount/99-mount-root.sh, later")
             # --- the marker
-            rc, out = self.ssh("cat > /root/marker.py <<'EOF'" + MARKER_PY + "EOF\nsetsid nohup python3 /root/marker.py >/dev/null 2>&1 < /dev/null & sleep 4; "
+            rc, out = self.ssh("cat > /root/marker.py <<'EOF'" + MARKER_PY + "EOF\nnohup python3 /root/marker.py >/dev/null 2>&1 < /dev/null & echo $! > /root/marker.pid; sleep 4; "
                                "head -c 65536 /dev/urandom | base64 > /dev/shm/marker.txt; sha256sum /dev/shm/marker.txt | cut -d' ' -f1; "
-                               "pid=$(pgrep -f /root/marker.py | head -1); echo $pid; awk '{print $22}' /proc/$pid/stat; cat /proc/sys/kernel/random/boot_id; "
+                               "pid=$(cat /root/marker.pid); echo $pid; awk '{print $22}' /proc/$pid/stat; cat /proc/sys/kernel/random/boot_id; "
                                "cat /dev/shm/counter; echo; cat /dev/shm/marker.sha; echo; awk '{print $1}' /proc/uptime; df -h /dev/shm | tail -1")
             L = out.split()
             marker = {"txt_sha": L[0], "pid": L[1], "start": L[2], "boot_id": L[3], "counter": int(L[4]), "tok_sha": L[5], "uptime": float(L[6])}
@@ -217,8 +230,8 @@ class ST(SQ.T):
             self.soft = True
             s = self.step
             rc, out = self.ssh("cat /proc/sys/kernel/random/boot_id; pid=%s; awk '{print $22}' /proc/$pid/stat; cat /proc/$pid/cmdline | tr '\\0' ' '; echo; cat /dev/shm/counter; echo; "
-                               "cat /dev/shm/selfcheck; cat /dev/shm/marker.sha; echo; sha256sum /dev/shm/marker.txt | cut -d' ' -f1; awk '{print $1}' /proc/uptime; "
-                               "dmesg | grep -iE 'PM: (hibernation|Image restored)|Image restored|hibernat' | tail -12" % marker["pid"])
+                               "cat /dev/shm/selfcheck; echo; cat /dev/shm/marker.sha; echo; sha256sum /dev/shm/marker.txt | cut -d' ' -f1; awk '{print $1}' /proc/uptime; "
+                               "dmesg | grep -iE 'PM: (hibernation|Image)|Image restored|hibernat' | tail -12" % marker["pid"])
             open(f"{a.out}/screens/resume-state.txt", "w").write(out)
             ln = out.splitlines()
             s("same-boot-id-as-before-hibernate", ln[0].strip() == marker["boot_id"], f"{ln[0].strip()} (a cold boot would have a new one)")
@@ -232,11 +245,31 @@ class ST(SQ.T):
             s("in-memory-token-intact", chk[0] == marker["tok_sha"] == ln[5].strip(), f"sha256 of the 1 MiB token held by the process: {chk[0][:16]}.. == recorded {marker['tok_sha'][:16]}..")
             s("tmpfs-file-intact", ln[6].strip() == marker["txt_sha"], f"/dev/shm/marker.txt sha256 {ln[6].strip()[:16]}..")
             s("uptime-continues-across-hibernate", float(ln[7]) > marker["uptime"], f"{marker['uptime']:.0f}s -> {float(ln[7]):.0f}s")
-            s("dmesg-shows-image-restored", re.search(r"Image restored|hibernation: (Image loading|Basic memory bitmaps freed)|PM: .*restor", "\n".join(ln[8:])) is not None, " | ".join(ln[8:])[:300])
+            s("dmesg-shows-image-restored", "hibernation exit" in "\n".join(ln[8:]), " | ".join(ln[8:])[:300])
             rc, out = self.ssh("cat /proc/swaps; lvs --noheadings 2>&1; cat /root/hibernate.out; grep -iE 'hibernat|resume' /var/log/messages 2>/dev/null | tail -6")
             open(f"{a.out}/screens/after-resume-swap.txt", "w").write(out)
             s("swap-still-active-after-resume", "/dev/zram0" in out and re.search(r"/dev/dm-\d+", out) is not None, re.sub(r"\s+", " ", out)[:240])
-            # a second hibernate cycle would need another passphrase: one full cycle is the proof
+            rc, out = self.ssh("dmesg | grep -ciE 'xfs.*(corrupt|error|metadata I/O)|I/O error|EXT4-fs error'; touch /root/after-resume && sync && echo writes-ok")
+            s("no-fs-errors-after-resume-and-root-writable", out.split()[0] == "0" and "writes-ok" in out, re.sub(r"\s+", " ", out))
+            self.soft = False
+            self.ssh("sync; (sleep 2; poweroff) >/dev/null 2>&1 &", timeout=20)
+            t0 = time.time()
+            while vm.alive() and time.time() < t0 + 180:
+                time.sleep(2)
+            self.step("clean-poweroff-after-resume", not vm.alive(), f"{int(time.time() - t0)}s")
+        finally:
+            if vm.alive():
+                vm.p.kill()
+        # --- a normal (cold) boot afterwards: the image must have been invalidated (no resume loop), one passphrase again
+        vm = Q.VM("4-cold", self.base(True, self.nvars), a.out)
+        try:
+            secs = self.unlock(vm, "cold")
+            self.step("cold-boot-after-resume-one-passphrase", secs is not None, f"{int(secs) if secs else 0}s")
+            self.soft = True
+            rc, out = self.ssh("cat /proc/sys/kernel/random/boot_id; ls /dev/shm; cat /proc/swaps | tail -n +2; ls /root/after-resume; dmesg | grep -ciE 'xfs.*(corrupt|error)|I/O error'")
+            L = out.split("\n")
+            self.step("cold-boot-is-a-fresh-boot", L[0].strip() != marker["boot_id"] and "counter" not in out and "/dev/zram0" in out, re.sub(r"\s+", " ", out)[:240])
+            self.step("cold-boot-fs-clean", out.strip().splitlines()[-1].strip() == "0" and "/root/after-resume" in out, "the write made after the resume survived, no fs errors")
         finally:
             if vm.alive():
                 self.ssh("poweroff", timeout=10)
@@ -254,16 +287,20 @@ class ST(SQ.T):
         Q.pflash_vars(self.nvars)
         vm = Q.VM("2-boot1", self.base(True, self.nvars), a.out)
         try:
-            secs = self.unlock(vm, "boot1")
+            secs = self.unlock(vm, "boot1", serial=(label == "server"))
             self.step("boot-one-passphrase-then-up", secs is not None, f"{int(secs) if secs else 0}s")
             self.soft = True
             s = self.step
-            rc, out = self.ssh("cat /proc/swaps; echo ---; swapon --show --noheadings; echo ---; lvs --noheadings 2>&1; vgs --noheadings 2>&1; echo ---; findmnt -no SOURCE,FSTYPE /; echo ---; "
-                               "cat /proc/cmdline; echo ---; cat /etc/fstab; echo ---; lsblk -no NAME,TYPE,FSTYPE /dev/vda | tr -s ' '; echo ---; "
-                               "ls /etc/elogind/logind.conf.d /etc/dracut.conf.d 2>&1; echo ---; free -m | sed -n 3p; zramctl --noheadings; echo ---; blkid | grep -ci swap")
+            rc, out = self.ssh("cat /proc/swaps; echo @@@; swapon --show --noheadings; echo @@@; lvs --noheadings 2>&1; vgs --noheadings 2>&1; echo @@@; findmnt -no SOURCE,FSTYPE /; echo @@@; "
+                               "cat /proc/cmdline; echo @@@; cat /etc/fstab; echo @@@; lsblk -no NAME,TYPE,FSTYPE /dev/vda | tr -s ' '; echo @@@; "
+                               "ls /etc/elogind/logind.conf.d /etc/dracut.conf.d 2>&1; echo @@@; free -m | sed -n 3p; zramctl --noheadings; echo @@@; blkid | grep -ci swap")
             open(f"{a.out}/screens/swap-state-{label}.txt", "w").write(out)
-            p = out.split("---")
-            s(f"{label}-proc-swaps-empty", len(p[0].strip().splitlines()) <= 1 and p[1].strip() == "", re.sub(r"\s+", " ", p[0]).strip() or "(empty)")
+            p = out.split("@@@") + [""] * 12
+            devs = [l.split()[0] for l in p[0].strip().splitlines()[1:] if l.strip()]
+            if label == "server":
+                s("server-proc-swaps-empty", devs == [] and p[1].strip() == "", re.sub(r"\s+", " ", p[0]).strip() or "(empty)")
+            else:
+                s("none-only-zram-no-disk-swap", devs == ["/dev/zram0"], re.sub(r"\s+", " ", p[0]).strip())
             s(f"{label}-no-lvm", p[2].strip() == "" or "No volume groups" in p[2] or "not found" in p[2], re.sub(r"\s+", " ", p[2]).strip() or "no lvs/vgs")
             s(f"{label}-root-is-plain-luks-xfs", "/dev/mapper/hxroot xfs" in p[3], p[3].strip())
             s(f"{label}-no-resume-no-lvm-on-cmdline", "resume=" not in p[4] and "rd.lvm" not in p[4], p[4].strip()[:240])
