@@ -466,7 +466,16 @@ def main():
     s = expect(200, "GET", "/system/packages/search?q=vim")
     ok(s and s[0]["name"] == "app-editors/vim" and s[0]["status"] == "installed" and s[0]["description"] == "Vim text editor", "tree search")
     t = wait_task(expect(200, "POST", "/system/packages/update")["upid"])
-    ok(t["status"] == "ok" and "--sync" in open("/tmp/emerge.log").read(), "update runs emerge --sync")
+    try:
+        shim_log = open("/tmp/emerge.log").read()
+    except OSError as e:
+        shim_log = f"<unreadable: {e}>"
+    ok(
+        t["status"] == "ok" and "--sync" in shim_log,
+        "update runs emerge --sync "
+        f"(task status={t['status']} exit={t.get('exit_code')}; shim log={shim_log!r}; "
+        f"task log={task_log(t['upid'])!r})",
+    )
     pk = {p["name"]: p for p in expect(200, "GET", "/system/packages")}
     ok(pk["sys-apps/foo"]["status"] == "upgradeable" and pk["sys-apps/foo"]["available_version"] == "2.0", "pending upgrades are read from emerge --pretend")
     ins = expect(200, "POST", "/system/packages/app-editors%2Fvim/install")
