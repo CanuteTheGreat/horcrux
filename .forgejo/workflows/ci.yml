@@ -149,6 +149,10 @@ jobs:
     # anon with 4 rustc in parallel (run 6711: the SDN step's `cargo test
     # --no-run` was killed, exit 101, no compiler output because stderr is
     # discarded there). 2 parallel rustc keep the peak ~1.5 GiB lower.
+    # 2026-10-29: run 1056's SDN step (`--workspace --no-run`) was SIGKILLed
+    # (OOM, 6.00 GiB cgroup peak) while rustc rebuilt the horcrux-api lib test
+    # under workspace feature unification beside another rustc. Those three
+    # --no-run lookups therefore use CARGO_BUILD_JOBS=1 (one rustc at a time).
     env:
       CARGO_BUILD_JOBS: "2"
       HX_RUN_TAG: ${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}   # run-scoped sibling container/network/volume names: exact cleanup, no collision with other jobs
@@ -360,7 +364,7 @@ jobs:
         # real netns to attach.
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "SDN networks + policies"
-          contract=$(cargo test --all-features --workspace --no-run --message-format=json 2>/tmp/contract-build.err \
+          contract=$(CARGO_BUILD_JOBS=1 cargo test --all-features --workspace --no-run --message-format=json 2>/tmp/contract-build.err \
             | python3 -c 'import json,sys
           for l in sys.stdin:
               m = json.loads(l)
@@ -435,7 +439,7 @@ jobs:
         # contract test's LXC part against that server.
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "LXC containers (real nested LXC, Proxmox pct parity)"
-          contract=$(cargo test --all-features --workspace --no-run --message-format=json 2>/tmp/contract-build.err \
+          contract=$(CARGO_BUILD_JOBS=1 cargo test --all-features --workspace --no-run --message-format=json 2>/tmp/contract-build.err \
             | python3 -c 'import json,sys
           for l in sys.stdin:
               m = json.loads(l)
@@ -456,7 +460,7 @@ jobs:
         # test's console-ticket part runs against that server.
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Incus containers (real nested Incus, in-browser consoles)"
-          contract=$(cargo test --all-features --workspace --no-run --message-format=json 2>/tmp/contract-build.err \
+          contract=$(CARGO_BUILD_JOBS=1 cargo test --all-features --workspace --no-run --message-format=json 2>/tmp/contract-build.err \
             | python3 -c 'import json,sys
           for l in sys.stdin:
               m = json.loads(l)
