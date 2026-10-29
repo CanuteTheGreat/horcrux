@@ -32,6 +32,8 @@ RUN set -e; chmod 644 /usr/share/horcrux/desktop/*; \
     # English-only message catalogs + emoji dictionaries (~530 MB uncompressed): the image has to fit below 2 GiB
     find /usr/share/locale -mindepth 1 -maxdepth 1 ! -name 'en*' ! -name locale.alias -exec rm -rf {} + ; \
     find /usr/share/ibus/dicts -type f ! -name 'emoji-en*' ! -name 'emoji-ascii*' -delete 2>/dev/null || true; \
+    # GNOME help pages for other languages
+    find /usr/share/help /usr/share/gnome/help -mindepth 1 -maxdepth 1 ! -name C ! -name 'en*' -exec rm -rf {} + 2>/dev/null || true; \
     echo "desktop" > /etc/live-iso-variant; \
     rm -rf /var/db/repos/gentoo/* /var/cache/distfiles/* /var/cache/binhost /usr/share/doc /usr/share/gtk-doc /var/tmp/portage /var/log/emerge* 2>/dev/null || true; \
     find / -xdev -name '*.pyc' -path '*/__pycache__/*' -delete 2>/dev/null || true
