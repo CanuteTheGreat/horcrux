@@ -20,17 +20,39 @@ GRUB_SERIAL_BLOCK=""
 if [ "$GRUB_SERIAL" = 1 ]; then GRUB_SERIAL_BLOCK='# mirror the menu on COM1 when a UART exists (serial consoles, QEMU tests)
 if serial --unit=0 --speed=115200; then
     terminal_input console serial
-    terminal_output console serial
+    terminal_output $gfxout serial
 fi
 '; fi
+# Graphical menu with the product splash (official logo, crop/scale only). Everything is optional: with no
+# splash image or no font in the tools image the menu stays the plain text console it always was.
+GFX_OK=0
+SPLASH="$ROOT/usr/share/live-installer/branding/grub-splash.png"
+FONT=$(ls /usr/share/grub/unicode.pf2 /usr/share/grub/*/unicode.pf2 2>/dev/null | head -1 || true)
+if [ -f "$SPLASH" ] && [ -n "$FONT" ]; then
+  mkdir -p "$ISO/boot/grub/fonts"; cp "$FONT" "$ISO/boot/grub/fonts/unicode.pf2"; cp "$SPLASH" "$ISO/boot/grub/splash.png"; GFX_OK=1
+else
+  echo "note: no GRUB splash/font (splash=$([ -f "$SPLASH" ] && echo yes || echo no) font=${FONT:-none}); plain text menu"
+fi
 CMD="root=live:LABEL=${VOLID} rd.live.image rd.live.overlay.overlayfs=1 rootfstype=auto ro quiet"
+GFX_BLOCK=""
+if [ "$GFX_OK" = 1 ]; then GFX_BLOCK='if loadfont /boot/grub/fonts/unicode.pf2; then
+    insmod gfxterm
+    insmod png
+    set gfxmode=auto
+    if terminal_output gfxterm; then
+        insmod gfxterm_background
+        if background_image /boot/grub/splash.png; then set gfxout=gfxterm; else terminal_output console; fi
+    fi
+fi
+'; fi
 cat > "$ISO/boot/grub/grub.cfg" <<CFG
 set timeout=5
 set default=0
 insmod all_video
 terminal_input console
 terminal_output console
-${GRUB_SERIAL_BLOCK}search --no-floppy --label --set=root ${VOLID}
+set gfxout=console
+${GFX_BLOCK}${GRUB_SERIAL_BLOCK}search --no-floppy --label --set=root ${VOLID}
 
 menuentry "Install ${TITLE} (guided installer)" {
     linux /boot/vmlinuz ${CMD} loglevel=3 ${PROJ}.installer=1
@@ -63,7 +85,7 @@ search --no-floppy --label --set=root ${VOLID}
 set prefix=(\$root)/boot/grub
 configfile (\$root)/boot/grub/grub.cfg
 CFG
-MODS="part_gpt part_msdos fat iso9660 normal linux search search_label search_fs_file configfile all_video terminal gzio echo test"
+MODS="part_gpt part_msdos fat iso9660 normal linux search search_label search_fs_file configfile all_video terminal gzio echo test font gfxterm gfxterm_background png video"
 [ "$GRUB_SERIAL" = 1 ] && MODS="serial $MODS"
 if [ "$HAS_BIOS" = 1 ]; then
 echo "== grub BIOS"

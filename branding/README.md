@@ -14,3 +14,4 @@ used: `CUTY=637 derive.py SRC OUT horcrux 150,-45,875,680 140,637,885,800 410,43
 | `horcrux-full-half.png` | the whole logo at 512x512 | login page, boot splash, installer welcome |
 
 The web UI ships the web-sized subset from `horcrux-api/horcrux-ui/assets/brand/` (copies of these files).
+| `horcrux-grub-splash.png` | 1024x768 GRUB background: the full logo scaled and centred under the menu (compose with the full logo only) | live-ISO boot menu |
