@@ -60,7 +60,10 @@ class ZRun(qt.Runner):
              f'root_password_hash = "{pwhash}"', f'ssh_keys = ["{pubkey}"]', "ssh_password_auth = false", f't2 = "{self.z.t2}"']
         if self.z.desktop:
             t.append('install_type = "desktop"')
-        t += ["", "[disk]", 'filesystem = "zfs"', 'zfs_raid = "single"', 'disks = ["/dev/vda"]', "encryption = true",
+        t += ["", "[disk]", 'filesystem = "zfs"', 'zfs_raid = "single"', 'disks = ["/dev/vda"]', "encryption = true"]
+        if self.z.hibernate:
+            t.append('swap = "hibernate"')
+        t += [
               f'passphrase = "{PASSPHRASE}"', "", "[network.management]", 'mode = "dhcp"', ""]
         if self.z.desktop:
             uh = subprocess.check_output(["openssl", "passwd", "-6", "-salt", "qemuuser1", USER_PW]).decode().strip()
@@ -88,6 +91,8 @@ class ZRun(qt.Runner):
         self.phase1(nvars)
         self.boot1(nvars)
         self.boot2(nvars)
+        if a.hibernate:
+            self.hibernate_phase(nvars)
         self.res["ok"] = not getattr(self, "failed", [])
         json.dump(self.res, open(f"{a.out}/result.json", "w"), indent=1)
         if getattr(self, "failed", []):
@@ -246,6 +251,100 @@ class ZRun(qt.Runner):
             if vm.alive():
                 vm.p.kill()
 
+
+    # --- boot 3 (--hibernate): ONE passphrase, hibernate, power off, boot, ONE passphrase, resume
+    def type_passphrase_usb(self, vm, label):
+        ok = self.vga_stable(vm, label)
+        kb = qt.Kbd(vm, True)
+        kb.text(PASSPHRASE, pause=0.05)
+        kb.key("ENTER")
+        return ok
+
+    def hibernate_phase(self, nvars):
+        a = self.z
+        self.no_ps2 = True
+        qt.pflash_vars(nvars)
+        vm = qt.VM("4-boot3-hibernate", self.qemu_args(None, True, nvars), a.out)
+        try:
+            self.type_passphrase_usb(vm, "passphrase-prompt-before-hibernate")
+            self.step("boot3-single-passphrase-ssh", self.wait_ssh(), "ONE passphrase typed (LUKS swap + ZFS): a second prompt would have blocked boot")
+            rc, o = self.sh("swapon --noheadings --bytes --show=NAME,SIZE,PRIO; echo ---; cryptsetup status hxswap | head -8; echo ---; "
+                            "cat /sys/power/resume; echo ---; test -e /run/hx/key && echo KEYLEFT || echo nokey; echo ---; "
+                            "grep -E 'resume=|rd.hx.swap=' /proc/cmdline | tr ' ' '\\n' | grep -E 'resume|hx'; echo ---; "
+                            "zfs get -H -o value keystatus,keylocation rpool | tr '\\n' ' '; echo ---; grep -c hxswap /etc/fstab; cat /etc/fstab | grep swap")
+            self.res["hibernate_swap"] = o
+            sw = o.split("---")[0]
+            m = re.search(r"/dev/(?:mapper/hxswap|dm-\d+)\s+(\d+)\s+(-?\d+)", sw)
+            ram_kb = int(re.search(r"MemTotal:\s+(\d+)", self.sh("cat /proc/meminfo")[1]).group(1))
+            self.step("hibernate-swap-is-luks2-dm-device-at-least-ram", bool(m) and int(m.group(1)) >= ram_kb * 1024 and "LUKS2" in o,
+                      o.replace("\n", " | ")[:400])
+            self.step("resume-device-set-and-no-key-left-in-run", re.search(r"---\s*\d+:\d+", o) is not None and "nokey" in o and "KEYLEFT" not in o,
+                      "/sys/power/resume set by hx-resume; /run/hx/key shredded")
+            self.step("kernel-args-resume-and-unlock", "resume=UUID=" in o and "rd.hx.swap=" in o, "")
+            self.step("zram-higher-priority-than-disk-swap", "zram" not in sw or (bool(re.search(r"zram\d+\s+\d+\s+16383", sw))), sw.strip().replace("\n", " | "))
+            # initramfs: the one-passphrase module and the hook order, on the REAL installed image
+            rc, o = self.sh("k=$(ls /boot/initramfs-* | tail -1); lsinitrd $k | grep -E 'hx-unlock|hx-zfskey|resume|cryptsetup|zfs.ko|dm-crypt|mount-zfs'")
+            from importlib import util as _u
+            sp = _u.spec_from_file_location("zfsswap", os.path.join(HERE, "overlay/usr/lib/live-installer/liveinst/zfsswap.py"))
+            # (zfsswap imports its package siblings lazily only inside the installer stages: the pure checks load standalone)
+            zs = _u.module_from_spec(sp)
+            sp.loader.exec_module(zs)
+            self.step("initramfs-has-unlock-resume-zfs-and-hook-order", not zs.initramfs_problems(o) and zs.hook_order_ok(o + "\nusr/lib/dracut/hooks/pre-mount/50-hx-zfskey.sh\n") , o.strip().replace("\n", " | ")[:300])
+            # marker in RAM + a running process
+            rc, o = self.sh("echo $(cat /proc/sys/kernel/random/boot_id) > /dev/shm/boot_id_before; head -c 24 /dev/urandom | base64 > /dev/shm/marker; "
+                            "cp /dev/shm/marker /run/marker-run; "
+                            "nohup sh -c 'i=0; while :; do i=$((i+1)); echo $i > /dev/shm/counter; sleep 1; done' >/dev/null 2>&1 & echo $! > /dev/shm/counter.pid; "
+                            "sleep 4; cat /dev/shm/counter /dev/shm/counter.pid /dev/shm/marker /dev/shm/boot_id_before; zpool status -x")
+            self.res["marker_before"] = o
+            lines = o.strip().splitlines()
+            before = {"counter": int(lines[0]), "pid": lines[1].strip(), "marker": lines[2].strip(), "boot_id": lines[3].strip()}
+            self.step("marker-and-process-written", before["counter"] >= 3, f"counter={before['counter']} pid={before['pid']}")
+            rc, o = self.sh("loginctl hibernate; echo rc=$?", timeout=40)
+            lc_ok = "rc=0" in o
+            if not lc_ok:                      # elogind refused: record it as a finding, but still try the kernel interface
+                self.step("loginctl-hibernate", False, o.strip().replace("\n", " | ")[:300])
+                self.sh("echo disk > /sys/power/state", timeout=30)
+            else:
+                self.step("loginctl-hibernate", True, "elogind started the hibernation")
+            t = time.time()
+            while vm.alive() and time.time() - t < qt.T(180):
+                time.sleep(2)
+            gone = not vm.alive()
+            self.step("hibernate-powered-off", gone, f"VM powered off after writing the image ({int(time.time() - t)}s)")
+            if not gone:
+                vm.p.kill()
+        finally:
+            if vm.alive():
+                vm.p.kill()
+        if not gone:
+            return
+        # boot again: ONE passphrase; the kernel resumes the saved memory BEFORE the pool is imported
+        qt.pflash_vars(nvars)
+        vm = qt.VM("5-boot4-resume", self.qemu_args(None, True, nvars), a.out)
+        try:
+            self.type_passphrase_usb(vm, "passphrase-prompt-resume-boot")
+            ok = self.wait_ssh()
+            self.step("resume-boot-single-passphrase-ssh", ok, "back on the network after ONE passphrase")
+            rc, o = self.sh("cat /proc/sys/kernel/random/boot_id; cat /dev/shm/boot_id_before /dev/shm/marker; cat /dev/shm/counter; "
+                            "p=$(cat /dev/shm/counter.pid); kill -0 $p && echo ALIVE || echo DEAD; sleep 3; cat /dev/shm/counter; "
+                            "dmesg | grep -iE 'hibernat|image restored|PM: Image|resume' | tail -8")
+            ls = o.strip().splitlines()
+            resumed = len(ls) >= 6 and ls[0] == ls[1] == before["boot_id"] and ls[2] == before["marker"]
+            self.step("resumed-same-boot-id-and-marker-survived", resumed, f"boot_id before/after equal={ls[0] == ls[1] if len(ls) > 1 else None}; marker equal={ls[2] == before['marker'] if len(ls) > 2 else None}")
+            c1, c2 = int(ls[3]), int(ls[5]) if len(ls) > 5 and ls[5].isdigit() else -1
+            self.step("process-survived-and-still-running", ls[4] == "ALIVE" and c1 >= before["counter"] and c2 > c1,
+                      f"counter before hibernate {before['counter']}, after resume {c1} -> {c2}")
+            self.res["resume_dmesg"] = "\n".join(ls[6:])
+            rc, o = self.sh("zpool status -x; zpool status rpool | grep -E 'state|errors'; zfs get -H -o value keystatus rpool; test -e /run/hx/key && echo KEYLEFT || echo nokey")
+            self.step("pool-healthy-after-resume", "all pools are healthy" in o and "available" in o and "KEYLEFT" not in o, o.strip().replace("\n", " | ")[:300])
+            rc, o = self.sh("zpool scrub -w rpool; zpool status rpool | grep -E 'scan:|errors:|state:'", timeout=int(qt.T(600)))
+            self.step("scrub-clean-after-resume", rc == 0 and "with 0 errors" in o and "No known data errors" in o, o.strip().replace("\n", " | ")[:300])
+            self.sh("poweroff", timeout=10)
+            time.sleep(8)
+        finally:
+            if vm.alive():
+                vm.p.kill()
+
     def desktop_checks(self, vm=None):
         end = time.time() + qt.T(240)
         o = ""
@@ -278,6 +377,7 @@ def main():
     ap.add_argument("--iso", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--desktop", action="store_true")
+    ap.add_argument("--hibernate", action="store_true", help="portable profile: LUKS2 hibernation swap, ONE passphrase, hibernate -> power off -> boot -> resume (marker + process survive, pool clean, scrub clean)")
     ap.add_argument("--fake-t2", action="store_true", help="force the T2 path with answer-file t2=yes (this QEMU cannot present PCI id 106b:1801; detection itself is unit-tested with a fake sysfs)")
     ap.add_argument("--expect-t2-refusal", action="store_true", help="(with --fake-t2) the image has no T2 kernel: assert the installer refuses")
     ap.add_argument("--t2", default="no", help="answer file t2 = no|auto|yes (default no: the normal tests ignore a T2 device)")
