@@ -34,4 +34,5 @@ COPY .hw/hwprofile.toml /tmp/hwprofile.toml
 RUN set -e; mkdir -p /usr/share/live-installer/hwprofiles; mv /tmp/hwprofile.toml "/usr/share/live-installer/hwprofiles/${HW_PROFILE}.toml"; \
     chmod +x /usr/bin/surface-* /usr/bin/horcrux-surface-report /usr/libexec/surface-* /etc/init.d/zram-swap 2>/dev/null || true; \
     echo "${HW_PROFILE}" > /etc/live-iso-hwprofile; \
+    grep -q '^en_US.UTF-8' /etc/locale.gen 2>/dev/null || echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen; locale-gen >/dev/null 2>&1 || true; \
     find / -xdev -name '*.pyc' -path '*/__pycache__/*' -delete 2>/dev/null || true
