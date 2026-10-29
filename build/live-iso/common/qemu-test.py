@@ -53,6 +53,41 @@ def T(sec):
     return sec * SLOW
 
 
+# ----------------------------------------------------------------------------- hard deadline
+# A stuck test must FAIL in bounded time: the KVM runner is a single slot and one hung QEMU run (a missed passphrase prompt, a guest that
+# never answers) used to hold it for hours. arm_deadline() starts a watchdog that kills every QEMU this process started and exits 124;
+# SIGTERM (from ci-run.sh's `timeout`) does the same. Seconds come from --deadline / env QEMU_TEST_DEADLINE (0 = off).
+LIVE_VMS = []
+
+
+def kill_all_vms():
+    for v in list(LIVE_VMS):
+        try:
+            if v.p.poll() is None:
+                v.p.kill()
+        except Exception:
+            pass
+
+
+def arm_deadline(secs=None):
+    import signal
+    secs = float(os.environ.get("QEMU_TEST_DEADLINE", 0) or 0) if secs is None else float(secs)
+
+    def _die(why):
+        kill_all_vms()
+        print(f"[FAIL] hard-deadline {why}: test stopped, QEMU killed", flush=True)
+        os._exit(124)
+
+    try:
+        signal.signal(signal.SIGTERM, lambda *_: _die("SIGTERM from the job timeout"))
+    except ValueError:
+        pass
+    if secs > 0:
+        t = threading.Timer(secs, _die, args=(f"after {int(secs)}s",))
+        t.daemon = True
+        t.start()
+
+
 # ----------------------------------------------------------------------------- png / screens
 def png_from_ppm(ppm_path, png_path):
     d = open(ppm_path, "rb").read()
@@ -199,6 +234,7 @@ class VM:
                                           "-chardev", f"socket,id=ser0,path={self.ser_path},server=on,wait=off", "-serial", "chardev:ser0",
                                           "-display", "none"],
                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=open(f"{out}/{name}-qemu.err", "wb"))
+        LIVE_VMS.append(self)
         self.sock = None
         self.last_rx = time.time()
         self.poke = False          # serial TUI runs: send Ctrl-L when the line has been silent (see expect_screen)
@@ -1563,6 +1599,7 @@ class Runner:
 
 def main():
     global ARCH, SLOW
+    arm_deadline()
     ap = argparse.ArgumentParser()
     ap.add_argument("--iso", required=True)
     ap.add_argument("--project", required=True, choices=PROJECTS)

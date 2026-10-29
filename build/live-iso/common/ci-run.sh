@@ -129,11 +129,15 @@ if [ "$result" = pass ]; then
       "uefi-usb-auto-zfs-mirror-sshpw|--mode uefi --media usb --flow auto --fs zfs --zfs-raid mirror --static-ip 10.0.2.99 --ssh-password-opt-in"
     )
   fi
+  # Hard per-test deadlines (a stuck QEMU test must FAIL in minutes-to-an-hour, not hold the single KVM runner for hours): the harness arms a
+  # watchdog (QEMU_TEST_DEADLINE: kills its QEMUs, prints [FAIL] hard-deadline, exits 124) and `timeout` is the backstop (SIGTERM = same cleanup).
+  if [ "$ARCH" = "$HOST_ARCH" ] && [ -e /dev/kvm ]; then DL_QEMU=2700; DL_ZFS=3600; DL_MODES=3000; else DL_QEMU=5400; DL_ZFS=7200; DL_MODES=6000; fi
+  with_deadline() { local s=$1; shift; QEMU_TEST_DEADLINE=$s timeout -k 30 $((s+180)) "$@"; }
   failed_list=""
   for entry in "${MATRIX[@]}"; do
     name=${entry%%|*}; args=${entry#*|}
     echo "::group::QEMU test $name"
-    python3 -u "$HERE/qemu-test.py" --iso "$ISO" --project "$PROJECT" --arch "$ARCH" $args --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
+    with_deadline $DL_QEMU python3 -u "$HERE/qemu-test.py" --iso "$ISO" --project "$PROJECT" --arch "$ARCH" $args --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
     rc=${PIPESTATUS[0]}
     echo "::endgroup::"
     rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img
@@ -144,7 +148,7 @@ if [ "$result" = pass ]; then
     # rollback, then the portable hibernate flow (one passphrase, hibernate, power off, boot, resume: marker + process survive, scrub clean)
     name=zfs-enc-desktop-hibernate
     echo "::group::QEMU test $name"
-    python3 -u "$HERE/zfs-enc-test.py" --iso "$ISO" --out "$EVI/$name" --desktop --hibernate 2>&1 | tee "$EVI/test-$name.log" | tail -60
+    with_deadline $DL_ZFS python3 -u "$HERE/zfs-enc-test.py" --iso "$ISO" --out "$EVI/$name" --desktop --hibernate 2>&1 | tee "$EVI/test-$name.log" | tail -60
     rc=${PIPESTATUS[0]}
     echo "::endgroup::"
     rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img
@@ -156,7 +160,7 @@ if [ "$result" = pass ]; then
       [ $fw = bios ] && [ "${HAS_BIOS:-1}" = 0 ] && continue
       name=boot-modes-$fw; media=usb; [ $fw = bios ] && media=cdrom
       echo "::group::QEMU test $name"
-      python3 -u "$HERE/boot-modes-test.py" --iso "$ISO" --project "$PROJECT" --arch "$ARCH" --mode $fw --media $media ${NO_MEMTEST:+--no-memtest} --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
+      with_deadline $DL_MODES python3 -u "$HERE/boot-modes-test.py" --iso "$ISO" --project "$PROJECT" --arch "$ARCH" --mode $fw --media $media ${NO_MEMTEST:+--no-memtest} --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
       rc=${PIPESTATUS[0]}
       echo "::endgroup::"
       rm -f "$EVI/$name"/*.raw "$EVI/$name"/*.qcow2 "$EVI/$name"/install/target*.qcow2 "$EVI/$name"/install/answers.img

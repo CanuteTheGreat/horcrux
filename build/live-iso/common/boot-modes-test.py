@@ -560,6 +560,7 @@ class Tests:
 
 
 def main():
+    qt.arm_deadline()
     ap = argparse.ArgumentParser()
     ap.add_argument("--iso", required=True)
     ap.add_argument("--project", required=True, choices=list(qt.PROJECTS))
