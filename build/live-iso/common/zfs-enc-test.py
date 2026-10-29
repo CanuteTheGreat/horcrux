@@ -220,7 +220,7 @@ class ZRun(qt.Runner):
 
     def change_and_rollback(self):
         rc, o = self.sh("horcrux-be snapshot before-change && echo CHANGE > /root/marker-after-snapshot && "
-                        "sed -i 's/^CMDLINE=.*/CMDLINE=\"console=tty0\"/' /etc/horcrux/be.conf && "
+                        "sed -i 's/console=ttyS0,115200n8//' /etc/horcrux/be.conf && grep ^CMDLINE /etc/horcrux/be.conf && "
                         "horcrux-be rollback horcrux@before-change --name rolledback && horcrux-be list && zpool get -H -o value bootfs rpool && "
                         "grep -c 'be-rolledback' /boot/grub/grub.cfg && ! grep -q ttyS0 /boot/grub/grub.cfg")
         self.step("rollback-boot-environment-created", rc == 0 and "rpool/ROOT/rolledback" in o, o.strip().replace("\n", " | ")[-300:])
@@ -325,16 +325,19 @@ class ZRun(qt.Runner):
             self.type_passphrase_usb(vm, "passphrase-prompt-resume-boot")
             ok = self.wait_ssh()
             self.step("resume-boot-single-passphrase-ssh", ok, "back on the network after ONE passphrase")
-            rc, o = self.sh("cat /proc/sys/kernel/random/boot_id; cat /dev/shm/boot_id_before /dev/shm/marker; cat /dev/shm/counter; "
-                            "p=$(cat /dev/shm/counter.pid); kill -0 $p && echo ALIVE || echo DEAD; sleep 3; cat /dev/shm/counter; "
-                            "dmesg | grep -iE 'hibernat|image restored|PM: Image|resume' | tail -8")
-            ls = o.strip().splitlines()
-            resumed = len(ls) >= 6 and ls[0] == ls[1] == before["boot_id"] and ls[2] == before["marker"]
-            self.step("resumed-same-boot-id-and-marker-survived", resumed, f"boot_id before/after equal={ls[0] == ls[1] if len(ls) > 1 else None}; marker equal={ls[2] == before['marker'] if len(ls) > 2 else None}")
-            c1, c2 = int(ls[3]), int(ls[5]) if len(ls) > 5 and ls[5].isdigit() else -1
-            self.step("process-survived-and-still-running", ls[4] == "ALIVE" and c1 >= before["counter"] and c2 > c1,
+            rc, o = self.sh("echo BOOT_NOW=$(cat /proc/sys/kernel/random/boot_id); echo BOOT_BEFORE=$(cat /dev/shm/boot_id_before 2>/dev/null); "
+                            "echo MARKER=$(cat /dev/shm/marker 2>/dev/null); echo C1=$(cat /dev/shm/counter 2>/dev/null); "
+                            "p=$(cat /dev/shm/counter.pid 2>/dev/null); kill -0 $p 2>/dev/null && echo PROC=ALIVE || echo PROC=DEAD; sleep 3; "
+                            "echo C2=$(cat /dev/shm/counter 2>/dev/null); dmesg | grep -iE 'hibernat|image restored|PM: Image' | tail -6")
+            kv = dict(l.split("=", 1) for l in o.splitlines() if re.match(r"^[A-Z0-9_]+=", l))
+            resumed = bool(kv.get("BOOT_NOW")) and kv.get("BOOT_NOW") == kv.get("BOOT_BEFORE") == before["boot_id"] and kv.get("MARKER") == before["marker"]
+            self.step("resumed-same-boot-id-and-marker-survived", resumed, f"boot_id before/now: {before['boot_id'][:8]}/{(kv.get('BOOT_NOW') or '')[:8]}; marker equal={kv.get('MARKER') == before['marker']}")
+            c1 = int(kv["C1"]) if (kv.get("C1") or "").isdigit() else -1
+            c2 = int(kv["C2"]) if (kv.get("C2") or "").isdigit() else -1
+            self.step("process-survived-and-still-running", kv.get("PROC") == "ALIVE" and c1 >= before["counter"] and c2 > c1,
                       f"counter before hibernate {before['counter']}, after resume {c1} -> {c2}")
-            self.res["resume_dmesg"] = "\n".join(ls[6:])
+            ls = [l for l in o.splitlines() if not re.match(r"^[A-Z0-9_]+=", l)]
+            self.res["resume_dmesg"] = "\n".join(ls)
             rc, o = self.sh("zpool status -x; zpool status rpool | grep -E 'state|errors'; zfs get -H -o value keystatus rpool; test -e /run/hx/key && echo KEYLEFT || echo nokey")
             self.step("pool-healthy-after-resume", "all pools are healthy" in o and "available" in o and "KEYLEFT" not in o, o.strip().replace("\n", " | ")[:300])
             rc, o = self.sh("zpool scrub -w rpool; zpool status rpool | grep -E 'scan:|errors:|state:'", timeout=int(qt.T(600)))
