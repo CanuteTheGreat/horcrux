@@ -46,7 +46,9 @@ set menu_color_highlight=black/${ACCENT}
 CFG
 # product splash (official logo): graphical menu on the screen when the splash + font are on the ISO (GFX_OK=1, set by
 # assemble-iso.sh); the entries and hotkeys are the same text, the serial mirror below stays a plain text menu
-if [ "${GFX_OK:-0}" = 1 ]; then
+# Only where GRUB mirrors the menu on a UART itself (GRUB_SERIAL=1, x86): on arm64 EFI the UART IS the firmware console, and gfxterm output
+# would no longer reach it (serial consoles and the serial-driven QEMU tests would never see the menu: grub-menu-reached timeouts)
+if [ "${GFX_OK:-0}" = 1 ] && [ "$GRUB_SERIAL" = 1 ]; then
 cat <<CFG
 if loadfont /boot/grub/fonts/unicode.pf2; then
     insmod gfxterm

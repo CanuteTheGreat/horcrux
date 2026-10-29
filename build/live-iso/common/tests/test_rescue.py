@@ -93,6 +93,12 @@ class BootMenu(unittest.TestCase):
         self.assertIn("terminal_output $gfxout serial", gfx)        # the serial mirror stays text
         self.assertEqual(gfx.count("{"), gfx.count("}"))
 
+    def test_no_gfxterm_on_arm64_where_the_uart_is_the_efi_console(self):
+        cfg = subprocess.run(["bash", GEN, "HORCRUX_LIVE", "Horcrux", "horcrux", "aarch64", "none"], capture_output=True, text=True, check=True,
+                             env=dict(os.environ, GFX_OK="1")).stdout
+        self.assertNotIn("gfxterm", cfg)      # gfxterm output never reaches the UART: serial consoles would see no menu
+        self.assertIn("Graphical install", cfg)
+
     def test_valid_grub_syntax_balanced(self):
         cfg = gen()
         self.assertEqual(cfg.count("{"), cfg.count("}"))
