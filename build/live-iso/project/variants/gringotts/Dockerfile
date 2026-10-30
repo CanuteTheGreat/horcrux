@@ -27,17 +27,17 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
     eselect profile show
 
 COPY project/variants/gringotts/packages.txt /tmp/packages-gringotts.txt
-COPY project/variants/gringotts/pkgs-owning-dev.py /tmp/pkgs-owning-dev.py
 
-# the Desktop layer deleted /usr/include and the LLVM/clang tools to fit the ISO; the apps compile (go, C): put those files back by re-installing exactly the
-# packages that own them (binary packages, same versions), then slim again at the end
+# the Desktop layer deleted /usr/include, the LLVM headers/tools and static libs to fit the ISO; the apps compile (python/C/go): put the headers back by
+# re-installing the packages that own them (same cat/pkg:slot, binary packages), then slim again at the end (the final slimming removes them again)
+COPY project/variants/gringotts/pkgs-owning-dev.py /tmp/pkgs-owning-dev.py
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
-    pk=$(python3 /tmp/pkgs-owning-dev.py); \
-    echo "re-installing $(echo $pk | wc -w) packages that own headers/llvm tools"; \
-    emerge --oneshot --nodeps --usepkg --getbinpkg --buildpkg=n $pk 2>&1 | tail -8; \
-    test -f /usr/include/stdio.h
+    pk=$(python3 /tmp/pkgs-owning-dev.py); echo "re-installing $(echo $pk | wc -w) packages that own headers"; \
+    emerge --oneshot --nodeps --usepkg --getbinpkg --buildpkg=n --jobs=6 $pk > /tmp/dev.log 2>&1 || { tail -30 /tmp/dev.log; exit 1; }; \
+    find /etc -name '._cfg*' -delete; rm -f /tmp/dev.log /tmp/pkgs-owning-dev.py; \
+    test -f /usr/include/stdio.h && ls /usr/include/python3*/Python.h >/dev/null
 
 # apps: Brave comes from the owner's overlay (re-merged below so the package belongs to canutethegreat-overlay, not the desktop layer's stop-gap copy)
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
