@@ -20,4 +20,7 @@ RDEPEND="
 
 src_install() {
 	dobin "${FILESDIR}"/horcrux-be "${FILESDIR}"/horcrux-t2-firmware
+	# the two modules the tools import (be.py, t2.py); the rest of the live installer is not part of this package
+	insinto /usr/lib/live-installer/liveinst
+	doins "${FILESDIR}"/liveinst/{__init__,be,t2}.py
 }
