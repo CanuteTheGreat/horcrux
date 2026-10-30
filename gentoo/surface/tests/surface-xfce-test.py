@@ -199,6 +199,25 @@ class XT(SQ.T):
             "firefox": "firefox-bin", "brave": "brave-bin", "nextcloud": "nextcloud", "onboard": "onboard", "terminal": "xfce4-terminal",
         }
         t_launch = {}
+        # RAM at idle (session up, nothing launched), then with Brave alone open, then with everything
+        time.sleep(30)
+        rc, out = self.ssh("free -m; echo; cat /proc/pressure/memory 2>/dev/null; cat /proc/swaps", timeout=60)
+        self.save("memory-idle.txt", out)
+        self.res["memory_idle"] = re.sub(r"\s+", " ", out.splitlines()[1])
+        s("memory-idle-recorded", True, self.res["memory_idle"])
+        t1 = time.time()
+        usr("(setsid brave-bin --no-first-run --new-window about:blank >/tmp/app-brave0.log 2>&1 &) ; sleep 1; true", timeout=30)
+        for _ in range(50):
+            if self.ssh(f"pgrep -u {USER} -f brave | head -1")[1].strip():
+                break
+            time.sleep(2)
+        time.sleep(40)
+        rc, out = self.ssh("free -m; echo; ps -eo rss,comm --sort=-rss | head -8; cat /proc/pressure/memory 2>/dev/null; cat /proc/swaps", timeout=60)
+        self.save("memory-with-brave.txt", out)
+        self.res["memory_brave_only"] = re.sub(r"\s+", " ", out.splitlines()[1])
+        self.res["brave_open_seconds"] = round(time.time() - t1 - 40, 1)
+        s("memory-with-brave-recorded", True, self.res["memory_brave_only"])
+        self.ssh(f"pkill -u {USER} -f brave; sleep 3", timeout=30)
         for name, cmd in (("firefox", "firefox-bin --new-window about:blank"), ("brave", "brave-bin --no-first-run --new-window about:blank"),
                           ("nextcloud", "nextcloud --background"), ("xfce4-terminal", "xfce4-terminal"), ("onboard", "onboard")):
             t1 = time.time()
@@ -246,6 +265,10 @@ class XT(SQ.T):
         rc, out = self.ssh("ps -eo user,comm,args | grep -E 'lightdm-gtk-greeter|onboard' | grep -v grep | cut -c1-150; ls /etc/lightdm; cat /etc/lightdm/lightdm-gtk-greeter.conf | grep -vE '^#|^$' | head -20")
         self.save("greeter-state.txt", out)
         s("lightdm-gtk-greeter-shown", "lightdm-gtk-greeter" in out, re.sub(r"\s+", " ", out)[:240])
+        rc, wm = self.ssh("export DISPLAY=:0 XAUTHORITY=$(ls /var/run/lightdm/root/:0 /run/lightdm/root/:0 2>/dev/null | head -1); xprop -root _NET_CLIENT_LIST 2>&1 | head -2; "
+                          "for w in $(xprop -root _NET_CLIENT_LIST 2>/dev/null | grep -o '0x[0-9a-f]*'); do xprop -id $w WM_CLASS _NET_WM_NAME 2>/dev/null; done; pgrep -a onboard | head -2", timeout=60)
+        self.save("greeter-windows.txt", wm)
+        s("greeter-onboard-window-mapped", re.search(r"[Oo]nboard", wm) is not None, re.sub(r"\s+", " ", wm)[:240])
         s("greeter-onscreen-keyboard-available", "onboard" in out or re.search(r"keyboard\s*=\s*onboard", out) is not None, "greeter has an on-screen keyboard (a11y button / onboard)")
         self.ssh("mv /root/60-autologin.conf.bak /etc/lightdm/lightdm.conf.d/60-horcrux-autologin.conf; rc-service display-manager stop >/dev/null 2>&1; pkill -9 Xorg; sleep 2; rc-service display-manager start >/dev/null 2>&1", timeout=90)
         time.sleep(30)
