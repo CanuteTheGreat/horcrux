@@ -58,7 +58,8 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
     set -e; unset ARCH; export FEATURES="-ccache"; \
     emerge --oneshot --usepkg=n --getbinpkg=n --buildpkg=n gnome-base/gnome-session-openrc; \
     if grep -q supervise-daemon /etc/user/init.d/gnome-settings-daemon-wayland /etc/user/init.d/gnome-settings-daemon-x11; then echo 'gsd patch not applied'; exit 1; fi; \
-    grep -q 'want pipewire-pulse wireplumber' /etc/user/init.d/gsd || { echo 'gsd audio patch not applied'; exit 1; }
+    grep -q 'want pipewire-pulse wireplumber' /etc/user/init.d/gsd || { echo 'gsd audio patch not applied'; exit 1; }; \
+    grep -q 'DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"' /etc/user/init.d/gnome-shell-wayland || { echo 'shell user-bus patch not applied'; exit 1; }
 
 # Ownership of the image's own files: the packages PROVEN on hogshead (overlay gentoo/ = repo horcrux): sys-kernel/horcrux-unlock (dracut one-passphrase),
 # sys-apps/horcrux-tools (installer, live scripts, horcrux-be, horcrux-orphans), sys-apps/horcrux-live-data (branding + portage metadata snapshot),
