@@ -4,3 +4,4 @@ etc/init.d/horcrux-api
 etc/conf.d/horcrux-api
 etc/init.d/t2fanrd
 etc/init.d/tiny-dfr
+etc/motd

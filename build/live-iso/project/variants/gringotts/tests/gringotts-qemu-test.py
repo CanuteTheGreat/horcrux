@@ -38,9 +38,9 @@ GUI_APPS = [
     ("discord", r"^discord", r"[Dd]iscord", "qlist -Iv net-im/discord"),
     ("proton-vpn", r"proton", r"protonvpn|proton-vpn", "qlist -Iv net-vpn/proton-vpn-gtk-app"),
     ("remmina", r"remmina\.desktop|org\.remmina\.Remmina", r"remmina", "remmina --version"),
-    ("virt-viewer", r"virt-viewer", r"virt-viewer", "virt-viewer --version"),
+    ("virt-viewer", r"remote-viewer|virt-viewer", r"remote-viewer|virt-viewer", "virt-viewer --version"),
     ("gimp", r"^gimp", r"gimp", "gimp --version"),
-    ("geeqie", r"geeqie", r"geeqie", "geeqie --version"),
+    ("geeqie", r"org\.geeqie\.Geeqie|^geeqie", r"geeqie", "geeqie --version"),
     ("vlc", r"^vlc", r"vlc", "vlc --version | head -1"),
     ("wireshark", r"wireshark", r"wireshark", "wireshark --version | head -1"),
     ("nextcloud", r"nextcloud", r"nextcloud", "nextcloud --version"),
@@ -147,6 +147,12 @@ class GRun(zt.ZRun):
             self.step("live-helpers-present", bool(m) and "nmtui=/" in txt and "install=/" in txt and "remote=/" in txt and "ts=keyfile" in txt and "keys=0" not in txt, txt)
             self.step("live-networkmanager-running", "nm=started" in txt, txt)
             # remote handoff on the live stick (needs the QEMU user-net: DHCP via NetworkManager)
+            if self.g.ts_key_file:
+                # the baked key is single-use and the test ISO's copy may already be spent: hand the live helper a fresh single-use TEST key
+                # through the path it prefers (/run/gringotts-keys/ts-authkey); the key never touches the image
+                k = open(self.g.ts_key_file).read().strip()
+                vm.send(f"mkdir -p /run/gringotts-keys && printf %s {k} > /run/gringotts-keys/ts-authkey && chmod 600 /run/gringotts-keys/ts-authkey; clear\r")
+                time.sleep(2)
             vm.send("for i in $(seq 1 40); do ip -4 route show default | grep -q . && break; sleep 2; done; gringotts-remote; echo REMOTE-RC=$?\r")
             m = vm.expect_raw(r"REMOTE-RC=\d+", 240, consume=False)
             out = vm.screen()
@@ -198,7 +204,7 @@ class GRun(zt.ZRun):
                         "ls -ld /home/" + USER + "; rc-status -a 2>&1 | grep -E 'docker|NetworkManager|iwd|sshd|gringotts|tailscale|display-manager|elogind|chronyd' | tr -s ' '")
         self.res["basic"] = o
         self.step("hostname-user-services", "gringotts" in o.split("\n")[0] and "uid=" in o and "docker" in o and USER in o, o.replace("\n", " | ")[:400])
-        rc, o = self.sh("passwd -S root; /usr/sbin/sshd -T 2>/dev/null | grep -E '^(permitrootlogin|passwordauthentication|authorizedkeysfile)'; "
+        rc, o = self.sh("passwd -S root; /usr/sbin/sshd -T 2>&1 | grep -E '^(permitrootlogin|passwordauthentication|authorizedkeysfile)'; "
                         "grep -c . /etc/gringotts/authorized_keys; stat -c '%a %U' /usr/share/gringotts/ts-authkey")
         self.step("root-locked-ssh-key-only-and-keys-baked", " L " in o and "passwordauthentication no" in o and "permitrootlogin prohibit-password" in o, o.replace("\n", " | ")[:300])
         rc, o = self.sh("swapon --noheadings --show=NAME,SIZE,PRIO; cat /sys/power/resume; lsblk -no NAME,SIZE,FSTYPE | head -12; uname -r; zfs version | head -2")
@@ -396,6 +402,7 @@ def main():
     ap.add_argument("--mem", type=int, default=16384)
     ap.add_argument("--disk-gb", type=int, default=64)
     ap.add_argument("--skip-menu", action="store_true")
+    ap.add_argument("--ts-key-file", default="", help="fresh single-use TEST Tailscale key for the live-join step (the baked one may be spent)")
     ap.add_argument("--keep-disks", action="store_true")
     ap.add_argument("--cpu", default=os.environ.get("QEMU_TEST_CPU", "qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt,+cx16,+aes,+avx,+xsave"))
     a = ap.parse_args()
