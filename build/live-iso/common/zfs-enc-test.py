@@ -467,21 +467,25 @@ class ZRun(qt.Runner):
                         f"su - {user} -c \"export XDG_RUNTIME_DIR=/run/user/{uid} DBUS_SESSION_BUS_ADDRESS=$B; echo BUS=$B; {names}\" 2>&1")
         self.step("session-manager-and-shell-names-on-the-shells-own-bus", o.count("(true,)") == 2, re.sub(r"\s+", " ", o)[:300])
 
-    def session_logout_check(self, user):
-        """a scripted Log Out through the shell's own bus ends the session and GDM shows its greeter again"""
+    def session_logout(self, user):
+        """Log Out through the shell's own bus (org.gnome.SessionManager.Logout 1); wait until the user's shell is gone and GDM shows a greeter session again"""
         uid, env = self._user_bus_env(user)
         self.sh(f"B=$(tr '\\0' '\\n' < /proc/$(pgrep -u {user} -x gnome-shell | head -1)/environ | grep '^DBUS_SESSION_BUS_ADDRESS=' | cut -d= -f2-); "
                 f"su - {user} -c \"export XDG_RUNTIME_DIR=/run/user/{uid} DBUS_SESSION_BUS_ADDRESS=$B; gdbus call --session --dest org.gnome.SessionManager --object-path /org/gnome/SessionManager --method org.gnome.SessionManager.Logout 1\" 2>&1")
-        end, gone, greeter = time.time() + qt.T(120), False, False
+        end, gone, greeter = time.time() + qt.T(150), False, False
         o = ""
         while time.time() < end:
-            rc, o = self.sh(f"pgrep -u {user} -x gnome-shell >/dev/null && echo USERSHELL; loginctl list-sessions --no-legend | awk '{{print $3}}' | tr '\\n' ' '; pgrep -f gdm-wayland-session >/dev/null && echo GDMSESSION")
+            rc, o = self.sh(f"pgrep -u {user} -x gnome-shell >/dev/null && echo USERSHELL; loginctl list-sessions --no-legend | awk '{{print $3}}' | tr '\\n' ' '; pgrep -u gdm-greeter -x gnome-shell >/dev/null && echo GREETERSHELL")
             gone = "USERSHELL" not in o
-            greeter = "gdm-greeter" in o
+            greeter = "gdm-greeter" in o and "GREETERSHELL" in o
             if gone and greeter:
                 break
             time.sleep(5)
-        self.step("shell-log-out-via-session-manager-returns-to-gdm", gone and greeter, re.sub(r"\s+", " ", o)[:300])
+        return gone and greeter, re.sub(r"\s+", " ", o)[:300]
+
+    def session_logout_check(self, user):
+        ok, o = self.session_logout(user)
+        self.step("shell-log-out-via-session-manager-returns-to-gdm", ok, o)
 
     def desktop_exec_check(self):
         rc, o = self.sh(DESKTOP_EXEC_CHECK, timeout=120)
