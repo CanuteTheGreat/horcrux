@@ -198,7 +198,7 @@ class GRun(zt.ZRun):
                         "ls -ld /home/" + USER + "; rc-status -a 2>&1 | grep -E 'docker|NetworkManager|iwd|sshd|gringotts|tailscale|display-manager|elogind|chronyd' | tr -s ' '")
         self.res["basic"] = o
         self.step("hostname-user-services", "gringotts" in o.split("\n")[0] and "uid=" in o and "docker" in o and USER in o, o.replace("\n", " | ")[:400])
-        rc, o = self.sh("passwd -S root; sshd -T 2>/dev/null | grep -E '^(permitrootlogin|passwordauthentication|authorizedkeysfile)'; "
+        rc, o = self.sh("passwd -S root; /usr/sbin/sshd -T 2>/dev/null | grep -E '^(permitrootlogin|passwordauthentication|authorizedkeysfile)'; "
                         "grep -c . /etc/gringotts/authorized_keys; stat -c '%a %U' /usr/share/gringotts/ts-authkey")
         self.step("root-locked-ssh-key-only-and-keys-baked", " L " in o and "passwordauthentication no" in o and "permitrootlogin prohibit-password" in o, o.replace("\n", " | ")[:300])
         rc, o = self.sh("swapon --noheadings --show=NAME,SIZE,PRIO; cat /sys/power/resume; lsblk -no NAME,SIZE,FSTYPE | head -12; uname -r; zfs version | head -2")
@@ -233,6 +233,9 @@ class GRun(zt.ZRun):
         vm.shot("gnome-desktop")
         rc, o = self.sh(f"loginctl list-sessions --no-legend; for s in $(loginctl list-sessions --no-legend | awk '{{print $1}}'); do loginctl show-session $s -p Name -p Type -p Active -p Remote | tr '\\n' ' '; echo; done")
         self.res["sessions"] = o
+        if not up:
+            rc, dg = self.sh(f"ps -u {USER} -o pid,etime,comm | head -30; echo ---; ls /var/log/gdm /var/log/messages /var/log/syslog 2>&1 | head; echo ---; for f in /var/log/gdm/*; do echo == $f; tail -25 $f; done 2>&1 | tail -80; echo ---; dmesg | grep -iE 'drm|gpu|virtio|segfault|gnome' | tail -15; echo ---; tail -30 /home/{USER}/.xsession-errors /home/{USER}/.local/share/xorg/*.log 2>&1 | tail -40; echo ---; ls -la /home/{USER}/.local/share/ 2>&1 | head; loginctl session-status 2>&1 | tail -25", timeout=120)
+            open(f"{self.g.out}/gnome-diag.txt", "w").write(dg)
         self.step("gnome-login-as-canutethegreat-wayland", up and re.search(rf"Name={USER}.*Type=wayland|Type=wayland.*Name={USER}", o.replace("\n", " ")) is not None, o.strip().replace("\n", " | ")[:300])
         return up
 
