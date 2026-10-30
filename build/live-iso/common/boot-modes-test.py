@@ -369,7 +369,7 @@ class Tests:
             self.menu_ready(vm)
             self.pick(vm, "5")
             self.step("rescue-banner", vm.expect_raw(r"RESCUE MODE", T(300)))
-            m = vm.expect_raw(r"Installed systems found:\s*\r?\n\s*1\) ([^\r\n]*)", T(120))
+            m = vm.expect_raw(r"Installed systems found:\s*\r?\n\s*1\) ([^\r\n]*)\r?\n", T(120))
             self.step("finds-the-installed-system", bool(m) and b"/dev/vda4" in m.group(0), (m.group(1).decode()[:100] if m else "none"))
             self.step("mounted-for-work", vm.expect_raw(r"Mounted .* at /mnt/rescue/\S+", T(60)))
             vm.expect_raw(r"Enter an option", T(30))
