@@ -14,7 +14,6 @@ ARG ARCH=x86_64
 ARG VARIANT=gringotts
 
 COPY --from=hxoverlay / /var/db/repos/horcrux/
-COPY project/variants/gringotts/repo/ /var/db/repos/horcrux-gringotts/
 COPY project/variants/gringotts/portage/ /etc/portage/
 
 # trees: ::gentoo (the desktop layer deleted it), GURU, the owner's overlay (shallow git clones; pins are printed in the build log)
@@ -46,6 +45,9 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     emerge --update --newuse --deep $(grep -v '^#' /tmp/packages-gringotts.txt | tr '\n' ' '); \
     emerge --oneshot --usepkg=n --getbinpkg=n www-client/brave-bin::canutethegreat-overlay; \
     rm -rf /var/db/repos/horcrux-desktop /etc/portage/repos.conf/horcrux-desktop.conf
+
+# this variant's local overlay is copied only now (editing it must not invalidate the long header/app layers above)
+COPY project/variants/gringotts/repo/ /var/db/repos/horcrux-gringotts/
 
 # files that came from the repository's overlays (not from a package) are re-packaged as ONE ebuild so Portage owns them:
 # the tarball is built from the same build contexts the base layers COPYed (order as in Dockerfile.rootfs: app, project, common, then the desktop variant)
