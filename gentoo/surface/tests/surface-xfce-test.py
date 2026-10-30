@@ -162,7 +162,7 @@ class XT(SQ.T):
         cfgs = [l.strip() for l in cfg.splitlines() if l.strip().startswith("/")]
         s("horcrux-orphans-clean", len(orph) == 0, f"{len(orph)} unexpected: " + ", ".join(orph[:12]) + f" | raw lines={len(po.splitlines())}")
         s("no-cfg-protect-leftovers", len(cfgs) == 0, ", ".join(cfgs[:5]) or "none under /etc")
-        rc3, qf = self.ssh("qfile /usr/bin/live-installer /usr/bin/horcrux-orphans /usr/share/live-installer/branding/full.png /etc/init.d/live-installer /etc/init.d/zram-swap /usr/bin/horcrux-surface-auto /usr/bin/brave-bin /usr/bin/rustinion | sort", timeout=60)
+        rc3, qf = self.ssh("qfile /usr/bin/live-installer /usr/bin/horcrux-orphans /usr/share/live-installer/branding/full.png /etc/init.d/live-installer /etc/init.d/zram-swap /usr/bin/horcrux-surface-auto /usr/bin/brave /usr/bin/rustinion | sort", timeout=60)
         self.save("qfile-spot-check.txt", qf)
         s("installer-files-owned-by-horcrux-tools-and-live-data", qf.count("sys-apps/horcrux-tools") >= 3 and "sys-apps/horcrux-live-data" in qf and "horcrux-live-installer" not in qf, re.sub(r"\s+", " ", qf)[:300])
         # ---- session
@@ -206,7 +206,7 @@ class XT(SQ.T):
         self.res["memory_idle"] = re.sub(r"\s+", " ", out.splitlines()[1])
         s("memory-idle-recorded", True, self.res["memory_idle"])
         t1 = time.time()
-        usr("(setsid brave-bin --no-first-run --new-window about:blank >/tmp/app-brave0.log 2>&1 &) ; sleep 1; true", timeout=30)
+        usr("(setsid brave --no-first-run --new-window about:blank >/tmp/app-brave0.log 2>&1 &) ; sleep 1; true", timeout=30)
         for _ in range(50):
             if self.ssh(f"pgrep -u {USER} -f brave | head -1")[1].strip():
                 break
@@ -218,7 +218,7 @@ class XT(SQ.T):
         self.res["brave_open_seconds"] = round(time.time() - t1 - 40, 1)
         s("memory-with-brave-recorded", True, self.res["memory_brave_only"])
         self.ssh(f"pkill -u {USER} -f brave; sleep 3", timeout=30)
-        for name, cmd in (("firefox", "firefox-bin --new-window about:blank"), ("brave", "brave-bin --no-first-run --new-window about:blank"),
+        for name, cmd in (("firefox", "firefox-bin --new-window about:blank"), ("brave", "brave --no-first-run --new-window about:blank"),
                           ("nextcloud", "nextcloud --background"), ("xfce4-terminal", "xfce4-terminal"), ("onboard", "onboard")):
             t1 = time.time()
             usr(f"(setsid {cmd} >/tmp/app-{name}.log 2>&1 &) ; sleep 1; true", timeout=30)
@@ -237,11 +237,11 @@ class XT(SQ.T):
         vm.shot("apps-running")
         wins = out
         s("app-windows-mapped", sum(k in wins for k in ("Firefox", "Brave", "Nextcloud", "onboard", "Onboard", "Xfce4-terminal")) >= 3, re.sub(r"\s+", " ", wins)[:300])
-        rc, out = self.ssh("rustinion --version 2>&1 | head -2; tailscale version 2>&1 | head -1; nextcloud --version 2>&1 | head -1; firefox-bin --version 2>&1 | head -1; brave-bin --version 2>&1 | head -1; "
+        rc, out = self.ssh("rustinion --version 2>&1 | head -2; tailscale version 2>&1 | head -1; nextcloud --version 2>&1 | head -1; firefox-bin --version 2>&1 | head -1; brave --version 2>&1 | head -1; "
                            "qlist -Iv app-admin/rustinion-bin net-vpn/tailscale www-client/brave-bin www-client/firefox-bin net-misc/nextcloud-client x11-misc/lightdm app-accessibility/onboard sys-firmware/intel-microcode sys-firmware/sof-firmware | tr '\\n' ' '", timeout=90)
         self.save("app-versions.txt", out)
         s("apps-versions-and-portage-ownership", all(x in out for x in ("rustinion-bin", "tailscale", "brave-bin", "firefox-bin", "nextcloud-client", "onboard", "intel-microcode", "sof-firmware")), re.sub(r"\s+", " ", out)[:300])
-        rc, out = self.ssh("qfile -o /usr/bin/brave-bin /usr/bin/firefox-bin /usr/bin/rustinion /usr/bin/onboard /usr/bin/tailscale /usr/bin/nextcloud | tr '\\n' ' '; echo; qfile /usr/bin/brave-bin /usr/bin/rustinion /usr/bin/onboard | tr '\\n' ' '")
+        rc, out = self.ssh("qfile -o /usr/bin/brave /usr/bin/firefox-bin /usr/bin/rustinion /usr/bin/onboard /usr/bin/tailscale /usr/bin/nextcloud | tr '\\n' ' '; echo; qfile /usr/bin/brave /usr/bin/rustinion /usr/bin/onboard | tr '\\n' ' '")
         s("app-binaries-owned-by-ebuilds", "orphan" not in out.lower() and out.count(":") >= 3, re.sub(r"\s+", " ", out)[:300])
         # ---- memory / responsiveness at 4 GB with everything running
         time.sleep(30)
