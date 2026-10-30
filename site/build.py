@@ -164,7 +164,7 @@ def main():
 <p>{CFG['dl_note']} Verify with <code>sha256sum -c</code>, write to a USB stick with <code>dd</code> (see the <a href="{rel('', 'docs/iso-install/')}">install guide</a>), or boot it in a VM. The test evidence (serial logs and screenshots) is attached to every build.</p>
 <h3>How the image names work</h3>
 <p>Every image is named <code>&lt;product&gt;-&lt;desktop or server&gt;-&lt;init&gt;-&lt;channel&gt;-&lt;arch&gt;.iso</code>, for example <code>{CFG['key']}-server-openrc-daily-x86_64.iso</code>.
-<strong>Desktop or server</strong> is the graphical environment the image installs: <code>server</code> (no desktop), <code>gnome-light</code> (GNOME on Wayland with a small set of apps); <code>xfce</code>, <code>kde</code> and others will get their own name when they are built.
+<strong>Desktop or server</strong> is the graphical environment the image installs: <code>server</code> means no desktop. An image with a desktop gets its environment in the name, for example <code>gnome-light</code> (GNOME on Wayland, small app set), <code>xfce</code> or <code>kde</code>.
 <strong>Init</strong> is the init system: <code>openrc</code> today, <code>systemd</code> only if a systemd image is ever built.
 <strong>Channel</strong> is <code>daily</code> (the rolling test build) or a release tag. <strong>Arch</strong> is <code>x86_64</code> or <code>aarch64</code>.
 Older download names (for example <code>{CFG['key']}-daily-x86_64.iso</code>) still work: they redirect (HTTP 301) to the new name.</p></section>
