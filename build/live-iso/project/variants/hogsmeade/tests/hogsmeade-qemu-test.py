@@ -154,6 +154,8 @@ class HRun(zt.ZRun):
         rc, o = self.sh("/usr/sbin/hogsmeade-snapshots hourly; zfs list -H -t snapshot -o name | grep -c 'hsm-hourly-'; zfs list -H -t snapshot -o name | grep -c 'rpool/comfyui@' || true")
         n = o.strip().splitlines()
         self.step("zfs-snapshot-rotation-skips-comfyui", n and int(n[0]) >= 2 and n[-1] == "0", o.strip().replace("\n", " | "))
+        rc, o = self.sh("cat /etc/cron.d/hogsmeade; rc-service cronie status 2>&1 | head -1; restic version; grep -c . /etc/hogsmeade/backup.env; grep -o '^RESTIC_REPOSITORY=.*' /etc/hogsmeade/backup.env | sed 's#//.*@#//<masked>@#'; hogsmeade-health --quiet; echo HEALTH-RC=$?")
+        self.step("snapshot-cron-backup-job-and-health-present", "hogsmeade-snapshots hourly" in o and "hogsmeade-backup" in o and "hogsmeade-health" in o and "restic " in o and "ctg-backups/HOGSMEADE" in o and "HEALTH-RC=" in o, o.strip().replace("\n", " | ")[:400])
         rc, o = self.sh("awccctl status 2>&1 | head -5; rc-service awccd status 2>&1 | head -2; busctl --system list 2>/dev/null | grep -i awcc || true")
         self.step("awccd-and-awccctl-run", "profile:" in o, o.strip().replace("\n", " | ")[:300])
         rc, o = self.sh("ss -ltnH | awk '$4 ~ /:8188$/' | wc -l; rc-service comfyui status 2>&1 | head -1; ls -l /usr/lib/comfyui/venv/bin/python; /usr/lib/comfyui/venv/bin/python -c 'import torch,sys;print(\"torch\",torch.__version__)' 2>&1 | tail -1")
