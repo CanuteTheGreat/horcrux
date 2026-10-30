@@ -8,6 +8,6 @@ mkdir -p /var/lib/gringotts
 echo "== portage trees"
 ok=1
 emerge-webrsync -q || ok=0
-for r in guru canutethegreat-overlay; do emaint sync -r $r || ok=0; done      # (the image ships the overlay directories empty: the first sync clones them)
+for r in guru canutethegreat-overlay; do [ -d /var/db/repos/$r/.git ] || find /var/db/repos/$r -mindepth 1 -delete 2>/dev/null; emaint sync -r $r || ok=0; done      # (the image ships the overlay directories empty: the first sync clones them)
 [ $ok = 1 ] && { date -u > /var/lib/gringotts/firstboot-done; echo "== done"; } || echo "== tree sync failed: will retry at the next boot"
 exit 0

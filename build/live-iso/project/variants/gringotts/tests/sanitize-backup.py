@@ -36,7 +36,7 @@ def rand_bytes(n):
     return bytes(random.getrandbits(8) for _ in range(min(n, 4096))) * (n // 4096 + 1)
 
 
-def sanitize(arc_in, arc_out):
+def sanitize(arc_in, arc_out, kind):
     tmp = tempfile.mkdtemp(prefix="sanitize-")
     try:
         subprocess.check_call(["tar", "--zstd", "-xf", arc_in, "-C", tmp, "--same-permissions", "--no-same-owner"])
@@ -63,10 +63,11 @@ def sanitize(arc_in, arc_out):
         # non-KEEP files must not leak names with secrets: names stay (layout fidelity); contents are random
         for name in SYNTH:                      # make sure the synthetic files exist even if the real archive lacks them
             p = os.path.join(tmp, name)
-            if not os.path.exists(p) and any(name.startswith(x) for x in (".bash", ".viminfo", ".config/Brave")):
+            if not os.path.exists(p) and kind == ("firefox" if name.startswith("snap/") else "home") and kind != "etc":
                 os.makedirs(os.path.dirname(p), exist_ok=True)
                 open(p, "w").write(SYNTH[name])
-        subprocess.check_call("tar --zstd -cf %s -C %s ." % (arc_out, tmp), shell=True)
+        # member names exactly like the real archives (no leading "./"): the restore script extracts members by name
+        subprocess.check_call(["tar", "--zstd", "-cf", arc_out, "-C", tmp] + sorted(os.listdir(tmp)))
         return n_keep, n_syn, n_rand
     finally:
         subprocess.call(["chmod", "-R", "u+rwX", tmp])
@@ -79,5 +80,5 @@ for name in ("home-dotfiles.tar.zst", "firefox-snap-profile.tar.zst", "etc-selec
     if not os.path.exists(src):
         print("missing", src)
         continue
-    k, s, r = sanitize(src, os.path.join(DST, name))
+    k, s, r = sanitize(src, os.path.join(DST, name), {"home-dotfiles.tar.zst": "home", "firefox-snap-profile.tar.zst": "firefox"}.get(name, "etc"))
     print(f"{name}: kept-real {k}, synthetic {s}, random {r}; {os.path.getsize(os.path.join(DST, name))} bytes")
