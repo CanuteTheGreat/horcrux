@@ -176,9 +176,13 @@ def configure(inst, cmdline_extra="", kernel_glob="*"):
     L = inst.layout(inst.c["disks"][0])
     from .system import fsuuid
     boot_uuid, esp_uuid = fsuuid(L[2]), fsuuid(L[1])
-    fstab = ["# written by the Horcrux installer", f"UUID={boot_uuid} /boot ext4 noatime 0 2"]
+    # multi-disk pool: any drive's ESP + /boot copy can boot the machine, so a dead/missing first drive must not stop the boot at fsck
+    # (OpenRC aborts `localmount` -> runlevel 3 without network/sshd): nofail + no fsck pass on those two mounts
+    multi = len(inst.c["disks"]) > 1
+    opt, pas = ("noatime,nofail", 0) if multi else ("noatime", 2)
+    fstab = ["# written by the Horcrux installer", f"UUID={boot_uuid} /boot ext4 {opt} 0 {pas}"]
     if inst.efi and esp_uuid:
-        fstab.append(f"UUID={esp_uuid} /boot/efi vfat umask=0077,noatime 0 2")
+        fstab.append(f"UUID={esp_uuid} /boot/efi vfat umask=0077,{opt} 0 {pas}")
     inst.write("/etc/fstab", "\n".join(fstab) + "\n")
 
 
