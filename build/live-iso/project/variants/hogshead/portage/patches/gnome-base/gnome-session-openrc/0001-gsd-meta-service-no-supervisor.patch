@@ -1,0 +1,22 @@
+gsd meta services have no command: supervisor=supervise-daemon makes openrc fail ("The command variable is undefined") and the gnome session never starts
+
+diff -ru a/data/openrc/gnome-settings-daemon-wayland b/data/openrc/gnome-settings-daemon-wayland
+--- a/data/openrc/gnome-settings-daemon-wayland
++++ b/data/openrc/gnome-settings-daemon-wayland
+@@ -1,6 +1,5 @@
+ #!/sbin/openrc-run
+ 
+-supervisor=supervise-daemon
+ description="GNOME Settings Daemon"
+ #pidfile="/tmp/gnome-shell.pid"
+ 
+diff -ru a/data/openrc/gnome-settings-daemon-x11 b/data/openrc/gnome-settings-daemon-x11
+--- a/data/openrc/gnome-settings-daemon-x11
++++ b/data/openrc/gnome-settings-daemon-x11
+@@ -1,6 +1,5 @@
+ #!/sbin/openrc-run
+ 
+-supervisor=supervise-daemon
+ description="GNOME Settings Daemon (x11)"
+ #pidfile="/tmp/gnome-shell.pid"
+ 
