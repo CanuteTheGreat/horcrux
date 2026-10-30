@@ -54,7 +54,11 @@ RUN --mount=type=cache,id=surface-binpkgs-${ARCH:-x86_64},target=/var/cache/binp
     --mount=type=cache,id=surface-distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
     emerge --deselect app-emulation/qemu app-emulation/libvirt app-containers/docker app-containers/docker-cli net-misc/bridge-utils net-dns/dnsmasq 2>&1 | tail -3; \
-    emerge --depclean --with-bdeps=n 2>&1 | tail -15 || true
+    emerge --depclean --pretend --with-bdeps=n > /var/log/surface-depclean-pretend.log 2>&1; tail -40 /var/log/surface-depclean-pretend.log; \
+    for k in sys-apps/horcrux-live-installer sys-kernel/horcrux-surface-config sys-kernel/gentoo-kernel app-misc/horcrux-surface-desktop sys-fs/zfs-kmod sys-kernel/dracut sys-boot/grub sys-fs/cryptsetup sys-fs/lvm2; do \
+        grep -q "^ *$k-[0-9]" /var/log/surface-depclean-pretend.log && { echo "depclean would remove $k"; exit 1; }; done; \
+    emerge --depclean --with-bdeps=n 2>&1 | tail -15; \
+    for f in /etc/init.d/live-installer /usr/libexec/live-installer-session /usr/bin/live-installer /usr/bin/horcrux-surface-auto /usr/share/live-installer/hwprofiles/surface.toml /usr/sbin/lightdm /usr/bin/xfce4-session /usr/bin/onboard /usr/bin/brave-bin /usr/bin/nextcloud /usr/bin/rustinion; do test -e $f || { echo "MISSING after depclean: $f"; exit 1; }; done
 
 # the live initramfs for the new kernel (dmsquash-live + the zfs/lvm/resume modules the installer's initramfs needs), services for the live image
 RUN set -e; rm -rf /lib/modules/*-gentoo-dist-bin /usr/src/linux-6.18.57* /etc/libvirt /var/lib/libvirt; ls /lib/modules

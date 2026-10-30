@@ -17,6 +17,9 @@ KEYWORDS="~amd64"
 # onboard + iio-sensor-proxy come from GURU, brave-bin from the owner's canutethegreat-overlay,
 # rustinion-bin from the Horcrux overlay.
 RDEPEND="
+	sys-kernel/horcrux-surface-config
+	<sys-kernel/gentoo-kernel-6.19
+	sys-apps/horcrux-live-installer
 	xfce-base/xfce4-meta
 	xfce-base/xfce4-power-manager
 	xfce-extra/xfce4-screensaver
