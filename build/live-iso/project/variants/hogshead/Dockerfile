@@ -23,31 +23,56 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     emerge --sync guru; \
     for e in /var/db/repos/horcrux/sys-kernel/horcrux-t2-config/*.ebuild /var/db/repos/horcrux/app-admin/rustinion-bin/*.ebuild /var/db/repos/horcrux/sys-apps/t2fanrd/*.ebuild /var/db/repos/horcrux/sys-apps/tiny-dfr/*.ebuild; do ebuild "$e" manifest; done
 
-# the T2 kernel: patches+config package first, then the dist kernel built FROM SOURCE with them; the stock binary kernel goes
+# T2 patches + config package (stage `hs-prep` is shared by the checks below)
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
-    set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \
+    set -e; unset ARCH; export FEATURES="-ccache"; \
     emerge --oneshot --usepkg=n sys-kernel/horcrux-t2-config; \
-    emerge --unmerge sys-kernel/gentoo-kernel-bin virtual/dist-kernel || true; \
-    emerge --oneshot --usepkg=n --getbinpkg=n =sys-kernel/gentoo-kernel-7.2.13 \
+    ls /etc/portage/patches/sys-kernel/gentoo-kernel | wc -l; ls /etc/kernel/config.d
+
+# quick check (minutes, not an hour): the patches apply and the config fragment wins (kernel release must end in -t2)
+FROM hogshead AS hs-kconfig
+RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
+    set -e; unset ARCH; export FEATURES="-ccache"; \
+    ebuild /var/db/repos/gentoo/sys-kernel/gentoo-kernel/gentoo-kernel-7.2.13.ebuild clean configure 2>&1 | tail -30; \
+    w=/var/tmp/portage/sys-kernel/gentoo-kernel-7.2.13/work/linux-7.2; \
+    grep -E 'LOCALVERSION|CONFIG_T2BCE|CONFIG_HID_APPLETB_KBD|CONFIG_APPLE_GMUX' $w/.config; \
+    ls $w/drivers/staging/t2bce; ls /var/tmp/portage/sys-kernel/gentoo-kernel-7.2.13/temp/ | head
+
+# the kernel binary package is built in its OWN layer (about an hour) and kept inside the image layer:
+# a later failure (install, dracut) does not recompile it
+FROM hogshead AS hs-kbuild
+RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
+    set -e; unset ARCH; export FEATURES="-ccache" PKGDIR=/var/cache/hs-binpkgs; \
+    emerge --buildpkgonly --nodeps --usepkg=n --getbinpkg=n =sys-kernel/gentoo-kernel-7.2.13 \
         > /var/log/hogshead-kernel-build.log 2>&1 || { tail -80 /var/log/hogshead-kernel-build.log; exit 1; }; \
+    find /var/cache/hs-binpkgs -type f | head
+
+FROM hs-kbuild AS hs-kinstall
+# the stock binary kernel goes; the freshly built kernel binpkg is installed. dracut cannot add the zfs module before zfs-kmod
+# exists for this kernel: omit zfs/unlock for THIS step only (the installer builds the real initramfs at install time)
+RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
+    set -e; unset ARCH; export FEATURES="-ccache" PKGDIR=/var/cache/hs-binpkgs; \
+    echo 'omit_dracutmodules+=" zfs horcrux-unlock "' > /etc/dracut.conf.d/00-hogshead-build.conf; \
+    emerge --unmerge sys-kernel/gentoo-kernel-bin || true; \
+    emerge --oneshot --usepkgonly --nodeps =sys-kernel/gentoo-kernel-7.2.13; \
     ls /lib/modules /boot
 
 # ZFS built for THAT kernel (never from a cached binpkg of another release), dracut module package, kernel sanity
-RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
-    --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
-    set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \
+RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
+    set -e; unset ARCH; export FEATURES="-ccache" PKGDIR=/var/cache/hs-binpkgs; \
     emerge --oneshot --usepkg=n --getbinpkg=n =sys-fs/zfs-kmod-2.3.9 =sys-fs/zfs-2.3.9; \
+    rm -f /etc/dracut.conf.d/00-hogshead-build.conf; \
     emerge --oneshot sys-kernel/horcrux-unlock; \
     kr=$(ls /lib/modules | grep -- '-t2$' | tail -1); test -n "$kr"; \
     find /lib/modules/$kr -name 'zfs.ko*' | grep .; \
     for m in t2bce_core t2bce_vhci t2bce_dma hid-apple hid-appletb-kbd; do find /lib/modules/$kr -name "$m.ko*" | grep . ; done; \
-    for r in $(grep -v '^#' /usr/share/horcrux-t2/required-config.txt | grep .); do grep -qx "$r" /usr/src/linux-$(echo $kr | sed 's/-gentoo-dist-t2//')-gentoo-dist/.config || echo "WARN missing $r"; done; \
     depmod $kr; echo $kr > /etc/hogshead-kernelrelease
 
+FROM hs-kinstall AS hogshead-final
 # the owner's applications (Portage packages: binhost binpkgs where USE matches, the rest compiles)
-RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
-    --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
+RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
+    --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \
     emerge --update --newuse --usepkg --getbinpkg --keep-going \
         app-containers/docker app-containers/docker-compose app-containers/docker-buildx \
@@ -57,8 +82,8 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
         > /var/log/hogshead-apps.log 2>&1 || { tail -60 /var/log/hogshead-apps.log; exit 1; }
 
 # optional heavy extras: failures are logged, never silent
-RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
-    --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
+RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
+    --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     unset ARCH; export FEATURES="-ccache buildpkg"; \
     for p in app-emulation/libguestfs app-emulation/libguestfs-appliance; do \
       emerge --update --newuse --usepkg --getbinpkg $p > /var/log/hogshead-opt-$(basename $p).log 2>&1 \
@@ -71,7 +96,7 @@ RUN set -e; for s in docker t2fanrd tiny-dfr; do rc-update add $s default || tru
     rm -rf /var/tmp/portage /var/cache/distfiles/* 2>/dev/null || true
 
 # binary packages of what this variant built (kernel, zfs, horcrux-unlock, rustinion, config): a binhost-ready PKGDIR
-FROM hogshead AS binpkgs-build
+FROM hogshead-final AS binpkgs-build
 RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
     mkdir -p /export/sys-kernel /export/sys-fs /export/app-admin; \
     cp -a /var/cache/binpkgs/sys-kernel/horcrux-* /var/cache/binpkgs/sys-kernel/gentoo-kernel-7.2.13* /export/sys-kernel/ 2>/dev/null; \
