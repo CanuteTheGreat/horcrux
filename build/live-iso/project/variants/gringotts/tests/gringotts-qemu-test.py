@@ -306,6 +306,7 @@ class GRun(zt.ZRun):
         self.res["versions"] = o
         open(f"{self.g.out}/app-versions.txt", "w").write(o)
         missing = [x for x in APP_ATOMS if x.split("/")[1] not in o]
+        self.desktop_exec_check()
         self.step("all-app-packages-installed", not missing, f"{len(APP_ATOMS) - len(missing)}/{len(APP_ATOMS)}; missing: {missing}")
         for name, cmd in CLI_APPS:
             rc, o = self.usr(cmd, timeout=60)
@@ -409,7 +410,10 @@ class GRun(zt.ZRun):
             up = self.unlock_usb(vm, kb, "boot2")
             self.step("boot2-ssh-after-usb-keyboard-passphrase", up, "ONE passphrase typed on the USB keyboard")
             self.gringotts_basic()
+            self.session_audio_autostart_pre(USER)
             sess = self.gringotts_session(vm)
+            if sess:
+                self.session_audio_autostart_checks(USER, vm)
             if sess:
                 self.apps()
             self.orphans()
