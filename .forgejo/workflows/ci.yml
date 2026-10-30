@@ -33,6 +33,15 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # Owner rule 2026-10-30: mobile UI follows the device's light/dark setting (cheap static check;
+  # rendered light/dark proof: horcrux-mobile/tests/render_theme.py).
+  mobile-theme:
+    name: Mobile theme (light/dark)
+    runs-on: linux-any
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 horcrux-mobile/tests/check_theme.py
+
   check:
     name: Check
     # linux-any: arch-independent (fmt/clippy/cargo check/audit/wasm), served by the arm64 hosts and
