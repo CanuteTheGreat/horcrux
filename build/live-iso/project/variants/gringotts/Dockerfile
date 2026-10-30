@@ -51,6 +51,14 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
 # this variant's local overlay is copied only now (editing it must not invalidate the long header/app layers above)
 COPY project/variants/gringotts/repo/ /var/db/repos/horcrux-gringotts/
 
+# GNOME under OpenRC: the gsd meta services declare supervisor=supervise-daemon without a command, so openrc refuses to start them and the session
+# never comes up (the hogshead first-login failure). Same one-line patch as the hogshead image, applied by rebuilding the (tiny) package from source.
+COPY project/variants/hogshead/portage/patches/gnome-base/ /etc/portage/patches/gnome-base/
+RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
+    set -e; unset ARCH; export FEATURES="-ccache"; \
+    emerge --oneshot --usepkg=n --getbinpkg=n --buildpkg=n gnome-base/gnome-session-openrc; \
+    if grep -q supervise-daemon /etc/user/init.d/gnome-settings-daemon-wayland /etc/user/init.d/gnome-settings-daemon-x11; then echo 'gsd patch not applied'; exit 1; fi
+
 # Ownership of the image's own files: the packages PROVEN on hogshead (overlay gentoo/ = repo horcrux): sys-kernel/horcrux-unlock (dracut one-passphrase),
 # sys-apps/horcrux-tools (installer, live scripts, horcrux-be, horcrux-orphans), sys-apps/horcrux-live-data (branding + portage metadata snapshot),
 # app-admin/rustinion-bin. The two tools/data tarballs are fetch-restricted distfiles made from this build's own trees (nothing is downloaded);
