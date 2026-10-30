@@ -51,9 +51,8 @@ def apply(inst):
         raise InstallError("desktop profile needs a password for " + name)
     have = set(l.split(":")[0] for l in open(f"{T}/etc/group"))
     groups = ",".join(g for g in GROUPS if g in have)
-    # the home dataset must be mounted BEFORE useradd -m: a home created in the root dataset is hidden
-    # (empty home, no session) once rpool/home is mounted over it
-    inst.run(["zfs", "mount", "-a"], check=False)
+    # the home dataset is mounted above the root BE by zfsroot.mount()/mount_rest() (they fail the install
+    # otherwise): a home created in the BE's own /home would be hidden by the empty home dataset at boot
     inst.run(["useradd", "-m", "-G", groups, "-s", "/bin/bash", "-c", c.get("user_fullname", name), name], chroot=True)
     if c.get("user_hash"):
         inst.run(["chpasswd", "-e"], chroot=True, input_=f"{name}:{c['user_hash']}\n")
