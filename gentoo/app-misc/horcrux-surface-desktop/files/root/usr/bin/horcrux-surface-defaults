@@ -1,0 +1,9 @@
+#!/bin/sh
+# First XFCE login of a user: tablet-sized text/cursor (1920x1080 on 10.6" = ~208 ppi), once. Runs from /etc/xdg/autostart.
+stamp="${XDG_CONFIG_HOME:-$HOME/.config}/horcrux-surface-defaults.done"
+[ -e "$stamp" ] && exit 0
+command -v xfconf-query >/dev/null 2>&1 || exit 0
+xfconf-query -c xsettings -p /Xft/DPI -n -t int -s 168
+xfconf-query -c xsettings -p /Gtk/CursorThemeSize -n -t int -s 36
+xfconf-query -c xfce4-panel -p /panels/panel-1/size -n -t uint -s 48 2>/dev/null
+mkdir -p "$(dirname "$stamp")" && : > "$stamp"

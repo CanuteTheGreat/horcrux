@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<channel name="xsettings" version="1.0">
-  <property name="Xft" type="empty">
-    <property name="DPI" type="int" value="168"/>
-  </property>
-  <property name="Gtk" type="empty">
-    <property name="CursorThemeSize" type="int" value="36"/>
-  </property>
-</channel>
