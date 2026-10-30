@@ -44,6 +44,8 @@ class ZRun(qt.Runner):
             i = args.index("-machine")
             args[i + 1] = args[i + 1] + ",i8042=off"
             args += ["-device", "usb-kbd,bus=xhci.0"]     # the ONLY keyboard: like the T2 Mac, whose keyboard is a USB device
+        if self.z.desktop and not iso:
+            args += ["-audiodev", "none,id=hxaudio", "-device", "intel-hda", "-device", "hda-duplex,audiodev=hxaudio"]   # a real ALSA card: wpctl/gsd-sound/volume keys need a sink
         return args
 
     def step(self, name, ok, info=""):
@@ -388,6 +390,43 @@ class ZRun(qt.Runner):
         finally:
             if vm.alive():
                 vm.p.kill()
+
+    def session_audio_autostart_pre(self, user):
+        """before the first GNOME login: an XDG autostart entry for this user and a system-wide one, each leaving a marker when gnome-session-openrc runs it"""
+        import base64
+        ent = lambda n: base64.b64encode(f"[Desktop Entry]\nType=Application\nName=hx {n}\nExec=/bin/sh -c 'date > /tmp/hx-autostart-{n}'\n".encode()).decode()
+        self.sh(f"rm -f /tmp/hx-autostart-*; install -d -o {user} -g {user} /home/{user}/.config/autostart; echo {ent('user')} | base64 -d > /home/{user}/.config/autostart/hx-autostart-user.desktop; "
+                f"chown {user}:{user} /home/{user}/.config/autostart/hx-autostart-user.desktop; echo {ent('xdg')} | base64 -d > /etc/xdg/autostart/hx-autostart-xdg.desktop")
+
+    def session_audio_autostart_checks(self, user, vm):
+        """after the GNOME login: XDG autostart ran, PipeWire is up in the user session by itself (no per-user runlevel), the gsd audio daemons started after it,
+        and a volume key (QMP volumeup -> USB keyboard -> mutter -> gsd-media-keys) really changes the sink volume"""
+        uid = self.sh(f"id -u {user}")[1].strip().splitlines()[-1]
+        env = f"XDG_RUNTIME_DIR=/run/user/{uid} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus"
+        u = lambda c, t=60: self.sh(f"su - {user} -c \"export {env}; {c}\" 2>&1", timeout=t)
+        rc, o = self.sh("ls /tmp/hx-autostart-* 2>&1; cat /etc/user/init.d/gsd | grep -c 'want pipewire-pulse wireplumber'")
+        self.step("xdg-autostart-runs-under-gnome-session-openrc", "hx-autostart-user" in o and "hx-autostart-xdg" in o, o.strip().replace("\n", " | ")[:200])
+        self.sh("rm -f /etc/xdg/autostart/hx-autostart-xdg.desktop /home/%s/.config/autostart/hx-autostart-user.desktop /tmp/hx-autostart-*" % user)
+        time.sleep(8)
+        rc, o = u("wpctl status | sed -n 1,30p")
+        self.step("pipewire-wireplumber-pulse-running-after-login-and-sink-present", "WirePlumber" in o and re.search(r"\d+\.\s+\S", o.partition("Sinks:")[2].partition("Sources:")[0]) is not None and "Could not connect" not in o,
+                  re.sub(r"\s+", " ", o)[:400])
+        rc, o = self.sh(f"ps -u {user} -o lstart=,comm= | grep -E 'pipewire$|wireplumber|pipewire-pulse|gsd-media-keys|gsd-sound' | while read a b c d e comm; do echo $(date -d \"$a $b $c $d $e\" +%s) $comm; done | sort -n")
+        names = [l.split()[-1] for l in o.strip().splitlines()]
+        pos = {n: i for i, n in enumerate(names)}
+        okord = all(n in pos for n in ("wireplumber", "gsd-media-keys", "gsd-sound")) and max(i for n, i in pos.items() if n in ("wireplumber", "pipewire")) <= min(pos["gsd-media-keys"], pos["gsd-sound"])
+        self.step("gsd-media-keys-and-gsd-sound-started-after-pipewire-and-wireplumber", okord, o.strip().replace("\n", " | ")[:300])
+        rc, o = u("wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.40; wpctl get-volume @DEFAULT_AUDIO_SINK@")
+        before = re.findall(r"Volume: ([0-9.]+)", o)
+        after = []
+        for _ in range(3):
+            vm.qmp("send-key", keys=[{"type": "qcode", "data": "volumeup"}])
+            time.sleep(1.5)
+            rc, o2 = u("wpctl get-volume @DEFAULT_AUDIO_SINK@")
+            after = re.findall(r"Volume: ([0-9.]+)", o2)
+            if after and before and float(after[-1]) > float(before[-1]):
+                break
+        self.step("volume-key-changes-the-sink-volume", bool(before and after and float(after[-1]) > float(before[-1])), f"before {before} after {after}")
 
     def desktop_exec_check(self):
         rc, o = self.sh(DESKTOP_EXEC_CHECK, timeout=120)

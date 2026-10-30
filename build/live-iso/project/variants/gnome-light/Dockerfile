@@ -22,6 +22,15 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     export FEATURES="-ccache"; \
     emerge --update --newuse $(grep -v '^#' /tmp/packages-desktop.txt | tr '\n' ' ')
 
+# GNOME under OpenRC (patches in /etc/portage/patches/gnome-base/gnome-session-openrc): the gsd meta services lose supervisor=supervise-daemon (openrc refused to start
+# them: no session), and gsd-media-keys/gsd-sound `want` + start after wireplumber and pipewire-pulse (nothing started PipeWire in the user session:
+# pipewire.desktop is X-GNOME-HiddenUnderSystemd; and a gsd that came up before it never reconnected: dead volume keys). Binary packages ignore patches: rebuild from source.
+RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
+    set -e; unset ARCH; export FEATURES="-ccache"; \
+    emerge --oneshot --usepkg=n --getbinpkg=n --buildpkg=n gnome-base/gnome-session-openrc; \
+    if grep -q supervise-daemon /etc/user/init.d/gnome-settings-daemon-wayland /etc/user/init.d/gnome-settings-daemon-x11; then echo 'gsd supervisor patch not applied'; exit 1; fi; \
+    grep -q 'want pipewire-pulse wireplumber' /etc/user/init.d/gsd || { echo 'gsd audio ordering patch not applied'; exit 1; }
+
 COPY project/variants/gnome-light/overlay/ /
 
 # the Desktop image marks itself (the installer offers the desktop profile only when this exists); slim down again

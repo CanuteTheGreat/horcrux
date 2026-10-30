@@ -1,0 +1,20 @@
+gsd-media-keys and gsd-sound must start after (and pull in) wireplumber + pipewire-pulse: on OpenRC nothing started PipeWire in the
+user session (pipewire.desktop is X-GNOME-HiddenUnderSystemd) and, once it was started late, the gsd daemons that had come up first never
+reconnected (volume keys dead). `want` starts the audio services for every user without a per-user runlevel entry.
+
+diff -ru a/data/openrc/gsd b/data/openrc/gsd
+--- a/data/openrc/gsd
++++ b/data/openrc/gsd
+@@ -9,3 +9,12 @@
+ command_args=""
+ command_background="true"
+ pidfile="${XDG_RUNTIME_DIR}/${RC_SVCNAME}.pid"
++
++depend() {
++	case "${RC_SVCNAME}" in
++	gsd-media-keys|gsd-sound)
++		want pipewire-pulse wireplumber
++		after pipewire-pulse wireplumber
++		;;
++	esac
++}
