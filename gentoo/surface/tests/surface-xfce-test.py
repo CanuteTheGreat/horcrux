@@ -293,7 +293,7 @@ class XT(SQ.T):
         """LightDM greeter + on-screen keyboard: stop the session, disable autologin for this one start, look at the greeter, restore."""
         self.soft = True
         s = self.step
-        self.ssh("mv /etc/lightdm/lightdm.conf.d/60-horcrux-autologin.conf /root/60-autologin.conf.bak; rc-service display-manager stop >/dev/null 2>&1; pkill -9 -x X; sleep 2; rc-service display-manager start >/dev/null 2>&1", timeout=90)
+        self.ssh("mv /etc/lightdm/lightdm.conf.d/60-horcrux-autologin.conf /root/60-autologin.conf.bak; rc-service display-manager stop >/dev/null 2>&1; sleep 8; pgrep -x X >/dev/null && pkill -x X; sleep 2; rc-service display-manager start >/dev/null 2>&1", timeout=90)
         time.sleep(25)
         vm.shot("lightdm-greeter")
         rc, out = self.ssh("ps -eo user,comm,args | grep -E 'lightdm-gtk-greeter|onboard' | grep -v grep | cut -c1-150; ls /etc/lightdm; cat /etc/lightdm/lightdm-gtk-greeter.conf | grep -vE '^#|^$' | head -20")
@@ -316,7 +316,7 @@ class XT(SQ.T):
         rc, out = self.ssh("loginctl list-sessions --no-legend; ps -u " + USER + " -o comm | sort -u | tr '\\n' ' '; grep -i -c 'Unable to contact settings server' /home/" + USER + "/.xsession-errors")
         self.save("greeter-login.txt", out)
         s("greeter-login-with-password-starts-xfce", ok and "xfce4-panel" in out and "nm-applet" in out and "onboard" in out, re.sub(r"\s+", " ", out)[:240])
-        self.ssh("mv /root/60-autologin.conf.bak /etc/lightdm/lightdm.conf.d/60-horcrux-autologin.conf; rc-service display-manager stop >/dev/null 2>&1; pkill -9 -x X; sleep 2; rc-service display-manager start >/dev/null 2>&1", timeout=90)
+        self.ssh("mv /root/60-autologin.conf.bak /etc/lightdm/lightdm.conf.d/60-horcrux-autologin.conf; rc-service display-manager stop >/dev/null 2>&1; sleep 8; pgrep -x X >/dev/null && pkill -x X; sleep 2; rc-service display-manager start >/dev/null 2>&1", timeout=90)
         time.sleep(30)
         self.soft = False
 
@@ -364,8 +364,34 @@ class XT(SQ.T):
                     self.ssh(open(a.pre_hib).read(), timeout=300)
             else:
                 self.checks(vm, secs)
-                self.greeter_check(vm)
-                self.world_update()
+                if not a.skip_greeter:
+                    self.greeter_check(vm)
+                if not a.skip_world:
+                    self.world_update()
+                # Hibernate/resume runs in a FRESH boot (the owner's real flow: autologin session + apps). Under QEMU/virtio-vga a resume
+                # hangs once the display manager/X server was restarted in the same boot (greeter check above) - a QEMU/virtio-gpu
+                # artifact (a boot with apps but without the restarts resumes fine), not exercised on real i915 hardware.
+                self.ssh("sync; (sleep 2; poweroff) >/dev/null 2>&1 &", timeout=20)
+                t0 = time.time()
+                while vm.alive() and time.time() < t0 + 240:
+                    time.sleep(2)
+                self.step("first-boot-clean-poweroff", not vm.alive(), f"{int(time.time() - t0)}s")
+                if vm.alive():
+                    vm.p.kill()
+                vm = Q.VM("2b-boot2", self.base(True, self.nvars), a.out)
+                secs2 = self.unlock(vm, "boot2")
+                self.step("second-boot-one-passphrase-then-up", secs2 is not None, f"{int(secs2) if secs2 else 0}s from power-on to ssh; ONE passphrase")
+                for _ in range(60):
+                    if self.ssh("pgrep -u " + USER + " -x xfce4-panel")[1].strip():
+                        break
+                    time.sleep(5)
+                time.sleep(20)
+                self.ssh("su - " + USER + " -c 'export DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) XAUTHORITY=$HOME/.Xauthority; (setsid brave --no-first-run --new-window about:blank >/tmp/b.log 2>&1 &); (setsid firefox-bin >/tmp/f.log 2>&1 &); (setsid nextcloud >/tmp/n.log 2>&1 &); sleep 2; true'", timeout=60)
+                time.sleep(75)
+                rc, out = self.ssh("free -m; echo; ps -eo comm | grep -cE 'firefox|brave|nextcloud'; ps -eo comm | grep -E '^onboard$' | head -1", timeout=60)
+                self.save("memory-before-hibernate.txt", out)
+                self.res["memory_before_hibernate"] = re.sub(r"\s+", " ", out.splitlines()[1])
+                s_ = self.step("session-with-apps-and-onboard-before-hibernate", "onboard" in out and int(out.split("\n")[4].strip() or 0) >= 3, re.sub(r"\s+", " ", out)[:240])
             self.soft = False
             # ---- marker + session pid before hibernate
             rc, out = self.ssh("cat > /root/marker.py <<'EOF'" + MARKER_PY + "EOF\nnohup python3 /root/marker.py >/dev/null 2>&1 < /dev/null & echo $! > /root/marker.pid; sleep 4; "
@@ -442,6 +468,8 @@ def main():
     ap.add_argument("--keep-disks", action="store_true")
     ap.add_argument("--install-only", action="store_true", help="debug: install, then stop (use with --keep-disks, then --boot-only)")
     ap.add_argument("--fast", action="store_true", help="debug: skip the checks/greeter/world update, go straight to hibernate+resume")
+    ap.add_argument("--skip-greeter", action="store_true", help="debug: bisect the resume hang")
+    ap.add_argument("--skip-world", action="store_true", help="debug: bisect the resume hang")
     ap.add_argument("--pre-hib", help="debug: file with shell commands run in the guest right before hibernate")
     ap.add_argument("--boot-only", action="store_true", help="debug: reuse the installed target.qcow2 + test_key in --out (kept with --keep-disks)")
     a = ap.parse_args()
