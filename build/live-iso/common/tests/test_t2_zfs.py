@@ -165,6 +165,38 @@ class ZfsEncryption(unittest.TestCase):
         self.assertNotIn("encryption=aes-256-gcm", " ".join(a))
         self.assertEqual(a[-3:], ["mirror", "/dev/vda4", "/dev/vdb4"])
 
+    def test_pool_args_stripe_three_top_level_vdevs(self):
+        devs = ["/dev/nvme0n1p4", "/dev/nvme1n1p4", "/dev/nvme2n1p4"]
+        a = Z.pool_args(True, devs, "stripe", "/mnt/target")
+        self.assertEqual(a[-4:], ["rpool"] + devs)          # no mirror/raidz keyword = a stripe
+        self.assertNotIn("mirror", a)
+        self.assertNotIn("raidz1", a)
+        self.assertIn("ashift=12", " ".join(a))
+        self.assertIn("encryption=aes-256-gcm", " ".join(a))
+
+    def test_vdev_args_levels(self):
+        d = ["a", "b", "c"]
+        self.assertEqual(Z.vdev_args("single", d), ["a"])
+        self.assertEqual(Z.vdev_args("mirror", d[:2]), ["mirror", "a", "b"])
+        self.assertEqual(Z.vdev_args("raidz1", d), ["raidz1", "a", "b", "c"])
+        self.assertEqual(Z.vdev_args(True, d[:2]), ["mirror", "a", "b"])      # old bool API
+        self.assertEqual(Z.vdev_args(False, d), ["a"])
+        with self.assertRaises(ValueError):
+            Z.vdev_args("raid0", d)
+
+    def test_raid_problem(self):
+        self.assertIsNone(Z.raid_problem("stripe", 3))
+        self.assertIsNone(Z.raid_problem("single", 1))
+        self.assertIn("two different", Z.raid_problem("stripe", 1))
+        self.assertIn("three different", Z.raid_problem("raidz1", 2))
+        self.assertIn("exactly one", Z.raid_problem("single", 3))
+        self.assertIn("unknown", Z.raid_problem("raid0", 3))
+
+    def test_mirror_conf(self):
+        t = Z.mirror_conf([("/dev/nvme1n1", "AAAA-1111", "uuid-b"), ("/dev/nvme2n1", "BBBB-2222", "uuid-c")])
+        self.assertIn("/dev/nvme1n1 AAAA-1111 uuid-b\n", t)
+        self.assertEqual(len([l for l in t.splitlines() if not l.startswith("#")]), 2)
+
     def test_datasets(self):
         names = [n for n, _ in Z.datasets()]
         for n in ("ROOT/horcrux", "home", "var/log", "var/lib/libvirt"):
