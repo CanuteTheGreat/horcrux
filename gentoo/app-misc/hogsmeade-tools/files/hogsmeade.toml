@@ -10,6 +10,10 @@ services_add = ["elogind:boot", "dbus:default", "NetworkManager:default", "zram-
                 "comfyui:default", "sshd:default", "hx-resume:boot"]
 services_del = ["iwd", "dhcpcd", "live-serial"]
 
+# the backlight puzzle (awcc-re/nvidia-and-backlight.md): the EC owns the panel level, reached through the NVIDIA WMI-EC
+# interface. Force exactly that one device (nvidia_wmi_ec_backlight, max 255) so intel_backlight / acpi_video never register.
+kernel_cmdline = ["acpi_backlight=nvidia_wmi_ec", "nvidia-drm.modeset=1", "nvidia-drm.fbdev=1", "nouveau.modeset=0", "module_blacklist=nouveau"]
+
 [match]
 sys_vendor = ["Alienware", "Dell Inc."]
 product_prefix = ["Alienware 18 Area-51"]
@@ -20,10 +24,6 @@ swap = "hibernate"      # LUKS2 swap of RAM x 1.125 on the first drive, same sin
 desktop = true
 keep_serial_console = false    # no UART: the passphrase prompt must be on the screen / USB or built-in keyboard
 zfs_raid = "stripe"
-
-# the backlight puzzle (awcc-re/nvidia-and-backlight.md): the EC owns the panel level, reached through the NVIDIA WMI-EC
-# interface. Force exactly that one device (nvidia_wmi_ec_backlight, max 255) so intel_backlight / acpi_video never register.
-kernel_cmdline = ["acpi_backlight=nvidia_wmi_ec", "nvidia-drm.modeset=1", "nvidia-drm.fbdev=1", "nouveau.modeset=0", "module_blacklist=nouveau"]
 
 [[models]]
 id = "alienware-18-area-51-aa18250"

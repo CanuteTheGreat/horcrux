@@ -120,6 +120,10 @@ def mkpool(inst):
 
 
 def mount(inst):
+    # `zfs create` mounts every new dataset with an auto mount point (home, var/log, ...) at once, BEFORE the canmount=noauto root dataset is
+    # mounted on /mnt/target: the root mount then shadows them, the system image and the new user's home land in the root dataset and the
+    # shared datasets stay empty (home empty at first boot, `zfs umount -a` busy at the end). Unmount first, root first, then the rest.
+    inst.run(["zfs", "umount", "-a"], check=False)
     inst.run(["zfs", "mount", f"{POOL}/ROOT/{BE}"])
 
 

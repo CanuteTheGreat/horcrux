@@ -150,7 +150,7 @@ class HRun(zt.ZRun):
         open(f"{a.out}/boot-mirrors.txt", "w").write(o)
         self.step("boot-copies-synced-and-extra-ESPs-bootable", o.count("COPY ") == 2 and o.count("vmlinuz: OK") == 2 and o.count("BOOTX64.EFI") >= 2, o.strip().replace("\n", " | ")[:300])
         rc, o = self.sh("grep -o 'acpi_backlight=[a-z_]*' /proc/cmdline; grep -o 'nvidia-drm.modeset=1' /proc/cmdline; uname -r; cat /etc/hogsmeade-kernelrelease; rc-update show default | tr -s ' ' | tr '\\n' ';'")
-        self.step("hardware-profile-hogsmeade-applied", "acpi_backlight=nvidia_wmi_ec" in o and "awccd" in o and "comfyui" in o and "hogsmeade-firstboot" in o, o.strip().replace("\n", " | ")[:300])
+        self.step("hardware-profile-hogsmeade-applied", "acpi_backlight=nvidia_wmi_ec" in o and "nvidia-drm.modeset=1" in o and "awccd" in o and "comfyui" in o, o.strip().replace("\n", " | ")[:300])
         rc, o = self.sh("for i in 1 2 3 4 5 6 7 8 9 10; do test -e /var/lib/hogsmeade/firstboot.done && break; sleep 3; done; zfs list -H -o name,mountpoint,org.hogsmeade:snapshots rpool/comfyui rpool/data; ls -ld /var/lib/comfyui")
         self.step("firstboot-created-comfyui-and-data-datasets", "rpool/comfyui\t/var/lib/comfyui\toff" in o and "rpool/data\t/data" in o, o.strip().replace("\n", " | ")[:300])
         rc, o = self.sh("/usr/sbin/hogsmeade-snapshots hourly; zfs list -H -t snapshot -o name | grep -c 'hsm-hourly-'; zfs list -H -t snapshot -o name | grep -c 'rpool/comfyui@' || true")
