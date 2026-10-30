@@ -204,7 +204,7 @@ class GRun(zt.ZRun):
                         "ls -ld /home/" + USER + "; rc-status -a 2>&1 | grep -E 'docker|NetworkManager|iwd|sshd|gringotts|tailscale|display-manager|elogind|chronyd' | tr -s ' '")
         self.res["basic"] = o
         self.step("hostname-user-services", "gringotts" in o.split("\n")[0] and "uid=" in o and "docker" in o and USER in o, o.replace("\n", " | ")[:400])
-        rc, o = self.sh("passwd -S root; /usr/sbin/sshd -T 2>&1 | grep -E '^(permitrootlogin|passwordauthentication|authorizedkeysfile)'; "
+        rc, o = self.sh("passwd -S root; /usr/sbin/sshd -T 2>&1 | grep -iE '^(permitrootlogin|passwordauthentication|authorizedkeysfile)' | tr A-Z a-z; "
                         "grep -c . /etc/gringotts/authorized_keys; stat -c '%a %U' /usr/share/gringotts/ts-authkey")
         if "passwordauthentication" not in o:
             rc, dg = self.sh("/usr/sbin/sshd -T 2>&1 | head -5; ls -l /etc/ssh/ssh_host_* | head -3; rc-service sshd status 2>&1 | head -2")
