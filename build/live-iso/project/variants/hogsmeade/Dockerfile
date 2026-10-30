@@ -37,20 +37,21 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
 FROM hsm-prep AS hsm-kconfig
 RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
-    ebuild /var/db/repos/gentoo/sys-kernel/gentoo-kernel/gentoo-kernel-7.2.13.ebuild clean configure 2>&1 | tail -15; \
+    emerge --oneshot --usepkg --getbinpkg sys-libs/binutils-libs app-alternatives/bc sys-devel/bc dev-util/pahole >/dev/null 2>&1; \
+    ebuild /var/db/repos/gentoo/sys-kernel/gentoo-kernel/gentoo-kernel-7.2.13.ebuild clean configure > /tmp/kcfg.log 2>&1 || { tail -30 /tmp/kcfg.log; exit 1; }; tail -3 /tmp/kcfg.log; \
     c=$(find /var/tmp/portage/sys-kernel/gentoo-kernel-7.2.13/work -maxdepth 2 -name .config | head -1); echo CONFIG=$c; \
     miss=0; while read -r l; do case "$l" in CONFIG_*) grep -qx "$l" "$c" || { echo "MISSING $l  (have: $(grep -E "^(# )?${l%%=*}[= ]" "$c" | head -1))"; miss=1; };; esac; done < /usr/share/horcrux-hogsmeade/required-config.txt; \
     [ $miss = 0 ] && echo KCONFIG-OK || exit 1
 
 # --- the kernel (about an hour) in its own layer: a later failure does not recompile it
 FROM hsm-prep AS hsm-kbuild
-# NOTE: `emerge --onlydeps =gentoo-kernel` alone pulls gentoo-kernel itself in through the virtual/dist-kernel cycle and then dies in
-# postinst (dracut cannot install zfs/horcrux-unlock yet): exclude both. The binpkg dir is a cache mount, so a failure after the
+# NOTE: `emerge --onlydeps =gentoo-kernel` pulls gentoo-kernel itself in through the virtual/dist-kernel cycle and then dies in
+# postinst (dracut cannot install zfs/horcrux-unlock yet), and with --exclude the build deps (bc, pahole) are skipped: install them explicitly. The binpkg dir is a cache mount, so a failure after the
 # ~hour-long compile keeps the binary package (the cp at the end copies it into the image layer).
 RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     --mount=type=cache,id=hs-kernel-binpkgs,target=/var/cache/hs-binpkgs,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache" PKGDIR=/var/cache/hs-binpkgs; \
-    emerge --onlydeps --usepkg --getbinpkg --exclude sys-kernel/gentoo-kernel --exclude virtual/dist-kernel =sys-kernel/gentoo-kernel-7.2.13 > /var/log/hogsmeade-kernel-deps.log 2>&1 || { tail -40 /var/log/hogsmeade-kernel-deps.log; exit 1; }; \
+    emerge --oneshot --usepkg --getbinpkg sys-libs/binutils-libs app-alternatives/bc sys-devel/bc dev-util/pahole > /var/log/hogsmeade-kernel-deps.log 2>&1 || { tail -40 /var/log/hogsmeade-kernel-deps.log; exit 1; }; \
     if ! ls /var/cache/hs-binpkgs/sys-kernel/gentoo-kernel-7.2.13*.gpkg.tar >/dev/null 2>&1; then \
       emerge --buildpkgonly --nodeps --usepkg=n --getbinpkg=n =sys-kernel/gentoo-kernel-7.2.13 \
         > /var/log/hogsmeade-kernel-build.log 2>&1 || { tail -80 /var/log/hogsmeade-kernel-build.log; exit 1; }; \
