@@ -1,2 +1,6 @@
-# paths (relative to /) that are NOT packed into sys-apps/horcrux-image-files because another ebuild owns them
-# (add a line when a Horcrux-overlay package such as sys-kernel/horcrux-unlock or sys-apps/horcrux-tools is installed by this variant)
+# paths (relative to /) that are NOT packed into app-misc/gringotts-config (the horcrux-api stack is not on this laptop; t2 services are Apple-only;
+# the packages horcrux-tools/live-data/unlock own the usr/ trees, which gringotts-config does not pack at all)
+etc/init.d/horcrux-api
+etc/conf.d/horcrux-api
+etc/init.d/t2fanrd
+etc/init.d/tiny-dfr
