@@ -3,10 +3,10 @@
 
 EAPI=8
 
-DESCRIPTION="Horcrux Desktop image files: live-installer, boot-environment tools, console menu, desktop profile data, horcrux-api and its UI"
+DESCRIPTION="gringotts image /etc files: live-installer init scripts, profile.d, dracut and Portage configuration, image markers"
 HOMEPAGE="https://git.canutethegreat.com/CanuteTheGreat/horcrux"
-# The tarball is made by the image build from the repository's build/live-iso overlays (common/overlay, project/overlay,
-# variants/desktop/overlay) and the horcrux-api build output; it is the exact tree the shared installer ships.
+# The tarball is made by the image build from the /etc trees of the repository's build/live-iso overlays plus the build-time Portage
+# configuration; usr/ content belongs to sys-apps/horcrux-tools, horcrux-live-data and sys-kernel/horcrux-unlock.
 SRC_URI="${P}.tar"
 S="${WORKDIR}"
 

@@ -3,11 +3,11 @@
 # for the ThinkBook 16 G6 + the remote-handoff helpers. EVERY file is owned by an ebuild (verified with qfile -o in the QEMU test):
 #   * apps          ::gentoo, GURU (proton-vpn-gtk-app) and the owner's canutethegreat-overlay (brave-bin)
 #   * rustinion     app-admin/rustinion-bin from the Horcrux overlay (repo gentoo/)
-#   * image files   sys-apps/horcrux-image-files (the live-installer/BE tools/console menu/horcrux-api tree, packed from the build contexts)
+#   * image files   sys-apps/horcrux-tools + horcrux-live-data + sys-kernel/horcrux-unlock (proven on hogshead) + app-misc/gringotts-config (/etc)
 #   * helpers       app-misc/gringotts-tools (this variant's local overlay)
 #   * PRIVATE       app-misc/gringotts-private (agent SSH public keys + 7-day ephemeral tagged Tailscale key) only when the build
 #                   gets a private bundle (named context `priv`, PRIV_DIR in build.sh); never committed, never in a public image.
-# Named contexts (build.sh): hxoverlay = repo gentoo/, priv = private bundle, app = the horcrux-api build output image.
+# Named contexts (build.sh): hxoverlay = repo gentoo/, priv = private bundle.
 ARG BASE
 FROM ${BASE}
 ARG ARCH=x86_64
@@ -49,30 +49,50 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
 # this variant's local overlay is copied only now (editing it must not invalidate the long header/app layers above)
 COPY project/variants/gringotts/repo/ /var/db/repos/horcrux-gringotts/
 
-# files that came from the repository's overlays (not from a package) plus the image's own Portage configuration and markers are re-packaged as ONE
-# ebuild so Portage owns them:
-# the tarball is built from the same build contexts the base layers COPYed (order as in Dockerfile.rootfs: app, project, common, then the desktop variant)
-COPY --from=app /out/ /tmp/hxo/app/
+# Ownership of the image's own files: the packages PROVEN on hogshead (overlay gentoo/ = repo horcrux): sys-kernel/horcrux-unlock (dracut one-passphrase),
+# sys-apps/horcrux-tools (installer, live scripts, horcrux-be, horcrux-orphans), sys-apps/horcrux-live-data (branding + portage metadata snapshot),
+# app-admin/rustinion-bin. The two tools/data tarballs are fetch-restricted distfiles made from this build's own trees (nothing is downloaded);
+# the loose copies from the ISO overlay are removed first so Portage owns the files. The gringotts tty1 menu is this variant's
+# live-installer-session, packed over the common one inside the tools tarball.
+COPY common/overlay/usr/lib/live-installer /tmp/hxt/usr/lib/live-installer
+COPY common/overlay/usr/libexec /tmp/hxt/usr/libexec
+COPY common/overlay/usr/bin /tmp/hxt/usr/bin
+COPY project/variants/hogshead/overlay/usr/bin/horcrux-orphans /tmp/hxt/usr/bin/horcrux-orphans
+COPY project/variants/desktop/overlay/usr/share/horcrux/desktop /tmp/hxt/usr/share/horcrux/desktop
+COPY project/variants/gringotts/overlay/usr/libexec/ /tmp/hxt/usr/libexec/
+RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
+    --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
+    set -e; unset ARCH; export FEATURES="-ccache"; \
+    tar -C /tmp/hxt --zstd -cf /var/cache/distfiles/horcrux-tools-1.tar.zst .; rm -rf /tmp/hxt; \
+    tar -C / --zstd -cf /var/cache/distfiles/horcrux-live-data-1.tar.zst usr/share/live-installer; \
+    for e in sys-apps/horcrux-live-data sys-apps/horcrux-tools sys-kernel/horcrux-unlock app-admin/rustinion-bin; do ebuild /var/db/repos/horcrux/$e/*.ebuild manifest; done; \
+    rm -rf /usr/bin/horcrux /usr/bin/horcrux-api /usr/share/horcrux/ui /etc/init.d/horcrux-api /etc/init.d/horcrux-guests /etc/conf.d/horcrux-api \
+           /usr/share/horcrux/t2 /usr/lib/live-installer /usr/libexec/live-* /usr/libexec/console-menu-session /usr/bin/live-installer /usr/bin/console-menu \
+           /usr/bin/live-persist /usr/bin/live-rescue /usr/bin/horcrux-be /usr/bin/horcrux-t2-firmware /usr/share/horcrux/desktop \
+           /usr/share/live-installer /usr/lib/dracut/modules.d/91horcrux-unlock /etc/init.d/t2fanrd /etc/init.d/tiny-dfr; \
+    rm -f /etc/runlevels/*/horcrux-api /etc/runlevels/*/horcrux-guests /etc/runlevels/*/t2fanrd /etc/runlevels/*/tiny-dfr; \
+    emerge --oneshot --usepkg=n --getbinpkg=n sys-kernel/horcrux-unlock sys-apps/horcrux-tools sys-apps/horcrux-live-data; \
+    emerge --noreplace --usepkg=n --getbinpkg=n app-admin/rustinion-bin; \
+    emerge --noreplace --select=y sys-kernel/horcrux-unlock sys-apps/horcrux-tools sys-apps/horcrux-live-data app-admin/rustinion-bin; \
+    printf 'desktop\ngringotts\n' > /etc/live-iso-variant
+
+# the image's remaining /etc files (init scripts, profile.d, dracut/Portage config, markers: the repository's overlay /etc trees and the build-time Portage
+# configuration) are ONE small ebuild, gringotts-config; usr/ content is owned by the packages above, so it is excluded from the tarball
 COPY project/overlay/ /tmp/hxo/project/
 COPY common/overlay/ /tmp/hxo/common/
-COPY project/variants/desktop/overlay/ /tmp/hxo/desktop/
-COPY project/variants/gringotts/overlay/ /tmp/hxo/gringotts/
 COPY project/variants/gringotts/image-files.exclude /tmp/image-files.exclude
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     set -e; unset ARCH; \
     mkdir -p /tmp/imgfiles /tmp/dist; \
-    for d in app project common desktop gringotts; do cp -a /tmp/hxo/$d/. /tmp/imgfiles/; done; \
+    for d in project common; do ( cd /tmp/hxo/$d && cp -a etc /tmp/imgfiles/ ) ; done; \
     ( cd /tmp/imgfiles && grep -v '^#' /tmp/image-files.exclude | grep . | while read -r p; do rm -rf "./$p"; done ); \
-    find /tmp/imgfiles -name __pycache__ -type d -prune -exec rm -rf {} +; \
-    printf 'desktop\ngringotts\n' > /etc/live-iso-variant; \
     ( cd / && cp -a --parents etc/portage/make.conf etc/portage/make.conf.arch etc/portage/binrepos.conf etc/portage/env etc/portage/package.* etc/portage/repos.conf \
-        etc/sudoers.d/wheel etc/live-installer/live-only-packages etc/live-iso-label etc/live-iso-volid etc/live-iso-variant \
-        usr/share/live-installer/portage-meta.json.xz /tmp/imgfiles/ ); \
-    ( cd /tmp/imgfiles && find . \( -type f -o -type l \) | sed 's|^\.||' | xargs -d '\n' qfile -C 2>/dev/null | tee /tmp/already-owned.txt | sed 's/^/NOTE already owned by a package, left out of horcrux-image-files: /'; \
+        etc/sudoers.d/wheel etc/live-installer/live-only-packages etc/live-iso-label etc/live-iso-volid etc/live-iso-variant /tmp/imgfiles/ ); \
+    ( cd /tmp/imgfiles && find . \( -type f -o -type l \) | sed 's|^\.||' | xargs -d '\n' qfile -C 2>/dev/null | tee /tmp/already-owned.txt | sed 's/^/NOTE already owned by a package, left out of gringotts-config: /'; \
       sed -E 's/.*\(([^)]*)\)$/\1/' /tmp/already-owned.txt | while read -r f; do rm -f "./$f"; done ); \
-    tar -C /tmp/imgfiles -cf /tmp/dist/horcrux-image-files-1.tar .; \
-    DISTDIR=/tmp/dist ebuild /var/db/repos/horcrux-gringotts/sys-apps/horcrux-image-files/horcrux-image-files-1.ebuild manifest; \
-    FEATURES="-collision-protect -protect-owned" COLLISION_IGNORE="/usr /etc /var /opt /lib /lib64 /bin /sbin /boot /root /srv" CONFIG_PROTECT="-*" DISTDIR=/tmp/dist emerge --noreplace --usepkg=n --getbinpkg=n --buildpkg=n sys-apps/horcrux-image-files app-misc/gringotts-tools app-admin/rustinion-bin; \
+    tar -C /tmp/imgfiles -cf /tmp/dist/gringotts-config-1.tar .; \
+    DISTDIR=/tmp/dist ebuild /var/db/repos/horcrux-gringotts/app-misc/gringotts-config/gringotts-config-1.ebuild manifest; \
+    FEATURES="-collision-protect -protect-owned" COLLISION_IGNORE="/etc" CONFIG_PROTECT="-*" DISTDIR=/tmp/dist emerge --noreplace --usepkg=n --getbinpkg=n --buildpkg=n app-misc/gringotts-config app-misc/gringotts-tools; \
     rm -rf /tmp/dist /tmp/hxo /tmp/imgfiles /tmp/image-files.exclude /tmp/already-owned.txt
 
 # PRIVATE bundle (agent SSH public keys + Tailscale key): absent in a public build. DISTDIR is a tmpfs-like scratch dir that is deleted,
