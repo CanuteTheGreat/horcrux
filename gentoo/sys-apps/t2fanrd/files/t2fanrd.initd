@@ -1,0 +1,10 @@
+#!/sbin/openrc-run
+description="T2 Mac fan daemon"
+command="/usr/bin/t2fanrd"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+
+depend() {
+	need localmount
+	after modules
+}

@@ -1,0 +1,2 @@
+# the t2linux patch set + OpenZFS 2.3.x support kernels <= 7.2 (see sys-kernel/horcrux-t2-config)
+>=sys-kernel/gentoo-kernel-7.3

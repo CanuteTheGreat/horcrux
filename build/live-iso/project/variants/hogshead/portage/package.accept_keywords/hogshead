@@ -1,0 +1,19 @@
+# Horcrux overlay packages (hogshead / T2 laptop)
+sys-kernel/horcrux-t2-config ~amd64
+sys-kernel/horcrux-unlock ~amd64
+app-admin/rustinion-bin -* ~amd64
+sys-firmware/apple-t2-wifi-firmware -* ~amd64
+# kernel: the t2linux patch set is pinned to 7.2.x (OpenZFS 2.3.9 supports <= 7.2)
+sys-kernel/gentoo-kernel ~amd64
+virtual/dist-kernel ~amd64
+=sys-fs/zfs-kmod-2.3.9 ~amd64
+=sys-fs/zfs-2.3.9 ~amd64
+net-im/discord ~amd64
+net-vpn/proton-vpn-gtk-app ~amd64
+sys-apps/t2fanrd ~amd64
+sys-apps/tiny-dfr ~amd64
+sys-apps/horcrux-tools ~amd64
+sys-apps/horcrux-live-data ~amd64
+# GURU (community overlay, all ~amd64): needed for net-vpn/proton-vpn-gtk-app and its python deps
+*/*::guru ~amd64
+sys-apps/horcrux-t2-audio ~amd64

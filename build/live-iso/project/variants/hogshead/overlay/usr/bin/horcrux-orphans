@@ -1,0 +1,48 @@
+#!/usr/bin/python3
+"""List files under /usr /opt /lib/firmware /lib/modules /boot that no installed Portage package owns.
+
+Same question as `qfile -o`, but merged-/usr safe: CONTENTS records /lib64/..., /bin/... while `find` shows /usr/lib64/...,
+so both sides are normalised with realpath() of the parent directory (qfile reports those as false orphans).
+Usage: portage-orphans.py [ROOT]    prints orphans one per line; exit 0 always (the caller decides what is allowed)."""
+import glob
+import os
+import sys
+
+root = sys.argv[1] if len(sys.argv) > 1 else "/"
+top = ["usr", "opt", "lib/firmware", "lib/modules", "boot"]
+
+
+def norm(p):
+    d, b = os.path.split(p)
+    return os.path.join(os.path.realpath(root + d.lstrip("/") if root != "/" else d), b)
+
+
+owned = set()
+for c in glob.glob(os.path.join(root, "var/db/pkg/*/*/CONTENTS")):
+    for line in open(c, errors="replace"):
+        parts = line.rstrip("\n").split(" ")
+        if parts[0] == "obj":
+            # "obj <path> <md5> <mtime>": the path may contain spaces, md5/mtime are the last two fields
+            path = " ".join(parts[1:-2])
+        elif parts[0] == "sym":
+            path = line.rstrip("\n")[4:].split(" -> ")[0]
+        else:
+            continue
+        owned.add(norm(path))
+
+seen_dirs = set()
+for t in top:
+    base = os.path.join(root, t)
+    if not os.path.isdir(base):
+        continue
+    for dp, dn, fn in os.walk(base):
+        rp = os.path.realpath(dp)
+        if rp in seen_dirs:
+            dn[:] = []
+            continue
+        seen_dirs.add(rp)
+        for f in fn:
+            p = os.path.join(dp, f)
+            rel = "/" + os.path.relpath(p, root) if root != "/" else p
+            if norm(rel) not in owned:
+                print(rel)

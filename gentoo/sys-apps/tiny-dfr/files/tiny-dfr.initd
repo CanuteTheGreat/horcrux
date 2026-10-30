@@ -1,0 +1,10 @@
+#!/sbin/openrc-run
+description="Touch Bar (dynamic function row) daemon"
+command="/usr/bin/tiny-dfr"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+
+depend() {
+	need localmount udev
+	after elogind
+}
