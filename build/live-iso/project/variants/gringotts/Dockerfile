@@ -7,12 +7,14 @@
 #   * helpers       app-misc/gringotts-tools (this variant's local overlay)
 #   * PRIVATE       app-misc/gringotts-private (agent SSH public keys + 7-day ephemeral tagged Tailscale key) only when the build
 #                   gets a private bundle (named context `priv`, PRIV_DIR in build.sh); never committed, never in a public image.
-# Named contexts (build.sh): hxoverlay = repo gentoo/, priv = private bundle.
+# Named contexts (build.sh): hxoverlay = minimal Horcrux overlay, hxfull = repo gentoo/ (whole overlay), priv = private bundle.
 ARG BASE
 FROM ${BASE}
 ARG ARCH=x86_64
 ARG VARIANT=gringotts
 
+# (hxoverlay is deliberately the MINIMAL overlay here (rustinion-bin + metadata): the long header/app layers below stay BuildKit-cached when the
+# overlay's other packages change; the full overlay is `hxfull`, copied after them)
 COPY --from=hxoverlay / /var/db/repos/horcrux/
 COPY project/variants/gringotts/portage/ /etc/portage/
 
@@ -54,6 +56,8 @@ COPY project/variants/gringotts/repo/ /var/db/repos/horcrux-gringotts/
 # app-admin/rustinion-bin. The two tools/data tarballs are fetch-restricted distfiles made from this build's own trees (nothing is downloaded);
 # the loose copies from the ISO overlay are removed first so Portage owns the files. The gringotts tty1 menu is this variant's
 # live-installer-session, packed over the common one inside the tools tarball.
+COPY --from=hxfull / /var/db/repos/horcrux/
+COPY project/variants/gringotts/portage-late/ /etc/portage/
 COPY common/overlay/usr/lib/live-installer /tmp/hxt/usr/lib/live-installer
 COPY common/overlay/usr/libexec /tmp/hxt/usr/libexec
 COPY common/overlay/usr/bin /tmp/hxt/usr/bin
