@@ -26,7 +26,9 @@ src_install() {
 	doins "${FILESDIR}"/paths "${FILESDIR}"/excludes
 	fperms 0700 /etc/ctg-backup
 	if use systemd; then
-		systemd_dounit "${FILESDIR}"/ctg-restic-{backup,prune,check}.{service,timer}
+		cp "${FILESDIR}"/ctg-restic-{backup,prune,check}.{service,timer} "${T}"/ || die
+		sed -i 's:/usr/local/sbin/ctg-restic:/usr/sbin/ctg-restic:' "${T}"/*.service || die
+		systemd_dounit "${T}"/ctg-restic-{backup,prune,check}.{service,timer}
 		for n in backup prune check; do
 			insinto /usr/lib/systemd/system/ctg-restic-${n}.service.d
 			newins "${FILESDIR}"/ctg-restic-ac-only.conf ac-only.conf
