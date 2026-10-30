@@ -1,0 +1,10 @@
+#!/bin/sh
+# Print the serial console device the kernel was started with (ttyS0 on x86_64/riscv64, ttyAMA0 on
+# aarch64 virt/SBCs, hvc0 ...), or fail when the command line names none. Used by the init scripts.
+for w in $(cat /proc/cmdline); do
+	case $w in
+	console=ttyS[0-9]*|console=ttyAMA[0-9]*|console=ttyAML[0-9]*|console=ttymxc[0-9]*|console=ttyUSB[0-9]*|console=hvc[0-9]*)
+		w=${w#console=}; echo "${w%%,*}"; exit 0 ;;
+	esac
+done
+exit 1

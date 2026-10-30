@@ -3,7 +3,10 @@
 
 EAPI=8
 
-DESCRIPTION="Horcrux boot-environment manager (horcrux-be) and Apple T2 firmware importer"
+PYTHON_COMPAT=( python3_{13..14} )
+inherit python-single-r1
+
+DESCRIPTION="Horcrux tooling: boot-environment manager (horcrux-be), live installer + console menu, T2 firmware importer, ownership audit"
 HOMEPAGE="https://github.com/CanuteTheGreat/horcrux"
 S="${WORKDIR}"
 
@@ -12,15 +15,17 @@ SLOT="0"
 KEYWORDS="~amd64"
 
 # horcrux-be: ZFS boot environments (snapshot/rollback/activate), static grub.cfg per BE, kernel-hook sync
+REQUIRED_USE="${PYTHON_REQUIRED_USE}"
 RDEPEND="
-	dev-lang/python
+	${PYTHON_DEPS}
 	sys-fs/zfs
 	sys-boot/grub
 "
 
 src_install() {
-	dobin "${FILESDIR}"/horcrux-be "${FILESDIR}"/horcrux-t2-firmware
-	# the two modules the tools import (be.py, t2.py); the rest of the live installer is not part of this package
-	insinto /usr/lib/live-installer/liveinst
-	doins "${FILESDIR}"/liveinst/{__init__,be,t2}.py
+	# the files/ tree mirrors build/live-iso of the Horcrux repo (sync-files.sh); modes come from git
+	cp -a "${FILESDIR}"/usr "${ED}"/ || die
+	find "${ED}" -name __pycache__ -prune -exec rm -rf {} + || true
+	# byte-compile here so the .pyc files are owned by this package instead of appearing at first run
+	python_optimize "${ED}/usr/lib/live-installer"
 }

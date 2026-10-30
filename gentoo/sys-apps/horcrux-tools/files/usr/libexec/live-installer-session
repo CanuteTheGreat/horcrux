@@ -1,0 +1,28 @@
+#!/bin/sh
+# login program for the installer consoles (agetty -n -l): run the installer for the boot-menu mode, then a live shell.
+#   mode (/run/live-installer/mode, written by the live-installer service from the kernel command line):
+#     gui     Graphical install: runs /usr/libexec/live-installer-gui (agent hook, ships with the GUI) when it exists
+#             and succeeds in starting; otherwise the text installer (placeholder until the GUI lands)
+#     text    Install (text mode) / safe graphics
+#     expert  Advanced (expert) install: text installer with LIVE_INSTALLER_EXPERT=1 (the stage backend reads it)
+dmesg -n 1 2>/dev/null
+export TERM=${TERM:-linux}
+mode=$(cat /run/live-installer/mode 2>/dev/null || echo text)
+echo "[live-installer] boot mode: $mode"
+case "$mode" in
+	gui)
+		if [ -x /usr/libexec/live-installer-gui ] && /usr/libexec/live-installer-gui; then
+			:
+		else
+			echo "[live-installer] graphical installer not available in this image: using the text installer"
+			sleep 1
+			/usr/bin/live-installer
+		fi ;;
+	expert)
+		LIVE_INSTALLER_EXPERT=1 /usr/bin/live-installer ;;
+	*)
+		/usr/bin/live-installer ;;
+esac
+echo
+echo "Live system shell (root). Run 'live-installer' to start the installer again, 'reboot' to restart."
+exec /bin/login -f root

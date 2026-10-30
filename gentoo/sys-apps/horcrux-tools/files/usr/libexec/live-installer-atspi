@@ -1,0 +1,156 @@
+#!/usr/bin/python3
+"""AT-SPI probe for the graphical installer (tests, support, accessibility checks).
+
+  live-installer-atspi names "<name>"... node count + which names are missing
+  live-installer-atspi tree              JSON list of every accessible widget (role, name, states)
+  live-installer-atspi press "<name>"    activate the push button / check box / radio button with that name
+  live-installer-atspi settext "<name>" "<text>"   set the text of an entry with that accessible name
+  live-installer-atspi focused           role|name of the widget that has the keyboard focus (tests Tab until it is the one they want)
+  live-installer-atspi focus "<name>"    move the keyboard focus to that widget
+  live-installer-atspi extents "<name>"  x y w h of a button (tests click it with a pointer)
+  live-installer-atspi has "<name>"      exit 0 when a widget with that name exists and is showing
+Talks to the session bus whose address the session script saved in /run/live-installer/dbus-address.
+"""
+import json
+import os
+import sys
+
+try:
+    os.environ.setdefault("DBUS_SESSION_BUS_ADDRESS", open("/run/live-installer/dbus-address").read().strip())
+except OSError:
+    pass
+import gi
+
+gi.require_version("Atspi", "2.0")
+from gi.repository import Atspi  # noqa: E402
+
+
+def walk(node, depth, out, only_showing=True):
+    try:
+        states = node.get_state_set()
+        st = [s.value_nick for s in [Atspi.StateType(i) for i in range(0, 45)] if states.contains(s)]
+        out.append({"depth": depth, "role": node.get_role_name(), "name": node.get_name() or "", "states": st})
+        for i in range(node.get_child_count()):
+            walk(node.get_child_at_index(i), depth + 1, out)
+    except Exception:  # noqa
+        pass
+
+
+def app_roots():
+    desk = Atspi.get_desktop(0)
+    for i in range(desk.get_child_count()):
+        yield desk.get_child_at_index(i)
+
+
+def find(name, roles=None):
+    """exact accessible name first, then a name that starts with it (e.g. 'Disk /dev/vda')"""
+    for exact in (True, False):
+        stack = list(app_roots())
+        while stack:
+            n = stack.pop()
+            try:
+                nm = n.get_name() or ""
+                if (nm == name if exact else nm.startswith(name)) and (roles is None or n.get_role_name() in roles):
+                    if n.get_state_set().contains(Atspi.StateType.SHOWING):
+                        return n
+                stack.extend(n.get_child_at_index(i) for i in range(n.get_child_count()))
+            except Exception:  # noqa
+                pass
+    return None
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "tree"
+    if cmd == "tree":
+        out = []
+        for a in app_roots():
+            walk(a, 0, out)
+        print(json.dumps(out))
+        return 0
+    if cmd == "names":      # names NAME...: node count + which names are missing (short output for serial consoles)
+        out = []
+        for a in app_roots():
+            walk(a, 0, out)
+        have = {n["name"] for n in out}
+        miss = [n for n in sys.argv[2:] if n not in have]
+        print("NODES=%d MISSING=%s" % (len(out), json.dumps(miss)))
+        return 0 if not miss else 1
+    if cmd == "focused":
+        stack = list(app_roots())
+        while stack:
+            n = stack.pop()
+            try:
+                if n.get_state_set().contains(Atspi.StateType.FOCUSED):
+                    print(f"{n.get_role_name()}|{n.get_name() or ''}")
+                    return 0
+                stack.extend(n.get_child_at_index(i) for i in range(n.get_child_count()))
+            except Exception:  # noqa
+                pass
+        print("none|")
+        return 1
+    name = sys.argv[2]
+    if cmd == "extents":     # extents NAME -> "x y w h" in window coordinates (= screen coordinates under the fullscreen kiosk)
+        n = find(name, ("push button", "button", "toggle button", "check box", "radio button"))
+        if n is None:
+            print("not found:", name)
+            return 2
+        e = Atspi.Component.get_extents(n, Atspi.CoordType.WINDOW)
+        print(f"EXTENTS {e.x} {e.y} {e.width} {e.height}")
+        return 0
+    if cmd == "has":
+        n = find(name)
+        return 0 if n is not None and n.get_state_set().contains(Atspi.StateType.SHOWING) else 1
+    if cmd == "focus":
+        n = find(name)
+        if n is None:
+            print("not found:", name)
+            return 2
+        ok = False
+        for cand in [n] + [n.get_child_at_index(i) for i in range(n.get_child_count())]:     # a combo box: its button takes the focus
+            try:
+                ok = Atspi.Component.grab_focus(cand)
+            except Exception:  # noqa
+                ok = False
+            if ok:
+                break
+        print("focused" if ok else "focus failed")
+        return 0 if ok else 3
+    if cmd == "press":
+        n = find(name, ("push button", "button", "check box", "radio button", "toggle button", "combo box", "expander"))
+        if n is None:                      # e.g. only the label inside the button is exposed: press the nearest ancestor with an action
+            n = find(name)
+            while n is not None:
+                try:
+                    act = n.get_action_iface()
+                except Exception:  # noqa
+                    act = None
+                if act is not None and act.get_n_actions() > 0:
+                    break
+                n = n.get_parent()
+        if n is None:
+            print("not found:", name)
+            return 2
+        try:
+            ok = Atspi.Action.do_action(n, 0)
+        except Exception:  # noqa - check/radio buttons expose no action in GTK4: focus them, the caller sends Space
+            ok = False
+            try:
+                ok = Atspi.Component.grab_focus(n)
+                print("focused (send Space to toggle)")
+                return 4
+            except Exception:  # noqa
+                pass
+        print("pressed" if ok else "action failed")
+        return 0 if ok else 3
+    if cmd == "settext":
+        n = find(name, ("text", "password text", "entry"))
+        if n is None:
+            print("not found:", name)
+            return 2
+        ok = Atspi.EditableText.set_text_contents(n, sys.argv[3])
+        print("set" if ok else "failed")
+        return 0 if ok else 3
+    return 64
+
+
+sys.exit(main())

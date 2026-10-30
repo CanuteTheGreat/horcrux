@@ -520,8 +520,8 @@ def config_from_answers(profile, path):
 def validate_config(profile, c, unattended=False, require_secret=True):
     """Return a list of problems (empty = ok)."""
     errs = []
-    if c.get("install_type", "server") != "server":
-        errs.append(f"install_type {c['install_type']!r} is not available yet (only 'server')")
+    if c.get("install_type", "server") not in ("server", "desktop"):
+        errs.append(f"install_type {c['install_type']!r} is not available yet (server, desktop)")
     bad_off = [x for x in c.get("services_off", []) if x not in profile.get("services_optional", [])]
     if bad_off:
         errs.append("services.disable may only name optional services: " + ", ".join(bad_off))
