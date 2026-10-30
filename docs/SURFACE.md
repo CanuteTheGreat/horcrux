@@ -80,7 +80,7 @@ Image name: the Surface image follows the repo-wide scheme `<product>-<desktop e
   (auto-show in text fields, also in the greeter), touch via libinput, pen via xf86-input-wacom, screen rotation + touch/pen mapping from the accelerometer
   (`iio-sensor-proxy`, `horcrux-surface-rotate`, only when the hardware has one), **xfce4-power-manager** (lid/power key = suspend, critical battery = hibernate,
   hibernate button) on top of elogind/UPower, `xfce4-screensaver` locks before sleeping. Apps: Brave (`canutethegreat-overlay`), Firefox (`firefox-bin`),
-  Nextcloud client, the Rustinion agent (`app-admin/rustinion-bin`), Tailscale, `intel-microcode`, `sof-firmware`, `linux-firmware`.
+  the Rustinion agent (`app-admin/rustinion-bin`), Tailscale, `intel-microcode`, `sof-firmware`, `linux-firmware`.
   GNOME was not measured or compared (owner chose XFCE).
 * Binpkg-first: the tablet never compiles anything. The image is built on an rw-man host (official binhost; source builds only for what the USE flags force:
   the kernel, zfs-kmod, a few libraries); the installer copies the ISO's squashfs.
@@ -256,3 +256,5 @@ HD 4000 acceleration under Mesa; HiDPI scale feel; battery reporting; UEFI quirk
 * linux-surface issues #381 (SP1/SP2 `_LID`, `button.lid_init_state=open`), #2049 (SP1 + GNOME)
 * kernel v7.2: `drivers/net/wireless/marvell/mwifiex/pcie_quirks.c`, `drivers/hid/hid-ids.h`, `hid-quirks.c`, `drivers/acpi/button.c`
 * docs/T2-MACS.md (kernel 7.2 pin because of OpenZFS), Gentoo handbook (XFS)
+
+**Nextcloud:** no desktop client on this device (tiny disk, owner decision): web only, in the browser. `~/.ssh` is a normal local directory; keys/config are pushed from crystalcave after first boot, never baked in.

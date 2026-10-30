@@ -8,7 +8,7 @@
   2. first boot of the installed disk with NO PS/2 keyboard: ONE passphrase on the USB keyboard, LightDM autologin, XFCE session
   3. checks: XFS on LUKS2 on LVM, hibernate swap + zram, kernel from the Surface kernel package, qfile -o orphans, packages of
      the meta package, session processes (xfwm4, panel, power manager, onboard, nm-applet, pipewire), greeter + on-screen keyboard
-  4. apps launch inside the session (Firefox, Brave, Nextcloud, Rustinion agent, Tailscale, onboard) + memory/responsiveness numbers
+  4. apps launch inside the session (Firefox, Brave, Rustinion agent, Tailscale, onboard) + memory/responsiveness numbers
   5. `loginctl hibernate` -> power off -> ONE passphrase -> same boot_id/process/tmpfs (resume), the XFCE session survives
   6. clean `emerge -puDN @world` (needs the network of the VM)
 Evidence: result.json, screens/*.png|txt, serial logs in --out. Reuses surface-qemu-test.py (T class) + common/qemu-test.py.
@@ -208,6 +208,9 @@ class XT(SQ.T):
         s("home-not-hidden-under-a-mount", a1.split() == a2.split() and USER in a2 and ".config" in a4 and USER in a4, re.sub(r"\s+", " ", out)[:240])
         rc, out = self.ssh("locale -a | tr '\\n' ' '; echo @@@; su - " + USER + " -c 'locale 2>&1 | head -3'; echo @@@; cat /etc/env.d/02locale")
         s("locale-en-us-utf8-generated", re.search(r"en_US\.(utf8|UTF-8)", out) is not None and "Cannot set" not in out, re.sub(r"\s+", " ", out)[:240])
+        rc, out = self.ssh("qlist -I net-misc/nextcloud-client | wc -l; command -v nextcloud nextcloudcmd | wc -l; ls /etc/xdg/autostart | grep -ci nextcloud; ls -ld /home/" + USER + "/.ssh /home/" + USER + "/Nextcloud 2>&1 | cut -c1-60; test -L /home/" + USER + "/.ssh && echo SYMLINK || echo local-dir; test -s /usr/share/horcrux-surface/restic-excludes && echo excludes-shipped")
+        o = out.split()
+        s("no-nextcloud-client-local-ssh-and-restic-excludes", o[:3] == ["0", "0", "0"] and "local-dir" in out and "SYMLINK" not in out and "excludes-shipped" in out and "Nextcloud: No such" in out, re.sub(r"\s+", " ", out)[:240])
         rc, out = self.ssh("grep -rl 'interface-name' /etc/NetworkManager/system-connections 2>/dev/null | head -3; echo rc=done; ls -l /etc/NetworkManager/system-connections 2>&1 | tail -3; rc-status default | grep -i -E 'NetworkManager'")
         s("no-networkmanager-profile-pinned-to-an-interface", out.startswith("rc=done") and "NetworkManager" in out, re.sub(r"\s+", " ", out)[:240])
         # session env helper: run commands as the user inside the X session
@@ -230,7 +233,7 @@ class XT(SQ.T):
         s("can-hibernate-and-sensor-proxy-installed", 'string "yes"' in out and "iio-sensor-proxy-installed" in out, re.sub(r"\s+", " ", out)[:240])
         # ---- apps launch inside the session
         launch = {
-            "firefox": "firefox-bin", "brave": "brave-bin", "nextcloud": "nextcloud", "onboard": "onboard", "terminal": "xfce4-terminal",
+            "firefox": "firefox-bin", "brave": "brave-bin", "onboard": "onboard", "terminal": "xfce4-terminal",
         }
         t_launch = {}
         # RAM at idle (session up, nothing launched), then with Brave alone open, then with everything
@@ -253,7 +256,7 @@ class XT(SQ.T):
         s("memory-with-brave-recorded", True, self.res["memory_brave_only"])
         self.ssh(f"pkill -u {USER} -f brave; sleep 3", timeout=30)
         for name, cmd in (("firefox", "firefox-bin --new-window about:blank"), ("brave", "brave --no-first-run --new-window about:blank"),
-                          ("nextcloud", "nextcloud --background"), ("xfce4-terminal", "xfce4-terminal"), ("onboard", "onboard")):
+                          ("xfce4-terminal", "xfce4-terminal"), ("onboard", "onboard")):
             t1 = time.time()
             usr(f"(setsid {cmd} >/tmp/app-{name}.log 2>&1 &) ; sleep 1; true", timeout=30)
             ok = False
@@ -270,12 +273,12 @@ class XT(SQ.T):
         self.save("windows.txt", out)
         vm.shot("apps-running")
         wins = out
-        s("app-windows-mapped", sum(k in wins for k in ("Firefox", "Brave", "Nextcloud", "onboard", "Onboard", "Xfce4-terminal")) >= 3, re.sub(r"\s+", " ", wins)[:300])
-        rc, out = self.ssh("rustinion --version 2>&1 | head -2; tailscale version 2>&1 | head -1; nextcloud --version 2>&1 | head -1; firefox-bin --version 2>&1 | head -1; brave --version 2>&1 | head -1; "
-                           "qlist -Iv app-admin/rustinion-bin net-vpn/tailscale www-client/brave-bin www-client/firefox-bin net-misc/nextcloud-client x11-misc/lightdm app-accessibility/onboard sys-firmware/intel-microcode sys-firmware/sof-firmware | tr '\\n' ' '", timeout=90)
+        s("app-windows-mapped", sum(k in wins for k in ("Firefox", "Brave", "onboard", "Onboard", "Xfce4-terminal")) >= 3, re.sub(r"\s+", " ", wins)[:300])
+        rc, out = self.ssh("rustinion --version 2>&1 | head -2; tailscale version 2>&1 | head -1; firefox-bin --version 2>&1 | head -1; brave --version 2>&1 | head -1; "
+                           "qlist -Iv app-admin/rustinion-bin net-vpn/tailscale www-client/brave-bin www-client/firefox-bin x11-misc/lightdm app-accessibility/onboard sys-firmware/intel-microcode sys-firmware/sof-firmware | tr '\\n' ' '", timeout=90)
         self.save("app-versions.txt", out)
-        s("apps-versions-and-portage-ownership", all(x in out for x in ("rustinion-bin", "tailscale", "brave-bin", "firefox-bin", "nextcloud-client", "onboard", "intel-microcode", "sof-firmware")), re.sub(r"\s+", " ", out)[:300])
-        rc, out = self.ssh("qfile -o /usr/bin/brave /usr/bin/firefox-bin /usr/bin/rustinion /usr/bin/onboard /usr/bin/tailscale /usr/bin/nextcloud | tr '\\n' ' '; echo; qfile /usr/bin/brave /usr/bin/rustinion /usr/bin/onboard | tr '\\n' ' '")
+        s("apps-versions-and-portage-ownership", all(x in out for x in ("rustinion-bin", "tailscale", "brave-bin", "firefox-bin", "onboard", "intel-microcode", "sof-firmware")), re.sub(r"\s+", " ", out)[:300])
+        rc, out = self.ssh("qfile -o /usr/bin/brave /usr/bin/firefox-bin /usr/bin/rustinion /usr/bin/onboard /usr/bin/tailscale | tr '\\n' ' '; echo; qfile /usr/bin/brave /usr/bin/rustinion /usr/bin/onboard | tr '\\n' ' '")
         s("app-binaries-owned-by-ebuilds", "orphan" not in out.lower() and out.count(":") >= 3, re.sub(r"\s+", " ", out)[:300])
         # ---- memory / responsiveness at 4 GB with everything running
         time.sleep(30)
@@ -386,12 +389,12 @@ class XT(SQ.T):
                         break
                     time.sleep(5)
                 time.sleep(20)
-                self.ssh("su - " + USER + " -c 'export DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) XAUTHORITY=$HOME/.Xauthority; (setsid brave --no-first-run --new-window about:blank >/tmp/b.log 2>&1 &); (setsid firefox-bin >/tmp/f.log 2>&1 &); (setsid nextcloud >/tmp/n.log 2>&1 &); sleep 2; true'", timeout=60)
+                self.ssh("su - " + USER + " -c 'export DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) XAUTHORITY=$HOME/.Xauthority; (setsid brave --no-first-run --new-window about:blank >/tmp/b.log 2>&1 &); (setsid firefox-bin >/tmp/f.log 2>&1 &); sleep 2; true'", timeout=60)
                 time.sleep(75)
-                rc, out = self.ssh("free -m; echo; ps -eo comm | grep -cE 'firefox|brave|nextcloud'; ps -eo comm | grep -E '^onboard$' | head -1", timeout=60)
+                rc, out = self.ssh("free -m; echo; ps -eo comm | grep -cE 'firefox|brave'; ps -eo comm | grep -E '^onboard$' | head -1", timeout=60)
                 self.save("memory-before-hibernate.txt", out)
                 self.res["memory_before_hibernate"] = re.sub(r"\s+", " ", out.splitlines()[1])
-                s_ = self.step("session-with-apps-and-onboard-before-hibernate", "onboard" in out and int(out.split("\n")[4].strip() or 0) >= 3, re.sub(r"\s+", " ", out)[:240])
+                s_ = self.step("session-with-apps-and-onboard-before-hibernate", "onboard" in out and int(out.split("\n")[4].strip() or 0) >= 2, re.sub(r"\s+", " ", out)[:240])
             self.soft = False
             # ---- marker + session pid before hibernate
             rc, out = self.ssh("cat > /root/marker.py <<'EOF'" + MARKER_PY + "EOF\nnohup python3 /root/marker.py >/dev/null 2>&1 < /dev/null & echo $! > /root/marker.pid; sleep 4; "

@@ -49,8 +49,6 @@ RDEPEND="
 	sys-apps/xdg-desktop-portal-gtk
 	www-client/firefox-bin
 	www-client/brave-bin
-	net-misc/nextcloud-client
-	kde-frameworks/extra-cmake-modules
 	net-vpn/tailscale
 	app-admin/rustinion-bin
 	sys-firmware/intel-microcode

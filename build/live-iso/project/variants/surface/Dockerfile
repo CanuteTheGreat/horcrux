@@ -47,13 +47,6 @@ RUN --mount=type=cache,id=surface-distfiles-${ARCH:-x86_64},target=/var/cache/di
 
 # the tablet desktop + the owner's apps = ONE meta package (binpkgs where USE matches; the rest compiles here, never on the tablet)
 FROM surface-live AS surface-apps
-# the Nextcloud client first and on its own: it is the one big Qt source build, and a failure must show its own build log.
-# nextcloud-client 4.0.4 configures with find_package(ECM) even without USE=dolphin (Gentoo only lists ECM for dolphin): the meta package carries ECM
-RUN --mount=type=cache,id=surface-binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
-    --mount=type=cache,id=surface-distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
-    set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \
-    eselect profile set default/linux/amd64/23.0/desktop; \
-    emerge --update --newuse --usepkg --getbinpkg kde-frameworks/extra-cmake-modules net-misc/nextcloud-client > /var/log/surface-nc.log 2>&1 || { tail -30 /var/log/surface-nc.log; for l in /var/tmp/portage/*/*/temp/build.log; do echo "== $l"; grep -n -i -E "error|undefined|fatal|CMake Error" $l | head -30; tail -25 $l; done; exit 1; }
 # dbus must have X (dbus-launch --autolaunch: the XFCE session bus). A plain `emerge -u <meta>` does not re-check already installed
 # dependencies for USE changes, so rebuild it explicitly (the stock server image has dbus -X)
 RUN --mount=type=cache,id=surface-binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
@@ -79,7 +72,7 @@ RUN --mount=type=cache,id=surface-binpkgs-${ARCH:-x86_64},target=/var/cache/binp
     for k in sys-apps/horcrux-tools sys-apps/horcrux-live-data sys-kernel/horcrux-unlock sys-kernel/horcrux-surface-config sys-kernel/gentoo-kernel app-misc/horcrux-surface-desktop sys-fs/zfs-kmod sys-kernel/dracut sys-boot/grub sys-fs/cryptsetup sys-fs/lvm2; do \
         grep -q "^ *$k-[0-9]" /var/log/surface-depclean-pretend.log && { echo "depclean would remove $k"; exit 1; }; done; \
     emerge --depclean --with-bdeps=n 2>&1 | tail -15; \
-    for f in /etc/init.d/live-installer /usr/libexec/live-installer-session /usr/bin/live-installer /usr/bin/horcrux-surface-auto /usr/share/live-installer/hwprofiles/surface.toml /usr/sbin/lightdm /usr/bin/xfce4-session /usr/bin/onboard /usr/bin/brave /usr/bin/nextcloud /usr/bin/rustinion; do test -e $f || { echo "MISSING after depclean: $f"; exit 1; }; done
+    for f in /etc/init.d/live-installer /usr/libexec/live-installer-session /usr/bin/live-installer /usr/bin/horcrux-surface-auto /usr/share/live-installer/hwprofiles/surface.toml /usr/sbin/lightdm /usr/bin/xfce4-session /usr/bin/onboard /usr/bin/brave/usr/bin/rustinion; do test -e $f || { echo "MISSING after depclean: $f"; exit 1; }; done
 
 # the live initramfs for the new kernel (dmsquash-live + the zfs/lvm/resume modules the installer's initramfs needs), services for the live image
 RUN set -e; rm -rf /lib/modules/*-gentoo-dist-bin /usr/src/linux-6.18.57* /boot/*6.18.57* /boot/*.old /etc/libvirt /var/lib/libvirt; ls /lib/modules
