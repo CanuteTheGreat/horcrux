@@ -227,7 +227,7 @@ class ZRun(qt.Runner):
         self.step("portage-owns-every-file", rc == 0 and not bad, f"{len(lines)} generated/eselect paths allowed, {len(bad)} unowned: {bad[:25]}")
         rc, o = self.sh("emerge -puDN @world 2>&1 | tail -25; echo RC=${PIPESTATUS[0]}", timeout=600)
         open(f"{a.out}/world-resolve.txt", "w").write(o)
-        self.step("emerge-world-resolves-no-blockers", "RC=0" in o and "blocked" not in o.lower(), o.strip().replace("\n", " | ")[-300:])
+        self.step("emerge-world-resolves-no-blockers", "RC=0" in o and not any(w in o.lower() for w in ("blocked", "masked", "warning", "problems", "conflict")) and "Calculating dependencies" in o, o.strip().replace("\n", " | ")[-300:])
         if a.desktop:
             self.desktop_checks()
 
