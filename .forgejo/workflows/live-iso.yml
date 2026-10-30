@@ -28,6 +28,10 @@ on:
         description: 'daily (publish to the rolling pre-release) or dry (build + test only)'
         required: false
         default: 'dry'
+      only:
+        description: 'optional: build only one matrix entry (x86_64, aarch64 or desktop); empty = all'
+        required: false
+        default: ''
 
 concurrency:
   group: live-iso-horcrux
@@ -54,11 +58,13 @@ jobs:
     timeout-minutes: 300
     steps:
       - name: Checkout
+        if: ${{ github.event.inputs.only == '' || github.event.inputs.only == (matrix.variant || matrix.arch) }}
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
       - name: Build, test, publish
+        if: ${{ github.event.inputs.only == '' || github.event.inputs.only == (matrix.variant || matrix.arch) }}
         env:
           FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}   # public GitHub mirror release (second publish step)
