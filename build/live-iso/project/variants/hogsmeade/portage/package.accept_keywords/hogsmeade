@@ -21,3 +21,5 @@ net-im/discord ~amd64
 net-vpn/proton-vpn-gtk-app ~amd64
 # GURU (community overlay): proton-vpn-gtk-app and its python deps (as on hogshead)
 */*::guru ~amd64
+gnome-extra/horcrux-gnome-defaults ~amd64
+net-misc/horcrux-chrony-nm ~amd64

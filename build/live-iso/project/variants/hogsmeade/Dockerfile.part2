@@ -9,12 +9,29 @@ ARG ARCH=x86_64
 COPY --from=hxgentoo2 / /var/db/repos/horcrux/
 COPY project/variants/hogsmeade/local-repo/ /var/db/repos/local/
 COPY project/variants/hogsmeade/portage/ /etc/portage/
+# hogshead/gnome-light fixes now in main: OpenRC GNOME patches (gsd meta services, PipeWire ordering, gnome-shell stays on the user bus), Brave from the owner's overlay,
+# cups-browsed zeroconf. The stale image-local repo horcrux-desktop (an old brave-bin whose .desktop Execs a missing binary) is dropped.
+COPY project/variants/gnome-light/portage/patches/ /etc/portage/patches/
+COPY project/variants/gnome-light/portage/package.accept_keywords/desktop /etc/portage/package.accept_keywords/desktop
+COPY project/variants/gnome-light/portage/package.use/zz-desktop /etc/portage/package.use/zz-desktop
 # sources of sys-apps/horcrux-tools (installer incl. the ZFS stripe layouts, scripts, boot-environment manager, ownership audit), straight from the repository tree
 COPY common/overlay/usr/lib/live-installer /tmp/hxt/usr/lib/live-installer
 COPY common/overlay/usr/libexec /tmp/hxt/usr/libexec
 COPY common/overlay/usr/bin /tmp/hxt/usr/bin
 COPY project/variants/hogshead/overlay/usr/bin/horcrux-orphans /tmp/hxt/usr/bin/horcrux-orphans
 COPY project/variants/desktop/overlay/usr/share/horcrux/desktop /tmp/hxt/usr/share/horcrux/desktop
+RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
+    set -e; unset ARCH; export FEATURES="-ccache"; \
+    rm -rf /var/db/repos/horcrux-desktop /etc/portage/repos.conf/horcrux-desktop.conf; \
+    emerge --unmerge www-client/brave-bin; \
+    emerge --oneshot --usepkg=n --getbinpkg=n --buildpkg=n --select=y www-client/brave-bin::canutethegreat-overlay gnome-base/gnome-session-openrc; \
+    test -x /usr/bin/brave-browser-stable; \
+    if grep -q supervise-daemon /etc/user/init.d/gnome-settings-daemon-wayland /etc/user/init.d/gnome-settings-daemon-x11; then echo 'gsd supervisor patch not applied'; exit 1; fi; \
+    grep -q 'want pipewire-pulse wireplumber' /etc/user/init.d/gsd || { echo 'gsd audio ordering patch not applied'; exit 1; }; \
+    grep -q 'keep the shell there' /etc/user/init.d/gnome-shell-wayland || { echo 'gnome-shell user-bus patch not applied'; exit 1; }; \
+    emerge --noreplace --select=y gnome-extra/gnome-shell-extensions gnome-extra/gnome-shell-extension-appindicator; \
+    emerge --update --newuse --usepkg=n --getbinpkg=n --select gnome-extra/horcrux-gnome-defaults net-misc/horcrux-chrony-nm; \
+    test -s /etc/dconf/db/local && test -f /etc/dconf/profile/user && qfile -q /etc/dconf/db/local
 RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \

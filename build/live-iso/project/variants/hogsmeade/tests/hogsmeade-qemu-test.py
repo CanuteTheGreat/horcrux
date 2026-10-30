@@ -179,7 +179,14 @@ class HRun(zt.ZRun):
         self.step("locale-generated-and-no-pinned-nm-interface", o.strip().splitlines()[0].strip() not in ("", "0") and "NM-DONE" in o and o.strip().count("\n") <= 1, o.strip().replace("\n", " | "))
         if a.desktop:
             self.desktop_checks(vm)
+            self.desktop_exec_check()
+            self.session_audio_autostart_pre(USER)      # markers that must run when the session is restarted below
             self.session_after_password_change()
+            # the session now running is the one the owner gets: user bus, PipeWire + volume key, tray, then Log Out (last: it ends the session)
+            self.session_bus_checks(USER)
+            self.session_audio_autostart_checks(USER, vm)
+            self.tray_extension_checks(USER)
+            self.session_logout_check(USER)
 
     def session_after_password_change(self):
         """hogshead lesson: after the owner's first-login password change the GNOME session must still start (home mounted + writable,
