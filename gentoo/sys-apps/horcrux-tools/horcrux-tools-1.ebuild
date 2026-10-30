@@ -8,24 +8,43 @@ inherit python-single-r1
 
 DESCRIPTION="Horcrux tooling: boot-environment manager (horcrux-be), live installer + console menu, T2 firmware importer, ownership audit"
 HOMEPAGE="https://github.com/CanuteTheGreat/horcrux"
+# The tarball is made by build/live-iso (variants/hogshead/Dockerfile.part2) from the repository tree at image-build time
+# (common/overlay installer + scripts, desktop service list, horcrux-orphans): nothing is downloaded. These tools track the image
+# they ship in, so a new image build makes a new tarball.
+SRC_URI="${P}.tar.zst"
 S="${WORKDIR}"
 
 LICENSE="MIT"
 SLOT="0"
 KEYWORDS="~amd64"
+RESTRICT="fetch mirror bindist"
 
-# horcrux-be: ZFS boot environments (snapshot/rollback/activate), static grub.cfg per BE, kernel-hook sync
 REQUIRED_USE="${PYTHON_REQUIRED_USE}"
+# horcrux-be: ZFS boot environments (snapshot/rollback/activate), static grub.cfg per BE, kernel-hook sync
 RDEPEND="
 	${PYTHON_DEPS}
 	sys-fs/zfs
 	sys-boot/grub
 "
+BDEPEND="app-arch/zstd"
+
+pkg_nofetch() {
+	einfo "${SRC_URI} is made by build/live-iso/project/variants/hogshead/Dockerfile.part2 (tar of the installer scripts)."
+}
+
+src_unpack() {
+	tar --zstd -xf "${DISTDIR}/${SRC_URI}" || die
+}
 
 src_install() {
-	# the files/ tree mirrors build/live-iso of the Horcrux repo (sync-files.sh); modes come from git
-	cp -a "${FILESDIR}"/usr "${ED}"/ || die
-	find "${ED}" -name __pycache__ -prune -exec rm -rf {} + || true
+	exeinto /usr/bin
+	doexe usr/bin/*
+	exeinto /usr/libexec
+	doexe usr/libexec/*
+	insinto /usr/lib
+	doins -r usr/lib/live-installer
+	insinto /usr/share/horcrux
+	doins -r usr/share/horcrux/desktop
 	# byte-compile here so the .pyc files are owned by this package instead of appearing at first run
 	python_optimize "${ED}/usr/lib/live-installer"
 }

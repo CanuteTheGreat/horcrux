@@ -1,5 +1,0 @@
-#!/usr/bin/python3
-import os, sys
-sys.path.insert(0, "/usr/lib/live-installer")
-from rescue.menu import main
-sys.exit(main(sys.argv[1:]))
