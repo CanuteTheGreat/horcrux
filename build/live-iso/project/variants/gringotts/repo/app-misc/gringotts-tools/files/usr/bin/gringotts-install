@@ -1,0 +1,264 @@
+#!/usr/bin/python3
+"""gringotts-install - the owner's one-step installer for the ThinkBook 16 G6 (gringotts).
+
+Everything else (hostname, user, ZFS native encryption, hibernation swap, apps, SSH keys, Wi-Fi) is decided by the image; the
+owner types only the disk passphrase (twice) and confirms the erase.  The passphrase lives in this process' memory and in a 0600
+file on tmpfs for the instant the shared installer reads it; it is never logged and never leaves the laptop.
+
+  gringotts-install                interactive (what the boot menu starts on tty1)
+  gringotts-install --disk /dev/X  pick the target disk (default: the only internal NVMe)
+  test/CI options (never used by the owner):
+  --yes-erase                      skip the ERASE confirmation
+  --extra-authorized-key-file F    also authorise this public key for root + canutethegreat on the installed system
+  --no-reboot                      stop after the install instead of rebooting
+"""
+import argparse
+import getpass
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+
+sys.path.insert(0, "/usr/lib/live-installer")
+from liveinst import system as S          # noqa: E402  (shared installer backend)
+
+HOSTNAME = "gringotts"
+USER = "canutethegreat"
+FULLNAME = "CanuteTheGreat"
+KEYS = "/etc/gringotts/authorized_keys"      # public keys, owned by app-misc/gringotts-private (absent in a public build)
+EXTRA_SERVICES = [("docker", "default"), ("iwd", "default"), ("gringotts-firstboot", "default")]
+EXTRA_GROUPS = ["docker", "wireshark", "plugdev"]
+LOG = "/var/log/gringotts-install.log"
+
+B, G, Y, R, N = "\033[1m", "\033[32m", "\033[33m", "\033[31m", "\033[0m"
+
+
+def say(s=""):
+    print(s, flush=True)
+
+
+def die(msg, code=1):
+    say(f"\n{R}{B}STOP:{N} {msg}")
+    return code
+
+
+def pick_disk(want):
+    disks = S.list_disks()
+    if want:
+        d = next((x for x in disks if x["path"] == want), None)
+        if not d:
+            raise SystemExit(die(f"{want} is not an installable disk here (USB stick / too small / unknown)."))
+        return d
+    cand = [d for d in disks if d["kind"] == "NVMe" and not d["removable"]]
+    if len(cand) == 1:
+        return cand[0]
+    if not cand:
+        cand = [d for d in disks if d["kind"] != "USB" and not d["removable"]]
+    if len(cand) == 1:
+        return cand[0]
+    say("More than one candidate disk:" if cand else "No internal disk found.")
+    for d in disks:
+        say(f"   {d['path']:<14} {d['kind']:<5} {S.fmt_size(d['size']):>9}  {d['model']}")
+    raise SystemExit(die("run again with  gringotts-install --disk /dev/<name>"))
+
+
+def ask_passphrase():
+    from liveinst import zfsroot
+    say(f"{B}Disk passphrase{N}: it encrypts the whole laptop and you type it at EVERY boot.")
+    say("Nobody else ever sees it and it cannot be recovered. Write it on paper. 12+ characters, a few words are fine.")
+    while True:
+        p1 = getpass.getpass("  Passphrase           : ")
+        prob = zfsroot.passphrase_problem(p1)
+        if prob:
+            say(f"  {Y}{prob}{N}")
+            continue
+        p2 = getpass.getpass("  Passphrase (again)   : ")
+        if p1 != p2:
+            say(f"  {Y}The two entries differ, try again.{N}")
+            continue
+        return p1
+
+
+def ask_login(passphrase):
+    say(f"\n{B}Login password{N} for {USER} (GNOME login and sudo).")
+    say("  Press Enter to use the SAME text as the disk passphrase (you can change it later with  passwd).")
+    while True:
+        p = getpass.getpass("  Login password       : ")
+        if not p:
+            return passphrase
+        if len(p) < 8:
+            say(f"  {Y}At least 8 characters.{N}")
+            continue
+        if getpass.getpass("  Login password (again): ") != p:
+            say(f"  {Y}The two entries differ, try again.{N}")
+            continue
+        return p
+
+
+def sha512_hash(pw):
+    out = subprocess.run(["openssl", "passwd", "-6", "-stdin"], input=pw + "\n", capture_output=True, text=True, check=True)
+    return out.stdout.strip()
+
+
+def read_keys(extra_file):
+    keys = []
+    for f in (KEYS, extra_file):
+        if f and os.path.exists(f):
+            for line in open(f):
+                line = line.strip()
+                if line and not line.startswith("#") and line not in keys:
+                    keys.append(line)
+    return keys
+
+
+def toml_str(s):
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def answers_text(disk, keys, passphrase, pwhash):
+    t = ["[global]", 'keyboard = "us"', 'locale = "en_US.UTF-8"', f'timezone = {toml_str(os.environ.get("GRINGOTTS_TZ", "America/Los_Angeles"))}',
+         f"hostname = {toml_str(HOSTNAME)}", 'install_type = "desktop"', 't2 = "no"',
+         "ssh_keys = [" + ", ".join(toml_str(k) for k in keys) + "]", "ssh_password_auth = false", "",
+         "[disk]", 'filesystem = "zfs"', 'zfs_raid = "single"', f"disks = [{toml_str(disk)}]", "encryption = true", 'swap = "hibernate"',
+         f"passphrase = {toml_str(passphrase)}", "",
+         "[network.management]", 'mode = "dhcp"', "",
+         "[user]", f"name = {toml_str(USER)}", f"fullname = {toml_str(FULLNAME)}", f"password_hash = {toml_str(pwhash)}", ""]
+    return "\n".join(t)
+
+
+class GringottsInstaller(S.Installer):
+    """shared installer + the gringotts-specific finishing steps, run while the target is still mounted"""
+
+    def finish(self):
+        try:
+            self.gringotts_extras()
+        except Exception as e:                       # noqa: BLE001  never leave the pool half-configured silently
+            self.log(f"gringotts extras FAILED: {e}")
+            raise
+        super().finish()
+
+    def gringotts_extras(self):
+        T = self.target
+        self.log("== gringotts: finishing touches")
+        # Wi-Fi/Ethernet profiles the owner made with nmtui on the live stick (NetworkManager keyfiles, root-only)
+        src = "/etc/NetworkManager/system-connections"
+        if os.path.isdir(src):
+            dst = f"{T}{src}"
+            os.makedirs(dst, exist_ok=True)
+            n = 0
+            for f in os.listdir(src):
+                if f.endswith(".nmconnection"):
+                    data = open(f"{src}/{f}", "rb").read()
+                    fd = os.open(f"{dst}/{f}", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                    with os.fdopen(fd, "wb") as o:
+                        o.write(data)
+                    n += 1
+            self.log(f"network profiles carried over: {n}")
+        # NetworkManager uses iwd as its Wi-Fi backend: the iwd daemon must stay enabled and must not do its own DHCP
+        self.write("/etc/iwd/main.conf", "[General]\nEnableNetworkConfiguration=false\n")
+        for svc, lvl in EXTRA_SERVICES:
+            if os.path.exists(f"{T}/etc/init.d/{svc}"):
+                self.run(["rc-update", "add", svc, lvl], chroot=True, check=False)
+            else:
+                self.log(f"service {svc} not in the image, skipped")
+        have = set(l.split(":")[0] for l in open(f"{T}/etc/group"))
+        groups = ",".join(g for g in EXTRA_GROUPS if g in have)
+        if groups:
+            self.run(["usermod", "-aG", groups, USER], chroot=True, check=False)
+        # the same keys also let the agent in as the desktop user
+        keys = [k.strip() for k in self.c["ssh_keys"] if k.strip()]
+        if keys:
+            self.write(f"/home/{USER}/.ssh/authorized_keys", "\n".join(keys) + "\n", 0o600)
+            self.run(["chown", "-R", f"{USER}:{USER}", f"/home/{USER}/.ssh"], chroot=True, check=False)
+            os.chmod(f"{T}/home/{USER}/.ssh", 0o700)
+        self.write("/var/lib/gringotts/install-info", f"installed {time.strftime('%FT%TZ', time.gmtime())}\nsource {open('/etc/live-iso-label').read().strip() if os.path.exists('/etc/live-iso-label') else '?'}\n")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--disk")
+    ap.add_argument("--yes-erase", action="store_true")
+    ap.add_argument("--extra-authorized-key-file")
+    ap.add_argument("--no-reboot", action="store_true")
+    a = ap.parse_args()
+    if os.geteuid() != 0:
+        return die("run as root")
+    if "rd.live.image" not in S.read("/proc/cmdline"):
+        return die("this only runs from the install USB stick (live system); it refuses to touch an installed system.")
+    os.system("clear")
+    say(f"{B}=== Horcrux for gringotts: guided install ==={N}\n")
+    if not S.efi_boot():
+        return die("not booted in UEFI mode. Boot the stick through the F12 menu entry marked UEFI.")
+    disk = pick_disk(a.disk)
+    sb = S.read("/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c")
+    if sb and sb.encode("latin1", "ignore")[-1:] == b"\x01":
+        say(f"{Y}Secure Boot is ON. This will boot the stick only because of an old key; the installed system needs it OFF.{N}")
+    ram = S.mem_mb()
+    say(f"  target disk : {B}{disk['path']}{N}  {disk['kind']}  {S.fmt_size(disk['size'])}  {disk['model']}")
+    say(f"  memory      : {ram} MB  ->  encrypted hibernation swap about {-(-ram // 1024) * 1.125:.0f} GiB")
+    say(f"  layout      : EFI 1 GiB | /boot 2 GiB | LUKS2 swap | ZFS pool 'rpool' (native encryption, one passphrase)")
+    say(f"  system      : hostname {HOSTNAME}, GNOME, user {B}{USER}{N}, apps and tools already inside the image")
+    say(f"  {R}{B}EVERYTHING ON {disk['path']} WILL BE ERASED (the Ubuntu install and its files).{N}")
+    say("  The backup in Nextcloud and the restore script bring your files back afterwards.\n")
+    if not a.yes_erase:
+        if input(f"  Type ERASE (capitals) to continue, anything else stops: ").strip() != "ERASE":
+            return die("nothing was changed.", 0)
+    say()
+    passphrase = ask_passphrase()
+    login = ask_login(passphrase)
+    keys = read_keys(a.extra_authorized_key_file)
+    if not keys:
+        say(f"{Y}Note: no SSH keys on this image, so nobody can log in remotely (only you, at the keyboard).{N}")
+    pwhash = sha512_hash(login)
+    del login
+    profile = S.load_profile()
+    tmp = tempfile.NamedTemporaryFile("w", dir="/run", prefix="gringotts-answers-", suffix=".toml", delete=False)
+    os.chmod(tmp.name, 0o600)
+    try:
+        tmp.write(answers_text(disk["path"], keys, passphrase, pwhash))
+        tmp.close()
+        c = S.config_from_answers(profile, tmp.name)
+    finally:
+        try:
+            subprocess.run(["shred", "-u", tmp.name], check=False)
+        except OSError:
+            os.unlink(tmp.name)
+    del passphrase
+    c["disks"] = [disk["path"]]
+    errs = S.validate_config(profile, c, unattended=True)
+    if errs:
+        for e in errs:
+            say(f"  {R}{e}{N}")
+        return die("the configuration is not valid (see above); nothing was changed.")
+    say(f"\n{B}Installing...{N} (about 10-20 minutes; the screen shows progress. Do not power off.)")
+    last = {"n": -1}
+
+    def prog(pct, note):
+        if pct // 5 != last["n"]:
+            last["n"] = pct // 5
+            say(f"  [{pct:3d}%] {note}")
+
+    inst = GringottsInstaller(profile, c, lambda l: None, prog)
+    try:
+        inst.go()
+    except Exception as e:                         # noqa: BLE001
+        say(f"\n{R}{B}INSTALL FAILED:{N} {e}")
+        say(f"Log: {S.LOG}   (copy it with:  cat {S.LOG} | nc ...  or tell Claude)")
+        return 1
+    finally:
+        c["zfs_passphrase"] = c["luks_passphrase"] = ""
+    say(f"\n{G}{B}INSTALL FINISHED.{N}")
+    say("  1. Remove the USB stick now.")
+    say("  2. The laptop restarts; type the disk passphrase ONCE at the text prompt, then log in as " + USER + ".")
+    if a.no_reboot:
+        return 0
+    input("\n  Press Enter to reboot...")
+    os.sync()
+    subprocess.run(["reboot"])
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
