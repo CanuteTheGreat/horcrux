@@ -1,6 +1,21 @@
 {
  "id": "vm-runtime",
- "last_full": null,
- "sha": "184018b546d749495128ff3087fef5f80044f323",
- "survivors": []
+ "last_full": "2026-10-30",
+ "sha": "07d0c90022efcbd2dea887d1baf1b316c06553e5",
+ "survivors": [
+  "crates/horcrux-vm/src/vm/hold.rs: delete match arm (HoldAction::Resume, true) in recover",
+  "crates/horcrux-vm/src/vm/hold.rs: delete match arm (HoldAction::Start, false) in recover",
+  "crates/horcrux-vm/src/vm/hold.rs: replace != with == in recover",
+  "crates/horcrux-vm/src/vm/hold.rs: replace recover -> Vec<String> with vec![\"xyzzy\".into()]",
+  "crates/horcrux-vm/src/vm/hold.rs: replace recover -> Vec<String> with vec![String::new()]",
+  "crates/horcrux-vm/src/vm/hold.rs: replace recover -> Vec<String> with vec![]",
+  "crates/horcrux-vm/src/vm/qemu.rs: delete ! in QemuManager::get_qemu_version",
+  "crates/horcrux-vm/src/vm/qemu.rs: delete ! in QemuManager::start_vm_with",
+  "crates/horcrux-vm/src/vm/qemu.rs: replace QemuManager::check_kvm_available -> bool with false",
+  "crates/horcrux-vm/src/vm/qemu.rs: replace QemuManager::check_kvm_available -> bool with true",
+  "crates/horcrux-vm/src/vm/qemu.rs: replace QemuManager::get_qemu_version -> Result<String> with Ok(\"xyzzy\".into())",
+  "crates/horcrux-vm/src/vm/qemu.rs: replace QemuManager::get_qemu_version -> Result<String> with Ok(String::new())",
+  "crates/horcrux-vm/src/vm/qemu.rs: replace QemuManager::process_running -> bool with false",
+  "crates/horcrux-vm/src/vm/qemu.rs: replace match guard o.status.success() with true in QemuManager::backing_files"
+ ]
 }
