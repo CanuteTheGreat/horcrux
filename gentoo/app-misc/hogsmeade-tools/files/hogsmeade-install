@@ -17,7 +17,8 @@ say() { printf '%s\n' "$*"; }
 
 say "=== HOGSMEADE install (Horcrux / Gentoo, encrypted ZFS) ==="
 vmd=""; [ -d /sys/bus/pci/devices/0000:00:0e.0 ] && grep -qi 'ad0b' /sys/bus/pci/devices/0000:00:0e.0/device 2>/dev/null && vmd=1
-mapfile -t NV < <(lsblk -dnpo PATH,TYPE | awk '$2=="disk" && $1 ~ /nvme[0-9]+n[0-9]+$/ {print $1}')
+# largest drive first: it becomes drive 1 (hibernation swap + the boot partition every other drive copies)
+mapfile -t NV < <(lsblk -bdnpo PATH,TYPE,SIZE | awk '$2=="disk" && $1 ~ /nvme[0-9]+n[0-9]+$/ {print $3, $1}' | sort -rn | awk '{print $2}')
 if [ -n "${HSM_DISKS:-}" ]; then read -r -a NV <<< "$HSM_DISKS"; fi
 say "NVMe drives visible: ${#NV[@]}"
 for d in "${NV[@]}"; do
