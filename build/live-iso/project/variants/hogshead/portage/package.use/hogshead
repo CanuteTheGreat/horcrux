@@ -2,3 +2,4 @@
 sys-kernel/gentoo-kernel -initramfs
 sys-fs/zfs rootfs dist-kernel
 sys-fs/zfs-kmod dist-kernel
+dev-libs/libdbusmenu gtk3
