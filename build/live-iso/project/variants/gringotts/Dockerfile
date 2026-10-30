@@ -43,7 +43,7 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
-    emerge --update --newuse $(grep -v '^#' /tmp/packages-gringotts.txt | tr '\n' ' '); \
+    emerge --update --newuse --deep $(grep -v '^#' /tmp/packages-gringotts.txt | tr '\n' ' '); \
     emerge --oneshot --usepkg=n --getbinpkg=n www-client/brave-bin::canutethegreat-overlay; \
     rm -rf /var/db/repos/horcrux-desktop /etc/portage/repos.conf/horcrux-desktop.conf
 
