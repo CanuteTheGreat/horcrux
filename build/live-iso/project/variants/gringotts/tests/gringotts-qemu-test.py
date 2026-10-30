@@ -292,23 +292,18 @@ class GRun(zt.ZRun):
 
     def restore(self):
         a = self.g
-        bk = a.backup_copy
-        self.sh("rm -rf /var/tmp/backup-copy; mkdir -p /var/tmp/backup-copy")
-        for f in sorted(os.listdir(bk)):
-            p = os.path.join(bk, f)
-            if os.path.isfile(p):
-                r = subprocess.run(["scp", "-q", "-i", self.key, "-P", str(qt.FWD_SSH), "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", p, "root@127.0.0.1:/var/tmp/backup-copy/"],
-                                   capture_output=True, text=True, timeout=900)
-                if r.returncode:
-                    self.step("restore-copy-backup-into-vm", False, r.stderr[-200:])
-                    return
-        rc, o = self.sh("ls -l /var/tmp/backup-copy | tail -5; for f in /var/tmp/backup-copy/*.zst; do zstd -t -q $f && echo OK $f; done")
-        self.step("restore-backup-copy-in-vm-and-valid", o.count("OK ") >= 2, o.replace("\n", " | ")[-300:])
-        # dummy wg0.conf on stdin (the real one never leaves crystalcave)
-        self.sh("wg genkey > /tmp/k; { printf '[Interface]\\nPrivateKey = '; cat /tmp/k; printf 'Address = 10.99.0.2/32\\n[Peer]\\nPublicKey = '; wg pubkey < /tmp/k; printf 'AllowedIPs = 10.99.0.1/32\\nEndpoint = 192.0.2.1:51820\\n'; } > /tmp/wg-test.conf; rm /tmp/k")
-        rc, o = self.sh("gringotts-restore --backup /var/tmp/backup-copy --wg-stdin --nft < /tmp/wg-test.conf; echo RC=$?", timeout=900)
-        open(f"{self.g.out}/restore-output.txt", "w").write(o)
-        self.step("restore-script-runs", "RC=0" in o and "[ ok]" in o, o.strip().replace("\n", " | ")[-400:])
+        bk = a.backup_copy      # = the output of `restic restore` (done on crystalcave from a local restic repo holding the sanitized stand-in)
+        import base64
+        b64 = lambda: base64.b64encode(os.urandom(32)).decode()
+        wgf = f"{a.out}/wg-test.conf"
+        open(wgf, "w").write(f"[Interface]\nPrivateKey = {b64()}\nAddress = 10.99.0.2/32\n[Peer]\nPublicKey = {b64()}\nAllowedIPs = 10.99.0.1/32\nEndpoint = 192.0.2.1:51820\n")
+        drv = os.path.join(HERE, "../tools/gringotts-restore-push.sh")
+        env = dict(os.environ, SRC_DIR=bk, WG_FILE=wgf, SSH_OPTS=f"-i {self.key} -p {qt.FWD_SSH} -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no")
+        r = subprocess.run(["sh", drv, "root@127.0.0.1", "--nft"], capture_output=True, text=True, env=env, timeout=1500)
+        open(f"{a.out}/restore-output.txt", "w").write(r.stdout + r.stderr)
+        self.step("restore-push-driver-and-gringotts-restore-run", r.returncode == 0 and "[  ok]" in r.stdout and "target copy of the archives removed" in r.stdout, (r.stdout + r.stderr).strip().replace("\n", " | ")[-400:])
+        rc, o = self.sh("ls /var/tmp/gringotts-backup 2>&1 | head -2")
+        self.step("restore-archives-shredded-on-target", "No such file" in o, o.strip())
         rc, o = self.sh(f"cd /home/{USER}; ls -ld .bashrc .gnupg .config/BraveSoftware .config/discord .config/terminator .config/vlc .config/remmina .local/share/remmina .mozilla/firefox | awk '{{print $1,$3,$9}}'; "
                         f"grep -rIl '/home/ron' .config/BraveSoftware/Brave-Browser/Default/Preferences .config/terminator .config/vlc .bashrc 2>/dev/null | wc -l; "
                         f"grep -c '/home/{USER}' .config/BraveSoftware/Brave-Browser/Default/Preferences; ls .mozilla/firefox; grep -c '^\\[Install' .mozilla/firefox/profiles.ini; "

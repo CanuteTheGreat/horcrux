@@ -3,9 +3,9 @@
 
   sudo gringotts-restore --backup DIR [--wg-stdin] [--user canutethegreat] [--dry-run] [--nft]
 
-DIR holds the Nextcloud folder `gringotts-backup-2026-10` (home-dotfiles.tar.zst, firefox-snap-profile.tar.zst, etc-selected.tar.zst):
-once the Nextcloud client has synced it, it is ~/Nextcloud/gringotts-backup-2026-10; before that the agent can copy the three
-files over ssh into any directory.  Nothing is overwritten silently: an existing file is moved to <name>.pre-restore first.
+DIR holds the three archives (home-dotfiles.tar.zst, firefox-snap-profile.tar.zst, etc-selected.tar.zst) restored from the restic snapshot
+(repo workstations/gringotts on B2, tag pre-horcrux-wipe). It is driven FROM crystalcave by gringotts-restore-push.sh (restic restore ->
+ssh push -> this script); gringotts never holds B2 credentials or the restic password. Nothing is overwritten silently: an existing file is moved to <name>.pre-restore first.
 
 What comes back (an allow-list; Ubuntu-only state - ibus/CJK input, gnome-initial-setup, snap units, evolution, dconf - stays out):
   shell/editor/gpg:   .bashrc .profile .bash_logout .bash_history .viminfo .gnupg
@@ -15,7 +15,7 @@ What comes back (an allow-list; Ubuntu-only state - ibus/CJK input, gnome-initia
   /etc/wireguard/wg0.conf  from STDIN with --wg-stdin (root 0600; the content is never printed or logged)
   --nft               the CVE-2026-98432 nftables mitigation from etc-selected (loaded + saved for the OpenRC nftables service)
 Not restored on purpose: GNOME keyring (logins in Brave/Firefox come back through browser sync), Rustinion identity (the agent re-enrols),
-Nextcloud login (sign in again; ~/.ssh ~/.aws ~/bin live in ~/Nextcloud and come back with the sync).
+Nextcloud login (sign in again; ~/Nextcloud syncs back, with ~/.ssh ~/.aws ~/bin).
 """
 import argparse
 import configparser
