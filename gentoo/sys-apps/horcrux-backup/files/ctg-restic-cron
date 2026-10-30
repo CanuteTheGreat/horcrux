@@ -1,0 +1,11 @@
+#!/bin/sh
+# cron wrapper: laptops only back up on AC power; random delay so machines do not hit B2 at the same second.
+# usage: ctg-restic-cron backup|prune|check
+[ -r /etc/ctg-backup/env ] || { logger -t ctg-restic "not provisioned (/etc/ctg-backup/env missing); skipping"; exit 0; }
+for ps in /sys/class/power_supply/*; do
+  [ "$(cat "$ps/type" 2>/dev/null)" = Battery ] && bat=1
+  [ "$(cat "$ps/type" 2>/dev/null)" = Mains ] && [ "$(cat "$ps/online" 2>/dev/null)" = 1 ] && ac=1
+done
+[ -n "$bat" ] && [ -z "$ac" ] && { logger -t ctg-restic "on battery; skipping $1"; exit 0; }
+sleep $(( $(od -An -N2 -tu2 /dev/urandom) % 2400 ))
+exec nice -n 19 ionice -c 3 /usr/sbin/ctg-restic "$1"
