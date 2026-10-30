@@ -220,7 +220,7 @@ class ZRun(qt.Runner):
         rc, o = self.sh("horcrux-orphans > /tmp/orph.txt; wc -l < /tmp/orph.txt; while read f; do [ -L \"$f\" ] && echo \"LINK $f\" || echo \"FILE $f\"; done < /tmp/orph.txt", timeout=900)
         allow = re.compile(r"^(/usr/share/mime/|/usr/share/info/dir$|/usr/share/(binutils|gcc)-data/.*/info/dir$|/usr/share/applications/mimeinfo\.cache$|"
                            r"/usr/share/icons/[^/]+/icon-theme\.cache$|/usr/lib/locale/locale-archive$|/usr/lib/cracklib_dict\.|/usr/lib64/lib(freebl3|softokn3|nssdbm3)\.chk$|"
-                           r"/usr/lib64/gconv/gconv-modules\.cache$|/boot/(vmlinuz|System\.map|config|initramfs)-|/usr/libexec/rc/console/keymap$|/boot/(be|grub)/|/usr/lib(64)?/(gio/modules|gdk-pixbuf-[^/]*|gtk-[34]\.0)/.*cache)")
+                           r"/usr/lib64/gconv/gconv-modules\.cache$|/boot/(vmlinuz|System\.map|config|initramfs)-|/usr/libexec/rc/console/keymap$|/boot/(be|grub|efi)/|/usr/lib(64)?/(gio/modules|gdk-pixbuf-[^/]*|gtk-[34]\.0)/.*cache)")
         lines = [l.split(" ", 1) for l in o.splitlines() if l.startswith(("FILE ", "LINK "))]
         bad = [p for k, p in lines if k == "FILE" and not allow.match(p)]     # symlinks are eselect/gcc-config/perl-cleaner products: reported, allowed
         open(f"{a.out}/orphans.txt", "w").write(o)
@@ -398,10 +398,11 @@ class ZRun(qt.Runner):
             time.sleep(6)
         self.step("desktop-gdm-and-gnome-shell-running", "GDM" in o and "SHELL" in o, o.strip().replace("\n", " | ")[:300])
         # hogshead hand-off: an account with an EMPTY, expired (day 0) password must force the owner to choose a password at the first
-        # login (PAM nullok + new_authtok_reqd), with no temporary password stored anywhere. Exercised as an unprivileged user over a pty.
-        rc, o = self.sh("useradd -m hxtmp && passwd -d hxtmp >/dev/null && chage -d 0 hxtmp && grep '^hxtmp:' /etc/shadow | cut -d: -f2,3; "
-                        "printf '\\nHxNew-pass-4711!\\nHxNew-pass-4711!\\n' | script -qec \"su -s /bin/sh nobody -c 'su - hxtmp -c id'\" /dev/null | tr -d '\\r' | tail -8; "
-                        "echo AFTER; grep '^hxtmp:' /etc/shadow | cut -d: -f2,3 | cut -c1-3; userdel -r hxtmp 2>/dev/null; true", timeout=90)
+        # login (PAM nullok + new_authtok_reqd), with no temporary password stored anywhere. Exercised through login(1) on a pty: no password prompt (nullok), forced new-password prompt, passwdqc.
+        rc, o = self.sh("userdel -rf hxtmp >/dev/null 2>&1; useradd -m hxtmp && passwd -d hxtmp >/dev/null && chage -d 0 hxtmp && grep '^hxtmp:' /etc/shadow | cut -d: -f2,3; "
+                        "(sleep 2; printf 'Granite-Meadow-Lantern-47!\\n'; sleep 1; printf 'Granite-Meadow-Lantern-47!\\n'; sleep 4; printf 'id\\nexit\\n') | "
+                        "script -qec 'login hxtmp' /dev/null | tr -d '\\r' | tail -6; "
+                        "echo AFTER; grep '^hxtmp:' /etc/shadow | cut -d: -f2,3 | cut -c1-3; sleep 3; userdel -rf hxtmp >/dev/null 2>&1; true", timeout=90)
         before, _, after = o.partition("AFTER")
         self.step("empty-expired-password-forces-change-at-first-login", before.strip().startswith(":0") and after.strip()[:1] == "$" and "uid=" in before,
                   o.strip().replace("\n", " | ")[:300])
