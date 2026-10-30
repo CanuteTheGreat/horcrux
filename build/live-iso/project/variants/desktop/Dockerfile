@@ -34,6 +34,10 @@ RUN set -e; chmod 644 /usr/share/horcrux/desktop/*; \
     find /usr/share/ibus/dicts -type f ! -name 'emoji-en*' ! -name 'emoji-ascii*' -delete 2>/dev/null || true; \
     # GNOME help pages for other languages
     find /usr/share/help /usr/share/gnome/help -mindepth 1 -maxdepth 1 ! -name C ! -name 'en*' -exec rm -rf {} + 2>/dev/null || true; \
+    # development leftovers of the desktop emerge (~1 GB uncompressed): static libs (libclamav_rust.a 330 MB, QmlDom 218, qpdf 108, LLVM ...),\
+    # headers, and the clang/LLVM tools (mesa's llvmpipe/radeonsi only load libLLVM.so, which stays)\
+    find /usr/lib /usr/lib64 -xdev -name '*.a' -type f ! -path '/usr/lib/gcc/*' -delete 2>/dev/null || true; \
+    rm -rf /usr/include /usr/lib/llvm/*/include /usr/lib/llvm/*/bin /usr/lib/clang 2>/dev/null || true; \
     echo "desktop" > /etc/live-iso-variant; \
     rm -rf /var/db/repos/gentoo/* /var/cache/distfiles/* /var/cache/binhost /usr/share/doc /usr/share/gtk-doc /var/tmp/portage /var/log/emerge* 2>/dev/null || true; \
     find / -xdev -name '*.pyc' -path '*/__pycache__/*' -delete 2>/dev/null || true

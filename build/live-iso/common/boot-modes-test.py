@@ -378,10 +378,17 @@ class Tests:
             vm.expect_raw(r"Shell inside the installed system", T(30))
             time.sleep(1)
             cfgdir = "/etc/" + self.a.project
-            rc, o = self.run(vm, f"echo ORIGINAL > {cfgdir}/rescue-test.conf && python3 -c 'import sys; sys.path.insert(0,\"/usr/lib/live-installer\"); "
-                                 f"from liveinst import system as S, consolemenu as C; print(\"BACKUP\", C.Console(S.load_profile()).make_backup(\"rescuetest\"))' && "
-                                 f"echo CHANGED > {cfgdir}/rescue-test.conf", 120)
-            self.step("backup-made-in-chroot", "BACKUP /var/backups" in o, "config backup written inside the installed system by its own console-menu code")
+            bcmd = (f"echo ORIGINAL > {cfgdir}/rescue-test.conf && python3 -c 'import sys; sys.path.insert(0,\"/usr/lib/live-installer\"); "
+                    f"from liveinst import system as S, consolemenu as C; print(\"BACKUP\", C.Console(S.load_profile()).make_backup(\"rescuetest\"))' && "
+                    f"echo CHANGED > {cfgdir}/rescue-test.conf")
+            for attempt in (1, 2):                      # the first command typed into a freshly started chroot shell is sometimes lost on a loaded host
+                rc, o = self.run(vm, bcmd, 120)
+                if "BACKUP /var/backups" in o:
+                    break
+                time.sleep(3)
+            self.step("backup-made-in-chroot", "BACKUP /var/backups" in o,
+                      "config backup written inside the installed system by its own console-menu code" if "BACKUP /var/backups" in o
+                      else f"rc={rc} attempt={attempt} output tail: {o[-600:]!r}")
             vm.send("exit\r")
             vm.expect_raw(r"Enter an option", T(30))
             vm.send("3\r")

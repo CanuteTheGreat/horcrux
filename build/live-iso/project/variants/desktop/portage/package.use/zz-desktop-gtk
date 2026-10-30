@@ -1,0 +1,4 @@
+# sorts AFTER the base image's package.use/gui (gtk -X, mesa -X -llvm VIDEO_CARDS: -* for the installer kiosk): the GNOME desktop needs the
+# real thing (run 7502: "no ebuilds built with USE flags to satisfy >=gui-libs/gtk-4.17.5:4[X,...]" / mesa[X])
+gui-libs/gtk X wayland
+media-libs/mesa X llvm wayland VIDEO_CARDS: intel amdgpu radeonsi nouveau virgl vmware

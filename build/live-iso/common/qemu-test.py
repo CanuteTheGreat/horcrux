@@ -774,7 +774,8 @@ class Runner:
         if a.fs == "zfs":
             kb.key("TAB")                                  # -> 'Encrypt the disk' check box (ZFS native encryption, off)
             if mirror:                                     # NOTE: mirror via the text wizard is not exercised by the default runs
-                kb.key("TAB"); kb.key("SPACE")             # 'Show advanced options' -> the ZFS layout row appears
+                kb.key("TAB"); kb.key("SPACE")             # 'Show advanced options' -> the ZFS layout row appears ABOVE the focus (the focus index stays: it is now on 'Encrypt')
+                kb.key("UP")                               # -> 'ZFS layout'
                 kb.key("RIGHT")
                 shot("03b-filesystem-zfs-mirror")
                 kb.key("TAB")
