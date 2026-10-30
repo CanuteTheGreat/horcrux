@@ -1,0 +1,4 @@
+# sorts after the base image's package.use/live (cage GUI: gtk -X, mesa stubs only): the GNOME desktop needs X (nautilus, xorg-server for GDM/Xwayland) and the Intel (iris) driver for the Iris Plus G7
+gui-libs/gtk X
+media-libs/libglvnd X
+media-libs/mesa X -llvm VIDEO_CARDS: -* intel
