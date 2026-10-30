@@ -2,6 +2,7 @@
 sys-kernel/horcrux-hogsmeade-config ~amd64
 sys-kernel/horcrux-unlock ~amd64
 sys-apps/horcrux-tools ~amd64
+sys-apps/horcrux-live-data ~amd64
 app-misc/hogsmeade-tools ~amd64
 app-misc/awccd ~amd64
 app-misc/alienfx ~amd64
