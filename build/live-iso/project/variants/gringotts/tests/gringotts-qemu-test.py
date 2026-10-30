@@ -414,6 +414,7 @@ class GRun(zt.ZRun):
             sess = self.gringotts_session(vm)
             if sess:
                 self.session_audio_autostart_checks(USER, vm)
+                self.tray_extension_checks(USER)
             if sess:
                 self.apps()
             self.orphans()
