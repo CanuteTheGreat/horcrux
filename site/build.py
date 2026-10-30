@@ -160,8 +160,14 @@ def main():
 <p>The measurable exit criteria for 1.0, and how far each one is, are on the <a href="{rel('', 'roadmap/')}">roadmap checklist</a>.</p></section>
 <section class="wrap" id="download"><h2>Download</h2>
 <p>Daily builds are test builds of the <code>main</code> branch, replaced in place. A build is published only after QEMU boot, install, reboot and web probe tests passed. They are not releases: use test hardware or a VM. There is no stable release yet. Secure Boot must be off.</p>
-<div class="tw"><table class="dl"><thead><tr><th>Architecture</th><th>ISO</th><th>Checksum</th><th>Test evidence</th></tr></thead><tbody>{dl_rows}</tbody></table></div>
-<p>{CFG['dl_note']} Verify with <code>sha256sum -c</code>, write to a USB stick with <code>dd</code> (see the <a href="{rel('', 'docs/iso-install/')}">install guide</a>), or boot it in a VM. The test evidence (serial logs and screenshots) is attached to every build.</p></section>
+<div class="tw"><table class="dl"><thead><tr><th>Image: desktop &middot; init &middot; architecture</th><th>ISO</th><th>Checksum</th><th>Test evidence</th></tr></thead><tbody>{dl_rows}</tbody></table></div>
+<p>{CFG['dl_note']} Verify with <code>sha256sum -c</code>, write to a USB stick with <code>dd</code> (see the <a href="{rel('', 'docs/iso-install/')}">install guide</a>), or boot it in a VM. The test evidence (serial logs and screenshots) is attached to every build.</p>
+<h3>How the image names work</h3>
+<p>Every image is named <code>&lt;product&gt;-&lt;desktop or server&gt;-&lt;init&gt;-&lt;channel&gt;-&lt;arch&gt;.iso</code>, for example <code>{CFG['key']}-server-openrc-daily-x86_64.iso</code>.
+<strong>Desktop or server</strong> is the graphical environment the image installs: <code>server</code> (no desktop), <code>gnome-light</code> (GNOME on Wayland with a small set of apps); <code>xfce</code>, <code>kde</code> and others will get their own name when they are built.
+<strong>Init</strong> is the init system: <code>openrc</code> today, <code>systemd</code> only if a systemd image is ever built.
+<strong>Channel</strong> is <code>daily</code> (the rolling test build) or a release tag. <strong>Arch</strong> is <code>x86_64</code> or <code>aarch64</code>.
+Older download names (for example <code>{CFG['key']}-daily-x86_64.iso</code>) still work: they redirect (HTTP 301) to the new name.</p></section>
 <section class="wrap"><h2>The installer</h2><p>A text-mode wizard, on a VGA screen or a serial console. These are real captures from the CI test. A graphical installer is in progress.</p><div class="shots">{sh}</div></section>
 <section class="wrap"><h2>Commercial support</h2>
 <p><strong>Planned after 1.0.</strong> The idea, in the style of Proxmox: an optional paid stable update channel with email support in business hours, best effort, no 24/7 guarantee. The free channel stays complete, with every feature. Nothing is for sale now and there is no sign-up. The <a href="{rel('', 'stable-channel/')}">design</a> is public, and it only starts after a stable 1.0 and a period of real use.</p></section>

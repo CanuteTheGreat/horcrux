@@ -24,20 +24,20 @@
  ],
  "isos": [
   [
-   "x86_64 (UEFI + BIOS, hybrid USB/CD)",
-   "horcrux-daily-x86_64.iso"
+   "Server \u00b7 OpenRC \u00b7 x86_64 (UEFI + BIOS, hybrid USB/CD)",
+   "horcrux-server-openrc-daily-x86_64.iso"
   ],
   [
-   "aarch64 (UEFI)",
-   "horcrux-daily-aarch64.iso"
+   "Server \u00b7 OpenRC \u00b7 aarch64 (UEFI)",
+   "horcrux-server-openrc-daily-aarch64.iso"
   ],
   [
-    "x86_64 Desktop (UEFI + BIOS, GNOME, encrypted ZFS + hibernate)",
-    "horcrux-desktop-daily-x86_64.iso"
+   "GNOME (light) \u00b7 OpenRC \u00b7 x86_64 (UEFI + BIOS, encrypted ZFS + hibernate)",
+   "horcrux-gnome-light-openrc-daily-x86_64.iso"
   ]
  ],
  "dl_note": "The aarch64 build is tested under QEMU emulation, not on real arm64 hardware.",
- "evidence": "horcrux-daily-test-evidence.tgz",
+ "evidence": "horcrux-server-openrc-daily-x86_64-test-evidence.tgz",
  "shots": [
   [
    "installer/horcrux/03b-target-disk-selected.png",

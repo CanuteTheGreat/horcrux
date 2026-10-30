@@ -8,10 +8,11 @@
 #  * The job never fails on a build/test problem (a red run e-mails the owner): the result is
 #    written to the `daily-status` release marker and the job summary instead.
 # One job per architecture, each BUILT NATIVELY and tested under QEMU on its own runner label:
-#   x86_64  kvm-x86_64  (rw-man-01 colo, /dev/kvm, host docker)  -> <product>-daily-x86_64.iso
-#   aarch64 arm64       (rw-man-04/05 Graviton, host docker; no /dev/kvm there, so QEMU runs TCG, timeouts x3)  -> <product>-daily-aarch64.iso
+#   x86_64  kvm-x86_64  (rw-man-01 colo, /dev/kvm, host docker)  -> horcrux-server-openrc-daily-x86_64.iso
+#   aarch64 arm64       (rw-man-04/05 Graviton, host docker; no /dev/kvm there, so QEMU runs TCG, timeouts x3)  -> horcrux-server-openrc-daily-aarch64.iso
+# Image names: <product>-<desktop-env | server>-<init>-<channel>-<arch>.iso (build/live-iso/common/image-name.sh; docs/ISO-INSTALL.md "Image names").
 #   (riscv64 is not in the matrix: see docs/ISO-INSTALL.md "riscv64" - no native runner, no rust image)
-# Each arch publishes its own asset set and its own status marker (daily-status, daily-status-aarch64) so one failing
+# Each image publishes its own asset set and its own status marker (daily-status-<DE|server>-<init>-<arch>) so one failing
 # arch never blocks the other. BuildKit cache mounts (binpkgs,
 # distfiles, ccache, cargo target) persist on the host, so a cached daily takes minutes, not hours.
 name: Live ISO
@@ -29,7 +30,7 @@ on:
         required: false
         default: 'dry'
       only:
-        description: 'optional: build only one matrix entry (x86_64, aarch64 or desktop); empty = all'
+        description: 'optional: build only one matrix entry: server-openrc-x86_64, server-openrc-aarch64, gnome-light-openrc-x86_64 (old values x86_64, aarch64, desktop still work); empty = all'
         required: false
         default: ''
 
@@ -39,32 +40,39 @@ concurrency:
 
 jobs:
   live-iso:
-    name: Build + test + publish live ISO (${{ matrix.arch }}${{ matrix.variant && format(' {0}', matrix.variant) || '' }})
+    name: Build + test + publish live ISO (${{ matrix.id }})
     strategy:
       fail-fast: false
       matrix:
         include:
+          # `id` = the `only=` input value; `alias` = the pre-naming-scheme value, still accepted
           - arch: x86_64
             runner: kvm-x86_64
+            id: server-openrc-x86_64
+            alias: x86_64
           - arch: aarch64
             runner: arm64
-          # Desktop variant (GNOME, encrypted ZFS + hibernate, Apple T2 ready, no Apple firmware): its own asset
-          # horcrux-desktop-daily-x86_64.iso (~2.0 GB: the build refuses to publish it when it reaches 2 GiB)
+            id: server-openrc-aarch64
+            alias: aarch64
+          # gnome-light variant (GNOME, OpenRC + elogind, encrypted ZFS + hibernate, Apple T2 ready, no Apple firmware; was `desktop`): its own
+          # asset horcrux-gnome-light-openrc-daily-x86_64.iso (~2.0 GB: the build refuses to publish it when it reaches 2 GiB)
           - arch: x86_64
             runner: kvm-x86_64
-            variant: desktop
+            variant: gnome-light
+            id: gnome-light-openrc-x86_64
+            alias: desktop
     runs-on: ${{ matrix.runner }}
     container: catthehacker/ubuntu:act-latest
     timeout-minutes: 300
     steps:
       - name: Checkout
-        if: ${{ github.event.inputs.only == '' || github.event.inputs.only == (matrix.variant || matrix.arch) }}
+        if: ${{ github.event.inputs.only == '' || github.event.inputs.only == matrix.id || github.event.inputs.only == matrix.alias }}
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
       - name: Build, test, publish
-        if: ${{ github.event.inputs.only == '' || github.event.inputs.only == (matrix.variant || matrix.arch) }}
+        if: ${{ github.event.inputs.only == '' || github.event.inputs.only == matrix.id || github.event.inputs.only == matrix.alias }}
         env:
           FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}   # public GitHub mirror release (second publish step)

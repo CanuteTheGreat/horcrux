@@ -10,9 +10,11 @@ HERE=$(cd "$(dirname "$0")" && pwd); cd "$HERE"
 . "$HERE/../project/project.env"
 case $(uname -m) in x86_64|amd64) HOST_ARCH=x86_64;; aarch64|arm64) HOST_ARCH=aarch64;; riscv64) HOST_ARCH=riscv64;; *) HOST_ARCH=$(uname -m);; esac
 ARCH=${ARCH:-$HOST_ARCH}; export ARCH
-# Optional image variant (VARIANT=desktop): same pipeline, its own ISO/asset names (<p>-desktop-daily-<arch>.iso), status marker and a
+# Optional image variant (VARIANT=gnome-light; `desktop` = old alias): same pipeline, its own ISO/asset names
+# (<p>-<DE|server>-<init>-<channel>-<arch>.iso, common/image-name.sh), status marker (daily-status-$IMG-<arch>) and a
 # smaller QEMU matrix + the encrypted-ZFS desktop test (GDM greeter on VGA, boot-environment rollback, hibernate/resume).
-VARIANT=${VARIANT:-}; export VARIANT; VPFX=${VARIANT:+$VARIANT-}
+VARIANT=${VARIANT:-}; export VARIANT
+. "$HERE/image-name.sh"; export INIT=$IMG_INIT; VPFX="$IMG-"
 . "$HERE/arch/$ARCH.env" || { echo "unsupported ARCH=$ARCH"; exit 0; }
 OUT=${OUT:-$PWD/../../../iso-out}; mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 EVI=$OUT/evidence; rm -rf "$EVI"; mkdir -p "$EVI"
@@ -143,7 +145,7 @@ if [ "$result" = pass ]; then
     rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img
     if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -E '^\[FAIL\]' "$EVI/test-$name.log" | head -1)"; fi
   done
-  if [ "$VARIANT" = desktop ] && [ "$ARCH" = x86_64 ]; then
+  if [ "$IMG_DE" != server ] && [ "$ARCH" = x86_64 ]; then
     # encrypted ZFS desktop: passphrase on a USB keyboard at the VGA prompt, GDM greeter ASSERTED on the VGA console, boot-environment
     # rollback, then the portable hibernate flow (one passphrase, hibernate, power off, boot, resume: marker + process survive, scrub clean)
     name=zfs-enc-desktop-hibernate
@@ -175,7 +177,7 @@ ACCEL=KVM; [ -e /dev/kvm ] && [ "$ARCH" = "$HOST_ARCH" ] || ACCEL="TCG emulation
 # evidence bundle (serial logs, screenshots, result.json - small)
 ( cd "$EVI" && tar czf "$OUT/$PROJECT-$VPFX$suffix-$ARCH-test-evidence.tgz" --exclude='target*.qcow2' --exclude='*.fd' --exclude='*.qmp' --exclude=test_key . )
 cat > "$OUT/status.json" <<JSON
-{"project":"$PROJECT","arch":"$ARCH","mode":"$mode","variant":"$VARIANT","result":"$result","failed_step":"$failed_step","summary":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$summary"),"sha":"$sha","run_id":"${GITHUB_RUN_ID:-manual}","run_url":"${GITHUB_SERVER_URL:-}/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID:-0}","time":"$(date -u +%FT%TZ)","build_seconds":$BUILD_S,"test_seconds":$TEST_S}
+{"project":"$PROJECT","arch":"$ARCH","mode":"$mode","variant":"$VARIANT","image":"$IMG","image_id":"$IMG_ID","result":"$result","failed_step":"$failed_step","summary":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$summary"),"sha":"$sha","run_id":"${GITHUB_RUN_ID:-manual}","run_url":"${GITHUB_SERVER_URL:-}/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID:-0}","time":"$(date -u +%FT%TZ)","build_seconds":$BUILD_S,"test_seconds":$TEST_S}
 JSON
 cat "$OUT/status.json"
 

@@ -1,28 +1,28 @@
 # syntax=docker/dockerfile:1.4
-# Horcrux Desktop variant: the finished server rootfs (BASE) + GNOME on Wayland (OpenRC/elogind) + the daily-use tools.
+# Horcrux gnome-light variant (was `desktop`; name = <product>-<DE>-<init>, see docs/ISO-INSTALL.md "Image names"): the finished server rootfs (BASE) + GNOME on Wayland (OpenRC/elogind) + the daily-use tools.
 # Binpkgs from the official binhost wherever the USE flags match; the rest compiles (BuildKit cache mounts keep it).
 ARG BASE
 FROM ${BASE}
 ARG ARCH=x86_64
-ARG VARIANT=desktop
+ARG VARIANT=gnome-light
 
 RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     unset ARCH; emerge-webrsync -q || emerge --sync -q
 
-COPY project/variants/desktop/portage/ /etc/portage/
-COPY project/variants/desktop/repo/ /var/db/repos/horcrux-desktop/
-COPY project/variants/desktop/packages.txt /tmp/packages-desktop.txt
+COPY project/variants/gnome-light/portage/ /etc/portage/
+COPY project/variants/gnome-light/repo/ /var/db/repos/horcrux-gnome-light/
+COPY project/variants/gnome-light/packages.txt /tmp/packages-desktop.txt
 
 # profile with the GNOME defaults (OpenRC flavour: elogind, no systemd), Manifest for the local Brave ebuild, one emerge
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; \
     eselect profile set default/linux/amd64/23.0/desktop/gnome; \
-    ( cd /var/db/repos/horcrux-desktop/www-client/brave-bin && ebuild brave-bin-*.ebuild manifest ); \
+    ( cd /var/db/repos/horcrux-gnome-light/www-client/brave-bin && ebuild brave-bin-*.ebuild manifest ); \
     export FEATURES="-ccache"; \
     emerge --update --newuse $(grep -v '^#' /tmp/packages-desktop.txt | tr '\n' ' ')
 
-COPY project/variants/desktop/overlay/ /
+COPY project/variants/gnome-light/overlay/ /
 
 # the Desktop image marks itself (the installer offers the desktop profile only when this exists); slim down again
 # Size: the ISO must stay below the 2 GiB release-asset limit. Firmware for hardware that is not in an x86 laptop/desktop
@@ -38,6 +38,6 @@ RUN set -e; chmod 644 /usr/share/horcrux/desktop/*; \
     # headers, and the clang/LLVM tools (mesa's llvmpipe/radeonsi only load libLLVM.so, which stays)\
     find /usr/lib /usr/lib64 -xdev -name '*.a' -type f ! -path '/usr/lib/gcc/*' -delete 2>/dev/null || true; \
     rm -rf /usr/include /usr/lib/llvm/*/include /usr/lib/llvm/*/bin /usr/lib/clang 2>/dev/null || true; \
-    echo "desktop" > /etc/live-iso-variant; \
+    echo "desktop" > /etc/live-iso-variant; echo "gnome-light" >> /etc/live-iso-variant; \
     rm -rf /var/db/repos/gentoo/* /var/cache/distfiles/* /var/cache/binhost /usr/share/doc /usr/share/gtk-doc /var/tmp/portage /var/log/emerge* 2>/dev/null || true; \
     find / -xdev -name '*.pyc' -path '*/__pycache__/*' -delete 2>/dev/null || true
