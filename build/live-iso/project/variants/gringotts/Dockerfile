@@ -35,7 +35,7 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
     pk=$(python3 /tmp/pkgs-owning-dev.py); echo "re-installing $(echo $pk | wc -w) packages that own headers"; \
-    emerge --oneshot --nodeps --usepkg --getbinpkg --buildpkg=n --jobs=6 $pk > /tmp/dev.log 2>&1 || { tail -30 /tmp/dev.log; exit 1; }; \
+    emerge --oneshot --nodeps --usepkg --getbinpkg --buildpkg=n --jobs=6 --keep-going $pk > /tmp/dev.log 2>&1 || grep -E "Failed to emerge" /tmp/dev.log | head; \
     find /etc -name '._cfg*' -delete; rm -f /tmp/dev.log /tmp/pkgs-owning-dev.py; \
     test -f /usr/include/stdio.h && ls /usr/include/python3*/Python.h >/dev/null
 
