@@ -10,3 +10,4 @@ sys-power/switcheroo-control -systemd
 app-misc/awccd gnome
 dev-lang/python sqlite ssl
 sys-apps/smartmontools -systemd
+dev-libs/libdbusmenu gtk3
