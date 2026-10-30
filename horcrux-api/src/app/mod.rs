@@ -1072,6 +1072,7 @@ fn cluster_routes() -> Router<Arc<AppState>> {
             "/api/cluster/nodes/:name/caps",
             axum::routing::put(set_node_caps),
         )
+        .route("/api/cluster/nics", get(get_local_nics))
         .route("/api/cluster/architecture", get(get_cluster_architecture))
         .route("/api/cluster/find-node", post(find_best_node_for_vm))
         // HA (High Availability) endpoints
@@ -4414,6 +4415,35 @@ async fn set_node_priority(
         .set_node_priority(&node_name, request.priority)
         .await?;
     Ok(StatusCode::OK)
+}
+
+#[derive(Debug, Deserialize)]
+struct NicsQuery {
+    /// Policy minimum link speed for storage/cluster NICs (default 10000).
+    min_mbps: Option<u64>,
+    /// Percent of the best link that migration/Ceph recovery may use (default 70).
+    percent: Option<u64>,
+}
+
+/// `GET /api/cluster/nics` -- local NICs/bonds (1-100 GbE), per-NIC warnings
+/// (down, below `min_mbps`, MTU < 9000, single-slave bond) and the suggested
+/// background-traffic cap scaled to the fastest link. Read-only.
+async fn get_local_nics(Query(q): Query<NicsQuery>) -> Json<serde_json::Value> {
+    use crate::cluster::nic;
+    let nics = nic::scan_nics(std::path::Path::new("/sys"));
+    let min = q.min_mbps.unwrap_or(10_000);
+    let mut warnings: Vec<String> = Vec::new();
+    for n in &nics {
+        warnings.extend(nic::check_storage_nic(n, min));
+    }
+    let best = nic::best_speed_mbps(&nics);
+    let cap = best.map(|b| nic::background_cap_mbps(b, q.percent.unwrap_or(70)));
+    Json(serde_json::json!({
+        "nics": nics,
+        "best_speed_mbps": best,
+        "background_cap_mbps": cap,
+        "warnings": warnings,
+    }))
 }
 
 /// `PUT /api/cluster/nodes/:name/caps` -- body is a NodeCaps

@@ -5,6 +5,7 @@
 //! with the detected speed.
 
 use std::fs;
+use serde::Serialize;
 use std::path::Path;
 
 /// Speeds Horcrux recognises (Mbit/s): 1/2.5/5/10/25/40/50/100 GbE.
@@ -12,7 +13,7 @@ pub const KNOWN_SPEEDS_MBPS: [u64; 9] = [
     100, 1_000, 2_500, 5_000, 10_000, 25_000, 40_000, 50_000, 100_000,
 ];
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NicInfo {
     pub name: String,
     /// Link speed in Mbit/s; None when down/unknown (sysfs reports -1).
