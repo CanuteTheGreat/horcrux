@@ -17,7 +17,7 @@ RDEPEND="
 	x11-libs/libnotify
 	net-vpn/tailscale
 	sys-apps/nvme-cli
-	sys-apps/rsync
+	net-misc/rsync
 	sys-apps/smartmontools
 	sys-fs/cryptsetup
 	sys-fs/zfs
