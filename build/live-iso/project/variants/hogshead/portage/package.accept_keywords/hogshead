@@ -12,3 +12,4 @@ net-im/discord ~amd64
 net-vpn/proton-vpn-gtk-app ~amd64
 sys-apps/t2fanrd ~amd64
 sys-apps/tiny-dfr ~amd64
+sys-apps/horcrux-tools ~amd64

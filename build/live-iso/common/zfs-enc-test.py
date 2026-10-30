@@ -215,6 +215,18 @@ class ZRun(qt.Runner):
         self.step("pre-upgrade-snapshot-hook", "ROOT/horcrux@pre-upgrade-" in o, o.strip().replace("\n", " "))
         rc, o = self.sh("/etc/kernel/postinst.d/90-horcrux-be && ls -l /boot/be/horcrux/ && grep -c 'be-horcrux' /boot/grub/grub.cfg")
         self.step("kernel-update-hook-refreshes-boot-environment", rc == 0 and "vmlinuz" in o and "initramfs.img" in o, o.strip().replace("\n", " | ")[:200])
+        # owner rule (hogshead): everything on the installed system belongs to a Portage package. Generated files are allowed.
+        rc, o = self.sh("find /usr /opt /lib/firmware /lib/modules /boot -xdev \\( -type f -o -type l \\) -print0 2>/dev/null | xargs -0 qfile -o 2>&1 | head -400", timeout=600)
+        allow = re.compile(r"^(/boot/(initramfs|grub/|be/|efi/|System\.map|vmlinuz|config-|\.kernelrelease|lost\+found)|/lib/modules/[^/]+/modules\.|/usr/lib/modules/[^/]+/modules\.|"
+                           r"/usr/lib/python[^/]*/(site-packages|__pycache__)/.*\.pyc|.*/__pycache__/|/usr/share/(icons|mime|glib-2\.0/schemas|applications)/.*(cache|\.xml$)|/usr/lib(64)?/(gio/modules|gdk-pixbuf-2\.0|gtk-[34]\.0|girepository-1\.0)/.*cache|/usr/share/info/dir$|"
+                           r"/usr/lib/locale/locale-archive|/usr/share/fonts/.*(fonts\.(dir|scale)|\.uuid)|/usr/lib/graphviz/config|/usr/share/horcrux/desktop/|/usr/share/live-installer|/usr/lib/live-installer|/usr/libexec/live-installer|/usr/bin/(live-|console-menu))")
+        orph = [l.split()[-1] if l.strip() else "" for l in o.splitlines() if l.startswith("/")]
+        bad = [x for x in orph if not allow.match(x)]
+        open(f"{a.out}/qfile-orphans.txt", "w").write(o)
+        self.step("portage-owns-every-file-qfile-o", rc == 0 and not bad, f"{len(orph)} orphan paths, {len(bad)} not on the generated-files allowlist: {bad[:25]}")
+        rc, o = self.sh("emerge -puDN @world 2>&1 | tail -25; echo RC=${PIPESTATUS[0]}", timeout=600)
+        open(f"{a.out}/world-resolve.txt", "w").write(o)
+        self.step("emerge-world-resolves-no-blockers", "RC=0" in o and "blocked" not in o.lower(), o.strip().replace("\n", " | ")[-300:])
         if a.desktop:
             self.desktop_checks()
 

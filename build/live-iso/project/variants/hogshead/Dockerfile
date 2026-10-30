@@ -21,7 +21,7 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     emerge --noreplace --usepkg --getbinpkg app-eselect/eselect-repository dev-vcs/git; \
     eselect repository enable guru; \
     emerge --sync guru; \
-    for e in /var/db/repos/horcrux/sys-kernel/horcrux-t2-config/*.ebuild /var/db/repos/horcrux/app-admin/rustinion-bin/*.ebuild /var/db/repos/horcrux/sys-apps/t2fanrd/*.ebuild /var/db/repos/horcrux/sys-apps/tiny-dfr/*.ebuild; do ebuild "$e" manifest; done
+    for e in /var/db/repos/horcrux/sys-kernel/horcrux-t2-config/*.ebuild /var/db/repos/horcrux/app-admin/rustinion-bin/*.ebuild /var/db/repos/horcrux/sys-apps/t2fanrd/*.ebuild /var/db/repos/horcrux/sys-apps/tiny-dfr/*.ebuild /var/db/repos/horcrux/sys-apps/horcrux-tools/*.ebuild; do ebuild "$e" manifest; done
 
 # T2 patches + config package (stage `hs-prep` is shared by the checks below)
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
@@ -63,7 +63,7 @@ RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,
     set -e; unset ARCH; export FEATURES="-ccache" PKGDIR=/var/cache/hs-binpkgs; \
     emerge --oneshot --usepkg=n --getbinpkg=n =sys-fs/zfs-kmod-2.3.9 =sys-fs/zfs-2.3.9; \
     rm -f /etc/dracut.conf.d/00-hogshead-build.conf; \
-    emerge --oneshot sys-kernel/horcrux-unlock; \
+    emerge --oneshot sys-kernel/horcrux-unlock sys-apps/horcrux-tools; \
     kr=$(ls /lib/modules | grep -- '-t2$' | tail -1); test -n "$kr"; \
     find /lib/modules/$kr -name 'zfs.ko*' | grep .; \
     for m in t2bce_core t2bce_vhci t2bce_dma hid-apple hid-appletb-kbd; do find /lib/modules/$kr -name "$m.ko*" | grep . ; done; \
