@@ -17,9 +17,11 @@ KEYWORDS="~amd64"
 
 # Patch set pinned to the last commit before the 7.3 rebase: it applies to gentoo-kernel 7.2.x (OpenZFS 2.3.x
 # declares Linux-Maximum 7.2). It is applied by Portage's user-patch mechanism, so a newer 7.2.y rebuilds with it.
+# no hard dependency on the kernel (it would pull a ~1 h source build into every config update); this pin only
+# refuses a 7.3+ kernel, where the pinned patch set does not apply and OpenZFS 2.3.x does not build
 RDEPEND="
-	<sys-kernel/gentoo-kernel-7.3
 	sys-kernel/dracut
+	!>=sys-kernel/gentoo-kernel-7.3
 "
 
 src_install() {
