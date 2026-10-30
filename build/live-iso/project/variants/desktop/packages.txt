@@ -37,3 +37,6 @@ sys-power/power-profiles-daemon
 sys-power/upower
 net-dns/avahi
 net-misc/chrony
+# --- laptop hardware: Intel SOF audio firmware (no sound on recent Intel laptops without it); microcode comes with the base image
+sys-firmware/sof-firmware
+sys-firmware/intel-microcode

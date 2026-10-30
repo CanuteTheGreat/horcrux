@@ -377,11 +377,12 @@ unsigned, so keep Secure Boot off after installing.
 
 ## Target-hardware notes
 
-**ThinkPad 21KH (i5-1335U, 16 GB, NVMe, Intel I219 wired, UEFI)** - expected to work, **not yet tested on the real laptop**:
-firmware setup (F1) -> Security -> Secure Boot -> *Disabled*; F12 for the one-time boot menu, pick the USB stick (UEFI entry).
-The kernel is Gentoo's generic distribution kernel with the full `linux-firmware` set (I219 uses the in-kernel `e1000e`;
-the AX211 Wi-Fi needs `iwlwifi` firmware, included; use `iwctl` (or the installer's Wi-Fi screen)). NVMe installs as `/dev/nvme0n1`.
-Hybrid graphics/touchpad/suspend were not exercised; the installer image is console-only (no desktop).
+**Lenovo ThinkBook 16 G6 IRL ("gringotts"; NVMe, UEFI, Intel Wi-Fi AX203)** - expected to work, **not yet tested on the real laptop**:
+firmware setup: **F2** (or **Fn+F2**), or the **Novo button** (with the laptop off) -> *BIOS Setup* -> Security -> Secure Boot -> *Disabled*;
+**F12** for the one-time boot menu, pick the USB stick (UEFI entry).
+The kernel is Gentoo's generic distribution kernel with the full `linux-firmware` set; the AX203 Wi-Fi needs `iwlwifi` firmware (included; use `iwctl`
+or the installer's Wi-Fi screen). Intel SOF audio firmware (`sof-firmware`) and the Intel CPU microcode (loaded early from the initramfs) ship in the Desktop image
+(microcode also in the server image). NVMe installs as `/dev/nvme0n1`. Hybrid graphics/touchpad/suspend were not exercised.
 
 **Surface Pro (gen 1, Ivy Bridge i5-3317U, 4 GB, UEFI + Secure Boot, no Ethernet)** - **not tested on the real device**:
 power off, hold *Volume Down* while pressing power to boot from USB (use a USB hub/adapter for the stick);
@@ -487,7 +488,7 @@ stale copy are caught.
 * The installed system's `/etc/fstab` lists no `/boot` or ESP entry (the installer writes the root only through the kernel command line), so the rescue menu finds those partitions by their labels (`boot`, `ESP`).
 * Rescue / forensic mode and Try-it-live are tested on x86_64 (UEFI + BIOS). aarch64 and riscv64 use the same code paths (arch-aware GRUB target / UART names) but are not exercised by the boot-modes test yet; memtest86+ is x86 only.
 * **Secure Boot**: not supported (see above). A shim + MOK-enrolment chain (own signing key for GRUB and the kernel) is the next step.
-* **Real hardware**: only QEMU/KVM (OVMF + SeaBIOS, USB-storage and CD boot) is tested automatically. The ThinkPad and Surface Pro notes above are expectations, not results. In particular untested: Wi-Fi scan/connect (needs a real adapter; the code path is exercised only by unit logic), the *Auto-detect (replug the cable)* link detection, NVMe/eMMC device naming (`part_path` is unit-tested), the large console font on high-DPI panels (`setfont ter-v32n` when the framebuffer is >= 1600 px wide), touch/Type Cover input.
+* **Real hardware**: only QEMU/KVM (OVMF + SeaBIOS, USB-storage and CD boot) is tested automatically. The ThinkBook and Surface Pro notes above are expectations, not results. In particular untested: Wi-Fi scan/connect (needs a real adapter; the code path is exercised only by unit logic), the *Auto-detect (replug the cable)* link detection, NVMe/eMMC device naming (`part_path` is unit-tested), the large console font on high-DPI panels (`setfont ter-v32n` when the framebuffer is >= 1600 px wide), touch/Type Cover input.
 * The installer is text mode (curses); the graphical installer (see above) shares its stages and falls back to it when no display works.
 * Installer language: only the *installed system's* locale/keymap are selectable; the wizard text is English.
 * ZFS mirror: /boot (ext4) and the hibernation swap partition live on the first disk only, so the box boots only while disk 1 is healthy (the ESP/MBR is installed on both). No RAIDZ, no separate data pool yet (native encryption is supported, see above). `zpool status` shows a harmless "pool hostid mismatch" notice (the generic initramfs imports the pool with `zfsforce=1`).
