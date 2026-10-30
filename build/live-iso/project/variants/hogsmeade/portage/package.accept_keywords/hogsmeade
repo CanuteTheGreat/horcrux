@@ -19,3 +19,5 @@ app-admin/rustinion-bin -* ~amd64
 x11-drivers/nvidia-drivers ~amd64
 net-im/discord ~amd64
 net-vpn/proton-vpn-gtk-app ~amd64
+# GURU (community overlay): proton-vpn-gtk-app and its python deps (as on hogshead)
+*/*::guru ~amd64
