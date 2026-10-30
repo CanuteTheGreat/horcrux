@@ -125,7 +125,7 @@ RUN set -e; \
 # slim again: the apps pulled the full firmware/locale/doc/static-lib sets back in; Portage keeps the records, the files are just not shipped
 RUN set -e; \
     # build-time tools the apps left behind (BDEPEND only): unmerge them properly (depclean refuses anything still needed), then ship the ISO under Forgejo's 2 GiB asset limit
-    emerge --depclean dev-lang/rust-bin dev-lang/go dev-util/rustup app-eselect/eselect-rust > /tmp/depclean-tools.log 2>&1 || true; tail -12 /tmp/depclean-tools.log; rm -f /tmp/depclean-tools.log; \
+    emerge --depclean --with-bdeps=n dev-lang/rust-bin dev-lang/go dev-util/rustup app-eselect/eselect-rust > /tmp/depclean-tools.log 2>&1 || true; tail -12 /tmp/depclean-tools.log; rm -f /tmp/depclean-tools.log; \
     cd /usr/lib/firmware && rm -rf qcom netronome mellanox mrvl qed dpaa2 liquidio cavium cxgb4 bnx2x bnx2 \
         nvidia amdgpu radeon mediatek ath10k ath11k ath12k rtw89 brcm qca; cd /; \
     find /usr/share/locale -mindepth 1 -maxdepth 1 ! -name 'en*' ! -name locale.alias -exec rm -rf {} + ; \
