@@ -16,7 +16,11 @@ paths=()
 for ds in rpool/home rpool/data; do
     zfs list -H "$ds" >/dev/null 2>&1 || continue
     mp=$(zfs get -H -o value mountpoint "$ds")
-    zfs snapshot "$ds@$snap" && paths+=("$mp/.zfs/snapshot/$snap")
+    zfs snapshot "$ds@$snap" || continue
+    # automount the snapshot ONCE, serially, before restic walks it with many threads: concurrent first access races in
+    # zfsctl_snapshot_mount (OpenZFS 2.3.9 + kernel 7.2: VERIFY(avl_find(...) == NULL) panic in the guest, restic hangs in D state)
+    ls -d "$mp/.zfs/snapshot/$snap/" >/dev/null 2>&1 || { echo "cannot mount snapshot $ds@$snap" >&2; continue; }
+    paths+=("$mp/.zfs/snapshot/$snap")
 done
 [ "${#paths[@]}" -gt 0 ] || { echo "nothing to back up" >&2; exit 5; }
 restic backup --tag hogsmeade --exclude-caches \
