@@ -24,7 +24,7 @@ zt = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(zt)
 qt = zt.qt
 USER = "canutethegreat"
-SIZES_GB = (40, 24, 24)
+SIZES_GB = (40, 40, 40)   # nvme enumeration order is not stable in QEMU: any drive may become nvme0n1, which carries the 9 GiB hibernate swap
 
 
 class HRun(zt.ZRun):
