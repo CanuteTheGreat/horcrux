@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<!-- Representative screens built from the app's real component classes (cards, status badges,
+     buttons, bottom nav, login) + the REAL style.css: lets the theme be rendered without a WASM build. -->
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="../style.css"></head>
+<body><div class="mobile-app">
+<header class="mobile-header"><h1>Dashboard</h1></header>
+<main style="padding:16px">
+<div class="card"><div class="card-title">Cluster</div>
+<div class="stat-item"><span class="stat-label">CPU</span><span class="stat-value">34%</span></div>
+<div class="progress-bar"><div class="progress-fill" style="width:34%"></div></div>
+<div class="detail-row"><span class="label">Nodes</span><span class="value success">3 online</span></div>
+<div class="detail-row"><span class="label">Alerts</span><span class="value error">2 failing</span></div></div>
+<div class="card"><div class="card-title">Virtual machines</div>
+<div class="node-item"><span class="vm-name">web-01</span> <span class="status-running">running</span></div>
+<div class="node-item"><span class="vm-name">db-01</span> <span class="status-stopped">stopped</span></div>
+<div class="node-item"><span class="vm-name">cache-01</span> <span class="status-paused">paused</span></div>
+<div class="node-item"><span class="vm-name">batch-07</span> <span class="status-error">error</span></div>
+<div class="node-details">node pve-2 <span class="node-badge">leader</span></div></div>
+<div class="card"><input class="mobile-input" placeholder="Search"><br><br>
+<button class="mobile-button primary">Start</button> <button class="mobile-button success">Resume</button> <button class="mobile-button danger">Stop</button>
+<button class="action-button">Snapshot</button><div class="empty-state">Nothing else here</div></div>
+</main>
+<nav class="bottom-nav"><a class="nav-item">Home</a><a class="nav-item">VMs</a><a class="nav-item">Network</a><a class="nav-item">Settings</a></nav>
+</div></body></html>
