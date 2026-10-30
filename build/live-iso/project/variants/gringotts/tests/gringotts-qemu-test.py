@@ -416,13 +416,16 @@ class GRun(zt.ZRun):
             if sess:
                 self.session_audio_autostart_checks(USER, vm)
                 self.tray_extension_checks(USER)
+                self.session_bus_checks(USER)
             if sess:
                 self.apps()
             self.orphans()
             self.world()
             if sess:
                 self.restore()
-                self.first_login_password_change(vm)
+                if self.first_login_password_change(vm):
+                    self.session_bus_checks(USER)
+                    self.session_logout_check(USER)
             self.sh("poweroff", timeout=10)
             self.wait_exit(vm)
         finally:
