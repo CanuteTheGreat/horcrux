@@ -220,7 +220,7 @@ class ZRun(qt.Runner):
         rc, o = self.sh("horcrux-orphans > /tmp/orph.txt; wc -l < /tmp/orph.txt; while read f; do [ -L \"$f\" ] && echo \"LINK $f\" || echo \"FILE $f\"; done < /tmp/orph.txt", timeout=900)
         allow = re.compile(r"^(/usr/share/mime/|/usr/share/info/dir$|/usr/share/(binutils|gcc)-data/.*/info/dir$|/usr/share/applications/mimeinfo\.cache$|"
                            r"/usr/share/icons/[^/]+/icon-theme\.cache$|/usr/lib/locale/locale-archive$|/usr/lib/cracklib_dict\.|/usr/lib64/lib(freebl3|softokn3|nssdbm3)\.chk$|"
-                           r"/usr/lib64/gconv/gconv-modules\.cache$|/boot/(vmlinuz|System\.map|config|initramfs)-|/usr/libexec/rc/console/keymap$|/boot/(be|grub|efi)/|/usr/lib(64)?/(gio/modules|gdk-pixbuf-[^/]*|gtk-[34]\.0)/.*cache)")
+                           r"/usr/lib64/gconv/gconv-modules\.cache$|/usr/lib64/vlc/plugins/plugins\.dat$|/boot/(vmlinuz|System\.map|config|initramfs)-|/usr/libexec/rc/console/keymap$|/boot/(be|grub|efi)/|/usr/lib(64)?/(gio/modules|gdk-pixbuf-[^/]*|gtk-[34]\.0)/.*cache)")
         lines = [l.split(" ", 1) for l in o.splitlines() if l.startswith(("FILE ", "LINK "))]
         bad = [p for k, p in lines if k == "FILE" and not allow.match(p)]     # symlinks are eselect/gcc-config/perl-cleaner products: reported, allowed
         open(f"{a.out}/orphans.txt", "w").write(o)
