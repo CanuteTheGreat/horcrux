@@ -39,6 +39,15 @@ src_install() {
 	newins "${FILESDIR}/hogsmeade.cron" hogsmeade
 	insinto /usr/share/hogsmeade
 	doins "${FILESDIR}/POST-INSTALL.md"
+	# early KMS: the Arrow Lake iGPU (8086:7D67, binds i915 or xe) must be up in the initramfs or the passphrase prompt is typed blind
+	# (hogshead's first real boot). NVIDIA stays out of the initramfs on purpose (hybrid: the iGPU drives the panel).
+	insinto /etc/dracut.conf.d
+	newins - 93-hogsmeade-early-kms.conf <<-'EOF'
+		# HOGSMEADE: Intel iGPU in the initramfs so the passphrase prompt is visible; firmware comes in through the modules' modinfo
+		add_drivers+=" i915 xe drm_kms_helper drm_display_helper drm_buddy drm_exec drm_gpuvm gpu_sched ttm video "
+		force_drivers+=" i915 xe "
+		omit_drivers+=" nvidia nvidia_modeset nvidia_uvm nvidia_drm nouveau "
+	EOF
 	insinto /etc/hogsmeade
 	newins - README <<-'EOF'
 		backup.env   RESTIC_REPOSITORY / AWS_* / RESTIC_PASSWORD_FILE for hogsmeade-backup (installed by the private package)

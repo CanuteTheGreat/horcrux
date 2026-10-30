@@ -871,7 +871,9 @@ class Installer:
         self.write("/etc/conf.d/keymaps", f'keymap="{c["keymap"]}"\n')
         self.write("/etc/env.d/02locale", f'LANG="{c["locale"]}"\n')
         self.run(["env-update"], chroot=True, check=False)
-        if c["locale"] not in ("en_US.UTF-8", "C.UTF-8"):
+        # ALWAYS generate: a stage3 ships an empty locale.gen, so LANG=en_US.UTF-8 alone gives GTK
+        # "Locale not supported by C library" in the desktop session
+        if c["locale"] != "C.UTF-8":
             self.write("/etc/locale.gen", f"{c['locale']} UTF-8\nen_US.UTF-8 UTF-8\n", append=True)
             self.run(["locale-gen"], chroot=True, check=False)
 

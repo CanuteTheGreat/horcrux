@@ -26,4 +26,12 @@ src_install() {
 		add_dracutmodules+=" crypt dm resume horcrux-unlock zfs "
 		add_drivers+=" dm_crypt "
 	EOF
+	# early KMS: without i915 in the initramfs the panel stays on the GRUB framebuffer (or black) until the root
+	# is mounted, so the passphrase prompt is typed blind. force_drivers loads it before udev settles; the
+	# firmware (DMC/GuC/HuC) is pulled in through the module's modinfo.
+	newins - 92-horcrux-early-kms.conf <<-'EOF'
+		# Horcrux: Intel graphics (T2 Macs) in the initramfs so the passphrase prompt is visible
+		add_drivers+=" i915 drm_kms_helper drm_display_helper drm_buddy ttm video "
+		force_drivers+=" i915 "
+	EOF
 }

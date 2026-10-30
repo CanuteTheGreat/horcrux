@@ -17,7 +17,9 @@ upl=https://uploads.github.com/repos/$repo
 H=(-H "Authorization: Bearer $GH_RELEASE_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
 sha=${GITHUB_SHA:-$(git rev-parse HEAD)}
 ARCH=${ARCH:-x86_64}
-VARIANT=${VARIANT:-}; VPFX=${VARIANT:+$VARIANT-}
+VARIANT=${VARIANT:-}
+. "$(dirname "$0")/image-name.sh"      # IMG=<DE|server>-<init> (scheme: common/image-name.sh)
+VPFX="$IMG-"
 DAILY_TAG=${DAILY_TAG:-daily}
 LIMIT=2147483648
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
@@ -77,15 +79,21 @@ daily)
   printf '%s  %s\n' "$sum" "$name" > "$tmp/$name.sha256"
   put_asset "$id" "$tmp/$name.sha256" "$name.sha256"
   [ -z "$evidence" ] || put_asset "$id" "$evidence" "$project-${VPFX}daily-$ARCH-test-evidence.tgz"
+  # assets of the older naming schemes: removed once the same image is up under its new name (the product-domain redirects keep the old URLs working)
+  for old in "$project-${IMG_OLD_VPFX}daily-$ARCH.iso" "$project-${IMG_OLD_VPFX}daily-$ARCH.iso.sha256" "$project-${IMG_OLD_VPFX}daily-$ARCH-test-evidence.tgz"; do
+    for a in $(assets_json "$id" | pyj 'import json,sys;print(" ".join(str(a["id"]) for a in json.load(sys.stdin) if a["name"]==sys.argv[1]))' "$old"); do curl -fsS -X DELETE "${H[@]}" "$api/releases/assets/$a" || true; done
+  done
   body=$(assets_json "$id" | ARCH=$ARCH SUMMARY="$(pyj 'import json,sys;print(json.load(open(sys.argv[1])).get("summary",""))' "$statusfile" 2>/dev/null || true)" SHA=$sha PROJECT=$project python3 -c '
 import json, os, re, sys, time
 a = json.load(sys.stdin); p = os.environ["PROJECT"]
+DE = {"server": "Server", "gnome-light": "GNOME (light)", "gnome": "GNOME", "xfce": "XFCE", "kde": "KDE"}
 rows = []
 for x in sorted(a, key=lambda x: x["name"]):
     n = x["name"]
-    m = re.match(re.escape(p) + r"-((?:desktop-)?)daily-(.+)\.iso$", n)
+    m = re.match(re.escape(p) + r"-((?:[a-z0-9]+-)*?[a-z0-9]+)-(openrc|systemd)-daily-(.+)\.iso$", n)
     if m:
-        rows.append("- **%s%s**: `%s` (%d MiB), SHA256 in `%s.sha256`" % (m.group(2), " (Desktop: GNOME, encrypted ZFS, Apple T2 ready)" if m.group(1) else "", n, x["size"] >> 20, n))
+        de = DE.get(m.group(1), m.group(1))
+        rows.append("- **%s %s - %s**: `%s` (%d MiB), SHA256 in `%s.sha256`" % (de, m.group(2).replace("openrc", "OpenRC").replace("systemd", "systemd"), m.group(3), n, x["size"] >> 20, n))
 print("Rolling **pre-release** build of the %s live/installer ISO from `main` (%s), updated %s UTC." % (p, os.environ["SHA"][:10], time.strftime("%F %T", time.gmtime())))
 print("Each architecture is replaced in place by its own daily job, only after the QEMU boot + install + reboot + web-probe tests passed on that architecture.\n")
 print("\n".join(rows)); print()
@@ -99,11 +107,11 @@ stable)
   [ -s "$iso" ] || { echo "no ISO at $iso"; exit 1; }
   id=$(ensure_release "$tag" "$tag" false "Release $tag. Install guide: https://$project.errant.solutions/docs/iso-install/")
   [ -n "$id" ] || { echo "no GitHub release for $tag"; exit 1; }
-  n=$project-$tag-$ARCH.iso
+  n=$project-$IMG-$tag-$ARCH.iso      # <product>-<DE|server>-<init>-<tag>-<arch>.iso
   put_asset "$id" "$iso" "$n"
   printf '%s  %s\n' "$(cut -d' ' -f1 "$iso.sha256")" "$n" > "$tmp/$n.sha256"
   put_asset "$id" "$tmp/$n.sha256" "$n.sha256"
-  [ -z "$evidence" ] || put_asset "$id" "$evidence" "$project-$tag-$ARCH-iso-test-evidence.tgz"
+  [ -z "$evidence" ] || put_asset "$id" "$evidence" "$project-$IMG-$tag-$ARCH-iso-test-evidence.tgz"
   echo "GITHUB DOWNLOAD https://github.com/$repo/releases/download/$tag/$n" ;;
 *) echo "bad mode"; exit 2 ;;
 esac

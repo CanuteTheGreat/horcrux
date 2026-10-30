@@ -49,10 +49,11 @@ lap "stage 2: gentoo rootfs (stage3 + binhost + ccache)"
 docker build $PLAT $ARCHARGS -f common/Dockerfile.rootfs --build-arg APP_IMAGE=$TAG-app --build-arg PROJECT=$PROJECT \
     --build-arg ISO_LABEL=$ISO_LABEL --build-arg PROJECT_TITLE="$PROJECT_TITLE" -t $TAG-rootfs . 2>&1 | tee "$OUT/rootfs-build.log" | tail -40
 fi
-# Optional image variants, applied in order on top of the finished rootfs: VARIANT=desktop | t2 | desktop,t2
+# Optional image variants, applied in order on top of the finished rootfs: VARIANT=gnome-light | t2 | gnome-light,t2 (`desktop` = old alias of gnome-light)
 # (project/variants/<name>/Dockerfile, ARG BASE = the previous image). The server image stays the default; a variant image
-# is a separate ISO (<prefix>-<variant>[-<variant>]-<date>-<arch>.iso). `t2` needs the repo's gentoo/t2 (named build context).
-ROOTFS_IMG=$TAG-rootfs; VNAME=""; VIMGS=""
+# is a separate ISO named <prefix>[-<hw profile>][-<hw variant>]-<DE|server>-<init>-<channel>-<arch>.iso (common/image-name.sh: horcrux-gnome-light-openrc-daily-x86_64.iso). `t2` needs the repo's gentoo/t2 (named build context).
+. "$HERE/common/image-name.sh"      # canonical VARIANT (desktop -> gnome-light), IMG=<DE|server>-<init>, IMG_HW
+ROOTFS_IMG=$TAG-rootfs; VIMGS=""
 if [ -n "${VARIANT:-}" ] && [ "$VARIANT" != server ]; then
   for v in $(echo "$VARIANT" | tr ',' ' '); do
     [ -f "project/variants/$v/Dockerfile" ] || { echo "unknown VARIANT=$v (no project/variants/$v/Dockerfile)"; exit 2; }
@@ -63,7 +64,7 @@ if [ -n "${VARIANT:-}" ] && [ "$VARIANT" != server ]; then
     docker build $PLAT $ARCHARGS $VCTX -f "project/variants/$v/Dockerfile" --build-arg BASE=$ROOTFS_IMG --build-arg VARIANT=$v \
         -t $TAG-rootfs-$v . 2>&1 | tee "$OUT/variant-$v-build.log" | tail -40
     [ "${PIPESTATUS[0]}" = 0 ] || { echo "variant $v build failed (log: $OUT/variant-$v-build.log)"; exit 1; }
-    ROOTFS_IMG=$TAG-rootfs-$v; VNAME="$VNAME$v-"; VIMGS="$VIMGS $TAG-rootfs-$v"
+    ROOTFS_IMG=$TAG-rootfs-$v; VIMGS="$VIMGS $TAG-rootfs-$v"
   done
 fi
 if [ -n "${HW_PROFILE:-}" ]; then
@@ -80,7 +81,7 @@ lap "stage 3: assembly toolbox"
 # parallel build) between this build and the docker run below (Horcrux run 7066: "pull access denied").
 docker build $PLAT $ARCHARGS -q -f common/Dockerfile.tools -t $TAG-tools .
 lap "stage 4: export rootfs + assemble ISO (no bind mounts: works from a job container using the host docker)"
-ISO_NAME=$ISO_PREFIX${HW_PROFILE:+-$HW_PROFILE}-${VNAME}$SUFFIX-$ARCH.iso
+ISO_NAME=$ISO_PREFIX${HW_PROFILE:+-$HW_PROFILE}${IMG_HW:+-${IMG_HW%-}}-$IMG-$SUFFIX-$ARCH.iso
 docker rm -f $TAG-asm >/dev/null 2>&1 || true
 cid=$(docker create $ROOTFS_IMG /bin/true)
 docker export "$cid" | docker run -i $PLAT -e ARCH=$ARCH --name $TAG-asm --memory=8g --cpus=$JOBS $TAG-tools \

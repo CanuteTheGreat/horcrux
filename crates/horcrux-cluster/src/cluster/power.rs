@@ -5,11 +5,13 @@
 //! runs guests, hosts OSDs, is HA-pinned, or when doing so would break
 //! quorum or leave fewer than `min_online` nodes running.
 
+use serde::{Deserialize, Serialize};
+
 /// Opt-in label: only nodes with this label may be powered down/woken.
 pub const POWER_LABEL: &str = "power-managed";
 
 /// How a powered-off node is woken.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WakeMethod {
     /// Wake-on-LAN magic packet to this MAC.
     Wol([u8; 6]),
@@ -17,7 +19,7 @@ pub enum WakeMethod {
     Bmc,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PowerNode {
     pub name: String,
     pub labels: Vec<String>,
@@ -38,7 +40,8 @@ impl PowerNode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PowerPolicy {
     /// CPU % below which a guest-free node counts as idle.
     pub idle_cpu_percent: f32,
