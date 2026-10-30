@@ -1044,7 +1044,11 @@ class Installer:
     def profile_extras(self):
         """T2 Mac profile, desktop profile, ZFS boot-environment config (new modules, see t2.py / desktop.py / zfsroot.py)"""
         from . import t2, desktop
-        self.cmdline_extra = arch.console_args()
+        # hardware profile: a machine without a UART (keep_serial_console = false) keeps console=tty0 only, so the passphrase prompt is on the
+        # screen; the profile's kernel_cmdline (backlight, nvidia-drm, ...) goes on the boot-environment kernel line too
+        serial_ok = not (self.hw_profile and self.hw_profile.get("defaults", {}).get("keep_serial_console") is False)
+        self.cmdline_extra = " ".join(x for x in ((arch.console_args() if serial_ok else ""),
+                                                  " ".join(hwprofile.kernel_cmdline(self.hw_profile, self.hw_model))) if x)
         self.kernel_glob = "*"
         hib = self.zfs() and self.swap_mode == "hibernate"
         if hib:
