@@ -521,7 +521,9 @@ def validate_config(profile, c, unattended=False, require_secret=True):
     """Return a list of problems (empty = ok)."""
     errs = []
     if c.get("install_type", "server") != "server":
-        errs.append(f"install_type {c['install_type']!r} is not available yet (only 'server')")
+        from . import desktop            # the Desktop image variant (marker file) installs the desktop profile
+        if not (c["install_type"] == "desktop" and desktop.available()):
+            errs.append(f"install_type {c['install_type']!r} is not available yet (only 'server')")
     bad_off = [x for x in c.get("services_off", []) if x not in profile.get("services_optional", [])]
     if bad_off:
         errs.append("services.disable may only name optional services: " + ", ".join(bad_off))
