@@ -34,6 +34,7 @@ src_install() {
 	doins "${FILESDIR}/hogsmeade.toml"
 	insinto /etc/modprobe.d
 	newins "${FILESDIR}/nvidia-hogsmeade.conf" nvidia-hogsmeade.conf
+	newins "${FILESDIR}/zfs-hogsmeade.conf" zfs-hogsmeade.conf
 	insinto /etc/cron.d
 	newins "${FILESDIR}/hogsmeade.cron" hogsmeade
 	insinto /usr/share/hogsmeade
