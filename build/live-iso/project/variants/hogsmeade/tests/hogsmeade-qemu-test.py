@@ -177,7 +177,7 @@ class HRun(zt.ZRun):
         have_gpu, _, _ = o.partition("---")
         self.step("initramfs-has-intel-igpu-early-kms-and-no-nvidia", ("i915" in have_gpu or "xe" in have_gpu) and "nvidia" not in have_gpu, o.strip().replace("\n", " | ")[:300])
         rc, o = self.sh("locale -a | grep -i -c 'en_US.utf'; grep -rl 'interface-name' /etc/NetworkManager 2>/dev/null | head -3; echo NM-DONE")
-        self.step("locale-generated-and-no-pinned-nm-interface", o.strip().splitlines()[0].strip() not in ("", "0") and "NM-DONE" in o and o.count("\n") <= 1, o.strip().replace("\n", " | "))
+        self.step("locale-generated-and-no-pinned-nm-interface", o.strip().splitlines()[0].strip() not in ("", "0") and "NM-DONE" in o and o.strip().count("\n") <= 1, o.strip().replace("\n", " | "))
         if a.desktop:
             self.desktop_checks(vm)
             self.session_after_password_change()
