@@ -1,0 +1,13 @@
+#!/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+echo "== gringotts-firstboot $(date -u)"
+i=0; while ! ip -4 route show default | grep -q . && [ $i -lt 120 ]; do sleep 5; i=$((i+1)); done
+if ! ip -4 route show default | grep -q .; then echo "no network after 10 min: will retry at the next boot"; exit 0; fi
+gringotts-remote || echo "remote handoff incomplete (see above)"
+mkdir -p /var/lib/gringotts
+echo "== portage trees"
+ok=1
+emerge-webrsync -q || ok=0
+for r in guru canutethegreat-overlay; do [ -d /var/db/repos/$r/.git ] && { emaint sync -r $r || ok=0; }; done
+[ $ok = 1 ] && { date -u > /var/lib/gringotts/firstboot-done; echo "== done"; } || echo "== tree sync failed: will retry at the next boot"
+exit 0
