@@ -4,8 +4,8 @@
 //! unit-testable with fixtures. No hardcoded 1/10 GbE assumptions: limits scale
 //! with the detected speed.
 
-use std::fs;
 use serde::Serialize;
+use std::fs;
 use std::path::Path;
 
 /// Speeds Horcrux recognises (Mbit/s): 1/2.5/5/10/25/40/50/100 GbE.
