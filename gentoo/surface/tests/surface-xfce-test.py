@@ -44,18 +44,6 @@ while True:
     time.sleep(1)
 '''
 
-# files that no package owns by design (generated at install/boot): checked as "known generated", everything else is an orphan
-GENERATED = r"""^/etc/(passwd|shadow|group|gshadow|passwd-|shadow-|group-|gshadow-|subuid|subgid|fstab|crypttab|hostname|machine-id|adjtime|mtab|resolv\.conf|ld\.so\.cache|locale\.gen|localtime|timezone|issue|motd|inittab|shells|environment|hosts|profile\.env|csh\.env|ssh/ssh_host_.*|ssh/sshd_config|conf\.d/(hostname|keymaps|display-manager|xdm|net|hwclock|consolefont)|runlevels/.*|dracut\.conf\.d/.*|udev/hwdb\.bin|machine-info|os-release|lightdm/lightdm\.conf\.d/60-horcrux-autologin\.conf|elogind/.*|UPower/UPower\.conf|sudoers\.d/.*|NetworkManager/system-connections/.*|X11/.*|ssl/certs/.*|ca-certificates.*|mime\.types|\._cfg.*|\.pwd\.lock|resolv\.conf\.bak|portage/make\.profile|etc-update.*|fonts/conf\.d/.*|gconf/.*|dconf/.*|horcrux/.*|live-iso.*|local\.d/.*|init\.d/.*|\.updated|hostid)$
-^/boot/(initramfs-.*|grub/.*|EFI/.*|loader/.*|System\.map.*|config-.*|vmlinuz.*|lost\+found.*)$
-^/usr/(lib|lib64)/(modules/.*/modules\..*|locale/locale-archive|gdk-pixbuf-2\.0/.*/loaders\.cache|gio/modules/giomodule\.cache|python.*/__pycache__/.*|gtk-[234]\.0/.*/immodules\.cache|graphene.*|systemd/.*)$
-^/usr/share/(icons/.*/icon-theme\.cache|applications/mimeinfo\.cache|mime/.*|glib-2\.0/schemas/gschemas\.compiled|fonts/.*(fonts\.(dir|scale|cache-.*))|info/dir|X11/xkb/.*)$
-^/var/.*$
-^/usr/lib/(python.*|python3.*)/.*\.pyc$
-^/usr/share/live-installer/(hwprofiles/.*|portage-meta.*|branding/.*)$
-^/usr/(lib|lib64)/\.build-id/.*$
-"""
-
-
 class XT(SQ.T):
     def __init__(self, a):
         super().__init__(a)
@@ -159,18 +147,19 @@ class XT(SQ.T):
                            "find /lib/modules/$k -name 'surface_aggregator*' | head -2; ls /sys/class/dmi/id >/dev/null && cat /sys/class/dmi/id/product_name", timeout=60)
         self.save("kernel-config-surface.txt", out)
         s("surface-kernel-has-the-patched-drivers-and-config", out.count("CONFIG_") >= 9 and "surface_aggregator" in out, re.sub(r"\s+", " ", out)[:300])
-        # ---- ownership
-        rc, out = self.ssh("which qfile >/dev/null 2>&1 || echo NOQFILE; find /usr /etc /opt /bin /sbin /lib /lib64 /boot -xdev \\( -type f -o -type l \\) -print0 2>/dev/null | xargs -0 qfile -o 2>/dev/null > /tmp/orphans.txt; wc -l < /tmp/orphans.txt; "
-                           "find /usr /etc /opt /bin /sbin /lib /lib64 /boot -xdev \\( -type f -o -type l \\) 2>/dev/null | wc -l", timeout=900)
-        rc2, orph = self.ssh("cat /tmp/orphans.txt", timeout=60)
-        self.save("qfile-orphans-raw.txt", orph)
-        pats = [re.compile(l) for l in GENERATED.strip().splitlines()]
-        lines = [l.strip().split()[-1] if l.strip() else "" for l in orph.splitlines()]
-        lines = [l for l in lines if l.startswith("/")]
-        unexpected = [l for l in lines if not any(p.match(l) for p in pats)]
-        self.save("qfile-orphans-unexpected.txt", "\n".join(unexpected) + "\n")
-        s("qfile-orphan-scan-ran", "NOQFILE" not in out and out.split()[-2].isdigit(), f"{len(lines)} unowned of {out.split()[-1] if out.split() else '?'} files; generated-by-design filtered: {len(lines) - len(unexpected)}")
-        s("no-unexpected-orphans", len(unexpected) == 0, f"{len(unexpected)} unexpected: " + ", ".join(unexpected[:12]))
+        # ---- ownership: every installed file belongs to an ebuild (portage-orphans.py = qfile -o with merged-/usr path resolution)
+        po = open(os.path.join(HERE, "portage-orphans.py")).read()
+        self.ssh("cat > /tmp/po.py <<'PYEOF'\n" + po + "PYEOF\n", timeout=30)
+        rc, out = self.ssh("python3 /tmp/po.py > /tmp/po.out 2>&1; tail -1 /tmp/po.out; grep -c ^ORPHAN /tmp/po.out", timeout=900)
+        rc2, full = self.ssh("cat /tmp/po.out", timeout=60)
+        self.save("portage-orphans.txt", full)
+        rc3, qf = self.ssh("which qfile >/dev/null 2>&1 && { qfile -o /usr/bin/brave-bin /usr/bin/rustinion /usr/bin/onboard /usr/bin/firefox-bin /usr/bin/live-installer /usr/bin/horcrux-surface-auto /etc/init.d/live-installer /etc/init.d/zram-swap | head; echo qfile-orphan-spot-check-done; qfile /usr/bin/live-installer /usr/bin/horcrux-surface-auto /etc/init.d/zram-swap /usr/bin/brave-bin | head; }", timeout=60)
+        self.save("qfile-spot-check.txt", qf)
+        orph = [l for l in full.splitlines() if l.startswith("ORPHAN ")]
+        summ = [l for l in full.splitlines() if l.startswith("SUMMARY")]
+        s("portage-ownership-scan-ran", bool(summ), summ[-1] if summ else out[:200])
+        s("no-orphan-files-qfile-o-clean", len(orph) == 0 and "qfile-orphan-spot-check-done" in qf and not re.search(r"^/", qf.split("qfile-orphan-spot-check-done")[0], re.M),
+          f"{len(orph)} orphans: " + ", ".join(o.split()[1] for o in orph[:12]) + " | " + (summ[-1] if summ else ""))
         # ---- session
         end, got = time.time() + 300, ""
         want = ["lightdm", "Xorg", "xfce4-session", "xfwm4", "xfce4-panel", "xfdesktop", "xfce4-power-man", "nm-applet", "onboard", "xfsettingsd", "pipewire", "wireplumber", "xfce4-screensav", "tailscaled"]

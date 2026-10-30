@@ -1,66 +1,22 @@
 # syntax=docker/dockerfile:1.4
-# Horcrux Surface variant (Surface Pro 1/2 tablet, 4 GB, everything owned by a Portage package):
-#   BASE (the finished server rootfs) + overlays (horcrux, GURU, canutethegreat-overlay) + the Surface kernel as
-#   sys-kernel/gentoo-kernel (source-built; linux-surface series + config from sys-kernel/horcrux-surface-config) +
-#   zfs-kmod rebuilt for it + the XFCE tablet desktop and the owner's apps as ONE meta package (app-misc/horcrux-surface-desktop).
+# Variant `surface` (2nd half of the Surface image; applied on top of `surface-kernel`): the installer package, the XFCE tablet desktop
+# and the owner's apps as Portage packages, cleanup and the live initramfs.
 #   Build context = build/live-iso, named context `hxgentoo` = the repo's gentoo/ (the horcrux overlay).
 ARG BASE
-FROM ${BASE} AS surface
+FROM ${BASE} AS surface-base
 ARG ARCH=x86_64
-ARG SURFACE_KERNEL=6.18.59
-
-# overlays: the repos.conf + portage config are COPIED FROM the package that owns them (identical bytes: installing the package later
-# is then a no-op for Portage's config protection)
+# the full overlay + the Portage config owned by app-misc/horcrux-surface-desktop (identical bytes: installing the package later is a no-op
+# for config protection)
 COPY --from=hxgentoo / /var/db/repos/horcrux/
-RUN mkdir -p /etc/portage/repos.conf && cp -a /var/db/repos/horcrux/app-misc/horcrux-surface-desktop/files/root/etc/portage/. /etc/portage/
-
-RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
-    --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
-    set -e; unset ARCH; export FEATURES="-ccache"; \
-    emerge-webrsync -q || emerge --sync -q; \
-    emerge --noreplace --usepkg --getbinpkg dev-vcs/git; \
-    git clone -q --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru; \
-    git clone -q --depth 1 https://git.canutethegreat.com/CanuteTheGreat/canutethegreat-overlay.git /var/db/repos/canutethegreat-overlay; \
-    for e in /var/db/repos/horcrux/sys-kernel/horcrux-surface-config/*.ebuild /var/db/repos/horcrux/app-misc/horcrux-surface-desktop/*.ebuild /var/db/repos/horcrux/app-admin/rustinion-bin/*.ebuild; do ebuild "$e" manifest; done; \
-    emerge --oneshot --usepkg=n sys-kernel/horcrux-surface-config; \
-    ls /etc/portage/patches/sys-kernel/gentoo-kernel | wc -l; ls /etc/kernel/config.d
-
-# the kernel binary package is built in its OWN layer (about an hour) and kept inside the image layer
-FROM surface AS surface-kbuild
-ARG SURFACE_KERNEL=6.18.59
-RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
-    set -e; unset ARCH; export FEATURES="-ccache" PKGDIR=/var/cache/surface-binpkgs; \
-    emerge --buildpkgonly --nodeps --usepkg=n --getbinpkg=n =sys-kernel/gentoo-kernel-${SURFACE_KERNEL} \
-        > /var/log/surface-kernel-build.log 2>&1 || { tail -80 /var/log/surface-kernel-build.log; exit 1; }; \
-    find /var/cache/surface-binpkgs -type f | head
-
-FROM surface-kbuild AS surface-kinstall
-ARG SURFACE_KERNEL=6.18.59
-# the stock binary kernel goes (modules, vmlinuz), the freshly built one is installed; dracut cannot add zfs/unlock before zfs-kmod
-# exists for this kernel: omit them for THIS step only (the live initramfs is rebuilt below, the installer builds the installed one)
-RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
-    set -e; unset ARCH; export FEATURES="-ccache" PKGDIR=/var/cache/surface-binpkgs; \
-    echo 'omit_dracutmodules+=" zfs "' > /etc/dracut.conf.d/00-surface-build.conf; \
-    emerge --unmerge sys-kernel/gentoo-kernel-bin; rm -f /boot/initramfs-*.img /boot/System.map-* /boot/config-*; \
-    emerge --oneshot --usepkgonly --nodeps =sys-kernel/gentoo-kernel-${SURFACE_KERNEL}; \
-    ls /lib/modules /boot
-RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
-    set -e; unset ARCH; export FEATURES="-ccache" PKGDIR=/var/cache/surface-binpkgs; \
-    emerge --oneshot --usepkg=n --getbinpkg=n sys-fs/zfs-kmod sys-fs/zfs; \
-    rm -f /etc/dracut.conf.d/00-surface-build.conf; \
-    kr=$(ls /lib/modules | sort -V | tail -1); test -n "$kr"; \
-    find /lib/modules/$kr -name 'zfs.ko*' | grep .; \
-    for m in hid-multitouch hid-microsoft wacom mwifiex mwifiex_pcie mwifiex_sdio btmrvl_sdio hid-sensor-accel-3d surface_aggregator; do find /lib/modules/$kr -name "$m.ko*" | grep . || { echo "MISSING $m"; exit 1; }; done; \
-    c=/lib/modules/$kr/build/.config; test -r $c; \
-    grep -v '^#' /usr/share/horcrux-surface/required-config.txt | while read -r l; do grep -qx "$l" $c || { echo "MISSING CONFIG $l"; exit 1; }; done; \
-    echo $kr > /etc/surface-kernelrelease
+RUN cp -a /var/db/repos/horcrux/app-misc/horcrux-surface-desktop/files/root/etc/portage/. /etc/portage/ \
+ && for e in /var/db/repos/horcrux/app-misc/horcrux-surface-desktop/*.ebuild /var/db/repos/horcrux/sys-apps/horcrux-live-installer/*.ebuild /var/db/repos/horcrux/app-admin/rustinion-bin/*.ebuild; do ebuild "$e" manifest >/dev/null; done
 
 # the installer / live scripts / console menu that the ISO's own tree provides become ONE package (sys-apps/horcrux-live-installer), made
 # from common/overlay + project/overlay at build time; Horcrux's hypervisor product and the Apple T2 userland are not tablet roles: removed
-FROM surface-kinstall AS surface-live
+FROM surface-base AS surface-live
 COPY common/overlay/ /tmp/hxlive/common/
 COPY project/overlay/ /tmp/hxlive/project/
-RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
+RUN --mount=type=cache,id=surface-distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; cd /tmp/hxlive; \
     rm -rf project/usr/share/horcrux/t2 project/etc/init.d/t2fanrd project/etc/init.d/tiny-dfr project/etc/init.d/horcrux-api project/etc/conf.d/horcrux-api; \
     mkdir -p /tmp/pkg; cp -a common/. /tmp/pkg/; cp -a project/. /tmp/pkg/; \
@@ -76,8 +32,8 @@ RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,
 
 # the tablet desktop + the owner's apps = ONE meta package (binpkgs where USE matches; the rest compiles here, never on the tablet)
 FROM surface-live AS surface-apps
-RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
-    --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
+RUN --mount=type=cache,id=surface-binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
+    --mount=type=cache,id=surface-distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \
     emerge --update --newuse --usepkg --getbinpkg --keep-going app-misc/horcrux-surface-desktop \
         > /var/log/surface-apps.log 2>&1 || { tail -80 /var/log/surface-apps.log; exit 1; }; \
@@ -85,8 +41,8 @@ RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,shar
 
 FROM surface-apps AS surface-final
 # Horcrux's own product (hypervisor/containers) is not a tablet role: drop it from world and the filesystem, so nothing unowned remains
-RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
-    --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
+RUN --mount=type=cache,id=surface-binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
+    --mount=type=cache,id=surface-distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
     emerge --deselect app-emulation/qemu app-emulation/libvirt app-containers/docker app-containers/docker-cli net-misc/bridge-utils net-dns/dnsmasq 2>&1 | tail -3; \
     emerge --depclean --with-bdeps=n 2>&1 | tail -15 || true

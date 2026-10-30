@@ -1,7 +1,7 @@
 #!/bin/bash
 # surface-backup [-n] DEST: copy the personal data of the Surface's CURRENT (Windows/other) system to DEST before the disk is erased.
 # Every partition is mounted READ-ONLY. DEST = a local directory (a USB drive) or [user@]host:/dir (rsync over ssh; used for the
-# remote hand-off: the assistant gives the target, then moves the files into the owner's Nextcloud and verifies them on the server).
+# remote hand-off: the assistant gives the target; backups go to restic on B2 (ctg-backups/<host>), never into Nextcloud).
 # Copies: Windows user profiles (Desktop, Documents, Downloads, Pictures, Videos, Music, OneDrive, Contacts, Saved Games) and, for
 # every non-Windows file system, the whole content. The Windows OS itself (Windows, Program Files, ProgramData) is not copied.
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
