@@ -28,8 +28,7 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
              /var/db/repos/horcrux/app-misc/hogsmeade-tools/*.ebuild /var/db/repos/horcrux/app-misc/awccd/*.ebuild \
              /var/db/repos/horcrux/sci-misc/comfyui/*.ebuild /var/db/repos/horcrux/acct-user/comfyui/*.ebuild /var/db/repos/horcrux/acct-group/comfyui/*.ebuild \
              /var/db/repos/canutethegreat/app-misc/alienfx/alienfx-2.4.3.ebuild /var/db/repos/local/sys-apps/hogsmeade-private/*.ebuild; do ebuild "$e" manifest; done
-RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
-    --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
+RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
     emerge --oneshot --usepkg=n sys-kernel/horcrux-hogsmeade-config; \
     ls /etc/kernel/config.d; test -s /usr/share/horcrux-hogsmeade/required-config.txt
