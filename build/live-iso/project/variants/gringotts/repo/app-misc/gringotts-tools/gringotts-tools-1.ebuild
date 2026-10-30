@@ -28,7 +28,7 @@ src_install() {
 	doexe usr/bin/gringotts-{install,remote,restore,motd}
 	exeinto /usr/libexec
 	doexe usr/libexec/gringotts-{session,firstboot}
-	doinitd etc/init.d/gringotts-{live,firstboot}
+	doinitd etc/init.d/gringotts-firstboot
 	insinto /etc/ssh/sshd_config.d
 	doins etc/ssh/sshd_config.d/10-gringotts.conf
 	insinto /etc/NetworkManager/conf.d
