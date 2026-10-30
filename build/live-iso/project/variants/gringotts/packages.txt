@@ -1,0 +1,20 @@
+# gringotts: the owner's apps (all Portage). Already in the Desktop image: brave-bin, firefox-bin, tailscale, nextcloud-client, terminator, vim,
+# clamav, linux-firmware, sof-firmware, intel-microcode, networkmanager. Brave is re-merged from the owner's overlay by the Dockerfile.
+net-im/discord
+app-containers/docker
+app-containers/docker-cli
+app-containers/docker-buildx
+app-containers/docker-compose
+net-vpn/proton-vpn-gtk-app
+net-misc/remmina
+app-emulation/virt-viewer
+media-gfx/gimp
+media-gfx/geeqie
+media-video/vlc
+net-misc/mosh
+net-analyzer/nmap
+net-analyzer/wireshark
+app-misc/tmux
+sys-auth/fprintd
+net-vpn/wireguard-tools
+net-firewall/nftables
