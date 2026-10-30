@@ -187,16 +187,29 @@ class XT(SQ.T):
         want = ["lightdm", "X", "xfce4-session", "xfwm4", "xfce4-panel", "xfdesktop", "xfce4-power-man", "nm-applet", "onboard", "xfsettingsd", "pipewire", "wireplumber", "xfce4-screensav", "tailscaled"]
         while time.time() < end:
             rc, got = self.ssh("ps -eo comm | sort -u | tr '\\n' ' '")
-            if all(w in set(got.split()) for w in want[:9]):
+            if all(w in set(got.split()) for w in want[:12]):
                 break
             time.sleep(6)
-        s("xfce-session-up-for-autologin-user", all(w in set(got.split()) for w in want[:9]), "missing: " + ", ".join(w for w in want if w not in set(got.split())) if not all(w in set(got.split()) for w in want) else "all running")
+        s("xfce-session-up-for-autologin-user", all(w in set(got.split()) for w in want[:12]), "missing: " + ", ".join(w for w in want if w not in set(got.split())) if not all(w in set(got.split()) for w in want) else "all running")
         self.save("processes.txt", got)
         time.sleep(5)
         vm.shot("desktop")
         rc, out = self.ssh("loginctl list-sessions --no-legend; grep -c lightdm /etc/runlevels/default/* 2>/dev/null; ls /etc/runlevels/default | tr '\\n' ' '; echo; cat /etc/conf.d/display-manager; cat /etc/lightdm/lightdm.conf.d/*.conf | grep -E 'autologin|greeter|session'")
         self.save("session-state.txt", out)
         s("lightdm-autologin-configured", "autologin-user=" + USER in out and "DISPLAYMANAGER=\"lightdm\"" in out, re.sub(r"\s+", " ", out)[:240])
+        # ---- hogshead first-boot lessons (a)-(d), asserted on the INSTALLED system
+        rc, out = self.ssh("ls /boot/initramfs-*.img | head -1 | xargs lsinitrd 2>/dev/null | grep -E 'i915|usbhid|xhci|hid-multitouch|dm-crypt' | awk '{print $NF}' | tr '\\n' ' '; echo @@@; "
+                           "grep -rh -E 'i915' /etc/dracut.conf.d/ | tr '\\n' ' '", timeout=90)
+        self.save("early-kms.txt", out)
+        s("early-kms-i915-in-initramfs", "i915" in out.split("@@@")[0] and "force_drivers" in out.split("@@@")[-1], re.sub(r"\s+", " ", out)[:240])
+        rc, out = self.ssh("mkdir -p /mnt/hx-root && mount --bind / /mnt/hx-root && ls -A /mnt/hx-root/home | tr '\\n' ' '; echo @@@; ls -A /home | tr '\\n' ' '; echo @@@; "
+                           "findmnt -no SOURCE,TARGET /home || echo no-separate-home; echo @@@; ls -A /home/" + USER + " | head -20 | tr '\\n' ' '; stat -c '%U' /home/" + USER + "; umount /mnt/hx-root")
+        a1, a2, a3, a4 = (out.split("@@@") + ["", "", "", ""])[:4]
+        s("home-not-hidden-under-a-mount", a1.split() == a2.split() and USER in a2 and ".config" in a4 and USER in a4, re.sub(r"\s+", " ", out)[:240])
+        rc, out = self.ssh("locale -a | tr '\\n' ' '; echo @@@; su - " + USER + " -c 'locale 2>&1 | head -3'; echo @@@; cat /etc/env.d/02locale")
+        s("locale-en-us-utf8-generated", re.search(r"en_US\.(utf8|UTF-8)", out) is not None and "Cannot set" not in out, re.sub(r"\s+", " ", out)[:240])
+        rc, out = self.ssh("grep -rl 'interface-name' /etc/NetworkManager/system-connections 2>/dev/null | head -3; echo rc=done; ls -l /etc/NetworkManager/system-connections 2>&1 | tail -3; rc-status default | grep -i -E 'NetworkManager'")
+        s("no-networkmanager-profile-pinned-to-an-interface", out.startswith("rc=done") and "NetworkManager" in out, re.sub(r"\s+", " ", out)[:240])
         # session env helper: run commands as the user inside the X session
         def usr(cmd, timeout=120):
             inner = ("export DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) XAUTHORITY=$HOME/.Xauthority; " + cmd)
@@ -206,6 +219,10 @@ class XT(SQ.T):
                       "cat /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml | grep -c critical-power-action; xfconf-query -c xfce4-power-manager -l 2>&1 | head -20")
         self.save("x11-state.txt", out)
         s("x-session-has-output-and-input-and-schema-defaults", "Screen 0" in out and "true" in out and "critical-power-action" not in "FAIL", re.sub(r"\s+", " ", out)[:240])
+        rc, out = self.ssh("cat /home/" + USER + "/.xsession-errors /var/log/lightdm/*.log /var/log/lightdm/*/*.log 2>/dev/null | grep -i -E 'Unable to contact settings server|Failed to connect to the session bus|Cannot connect to session|Could not (connect|open) display' | sort | uniq -c | head -5; echo rc=done; "
+                           "ps -u " + USER + " -o comm | sort -u | tr '\\n' ' '")
+        self.save("session-errors.txt", out)
+        s("no-unable-to-contact-settings-server", out.startswith("rc=done") and "xfsettingsd" in out, re.sub(r"\s+", " ", out)[:240])
         rc, out = self.ssh("rc-service elogind status 2>&1 | tail -1; dbus-send --system --print-reply --dest=org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager.CanHibernate 2>&1 | tail -1; "
                            "dbus-send --system --print-reply --dest=org.freedesktop.UPower /org/freedesktop/UPower org.freedesktop.DBus.Properties.Get string:org.freedesktop.UPower string:LidIsPresent 2>&1 | tail -1; "
                            "pgrep -a onboard | head -2; test -x /usr/libexec/iio-sensor-proxy -o -x /usr/sbin/iio-sensor-proxy && echo iio-sensor-proxy-installed")
@@ -286,6 +303,19 @@ class XT(SQ.T):
         self.save("greeter-windows.txt", wm)
         s("greeter-onboard-running", re.search(r"onboard", wm) is not None, re.sub(r"\s+", " ", wm)[:240])
         s("greeter-onscreen-keyboard-available", "onboard" in out or re.search(r"keyboard\s*=\s*onboard", out) is not None, "greeter has an on-screen keyboard (a11y button / onboard)")
+        # a REAL login at the greeter: the desktop user's password (the same passphrase typed at install) on the USB keyboard
+        self.key(vm, LUKS_PW + "\n")
+        ok = False
+        for _ in range(30):
+            time.sleep(6)
+            if USER in self.ssh("pgrep -u " + USER + " -x xfce4-session >/dev/null && echo " + USER)[1] and "xfsettingsd" in self.ssh("pgrep -u " + USER + " -a xfsettingsd")[1]:
+                ok = True
+                break
+        time.sleep(15)
+        vm.shot("greeter-login-session")
+        rc, out = self.ssh("loginctl list-sessions --no-legend; ps -u " + USER + " -o comm | sort -u | tr '\\n' ' '; grep -i -c 'Unable to contact settings server' /home/" + USER + "/.xsession-errors")
+        self.save("greeter-login.txt", out)
+        s("greeter-login-with-password-starts-xfce", ok and "xfce4-panel" in out and "nm-applet" in out and "onboard" in out, re.sub(r"\s+", " ", out)[:240])
         self.ssh("mv /root/60-autologin.conf.bak /etc/lightdm/lightdm.conf.d/60-horcrux-autologin.conf; rc-service display-manager stop >/dev/null 2>&1; pkill -9 -x X; sleep 2; rc-service display-manager start >/dev/null 2>&1", timeout=90)
         time.sleep(30)
         self.soft = False
