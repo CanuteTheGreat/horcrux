@@ -27,15 +27,16 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
     eselect profile show
 
 COPY project/variants/gringotts/packages.txt /tmp/packages-gringotts.txt
+COPY project/variants/gringotts/pkgs-owning-dev.py /tmp/pkgs-owning-dev.py
 
 # the Desktop layer deleted /usr/include and the LLVM/clang tools to fit the ISO; the apps compile (go, C): put those files back by re-installing exactly the
 # packages that own them (binary packages, same versions), then slim again at the end
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
-    pk=$(grep -lE '^(obj|sym|dir) /usr/(include|lib/llvm/[0-9]+/(include|bin)|lib/clang)' /var/db/pkg/*/*/CONTENTS | sed -e 's|/var/db/pkg/|=|' -e 's|/CONTENTS||' | sort -u); \
+    pk=$(python3 /tmp/pkgs-owning-dev.py); \
     echo "re-installing $(echo $pk | wc -w) packages that own headers/llvm tools"; \
-    emerge --oneshot --nodeps --usepkg --getbinpkg --buildpkg=n $pk >/dev/null; \
+    emerge --oneshot --nodeps --usepkg --getbinpkg --buildpkg=n $pk 2>&1 | tail -8; \
     test -f /usr/include/stdio.h
 
 # apps: Brave comes from the owner's overlay (re-merged below so the package belongs to canutethegreat-overlay, not the desktop layer's stop-gap copy)
