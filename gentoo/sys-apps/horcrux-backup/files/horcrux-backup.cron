@@ -1,0 +1,4 @@
+# Owner standard 2026-10-30: encrypted restic -> B2, 30 days. Provisioned secrets: /etc/ctg-backup/{env,repo.pw} (root 0600, from crystalcave over ssh stdin).
+30 3 * * *   root  /usr/sbin/ctg-restic-cron backup  >> /var/log/ctg-restic.log 2>&1
+30 6 * * 0   root  /usr/sbin/ctg-restic-cron prune   >> /var/log/ctg-restic.log 2>&1
+30 7 2 * *   root  /usr/sbin/ctg-restic-cron check   >> /var/log/ctg-restic.log 2>&1

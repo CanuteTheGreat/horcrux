@@ -4,6 +4,8 @@
 gnome-base/gnome-light
 gnome-base/gdm
 gnome-extra/gnome-tweaks
+gnome-extra/gnome-shell-extensions
+gnome-extra/gnome-shell-extension-appindicator
 sys-auth/elogind
 net-misc/networkmanager
 media-video/pipewire

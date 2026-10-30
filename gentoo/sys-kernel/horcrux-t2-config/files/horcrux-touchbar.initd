@@ -1,0 +1,68 @@
+#!/sbin/openrc-run
+# Attach the Apple T2 Touch Bar display (USB 05ac:8302, bridgeOS iBridge) to appletbdrm so tiny-dfr can draw on it.
+#
+# The device has two USB configurations: 1 = function-key keyboard (the kernel default, bridgeOS draws the keys),
+# 2 = display + touch. On the t2bce stack the display's bulk pipes only answer after a USB port reset of the device
+# in configuration 2: with a plain SET_CONFIGURATION every bulk OUT times out and the appletbdrm probe fails with
+# -110. So: select configuration 2, reset the device, bind appletbdrm to interface 2.1 (it autobinds on later module
+# reloads/probes once the device has been reset).
+description="Touch Bar display attach (USB configuration 2 + reset + appletbdrm)"
+
+depend() {
+	need localmount udev
+	after modules
+	before tiny-dfr
+}
+
+tb_dev() {
+	local d
+	for d in /sys/bus/usb/devices/*; do
+		[ -r "${d}/idVendor" ] || continue
+		if [ "$(cat "${d}/idVendor")" = 05ac ] && [ "$(cat "${d}/idProduct")" = 8302 ]; then
+			echo "${d##*/}"
+			return 0
+		fi
+	done
+	return 1
+}
+
+# USBDEVFS_RESET (_IO('U', 20)) on the device node: a port reset through the t2bce vhci
+tb_reset() {
+	python3 - "$(cat "/sys/bus/usb/devices/${1}/busnum")" "$(cat "/sys/bus/usb/devices/${1}/devnum")" <<-'PY'
+		import fcntl, os, sys
+		fd = os.open("/dev/bus/usb/%03d/%03d" % (int(sys.argv[1]), int(sys.argv[2])), os.O_RDWR)
+		fcntl.ioctl(fd, (ord("U") << 8) | 20, 0)
+	PY
+}
+
+tb_bound() {
+	[ -e "/sys/bus/usb/drivers/appletbdrm/${1}:2.1" ]
+}
+
+start() {
+	local dev try
+	modprobe -q hid_appletb_bl
+	modprobe -q hid_multitouch
+	modprobe -q appletbdrm
+	dev=$(tb_dev) || { eerror "Touch Bar device 05ac:8302 not found (t2bce_vhci loaded?)"; return 1; }
+	tb_bound "${dev}" && return 0
+	if [ "$(cat "/sys/bus/usb/devices/${dev}/bConfigurationValue")" != 2 ]; then
+		echo 2 > "/sys/bus/usb/devices/${dev}/bConfigurationValue" || { eerror "cannot select USB configuration 2"; return 1; }
+		sleep 1
+	fi
+	for try in 1 2 3; do
+		tb_bound "${dev}" && return 0
+		# the driver is unbound after a failed probe, so the reset touches nothing else
+		tb_reset "${dev}" 2>/dev/null
+		sleep 2
+		tb_bound "${dev}" || echo "${dev}:2.1" > /sys/bus/usb/drivers/appletbdrm/bind 2>/dev/null
+		sleep 1
+	done
+	tb_bound "${dev}" || { eerror "appletbdrm did not bind to ${dev}:2.1"; return 1; }
+	return 0
+}
+
+stop() {
+	# nothing to undo: leaving configuration 2 selected is harmless, the next boot starts in configuration 1
+	return 0
+}

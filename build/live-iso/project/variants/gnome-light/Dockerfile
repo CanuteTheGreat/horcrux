@@ -13,14 +13,31 @@ COPY project/variants/gnome-light/portage/ /etc/portage/
 COPY project/variants/gnome-light/repo/ /var/db/repos/horcrux-gnome-light/
 COPY project/variants/gnome-light/packages.txt /tmp/packages-desktop.txt
 
-# profile with the GNOME defaults (OpenRC flavour: elogind, no systemd), Manifest for the local Brave ebuild, one emerge
+# profile with the GNOME defaults (OpenRC flavour: elogind, no systemd), the owner's overlay (Brave), one emerge
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; \
     eselect profile set default/linux/amd64/23.0/desktop/gnome; \
-    ( cd /var/db/repos/horcrux-gnome-light/www-client/brave-bin && ebuild brave-bin-*.ebuild manifest ); \
+    git clone -q --depth 1 https://github.com/CanuteTheGreat/canutethegreat-overlay.git /var/db/repos/canutethegreat-overlay; \
     export FEATURES="-ccache"; \
     emerge --update --newuse $(grep -v '^#' /tmp/packages-desktop.txt | tr '\n' ' ')
+
+# GNOME under OpenRC (patches in /etc/portage/patches/gnome-base/gnome-session-openrc): the gsd meta services lose supervisor=supervise-daemon (openrc refused to start
+# them: no session), and gsd-media-keys/gsd-sound `want` + start after wireplumber and pipewire-pulse (nothing started PipeWire in the user session:
+# pipewire.desktop is X-GNOME-HiddenUnderSystemd; and a gsd that came up before it never reconnected: dead volume keys). Binary packages ignore patches: rebuild from source.
+RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
+    set -e; unset ARCH; export FEATURES="-ccache"; \
+    emerge --oneshot --usepkg=n --getbinpkg=n --buildpkg=n gnome-base/gnome-session-openrc; \
+    if grep -q supervise-daemon /etc/user/init.d/gnome-settings-daemon-wayland /etc/user/init.d/gnome-settings-daemon-x11; then echo 'gsd supervisor patch not applied'; exit 1; fi; \
+    grep -q 'want pipewire-pulse wireplumber' /etc/user/init.d/gsd || { echo 'gsd audio ordering patch not applied'; exit 1; }; \
+    grep -q 'keep the shell there' /etc/user/init.d/gnome-shell-wayland || { echo 'gnome-shell user-bus patch not applied'; exit 1; }
+
+# GNOME system-wide defaults (every GNOME install gets them through @world): AppIndicator tray icons enabled in a packaged system dconf db. The Horcrux
+# overlay is copied only now so editing it does not invalidate the long layers above.
+COPY --from=hxfull / /var/db/repos/horcrux/
+RUN set -e; unset ARCH; export FEATURES="-ccache"; \
+    emerge --update --newuse --usepkg=n --getbinpkg=n --select gnome-extra/horcrux-gnome-defaults; \
+    test -s /etc/dconf/db/local && test -f /etc/dconf/profile/user && qfile -q /etc/dconf/db/local
 
 COPY project/variants/gnome-light/overlay/ /
 
@@ -39,5 +56,7 @@ RUN set -e; chmod 644 /usr/share/horcrux/desktop/*; \
     find /usr/lib /usr/lib64 -xdev -name '*.a' -type f ! -path '/usr/lib/gcc/*' -delete 2>/dev/null || true; \
     rm -rf /usr/include /usr/lib/llvm/*/include /usr/lib/llvm/*/bin /usr/lib/clang 2>/dev/null || true; \
     echo "desktop" > /etc/live-iso-variant; echo "gnome-light" >> /etc/live-iso-variant; \
+    # the overlay tree is re-cloned by `emaint sync` (repos.conf stays); ship an EMPTY dir, not a stale copy
+    rm -rf /var/db/repos/canutethegreat-overlay; mkdir -p /var/db/repos/canutethegreat-overlay; \
     rm -rf /var/db/repos/gentoo/* /var/cache/distfiles/* /var/cache/binhost /usr/share/doc /usr/share/gtk-doc /var/tmp/portage /var/log/emerge* 2>/dev/null || true; \
     find / -xdev -name '*.pyc' -path '*/__pycache__/*' -delete 2>/dev/null || true

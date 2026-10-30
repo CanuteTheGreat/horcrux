@@ -308,6 +308,63 @@ def write_wifi_profile(root, ssid, psk):
     return path
 
 
+def nm_wifi_networks(directory):
+    """(ssid, psk) of every Wi-Fi profile in a NetworkManager system-connections directory (psk '' = open network).
+    802.1x/enterprise profiles and anything without a readable SSID are skipped."""
+    import configparser
+    out = []
+    if not os.path.isdir(directory):
+        return out
+    for fn in sorted(os.listdir(directory)):
+        if not fn.endswith(".nmconnection"):
+            continue
+        cp = configparser.RawConfigParser(strict=False, interpolation=None)
+        try:
+            cp.read(os.path.join(directory, fn))
+        except (configparser.Error, OSError, UnicodeDecodeError):
+            continue
+        if cp.get("connection", "type", fallback="") not in ("wifi", "802-11-wireless"):
+            continue
+        ssid = cp.get("wifi", "ssid", fallback="") or cp.get("802-11-wireless", "ssid", fallback="")
+        if not ssid:
+            continue
+        key_mgmt = cp.get("wifi-security", "key-mgmt", fallback="")
+        if key_mgmt in ("wpa-eap", "ieee8021x"):
+            continue
+        out.append((ssid, cp.get("wifi-security", "psk", fallback="")))
+    return out
+
+
+def carry_wifi_to_iwd(root, sources=("/etc/NetworkManager/system-connections",)):
+    """NetworkManager with the iwd backend (desktop images) only autoconnects networks that iwd already knows, i.e. that have a
+    /var/lib/iwd/<ssid>.psk file. Profiles joined on the live system (nmtui, GNOME) or carried over as .nmconnection files
+    therefore never connected on the first boot of the installed system (hogshead, 2026-10-30). Write the iwd file for each of
+    them (never overwriting one that exists) and drop `interface-name=` pins from the copies inside the target: the installed
+    system names its Wi-Fi device differently from the live one. Returns the written iwd paths."""
+    written, seen = [], set()
+    for src in sources:
+        for ssid, psk in nm_wifi_networks(src):
+            if ssid in seen:
+                continue
+            seen.add(ssid)
+            fn = ssid if re.fullmatch(r"[A-Za-z0-9 _-]+", ssid) else "=" + ssid.encode().hex()
+            if os.path.exists(os.path.join(root, "var/lib/iwd", f"{fn}.psk")) or os.path.exists(os.path.join(root, "var/lib/iwd", f"{fn}.open")):
+                continue
+            written.append(write_wifi_profile(root, ssid, psk))
+    d = os.path.join(root, "etc/NetworkManager/system-connections")
+    if os.path.isdir(d):
+        for fn in os.listdir(d):
+            path = os.path.join(d, fn)
+            if not fn.endswith(".nmconnection") or not os.path.isfile(path):
+                continue
+            txt = open(path).read()
+            new = re.sub(r"(?m)^interface-name=.*\n", "", txt)
+            if new != txt:
+                with open(path, "w") as f:
+                    f.write(new)
+    return written
+
+
 def wifi_connect(iface, ssid, psk):
     cmd = ["iwctl"] + (["--passphrase", psk] if psk else []) + ["station", iface, "connect", ssid]
     rc, out = sh(cmd, timeout=40)
