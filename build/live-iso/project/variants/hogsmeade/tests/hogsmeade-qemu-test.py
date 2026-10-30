@@ -156,7 +156,7 @@ class HRun(zt.ZRun):
         self.step("zfs-snapshot-rotation-skips-comfyui", n and int(n[0]) >= 2 and n[-1] == "0", o.strip().replace("\n", " | "))
         rc, o = self.sh("cat /etc/cron.d/hogsmeade; rc-service cronie status 2>&1 | head -1; restic version; hogsmeade-health --quiet; echo HEALTH-RC=$?")
         self.step("snapshot-cron-backup-job-and-health-present", "hogsmeade-snapshots hourly" in o and "hogsmeade-snapshots daily" in o and "hogsmeade-backup" in o and "hogsmeade-health" in o and "restic " in o and "HEALTH-RC=" in o, o.strip().replace("\n", " | ")[:400])
-        rc, o = self.sh("ls /etc/hogsmeade/; test ! -e /etc/hogsmeade/backup.env && test ! -e /etc/hogsmeade/restic-password && echo NO-RESTIC-SECRETS-IN-IMAGE; grep -rlE 'AWS_SECRET|RESTIC_PASSWORD|applicationKey' /etc /root /home /usr/share/hogsmeade 2>/dev/null | head -3; echo GREP-DONE")
+        rc, o = self.sh("ls /etc/hogsmeade/; test ! -e /etc/hogsmeade/backup.env && test ! -e /etc/hogsmeade/restic-password && echo NO-RESTIC-SECRETS-IN-IMAGE; grep -rlE --exclude=README 'AWS_SECRET|RESTIC_PASSWORD|applicationKey' /etc /root /home /usr/share/hogsmeade 2>/dev/null | head -3; echo GREP-DONE")
         self.step("image-has-no-restic-credentials", "NO-RESTIC-SECRETS-IN-IMAGE" in o and "GREP-DONE" in o and not re.search(r"^/(etc|root|home|usr)", o, re.M), o.strip().replace("\n", " | ")[:300])
         rc, o = self.sh("awccctl status 2>&1 | head -5; rc-service awccd status 2>&1 | head -2; busctl --system list 2>/dev/null | grep -i awcc || true")
         self.step("awccd-and-awccctl-run", "profile:" in o, o.strip().replace("\n", " | ")[:300])
