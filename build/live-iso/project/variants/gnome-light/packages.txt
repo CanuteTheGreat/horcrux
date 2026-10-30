@@ -6,7 +6,6 @@ gnome-base/gdm
 gnome-extra/gnome-tweaks
 gnome-extra/gnome-shell-extensions
 gnome-extra/gnome-shell-extension-appindicator
-gnome-extra/horcrux-gnome-defaults
 sys-auth/elogind
 net-misc/networkmanager
 media-video/pipewire

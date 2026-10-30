@@ -32,6 +32,13 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
     grep -q 'want pipewire-pulse wireplumber' /etc/user/init.d/gsd || { echo 'gsd audio ordering patch not applied'; exit 1; }; \
     grep -q 'keep the shell there' /etc/user/init.d/gnome-shell-wayland || { echo 'gnome-shell user-bus patch not applied'; exit 1; }
 
+# GNOME system-wide defaults (every GNOME install gets them through @world): AppIndicator tray icons enabled in a packaged system dconf db. The Horcrux
+# overlay is copied only now so editing it does not invalidate the long layers above.
+COPY --from=hxfull / /var/db/repos/horcrux/
+RUN set -e; unset ARCH; export FEATURES="-ccache"; \
+    emerge --update --newuse --usepkg=n --getbinpkg=n --select gnome-extra/horcrux-gnome-defaults; \
+    test -s /etc/dconf/db/local && test -f /etc/dconf/profile/user && qfile -q /etc/dconf/db/local
+
 COPY project/variants/gnome-light/overlay/ /
 
 # the Desktop image marks itself (the installer offers the desktop profile only when this exists); slim down again

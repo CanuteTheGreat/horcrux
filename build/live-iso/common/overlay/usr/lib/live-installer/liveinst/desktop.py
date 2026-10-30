@@ -80,4 +80,10 @@ def apply(inst):
         inst.write("/etc/gdm/custom.conf", f"[daemon]\nAutomaticLoginEnable=True\nAutomaticLogin={name}\nWaylandEnable=true\n")
     else:
         inst.write("/etc/gdm/custom.conf", "[daemon]\nWaylandEnable=true\n")
+    # the GNOME defaults package (AppIndicator tray icons enabled system-wide) belongs to @world of every GNOME install, so later `emerge -uDN @world` keeps it
+    pk = f"{T}/var/db/pkg/gnome-extra"
+    if os.path.isdir(pk) and any(d.startswith("horcrux-gnome-defaults-") for d in os.listdir(pk)):
+        w = f"{T}/var/lib/portage/world"
+        if "gnome-extra/horcrux-gnome-defaults" not in (open(w).read().split() if os.path.exists(w) else []):
+            inst.write("/var/lib/portage/world", "gnome-extra/horcrux-gnome-defaults\n", append=True)
     inst.log(f"desktop profile: user {name}, GNOME/GDM on Wayland")
