@@ -44,7 +44,8 @@ RUN --mount=type=cache,id=surface-binpkgs-${ARCH:-x86_64},target=/var/cache/binp
 RUN --mount=type=cache,id=surface-binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=surface-distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \
-    emerge --update --newuse --usepkg --getbinpkg app-misc/horcrux-surface-desktop \
+    rm -f /var/cache/binpkgs/app-misc/horcrux-surface-desktop-* /var/cache/binpkgs/sys-apps/horcrux-live-installer-* /var/cache/binpkgs/sys-kernel/horcrux-surface-config-*; \
+    emerge --update --newuse --usepkg --getbinpkg --usepkg-exclude "app-misc/horcrux-surface-desktop sys-apps/horcrux-live-installer sys-kernel/horcrux-surface-config app-admin/rustinion-bin" app-misc/horcrux-surface-desktop \
         > /var/log/surface-apps.log 2>&1 || { tail -80 /var/log/surface-apps.log; for l in /var/tmp/portage/*/*/temp/build.log; do echo "== $l"; tail -25 $l; done; exit 1; }; \
     tail -5 /var/log/surface-apps.log
 
@@ -61,7 +62,7 @@ RUN --mount=type=cache,id=surface-binpkgs-${ARCH:-x86_64},target=/var/cache/binp
     for f in /etc/init.d/live-installer /usr/libexec/live-installer-session /usr/bin/live-installer /usr/bin/horcrux-surface-auto /usr/share/live-installer/hwprofiles/surface.toml /usr/sbin/lightdm /usr/bin/xfce4-session /usr/bin/onboard /usr/bin/brave-bin /usr/bin/nextcloud /usr/bin/rustinion; do test -e $f || { echo "MISSING after depclean: $f"; exit 1; }; done
 
 # the live initramfs for the new kernel (dmsquash-live + the zfs/lvm/resume modules the installer's initramfs needs), services for the live image
-RUN set -e; rm -rf /lib/modules/*-gentoo-dist-bin /usr/src/linux-6.18.57* /etc/libvirt /var/lib/libvirt; ls /lib/modules
+RUN set -e; rm -rf /lib/modules/*-gentoo-dist-bin /usr/src/linux-6.18.57* /boot/*6.18.57* /boot/*.old /etc/libvirt /var/lib/libvirt; ls /lib/modules
 RUN set -e; kr=$(cat /etc/surface-kernelrelease); \
     export CHOST=$(ls /usr/lib/gcc | head -1); \
     dracut -f --no-hostonly --kver "$kr" "/boot/initramfs-$kr.img" "$kr"; \
