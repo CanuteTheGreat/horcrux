@@ -36,6 +36,8 @@ RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,shar
     done | tee /etc/hogshead-optional.txt; true
 
 RUN set -e; for s in docker t2fanrd tiny-dfr; do rc-update add $s default || true; done; \
+    # leftovers of the stock binary kernel that was unmerged (its modules dir kept the zfs.ko built for it) and the .old copies
+    rm -rf /lib/modules/6.18.57-gentoo-dist-bin /boot/*6.18.57-gentoo-dist-bin* /boot/*.old; \
     echo "hogshead" >> /etc/live-iso-variant; \
     find / -xdev -name '*.pyc' -path '*/__pycache__/*' -delete 2>/dev/null || true; \
     rm -rf /var/tmp/portage /var/cache/distfiles/* 2>/dev/null || true
