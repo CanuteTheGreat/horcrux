@@ -54,6 +54,13 @@ RUN --mount=type=cache,id=surface-binpkgs-${ARCH:-x86_64},target=/var/cache/binp
     set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \
     eselect profile set default/linux/amd64/23.0/desktop; \
     emerge --update --newuse --usepkg --getbinpkg kde-frameworks/extra-cmake-modules net-misc/nextcloud-client > /var/log/surface-nc.log 2>&1 || { tail -30 /var/log/surface-nc.log; for l in /var/tmp/portage/*/*/temp/build.log; do echo "== $l"; grep -n -i -E "error|undefined|fatal|CMake Error" $l | head -30; tail -25 $l; done; exit 1; }
+# dbus must have X (dbus-launch --autolaunch: the XFCE session bus). A plain `emerge -u <meta>` does not re-check already installed
+# dependencies for USE changes, so rebuild it explicitly (the stock server image has dbus -X)
+RUN --mount=type=cache,id=surface-binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
+    --mount=type=cache,id=surface-distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
+    set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \
+    emerge --oneshot --newuse --usepkg --getbinpkg sys-apps/dbus > /var/log/surface-dbus.log 2>&1 || { tail -40 /var/log/surface-dbus.log; exit 1; }; \
+    qlist -IUv sys-apps/dbus | grep -q ' X ' || { echo "dbus has no X: $(qlist -IUv sys-apps/dbus)"; exit 1; }
 RUN --mount=type=cache,id=surface-binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=surface-distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \

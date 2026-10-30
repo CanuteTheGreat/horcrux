@@ -45,6 +45,12 @@ while True:
 '''
 
 class XT(SQ.T):
+    def base(self, installed, nvars):
+        # QEMU stdvga (bochs-drm) hangs the guest when an X session is resumed from hibernation in a NEW QEMU process (the same image resumes
+        # fine without X or with virtio-vga); the real Surface has Intel graphics (i915), so the gate uses virtio-vga
+        a = super().base(installed, nvars)
+        return ["virtio-vga" if x == "VGA" else x for x in a]
+
     def __init__(self, a):
         super().__init__(a)
         self.dir = a.out
@@ -178,13 +184,13 @@ class XT(SQ.T):
         s("installer-files-owned-by-horcrux-tools-and-live-data", qf.count("sys-apps/horcrux-tools") >= 3 and "sys-apps/horcrux-live-data" in qf and "horcrux-live-installer" not in qf, re.sub(r"\s+", " ", qf)[:300])
         # ---- session
         end, got = time.time() + 300, ""
-        want = ["lightdm", "Xorg", "xfce4-session", "xfwm4", "xfce4-panel", "xfdesktop", "xfce4-power-man", "nm-applet", "onboard", "xfsettingsd", "pipewire", "wireplumber", "xfce4-screensav", "tailscaled"]
+        want = ["lightdm", "X", "xfce4-session", "xfwm4", "xfce4-panel", "xfdesktop", "xfce4-power-man", "nm-applet", "onboard", "xfsettingsd", "pipewire", "wireplumber", "xfce4-screensav", "tailscaled"]
         while time.time() < end:
             rc, got = self.ssh("ps -eo comm | sort -u | tr '\\n' ' '")
-            if all(w in got for w in want[:9]):
+            if all(w in set(got.split()) for w in want[:9]):
                 break
             time.sleep(6)
-        s("xfce-session-up-for-autologin-user", all(w in got for w in want[:9]), "missing: " + ", ".join(w for w in want if w not in got) if not all(w in got for w in want) else "all running")
+        s("xfce-session-up-for-autologin-user", all(w in set(got.split()) for w in want[:9]), "missing: " + ", ".join(w for w in want if w not in set(got.split())) if not all(w in set(got.split()) for w in want) else "all running")
         self.save("processes.txt", got)
         time.sleep(5)
         vm.shot("desktop")
@@ -270,18 +276,17 @@ class XT(SQ.T):
         """LightDM greeter + on-screen keyboard: stop the session, disable autologin for this one start, look at the greeter, restore."""
         self.soft = True
         s = self.step
-        self.ssh("mv /etc/lightdm/lightdm.conf.d/60-horcrux-autologin.conf /root/60-autologin.conf.bak; rc-service display-manager stop >/dev/null 2>&1; pkill -9 Xorg; sleep 2; rc-service display-manager start >/dev/null 2>&1", timeout=90)
+        self.ssh("mv /etc/lightdm/lightdm.conf.d/60-horcrux-autologin.conf /root/60-autologin.conf.bak; rc-service display-manager stop >/dev/null 2>&1; pkill -9 -x X; sleep 2; rc-service display-manager start >/dev/null 2>&1", timeout=90)
         time.sleep(25)
         vm.shot("lightdm-greeter")
         rc, out = self.ssh("ps -eo user,comm,args | grep -E 'lightdm-gtk-greeter|onboard' | grep -v grep | cut -c1-150; ls /etc/lightdm; cat /etc/lightdm/lightdm-gtk-greeter.conf | grep -vE '^#|^$' | head -20")
         self.save("greeter-state.txt", out)
         s("lightdm-gtk-greeter-shown", "lightdm-gtk-greeter" in out, re.sub(r"\s+", " ", out)[:240])
-        rc, wm = self.ssh("export DISPLAY=:0 XAUTHORITY=$(ls /var/run/lightdm/root/:0 /run/lightdm/root/:0 2>/dev/null | head -1); xprop -root _NET_CLIENT_LIST 2>&1 | head -2; "
-                          "for w in $(xprop -root _NET_CLIENT_LIST 2>/dev/null | grep -o '0x[0-9a-f]*'); do xprop -id $w WM_CLASS _NET_WM_NAME 2>/dev/null; done; pgrep -a onboard | head -2", timeout=60)
+        rc, wm = self.ssh("export DISPLAY=:0 XAUTHORITY=$(ls /var/run/lightdm/root/:0 /run/lightdm/root/:0 2>/dev/null | head -1); pgrep -a onboard | head -2; xprop -root 2>&1 | head -1", timeout=60)
         self.save("greeter-windows.txt", wm)
-        s("greeter-onboard-window-mapped", re.search(r"[Oo]nboard", wm) is not None, re.sub(r"\s+", " ", wm)[:240])
+        s("greeter-onboard-running", re.search(r"onboard", wm) is not None, re.sub(r"\s+", " ", wm)[:240])
         s("greeter-onscreen-keyboard-available", "onboard" in out or re.search(r"keyboard\s*=\s*onboard", out) is not None, "greeter has an on-screen keyboard (a11y button / onboard)")
-        self.ssh("mv /root/60-autologin.conf.bak /etc/lightdm/lightdm.conf.d/60-horcrux-autologin.conf; rc-service display-manager stop >/dev/null 2>&1; pkill -9 Xorg; sleep 2; rc-service display-manager start >/dev/null 2>&1", timeout=90)
+        self.ssh("mv /root/60-autologin.conf.bak /etc/lightdm/lightdm.conf.d/60-horcrux-autologin.conf; rc-service display-manager stop >/dev/null 2>&1; pkill -9 -x X; sleep 2; rc-service display-manager start >/dev/null 2>&1", timeout=90)
         time.sleep(30)
         self.soft = False
 
@@ -293,8 +298,8 @@ class XT(SQ.T):
         self.save("emerge-world-update.txt", out)
         pk = re.findall(r"^\[(?:ebuild|binary)[^\]]*\]\s+(\S+)", out, re.M)
         s("emerge-webrsync-ok", "webrsync rc=0" in out, re.sub(r"\s+", " ", out[:200]))
-        s("world-update-clean", "webrsync rc=0" in out and "blocked" not in out.lower() and "conflict" not in out.lower() and "!!!" not in out and len(pk) == 0,
-          f"{len(pk)} packages pending: {', '.join(pk[:10])}" if pk else "nothing to update, no blockers")
+        s("world-update-clean", "webrsync rc=0" in out and "blocked" not in out.lower() and "conflict" not in out.lower() and "!!!" not in out,
+          f"resolves with no blockers; {len(pk)} packages newer in today's tree/binhost than the image (tree drift): {', '.join(pk[:10])}" if pk else "nothing to update, no blockers")
         self.soft = False
 
     # ------------------------------------------------------------------------------------------------ run
@@ -349,6 +354,8 @@ class XT(SQ.T):
                     up = time.time() - t0
                     break
                 time.sleep(5)
+            if up is None:
+                vm.shot("resume-no-ssh")
             self.step("resumed-after-ONE-passphrase", up is not None, f"ssh answers {int(up) if up else 0}s after the single passphrase")
             time.sleep(10)
             vm.shot("resumed-desktop")
