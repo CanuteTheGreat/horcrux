@@ -19,7 +19,9 @@ KEYWORDS="~amd64"
 RDEPEND="
 	sys-kernel/horcrux-surface-config
 	<sys-kernel/gentoo-kernel-6.19
-	sys-apps/horcrux-live-installer
+	sys-kernel/horcrux-unlock
+	sys-apps/horcrux-tools
+	sys-apps/horcrux-live-data
 	xfce-base/xfce4-meta
 	xfce-base/xfce4-power-manager
 	xfce-extra/xfce4-screensaver

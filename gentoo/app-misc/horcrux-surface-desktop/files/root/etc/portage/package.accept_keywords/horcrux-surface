@@ -7,4 +7,6 @@ app-accessibility/onboard **
 gnome-extra/iio-sensor-proxy **
 =sys-kernel/gentoo-kernel-6.18.59 ~amd64
 =virtual/dist-kernel-6.18.59 ~amd64
-sys-apps/horcrux-live-installer ~amd64
+sys-apps/horcrux-tools ~amd64
+sys-apps/horcrux-live-data ~amd64
+sys-kernel/horcrux-unlock ~amd64

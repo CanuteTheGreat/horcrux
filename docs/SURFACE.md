@@ -88,18 +88,19 @@ Status: **built and emulated, not yet run on the real device.** Everything below
 Build: `VARIANT=surface build/live-iso/build.sh` (optionally `PRIV_DIR=<private dir>` for the private layer) on top of the finished Horcrux rootfs.
 `build/live-iso/project/variants/surface/Dockerfile` stages: overlays (horcrux, GURU, canutethegreat-overlay) → `sys-kernel/horcrux-surface-config`
 → **kernel binary package** `=sys-kernel/gentoo-kernel-6.18.59` (own layer, ~1 h) → install (the stock `gentoo-kernel-bin` goes) + zfs-kmod rebuilt + kernel/module/config
-assertions → `sys-apps/horcrux-live-installer` → **`app-misc/horcrux-surface-desktop`** (one meta package whose RDEPEND is the whole desktop and all apps) → cleanup + live initramfs.
+assertions → `sys-apps/horcrux-tools` + `sys-apps/horcrux-live-data` + `sys-kernel/horcrux-unlock` (the shared packages proven on hogshead) → **`app-misc/horcrux-surface-desktop`** (one meta package whose RDEPEND is the whole desktop and all apps) → cleanup + live initramfs.
 
 | package (Horcrux overlay `gentoo/`) | owns |
 |---|---|
 | `sys-kernel/horcrux-surface-config` | the 16 linux-surface 6.18 patches (`/etc/portage/patches/sys-kernel/gentoo-kernel/`, applied by every `gentoo-kernel` build), `/etc/kernel/config.d/90-horcrux-surface.config`, `/etc/dracut.conf.d/90-horcrux-surface.conf` |
 | `app-misc/horcrux-surface-desktop` | the dependency set above, `/etc/portage/{repos.conf,package.*}` (so `emerge -uDN @world` works on the tablet), LightDM/elogind/xfconf/glib defaults, X input config, `horcrux-surface-auto|-report|-rotate`, `surface-inventory|-backup|-remote`, `/etc/local.d/50-surface-tailscale.start`, the `surface` hardware profile |
-| `sys-apps/horcrux-live-installer` | `live-installer`, console menu, init services, branding (built from `common/overlay` + `project/overlay` at image-build time; fetch-restricted distfile) |
+| `sys-apps/horcrux-tools` | `live-installer`, console menu, `horcrux-orphans`, and for this image the live-ISO init services / zram-swap (`/etc` payload); fetch-restricted distfile made from `common/overlay` + `project/overlay` at image-build time |
+| `sys-apps/horcrux-live-data` | installer branding + Portage metadata snapshot (made from the image) |
+| `sys-kernel/horcrux-unlock` | dracut one-passphrase + resume-before-unlock module |
 | `app-admin/rustinion-bin`, `www-client/brave-bin` (canutethegreat-overlay), `app-accessibility/onboard`, `gnome-extra/iio-sensor-proxy` (GURU) | the apps |
 
-Ownership check: `gentoo/surface/tests/portage-orphans.py` (the `qfile -o` check with merged-/usr path resolution: plain `qfile -o /usr/lib64/x` reports a false
-orphan for a file recorded as `/lib64/x`). Classes that no ebuild can own and that are listed explicitly in the script: installer-written files (passwd, fstab,
-machine-id, grub, initramfs, host keys), Portage/eselect state (`profile.env`, `ld.so.cache`, `make.conf`, gnupg keyring, eselect symlinks), post-install caches (mime, icon, locale-archive).
+Ownership check: `horcrux-orphans` (installed by `sys-apps/horcrux-tools`; merged-/usr safe `qfile -o` over /usr, /opt, /boot, /lib/modules, /lib/firmware) must list only generated files
+(eselect/gcc-config links, icon/mime/gconv caches, `info/dir`, nss `.chk`, `/boot/{grub,efi}`), and no `._cfg*` file may remain under /etc (`etc-update --automode -5` at image end).
 Horcrux's own hypervisor product (horcrux-api, libvirt, qemu, docker) and the Apple T2 userland are removed from this image: not a tablet role.
 
 One-screen install: the default GRUB entry runs `horcrux-surface-auto` (read-only disk inventory, ERASE confirmation only when data is found, passphrase typed twice, answer

@@ -147,19 +147,24 @@ class XT(SQ.T):
                            "find /lib/modules/$k -name 'surface_aggregator*' | head -2; ls /sys/class/dmi/id >/dev/null && cat /sys/class/dmi/id/product_name", timeout=60)
         self.save("kernel-config-surface.txt", out)
         s("surface-kernel-has-the-patched-drivers-and-config", out.count("CONFIG_") >= 9 and "surface_aggregator" in out, re.sub(r"\s+", " ", out)[:300])
-        # ---- ownership: every installed file belongs to an ebuild (portage-orphans.py = qfile -o with merged-/usr path resolution)
-        po = open(os.path.join(HERE, "portage-orphans.py")).read()
-        self.ssh("cat > /tmp/po.py <<'PYEOF'\n" + po + "PYEOF\n", timeout=30)
-        rc, out = self.ssh("python3 /tmp/po.py > /tmp/po.out 2>&1; tail -1 /tmp/po.out; grep -c ^ORPHAN /tmp/po.out", timeout=900)
-        rc2, full = self.ssh("cat /tmp/po.out", timeout=60)
-        self.save("portage-orphans.txt", full)
-        rc3, qf = self.ssh("which qfile >/dev/null 2>&1 && { qfile -o /usr/bin/brave-bin /usr/bin/rustinion /usr/bin/onboard /usr/bin/firefox-bin /usr/bin/live-installer /usr/bin/horcrux-surface-auto /etc/init.d/live-installer /etc/init.d/zram-swap | head; echo qfile-orphan-spot-check-done; qfile /usr/bin/live-installer /usr/bin/horcrux-surface-auto /etc/init.d/zram-swap /usr/bin/brave-bin | head; }", timeout=60)
+        # ---- ownership: horcrux-orphans (shipped by sys-apps/horcrux-tools; merged-/usr safe qfile -o over /usr /opt /boot /lib/modules /lib/firmware)
+        # allowed = generated files only (eselect/gcc-config links, icon/mime/gconv caches, info/dir, nss .chk, cracklib dict, /boot/{grub,efi}); plus no
+        # Portage config-protection leftovers (._cfg*) anywhere under /etc
+        rc, out = self.ssh("horcrux-orphans > /tmp/po.out 2>&1; wc -l < /tmp/po.out; find /etc -name '._cfg*' > /tmp/cfg.out; wc -l < /tmp/cfg.out", timeout=900)
+        rc2, full = self.ssh("cat /tmp/po.out; echo @@CFG; cat /tmp/cfg.out", timeout=60)
+        self.save("horcrux-orphans.txt", full)
+        po, _, cfg = full.partition("@@CFG")
+        ALLOW = [re.compile(x) for x in (r"/etc/", r"^/usr/lib/python[0-9.]+/.*__pycache__/", r"^/usr/lib64?/gconv/gconv-modules\.cache$", r"^/usr/share/(mime|icons)/", r"^/usr/share/(info/)?dir$",
+                 r"^/usr/share/applications/mimeinfo\.cache$", r"^/usr/share/glib-2\.0/schemas/gschemas\.compiled$", r"^/usr/lib64?/lib(freebl3|softokn3|nssdbm3)\.chk$", r"^/usr/lib/locale/locale-archive$",
+                 r"^/usr/libexec/rc/console/keymap$", r"^/usr/share/cracklib/", r"^/boot/(grub|efi|EFI|initramfs-|System\.map|config-|vmlinuz-)", r"^/usr/lib/modules/[^/]+/modules\.",
+                 r"^/usr/lib64?/(gdk-pixbuf-2\.0|gio|gtk-[234]\.0)/.*cache$", r"^/usr/lib/\.build-id/", r"^/usr/bin/(eselect|gcc|g\+\+|cc|c\+\+|cpp)", r"^/usr/(bin|lib64?)/.*->")]
+        orph = [l.strip() for l in po.splitlines() if l.strip().startswith("/") and not any(r.search(l.strip()) for r in ALLOW)]
+        cfgs = [l.strip() for l in cfg.splitlines() if l.strip().startswith("/")]
+        s("horcrux-orphans-clean", len(orph) == 0, f"{len(orph)} unexpected: " + ", ".join(orph[:12]) + f" | raw lines={len(po.splitlines())}")
+        s("no-cfg-protect-leftovers", len(cfgs) == 0, ", ".join(cfgs[:5]) or "none under /etc")
+        rc3, qf = self.ssh("qfile /usr/bin/live-installer /usr/bin/horcrux-orphans /usr/share/live-installer/branding/full.png /etc/init.d/live-installer /etc/init.d/zram-swap /usr/bin/horcrux-surface-auto /usr/bin/brave-bin /usr/bin/rustinion | sort", timeout=60)
         self.save("qfile-spot-check.txt", qf)
-        orph = [l for l in full.splitlines() if l.startswith("ORPHAN ")]
-        summ = [l for l in full.splitlines() if l.startswith("SUMMARY")]
-        s("portage-ownership-scan-ran", bool(summ), summ[-1] if summ else out[:200])
-        s("no-orphan-files-qfile-o-clean", len(orph) == 0 and "qfile-orphan-spot-check-done" in qf and not re.search(r"^/", qf.split("qfile-orphan-spot-check-done")[0], re.M),
-          f"{len(orph)} orphans: " + ", ".join(o.split()[1] for o in orph[:12]) + " | " + (summ[-1] if summ else ""))
+        s("installer-files-owned-by-horcrux-tools-and-live-data", qf.count("sys-apps/horcrux-tools") >= 3 and "sys-apps/horcrux-live-data" in qf and "horcrux-live-installer" not in qf, re.sub(r"\s+", " ", qf)[:300])
         # ---- session
         end, got = time.time() + 300, ""
         want = ["lightdm", "Xorg", "xfce4-session", "xfwm4", "xfce4-panel", "xfdesktop", "xfce4-power-man", "nm-applet", "onboard", "xfsettingsd", "pipewire", "wireplumber", "xfce4-screensav", "tailscaled"]
