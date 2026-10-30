@@ -1259,3 +1259,12 @@ jobs:
       - name: Remove this run's image
         if: always()
         run: docker rmi horcrux/use-matrix:${{ github.sha }} >/dev/null 2>&1 || true
+
+  ui-theme:
+    name: Web UI theme (light/dark)
+    runs-on: linux-any
+    steps:
+      - uses: actions/checkout@v4
+      # Owner rule 2026-10-30: the UI follows the device's light/dark setting (palette + contrast of both).
+      # The rendered proof is theme_checks() in horcrux-api/horcrux-ui/e2e/ui_e2e.py (UI E2E job).
+      - run: python3 horcrux-api/horcrux-ui/tests/check_theme.py
