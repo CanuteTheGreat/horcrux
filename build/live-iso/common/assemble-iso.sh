@@ -40,7 +40,7 @@ for d in "$ROOT"/boot/memtest86plus "$ROOT"/usr/share/memtest86+ "$ROOT"/boot/me
 done
 [ "$MT" = none ] && rmdir "$ISO/boot/memtest"
 echo "== memtest86+: $MT"
-LIVE_EXTRA_CMD="$(cat "$ROOT/etc/live-iso-cmdline" 2>/dev/null | tr -d '\n' || true)" GFX_OK="$GFX_OK" SERIAL_DEV="$SERIAL_DEV" GRUB_SERIAL="$GRUB_SERIAL" bash "$GEN" "${VOLID}" "${TITLE}" "${PROJ}" "$ARCH" "$MT" "${BOOT_ACCENT:-cyan}" > "$ISO/boot/grub/grub.cfg"
+AUTO_ENTRY="$(cat "$ROOT/etc/live-iso-autoentry" 2>/dev/null | tr -d '\n' || true)" LIVE_EXTRA_CMD="$(cat "$ROOT/etc/live-iso-cmdline" 2>/dev/null | tr -d '\n' || true)" GFX_OK="$GFX_OK" SERIAL_DEV="$SERIAL_DEV" GRUB_SERIAL="$GRUB_SERIAL" bash "$GEN" "${VOLID}" "${TITLE}" "${PROJ}" "$ARCH" "$MT" "${BOOT_ACCENT:-cyan}" > "$ISO/boot/grub/grub.cfg"
 # tiny early config embedded in the BIOS/UEFI images: find the medium, load the real config
 cat > $W/early.cfg <<CFG
 search --no-floppy --label --set=root ${VOLID}

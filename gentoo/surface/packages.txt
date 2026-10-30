@@ -1,20 +1,3 @@
-# Surface profile: lightweight Wayland touch desktop (installed ON TOP of the Horcrux live image).
-# Rule: every entry must come from the official binhost (see portage/package.use: only USE that matches the
-# binpkgs), because the 4 GB Surface Pro 1 must never compile large packages.
-gui-wm/sway
-gui-apps/foot
-gui-apps/wmenu
-gui-apps/swaybg
-gui-apps/swayidle
-gui-apps/swaylock
-gui-apps/wl-clipboard
-net-misc/networkmanager
-sys-auth/elogind
-media-video/pipewire
-media-video/wireplumber
-media-sound/alsa-utils
-sys-power/upower
-media-fonts/dejavu
-gui-apps/wvkbd
-net-vpn/tailscale
+# Surface hardware-profile layer: nothing to add here. The tablet desktop, kernel and apps are the Portage packages of the
+# Surface image variant (build/live-iso/project/variants/surface, meta package app-misc/horcrux-surface-desktop).
 sys-fs/cryptsetup

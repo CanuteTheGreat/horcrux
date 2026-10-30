@@ -1,0 +1,9 @@
+# Horcrux overlay + GURU + owner's overlay packages, and the 6.18.59 kernel the linux-surface series is pinned to
+sys-kernel/horcrux-surface-config ~amd64
+app-misc/horcrux-surface-desktop ~amd64
+app-admin/rustinion-bin -* ~amd64
+www-client/brave-bin ~amd64
+app-accessibility/onboard **
+gnome-extra/iio-sensor-proxy **
+=sys-kernel/gentoo-kernel-6.18.59 ~amd64
+=virtual/dist-kernel-6.18.59 ~amd64

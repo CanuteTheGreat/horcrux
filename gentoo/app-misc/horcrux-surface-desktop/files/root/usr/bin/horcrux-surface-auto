@@ -1,0 +1,122 @@
+#!/bin/bash
+# horcrux-surface-auto: the whole Surface install on one screen. The owner only types the disk passphrase (twice) and restarts.
+#   1. finds the internal disk (never the USB stick) and checks the machine is a Surface
+#   2. read-only inventory of the disk: factory-fresh/empty -> goes on by itself; user data (or unreadable/encrypted partitions,
+#      or not a Surface) -> asks for the word ERASE first; the report is kept in /root
+#   3. asks the disk passphrase twice (it is also the desktop password; change it later with `passwd`), builds the answer file in
+#      tmpfs, runs the installer (XFS in LUKS2 in LVM, 4.5 GiB encrypted hibernate swap, zram, XFCE) and wipes the answer file
+# Anything unexpected -> the guided installer or a shell, never a half decision.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+export TERM=${TERM:-linux}
+dmesg -n 1 2>/dev/null
+B=$'\e[1m'; G=$'\e[32m'; R=$'\e[31m'; Y=$'\e[33m'; N=$'\e[0m'
+PRIV=/usr/share/horcrux-surface-private
+USER_NAME=canutethegreat
+clear
+echo "${B}Horcrux for the Surface Pro${N}  (kernel $(uname -r))"
+echo "----------------------------------------------------------------------"
+fallback() { echo; echo "${Y}$*${N}"; echo "Starting the guided installer instead."; sleep 3; /usr/bin/live-installer; exec /bin/login -f root; }
+
+dmi_v=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null); dmi_p=$(cat /sys/class/dmi/id/product_name 2>/dev/null)
+echo "Machine: ${dmi_v:-?} ${dmi_p:-?}"
+case "$dmi_v/$dmi_p" in
+    "Microsoft Corporation/Surface"*) is_surface=1 ;;
+    *) is_surface=0; echo "${R}This does not look like a Surface (DMI above).${N}" ;;
+esac
+
+# the internal disk: not the live medium, not USB, not removable
+live_src=$(findmnt -no SOURCE /run/initramfs/live 2>/dev/null)
+live_disk=""; [ -n "$live_src" ] && live_disk=$(lsblk -no PKNAME "$live_src" 2>/dev/null | head -1)
+cands=()
+while read -r name tran rm; do
+    [ "$name" = "$live_disk" ] && continue
+    [ "$tran" = usb ] && continue
+    [ "$rm" = 1 ] && continue
+    case "$name" in zram*|loop*|sr*|ram*|dm-*) continue ;; esac
+    cands+=("/dev/$name")
+done < <(lsblk -dnro NAME,TRAN,RM,TYPE | awk '$4=="disk"{print $1, ($2==""?"-":$2), $3}')
+[ ${#cands[@]} -eq 1 ] || fallback "Expected exactly one internal disk, found ${#cands[@]} (${cands[*]:-none})."
+DISK=${cands[0]}
+echo "Internal disk: $DISK  ($(lsblk -dno SIZE,MODEL "$DISK" | xargs))"
+
+# read-only inventory (what would be erased)
+echo; echo "${B}Looking at what is on the disk (read-only)...${N}"
+inv=/root/surface-inventory-$(date +%Y%m%d-%H%M%S).txt
+/usr/bin/surface-inventory "$DISK" > "$inv" 2>&1; irc=$?
+grep -E '^(-- |   Windows user|== summary|RESULT)' "$inv" | sed 's/^/  /'
+echo "  (full report: $inv)"
+need_confirm=0
+[ "$irc" = 0 ] || need_confirm=1
+[ "$is_surface" = 1 ] || need_confirm=1
+if [ "$need_confirm" = 1 ]; then
+    echo
+    echo "${R}${B}Personal data (or an unreadable/encrypted partition, or a machine that is not a Surface) was found.${N}"
+    echo "Installing ERASES the whole disk. If you need anything on it, switch the tablet off now and tell the assistant."
+    printf "Type ${B}ERASE${N} (capitals) to erase the disk and install; anything else opens a shell: "
+    read -r ans
+    [ "$ans" = ERASE ] || { echo "Not erasing. Shell below."; exec /bin/login -f root; }
+else
+    echo "${G}Nothing of value on the disk (factory image or empty): installing without further questions.${N}"
+fi
+
+# the passphrase (typed here, never stored; also the desktop password)
+echo
+echo "${B}Disk passphrase${N}: typed at every start of the tablet (and once more after hibernate). At least 12 characters."
+echo "There is NO recovery: lose it, lose the data. It is also the password of the desktop user '$USER_NAME'."
+while :; do
+    printf "Passphrase: "; read -rs p1; echo
+    [ "${#p1}" -ge 12 ] || { echo "${R}too short (min 12)${N}"; continue; }
+    printf "Again:      "; read -rs p2; echo
+    [ "$p1" = "$p2" ] && break
+    echo "${R}the two entries differ${N}"
+done
+
+# answer file in tmpfs
+d=/run/hx-auto; mkdir -p "$d"; chmod 700 "$d"; ans=$d/answer.toml
+uh=$(printf '%s' "$p1" | openssl passwd -6 -stdin)
+rh=$(head -c 24 /dev/urandom | openssl passwd -6 -stdin)          # root: random and unknown (key-only ssh, sudo for the user)
+keys=""
+if [ -s "$PRIV/authorized_keys" ]; then
+    while read -r k; do case "$k" in ssh-*|ecdsa-*|sk-*) keys="$keys\"$k\"," ;; esac; done < "$PRIV/authorized_keys"
+fi
+umask 077
+esc=$(printf '%s' "$p1" | sed 's/\\/\\\\/g; s/"/\\"/g')
+cat > "$ans" <<TOML
+[global]
+keyboard = "us"
+timezone = "America/Los_Angeles"
+hostname = "surface-pro"
+email = ""
+root_password_hash = "$rh"
+ssh_keys = [${keys%,}]
+ssh_password_auth = false
+
+[disk]
+filesystem = "xfs-luks"
+luks_passphrase = "$esc"
+disks = ["$DISK"]
+
+[desktop]
+enable = true
+user = "$USER_NAME"
+password_hash = "$uh"
+autologin = true
+
+[network.management]
+mode = "dhcp"
+TOML
+unset p1 p2 esc
+echo; echo "${B}Installing...${N} (15-30 minutes from a USB 3 stick; do not unplug anything)"
+/usr/bin/live-installer --answers "$ans" 2>&1 | tee /var/log/surface-install.log
+rc=${PIPESTATUS[0]}
+shred -u "$ans" 2>/dev/null || rm -f "$ans"
+if [ "$rc" = 0 ] && grep -q 'AUTOINSTALL-OK' /var/log/surface-install.log; then
+    echo; echo "${G}${B}Installation successful.${N}"
+    echo "Unplug the USB stick, then press Enter to restart. Type the SAME passphrase at the prompt that follows the logo."
+    read -r _
+    /sbin/reboot
+    exec /bin/login -f root
+fi
+echo; echo "${R}${B}The installation did not finish (exit $rc).${N} Log: /var/log/surface-install.log. A root shell follows."
+echo "Tell the assistant: join Wi-Fi with  nmtui  and run  surface-remote."
+exec /bin/login -f root

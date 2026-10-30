@@ -1,0 +1,4 @@
+# Surface desktop variant: the whole profile is ONE package (app-misc/horcrux-surface-desktop RDEPENDs on XFCE, LightDM,
+# onboard, power manager, Brave, Firefox, Nextcloud, Rustinion agent, Tailscale, firmware, microcode ...). Listed here so the
+# build log shows what the image is made of; the Dockerfile emerges only the meta package.
+app-misc/horcrux-surface-desktop

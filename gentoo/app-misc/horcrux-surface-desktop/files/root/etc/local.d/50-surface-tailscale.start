@@ -1,0 +1,17 @@
+#!/bin/sh
+# First start of an installed Surface made from the PRIVATE image: join the tailnet once with the baked ephemeral key, then delete
+# the key. The public image has no key: nothing happens. Retries on every start until the key works (or has expired).
+K=/usr/share/horcrux-surface-private/ts-authkey
+[ -s "$K" ] || exit 0
+(
+  i=0
+  while [ $i -lt 120 ]; do
+    ip -4 route show default 2>/dev/null | grep -q . && break
+    sleep 5; i=$((i+1))
+  done
+  ip -4 route show default 2>/dev/null | grep -q . || exit 0
+  if tailscale up --auth-key="file:$K" --hostname=surface-pro --accept-dns=false --accept-routes=false --ssh=false --timeout=60s >/var/log/surface-tailscale.log 2>&1; then
+      shred -u "$K" 2>/dev/null || rm -f "$K"
+  fi
+) </dev/null >/dev/null 2>&1 &
+exit 0

@@ -18,6 +18,8 @@ case "$mode" in
 			sleep 1
 			/usr/bin/live-installer
 		fi ;;
+	surfaceauto)
+		/usr/bin/horcrux-surface-auto ;;
 	expert)
 		LIVE_INSTALLER_EXPERT=1 /usr/bin/live-installer ;;
 	*)

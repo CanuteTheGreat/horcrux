@@ -128,13 +128,34 @@ def apply_profile(inst, profile, model):
 
 def add_desktop_user(inst, d):
     u = d["user"]
-    inst.run(["useradd", "-m", "-G", "wheel,audio,video,input,plugdev,users", "-s", "/bin/bash", u], chroot=True, check=False)
+    try:
+        have = {l.split(":")[0] for l in open(f"{inst.target}/etc/group")}
+    except OSError:
+        have = set()
+    groups = ",".join(g for g in ("wheel", "audio", "video", "input", "plugdev", "users", "lp", "cdrom", "usb", "pipewire") if g in have or not have)
+    inst.run(["useradd", "-m", "-G", groups, "-s", "/bin/bash", u], chroot=True, check=False)
     if d.get("password_hash"):
         inst.run(["chpasswd", "-e"], chroot=True, input_=f"{u}:{d['password_hash']}\n")
     elif d.get("password"):
         inst.run(["chpasswd"], chroot=True, input_=f"{u}:{d['password']}\n")
     else:
         inst.run(["passwd", "-l", u], chroot=True, check=False)
+    dm = ""
+    try:
+        dm = open(f"{inst.target}/usr/share/horcrux/desktop/display-manager").read().strip()
+    except OSError:
+        pass
+    if dm:
+        # XFCE profile: the display manager (LightDM) owns the login screen; its name comes from the image's own package data
+        inst.write("/etc/conf.d/display-manager", f'DISPLAYMANAGER="{dm}"\n')
+        inst.write("/etc/conf.d/xdm", f'DISPLAYMANAGER="{dm}"\n')
+        if d.get("autologin") and dm == "lightdm":
+            inst.write("/etc/lightdm/lightdm.conf.d/60-horcrux-autologin.conf",
+                       f"[Seat:*]\nautologin-user={u}\nautologin-user-timeout=0\nautologin-session=xfce\n")
+            inst.run(["groupadd", "-f", "autologin"], chroot=True, check=False)
+            inst.run(["gpasswd", "-a", u, "autologin"], chroot=True, check=False)
+            inst.log(f"autologin enabled for {u} in LightDM (opt-in; the disk passphrase has already been typed)")
+        return
     if d.get("autologin"):
         # opt-in: tty1 logs this user in and starts the session. With LUKS the disk is already unlocked by a passphrase.
         ip = f"{inst.target}/etc/inittab"
