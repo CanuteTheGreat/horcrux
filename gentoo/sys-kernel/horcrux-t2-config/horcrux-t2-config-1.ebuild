@@ -17,12 +17,10 @@ KEYWORDS="~amd64"
 
 # Patch set pinned to the last commit before the 7.3 rebase: it applies to gentoo-kernel 7.2.x (OpenZFS 2.3.x
 # declares Linux-Maximum 7.2). It is applied by Portage's user-patch mechanism, so a newer 7.2.y rebuilds with it.
-# no hard dependency on the kernel (it would pull a ~1 h source build into every config update); this pin only
-# refuses a 7.3+ kernel, where the pinned patch set does not apply and OpenZFS 2.3.x does not build
-RDEPEND="
-	sys-kernel/dracut
-	!>=sys-kernel/gentoo-kernel-7.3
-"
+# deliberately NO dependency on the kernel (it would pull a ~1 h source build into every config update). Use with
+# sys-kernel/gentoo-kernel 7.2.x only: the pinned patch set does not apply to 7.3+ and OpenZFS 2.3.x does not build there
+# (package.mask >=sys-kernel/gentoo-kernel-7.3 on the machine; the Horcrux image ships that mask).
+RDEPEND="sys-kernel/dracut"
 
 src_install() {
 	# t2linux patches (APFS 8001/8002 skipped: macOS is gone, out-of-tree driver)
