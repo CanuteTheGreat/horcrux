@@ -23,6 +23,8 @@ qt = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(qt)
 
 PASSPHRASE = "correct horse battery staple 2026"
+# every installed .desktop file's TryExec/Exec binary must exist, or GNOME/XFCE hides the app (hogshead: brave-browser-stable was missing)
+DESKTOP_EXEC_CHECK = "echo aW1wb3J0IGdsb2IsIG9zLCByZSwgc2hsZXgsIHNodXRpbCwgc3lzCm1pc3MgPSBbXQpmb3IgZiBpbiBzb3J0ZWQoZ2xvYi5nbG9iKCIvdXNyL3NoYXJlL2FwcGxpY2F0aW9ucy8qKi8qLmRlc2t0b3AiLCByZWN1cnNpdmU9VHJ1ZSkpOgogICAgdHJ5OgogICAgICAgIHR4dCA9IG9wZW4oZiwgZXJyb3JzPSJyZXBsYWNlIikucmVhZCgpLnNwbGl0KCJbRGVza3RvcCBBY3Rpb24iKVswXQogICAgZXhjZXB0IE9TRXJyb3I6CiAgICAgICAgY29udGludWUKICAgIGt2ID0gZGljdChsLnNwbGl0KCI9IiwgMSkgZm9yIGwgaW4gdHh0LnNwbGl0bGluZXMoKSBpZiAiPSIgaW4gbCBhbmQgbm90IGwuc3RhcnRzd2l0aCgiIyIpKQogICAgaWYga3YuZ2V0KCJOb0Rpc3BsYXkiLCAiIikubG93ZXIoKSA9PSAidHJ1ZSIgb3Iga3YuZ2V0KCJIaWRkZW4iLCAiIikubG93ZXIoKSA9PSAidHJ1ZSIgb3Iga3YuZ2V0KCJUeXBlIiwgIkFwcGxpY2F0aW9uIikgIT0gIkFwcGxpY2F0aW9uIjoKICAgICAgICBjb250aW51ZQogICAgZm9yIGtleSBpbiAoIlRyeUV4ZWMiLCAiRXhlYyIpOgogICAgICAgIHYgPSBrdi5nZXQoa2V5KQogICAgICAgIGlmIG5vdCB2OgogICAgICAgICAgICBjb250aW51ZQogICAgICAgIHRyeToKICAgICAgICAgICAgdCA9IHNobGV4LnNwbGl0KHYpCiAgICAgICAgZXhjZXB0IFZhbHVlRXJyb3I6CiAgICAgICAgICAgIHQgPSB2LnNwbGl0KCkKICAgICAgICB3aGlsZSB0IGFuZCAodFswXSA9PSAiZW52IiBvciAiPSIgaW4gdFswXSk6CiAgICAgICAgICAgIHQgPSB0WzE6XQogICAgICAgIGlmIHQgYW5kIHRbMF0gbm90IGluICgic2giLCAiYmFzaCIpIGFuZCBub3Qgc2h1dGlsLndoaWNoKHRbMF0pIGFuZCBub3QgKHRbMF0uc3RhcnRzd2l0aCgiLyIpIGFuZCBvcy5hY2Nlc3ModFswXSwgb3MuWF9PSykpOgogICAgICAgICAgICBtaXNzLmFwcGVuZChmIntvcy5wYXRoLmJhc2VuYW1lKGYpfTp7a2V5fT17dFswXX0iKQpwcmludCgiREVTS1RPUC1GSUxFUy1DSEVDS0VEIiwgbGVuKGdsb2IuZ2xvYigiL3Vzci9zaGFyZS9hcHBsaWNhdGlvbnMvKiovKi5kZXNrdG9wIiwgcmVjdXJzaXZlPVRydWUpKSkKcHJpbnQoIkRFU0tUT1AtRklMRVMtTUlTU0lORyIsICIgIi5qb2luKG1pc3MpIGlmIG1pc3MgZWxzZSAibm9uZSIpCg== | base64 -d | python3"
 USER_PW = "Xv5#kP2-lima-48Qr"
 
 
@@ -387,6 +389,10 @@ class ZRun(qt.Runner):
             if vm.alive():
                 vm.p.kill()
 
+    def desktop_exec_check(self):
+        rc, o = self.sh(DESKTOP_EXEC_CHECK, timeout=120)
+        self.step("desktop-files-exec-binaries-exist", "DESKTOP-FILES-CHECKED" in o and "DESKTOP-FILES-MISSING none" in o, re.sub(r"\s+", " ", o).strip()[:400])
+
     def desktop_checks(self, vm=None):
         end = time.time() + qt.T(240)
         o = ""
@@ -397,6 +403,7 @@ class ZRun(qt.Runner):
                 break
             time.sleep(6)
         self.step("desktop-gdm-and-gnome-shell-running", "GDM" in o and "SHELL" in o, o.strip().replace("\n", " | ")[:300])
+        self.desktop_exec_check()
         # hogshead hand-off: an account with an EMPTY, expired (day 0) password must force the owner to choose a password at the first
         # login (PAM nullok + new_authtok_reqd), with no temporary password stored anywhere. Exercised through login(1) on a pty: no password prompt (nullok), forced new-password prompt, passwdqc.
         rc, o = self.sh("userdel -rf hxtmp >/dev/null 2>&1; useradd -m hxtmp && passwd -d hxtmp >/dev/null && chage -d 0 hxtmp && grep '^hxtmp:' /etc/shadow | cut -d: -f2,3; "
