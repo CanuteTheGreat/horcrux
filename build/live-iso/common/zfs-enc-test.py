@@ -440,6 +440,37 @@ class ZRun(qt.Runner):
         rc, o = self.sh(f"echo {SNI_TEST} | base64 -d > /tmp/hx-sni.py; su - {user} -c \"export {env}; python3 /tmp/hx-sni.py\" 2>&1; rm -f /tmp/hx-sni.py", timeout=90)
         self.step("status-notifier-item-registers-on-the-watcher-and-a-host-exists", "StatusNotifierItem-4242-1" in o.partition("SNI-RESULT")[2] and "'IsStatusNotifierHostRegistered': True" in o, re.sub(r"\s+", " ", o)[:400])
 
+    def _user_bus_env(self, user):
+        uid = self.sh(f"id -u {user}")[1].strip().splitlines()[-1]
+        return uid, f"XDG_RUNTIME_DIR=/run/user/{uid} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus"
+
+    def session_bus_checks(self, user):
+        """gnome-shell must live on the OpenRC user bus (/run/user/UID/bus), not on gdm's private /tmp/dbus-* bus, so that org.gnome.Shell and
+        org.gnome.SessionManager are on the SAME bus (otherwise Log Out / Restart / Power Off in the shell menu do nothing, and gsd-media-keys cannot grab keys)"""
+        uid, env = self._user_bus_env(user)
+        rc, o = self.sh(f"P=$(pgrep -u {user} -x gnome-shell | head -1); echo PID=$P; tr '\\0' '\\n' < /proc/$P/environ | grep -E '^(DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR)='")
+        self.step("gnome-shell-runs-on-the-user-bus-not-gdms-private-bus", f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus" in o and "/tmp/dbus-" not in o, re.sub(r"\s+", " ", o)[:300])
+        names = " ".join(f"{n}=$(gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.NameHasOwner {n})" for n in ("org.gnome.SessionManager", "org.gnome.Shell"))
+        rc, o = self.sh(f"B=$(tr '\\0' '\\n' < /proc/$(pgrep -u {user} -x gnome-shell | head -1)/environ | grep '^DBUS_SESSION_BUS_ADDRESS=' | cut -d= -f2-); "
+                        f"su - {user} -c \"export XDG_RUNTIME_DIR=/run/user/{uid} DBUS_SESSION_BUS_ADDRESS=$B; echo BUS=$B; {names}\" 2>&1")
+        self.step("session-manager-and-shell-names-on-the-shells-own-bus", o.count("(true,)") == 2, re.sub(r"\s+", " ", o)[:300])
+
+    def session_logout_check(self, user):
+        """a scripted Log Out through the shell's own bus ends the session and GDM shows its greeter again"""
+        uid, env = self._user_bus_env(user)
+        self.sh(f"B=$(tr '\\0' '\\n' < /proc/$(pgrep -u {user} -x gnome-shell | head -1)/environ | grep '^DBUS_SESSION_BUS_ADDRESS=' | cut -d= -f2-); "
+                f"su - {user} -c \"export XDG_RUNTIME_DIR=/run/user/{uid} DBUS_SESSION_BUS_ADDRESS=$B; gdbus call --session --dest org.gnome.SessionManager --object-path /org/gnome/SessionManager --method org.gnome.SessionManager.Logout 1\" 2>&1")
+        end, gone, greeter = time.time() + qt.T(120), False, False
+        o = ""
+        while time.time() < end:
+            rc, o = self.sh(f"pgrep -u {user} -x gnome-shell >/dev/null && echo USERSHELL; loginctl list-sessions --no-legend | awk '{{print $3}}' | tr '\\n' ' '; pgrep -f gdm-wayland-session >/dev/null && echo GDMSESSION")
+            gone = "USERSHELL" not in o
+            greeter = "gdm-greeter" in o
+            if gone and greeter:
+                break
+            time.sleep(5)
+        self.step("shell-log-out-via-session-manager-returns-to-gdm", gone and greeter, re.sub(r"\s+", " ", o)[:300])
+
     def desktop_exec_check(self):
         rc, o = self.sh(DESKTOP_EXEC_CHECK, timeout=120)
         self.step("desktop-files-exec-binaries-exist", "DESKTOP-FILES-CHECKED" in o and "DESKTOP-FILES-MISSING none" in o, re.sub(r"\s+", " ", o).strip()[:400])
