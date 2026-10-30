@@ -396,7 +396,7 @@ class ZRun(qt.Runner):
         """before the first GNOME login: an XDG autostart entry for this user and a system-wide one, each leaving a marker when gnome-session-openrc runs it"""
         import base64
         ent = lambda n: base64.b64encode(f"[Desktop Entry]\nType=Application\nName=hx {n}\nExec=/bin/sh -c 'date > /tmp/hx-autostart-{n}'\n".encode()).decode()
-        self.sh(f"rm -f /tmp/hx-autostart-*; install -d -o {user} -g {user} /home/{user}/.config/autostart; echo {ent('user')} | base64 -d > /home/{user}/.config/autostart/hx-autostart-user.desktop; "
+        self.sh(f"rm -f /tmp/hx-autostart-*; mkdir -p /home/{user}/.config/autostart; chown -R {user}:{user} /home/{user}/.config; echo {ent('user')} | base64 -d > /home/{user}/.config/autostart/hx-autostart-user.desktop; "
                 f"chown {user}:{user} /home/{user}/.config/autostart/hx-autostart-user.desktop; echo {ent('xdg')} | base64 -d > /etc/xdg/autostart/hx-autostart-xdg.desktop")
 
     def session_audio_autostart_checks(self, user, vm):
