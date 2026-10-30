@@ -32,7 +32,7 @@ cid=
 cleanup_build() {
   docker rm -fv "$TAG-asm" >/dev/null 2>&1 || true
   [ -z "$cid" ] || docker rm -fv "$cid" >/dev/null 2>&1 || true
-  docker rmi "$TAG-tools" "$TAG-hw" >/dev/null 2>&1 || true
+  docker rmi "$TAG-tools" "$TAG-hw" "$TAG-priv" >/dev/null 2>&1 || true
   rm -rf "$HERE/.hw"
   [ -z "${VIMGS:-}" ] || [ -n "${KEEP_IMAGES:-}" ] || docker rmi $VIMGS >/dev/null 2>&1 || true
   [ -n "${REUSE_ROOTFS:-}" ] || [ -n "${KEEP_IMAGES:-}" ] || docker rmi "$TAG-app" "$TAG-rootfs" >/dev/null 2>&1 || true
@@ -73,12 +73,20 @@ rm -rf "$HERE/.hw"
 docker image inspect $TAG-hw >/dev/null 2>&1 || { echo "profile layer failed (see $OUT/profile-build.log)"; exit 1; }
 ROOTFS_IMG=$TAG-hw
 fi
+VNAME_PRIV=""
+if [ -n "${PRIV_DIR:-}" ]; then
+lap "stage 2c: PRIVATE layer ($PRIV_DIR)"
+[ -d "$PRIV_DIR" ] || { echo "PRIV_DIR is not a directory"; exit 2; }
+docker build $PLAT $ARCHARGS --build-context priv="$PRIV_DIR" -f common/Dockerfile.private --build-arg BASE=$ROOTFS_IMG -t $TAG-priv . 2>&1 | tail -12
+docker image inspect $TAG-priv >/dev/null 2>&1 || { echo "private layer failed"; exit 1; }
+ROOTFS_IMG=$TAG-priv; VNAME_PRIV="private-"
+fi
 lap "stage 3: assembly toolbox"
 # Per-build tag: a shared live-iso-tools:latest could be untagged by the runner disk guard (or replaced by a
 # parallel build) between this build and the docker run below (Horcrux run 7066: "pull access denied").
 docker build $PLAT $ARCHARGS -q -f common/Dockerfile.tools -t $TAG-tools .
 lap "stage 4: export rootfs + assemble ISO (no bind mounts: works from a job container using the host docker)"
-ISO_NAME=$ISO_PREFIX${HW_PROFILE:+-$HW_PROFILE}-${VNAME}$SUFFIX-$ARCH.iso
+ISO_NAME=$ISO_PREFIX${HW_PROFILE:+-$HW_PROFILE}-${VNAME}${VNAME_PRIV}$SUFFIX-$ARCH.iso
 docker rm -f $TAG-asm >/dev/null 2>&1 || true
 cid=$(docker create $ROOTFS_IMG /bin/true)
 docker export "$cid" | docker run -i $PLAT -e ARCH=$ARCH --name $TAG-asm --memory=8g --cpus=$JOBS $TAG-tools \

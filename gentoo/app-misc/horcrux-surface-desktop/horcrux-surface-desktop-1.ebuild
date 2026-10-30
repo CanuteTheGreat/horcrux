@@ -36,6 +36,8 @@ RDEPEND="
 	x11-drivers/xf86-input-libinput
 	x11-drivers/xf86-input-wacom
 	x11-apps/xinput
+	x11-apps/xprop
+	app-portage/portage-utils
 	x11-apps/xrandr
 	sys-power/upower
 	sys-auth/elogind

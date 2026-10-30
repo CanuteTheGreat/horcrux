@@ -55,8 +55,27 @@ RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,
     grep -v '^#' /usr/share/horcrux-surface/required-config.txt | while read -r l; do grep -qx "$l" $c || { echo "MISSING CONFIG $l"; exit 1; }; done; \
     echo $kr > /etc/surface-kernelrelease
 
+# the installer / live scripts / console menu that the ISO's own tree provides become ONE package (sys-apps/horcrux-live-installer), made
+# from common/overlay + project/overlay at build time; Horcrux's hypervisor product and the Apple T2 userland are not tablet roles: removed
+FROM surface-kinstall AS surface-live
+COPY common/overlay/ /tmp/hxlive/common/
+COPY project/overlay/ /tmp/hxlive/project/
+RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
+    set -e; unset ARCH; export FEATURES="-ccache"; cd /tmp/hxlive; \
+    rm -rf project/usr/share/horcrux/t2 project/etc/init.d/t2fanrd project/etc/init.d/tiny-dfr project/etc/init.d/horcrux-api project/etc/conf.d/horcrux-api; \
+    mkdir -p /tmp/pkg; cp -a common/. /tmp/pkg/; cp -a project/. /tmp/pkg/; \
+    tar -C /tmp/pkg --zstd -cf /var/cache/distfiles/horcrux-live-installer-1.tar.zst .; \
+    ebuild /var/db/repos/horcrux/sys-apps/horcrux-live-installer/horcrux-live-installer-1.ebuild manifest; \
+    CONFIG_PROTECT="-*" emerge --oneshot --usepkg=n --getbinpkg=n sys-apps/horcrux-live-installer; \
+    rm -rf /tmp/hxlive /tmp/pkg; \
+    rm -f /usr/bin/horcrux /usr/bin/horcrux-api /usr/bin/tiny-dfr /usr/bin/t2fanrd /etc/init.d/horcrux-guests /etc/init.d/horcrux-api /etc/init.d/t2fanrd /etc/init.d/tiny-dfr \
+          /usr/lib/udev/rules.d/99-touchbar-tiny-dfr.rules /usr/lib/udev/rules.d/99-touchbar-seat.rules; \
+    rm -rf /usr/share/horcrux /usr/share/tiny-dfr /var/lib/horcrux /var/log/horcrux /etc/horcrux; \
+    rc-update del horcrux-api default 2>/dev/null || true; \
+    qfile -o /usr/bin/live-installer /etc/init.d/live-installer; qlist -Iv sys-apps/horcrux-live-installer
+
 # the tablet desktop + the owner's apps = ONE meta package (binpkgs where USE matches; the rest compiles here, never on the tablet)
-FROM surface-kinstall AS surface-apps
+FROM surface-live AS surface-apps
 RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \
@@ -69,8 +88,6 @@ FROM surface-apps AS surface-final
 RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
-    rc-update del horcrux-api default 2>/dev/null || true; \
-    rm -rf /usr/bin/horcrux-api /usr/bin/horcrux-cli /usr/bin/horcrux /usr/share/horcrux/web /etc/init.d/horcrux-api /etc/conf.d/horcrux-api /var/lib/horcrux /var/log/horcrux /etc/horcrux 2>/dev/null || true; \
     emerge --deselect app-emulation/qemu app-emulation/libvirt app-containers/docker app-containers/docker-cli net-misc/bridge-utils net-dns/dnsmasq 2>&1 | tail -3; \
     emerge --depclean --with-bdeps=n 2>&1 | tail -15 || true
 
