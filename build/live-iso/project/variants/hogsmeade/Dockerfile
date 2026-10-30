@@ -66,7 +66,7 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     emerge --update --newuse $(grep -v '^#' /tmp/packages-desktop.txt | tr '\n' ' ')
 
 # --- everything together
-FROM hsm-desktop AS hsm-kinstall
+FROM hsm-desktop AS hsm-kinst1
 COPY --from=hsm-kbuild /hs-binpkgs /hs-binpkgs
 RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache" PKGDIR=/hs-binpkgs; \
@@ -74,6 +74,11 @@ RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,
     emerge --unmerge sys-kernel/gentoo-kernel-bin || true; \
     emerge --oneshot --usepkgonly --nodeps =sys-kernel/gentoo-kernel-7.2.13; \
     ls /lib/modules /boot
+FROM hsm-kinst1 AS hsm-kinstall
+# the installed kernel tree carries a built objtool; linux-mod-r1 refuses to build modules when its libraries are missing (they were only in the kernel-build layer)
+RUN set -e; unset ARCH; export FEATURES="-ccache"; \
+    emerge --oneshot --usepkg --getbinpkg sys-libs/binutils-libs dev-libs/xxhash virtual/libelf dev-util/pahole app-alternatives/bc sys-devel/bc > /var/log/hogsmeade-objtool-deps.log 2>&1 || { tail -30 /var/log/hogsmeade-objtool-deps.log; exit 1; }; \
+    o=/usr/src/linux/tools/objtool/objtool; ldd $o; if ldd $o | grep 'not found'; then echo OBJTOOL-LIBS-MISSING; exit 1; fi
 # ZFS and the NVIDIA open modules are built for THAT kernel (never from a cached binpkg of another release)
 RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
