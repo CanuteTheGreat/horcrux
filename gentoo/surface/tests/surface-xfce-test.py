@@ -341,6 +341,8 @@ class XT(SQ.T):
         else:
             self.setup()
             self.install()
+            if a.install_only:
+                return
         Q.pflash_vars(self.nvars)
         vm = Q.VM("2-boot1", self.base(True, self.nvars), a.out)
         marker = {}
@@ -349,9 +351,21 @@ class XT(SQ.T):
             secs = self.unlock(vm, "boot1")
             self.step("first-boot-one-passphrase-then-up", secs is not None, f"{int(secs) if secs else 0}s from power-on to ssh; the LUKS prompt was answered ONCE (USB keyboard, PS/2 off)")
             self.res["first_boot_seconds"] = int(secs or 0)
-            self.checks(vm, secs)
-            self.greeter_check(vm)
-            self.world_update()
+            if a.fast:
+                # debug: only wait for the session, then straight to hibernate (isolating the resume path)
+                for _ in range(60):
+                    if "xfce4-session" in self.ssh("pgrep -u " + USER + " -x xfce4-session")[1] + "" or False:
+                        pass
+                    if self.ssh("pgrep -u " + USER + " -x xfce4-panel")[1].strip():
+                        break
+                    time.sleep(5)
+                time.sleep(20)
+                if a.pre_hib:
+                    self.ssh(open(a.pre_hib).read(), timeout=300)
+            else:
+                self.checks(vm, secs)
+                self.greeter_check(vm)
+                self.world_update()
             self.soft = False
             # ---- marker + session pid before hibernate
             rc, out = self.ssh("cat > /root/marker.py <<'EOF'" + MARKER_PY + "EOF\nnohup python3 /root/marker.py >/dev/null 2>&1 < /dev/null & echo $! > /root/marker.pid; sleep 4; "
@@ -426,6 +440,9 @@ def main():
     ap.add_argument("--cpu", default="IvyBridge")
     ap.add_argument("--disk-gb", type=int, default=40)
     ap.add_argument("--keep-disks", action="store_true")
+    ap.add_argument("--install-only", action="store_true", help="debug: install, then stop (use with --keep-disks, then --boot-only)")
+    ap.add_argument("--fast", action="store_true", help="debug: skip the checks/greeter/world update, go straight to hibernate+resume")
+    ap.add_argument("--pre-hib", help="debug: file with shell commands run in the guest right before hibernate")
     ap.add_argument("--boot-only", action="store_true", help="debug: reuse the installed target.qcow2 + test_key in --out (kept with --keep-disks)")
     a = ap.parse_args()
     SQ.DMI = "type=1,manufacturer=Microsoft Corporation,product=Surface with Windows 8 Pro,version=1,sku=Surface_Pro"
