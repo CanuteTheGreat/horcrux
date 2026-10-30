@@ -64,6 +64,7 @@ if [ -n "${VARIANT:-}" ] && [ "$VARIANT" != server ]; then
     ROOTFS_IMG=$TAG-rootfs-$v; VNAME="$VNAME$v-"; VIMGS="$VIMGS $TAG-rootfs-$v"
   done
 fi
+[ -z "${ISO_VNAME:-}" ] || VNAME=$ISO_VNAME
 if [ -n "${HW_PROFILE:-}" ]; then
 lap "stage 2b: hardware profile layer ($HW_PROFILE, gentoo/$HW_PROFILE)"
 [ -d "$REPO/gentoo/$HW_PROFILE" ] || { echo "no such hardware profile: gentoo/$HW_PROFILE"; exit 2; }
