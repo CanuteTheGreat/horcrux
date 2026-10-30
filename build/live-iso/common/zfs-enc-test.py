@@ -320,7 +320,7 @@ class ZRun(qt.Runner):
             self.step("kernel-args-resume-and-unlock", "resume=UUID=" in o and "rd.hx.swap=" in o, "")
             self.step("zram-higher-priority-than-disk-swap", "zram" not in sw or (bool(re.search(r"zram\d+\s+\d+\s+16383", sw))), sw.strip().replace("\n", " | "))
             # initramfs: the one-passphrase module and the hook order, on the REAL installed image
-            rc, o = self.sh("k=$(ls /boot/initramfs-* | tail -1); lsinitrd $k | grep -E 'hx-unlock|hx-zfskey|resume|cryptsetup|zfs.ko|dm-crypt|mount-zfs'")
+            rc, o = self.sh("k=$(ls /boot/initramfs-* | tail -1); lsinitrd $k | grep -E 'hx-unlock|hx-zfskey|resume|cryptsetup|zfs.ko|dm-crypt|mount-zfs'", timeout=240)
             from importlib import util as _u
             sp = _u.spec_from_file_location("zfsswap", os.path.join(HERE, "overlay/usr/lib/live-installer/liveinst/zfsswap.py"))
             # (zfsswap imports its package siblings lazily only inside the installer stages: the pure checks load standalone)
