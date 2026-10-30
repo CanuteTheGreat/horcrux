@@ -53,11 +53,12 @@ COPY project/variants/gringotts/repo/ /var/db/repos/horcrux-gringotts/
 
 # GNOME under OpenRC: the gsd meta services declare supervisor=supervise-daemon without a command, so openrc refuses to start them and the session
 # never comes up (the hogshead first-login failure). Same one-line patch as the hogshead image, applied by rebuilding the (tiny) package from source.
-COPY project/variants/hogshead/portage/patches/gnome-base/ /etc/portage/patches/gnome-base/
+COPY project/variants/gnome-light/portage/patches/gnome-base/ /etc/portage/patches/gnome-base/
 RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
     emerge --oneshot --usepkg=n --getbinpkg=n --buildpkg=n gnome-base/gnome-session-openrc; \
-    if grep -q supervise-daemon /etc/user/init.d/gnome-settings-daemon-wayland /etc/user/init.d/gnome-settings-daemon-x11; then echo 'gsd patch not applied'; exit 1; fi
+    if grep -q supervise-daemon /etc/user/init.d/gnome-settings-daemon-wayland /etc/user/init.d/gnome-settings-daemon-x11; then echo 'gsd patch not applied'; exit 1; fi; \
+    grep -q 'want pipewire-pulse wireplumber' /etc/user/init.d/gsd || { echo 'gsd audio patch not applied'; exit 1; }
 
 # Ownership of the image's own files: the packages PROVEN on hogshead (overlay gentoo/ = repo horcrux): sys-kernel/horcrux-unlock (dracut one-passphrase),
 # sys-apps/horcrux-tools (installer, live scripts, horcrux-be, horcrux-orphans), sys-apps/horcrux-live-data (branding + portage metadata snapshot),
