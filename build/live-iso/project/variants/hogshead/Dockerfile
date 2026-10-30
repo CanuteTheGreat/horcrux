@@ -36,7 +36,7 @@ RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,
     set -e; unset ARCH; export FEATURES="-ccache"; \
     ebuild /var/db/repos/gentoo/sys-kernel/gentoo-kernel/gentoo-kernel-7.2.13.ebuild clean configure 2>&1 | tail -30; \
     w=/var/tmp/portage/sys-kernel/gentoo-kernel-7.2.13/work/linux-7.2; \
-    grep -E 'LOCALVERSION|CONFIG_T2BCE|CONFIG_HID_APPLETB_KBD|CONFIG_APPLE_GMUX' $w/.config; \
+    c=$(find /var/tmp/portage/sys-kernel/gentoo-kernel-7.2.13/work -maxdepth 2 -name .config | head -1); echo CONFIG=$c; grep -E 'LOCALVERSION|CONFIG_T2BCE|CONFIG_HID_APPLETB_KBD|CONFIG_APPLE_GMUX' $c; \
     ls $w/drivers/staging/t2bce; ls /var/tmp/portage/sys-kernel/gentoo-kernel-7.2.13/temp/ | head
 
 # the kernel binary package is built in its OWN layer (about an hour) and kept inside the image layer:
