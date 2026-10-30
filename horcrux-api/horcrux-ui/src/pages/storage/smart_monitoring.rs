@@ -262,7 +262,7 @@ pub fn SmartMonitoringPage() -> impl IntoView {
                                                         a 15.9155 15.9155 0 0 1 0 31.831
                                                         a 15.9155 15.9155 0 0 1 0 -31.831"
                                                     fill="none"
-                                                    stroke="#eee"
+                                                    style="stroke:var(--grid)"
                                                     stroke-width="3"
                                                 />
                                                 <path
