@@ -1,0 +1,288 @@
+#!/usr/bin/python3
+"""gringotts-restore - bring the owner's files back from the Ubuntu-era backup after the first boot of the Horcrux install.
+
+  sudo gringotts-restore --backup DIR [--wg-stdin] [--user canutethegreat] [--dry-run] [--nft]
+
+DIR holds the Nextcloud folder `gringotts-backup-2026-10` (home-dotfiles.tar.zst, firefox-snap-profile.tar.zst, etc-selected.tar.zst):
+once the Nextcloud client has synced it, it is ~/Nextcloud/gringotts-backup-2026-10; before that the agent can copy the three
+files over ssh into any directory.  Nothing is overwritten silently: an existing file is moved to <name>.pre-restore first.
+
+What comes back (an allow-list; Ubuntu-only state - ibus/CJK input, gnome-initial-setup, snap units, evolution, dconf - stays out):
+  shell/editor/gpg:   .bashrc .profile .bash_logout .bash_history .viminfo .gnupg
+  app profiles:       Brave (BraveSoftware), Discord, terminator, VLC, Remmina (+ saved connection), virt-viewer, GTK bookmarks
+  Firefox:            the snap profile -> ~/.mozilla/firefox (the Install* sections of profiles.ini are dropped so the restored profile is used)
+  /home/ron -> /home/<user> in the small text settings files (never in Secure Preferences / databases)
+  /etc/wireguard/wg0.conf  from STDIN with --wg-stdin (root 0600; the content is never printed or logged)
+  --nft               the CVE-2026-98432 nftables mitigation from etc-selected (loaded + saved for the OpenRC nftables service)
+Not restored on purpose: GNOME keyring (logins in Brave/Firefox come back through browser sync), Rustinion identity (the agent re-enrols),
+Nextcloud login (sign in again; ~/.ssh ~/.aws ~/bin live in ~/Nextcloud and come back with the sync).
+"""
+import argparse
+import configparser
+import grp
+import os
+import pwd
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+OLD_USERS = ["ron"]
+DOT_FILES = [".bashrc", ".profile", ".bash_logout", ".bash_history", ".viminfo", ".gnupg"]
+DOT_DIRS = [".config/BraveSoftware", ".config/discord", ".config/terminator", ".config/vlc", ".config/remmina",
+            ".config/virt-viewer", ".config/gtk-3.0", ".local/share/remmina", ".local/share/vlc"]
+# text settings that embed the old home; never the HMAC-protected / binary ones
+REWRITE_NAMES = {"Preferences", "terminator", "config", "vlcrc", "vlc-qt-interface.conf", "remmina.pref", "settings", "bookmarks",
+                 ".bashrc", ".profile", ".bash_logout"}
+REWRITE_SKIP = {"Secure Preferences", "Local State"}
+OK, WARN, BAD = "ok", "warn", "FAIL"
+results = []
+
+
+def note(level, what, info=""):
+    results.append((level, what, info))
+    print(f"[{level:>4}] {what}" + (f"  {info}" if info else ""), flush=True)
+
+
+def run(cmd, **kw):
+    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+
+
+def zst_test(path):
+    r = run(["zstd", "-t", "-q", path])
+    return r.returncode == 0
+
+
+def tar_extract(archive, dest, members):
+    r = run(["tar", "--zstd", "-xf", archive, "-C", dest, "--wildcards"] + members)
+    return r.returncode, r.stderr.strip()
+
+
+def move_aside(path, dry):
+    if os.path.lexists(path):
+        bak = path + ".pre-restore"
+        n = 1
+        while os.path.lexists(bak):
+            n += 1
+            bak = f"{path}.pre-restore{n}"
+        if not dry:
+            os.rename(path, bak)
+        return bak
+    return None
+
+
+def chown_tree(root, uid, gid):
+    os.lchown(root, uid, gid)
+    for dp, dns, fns in os.walk(root):
+        for n in dns + fns:
+            try:
+                os.lchown(os.path.join(dp, n), uid, gid)
+            except OSError:
+                pass
+
+
+def rewrite_home(root, old_homes, new_home):
+    changed = 0
+    for dp, _dns, fns in os.walk(root):
+        for fn in fns:
+            if fn in REWRITE_SKIP or fn not in REWRITE_NAMES:
+                continue
+            p = os.path.join(dp, fn)
+            try:
+                if os.path.islink(p) or os.path.getsize(p) > 2_000_000:
+                    continue
+                data = open(p, "rb").read()
+            except OSError:
+                continue
+            if b"\0" in data:
+                continue
+            new = data
+            for oh in old_homes:
+                new = new.replace(oh.encode(), new_home.encode())
+            if new != data:
+                open(p, "wb").write(new)
+                changed += 1
+    return changed
+
+
+def restore_home(backup, user, dry):
+    arc = os.path.join(backup, "home-dotfiles.tar.zst")
+    if not os.path.exists(arc):
+        note(BAD, "home-dotfiles.tar.zst", f"not found in {backup}")
+        return
+    if not zst_test(arc):
+        note(BAD, "home-dotfiles.tar.zst", "zstd -t failed (incomplete copy?)")
+        return
+    pw = pwd.getpwnam(user)
+    home = pw.pw_dir
+    tmp = tempfile.mkdtemp(prefix="gringotts-restore-", dir="/var/tmp")
+    try:
+        members = DOT_FILES + [d + "/" for d in DOT_DIRS] + DOT_DIRS
+        rc, err = tar_extract(arc, tmp, members)
+        if rc not in (0, 2) and not os.listdir(tmp):
+            note(BAD, "extract home-dotfiles", err[:200])
+            return
+        # old home path(s): the archive was made as `ron`
+        old_homes = [f"/home/{u}" for u in OLD_USERS]
+        n_rw = rewrite_home(tmp, old_homes, home)
+        done = []
+        for rel in DOT_FILES + DOT_DIRS:
+            src = os.path.join(tmp, rel)
+            if not os.path.lexists(src):
+                continue
+            dst = os.path.join(home, rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            bak = move_aside(dst, dry)
+            if not dry:
+                shutil.move(src, dst)
+            done.append(rel + (" (old one kept as .pre-restore)" if bak else ""))
+        if not dry:
+            for top in {d.split("/")[0] for d in DOT_FILES + DOT_DIRS}:
+                p = os.path.join(home, top)
+                if os.path.lexists(p):
+                    chown_tree(p, pw.pw_uid, pw.pw_gid)
+            for p in (os.path.join(home, ".gnupg"),):
+                if os.path.isdir(p):
+                    os.chmod(p, 0o700)
+            for d in {os.path.dirname(os.path.join(home, r)) for r in DOT_DIRS}:
+                if os.path.isdir(d) and d != home:
+                    os.chown(d, pw.pw_uid, pw.pw_gid)
+        note(OK, f"dotfiles + app profiles restored ({len(done)} items; {n_rw} text files re-pointed /home/ron -> {home})", ", ".join(done)[:300])
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def restore_firefox(backup, user, dry):
+    arc = os.path.join(backup, "firefox-snap-profile.tar.zst")
+    if not os.path.exists(arc):
+        note(WARN, "firefox-snap-profile.tar.zst", "not found, Firefox profile skipped")
+        return
+    if not zst_test(arc):
+        note(BAD, "firefox-snap-profile.tar.zst", "zstd -t failed")
+        return
+    pw = pwd.getpwnam(user)
+    if run(["pgrep", "-u", str(pw.pw_uid), "-x", "firefox"]).returncode == 0 or run(["pgrep", "-u", str(pw.pw_uid), "-f", "firefox-bin"]).returncode == 0:
+        note(BAD, "Firefox is running", "close it, then run the restore again")
+        return
+    tmp = tempfile.mkdtemp(prefix="gringotts-restore-ff-", dir="/var/tmp")
+    try:
+        rc, err = tar_extract(arc, tmp, ["snap/firefox/common/.mozilla/firefox"])
+        src = os.path.join(tmp, "snap/firefox/common/.mozilla/firefox")
+        if not os.path.isdir(src):
+            note(BAD, "extract firefox profile", err[:200])
+            return
+        dst = os.path.join(pw.pw_dir, ".mozilla/firefox")
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        bak = move_aside(dst, dry)
+        if not dry:
+            shutil.move(src, dst)
+            # force the restored profile: Install<hash> sections name the snap's install dir (no longer exists)
+            pi = os.path.join(dst, "profiles.ini")
+            if os.path.exists(pi):
+                cp = configparser.RawConfigParser()
+                cp.optionxform = str
+                cp.read(pi)
+                for s in [s for s in cp.sections() if s.startswith("Install")]:
+                    cp.remove_section(s)
+                for s in cp.sections():
+                    if s.startswith("Profile") and cp.get(s, "Name", fallback="") in ("default-release", "default") and cp.get(s, "Default", fallback="") != "1":
+                        pass
+                with open(pi, "w") as f:
+                    cp.write(f, space_around_delimiters=False)
+            try:
+                os.remove(os.path.join(dst, "installs.ini"))
+            except OSError:
+                pass
+            chown_tree(os.path.join(pw.pw_dir, ".mozilla"), pw.pw_uid, pw.pw_gid)
+        profs = [d for d in os.listdir(dst)] if os.path.isdir(dst) else []
+        note(OK, "Firefox profile restored to ~/.mozilla/firefox", f"{len(profs)} entries" + (" (old one kept as .pre-restore)" if bak else ""))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def restore_wg(dry):
+    data = sys.stdin.buffer.read()
+    if not data.strip():
+        note(BAD, "wg0.conf", "nothing on stdin")
+        return
+    if b"[Interface]" not in data or b"PrivateKey" not in data:
+        note(BAD, "wg0.conf", "stdin is not a WireGuard config (no [Interface]/PrivateKey)")
+        return
+    dst = "/etc/wireguard/wg0.conf"
+    if not dry:
+        os.makedirs("/etc/wireguard", mode=0o700, exist_ok=True)
+        os.chmod("/etc/wireguard", 0o700)
+        bak = move_aside(dst, dry)
+        fd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.chmod(dst, 0o600)
+    note(OK, "/etc/wireguard/wg0.conf installed", f"{len(data)} bytes, mode 600, left INACTIVE (it was inactive on Ubuntu); `wg-quick up wg0` to use it")
+
+
+def restore_nft(backup, dry):
+    arc = os.path.join(backup, "etc-selected.tar.zst")
+    if not (os.path.exists(arc) and zst_test(arc)):
+        note(WARN, "etc-selected.tar.zst", "missing/corrupt, nftables mitigation skipped")
+        return
+    tmp = tempfile.mkdtemp(prefix="gringotts-restore-etc-", dir="/var/tmp")
+    try:
+        tar_extract(arc, tmp, ["etc/nftables-cve-2026-98432.nft"])
+        f = os.path.join(tmp, "etc/nftables-cve-2026-98432.nft")
+        if not os.path.exists(f):
+            note(WARN, "nftables mitigation", "file not in the archive")
+            return
+        if dry:
+            note(OK, "nftables mitigation (dry run)", "")
+            return
+        r = run(["nft", "-c", "-f", f])
+        if r.returncode != 0:
+            note(BAD, "nftables mitigation does not parse", r.stderr.strip()[:200])
+            return
+        run(["nft", "-f", f])
+        os.makedirs("/var/lib/nftables", exist_ok=True)
+        run(["/etc/init.d/nftables", "save"])
+        run(["rc-update", "add", "nftables", "default"])
+        note(OK, "nftables mitigation loaded and saved for the nftables service", "")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--backup", required=True)
+    ap.add_argument("--user", default="canutethegreat")
+    ap.add_argument("--wg-stdin", action="store_true", help="read /etc/wireguard/wg0.conf from stdin (never printed)")
+    ap.add_argument("--nft", action="store_true")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--skip-firefox", action="store_true")
+    a = ap.parse_args()
+    if os.geteuid() != 0 and not a.dry_run:
+        print("run as root: sudo gringotts-restore ...")
+        return 1
+    try:
+        pwd.getpwnam(a.user)
+    except KeyError:
+        print(f"no such user {a.user}")
+        return 1
+    if not os.path.isdir(a.backup):
+        print(f"backup directory not found: {a.backup}")
+        return 1
+    wg_data_needed = a.wg_stdin
+    restore_home(a.backup, a.user, a.dry_run)
+    if not a.skip_firefox:
+        restore_firefox(a.backup, a.user, a.dry_run)
+    if wg_data_needed:
+        restore_wg(a.dry_run)
+    if a.nft:
+        restore_nft(a.backup, a.dry_run)
+    bad = [r for r in results if r[0] == BAD]
+    print("\nNext (by hand): start the Nextcloud client and sign in (~/Nextcloud syncs back, with ~/.ssh ~/.aws ~/bin); sign in to Brave/Firefox sync;")
+    print("Discord and Proton VPN ask for their logins once. Rustinion: enrol the new device with the tenant token.")
+    print(f"restore finished: {len(results) - len(bad)} ok/warn, {len(bad)} failed")
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

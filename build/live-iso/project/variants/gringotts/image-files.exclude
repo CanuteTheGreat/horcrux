@@ -1,0 +1,2 @@
+# paths (relative to /) that are NOT packed into sys-apps/horcrux-image-files because another ebuild owns them
+# (add a line when a Horcrux-overlay package such as sys-kernel/horcrux-unlock or sys-apps/horcrux-tools is installed by this variant)
