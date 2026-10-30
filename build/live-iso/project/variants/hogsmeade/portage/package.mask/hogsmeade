@@ -1,2 +1,4 @@
 # OpenZFS 2.3.x declares Linux-Maximum 7.2
 >=sys-kernel/gentoo-kernel-7.3
+# qemu (base image) pins the installed edk2-bin 202408: keep @world free of the skipped-update conflict warning
+>sys-firmware/edk2-bin-202408

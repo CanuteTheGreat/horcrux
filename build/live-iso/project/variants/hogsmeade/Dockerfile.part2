@@ -78,6 +78,8 @@ RUN set -e; unset ARCH; \
     for s in awccd nvidia-persistenced switcheroo-control smartd hogsmeade-firstboot comfyui docker tailscale cronie; do rc-update add $s default 2>/dev/null || true; done; \
     printf 'DISPLAYMANAGER="gdm"\n' > /etc/conf.d/display-manager; \
     echo "hogsmeade" > /etc/live-iso-variant; \
+    rm -rf /usr/bin/tiny-dfr /usr/bin/t2fanrd /usr/share/tiny-dfr /usr/share/horcrux/t2 /usr/lib/udev/rules.d/99-touchbar-*.rules /etc/init.d/tiny-dfr /etc/init.d/t2fanrd; \
+    rm -f /etc/runlevels/*/tiny-dfr /etc/runlevels/*/t2fanrd; \
     rm -rf /lib/modules/6.18.57-gentoo-dist-bin /boot/*6.18.57-gentoo-dist-bin* /boot/*.old; \
     horcrux-orphans | grep -E "[.]pyc$" | xargs -r rm -f; \
     find / -xdev -name __pycache__ -type d -empty -delete 2>/dev/null || true; \
