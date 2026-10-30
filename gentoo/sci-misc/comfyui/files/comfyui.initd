@@ -7,7 +7,7 @@ command_background=true
 pidfile="/run/comfyui.pid"
 output_log="/var/log/comfyui/comfyui.log"
 error_log="/var/log/comfyui/comfyui.err"
-export COMFYUI_PORT COMFYUI_DATA COMFYUI_EXTRA_ARGS
+export COMFYUI_PORT COMFYUI_DATA COMFYUI_EXTRA_ARGS COMFYUI_LISTEN
 depend() {
 	need localmount
 	use net tailscale

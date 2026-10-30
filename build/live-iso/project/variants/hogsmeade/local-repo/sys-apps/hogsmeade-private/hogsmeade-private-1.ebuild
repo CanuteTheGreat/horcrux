@@ -1,9 +1,9 @@
 # Copyright 2026 Errant Solutions
-# PRIVATE, machine-local package (never in git, never in a public ISO): the owner's handoff key, the agent's ssh public key and
-# the backup repository credentials of HOGSMEADE. The payload is copied into files/ by the private image build only.
+# PRIVATE, machine-local package (never in git, never in a public ISO): the single-use ephemeral tag:horcrux-handoff Tailscale key and the agent's ssh public key.
+# Backup credentials are NEVER baked in (provisioned after first boot from crystalcave). The payload is copied into files/ by the private image build only.
 EAPI=8
 
-DESCRIPTION="HOGSMEADE private payload: Tailscale handoff key, agent ssh key, restic backup credentials"
+DESCRIPTION="HOGSMEADE private payload: Tailscale handoff key and agent ssh public key (NO restic credentials)"
 S="${WORKDIR}"
 LICENSE="all-rights-reserved"
 RESTRICT="bindist mirror"
@@ -14,7 +14,7 @@ src_install() {
 	insinto /etc/hogsmeade
 	insopts -m0600
 	local f
-	for f in ts-authkey backup.env restic-password; do
+	for f in ts-authkey; do
 		[[ -s ${FILESDIR}/${f} ]] && newins "${FILESDIR}/${f}" "${f}"
 	done
 	# the agent's key: root (key-only sshd); hogsmeade-firstboot copies it to the desktop user once that user exists

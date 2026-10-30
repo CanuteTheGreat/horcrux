@@ -2,8 +2,8 @@
 # comfyui-launch: wait (in the background, never blocking boot) for the Tailscale IPv4 address, then run ComfyUI bound to it ONLY.
 # Never 0.0.0.0, never the LAN: if Tailscale never comes up, ComfyUI never starts.
 : "${COMFYUI_PORT:=8188}" "${COMFYUI_DATA:=/var/lib/comfyui}" "${COMFYUI_EXTRA_ARGS:=}"
-ip=""
-while :; do
+ip="${COMFYUI_LISTEN:-}"   # tests/CPU-only debugging: an explicit address skips the Tailscale wait (never set it to 0.0.0.0)
+while [ -z "$ip" ]; do
 	ip=$(tailscale ip -4 2>/dev/null | head -n1)
 	[ -n "$ip" ] && break
 	sleep 5

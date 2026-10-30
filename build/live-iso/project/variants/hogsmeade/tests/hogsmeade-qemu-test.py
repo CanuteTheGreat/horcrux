@@ -154,14 +154,18 @@ class HRun(zt.ZRun):
         rc, o = self.sh("/usr/sbin/hogsmeade-snapshots hourly; zfs list -H -t snapshot -o name | grep -c 'hsm-hourly-'; zfs list -H -t snapshot -o name | grep -c 'rpool/comfyui@' || true")
         n = o.strip().splitlines()
         self.step("zfs-snapshot-rotation-skips-comfyui", n and int(n[0]) >= 2 and n[-1] == "0", o.strip().replace("\n", " | "))
-        rc, o = self.sh("cat /etc/cron.d/hogsmeade; rc-service cronie status 2>&1 | head -1; restic version; grep -c . /etc/hogsmeade/backup.env; grep -o '^RESTIC_REPOSITORY=.*' /etc/hogsmeade/backup.env | sed 's#//.*@#//<masked>@#'; hogsmeade-health --quiet; echo HEALTH-RC=$?")
-        self.step("snapshot-cron-backup-job-and-health-present", "hogsmeade-snapshots hourly" in o and "hogsmeade-backup" in o and "hogsmeade-health" in o and "restic " in o and "ctg-backups/HOGSMEADE" in o and "HEALTH-RC=" in o, o.strip().replace("\n", " | ")[:400])
+        rc, o = self.sh("cat /etc/cron.d/hogsmeade; rc-service cronie status 2>&1 | head -1; restic version; hogsmeade-health --quiet; echo HEALTH-RC=$?")
+        self.step("snapshot-cron-backup-job-and-health-present", "hogsmeade-snapshots hourly" in o and "hogsmeade-snapshots daily" in o and "hogsmeade-backup" in o and "hogsmeade-health" in o and "restic " in o and "HEALTH-RC=" in o, o.strip().replace("\n", " | ")[:400])
+        rc, o = self.sh("ls /etc/hogsmeade/; test ! -e /etc/hogsmeade/backup.env && test ! -e /etc/hogsmeade/restic-password && echo NO-RESTIC-SECRETS-IN-IMAGE; grep -rlE 'AWS_SECRET|RESTIC_PASSWORD|applicationKey' /etc /root /home /usr/share/hogsmeade 2>/dev/null | head -3; echo GREP-DONE")
+        self.step("image-has-no-restic-credentials", "NO-RESTIC-SECRETS-IN-IMAGE" in o and "GREP-DONE" in o and not re.search(r"^/(etc|root|home|usr)", o, re.M), o.strip().replace("\n", " | ")[:300])
         rc, o = self.sh("awccctl status 2>&1 | head -5; rc-service awccd status 2>&1 | head -2; busctl --system list 2>/dev/null | grep -i awcc || true")
         self.step("awccd-and-awccctl-run", "profile:" in o, o.strip().replace("\n", " | ")[:300])
         rc, o = self.sh("ss -ltnH | awk '$4 ~ /:8188$/' | wc -l; rc-service comfyui status 2>&1 | head -1; ls -l /usr/lib/comfyui/venv/bin/python; /usr/lib/comfyui/venv/bin/python -c 'import torch,sys;print(\"torch\",torch.__version__)' 2>&1 | tail -1")
         self.step("comfyui-not-listening-without-tailscale-and-torch-imports", o.strip().splitlines()[0] == "0" and "torch " in o, o.strip().replace("\n", " | ")[:300])
-        rc, o = self.sh("stat -c '%a %U' /etc/hogsmeade/ts-authkey /etc/hogsmeade/backup.env /root/.ssh/authorized_keys 2>&1; ls /home/canutethegreat/.ssh/authorized_keys 2>&1; command -v hogsmeade-remote hogsmeade-verify hogsmeade-install prime-run")
+        rc, o = self.sh("stat -c '%a %U' /etc/hogsmeade/ts-authkey /root/.ssh/authorized_keys 2>&1; ls /home/canutethegreat/.ssh/authorized_keys 2>&1; command -v hogsmeade-remote hogsmeade-verify hogsmeade-install prime-run")
         self.step("private-payload-and-tools-installed", "600 root" in o and "hogsmeade-verify" in o, o.strip().replace("\n", " | ")[:300])
+        self.comfyui_cpu()
+        self.provision_and_backup()
         rc, o = self.sh("hogsmeade-verify 2>&1 | tail -80", timeout=180)
         open(f"{a.out}/hogsmeade-verify-in-vm.txt", "w").write(o)
         self.step("hogsmeade-verify-runs-in-vm", "RESULT:" in o, "(GPU/audio/WMI lines are expected to FAIL in a VM) " + o.strip().splitlines()[-1][:100] if o.strip() else "no output")
@@ -169,6 +173,28 @@ class HRun(zt.ZRun):
         self.step("swap-and-ram-sizes", True, o.strip().replace("\n", " | "))
         if a.desktop:
             self.desktop_checks(vm)
+
+    def comfyui_cpu(self):
+        rc, o = self.sh("sed -i '/^COMFYUI_LISTEN=/d;/^COMFYUI_EXTRA_ARGS=/d' /etc/conf.d/comfyui; echo COMFYUI_LISTEN=127.0.0.1 >> /etc/conf.d/comfyui; echo 'COMFYUI_EXTRA_ARGS=\"--cpu\"' >> /etc/conf.d/comfyui; "
+                        "rc-service comfyui restart 2>&1 | tail -2; for i in $(seq 1 60); do curl -fsS -m 4 http://127.0.0.1:8188/system_stats && break; sleep 4; done; echo; "
+                        "tail -5 /var/log/comfyui/comfyui.log /var/log/comfyui/comfyui.err 2>&1 | cut -c1-160", timeout=360)
+        open(f"{self.z.out}/comfyui-cpu.txt", "w").write(o)
+        self.step("comfyui-service-starts-in-cpu-mode", '"comfyui_version"' in o or '"system"' in o, o.strip().replace("\n", " | ")[:400])
+        self.sh("rc-service comfyui stop; sed -i '/^COMFYUI_LISTEN=/d;/^COMFYUI_EXTRA_ARGS=/d' /etc/conf.d/comfyui", timeout=60)
+
+    def provision_and_backup(self):
+        """the post-install restic provisioning: crystalcave-style push over SSH stdin into root-only 0600 files, then a real hogsmeade-backup
+        into a THROWAWAY local repo (never the real B2 repo)"""
+        a = self.z
+        script = os.path.join(HERE, "..", "provision-restic.sh")
+        env = dict(os.environ, HSM_SSH_OPTS=f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i {self.key} -p {qt.FWD_SSH}")
+        r = subprocess.run(["bash", script, "--test", "--", "root@127.0.0.1"], env=env, capture_output=True, text=True, timeout=180)
+        open(f"{a.out}/provision.txt", "w").write(r.stdout + r.stderr)
+        self.step("restic-provisioned-over-ssh-stdin-0600", r.returncode == 0 and "600 root /etc/hogsmeade/backup.env" in r.stdout and "600 root /etc/hogsmeade/restic-password" in r.stdout, r.stdout.strip().replace("\n", " | ")[:300] + r.stderr[:100])
+        self.sh("mkdir -p /data/hsmtest && head -c 300000 /dev/urandom > /data/hsmtest/blob && echo hello > /home/canutethegreat/hsm-note.txt && chown -R canutethegreat /home/canutethegreat/hsm-note.txt", timeout=60)
+        rc, o = self.sh("/usr/sbin/hogsmeade-backup; echo BACKUP-RC=$?; set -a; . /etc/hogsmeade/backup.env; set +a; restic snapshots --tag hogsmeade --compact; restic ls latest | grep -c hsm-note; restic check 2>&1 | tail -2; cat /var/lib/hogsmeade/last-backup-ok", timeout=600)
+        open(f"{a.out}/test-backup.txt", "w").write(o)
+        self.step("test-backup-to-throwaway-restic-repo", "BACKUP-RC=0" in o and "1 snapshots" in o and "no errors were found" in o, o.strip().replace("\n", " | ")[:400])
 
     # ---------------------------------------------------------------- last phase: only drive 3 can boot
     def third_drive_boot(self, nvars):
