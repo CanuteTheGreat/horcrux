@@ -532,8 +532,13 @@ def validate_config(profile, c, unattended=False, require_secret=True):
         errs.append("hostname: " + hostname_problem(c["hostname"]))
     if not c["disks"]:
         errs.append("no target disk")
-    if c["fs"] == "zfs" and c["zfs_raid"] == "mirror" and len(set(c["disks"])) < 2:
-        errs.append("ZFS mirror needs two different disks")
+    if c["fs"] == "zfs":
+        from . import zfsroot
+        if len(set(c["disks"])) != len(c["disks"]):
+            errs.append("the same disk is listed twice")
+        rp = zfsroot.raid_problem(c["zfs_raid"], len(set(c["disks"])))
+        if rp:
+            errs.append(rp)
     if c["fs"] != "zfs" and len(c["disks"]) > 1:
         errs.append("only ZFS uses more than one disk")
     if c.get("install_type") == "desktop":
@@ -752,12 +757,12 @@ class Installer:
             return luksroot.partition_stage(self)        # swap (if any) is an LV inside the LUKS volume, made by mkfs_stage
         swap = self.swap_mb if self.swap_mode == "hibernate" else 0      # servers: no swap partition; portables: >= RAM for the image
         self.swap_mb = swap
-        for disk in self.c["disks"]:
+        for di, disk in enumerate(self.c["disks"]):
             self.run(["sh", "-c", f"swapoff -a 2>/dev/null; wipefs -a {shquote(disk)} >/dev/null 2>&1; sgdisk -Z {shquote(disk)} >/dev/null 2>&1; true"], check=False)
             first = ["-n", "1:0:+" + ("1G" if self.zfs() else "512M"), "-t", "1:ef00", "-c", "1:ESP"] if self.efi else ["-n", "1:0:+1M", "-t", "1:ef02", "-c", "1:BIOS-boot"]
             args = ["sgdisk"] + first + ["-n", "2:0:+" + ("2G" if self.zfs() else "1G"), "-t", "2:8300", "-c", "2:boot"]
             if self.zfs():
-                if swap:    # encrypted ZFS laptop: LUKS2 hibernation swap as partition 3 (zfsswap.py); servers: zram only
+                if swap and di == 0:    # encrypted ZFS laptop: LUKS2 hibernation swap as partition 3 of the FIRST disk only (zfsswap.py); servers: zram only
                     args += zfsswap.sgdisk_part(swap)
             elif swap:        # servers/firewalls/hypervisors: NO swap partition (zram only); partition 3 simply does not exist, root stays number 4
                 args += ["-n", f"3:0:+{swap}M", "-t", "3:8200", "-c", "3:swap"]
@@ -773,10 +778,12 @@ class Installer:
             return luksroot.mkfs_stage(self, mem_mb())
         d0 = c["disks"][0]
         L = self.layout(d0)
-        for disk in c["disks"]:
+        for i, disk in enumerate(c["disks"]):
             l = self.layout(disk)
             if self.efi:
-                self.run(["mkfs.vfat", "-F32", "-n", "ESP", l[1]])
+                self.run(["mkfs.vfat", "-F32", "-n", "ESP" if i == 0 else f"ESP{i + 1}", l[1]])
+            if i and self.zfs():      # every extra drive carries its own copy of /boot (kept in sync by horcrux-boot-sync)
+                self.run(["mkfs.ext4", "-F", "-q", "-L", f"boot{i + 1}", l[2]])
         self.run(["mkfs.ext4", "-F", "-q", "-L", "boot", L[2]])
         if self.swap_mb and not self.zfs():
             self.run(["mkswap", "-L", "swap", L[3]])
@@ -1111,6 +1118,8 @@ class Installer:
         self.run("udevadm trigger --subsystem-match=block --action=change; udevadm settle --timeout=10; true", check=False)
         if self.efi:
             for i, disk in enumerate(c["disks"]):
+                if i and self.zfs():
+                    continue          # extra drives: own /boot copy + ESP via horcrux-boot-sync (zfsroot.write_grubcfg)
                 l = self.layout(disk)
                 mnt = "/boot/efi" if i == 0 else f"/boot/efi{i + 1}"
                 if i:

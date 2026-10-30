@@ -122,6 +122,9 @@ def grubcfg(c, boot=BOOT, uuid=None):
     tmp = os.path.join(boot, "grub", "grub.cfg.new")
     open(tmp, "w").write(text)
     os.replace(tmp, os.path.join(boot, "grub", "grub.cfg"))
+    if boot == BOOT and os.path.exists("/etc/horcrux/boot-mirrors.conf"):
+        # multi-disk pool: the other drives' /boot copies must follow the real grub.cfg (best effort)
+        subprocess.run(["horcrux-boot-sync"], check=False)
     return text
 
 

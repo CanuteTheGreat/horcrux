@@ -1,0 +1,37 @@
+#!/bin/bash
+# horcrux-boot-sync [--init]
+# Multi-disk ZFS install: every extra drive carries its own copy of /boot (ext4) and its own bootable ESP
+# (grub --removable), so ANY drive's ESP can boot the machine (BIOS boot order, a replaced first drive).
+# Drive 1 is the master: after every kernel install / boot-environment change this copies /boot to the other
+# drives and re-runs grub-install for their ESPs. Config: /etc/horcrux/boot-mirrors.conf = "<disk> <esp-uuid> <boot-uuid>".
+# NOTE: a pool striped over several drives has NO redundancy: this only keeps the boot path symmetric.
+set -u
+CONF=/etc/horcrux/boot-mirrors.conf
+[ -r "$CONF" ] || exit 0
+mode=${1:-sync}
+rc=0
+src=$(findmnt -no UUID /boot) || { echo "horcrux-boot-sync: /boot is not mounted" >&2; exit 1; }
+efi_target=x86_64-efi
+[ -d /sys/firmware/efi ] || [ -d /boot/efi/EFI ] || efi_target=""
+[ -n "$efi_target" ] || exit 0
+n=0
+while read -r disk esp boot _; do
+    case $disk in ''|\#*) continue ;; esac
+    n=$((n + 1))
+    d=/run/horcrux-bootmirror/$n
+    mkdir -p "$d/boot" "$d/efi"
+    if ! mount -t ext4 "UUID=$boot" "$d/boot"; then echo "horcrux-boot-sync: cannot mount boot copy $n ($boot)" >&2; rc=1; continue; fi
+    if ! mount -t vfat -o umask=0077 "UUID=$esp" "$d/efi"; then echo "horcrux-boot-sync: cannot mount ESP $n ($esp)" >&2; umount "$d/boot"; rc=1; continue; fi
+    # kernels, initramfs, per-BE directories, grub modules/fonts; the grub.cfg is rewritten for this copy below
+    rsync -aqx --delete --exclude lost+found --exclude /efi --exclude /grub/grub.cfg /boot/ "$d/boot/" || rc=1
+    mkdir -p "$d/boot/grub"
+    sed "s/$src/$boot/g" /boot/grub/grub.cfg > "$d/boot/grub/grub.cfg.new" && mv "$d/boot/grub/grub.cfg.new" "$d/boot/grub/grub.cfg" || rc=1
+    # the ESP of this drive: GRUB whose prefix points at THIS drive's /boot copy
+    grub-install --target="$efi_target" --efi-directory="$d/efi" --boot-directory="$d/boot" \
+        --bootloader-id=Horcrux --removable >/dev/null 2>&1 || { echo "horcrux-boot-sync: grub-install for $disk failed" >&2; rc=1; }
+    sync
+    umount "$d/efi" "$d/boot"
+    [ "$mode" = "--init" ] && echo "horcrux-boot-sync: drive $n ($disk) bootable"
+done < "$CONF"
+rmdir /run/horcrux-bootmirror/* /run/horcrux-bootmirror 2>/dev/null
+exit $rc
