@@ -69,6 +69,16 @@ class GRun(zt.ZRun):
     def qemu_args(self, iso, installed, nvars):
         args = super().qemu_args(iso, installed, nvars)
         # NVMe like the ThinkBook (the shared harness uses virtio-blk), 4 vCPUs, ThinkBook DMI strings
+        # the gringotts flow has no answer file (the owner's `gringotts-install` writes its own): drop the shared harness's answers USB disk
+        keep, k = [], 0
+        while k < len(args):
+            nxt = args[k + 1] if k + 1 < len(args) else ""
+            if args[k] in ("-drive", "-device") and isinstance(nxt, str) and (nxt.startswith("if=none,id=ans,") or nxt == "usb-storage,bus=xhci.0,drive=ans"):
+                k += 2
+                continue
+            keep.append(args[k])
+            k += 1
+        args = keep
         i = next(k for k, v in enumerate(args) if isinstance(v, str) and v.startswith(f"file={self.disk},if=virtio"))
         args[i - 1:i + 1] = ["-drive", f"file={self.disk},if=none,id=nvm0,format=qcow2,discard=unmap", "-device", "nvme,serial=GRINGOTTS0,drive=nvm0"]
         j = args.index("-smp")
@@ -166,10 +176,10 @@ class GRun(zt.ZRun):
             vm.shot("install-finished")
             self.step("installer-finished", ok and b"INSTALL FINISHED" in ok.group(0), txt)
             time.sleep(3)
-            vm.send("grep -c passphrase /var/log/gringotts-install.log; grep -rIlF -- '" + PASSPHRASE + "' /var/log /run /tmp /root 2>/dev/null | head -3; echo LEAK-CHECK-DONE\r")
+            vm.send("grep -c passphrase /var/log/gringotts-install.log; grep -rIlF -- '" + PASSPHRASE + "' /var/log /run /tmp /root 2>/dev/null | head -3 | sed 's/^/LEAKHIT /'; echo LEAK-CHECK-DONE\r")
             m = vm.expect_raw(r"LEAK-CHECK-DONE\r?\n", 30)
             leak = vm.screen()
-            self.step("live-passphrase-not-in-logs", "/var/log" not in leak.split("grep -rIlF")[-1] and "/run/" not in leak.split("grep -rIlF")[-1], "no file under /var/log /run /tmp /root contains the passphrase")
+            self.step("live-passphrase-not-in-logs", re.search(r"LEAKHIT /(var|run|tmp|root)", leak) is None and "LEAK-CHECK-DONE" in leak, "no file under /var/log /run /tmp /root contains the passphrase" if not re.search(r"LEAKHIT /", leak) else leak[-300:])
             vm.send("sync; poweroff\r")
             self.wait_exit(vm, 240)
         finally:
