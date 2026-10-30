@@ -115,7 +115,7 @@ TOML
 unset p1 p2 esc
 mark "PASSPHRASE-ACCEPTED"
 echo; echo "${B}Installing...${N} (15-30 minutes from a USB 3 stick; do not unplug anything)"
-/usr/bin/live-installer --answers "$ans" 2>&1 | tee /var/log/surface-install.log
+/usr/bin/live-installer --answers "$ans" --no-halt 2>&1 | tee /var/log/surface-install.log
 rc=${PIPESTATUS[0]}
 shred -u "$ans" 2>/dev/null || rm -f "$ans"
 if [ "$rc" = 0 ] && grep -q 'AUTOINSTALL-OK' /var/log/surface-install.log; then

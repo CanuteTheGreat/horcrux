@@ -114,7 +114,15 @@ class XT(SQ.T):
             self.step("passphrase-accepted", ok, "typed twice on the USB keyboard")
             time.sleep(20)
             vm.shot("installing")
-            ok = vm.expect_raw(r"SURFACE-AUTO: (INSTALL-OK|INSTALL-FAILED[^\n]*)", 2400, consume=False)
+            # progress shots (the last screen before a failure is the evidence)
+            for i in range(1, 400):
+                if not vm.alive():
+                    break
+                if vm.expect_raw(r"SURFACE-AUTO: (INSTALL-OK|INSTALL-FAILED)", 15, consume=False):
+                    break
+                if i % 4 == 0:
+                    vm.shot(f"installing-{i:03d}")
+            ok = vm.expect_raw(r"SURFACE-AUTO: (INSTALL-OK|INSTALL-FAILED[^\n]*)", 2400 if vm.alive() else 1, consume=False)
             self.step("installer-finished-ok", ok and b"INSTALL-OK" in ok.group(0), f"{int(time.time() - t0)}s total: " + (ok.group(0).decode() if ok else "timeout"))
             time.sleep(3)
             vm.shot("install-done")
@@ -151,16 +159,19 @@ class XT(SQ.T):
         # allowed = generated files only (eselect/gcc-config links, icon/mime/gconv caches, info/dir, nss .chk, cracklib dict, /boot/{grub,efi}); plus no
         # Portage config-protection leftovers (._cfg*) anywhere under /etc
         rc, out = self.ssh("horcrux-orphans > /tmp/po.out 2>&1; wc -l < /tmp/po.out; find /etc -name '._cfg*' > /tmp/cfg.out; wc -l < /tmp/cfg.out", timeout=900)
-        rc2, full = self.ssh("cat /tmp/po.out; echo @@CFG; cat /tmp/cfg.out", timeout=60)
+        rc2, full = self.ssh("while read f; do [ -L \"$f\" ] && echo \"LINK $f\" || echo \"FILE $f\"; done < /tmp/po.out; echo @@CFG; cat /tmp/cfg.out", timeout=300)
         self.save("horcrux-orphans.txt", full)
         po, _, cfg = full.partition("@@CFG")
-        ALLOW = [re.compile(x) for x in (r"/etc/", r"^/usr/lib/python[0-9.]+/.*__pycache__/", r"^/usr/lib64?/gconv/gconv-modules\.cache$", r"^/usr/share/(mime|icons)/", r"^/usr/share/(info/)?dir$",
-                 r"^/usr/share/applications/mimeinfo\.cache$", r"^/usr/share/glib-2\.0/schemas/gschemas\.compiled$", r"^/usr/lib64?/lib(freebl3|softokn3|nssdbm3)\.chk$", r"^/usr/lib/locale/locale-archive$",
-                 r"^/usr/libexec/rc/console/keymap$", r"^/usr/share/cracklib/", r"^/boot/(grub|efi|EFI|initramfs-|System\.map|config-|vmlinuz-)", r"^/usr/lib/modules/[^/]+/modules\.",
-                 r"^/usr/lib64?/(gdk-pixbuf-2\.0|gio|gtk-[234]\.0)/.*cache$", r"^/usr/lib/\.build-id/", r"^/usr/bin/(eselect|gcc|g\+\+|cc|c\+\+|cpp)", r"^/usr/(bin|lib64?)/.*->")]
-        orph = [l.strip() for l in po.splitlines() if l.strip().startswith("/") and not any(r.search(l.strip()) for r in ALLOW)]
+        # same rule as the hogshead harness: generated FILES only (mime/icon/gconv caches, info/dir, nss .chk, cracklib dict, grub modules + boot images);
+        # symlinks are eselect/gcc-config/binutils-config/perl-cleaner products (reported, allowed)
+        ALLOW = re.compile(r"^(/usr/share/mime/|/usr/share/info/dir$|/usr/share/(binutils|gcc)-data/.*/info/dir$|/usr/share/applications/mimeinfo\.cache$|"
+                           r"/usr/share/icons/[^/]+/icon-theme\.cache$|/usr/lib/locale/locale-archive$|/usr/lib/cracklib_dict\.|/usr/lib64/lib(freebl3|softokn3|nssdbm3)\.chk$|"
+                           r"/usr/lib64/gconv/gconv-modules\.cache$|/boot/(vmlinuz|System\.map|config|initramfs)-|/usr/libexec/rc/console/keymap$|/boot/(be|grub|efi)/|"
+                           r"/usr/lib(64)?/(gio/modules|gdk-pixbuf-[^/]*|gtk-[34]\.0)/.*cache|/usr/lib/cpp$|/usr/share/glib-2\.0/schemas/gschemas\.compiled$|/usr/lib/python[0-9.]+/.*__pycache__/)")
+        rows = [l.split(" ", 1) for l in po.splitlines() if l.startswith(("FILE ", "LINK "))]
+        orph = [p for k, p in rows if k == "FILE" and not ALLOW.match(p)]
         cfgs = [l.strip() for l in cfg.splitlines() if l.strip().startswith("/")]
-        s("horcrux-orphans-clean", len(orph) == 0, f"{len(orph)} unexpected: " + ", ".join(orph[:12]) + f" | raw lines={len(po.splitlines())}")
+        s("horcrux-orphans-clean", len(orph) == 0, f"{len(rows)} generated/eselect paths allowed ({sum(k == 'LINK' for k, _ in rows)} symlinks), {len(orph)} unowned: " + ", ".join(orph[:25]))
         s("no-cfg-protect-leftovers", len(cfgs) == 0, ", ".join(cfgs[:5]) or "none under /etc")
         rc3, qf = self.ssh("qfile /usr/bin/live-installer /usr/bin/horcrux-orphans /usr/share/live-installer/branding/full.png /etc/init.d/live-installer /etc/init.d/zram-swap /usr/bin/horcrux-surface-auto /usr/bin/brave /usr/bin/rustinion | sort", timeout=60)
         self.save("qfile-spot-check.txt", qf)
@@ -289,8 +300,12 @@ class XT(SQ.T):
     # ------------------------------------------------------------------------------------------------ run
     def run(self):
         a = self.a
-        self.setup()
-        self.install()
+        if self.a.boot_only:
+            Q.ARCH = "x86_64"
+            self.key_path = f"{a.out}/test_key"
+        else:
+            self.setup()
+            self.install()
         Q.pflash_vars(self.nvars)
         vm = Q.VM("2-boot1", self.base(True, self.nvars), a.out)
         marker = {}
@@ -374,6 +389,7 @@ def main():
     ap.add_argument("--cpu", default="IvyBridge")
     ap.add_argument("--disk-gb", type=int, default=40)
     ap.add_argument("--keep-disks", action="store_true")
+    ap.add_argument("--boot-only", action="store_true", help="debug: reuse the installed target.qcow2 + test_key in --out (kept with --keep-disks)")
     a = ap.parse_args()
     SQ.DMI = "type=1,manufacturer=Microsoft Corporation,product=Surface with Windows 8 Pro,version=1,sku=Surface_Pro"
     t = XT(a)
