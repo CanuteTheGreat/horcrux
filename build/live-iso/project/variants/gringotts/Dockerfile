@@ -73,7 +73,8 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
     rm -rf /usr/bin/horcrux /usr/bin/horcrux-api /usr/share/horcrux/ui /etc/init.d/horcrux-api /etc/init.d/horcrux-guests /etc/conf.d/horcrux-api \
            /usr/share/horcrux/t2 /usr/lib/live-installer /usr/libexec/live-* /usr/libexec/console-menu-session /usr/bin/live-installer /usr/bin/console-menu \
            /usr/bin/live-persist /usr/bin/live-rescue /usr/bin/horcrux-be /usr/bin/horcrux-t2-firmware /usr/share/horcrux/desktop \
-           /usr/share/live-installer /usr/lib/dracut/modules.d/91horcrux-unlock /etc/init.d/t2fanrd /etc/init.d/tiny-dfr; \
+           /usr/share/live-installer /usr/lib/dracut/modules.d/91horcrux-unlock /etc/init.d/t2fanrd /etc/init.d/tiny-dfr \
+           /usr/share/tiny-dfr /usr/lib/udev/rules.d/99-touchbar-tiny-dfr.rules; \
     rm -f /etc/runlevels/*/horcrux-api /etc/runlevels/*/horcrux-guests /etc/runlevels/*/t2fanrd /etc/runlevels/*/tiny-dfr; \
     emerge --oneshot --usepkg=n --getbinpkg=n sys-kernel/horcrux-unlock sys-apps/horcrux-tools sys-apps/horcrux-live-data; \
     emerge --noreplace --usepkg=n --getbinpkg=n app-admin/rustinion-bin; \
