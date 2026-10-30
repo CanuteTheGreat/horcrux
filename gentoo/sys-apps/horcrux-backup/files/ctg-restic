@@ -1,0 +1,36 @@
+#!/bin/bash
+# ctg-restic: one restic wrapper for every Linux host (owner standard 2026-10-30: encrypted, B2, 30 days).
+#   ctg-restic backup   daily; runs /etc/ctg-backup/pre.sh first if present, then backs up the paths file
+#   ctg-restic prune    weekly; forget --keep-within 30d --prune
+#   ctg-restic check    monthly; check --read-data-subset=5%
+#   ctg-restic <other>  passed through to restic (snapshots, restore, ...)
+# Config dir /etc/ctg-backup (root:root 0700): env (RESTIC_REPOSITORY, AWS_*/B2_* credentials, RESTIC_PASSWORD_FILE),
+# paths (one path per line), excludes (restic --exclude-file), optional pre.sh / post.sh.
+# State dir /var/lib/ctg-backup: last-backup-ok, last-prune-ok, last-check-ok, last-check-fail (epoch seconds).
+set -uo pipefail
+CONF=${CTG_BACKUP_CONF:-/etc/ctg-backup}
+STATE=${CTG_BACKUP_STATE:-/var/lib/ctg-backup}
+KEEP=${CTG_KEEP_WITHIN:-30d}
+set -a; . "$CONF/env"; set +a
+export HOME=${HOME:-/root}
+mkdir -p "$STATE"
+cmd=${1:-backup}; [ $# -gt 0 ] && shift
+now() { date +%s; }
+case "$cmd" in
+  backup)
+    if [ -x "$CONF/pre.sh" ]; then "$CONF/pre.sh" || { echo "pre.sh failed" >&2; exit 1; }; fi
+    args=(backup --tag ctg-daily --exclude-caches --one-file-system=false)
+    [ -f "$CONF/excludes" ] && args+=(--exclude-file "$CONF/excludes")
+    [ -n "${CTG_LIMIT_UPLOAD:-}" ] && args+=(--limit-upload "$CTG_LIMIT_UPLOAD")   # KiB/s, optional (set in env)
+    args+=(--files-from "$CONF/paths")
+    restic "${args[@]}" "$@"; rc=$?
+    # rc 3 = some source files unreadable (vanished while running): snapshot still written
+    if [ $rc -eq 0 ] || [ $rc -eq 3 ]; then now > "$STATE/last-backup-ok"; rc=0; fi
+    [ -x "$CONF/post.sh" ] && "$CONF/post.sh"
+    exit $rc ;;
+  prune)
+    restic forget --keep-within "$KEEP" --prune "$@" && now > "$STATE/last-prune-ok" ;;
+  check)
+    if restic check --read-data-subset=5% "$@"; then now > "$STATE/last-check-ok"; rm -f "$STATE/last-check-fail"; else now > "$STATE/last-check-fail"; exit 1; fi ;;
+  *) exec restic "$cmd" "$@" ;;
+esac

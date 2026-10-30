@@ -1,0 +1,9 @@
+/home/canutethegreat/.cache
+/home/canutethegreat/.local/share/Trash
+/home/canutethegreat/.local/share/Steam
+/home/canutethegreat/.var/app/*/cache
+/home/canutethegreat/snap
+/etc/ctg-backup
+**/node_modules
+**/__pycache__
+**/target

@@ -1,0 +1,8 @@
+[Unit]
+Description=ctg-restic weekly prune (keep-within 30d)
+[Timer]
+OnCalendar=Sun 06:30
+RandomizedDelaySec=60min
+Persistent=true
+[Install]
+WantedBy=timers.target
