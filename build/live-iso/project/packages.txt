@@ -7,5 +7,3 @@ net-misc/bridge-utils
 sys-apps/dbus
 net-dns/dnsmasq
 app-misc/jq
-# CPU microcode (Intel; early-loaded from the initramfs, see overlay/etc/dracut.conf.d/10-microcode.conf)
-sys-firmware/intel-microcode

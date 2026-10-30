@@ -7,3 +7,5 @@ sys-fs/cryptsetup
 x86_64? sys-apps/memtest86+
 # compressed RAM swap for ZFS installs (no swap on ZFS)
 sys-block/zram-init
+# Intel CPU microcode, early-loaded from the initramfs (x86 only; ~arm64 has no such package)
+x86_64? sys-firmware/intel-microcode
