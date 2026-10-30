@@ -8,7 +8,8 @@
     --secondary-solid: #5a6877;
     --success: #2d7a20;
     --success-solid: #2d7a20;
-    --warning: #ffc453;
+    --warning: #ffc453;          /* fills / borders */
+    --warning-text: #8a5a00;     /* warning as text on a card */
     --danger: #c62d12;
     --danger-solid: #c62d12;
     --info: #006fbb;
@@ -32,6 +33,7 @@
         --primary: #a3adff;
         --secondary: #9aa7b5;
         --success: #6fd35a;
+        --warning-text: #ffc453;
         --danger: #ff8a73;
         --info: #66b8ff;
         --light: #12161b;
@@ -295,7 +297,7 @@ body {
 }
 
 .status-paused {
-    color: var(--warning);
+    color: var(--warning-text);
 }
 
 .status-unknown {

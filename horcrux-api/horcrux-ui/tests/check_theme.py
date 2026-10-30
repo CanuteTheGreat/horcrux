@@ -70,6 +70,7 @@ PAIRS = [
     ("accent text on card", "var(--primary)", "var(--surface)"),
     ("accent text on page", "var(--primary)", "var(--light)"),
     ("success text on card", "var(--success)", "var(--surface)"),
+    ("warning text on card", "var(--warning-text)", "var(--surface)"),
     ("danger text on card", "var(--danger)", "var(--surface)"),
     ("info text on card", "var(--info)", "var(--surface)"),
     ("danger text on error banner", "var(--danger)", "var(--crit-bg)"),
