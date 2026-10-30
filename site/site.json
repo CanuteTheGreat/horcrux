@@ -30,6 +30,10 @@
   [
    "aarch64 (UEFI)",
    "horcrux-daily-aarch64.iso"
+  ],
+  [
+    "x86_64 Desktop (UEFI + BIOS, GNOME, encrypted ZFS + hibernate)",
+    "horcrux-desktop-daily-x86_64.iso"
   ]
  ],
  "dl_note": "The aarch64 build is tested under QEMU emulation, not on real arm64 hardware.",
