@@ -53,6 +53,11 @@ fi
 # (project/variants/<name>/Dockerfile, ARG BASE = the previous image). The server image stays the default; a variant image
 # is a separate ISO named <prefix>[-<hw profile>][-<hw variant>]-<DE|server>-<init>-<channel>-<arch>.iso (common/image-name.sh: horcrux-gnome-light-openrc-daily-x86_64.iso). `t2` needs the repo's gentoo/t2 (named build context).
 . "$HERE/common/image-name.sh"      # canonical VARIANT (desktop -> gnome-light), IMG=<DE|server>-<init>, IMG_HW
+# a hardware/private variant that sits on top of a desktop rootfs states its desktop environment in project/variants/<v>/de, so its ISO name says
+# DE + init (horcrux-gringotts-gnome-light-openrc-<date>-x86_64.iso) although the variant list names no DE variant (REUSE_ROOTFS = the desktop rootfs)
+for _v in $(echo "${VARIANT:-}" | tr ',' ' '); do
+  [ -f "project/variants/$_v/de" ] && { IMG_DE=$(tr -d ' \n' < "project/variants/$_v/de"); IMG=$IMG_DE-$IMG_INIT; }
+done
 ROOTFS_IMG=$TAG-rootfs; VIMGS=""
 if [ -n "${VARIANT:-}" ] && [ "$VARIANT" != server ]; then
   for v in $(echo "$VARIANT" | tr ',' ' '); do
