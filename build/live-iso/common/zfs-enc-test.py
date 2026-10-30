@@ -397,6 +397,14 @@ class ZRun(qt.Runner):
                 break
             time.sleep(6)
         self.step("desktop-gdm-and-gnome-shell-running", "GDM" in o and "SHELL" in o, o.strip().replace("\n", " | ")[:300])
+        # hogshead hand-off: an account with an EMPTY, expired (day 0) password must force the owner to choose a password at the first
+        # login (PAM nullok + new_authtok_reqd), with no temporary password stored anywhere. Exercised as an unprivileged user over a pty.
+        rc, o = self.sh("useradd -m hxtmp && passwd -d hxtmp >/dev/null && chage -d 0 hxtmp && grep '^hxtmp:' /etc/shadow | cut -d: -f2,3; "
+                        "printf '\\nHxNew-pass-4711!\\nHxNew-pass-4711!\\n' | script -qec \"su -s /bin/sh nobody -c 'su - hxtmp -c id'\" /dev/null | tr -d '\\r' | tail -8; "
+                        "echo AFTER; grep '^hxtmp:' /etc/shadow | cut -d: -f2,3 | cut -c1-3; userdel -r hxtmp 2>/dev/null; true", timeout=90)
+        before, _, after = o.partition("AFTER")
+        self.step("empty-expired-password-forces-change-at-first-login", before.strip().startswith(":0") and after.strip()[:1] == "$" and "uid=" in before,
+                  o.strip().replace("\n", " | ")[:300])
         if vm:
             # the greeter is graphical: wait until the VGA console is no longer the black text console (many distinct colours)
             end, colours = time.time() + qt.T(150), 0
