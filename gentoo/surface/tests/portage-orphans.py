@@ -36,7 +36,7 @@ GENERATED = [re.compile(x) for x in (
     r"^/usr/lib/python[0-9.]+/.*__pycache__/.*$", r"^/usr/lib/cpp$",
     r"^/usr/share/mime/.*$", r"^/usr/share/icons/[^/]+/icon-theme\.cache$", r"^/usr/share/applications/mimeinfo\.cache$", r"^/usr/share/glib-2\.0/schemas/gschemas\.compiled$",
     r"^/usr/share/(info/dir|.*/info/dir)$", r"^/usr/share/fonts/.*/(fonts\.dir|fonts\.scale)$", r"^/usr/share/live-installer/portage-meta\.json\.xz$",
-    r"^/usr/lib/\.build-id/.*$", r"^/usr/share/man/man1/.*\.1(\.bz2|\.gz|\.xz|\.zst)?$",
+    r"^/usr/lib/\.build-id/.*$", r"^/usr/lib64?/lib(freebl3|softokn3|nssdbm3)\.chk$", r"^/usr/bin/(GET|POST|HEAD)$", r"^/usr/share/man/man1/.*\.1(\.bz2|\.gz|\.xz|\.zst)?$",
 )]
 
 
