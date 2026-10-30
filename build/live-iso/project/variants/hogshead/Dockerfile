@@ -21,7 +21,7 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     emerge --noreplace --usepkg --getbinpkg app-eselect/eselect-repository dev-vcs/git; \
     eselect repository enable guru; \
     emerge --sync guru; \
-    for e in /var/db/repos/horcrux/sys-kernel/horcrux-t2-config/*.ebuild /var/db/repos/horcrux/app-admin/rustinion-bin/*.ebuild; do ebuild "$e" manifest; done
+    for e in /var/db/repos/horcrux/sys-kernel/horcrux-t2-config/*.ebuild /var/db/repos/horcrux/app-admin/rustinion-bin/*.ebuild /var/db/repos/horcrux/sys-apps/t2fanrd/*.ebuild /var/db/repos/horcrux/sys-apps/tiny-dfr/*.ebuild; do ebuild "$e" manifest; done
 
 # the T2 kernel: patches+config package first, then the dist kernel built FROM SOURCE with them; the stock binary kernel goes
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
@@ -52,7 +52,7 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     emerge --update --newuse --usepkg --getbinpkg --keep-going \
         app-containers/docker app-containers/docker-compose app-containers/docker-buildx \
         net-misc/remmina media-gfx/gimp media-gfx/geeqie net-misc/mosh net-analyzer/nmap \
-        net-im/discord net-vpn/proton-vpn-gtk-app app-admin/rustinion-bin \
+        net-im/discord net-vpn/proton-vpn-gtk-app app-admin/rustinion-bin sys-apps/t2fanrd sys-apps/tiny-dfr \
         sys-firmware/edk2-bin app-admin/sudo sys-process/cronie sys-apps/portage-utils app-portage/eix \
         > /var/log/hogshead-apps.log 2>&1 || { tail -60 /var/log/hogshead-apps.log; exit 1; }
 
@@ -65,7 +65,7 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
         && echo "OPTIONAL-OK $p" || echo "OPTIONAL-FAILED $p"; \
     done | tee /etc/hogshead-optional.txt; true
 
-RUN set -e; for s in docker; do rc-update add $s default || true; done; \
+RUN set -e; for s in docker t2fanrd tiny-dfr; do rc-update add $s default || true; done; \
     echo "hogshead" >> /etc/live-iso-variant; \
     find / -xdev -name '*.pyc' -path '*/__pycache__/*' -delete 2>/dev/null || true; \
     rm -rf /var/tmp/portage /var/cache/distfiles/* 2>/dev/null || true

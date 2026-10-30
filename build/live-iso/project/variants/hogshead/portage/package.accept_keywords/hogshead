@@ -10,3 +10,5 @@ sys-firmware/apple-t2-wifi-firmware -* ~amd64
 =sys-fs/zfs-2.3.9 ~amd64
 net-im/discord ~amd64
 net-vpn/proton-vpn-gtk-app ~amd64
+sys-apps/t2fanrd ~amd64
+sys-apps/tiny-dfr ~amd64
