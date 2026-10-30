@@ -61,9 +61,9 @@ if [ -n "${VARIANT:-}" ] && [ "$VARIANT" != server ]; then
     # named contexts for variants: `hxoverlay` = the Horcrux Portage overlay (repo's gentoo/), `priv` = PRIVATE inputs (PRIV_DIR, never in the
     # repo: authorized_keys + ts-authkey for the gringotts image; empty = a public image without them)
     if [ -d "$REPO/gentoo" ]; then
-      # hxoverlay = minimal overlay (long cached layers), hxfull = the whole overlay (variants copy it late)
-      HXMIN=$(mktemp -d); for d in app-admin/rustinion-bin profiles metadata; do [ -e "$REPO/gentoo/$d" ] && { mkdir -p "$HXMIN/$(dirname $d)"; cp -a "$REPO/gentoo/$d" "$HXMIN/$d"; }; done
-      VCTX="$VCTX --build-context hxoverlay=$HXMIN --build-context hxfull=$REPO/gentoo"
+      # hxoverlay = the overlay the long cached layers were built with (HXO_EARLY, default the whole repo gentoo/), hxfull = the whole overlay
+      # (variants copy it after the long layers so overlay edits do not invalidate them)
+      VCTX="$VCTX --build-context hxoverlay=${HXO_EARLY:-$REPO/gentoo} --build-context hxfull=$REPO/gentoo"
     fi
     PRIVCTX=${PRIV_DIR:-}; [ -n "$PRIVCTX" ] || { PRIVCTX=$(mktemp -d); trap 'rmdir "$PRIVCTX" 2>/dev/null; cleanup_build' EXIT; }
     VCTX="$VCTX --build-context priv=$PRIVCTX"
