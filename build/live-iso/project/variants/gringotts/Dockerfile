@@ -61,10 +61,12 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     for d in app project common desktop gringotts; do cp -a /tmp/hxo/$d/. /tmp/imgfiles/; done; \
     ( cd /tmp/imgfiles && grep -v '^#' /tmp/image-files.exclude | grep . | while read -r p; do rm -rf "./$p"; done ); \
     find /tmp/imgfiles -name __pycache__ -type d -prune -exec rm -rf {} +; \
+    ( cd /tmp/imgfiles && find . \( -type f -o -type l \) | sed 's|^\.||' | xargs -d '\n' qfile -C 2>/dev/null | tee /tmp/already-owned.txt | sed 's/^/NOTE already owned by a package, left out of horcrux-image-files: /'; \
+      sed -E 's/.*\(([^)]*)\)$/\1/' /tmp/already-owned.txt | while read -r f; do rm -f "./$f"; done ); \
     tar -C /tmp/imgfiles -cf /tmp/dist/horcrux-image-files-1.tar .; \
     DISTDIR=/tmp/dist ebuild /var/db/repos/horcrux-gringotts/sys-apps/horcrux-image-files/horcrux-image-files-1.ebuild manifest; \
-    CONFIG_PROTECT="-*" DISTDIR=/tmp/dist emerge --noreplace --usepkg=n --getbinpkg=n --buildpkg=n sys-apps/horcrux-image-files app-misc/gringotts-tools app-admin/rustinion-bin; \
-    rm -rf /tmp/dist /tmp/hxo /tmp/imgfiles /tmp/image-files.exclude
+    FEATURES="-collision-protect -protect-owned" COLLISION_IGNORE="/usr /etc /var /opt /lib /lib64 /bin /sbin /boot /root /srv" CONFIG_PROTECT="-*" DISTDIR=/tmp/dist emerge --noreplace --usepkg=n --getbinpkg=n --buildpkg=n sys-apps/horcrux-image-files app-misc/gringotts-tools app-admin/rustinion-bin; \
+    rm -rf /tmp/dist /tmp/hxo /tmp/imgfiles /tmp/image-files.exclude /tmp/already-owned.txt
 
 # PRIVATE bundle (agent SSH public keys + Tailscale key): absent in a public build. DISTDIR is a tmpfs-like scratch dir that is deleted,
 # the binary package is not built, so nothing secret reaches the binpkg/distfile caches.
@@ -76,6 +78,10 @@ RUN --mount=type=bind,from=priv,target=/priv \
       CONFIG_PROTECT="-*" DISTDIR=/tmp/dist emerge --noreplace --usepkg=n --getbinpkg=n --buildpkg=n app-misc/gringotts-private; \
       rm -rf /tmp/dist; echo "PRIVATE bundle installed (app-misc/gringotts-private)"; \
     else echo "no private bundle: PUBLIC image (no SSH keys, no Tailscale key)"; fi
+
+# package-owned config files that are only edited (not shipped by gringotts-tools: iwd and openrc own them): iwd must not do its own DHCP (NetworkManager does),
+# the live stick has its own host name (the installer sets the real one on the target)
+RUN printf '[General]\nEnableNetworkConfiguration=false\n' > /etc/iwd/main.conf; printf 'hostname="gringotts-live"\n' > /etc/conf.d/hostname
 
 # runlevels of the live stick (and of the install, which copies them): NetworkManager (iwd backend; nmtui) instead of dhcpcd; the gringotts tty1 menu comes from the live-installer-session override in ./overlay.
 RUN set -e; \

@@ -33,9 +33,5 @@ src_install() {
 	doins etc/ssh/sshd_config.d/10-gringotts.conf
 	insinto /etc/NetworkManager/conf.d
 	doins etc/NetworkManager/conf.d/10-horcrux.conf
-	insinto /etc/iwd
-	doins etc/iwd/main.conf
-	insinto /etc/conf.d
-	doins etc/conf.d/hostname
 	keepdir /var/lib/gringotts
 }
