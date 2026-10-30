@@ -87,12 +87,20 @@ def mkpool(inst):
 
 
 def mount(inst):
+    # datasets created with canmount=on were auto-mounted under the target at creation, BEFORE the root boot environment existed as a mount:
+    # the BE mounted on top of them hid them, and the desktop user's home was created in the BE's own /home (hidden by the empty home dataset
+    # at every boot: GNOME could not start). Unmount them first, mount the BE, then mount_rest() mounts the shared datasets above it.
+    inst.run(["zfs", "umount", "-a"], check=False)
     inst.run(["zfs", "mount", f"{POOL}/ROOT/{BE}"])
 
 
 def mount_rest(inst):
     """after /boot is mounted: the shared datasets (home, var/log, ...)"""
     inst.run(["zfs", "mount", "-a"], check=False)
+    home = f"{inst.target}/home"
+    if os.system(f"findmnt -n -o FSTYPE {home} | grep -q zfs") != 0:
+        from .system import InstallError
+        raise InstallError(f"{POOL}/home is not mounted at {home}: the user's home would be created in the boot environment and hidden at boot")
 
 
 ZRAM_CONF = """# written by the Horcrux installer: compressed RAM swap instead of swap on ZFS (unsafe) or a disk partition
