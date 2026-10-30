@@ -156,6 +156,15 @@ class GringottsInstaller(S.Installer):
                         o.write(data)
                     n += 1
             self.log(f"network profiles carried over: {n}")
+        # The baked Tailscale key is SINGLE-USE: if the live stick already joined the tailnet with it (gringotts-remote), the node identity goes with the
+        # install, so the installed system's first boot is still connected (the key itself cannot be used a second time).
+        tsst = "/var/lib/tailscale/tailscaled.state"
+        if os.path.isfile(tsst):
+            os.makedirs(f"{T}/var/lib/tailscale", mode=0o700, exist_ok=True)
+            fd = os.open(f"{T}{tsst}", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "wb") as o:
+                o.write(open(tsst, "rb").read())
+            self.log("tailscale node identity carried over (single-use key already spent on the live stick)")
         # NetworkManager uses iwd as its Wi-Fi backend: the iwd daemon must stay enabled and must not do its own DHCP
         self.write("/etc/iwd/main.conf", "[General]\nEnableNetworkConfiguration=false\n")
         for svc, lvl in EXTRA_SERVICES:
