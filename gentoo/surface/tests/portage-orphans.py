@@ -28,7 +28,7 @@ GENERATED = [re.compile(x) for x in (
     r"^/etc/elogind/logind\.conf\.d/10-horcrux-portable\.conf$", r"^/etc/elogind/sleep\.conf\.d/.*$", r"^/etc/UPower/UPower\.conf$", r"^/etc/sudoers\.d/.*$", r"^/etc/NetworkManager/system-connections/.*$",
     r"^/etc/portage/(make\.conf|make\.conf\.arch|make\.profile|\.gitkeep|binrepos\.conf/.*|gnupg/.*|env/.*|package\.env/.*|package\.accept_keywords/arch|package\.mask/zfs)$",
     r"^/etc/live-iso-(volid|label|variant|cmdline|autoentry|hwprofile)$", r"^/etc/surface-kernelrelease$", r"^/etc/local\.d/50-installer-firstboot\.start$",
-    r"^/etc/(ssl/certs/.*|ca-certificates\.conf)$", r"^/etc/\._cfg.*$", r"^/etc/ssh/sshd_config(\.d/.*)?$", r"^/etc/inittab$", r"^/etc/default/grub$", r"^/etc/hosts$",
+    r"^/etc/(ssl/certs/.*|ca-certificates\.conf)$", r"^/etc/\._cfg.*$", r"^/etc/ssh/sshd_config(\.d/.*)?$", r"^/etc/inittab$", r"^/etc/default/grub$", r"^/etc/hosts$", r"^/etc/gitconfig$",
     r"^/etc/(kernel/.*|modprobe\.d/.*|modules-load\.d/.*|sysctl\.d/.*)$", r"^/etc/conf\.d/(zram-swap|horcrux-api)$", r"^/etc/udev/hwdb\.bin$",
     r"^/boot/(initramfs-.*|grub/.*|EFI/.*|System\.map.*|config-.*|vmlinuz-.*)$", r"^/etc/xml/.*$", r"^/etc/ld\.so\.conf\.d/.*$", r"^/etc/iwd/main\.conf$", r"^/etc/live-installer/live-only-packages$",
     r"^/usr/lib/modules/[^/]+/modules\..*$", r"^/usr/lib/locale/locale-archive$", r"^/usr/lib64/gconv/gconv-modules\.cache$",
