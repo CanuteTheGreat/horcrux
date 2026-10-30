@@ -2,7 +2,7 @@
 # Distributed under the terms of the GNU General Public License v2
 EAPI=8
 
-inherit unpacker xdg
+inherit desktop unpacker xdg
 
 DESCRIPTION="Brave web browser (upstream stable release, repackaged from the official .deb)"
 HOMEPAGE="https://brave.com"

@@ -2,3 +2,6 @@
 gui-libs/gtk X
 media-libs/libglvnd X
 media-libs/mesa X -llvm VIDEO_CARDS: -* intel
+
+# cups-browsed built without zeroconf cannot browse DNS-SD (the default BrowseRemoteProtocols) and exits at once, so OpenRC shows it crashed
+net-print/cups-browsed zeroconf

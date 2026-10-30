@@ -72,6 +72,10 @@ def apply(inst):
     inst.write("/etc/conf.d/xdm", 'DISPLAYMANAGER="gdm"\n')
     # wired + Wi-Fi by NetworkManager (iwd backend) from now on
     inst.write("/etc/NetworkManager/conf.d/10-horcrux.conf", "[device]\nwifi.backend=iwd\n")
+    # the iwd backend only autoconnects networks iwd knows: turn every Wi-Fi profile (joined on the live system or carried over) into /var/lib/iwd/<ssid>.psk
+    from . import system as _system
+    for p in _system.carry_wifi_to_iwd(T, sources=("/etc/NetworkManager/system-connections", T + "/etc/NetworkManager/system-connections")):
+        inst.log(f"desktop: Wi-Fi network carried over to iwd: {os.path.basename(p)}")
     if c.get("user_autologin"):
         inst.write("/etc/gdm/custom.conf", f"[daemon]\nAutomaticLoginEnable=True\nAutomaticLogin={name}\nWaylandEnable=true\n")
     else:
