@@ -7,6 +7,7 @@ FROM ${BASE} AS surface-base
 ARG ARCH=x86_64
 # the full overlay + the Portage config owned by app-misc/horcrux-surface-desktop (identical bytes: installing the package later is a no-op
 # for config protection)
+RUN rm -rf /var/db/repos/horcrux
 COPY --from=hxgentoo / /var/db/repos/horcrux/
 RUN cp -a /var/db/repos/horcrux/app-misc/horcrux-surface-desktop/files/root/etc/portage/. /etc/portage/ \
  && for e in /var/db/repos/horcrux/app-misc/horcrux-surface-desktop/*.ebuild /var/db/repos/horcrux/app-admin/rustinion-bin/*.ebuild; do ebuild "$e" manifest >/dev/null; done
