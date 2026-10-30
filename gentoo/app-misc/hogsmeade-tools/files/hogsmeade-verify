@@ -1,0 +1,70 @@
+#!/bin/bash
+# hogsmeade-verify: read-only first-boot checklist for the Alienware 18 Area-51 (everything the QEMU test cannot prove).
+# Prints PASS/FAIL/WARN per item with the command used. Safe: it never changes GPU mode, BIOS/EC settings or fan/profile values.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+P=0; F=0; W=0
+ok()   { printf 'PASS  %-34s %s\n' "$1" "$2"; P=$((P+1)); }
+bad()  { printf 'FAIL  %-34s %s\n' "$1" "$2"; F=$((F+1)); }
+warn() { printf 'WARN  %-34s %s\n' "$1" "$2"; W=$((W+1)); }
+chk()  { # name, command (run through sh -c), [warn-only]
+    local out; out=$(sh -c "$2" 2>&1); local rc=$?
+    if [ $rc = 0 ] && [ -n "$out" ]; then ok "$1" "$(echo "$out" | head -1 | cut -c1-110)"; else [ -n "${3:-}" ] && warn "$1" "$2 -> ${out:-no output}" || bad "$1" "$2 -> ${out:-no output}"; fi; }
+
+echo "=== HOGSMEADE first-boot verification ($(date -Is)) ==="
+chk "machine"             "cat /sys/class/dmi/id/product_name | grep -i 'Area-51'"
+chk "kernel"              "uname -r"
+chk "pool health"         "zpool status -x rpool | grep -E 'healthy|all pools are healthy'"
+chk "pool encrypted"      "zfs get -H -o value encryption rpool | grep -v '^off'"
+chk "pool vdev count"     "zpool list -v -H rpool | awk 'BEGIN{n=0} \$1 ~ /nvme|^wwn|^eui/ {n++} END{ if (n==3) print n\" top-level vdevs\" }'"
+chk "ashift 12"           "zpool get -H -o value ashift rpool | grep -x 12"
+chk "storage mode"        "lspci -nn | grep -i 'non-volatile' | head -3; true"
+chk "NVMe drives visible" "test \$(ls /dev/nvme[0-9]n1 2>/dev/null | wc -l) -eq 3 && echo 3"
+chk "VMD driver present"  "modinfo vmd 2>/dev/null | head -1 || grep -q vmd /lib/modules/\$(uname -r)/modules.builtin && echo builtin" warn
+chk "ESP on each drive"   "test \$(lsblk -no PARTTYPENAME | grep -c 'EFI System') -ge 3 && echo 3 ESPs"
+chk "hibernate swap"      "swapon --show=NAME,SIZE --noheadings | grep -E 'mapper/hxswap'"
+chk "resume device set"   "test -s /sys/power/resume && cat /sys/power/resume"
+chk "zram swap"           "swapon --show=NAME --noheadings | grep zram"
+echo "--- GPU / display"
+chk "iGPU driver (xe/i915)" "lsmod | grep -E '^(xe|i915) ' | head -1"
+chk "iGPU drives the panel" "for c in /sys/class/drm/card*-eDP-*; do readlink -f \$c/device | xargs -I{} cat {}/vendor 2>/dev/null; done | grep -x 0x8086"
+chk "dGPU detected"       "lspci -nn -d 10de: | grep -i -E '2c58|VGA|3D'"
+chk "nvidia open module"  "modinfo -F license nvidia | grep -i -E 'dual|mit'; cat /sys/module/nvidia/version"
+chk "nvidia-smi"          "nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader"
+chk "nvidia-drm modeset"  "cat /sys/module/nvidia_drm/parameters/modeset | grep -x Y"
+chk "nouveau not loaded"  "! lsmod | grep -q '^nouveau ' && echo not-loaded"
+chk "offload works"       "prime-run sh -c 'glxinfo -B 2>/dev/null | grep -i \"OpenGL renderer\"' | grep -i nvidia" warn
+chk "CUDA from torch"     "/usr/lib/comfyui/venv/bin/python -c 'import torch;print(torch.cuda.get_device_name(0), torch.version.cuda)'"
+echo "--- brightness (the EC owns the level)"
+chk "ONE backlight device" "ls /sys/class/backlight | wc -l | grep -x 1"
+chk "nvidia_wmi_ec"       "ls /sys/class/backlight | grep -x nvidia_wmi_ec_backlight && cat /sys/class/backlight/nvidia_wmi_ec_backlight/max_brightness"
+chk "cmdline"             "grep -o 'acpi_backlight=[a-z_]*' /proc/cmdline"
+echo "--- audio (SoundWire / SOF)"
+chk "sof firmware loaded" "journalctl -k -b 2>/dev/null | grep -i -E 'sof.*(firmware|booted)' | head -1 || dmesg | grep -i 'sof' | head -1"
+chk "rt722 + rt1320"      "lsmod | grep -E 'snd_soc_rt722|snd_soc_rt1320' | awk '{print \$1}' | tr '\n' ' '"
+chk "sound card"          "cat /proc/asound/cards | head -3"
+chk "pipewire sink"       "wpctl status 2>/dev/null | grep -i -E 'speaker|sdw|headphone' | head -2" warn
+echo "--- network / platform"
+chk "Wi-Fi BE200"         "lspci -nnk | grep -A3 -i '272b' | grep -i 'driver in use: iwlwifi'"
+chk "Ethernet r8169"      "lspci -nnk | grep -A3 -i '10ec:5000' | grep -i 'driver in use: r8169'"
+chk "Bluetooth"           "bluetoothctl list | head -1"
+chk "alienware-wmi"       "lsmod | grep alienware_wmi | head -1"
+chk "platform_profile"    "cat /sys/firmware/acpi/platform_profile_choices"
+chk "fans (hwmon)"        "grep -l alienware /sys/class/hwmon/hwmon*/name | head -1 | xargs dirname | xargs -I{} sh -c 'ls {}/fan*_input | wc -l' | grep -x 4"
+chk "awccd running"       "rc-service awccd status | grep -i started; awccctl status | head -3"
+chk "lighting controller" "ls /dev/hidraw* >/dev/null && grep -l -i '187C:00000551' /sys/class/hidraw/hidraw*/device/uevent | head -1"
+chk "ISH sensor hub"      "lsmod | grep -E 'intel_ish_ipc|hid_sensor_hub' | head -1" warn
+chk "touchpad"            "grep -i -E 'touchpad|synaptics' /proc/bus/input/devices | head -1"
+chk "webcam"              "ls /dev/video0"
+chk "Thunderbolt 5"       "lsmod | grep -E '^thunderbolt ' | head -1" warn
+chk "TPM"                 "ls /dev/tpm0"
+echo "--- services / software"
+chk "tailscale up"        "tailscale ip -4"
+chk "ComfyUI bound to TS" "ss -ltnH | awk '\$4 ~ /:8188\$/ {print \$4}' | grep -v -E '^(0.0.0.0|\\*|\\[::\\]|127)' | grep -E '^100\\.'"
+chk "ComfyUI NOT on LAN"  "! ss -ltnH | awk '\$4 ~ /:8188\$/ {print \$4}' | grep -E '^(0.0.0.0|\\*|\\[::\\])' && echo ok"
+chk "rustinion service"   "rc-service rustinion status | grep -i started" warn
+chk "backups configured"  "test -s /etc/hogsmeade/backup.env && echo configured" warn
+chk "SMART/NVMe health"   "hogsmeade-health --quiet; echo rc=\$?" 
+chk "qfile -o clean"      "test \$(qfile -o / 2>/dev/null | wc -l) -le 0 && echo 0 unowned" warn
+echo
+echo "RESULT: $P pass, $W warn, $F fail"
+[ $F = 0 ]

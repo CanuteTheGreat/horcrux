@@ -1,0 +1,30 @@
+#!/bin/bash
+# hogsmeade-backup : encrypted, deduplicated restic backup of the user data to the repository in /etc/hogsmeade/backup.env
+# (proposed target: the existing Backblaze B2 bucket ctg-backups, prefix hogsmeade-linux/ : no new service, no new cost).
+# Consistent source: a temporary ZFS snapshot of rpool/home (+ rpool/data when present) is read through .zfs/snapshot.
+# Restore: restic -r ... restore latest --target /; see /usr/share/hogsmeade/POST-INSTALL.md
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+ENV=/etc/hogsmeade/backup.env
+[ -r "$ENV" ] || { echo "no $ENV: backups are not configured yet" >&2; exit 3; }
+set -a; . "$ENV"; set +a
+D=/var/lib/hogsmeade; mkdir -p $D
+snap="hsm-backup-$$"
+cleanup() { for ds in rpool/home rpool/data; do zfs destroy "$ds@$snap" 2>/dev/null; done; }
+trap cleanup EXIT
+restic cat config >/dev/null 2>&1 || restic init || exit 4
+paths=()
+for ds in rpool/home rpool/data; do
+    zfs list -H "$ds" >/dev/null 2>&1 || continue
+    mp=$(zfs get -H -o value mountpoint "$ds")
+    zfs snapshot "$ds@$snap" && paths+=("$mp/.zfs/snapshot/$snap")
+done
+[ "${#paths[@]}" -gt 0 ] || { echo "nothing to back up" >&2; exit 5; }
+restic backup --tag hogsmeade --exclude-caches \
+    --exclude '*/.cache' --exclude '*/Cache' --exclude '*/.local/share/Trash' --exclude '*/node_modules' --exclude '*/.thumbnails' \
+    --exclude '*/Nextcloud' \
+    "${paths[@]}" && date +%s > $D/last-backup-ok && \
+restic forget --tag hogsmeade --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune --max-unused 5% >/dev/null
+rc=$?
+# weekly integrity sample (5 % of the pack data read back)
+[ "$(date +%u)" = 7 ] && restic check --read-data-subset=5% >/dev/null 2>&1 || true
+exit $rc

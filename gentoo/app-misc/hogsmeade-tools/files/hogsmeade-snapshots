@@ -1,0 +1,13 @@
+#!/bin/bash
+# hogsmeade-snapshots hourly|daily|weekly : ZFS snapshot rotation for the stripe (a snapshot is NOT a backup: same drives).
+# Datasets with org.hogsmeade:snapshots=off (comfyui models, caches) are skipped. Keep: 24 hourly, 14 daily, 8 weekly.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+kind=${1:?hourly|daily|weekly}
+case $kind in hourly) keep=24;; daily) keep=14;; weekly) keep=8;; *) exit 2;; esac
+stamp=$(date +%Y%m%d-%H%M)
+zfs list -H -o name,org.hogsmeade:snapshots -t filesystem -r rpool 2>/dev/null | while read -r ds flag; do
+    [ "$flag" = off ] && continue
+    case $ds in rpool|rpool/ROOT|rpool/var|rpool/var/lib) continue ;; esac
+    zfs snapshot "$ds@hsm-$kind-$stamp" 2>/dev/null
+    zfs list -H -o name -t snapshot -s creation -d 1 "$ds" | grep "@hsm-$kind-" | head -n -"$keep" | xargs -r -n1 zfs destroy
+done

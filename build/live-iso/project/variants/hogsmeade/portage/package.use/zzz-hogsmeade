@@ -1,0 +1,11 @@
+# source-built dist kernel; the installer builds the dracut initramfs (resume + one-passphrase unlock + zfs) at install time
+sys-kernel/gentoo-kernel -initramfs
+sys-fs/zfs rootfs dist-kernel
+sys-fs/zfs-kmod dist-kernel
+# RTX 5090 Laptop (Blackwell): NVIDIA open kernel modules only (595+ builds only the open flavour). Hybrid graphics: iGPU = display, dGPU = offload + compute.
+x11-drivers/nvidia-drivers wayland X powerd persistenced tools -static-libs
+x11-libs/libdrm VIDEO_CARDS: intel nouveau
+sys-power/switcheroo-control -systemd
+app-misc/awccd gnome
+dev-lang/python sqlite ssl
+sys-apps/smartmontools -systemd

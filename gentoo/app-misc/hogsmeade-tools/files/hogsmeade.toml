@@ -1,0 +1,32 @@
+# Hardware profile "hogsmeade": /usr/share/live-installer/hwprofiles/hogsmeade.toml (read by liveinst/hwprofile.py, DMI match)
+# Alienware 18 Area-51 AA18250: Arrow Lake-HX + RTX 5090 Laptop (hybrid, iGPU drives the panel), 3 NVMe, 64 GB.
+id = "hogsmeade"
+title = "Alienware 18 Area-51 (HOGSMEADE)"
+
+# NetworkManager owns Wi-Fi (BE200) + Ethernet (r8169); zram first, encrypted disk swap only for the hibernation image;
+# awccd = thermal profile/fan/lighting daemon; comfyui = GPU render server (Tailscale only); nvidia-persistenced = GPU init.
+services_add = ["elogind:boot", "dbus:default", "NetworkManager:default", "zram-swap:default", "cronie:default", "tailscale:default",
+                "awccd:default", "nvidia-persistenced:default", "switcheroo-control:default", "smartd:default", "hogsmeade-firstboot:default",
+                "comfyui:default", "sshd:default", "hx-resume:boot"]
+services_del = ["iwd", "dhcpcd", "live-serial"]
+
+[match]
+sys_vendor = ["Alienware", "Dell Inc."]
+product_prefix = ["Alienware 18 Area-51"]
+
+[defaults]
+fs = "zfs"              # one encrypted pool striped over all three NVMe drives (see hosts/hogsmeade/CONVERSION.md)
+swap = "hibernate"      # LUKS2 swap of RAM x 1.125 on the first drive, same single passphrase; zram stays the first swap
+desktop = true
+keep_serial_console = false    # no UART: the passphrase prompt must be on the screen / USB or built-in keyboard
+zfs_raid = "stripe"
+
+# the backlight puzzle (awcc-re/nvidia-and-backlight.md): the EC owns the panel level, reached through the NVIDIA WMI-EC
+# interface. Force exactly that one device (nvidia_wmi_ec_backlight, max 255) so intel_backlight / acpi_video never register.
+kernel_cmdline = ["acpi_backlight=nvidia_wmi_ec", "nvidia-drm.modeset=1", "nvidia-drm.fbdev=1", "nouveau.modeset=0", "module_blacklist=nouveau"]
+
+[[models]]
+id = "alienware-18-area-51-aa18250"
+title = "Alienware 18 Area-51 AA18250 (SKU 0CCD)"
+product_name = ["Alienware 18 Area-51 AA18250", "Alienware 18 Area-51"]
+notes = "RTX 5090 Laptop 10DE:2C58 (nvidia-open only), iGPU 8086:7D67, VMD AD0B (BIOS AHCI recommended), SoundWire rt722+rt1320"

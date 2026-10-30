@@ -283,6 +283,22 @@ class Stages(unittest.TestCase):
         self.assertIn("workstation", it.disabled)
         self.assertIn("workstation", ST.TYPE_DEFAULTS, "the stage design keeps a place for a Workstation profile")
 
+    def test_desktop_install_type_needs_the_desktop_image(self):
+        from liveinst import desktop as D
+        c = S.default_config(PROFILE_X)
+        c["install_type"] = "desktop"
+        c["disks"] = ["/dev/vda"]
+        c["root_hash"] = HASH
+        c["user_name"], c["user_password"] = "canutethegreat", "Passw0rd-long-enough"
+        old = D.available
+        try:
+            D.available = lambda root="/": False
+            self.assertTrue(any("needs the Desktop image" in e for e in S.validate_config(PROFILE_X, c)))
+            D.available = lambda root="/": True
+            self.assertFalse(any("install_type" in e for e in S.validate_config(PROFILE_X, c)))
+        finally:
+            D.available = old
+
     def test_secure_defaults(self):
         c = S.default_config(PROFILE_X)
         self.assertFalse(c["ssh_password_auth"])

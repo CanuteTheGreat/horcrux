@@ -1,0 +1,41 @@
+#!/bin/bash
+# hogsmeade-health [--quiet] : SMART + NVMe health of the three drives and the pool, alerting on the normal channels
+# (desktop notification, syslog, /var/lib/hogsmeade/alerts, `ctg-alert-mail --route hogsmeade` when installed). NEVER ntfy.
+# The pool is a STRIPE: one failing drive loses everything, so the thresholds are deliberately early.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+quiet=0; [ "${1:-}" = "--quiet" ] && quiet=1
+D=/var/lib/hogsmeade; mkdir -p "$D/alerts"
+problems=()
+add() { problems+=("$1"); }
+for dev in /dev/nvme[0-9]n1; do
+    [ -e "$dev" ] || continue
+    c=${dev%n1}
+    log=$(nvme smart-log "$c" 2>/dev/null) || { add "$dev: nvme smart-log failed"; continue; }
+    g() { echo "$log" | awk -F: -v k="$1" '$1 ~ k {gsub(/[ ,%C]/,"",$2); sub(/\(.*/,"",$2); print $2; exit}'; }
+    cw=$(g "critical_warning"); used=$(g "percentage_used"); spare=$(g "available_spare"); me=$(g "media_errors"); temp=$(g "^temperature")
+    [ "${cw:-0}" != 0 ] && add "$dev: critical_warning=$cw"
+    [ "${used:-0}" -ge 80 ] 2>/dev/null && add "$dev: wear ${used}% used"
+    [ "${spare:-100}" -le 20 ] 2>/dev/null && add "$dev: available spare ${spare}%"
+    [ "${me:-0}" != 0 ] && add "$dev: media errors $me"
+    [ "${temp:-0}" -ge 80 ] 2>/dev/null && add "$dev: temperature ${temp}C"
+    smartctl -H "$dev" 2>/dev/null | grep -q -E 'PASSED|OK' || add "$dev: smartctl health not PASSED"
+done
+n=$(ls /dev/nvme[0-9]n1 2>/dev/null | wc -l); [ "$n" -eq 3 ] || add "only $n of 3 NVMe drives present"
+st=$(zpool status -x rpool 2>/dev/null); echo "$st" | grep -q 'healthy' || add "zpool rpool: $(echo "$st" | head -3 | tr '\n' ' ')"
+last=$(cat $D/last-backup-ok 2>/dev/null || echo 0); age=$(( $(date +%s) - last ))
+[ -s /etc/hogsmeade/backup.env ] && [ "$age" -gt 129600 ] && add "no successful backup for $((age / 3600)) h"
+if [ "${#problems[@]}" -eq 0 ]; then [ $quiet = 1 ] || echo "hogsmeade-health: all drives, the pool and the backup are healthy"; rm -f $D/alerts/active; exit 0; fi
+msg=$(printf '%s\n' "${problems[@]}")
+echo "$msg" >&2
+logger -t hogsmeade-health -p daemon.crit "$msg"
+printf '%s\n%s\n' "$(date -Is)" "$msg" > $D/alerts/active
+# at most one alert per distinct problem set per 24 h
+h=$(echo "$msg" | sha256sum | cut -c1-16)
+if [ ! -f "$D/alerts/sent-$h" ] || [ -n "$(find "$D/alerts/sent-$h" -mmin +1440 2>/dev/null)" ]; then
+    touch "$D/alerts/sent-$h"
+    for u in $(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $3}' | sort -u); do
+        sudo -u "$u" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$u")/bus" notify-send -u critical "HOGSMEADE: storage health" "$msg" 2>/dev/null
+    done
+    command -v ctg-alert-mail >/dev/null && ctg-alert-mail --route hogsmeade --subject "HOGSMEADE storage health" --body "$msg" 2>/dev/null
+fi
+exit 1

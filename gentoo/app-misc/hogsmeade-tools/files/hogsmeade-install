@@ -1,0 +1,100 @@
+#!/bin/bash
+# hogsmeade-install: the owner-run installer front door on the live USB (tty1). The owner types ONE passphrase here.
+#   * refuses to run over ssh (the passphrase is typed on the laptop keyboard, never through an agent)
+#   * finds the three NVMe drives, shows model/size/serial, asks for the confirmation word
+#   * writes an answer file on tmpfs (0600, shredded after) and runs the shared installer: one encrypted ZFS pool striped over
+#     all three drives, ESP + /boot copy on each, LUKS2 hibernation swap (RAM x 1.125) on the first drive, user canutethegreat
+# env HSM_DRY_RUN=1: print the plan only (QEMU test uses HSM_ANSWER_FILE + HSM_DISKS instead of the keyboard)
+set -u
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+[ "$(id -u)" = 0 ] || [ -n "${HSM_TEST:-}" ] || { echo "run as root"; exit 1; }
+if [ -z "${HSM_TEST:-}" ] && { [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_TTY:-}" ]; }; then
+    echo "hogsmeade-install refuses to run over ssh: the disk passphrase is typed on the laptop itself."; exit 1; fi
+USERNAME=canutethegreat
+ANS=${HSM_ANS_PATH:-/run/hogsmeade-install.toml}
+trap 'shred -u "$ANS" 2>/dev/null || rm -f "$ANS"' EXIT
+say() { printf '%s\n' "$*"; }
+
+say "=== HOGSMEADE install (Horcrux / Gentoo, encrypted ZFS) ==="
+vmd=""; [ -d /sys/bus/pci/devices/0000:00:0e.0 ] && grep -qi 'ad0b' /sys/bus/pci/devices/0000:00:0e.0/device 2>/dev/null && vmd=1
+mapfile -t NV < <(lsblk -dnpo PATH,TYPE | awk '$2=="disk" && $1 ~ /nvme[0-9]+n[0-9]+$/ {print $1}')
+if [ -n "${HSM_DISKS:-}" ]; then read -r -a NV <<< "$HSM_DISKS"; fi
+say "NVMe drives visible: ${#NV[@]}"
+for d in "${NV[@]}"; do
+    printf '  %-16s %-28s %8s  serial %s\n' "$d" "$(lsblk -dno MODEL "$d" | sed 's/ *$//')" "$(lsblk -dno SIZE "$d")" "$(lsblk -dno SERIAL "$d")"
+done
+if [ "${#NV[@]}" -ne 3 ]; then
+    say ""
+    say "STOP: exactly 3 NVMe drives are expected, ${#NV[@]} are visible."
+    if [ -n "$vmd" ] || [ "${#NV[@]}" -eq 0 ]; then
+        say "The BIOS storage mode is probably still Intel VMD/RST. Reboot into the BIOS and set it to AHCI (disable VMD),"
+        say "or tell Claude: the image also carries the VMD driver; 'dmesg | grep -i -E \"vmd|nvme\"' shows what the kernel saw."
+    fi
+    say "Nothing was touched."; exit 2
+fi
+[ -n "$vmd" ] && say "NOTE: VMD controller (8086:ad0b) is still present in lspci; the drives are visible through the vmd driver, that is fine."
+[ -d /sys/firmware/efi ] || [ -n "${HSM_TEST:-}" ] || { say "STOP: not booted in UEFI mode."; exit 2; }
+ram_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo); say "RAM: $((ram_kb / 1048576)) GiB -> hibernation swap about $(( (ram_kb / 1048576 + 1) * 1125 / 1000 )) GiB"
+
+if [ -z "${HSM_ANSWER_FILE:-}" ]; then
+    if [ -n "${HSM_TEST:-}" ] && [ -n "${HSM_PASSPHRASE:-}" ]; then      # test hook only (QEMU/unit tests): never used by the owner
+        w="ERASE HOGSMEADE"; p1=$HSM_PASSPHRASE; p2=$HSM_PASSPHRASE
+    else
+    say ""
+    say "This will ERASE ALL THREE DRIVES (Windows and everything on them)."
+    say "Backup gate: only continue when Claude confirmed the Nextcloud backup is verified on the server."
+    read -r -p "Type  ERASE HOGSMEADE  to continue: " w
+    [ "$w" = "ERASE HOGSMEADE" ] || { say "Cancelled. Nothing was touched."; exit 3; }
+    while :; do
+        read -r -s -p "Disk passphrase (min 12 characters; you will type it at every boot): " p1; echo
+        read -r -s -p "Again: " p2; echo
+        [ "$p1" = "$p2" ] || { say "They differ."; continue; }
+        [ "${#p1}" -ge 12 ] || { say "Too short."; continue; }
+        break
+    done
+    fi
+    umask 077
+    disks_toml=$(printf '"%s", ' "${NV[@]}"); disks_toml=${disks_toml%, }
+    # the passphrase is also the initial login password of $USERNAME (change it with passwd); never written anywhere else
+    esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+    key=""; [ -s /etc/hogsmeade/agent_authorized_keys ] && key=$(grep -m1 -E '^(ssh-|ecdsa-)' /etc/hogsmeade/agent_authorized_keys)
+    if [ -n "$key" ]; then rootline="ssh_keys = [\"$(esc "$key")\"]"; else rootline="root_password_hash = \"$(printf '%s' "$p1" | openssl passwd -6 -stdin)\""; fi
+    cat > "$ANS" <<EOF
+[global]
+hostname = "hogsmeade"
+timezone = "America/Los_Angeles"
+install_type = "desktop"
+$rootline
+[disk]
+filesystem = "zfs"
+zfs_raid = "stripe"
+encryption = true
+passphrase = "$(esc "$p1")"
+swap = "hibernate"
+disks = [$disks_toml]
+[user]
+name = "$USERNAME"
+fullname = "$USERNAME"
+password = "$(esc "$p1")"
+autologin = true
+[hardware]
+profile = "hogsmeade"
+[network.management]
+mode = "dhcp"
+EOF
+    unset p1 p2
+else
+    ANS=$HSM_ANSWER_FILE; trap - EXIT
+fi
+if [ -n "${HSM_TEST:-}" ] && [ -n "${HSM_ANSWER_OUT:-}" ]; then cp "$ANS" "$HSM_ANSWER_OUT"; say "answer file copied to $HSM_ANSWER_OUT (test)"; [ -n "${HSM_DRY_RUN:-}" ] && exit 0; fi
+say "Installing (about 10-20 minutes). Do not power off."
+rm -f /run/hogsmeade-install.log
+live-installer --answers "$ANS" --no-halt 2>&1 | tee /run/hogsmeade-install.log | grep -E 'AUTOINSTALL|ERROR|FAILED|%'
+rc=${PIPESTATUS[0]}
+if [ "$rc" = 0 ]; then
+    say ""; say "INSTALL OK. Remove the USB stick and reboot:  reboot"
+    say "At the next boot type the same passphrase ONCE; GNOME logs in as $USERNAME by itself."
+else
+    say "INSTALL FAILED (rc $rc): see /run/hogsmeade-install.log. Tell Claude."
+fi
+exit "$rc"

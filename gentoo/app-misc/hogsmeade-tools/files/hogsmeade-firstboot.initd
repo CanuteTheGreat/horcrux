@@ -1,0 +1,23 @@
+#!/sbin/openrc-run
+# one-time setup on the installed system (idempotent): datasets, cron jobs, health timers. Removes itself from the runlevel when done.
+description="HOGSMEADE first boot setup"
+depend() { need localmount; after zfs-mount zfs-import; }
+start() {
+	[ -e /var/lib/hogsmeade/firstboot.done ] && return 0
+	ebegin "HOGSMEADE: datasets and schedules"
+	mkdir -p /var/lib/hogsmeade
+	# ComfyUI data (models, outputs): own dataset, big records, no compression for safetensors, NO snapshots (re-downloadable)
+	zfs list -H rpool/comfyui >/dev/null 2>&1 || zfs create -o mountpoint=/var/lib/comfyui -o recordsize=1M -o compression=lz4 \
+		-o org.hogsmeade:snapshots=off rpool/comfyui
+	chown comfyui:comfyui /var/lib/comfyui 2>/dev/null; chmod 0750 /var/lib/comfyui 2>/dev/null
+	# irreplaceable user data that is not in $HOME
+	zfs list -H rpool/data >/dev/null 2>&1 || zfs create -o mountpoint=/data rpool/data
+	chown canutethegreat:canutethegreat /data 2>/dev/null
+	if [ -s /etc/hogsmeade/agent_authorized_keys ] && [ -d /home/canutethegreat ]; then
+		install -d -m 0700 -o canutethegreat -g canutethegreat /home/canutethegreat/.ssh
+		install -m 0600 -o canutethegreat -g canutethegreat /etc/hogsmeade/agent_authorized_keys /home/canutethegreat/.ssh/authorized_keys
+	fi
+	touch /var/lib/hogsmeade/firstboot.done
+	rc-update del hogsmeade-firstboot default >/dev/null 2>&1
+	eend 0
+}

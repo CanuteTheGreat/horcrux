@@ -1,0 +1,47 @@
+#!/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+# hogsmeade-remote: remote-handoff helper (live USB AND the installed system). Starts sshd (key-only) and brings up Tailscale
+# non-interactively with the ephemeral, tagged (tag:horcrux-handoff), 7-day auth key that is baked into the PRIVATE image only
+# (sys-apps/hogsmeade-private -> /etc/hogsmeade/ts-authkey). Needs a network first (Wi-Fi: nmtui; Ethernet: automatic).
+set -u
+[ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
+KEY=/etc/hogsmeade/ts-authkey
+LIVE=0; [ -d /run/initramfs/live ] || grep -q -E 'rd.live|root=live' /proc/cmdline 2>/dev/null && LIVE=1
+if [ $LIVE = 1 ]; then HOST=hogsmeade-live; SOCK=/run/tailscale/tailscaled.sock; else HOST=hogsmeade; SOCK=/run/tailscale/tailscaled.sock; fi
+ts() { tailscale --socket=$SOCK "$@"; }
+lanips() { ip -4 -o addr show scope global 2>/dev/null | awk '$2!="tailscale0"{split($4,a,"/"); print "  " a[1] "  (" $2 ")"}'; }
+echo "== network"
+if ! ip -4 route show default | grep -q .; then
+  echo "No default route: the laptop is not online yet."
+  echo "  Wi-Fi: nmtui (Activate a connection)     Ethernet: plug it in, DHCP is automatic"; exit 1; fi
+ip -4 route show default | head -2
+echo "== sshd (key-only)"
+rc-service sshd status >/dev/null 2>&1 || rc-service sshd start >/dev/null 2>&1; rc-service sshd status 2>&1 | tail -1
+echo "== clock"
+# a live stick can boot with a clock months off: TLS (tailscale, curl) fails. A plain-HTTP Date header needs no certificate.
+d=$(curl -sI -m 8 http://www.google.com 2>/dev/null | tr -d '\r' | sed -n 's/^[Dd]ate: //p' | head -1)
+if [ -n "$d" ] && date -u -s "$d" >/dev/null 2>&1; then hwclock -w -u 2>/dev/null; echo "clock set to: $(date -u)"; else echo "clock left as: $(date -u)"; fi
+echo "== tailscale"
+hostname "$HOST" 2>/dev/null
+modprobe tun 2>/dev/null
+if [ ! -S $SOCK ]; then
+  if [ $LIVE = 1 ]; then
+    mkdir -p /run/tailscale; nohup tailscaled --state=mem: --socket=$SOCK --port=41641 >/var/log/tailscaled.log 2>&1 &
+  else rc-service tailscale start >/dev/null 2>&1; fi
+fi
+i=0; while [ ! -S $SOCK ] && [ $i -lt 30 ]; do sleep 0.5; i=$((i+1)); done
+if ts status --json 2>/dev/null | grep -q '"BackendState": "Running"'; then echo "already connected"
+elif [ ! -s "$KEY" ]; then echo "No auth key baked in ($KEY). Run: tailscale up --hostname=$HOST   and open the printed URL."
+else
+  if ! ts up --auth-key="file:$KEY" --hostname="$HOST" --accept-dns=false --accept-routes=false --ssh=false --timeout=60s; then
+    echo "Tailscale refused the key (7-day key expired, or used up?). Fallback: plain LAN ssh below, or: tailscale up --hostname=$HOST (open the URL)."
+  fi
+fi
+tsip=$(ts ip -4 2>/dev/null | head -1)
+echo
+echo "================= give these to Claude ================="
+echo "Tailscale IP : ${tsip:-<not connected>}"
+echo "LAN IP(s)    :"; lanips
+echo "ssh          : key-only (root@<ip>)   hostname: $HOST"
+echo "========================================================="
+[ -n "$tsip" ]
