@@ -16,7 +16,7 @@ echo "== squashfs"
 # Desktop image: 1 MiB blocks (xz sees 4x the context: ~4-6 % smaller) so it fits below the 2 GiB release-asset limit; slower random reads, fine for a live ISO
 SQFS_BLOCK=256K; grep -qx desktop "$ROOT/etc/live-iso-variant" 2>/dev/null && SQFS_BLOCK=1M
 [ "$SQFS_BLOCK" = 1M ] && { echo "== size breakdown (MB, uncompressed)"; du -xsm "$ROOT"/usr/* "$ROOT"/usr/lib/* "$ROOT"/usr/share/* "$ROOT"/opt/* "$ROOT"/var/* 2>/dev/null | sort -rn | head -40; }
-mksquashfs "$ROOT" "$ISO/LiveOS/squashfs.img" -comp xz -b $SQFS_BLOCK $SQFS_BCJ -no-progress -noappend 2>&1 | tail -3
+mksquashfs "$ROOT" "$ISO/LiveOS/squashfs.img" ${SQUASH_COMP:--comp xz -b $SQFS_BLOCK $SQFS_BCJ} -no-progress -noappend 2>&1 | tail -3
 
 # Graphical menu with the product splash (official logo, crop/scale only). Everything is optional: with no splash image or no
 # font in the tools image the menu stays the plain text console. The generator adds the gfxterm block when GFX_OK=1.
