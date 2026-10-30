@@ -1,0 +1,15 @@
+#!/bin/sh
+# comfyui-launch: wait (in the background, never blocking boot) for the Tailscale IPv4 address, then run ComfyUI bound to it ONLY.
+# Never 0.0.0.0, never the LAN: if Tailscale never comes up, ComfyUI never starts.
+: "${COMFYUI_PORT:=8188}" "${COMFYUI_DATA:=/var/lib/comfyui}" "${COMFYUI_EXTRA_ARGS:=}"
+ip=""
+while :; do
+	ip=$(tailscale ip -4 2>/dev/null | head -n1)
+	[ -n "$ip" ] && break
+	sleep 5
+done
+export PYTHONUNBUFFERED=1 HOME="${COMFYUI_DATA}"
+cd /usr/lib/comfyui/app || exit 1
+# shellcheck disable=SC2086
+exec /usr/lib/comfyui/venv/bin/python -s main.py --listen "$ip" --port "${COMFYUI_PORT}" --base-directory "${COMFYUI_DATA}" \
+	--extra-model-paths-config /etc/comfyui/extra_model_paths.yaml ${COMFYUI_EXTRA_ARGS}

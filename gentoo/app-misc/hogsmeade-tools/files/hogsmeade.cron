@@ -1,0 +1,9 @@
+# /etc/cron.d/hogsmeade (installed by app-misc/hogsmeade-tools)
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+7 * * * *   root  /usr/sbin/hogsmeade-snapshots hourly
+17 3 * * *  root  /usr/sbin/hogsmeade-snapshots daily
+27 3 * * 0  root  /usr/sbin/hogsmeade-snapshots weekly
+40 3 * * *  root  [ -s /etc/hogsmeade/backup.env ] && /usr/sbin/hogsmeade-backup
+*/30 * * * * root  /usr/sbin/hogsmeade-health --quiet
+15 4 1 * *  root  /usr/bin/ionice -c3 /sbin/zpool scrub rpool

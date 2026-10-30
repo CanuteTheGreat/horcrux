@@ -1,0 +1,2 @@
+# OpenZFS 2.3.x declares Linux-Maximum 7.2
+>=sys-kernel/gentoo-kernel-7.3

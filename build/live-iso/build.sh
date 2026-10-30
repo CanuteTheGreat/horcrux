@@ -58,6 +58,8 @@ if [ -n "${VARIANT:-}" ] && [ "$VARIANT" != server ]; then
     [ -f "project/variants/$v/Dockerfile" ] || { echo "unknown VARIANT=$v (no project/variants/$v/Dockerfile)"; exit 2; }
     lap "stage 2b: variant $v"
     VCTX=""; [ -d "$REPO/gentoo/t2" ] && VCTX="--build-context t2=$REPO/gentoo/t2"
+    # named contexts: the horcrux overlay (repo gentoo/) and anything the caller passes (BUILD_CONTEXTS="--build-context k=dir ...")
+    VCTX="$VCTX --build-context hxgentoo=$REPO/gentoo ${BUILD_CONTEXTS:-}"
     docker build $PLAT $ARCHARGS $VCTX -f "project/variants/$v/Dockerfile" --build-arg BASE=$ROOTFS_IMG --build-arg VARIANT=$v \
         -t $TAG-rootfs-$v . 2>&1 | tee "$OUT/variant-$v-build.log" | tail -40
     [ "${PIPESTATUS[0]}" = 0 ] || { echo "variant $v build failed (log: $OUT/variant-$v-build.log)"; exit 1; }

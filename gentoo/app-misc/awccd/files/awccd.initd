@@ -1,0 +1,19 @@
+#!/sbin/openrc-run
+# awccd: Alienware thermal profile / fan / lighting daemon (D-Bus org.horcrux.Awcc1)
+description="Alienware Command Center replacement daemon"
+command="/usr/sbin/awccd"
+command_background=true
+pidfile="/run/awccd.pid"
+output_log="/var/log/awccd.log"
+error_log="/var/log/awccd.log"
+depend() {
+	need dbus
+	after udev elogind
+}
+start_pre() {
+	checkpath -d -m 0755 /run/awccd
+}
+stop_post() {
+	# the daemon restores profile/boost/lighting itself on SIGTERM; this covers a crash (state.json survives)
+	/usr/sbin/awccd --restore-state >/dev/null 2>&1 || true
+}

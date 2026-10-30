@@ -1,0 +1,18 @@
+#!/bin/bash
+# comfyui-fetch-models [manifest]: download the models listed in the manifest (name<TAB>subdir<TAB>url<TAB>bytes<TAB>sha256)
+# into /var/lib/comfyui/models, resumable, every file verified by sha256. Run as the comfyui user (sudo -u comfyui).
+set -u
+M=${1:-/usr/share/comfyui/models-manifest.tsv}
+D=${COMFYUI_DATA:-/var/lib/comfyui}/models
+[ -r "$M" ] || { echo "no manifest $M" >&2; exit 2; }
+fail=0
+while IFS=$'\t' read -r name sub url bytes sha; do
+    case $name in ''|\#*) continue ;; esac
+    f="$D/$sub/$name"; mkdir -p "$D/$sub"
+    if [ -f "$f" ] && [ "$(stat -c %s "$f")" = "$bytes" ] && [ "$(sha256sum "$f" | cut -d' ' -f1)" = "$sha" ]; then echo "ok      $sub/$name"; continue; fi
+    echo "fetch   $sub/$name ($((bytes / 1048576)) MiB)"
+    curl -fL --retry 5 --retry-delay 10 -C - -o "$f" "$url" || { echo "FAILED  $name" >&2; fail=1; continue; }
+    got=$(sha256sum "$f" | cut -d' ' -f1)
+    [ "$got" = "$sha" ] || { echo "HASH MISMATCH $name (got $got)" >&2; fail=1; }
+done < "$M"
+exit $fail
