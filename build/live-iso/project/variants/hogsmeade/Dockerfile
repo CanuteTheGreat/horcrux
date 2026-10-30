@@ -45,11 +45,17 @@ RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,
 
 # --- the kernel (about an hour) in its own layer: a later failure does not recompile it
 FROM hsm-prep AS hsm-kbuild
+# NOTE: `emerge --onlydeps =gentoo-kernel` alone pulls gentoo-kernel itself in through the virtual/dist-kernel cycle and then dies in
+# postinst (dracut cannot install zfs/horcrux-unlock yet): exclude both. The binpkg dir is a cache mount, so a failure after the
+# ~hour-long compile keeps the binary package (the cp at the end copies it into the image layer).
 RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
+    --mount=type=cache,id=hs-kernel-binpkgs,target=/var/cache/hs-binpkgs,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache" PKGDIR=/var/cache/hs-binpkgs; \
-    emerge --onlydeps --usepkg --getbinpkg =sys-kernel/gentoo-kernel-7.2.13 > /var/log/hogsmeade-kernel-deps.log 2>&1 || { tail -40 /var/log/hogsmeade-kernel-deps.log; exit 1; }; \
-    emerge --buildpkgonly --nodeps --usepkg=n --getbinpkg=n =sys-kernel/gentoo-kernel-7.2.13 \
+    emerge --onlydeps --usepkg --getbinpkg --exclude sys-kernel/gentoo-kernel --exclude virtual/dist-kernel =sys-kernel/gentoo-kernel-7.2.13 > /var/log/hogsmeade-kernel-deps.log 2>&1 || { tail -40 /var/log/hogsmeade-kernel-deps.log; exit 1; }; \
+    if ! ls /var/cache/hs-binpkgs/sys-kernel/gentoo-kernel-7.2.13*.gpkg.tar >/dev/null 2>&1; then \
+      emerge --buildpkgonly --nodeps --usepkg=n --getbinpkg=n =sys-kernel/gentoo-kernel-7.2.13 \
         > /var/log/hogsmeade-kernel-build.log 2>&1 || { tail -80 /var/log/hogsmeade-kernel-build.log; exit 1; }; \
+    fi; \
     mkdir -p /hs-binpkgs && cp -a /var/cache/hs-binpkgs/. /hs-binpkgs/; find /hs-binpkgs -type f | head
 
 # --- desktop (GNOME/Wayland on OpenRC) + the owner's browsers etc., identical steps to variants/desktop (no strip yet)
