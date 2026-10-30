@@ -1,6 +1,3 @@
 # GURU packages (proton-vpn-gtk-app and its python deps) are testing-only
 */*::guru ~amd64
 app-admin/rustinion-bin ~amd64
-sys-kernel/horcrux-unlock ~amd64
-sys-apps/horcrux-tools ~amd64
-sys-apps/horcrux-live-data ~amd64
