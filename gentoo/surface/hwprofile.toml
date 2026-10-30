@@ -6,8 +6,8 @@ title = "Microsoft Surface"
 
 # Services the profile turns on/off on the installed system (NetworkManager replaces iwd+dhcpcd so that nmtui and the
 # desktop's Wi-Fi menu manage the one Wi-Fi stack; zram-swap = the fast swap; the encrypted disk swap is only for the hibernation image).
-services_add = ["elogind:boot", "dbus:default", "NetworkManager:default", "zram-swap:default", "cronie:default", "tailscale:default"]
-services_del = ["iwd", "dhcpcd", "live-serial"]
+services_add = ["elogind:boot", "dbus:default", "NetworkManager:default", "display-manager:default", "zram-swap:default", "cronie:default", "tailscale:default"]
+services_del = ["iwd", "dhcpcd", "live-serial", "horcrux-api", "libvirtd", "docker"]
 
 [match]
 sys_vendor = ["Microsoft Corporation"]
@@ -26,7 +26,7 @@ title = "Surface Pro (1st gen, 2013)"
 # DMI product_name as reported by the firmware: SP1 reports "Surface with Windows 8 Pro" (retail name), later
 # firmware/Windows 10 builds "Surface Pro"; SP2 is "Surface Pro 2" and needs the identical treatment (same platform).
 product_name = ["Surface with Windows 8 Pro", "Surface Pro", "Surface Pro 2"]
-kernel = "mainline"      # no linux-surface patches needed (see gentoo/surface/README.md)
+kernel = "linux-surface"  # gentoo-kernel + sys-kernel/horcrux-surface-config (linux-surface 6.18 series), a Portage package; the SP1 itself needs none of the patches
 # Buggy ACPI _LID on SP1/SP2: after S3 the kernel believes the lid is closed -> endless suspend/resume loop.
 # linux-surface issue #381; mainline has no DMI quirk for it.
 kernel_cmdline = ["button.lid_init_state=open"]

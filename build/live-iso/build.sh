@@ -57,7 +57,7 @@ if [ -n "${VARIANT:-}" ] && [ "$VARIANT" != server ]; then
   for v in $(echo "$VARIANT" | tr ',' ' '); do
     [ -f "project/variants/$v/Dockerfile" ] || { echo "unknown VARIANT=$v (no project/variants/$v/Dockerfile)"; exit 2; }
     lap "stage 2b: variant $v"
-    VCTX=""; [ -d "$REPO/gentoo/t2" ] && VCTX="--build-context t2=$REPO/gentoo/t2"
+    VCTX="--build-context hxgentoo=$REPO/gentoo"; [ -d "$REPO/gentoo/t2" ] && VCTX="$VCTX --build-context t2=$REPO/gentoo/t2"
     docker build $PLAT $ARCHARGS $VCTX -f "project/variants/$v/Dockerfile" --build-arg BASE=$ROOTFS_IMG --build-arg VARIANT=$v \
         -t $TAG-rootfs-$v . 2>&1 | tee "$OUT/variant-$v-build.log" | tail -40
     [ "${PIPESTATUS[0]}" = 0 ] || { echo "variant $v build failed (log: $OUT/variant-$v-build.log)"; exit 1; }
