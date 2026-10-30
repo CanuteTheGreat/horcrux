@@ -49,7 +49,8 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
 # this variant's local overlay is copied only now (editing it must not invalidate the long header/app layers above)
 COPY project/variants/gringotts/repo/ /var/db/repos/horcrux-gringotts/
 
-# files that came from the repository's overlays (not from a package) are re-packaged as ONE ebuild so Portage owns them:
+# files that came from the repository's overlays (not from a package) plus the image's own Portage configuration and markers are re-packaged as ONE
+# ebuild so Portage owns them:
 # the tarball is built from the same build contexts the base layers COPYed (order as in Dockerfile.rootfs: app, project, common, then the desktop variant)
 COPY --from=app /out/ /tmp/hxo/app/
 COPY project/overlay/ /tmp/hxo/project/
@@ -63,6 +64,10 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     for d in app project common desktop gringotts; do cp -a /tmp/hxo/$d/. /tmp/imgfiles/; done; \
     ( cd /tmp/imgfiles && grep -v '^#' /tmp/image-files.exclude | grep . | while read -r p; do rm -rf "./$p"; done ); \
     find /tmp/imgfiles -name __pycache__ -type d -prune -exec rm -rf {} +; \
+    printf 'desktop\ngringotts\n' > /etc/live-iso-variant; \
+    ( cd / && cp -a --parents etc/portage/make.conf etc/portage/make.conf.arch etc/portage/binrepos.conf etc/portage/env etc/portage/package.* etc/portage/repos.conf \
+        etc/sudoers.d/wheel etc/live-installer/live-only-packages etc/live-iso-label etc/live-iso-volid etc/live-iso-variant \
+        usr/share/live-installer/portage-meta.json.xz /tmp/imgfiles/ ); \
     ( cd /tmp/imgfiles && find . \( -type f -o -type l \) | sed 's|^\.||' | xargs -d '\n' qfile -C 2>/dev/null | tee /tmp/already-owned.txt | sed 's/^/NOTE already owned by a package, left out of horcrux-image-files: /'; \
       sed -E 's/.*\(([^)]*)\)$/\1/' /tmp/already-owned.txt | while read -r f; do rm -f "./$f"; done ); \
     tar -C /tmp/imgfiles -cf /tmp/dist/horcrux-image-files-1.tar .; \
@@ -99,7 +104,6 @@ RUN set -e; \
     find /usr/share/help /usr/share/gnome/help -mindepth 1 -maxdepth 1 ! -name C ! -name 'en*' -exec rm -rf {} + 2>/dev/null || true; \
     find /usr/lib /usr/lib64 -xdev -name '*.a' -type f ! -path '/usr/lib/gcc/*' -delete 2>/dev/null || true; \
     rm -rf /usr/include /usr/lib/llvm/*/include /usr/lib/llvm/*/bin /usr/lib/clang 2>/dev/null || true; \
-    echo "desktop" > /etc/live-iso-variant; echo "gringotts" >> /etc/live-iso-variant; \
     rm -rf /var/db/repos/gentoo/* /var/db/repos/guru/* /var/db/repos/guru/.git /var/db/repos/canutethegreat-overlay/* /var/db/repos/canutethegreat-overlay/.git \
            /var/cache/distfiles/* /var/cache/binhost /usr/share/doc /usr/share/gtk-doc /var/tmp/portage /var/log/emerge* 2>/dev/null || true; \
     find / -xdev -name '*.pyc' -path '*/__pycache__/*' -delete 2>/dev/null || true
