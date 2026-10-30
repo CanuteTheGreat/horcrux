@@ -12,6 +12,8 @@ dmesg -n 1 2>/dev/null
 B=$'\e[1m'; G=$'\e[32m'; R=$'\e[31m'; Y=$'\e[33m'; N=$'\e[0m'
 PRIV=/usr/share/horcrux-surface-private
 USER_NAME=canutethegreat
+mark() { echo "SURFACE-AUTO: $*" > /dev/console 2>/dev/null; }
+mark START
 clear
 echo "${B}Horcrux for the Surface Pro${N}  (kernel $(uname -r))"
 echo "----------------------------------------------------------------------"
@@ -45,6 +47,7 @@ inv=/root/surface-inventory-$(date +%Y%m%d-%H%M%S).txt
 /usr/bin/surface-inventory "$DISK" > "$inv" 2>&1; irc=$?
 grep -E '^(-- |   Windows user|== summary|RESULT)' "$inv" | sed 's/^/  /'
 echo "  (full report: $inv)"
+mark "INVENTORY rc=$irc disk=$DISK"
 need_confirm=0
 [ "$irc" = 0 ] || need_confirm=1
 [ "$is_surface" = 1 ] || need_confirm=1
@@ -59,6 +62,7 @@ else
     echo "${G}Nothing of value on the disk (factory image or empty): installing without further questions.${N}"
 fi
 
+mark WAITING-FOR-PASSPHRASE
 # the passphrase (typed here, never stored; also the desktop password)
 echo
 echo "${B}Disk passphrase${N}: typed at every start of the tablet (and once more after hibernate). At least 12 characters."
@@ -76,9 +80,12 @@ d=/run/hx-auto; mkdir -p "$d"; chmod 700 "$d"; ans=$d/answer.toml
 uh=$(printf '%s' "$p1" | openssl passwd -6 -stdin)
 rh=$(head -c 24 /dev/urandom | openssl passwd -6 -stdin)          # root: random and unknown (key-only ssh, sudo for the user)
 keys=""
-if [ -s "$PRIV/authorized_keys" ]; then
-    while read -r k; do case "$k" in ssh-*|ecdsa-*|sk-*) keys="$keys\"$k\"," ;; esac; done < "$PRIV/authorized_keys"
-fi
+allkeys=$d/keys.txt; : > "$allkeys"
+[ -s "$PRIV/authorized_keys" ] && cat "$PRIV/authorized_keys" >> "$allkeys"
+# optional extra public keys from a stick labelled SURFKEYS (file: authorized_keys), e.g. for tests or a second admin
+kd=$(blkid -L SURFKEYS 2>/dev/null)
+if [ -n "$kd" ]; then mkdir -p /run/hx-keys && mount -o ro "$kd" /run/hx-keys 2>/dev/null && { cat /run/hx-keys/authorized_keys >> "$allkeys" 2>/dev/null; umount /run/hx-keys; }; fi
+while read -r k; do case "$k" in ssh-*|ecdsa-*|sk-*) keys="$keys\"$k\"," ;; esac; done < "$allkeys"
 umask 077
 esc=$(printf '%s' "$p1" | sed 's/\\/\\\\/g; s/"/\\"/g')
 cat > "$ans" <<TOML
@@ -106,17 +113,20 @@ autologin = true
 mode = "dhcp"
 TOML
 unset p1 p2 esc
+mark "PASSPHRASE-ACCEPTED"
 echo; echo "${B}Installing...${N} (15-30 minutes from a USB 3 stick; do not unplug anything)"
 /usr/bin/live-installer --answers "$ans" 2>&1 | tee /var/log/surface-install.log
 rc=${PIPESTATUS[0]}
 shred -u "$ans" 2>/dev/null || rm -f "$ans"
 if [ "$rc" = 0 ] && grep -q 'AUTOINSTALL-OK' /var/log/surface-install.log; then
+    mark "INSTALL-OK"
     echo; echo "${G}${B}Installation successful.${N}"
     echo "Unplug the USB stick, then press Enter to restart. Type the SAME passphrase at the prompt that follows the logo."
     read -r _
     /sbin/reboot
     exec /bin/login -f root
 fi
+mark "INSTALL-FAILED rc=$rc"
 echo; echo "${R}${B}The installation did not finish (exit $rc).${N} Log: /var/log/surface-install.log. A root shell follows."
 echo "Tell the assistant: join Wi-Fi with  nmtui  and run  surface-remote."
 exec /bin/login -f root

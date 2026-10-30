@@ -1,0 +1,9 @@
+# syntax=docker/dockerfile:1.4
+# PRIVATE layer (PRIV_DIR=<dir outside the repo> build.sh): the owner's secrets/keys baked into the image, on top of the finished
+# rootfs. Never published publicly. Files land in /usr/share/horcrux-surface-private (root 0700/0600), e.g.
+#   authorized_keys  (the owner's ssh PUBLIC keys: key-only root ssh for the remote hand-off)
+#   ts-authkey       (ephemeral, tagged, 7-day pre-authorised Tailscale key; deleted from the installed system after its first use)
+ARG BASE
+FROM ${BASE}
+COPY --from=priv --chmod=0600 / /usr/share/horcrux-surface-private/
+RUN chmod 0700 /usr/share/horcrux-surface-private && chown -R root:root /usr/share/horcrux-surface-private && ls -la /usr/share/horcrux-surface-private | sed -E 's/tskey-[A-Za-z0-9-]+/tskey-***/g'

@@ -1,0 +1,37 @@
+#!/bin/bash
+# surface-backup [-n] DEST: copy the personal data of the Surface's CURRENT (Windows/other) system to DEST before the disk is erased.
+# Every partition is mounted READ-ONLY. DEST = a local directory (a USB drive) or [user@]host:/dir (rsync over ssh; used for the
+# remote hand-off: the assistant gives the target, then moves the files into the owner's Nextcloud and verifies them on the server).
+# Copies: Windows user profiles (Desktop, Documents, Downloads, Pictures, Videos, Music, OneDrive, Contacts, Saved Games) and, for
+# every non-Windows file system, the whole content. The Windows OS itself (Windows, Program Files, ProgramData) is not copied.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+DRY=""; while getopts nh o; do case $o in n) DRY=-n ;; *) echo "usage: surface-backup [-n] DEST"; exit 2 ;; esac; done
+shift $((OPTIND-1)); [ $# -eq 1 ] || { echo "usage: surface-backup [-n] DEST"; exit 2; }
+DEST=$1
+[ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
+live_src=$(findmnt -no SOURCE /run/initramfs/live 2>/dev/null); live_disk=""; [ -n "$live_src" ] && live_disk=$(lsblk -no PKNAME "$live_src" 2>/dev/null | head -1)
+mnt=/mnt/surface-old; mkdir -p "$mnt"
+n=0
+for p in $(lsblk -lnpo NAME,TYPE,TRAN | awk '$2=="part" && $3!="usb"{print $1}'); do
+    [ -n "$live_disk" ] && [ "$(lsblk -no PKNAME "$p" | head -1)" = "$live_disk" ] && continue
+    fs=$(blkid -o value -s TYPE "$p" 2>/dev/null); label=$(blkid -o value -s LABEL "$p" 2>/dev/null)
+    case "$fs" in ntfs) mfs=ntfs3 ;; ext2|ext3|ext4|xfs|btrfs|exfat|vfat) mfs=$fs ;; *) continue ;; esac
+    opts=ro; [ "$fs" = xfs ] && opts=ro,norecovery
+    mount -t "$mfs" -o "$opts" "$p" "$mnt" 2>/dev/null || mount -o ro "$p" "$mnt" 2>/dev/null || { echo "skip $p (cannot mount read-only)"; continue; }
+    n=$((n+1)); tag=$(basename "$p")
+    echo "== $p ($fs ${label:-})"
+    if [ -d "$mnt/Users" ]; then
+        for u in "$mnt"/Users/*/; do
+            un=$(basename "$u"); case "$un" in Public|Default|"Default User"|"All Users") continue ;; esac
+            for d in Desktop Documents Downloads Pictures Videos Music OneDrive Contacts "Saved Games"; do
+                [ -d "$u$d" ] || continue
+                echo "   $un/$d"
+                rsync -r -tpogl --partial --info=stats1 $DRY "$u$d/" "$DEST/windows-$tag/Users/$un/$d/" || echo "   !! $un/$d failed"
+            done
+        done
+    elif [ "$fs" != vfat ] || [ "$(df -Pm "$mnt" | awk 'NR==2{print $3}')" -gt 300 ]; then
+        rsync -r -aHAX --partial --info=stats1 $DRY "$mnt/" "$DEST/part-$tag/" || echo "   !! $p failed"
+    fi
+    umount "$mnt"
+done
+echo "done: $n partition(s) looked at. Verify the copy on the destination before the disk is erased."
