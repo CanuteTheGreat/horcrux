@@ -88,6 +88,8 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
     emerge --oneshot --usepkg=n --getbinpkg=n sys-kernel/horcrux-unlock sys-apps/horcrux-tools sys-apps/horcrux-live-data; \
     emerge --noreplace --usepkg=n --getbinpkg=n app-admin/rustinion-bin; \
     emerge --noreplace --select=y sys-kernel/horcrux-unlock sys-apps/horcrux-tools sys-apps/horcrux-live-data app-admin/rustinion-bin; \
+    emerge --update --newuse --select gnome-extra/gnome-shell-extension-appindicator gnome-extra/gnome-shell-extensions; emerge --update --newuse --usepkg=n --getbinpkg=n --select gnome-extra/horcrux-gnome-defaults; \
+    test -s /etc/dconf/db/local && qfile -q /etc/dconf/db/local; \
     printf 'desktop\ngringotts\n' > /etc/live-iso-variant
 
 # the image's remaining /etc files (init scripts, profile.d, dracut/Portage config, markers: the repository's overlay /etc trees and the build-time Portage
