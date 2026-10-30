@@ -10,19 +10,45 @@ key-only unless you opt in.
 
 | | URL |
 |---|---|
-| Latest **daily** test build (rolling pre-release, replaced after the QEMU test passed) | `https://horcrux.errant.solutions/download/horcrux-daily-x86_64.iso` |
-| SHA256 of the daily | `https://horcrux.errant.solutions/download/horcrux-daily-x86_64.iso.sha256` |
-| Latest daily **Desktop** build (GNOME, encrypted-ZFS + hibernate, Apple T2 ready, x86_64; no Apple firmware) | `https://horcrux.errant.solutions/download/horcrux-desktop-daily-x86_64.iso` (+ `.sha256`) |
-| **Stable** build (only for `v*` releases that met the criteria below) | `https://horcrux.errant.solutions/download/horcrux-<tag>-x86_64.iso` (tag like `v0.2.0`) |
+| Latest **daily** server image (rolling pre-release, replaced after the QEMU test passed) | `https://horcrux.errant.solutions/download/horcrux-server-openrc-daily-x86_64.iso` |
+| SHA256 of it | `https://horcrux.errant.solutions/download/horcrux-server-openrc-daily-x86_64.iso.sha256` |
+| Latest daily **GNOME (light)** desktop image (OpenRC + elogind, encrypted-ZFS + hibernate, Apple T2 ready, x86_64; no Apple firmware) | `https://horcrux.errant.solutions/download/horcrux-gnome-light-openrc-daily-x86_64.iso` (+ `.sha256`) |
+| **Stable** build (only for `v*` releases that met the criteria below) | `https://horcrux.errant.solutions/download/horcrux-server-openrc-<tag>-x86_64.iso` (tag like `v0.2.0`; `...-gnome-light-openrc-<tag>-...` for the desktop) |
 
-Always verify: `sha256sum -c horcrux-daily-x86_64.iso.sha256` (run it next to the downloaded files).
+Always verify: `sha256sum -c horcrux-server-openrc-daily-x86_64.iso.sha256` (run it next to the downloaded files).
+
+### Image names
+
+`<product>-<desktop-env or "server">-<init>-<channel>-<arch>.iso`, one scheme for every image (defined once in `build/live-iso/common/image-name.sh`):
+
+| part | values |
+|---|---|
+| product | `horcrux`, `patronus` (a private per-machine image adds its machine name: `horcrux-hogshead-gnome-light-openrc-...`) |
+| desktop env | `server` (no desktop), `gnome-light` (GNOME on Wayland, small app set); later `xfce`, `kde`, ... each as its own name |
+| init | `openrc` (all images today), `systemd` only if such an image is ever built |
+| channel | `daily` (rolling pre-release) or the release tag (`v0.2.0`) |
+| arch | `x86_64`, `aarch64` |
+
+Build variant id = desktop env (`VARIANT=gnome-light build.sh`; `project/variants/gnome-light/`). `VARIANT=desktop` and `project/variants/desktop` are kept as aliases.
+The workflow's `only=` input and the status marker use `<desktop env>-<init>-<arch>` (`only=gnome-light-openrc-x86_64`, marker `daily-status-gnome-light-openrc-x86_64`); the old `only=x86_64|aarch64|desktop` values still work.
+
+| old name | new name |
+|---|---|
+| `horcrux-server-openrc-daily-x86_64.iso` | `horcrux-server-openrc-daily-x86_64.iso` |
+| `horcrux-server-openrc-daily-aarch64.iso` | `horcrux-server-openrc-daily-aarch64.iso` |
+| `horcrux-desktop-daily-x86_64.iso` | `horcrux-gnome-light-openrc-daily-x86_64.iso` |
+| `patronus-daily-<arch>.iso` | `patronus-server-openrc-daily-<arch>.iso` |
+| `horcrux-<tag>-<arch>.iso` (stable) | `horcrux-server-openrc-<tag>-<arch>.iso` |
+
+The product-domain URLs of the old names answer **301** to the new names (also for `.sha256` and `-test-evidence.tgz`), so existing links keep working; the new names answer 302 to the GitHub release asset.
+Note that the `.sha256` file names the NEW file name: rename the download or use `sha256sum` and compare by hand if you fetched an old URL.
 
 ## Architectures
 
 | arch | boot | serial console | built on | tested with | assets |
 |---|---|---|---|---|---|
-| **x86_64** | UEFI **and** legacy BIOS (hybrid ISO) | `ttyS0` | rw-man-01 (`kvm-x86_64` runner) | QEMU/KVM, OVMF + SeaBIOS | `horcrux-daily-x86_64.iso` |
-| **aarch64** | UEFI only (GRUB `arm64-efi`, `EFI/BOOT/BOOTAA64.EFI`); there is no BIOS on arm64 | `ttyAMA0` (PL011) | rw-man-04/05 (`arm64` runner, native Graviton build, no emulation) | QEMU `virt` + AAVMF; **TCG** (the Graviton hosts have no `/dev/kvm`), timeouts x3 | `horcrux-daily-aarch64.iso` |
+| **x86_64** | UEFI **and** legacy BIOS (hybrid ISO) | `ttyS0` | rw-man-01 (`kvm-x86_64` runner) | QEMU/KVM, OVMF + SeaBIOS | `horcrux-server-openrc-daily-x86_64.iso` |
+| **aarch64** | UEFI only (GRUB `arm64-efi`, `EFI/BOOT/BOOTAA64.EFI`); there is no BIOS on arm64 | `ttyAMA0` (PL011) | rw-man-04/05 (`arm64` runner, native Graviton build, no emulation) | QEMU `virt` + AAVMF; **TCG** (the Graviton hosts have no `/dev/kvm`), timeouts x3 | `horcrux-server-openrc-daily-aarch64.iso` |
 | riscv64 | UEFI only (GRUB `riscv64-efi`) | `ttyS0` | not built in CI yet | not tested | - |
 
 Per-architecture facts (stage3 tag, GRUB target, EFI file name, serial device, squashfs filter, the **per-arch
@@ -32,15 +58,15 @@ to compiling everything), and the BuildKit cache mounts are keyed by arch. Downl
 
 | | URL |
 |---|---|
-| daily aarch64 | `https://horcrux.errant.solutions/download/horcrux-daily-aarch64.iso` (+ `.sha256`) |
-| stable aarch64 | `https://horcrux.errant.solutions/download/horcrux-<tag>-aarch64.iso` |
+| daily aarch64 | `https://horcrux.errant.solutions/download/horcrux-server-openrc-daily-aarch64.iso` (+ `.sha256`) |
+| stable aarch64 | `https://horcrux.errant.solutions/download/horcrux-server-openrc-<tag>-aarch64.iso` |
 
-Each architecture has its own job, its own assets and its own status marker (`daily-status` for x86_64,
-`daily-status-aarch64`), so a failing arch never blocks the other. Test evidence is attached per arch
-(`horcrux-daily-<arch>-test-evidence.tgz`). Build one yourself on a native host: `ARCH=aarch64 build/live-iso/build.sh -o ./iso`
+Each architecture has its own job, its own assets and its own status marker (`daily-status-<desktop env>-<init>-<arch>`, e.g.
+`daily-status-server-openrc-aarch64`), so a failing arch never blocks the other. Test evidence is attached per arch
+(`horcrux-<desktop env>-<init>-daily-<arch>-test-evidence.tgz`). Build one yourself on a native host: `ARCH=aarch64 build/live-iso/build.sh -o ./iso`
 (`ALLOW_EMULATED=1` is needed to build a foreign arch under qemu-user; not supported for the app stage).
 On arm64 machines the ISO is written to the stick exactly as on x86 (`dd`); firmware must be UEFI (Secure Boot off).
-Test it in QEMU: `qemu-system-aarch64 -machine virt -cpu max -m 4G -drive if=pflash,format=raw,readonly=on,file=AAVMF_CODE.fd -drive if=pflash,format=raw,file=VARS.fd -device qemu-xhci -device usb-storage,drive=iso -drive if=none,id=iso,file=horcrux-daily-aarch64.iso,format=raw -device virtio-gpu-pci -device usb-kbd -serial stdio`.
+Test it in QEMU: `qemu-system-aarch64 -machine virt -cpu max -m 4G -drive if=pflash,format=raw,readonly=on,file=AAVMF_CODE.fd -drive if=pflash,format=raw,file=VARS.fd -device qemu-xhci -device usb-storage,drive=iso -drive if=none,id=iso,file=horcrux-server-openrc-daily-aarch64.iso,format=raw -device virtio-gpu-pci -device usb-kbd -serial stdio`.
 
 **riscv64** is not in CI: there is no RISC-V runner, the official binhost has only ~600 riscv64 packages (about 40 of the
 ones the image needs would compile from source under emulation: QEMU, libvirt, docker, ZFS, GRUB, dracut, ...), no
@@ -52,11 +78,11 @@ cross-compile stage for the app plus a long-running weekly emulated job.
 
 Linux (replace `/dev/sdX` - check with `lsblk`; **not** a partition like `sdX1`):
 
-    sudo dd if=horcrux-daily-x86_64.iso of=/dev/sdX bs=4M conv=fsync status=progress
+    sudo dd if=horcrux-server-openrc-daily-x86_64.iso of=/dev/sdX bs=4M conv=fsync status=progress
     sync
 
 macOS: `diskutil list`, `diskutil unmountDisk /dev/diskN`, then
-`sudo dd if=horcrux-daily-x86_64.iso of=/dev/rdiskN bs=4m`.
+`sudo dd if=horcrux-server-openrc-daily-x86_64.iso of=/dev/rdiskN bs=4m`.
 
 Windows: [Rufus](https://rufus.ie) -> select the ISO -> when asked choose **"Write in DD Image mode"**
 (not "ISO Image mode"), or use balenaEtcher / `dd` for Windows. Ventoy also works.
@@ -352,7 +378,7 @@ be dead at the passphrase prompt), `pm_async=off`, `tiny-dfr` (Touch Bar), `t2fa
 Wi-Fi/Bluetooth firmware is never on the ISO: the installer offers to import it from an existing install
 (`/lib/firmware/brcm/*apple*`) or from a `firmware.tar`; later with `horcrux-t2-firmware PATH`.
 
-**Desktop image** (`VARIANT=desktop build.sh`; daily asset `horcrux-desktop-daily-x86_64.iso`, built and tested by the daily workflow as its own job: BIOS+CD ext4, UEFI+USB ZFS mirror, and the encrypted-ZFS desktop flow with the GDM greeter asserted on the VGA console): GNOME on Wayland (OpenRC + elogind,
+**GNOME (light) image** (`VARIANT=gnome-light build.sh`, formerly `desktop`; daily asset `horcrux-gnome-light-openrc-daily-x86_64.iso`, built and tested by the daily workflow as its own job: BIOS+CD ext4, UEFI+USB ZFS mirror, and the encrypted-ZFS desktop flow with the GDM greeter asserted on the VGA console): GNOME on Wayland (OpenRC + elogind,
 GDM), NetworkManager (iwd), PipeWire, Firefox, Brave (local overlay ebuild), terminator, vim, Nextcloud client, Tailscale,
 virt-manager/virt-install, keepalived, ClamAV, rustup, CUPS, Bluetooth, fwupd, thermald, power-profiles-daemon. The installer
 shows the *Desktop user* screen on this image only (answer file: `install_type = "desktop"` + `[user]`).
@@ -423,8 +449,8 @@ Every run then reboots from the installed disk alone (no ISO) and asserts:
 After the install matrix, `boot-modes-test.py` runs the boot-menu / rescue / forensic / live / persistence tests (UEFI and BIOS, see "What the boot-menu tests prove"); they must pass too.
 
 Publishing happens only when all of that passed. The run's serial logs, per-screen text captures and PNG
-screenshots are attached to the release as `horcrux-daily-test-evidence.tgz`. The workflow never turns the job
-red on a failure (that would e-mail the owner); the result is recorded in the `daily-status` release marker instead.
+screenshots are attached to the release as `horcrux-server-openrc-daily-x86_64-test-evidence.tgz`. The workflow never turns the job
+red on a failure (that would e-mail the owner); the result is recorded in the `daily-status-<desktop env>-<init>-<arch>` release marker instead.
 Unit tests of the installer's validation rules (`common/tests`) run first.
 
 Build it yourself on any x86_64 Docker host: `build/live-iso/build.sh -o ./iso` (BuildKit required; a
@@ -441,7 +467,7 @@ A `v*` release gets a stable ISO attached (non-pre-release asset
 4. **all five** QEMU runs above pass (both firmware types, both media types, unattended + serial wizard + VGA wizard), including the SSH/web assertions;
 5. no step reported `FAIL` in the evidence bundle (attached to the release).
 
-If any criterion fails, nothing is attached and the failure is recorded in the `daily-status` marker
+If any criterion fails, nothing is attached and the failure is recorded in the `daily-status-<desktop env>-<init>-<arch>` marker
 (mode `stable`). The previous release stays as is. Tags must be cut by the maintainers; the workflow
 never creates tags or bumps versions.
 

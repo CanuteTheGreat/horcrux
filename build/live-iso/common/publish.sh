@@ -12,7 +12,9 @@ api="$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY"
 auth=(-H "Authorization: token $FORGEJO_TOKEN")
 sha=${GITHUB_SHA:-$(git rev-parse HEAD)}
 ARCH=${ARCH:-x86_64}
-VARIANT=${VARIANT:-}; VPFX=${VARIANT:+$VARIANT-}      # image variant (desktop): own asset names + status marker
+VARIANT=${VARIANT:-}
+. "$(dirname "$0")/image-name.sh"      # IMG=<DE|server>-<init>, IMG_ID=<IMG>-<arch>: asset names + status marker (scheme: common/image-name.sh)
+VPFX="$IMG-"
 DAILY_TAG=${DAILY_TAG:-daily}      # tests publish to a throw-away tag
 
 rel_id() { curl -fsS "${auth[@]}" "$api/releases/tags/$1" 2>/dev/null | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])' 2>/dev/null || true; }
@@ -41,7 +43,7 @@ put_asset() { # id file [name]
 
 case "$mode" in
 status)
-  marker=${DAILY_TAG}-status; [ "$ARCH" = x86_64 ] || marker=${DAILY_TAG}-status-$ARCH; [ -z "$VARIANT" ] || marker=${DAILY_TAG}-status-$VARIANT-$ARCH
+  marker=${DAILY_TAG}-status-$IMG_ID      # e.g. daily-status-server-openrc-x86_64, daily-status-gnome-light-openrc-x86_64 (old: daily-status, daily-status-<arch>, daily-status-desktop-x86_64)
   id=$(ensure_release "$marker" "$project daily build status $ARCH (machine-readable)" true "pending")
   patch_body "$id" "$(cat "$statusfile")" ;;
 daily)
@@ -53,9 +55,10 @@ daily)
   printf '%s  %s\n' "$sum" "$name" > /tmp/daily-${VPFX}$ARCH.sha256
   put_asset "$id" /tmp/daily-${VPFX}$ARCH.sha256 "$name.sha256"
   [ -z "$evidence" ] || put_asset "$id" "$evidence" "$project-${VPFX}daily-$ARCH-test-evidence.tgz"
-  # pre-multi-arch asset names (x86_64 only), removed once so a stale file never looks current
-  if [ "$ARCH" = x86_64 ] && [ -z "$VARIANT" ]; then
-    for old in "$project-daily-test-evidence.tgz"; do
+  # asset names of the older schemes (<p>-daily-<arch>.iso, <p>-desktop-daily-<arch>.iso, ...): removed once the same image is published under
+  # its new name, so a stale file never looks current (the product-domain redirects keep the old URLs working)
+  if true; then
+    for old in "$project-daily-test-evidence.tgz" "$project-${IMG_OLD_VPFX}daily-$ARCH.iso" "$project-${IMG_OLD_VPFX}daily-$ARCH.iso.sha256" "$project-${IMG_OLD_VPFX}daily-$ARCH-test-evidence.tgz"; do
       for a in $(curl -fsS "${auth[@]}" "$api/releases/$id/assets" | python3 -c 'import json,sys;print(" ".join(str(a["id"]) for a in json.load(sys.stdin) if a["name"]==sys.argv[1]))' "$old"); do curl -fsS -X DELETE "${auth[@]}" "$api/releases/$id/assets/$a" || true; done
     done
   fi
@@ -63,13 +66,14 @@ daily)
   body=$(curl -fsS "${auth[@]}" "$api/releases/$id/assets" | ARCH=$ARCH SUMMARY="$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d.get("summary",""))' "$statusfile" 2>/dev/null)" SHA=$sha PROJECT=$project python3 -c '
 import json, os, re, sys, time
 a = json.load(sys.stdin); p = os.environ["PROJECT"]
+DE = {"server": "Server", "gnome-light": "GNOME (light)", "gnome": "GNOME", "xfce": "XFCE", "kde": "KDE"}
 rows = []
 for x in sorted(a, key=lambda x: x["name"]):
     n = x["name"]
-    m = re.match(re.escape(p) + r"-((?:desktop-)?)daily-(.+)\.iso$", n)
+    m = re.match(re.escape(p) + r"-((?:[a-z0-9]+-)*?[a-z0-9]+)-(openrc|systemd)-daily-(.+)\.iso$", n)
     if m:
-        arch = m.group(2) + (" (Desktop: GNOME, encrypted ZFS, Apple T2 ready)" if m.group(1) else "")
-        rows.append("- **%s**: `%s` (%d MiB), SHA256 in `%s.sha256`" % (arch, n, x["size"] >> 20, n))
+        de = DE.get(m.group(1), m.group(1))
+        rows.append("- **%s %s - %s**: `%s` (%d MiB), SHA256 in `%s.sha256`" % (de, m.group(2).replace("openrc", "OpenRC").replace("systemd", "systemd"), m.group(3), n, x["size"] >> 20, n))
 print("Rolling **pre-release** build of the %s live/installer ISO from `main` (%s), updated %s UTC." % (p, os.environ["SHA"][:10], time.strftime("%F %T", time.gmtime())))
 print("Each architecture is replaced in place by its own daily job, only after the QEMU boot + install + reboot + web-probe tests passed on that architecture.\n")
 print("\n".join(rows)); print()
@@ -82,11 +86,11 @@ stable)
   tag=${GITHUB_REF_NAME:?}
   id=$(ensure_release "$tag" "$tag" false "Release $tag")
   [ -n "$id" ] || { echo "no release for $tag"; exit 1; }
-  n=$project-$tag-$ARCH.iso
+  n=$project-$IMG-$tag-$ARCH.iso      # <product>-<DE|server>-<init>-<tag>-<arch>.iso
   put_asset "$id" "$iso" "$n"
-  printf '%s  %s\n' "$(cut -d' ' -f1 "$iso.sha256")" "$n" > /tmp/stable-$ARCH.sha256
-  put_asset "$id" /tmp/stable-$ARCH.sha256 "$n.sha256"
-  [ -z "$evidence" ] || put_asset "$id" "$evidence" "$project-$tag-$ARCH-iso-test-evidence.tgz"
+  printf '%s  %s\n' "$(cut -d' ' -f1 "$iso.sha256")" "$n" > /tmp/stable-$IMG-$ARCH.sha256
+  put_asset "$id" /tmp/stable-$IMG-$ARCH.sha256 "$n.sha256"
+  [ -z "$evidence" ] || put_asset "$id" "$evidence" "$project-$IMG-$tag-$ARCH-iso-test-evidence.tgz"
   echo "DOWNLOAD $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$tag/$n" ;;
 *) echo "bad mode"; exit 2 ;;
 esac

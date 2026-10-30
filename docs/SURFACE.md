@@ -9,6 +9,8 @@ Status: **built and emulated, not yet run on the real device.** Everything below
 (`-cpu IvyBridge -m 4096`, UEFI, DMI faked as the real SP1) or against kernel/linux-surface sources; everything marked
 *device-only* needs the tablet (see the last section).
 
+Image name: the Surface image follows the repo-wide scheme `<product>-<desktop env>-<init>-<channel>-<arch>.iso` (docs/ISO-INSTALL.md "Image names"), i.e. `horcrux-surface-xfce-openrc-<channel>-x86_64.iso` for the XFCE + LightDM / OpenRC build (older test releases such as `horcrux-surface-test-20261028-swap` keep their names).
+
 ## Decision: stock Gentoo kernel + three small quirks, NOT the linux-surface patch set
 
 | | |

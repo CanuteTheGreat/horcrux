@@ -1073,6 +1073,7 @@ fn cluster_routes() -> Router<Arc<AppState>> {
             axum::routing::put(set_node_caps),
         )
         .route("/api/cluster/nics", get(get_local_nics))
+        .route("/api/cluster/power/plan", post(plan_cluster_power))
         .route("/api/cluster/architecture", get(get_cluster_architecture))
         .route("/api/cluster/find-node", post(find_best_node_for_vm))
         // HA (High Availability) endpoints
@@ -4443,6 +4444,27 @@ async fn get_local_nics(Query(q): Query<NicsQuery>) -> Json<serde_json::Value> {
         "best_speed_mbps": best,
         "background_cap_mbps": cap,
         "warnings": warnings,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct PowerPlanRequest {
+    nodes: Vec<crate::cluster::power::PowerNode>,
+    #[serde(default)]
+    policy: crate::cluster::power::PowerPolicy,
+    /// How many more guest-capable nodes are needed online (wake plan).
+    #[serde(default)]
+    wake_needed: usize,
+}
+
+/// `POST /api/cluster/power/plan` -- dry-run of the idle power-down / wake
+/// planner (area 7). Stateless: returns which opt-in (`power-managed`) nodes
+/// could be powered down quorum-safely and which to wake. Never acts.
+async fn plan_cluster_power(Json(req): Json<PowerPlanRequest>) -> Json<serde_json::Value> {
+    use crate::cluster::power;
+    Json(serde_json::json!({
+        "power_down": power::plan_power_down(&req.nodes, &req.policy),
+        "wake": power::plan_wake(&req.nodes, req.wake_needed),
     }))
 }
 
