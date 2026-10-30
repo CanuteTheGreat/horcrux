@@ -91,7 +91,7 @@ class XT(SQ.T):
         a, t0 = self.a, time.time()
         vm = Q.VM("1-install", self.base(False, self.nvars), a.out)
         try:
-            ok = vm.expect_raw(r"(Serial console \(ttyS0|safe graphics)", 150)
+            ok = vm.expect_raw(r"(Serial console \(ttyS0|[Ss]afe graphics|Memory test)", 150)
             self.step("grub-menu-reached", ok, f"{int(time.time() - t0)}s, cpu={a.cpu}, {a.mem} MiB, DMI Microsoft Corporation / Surface with Windows 8 Pro")
             time.sleep(2)
             vm.shot("grub-menu")
