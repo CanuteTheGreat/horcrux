@@ -1,0 +1,85 @@
+# syntax=docker/dockerfile:1.4
+# HOGSMEADE variant, part 2: everything after the (1 h) kernel / desktop / zfs+nvidia layers, on the proven hogshead packaging pattern.
+# Part 1 = Dockerfile target hsm-kinstall (tagged and passed as BASE) so that changes to the overlay, the ebuilds or the Portage config
+# in this part never recompile the kernel or the desktop. Named contexts: hxgentoo2 = the repo's gentoo/ (CURRENT horcrux overlay: horcrux-tools,
+# horcrux-live-data, horcrux-unlock, rustinion-bin, hogsmeade-tools, awccd, comfyui), ctgoverlay, hsmprivate (NEVER in git).
+ARG BASE
+FROM ${BASE} AS hsm-final
+ARG ARCH=x86_64
+COPY --from=hxgentoo2 / /var/db/repos/horcrux/
+COPY project/variants/hogsmeade/local-repo/ /var/db/repos/local/
+COPY project/variants/hogsmeade/portage/ /etc/portage/
+# sources of sys-apps/horcrux-tools (installer incl. the ZFS stripe layouts, scripts, boot-environment manager, ownership audit), straight from the repository tree
+COPY common/overlay/usr/lib/live-installer /tmp/hxt/usr/lib/live-installer
+COPY common/overlay/usr/libexec /tmp/hxt/usr/libexec
+COPY common/overlay/usr/bin /tmp/hxt/usr/bin
+COPY project/variants/hogshead/overlay/usr/bin/horcrux-orphans /tmp/hxt/usr/bin/horcrux-orphans
+COPY project/variants/desktop/overlay/usr/share/horcrux/desktop /tmp/hxt/usr/share/horcrux/desktop
+RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
+    --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
+    set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \
+    tar -C /tmp/hxt --zstd -cf /var/cache/distfiles/horcrux-tools-1.tar.zst .; rm -rf /tmp/hxt; \
+    tar -C / --zstd -cf /var/cache/distfiles/horcrux-live-data-1.tar.zst usr/share/live-installer; \
+    for e in /var/db/repos/horcrux/sys-kernel/horcrux-hogsmeade-config/*.ebuild /var/db/repos/horcrux/sys-apps/horcrux-live-data/*.ebuild /var/db/repos/horcrux/sys-kernel/horcrux-unlock/*.ebuild \
+             /var/db/repos/horcrux/app-admin/rustinion-bin/*.ebuild /var/db/repos/horcrux/sys-apps/horcrux-tools/*.ebuild /var/db/repos/horcrux/app-misc/hogsmeade-tools/*.ebuild \
+             /var/db/repos/horcrux/app-misc/awccd/*.ebuild /var/db/repos/horcrux/sci-misc/comfyui/*.ebuild /var/db/repos/horcrux/acct-user/comfyui/*.ebuild /var/db/repos/horcrux/acct-group/comfyui/*.ebuild \
+             /var/db/repos/local/sys-apps/hogsmeade-private/*.ebuild; do ebuild "$e" manifest; done; \
+    # loose copies from the ISO overlay that packages own now: remove first so Portage owns the files
+    rm -rf /usr/bin/horcrux /usr/bin/horcrux-api /usr/share/horcrux/ui /etc/init.d/horcrux-api /etc/init.d/horcrux-guests \
+           /usr/lib/live-installer /usr/libexec/live-* /usr/libexec/console-menu-session /usr/bin/live-installer /usr/bin/console-menu \
+           /usr/bin/live-persist /usr/bin/live-rescue /usr/bin/horcrux-be /usr/bin/horcrux-t2-firmware /usr/share/horcrux/desktop; \
+    rm -f /etc/runlevels/*/horcrux-api /etc/runlevels/*/horcrux-guests; \
+    rm -rf /usr/share/live-installer; \
+    emerge --oneshot --usepkg=n --getbinpkg=n sys-kernel/horcrux-unlock sys-apps/horcrux-tools sys-apps/horcrux-live-data sys-kernel/horcrux-hogsmeade-config; \
+    # explicit packages go into @world, so `emerge -uDN @world` keeps them current and depclean never removes them
+    emerge --noreplace --select=y sys-kernel/gentoo-kernel sys-fs/zfs sys-fs/zfs-kmod x11-drivers/nvidia-drivers sys-kernel/horcrux-unlock sys-kernel/horcrux-hogsmeade-config \
+        sys-apps/horcrux-tools sys-apps/horcrux-live-data
+
+# the owner's applications + the HOGSMEADE packages (binhost binpkgs where USE matches, the rest compiles)
+RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
+    --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
+    set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \
+    emerge --update --newuse --usepkg --getbinpkg --keep-going \
+        sys-firmware/sof-firmware sys-power/switcheroo-control x11-apps/mesa-progs sys-apps/smartmontools sys-apps/nvme-cli app-backup/restic \
+        app-containers/docker app-containers/docker-compose app-containers/docker-buildx \
+        net-misc/remmina media-gfx/gimp media-gfx/geeqie net-misc/mosh net-analyzer/nmap \
+        net-im/discord net-vpn/proton-vpn-gtk-app app-admin/rustinion-bin sys-firmware/edk2-bin app-admin/sudo \
+        sys-process/cronie app-portage/portage-utils app-portage/eix sys-apps/lm-sensors x11-libs/libnotify \
+        > /var/log/hogsmeade-apps.log 2>&1 || { tail -60 /var/log/hogsmeade-apps.log; exit 1; }
+RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
+    --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
+    set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \
+    emerge --update --newuse --usepkg app-misc/hogsmeade-tools app-misc/awccd app-misc/alienfx \
+        > /var/log/hogsmeade-tools.log 2>&1 || { tail -60 /var/log/hogsmeade-tools.log; exit 1; }
+# ComfyUI: venv with PyTorch cu130 wheels (large download), own layer so a failure does not redo the above
+RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
+    --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
+    set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \
+    emerge --oneshot --usepkg sci-misc/comfyui > /var/log/hogsmeade-comfyui.log 2>&1 || { tail -60 /var/log/hogsmeade-comfyui.log; exit 1; }
+# private payload (handoff key, agent ssh key, backup credentials) as a machine-local package; the files come from the named context
+COPY --from=hsmprivate / /var/db/repos/local/sys-apps/hogsmeade-private/files/
+RUN set -e; unset ARCH; export FEATURES="-ccache"; \
+    ebuild /var/db/repos/local/sys-apps/hogsmeade-private/hogsmeade-private-1.ebuild manifest; \
+    emerge --oneshot sys-apps/hogsmeade-private; \
+    rm -rf /var/db/repos/local/sys-apps/hogsmeade-private/files/*; \
+    emerge --noreplace --select=y app-misc/hogsmeade-tools app-misc/awccd app-misc/alienfx sci-misc/comfyui sys-apps/hogsmeade-private app-admin/rustinion-bin \
+        sys-firmware/sof-firmware sys-kernel/linux-firmware
+
+# make @world consistent with the desktop profile + new USE, so the owner's first `emerge -uDN @world` is a no-op for them
+RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
+    --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
+    set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \
+    emerge --update --deep --newuse --usepkg --getbinpkg --with-bdeps=n --keep-going=n @world > /var/log/hogsmeade-world.log 2>&1 \
+      || { tail -60 /var/log/hogsmeade-world.log; exit 1; }; \
+    emerge --depclean --pretend > /var/log/hogsmeade-depclean.log 2>&1 || true; tail -5 /var/log/hogsmeade-depclean.log
+
+# services, markers; the byte-code made by build steps (not by a package) would be unowned files: drop exactly those; horcrux-orphans gates the result
+RUN set -e; unset ARCH; \
+    for s in awccd nvidia-persistenced switcheroo-control smartd hogsmeade-firstboot comfyui docker tailscale cronie; do rc-update add $s default 2>/dev/null || true; done; \
+    printf 'DISPLAYMANAGER="gdm"\n' > /etc/conf.d/display-manager; \
+    echo "hogsmeade" > /etc/live-iso-variant; \
+    rm -rf /lib/modules/6.18.57-gentoo-dist-bin /boot/*6.18.57-gentoo-dist-bin* /boot/*.old; \
+    horcrux-orphans | grep -E "[.]pyc$" | xargs -r rm -f; \
+    find / -xdev -name __pycache__ -type d -empty -delete 2>/dev/null || true; \
+    rm -rf /var/tmp/portage /var/cache/distfiles/* 2>/dev/null || true; \
+    echo "== orphans left (must be none or allowlisted):"; horcrux-orphans | head -40; echo "== count: $(horcrux-orphans | wc -l)"
