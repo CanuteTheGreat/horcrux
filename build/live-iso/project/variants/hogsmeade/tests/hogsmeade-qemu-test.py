@@ -131,6 +131,8 @@ class HRun(zt.ZRun):
 
     def hogsmeade_checks(self, vm):
         a = self.z
+        rc, o = self.sh("stat -c '%U %a %n' /home/canutethegreat; df -h /home/canutethegreat | tail -1; ls -A /home/canutethegreat | head -5")
+        self.step("user-home-exists-on-rpool-home", "canutethegreat 7" in o and "rpool/home" in o, o.strip().replace("\n", " | ")[:250])
         rc, o = self.sh("zpool status -P rpool; echo ---; zpool list -v -H rpool | awk '{print $1}'; echo ---; zpool get -H -o value ashift rpool; zfs get -H -o value encryption rpool")
         open(f"{a.out}/zpool-status.txt", "w").write(o)
         vdevs = re.findall(r"^\s+(/dev/nvme\dn1p4)\s+ONLINE", o, re.M)
