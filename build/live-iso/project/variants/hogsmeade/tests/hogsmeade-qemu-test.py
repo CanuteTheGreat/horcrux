@@ -177,6 +177,9 @@ class HRun(zt.ZRun):
         self.step("initramfs-has-intel-igpu-early-kms-and-no-nvidia", re.search(r"/(i915|xe)[.]ko", o) is not None and "NVIDIA-MODULES=0" in o, o.strip().replace("\n", " | ")[:300])
         rc, o = self.sh("locale -a | grep -i -c 'en_US.utf'; grep -rl 'interface-name' /etc/NetworkManager 2>/dev/null | head -3; echo NM-DONE")
         self.step("locale-generated-and-no-pinned-nm-interface", o.strip().splitlines()[0].strip() not in ("", "0") and "NM-DONE" in o and o.strip().count("\n") <= 1, o.strip().replace("\n", " | "))
+        rc, o = self.sh("emerge -puDN @world > /tmp/hx-world.txt 2>&1; echo RC=$?; echo WARN-LINES=$(grep -c -i -E 'warning|!!!|masked|blocked|unable to|unmerged|[*] ERROR' /tmp/hx-world.txt); grep -i -E 'warning|!!!|masked|blocked|unable to|unmerged|[*] ERROR' /tmp/hx-world.txt | head -5; tail -3 /tmp/hx-world.txt", timeout=900)
+        open(f"{a.out}/world-full.txt", "w").write(o)
+        self.step("emerge-puDN-world-clean-no-warnings", "RC=0" in o and "WARN-LINES=0" in o, re.sub(r"\s+", " ", o)[:300])
         if a.desktop:
             self.desktop_checks(vm)
             self.desktop_exec_check()
