@@ -42,16 +42,17 @@ COPY --from=app /out/ /tmp/hxo/app/
 COPY project/overlay/ /tmp/hxo/project/
 COPY common/overlay/ /tmp/hxo/common/
 COPY project/variants/desktop/overlay/ /tmp/hxo/desktop/
+COPY project/variants/gringotts/overlay/ /tmp/hxo/gringotts/
 COPY project/variants/gringotts/image-files.exclude /tmp/image-files.exclude
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     set -e; unset ARCH; \
     mkdir -p /tmp/imgfiles /tmp/dist; \
-    for d in app project common desktop; do cp -a /tmp/hxo/$d/. /tmp/imgfiles/; done; \
+    for d in app project common desktop gringotts; do cp -a /tmp/hxo/$d/. /tmp/imgfiles/; done; \
     ( cd /tmp/imgfiles && grep -v '^#' /tmp/image-files.exclude | grep . | while read -r p; do rm -rf "./$p"; done ); \
     find /tmp/imgfiles -name __pycache__ -type d -prune -exec rm -rf {} +; \
     tar -C /tmp/imgfiles -cf /tmp/dist/horcrux-image-files-1.tar .; \
     DISTDIR=/tmp/dist ebuild /var/db/repos/horcrux-gringotts/sys-apps/horcrux-image-files/horcrux-image-files-1.ebuild manifest; \
-    DISTDIR=/tmp/dist emerge --noreplace --usepkg=n --getbinpkg=n --buildpkg=n sys-apps/horcrux-image-files app-misc/gringotts-tools app-admin/rustinion-bin; \
+    CONFIG_PROTECT="-*" DISTDIR=/tmp/dist emerge --noreplace --usepkg=n --getbinpkg=n --buildpkg=n sys-apps/horcrux-image-files app-misc/gringotts-tools app-admin/rustinion-bin; \
     rm -rf /tmp/dist /tmp/hxo /tmp/imgfiles /tmp/image-files.exclude
 
 # PRIVATE bundle (agent SSH public keys + Tailscale key): absent in a public build. DISTDIR is a tmpfs-like scratch dir that is deleted,
@@ -61,15 +62,14 @@ RUN --mount=type=bind,from=priv,target=/priv \
     if [ -s /priv/ts-authkey ] && [ -s /priv/authorized_keys ]; then \
       mkdir -p /tmp/dist; tar -C /priv -cf /tmp/dist/gringotts-private-1.tar authorized_keys ts-authkey; \
       DISTDIR=/tmp/dist ebuild /var/db/repos/horcrux-gringotts/app-misc/gringotts-private/gringotts-private-1.ebuild manifest; \
-      DISTDIR=/tmp/dist emerge --noreplace --usepkg=n --getbinpkg=n --buildpkg=n app-misc/gringotts-private; \
+      CONFIG_PROTECT="-*" DISTDIR=/tmp/dist emerge --noreplace --usepkg=n --getbinpkg=n --buildpkg=n app-misc/gringotts-private; \
       rm -rf /tmp/dist; echo "PRIVATE bundle installed (app-misc/gringotts-private)"; \
     else echo "no private bundle: PUBLIC image (no SSH keys, no Tailscale key)"; fi
 
-# runlevels of the live stick (and of the install, which copies them): NetworkManager (iwd backend; nmtui) instead of dhcpcd; the gringotts tty1 menu.
+# runlevels of the live stick (and of the install, which copies them): NetworkManager (iwd backend; nmtui) instead of dhcpcd; the gringotts tty1 menu comes from the live-installer-session override in ./overlay.
 RUN set -e; \
     rc-update del dhcpcd default 2>/dev/null || true; \
     rc-update add dbus default; rc-update add NetworkManager default; rc-update add iwd default; \
-    rc-update add gringotts-live default; \
     test -x /usr/bin/nmtui && test -x /usr/bin/gringotts-install; \
     chmod 700 /usr/share/gringotts 2>/dev/null || true
 
