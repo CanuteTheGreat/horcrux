@@ -22,7 +22,7 @@ KEYWORDS="~amd64"
 # (package.mask >=sys-kernel/gentoo-kernel-7.3 on the machine; the Horcrux image ships that mask).
 RDEPEND="
 	sys-kernel/dracut
-	sys-apps/usbutils
+	dev-lang/python
 "
 
 src_install() {

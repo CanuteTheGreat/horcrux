@@ -26,6 +26,15 @@ tb_dev() {
 	return 1
 }
 
+# USBDEVFS_RESET (_IO('U', 20)) on the device node: a port reset through the t2bce vhci
+tb_reset() {
+	python3 - "$(cat "/sys/bus/usb/devices/${1}/busnum")" "$(cat "/sys/bus/usb/devices/${1}/devnum")" <<-'PY'
+		import fcntl, os, sys
+		fd = os.open("/dev/bus/usb/%03d/%03d" % (int(sys.argv[1]), int(sys.argv[2])), os.O_RDWR)
+		fcntl.ioctl(fd, (ord("U") << 8) | 20, 0)
+	PY
+}
+
 tb_bound() {
 	[ -e "/sys/bus/usb/drivers/appletbdrm/${1}:2.1" ]
 }
@@ -44,7 +53,7 @@ start() {
 	for try in 1 2 3; do
 		tb_bound "${dev}" && return 0
 		# the driver is unbound after a failed probe, so the reset touches nothing else
-		usbreset 05ac:8302 >/dev/null 2>&1
+		tb_reset "${dev}" 2>/dev/null
 		sleep 2
 		tb_bound "${dev}" || echo "${dev}:2.1" > /sys/bus/usb/drivers/appletbdrm/bind 2>/dev/null
 		sleep 1
