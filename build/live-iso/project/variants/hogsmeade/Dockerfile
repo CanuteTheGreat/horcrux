@@ -81,14 +81,17 @@ RUN set -e; unset ARCH; export FEATURES="-ccache"; \
     o=/usr/src/linux/tools/objtool/objtool; ldd $o; if ldd $o | grep 'not found'; then echo OBJTOOL-LIBS-MISSING; exit 1; fi
 # ZFS and the NVIDIA open modules are built for THAT kernel (never from a cached binpkg of another release)
 RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
-    set -e; unset ARCH; export FEATURES="-ccache"; \
-    emerge --oneshot --usepkg=n --getbinpkg=n =sys-fs/zfs-kmod-2.3.9 =sys-fs/zfs-2.3.9 x11-drivers/nvidia-drivers \
-        > /var/log/hogsmeade-kmods.log 2>&1 || { tail -80 /var/log/hogsmeade-kmods.log; exit 1; }; \
+    --mount=type=cache,id=hs-kmod-binpkgs,target=/var/cache/hs-kmod-binpkgs,sharing=locked \
+    set -e; unset ARCH; export FEATURES="-ccache buildpkg" PKGDIR=/var/cache/hs-kmod-binpkgs; \
+    # PKGDIR is a cache mount: a failure later in this image keeps the (30 min) module binpkgs. Only valid for THIS kernel binpkg (never reuse after a kernel change).
+    emerge --oneshot --usepkg --getbinpkg=n =sys-fs/zfs-kmod-2.3.9 =sys-fs/zfs-2.3.9 x11-drivers/nvidia-drivers \
+        > /var/log/hogsmeade-kmods.log 2>&1 || { tail -80 /var/log/hogsmeade-kmods.log; exit 1; }
+RUN set -e; unset ARCH; export FEATURES="-ccache"; \
     rm -f /etc/dracut.conf.d/00-hogsmeade-build.conf; \
     emerge --oneshot sys-kernel/horcrux-unlock sys-apps/horcrux-tools; \
-    kr=$(ls /lib/modules | tail -1); test -n "$kr"; \
+    kr=$(ls /lib/modules | grep -- '-gentoo-dist$' | tail -1); test -n "$kr"; \
     find /lib/modules/$kr -name 'zfs.ko*' | grep .; find /lib/modules/$kr -name 'nvidia.ko*' | grep .; find /lib/modules/$kr -name 'nvidia-drm.ko*' | grep .; \
-    for m in vmd snd-soc-rt722-sdca-sdw snd-soc-rt1320-sdw iwlwifi r8169 xe alienware-wmi nvidia-wmi-ec-backlight intel-ish-ipc; do \
+    for m in vmd snd-soc-rt722-sdca snd-soc-rt1320-sdw iwlwifi r8169 xe alienware-wmi nvidia-wmi-ec-backlight intel-ish-ipc; do \
         find /lib/modules/$kr \( -name "$m.ko*" -o -name "$(echo $m | tr - _).ko*" \) | grep -q . || grep -q -E "/$(echo $m | tr - _)\.ko|/$m\.ko" /lib/modules/$kr/modules.builtin || { echo "MISSING module $m"; exit 1; }; done; \
     depmod $kr; echo $kr > /etc/hogsmeade-kernelrelease
 
