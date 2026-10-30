@@ -211,8 +211,9 @@ class GRun(zt.ZRun):
             o += "\nSSHD-DIAG: " + dg
         self.step("root-locked-ssh-key-only-and-keys-baked", " L " in o and "passwordauthentication no" in o and "permitrootlogin prohibit-password" in o, o.replace("\n", " | ")[:400])
         # early KMS (owner rule from hogshead): the ThinkBook's Iris Xe (Raptor Lake-P) needs i915 + its DMC/GuC/HuC firmware IN the initramfs, or the passphrase prompt is typed blind
-        rc, o = self.sh("I=/boot/initramfs-$(ls /lib/modules | sort -V | tail -1).img; lsinitrd $I 2>/dev/null | grep -E 'i915[.]ko|adlp_dmc|adlp_guc|adlp_huc|drm_display_helper|drm_kms_helper' | awk '{print $NF}'; "
-                        "echo ---; lsinitrd $I -f etc/modprobe.d 2>/dev/null | head -2; lsinitrd $I 2>/dev/null | grep -c 'i915'; cat /etc/dracut.conf.d/92-horcrux-early-kms.conf 2>&1 | grep -v '^#'; grep -o 'rd[.][a-z.]*=[^ ]*' /proc/cmdline | head -3")
+        rc, o = self.sh("I=/boot/initramfs-$(ls /lib/modules | sort -V | tail -1).img; lsinitrd $I > /tmp/initrd.lst 2>/dev/null; "
+                        "grep -E 'i915[.]ko|adlp_dmc|adlp_guc|adlp_huc|drm_display_helper|drm_kms_helper' /tmp/initrd.lst | awk '{print $NF}'; "
+                        "echo ---; cat /etc/dracut.conf.d/92-horcrux-early-kms.conf 2>&1 | grep -v '^#'; rm -f /tmp/initrd.lst", timeout=300)
         self.res["early_kms"] = o
         self.step("initramfs-has-i915-and-its-firmware-for-the-visible-passphrase-prompt", "i915.ko" in o and "adlp_dmc" in o and "drm_kms_helper" in o and "force_drivers" in o, o.replace("\n", " | ")[:500])
         rc, o = self.sh("grep -c supervise-daemon /etc/user/init.d/gnome-settings-daemon-wayland /etc/user/init.d/gnome-settings-daemon-x11")
