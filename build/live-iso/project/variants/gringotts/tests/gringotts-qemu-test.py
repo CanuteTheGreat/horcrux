@@ -206,7 +206,17 @@ class GRun(zt.ZRun):
         self.step("hostname-user-services", "gringotts" in o.split("\n")[0] and "uid=" in o and "docker" in o and USER in o, o.replace("\n", " | ")[:400])
         rc, o = self.sh("passwd -S root; /usr/sbin/sshd -T 2>&1 | grep -E '^(permitrootlogin|passwordauthentication|authorizedkeysfile)'; "
                         "grep -c . /etc/gringotts/authorized_keys; stat -c '%a %U' /usr/share/gringotts/ts-authkey")
-        self.step("root-locked-ssh-key-only-and-keys-baked", " L " in o and "passwordauthentication no" in o and "permitrootlogin prohibit-password" in o, o.replace("\n", " | ")[:300])
+        if "passwordauthentication" not in o:
+            rc, dg = self.sh("/usr/sbin/sshd -T 2>&1 | head -5; ls -l /etc/ssh/ssh_host_* | head -3; rc-service sshd status 2>&1 | head -2")
+            o += "\nSSHD-DIAG: " + dg
+        self.step("root-locked-ssh-key-only-and-keys-baked", " L " in o and "passwordauthentication no" in o and "permitrootlogin prohibit-password" in o, o.replace("\n", " | ")[:400])
+        # early KMS (owner rule from hogshead): the ThinkBook's Iris Xe (Raptor Lake-P) needs i915 + its DMC/GuC/HuC firmware IN the initramfs, or the passphrase prompt is typed blind
+        rc, o = self.sh("I=/boot/initramfs-$(ls /lib/modules | sort -V | tail -1).img; lsinitrd $I 2>/dev/null | grep -E 'i915[.]ko|adlp_dmc|adlp_guc|adlp_huc|drm_display_helper|drm_kms_helper' | awk '{print $NF}'; "
+                        "echo ---; lsinitrd $I -f etc/modprobe.d 2>/dev/null | head -2; lsinitrd $I 2>/dev/null | grep -c 'i915'; cat /etc/dracut.conf.d/92-horcrux-early-kms.conf 2>&1 | grep -v '^#'; grep -o 'rd[.][a-z.]*=[^ ]*' /proc/cmdline | head -3")
+        self.res["early_kms"] = o
+        self.step("initramfs-has-i915-and-its-firmware-for-the-visible-passphrase-prompt", "i915.ko" in o and "adlp_dmc" in o and "drm_kms_helper" in o and "force_drivers" in o, o.replace("\n", " | ")[:500])
+        rc, o = self.sh("grep -c supervise-daemon /etc/user/init.d/gnome-settings-daemon-wayland /etc/user/init.d/gnome-settings-daemon-x11")
+        self.step("gsd-openrc-services-have-no-supervisor-without-command", o.strip().splitlines()[-2:] == ["/etc/user/init.d/gnome-settings-daemon-wayland:0", "/etc/user/init.d/gnome-settings-daemon-x11:0"], o.strip().replace("\n", " | "))
         rc, o = self.sh("swapon --noheadings --show=NAME,SIZE,PRIO; cat /sys/power/resume; lsblk -no NAME,SIZE,FSTYPE | head -12; uname -r; zfs version | head -2")
         self.res["layout"] = o
         self.step("layout-nvme-esp-boot-luks-swap-zfs", "nvme0n1" in o and "crypto_LUKS" in o and "zfs_member" in o, o.replace("\n", " | ")[:400])
@@ -243,6 +253,52 @@ class GRun(zt.ZRun):
             rc, dg = self.sh(f"ps -u {USER} -o pid,etime,comm | head -30; echo ---; ls /var/log/gdm /var/log/messages /var/log/syslog 2>&1 | head; echo ---; for f in /var/log/gdm/*; do echo == $f; tail -25 $f; done 2>&1 | tail -80; echo ---; dmesg | grep -iE 'drm|gpu|virtio|segfault|gnome' | tail -15; echo ---; tail -30 /home/{USER}/.xsession-errors /home/{USER}/.local/share/xorg/*.log 2>&1 | tail -40; echo ---; ls -la /home/{USER}/.local/share/ 2>&1 | head; loginctl session-status 2>&1 | tail -25", timeout=120)
             open(f"{self.g.out}/gnome-diag.txt", "w").write(dg)
         self.step("gnome-login-as-canutethegreat-wayland", up and re.search(rf"Name={USER}.*Type=wayland|Type=wayland.*Name={USER}", o.replace("\n", " ")) is not None, o.strip().replace("\n", " | ")[:300])
+        return up
+
+    def first_login_password_change(self, vm):
+        """The hogshead failure: an account whose password must be changed at the first login. GDM's greeter takes the current password, asks for the new one
+        twice, and the GNOME Wayland session has to start afterwards (with the home dataset mounted and the new password valid)."""
+        NEW = "Vault-Dragon-Gnome-47!"
+        kb = qt.Kbd(vm, True)
+        rc, before = self.sh(f"getent shadow {USER} | cut -d: -f2 | sha256sum | cut -c1-12; mount | grep -c ' /home type zfs'")
+        self.sh(f"chage -d 0 {USER}; chage -l {USER} | head -2; loginctl terminate-user {USER}; sleep 8; pgrep -u {USER} -c; true", timeout=60)
+        time.sleep(35)
+        vm.shot("changepw-greeter")
+        up = False
+        for attempt in range(1, 4):
+            kb.key("ENTER", 1.5)                  # the user tile
+            time.sleep(4)
+            kb.text(PASSPHRASE, pause=0.08)
+            kb.key("ENTER")
+            time.sleep(8)
+            vm.shot(f"changepw-newpassword-{attempt}")
+            kb.text(NEW, pause=0.08)
+            kb.key("ENTER")
+            time.sleep(4)
+            kb.text(NEW, pause=0.08)
+            kb.key("ENTER")
+            vm.shot(f"changepw-retyped-{attempt}")
+            end = time.time() + qt.T(120)
+            while time.time() < end:
+                rc, o = self.sh(f"pgrep -u {USER} -x gnome-shell >/dev/null && echo SHELL")
+                if "SHELL" in o:
+                    up = True
+                    break
+                time.sleep(5)
+            if up:
+                break
+            vm.shot(f"changepw-retry-{attempt}")
+        time.sleep(15)
+        vm.shot("changepw-gnome-desktop")
+        rc, after = self.sh(f"getent shadow {USER} | cut -d: -f2 | sha256sum | cut -c1-12; chage -l {USER} | head -2; mount | grep -c ' /home type zfs'; ls -d /home/{USER}/.config; "
+                            f"for s in $(loginctl list-sessions --no-legend | awk '{{print $1}}'); do loginctl show-session $s -p Name -p Type -p Active | tr '\\n' ' '; echo; done; "
+                            f"ps -u {USER} -o comm | grep -E 'gnome-shell|gsd-|gnome-session' | sort | uniq -c | head -12; "
+                            f"h=$(getent shadow {USER} | cut -d: -f2); sl=$(echo $h | cut -d'$' -f3); [ \"$(openssl passwd -6 -salt $sl '{NEW}')\" = \"$h\" ] && echo NEWPW-VALID || echo NEWPW-INVALID")
+        if not up:
+            rc, dg = self.sh(f"ps -u {USER} -o pid,etime,comm | head -30; for f in /var/log/gdm/*; do echo == $f; tail -20 $f; done 2>&1 | tail -60; rc-status --user 2>&1 | tail -20", timeout=120)
+            open(f"{self.g.out}/changepw-diag.txt", "w").write(dg)
+        changed = before.split()[0] not in after.split("\n")[0] if before.split() else False
+        self.step("first-login-password-change-then-gnome-wayland-session-starts", up and changed and "NEWPW-VALID" in after and "gnome-shell" in after and "wayland" in after.lower(), after.strip().replace("\n", " | ")[:500])
         return up
 
     def apps(self):
@@ -304,8 +360,9 @@ class GRun(zt.ZRun):
         self.res["emerge_world"] = o[-1500:]
         bad = re.search(r"(Error|ERROR|blocked|conflict|masked|!!!|cannot|Could not)", o)
         self.step("emerge-puDN-world-resolves-cleanly", "EXIT=0" in o and not bad, o.strip().splitlines()[-3:].__repr__()[:300])
-        rc, o = self.sh("emerge --depclean -p 2>&1 | tail -8", timeout=600)
+        rc, o = self.sh("emerge --depclean -p 2>&1 | grep -vE '^$|^ *[(]' | tail -60", timeout=600)
         open(f"{self.g.out}/depclean-pretend.txt", "w").write(o)
+        o = "\n".join(o.strip().splitlines()[-30:])
         self.step("depclean-would-remove-nothing-important", "Number to remove:  0" in o or "Number to remove: 0" in o or "No packages selected for removal" in o or "Nothing to clean" in o, o.strip().replace("\n", " | ")[-300:])
         rc, o = self.sh("qcheck -a 2>/dev/null | tail -3; true", timeout=900)
 
@@ -359,6 +416,7 @@ class GRun(zt.ZRun):
             self.world()
             if sess:
                 self.restore()
+                self.first_login_password_change(vm)
             self.sh("poweroff", timeout=10)
             self.wait_exit(vm)
         finally:
