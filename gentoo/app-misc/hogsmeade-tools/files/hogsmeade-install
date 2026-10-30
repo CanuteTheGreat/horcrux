@@ -43,7 +43,7 @@ if [ -z "${HSM_ANSWER_FILE:-}" ]; then
     else
     say ""
     say "This will ERASE ALL THREE DRIVES (Windows and everything on them)."
-    say "Backup gate: only continue when Claude confirmed the Nextcloud backup is verified on the server."
+    say "Backup gate: only continue when Claude confirmed the restic snapshot tagged pre-horcrux-wipe is verified in the B2 repo."
     read -r -p "Type  ERASE HOGSMEADE  to continue: " w
     [ "$w" = "ERASE HOGSMEADE" ] || { say "Cancelled. Nothing was touched."; exit 3; }
     while :; do
