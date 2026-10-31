@@ -171,6 +171,19 @@ pub fn migration_limit_mbytes(nics: &[NicInfo], percent: u64) -> Option<u64> {
     best_speed_mbps(nics).map(|m| background_cap_mbps(m, percent) / 8)
 }
 
+/// Ceph recovery/backfill throttles scaled to the link so a rebuild cannot
+/// saturate it: `(osd_max_backfills, osd_recovery_max_active, osd_recovery_sleep_ms)`.
+/// 1 GbE is conservative; 25 GbE and faster run unthrottled-ish.
+pub fn ceph_recovery_tuning(link_mbps: u64) -> (u32, u32, u32) {
+    match link_mbps {
+        0..=1_999 => (1, 1, 100),
+        2_000..=9_999 => (1, 2, 50),
+        10_000..=24_999 => (2, 3, 20),
+        25_000..=49_999 => (3, 5, 5),
+        _ => (4, 8, 0),
+    }
+}
+
 /// Warnings for a NIC that carries storage/cluster traffic.
 /// `min_mbps` is the policy minimum (e.g. 10_000).
 pub fn check_storage_nic(nic: &NicInfo, min_mbps: u64) -> Vec<String> {
@@ -333,5 +346,20 @@ mod tests {
         mk(t.path(), "eth0", "25000", "9000", "up", "mlx5_core");
         fs::write(t.path().join("class/net/eth0/device/sriov_numvfs"), "8\n").unwrap();
         assert_eq!(scan_nics(t.path())[0].sriov_vfs, 8);
+    }
+
+    #[test]
+    fn ceph_recovery_scales_with_link() {
+        assert_eq!(ceph_recovery_tuning(1_000), (1, 1, 100));
+        assert_eq!(ceph_recovery_tuning(2_500), (1, 2, 50));
+        assert_eq!(ceph_recovery_tuning(10_000), (2, 3, 20));
+        assert_eq!(ceph_recovery_tuning(25_000), (3, 5, 5));
+        assert_eq!(ceph_recovery_tuning(100_000), (4, 8, 0));
+        let mut prev = 0;
+        for m in [1_000, 2_500, 10_000, 25_000, 100_000] {
+            let b = ceph_recovery_tuning(m).0;
+            assert!(b >= prev);
+            prev = b;
+        }
     }
 }
