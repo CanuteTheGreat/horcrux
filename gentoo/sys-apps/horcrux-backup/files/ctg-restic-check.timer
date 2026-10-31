@@ -1,0 +1,8 @@
+[Unit]
+Description=ctg-restic monthly check
+[Timer]
+OnCalendar=*-*-02 07:30
+RandomizedDelaySec=60min
+Persistent=true
+[Install]
+WantedBy=timers.target

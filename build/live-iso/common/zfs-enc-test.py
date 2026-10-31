@@ -23,6 +23,9 @@ qt = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(qt)
 
 PASSPHRASE = "correct horse battery staple 2026"
+SNI_TEST = "aW1wb3J0IGdpCmdpLnJlcXVpcmVfdmVyc2lvbigiR2lvIiwgIjIuMCIpCmZyb20gZ2kucmVwb3NpdG9yeSBpbXBvcnQgR2lvLCBHTGliClhNTCA9ICIiIjxub2RlPjxpbnRlcmZhY2UgbmFtZT0ib3JnLmtkZS5TdGF0dXNOb3RpZmllckl0ZW0iPgo8cHJvcGVydHkgbmFtZT0iQ2F0ZWdvcnkiIHR5cGU9InMiIGFjY2Vzcz0icmVhZCIvPjxwcm9wZXJ0eSBuYW1lPSJJZCIgdHlwZT0icyIgYWNjZXNzPSJyZWFkIi8+PHByb3BlcnR5IG5hbWU9IlRpdGxlIiB0eXBlPSJzIiBhY2Nlc3M9InJlYWQiLz4KPHByb3BlcnR5IG5hbWU9IlN0YXR1cyIgdHlwZT0icyIgYWNjZXNzPSJyZWFkIi8+PHByb3BlcnR5IG5hbWU9Ikljb25OYW1lIiB0eXBlPSJzIiBhY2Nlc3M9InJlYWQiLz48cHJvcGVydHkgbmFtZT0iTWVudSIgdHlwZT0ibyIgYWNjZXNzPSJyZWFkIi8+Cjxwcm9wZXJ0eSBuYW1lPSJJdGVtSXNNZW51IiB0eXBlPSJiIiBhY2Nlc3M9InJlYWQiLz48L2ludGVyZmFjZT48L25vZGU+IiIiClAgPSB7IkNhdGVnb3J5IjogKCJzIiwgIkFwcGxpY2F0aW9uU3RhdHVzIiksICJJZCI6ICgicyIsICJoeC10ZXN0IiksICJUaXRsZSI6ICgicyIsICJoeCB0cmF5IHRlc3QiKSwgIlN0YXR1cyI6ICgicyIsICJBY3RpdmUiKSwKICAgICAiSWNvbk5hbWUiOiAoInMiLCAibmV0d29yay13aXJlZCIpLCAiTWVudSI6ICgibyIsICIvTk9fREJVU01FTlUiKSwgIkl0ZW1Jc01lbnUiOiAoImIiLCBGYWxzZSl9Ck5BTUUgPSAib3JnLmtkZS5TdGF0dXNOb3RpZmllckl0ZW0tNDI0Mi0xIgpsb29wID0gR0xpYi5NYWluTG9vcCgpCnJlcyA9IHt9CmRlZiBnZXRwKGNvbm4sIHNlbmRlciwgcGF0aCwgaWZhY2UsIG5hbWUpOgogICAgdCwgdiA9IFBbbmFtZV0KICAgIHJldHVybiBHTGliLlZhcmlhbnQodCwgdikKZGVmIG9uX2J1cyhjb25uLCBuYW1lKToKICAgIGNvbm4ucmVnaXN0ZXJfb2JqZWN0KCIvU3RhdHVzTm90aWZpZXJJdGVtIiwgR2lvLkRCdXNOb2RlSW5mby5uZXdfZm9yX3htbChYTUwpLmludGVyZmFjZXNbMF0sIE5vbmUsIGdldHAsIE5vbmUpCmRlZiBvbl9uYW1lKGNvbm4sIG5hbWUpOgogICAgdHJ5OgogICAgICAgIGNvbm4uY2FsbF9zeW5jKCJvcmcua2RlLlN0YXR1c05vdGlmaWVyV2F0Y2hlciIsICIvU3RhdHVzTm90aWZpZXJXYXRjaGVyIiwgIm9yZy5rZGUuU3RhdHVzTm90aWZpZXJXYXRjaGVyIiwgIlJlZ2lzdGVyU3RhdHVzTm90aWZpZXJJdGVtIiwKICAgICAgICAgICAgICAgICAgICAgICBHTGliLlZhcmlhbnQoIihzKSIsIChOQU1FLCkpLCBOb25lLCBHaW8uREJ1c0NhbGxGbGFncy5OT05FLCA1MDAwLCBOb25lKQogICAgICAgIEdMaWIudGltZW91dF9hZGQoMTUwMCwgbGFtYmRhOiBjaGVjayhjb25uKSkKICAgIGV4Y2VwdCBFeGNlcHRpb24gYXMgZToKICAgICAgICByZXNbImVyciJdID0gc3RyKGUpCiAgICAgICAgbG9vcC5xdWl0KCkKZGVmIGNoZWNrKGNvbm4pOgogICAgZm9yIHAgaW4gKCJSZWdpc3RlcmVkU3RhdHVzTm90aWZpZXJJdGVtcyIsICJJc1N0YXR1c05vdGlmaWVySG9zdFJlZ2lzdGVyZWQiKToKICAgICAgICByID0gY29ubi5jYWxsX3N5bmMoIm9yZy5rZGUuU3RhdHVzTm90aWZpZXJXYXRjaGVyIiwgIi9TdGF0dXNOb3RpZmllcldhdGNoZXIiLCAib3JnLmZyZWVkZXNrdG9wLkRCdXMuUHJvcGVydGllcyIsICJHZXQiLAogICAgICAgICAgICAgICAgICAgICAgICAgICBHTGliLlZhcmlhbnQoIihzcykiLCAoIm9yZy5rZGUuU3RhdHVzTm90aWZpZXJXYXRjaGVyIiwgcCkpLCBOb25lLCBHaW8uREJ1c0NhbGxGbGFncy5OT05FLCA1MDAwLCBOb25lKQogICAgICAgIHJlc1twXSA9IHIudW5wYWNrKClbMF0KICAgIGxvb3AucXVpdCgpCkdpby5idXNfb3duX25hbWUoR2lvLkJ1c1R5cGUuU0VTU0lPTiwgTkFNRSwgR2lvLkJ1c05hbWVPd25lckZsYWdzLk5PTkUsIG9uX2J1cywgb25fbmFtZSwgbGFtYmRhICphOiAocmVzLnNldGRlZmF1bHQoImVyciIsICJuYW1lIGxvc3QiKSwgbG9vcC5xdWl0KCkpKQpHTGliLnRpbWVvdXRfYWRkKDE1MDAwLCBsb29wLnF1aXQpCmxvb3AucnVuKCkKcHJpbnQoIlNOSS1SRVNVTFQiLCByZXMpCg=="      # registers a StatusNotifierItem with the watcher the AppIndicator extension provides
+# every installed .desktop file's TryExec/Exec binary must exist, or GNOME/XFCE hides the app (hogshead: brave-browser-stable was missing)
+DESKTOP_EXEC_CHECK = "echo aW1wb3J0IGdsb2IsIG9zLCByZSwgc2hsZXgsIHNodXRpbCwgc3lzCm1pc3MgPSBbXQpmb3IgZiBpbiBzb3J0ZWQoZ2xvYi5nbG9iKCIvdXNyL3NoYXJlL2FwcGxpY2F0aW9ucy8qKi8qLmRlc2t0b3AiLCByZWN1cnNpdmU9VHJ1ZSkpOgogICAgdHJ5OgogICAgICAgIHR4dCA9IG9wZW4oZiwgZXJyb3JzPSJyZXBsYWNlIikucmVhZCgpLnNwbGl0KCJbRGVza3RvcCBBY3Rpb24iKVswXQogICAgZXhjZXB0IE9TRXJyb3I6CiAgICAgICAgY29udGludWUKICAgIGt2ID0gZGljdChsLnNwbGl0KCI9IiwgMSkgZm9yIGwgaW4gdHh0LnNwbGl0bGluZXMoKSBpZiAiPSIgaW4gbCBhbmQgbm90IGwuc3RhcnRzd2l0aCgiIyIpKQogICAgaWYga3YuZ2V0KCJOb0Rpc3BsYXkiLCAiIikubG93ZXIoKSA9PSAidHJ1ZSIgb3Iga3YuZ2V0KCJIaWRkZW4iLCAiIikubG93ZXIoKSA9PSAidHJ1ZSIgb3Iga3YuZ2V0KCJUeXBlIiwgIkFwcGxpY2F0aW9uIikgIT0gIkFwcGxpY2F0aW9uIjoKICAgICAgICBjb250aW51ZQogICAgZm9yIGtleSBpbiAoIlRyeUV4ZWMiLCAiRXhlYyIpOgogICAgICAgIHYgPSBrdi5nZXQoa2V5KQogICAgICAgIGlmIG5vdCB2OgogICAgICAgICAgICBjb250aW51ZQogICAgICAgIHRyeToKICAgICAgICAgICAgdCA9IHNobGV4LnNwbGl0KHYpCiAgICAgICAgZXhjZXB0IFZhbHVlRXJyb3I6CiAgICAgICAgICAgIHQgPSB2LnNwbGl0KCkKICAgICAgICB3aGlsZSB0IGFuZCAodFswXSA9PSAiZW52IiBvciAiPSIgaW4gdFswXSk6CiAgICAgICAgICAgIHQgPSB0WzE6XQogICAgICAgIGlmIHQgYW5kIHRbMF0gbm90IGluICgic2giLCAiYmFzaCIpIGFuZCBub3Qgc2h1dGlsLndoaWNoKHRbMF0pIGFuZCBub3QgKHRbMF0uc3RhcnRzd2l0aCgiLyIpIGFuZCBvcy5hY2Nlc3ModFswXSwgb3MuWF9PSykpOgogICAgICAgICAgICBtaXNzLmFwcGVuZChmIntvcy5wYXRoLmJhc2VuYW1lKGYpfTp7a2V5fT17dFswXX0iKQpwcmludCgiREVTS1RPUC1GSUxFUy1DSEVDS0VEIiwgbGVuKGdsb2IuZ2xvYigiL3Vzci9zaGFyZS9hcHBsaWNhdGlvbnMvKiovKi5kZXNrdG9wIiwgcmVjdXJzaXZlPVRydWUpKSkKcHJpbnQoIkRFU0tUT1AtRklMRVMtTUlTU0lORyIsICIgIi5qb2luKG1pc3MpIGlmIG1pc3MgZWxzZSAibm9uZSIpCg== | base64 -d | python3"
 USER_PW = "Xv5#kP2-lima-48Qr"
 
 
@@ -42,6 +45,8 @@ class ZRun(qt.Runner):
             i = args.index("-machine")
             args[i + 1] = args[i + 1] + ",i8042=off"
             args += ["-device", "usb-kbd,bus=xhci.0"]     # the ONLY keyboard: like the T2 Mac, whose keyboard is a USB device
+        if self.z.desktop and not iso:
+            args += ["-audiodev", "none,id=hxaudio", "-device", "intel-hda", "-device", "hda-duplex,audiodev=hxaudio"]   # a real ALSA card: wpctl/gsd-sound/volume keys need a sink
         return args
 
     def step(self, name, ok, info=""):
@@ -226,6 +231,15 @@ class ZRun(qt.Runner):
         open(f"{a.out}/orphans.txt", "w").write(o)
         self.step("portage-owns-every-file", rc == 0 and not bad, f"{len(lines)} generated/eselect paths allowed, {len(bad)} unowned: {bad[:25]}")
         rc, o = self.sh("emerge -puDN @world 2>&1 | tail -25; echo RC=${PIPESTATUS[0]}", timeout=600)
+        if "profile is invalid" in o:
+            # a first-boot service (gringotts-firstboot) is still fetching the Portage trees: wait for it, then resolve again
+            end = time.time() + qt.T(1200)
+            while time.time() < end:
+                rc, t = self.sh("test -e /var/db/repos/gentoo/profiles/repo_name && ! pgrep -f 'emaint|emerge-webrsync|git clone' >/dev/null && echo TREE-READY", timeout=60)
+                if "TREE-READY" in t:
+                    break
+                time.sleep(20)
+            rc, o = self.sh("emerge -puDN @world 2>&1 | tail -25; echo RC=${PIPESTATUS[0]}", timeout=600)
         open(f"{a.out}/world-resolve.txt", "w").write(o)
         self.step("emerge-world-resolves-no-blockers", "RC=0" in o and "blocked" not in o.lower(), o.strip().replace("\n", " | ")[-300:])
         if a.desktop:
@@ -387,6 +401,96 @@ class ZRun(qt.Runner):
             if vm.alive():
                 vm.p.kill()
 
+    def session_audio_autostart_pre(self, user):
+        """before the first GNOME login: an XDG autostart entry for this user and a system-wide one, each leaving a marker when gnome-session-openrc runs it"""
+        import base64
+        ent = lambda n: base64.b64encode(f"[Desktop Entry]\nType=Application\nName=hx {n}\nExec=/bin/sh -c 'date > /tmp/hx-autostart-{n}'\n".encode()).decode()
+        self.sh(f"rm -f /tmp/hx-autostart-*; mkdir -p /home/{user}/.config/autostart; chown -R {user}:{user} /home/{user}/.config; echo {ent('user')} | base64 -d > /home/{user}/.config/autostart/hx-autostart-user.desktop; "
+                f"chown {user}:{user} /home/{user}/.config/autostart/hx-autostart-user.desktop; echo {ent('xdg')} | base64 -d > /etc/xdg/autostart/hx-autostart-xdg.desktop")
+
+    def session_audio_autostart_checks(self, user, vm):
+        """after the GNOME login: XDG autostart ran, PipeWire is up in the user session by itself (no per-user runlevel), the gsd audio daemons started after it,
+        and a volume key (QMP volumeup -> USB keyboard -> mutter -> gsd-media-keys) really changes the sink volume"""
+        uid = self.sh(f"id -u {user}")[1].strip().splitlines()[-1]
+        env = f"XDG_RUNTIME_DIR=/run/user/{uid} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus"
+        u = lambda c, t=60: self.sh(f"su - {user} -c \"export {env}; {c}\" 2>&1", timeout=t)
+        rc, o = self.sh("ls /tmp/hx-autostart-* 2>&1; cat /etc/user/init.d/gsd | grep -c 'want pipewire-pulse wireplumber'")
+        self.step("xdg-autostart-runs-under-gnome-session-openrc", "hx-autostart-user" in o and "hx-autostart-xdg" in o, o.strip().replace("\n", " | ")[:200])
+        self.sh("rm -f /etc/xdg/autostart/hx-autostart-xdg.desktop /home/%s/.config/autostart/hx-autostart-user.desktop /tmp/hx-autostart-*" % user)
+        time.sleep(8)
+        rc, o = u("wpctl status | sed -n 1,30p")
+        self.step("pipewire-wireplumber-pulse-running-after-login-and-sink-present", "WirePlumber" in o and re.search(r"\d+\.\s+\S", o.partition("Sinks:")[2].partition("Sources:")[0]) is not None and "Could not connect" not in o,
+                  re.sub(r"\s+", " ", o)[:400])
+        rc, o = self.sh(f"for p in $(pgrep -u {user} 'pipewire|wireplumber|gsd-media-keys|gsd-sound'); do echo $(awk '{{print $22}}' /proc/$p/stat) $(cat /proc/$p/comm) $(tr '\\0' ' ' < /proc/$p/cmdline | cut -c1-60); done | sort -n")
+        t = {}
+        for l in o.strip().splitlines():
+            f = l.split()
+            if len(f) >= 2 and f[0].isdigit():
+                t.setdefault("pulse" if "pipewire-pulse" in l or "pipewire.*pulse" in l or "pulse.conf" in l else f[1], int(f[0]))
+        okord = all(k in t for k in ("wireplumber", "gsd-media-keys", "gsd-sound", "pipewire")) and max(t["wireplumber"], t["pipewire"], t.get("pulse", 0)) <= min(t["gsd-media-keys"], t["gsd-sound"])
+        self.step("gsd-media-keys-and-gsd-sound-started-after-pipewire-and-wireplumber", okord, o.strip().replace("\n", " | ")[:300])
+        rc, o = u("wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.40; wpctl get-volume @DEFAULT_AUDIO_SINK@")
+        before = re.findall(r"Volume: ([0-9.]+)", o)
+        after = []
+        for _ in range(3):
+            vm.qmp("send-key", keys=[{"type": "qcode", "data": "volumeup"}])
+            time.sleep(1.5)
+            rc, o2 = u("wpctl get-volume @DEFAULT_AUDIO_SINK@")
+            after = re.findall(r"Volume: ([0-9.]+)", o2)
+            if after and before and float(after[-1]) > float(before[-1]):
+                break
+        self.step("volume-key-changes-the-sink-volume", bool(before and after and float(after[-1]) > float(before[-1])), f"before {before} after {after}")
+
+    def tray_extension_checks(self, user):
+        """GNOME has no tray without the AppIndicator extension: it must be enabled by the system dconf default and a StatusNotifierItem must register"""
+        uid = self.sh(f"id -u {user}")[1].strip().splitlines()[-1]
+        env = f"XDG_RUNTIME_DIR=/run/user/{uid} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus"
+        rc, o = self.sh(f"su - {user} -c \"export {env}; gnome-extensions list --enabled; echo ---; gsettings get org.gnome.shell enabled-extensions; echo ---; "
+                        f"gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.NameHasOwner org.kde.StatusNotifierWatcher\" 2>&1; "
+                        f"ls /etc/dconf/db/local /etc/dconf/profile/user; qfile /etc/dconf/db/local /etc/dconf/profile/user")
+        self.step("gnome-extensions-enabled-includes-appindicator-from-system-dconf", "appindicatorsupport@rgcjonas.gmail.com" in o.partition("---")[0] and "(true,)" in o, re.sub(r"\s+", " ", o)[:400])
+        rc, o = self.sh(f"echo {SNI_TEST} | base64 -d > /tmp/hx-sni.py; su - {user} -c \"export {env}; python3 /tmp/hx-sni.py\" 2>&1; rm -f /tmp/hx-sni.py", timeout=90)
+        self.step("status-notifier-item-registers-on-the-watcher-and-a-host-exists", "StatusNotifierItem-4242-1" in o.partition("SNI-RESULT")[2] and "'IsStatusNotifierHostRegistered': True" in o, re.sub(r"\s+", " ", o)[:400])
+
+    def _user_bus_env(self, user):
+        uid = self.sh(f"id -u {user}")[1].strip().splitlines()[-1]
+        return uid, f"XDG_RUNTIME_DIR=/run/user/{uid} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus"
+
+    def session_bus_checks(self, user):
+        """gnome-shell must live on the OpenRC user bus (/run/user/UID/bus), not on gdm's private /tmp/dbus-* bus, so that org.gnome.Shell and
+        org.gnome.SessionManager are on the SAME bus (otherwise Log Out / Restart / Power Off in the shell menu do nothing, and gsd-media-keys cannot grab keys)"""
+        uid, env = self._user_bus_env(user)
+        rc, o = self.sh(f"P=$(pgrep -u {user} -x gnome-shell | head -1); echo PID=$P; tr '\\0' '\\n' < /proc/$P/environ | grep -E '^(DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR)='")
+        self.step("gnome-shell-runs-on-the-user-bus-not-gdms-private-bus", f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus" in o and "/tmp/dbus-" not in o, re.sub(r"\s+", " ", o)[:300])
+        names = "; ".join(f"echo {n}: \\$(gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.NameHasOwner {n})" for n in ("org.gnome.SessionManager", "org.gnome.Shell"))
+        rc, o = self.sh(f"B=$(tr '\\0' '\\n' < /proc/$(pgrep -u {user} -x gnome-shell | head -1)/environ | grep '^DBUS_SESSION_BUS_ADDRESS=' | cut -d= -f2-); "
+                        f"su - {user} -c \"export XDG_RUNTIME_DIR=/run/user/{uid} DBUS_SESSION_BUS_ADDRESS=$B; echo BUS=$B; {names}\" 2>&1")
+        self.step("session-manager-and-shell-names-on-the-shells-own-bus", o.count("(true,)") == 2, re.sub(r"\s+", " ", o)[:300])
+
+    def session_logout(self, user):
+        """Log Out through the shell's own bus (org.gnome.SessionManager.Logout 1); wait until the user's shell is gone and GDM shows a greeter session again"""
+        uid, env = self._user_bus_env(user)
+        self.sh(f"B=$(tr '\\0' '\\n' < /proc/$(pgrep -u {user} -x gnome-shell | head -1)/environ | grep '^DBUS_SESSION_BUS_ADDRESS=' | cut -d= -f2-); "
+                f"su - {user} -c \"export XDG_RUNTIME_DIR=/run/user/{uid} DBUS_SESSION_BUS_ADDRESS=$B; gdbus call --session --dest org.gnome.SessionManager --object-path /org/gnome/SessionManager --method org.gnome.SessionManager.Logout 1\" 2>&1")
+        end, gone, greeter = time.time() + qt.T(150), False, False
+        o = ""
+        while time.time() < end:
+            rc, o = self.sh(f"pgrep -u {user} -x gnome-shell >/dev/null && echo USERSHELL; loginctl list-sessions --no-legend | awk '{{print $3}}' | tr '\\n' ' '; pgrep -u gdm-greeter -x gnome-shell >/dev/null && echo GREETERSHELL")
+            gone = "USERSHELL" not in o
+            greeter = "gdm-greeter" in o and "GREETERSHELL" in o
+            if gone and greeter:
+                break
+            time.sleep(5)
+        return gone and greeter, re.sub(r"\s+", " ", o)[:300]
+
+    def session_logout_check(self, user):
+        ok, o = self.session_logout(user)
+        self.step("shell-log-out-via-session-manager-returns-to-gdm", ok, o)
+
+    def desktop_exec_check(self):
+        rc, o = self.sh(DESKTOP_EXEC_CHECK, timeout=120)
+        self.step("desktop-files-exec-binaries-exist", "DESKTOP-FILES-CHECKED" in o and "DESKTOP-FILES-MISSING none" in o, re.sub(r"\s+", " ", o).strip()[:400])
+
     def desktop_checks(self, vm=None):
         end = time.time() + qt.T(240)
         o = ""
@@ -397,6 +501,7 @@ class ZRun(qt.Runner):
                 break
             time.sleep(6)
         self.step("desktop-gdm-and-gnome-shell-running", "GDM" in o and "SHELL" in o, o.strip().replace("\n", " | ")[:300])
+        self.desktop_exec_check()
         # hogshead hand-off: an account with an EMPTY, expired (day 0) password must force the owner to choose a password at the first
         # login (PAM nullok + new_authtok_reqd), with no temporary password stored anywhere. Exercised through login(1) on a pty: no password prompt (nullok), forced new-password prompt, passwdqc.
         rc, o = self.sh("userdel -rf hxtmp >/dev/null 2>&1; useradd -m hxtmp && passwd -d hxtmp >/dev/null && chage -d 0 hxtmp && grep '^hxtmp:' /etc/shadow | cut -d: -f2,3; "

@@ -33,6 +33,15 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # Owner rule 2026-10-30: mobile UI follows the device's light/dark setting (cheap static check;
+  # rendered light/dark proof: horcrux-mobile/tests/render_theme.py).
+  mobile-theme:
+    name: Mobile theme (light/dark)
+    runs-on: linux-any
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 horcrux-mobile/tests/check_theme.py
+
   check:
     name: Check
     # linux-any: arch-independent (fmt/clippy/cargo check/audit/wasm), served by the arm64 hosts and
@@ -1250,3 +1259,12 @@ jobs:
       - name: Remove this run's image
         if: always()
         run: docker rmi horcrux/use-matrix:${{ github.sha }} >/dev/null 2>&1 || true
+
+  ui-theme:
+    name: Web UI theme (light/dark)
+    runs-on: linux-any
+    steps:
+      - uses: actions/checkout@v4
+      # Owner rule 2026-10-30: the UI follows the device's light/dark setting (palette + contrast of both).
+      # The rendered proof is theme_checks() in horcrux-api/horcrux-ui/e2e/ui_e2e.py (UI E2E job).
+      - run: python3 horcrux-api/horcrux-ui/tests/check_theme.py

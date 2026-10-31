@@ -228,7 +228,6 @@ pub fn spawn_command(
     tokio::spawn(async move {
         let status = child.wait().await;
         let was_stopped = registry().stopped.lock().unwrap().remove(&u);
-        registry().running.lock().unwrap().remove(&u);
         rec.end_time = Some(now());
         match status {
             Ok(s) => {
@@ -249,6 +248,11 @@ pub fn spawn_command(
         }
         append_log(&u, &format!("TASK {}", rec.status.to_uppercase()));
         save(&rec);
+        // Leave the registry only AFTER the final record is on disk: load()
+        // calls a "running" record that is not in the registry "interrupted",
+        // so removing first made a poller read an ended task as interrupted
+        // (CI flake: system-admin e2e "update runs emerge --sync", run 7664).
+        registry().running.lock().unwrap().remove(&u);
     });
     Ok(upid)
 }

@@ -129,6 +129,9 @@ def configure(inst, cmdline_extra="", kernel_glob="*"):
     inst.write("/etc/conf.d/zram-init", ZRAM_CONF.format(mb=max(2048, min(ram // 2, 16384))))
     if os.path.exists(f"{inst.target}/etc/init.d/zram-init"):
         inst.run(["rc-update", "add", "zram-init", "boot"], chroot=True, check=False)
+        # one zram swap only: the generic cfg_hardening step enabled the live image's zram-swap script as well, which gave
+        # two zram devices (7.7G prio 16383 + 8G prio 100) on hogshead
+        inst.run(["rc-update", "del", "zram-swap", "default"], chroot=True, check=False)
     inst.write("/etc/horcrux/be.conf", BE_CONF.format(cmdline=cmdline_extra.strip(), kglob=kernel_glob))
     inst.write("/etc/portage/bashrc", PORTAGE_BASHRC)
     inst.write("/etc/kernel/postinst.d/90-horcrux-be", "#!/bin/sh\nexec horcrux-be sync\n", 0o755)

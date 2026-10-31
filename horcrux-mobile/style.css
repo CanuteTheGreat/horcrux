@@ -1,5 +1,10 @@
 /* Horcrux Mobile UI Styles */
 
+/* Follows the device's light/dark setting (owner rule 2026-10-30): the palette below is the light
+   one; the prefers-color-scheme: dark block at the end of this file swaps it, live, with no JS and
+   so no flash. */
+:root { color-scheme: light dark; }
+
 /* Reset and base styles */
 * {
     margin: 0;
@@ -191,12 +196,12 @@ body {
 }
 
 .mobile-button.success {
-    background: #16a34a;
+    background: #15803d;
     color: white;
 }
 
 .mobile-button.success:active {
-    background: #15803d;
+    background: #166534;
 }
 
 .mobile-button.danger {
@@ -536,4 +541,35 @@ body {
     .mobile-button:hover {
         background-color: inherit;
     }
+}
+
+/* ---- Dark palette: used when the device is in dark mode ---- */
+@media (prefers-color-scheme: dark) {
+    body { background: #0f1115; color: #e5e7eb; }
+    .mobile-header { background: #1e3a8a; }
+    .bottom-nav { background: #171a21; border-top-color: #2a2f3a; box-shadow: 0 -2px 8px rgba(0,0,0,0.5); }
+    .nav-item { color: #a3aab8; }
+    .nav-item:active { background: #232833; }
+    .card { background: #171a21; box-shadow: 0 1px 3px rgba(0,0,0,0.5); }
+    .card-title, .stat-value, .value, .vm-name, .settings-section h2 { color: #f3f4f6; }
+    .stat-label, .label, .loading-container, .empty-state, .node-details { color: #a3aab8; }
+    .status-running { background: #14532d; color: #bbf7d0; }
+    .status-stopped { background: #2a2f3a; color: #d1d5db; }
+    .status-paused { background: #78350f; color: #fde68a; }
+    .status-error, .error-message { background: #7f1d1d; color: #fecaca; }
+    .mobile-button.primary { background: #2563eb; }
+    .mobile-input { background: #171a21; color: #f3f4f6; border-color: #2a2f3a; }
+    .mobile-input:focus { border-color: #60a5fa; }
+    .login-page { background: linear-gradient(135deg, #312e81 0%, #4c1d95 100%); }
+    .login-form { background: #171a21; box-shadow: 0 10px 40px rgba(0,0,0,0.6); }
+    .stat-item, .node-item { border-bottom-color: #2a2f3a; }
+    .status-item, .detail-row { border-bottom-color: #232833; }
+    .progress-bar { background: #2a2f3a; }
+    .progress-fill { background: #3b82f6; }
+    .value.success { color: #4ade80; }
+    .value.error { color: #f87171; }
+    .action-button { background: #1d212a; border-color: #2a2f3a; color: #f3f4f6; }
+    .action-button:active { background: #232833; }
+    .spinner { border-color: #2a2f3a; border-top-color: #3b82f6; }
+    .node-badge { background: #1e3a8a; color: #bfdbfe; }
 }

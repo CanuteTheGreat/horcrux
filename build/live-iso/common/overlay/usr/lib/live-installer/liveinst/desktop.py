@@ -72,8 +72,18 @@ def apply(inst):
     inst.write("/etc/conf.d/xdm", 'DISPLAYMANAGER="gdm"\n')
     # wired + Wi-Fi by NetworkManager (iwd backend) from now on
     inst.write("/etc/NetworkManager/conf.d/10-horcrux.conf", "[device]\nwifi.backend=iwd\n")
+    # the iwd backend only autoconnects networks iwd knows: turn every Wi-Fi profile (joined on the live system or carried over) into /var/lib/iwd/<ssid>.psk
+    from . import system as _system
+    for p in _system.carry_wifi_to_iwd(T, sources=("/etc/NetworkManager/system-connections", T + "/etc/NetworkManager/system-connections")):
+        inst.log(f"desktop: Wi-Fi network carried over to iwd: {os.path.basename(p)}")
     if c.get("user_autologin"):
         inst.write("/etc/gdm/custom.conf", f"[daemon]\nAutomaticLoginEnable=True\nAutomaticLogin={name}\nWaylandEnable=true\n")
     else:
         inst.write("/etc/gdm/custom.conf", "[daemon]\nWaylandEnable=true\n")
+    # the GNOME defaults package (AppIndicator tray icons enabled system-wide) belongs to @world of every GNOME install, so later `emerge -uDN @world` keeps it
+    pk = f"{T}/var/db/pkg/gnome-extra"
+    if os.path.isdir(pk) and any(d.startswith("horcrux-gnome-defaults-") for d in os.listdir(pk)):
+        w = f"{T}/var/lib/portage/world"
+        if "gnome-extra/horcrux-gnome-defaults" not in (open(w).read().split() if os.path.exists(w) else []):
+            inst.write("/var/lib/portage/world", "gnome-extra/horcrux-gnome-defaults\n", append=True)
     inst.log(f"desktop profile: user {name}, GNOME/GDM on Wayland")

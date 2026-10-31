@@ -1,0 +1,12 @@
+[Unit]
+Description=ctg-restic daily encrypted backup to B2
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ctg-restic backup
+Nice=19
+IOSchedulingClass=idle
+CPUSchedulingPolicy=batch
+Environment=GOMAXPROCS=2
+TimeoutStartSec=12h

@@ -1,0 +1,12 @@
+[Unit]
+Description=ctg-restic weekly 30-day forget+prune
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ctg-restic prune
+Nice=19
+IOSchedulingClass=idle
+CPUSchedulingPolicy=batch
+Environment=GOMAXPROCS=2
+TimeoutStartSec=12h
