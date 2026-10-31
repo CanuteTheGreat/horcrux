@@ -1,0 +1,22 @@
+# sorts AFTER the base image's package.use/live+gui (installer kiosk: gtk -X, mesa stubs): the XFCE desktop needs X and the Intel GPU drivers
+*/* elogind -systemd
+gui-libs/gtk X wayland
+x11-libs/gtk+ X wayland
+media-libs/libglvnd X
+media-libs/mesa X llvm wayland VIDEO_CARDS: intel
+x11-base/xorg-server elogind -systemd udev xorg
+x11-libs/libxkbcommon X
+x11-misc/lightdm elogind gtk introspection -systemd
+x11-misc/lightdm-gtk-greeter branding
+dev-libs/libdbusmenu gtk3
+xfce-base/xfce4-panel dbusmenu
+media-video/pipewire sound-server pipewire-alsa elogind -jack-sdk -systemd bluetooth
+media-video/wireplumber elogind -systemd
+net-misc/networkmanager wifi bluetooth modemmanager -ppp -iwd
+net-print/cups -systemd
+sys-apps/fwupd -systemd
+sys-kernel/gentoo-kernel -initramfs
+sys-fs/zfs rootfs dist-kernel
+sys-fs/zfs-kmod dist-kernel
+gnome-base/gvfs elogind udisks -systemd
+sys-apps/dbus X

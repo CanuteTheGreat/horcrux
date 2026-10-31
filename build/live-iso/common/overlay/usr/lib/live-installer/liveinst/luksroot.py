@@ -104,7 +104,9 @@ def dracut_conf(drivers=None):
             'hostonly="no"\nhostonly_cmdline="no"\n'
             'add_dracutmodules+=" crypt dm "\n'
             'omit_dracutmodules+=" plymouth network-manager nfs iscsi biosdevname dmsquash-live "\n'
-            f'add_drivers+=" {drivers} "\n')
+            f'add_drivers+=" {drivers} "\n'
+            # early KMS: i915 loaded before udev settles, or the passphrase prompt is typed blind (hogshead's first boot)
+            'force_drivers+=" i915 "\n')
 
 
 def fstab_text(root_uuid_dev, boot_uuid, esp_uuid, efi=True, swap_dev=None):

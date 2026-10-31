@@ -32,7 +32,7 @@ cid=
 cleanup_build() {
   docker rm -fv "$TAG-asm" >/dev/null 2>&1 || true
   [ -z "$cid" ] || docker rm -fv "$cid" >/dev/null 2>&1 || true
-  docker rmi "$TAG-tools" "$TAG-hw" >/dev/null 2>&1 || true
+  docker rmi "$TAG-tools" "$TAG-hw" "$TAG-priv" >/dev/null 2>&1 || true
   rm -rf "$HERE/.hw"
   [ -z "${VIMGS:-}" ] || [ -n "${KEEP_IMAGES:-}" ] || docker rmi $VIMGS >/dev/null 2>&1 || true
   [ -n "${REUSE_ROOTFS:-}" ] || [ -n "${KEEP_IMAGES:-}" ] || docker rmi "$TAG-app" "$TAG-rootfs" >/dev/null 2>&1 || true
@@ -63,7 +63,7 @@ if [ -n "${VARIANT:-}" ] && [ "$VARIANT" != server ]; then
   for v in $(echo "$VARIANT" | tr ',' ' '); do
     [ -f "project/variants/$v/Dockerfile" ] || { echo "unknown VARIANT=$v (no project/variants/$v/Dockerfile)"; exit 2; }
     lap "stage 2b: variant $v"
-    VCTX=""; [ -d "$REPO/gentoo/t2" ] && VCTX="--build-context t2=$REPO/gentoo/t2"
+    VCTX="--build-context hxgentoo=$REPO/gentoo"; [ -d "$REPO/gentoo/t2" ] && VCTX="--build-context t2=$REPO/gentoo/t2"
     # named contexts for variants: `hxoverlay` = the Horcrux Portage overlay (repo's gentoo/), `priv` = PRIVATE inputs (PRIV_DIR, never in the
     # repo: authorized_keys + ts-authkey for the gringotts image; empty = a public image without them)
     if [ -d "$REPO/gentoo" ]; then
@@ -80,6 +80,7 @@ if [ -n "${VARIANT:-}" ] && [ "$VARIANT" != server ]; then
     ROOTFS_IMG=$TAG-rootfs-$v; VIMGS="$VIMGS $TAG-rootfs-$v"
   done
 fi
+[ -z "${ISO_VNAME:-}" ] || VNAME=$ISO_VNAME
 [ -z "${STOP_AFTER_VARIANTS:-}" ] || { lap "STOP_AFTER_VARIANTS: image $ROOTFS_IMG kept"; KEEP_IMAGES=1; exit 0; }
 if [ -n "${HW_PROFILE:-}" ]; then
 lap "stage 2b: hardware profile layer ($HW_PROFILE, gentoo/$HW_PROFILE)"
@@ -90,15 +91,23 @@ rm -rf "$HERE/.hw"
 docker image inspect $TAG-hw >/dev/null 2>&1 || { echo "profile layer failed (see $OUT/profile-build.log)"; exit 1; }
 ROOTFS_IMG=$TAG-hw
 fi
+VNAME_PRIV=""
+if [ -n "${PRIV_DIR:-}" ]; then
+lap "stage 2c: PRIVATE layer ($PRIV_DIR)"
+[ -d "$PRIV_DIR" ] || { echo "PRIV_DIR is not a directory"; exit 2; }
+docker build $PLAT $ARCHARGS --build-context priv="$PRIV_DIR" -f common/Dockerfile.private --build-arg BASE=$ROOTFS_IMG -t $TAG-priv . 2>&1 | tail -12
+docker image inspect $TAG-priv >/dev/null 2>&1 || { echo "private layer failed"; exit 1; }
+ROOTFS_IMG=$TAG-priv; VNAME_PRIV="private-"
+fi
 lap "stage 3: assembly toolbox"
 # Per-build tag: a shared live-iso-tools:latest could be untagged by the runner disk guard (or replaced by a
 # parallel build) between this build and the docker run below (Horcrux run 7066: "pull access denied").
 docker build $PLAT $ARCHARGS -q -f common/Dockerfile.tools -t $TAG-tools .
 lap "stage 4: export rootfs + assemble ISO (no bind mounts: works from a job container using the host docker)"
-ISO_NAME=$ISO_PREFIX${HW_PROFILE:+-$HW_PROFILE}${IMG_HW:+-${IMG_HW%-}}-$IMG-$SUFFIX-$ARCH.iso
+ISO_NAME=$ISO_PREFIX${HW_PROFILE:+-$HW_PROFILE}-${ISO_VNAME:-${IMG_HW}$IMG-}$SUFFIX-$ARCH.iso   # owner rule: horcrux-surface-xfce-openrc-<date>-x86_64.iso (ISO_VNAME=surface-xfce-openrc-)
 docker rm -f $TAG-asm >/dev/null 2>&1 || true
 cid=$(docker create $ROOTFS_IMG /bin/true)
-docker export "$cid" | docker run -i $PLAT -e ARCH=$ARCH --name $TAG-asm --memory=8g --cpus=$JOBS $TAG-tools \
+docker export "$cid" | docker run -i $PLAT -e ARCH=$ARCH -e "SQUASH_COMP=${SQUASH_COMP:-}" --name $TAG-asm --memory=8g --cpus=$JOBS $TAG-tools \
     sh -c "mkdir -p /work/root /out && tar -x -C /work/root --exclude='dev/*' && assemble-iso.sh /work/root /out/$ISO_NAME '$ISO_LABEL' '$PROJECT_TITLE' '$PROJECT'"
 docker rm -v "$cid" >/dev/null; cid=
 docker cp $TAG-asm:/out/$ISO_NAME "$OUT/$ISO_NAME"
