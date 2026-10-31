@@ -210,7 +210,7 @@ class XT(SQ.T):
         s("locale-en-us-utf8-generated", re.search(r"en_US\.(utf8|UTF-8)", out) is not None and "Cannot set" not in out, re.sub(r"\s+", " ", out)[:240])
         rc, out = self.ssh("qlist -I net-misc/nextcloud-client | wc -l; command -v nextcloud nextcloudcmd | wc -l; ls /etc/xdg/autostart | grep -ci nextcloud; ls -ld /home/" + USER + "/.ssh /home/" + USER + "/Nextcloud 2>&1 | cut -c1-60; test -L /home/" + USER + "/.ssh && echo SYMLINK || echo local-dir; test -s /usr/share/horcrux-surface/restic-excludes && echo excludes-shipped")
         o = out.split()
-        s("no-nextcloud-client-local-ssh-and-restic-excludes", o[:3] == ["0", "0", "0"] and "local-dir" in out and "SYMLINK" not in out and "excludes-shipped" in out and "Nextcloud: No such" in out, re.sub(r"\s+", " ", out)[:240])
+        s("no-nextcloud-client-local-ssh-and-restic-excludes", o[:3] == ["0", "0", "0"] and "local-dir" in out and "SYMLINK" not in out and "excludes-shipped" in out and re.search(r"Nextcloud'?: No such", out) is not None, re.sub(r"\s+", " ", out)[:240])
         rc, out = self.ssh("grep -rl 'interface-name' /etc/NetworkManager/system-connections 2>/dev/null | head -3; echo rc=done; ls -l /etc/NetworkManager/system-connections 2>&1 | tail -3; rc-status default | grep -i -E 'NetworkManager'")
         s("no-networkmanager-profile-pinned-to-an-interface", out.startswith("rc=done") and "NetworkManager" in out, re.sub(r"\s+", " ", out)[:240])
         # session env helper: run commands as the user inside the X session
