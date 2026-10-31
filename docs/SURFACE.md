@@ -1,5 +1,10 @@
 # Microsoft Surface on Horcrux (focus: Surface Pro 1 / 2013)
 
+> **2026-10-29 update (owner decisions): the Surface image is an XFCE tablet (LightDM + onboard), NOT sway and NOT GNOME; the kernel is
+> `sys-kernel/gentoo-kernel` built from source with the linux-surface series from `sys-kernel/horcrux-surface-config`; every installed
+> file is owned by an ebuild. See "XFCE image, packages and ownership" below. Sections about sway/wvkbd/swaybar/surface-hidpi/foot
+> describe the superseded 2026-10-28 test image and are kept only as history of the QEMU evidence.**
+
 Status: **built and emulated, not yet run on the real device.** Everything below marked *verified* was checked in QEMU
 (`-cpu IvyBridge -m 4096`, UEFI, DMI faked as the real SP1) or against kernel/linux-surface sources; everything marked
 *device-only* needs the tablet (see the last section).
@@ -10,7 +15,7 @@ Image name: the Surface image follows the repo-wide scheme `<product>-<desktop e
 
 | | |
 |---|---|
-| SP1 / SP2 (Ivy Bridge, 2013) | **mainline kernel** (`gentoo-kernel-bin`) + the quirks listed here |
+| SP1 / SP2 (Ivy Bridge, 2013) | needs none of the patches (evidence below). Owner decision 2026-10-29: the image still carries the **linux-surface series** as a proper Portage package (`sys-kernel/horcrux-surface-config` + `sys-kernel/gentoo-kernel-6.18.59` from source), so one kernel serves SP1..SP7 and updates with `emerge -uDN @world` |
 | SP3 and newer, Surface Laptop/Book/Go | linux-surface patched kernel recommended (`gentoo/surface/kernel/`: pinned series **6.18** = the ISO's kernel `6.18.57-gentoo-dist-bin`, and 7.2; all 15/16 patches verified to apply with `patch -Np1`; not shipped on the ISO) |
 
 ### Evidence
@@ -71,11 +76,38 @@ Image name: the Surface image follows the repo-wide scheme `<product>-<desktop e
 * LUKS2 keyslot: `argon2id`, memory cost = 3/16 of RAM, ≤ 1 GiB (4 GB → 768 MiB; 8 GB+ → 1 GiB), 2 lanes, ~2 s on the install machine.
 * The installer offers **XFS + LUKS as the default file system for every machine with < 8 GB RAM** (ZFS stays the default above that;
   the interactive default only, answer files name their file system explicitly).
-* Desktop: **sway** (Wayland; ~150-250 MB), foot terminal, wmenu launcher, **wvkbd** on-screen keyboard (toggle from the bar's *[Keyboard]* button
-  or `Mod+k`), swaybar with tappable buttons, NetworkManager (`nmtui`), PipeWire. GNOME/KDE are deliberately not installed: too heavy for 4 GB.
-  No browser in the default image (Firefox needs X11 libraries and a source build under a Wayland-only USE set; install one later from the binhost).
-* Binpkg-first: the tablet never compiles anything. The installer copies the ISO's squashfs; the ISO build uses the official binhost and
-  compiles only what its USE flags force (sway/wlroots/pipewire/wvkbd, on the build host).
+* Desktop (owner decision 2026-10-29): **XFCE 4.20 + LightDM** (lightdm-gtk-greeter), NetworkManager + nm-applet, PipeWire/WirePlumber, **onboard** on-screen keyboard
+  (auto-show in text fields, also in the greeter), touch via libinput, pen via xf86-input-wacom, screen rotation + touch/pen mapping from the accelerometer
+  (`iio-sensor-proxy`, `horcrux-surface-rotate`, only when the hardware has one), **xfce4-power-manager** (lid/power key = suspend, critical battery = hibernate,
+  hibernate button) on top of elogind/UPower, `xfce4-screensaver` locks before sleeping. Apps: Brave (`canutethegreat-overlay`), Firefox (`firefox-bin`),
+  the Rustinion agent (`app-admin/rustinion-bin`), Tailscale, `intel-microcode`, `sof-firmware`, `linux-firmware`.
+  GNOME was not measured or compared (owner chose XFCE).
+* Binpkg-first: the tablet never compiles anything. The image is built on an rw-man host (official binhost; source builds only for what the USE flags force:
+  the kernel, zfs-kmod, a few libraries); the installer copies the ISO's squashfs.
+
+## XFCE image, packages and ownership (2026-10-29)
+
+Build: `VARIANT=surface build/live-iso/build.sh` (optionally `PRIV_DIR=<private dir>` for the private layer) on top of the finished Horcrux rootfs.
+`build/live-iso/project/variants/surface/Dockerfile` stages: overlays (horcrux, GURU, canutethegreat-overlay) → `sys-kernel/horcrux-surface-config`
+→ **kernel binary package** `=sys-kernel/gentoo-kernel-6.18.59` (own layer, ~1 h) → install (the stock `gentoo-kernel-bin` goes) + zfs-kmod rebuilt + kernel/module/config
+assertions → `sys-apps/horcrux-tools` + `sys-apps/horcrux-live-data` + `sys-kernel/horcrux-unlock` (the shared packages proven on hogshead) → **`app-misc/horcrux-surface-desktop`** (one meta package whose RDEPEND is the whole desktop and all apps) → cleanup + live initramfs.
+
+| package (Horcrux overlay `gentoo/`) | owns |
+|---|---|
+| `sys-kernel/horcrux-surface-config` | the 16 linux-surface 6.18 patches (`/etc/portage/patches/sys-kernel/gentoo-kernel/`, applied by every `gentoo-kernel` build), `/etc/kernel/config.d/90-horcrux-surface.config`, `/etc/dracut.conf.d/90-horcrux-surface.conf` |
+| `app-misc/horcrux-surface-desktop` | the dependency set above, `/etc/portage/{repos.conf,package.*}` (so `emerge -uDN @world` works on the tablet), LightDM/elogind/xfconf/glib defaults, X input config, `horcrux-surface-auto|-report|-rotate`, `surface-inventory|-backup|-remote`, `/etc/local.d/50-surface-tailscale.start`, the `surface` hardware profile |
+| `sys-apps/horcrux-tools` | `live-installer`, console menu, `horcrux-orphans`, and for this image the live-ISO init services / zram-swap (`/etc` payload); fetch-restricted distfile made from `common/overlay` + `project/overlay` at image-build time |
+| `sys-apps/horcrux-live-data` | installer branding + Portage metadata snapshot (made from the image) |
+| `sys-kernel/horcrux-unlock` | dracut one-passphrase + resume-before-unlock module |
+| `app-admin/rustinion-bin`, `www-client/brave-bin` (canutethegreat-overlay), `app-accessibility/onboard`, `gnome-extra/iio-sensor-proxy` (GURU) | the apps |
+
+Ownership check: `horcrux-orphans` (installed by `sys-apps/horcrux-tools`; merged-/usr safe `qfile -o` over /usr, /opt, /boot, /lib/modules, /lib/firmware) must list only generated files
+(eselect/gcc-config links, icon/mime/gconv caches, `info/dir`, nss `.chk`, `/boot/{grub,efi}`), and no `._cfg*` file may remain under /etc (`etc-update --automode -5` at image end).
+Horcrux's own hypervisor product (horcrux-api, libvirt, qemu, docker) and the Apple T2 userland are removed from this image: not a tablet role.
+
+One-screen install: the default GRUB entry runs `horcrux-surface-auto` (read-only disk inventory, ERASE confirmation only when data is found, passphrase typed twice, answer
+file built in tmpfs, `live-installer --answers`). Private layer (`Dockerfile.private`): owner ssh public keys + the ephemeral/tagged Tailscale key under
+`/usr/share/horcrux-surface-private`; the installed system joins the tailnet once at first network and deletes the key.
 
 ## AVX2 / Ivy Bridge (verified)
 
@@ -224,3 +256,5 @@ HD 4000 acceleration under Mesa; HiDPI scale feel; battery reporting; UEFI quirk
 * linux-surface issues #381 (SP1/SP2 `_LID`, `button.lid_init_state=open`), #2049 (SP1 + GNOME)
 * kernel v7.2: `drivers/net/wireless/marvell/mwifiex/pcie_quirks.c`, `drivers/hid/hid-ids.h`, `hid-quirks.c`, `drivers/acpi/button.c`
 * docs/T2-MACS.md (kernel 7.2 pin because of OpenZFS), Gentoo handbook (XFS)
+
+**Nextcloud:** no desktop client on this device (tiny disk, owner decision): web only, in the browser. `~/.ssh` is a normal local directory; keys/config are pushed from crystalcave after first boot, never baked in.

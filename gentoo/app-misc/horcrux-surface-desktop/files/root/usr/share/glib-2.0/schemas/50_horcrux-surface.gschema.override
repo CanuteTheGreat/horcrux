@@ -1,0 +1,9 @@
+[org.gnome.desktop.interface]
+toolkit-accessibility=true
+[org.onboard]
+layout='Phone'
+theme='Nightshade'
+[org.onboard.auto-show]
+enabled=true
+[org.onboard.window]
+docking-enabled=true

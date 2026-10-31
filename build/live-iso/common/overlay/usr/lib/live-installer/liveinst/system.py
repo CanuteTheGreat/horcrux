@@ -308,6 +308,36 @@ def write_wifi_profile(root, ssid, psk):
     return path
 
 
+def write_nm_wifi_profile(root, ssid, psk):
+    """NetworkManager keyfile for the installed system. No `interface-name`: the installed system names the NIC differently
+    from the live stick (a pinned name left the profile dead on hogshead). Mode 0600 or NM ignores the file."""
+    import uuid
+    d = os.path.join(root, "etc/NetworkManager/system-connections")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, re.sub(r"[^A-Za-z0-9._-]", "_", ssid) + ".nmconnection")
+    txt = ("[connection]\nid=%s\nuuid=%s\ntype=wifi\nautoconnect=true\n\n[wifi]\nmode=infrastructure\nssid=%s\n\n" % (ssid, uuid.uuid4(), ssid)
+           + ("[wifi-security]\nkey-mgmt=wpa-psk\npsk=%s\n\n" % psk if psk else "")
+           + "[ipv4]\nmethod=auto\n\n[ipv6]\nmethod=auto\n")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(txt)
+    return path
+
+
+def strip_pinned_interfaces(root):
+    """drop `interface-name=` lines from every NM profile under root (carried-over profiles)"""
+    d = os.path.join(root, "etc/NetworkManager/system-connections")
+    n = 0
+    for f in (os.listdir(d) if os.path.isdir(d) else []):
+        p = os.path.join(d, f)
+        t = open(p).read()
+        t2 = re.sub(r"(?m)^interface-name=.*\n", "", t)
+        if t2 != t:
+            open(p, "w").write(t2)
+            n += 1
+    return n
+
+
 def nm_wifi_networks(directory):
     """(ssid, psk) of every Wi-Fi profile in a NetworkManager system-connections directory (psk '' = open network).
     802.1x/enterprise profiles and anything without a readable SSID are skipped."""
@@ -1135,10 +1165,17 @@ class Installer:
             dh += ["", "# Wi-Fi is configured by iwd (EnableNetworkConfiguration)", "denyinterfaces wlan* wlp*"]
         self.write("/etc/dhcpcd.conf", open(f"{self.target}/etc/dhcpcd.conf").read() + "\n".join(dh) + "\n") \
             if os.path.exists(f"{self.target}/etc/dhcpcd.conf") else self.write("/etc/dhcpcd.conf", "\n".join(dh) + "\n")
-        if wifi:
+        if wifi and os.path.exists(f"{self.target}/etc/init.d/NetworkManager") and not os.path.exists(f"{self.target}/etc/init.d/iwd"):
+            # NetworkManager machine (Surface profile): carry the Wi-Fi over as an NM keyfile that is NOT pinned to the live
+            # system's interface name (wlan0 vs wlp1s0 differs on the installed system), mode 600, autoconnect
+            write_nm_wifi_profile(self.target, wifi["ssid"], wifi.get("psk", ""))
+        elif wifi:
             write_wifi_profile(self.target, wifi["ssid"], wifi.get("psk", ""))
             self.write("/etc/iwd/main.conf", "[General]\nEnableNetworkConfiguration=true\n")
             self.run(["rc-update", "add", "iwd", "default"], chroot=True, check=False)
+        n_pinned = strip_pinned_interfaces(self.target)
+        if n_pinned:
+            self.log(f"removed the pinned interface-name from {n_pinned} NetworkManager profile(s)")
         if p["network_mode"] == "wan-lan":
             self.write_roles()
 
@@ -1165,7 +1202,7 @@ class Installer:
                                      portableswap.kernel_args(self) if not self.luks() else "") if x)
         self.write("/etc/default/grub", "\n".join([
             f'GRUB_DISTRIBUTOR="{p["title"]}"', 'GRUB_TIMEOUT=3', f'GRUB_CMDLINE_LINUX="{extra}"',
-            'GRUB_DISABLE_OS_PROBER=true',
+            'GRUB_DISABLE_OS_PROBER=true', 'GRUB_GFXPAYLOAD_LINUX=keep',
         ] + (['GRUB_TERMINAL="console serial"', f'GRUB_SERIAL_COMMAND="{arch.grub_serial_lines()}"'] if arch.grub_serial_lines() and serial_ok else [])) + "\n")
         for dev in L.values():
             self.run(f"blkid -s UUID -o value {dev}", check=False)
