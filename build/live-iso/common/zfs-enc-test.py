@@ -416,7 +416,13 @@ class ZRun(qt.Runner):
         uid = self.sh(f"id -u {user}")[1].strip().splitlines()[-1]
         env = f"XDG_RUNTIME_DIR=/run/user/{uid} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus"
         u = lambda c, t=60: self.sh(f"su - {user} -c \"export {env}; {c}\" 2>&1", timeout=t)
-        rc, o = self.sh("ls /tmp/hx-autostart-* 2>&1; cat /etc/user/init.d/gsd | grep -c 'want pipewire-pulse wireplumber'")
+        # the first login of a fresh account is slow (cold caches): XDG autostart runs some seconds after gnome-shell appears, so poll instead of sampling once
+        end = time.time() + qt.T(120)
+        while True:
+            rc, o = self.sh("ls /tmp/hx-autostart-* 2>&1; cat /etc/user/init.d/gsd | grep -c 'want pipewire-pulse wireplumber'")
+            if ("hx-autostart-user" in o and "hx-autostart-xdg" in o) or time.time() > end:
+                break
+            time.sleep(5)
         self.step("xdg-autostart-runs-under-gnome-session-openrc", "hx-autostart-user" in o and "hx-autostart-xdg" in o, o.strip().replace("\n", " | ")[:200])
         self.sh("rm -f /etc/xdg/autostart/hx-autostart-xdg.desktop /home/%s/.config/autostart/hx-autostart-user.desktop /tmp/hx-autostart-*" % user)
         time.sleep(8)

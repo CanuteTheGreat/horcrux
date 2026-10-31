@@ -262,9 +262,10 @@ class GRun(zt.ZRun):
         NEW = "Vault-Dragon-Gnome-47!"
         kb = qt.Kbd(vm, True)
         rc, before = self.sh(f"getent shadow {USER} | cut -d: -f2 | sha256sum | cut -c1-12; mount | grep -c ' /home type zfs'")
-        self.sh(f"chage -d 0 {USER}; chage -l {USER} | head -2")
+        # Log Out first (it needs `su - USER`, which PAM refuses once the password is expired), THEN expire the password
         ok, o = self.session_logout(USER)            # the real Log Out path: back to a GDM greeter (a terminate-user leaves a black console for a while)
         self.step("expired-password-account-logged-out-to-gdm-greeter", ok, o)
+        self.sh(f"chage -d 0 {USER}; chage -l {USER} | head -2")
         time.sleep(15)
         vm.shot("changepw-greeter")
         up = False
