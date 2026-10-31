@@ -256,6 +256,25 @@ class GRun(zt.ZRun):
         self.step("gnome-login-as-canutethegreat-wayland", up and re.search(rf"Name={USER}.*Type=wayland|Type=wayland.*Name={USER}", o.replace("\n", " ")) is not None, o.strip().replace("\n", " | ")[:300])
         return up
 
+    def greeter_idle(self, vm, minimum=3, timeout=120):
+        """GDM shows a spinner right of the entry while PAM works (passwdqc, the slow emulated ZFS home): wait until the spinner area stops changing,
+        so the next password is never typed while the previous one is still being checked (a key typed too early is lost)"""
+        time.sleep(minimum)
+        end, last, same = time.time() + qt.T(timeout), None, 0
+        while time.time() < end:
+            ppm = vm.grab()
+            m = re.match(rb"P6\s+(\d+)\s+(\d+)\s+(\d+)\s", ppm or b"")
+            if m:
+                w, h = int(m.group(1)), int(m.group(2))
+                px = ppm[m.end():]
+                area = b"".join(px[3 * (y * w + 790):3 * (y * w + 826)] for y in range(380, min(h, 520)))
+                same = same + 1 if area == last else 0
+                last = area
+                if same >= 2:
+                    return True
+            time.sleep(1.5)
+        return False
+
     def first_login_password_change(self, vm):
         """The hogshead failure: an account whose password must be changed at the first login. GDM's greeter takes the current password, asks for the new one
         twice, and the GNOME Wayland session has to start afterwards (with the home dataset mounted and the new password valid)."""
@@ -270,21 +289,25 @@ class GRun(zt.ZRun):
         vm.shot("changepw-greeter")
         up = False
         for attempt in range(1, 4):
+            if attempt > 1:
+                kb.key("ESC", 3)                  # back out of a half-typed attempt to the user list
             kb.key("ENTER", 1.5)                  # the user tile
             time.sleep(4)
             kb.text(PASSPHRASE, pause=0.08)
             kb.key("ENTER")
-            time.sleep(7)
+            self.greeter_idle(vm, 4)
             vm.shot(f"changepw-current-{attempt}")
             kb.text(PASSPHRASE, pause=0.08)       # GDM/PAM asks for the CURRENT password once more ("Changing password for ...")
             kb.key("ENTER")
-            time.sleep(6)
+            self.greeter_idle(vm, 4)
             vm.shot(f"changepw-newpassword-{attempt}")
             kb.text(NEW, pause=0.08)
             kb.key("ENTER")
-            time.sleep(5)
+            self.greeter_idle(vm, 4)              # passwdqc strength check + the next PAM prompt are slow under emulation
+            vm.shot(f"changepw-retype-prompt-{attempt}")
             kb.text(NEW, pause=0.08)
             kb.key("ENTER")
+            self.greeter_idle(vm, 3)
             vm.shot(f"changepw-retyped-{attempt}")
             end = time.time() + qt.T(120)
             while time.time() < end:
@@ -301,7 +324,7 @@ class GRun(zt.ZRun):
         rc, after = self.sh(f"getent shadow {USER} | cut -d: -f2 | sha256sum | cut -c1-12; chage -l {USER} | head -2; mount | grep -c ' /home type zfs'; ls -d /home/{USER}/.config; "
                             f"for s in $(loginctl list-sessions --no-legend | awk '{{print $1}}'); do loginctl show-session $s -p Name -p Type -p Active | tr '\\n' ' '; echo; done; "
                             f"ps -u {USER} -o comm | grep -E 'gnome-shell|gsd-|gnome-session' | sort | uniq -c | head -12; "
-                            f"h=$(getent shadow {USER} | cut -d: -f2); sl=$(echo $h | cut -d'$' -f3); [ \"$(openssl passwd -6 -salt $sl '{NEW}')\" = \"$h\" ] && echo NEWPW-VALID || echo NEWPW-INVALID")
+                            f"printf '{NEW}\\0' | /sbin/unix_chkpwd {USER} nullok && echo NEWPW-VALID || echo NEWPW-INVALID")   # PAM's own checker: the hash is yescrypt, not sha512
         if not up:
             rc, dg = self.sh(f"ps -u {USER} -o pid,etime,comm | head -30; for f in /var/log/gdm/*; do echo == $f; tail -20 $f; done 2>&1 | tail -60; rc-status --user 2>&1 | tail -20", timeout=120)
             open(f"{self.g.out}/changepw-diag.txt", "w").write(dg)
