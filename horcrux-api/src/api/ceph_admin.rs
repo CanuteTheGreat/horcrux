@@ -39,6 +39,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/ceph/flags", get(flags))
         .route("/api/ceph/flags/:flag", post(set_flag))
         .route("/api/ceph/placement", get(placement))
+        .route("/api/ceph/recovery-tuning", post(recovery_tuning))
 }
 
 type Res<T> = Result<Json<T>, ApiError>;
@@ -322,6 +323,74 @@ async fn placement(
         );
     }
     Json(p)
+}
+
+// ------------------------------------------------------- recovery tuning
+
+#[derive(Debug, Deserialize, Default)]
+struct TuningQ {
+    /// Link speed (Mbit/s) of the Ceph cluster network. Default: fastest
+    /// local NIC.
+    link_mbps: Option<u64>,
+    /// Only return the `ceph config set` commands, change nothing.
+    dry_run: Option<bool>,
+}
+
+fn set_osd(k: &str, v: String) -> Vec<String> {
+    ["config", "set", "osd", k]
+        .iter()
+        .map(|x| x.to_string())
+        .chain([v])
+        .collect()
+}
+
+/// `ceph config set` argument lists that throttle backfill/recovery for a
+/// link of `link_mbps`. Sleep is in seconds and set for both hdd and ssd
+/// classes, since the class-specific options override the generic one.
+pub fn recovery_tuning_cmds(link_mbps: u64) -> Vec<Vec<String>> {
+    let (backfills, active, sleep_ms) = crate::cluster::nic::ceph_recovery_tuning(link_mbps);
+    let sleep = format!("{}", f64::from(sleep_ms) / 1000.0);
+    vec![
+        set_osd("osd_max_backfills", backfills.to_string()),
+        set_osd("osd_recovery_max_active", active.to_string()),
+        set_osd("osd_recovery_sleep_hdd", sleep.clone()),
+        set_osd("osd_recovery_sleep_ssd", sleep),
+    ]
+}
+
+/// `POST /api/ceph/recovery-tuning` -- scale OSD backfill/recovery throttles
+/// to the cluster-network link speed so a rebuild cannot saturate it.
+async fn recovery_tuning(u: AuthExt, Query(q): Query<TuningQ>) -> Res<serde_json::Value> {
+    let link = match q.link_mbps {
+        Some(l) if l > 0 => l,
+        Some(_) => return Err(ApiError::BadRequest("link_mbps must be > 0".into())),
+        None => crate::cluster::nic::best_speed_mbps(&crate::cluster::nic::scan_nics(
+            std::path::Path::new("/sys"),
+        ))
+        .ok_or_else(|| ApiError::BadRequest("no NIC speed detected: pass link_mbps".into()))?,
+    };
+    let cmds = recovery_tuning_cmds(link);
+    let dry = q.dry_run.unwrap_or(false);
+    if !dry {
+        for c in &cmds {
+            let a: Vec<&str> = c.iter().map(String::as_str).collect();
+            let r = ceph_do(&a).await;
+            tasks::record_done(
+                "ceph-tuning",
+                &c[3..].join("="),
+                &super::system_admin::user_of(&u),
+                &r.as_ref()
+                    .map(|s| s.trim().to_string())
+                    .map_err(|e| format!("{e:?}")),
+            );
+            r?;
+        }
+    }
+    Ok(Json(serde_json::json!({
+        "link_mbps": link,
+        "applied": !dry,
+        "commands": cmds.iter().map(|c| format!("ceph {}", c.join(" "))).collect::<Vec<_>>(),
+    })))
 }
 
 // ------------------------------------------------------------------ OSDs
@@ -699,6 +768,24 @@ async fn set_flag(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_tuning_cmds_scale_with_link() {
+        let flat = |m| {
+            recovery_tuning_cmds(m)
+                .iter()
+                .map(|c| c.join(" "))
+                .collect::<Vec<_>>()
+        };
+        let slow = flat(1_000);
+        assert_eq!(slow[0], "config set osd osd_max_backfills 1");
+        assert_eq!(slow[2], "config set osd osd_recovery_sleep_hdd 0.1");
+        assert_eq!(slow[3], "config set osd osd_recovery_sleep_ssd 0.1");
+        let fast = flat(100_000);
+        assert_eq!(fast[0], "config set osd osd_max_backfills 4");
+        assert_eq!(fast[1], "config set osd osd_recovery_max_active 8");
+        assert_eq!(fast[3], "config set osd osd_recovery_sleep_ssd 0");
+    }
 
     fn fx(name: &str) -> Value {
         let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
