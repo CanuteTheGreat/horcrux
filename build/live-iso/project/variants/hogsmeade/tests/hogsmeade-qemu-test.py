@@ -117,6 +117,8 @@ class HRun(zt.ZRun):
         if vm:
             end, colours = time.time() + qt.T(150), 0
             while time.time() < end:
+                vm.qmp("send-key", keys=[{"type": "qcode", "data": "shift"}])   # gsd-power blanks an idle session after 5 min (the checks before this one take longer): wake it
+                time.sleep(2)
                 ppm = vm.grab()
                 m = re.match(rb"P6\s+(\d+)\s+(\d+)\s+(\d+)\s", ppm or b"")
                 if m:

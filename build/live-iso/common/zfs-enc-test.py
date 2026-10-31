@@ -405,7 +405,11 @@ class ZRun(qt.Runner):
         uid = self.sh(f"id -u {user}")[1].strip().splitlines()[-1]
         env = f"XDG_RUNTIME_DIR=/run/user/{uid} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus"
         u = lambda c, t=60: self.sh(f"su - {user} -c \"export {env}; {c}\" 2>&1", timeout=t)
-        rc, o = self.sh("ls /tmp/hx-autostart-* 2>&1; cat /etc/user/init.d/gsd | grep -c 'want pipewire-pulse wireplumber'")
+        for _ in range(30):     # the session is still starting when gnome-shell first shows up: autostart entries run a little later
+            rc, o = self.sh("ls /tmp/hx-autostart-* 2>&1; cat /etc/user/init.d/gsd | grep -c 'want pipewire-pulse wireplumber'")
+            if "hx-autostart-user" in o and "hx-autostart-xdg" in o:
+                break
+            time.sleep(5)
         self.step("xdg-autostart-runs-under-gnome-session-openrc", "hx-autostart-user" in o and "hx-autostart-xdg" in o, o.strip().replace("\n", " | ")[:200])
         self.sh("rm -f /etc/xdg/autostart/hx-autostart-xdg.desktop /home/%s/.config/autostart/hx-autostart-user.desktop /tmp/hx-autostart-*" % user)
         time.sleep(8)
@@ -420,9 +424,9 @@ class ZRun(qt.Runner):
         rc, o = u("wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.40; wpctl get-volume @DEFAULT_AUDIO_SINK@")
         before = re.findall(r"Volume: ([0-9.]+)", o)
         after = []
-        for _ in range(3):
+        for _ in range(30):     # gsd-media-keys grabs its accelerators a while after it starts (slow VM): keep pressing for up to ~2 min
             vm.qmp("send-key", keys=[{"type": "qcode", "data": "volumeup"}])
-            time.sleep(1.5)
+            time.sleep(4)
             rc, o2 = u("wpctl get-volume @DEFAULT_AUDIO_SINK@")
             after = re.findall(r"Volume: ([0-9.]+)", o2)
             if after and before and float(after[-1]) > float(before[-1]):
@@ -450,7 +454,7 @@ class ZRun(qt.Runner):
         uid, env = self._user_bus_env(user)
         rc, o = self.sh(f"P=$(pgrep -u {user} -x gnome-shell | head -1); echo PID=$P; tr '\\0' '\\n' < /proc/$P/environ | grep -E '^(DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR)='")
         self.step("gnome-shell-runs-on-the-user-bus-not-gdms-private-bus", f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus" in o and "/tmp/dbus-" not in o, re.sub(r"\s+", " ", o)[:300])
-        names = " ".join(f"{n}=\\$(gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.NameHasOwner {n})" for n in ("org.gnome.SessionManager", "org.gnome.Shell"))
+        names = "; ".join(f"echo {n}=\\$(gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.NameHasOwner {n})" for n in ("org.gnome.SessionManager", "org.gnome.Shell"))
         rc, o = self.sh(f"B=$(tr '\\0' '\\n' < /proc/$(pgrep -u {user} -x gnome-shell | head -1)/environ | grep '^DBUS_SESSION_BUS_ADDRESS=' | cut -d= -f2-); "
                         f"su - {user} -c \"export XDG_RUNTIME_DIR=/run/user/{uid} DBUS_SESSION_BUS_ADDRESS=$B; echo BUS=$B; {names}\" 2>&1")
         self.step("session-manager-and-shell-names-on-the-shells-own-bus", o.count("(true,)") == 2, re.sub(r"\s+", " ", o)[:300])
