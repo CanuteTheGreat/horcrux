@@ -416,10 +416,10 @@ class ZRun(qt.Runner):
         rc, o = u("wpctl status | sed -n 1,30p")
         self.step("pipewire-wireplumber-pulse-running-after-login-and-sink-present", "WirePlumber" in o and re.search(r"\d+\.\s+\S", o.partition("Sinks:")[2].partition("Sources:")[0]) is not None and "Could not connect" not in o,
                   re.sub(r"\s+", " ", o)[:400])
-        rc, o = self.sh(f"ps -u {user} -o lstart=,comm= | grep -E 'pipewire$|wireplumber|pipewire-pulse|gsd-media-keys|gsd-sound' | while read a b c d e comm; do echo $(date -d \"$a $b $c $d $e\" +%s) $comm; done | sort -n")
-        names = [l.split()[-1] for l in o.strip().splitlines()]
-        pos = {n: i for i, n in enumerate(names)}
-        okord = all(n in pos for n in ("wireplumber", "gsd-media-keys", "gsd-sound")) and max(i for n, i in pos.items() if n in ("wireplumber", "pipewire")) <= min(pos["gsd-media-keys"], pos["gsd-sound"])
+        rc, o = self.sh(f"for n in pipewire wireplumber gsd-media-keys gsd-sound; do for p in $(pgrep -u {user} -x $n); do echo $(awk '{{print $22}}' /proc/$p/stat) $n; done; done | sort -n")    # start time in clock ticks (the 1 s of ps lstart ties)
+        rows = [(int(l.split()[0]), l.split()[1]) for l in o.strip().splitlines() if len(l.split()) == 2 and l.split()[0].isdigit()]
+        first = lambda n: min((t for t, x in rows if x == n), default=None)
+        okord = all(first(n) is not None for n in ("pipewire", "wireplumber", "gsd-media-keys", "gsd-sound")) and max(first("wireplumber"), first("pipewire")) <= min(first("gsd-media-keys"), first("gsd-sound"))
         self.step("gsd-media-keys-and-gsd-sound-started-after-pipewire-and-wireplumber", okord, o.strip().replace("\n", " | ")[:300])
         rc, o = u("wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.40; wpctl get-volume @DEFAULT_AUDIO_SINK@")
         before = re.findall(r"Volume: ([0-9.]+)", o)
