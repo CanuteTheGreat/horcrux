@@ -5368,6 +5368,37 @@ mod tests {
         }
     }
 
+    fn me_with(is_admin: bool, perms: &[(&str, &[&str])]) -> Me {
+        serde_json::from_value(serde_json::json!({
+            "user": {"id": "u1", "username": "u1", "email": "", "role": "VMUser", "roles": [],
+                     "groups": [], "enabled": true, "realm": "local", "tfa_required": false},
+            "is_admin": is_admin,
+            "permissions": perms.iter().map(|(k, v)| (k.to_string(), serde_json::json!(v)))
+                .collect::<serde_json::Map<_, _>>(),
+        }))
+        .expect("Me json")
+    }
+
+    #[test]
+    fn me_can_at_follows_acl_paths() {
+        // a VMUser: VM privileges on /vms only, nothing on /
+        let vm_user = me_with(
+            false,
+            &[("/", &[]), ("/vms", &["VM.Audit", "VM.PowerMgmt"])],
+        );
+        assert!(!vm_user.can_at("Sys.Audit", "/"));
+        assert!(!vm_user.can_at("Sys.Audit", "/cluster"));
+        assert!(!vm_user.can_at("User.Modify", "/access/users"));
+        assert!(vm_user.can_at("VM.Audit", "/vms/100"));
+        assert!(!vm_user.can_at("VM.Audit", "/containers"));
+        // a grant on / covers every path below it
+        let auditor = me_with(false, &[("/", &["Sys.Audit"])]);
+        assert!(auditor.can_at("Sys.Audit", "/cluster"));
+        assert!(!auditor.can_at("User.Modify", "/access/users"));
+        // administrators hold everything
+        assert!(me_with(true, &[]).can_at("User.Modify", "/access/users"));
+    }
+
     #[test]
     fn empty_success_body_decodes_as_unit() {
         let r: Result<(), ApiError> = decode_body("");
@@ -5704,6 +5735,29 @@ impl Me {
         self.permissions
             .values()
             .any(|p| p.iter().any(|x| x == privilege))
+    }
+
+    /// Whether the user holds `privilege` on ACL `path` (an administrator
+    /// holds everything; a grant on an ancestor path covers the children).
+    /// Mirrors what the server's rbac middleware checks, so the UI can hide
+    /// actions and skip reads the role would only get a 403 for.
+    pub fn can_at(&self, privilege: &str, path: &str) -> bool {
+        if self.is_admin {
+            return true;
+        }
+        let held = |key: &str| {
+            self.permissions
+                .get(key)
+                .is_some_and(|p| p.iter().any(|x| x == privilege))
+        };
+        let mut cur = path.trim_end_matches('/');
+        while !cur.is_empty() {
+            if held(cur) {
+                return true;
+            }
+            cur = cur.rfind('/').map_or("", |i| &cur[..i]);
+        }
+        held("/")
     }
 }
 

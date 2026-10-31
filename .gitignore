@@ -4,6 +4,7 @@ target/
 
 # Trunk (WASM build tool)
 horcrux-ui/dist/
+horcrux-api/horcrux-ui/dist/
 
 # IDE
 .vscode/

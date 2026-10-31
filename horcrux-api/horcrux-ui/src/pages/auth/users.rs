@@ -18,6 +18,20 @@ pub fn UsersPage() -> impl IntoView {
     let (selected_users, set_selected_users) = create_signal(HashSet::<String>::new());
     let (bulk_action_loading, set_bulk_action_loading) = create_signal(false);
     let (editing, set_editing) = create_signal(None::<api::User>);
+    // What the logged-in account may do here. Unknown until /auth/me answers,
+    // and then only what the role holds: a VM user sees "No permission"
+    // instead of the user list, and no admin-only buttons.
+    let (me, set_me) = create_signal(None::<api::Me>);
+    let can_read = move || {
+        me.get()
+            .map(|m| m.can_at("Sys.Audit", "/access"))
+            .unwrap_or(false)
+    };
+    let can_modify = move || {
+        me.get()
+            .map(|m| m.can_at("User.Modify", "/access/users"))
+            .unwrap_or(false)
+    };
 
     // Filter and search state
     let (search_term, set_search_term) = create_signal(String::new());
@@ -30,6 +44,18 @@ pub fn UsersPage() -> impl IntoView {
         spawn_local(async move {
             set_loading.set(true);
             set_error_message.set(None);
+
+            let me_now = api::get_me().await.ok();
+            let readable = me_now
+                .as_ref()
+                .map(|m| m.can_at("Sys.Audit", "/access"))
+                .unwrap_or(true);
+            set_me.set(me_now);
+            if !readable {
+                // the role can't read accounts: don't ask, the page says so
+                set_loading.set(false);
+                return;
+            }
 
             // Load users and roles in parallel
             let users_result = api::get_users().await;
@@ -256,13 +282,15 @@ pub fn UsersPage() -> impl IntoView {
                 </div>
 
                 <div class="header-actions">
-                    <button
-                        class="btn btn-primary"
-                        on:click=move |_| set_show_create_form.set(!show_create_form.get())
-                    >
-                        <span class="icon">"+"</span>
-                        {move || if show_create_form.get() { "Cancel" } else { "Add User" }}
-                    </button>
+                    {move || can_modify().then(|| view! {
+                        <button
+                            class="btn btn-primary"
+                            on:click=move |_| set_show_create_form.set(!show_create_form.get())
+                        >
+                            <span class="icon">"+"</span>
+                            {move || if show_create_form.get() { "Cancel" } else { "Add User" }}
+                        </button>
+                    })}
                 </div>
             </div>
 
@@ -373,7 +401,7 @@ pub fn UsersPage() -> impl IntoView {
             </div>
 
             <div class="bulk-actions" style:display=move || {
-                if selected_users.get().is_empty() { "none" } else { "flex" }
+                if selected_users.get().is_empty() || !can_modify() { "none" } else { "flex" }
             }>
                 <div class="bulk-selection-info">
                     <span>{move || format!("{} users selected", selected_users.get().len())}</span>
@@ -404,6 +432,13 @@ pub fn UsersPage() -> impl IntoView {
                         <div class="loading-container">
                             <div class="spinner"></div>
                             <p>"Loading users..."</p>
+                        </div>
+                    }.into_view()
+                } else if me.get().is_some() && !can_read() {
+                    view! {
+                        <div class="empty-state">
+                            <h3 class="no-permission">"No permission"</h3>
+                            <p>"Your role can't view user accounts"</p>
                         </div>
                     }.into_view()
                 } else {
@@ -505,6 +540,7 @@ pub fn UsersPage() -> impl IntoView {
                                                     </td>
                                                     <td class="actions-cell">
                                                         <div class="action-buttons">
+                                                            {can_modify().then(|| view! {
                                                             <button
                                                                 class="btn-icon"
                                                                 title={if user_enabled { "Disable User" } else { "Enable User" }}
@@ -537,6 +573,7 @@ pub fn UsersPage() -> impl IntoView {
                                                             >
                                                                 "🗑"
                                                             </button>
+                                                            })}
                                                         </div>
                                                     </td>
                                                 </tr>
