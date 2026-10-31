@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+# Installed system, first boot only: online -> clock, Tailscale handoff (gringotts-remote), then refresh the Portage trees
+# in the background so `emerge -uDN @world` works. Marker: /var/lib/gringotts/firstboot-done.
+description="gringotts first boot: remote handoff + Portage tree sync (once)"
+depend() { need net; after NetworkManager tailscale chronyd sshd; }
+LOG=/var/log/gringotts-firstboot.log
+start() {
+	grep -q 'rd.live.image' /proc/cmdline && return 0
+	[ -e /var/lib/gringotts/firstboot-done ] && return 0
+	ebegin "gringotts first boot (background, log $LOG)"
+	start-stop-daemon --start --background --make-pidfile --pidfile /run/gringotts-firstboot.pid \
+		--stdout "$LOG" --stderr "$LOG" --exec /usr/libexec/gringotts-firstboot
+	eend $?
+}

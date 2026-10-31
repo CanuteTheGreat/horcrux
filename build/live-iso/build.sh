@@ -53,12 +53,27 @@ fi
 # (project/variants/<name>/Dockerfile, ARG BASE = the previous image). The server image stays the default; a variant image
 # is a separate ISO named <prefix>[-<hw profile>][-<hw variant>]-<DE|server>-<init>-<channel>-<arch>.iso (common/image-name.sh: horcrux-gnome-light-openrc-daily-x86_64.iso). `t2` needs the repo's gentoo/t2 (named build context).
 . "$HERE/common/image-name.sh"      # canonical VARIANT (desktop -> gnome-light), IMG=<DE|server>-<init>, IMG_HW
+# a hardware/private variant that sits on top of a desktop rootfs states its desktop environment in project/variants/<v>/de, so its ISO name says
+# DE + init (horcrux-gringotts-gnome-light-openrc-<date>-x86_64.iso) although the variant list names no DE variant (REUSE_ROOTFS = the desktop rootfs)
+for _v in $(echo "${VARIANT:-}" | tr ',' ' '); do
+  [ -f "project/variants/$_v/de" ] && { IMG_DE=$(tr -d ' \n' < "project/variants/$_v/de"); IMG=$IMG_DE-$IMG_INIT; }
+done
 ROOTFS_IMG=$TAG-rootfs; VIMGS=""
 if [ -n "${VARIANT:-}" ] && [ "$VARIANT" != server ]; then
   for v in $(echo "$VARIANT" | tr ',' ' '); do
     [ -f "project/variants/$v/Dockerfile" ] || { echo "unknown VARIANT=$v (no project/variants/$v/Dockerfile)"; exit 2; }
     lap "stage 2b: variant $v"
     VCTX="--build-context hxgentoo=$REPO/gentoo"; [ -d "$REPO/gentoo/t2" ] && VCTX="$VCTX --build-context t2=$REPO/gentoo/t2"
+    # named contexts for variants: `hxoverlay` = the Horcrux Portage overlay (repo's gentoo/), `priv` = PRIVATE inputs (PRIV_DIR, never in the
+    # repo: authorized_keys + ts-authkey for the gringotts image; empty = a public image without them)
+    if [ -d "$REPO/gentoo" ]; then
+      # hxoverlay = the overlay the long cached layers were built with (HXO_EARLY, default the whole repo gentoo/), hxfull = the whole overlay
+      # (variants copy it after the long layers so overlay edits do not invalidate them)
+      VCTX="$VCTX --build-context hxoverlay=${HXO_EARLY:-$REPO/gentoo} --build-context hxfull=$REPO/gentoo"
+    fi
+    PRIVCTX=${PRIV_DIR:-}; [ -n "$PRIVCTX" ] || { PRIVCTX=$(mktemp -d); trap 'rmdir "$PRIVCTX" 2>/dev/null; cleanup_build' EXIT; }
+    VCTX="$VCTX --build-context priv=$PRIVCTX"
+    docker image inspect "$TAG-app" >/dev/null 2>&1 && VCTX="$VCTX --build-context app=docker-image://$TAG-app"
     docker build $PLAT $ARCHARGS $VCTX -f "project/variants/$v/Dockerfile" --build-arg BASE=$ROOTFS_IMG --build-arg VARIANT=$v \
         -t $TAG-rootfs-$v . 2>&1 | tee "$OUT/variant-$v-build.log" | tail -40
     [ "${PIPESTATUS[0]}" = 0 ] || { echo "variant $v build failed (log: $OUT/variant-$v-build.log)"; exit 1; }
@@ -66,6 +81,7 @@ if [ -n "${VARIANT:-}" ] && [ "$VARIANT" != server ]; then
   done
 fi
 [ -z "${ISO_VNAME:-}" ] || VNAME=$ISO_VNAME
+[ -z "${STOP_AFTER_VARIANTS:-}" ] || { lap "STOP_AFTER_VARIANTS: image $ROOTFS_IMG kept"; KEEP_IMAGES=1; exit 0; }
 if [ -n "${HW_PROFILE:-}" ]; then
 lap "stage 2b: hardware profile layer ($HW_PROFILE, gentoo/$HW_PROFILE)"
 [ -d "$REPO/gentoo/$HW_PROFILE" ] || { echo "no such hardware profile: gentoo/$HW_PROFILE"; exit 2; }

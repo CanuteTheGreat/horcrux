@@ -225,7 +225,7 @@ class ZRun(qt.Runner):
         rc, o = self.sh("horcrux-orphans > /tmp/orph.txt; wc -l < /tmp/orph.txt; while read f; do [ -L \"$f\" ] && echo \"LINK $f\" || echo \"FILE $f\"; done < /tmp/orph.txt", timeout=900)
         allow = re.compile(r"^(/usr/share/mime/|/usr/share/info/dir$|/usr/share/(binutils|gcc)-data/.*/info/dir$|/usr/share/applications/mimeinfo\.cache$|"
                            r"/usr/share/icons/[^/]+/icon-theme\.cache$|/usr/lib/locale/locale-archive$|/usr/lib/cracklib_dict\.|/usr/lib64/lib(freebl3|softokn3|nssdbm3)\.chk$|"
-                           r"/usr/lib64/gconv/gconv-modules\.cache$|/boot/(vmlinuz|System\.map|config|initramfs)-|/usr/libexec/rc/console/keymap$|/boot/(be|grub|efi)/|/usr/lib(64)?/(gio/modules|gdk-pixbuf-[^/]*|gtk-[34]\.0)/.*cache)")
+                           r"/usr/lib64/gconv/gconv-modules\.cache$|/usr/lib64/vlc/plugins/plugins\.dat$|/boot/(vmlinuz|System\.map|config|initramfs)-|/usr/libexec/rc/console/keymap$|/boot/(be|grub|efi)/|/usr/lib(64)?/(gio/modules|gdk-pixbuf-[^/]*|gtk-[34]\.0)/.*cache)")
         lines = [l.split(" ", 1) for l in o.splitlines() if l.startswith(("FILE ", "LINK "))]
         bad = [p for k, p in lines if k == "FILE" and not allow.match(p)]     # symlinks are eselect/gcc-config/perl-cleaner products: reported, allowed
         open(f"{a.out}/orphans.txt", "w").write(o)
@@ -242,6 +242,8 @@ class ZRun(qt.Runner):
             rc, o = self.sh("emerge -puDN @world 2>&1 | tail -25; echo RC=${PIPESTATUS[0]}", timeout=600)
         open(f"{a.out}/world-resolve.txt", "w").write(o)
         self.step("emerge-world-resolves-no-blockers", "RC=0" in o and "blocked" not in o.lower(), o.strip().replace("\n", " | ")[-300:])
+        rc, o = self.sh("mkdir -p /mnt/under; mount --bind / /mnt/under; ls -A /mnt/under/home | wc -l; umount /mnt/under; zfs get -H -o value mounted rpool/home")
+        self.step("nothing-hidden-under-the-home-dataset", o.strip().splitlines()[-2:] == ["0", "yes"], "files in the root BE's /home beneath the mounted home dataset: " + o.strip().replace("\n", " "))
         if a.desktop:
             self.desktop_checks()
 
@@ -414,7 +416,13 @@ class ZRun(qt.Runner):
         uid = self.sh(f"id -u {user}")[1].strip().splitlines()[-1]
         env = f"XDG_RUNTIME_DIR=/run/user/{uid} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus"
         u = lambda c, t=60: self.sh(f"su - {user} -c \"export {env}; {c}\" 2>&1", timeout=t)
-        rc, o = self.sh("ls /tmp/hx-autostart-* 2>&1; cat /etc/user/init.d/gsd | grep -c 'want pipewire-pulse wireplumber'")
+        # the first login of a fresh account is slow (cold caches): XDG autostart runs some seconds after gnome-shell appears, so poll instead of sampling once
+        end = time.time() + qt.T(120)
+        while True:
+            rc, o = self.sh("ls /tmp/hx-autostart-* 2>&1; cat /etc/user/init.d/gsd | grep -c 'want pipewire-pulse wireplumber'")
+            if ("hx-autostart-user" in o and "hx-autostart-xdg" in o) or time.time() > end:
+                break
+            time.sleep(5)
         self.step("xdg-autostart-runs-under-gnome-session-openrc", "hx-autostart-user" in o and "hx-autostart-xdg" in o, o.strip().replace("\n", " | ")[:200])
         self.sh("rm -f /etc/xdg/autostart/hx-autostart-xdg.desktop /home/%s/.config/autostart/hx-autostart-user.desktop /tmp/hx-autostart-*" % user)
         time.sleep(8)
