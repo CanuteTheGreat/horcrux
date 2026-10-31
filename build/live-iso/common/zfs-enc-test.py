@@ -450,7 +450,7 @@ class ZRun(qt.Runner):
         uid, env = self._user_bus_env(user)
         rc, o = self.sh(f"P=$(pgrep -u {user} -x gnome-shell | head -1); echo PID=$P; tr '\\0' '\\n' < /proc/$P/environ | grep -E '^(DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR)='")
         self.step("gnome-shell-runs-on-the-user-bus-not-gdms-private-bus", f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus" in o and "/tmp/dbus-" not in o, re.sub(r"\s+", " ", o)[:300])
-        names = " ".join(f"{n}=$(gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.NameHasOwner {n})" for n in ("org.gnome.SessionManager", "org.gnome.Shell"))
+        names = " ".join(f"{n}=\\$(gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.NameHasOwner {n})" for n in ("org.gnome.SessionManager", "org.gnome.Shell"))
         rc, o = self.sh(f"B=$(tr '\\0' '\\n' < /proc/$(pgrep -u {user} -x gnome-shell | head -1)/environ | grep '^DBUS_SESSION_BUS_ADDRESS=' | cut -d= -f2-); "
                         f"su - {user} -c \"export XDG_RUNTIME_DIR=/run/user/{uid} DBUS_SESSION_BUS_ADDRESS=$B; echo BUS=$B; {names}\" 2>&1")
         self.step("session-manager-and-shell-names-on-the-shells-own-bus", o.count("(true,)") == 2, re.sub(r"\s+", " ", o)[:300])
