@@ -164,6 +164,13 @@ pub fn background_cap_mbps(link_mbps: u64, percent: u64) -> u64 {
     (link_mbps.saturating_mul(percent.min(100)) / 100).max(100)
 }
 
+/// Default global live-migration limit in MB/s: `percent` of the fastest up
+/// link (Mbit/s / 8). `None` when no link speed is known, so migrations are
+/// left unlimited rather than guessed.
+pub fn migration_limit_mbytes(nics: &[NicInfo], percent: u64) -> Option<u64> {
+    best_speed_mbps(nics).map(|m| background_cap_mbps(m, percent) / 8)
+}
+
 /// Warnings for a NIC that carries storage/cluster traffic.
 /// `min_mbps` is the policy minimum (e.g. 10_000).
 pub fn check_storage_nic(nic: &NicInfo, min_mbps: u64) -> Vec<String> {
@@ -304,6 +311,11 @@ mod tests {
         assert_eq!(w.len(), 2);
         assert!(w[0].contains("1 GbE") && w[0].contains("10 GbE"));
         assert!(w[1].contains("MTU 1500"));
+    }
+
+    #[test]
+    fn migration_limit_none_without_speed() {
+        assert_eq!(migration_limit_mbytes(&[], 50), None);
     }
 
     #[test]

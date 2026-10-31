@@ -393,6 +393,15 @@ pub async fn run() -> anyhow::Result<()> {
         kubernetes_manager,
     });
 
+    // Default global migration bandwidth limit: 70% of the fastest local link
+    // so a live migration cannot saturate it (1 GbE .. 100 GbE).
+    {
+        let nics = crate::cluster::nic::scan_nics(std::path::Path::new("/sys"));
+        if let Some(mb) = crate::cluster::nic::migration_limit_mbytes(&nics, 70) {
+            state.migration_manager.set_bandwidth_limit(Some(mb)).await;
+        }
+    }
+
     // Start snapshot scheduler background task
     let state_for_scheduler = state.clone();
     let vm_getter = Arc::new(move |vm_id: &str| {
