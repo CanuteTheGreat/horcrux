@@ -67,7 +67,7 @@ fi
 TEST_S=0
 if [ "$result" = pass ]; then
   size=$(stat -c %s "$ISO")
-  [ "$size" -lt 2147483648 ] || fail size "ISO is $size bytes, over the 2 GiB Forgejo asset limit"
+  [ "$size" -lt 2147483648 ] || fail size "ISO is $size bytes, over GitHub's 2 GiB per-release-asset limit (the ISO is delivered from the GitHub release)"
   ( cd "$OUT" && sha256sum -c "$(basename "$ISO").sha256" ) || fail checksum "sha256 mismatch"
 fi
 if [ "$result" = pass ]; then
@@ -181,18 +181,27 @@ cat > "$OUT/status.json" <<JSON
 JSON
 cat "$OUT/status.json"
 
-if [ -n "${FORGEJO_TOKEN:-}" ]; then
-  if [ "$result" = pass ]; then
-    bash "$HERE/publish.sh" "$mode" "$PROJECT" "$ISO" "$OUT/$PROJECT-$VPFX$suffix-$ARCH-test-evidence.tgz" "$OUT/status.json" || { echo "::error::publish failed"; result=fail; sed -i 's/"result":"pass"/"result":"fail"/; s/"failed_step":""/"failed_step":"publish"/' "$OUT/status.json"; }
-  fi
-  [ "$mode" = daily ] && bash "$HERE/publish.sh" status "$PROJECT" "" "" "$OUT/status.json" || true
-fi
-# Second publish step: the public GitHub mirror (the product site's /download/ URLs redirect there). Only when the
-# Forgejo publish above ran and everything passed; a failure here is a warning in the summary, not a red job.
+# Delivery is the public GitHub release (the product site 302-redirects its stable download URLs there); the ISO is NEVER uploaded to
+# Forgejo (owner rule: no downloads/assets on Forgejo). Forgejo only gets the machine-readable status marker (publish.sh status).
+# A GitHub publish failure is a real failure of the daily (nothing was delivered), recorded as failed_step=publish.
 gh_note=""
-if [ -n "${FORGEJO_TOKEN:-}" ] && [ -n "${GH_RELEASE_TOKEN:-}" ] && [ "$result" = pass ]; then
-  bash "$HERE/publish-github.sh" "$mode" "$PROJECT" "$ISO" "$OUT/$PROJECT-$VPFX$suffix-$ARCH-test-evidence.tgz" "$OUT/status.json" \
-    && gh_note="GitHub release updated." || { gh_note="GitHub publish FAILED (Forgejo publish is unaffected)."; echo "::warning::$gh_note"; }
+if [ -n "${FORGEJO_TOKEN:-}" ] && [ "$result" = pass ]; then
+  if [ -z "${GH_RELEASE_TOKEN:-}" ]; then
+    fail publish "GH_RELEASE_TOKEN is not set: the ISO cannot be delivered (the GitHub release is the only download location)"
+  elif bash "$HERE/publish-github.sh" "$mode" "$PROJECT" "$ISO" "$OUT/$PROJECT-$VPFX$suffix-$ARCH-test-evidence.tgz" "$OUT/status.json"; then
+    gh_note="GitHub release updated."
+  else
+    fail publish "GitHub release publish failed (see the job log)"
+  fi
+  if [ "$result" != pass ]; then
+    python3 - "$OUT/status.json" "$failed_step" "$summary" <<'PY' || true
+import json, sys
+d = json.load(open(sys.argv[1])); d.update(result="fail", failed_step=sys.argv[2], summary=sys.argv[3]); json.dump(d, open(sys.argv[1], "w"))
+PY
+  fi
+fi
+if [ -n "${FORGEJO_TOKEN:-}" ] && [ "$mode" = daily ]; then
+  bash "$HERE/publish.sh" status "$PROJECT" "" "" "$OUT/status.json" || true
 fi
 { echo "### $PROJECT $mode ISO: $result"; echo "$summary"; [ -z "$gh_note" ] || echo "$gh_note"; } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
 # docker hygiene on the shared host (build.sh already removed this build's containers/images; keep the BuildKit cache)

@@ -45,6 +45,9 @@ COPY project/variants/gnome-light/overlay/ /
 # Size: the ISO must stay below the 2 GiB release-asset limit. Firmware for hardware that is not in an x86 laptop/desktop
 # (Snapdragon SoCs, server/SmartNICs) is ~900 MB of the uncompressed image; the server image keeps it.
 RUN set -e; chmod 644 /usr/share/horcrux/desktop/*; \
+    # build-only toolchains the source rebuilds (gsd patches, horcrux-gnome-defaults) can leave behind: depclean removes them only when nothing
+    # in @world/runtime deps needs them (rust-bin alone is ~1 GB uncompressed); never fails the build
+    emerge --depclean --with-bdeps=n dev-lang/rust-bin dev-lang/go dev-util/rustup app-eselect/eselect-rust > /tmp/depclean-tools.log 2>&1 || true; tail -8 /tmp/depclean-tools.log; rm -f /tmp/depclean-tools.log; \
     cd /usr/lib/firmware && rm -rf qcom netronome mellanox mrvl qed dpaa2 liquidio cavium cxgb4 bnx2x bnx2; cd /; \
     # English-only message catalogs + emoji dictionaries (~530 MB uncompressed): the image has to fit below 2 GiB
     find /usr/share/locale -mindepth 1 -maxdepth 1 ! -name 'en*' ! -name locale.alias -exec rm -rf {} + ; \

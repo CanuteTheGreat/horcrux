@@ -136,7 +136,7 @@ RUN set -e; \
 
 # slim again: the apps pulled the full firmware/locale/doc/static-lib sets back in; Portage keeps the records, the files are just not shipped
 RUN set -e; \
-    # build-time tools the apps left behind (BDEPEND only): unmerge them properly (depclean refuses anything still needed), then ship the ISO under Forgejo's 2 GiB asset limit
+    # build-time tools the apps left behind (BDEPEND only): unmerge them properly (depclean refuses anything still needed), then ship the ISO under the 2 GiB GitHub release-asset limit
     emerge --depclean --with-bdeps=n dev-lang/rust-bin dev-lang/go dev-util/rustup app-eselect/eselect-rust > /tmp/depclean-tools.log 2>&1 || true; tail -12 /tmp/depclean-tools.log; rm -f /tmp/depclean-tools.log; \
     emerge --depclean > /tmp/depclean-all.log 2>&1 || { tail -30 /tmp/depclean-all.log; exit 1; }; grep -E 'Number to remove|Packages installed' /tmp/depclean-all.log; rm -f /tmp/depclean-all.log; \
     cd /usr/lib/firmware && rm -rf qcom netronome mellanox mrvl qed dpaa2 liquidio cavium cxgb4 bnx2x bnx2 \

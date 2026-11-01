@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # publish-github.sh <mode> <project> <iso> <evidence.tgz> <status-json>      (ARCH env: x86_64 (default) | aarch64 | riscv64)
-# Second publish step, run by ci-run.sh AFTER publish.sh (Forgejo): puts the same files on the public GitHub mirror
+# Publish step run by ci-run.sh (the ONLY place the ISO is delivered; Forgejo only gets the status marker): puts the files on the public GitHub mirror
 # (github.com/CanuteTheGreat/<project>) so the product site can redirect its stable download URLs there.
 #   mode=daily  -> rolling PRE-release tag `daily` (stable asset names, replaced in place)
 #   mode=stable -> release of the pushed tag (GITHUB_REF_NAME), a normal (non-pre) release

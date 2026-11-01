@@ -38,7 +38,7 @@ printf 'PermitRootLogin prohibit-password\nPasswordAuthentication no\n' >> /etc/
 mkdir -p /etc/hogshead /lib/firmware/brcm
 if [ -d /tmp/priv/fw ]; then cp -a /tmp/priv/fw/. /lib/firmware/brcm/; fi
 if [ -s /tmp/priv/ts-authkey ]; then install -m 0600 /tmp/priv/ts-authkey /etc/hogshead/ts-authkey; fi
-# --- prune firmware this laptop/tests never use (ISO must stay well under the 2 GB Forgejo asset limit)
+# --- prune firmware this laptop/tests never use (ISO must stay well under the 2 GiB GitHub release-asset limit)
 cd /lib/firmware
 for d in amdgpu radeon nvidia netronome mellanox qcom ti-connectivity ath10k ath11k ath12k mrvl mediatek liquidio cxgb4 bnx2x qed qlogic rockchip imx amlogic cirrus; do rm -rf "$d"; done
 cd /
