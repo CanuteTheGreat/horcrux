@@ -1083,6 +1083,7 @@ fn cluster_routes() -> Router<Arc<AppState>> {
         )
         .route("/api/cluster/nics", get(get_local_nics))
         .route("/api/cluster/power/plan", post(plan_cluster_power))
+        .route("/api/cluster/quorum/plan", get(get_quorum_plan))
         .route("/api/cluster/architecture", get(get_cluster_architecture))
         .route("/api/cluster/find-node", post(find_best_node_for_vm))
         // HA (High Availability) endpoints
@@ -4474,6 +4475,32 @@ async fn plan_cluster_power(Json(req): Json<PowerPlanRequest>) -> Json<serde_jso
     Json(serde_json::json!({
         "power_down": power::plan_power_down(&req.nodes, &req.policy),
         "wake": power::plan_wake(&req.nodes, req.wake_needed),
+    }))
+}
+
+/// `GET /api/cluster/quorum/plan` -- dry-run quorum plan (area 3) for the
+/// current membership, one vote per node: threshold, tolerated losses,
+/// auto_tie_breaker for even totals (e.g. 10 voters), warnings, and the
+/// corosync.conf that would be generated. Read-only; never writes config.
+async fn get_quorum_plan(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    use crate::cluster::corosync::generate_multi_node_config;
+    let nodes: Vec<(_, u32)> = state
+        .cluster_manager
+        .list_nodes_with_local()
+        .await
+        .into_iter()
+        .map(|n| (n, 1))
+        .collect();
+    let (config, plan) = generate_multi_node_config("horcrux", &nodes);
+    Json(serde_json::json!({
+        "nodes": nodes.len(),
+        "total_votes": plan.total_votes,
+        "quorum": plan.quorum,
+        "tolerated_vote_loss": plan.tolerated_vote_loss,
+        "split_brain_risk": plan.split_brain_risk,
+        "auto_tie_breaker": plan.auto_tie_breaker,
+        "warnings": plan.warnings,
+        "corosync_conf": config,
     }))
 }
 

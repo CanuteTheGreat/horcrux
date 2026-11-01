@@ -186,3 +186,66 @@ logging {{
         Ok(version.lines().next().unwrap_or("Unknown").to_string())
     }
 }
+
+/// Render a full multi-node corosync.conf. `nodes` pairs each node with its
+/// `quorum_votes` (0 = non-voting). The `quorum {}` block comes from
+/// `quorum::plan`, so an even voter count (e.g. 10) gets `auto_tie_breaker`.
+/// Pure: writes nothing. Returns the config text and the plan (for warnings).
+pub fn generate_multi_node_config(
+    cluster_name: &str,
+    nodes: &[(Node, u32)],
+) -> (String, super::quorum::QuorumPlan) {
+    use super::quorum::{corosync_quorum_block, plan, Voter};
+    let voters: Vec<Voter> = nodes
+        .iter()
+        .map(|(n, v)| Voter {
+            name: n.name.clone(),
+            node_id: n.id,
+            votes: *v,
+        })
+        .collect();
+    let qp = plan(&voters);
+    let mut s = format!(
+        "totem {{\n    version: 2\n    cluster_name: {cluster_name}\n    transport: knet\n    crypto_cipher: aes256\n    crypto_hash: sha256\n}}\n\nnodelist {{\n"
+    );
+    for (n, v) in nodes {
+        s.push_str(&format!(
+            "    node {{\n        ring0_addr: {}\n        name: {}\n        nodeid: {}\n        quorum_votes: {}\n    }}\n",
+            n.ip, n.name, n.id, v
+        ));
+    }
+    s.push_str("}\n\n");
+    s.push_str(&corosync_quorum_block(&qp));
+    s.push_str("\nlogging {\n    to_logfile: yes\n    logfile: /var/log/corosync/corosync.log\n    to_syslog: yes\n    timestamp: on\n}\n");
+    (s, qp)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cluster::node::Node;
+
+    fn node(id: u32) -> Node {
+        Node::new(id, format!("n{id}"), format!("10.0.0.{id}"))
+    }
+
+    #[test]
+    fn ten_node_config_enables_tie_breaker_and_lists_all_nodes() {
+        let nodes: Vec<(Node, u32)> = (1..=10).map(|i| (node(i), 1)).collect();
+        let (cfg, plan) = generate_multi_node_config("lab", &nodes);
+        assert_eq!(plan.total_votes, 10);
+        assert!(plan.auto_tie_breaker);
+        assert_eq!(cfg.matches("ring0_addr:").count(), 10);
+        assert!(cfg.contains("expected_votes: 10"));
+        assert!(cfg.contains("auto_tie_breaker: 1"));
+        assert!(cfg.contains("quorum_votes: 1"));
+    }
+
+    #[test]
+    fn odd_node_config_has_no_tie_breaker() {
+        let nodes: Vec<(Node, u32)> = (1..=3).map(|i| (node(i), 1)).collect();
+        let (cfg, plan) = generate_multi_node_config("lab", &nodes);
+        assert!(!plan.auto_tie_breaker);
+        assert!(!cfg.contains("auto_tie_breaker"));
+    }
+}
