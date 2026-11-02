@@ -1083,6 +1083,7 @@ fn cluster_routes() -> Router<Arc<AppState>> {
         )
         .route("/api/cluster/nics", get(get_local_nics))
         .route("/api/cluster/power/plan", post(plan_cluster_power))
+        .route("/api/cluster/power/wake", post(wake_cluster_node))
         .route("/api/cluster/quorum/plan", get(get_quorum_plan))
         .route("/api/cluster/architecture", get(get_cluster_architecture))
         .route("/api/cluster/find-node", post(find_best_node_for_vm))
@@ -4476,6 +4477,37 @@ async fn plan_cluster_power(Json(req): Json<PowerPlanRequest>) -> Json<serde_jso
         "power_down": power::plan_power_down(&req.nodes, &req.policy),
         "wake": power::plan_wake(&req.nodes, req.wake_needed),
     }))
+}
+
+#[derive(Debug, Deserialize)]
+struct WakeRequest {
+    /// Target NIC MAC, e.g. "aa:bb:cc:dd:ee:ff".
+    mac: String,
+    /// Broadcast address (default 255.255.255.255:9).
+    #[serde(default)]
+    broadcast: Option<std::net::SocketAddr>,
+}
+
+/// `POST /api/cluster/power/wake` -- send a Wake-on-LAN magic packet to a
+/// powered-off node (area 7). Sends only the packet; BMC power-on is separate.
+async fn wake_cluster_node(
+    Json(req): Json<WakeRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    use crate::cluster::power;
+    let mac = power::parse_mac(&req.mac).ok_or((
+        StatusCode::BAD_REQUEST,
+        format!("invalid MAC '{}'", req.mac),
+    ))?;
+    let target = req
+        .broadcast
+        .unwrap_or_else(|| "255.255.255.255:9".parse().expect("static addr"));
+    power::send_wol(mac, target)
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("WoL send failed: {e}")))?;
+    Ok(Json(serde_json::json!({
+        "sent": true,
+        "mac": req.mac,
+        "target": target.to_string(),
+    })))
 }
 
 /// `GET /api/cluster/quorum/plan` -- dry-run quorum plan (area 3) for the
