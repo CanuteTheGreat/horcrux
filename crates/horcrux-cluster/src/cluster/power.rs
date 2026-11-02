@@ -131,6 +131,23 @@ pub fn parse_mac(s: &str) -> Option<[u8; 6]> {
     Some(m)
 }
 
+/// Send a Wake-on-LAN magic packet for `mac` to `target` (normally the
+/// subnet broadcast on UDP port 9, e.g. `192.168.1.255:9`).
+pub fn send_wol(mac: [u8; 6], target: std::net::SocketAddr) -> std::io::Result<()> {
+    let bind: std::net::SocketAddr = if target.is_ipv4() {
+        "0.0.0.0:0".parse().expect("static addr")
+    } else {
+        "[::]:0".parse().expect("static addr")
+    };
+    let sock = std::net::UdpSocket::bind(bind)?;
+    sock.set_broadcast(true)?;
+    let sent = sock.send_to(&wol_magic_packet(mac), target)?;
+    if sent != 102 {
+        return Err(std::io::Error::other("short WoL packet send"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,5 +237,17 @@ mod tests {
         assert_eq!(p.len(), 102);
         assert!(p[..6].iter().all(|b| *b == 0xFF));
         assert_eq!(&p[96..], &mac);
+    }
+
+    #[test]
+    fn send_wol_delivers_magic_packet_over_udp() {
+        let rx = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        rx.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let mac = parse_mac("aa:bb:cc:dd:ee:01").unwrap();
+        send_wol(mac, rx.local_addr().unwrap()).unwrap();
+        let mut buf = [0u8; 256];
+        let (n, _) = rx.recv_from(&mut buf).unwrap();
+        assert_eq!(&buf[..n], wol_magic_packet(mac).as_slice());
     }
 }
