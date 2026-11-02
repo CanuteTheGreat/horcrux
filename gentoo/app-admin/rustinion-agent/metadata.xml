@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person">
+		<email>canutethegreat@gmail.com</email>
+	</maintainer>
+	<longdescription>
+		Rustinion agent: enrols the machine, reports inventory and health and applies approved updates.
+		Portage owns /usr/bin/rustinion: the agent never replaces its own binary on a Portage install
+		(it only reports that a newer version exists); update it with emerge. The enrolment in
+		/etc/rustinion is kept across upgrades and removal.
+	</longdescription>
+</pkgmetadata>

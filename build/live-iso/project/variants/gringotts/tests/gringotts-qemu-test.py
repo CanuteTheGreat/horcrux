@@ -57,7 +57,7 @@ APP_ATOMS = ["www-client/brave-bin", "www-client/firefox-bin", "net-im/discord",
              "app-containers/docker-buildx", "app-containers/docker-compose", "net-vpn/proton-vpn-gtk-app", "net-vpn/tailscale",
              "net-misc/remmina", "app-emulation/virt-viewer", "media-gfx/gimp", "media-gfx/geeqie", "media-video/vlc", "net-misc/mosh",
              "net-analyzer/nmap", "net-analyzer/wireshark", "app-antivirus/clamav", "net-misc/nextcloud-client", "x11-terms/terminator",
-             "app-misc/tmux", "app-editors/vim", "app-admin/rustinion-bin", "sys-auth/fprintd", "sys-auth/libfprint", "sys-firmware/sof-firmware",
+             "app-misc/tmux", "app-editors/vim", "app-admin/rustinion-agent", "sys-auth/fprintd", "sys-auth/libfprint", "sys-firmware/sof-firmware",
              "sys-firmware/intel-microcode", "sys-kernel/linux-firmware", "net-vpn/wireguard-tools", "sys-fs/zfs", "sys-kernel/gentoo-kernel-bin"]
 
 

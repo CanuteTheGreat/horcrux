@@ -21,7 +21,7 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     emerge --noreplace --usepkg --getbinpkg app-eselect/eselect-repository dev-vcs/git; \
     eselect repository enable guru; \
     emerge --sync guru; \
-    for e in /var/db/repos/horcrux/sys-kernel/horcrux-t2-config/*.ebuild /var/db/repos/horcrux/app-admin/rustinion-bin/*.ebuild /var/db/repos/horcrux/sys-apps/t2fanrd/*.ebuild /var/db/repos/horcrux/sys-apps/tiny-dfr/*.ebuild /var/db/repos/horcrux/sys-apps/horcrux-tools/*.ebuild; do ebuild "$e" manifest; done
+    for e in /var/db/repos/horcrux/sys-kernel/horcrux-t2-config/*.ebuild /var/db/repos/horcrux/app-admin/rustinion-agent/*.ebuild /var/db/repos/horcrux/sys-apps/t2fanrd/*.ebuild /var/db/repos/horcrux/sys-apps/tiny-dfr/*.ebuild /var/db/repos/horcrux/sys-apps/horcrux-tools/*.ebuild; do ebuild "$e" manifest; done
 
 # T2 patches + config package (stage `hs-prep` is shared by the checks below)
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
@@ -77,7 +77,7 @@ RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,shar
     emerge --update --newuse --usepkg --getbinpkg --keep-going \
         app-containers/docker app-containers/docker-compose app-containers/docker-buildx \
         net-misc/remmina media-gfx/gimp media-gfx/geeqie net-misc/mosh net-analyzer/nmap \
-        net-im/discord net-vpn/proton-vpn-gtk-app app-admin/rustinion-bin sys-apps/t2fanrd sys-apps/tiny-dfr net-misc/horcrux-chrony-nm \
+        net-im/discord net-vpn/proton-vpn-gtk-app app-admin/rustinion-agent sys-apps/t2fanrd sys-apps/tiny-dfr net-misc/horcrux-chrony-nm \
         sys-firmware/edk2-bin app-admin/sudo sys-process/cronie app-portage/portage-utils app-portage/eix \
         > /var/log/hogshead-apps.log 2>&1 || { tail -60 /var/log/hogshead-apps.log; exit 1; }
 
@@ -101,7 +101,7 @@ RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,shar
     mkdir -p /export/sys-kernel /export/sys-fs /export/app-admin; \
     cp -a /var/cache/binpkgs/sys-kernel/horcrux-* /var/cache/binpkgs/sys-kernel/gentoo-kernel-7.2.13* /export/sys-kernel/ 2>/dev/null; \
     cp -a /var/cache/binpkgs/sys-fs/zfs-2.3.9* /var/cache/binpkgs/sys-fs/zfs-kmod-2.3.9* /export/sys-fs/ 2>/dev/null; \
-    cp -a /var/cache/binpkgs/app-admin/rustinion-bin* /export/app-admin/ 2>/dev/null; \
+    cp -a /var/cache/binpkgs/app-admin/rustinion-agent* /export/app-admin/ 2>/dev/null; \
     cp -a /var/cache/binpkgs/Packages /export/ 2>/dev/null; find /export -type f | head -50
 
 FROM scratch AS binpkgs-export

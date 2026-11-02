@@ -15,7 +15,7 @@ KEYWORDS="~amd64"
 
 # Everything the Surface desktop needs, as dependencies of ONE package: `emerge -uDN @world` keeps all of it current.
 # onboard + iio-sensor-proxy come from GURU, brave-bin from the owner's canutethegreat-overlay,
-# rustinion-bin from the Horcrux overlay.
+# rustinion-agent from the Horcrux overlay.
 RDEPEND="
 	sys-kernel/horcrux-surface-config
 	<sys-kernel/gentoo-kernel-6.19
@@ -50,7 +50,7 @@ RDEPEND="
 	www-client/firefox-bin
 	www-client/brave-bin
 	net-vpn/tailscale
-	app-admin/rustinion-bin
+	app-admin/rustinion-agent
 	sys-firmware/intel-microcode
 	sys-firmware/sof-firmware
 	sys-kernel/linux-firmware

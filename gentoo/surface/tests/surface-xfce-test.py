@@ -275,9 +275,9 @@ class XT(SQ.T):
         wins = out
         s("app-windows-mapped", sum(k in wins for k in ("Firefox", "Brave", "onboard", "Onboard", "Xfce4-terminal")) >= 3, re.sub(r"\s+", " ", wins)[:300])
         rc, out = self.ssh("rustinion --version 2>&1 | head -2; tailscale version 2>&1 | head -1; firefox-bin --version 2>&1 | head -1; brave --version 2>&1 | head -1; "
-                           "qlist -Iv app-admin/rustinion-bin net-vpn/tailscale www-client/brave-bin www-client/firefox-bin x11-misc/lightdm app-accessibility/onboard sys-firmware/intel-microcode sys-firmware/sof-firmware | tr '\\n' ' '", timeout=90)
+                           "qlist -Iv app-admin/rustinion-agent net-vpn/tailscale www-client/brave-bin www-client/firefox-bin x11-misc/lightdm app-accessibility/onboard sys-firmware/intel-microcode sys-firmware/sof-firmware | tr '\\n' ' '", timeout=90)
         self.save("app-versions.txt", out)
-        s("apps-versions-and-portage-ownership", all(x in out for x in ("rustinion-bin", "tailscale", "brave-bin", "firefox-bin", "onboard", "intel-microcode", "sof-firmware")), re.sub(r"\s+", " ", out)[:300])
+        s("apps-versions-and-portage-ownership", all(x in out for x in ("rustinion-agent", "tailscale", "brave-bin", "firefox-bin", "onboard", "intel-microcode", "sof-firmware")), re.sub(r"\s+", " ", out)[:300])
         rc, out = self.ssh("qfile -o /usr/bin/brave /usr/bin/firefox-bin /usr/bin/rustinion /usr/bin/onboard /usr/bin/tailscale | tr '\\n' ' '; echo; qfile /usr/bin/brave /usr/bin/rustinion /usr/bin/onboard | tr '\\n' ' '")
         s("app-binaries-owned-by-ebuilds", "orphan" not in out.lower() and out.count(":") >= 3, re.sub(r"\s+", " ", out)[:300])
         # ---- memory / responsiveness at 4 GB with everything running

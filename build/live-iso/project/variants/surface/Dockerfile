@@ -10,7 +10,7 @@ ARG ARCH=x86_64
 RUN rm -rf /var/db/repos/horcrux
 COPY --from=hxgentoo / /var/db/repos/horcrux/
 RUN cp -a /var/db/repos/horcrux/app-misc/horcrux-surface-desktop/files/root/etc/portage/. /etc/portage/ \
- && for e in /var/db/repos/horcrux/app-misc/horcrux-surface-desktop/*.ebuild /var/db/repos/horcrux/app-admin/rustinion-bin/*.ebuild; do ebuild "$e" manifest >/dev/null; done
+ && for e in /var/db/repos/horcrux/app-misc/horcrux-surface-desktop/*.ebuild /var/db/repos/horcrux/app-admin/rustinion-agent/*.ebuild; do ebuild "$e" manifest >/dev/null; done
 
 # the installer / live scripts / console menu come from the repository tree as the two PROVEN generic packages (same recipe as the hogshead
 # variant, Dockerfile.part2): sys-apps/horcrux-tools (installer, scripts, horcrux-orphans, + the live-ISO /etc payload for this image) and
@@ -58,7 +58,7 @@ RUN --mount=type=cache,id=surface-binpkgs-${ARCH:-x86_64},target=/var/cache/binp
     --mount=type=cache,id=surface-distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \
     rm -f /var/cache/binpkgs/app-misc/horcrux-surface-desktop-* /var/cache/binpkgs/sys-apps/horcrux-tools-* /var/cache/binpkgs/sys-apps/horcrux-live-data-* /var/cache/binpkgs/sys-kernel/horcrux-surface-config-*; \
-    emerge --update --newuse --usepkg --getbinpkg --usepkg-exclude "app-misc/horcrux-surface-desktop sys-apps/horcrux-tools sys-apps/horcrux-live-data sys-kernel/horcrux-unlock sys-kernel/horcrux-surface-config app-admin/rustinion-bin" app-misc/horcrux-surface-desktop \
+    emerge --update --newuse --usepkg --getbinpkg --usepkg-exclude "app-misc/horcrux-surface-desktop sys-apps/horcrux-tools sys-apps/horcrux-live-data sys-kernel/horcrux-unlock sys-kernel/horcrux-surface-config app-admin/rustinion-agent" app-misc/horcrux-surface-desktop \
         > /var/log/surface-apps.log 2>&1 || { tail -80 /var/log/surface-apps.log; for l in /var/tmp/portage/*/*/temp/build.log; do echo "== $l"; tail -25 $l; done; exit 1; }; \
     tail -5 /var/log/surface-apps.log
 

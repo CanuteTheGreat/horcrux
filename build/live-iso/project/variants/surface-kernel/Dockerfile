@@ -24,7 +24,7 @@ RUN --mount=type=cache,id=surface-binpkgs-${ARCH},target=/var/cache/binpkgs,shar
     emerge --noreplace --usepkg --getbinpkg dev-vcs/git; \
     git clone -q --depth 1 https://github.com/gentoo-mirror/guru.git /var/db/repos/guru; \
     git clone -q --depth 1 https://git.canutethegreat.com/CanuteTheGreat/canutethegreat-overlay.git /var/db/repos/canutethegreat-overlay; \
-    for e in /var/db/repos/horcrux/sys-kernel/horcrux-surface-config/*.ebuild /var/db/repos/horcrux/app-misc/horcrux-surface-desktop/*.ebuild /var/db/repos/horcrux/app-admin/rustinion-bin/*.ebuild; do ebuild "$e" manifest; done; \
+    for e in /var/db/repos/horcrux/sys-kernel/horcrux-surface-config/*.ebuild /var/db/repos/horcrux/app-misc/horcrux-surface-desktop/*.ebuild /var/db/repos/horcrux/app-admin/rustinion-agent/*.ebuild; do ebuild "$e" manifest; done; \
     emerge --oneshot --usepkg=n sys-kernel/horcrux-surface-config; \
     ls /etc/portage/patches/sys-kernel/gentoo-kernel | wc -l; ls /etc/kernel/config.d
 

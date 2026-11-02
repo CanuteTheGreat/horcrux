@@ -2,7 +2,7 @@
 # Horcrux "gringotts" variant: the Desktop image (BASE = server rootfs + desktop variant) + the owner's apps + the guided one-step install
 # for the ThinkBook 16 G6 + the remote-handoff helpers. EVERY file is owned by an ebuild (verified with qfile -o in the QEMU test):
 #   * apps          ::gentoo, GURU (proton-vpn-gtk-app) and the owner's canutethegreat-overlay (brave-bin)
-#   * rustinion     app-admin/rustinion-bin from the Horcrux overlay (repo gentoo/)
+#   * rustinion     app-admin/rustinion-agent from the Horcrux overlay (repo gentoo/)
 #   * image files   sys-apps/horcrux-tools + horcrux-live-data + sys-kernel/horcrux-unlock (proven on hogshead) + app-misc/gringotts-config (/etc)
 #   * helpers       app-misc/gringotts-tools (this variant's local overlay)
 #   * PRIVATE       app-misc/gringotts-private (agent SSH public keys + 7-day ephemeral tagged Tailscale key) only when the build
@@ -13,7 +13,7 @@ FROM ${BASE}
 ARG ARCH=x86_64
 ARG VARIANT=gringotts
 
-# (hxoverlay is deliberately the MINIMAL overlay here (rustinion-bin + metadata): the long header/app layers below stay BuildKit-cached when the
+# (hxoverlay is deliberately the MINIMAL overlay here (rustinion-agent + metadata): the long header/app layers below stay BuildKit-cached when the
 # overlay's other packages change; the full overlay is `hxfull`, copied after them)
 COPY --from=hxoverlay / /var/db/repos/horcrux/
 COPY project/variants/gringotts/portage/ /etc/portage/
@@ -63,7 +63,7 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
 
 # Ownership of the image's own files: the packages PROVEN on hogshead (overlay gentoo/ = repo horcrux): sys-kernel/horcrux-unlock (dracut one-passphrase),
 # sys-apps/horcrux-tools (installer, live scripts, horcrux-be, horcrux-orphans), sys-apps/horcrux-live-data (branding + portage metadata snapshot),
-# app-admin/rustinion-bin. The two tools/data tarballs are fetch-restricted distfiles made from this build's own trees (nothing is downloaded);
+# app-admin/rustinion-agent. The two tools/data tarballs are fetch-restricted distfiles made from this build's own trees (nothing is downloaded);
 # the loose copies from the ISO overlay are removed first so Portage owns the files. The gringotts tty1 menu is this variant's
 # live-installer-session, packed over the common one inside the tools tarball.
 COPY --from=hxfull / /var/db/repos/horcrux/
@@ -79,7 +79,7 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
     set -e; unset ARCH; export FEATURES="-ccache"; \
     tar -C /tmp/hxt --zstd -cf /var/cache/distfiles/horcrux-tools-1.tar.zst .; rm -rf /tmp/hxt; \
     tar -C / --zstd -cf /var/cache/distfiles/horcrux-live-data-1.tar.zst usr/share/live-installer; \
-    for e in sys-apps/horcrux-live-data sys-apps/horcrux-tools sys-kernel/horcrux-unlock app-admin/rustinion-bin; do ebuild /var/db/repos/horcrux/$e/*.ebuild manifest; done; \
+    for e in sys-apps/horcrux-live-data sys-apps/horcrux-tools sys-kernel/horcrux-unlock app-admin/rustinion-agent; do ebuild /var/db/repos/horcrux/$e/*.ebuild manifest; done; \
     rm -rf /usr/bin/horcrux /usr/bin/horcrux-api /usr/share/horcrux/ui /etc/init.d/horcrux-api /etc/init.d/horcrux-guests /etc/conf.d/horcrux-api \
            /usr/share/horcrux/t2 /usr/lib/live-installer /usr/libexec/live-* /usr/libexec/console-menu-session /usr/bin/live-installer /usr/bin/console-menu \
            /usr/bin/live-persist /usr/bin/live-rescue /usr/bin/horcrux-be /usr/bin/horcrux-t2-firmware /usr/share/horcrux/desktop \
@@ -87,8 +87,8 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
            /usr/share/tiny-dfr /usr/lib/udev/rules.d/99-touchbar-tiny-dfr.rules /usr/lib/udev/rules.d/99-touchbar-seat.rules /usr/bin/t2fanrd /usr/bin/tiny-dfr; \
     rm -f /etc/runlevels/*/horcrux-api /etc/runlevels/*/horcrux-guests /etc/runlevels/*/t2fanrd /etc/runlevels/*/tiny-dfr; \
     emerge --oneshot --usepkg=n --getbinpkg=n sys-kernel/horcrux-unlock sys-apps/horcrux-tools sys-apps/horcrux-live-data; \
-    emerge --noreplace --usepkg=n --getbinpkg=n app-admin/rustinion-bin; \
-    emerge --noreplace --select=y sys-kernel/horcrux-unlock sys-apps/horcrux-tools sys-apps/horcrux-live-data app-admin/rustinion-bin; \
+    emerge --noreplace --usepkg=n --getbinpkg=n app-admin/rustinion-agent; \
+    emerge --noreplace --select=y sys-kernel/horcrux-unlock sys-apps/horcrux-tools sys-apps/horcrux-live-data app-admin/rustinion-agent; \
     emerge --update --newuse --select gnome-extra/gnome-shell-extension-appindicator gnome-extra/gnome-shell-extensions; emerge --update --newuse --usepkg=n --getbinpkg=n --select gnome-extra/horcrux-gnome-defaults; \
     test -s /etc/dconf/db/local && qfile -q /etc/dconf/db/local; \
     printf 'desktop\ngringotts\n' > /etc/live-iso-variant
