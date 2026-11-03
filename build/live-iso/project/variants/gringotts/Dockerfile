@@ -67,6 +67,8 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
 # the loose copies from the ISO overlay are removed first so Portage owns the files. The gringotts tty1 menu is this variant's
 # live-installer-session, packed over the common one inside the tools tarball.
 COPY --from=hxfull / /var/db/repos/horcrux/
+# the gnome-light layer made the tree a git checkout; record this layer's copy so the tree is clean for `emaint sync -r horcrux`
+RUN cd /var/db/repos/horcrux && git add -A && { git diff --cached --quiet || git -c user.name=horcrux-image -c user.email=image@horcrux.invalid commit -q -m 'image snapshot (gringotts layer)'; }
 COPY project/variants/gringotts/portage-late/ /etc/portage/
 COPY common/overlay/usr/lib/live-installer /tmp/hxt/usr/lib/live-installer
 COPY common/overlay/usr/libexec /tmp/hxt/usr/libexec

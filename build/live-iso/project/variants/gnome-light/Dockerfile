@@ -35,9 +35,15 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
 # GNOME system-wide defaults (every GNOME install gets them through @world): AppIndicator tray icons enabled in a packaged system dconf db. The Horcrux
 # overlay is copied only now so editing it does not invalidate the long layers above.
 COPY --from=hxfull / /var/db/repos/horcrux/
+# the [horcrux] repos.conf entry is package-owned (sys-apps/horcrux-repo-config, a dependency of horcrux-gnome-defaults: git sync from the overlay's own Forgejo repo,
+# auto-sync yes); it is placed once from the package's own file so this emerge can see the overlay, and the package then owns it
 RUN set -e; unset ARCH; export FEATURES="-ccache"; \
+    install -D -m644 /var/db/repos/horcrux/sys-apps/horcrux-repo-config/files/horcrux.conf /etc/portage/repos.conf/horcrux.conf; \
     emerge --update --newuse --usepkg=n --getbinpkg=n --select gnome-extra/horcrux-gnome-defaults; \
-    test -s /etc/dconf/db/local && test -f /etc/dconf/profile/user && qfile -q /etc/dconf/db/local
+    test -s /etc/dconf/db/local && test -f /etc/dconf/profile/user && qfile -q /etc/dconf/db/local && qfile -q /etc/portage/repos.conf/horcrux.conf; \
+    # the shipped tree is a git checkout (snapshot of this build's overlay) so `emaint sync -r horcrux` fast-forwards it to the published overlay (sync-depth 1 = fetch + reset)\
+    cd /var/db/repos/horcrux; git init -q -b main; git add -A; git -c user.name=horcrux-image -c user.email=image@horcrux.invalid commit -q -m "image snapshot"; \
+    git remote add origin "$(sed -n 's/^sync-uri *= *//p' /etc/portage/repos.conf/horcrux.conf)"; git rev-parse --short HEAD
 
 COPY project/variants/gnome-light/overlay/ /
 
