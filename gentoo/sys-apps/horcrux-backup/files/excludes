@@ -9,3 +9,12 @@
 **/target
 # Nextcloud re-syncs from the server (110 GB, versioned in B2): never back it up from a workstation
 /home/*/Nextcloud
+# browser CACHES only (never Cookies, Local Storage, IndexedDB, Extension data: that is what keeps the owner signed in)
+**/BraveSoftware/*/*/Cache
+**/BraveSoftware/*/*/Code Cache
+**/BraveSoftware/*/*/GPUCache
+**/BraveSoftware/*/*/Service Worker/CacheStorage
+**/BraveSoftware/*/ShaderCache
+**/BraveSoftware/*/GrShaderCache
+**/Proton*/Cache
+**/.mozilla/firefox/*/cache2
