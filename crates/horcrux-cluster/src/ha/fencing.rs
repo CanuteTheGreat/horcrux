@@ -270,6 +270,47 @@ impl FencingManager {
         FencingResult::ManualRequired
     }
 
+    /// Power a node back on through its BMC (wake-on-demand, area 7). Unlike
+    /// fencing this is not gated by `is_enabled`; devices are tried in
+    /// priority order and only BMC-type agents (IPMI/iLO/DRAC/Redfish) are used.
+    pub async fn power_on_node(&self, node: &str) -> FencingResult {
+        let devices: Vec<_> = self
+            .get_node_devices(node)
+            .await
+            .into_iter()
+            .filter(|d| {
+                matches!(
+                    d.agent_type,
+                    FencingAgentType::Ipmi
+                        | FencingAgentType::Ilo
+                        | FencingAgentType::Drac
+                        | FencingAgentType::Redfish
+                )
+            })
+            .collect();
+        if devices.is_empty() {
+            return FencingResult::Failed(format!("no BMC device configured for node {node}"));
+        }
+        let mut last = FencingResult::ManualRequired;
+        for device in devices {
+            let result = self.execute_fence(&device, FencingAction::On).await;
+            self.log_event(FencingEvent {
+                timestamp: chrono::Utc::now().timestamp(),
+                node: node.to_string(),
+                device_id: device.id.clone(),
+                action: FencingAction::On,
+                result: result.clone(),
+                reason: "wake on demand".to_string(),
+            })
+            .await;
+            if matches!(result, FencingResult::Success) {
+                return result;
+            }
+            last = result;
+        }
+        last
+    }
+
     /// Check node power status
     pub async fn check_node_status(&self, node: &str) -> FencingResult {
         let devices = self.get_node_devices(node).await;
@@ -803,6 +844,15 @@ mod tests {
 
         let node_devices = manager.get_node_devices("node1").await;
         assert_eq!(node_devices.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_power_on_without_bmc_device_fails() {
+        let mgr = FencingManager::new();
+        match mgr.power_on_node("lab1").await {
+            FencingResult::Failed(m) => assert!(m.contains("no BMC device")),
+            other => panic!("unexpected {other:?}"),
+        }
     }
 
     #[tokio::test]

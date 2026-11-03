@@ -1084,6 +1084,7 @@ fn cluster_routes() -> Router<Arc<AppState>> {
         .route("/api/cluster/nics", get(get_local_nics))
         .route("/api/cluster/power/plan", post(plan_cluster_power))
         .route("/api/cluster/power/wake", post(wake_cluster_node))
+        .route("/api/cluster/power/bmc-on", post(bmc_power_on_node))
         .route("/api/cluster/quorum/plan", get(get_quorum_plan))
         .route("/api/cluster/architecture", get(get_cluster_architecture))
         .route("/api/cluster/find-node", post(find_best_node_for_vm))
@@ -4508,6 +4509,32 @@ async fn wake_cluster_node(
         "mac": req.mac,
         "target": target.to_string(),
     })))
+}
+
+#[derive(Debug, Deserialize)]
+struct BmcOnRequest {
+    node: String,
+}
+
+/// `POST /api/cluster/power/bmc-on` -- power a node on through its configured
+/// BMC fencing device (IPMI/iLO/DRAC/Redfish) (area 7).
+async fn bmc_power_on_node(
+    Json(req): Json<BmcOnRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    use crate::ha::fencing::FencingResult;
+    match crate::api::ha_loop::fencing()
+        .power_on_node(&req.node)
+        .await
+    {
+        FencingResult::Success => Ok(Json(
+            serde_json::json!({"powered_on": true, "node": req.node}),
+        )),
+        FencingResult::Failed(e) => Err((StatusCode::BAD_GATEWAY, e)),
+        other => Err((
+            StatusCode::BAD_GATEWAY,
+            format!("BMC power-on not confirmed: {other:?}"),
+        )),
+    }
 }
 
 /// `GET /api/cluster/quorum/plan` -- dry-run quorum plan (area 3) for the
