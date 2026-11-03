@@ -51,9 +51,10 @@ RUN --mount=type=cache,id=surface-distfiles-${ARCH:-x86_64},target=/var/cache/di
     set -e; unset ARCH; export FEATURES="-ccache" PKGDIR=/var/cache/surface-binpkgs; \
     emerge --oneshot --usepkg=n --getbinpkg=n sys-fs/zfs-kmod sys-fs/zfs; \
     rm -f /etc/dracut.conf.d/00-surface-build.conf; \
-    kr=$(ls /lib/modules | sort -V | tail -1); test -n "$kr"; \
+    rm -rf /lib/modules/*-gentoo-dist-bin /boot/*-gentoo-dist-bin; \
+    kr=$(readlink /usr/src/linux | sed 's/^linux-//'); test -n "$kr" && test -d /lib/modules/$kr; \
     find /lib/modules/$kr -name 'zfs.ko*' | grep .; \
     for m in hid-multitouch hid-microsoft wacom mwifiex mwifiex_pcie mwifiex_sdio btmrvl_sdio hid-sensor-accel-3d surface_aggregator; do find /lib/modules/$kr -name "$m.ko*" | grep . || { echo "MISSING $m"; exit 1; }; done; \
-    c=/lib/modules/$kr/build/.config; test -r $c; \
+    c=/lib/modules/$kr/build/.config; test -r $c || { echo "DIAG no readable $c"; ls -la /lib/modules /lib/modules/$kr /usr/src; qlist -Iv sys-kernel/gentoo-kernel sys-kernel/gentoo-kernel-bin virtual/dist-kernel; exit 1; }; \
     grep -v '^#' /usr/share/horcrux-surface/required-config.txt | while read -r l; do grep -qx "$l" $c || { echo "MISSING CONFIG $l"; exit 1; }; done; \
     echo $kr > /etc/surface-kernelrelease
