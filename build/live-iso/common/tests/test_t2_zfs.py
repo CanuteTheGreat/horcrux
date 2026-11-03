@@ -9,6 +9,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "overlay", "usr", "lib", "live-installer"))
 from liveinst import be as BE  # noqa: E402
+from liveinst import rtc as RTC  # noqa: E402
 from liveinst import desktop as D  # noqa: E402
 from liveinst import system as S  # noqa: E402
 from liveinst import t2 as T2  # noqa: E402
@@ -307,6 +308,66 @@ class ZfsHibernateSwap(unittest.TestCase):
 
     def test_zfsroot_declares_support(self):
         self.assertTrue(Z.PORTABLE_SWAP)
+
+
+class RtcSync(unittest.TestCase):
+    """The installed system must not boot with a months-off RTC (gringotts first boot): write it only from a verified clock."""
+
+    JULY = 1782129600.0           # live clock stuck in July 2026
+    NOW = 1793000000.0            # the real time (Nov 2026)
+    HDR = "HTTP/1.1 200 OK\r\nDate: Tue, 03 Nov 2026 18:40:00 GMT\r\nServer: x\r\n\r\n"
+
+    def fake(self, chrony=None, http=None, hw_rc=0, date_rc=0):
+        calls = []
+
+        def sh(cmd, timeout=15):
+            calls.append(list(cmd))
+            if cmd[0] == "chronyc":
+                return (0, chrony) if chrony is not None else (1, "506 Cannot talk to daemon")
+            if cmd[0] == "curl":
+                return (0, http) if http is not None else (7, "")
+            if cmd[0] == "date":
+                return date_rc, ""
+            if cmd[0] == "hwclock":
+                return hw_rc, ""
+            return 0, ""
+        return sh, calls
+
+    def test_synced_chrony_writes_rtc_without_touching_the_clock(self):
+        sh, calls = self.fake(chrony="Stratum         : 2\nLeap status     : Normal\n")
+        lines = []
+        self.assertTrue(RTC.sync(lines.append, sh=sh, now=lambda: self.NOW))
+        self.assertIn(["hwclock", "-w", "-u"], calls)
+        self.assertNotIn("date", [c[0] for c in calls])
+        self.assertIn("rtc: hardware clock written (UTC) from a synced clock (chrony)", lines[-1])
+
+    def test_unsynced_chrony_is_not_a_source(self):
+        sh, calls = self.fake(chrony="Stratum         : 0\nLeap status     : Not synchronised\n")
+        self.assertFalse(RTC.chrony_synced(sh))
+
+    def test_months_off_live_clock_is_stepped_from_http_date_then_written(self):
+        sh, calls = self.fake(http=self.HDR)
+        lines = []
+        self.assertTrue(RTC.sync(lines.append, sh=sh, now=lambda: self.JULY))
+        names = [c[0] for c in calls if c[0] in ("date", "hwclock")]
+        self.assertEqual(names, ["date", "hwclock"], "the clock must be stepped BEFORE it is written to the RTC")
+        self.assertTrue(any("stepped from an HTTP Date header" in x for x in lines))
+
+    def test_offline_never_writes_an_unverified_clock(self):
+        sh, calls = self.fake()
+        lines = []
+        self.assertFalse(RTC.sync(lines.append, sh=sh, now=lambda: self.JULY))
+        self.assertNotIn("hwclock", [c[0] for c in calls])
+        self.assertIn("NOT written", lines[-1])
+
+    def test_garbage_date_header_is_ignored(self):
+        sh, calls = self.fake(http="HTTP/1.1 200 OK\r\nDate: Thu, 01 Jan 1970 00:00:00 GMT\r\n\r\n")
+        self.assertIsNone(RTC.http_date(sh))
+
+    def test_finish_calls_rtc_sync_first(self):
+        src = open(os.path.join(HERE, "..", "overlay", "usr", "lib", "live-installer", "liveinst", "system.py")).read()
+        i = src.index("    def finish(self):")
+        self.assertLess(src.index("rtc.sync(self.log)", i), src.index("self.run(\"sync\", check=False)", i))
 
 
 class WifiToIwd(unittest.TestCase):
