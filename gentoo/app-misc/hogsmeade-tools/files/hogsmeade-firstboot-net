@@ -1,0 +1,35 @@
+#!/bin/sh
+# HOGSMEADE first boot, network part (once): wait for a network WITHOUT a time limit, then the clock + Tailscale handoff (hogsmeade-remote)
+# and the Portage tree sync; a failed step is retried every 10 minutes. Marker /var/lib/hogsmeade/net-firstboot.done, then the service
+# removes itself from the default runlevel at the next start. (gringotts' first real boot gave up after 10 minutes without Wi-Fi and the
+# laptop stayed unreachable: this never gives up.)
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+PIDFILE=/run/hogsmeade-firstboot.pid
+echo $$ > "$PIDFILE"; trap 'rm -f "$PIDFILE"' EXIT
+echo "== hogsmeade-firstboot-net $(date -u)"
+have_net() { ip -4 route show default | grep -q .; }
+if ! have_net; then
+  echo "== waiting for a network (no limit): connect Wi-Fi from the GNOME network menu; the first connection continues this automatically"
+  while ! have_net; do sleep 10; done
+  echo "== network is up $(date -u)"
+fi
+sleep 5                      # DHCP lease + the chrony burst of the NetworkManager hook (net-misc/horcrux-chrony-nm) settle first
+remote_ok() { [ ! -s /etc/hogsmeade/ts-authkey ] && tailscale status >/dev/null 2>&1; }
+sync_trees() {
+  echo "== portage trees"
+  ok=1
+  emerge-webrsync -q || ok=0
+  for r in guru canutethegreat-overlay; do
+    [ -d /var/db/repos/$r/.git ] || find /var/db/repos/$r -mindepth 1 -delete 2>/dev/null     # the image ships these overlay dirs empty: the first sync clones them
+    emaint sync -r $r || ok=0
+  done
+  [ $ok = 1 ]
+}
+until have_net && { hogsmeade-remote || remote_ok; } && sync_trees; do
+  echo "== handoff or tree sync not done (network?): retry in 10 minutes"; sleep 600
+done
+# the single-use handoff key is spent by its first join: do not leave the file around
+[ -s /etc/hogsmeade/ts-authkey ] && tailscale status >/dev/null 2>&1 && { shred -u /etc/hogsmeade/ts-authkey 2>/dev/null || rm -f /etc/hogsmeade/ts-authkey; }
+mkdir -p /var/lib/hogsmeade; date -u > /var/lib/hogsmeade/net-firstboot.done
+echo "== done"
+exit 0

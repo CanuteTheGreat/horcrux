@@ -28,6 +28,8 @@ RDEPEND="
 
 src_install() {
 	dobin "${FILESDIR}"/{prime-run,hogsmeade-verify,hogsmeade-install,hogsmeade-remote}
+	exeinto /usr/libexec
+	doexe "${FILESDIR}"/hogsmeade-firstboot-net
 	dosbin "${FILESDIR}"/{hogsmeade-health,hogsmeade-snapshots,hogsmeade-backup}
 	newinitd "${FILESDIR}/hogsmeade-firstboot.initd" hogsmeade-firstboot
 	insinto /usr/share/live-installer/hwprofiles
