@@ -93,6 +93,15 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
     test -s /etc/dconf/db/local && qfile -q /etc/dconf/db/local; \
     printf 'desktop\ngringotts\n' > /etc/live-iso-variant
 
+# GATE against a stale base (gringotts shipped on 2026-10-30 from a gnome-light base built BEFORE the hogshead fixes landed, via REUSE_ROOTFS, and its own
+# package list lacked them: no clock hook, cups-browsed without zeroconf, unusable toolchain). Every shared-base fix is asserted here, so such a base fails the build.
+RUN set -e; \
+    f=/etc/NetworkManager/dispatcher.d/20-horcrux-chrony; \
+    { test -x $f && qfile -q $f && qlist -I net-misc/horcrux-chrony-nm >/dev/null; } || { echo "STALE BASE: net-misc/horcrux-chrony-nm missing (the clock never syncs on the first Wi-Fi): rebuild the gnome-light base, do not REUSE_ROOTFS an older image"; exit 1; }; \
+    grep -qw zeroconf /var/db/pkg/net-print/cups-browsed-*/USE || { echo "STALE BASE: cups-browsed built without zeroconf (it crashes at once under OpenRC)"; exit 1; }; \
+    test -f /usr/lib/live-installer/liveinst/rtc.py || { echo "STALE BASE: the installer does not write the RTC (liveinst/rtc.py missing)"; exit 1; }; \
+    printf 'int main(void){return 0;}\n' > /tmp/t.c && gcc /tmp/t.c -o /tmp/t && rm -f /tmp/t /tmp/t.c
+
 # the image's remaining /etc files (init scripts, profile.d, dracut/Portage config, markers: the repository's overlay /etc trees and the build-time Portage
 # configuration) are ONE small ebuild, gringotts-config; usr/ content is owned by the packages above, so it is excluded from the tarball
 COPY project/overlay/ /tmp/hxo/project/
