@@ -205,6 +205,8 @@ class GRun(zt.ZRun):
         if getattr(self.g, "rtc_base", ""):
             self.clock_checks()
         self.toolchain_check()
+        self.package_contents_check()
+        self.kmod_build_check()
         rc, o = self.sh("hostname; id " + USER + "; getent passwd " + USER + "; getent passwd ron | wc -l; cat /etc/os-release | head -3; "
                         "ls -ld /home/" + USER + "; rc-status -a 2>&1 | grep -E 'docker|NetworkManager|iwd|sshd|gringotts|tailscale|display-manager|elogind|chronyd' | tr -s ' '")
         self.res["basic"] = o
