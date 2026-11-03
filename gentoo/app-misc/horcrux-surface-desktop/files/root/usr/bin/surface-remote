@@ -5,7 +5,7 @@ set -u
 [ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
 SOCK=/run/tailscale/tailscaled.sock
 KEY=/usr/share/horcrux-surface-private/ts-authkey
-HOST=surface-pro; [ -d /run/live-installer ] && HOST=surface-live
+HOST=$(hostname); [ -d /run/live-installer ] && HOST=surface-live
 ts() { tailscale --socket=$SOCK "$@"; }
 lanips() { ip -4 -o addr show scope global 2>/dev/null | awk '$2!="tailscale0"{split($4,a,"/"); print "  " a[1] "  (" $2 ")"}'; }
 echo "== network"

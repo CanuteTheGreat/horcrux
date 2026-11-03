@@ -99,7 +99,13 @@ def password_strength(pw):
     return f"{word} ({score}/100)"
 
 
+GENERIC_HOSTNAMES = {"surface-pro", "surface", "localhost", "gentoo", "ubuntu", "debian"}
+
+
 def hostname_problem(h):
+    """per-machine installs must carry the owner's chosen name (Harry Potter places for his machines), never an image default"""
+    if h and h.split(".")[0] in GENERIC_HOSTNAMES:
+        return f"'{h.split('.')[0]}' is a generic default, not this machine's name: use the name the owner chose for it."
     if not h or len(h) > 253:
         return "Enter a host name (FQDN preferred, e.g. node1.example.com)."
     for label in h.split("."):

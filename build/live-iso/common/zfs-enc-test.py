@@ -210,6 +210,7 @@ class ZRun(qt.Runner):
         self.step("no-swap-on-zfs", "zd" not in o.split("---")[0] and "/dev/zvol" not in o, f"swap: {o.split('---')[0].strip() or 'none (zram-init not in image)'}")
         rc, o = self.sh("ls /lib/firmware/brcm 2>/dev/null | grep -ci apple; true")
         self.step("no-apple-firmware-on-the-public-image", o.strip().splitlines()[-1] == "0", f"apple files under /lib/firmware/brcm: {o.strip()}")
+        qt.no_autologin_config_gate(self.sh, self.step)             # OWNER RULE: no display-manager autologin in the installed configs (GDM/LightDM/SDDM/agetty)
         qt.shadow_reuse_gate(self.sh, self.step, PASSPHRASE)       # SECURITY: no account (user, root, ...) may have the disk passphrase as its password
         rc, o = self.sh(f"grep -rIlF -- '{PASSPHRASE}' /etc /boot /var/log /root /var/lib/horcrux /run 2>/dev/null | head; echo done")
         self.step("passphrase-not-stored-anywhere", o.strip() == "done", f"hits: {o.strip()}")
@@ -510,6 +511,7 @@ class ZRun(qt.Runner):
                 break
             time.sleep(6)
         self.step("desktop-gdm-and-gnome-shell-running", "GDM" in o and "SHELL" in o, o.strip().replace("\n", " | ")[:300])
+        qt.greeter_no_session_gate(self.sh, self.step, "owner", "gdm", wait=60)         # OWNER RULE: after the disk unlock the greeter shows, no user session exists before a greeter login
         self.desktop_exec_check()
         # hogshead hand-off: an account with an EMPTY, expired (day 0) password must force the owner to choose a password at the first
         # login (PAM nullok + new_authtok_reqd), with no temporary password stored anywhere. Exercised through login(1) on a pty: no password prompt (nullok), forced new-password prompt, passwdqc.

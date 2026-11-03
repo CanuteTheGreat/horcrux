@@ -33,7 +33,7 @@ class Profile(unittest.TestCase):
         self.assertIn("elogind:boot", p["services_add"])
 
     def test_desktop_package_has_xfce_stack(self):
-        eb = open(os.path.join(ROOT, "..", "app-misc", "horcrux-surface-desktop", "horcrux-surface-desktop-1.ebuild")).read()
+        eb = open(os.path.join(ROOT, "..", "app-misc", "horcrux-surface-desktop", "horcrux-surface-desktop-1-r1.ebuild")).read()
         for atom in ("xfce-base/xfce4-meta", "x11-misc/lightdm", "app-accessibility/onboard", "xfce-base/xfce4-power-manager",
                      "www-client/brave-bin", "www-client/firefox-bin", "net-vpn/tailscale", "app-admin/rustinion-agent",
                      "sys-firmware/intel-microcode", "sys-firmware/sof-firmware", "x11-drivers/xf86-input-wacom", "gnome-extra/iio-sensor-proxy"):
