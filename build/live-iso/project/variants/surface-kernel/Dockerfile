@@ -10,7 +10,7 @@
 ARG BASE
 FROM ${BASE} AS surface
 ARG ARCH=x86_64
-ARG SURFACE_KERNEL=6.18.59
+ARG SURFACE_KERNEL=6.18.60
 
 # overlays: the repos.conf + portage config are COPIED FROM the package that owns them (identical bytes: installing the package later
 # is then a no-op for Portage's config protection)
@@ -30,7 +30,7 @@ RUN --mount=type=cache,id=surface-binpkgs-${ARCH},target=/var/cache/binpkgs,shar
 
 # the kernel binary package is built in its OWN layer (about an hour) and kept inside the image layer
 FROM surface AS surface-kbuild
-ARG SURFACE_KERNEL=6.18.59
+ARG SURFACE_KERNEL=6.18.60
 RUN --mount=type=cache,id=surface-distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache" PKGDIR=/var/cache/surface-binpkgs; \
     emerge --buildpkgonly --nodeps --usepkg=n --getbinpkg=n =sys-kernel/gentoo-kernel-${SURFACE_KERNEL} \
@@ -38,7 +38,7 @@ RUN --mount=type=cache,id=surface-distfiles-${ARCH:-x86_64},target=/var/cache/di
     find /var/cache/surface-binpkgs -type f | head
 
 FROM surface-kbuild AS surface-kinstall
-ARG SURFACE_KERNEL=6.18.59
+ARG SURFACE_KERNEL=6.18.60
 # the stock binary kernel goes (modules, vmlinuz), the freshly built one is installed; dracut cannot add zfs/unlock before zfs-kmod
 # exists for this kernel: omit them for THIS step only (the live initramfs is rebuilt below, the installer builds the installed one)
 RUN --mount=type=cache,id=surface-distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
