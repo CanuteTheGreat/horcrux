@@ -34,4 +34,13 @@ src_install() {
 		add_drivers+=" i915 drm_kms_helper drm_display_helper drm_buddy ttm video "
 		force_drivers+=" i915 "
 	EOF
+	# ZFS root + dist-kernel: the kernel update must rebuild the ZFS module IN THE SAME TRANSACTION and before the new initramfs is made. Without USE=dist-kernel
+	# on zfs-kmod nothing rebuilds it for the new kernel: dracut then fails with "Failed to find module zfs" (or the initramfs has no ZFS) and the ZFS-root laptop
+	# does not boot (gringotts, 2026-11-03: shipped without the flag). Kernel builds that are not dist-kernel (the T2 variant) override it in their own package.use file.
+	insinto /etc/portage/package.use
+	newins - horcrux-zfs <<-'EOF'
+		# owned by sys-kernel/horcrux-unlock: rebuild the ZFS kernel module with every dist-kernel update (see the package ebuild)
+		sys-fs/zfs rootfs dist-kernel
+		sys-fs/zfs-kmod dist-kernel
+	EOF
 }
