@@ -193,6 +193,8 @@ class GRun(zt.ZRun):
                 vm.p.kill()
         self.step("vm-stopped-after-install", True, f"install phase {int(time.time() - t0)}s")
         time.sleep(3)
+        if getattr(a, "rtc_base", ""):
+            self.install_rtc_check(f"{a.out}/1-install-serial.log")
 
     # ------------------------------------------------------------------ gringotts specific checks on the installed system
     def desktop_checks(self, vm=None):
@@ -200,6 +202,9 @@ class GRun(zt.ZRun):
         return
 
     def gringotts_basic(self):
+        if getattr(self.g, "rtc_base", ""):
+            self.clock_checks()
+        self.toolchain_check()
         rc, o = self.sh("hostname; id " + USER + "; getent passwd " + USER + "; getent passwd ron | wc -l; cat /etc/os-release | head -3; "
                         "ls -ld /home/" + USER + "; rc-status -a 2>&1 | grep -E 'docker|NetworkManager|iwd|sshd|gringotts|tailscale|display-manager|elogind|chronyd' | tr -s ' '")
         self.res["basic"] = o
@@ -462,6 +467,52 @@ class GRun(zt.ZRun):
             if vm.alive():
                 vm.p.kill()
 
+    def latenet_phase(self, nvars):
+        """firstboot must not give up when the network comes late (gringotts: no Wi-Fi at the first boot, the 10-minute limit ended it, 'will retry at the
+        next boot', and the laptop was unreachable). Boot the installed system, drop the NIC link, restart firstboot, bring the link back after
+        --late-network-minutes and require that firstboot waited, then completed (Portage trees synced, marker written)."""
+        a = self.g
+        mins = a.late_network_minutes
+        if not mins:
+            return
+        self.no_ps2 = True
+        qt.pflash_vars(nvars)
+        vm = qt.VM("5-latenet", self.qemu_args(None, True, nvars), a.out)
+        kb = qt.Kbd(vm, True)
+        try:
+            self.vga_stable(vm, "latenet-passphrase-prompt")
+            up = self.unlock_usb(vm, kb, "latenet")
+            self.step("latenet-boot-up", up, "installed system up for the late-network test")
+            if not up:
+                return
+            self.sh("rm -f /var/lib/gringotts/firstboot-done /var/log/gringotts-firstboot.log; "
+                    "nohup sh -c 'sleep 15; rc-service gringotts-firstboot restart' >/dev/null 2>&1 &", timeout=30)
+            time.sleep(2)
+            vm.qmp("human-monitor-command", **{"command-line": "set_link n0 off"})
+            t_off = time.time()
+            self.step("latenet-nic-link-down", True, f"set_link n0 off; firstboot restarts inside the guest with no default route; link stays down {mins} min")
+            time.sleep(mins * 60)                    # (wall clock on purpose: the guest cannot be observed while its link is down)
+            vm.qmp("human-monitor-command", **{"command-line": "set_link n0 on"})
+            back = self.wait_ssh(600)
+            self.step("latenet-ssh-back-after-link-up", back, f"after {int(time.time() - t_off)} s")
+            end = time.time() + qt.T(1500)
+            o = ""
+            while back and time.time() < end and "firstboot-done" not in o:
+                rc, o = self.sh("ls /var/lib/gringotts/; tail -4 /var/log/gringotts-firstboot.log 2>/dev/null", timeout=60)
+                if "firstboot-done" not in o:
+                    time.sleep(15)
+            rc, lg = self.sh("grep -E '^== (gringotts-firstboot|waiting|network is up|done)' /var/log/gringotts-firstboot.log; rc-status -a 2>&1 | grep gringotts-firstboot; "
+                             "test -s /run/gringotts-firstboot.pid && echo PIDLEFT || echo PIDGONE", timeout=60)
+            open(f"{a.out}/latenet-firstboot.log", "w").write(re.sub(r"tskey-[A-Za-z0-9-]+", "tskey-***", lg))
+            self.step("latenet-firstboot-waited-without-limit-then-completed", back and "waiting for a network" in lg and "firstboot-done" in o and "== done" in lg,
+                      lg.strip().replace("\n", " | ")[-300:])
+            self.step("latenet-firstboot-not-reported-crashed-by-openrc", "crashed" not in lg and "PIDGONE" in lg, lg.strip().replace("\n", " | ")[-200:])
+            self.sh("poweroff", timeout=10)
+            self.wait_exit(vm)
+        finally:
+            if vm.alive():
+                vm.p.kill()
+
     def run(self):
         a = self.g
         os.makedirs(a.out, exist_ok=True)
@@ -482,6 +533,7 @@ class GRun(zt.ZRun):
         self.boot1(nvars)
         self.boot2(nvars)
         self.hibernate_phase(nvars)
+        self.latenet_phase(nvars)
         self.res["ok"] = not getattr(self, "failed", [])
         json.dump(self.res, open(f"{a.out}/result.json", "w"), indent=1)
         if getattr(self, "failed", []):
@@ -501,6 +553,8 @@ def main():
     ap.add_argument("--skip-menu", action="store_true")
     ap.add_argument("--ts-key-file", default="", help="fresh single-use TEST Tailscale key for the live-join step (the baked one may be spent)")
     ap.add_argument("--keep-disks", action="store_true")
+    ap.add_argument("--rtc-base", default="2026-07-01T12:00:00", help="start EVERY boot with this months-off hardware clock ('' disables the clock gates)")
+    ap.add_argument("--late-network-minutes", type=int, default=12, help="late-network firstboot phase: NIC link down this long (0 skips; the owner's real case was hours)")
     ap.add_argument("--cpu", default=os.environ.get("QEMU_TEST_CPU", "qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt,+cx16,+aes,+avx,+xsave"))
     a = ap.parse_args()
     a.desktop = True

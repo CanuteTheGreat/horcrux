@@ -45,6 +45,10 @@ class ZRun(qt.Runner):
             i = args.index("-machine")
             args[i + 1] = args[i + 1] + ",i8042=off"
             args += ["-device", "usb-kbd,bus=xhci.0"]     # the ONLY keyboard: like the T2 Mac, whose keyboard is a USB device
+        if self.z.desktop and getattr(self.z, "rtc_base", ""):
+            # a MONTHS-OFF hardware clock on every boot, like gringotts' first real boot (RTC in July, installed in November): the installer must write a
+            # good time to the RTC (checked in the install log) and the installed system must get its clock stepped by chrony once the network is up
+            args += ["-rtc", f"base={self.z.rtc_base}"]
         if self.z.desktop and not iso:
             args += ["-audiodev", "none,id=hxaudio", "-device", "intel-hda", "-device", "hda-duplex,audiodev=hxaudio"]   # a real ALSA card: wpctl/gsd-sound/volume keys need a sink
         return args
@@ -169,6 +173,11 @@ class ZRun(qt.Runner):
         return False
 
     # --- boot 1: serial passphrase
+    def phase1(self, nvars):
+        super().phase1(nvars)
+        if self.z.desktop and getattr(self.z, "rtc_base", ""):
+            self.install_rtc_check(f"{self.z.out}/1-install-serial.log")
+
     def boot1(self, nvars):
         a = self.z
         qt.pflash_vars(nvars)
@@ -495,6 +504,50 @@ class ZRun(qt.Runner):
         ok, o = self.session_logout(user)
         self.step("shell-log-out-via-session-manager-returns-to-gdm", ok, o)
 
+    def install_rtc_check(self, serial_log):
+        """the installer must have written the RTC from a synced clock (liveinst/rtc.py logs one `rtc:` line)"""
+        try:
+            txt = open(serial_log, errors="replace").read()
+        except OSError:
+            txt = ""
+        m = re.findall(r"rtc: [^\r\n]*", txt)
+        self.step("installer-writes-rtc-from-a-synced-clock", any("hardware clock written (UTC) from a synced clock" in x for x in m), " | ".join(m)[:300] or "no `rtc:` line in the install log")
+
+    def clock_checks(self):
+        """regression gate for gringotts 2026-11-03 (RTC months off, chrony without sources, no clock hook): the dispatcher hook is package-owned,
+        chronyd steps (makestep) and is enabled, and a VM booted with a months-off RTC ends up with the right time after the network is up"""
+        rc, o = self.sh("f=/etc/NetworkManager/dispatcher.d/20-horcrux-chrony; test -x $f && echo HOOK; qfile -q $f && echo OWNED; qlist -I net-misc/horcrux-chrony-nm; "
+                        "grep -h '^makestep' /etc/chrony/chrony.conf /etc/chrony.conf 2>/dev/null | head -2; grep -hE '^rtcsync' /etc/chrony/chrony.conf 2>/dev/null; "
+                        "rc-update show default | grep -c chronyd; grep -h '^clock=' /etc/conf.d/hwclock; test -f /usr/lib/live-installer/liveinst/rtc.py && echo RTCPY")
+        self.step("chrony-nm-dispatcher-hook-installed-and-package-owned", "HOOK" in o and "OWNED" in o and "horcrux-chrony-nm" in o, re.sub(r"\s+", " ", o).strip()[:300])
+        self.step("chronyd-enabled-makestep-rtcsync-clock-utc", "makestep" in o and "rtcsync" in o and re.search(r"(?m)^1$", o) is not None and 'clock="UTC"' in o and "RTCPY" in o, re.sub(r"\s+", " ", o).strip()[:300])
+        rc, o = self.sh("date -u +%s")
+        try:
+            first = int(o.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            first = 0
+        t0, ok, delta = time.time(), False, None
+        end = t0 + qt.T(480)
+        while time.time() < end:
+            rc, o = self.sh("date -u +%s", timeout=30)
+            try:
+                delta = int(o.strip().splitlines()[-1]) - int(time.time())
+            except (ValueError, IndexError):
+                time.sleep(5)
+                continue
+            if abs(delta) < 120:
+                ok = True
+                break
+            time.sleep(8)
+        rc, ch = self.sh("chronyc -n sources 2>&1 | head -6; chronyc -n tracking 2>&1 | head -3")
+        self.step("months-off-rtc-clock-stepped-by-chrony-after-network", ok,
+                  f"booted {int(time.time()) - first} s from the host clock ({(int(time.time()) - first) // 86400} days off), after {int(time.time() - t0)} s the offset is {delta} s | " + re.sub(r"\s+", " ", ch)[:200])
+
+    def toolchain_check(self):
+        """the image strip once deleted /usr/include and every static lib: `C compiler cannot create executables`, no zfs-kmod rebuild on a kernel update"""
+        rc, o = self.sh("printf '#include <stdio.h>\\n#include <linux/types.h>\\nint main(void){puts(\"hx-ok\");return 0;}\\n' > /tmp/t.c && gcc /tmp/t.c -o /tmp/t && /tmp/t; rm -f /tmp/t /tmp/t.c", timeout=90)
+        self.step("toolchain-compiles-and-links-a-c-program", "hx-ok" in o, o.strip()[-200:])
+
     def desktop_exec_check(self):
         rc, o = self.sh(DESKTOP_EXEC_CHECK, timeout=120)
         self.step("desktop-files-exec-binaries-exist", "DESKTOP-FILES-CHECKED" in o and "DESKTOP-FILES-MISSING none" in o, re.sub(r"\s+", " ", o).strip()[:400])
@@ -510,6 +563,8 @@ class ZRun(qt.Runner):
             time.sleep(6)
         self.step("desktop-gdm-and-gnome-shell-running", "GDM" in o and "SHELL" in o, o.strip().replace("\n", " | ")[:300])
         self.desktop_exec_check()
+        self.clock_checks()
+        self.toolchain_check()
         # hogshead hand-off: an account with an EMPTY, expired (day 0) password must force the owner to choose a password at the first
         # login (PAM nullok + new_authtok_reqd), with no temporary password stored anywhere. Exercised through login(1) on a pty: no password prompt (nullok), forced new-password prompt, passwdqc.
         rc, o = self.sh("userdel -rf hxtmp >/dev/null 2>&1; useradd -m hxtmp && passwd -d hxtmp >/dev/null && chage -d 0 hxtmp && grep '^hxtmp:' /etc/shadow | cut -d: -f2,3; "
@@ -546,6 +601,7 @@ def main():
     ap.add_argument("--fake-t2", action="store_true", help="force the T2 path with answer-file t2=yes (this QEMU cannot present PCI id 106b:1801; detection itself is unit-tested with a fake sysfs)")
     ap.add_argument("--expect-t2-refusal", action="store_true", help="(with --fake-t2) the image has no T2 kernel: assert the installer refuses")
     ap.add_argument("--t2", default="no", help="answer file t2 = no|auto|yes (default no: the normal tests ignore a T2 device)")
+    ap.add_argument("--rtc-base", default="2026-07-01T12:00:00", help="desktop runs: start EVERY boot with this (months-off) hardware clock; '' disables the clock gates")
     ap.add_argument("--mem", type=int, default=4096)
     ap.add_argument("--cpu", default=os.environ.get("QEMU_TEST_CPU", "qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt,+cx16"))
     ap.add_argument("--disk-gb", type=int, default=24)
