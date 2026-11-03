@@ -108,7 +108,7 @@ ISO_NAME=$ISO_PREFIX${HW_PROFILE:+-$HW_PROFILE}-${ISO_VNAME:-${IMG_HW}$IMG-}$SUF
 docker rm -f $TAG-asm >/dev/null 2>&1 || true
 cid=$(docker create $ROOTFS_IMG /bin/true)
 docker export "$cid" | docker run -i $PLAT -e ARCH=$ARCH -e "SQUASH_COMP=${SQUASH_COMP:-}" --name $TAG-asm --memory=8g --cpus=$JOBS $TAG-tools \
-    sh -c "mkdir -p /work/root /out && tar -x -C /work/root --exclude='dev/*' && assemble-iso.sh /work/root /out/$ISO_NAME '$ISO_LABEL' '$PROJECT_TITLE' '$PROJECT'"
+    sh -c "mkdir -p /work/root /out && tar -x -C /work/root --anchored --exclude='dev/*' && assemble-iso.sh /work/root /out/$ISO_NAME '$ISO_LABEL' '$PROJECT_TITLE' '$PROJECT'"
 docker rm -v "$cid" >/dev/null; cid=
 docker cp $TAG-asm:/out/$ISO_NAME "$OUT/$ISO_NAME"
 ( cd "$OUT" && sha256sum "$ISO_NAME" > "$ISO_NAME.sha256" && cat "$ISO_NAME.sha256" )
