@@ -82,7 +82,7 @@ pub struct NodeUsage {
     /// CPU family bucket of the reporting host: "intel", "amd" or "" (unknown
     /// / older node). Lets every peer know the vendor of remote nodes so
     /// AMD<->Intel live moves are blocked cluster-wide, not just locally.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub cpu_vendor: String,
 }
 
