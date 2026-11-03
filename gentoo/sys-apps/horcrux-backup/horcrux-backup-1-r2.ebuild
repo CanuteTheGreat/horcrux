@@ -5,7 +5,7 @@ EAPI=8
 
 inherit systemd
 
-DESCRIPTION="Encrypted daily restic backup to Backblaze B2, 30-day retention (owner standard); secrets are provisioned after first boot"
+DESCRIPTION="Encrypted daily restic backup to Backblaze B2, 30-day retention (owner standard), keyring + browser profiles + app logins verified in every snapshot; secrets are provisioned after first boot"
 HOMEPAGE="https://github.com/CanuteTheGreat/horcrux"
 S="${WORKDIR}"
 
@@ -23,7 +23,7 @@ RDEPEND="
 src_install() {
 	dosbin "${FILESDIR}"/ctg-restic "${FILESDIR}"/ctg-restic-cron
 	insinto /etc/ctg-backup
-	doins "${FILESDIR}"/paths "${FILESDIR}"/excludes
+	doins "${FILESDIR}"/paths "${FILESDIR}"/excludes "${FILESDIR}"/required
 	fperms 0700 /etc/ctg-backup
 	if use systemd; then
 		cp "${FILESDIR}"/ctg-restic-{backup,prune,check}.{service,timer} "${T}"/ || die

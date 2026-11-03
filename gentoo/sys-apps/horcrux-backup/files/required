@@ -1,0 +1,24 @@
+# ctg-restic content: what a restore needs to keep the owner signed in everywhere (owner order 2026-11-03: never re-sign in after a reinstall).
+# Checked after every backup (ctg-restic content); the freshness monitor on crystalcave alerts when the newest snapshot lacks one.
+#   /path    must be in the snapshot if it exists on this host     !/path   must exist on this host too (and be in the snapshot)
+# The GNOME login keyring holds Brave's cookie-encryption key ("Brave Safe Storage") and the Nextcloud app password: no keyring = every browser session is unreadable.
+!/home/canutethegreat/.local/share/keyrings/login.keyring
+/home/canutethegreat/.local/share/keyrings
+/home/canutethegreat/.config/BraveSoftware/Brave-Browser/Local State
+/home/canutethegreat/.config/BraveSoftware/Brave-Browser/Default/Cookies
+/home/canutethegreat/.config/BraveSoftware/Brave-Browser/Default/Login Data
+/home/canutethegreat/.config/BraveSoftware/Brave-Browser/Default/Extensions
+/home/canutethegreat/.config/BraveSoftware/Brave-Browser/Default/Local Extension Settings
+/home/canutethegreat/.mozilla
+/home/canutethegreat/.config/Nextcloud/nextcloud.cfg
+/home/canutethegreat/.config/Proton
+/home/canutethegreat/.config/protonvpn
+/home/canutethegreat/.config/Proton Pass
+/home/canutethegreat/.config/proton-pass
+/home/canutethegreat/.local/share/protonvpn
+/home/canutethegreat/.ssh
+/home/canutethegreat/.gnupg
+/home/canutethegreat/.config/discord
+/home/canutethegreat/.config/rustinion
+/var/lib/iwd
+/etc/NetworkManager/system-connections

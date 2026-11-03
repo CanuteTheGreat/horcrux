@@ -5,3 +5,4 @@
 /var/spool/cron
 /var/lib/portage/world
 /var/lib/portage/world_sets
+/var/lib/iwd

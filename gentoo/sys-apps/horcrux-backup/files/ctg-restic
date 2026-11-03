@@ -3,6 +3,7 @@
 #   ctg-restic backup   daily; runs /etc/ctg-backup/pre.sh first if present, then backs up the paths file
 #   ctg-restic prune    weekly; forget --keep-within 30d --prune
 #   ctg-restic check    monthly; check --read-data-subset=5%
+#   ctg-restic content  after every backup: the newest snapshot must really hold the sign-in state (keyring, browser profiles, app configs), see /etc/ctg-backup/required
 #   ctg-restic <other>  passed through to restic (snapshots, restore, ...)
 # Config dir /etc/ctg-backup (root:root 0700): env (RESTIC_REPOSITORY, AWS_*/B2_* credentials, RESTIC_PASSWORD_FILE),
 # paths (one path per line), excludes (restic --exclude-file), optional pre.sh / post.sh.
@@ -27,7 +28,35 @@ case "$cmd" in
     # rc 3 = some source files unreadable (vanished while running): snapshot still written
     if [ $rc -eq 0 ] || [ $rc -eq 3 ]; then now > "$STATE/last-backup-ok"; rc=0; fi
     [ -x "$CONF/post.sh" ] && "$CONF/post.sh"
+    # the snapshot is only useful if it holds what a restore needs to keep the owner signed in: verify, record, never fail the backup for it
+    [ $rc -eq 0 ] && [ -f "$CONF/required" ] && { "$0" content || true; }
     exit $rc ;;
+  content)
+    # /etc/ctg-backup/required, one path per line (# = comment):
+    #   /path     must be IN the newest snapshot IF it exists on this host now (catches excludes, permission errors, a changed layout)
+    #   !/path    must exist on this host AND be in the snapshot (the login keyring: without it every sign-in is lost at the next login)
+    # Result: $STATE/content-ok (epoch) or $STATE/content-missing (paths, one per line; read by the backup-freshness monitor over ssh).
+    # Only lists paths (restic ls), never reads contents.
+    [ -f "$CONF/required" ] || { echo "no $CONF/required"; exit 0; }
+    miss=""; n=0
+    while IFS= read -r line; do
+      case "$line" in ''|'#'*) continue ;; esac
+      must=0; p=$line; case "$line" in '!'*) must=1; p=${line#!} ;; esac
+      if [ ! -e "$p" ] && [ ! -L "$p" ]; then
+        [ $must -eq 1 ] && miss="$miss
+ABSENT-ON-HOST $p"
+        continue
+      fi
+      n=$((n+1))
+      if ! restic ls --no-lock latest "$p" 2>/dev/null | grep -q '^/'; then miss="$miss
+NOT-IN-SNAPSHOT $p"; fi
+    done < "$CONF/required"
+    if [ -n "$miss" ]; then
+      printf '%s\n' "$miss" | sed '/^$/d' > "$STATE/content-missing"; rm -f "$STATE/content-ok"
+      echo "CONTENT-MISSING:$miss" >&2; logger -t ctg-restic "CONTENT-MISSING: $(printf '%s' "$miss" | tr '\n' ';')" 2>/dev/null
+      exit 1
+    fi
+    rm -f "$STATE/content-missing"; now > "$STATE/content-ok"; echo "content ok ($n required paths present in the newest snapshot)" ;;
   prune)
     restic forget --keep-within "$KEEP" --prune "$@" && now > "$STATE/last-prune-ok" ;;
   check)
