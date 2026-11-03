@@ -587,24 +587,35 @@ class Runner:
 
     def start_swtpm(self, name):
         """software TPM 2.0 whose state (endorsement/owner seeds, NV) outlives every VM of this run: a key sealed during the install must unseal at each boot of the
-        same 'machine'. Returns the control socket path."""
+        same 'machine'. swtpm quits when QEMU disconnects, so qemu_args() calls ensure_swtpm() before every VM: same state dir = same TPM. Returns the control socket path."""
         d = f"{self.a.out}/{name}"
         shutil.rmtree(d, ignore_errors=True)
         os.makedirs(d)
+        self.tpm_dirs = getattr(self, "tpm_dirs", {})
+        self.tpm_dirs[name] = d
+        return self.ensure_swtpm(name)
+
+    def ensure_swtpm(self, name):
+        d = self.tpm_dirs[name]
         sock = f"{d}/ctrl.sock"
+        cur = self.tpm_proc if name == "tpm" else self.tpm_proc2
+        if cur is not None and cur.poll() is None:
+            return sock
+        try:
+            os.unlink(sock)
+        except OSError:
+            pass
         p = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", f"dir={d}", "--ctrl", f"type=unixio,path={sock}"],
-                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=open(f"{d}/swtpm.err", "wb"))
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=open(f"{d}/swtpm.err", "ab"))
         if name == "tpm":
             self.tpm_proc = p
         else:
             self.tpm_proc2 = p
         for _ in range(100):
             if os.path.exists(sock):
-                break
+                return sock
             time.sleep(0.1)
-        else:
-            raise SystemExit("swtpm did not create its control socket (is swtpm installed?)")
-        return sock
+        raise SystemExit("swtpm did not create its control socket (is swtpm installed?)")
 
     def qemu_args(self, iso, installed, nvars):
         a, A = self.a, ARCHS[ARCH]
@@ -624,6 +635,7 @@ class Runner:
                      "-netdev", f"user,id=n1,net=10.77.0.0/24,host=10.77.0.2,hostfwd=tcp:{FWD_BIND}:{FWD_WEB}-{a.lan_ip}:{self.P['port']},hostfwd=tcp:{FWD_BIND}:{FWD_SSH}-{a.lan_ip}:22",
                      "-device", f"{nic},netdev=n1,mac=52:54:00:00:00:02"]
         if getattr(self, "tpm_ctrl", None):
+            self.tpm_ctrl = self.ensure_swtpm("tpm2" if self.tpm_ctrl.endswith("/tpm2/ctrl.sock") else "tpm")
             args += ["-chardev", f"socket,id=chrtpm,path={self.tpm_ctrl}", "-tpmdev", "emulator,id=tpm0,chardev=chrtpm",
                      "-device", ("tpm-tis" if ARCH == "x86_64" else "tpm-tis-device") + ",tpmdev=tpm0"]
         gpu = A["gpu"]
