@@ -548,6 +548,57 @@ class ZRun(qt.Runner):
         rc, o = self.sh("printf '#include <stdio.h>\\n#include <linux/types.h>\\nint main(void){puts(\"hx-ok\");return 0;}\\n' > /tmp/t.c && gcc /tmp/t.c -o /tmp/t && /tmp/t; rm -f /tmp/t /tmp/t.c", timeout=90)
         self.step("toolchain-compiles-and-links-a-c-program", "hx-ok" in o, o.strip()[-200:])
 
+    # ---- the installed system must be repairable by Portage: every package file exists, and a kernel module can be built against the running kernel
+    CONTENTS_CHECK = r"""
+import glob, os, collections
+# the ONLY files that may be missing: runtime state dirs Portage records with .keep markers. Intentional strips are removed from the CONTENTS records at build
+# time by common/vdb-prune.py (reviewed list); anything else missing here is a bug in the image (tar --exclude, a strip eating a toolchain file, ...).
+ALLOW_PREFIX = ("/var/log/", "/var/spool/", "/var/cache/", "/var/tmp/", "/run/", "/tmp/")
+miss = collections.OrderedDict(); n = 0; pk = 0
+for cf in sorted(glob.glob("/var/db/pkg/*/*/CONTENTS")):
+    pkg = "/".join(cf.split("/")[-3:-1]); pk += 1
+    for line in open(cf, errors="replace"):
+        if line.startswith("obj "):
+            path = " ".join(line.rstrip("\n").split(" ")[1:-2])
+        elif line.startswith("sym "):
+            path = line[4:line.index(" -> ")]
+        else:
+            continue
+        if os.path.lexists(path) or path.startswith(ALLOW_PREFIX):
+            continue
+        miss.setdefault(pkg, []).append(path); n += 1
+print("CONTENTS-PACKAGES", pk)
+print("CONTENTS-MISSING", n, "files in", len(miss), "packages")
+for p, m in sorted(miss.items(), key=lambda x: -len(x[1]))[:8]:
+    print("  ", len(m), p, m[0])
+"""
+
+    KMOD_CHECK = r"""
+set -e; kv=$(uname -r); d=$(mktemp -d); cd $d
+test -e /lib/modules/$kv/build/Makefile || { echo "NO-KERNEL-BUILD-TREE for $kv ($(readlink /lib/modules/$kv/build))"; exit 1; }
+printf '#include <linux/module.h>\n#include <linux/init.h>\nstatic int __init hx_init(void){return 0;}\nstatic void __exit hx_exit(void){}\nmodule_init(hx_init);\nmodule_exit(hx_exit);\nMODULE_LICENSE("GPL");\n' > hx.c
+printf 'obj-m := hx.o\n' > Kbuild
+make -C /lib/modules/$kv/build M=$d modules > build.log 2>&1 || { tail -15 build.log; echo KMOD-BUILD-FAILED; exit 1; }
+modinfo -F vermagic $d/hx.ko | grep -q "^$kv " && echo KMOD-OK $kv
+cd /; rm -rf $d
+"""
+
+    def _b64sh(self, interp, text):
+        import base64
+        return f"echo {base64.b64encode(text.encode()).decode()} | base64 -d | {interp}"
+
+    def package_contents_check(self):
+        """gringotts 2026-11-03: the image strip deleted 444 packages' dev files and the unpack dropped every dir named `dev`: a package database that lies, so no
+        file-level repair and no kernel-module rebuild. FAIL if any installed package has a missing CONTENTS file (beyond the runtime-state allowlist above)."""
+        rc, o = self.sh(self._b64sh("python3", self.CONTENTS_CHECK), timeout=300)
+        m = re.search(r"CONTENTS-MISSING (\d+) files", o)
+        self.step("package-contents-complete-no-missing-files", bool(m) and m.group(1) == "0" and "CONTENTS-PACKAGES" in o, re.sub(r"\s+", " ", o).strip()[:400])
+
+    def kmod_build_check(self):
+        """a kernel module builds against the RUNNING kernel's build tree (what zfs-kmod needs after every kernel update: kernel tree + compiler + libelf/openssl)"""
+        rc, o = self.sh(self._b64sh("sh", self.KMOD_CHECK), timeout=600)
+        self.step("kernel-module-builds-against-running-kernel", "KMOD-OK" in o, re.sub(r"\s+", " ", o).strip()[-300:])
+
     def desktop_exec_check(self):
         rc, o = self.sh(DESKTOP_EXEC_CHECK, timeout=120)
         self.step("desktop-files-exec-binaries-exist", "DESKTOP-FILES-CHECKED" in o and "DESKTOP-FILES-MISSING none" in o, re.sub(r"\s+", " ", o).strip()[:400])
@@ -565,6 +616,8 @@ class ZRun(qt.Runner):
         self.desktop_exec_check()
         self.clock_checks()
         self.toolchain_check()
+        self.package_contents_check()
+        self.kmod_build_check()
         # hogshead hand-off: an account with an EMPTY, expired (day 0) password must force the owner to choose a password at the first
         # login (PAM nullok + new_authtok_reqd), with no temporary password stored anywhere. Exercised through login(1) on a pty: no password prompt (nullok), forced new-password prompt, passwdqc.
         rc, o = self.sh("userdel -rf hxtmp >/dev/null 2>&1; useradd -m hxtmp && passwd -d hxtmp >/dev/null && chage -d 0 hxtmp && grep '^hxtmp:' /etc/shadow | cut -d: -f2,3; "

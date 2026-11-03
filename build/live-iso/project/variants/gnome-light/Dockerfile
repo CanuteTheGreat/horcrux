@@ -41,6 +41,8 @@ RUN set -e; unset ARCH; export FEATURES="-ccache"; \
 
 COPY project/variants/gnome-light/overlay/ /
 
+COPY common/vdb-prune.py /tmp/vdb-prune.py
+
 # the Desktop image marks itself (the installer offers the desktop profile only when this exists); slim down again
 # Size: the ISO must stay below the 2 GiB release-asset limit. Firmware for hardware that is not in an x86 laptop/desktop
 # (Snapdragon SoCs, server/SmartNICs) is ~900 MB of the uncompressed image; the server image keeps it.
@@ -70,4 +72,6 @@ RUN set -e; chmod 644 /usr/share/horcrux/desktop/*; \
     # the overlay tree is re-cloned by `emaint sync` (repos.conf stays); ship an EMPTY dir, not a stale copy
     rm -rf /var/db/repos/canutethegreat-overlay; mkdir -p /var/db/repos/canutethegreat-overlay; \
     rm -rf /var/db/repos/gentoo/* /var/cache/distfiles/* /var/cache/binhost /usr/share/doc /usr/share/gtk-doc /var/tmp/portage /var/log/emerge* 2>/dev/null || true; \
-    find / -xdev -name '*.pyc' -path '*/__pycache__/*' -delete 2>/dev/null || true
+    find / -xdev -name '*.pyc' -path '*/__pycache__/*' -delete 2>/dev/null || true; \
+    # Portage's records match what was stripped on purpose (the reviewed list in common/vdb-prune.py); anything else missing fails the package-contents gate
+    python3 /tmp/vdb-prune.py && rm -f /tmp/vdb-prune.py
