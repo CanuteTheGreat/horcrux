@@ -1,13 +1,29 @@
 #!/bin/sh
+# gringotts first boot (once): wait for a network, clock + Tailscale handoff (gringotts-remote), refresh the Portage trees.
+# Never gives up: the first real boot (2026-11-03) had no Wi-Fi yet, the old 10-minute limit made this exit with "will retry at the next
+# boot" and the laptop stayed unreachable until an agent restarted it by hand. It now waits for NetworkManager as long as it takes
+# (the owner may connect Wi-Fi hours later) and retries a failed tree sync every 10 minutes. Marker: /var/lib/gringotts/firstboot-done.
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+PIDFILE=/run/gringotts-firstboot.pid
+echo $$ > "$PIDFILE"; trap 'rm -f "$PIDFILE"' EXIT
 echo "== gringotts-firstboot $(date -u)"
-i=0; while ! ip -4 route show default | grep -q . && [ $i -lt 120 ]; do sleep 5; i=$((i+1)); done
-if ! ip -4 route show default | grep -q .; then echo "no network after 10 min: will retry at the next boot"; exit 0; fi
+have_net() { ip -4 route show default | grep -q .; }
+if ! have_net; then
+  echo "== waiting for a network (no limit): connect Wi-Fi from the GNOME network menu; the first connection continues this automatically"
+  while ! have_net; do sleep 10; done
+  echo "== network is up $(date -u)"
+fi
+sleep 5                      # DHCP lease + chrony burst (the NetworkManager hook of horcrux-chrony-nm) settle first
 gringotts-remote || echo "remote handoff incomplete (see above)"
 mkdir -p /var/lib/gringotts
-echo "== portage trees"
-ok=1
-emerge-webrsync -q || ok=0
-for r in guru canutethegreat-overlay; do [ -d /var/db/repos/$r/.git ] || find /var/db/repos/$r -mindepth 1 -delete 2>/dev/null; emaint sync -r $r || ok=0; done      # (the image ships the overlay directories empty: the first sync clones them)
-[ $ok = 1 ] && { date -u > /var/lib/gringotts/firstboot-done; echo "== done"; } || echo "== tree sync failed: will retry at the next boot"
+sync_trees() {
+  echo "== portage trees"
+  ok=1
+  emerge-webrsync -q || ok=0
+  for r in guru canutethegreat-overlay; do [ -d /var/db/repos/$r/.git ] || find /var/db/repos/$r -mindepth 1 -delete 2>/dev/null; emaint sync -r $r || ok=0; done      # (the image ships the overlay directories empty: the first sync clones them)
+  [ $ok = 1 ]
+}
+until have_net && sync_trees; do echo "== tree sync not done (network?): retry in 10 minutes"; sleep 600; done
+date -u > /var/lib/gringotts/firstboot-done
+echo "== done"
 exit 0

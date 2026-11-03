@@ -1264,6 +1264,12 @@ menuentry "{self.p['title']} (ZFS root)" {{
 
     def finish(self):
         T = self.target
+        # the installed system must not boot with a months-off hardware clock (chrony has no sources before the network is up)
+        try:
+            from . import rtc
+            rtc.sync(self.log)
+        except Exception as e:  # never fail an install over the clock
+            self.log(f"rtc: skipped ({e})")
         self.run("sync", check=False)
         for d in ("dev", "proc", "sys"):
             self.run(["umount", "-R", "-l", f"{T}/{d}"], check=False)
