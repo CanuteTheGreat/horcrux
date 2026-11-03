@@ -30,6 +30,7 @@ SQ = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(SQ)
 Q = SQ.Q
 LUKS_PW = SQ.LUKS_PW
+LOGIN_PW = SQ.USER_PW          # the desktop user's own password: a DIFFERENT secret from the disk passphrase
 USER = "canutethegreat"
 
 MARKER_PY = r'''
@@ -110,14 +111,26 @@ class XT(SQ.T):
             inv = vm.expect_raw(r"SURFACE-AUTO: INVENTORY rc=(\d+) disk=(\S+)", 240, consume=False)
             self.step("inventory-found-empty-disk", inv and inv.group(1) == b"0" and inv.group(2) == b"/dev/vda", inv.group(0).decode() if inv else "no inventory marker")
             ok = vm.expect_raw(r"SURFACE-AUTO: WAITING-FOR-PASSPHRASE", 120, consume=False)
-            self.step("asks-for-the-passphrase", ok, "the only question")
+            self.step("asks-for-the-passphrase", ok, "first question")
             time.sleep(3)
             vm.shot("passphrase-prompt")
             self.key(vm, LUKS_PW + "\n")
             time.sleep(2)
             self.key(vm, LUKS_PW + "\n")
+            ok = vm.expect_raw(r"SURFACE-AUTO: WAITING-FOR-LOGIN-PASSWORD", 60, consume=False)
+            self.step("asks-for-the-login-password-separately", ok, "second question: the desktop user's own password (never derived from the passphrase)")
+            time.sleep(3)
+            vm.shot("login-password-prompt")
+            self.key(vm, LUKS_PW + "\n")        # the disk passphrase typed as the login password: must be REFUSED
+            ok = vm.expect_raw(r"SURFACE-AUTO: LOGIN-PASSWORD-REFUSED-SAME-AS-DISK", 60, consume=False)
+            self.step("installer-refuses-login-password-equal-to-disk-passphrase", ok, "identical entry rejected with a clear message")
+            time.sleep(2)
+            vm.shot("login-password-refused")
+            self.key(vm, LOGIN_PW + "\n")
+            time.sleep(2)
+            self.key(vm, LOGIN_PW + "\n")
             ok = vm.expect_raw(r"SURFACE-AUTO: PASSPHRASE-ACCEPTED", 60, consume=False)
-            self.step("passphrase-accepted", ok, "typed twice on the USB keyboard")
+            self.step("passphrase-and-login-password-accepted", ok, "each typed twice on the USB keyboard")
             time.sleep(20)
             vm.shot("installing")
             # progress shots (the last screen before a failure is the evidence)
@@ -132,11 +145,26 @@ class XT(SQ.T):
             self.step("installer-finished-ok", ok and b"INSTALL-OK" in ok.group(0), f"{int(time.time() - t0)}s total: " + (ok.group(0).decode() if ok else "timeout"))
             time.sleep(3)
             vm.shot("install-done")
+            ok = vm.expect_raw(r"SURFACE-AUTO: TARGET-CLOSED", 30, consume=False)
+            self.step("target-synced-unmounted-and-closed-before-the-prompt", ok, "sync, umount, LVM/dm-crypt closed before the owner is told to remove the stick")
+            # the owner pulls the stick while the live system still runs from it (SP1: no copy to RAM): hot-unplug it at the prompt
+            mark = os.path.getsize(f"{a.out}/1-install-serial.log")
+            try:
+                vm.qmp("device_del", id="stickdev")
+                gone = True
+            except Exception as e:  # noqa
+                gone = False
+                print("device_del failed:", e)
+            self.step("usb-stick-hot-unplugged-at-the-prompt", gone, "QMP device_del of the boot stick, then Enter")
+            time.sleep(3)
             self.key(vm, "\n")                 # "press Enter to restart"
             end = time.time() + 120
             while vm.alive() and time.time() < end:
                 time.sleep(1)
             self.step("vm-restarts-after-install", not vm.alive(), f"{int(time.time() - t0)}s total")
+            sr = open(f"{a.out}/1-install-serial.log", "rb").read()[mark:].decode(errors="replace")
+            bad = re.findall(r"(?i)[^\n]*(i/o error|buffer i/o|blk_update_request|critical target error|squashfs[^\n]*error)[^\n]*", sr)
+            self.step("no-io-errors-after-the-stick-is-pulled", not bad and "SURFACE-AUTO: RESTARTING" in sr, "restart without reading the stick" if not bad else bad[0][:200])
         finally:
             if vm.alive():
                 vm.p.kill()
@@ -151,6 +179,7 @@ class XT(SQ.T):
                            "cat /proc/swaps; echo @@@; cat /etc/surface-kernelrelease; qlist -Iv sys-kernel/gentoo-kernel sys-kernel/horcrux-surface-config app-misc/horcrux-surface-desktop; "
                            "ls /etc/portage/patches/sys-kernel/gentoo-kernel | wc -l", timeout=60)
         self.save("system-state.txt", out)
+        Q.shadow_reuse_gate(self.ssh, self.step, LUKS_PW)      # SECURITY: no account password (user, root, ...) verifies against the disk passphrase
         flat = out.replace("\r", "")
         s("root-is-xfs-on-lvm-on-luks2", "/dev/mapper/hxvg-root xfs" in flat and "argon2id" in flat and re.search(r"Version:\s+2", flat) is not None, flat.splitlines()[0] if flat else "")
         s("boot-is-ext4", re.search(r"^ext4$", flat, re.M) is not None, "/boot ext4")
@@ -306,8 +335,8 @@ class XT(SQ.T):
         self.save("greeter-windows.txt", wm)
         s("greeter-onboard-running", re.search(r"onboard", wm) is not None, re.sub(r"\s+", " ", wm)[:240])
         s("greeter-onscreen-keyboard-available", "onboard" in out or re.search(r"keyboard\s*=\s*onboard", out) is not None, "greeter has an on-screen keyboard (a11y button / onboard)")
-        # a REAL login at the greeter: the desktop user's password (the same passphrase typed at install) on the USB keyboard
-        self.key(vm, LUKS_PW + "\n")
+        # a REAL login at the greeter: the desktop user's own password (NOT the disk passphrase) on the USB keyboard
+        self.key(vm, LOGIN_PW + "\n")
         ok = False
         for _ in range(30):
             time.sleep(6)

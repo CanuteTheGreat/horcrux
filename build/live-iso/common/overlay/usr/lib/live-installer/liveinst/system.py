@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import time
 
-from . import arch, hwprofile, luksroot, portableswap, zfsswap
+from . import arch, hwprofile, luksroot, portableswap, secretcheck, zfsswap
 
 LOG = "/var/log/live-installer.log"
 
@@ -644,6 +644,7 @@ def validate_config(profile, c, unattended=False, require_secret=True):
                 errs.append("disk passphrase: " + pp)
     errs += luksroot.validate(c)
     errs += portableswap.validate(c)
+    errs += secretcheck.reuse_problems(c)        # the disk passphrase is only for the disk (never an account password)
     de = c.get("desktop") or {}
     if de.get("enable") and not de.get("user"):
         errs.append("desktop: a user name is required")
@@ -655,7 +656,7 @@ def validate_config(profile, c, unattended=False, require_secret=True):
             pp = password_problem(c["root_password"], c["hostname"])
             if pp:
                 errs.append(pp)
-        elif not c["ssh_keys"]:
+        elif not c["ssh_keys"] and not has_login_user(c):
             errs.append("no root password hash and no SSH key supplied: the installed system would be unreachable")
     for k in c["ssh_keys"]:
         if ssh_key_problem(k):
@@ -674,6 +675,13 @@ def validate_config(profile, c, unattended=False, require_secret=True):
                 if n.get("dns") and dns_problem(n["dns"]):
                     errs.append(f"{s} dns: " + dns_problem(n["dns"]))
     return errs
+
+
+def has_login_user(c):
+    """a sudo-capable account is created (root can then stay locked)"""
+    d = c.get("desktop") or {}
+    return bool((c.get("install_type") == "desktop" and c.get("user_name") and (c.get("user_hash") or c.get("user_password")))
+                or (d.get("enable") and d.get("user") and (d.get("password") or d.get("password_hash"))))
 
 
 def use_problems(profile, c):
@@ -768,6 +776,9 @@ class Installer:
         from . import stages
         c, p = self.c, self.p
         self.log(f"== live-installer: {p['title']} ({c['install_type']}) on {', '.join(c['disks'])} ({'UEFI' if self.efi else 'BIOS'}), fs={c['fs']}")
+        bad = secretcheck.reuse_problems(c, unverifiable=lambda who: self.log(f"warning: the password hash of {who} could not be checked against the disk passphrase here"))
+        if bad:      # before anything touches the disk; in-memory comparison only, nothing secret is logged
+            raise InstallError("refusing to install: " + " ".join(bad))
         if self.t2:
             from . import t2
             t2.preflight(self)

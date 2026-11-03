@@ -519,6 +519,42 @@ def ssh(port, key, cmd, extra=(), timeout=40):
         return 255, "timeout"
 
 
+def load_secretcheck():
+    """the installer's own in-memory password/hash comparison (liveinst/secretcheck.py), loaded without importing the package"""
+    import importlib.util
+    f = os.path.join(os.path.dirname(os.path.abspath(__file__)), "overlay", "usr", "lib", "live-installer", "liveinst", "secretcheck.py")
+    sp = importlib.util.spec_from_file_location("hx_secretcheck", f)
+    m = importlib.util.module_from_spec(sp)
+    sp.loader.exec_module(m)
+    return m
+
+
+def shadow_reuse_gate(sh, step_fn, secret, step="no-account-password-equals-the-disk-passphrase"):
+    """SECURITY GATE: the disk passphrase is ONLY for the disk. `sh(cmd)` -> (rc, out) runs as root on the installed system; `step_fn(name, ok, info)` records. Reads the installed system's /etc/shadow (over ssh as root, kept in
+    memory) and FAILS when ANY account's hash verifies against the known TEST passphrase `secret` (user, root, anything), or when a
+    hash cannot be checked at all. Self-tests the checker first (a known hash of `secret` must verify, a wrong one must not), so a broken
+    crypt library can never turn this into a vacuous PASS. Only account NAMES go into the report, never a hash or a password."""
+    sc = load_secretcheck()
+    probe = subprocess.check_output(["openssl", "passwd", "-6", "-salt", "gateselft", secret]).decode().strip()
+    selftest = sc.hash_verifies(secret, probe) is True and sc.hash_verifies(secret + "x", probe) is False
+    rc, o = sh("getent shadow")
+    reuse, unknown, locked, checked = [], [], [], []
+    for line in o.splitlines():
+        f = line.split(":")
+        if len(f) < 2 or not f[0] or " " in f[0]:
+            continue
+        name, h = f[0], f[1]
+        if not h or h[0] in "!*":
+            locked.append(name)
+            continue
+        r = sc.hash_verifies(secret, h)
+        (reuse if r else unknown if r is None else checked).append(name)
+    ok = bool(selftest and rc == 0 and checked + reuse + locked and not reuse and not unknown)
+    step_fn(step, ok, ("REUSE: " + ",".join(reuse) + " " if reuse else "") + ("UNVERIFIABLE: " + ",".join(unknown) + " " if unknown else "")
+             + ("" if selftest else "GATE SELF-TEST FAILED (no crypt backend) ") + f"password hashes checked and different: {','.join(checked) or '-'}; locked: {len(locked)}")
+    return ok
+
+
 def make_answer_image(path, proj, content):
     d = tempfile.mkdtemp()
     open(f"{d}/answer.toml", "w").write(content)

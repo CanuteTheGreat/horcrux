@@ -2,7 +2,7 @@
 """gringotts-install - the owner's one-step installer for the ThinkBook 16 G6 (gringotts).
 
 Everything else (hostname, user, ZFS native encryption, hibernation swap, apps, SSH keys, Wi-Fi) is decided by the image; the
-owner types only the disk passphrase (twice) and confirms the erase.  The passphrase lives in this process' memory and in a 0600
+owner types the disk passphrase and a DIFFERENT login password (each twice) and confirms the erase.  The passphrase lives in this process' memory and in a 0600
 file on tmpfs for the instant the shared installer reads it; it is never logged and never leaves the laptop.
 
   gringotts-install                interactive (what the boot menu starts on tty1)
@@ -82,14 +82,17 @@ def ask_passphrase():
 
 
 def ask_login(passphrase):
-    say(f"\n{B}Login password{N} for {USER} (GNOME login and sudo).")
-    say("  Press Enter to use the SAME text as the disk passphrase (you can change it later with  passwd).")
+    """the desktop login password: asked separately, twice, never the disk passphrase (compared in memory only)"""
+    from liveinst import secretcheck
+    say(f"\n{B}Login password{N} for {USER} (GNOME login and sudo). It must be DIFFERENT from the disk passphrase.")
+    say("  The disk passphrase is only for the disk; root stays locked (sudo via your user).")
     while True:
         p = getpass.getpass("  Login password       : ")
-        if not p:
-            return passphrase
         if len(p) < 8:
             say(f"  {Y}At least 8 characters.{N}")
+            continue
+        if secretcheck.entry_problem(p, {"fs": "zfs", "zfs_encrypt": True, "zfs_passphrase": passphrase}):
+            say(f"  {Y}{secretcheck.DISK_REUSE}{N}")
             continue
         if getpass.getpass("  Login password (again): ") != p:
             say(f"  {Y}The two entries differ, try again.{N}")
@@ -265,7 +268,11 @@ def main():
         return 0
     input("\n  Press Enter to reboot...")
     os.sync()
-    subprocess.run(["reboot"])
+    try:        # the live system runs from the USB stick: restart through the kernel so pulling the stick cannot break the reboot
+        with open("/proc/sysrq-trigger", "w") as f:
+            f.write("b")
+    except OSError:
+        subprocess.run(["reboot", "-f"])
     return 0
 
 
