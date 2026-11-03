@@ -79,6 +79,11 @@ pub struct NodeUsage {
     /// older nodes). See [`check_identity`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_id: Option<String>,
+    /// CPU family bucket of the reporting host: "intel", "amd" or "" (unknown
+    /// / older node). Lets every peer know the vendor of remote nodes so
+    /// AMD<->Intel live moves are blocked cluster-wide, not just locally.
+    #[serde(default)]
+    pub cpu_vendor: String,
 }
 
 /// Result of one usage poll of one node.
@@ -121,6 +126,11 @@ pub fn apply_poll(node: &mut Node, outcome: PollOutcome, now: i64) {
             }
             if usage.cpu_cores > 0 {
                 node.cpu_cores = usage.cpu_cores;
+            }
+            // Vendor is a hardware fact the node itself reports; an empty
+            // report (older node) never erases a known value.
+            if !usage.cpu_vendor.is_empty() {
+                node.cpu_vendor = usage.cpu_vendor.clone();
             }
             if node.architecture == Architecture::Unknown
                 && usage.architecture != Architecture::Unknown
@@ -334,6 +344,7 @@ impl LocalUsageSampler {
             architecture: Architecture::detect(),
             timestamp: chrono::Utc::now().timestamp(),
             node_id: None,
+            cpu_vendor: super::node::detect_cpu_vendor_family(),
         })
     }
 }
@@ -409,7 +420,23 @@ mod tests {
             architecture: Architecture::Aarch64,
             timestamp: 1_000,
             node_id: None,
+            cpu_vendor: String::new(),
         }
+    }
+
+    #[test]
+    fn report_fills_cpu_vendor_and_empty_report_keeps_it() {
+        let mut n = node("n1", "10.0.0.1");
+        assert_eq!(n.cpu_vendor, "");
+        let mut u = usage(1.0, 1);
+        u.cpu_vendor = "amd".to_string();
+        apply_poll(&mut n, PollOutcome::Usage(u), 1_000);
+        assert_eq!(n.cpu_vendor, "amd");
+        apply_poll(&mut n, PollOutcome::Usage(usage(2.0, 2)), 1_010);
+        assert_eq!(
+            n.cpu_vendor, "amd",
+            "older node's empty vendor must not erase it"
+        );
     }
 
     #[test]
