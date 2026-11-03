@@ -5,8 +5,9 @@
 #               PRE-release `daily` (stable URL, assets replaced in place).
 #  * v* tag   : same build + tests from the tag, attached to that release as a stable ISO
 #               (criteria: docs/ISO-INSTALL.md "Stable ISO criteria").
-#  * The job never fails on a build/test problem (a red run e-mails the owner): the result is
-#    written to the `daily-status` release marker and the job summary instead.
+#  * A build/test/publish failure FAILS the run (red run = e-mail to the owner; a green run means an image was built,
+#    tested and published). The result is also written to the `daily-status-*` release marker and the job summary;
+#    ~/.hermes iso-status-watch additionally alerts when a published daily asset is older than 36 h.
 # One job per architecture, each BUILT NATIVELY and tested under QEMU on its own runner label:
 #   x86_64  kvm-x86_64  (rw-man-01 colo, /dev/kvm, host docker)  -> horcrux-server-openrc-daily-x86_64.iso
 #   aarch64 arm64       (rw-man-04/05 Graviton, host docker; no /dev/kvm there, so QEMU runs TCG, timeouts x3)  -> horcrux-server-openrc-daily-aarch64.iso
