@@ -18,6 +18,7 @@ RDEPEND="
 	gnome-base/gnome-control-center
 	net-misc/chrony
 	net-misc/horcrux-chrony-nm
+	sys-apps/horcrux-repo-config
 	net-misc/networkmanager
 	gnome-extra/gnome-shell-extension-appindicator
 	gnome-extra/gnome-shell-extensions
