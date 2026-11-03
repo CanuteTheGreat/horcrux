@@ -584,7 +584,11 @@ configure_root_password() {
     log_info "Set the root password for your system."
     echo ""
 
+    # the live medium's own account (horcrux, password known) came along with the copied system: never keep it
+    chroot "$TARGET" passwd -l horcrux >/dev/null 2>&1 || true
+
     local password=$(get_password "Enter root password")
+    ROOT_PW_CHECK="$password"       # memory only; compared with the user's password below, never written anywhere
 
     echo "root:$password" | chroot "$TARGET" chpasswd
 
@@ -601,7 +605,13 @@ configure_user() {
 
     local username=$(get_input "Enter username" "horcrux")
     local fullname=$(get_input "Enter full name" "Horcrux Administrator")
-    local password=$(get_password "Enter password for $username")
+    local password
+    while true; do
+        password=$(get_password "Enter password for $username")
+        [[ -n "${ROOT_PW_CHECK:-}" && "$password" == "$ROOT_PW_CHECK" ]] || break
+        log_error "The user password and the root password must differ."
+    done
+    unset ROOT_PW_CHECK
 
     # Create user
     chroot "$TARGET" useradd -m -G wheel,kvm,libvirt,docker -c "$fullname" -s /bin/bash "$username" 2>/dev/null || true
@@ -883,13 +893,21 @@ run_automatic_install() {
     # Use defaults
     echo "$DEFAULT_HOSTNAME" > "$TARGET/etc/hostname"
     ln -sf "/usr/share/zoneinfo/$DEFAULT_TIMEZONE" "$TARGET/etc/localtime"
-    echo "root:horcrux" | chroot "$TARGET" chpasswd
+    # NO default password: root is locked and the live account is locked; a random ONE-TIME root password (expired, must be changed at the
+    # first login) is shown on this console only, never logged or stored
+    chroot "$TARGET" passwd -l horcrux >/dev/null 2>&1 || true
+    local otp
+    otp=$(head -c 18 /dev/urandom | base64 | tr -d '/+=' | head -c 16)
+    echo "root:$otp" | chroot "$TARGET" chpasswd
+    chroot "$TARGET" chage -d 0 root
+    printf '\n  One-time root password (valid for the first login only, you must change it then): %s\n\n' "$otp" > /dev/tty 2>/dev/null || true
+    unset otp
 
     install_bootloader
     configure_horcrux
 
     log_success "Automatic installation complete"
-    log_info "Default root password: horcrux"
+    log_info "Root has a one-time password shown above (expired: it must be changed at the first login)"
 }
 
 # ============================================================================

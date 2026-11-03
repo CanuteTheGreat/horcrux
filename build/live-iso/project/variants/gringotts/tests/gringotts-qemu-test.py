@@ -166,7 +166,7 @@ class GRun(zt.ZRun):
             vm.send("tailscale --socket=/run/tailscale/tailscaled.sock logout; echo TS-LOGOUT-RC=$?\r")
             m = vm.expect_raw(r"TS-LOGOUT-RC=\d+", 60)
             self.step("live-tailscale-ephemeral-node-removed-by-logout", bool(m) and b"RC=0" in m.group(0), "test node removed from the tailnet")
-            # the owner's install: only the passphrase is typed
+            # the owner's install: the disk passphrase and a separate login password are typed
             vm.send("gringotts-install --yes-erase --extra-authorized-key-file /root/test.pub --no-reboot\r")
             self.step("install-passphrase-prompt", vm.expect_raw(r"Passphrase\s+:", 120), "asked for the disk passphrase")
             time.sleep(0.5)
@@ -174,9 +174,18 @@ class GRun(zt.ZRun):
             self.step("install-passphrase-confirm-prompt", vm.expect_raw(r"Passphrase \(again\)\s+:", 30), "")
             time.sleep(0.5)
             vm.send(PASSPHRASE + "\r")
-            self.step("install-login-password-prompt", vm.expect_raw(r"Login password\s+:", 30), "Enter = same as the passphrase")
+            self.step("install-login-password-prompt", vm.expect_raw(r"Login password\s+:", 30), "asked separately, no 'same as the passphrase' shortcut")
             time.sleep(0.5)
-            vm.send("\r")
+            vm.send("\r")                       # Enter alone must NOT mean 'same as the passphrase'
+            self.step("installer-refuses-empty-login-password", vm.expect_raw(r"At least 8 characters", 30), "empty entry is refused")
+            time.sleep(0.5)
+            vm.send(PASSPHRASE + "\r")          # the disk passphrase typed as the login password
+            self.step("installer-refuses-login-password-equal-to-disk-passphrase", vm.expect_raw(r"only for unlocking the disk", 30), "identical entry rejected with a clear message")
+            time.sleep(0.5)
+            vm.send(zt.USER_PW + "\r")
+            self.step("install-login-password-confirm-prompt", vm.expect_raw(r"Login password \(again\)\s*:", 30), "")
+            time.sleep(0.5)
+            vm.send(zt.USER_PW + "\r")
             ok = vm.expect_raw(r"(INSTALL FINISHED|INSTALL FAILED[^\n]*|STOP:[^\n]*)", 3000, consume=False)
             txt = ok.group(0).decode(errors="replace") if ok else "timeout"
             vm.shot("install-finished")
@@ -241,7 +250,7 @@ class GRun(zt.ZRun):
         for attempt in range(1, 5):
             kb.key("ENTER", 1.5)                  # the user tile
             time.sleep(4)
-            kb.text(PASSPHRASE, pause=0.08)      # login password = same text (Enter at the installer prompt)
+            kb.text(zt.USER_PW, pause=0.08)      # the LOGIN password (a different secret from the disk passphrase)
             kb.key("ENTER")
             end = time.time() + qt.T(120)
             while time.time() < end:

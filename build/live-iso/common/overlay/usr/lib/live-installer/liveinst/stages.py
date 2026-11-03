@@ -16,7 +16,7 @@ stack, skip the server sysctl lock-down and use the desktop USE preset.
 """
 import re
 
-from . import portableswap
+from . import portableswap, secretcheck
 from . import system as S
 
 ERASE_WORD = "ERASE"
@@ -237,17 +237,24 @@ class DiskStage(Stage):
                 Field("lpw2", "Confirm passphrase", "password", c.get("luks_passphrase", ""), width=40, visible=luks),
                 swap_field(c, p, ctx.ram_mb)]
 
+    def _reuse(self, ctx, pw):
+        """going back to this page and choosing a passphrase that an account already uses"""
+        probe = dict(ctx.c, fs="xfs-luks", luks_passphrase=pw)
+        bad = secretcheck.reuse_problems(probe)
+        return bad[0] if bad else None
+
     def validate(self, ctx, v):
         if v.get("fs") == "xfs-luks":
             if v.get("lpw") != v.get("lpw2"):
                 return "The two passphrases do not match."
             if len(v.get("lpw") or "") < 12:
                 return "The disk passphrase needs at least 12 characters."
+            return self._reuse(ctx, v.get("lpw") or "")
         if v.get("fs") == "zfs" and v.get("enc"):
             if v.get("pp") != v.get("pp2"):
                 return "The two passphrases do not match."
             from . import zfsroot
-            return zfsroot.passphrase_problem(v.get("pp") or "")
+            return zfsroot.passphrase_problem(v.get("pp") or "") or self._reuse(ctx, v.get("pp") or "")
         return None
 
     def commit(self, ctx, v):
@@ -309,12 +316,25 @@ class RootpassStage(Stage):
     intro = ("Set the administrator password (REQUIRED - there is no default password). "
              "It is used for the console root login and the web admin user.")
 
+    def _user_machine(self, ctx):
+        """a desktop/Surface install creates a sudo user: root then stays LOCKED unless a separate password is given"""
+        try:
+            from . import desktop
+            if desktop.available():
+                return True
+            hp, _hm = S.hwprofile.detect()
+            return bool(hp and hp.get("defaults", {}).get("desktop"))
+        except Exception:  # noqa
+            return False
+
     def fields(self, ctx):
         c = ctx.c
+        user_m = self._user_machine(ctx)
         return [
-            Field("pw", "Password", "password", c["root_password"], width=40,
-                  hint="At least 12 characters, mixed. Used for console root and web admin"),
-            Field("pw2", "Confirm password", "password", c["root_password"], width=40),
+            Field("pw", "Root password (optional)" if user_m else "Password", "password", c["root_password"], width=40, optional=user_m,
+                  hint="Leave EMPTY to keep root locked (log in as your user, sudo). Never the disk passphrase" if user_m
+                  else "At least 12 characters, mixed. Used for console root and web admin. Never the disk passphrase"),
+            Field("pw2", "Confirm password", "password", c["root_password"], width=40, optional=user_m),
             Field("strength", "Strength", "info", lambda a: S.password_strength(a["pw"]) if a["pw"] else "-"),
             Field("email", "E-mail (notifications)", "text", c["email"], validate=lambda v, a: S.email_problem(v), width=40,
                   hint="Alerts and notices are addressed here"),
@@ -325,7 +345,9 @@ class RootpassStage(Stage):
     def validate(self, ctx, v):
         if v["pw"] != v["pw2"]:
             return "The two passwords do not match."
-        return S.password_problem(v["pw"], ctx.c["hostname"])
+        if not v["pw"] and self._user_machine(ctx):
+            return None                     # root stays locked
+        return secretcheck.entry_problem(v["pw"], ctx.c) or S.password_problem(v["pw"], ctx.c["hostname"])
 
     def commit(self, ctx, v):
         c = ctx.c
@@ -483,7 +505,7 @@ class DesktopStage(Stage):
         d = ctx.c["desktop"]
         return [Field("user", "User name", "text", d.get("user") or "surface", width=30,
                       validate=lambda v, a: None if re.fullmatch(r"[a-z_][a-z0-9_-]{0,30}", v or "") else "lower-case letters, digits, - and _"),
-                Field("pw", "Password", "password", d.get("password", ""), width=40, hint="Min 12 chars. Needed to log in and for sudo"),
+                Field("pw", "Password", "password", d.get("password", ""), width=40, hint="Min 12 chars. Needed to log in and for sudo. NOT the disk passphrase"),
                 Field("pw2", "Confirm password", "password", d.get("password", ""), width=40),
                 Field("auto", "Log in automatically on the console", "check", d.get("autologin", False),
                       hint="OFF (default): the Type Cover / on-screen keyboard login prompt is shown. ON: the desktop starts right after the disk passphrase")]
@@ -491,7 +513,9 @@ class DesktopStage(Stage):
     def validate(self, ctx, v):
         if v["pw"] != v["pw2"]:
             return "The two passwords do not match."
-        return S.password_problem(v["pw"], ctx.c["hostname"])
+        return (secretcheck.entry_problem(v["pw"], ctx.c)
+                or (("root and the user must not share a password.") if v["pw"] and v["pw"] == ctx.c.get("root_password") else None)
+                or S.password_problem(v["pw"], ctx.c["hostname"]))
 
     def commit(self, ctx, v):
         ctx.c["desktop"].update({"enable": True, "user": v["user"], "password": v["pw"], "autologin": bool(v["auto"])})
@@ -549,14 +573,16 @@ class GnomeStage(Stage):
         c = ctx.c
         return [Field("user", "User name", "text", c["user_name"], width=30, validate=lambda v, a: desktop.user_problem(v)),
                 Field("full", "Full name", "text", c["user_fullname"], width=30, optional=True),
-                Field("pw", "Password", "password", c["user_password"], width=40, hint="Min 12 chars, mixed"),
+                Field("pw", "Password", "password", c["user_password"], width=40, hint="Min 12 chars, mixed. NOT the disk passphrase"),
                 Field("pw2", "Confirm password", "password", c["user_password"], width=40),
                 Field("auto", "Log in automatically", "check", c["user_autologin"], hint="Not recommended on an encrypted laptop that you carry around")]
 
     def validate(self, ctx, v):
         if v["pw"] != v["pw2"]:
             return "The two passwords do not match."
-        return S.password_problem(v["pw"], ctx.c["hostname"])
+        return (secretcheck.entry_problem(v["pw"], ctx.c)
+                or (("root and the user must not share a password.") if v["pw"] and v["pw"] == ctx.c.get("root_password") else None)
+                or S.password_problem(v["pw"], ctx.c["hostname"]))
 
     def commit(self, ctx, v):
         c = ctx.c
