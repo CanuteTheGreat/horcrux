@@ -37,7 +37,7 @@ if [ "$mode" = stable ]; then tag=${GITHUB_REF_NAME:?}; suffix=$tag; else suffix
 
 echo "::group::host deps"
 export DEBIAN_FRONTEND=noninteractive
-(apt-get update -qq && apt-get install -y -qq --no-install-recommends $QEMU_PKGS qemu-utils python3 curl ca-certificates openssh-client sshpass e2fsprogs openssl >/dev/null) || fail deps "apt install failed"
+(apt-get update -qq && apt-get install -y -qq --no-install-recommends $QEMU_PKGS swtpm qemu-utils python3 curl ca-certificates openssh-client sshpass e2fsprogs openssl >/dev/null) || fail deps "apt install failed"
 echo "::endgroup::"
 
 # stable gate: the repo's own CI must not be red on the tagged commit
@@ -126,6 +126,9 @@ if [ "$result" = pass ]; then
     )
   fi
   fi
+  # product-specific matrix (Patronus: ZFS default + TPM-unlock path, XFS fallback, no-TPM path): <project>/ci-matrix.sh may append to MATRIX
+  # and may set GATES_ONLY_X86 entries; sourced after the shared defaults so both products keep one runner.
+  [ -f "$HERE/../project/ci-matrix.sh" ] && . "$HERE/../project/ci-matrix.sh"
   if [ -n "$VARIANT" ]; then
     # the variant adds a desktop on top of the same installer: the server matrix is run in its short form (BIOS+CD ext4, UEFI+USB ZFS mirror)
     # and the variant's own test below does the rest

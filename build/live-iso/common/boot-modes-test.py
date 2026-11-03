@@ -66,7 +66,7 @@ class Tests:
         self.nvars = f"{a.out}/OVMF_VARS.fd"
         self.ns = argparse.Namespace(project=a.project, mode=a.mode, media=a.media, flow="tui", fs="ext4", fs_default=False, install_only=False, zfs_raid="single", static_ip="", lan_ip="10.77.0.1",
                                      mem=3072, ssh_password_opt_in=False, console_open=False, out=a.out, disk_gb=12, arch=a.arch,
-                                     cpu=a.cpu, restarts=0)
+                                     cpu=a.cpu, restarts=0, tpm="none", tpm_negative=False)
         self.serial = qt.ARCHS[a.arch]["serial"]
 
     # ---------------------------------------------------------------- plumbing

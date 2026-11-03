@@ -12,6 +12,8 @@ it is never logged, never written to the installed system, and the key is prompt
 import os
 import re
 
+from . import tpmunlock
+
 POOL = "rpool"
 BE = "horcrux"
 KEY_FILE = "/run/horcrux-zfs.key"
@@ -30,14 +32,15 @@ def passphrase_problem(p):
     return None
 
 
-def pool_args(encrypt, devs, mirror, target):
+def pool_args(encrypt, devs, mirror, target, keyformat="passphrase"):
     """argv of `zpool create` (pure: unit tested)"""
     a = ["zpool", "create", "-f", "-o", "ashift=12", "-o", "autotrim=on",
          "-O", "compression=zstd", "-O", "acltype=posixacl", "-O", "xattr=sa", "-O", "relatime=on",
          "-O", "dnodesize=auto", "-O", "normalization=formD", "-O", "mountpoint=none", "-O", "canmount=off"]
     if encrypt:
-        a += ["-O", f"encryption={ENC_ALGO}", "-O", "keyformat=passphrase", "-O", f"keylocation=file://{KEY_FILE}",
-              "-O", "pbkdf2iters=1000000"]
+        a += ["-O", f"encryption={ENC_ALGO}", "-O", f"keyformat={keyformat}", "-O", f"keylocation=file://{KEY_FILE}"]
+        if keyformat == "passphrase":
+            a += ["-O", "pbkdf2iters=1000000"]
     a += ["-R", target, POOL] + (["mirror"] + list(devs) if mirror else list(devs)[:1])
     return a
 
@@ -65,9 +68,13 @@ def mkpool(inst):
     if enc:
         fd = os.open(KEY_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
-            f.write(c["zfs_passphrase"])           # no trailing newline: the key is exactly what the user typed
+            if c.get("zfs_keymode") == "tpm":
+                inst.tpm_key = tpmunlock.new_key()      # 64 hex digits: sealed to the TPM later (configure), also the printed recovery key
+                f.write(inst.tpm_key)
+            else:
+                f.write(c["zfs_passphrase"])       # no trailing newline: the key is exactly what the user typed
     try:
-        inst.run(pool_args(enc, devs, c["zfs_raid"] == "mirror", inst.target))
+        inst.run(pool_args(enc, devs, c["zfs_raid"] == "mirror", inst.target, "hex" if c.get("zfs_keymode") == "tpm" else "passphrase"))
         if enc:
             # from now on the key is asked for (initramfs prompt); the file URL must not outlive the install
             inst.run(["zfs", "set", "keylocation=prompt", POOL])
@@ -146,6 +153,8 @@ def configure(inst, cmdline_extra="", kernel_glob="*"):
     # the boot-time import of an encrypted pool: zfs-import/zfs-mount from OpenRC (dracut already mounted /)
     for svc in ("zfs-import", "zfs-mount", "zfs-zed"):
         inst.run(["rc-update", "add", svc, "boot" if svc != "zfs-zed" else "default"], chroot=True, check=False)
+    if inst.c.get("zfs_encrypt") and inst.c.get("zfs_keymode") == "tpm":
+        tpm_seal(inst)
     # /boot is its own ext4 partition: fstab (the installer wrote none)
     L = inst.layout(inst.c["disks"][0])
     from .system import fsuuid
@@ -154,6 +163,20 @@ def configure(inst, cmdline_extra="", kernel_glob="*"):
     if inst.efi and esp_uuid:
         fstab.append(f"UUID={esp_uuid} /boot/efi vfat umask=0077,noatime 0 2")
     inst.write("/etc/fstab", "\n".join(fstab) + "\n")
+
+
+def tpm_seal(inst):
+    """unattended unlock: seal the pool key to the TPM, rebuild the initramfs with the unlock module and prove it is in there"""
+    from .system import InstallError
+    key = getattr(inst, "tpm_key", "")
+    if not key:
+        raise InstallError("internal: TPM key missing")
+    inst.recovery_key = inst.c["recovery_key"] = tpmunlock.seal_to_target(inst, key)    # shown once on the done page; never written to disk
+    inst.tpm_key = ""
+    from . import zfsswap
+    zfsswap._rebuild_initramfs_for(inst, tpmunlock.initramfs_problems)
+    inst.log("RECOVERY KEY (write it down, it is not stored anywhere): " + inst.recovery_key)
+    inst.log("disk key sealed to the TPM 2.0 (PCR 7); the initramfs unseals it at boot, no passphrase is ever asked")
 
 
 def write_grubcfg(inst, extra_cmdline=""):

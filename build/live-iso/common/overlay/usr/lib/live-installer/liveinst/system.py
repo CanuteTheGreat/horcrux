@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import time
 
-from . import arch, hwprofile, luksroot, portableswap, zfsswap
+from . import arch, hwprofile, luksroot, portableswap, tpmunlock, zfsswap
 
 LOG = "/var/log/live-installer.log"
 
@@ -512,6 +512,29 @@ def _default_fs(profile):
 
 def default_config(profile):
     fs, fs_why = _default_fs(profile)
+    c = _default_config(profile, fs, fs_why)
+    apply_encryption_policy(profile, c)
+    return c
+
+
+def apply_encryption_policy(profile, c, tpm_ok=None):
+    """profile encryption = \"tpm-or-none\" (appliances): ZFS is encrypted only when a working TPM 2.0 can unlock it unattended, otherwise NOT
+    encrypted. No passphrase prompt at boot, ever. Sets zfs_encrypt / zfs_keymode / enc_why (shown on the disk page)."""
+    if profile.get("encryption") != "tpm-or-none":
+        return
+    c["zfs_keymode"], c["zfs_passphrase"] = "tpm", ""
+    if c.get("fs") != "zfs":
+        c["zfs_encrypt"], c["enc_why"] = False, "NOT encrypted: encryption needs the ZFS file system with a TPM (XFS here would need a passphrase at every boot)"
+        return
+    want = c.get("enc_request", "auto")
+    if want == "none":
+        c["zfs_encrypt"], c["enc_why"] = False, "NOT encrypted: switched off in the answer file"
+        return
+    ok, why = tpmunlock.decide(profile, tpm_ok)
+    c["zfs_encrypt"], c["enc_why"] = ok, why
+
+
+def _default_config(profile, fs, fs_why):
     return {
         "locale": "en_US.UTF-8", "keymap": "us", "timezone": "UTC",
         "disks": [], "fs": fs, "fs_why": fs_why, "zfs_raid": "single", "luks_passphrase": "",
@@ -526,7 +549,7 @@ def default_config(profile):
         "ssh_keys": [], "ssh_password_auth": False, "email": "",
         "console_open": False,
         # ZFS root with native encryption (the passphrase is typed by the user; only held in memory)
-        "zfs_encrypt": False, "zfs_passphrase": "",
+        "zfs_encrypt": False, "zfs_passphrase": "", "zfs_keymode": "passphrase", "enc_why": "",
         # Apple T2 Mac support: auto = detect PCI 106b:1801; firmware = auto | none | path to a firmware.tar / brcm dir
         "t2": "auto", "t2_firmware": "auto",
         # install profile: server | desktop (desktop needs the desktop image variant)
@@ -581,8 +604,16 @@ def config_from_answers(profile, path):
         c["desktop"].update({k: de[k] for k in ("enable", "user", "password", "password_hash", "autologin") if k in de})
     c["hw"] = a.get("hardware", {}).get("profile", "auto")
     c["zfs_raid"] = d.get("zfs_raid", "single")
-    c["zfs_encrypt"] = bool(d.get("encryption", d.get("encrypt", False)))
-    c["zfs_passphrase"] = d.get("passphrase", "")
+    enc = d.get("encryption", d.get("encrypt", False))
+    if profile.get("encryption") == "tpm-or-none":
+        # appliance: encryption is decided by the machine (TPM present and working -> encrypted + unattended, else none); "auto" | "none" only
+        c["enc_request"] = enc if enc in ("auto", "none") else ("none" if enc is False and "encryption" in d else "auto")
+        if d.get("passphrase"):
+            c["enc_passphrase_given"] = True
+        apply_encryption_policy(profile, c)
+    else:
+        c["zfs_encrypt"] = bool(enc)
+        c["zfs_passphrase"] = d.get("passphrase", "")
     c["t2"] = str(g.get("t2", "auto"))
     c["t2_firmware"] = str(g.get("t2_firmware", "auto"))
     c["install_type"] = str(g.get("install_type", "server"))
@@ -634,7 +665,12 @@ def validate_config(profile, c, unattended=False, require_secret=True):
                 errs.append("user password hash: " + crypt_hash_problem(c["user_hash"]))
         elif not c.get("user_password"):
             errs.append("user: no password")
-    if c.get("zfs_encrypt"):
+    if profile.get("encryption") == "tpm-or-none" and c.get("enc_passphrase_given"):
+        errs.append("this product never asks for a disk passphrase at boot: remove 'passphrase' from the answer file (encryption is automatic with a working TPM 2.0, otherwise off)")
+    if c.get("zfs_encrypt") and c.get("zfs_keymode") == "tpm":
+        if c["fs"] != "zfs":
+            errs.append("TPM disk encryption is ZFS native encryption: choose the ZFS file system")
+    elif c.get("zfs_encrypt"):
         if c["fs"] != "zfs":
             errs.append("disk encryption is ZFS native encryption: choose the ZFS file system")
         else:
@@ -768,6 +804,8 @@ class Installer:
         from . import stages
         c, p = self.c, self.p
         self.log(f"== live-installer: {p['title']} ({c['install_type']}) on {', '.join(c['disks'])} ({'UEFI' if self.efi else 'BIOS'}), fs={c['fs']}")
+        if p.get("encryption") == "tpm-or-none":
+            self.log("Disk encryption: " + (c.get("enc_why") or "none"))
         if self.t2:
             from . import t2
             t2.preflight(self)

@@ -93,3 +93,6 @@ emerge --quiet --unmerge dev-util/ccache >/dev/null 2>&1 || true
 rm -rf /var/db/repos/gentoo/* /var/cache/distfiles/* /var/cache/binhost \
        /usr/share/doc /usr/share/gtk-doc /var/tmp/portage /var/log/emerge* 2>/dev/null || true   # /usr/src/linux-<ver> stays: it is the kernel build tree zfs-kmod (and every module) is built against, ~170 MB
 find / -xdev -name '*.pyc' -path '*/__pycache__/*' -delete 2>/dev/null || true
+# Portage's records must match the image: the strip above removed docs/pyc on purpose, so drop exactly those CONTENTS entries (reviewed list in
+# vdb-prune.py, group `core`); every other missing file stays visible and fails the `package-contents-complete` QEMU gate
+python3 /tmp/vdb-prune.py --groups core

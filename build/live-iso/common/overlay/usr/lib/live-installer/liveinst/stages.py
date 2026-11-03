@@ -227,15 +227,26 @@ class DiskStage(Stage):
                       [("single", "single disk"), ("mirror", "mirror (RAID1, two disks)")],
                       visible=lambda v: v.get("fs") == "zfs", advanced=True,
                       hint="A mirror needs two disks and survives one failing; /boot lives on the first disk only."),
-                Field("enc", "Encrypt the disk (ZFS native, AES-256-GCM)", "check", c.get("zfs_encrypt", False), visible=lambda v: v.get("fs") == "zfs",
-                      hint="Recommended for laptops. The passphrase is asked at every boot; /boot and the EFI partition stay unencrypted"),
-                Field("pp", "Disk passphrase", "password", c.get("zfs_passphrase", ""), width=40, visible=lambda v: v.get("fs") == "zfs" and v.get("enc"),
-                      hint="Min 12 characters. NOT recoverable: if you forget it the data is gone"),
-                Field("pp2", "Confirm passphrase", "password", c.get("zfs_passphrase", ""), width=40, visible=lambda v: v.get("fs") == "zfs" and v.get("enc")),
+                *self._enc_fields(c, p),
                 Field("lpw", "Disk passphrase", "password", c.get("luks_passphrase", ""), width=40, visible=luks,
                       hint="Typed at every boot (the Type Cover / a USB keyboard works). Min 12 chars. Lose it = lose the data"),
                 Field("lpw2", "Confirm passphrase", "password", c.get("luks_passphrase", ""), width=40, visible=luks),
                 swap_field(c, p, ctx.ram_mb)]
+
+    def _enc_fields(self, c, p):
+        """passphrase encryption (laptops/servers) or, for an appliance profile (encryption = "tpm-or-none"), a read-only line that says what
+        the machine itself decided: encrypted with TPM unlock, or not encrypted (never a boot-time passphrase)"""
+        if p.get("encryption") == "tpm-or-none":
+            from . import tpmunlock
+            ok, why = tpmunlock.decide(p)
+            return [Field("encinfo", "Disk encryption: " + why, "label", "", visible=lambda v: v.get("fs") == "zfs"),
+                    Field("encinfo2", "Disk encryption: NOT encrypted (only ZFS can be unlocked unattended by the TPM)", "label", "",
+                          visible=lambda v: v.get("fs") != "zfs")]
+        return [Field("enc", "Encrypt the disk (ZFS native, AES-256-GCM)", "check", c.get("zfs_encrypt", False), visible=lambda v: v.get("fs") == "zfs",
+                      hint="Recommended for laptops. The passphrase is asked at every boot; /boot and the EFI partition stay unencrypted"),
+                Field("pp", "Disk passphrase", "password", c.get("zfs_passphrase", ""), width=40, visible=lambda v: v.get("fs") == "zfs" and v.get("enc"),
+                      hint="Min 12 characters. NOT recoverable: if you forget it the data is gone"),
+                Field("pp2", "Confirm passphrase", "password", c.get("zfs_passphrase", ""), width=40, visible=lambda v: v.get("fs") == "zfs" and v.get("enc"))]
 
     def validate(self, ctx, v):
         if v.get("fs") == "xfs-luks":
@@ -253,8 +264,12 @@ class DiskStage(Stage):
     def commit(self, ctx, v):
         ctx.c["fs"], ctx.c["zfs_raid"] = v["fs"], v["zfs_raid"]
         ctx.c["luks_passphrase"] = v.get("lpw", "") if v["fs"] == "xfs-luks" else ""
-        ctx.c["zfs_encrypt"] = bool(v["fs"] == "zfs" and v.get("enc"))
-        ctx.c["zfs_passphrase"] = v.get("pp", "") if ctx.c["zfs_encrypt"] else ""
+        if ctx.p.get("encryption") == "tpm-or-none":
+            from . import system as _S
+            _S.apply_encryption_policy(ctx.p, ctx.c)       # TPM present and working -> encrypted + unattended, else not encrypted; never a passphrase
+        else:
+            ctx.c["zfs_encrypt"] = bool(v["fs"] == "zfs" and v.get("enc"))
+            ctx.c["zfs_passphrase"] = v.get("pp", "") if ctx.c["zfs_encrypt"] else ""
         ctx.c["swap"] = v.get("swap", "auto") if (v["fs"] != "zfs" or ctx.c["zfs_encrypt"]) else "auto"
 
     def need_disks(self, c):
@@ -290,7 +305,9 @@ class DiskStage(Stage):
             out.append("Encrypt the root partition with LUKS2 (argon2id) and create XFS inside it; zram instead of swap")
         elif c["fs"] == "zfs":
             out.append("Create ZFS pool rpool" + (" (mirror)" if c["zfs_raid"] == "mirror" else "") + " with lz4 compression"
-                       + (", natively ENCRYPTED (AES-256-GCM, passphrase at every boot)" if c.get("zfs_encrypt") else ""))
+                       + ((", natively ENCRYPTED (AES-256-GCM, key sealed to the TPM 2.0: unattended boot)" if c.get("zfs_keymode") == "tpm" else ", natively ENCRYPTED (AES-256-GCM, passphrase at every boot)") if c.get("zfs_encrypt") else ""))
+        if ctx.p.get("encryption") == "tpm-or-none":
+            out.append("Disk encryption: " + (c.get("enc_why") or "none"))
         else:
             out.append(f"Create {c['fs']} file systems and mount them under /mnt/target")
         return out

@@ -585,6 +585,27 @@ class Runner:
             return False, ["-machine", "virt,gic-version=max", "-accel", "tcg,thread=multi", "-cpu", "cortex-a72"]  # generic ARMv8.0-A baseline (no SVE/LSE/pauth); KVM runs on the host CPU
         return kvm, ["-machine", "virt"] + (["-accel", "kvm", "-cpu", "host"] if kvm else ["-accel", "tcg,thread=multi", "-cpu", "rv64"])
 
+    def start_swtpm(self, name):
+        """software TPM 2.0 whose state (endorsement/owner seeds, NV) outlives every VM of this run: a key sealed during the install must unseal at each boot of the
+        same 'machine'. Returns the control socket path."""
+        d = f"{self.a.out}/{name}"
+        shutil.rmtree(d, ignore_errors=True)
+        os.makedirs(d)
+        sock = f"{d}/ctrl.sock"
+        p = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", f"dir={d}", "--ctrl", f"type=unixio,path={sock}"],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=open(f"{d}/swtpm.err", "wb"))
+        if name == "tpm":
+            self.tpm_proc = p
+        else:
+            self.tpm_proc2 = p
+        for _ in range(100):
+            if os.path.exists(sock):
+                break
+            time.sleep(0.1)
+        else:
+            raise SystemExit("swtpm did not create its control socket (is swtpm installed?)")
+        return sock
+
     def qemu_args(self, iso, installed, nvars):
         a, A = self.a, ARCHS[ARCH]
         kvm, mach = self.accel()
@@ -602,6 +623,9 @@ class Runner:
             args += ["-netdev", f"user,id=n0,{wan}", "-device", f"{nic},netdev=n0,mac=52:54:00:00:00:01",
                      "-netdev", f"user,id=n1,net=10.77.0.0/24,host=10.77.0.2,hostfwd=tcp:{FWD_BIND}:{FWD_WEB}-{a.lan_ip}:{self.P['port']},hostfwd=tcp:{FWD_BIND}:{FWD_SSH}-{a.lan_ip}:22",
                      "-device", f"{nic},netdev=n1,mac=52:54:00:00:00:02"]
+        if getattr(self, "tpm_ctrl", None):
+            args += ["-chardev", f"socket,id=chrtpm,path={self.tpm_ctrl}", "-tpmdev", "emulator,id=tpm0,chardev=chrtpm",
+                     "-device", ("tpm-tis" if ARCH == "x86_64" else "tpm-tis-device") + ",tpmdev=tpm0"]
         gpu = A["gpu"]
         if a.flow == "gui":        # virtio-gpu at a fixed size (virtio-vga also gives a BIOS machine a VGA console)
             gpu = ["-device", ("virtio-vga" if ARCH == "x86_64" else "virtio-gpu-pci") + ",xres=1280,yres=800"]
@@ -634,6 +658,10 @@ class Runner:
             subprocess.check_call(["qemu-img", "create", "-q", "-f", "qcow2", d, f"{a.disk_gb}G"])
         if a.mode == "uefi":
             pflash_vars(nvars)
+        self.tpm_proc = self.tpm_proc2 = None
+        self.tpm_ctrl = None
+        if a.tpm == "swtpm":
+            self.tpm_ctrl = self.start_swtpm("tpm")
         self.key = f"{a.out}/test_key"
         for f in (self.key, self.key + ".pub"):
             if os.path.exists(f):
@@ -662,6 +690,8 @@ class Runner:
             self.phase2(nvars)
             if a.restarts:
                 self.restart_phase(nvars)
+            if a.tpm == "swtpm" and a.tpm_negative:
+                self.tpm_negative_phase(nvars)
         finally:
             if self.shots:
                 json.dump(self.shots, open(f"{a.out}/gui-shots.json", "w"), indent=1)
@@ -765,14 +795,15 @@ class Runner:
         kb.key("CLEAR"); kb.text(f"{p}-t1.test.lan")
         shot("02b-hostname-filled")
         kb.key("TAB"); kb.key("ENTER", 1)
-        order = ["zfs", "xfs-luks", "xfs", "ext4"] if p == "horcrux" else ["xfs", "ext4"]       # the Root-file-system choice, in screen order (stages.DiskStage)
-        dflt = "xfs" if p == "patronus" else ("zfs" if a.mem >= 8192 else "xfs-luks")
+        order = ["zfs", "xfs-luks", "xfs", "ext4"] if p == "horcrux" else ["zfs", "xfs", "ext4"]       # the Root-file-system choice, in screen order (stages.DiskStage)
+        dflt = ("zfs" if a.mem >= 8192 else "xfs") if p == "patronus" else ("zfs" if a.mem >= 8192 else "xfs-luks")
         wait(r"\] File system", "03-filesystem")
         if not a.fs_default:
             for _ in range((order.index(a.fs) - order.index(dflt)) % len(order)):
                 kb.key("RIGHT")                            # the choice wraps; the default is preselected
         if a.fs == "zfs":
-            kb.key("TAB")                                  # -> 'Encrypt the disk' check box (ZFS native encryption, off)
+            if p == "horcrux":
+                kb.key("TAB")                              # -> 'Encrypt the disk' check box (ZFS native encryption, off); Patronus has none (TPM decides)
             if mirror:                                     # NOTE: mirror via the text wizard is not exercised by the default runs
                 kb.key("TAB"); kb.key("SPACE")             # 'Show advanced options' -> the ZFS layout row appears ABOVE the focus (the focus index stays: it is now on 'Encrypt')
                 kb.key("UP")                               # -> 'ZFS layout'
@@ -1028,7 +1059,7 @@ class Runner:
         st = self.gwait(vm, "disk", 30)
         self.step("gui-mouse-click-next", ok and st.get("page") == "disk", "pointer click on 'Next' moved to the disk screen")
         # ---- disk
-        if a.project == "horcrux":
+        if True:       # both products offer the root file system choice now (Patronus: ZFS default, XFS fallback, ext4 manual)
             # the proposal depends on the machine (ZFS from 8 GB RAM, encrypted XFS below): default runs leave it alone and only assert it
             self.gshot(vm, "disk-default", "File system default proposed by the installer, with the reason" + (": " + a.fs if a.fs_default else ""))
             if not a.fs_default:
@@ -1040,7 +1071,7 @@ class Runner:
                 ok = self.gfocus(vm, "Confirm passphrase") and ok
                 self.gtype(vm, PW)
                 self.step("gui-luks-passphrase-typed", ok, "disk passphrase + confirmation typed with the keyboard")
-            if a.fs == "zfs":
+            if a.fs == "zfs" and (a.project == "horcrux" or mirror):
                 self.gexpand(vm)
                 time.sleep(1)
                 if mirror:
@@ -1551,6 +1582,62 @@ class Runner:
             if vm.alive():
                 vm.p.kill()
 
+    def _b64run(self, interp, text, timeout=300):
+        import base64
+        return ssh(FWD_SSH, self.key, f"echo {base64.b64encode(text.encode()).decode()} | base64 -d | {interp}", timeout=int(T(timeout)))
+
+    def storage_gates(self):
+        """owner rule 2026-10-29/11-03 on the installed server/firewall: (1) the Portage database matches the disk, (2) a kernel module builds against the running
+        kernel (what zfs-kmod needs after every kernel update), (3) zfs/zfs-kmod carry USE=dist-kernel so a kernel update rebuilds the module in the same transaction,
+        (4) the disk encryption is exactly what the profile promises: Patronus = ZFS native encryption sealed to a working TPM 2.0 (unattended), else NO encryption."""
+        a = self.a
+        rc, o = self._b64run("python3", CONTENTS_CHECK)
+        m = re.search(r"CONTENTS-MISSING (\d+) files", o)
+        self.step("package-contents-complete-no-missing-files", bool(m) and m.group(1) == "0" and "CONTENTS-PACKAGES" in o, re.sub(r"\s+", " ", o).strip()[:400])
+        rc, o = self._b64run("sh", KMOD_CHECK, 600)
+        self.step("kernel-module-builds-against-running-kernel", "KMOD-OK" in o, re.sub(r"\s+", " ", o).strip()[-300:])
+        if a.fs == "zfs":
+            rc, o = ssh(FWD_SSH, self.key, "if qlist -I sys-kernel/gentoo-kernel-bin sys-kernel/gentoo-kernel | grep -q .; then "
+                        "grep -qw dist-kernel /var/db/pkg/sys-fs/zfs-kmod-*/USE && grep -qw dist-kernel /var/db/pkg/sys-fs/zfs-[0-9]*/USE && echo DISTKERNEL-OK || echo DISTKERNEL-MISSING; "
+                        "else echo NOT-DIST-KERNEL; fi; qlist -Iv sys-kernel/gentoo-kernel-bin sys-fs/zfs-kmod sys-fs/zfs virtual/dist-kernel; ls /usr/src; uname -r")
+            self.step("zfs-and-zfs-kmod-use-dist-kernel-so-kernel-updates-rebuild-the-module", "DISTKERNEL-OK" in o, re.sub(r"\s+", " ", o).strip()[:300])
+        if a.project != "patronus":
+            return
+        want_enc = a.fs == "zfs" and a.tpm == "swtpm"
+        if a.fs == "zfs":
+            rc, z = ssh(FWD_SSH, self.key, "zfs get -H -o value encryption,keyformat,keylocation,keystatus rpool | tr '\\n' ' '")
+            if want_enc:
+                ok = "aes-256-gcm hex prompt available" in z.replace("\r", "")
+                rc, t = ssh(FWD_SSH, self.key, "ls -l /etc/tpm-unlock; for k in /boot/initramfs-*.img; do lsinitrd $k | grep -E 'tpm2_unseal|tpm-zfskey|tpm-unlock/key' | wc -l; done; grep -c . /etc/dracut.conf.d/92-tpm-unlock.conf")
+                self.step("disk-encrypted-with-tpm-sealed-key-unlocked-without-a-console-prompt", ok and "key.priv" in t, re.sub(r"\s+", " ", z + " | " + t)[:300])
+            else:
+                self.step("disk-not-encrypted-because-no-tpm-no-prompt", z.split()[:1] == ["off"], re.sub(r"\s+", " ", z)[:200])
+        else:
+            rc, z = ssh(FWD_SSH, self.key, "lsblk -rno FSTYPE | grep -c crypto_LUKS; ls /etc/crypttab 2>&1 | head -1")
+            self.step("xfs-fallback-has-no-luks-no-prompt", z.split()[0:1] == ["0"], re.sub(r"\s+", " ", z)[:120])
+        # the encryption decision is also printed by the installer
+        try:
+            log = open(f"{self.a.out}/1-install-serial.log", errors="replace").read()
+        except OSError:
+            log = ""
+        if self.a.flow == "auto":
+            self.step("installer-reported-the-encryption-decision", ("Disk encryption: encrypted" in log) if want_enc else ("Disk encryption: NOT encrypted" in log), "installer log line 'Disk encryption: ...' present" if log else "no installer log")
+
+    def tpm_negative_phase(self, nvars):
+        """a different TPM (blank swtpm) must NOT release the key: the system must not come up unattended (and must not silently boot unencrypted)"""
+        a = self.a
+        self.tpm_ctrl = self.start_swtpm("tpm2")
+        if a.mode == "uefi":
+            pflash_vars(nvars)
+        vm = VM("4-wrong-tpm", self.qemu_args(None, True, nvars), a.out)
+        try:
+            got = vm.expect_raw(r"(refused to unseal|Key load error|Enter passphrase|Enter key|Key for)", T(300))
+            up = ssh(FWD_SSH, self.key, "true", timeout=15)[0] == 0
+            self.step("wrong-tpm-does-not-release-the-disk-key", bool(got) and not up, "the initramfs reported the TPM refusal and did not boot" if got and not up else f"prompt/refusal seen={bool(got)} ssh_up={up}")
+        finally:
+            if vm.alive():
+                vm.p.kill()
+
     def ssh_checks(self):
         a = self.a
         rc, out = ssh(FWD_SSH, None, "true", extra=["-o", "PreferredAuthentications=none", "-o", "PubkeyAuthentication=no", "-o", "BatchMode=yes"])
@@ -1615,10 +1702,47 @@ class Runner:
             rc, z = ssh(FWD_SSH, self.key, "zpool status rpool; zpool list -H -o name,health rpool")
             ok = "ONLINE" in z and (a.zfs_raid != "mirror" or ("mirror-0" in z and z.count("vd") >= 2))
             self.step("zfs-pool-online", ok, re.sub(r"\s+", " ", z)[:220])
+        self.storage_gates()
 
+
+
+# ---- shared storage gates (Portage database complete, kernel modules buildable): used by every project's server runs and by zfs-enc-test.py
+CONTENTS_CHECK = r"""
+import glob, os, collections
+# the ONLY files that may be missing: runtime state dirs Portage records with .keep markers. Intentional strips are removed from the CONTENTS records at build
+# time by common/vdb-prune.py (reviewed list); anything else missing here is a bug in the image (tar --exclude, a strip eating a toolchain file, ...).
+ALLOW_PREFIX = ("/var/log/", "/var/spool/", "/var/cache/", "/var/tmp/", "/run/", "/tmp/")
+miss = collections.OrderedDict(); n = 0; pk = 0
+for cf in sorted(glob.glob("/var/db/pkg/*/*/CONTENTS")):
+    pkg = "/".join(cf.split("/")[-3:-1]); pk += 1
+    for line in open(cf, errors="replace"):
+        if line.startswith("obj "):
+            path = " ".join(line.rstrip("\n").split(" ")[1:-2])
+        elif line.startswith("sym "):
+            path = line[4:line.index(" -> ")]
+        else:
+            continue
+        if os.path.lexists(path) or path.startswith(ALLOW_PREFIX):
+            continue
+        miss.setdefault(pkg, []).append(path); n += 1
+print("CONTENTS-PACKAGES", pk)
+print("CONTENTS-MISSING", n, "files in", len(miss), "packages")
+for p, m in sorted(miss.items(), key=lambda x: -len(x[1]))[:8]:
+    print("  ", len(m), p, m[0])
+"""
+
+KMOD_CHECK = r"""
+set -e; kv=$(uname -r); d=$(mktemp -d); cd $d
+test -e /lib/modules/$kv/build/Makefile || { echo "NO-KERNEL-BUILD-TREE for $kv ($(readlink /lib/modules/$kv/build))"; exit 1; }
+printf '#include <linux/module.h>\n#include <linux/init.h>\nstatic int __init hx_init(void){return 0;}\nstatic void __exit hx_exit(void){}\nmodule_init(hx_init);\nmodule_exit(hx_exit);\nMODULE_LICENSE("GPL");\n' > hx.c
+printf 'obj-m := hx.o\n' > Kbuild
+make -C /lib/modules/$kv/build M=$d modules > build.log 2>&1 || { tail -15 build.log; echo KMOD-BUILD-FAILED; exit 1; }
+modinfo -F vermagic $d/hx.ko | grep -q "^$kv " && echo KMOD-OK $kv
+cd /; rm -rf $d
+"""
 
 def main():
-    global ARCH, SLOW
+    global ARCH, SLOW, RUNNER
     arm_deadline()
     ap = argparse.ArgumentParser()
     ap.add_argument("--iso", required=True)
@@ -1640,6 +1764,8 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--keep-disks", action="store_true", help="keep target*.qcow2/answers.img/OVMF_VARS.fd in --out (default: delete them when the run ends, pass or fail; they are 20-40 GB of regenerable state)")
     ap.add_argument("--mem", type=int, default=4096)
+    ap.add_argument("--tpm", choices=["none", "swtpm"], default="none", help="attach a software TPM 2.0 (swtpm) that keeps its state across the install and every boot; Patronus then must install ENCRYPTED with TPM unlock")
+    ap.add_argument("--tpm-negative", action="store_true", help="with --tpm swtpm: afterwards boot the disk with a DIFFERENT (blank) TPM and assert the key is NOT released (no unattended boot)")
     ap.add_argument("--cpu", default=os.environ.get("QEMU_TEST_CPU", "qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt,+cx16"),
                     help="QEMU CPU model. Default = x86-64-v2 (no AVX/BMI): catches binaries built for a host-tuned CPU. Never `host`.")
     ap.add_argument("--restarts", type=int, default=0, help="after the install checks: boot the installed disk again and restart it N times from inside the guest, asserting service health after each boot")
@@ -1647,8 +1773,8 @@ def main():
     args = ap.parse_args()
     ARCH = args.arch
     args.fs_default = args.fs == "default"
-    if args.fs_default:       # the installer's own default: ZFS >= 8 GB RAM (Horcrux), XFS+LUKS below, XFS where the image has no ZFS (Patronus)
-        args.fs = "xfs" if args.project == "patronus" else ("zfs" if args.mem >= 8192 else "xfs-luks")
+    if args.fs_default:       # the installer's own default: ZFS >= 8 GB RAM, below that XFS+LUKS (Horcrux) / plain XFS (Patronus: it must boot unattended)
+        args.fs = ("zfs" if args.mem >= 8192 else "xfs") if args.project == "patronus" else ("zfs" if args.mem >= 8192 else "xfs-luks")
     args.zfs_raid = args.zfs_raid or ("single" if args.fs_default else "mirror")
     if args.mode == "bios" and not ARCHS[ARCH]["bios"]:
         ap.error(f"{ARCH} has no legacy BIOS: use --mode uefi")
@@ -1656,8 +1782,15 @@ def main():
     SLOW = args.slow or float(os.environ.get("QEMU_SLOW", 0) or 0) or (1.0 if kvm else 3.0 if ARCH == HOST_ARCH else 10.0)
     print(f"arch={ARCH} host={HOST_ARCH} accel={'kvm' if kvm else 'tcg'} timeout-factor={SLOW}", flush=True)
     try:
-        Runner(args).run()
+        RUNNER = Runner(args)
+        RUNNER.run()
     finally:
+        for r in [x for x in (globals().get("RUNNER"),) if x]:
+            for pr in (r.tpm_proc, r.tpm_proc2):
+                if pr and pr.poll() is None:
+                    pr.terminate()
+            shutil.rmtree(os.path.join(args.out, "tpm"), ignore_errors=True)
+            shutil.rmtree(os.path.join(args.out, "tpm2"), ignore_errors=True)
         if not args.keep_disks:
             for n in ("target.qcow2", "target2.qcow2", "answers.img", "OVMF_VARS.fd"):
                 try:

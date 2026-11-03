@@ -1112,7 +1112,10 @@ class DonePage(Page):
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=w.px(6))
         card.add_css_class("card")
         ssh = "off" if not c["ssh_enabled"] else "root with " + ("your key" if c["ssh_keys"] else "NO key (console only)") + (" or password" if c["ssh_password_auth"] else "")
-        for k, v in (("Web UI", url), ("Login", "admin  /  the password you just set"), ("SSH", ssh), ("Console", "root  /  the same password")):
+        rows = [("Web UI", url), ("Login", "admin  /  the password you just set"), ("SSH", ssh), ("Console", "root  /  the same password")]
+        if c.get("recovery_key"):
+            rows.append(("Recovery key", c["recovery_key"]))
+        for k, v in rows:
             r = Gtk.Box(spacing=w.px(10))
             kl = lbl(k, "flabel", wrap=False)
             kl.set_size_request(w.px(110), -1)
@@ -1120,6 +1123,8 @@ class DonePage(Page):
             r.append(lbl(v, "mono" if k == "Web UI" else None, wrap=False))
             card.append(r)
         self.box.append(card)
+        if c.get("recovery_key"):
+            self.box.append(lbl("Write the recovery key down. The TPM unlocks the disk by itself; the key is only needed if the TPM ever refuses (it is not stored anywhere).", "hint"))
         self.box.append(lbl(f"{p['title']} has been installed. Remove the installation medium, then reboot.", "ok"))
         if "<" in url:
             self.box.append(lbl("The address comes from DHCP: it is shown on the console after boot and in your DHCP server's lease list.", "hint"))

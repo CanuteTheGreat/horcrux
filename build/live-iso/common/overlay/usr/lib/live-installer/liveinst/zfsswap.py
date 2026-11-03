@@ -147,6 +147,20 @@ def _rebuild_initramfs(inst):
     _check_initramfs(inst, kver)
 
 
+def _rebuild_initramfs_for(inst, problems_fn):
+    """rebuild the newest kernel's initramfs and fail the install when `problems_fn(lsinitrd listing)` names a missing piece"""
+    from .system import InstallError
+    kver = _newest_kver(inst)
+    gcc = f"{inst.target}/usr/lib/gcc"
+    chost = sorted(os.listdir(gcc))[0] if os.path.isdir(gcc) and os.listdir(gcc) else "x86_64-pc-linux-gnu"
+    inst.run(["dracut", "--force", "--no-hostonly", "--kver", kver, f"/boot/initramfs-{kver}.img", kver], chroot=True, env={"CHOST": chost})
+    out = []
+    inst.run(["lsinitrd", f"/boot/initramfs-{kver}.img"], chroot=True, line_cb=lambda l: out.append(l))
+    miss = problems_fn("".join(out))
+    if miss:
+        raise InstallError("initramfs is missing: " + ", ".join(miss))
+
+
 def _check_initramfs(inst, kver=None):
     from .system import InstallError
     kver = kver or _newest_kver(inst)

@@ -90,8 +90,9 @@ COPY common/overlay/ /
 
 COPY common/setup-rootfs.sh /tmp/setup-rootfs.sh
 COPY common/mk-portage-meta.py /tmp/mk-portage-meta.py
+COPY common/vdb-prune.py /tmp/vdb-prune.py
 COPY project/setup.sh /tmp/project-setup.sh
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     PROJECT="${PROJECT}" ISO_LABEL="${ISO_LABEL}" PROJECT_TITLE="${PROJECT_TITLE}" \
-    sh /tmp/setup-rootfs.sh && sh /tmp/project-setup.sh && rm -f /tmp/*.sh /tmp/packages*.txt
+    sh /tmp/setup-rootfs.sh && sh /tmp/project-setup.sh && rm -f /tmp/*.sh /tmp/packages*.txt /tmp/vdb-prune.py

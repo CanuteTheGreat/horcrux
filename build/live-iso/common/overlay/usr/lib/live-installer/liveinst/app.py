@@ -539,7 +539,11 @@ def s_done(t, st, step):
     lines = [("Web UI", url), ("Login", "admin  /  the password you just set"),
              ("SSH", "root with " + ("your key" if c["ssh_keys"] else "NO key (console only)") + (" or password" if c["ssh_password_auth"] else "")),
              ("Console", "root  /  the same password")]
+    if c.get("recovery_key"):
+        lines.append(("Recovery key", c["recovery_key"]))
     f = [Field(k, k, "info", v) for k, v in lines]
+    if c.get("recovery_key"):
+        f.append(Field("mrk", "Write the recovery key down. The TPM unlocks the disk by itself; the key is only needed if the TPM ever refuses (it is not stored anywhere).", "label", "", hint="warn"))
     f.append(Field("m", "Installation successful. Remove the installation medium, then reboot.", "label", "", hint="warn"))
     if "<" in url:
         f.append(Field("m2", "The address comes from DHCP: it is shown on the console after boot and in your DHCP server's lease list.", "label"))

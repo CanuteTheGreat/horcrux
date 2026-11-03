@@ -33,7 +33,7 @@ class ZRun(qt.Runner):
     def __init__(self, a):
         ns = types.SimpleNamespace(iso=a.iso, project="horcrux", arch=qt.HOST_ARCH, mode="uefi", media="usb", flow="auto", fs="zfs",
                                    zfs_raid="single", ssh_password_opt_in=False, static_ip="", lan_ip="10.77.0.1", console_open=False,
-                                   out=a.out, mem=a.mem, cpu=a.cpu, restarts=0, disk_gb=a.disk_gb)
+                                   out=a.out, mem=a.mem, cpu=a.cpu, restarts=0, disk_gb=a.disk_gb, tpm="none", tpm_negative=False)
         super().__init__(ns)
         self.z = a
         self.no_ps2 = False
@@ -549,39 +549,7 @@ class ZRun(qt.Runner):
         self.step("toolchain-compiles-and-links-a-c-program", "hx-ok" in o, o.strip()[-200:])
 
     # ---- the installed system must be repairable by Portage: every package file exists, and a kernel module can be built against the running kernel
-    CONTENTS_CHECK = r"""
-import glob, os, collections
-# the ONLY files that may be missing: runtime state dirs Portage records with .keep markers. Intentional strips are removed from the CONTENTS records at build
-# time by common/vdb-prune.py (reviewed list); anything else missing here is a bug in the image (tar --exclude, a strip eating a toolchain file, ...).
-ALLOW_PREFIX = ("/var/log/", "/var/spool/", "/var/cache/", "/var/tmp/", "/run/", "/tmp/")
-miss = collections.OrderedDict(); n = 0; pk = 0
-for cf in sorted(glob.glob("/var/db/pkg/*/*/CONTENTS")):
-    pkg = "/".join(cf.split("/")[-3:-1]); pk += 1
-    for line in open(cf, errors="replace"):
-        if line.startswith("obj "):
-            path = " ".join(line.rstrip("\n").split(" ")[1:-2])
-        elif line.startswith("sym "):
-            path = line[4:line.index(" -> ")]
-        else:
-            continue
-        if os.path.lexists(path) or path.startswith(ALLOW_PREFIX):
-            continue
-        miss.setdefault(pkg, []).append(path); n += 1
-print("CONTENTS-PACKAGES", pk)
-print("CONTENTS-MISSING", n, "files in", len(miss), "packages")
-for p, m in sorted(miss.items(), key=lambda x: -len(x[1]))[:8]:
-    print("  ", len(m), p, m[0])
-"""
-
-    KMOD_CHECK = r"""
-set -e; kv=$(uname -r); d=$(mktemp -d); cd $d
-test -e /lib/modules/$kv/build/Makefile || { echo "NO-KERNEL-BUILD-TREE for $kv ($(readlink /lib/modules/$kv/build))"; exit 1; }
-printf '#include <linux/module.h>\n#include <linux/init.h>\nstatic int __init hx_init(void){return 0;}\nstatic void __exit hx_exit(void){}\nmodule_init(hx_init);\nmodule_exit(hx_exit);\nMODULE_LICENSE("GPL");\n' > hx.c
-printf 'obj-m := hx.o\n' > Kbuild
-make -C /lib/modules/$kv/build M=$d modules > build.log 2>&1 || { tail -15 build.log; echo KMOD-BUILD-FAILED; exit 1; }
-modinfo -F vermagic $d/hx.ko | grep -q "^$kv " && echo KMOD-OK $kv
-cd /; rm -rf $d
-"""
+    CONTENTS_CHECK, KMOD_CHECK = qt.CONTENTS_CHECK, qt.KMOD_CHECK     # one copy, in qemu-test.py (every project's server gates use it)
 
     def _b64sh(self, interp, text):
         import base64
