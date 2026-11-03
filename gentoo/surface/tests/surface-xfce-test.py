@@ -5,7 +5,8 @@
 
   1. boot the ISO from a (virtual) USB stick, UEFI, 4 GiB, IvyBridge, Surface DMI; the default entry runs `horcrux-surface-auto`:
      read-only inventory of the (empty) disk, the TEST passphrase is typed twice on the USB keyboard, the installer runs by itself
-  2. first boot of the installed disk with NO PS/2 keyboard: ONE passphrase on the USB keyboard, LightDM autologin, XFCE session
+  2. first boot of the installed disk with NO PS/2 keyboard: ONE passphrase on the USB keyboard, then the LightDM GREETER (NO autologin: no user session exists
+     until the login password is typed at the greeter), XFCE session after the login
   3. checks: XFS on LUKS2 on LVM, hibernate swap + zram, kernel from the Surface kernel package, qfile -o orphans, packages of
      the meta package, session processes (xfwm4, panel, power manager, onboard, nm-applet, pipewire), greeter + on-screen keyboard
   4. apps launch inside the session (Firefox, Brave, Rustinion agent, Tailscale, onboard) + memory/responsiveness numbers
@@ -32,6 +33,7 @@ Q = SQ.Q
 LUKS_PW = SQ.LUKS_PW
 LOGIN_PW = SQ.USER_PW          # the desktop user's own password: a DIFFERENT secret from the disk passphrase
 USER = "canutethegreat"
+HOST = "surface-t1"            # the test machine's name (a real machine gets the owner's name from its private image)
 
 MARKER_PY = r'''
 import os, time, hashlib
@@ -110,6 +112,16 @@ class XT(SQ.T):
             self.step("auto-installer-started", ok, f"{int(time.time() - t0)}s after power-on: horcrux-surface-auto on tty1")
             inv = vm.expect_raw(r"SURFACE-AUTO: INVENTORY rc=(\d+) disk=(\S+)", 240, consume=False)
             self.step("inventory-found-empty-disk", inv and inv.group(1) == b"0" and inv.group(2) == b"/dev/vda", inv.group(0).decode() if inv else "no inventory marker")
+            ok = vm.expect_raw(r"Host name of this tablet", 120, consume=False)
+            self.step("asks-for-the-host-name-first", ok, "no generic default: the owner's name for the machine is prefilled from the private image, or typed")
+            time.sleep(2)
+            self.key(vm, "surface-pro\n")                       # the old generic image default must be REFUSED
+            ok = vm.expect_raw(r"is not a name for this machine", 30, consume=False)
+            self.step("generic-host-name-surface-pro-refused", ok, "'surface-pro' rejected: type the name the owner gave the machine")
+            time.sleep(2)
+            self.key(vm, HOST + "\n")
+            ok = vm.expect_raw(rf"SURFACE-AUTO: HOSTNAME-CONFIRMED {HOST}", 30, consume=False)
+            self.step("host-name-confirmed", ok, f"typed {HOST}")
             ok = vm.expect_raw(r"SURFACE-AUTO: WAITING-FOR-PASSPHRASE", 120, consume=False)
             self.step("asks-for-the-passphrase", ok, "first question")
             time.sleep(3)
@@ -169,6 +181,17 @@ class XT(SQ.T):
             if vm.alive():
                 vm.p.kill()
 
+    def greeter_login(self, vm, name):
+        """after the disk unlock: the greeter must be up and NO session may exist; then log in at it with the user's own password (USB keyboard)"""
+        Q.greeter_no_session_gate(self.ssh, self.step, USER, "lightdm", step=f"{name}-greeter-shown-and-no-user-session-before-login")
+        vm.shot(f"{name}-greeter-before-login")
+        self.key(vm, LOGIN_PW + "\n")
+        for _ in range(60):
+            if self.ssh("pgrep -u " + USER + " -x xfce4-panel")[1].strip():
+                break
+            time.sleep(5)
+        self.step(f"{name}-greeter-login-starts-the-xfce-session", bool(self.ssh("pgrep -u " + USER + " -x xfce4-panel")[1].strip()), "typed the login password (not the disk passphrase) at the greeter")
+
     # ------------------------------------------------------------------------------------------------ checks
     def checks(self, vm, secs):
         a = self.a
@@ -180,6 +203,9 @@ class XT(SQ.T):
                            "ls /etc/portage/patches/sys-kernel/gentoo-kernel | wc -l", timeout=60)
         self.save("system-state.txt", out)
         Q.shadow_reuse_gate(self.ssh, self.step, LUKS_PW)      # SECURITY: no account password (user, root, ...) verifies against the disk passphrase
+        rc, hn = self.ssh("hostname; cat /etc/conf.d/hostname; grep -c madammalkins /etc/local.d/50-surface-tailscale.start; grep -n surface-pro /etc/hosts /etc/hostname /etc/conf.d/hostname /etc/local.d/50-surface-tailscale.start; true")
+        s("hostname-is-the-confirmed-name-not-a-generic-default", hn.split()[0] == HOST and "surface-pro" not in hn, re.sub(r"\s+", " ", hn)[:200])
+        Q.no_autologin_config_gate(self.ssh, self.step)       # OWNER RULE: no display-manager autologin in the installed configs
         flat = out.replace("\r", "")
         s("root-is-xfs-on-lvm-on-luks2", "/dev/mapper/hxvg-root xfs" in flat and "argon2id" in flat and re.search(r"Version:\s+2", flat) is not None, flat.splitlines()[0] if flat else "")
         s("boot-is-ext4", re.search(r"^ext4$", flat, re.M) is not None, "/boot ext4")
@@ -219,13 +245,13 @@ class XT(SQ.T):
             if all(w in set(got.split()) for w in want[:12]):
                 break
             time.sleep(6)
-        s("xfce-session-up-for-autologin-user", all(w in set(got.split()) for w in want[:12]), "missing: " + ", ".join(w for w in want if w not in set(got.split())) if not all(w in set(got.split()) for w in want) else "all running")
+        s("xfce-session-up-for-the-logged-in-user", all(w in set(got.split()) for w in want[:12]), "missing: " + ", ".join(w for w in want if w not in set(got.split())) if not all(w in set(got.split()) for w in want) else "all running")
         self.save("processes.txt", got)
         time.sleep(5)
         vm.shot("desktop")
         rc, out = self.ssh("loginctl list-sessions --no-legend; grep -c lightdm /etc/runlevels/default/* 2>/dev/null; ls /etc/runlevels/default | tr '\\n' ' '; echo; cat /etc/conf.d/display-manager; cat /etc/lightdm/lightdm.conf.d/*.conf | grep -E 'autologin|greeter|session'")
         self.save("session-state.txt", out)
-        s("lightdm-autologin-configured", "autologin-user=" + USER in out and "DISPLAYMANAGER=\"lightdm\"" in out, re.sub(r"\s+", " ", out)[:240])
+        s("lightdm-has-no-autologin-and-is-the-display-manager", "autologin-user=" not in out.replace("#autologin-user=", "") and "DISPLAYMANAGER=\"lightdm\"" in out, re.sub(r"\s+", " ", out)[:240])
         # ---- hogshead first-boot lessons (a)-(d), asserted on the INSTALLED system
         rc, out = self.ssh("ls /boot/initramfs-*.img | head -1 | xargs lsinitrd 2>/dev/null | grep -E 'i915|usbhid|xhci|hid-multitouch|dm-crypt' | awk '{print $NF}' | tr '\\n' ' '; echo @@@; "
                            "grep -rh -E 'i915' /etc/dracut.conf.d/ | tr '\\n' ' '", timeout=90)
@@ -322,10 +348,10 @@ class XT(SQ.T):
         self.soft = False
 
     def greeter_check(self, vm):
-        """LightDM greeter + on-screen keyboard: stop the session, disable autologin for this one start, look at the greeter, restore."""
+        """LightDM greeter + on-screen keyboard: stop the session, restart the display manager (no autologin exists), look at the greeter, log in again."""
         self.soft = True
         s = self.step
-        self.ssh("mv /etc/lightdm/lightdm.conf.d/60-horcrux-autologin.conf /root/60-autologin.conf.bak; rc-service display-manager stop >/dev/null 2>&1; sleep 8; pgrep -x X >/dev/null && pkill -x X; sleep 2; rc-service display-manager start >/dev/null 2>&1", timeout=90)
+        self.ssh("rc-service display-manager stop >/dev/null 2>&1; sleep 8; pgrep -x X >/dev/null && pkill -x X; sleep 2; rc-service display-manager start >/dev/null 2>&1", timeout=90)
         time.sleep(25)
         vm.shot("lightdm-greeter")
         rc, out = self.ssh("ps -eo user,comm,args | grep -E 'lightdm-gtk-greeter|onboard' | grep -v grep | cut -c1-150; ls /etc/lightdm; cat /etc/lightdm/lightdm-gtk-greeter.conf | grep -vE '^#|^$' | head -20")
@@ -348,7 +374,7 @@ class XT(SQ.T):
         rc, out = self.ssh("loginctl list-sessions --no-legend; ps -u " + USER + " -o comm | sort -u | tr '\\n' ' '; grep -i -c 'Unable to contact settings server' /home/" + USER + "/.xsession-errors")
         self.save("greeter-login.txt", out)
         s("greeter-login-with-password-starts-xfce", ok and "xfce4-panel" in out and "nm-applet" in out and "onboard" in out, re.sub(r"\s+", " ", out)[:240])
-        self.ssh("mv /root/60-autologin.conf.bak /etc/lightdm/lightdm.conf.d/60-horcrux-autologin.conf; rc-service display-manager stop >/dev/null 2>&1; sleep 8; pgrep -x X >/dev/null && pkill -x X; sleep 2; rc-service display-manager start >/dev/null 2>&1", timeout=90)
+        self.ssh("rc-service display-manager stop >/dev/null 2>&1; sleep 8; pgrep -x X >/dev/null && pkill -x X; sleep 2; rc-service display-manager start >/dev/null 2>&1", timeout=90)
         time.sleep(30)
         self.soft = False
 
@@ -383,6 +409,7 @@ class XT(SQ.T):
             secs = self.unlock(vm, "boot1")
             self.step("first-boot-one-passphrase-then-up", secs is not None, f"{int(secs) if secs else 0}s from power-on to ssh; the LUKS prompt was answered ONCE (USB keyboard, PS/2 off)")
             self.res["first_boot_seconds"] = int(secs or 0)
+            self.greeter_login(vm, "boot1")        # the greeter is shown, no session exists, then the login password is typed (NO autologin)
             if a.fast:
                 # debug: only wait for the session, then straight to hibernate (isolating the resume path)
                 for _ in range(60):
@@ -400,7 +427,7 @@ class XT(SQ.T):
                     self.greeter_check(vm)
                 if not a.skip_world:
                     self.world_update()
-                # Hibernate/resume runs in a FRESH boot (the owner's real flow: autologin session + apps). Under QEMU/virtio-vga a resume
+                # Hibernate/resume runs in a FRESH boot (the owner's real flow: greeter login + apps). Under QEMU/virtio-vga a resume
                 # hangs once the display manager/X server was restarted in the same boot (greeter check above) - a QEMU/virtio-gpu
                 # artifact (a boot with apps but without the restarts resumes fine), not exercised on real i915 hardware.
                 self.ssh("sync; (sleep 2; poweroff) >/dev/null 2>&1 &", timeout=20)
@@ -413,10 +440,7 @@ class XT(SQ.T):
                 vm = Q.VM("2b-boot2", self.base(True, self.nvars), a.out)
                 secs2 = self.unlock(vm, "boot2")
                 self.step("second-boot-one-passphrase-then-up", secs2 is not None, f"{int(secs2) if secs2 else 0}s from power-on to ssh; ONE passphrase")
-                for _ in range(60):
-                    if self.ssh("pgrep -u " + USER + " -x xfce4-panel")[1].strip():
-                        break
-                    time.sleep(5)
+                self.greeter_login(vm, "boot2")
                 time.sleep(20)
                 self.ssh("su - " + USER + " -c 'export DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) XAUTHORITY=$HOME/.Xauthority; (setsid brave --no-first-run --new-window about:blank >/tmp/b.log 2>&1 &); (setsid firefox-bin >/tmp/f.log 2>&1 &); sleep 2; true'", timeout=60)
                 time.sleep(75)

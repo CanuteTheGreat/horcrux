@@ -168,6 +168,9 @@ class GRun(zt.ZRun):
             self.step("live-tailscale-ephemeral-node-removed-by-logout", bool(m) and b"RC=0" in m.group(0), "test node removed from the tailnet")
             # the owner's install: the disk passphrase and a separate login password are typed
             vm.send("gringotts-install --yes-erase --extra-authorized-key-file /root/test.pub --no-reboot\r")
+            self.step("install-hostname-prefilled-and-confirmed", vm.expect_raw(r"Host name \[gringotts\]", 120), "the owner's name for this machine is prefilled; Enter keeps it")
+            time.sleep(0.5)
+            vm.send("\r")
             self.step("install-passphrase-prompt", vm.expect_raw(r"Passphrase\s+:", 120), "asked for the disk passphrase")
             time.sleep(0.5)
             vm.send(PASSPHRASE + "\r")
@@ -246,6 +249,8 @@ class GRun(zt.ZRun):
         kb = qt.Kbd(vm, True)
         time.sleep(40)
         vm.shot("gdm-greeter")
+        qt.no_autologin_config_gate(self.sh, self.step)                        # OWNER RULE: no autologin in the installed configs
+        qt.greeter_no_session_gate(self.sh, self.step, USER, "gdm", wait=60)   # greeter shown after the disk unlock, NO session of the user before the greeter login
         up = False
         for attempt in range(1, 5):
             kb.key("ENTER", 1.5)                  # the user tile

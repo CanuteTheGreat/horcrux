@@ -508,7 +508,7 @@ class DesktopStage(Stage):
                 Field("pw", "Password", "password", d.get("password", ""), width=40, hint="Min 12 chars. Needed to log in and for sudo. NOT the disk passphrase"),
                 Field("pw2", "Confirm password", "password", d.get("password", ""), width=40),
                 Field("auto", "Log in automatically on the console", "check", d.get("autologin", False),
-                      hint="OFF (default): the Type Cover / on-screen keyboard login prompt is shown. ON: the desktop starts right after the disk passphrase")]
+                      hint="OFF (default, recommended): the login screen asks for the password after the disk passphrase. ON = WARNING: whoever has the tablet gets this session without a password")]
 
     def validate(self, ctx, v):
         if v["pw"] != v["pw2"]:
@@ -575,7 +575,7 @@ class GnomeStage(Stage):
                 Field("full", "Full name", "text", c["user_fullname"], width=30, optional=True),
                 Field("pw", "Password", "password", c["user_password"], width=40, hint="Min 12 chars, mixed. NOT the disk passphrase"),
                 Field("pw2", "Confirm password", "password", c["user_password"], width=40),
-                Field("auto", "Log in automatically", "check", c["user_autologin"], hint="Not recommended on an encrypted laptop that you carry around")]
+                Field("auto", "Log in automatically", "check", c["user_autologin"], hint="OFF (default, recommended). ON = WARNING: whoever holds the laptop gets this session without a login password (the disk passphrase is the only lock)")]
 
     def validate(self, ctx, v):
         if v["pw"] != v["pw2"]:

@@ -24,6 +24,7 @@ import time
 sys.path.insert(0, "/usr/lib/live-installer")
 from liveinst import system as S          # noqa: E402  (shared installer backend)
 
+HOSTNAME_FILE = "/usr/share/gringotts/hostname"      # the owner's name for this machine (from ctg-infrastructure hosts/<name>/ at image build)
 HOSTNAME = "gringotts"
 USER = "canutethegreat"
 FULLNAME = "CanuteTheGreat"
@@ -62,6 +63,25 @@ def pick_disk(want):
     for d in disks:
         say(f"   {d['path']:<14} {d['kind']:<5} {S.fmt_size(d['size']):>9}  {d['model']}")
     raise SystemExit(die("run again with  gringotts-install --disk /dev/<name>"))
+
+
+GENERIC = {"surface-pro", "surface", "localhost", "ubuntu", "debian", "gentoo", "gringotts-live"}
+
+
+def ask_hostname():
+    """the machine's name is shown prefilled and must be confirmed (Enter) or typed: a generic image default can never slip through unseen"""
+    global HOSTNAME
+    try:
+        default = open(HOSTNAME_FILE).read().strip() or HOSTNAME
+    except OSError:
+        default = HOSTNAME
+    while True:
+        v = input(f"{B}Host name{N} [{default}] (Enter = keep): ").strip().lower() or default
+        if v in GENERIC or not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?", v):
+            say(f"  {Y}'{v}' is not a name for this machine: type the name the owner gave it (lower-case letters, digits, -).{N}")
+            continue
+        HOSTNAME = v
+        return v
 
 
 def ask_passphrase():
@@ -269,6 +289,7 @@ def main():
         if input(f"  Type ERASE (capitals) to continue, anything else stops: ").strip() != "ERASE":
             return die("nothing was changed.", 0)
     say()
+    ask_hostname()
     passphrase = ask_passphrase()
     login = ask_login(passphrase)
     keys = read_keys(a.extra_authorized_key_file)

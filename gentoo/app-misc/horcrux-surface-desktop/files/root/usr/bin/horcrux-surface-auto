@@ -62,6 +62,18 @@ else
     echo "${G}Nothing of value on the disk (factory image or empty): installing without further questions.${N}"
 fi
 
+# the machine's NAME: the owner chose it (his machines are Harry Potter places). A private image carries it in $PRIV/hostname (taken from
+# ctg-infrastructure hosts/<name>/); it is shown prefilled and must be confirmed (Enter) or typed. There is NO generic default.
+def_host=""; [ -s "$PRIV/hostname" ] && def_host=$(tr -d ' \t\r\n' < "$PRIV/hostname")
+echo
+while :; do
+    if [ -n "$def_host" ]; then printf "${B}Host name${N} of this tablet [%s] (Enter = keep): " "$def_host"; else printf "${B}Host name${N} of this tablet (the name the owner chose for it): "; fi
+    read -r HOST_NAME; HOST_NAME=${HOST_NAME:-$def_host}
+    case "$HOST_NAME" in surface-pro|surface|localhost|ubuntu|debian|gentoo|"") echo "${R}'$HOST_NAME' is not a name for this machine: type the name the owner gave it.${N}"; continue ;; esac
+    printf '%s' "$HOST_NAME" | grep -qE '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$' || { echo "${R}lower-case letters, digits and - only${N}"; continue; }
+    break
+done
+mark "HOSTNAME-CONFIRMED $HOST_NAME"
 mark WAITING-FOR-PASSPHRASE
 # the passphrase (typed here, never stored) and the desktop password (a DIFFERENT secret; compared in memory only)
 echo
@@ -103,7 +115,7 @@ cat > "$ans" <<TOML
 [global]
 keyboard = "us"
 timezone = "America/Los_Angeles"
-hostname = "surface-pro"
+hostname = "$HOST_NAME"
 email = ""
 ssh_keys = [${keys%,}]
 ssh_password_auth = false
@@ -117,7 +129,7 @@ disks = ["$DISK"]
 enable = true
 user = "$USER_NAME"
 password_hash = "$uh"
-autologin = true
+autologin = false
 
 [network.management]
 mode = "dhcp"

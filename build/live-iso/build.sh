@@ -95,6 +95,10 @@ VNAME_PRIV=""
 if [ -n "${PRIV_DIR:-}" ]; then
 lap "stage 2c: PRIVATE layer ($PRIV_DIR)"
 [ -d "$PRIV_DIR" ] || { echo "PRIV_DIR is not a directory"; exit 2; }
+# every per-machine image carries the OWNER'S name for the machine (his machines are Harry Potter places; ctg-infrastructure hosts/<name>/HOSTNAME),
+# shown prefilled by the installer for confirmation. A generic default ('surface-pro') must never be possible again.
+[ -s "$PRIV_DIR/hostname" ] || { echo "PRIV_DIR/hostname is missing: put the machine's name there (copy ctg-infrastructure hosts/<name>/HOSTNAME)"; exit 2; }
+case "$(tr -d ' \t\r\n' < "$PRIV_DIR/hostname")" in surface-pro|surface|localhost|ubuntu|debian|gentoo|"") echo "PRIV_DIR/hostname is a generic name, not the owner's name for this machine"; exit 2 ;; esac
 docker build $PLAT $ARCHARGS --build-context priv="$PRIV_DIR" -f common/Dockerfile.private --build-arg BASE=$ROOTFS_IMG -t $TAG-priv . 2>&1 | tail -12
 docker image inspect $TAG-priv >/dev/null 2>&1 || { echo "private layer failed"; exit 1; }
 ROOTFS_IMG=$TAG-priv; VNAME_PRIV="private-"
