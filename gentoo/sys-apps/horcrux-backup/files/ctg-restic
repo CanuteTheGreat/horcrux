@@ -48,7 +48,9 @@ ABSENT-ON-HOST $p"
         continue
       fi
       n=$((n+1))
-      if ! restic ls --no-lock latest "$p" 2>/dev/null | grep -q '^/'; then miss="$miss
+      # count, not grep -q: with pipefail an early-exiting grep SIGPIPEs restic on big directories and reports a false miss
+      found=$(restic ls --no-lock latest "$p" 2>/dev/null | grep -c '^/')
+      if [ "${found:-0}" -eq 0 ]; then miss="$miss
 NOT-IN-SNAPSHOT $p"; fi
     done < "$CONF/required"
     if [ -n "$miss" ]; then
