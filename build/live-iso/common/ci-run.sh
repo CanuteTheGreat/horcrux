@@ -2,8 +2,9 @@
 # ci-run.sh daily|stable   -- run by .forgejo/workflows/live-iso.yml, once per architecture (ARCH env; default = the host's):
 #   x86_64 on the kvm-x86_64 runner (KVM), aarch64 on the arm64 runner (native build, QEMU TCG: Graviton has no /dev/kvm).
 # build ISO -> QEMU boot/install/reboot/web tests (x86: UEFI+USB, BIOS+CD; arm64/riscv64: UEFI) -> publish only if ALL passed.
-# ALWAYS exits 0 (a red job would e-mail the owner): the outcome goes to the `daily-status`
-# marker release and the job summary; ~/.hermes iso-status-watch reads the marker.
+# The outcome goes to the `daily-status-*` marker release and the job summary (~/.hermes iso-status-watch reads the
+# marker), and a failed build/test/publish step FAILS THE RUN (exit 1, after the marker is written): a green run
+# must mean an image was built, tested and published (run 8637 was green while `dracut: Failed to find module zfs`).
 set -uo pipefail
 mode=${1:?daily|stable}
 HERE=$(cd "$(dirname "$0")" && pwd); cd "$HERE"
@@ -15,7 +16,7 @@ ARCH=${ARCH:-$HOST_ARCH}; export ARCH
 # smaller QEMU matrix + the encrypted-ZFS desktop test (GDM greeter on VGA, boot-environment rollback, hibernate/resume).
 VARIANT=${VARIANT:-}; export VARIANT
 . "$HERE/image-name.sh"; export INIT=$IMG_INIT; VPFX="$IMG-"
-. "$HERE/arch/$ARCH.env" || { echo "unsupported ARCH=$ARCH"; exit 0; }
+. "$HERE/arch/$ARCH.env" || { echo "::error::unsupported ARCH=$ARCH"; exit 1; }
 OUT=${OUT:-$PWD/../../../iso-out}; mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 EVI=$OUT/evidence; rm -rf "$EVI"; mkdir -p "$EVI"
 T0=$(date +%s); sha=${GITHUB_SHA:-$(git rev-parse HEAD)}
@@ -58,9 +59,11 @@ if [ "$result" = pass ]; then
   echo "::group::build ISO"
   t=$(date +%s)
   ARCH=$ARCH VARIANT=$VARIANT JOBS=${JOBS:-4} bash ../build.sh -o "$OUT" -n "$suffix" 2>&1 | tee "$EVI/build.log" | tail -60
+  build_rc=${PIPESTATUS[0]}
   BUILD_S=$(( $(date +%s)-t ))
   ISO=$(ls "$OUT"/*-"$suffix"-$ARCH.iso 2>/dev/null | head -1)
-  [ -n "$ISO" ] && [ -s "$ISO" ] || fail build "no ISO produced (see build.log)"
+  if [ "$build_rc" != 0 ]; then fail build "build.sh exited $build_rc: $(grep -E 'ERROR|Failed|failed' "$EVI/build.log" | tail -1 | cut -c1-200)"
+  elif [ -z "$ISO" ] || [ ! -s "$ISO" ]; then fail build "no ISO produced (see build.log)"; fi
   echo "::endgroup::"
 fi
 
@@ -206,4 +209,6 @@ fi
 { echo "### $PROJECT $mode ISO: $result"; echo "$summary"; [ -z "$gh_note" ] || echo "$gh_note"; } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
 # docker hygiene on the shared host (build.sh already removed this build's containers/images; keep the BuildKit cache)
 docker image prune -f >/dev/null 2>&1 || true
+# honest run status: red when anything failed (the status marker above is already written)
+if [ "$result" != pass ]; then echo "::error::Live ISO $mode ($IMG-$ARCH) FAILED at $failed_step: $summary"; exit 1; fi
 exit 0
