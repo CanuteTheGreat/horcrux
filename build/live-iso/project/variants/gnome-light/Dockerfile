@@ -56,8 +56,16 @@ RUN set -e; chmod 644 /usr/share/horcrux/desktop/*; \
     find /usr/share/help /usr/share/gnome/help -mindepth 1 -maxdepth 1 ! -name C ! -name 'en*' -exec rm -rf {} + 2>/dev/null || true; \
     # development leftovers of the desktop emerge (~1 GB uncompressed): static libs (libclamav_rust.a 330 MB, QmlDom 218, qpdf 108, LLVM ...),\
     # headers, and the clang/LLVM tools (mesa's llvmpipe/radeonsi only load libLLVM.so, which stays)\
-    find /usr/lib /usr/lib64 -xdev -name '*.a' -type f ! -path '/usr/lib/gcc/*' -delete 2>/dev/null || true; \
-    rm -rf /usr/include /usr/lib/llvm/*/include /usr/lib/llvm/*/bin /usr/lib/clang 2>/dev/null || true; \
+    # KEEP the toolchain's own development files (glibc + kernel headers + the libraries kernel-module builds link: elfutils, openssl, zlib, zstd, xz, ncurses):\
+    # stripping them left every installed system unable to compile anything (gringotts, 2026-11-03: `C compiler cannot create executables`, missing\
+    # libc_nonshared.a/stdio.h), which also breaks the zfs-kmod rebuild on every kernel update. ~100 MB; the rest of the headers/static libs go.\
+    qlist -e sys-libs/glibc sys-kernel/linux-headers dev-libs/elfutils dev-libs/openssl sys-libs/zlib app-arch/zstd app-arch/xz-utils sys-libs/ncurses sys-libs/libxcrypt | grep -E '^/usr/(include|lib64?)/' | sort -u > /tmp/devkeep.lst; \
+    test "$(wc -l < /tmp/devkeep.lst)" -gt 500; \
+    find /usr/lib /usr/lib64 -xdev -name '*.a' -type f ! -path '/usr/lib/gcc/*' 2>/dev/null | grep -vxFf /tmp/devkeep.lst | xargs -r rm -f; \
+    find /usr/include -xdev \( -type f -o -type l \) 2>/dev/null | grep -vxFf /tmp/devkeep.lst | xargs -r rm -f; find /usr/include -xdev -depth -type d -empty -delete 2>/dev/null || true; \
+    rm -rf /usr/lib/llvm/*/include /usr/lib/llvm/*/bin /usr/lib/clang 2>/dev/null || true; \
+    # gate: the toolchain still builds a C program that needs libc_nonshared.a and the kernel headers\
+    printf '#include <stdio.h>\n#include <linux/types.h>\nint main(void){puts("ok");return 0;}\n' > /tmp/t.c && gcc /tmp/t.c -o /tmp/t && /tmp/t && rm -f /tmp/t /tmp/t.c /tmp/devkeep.lst; \
     echo "desktop" > /etc/live-iso-variant; echo "gnome-light" >> /etc/live-iso-variant; \
     # the overlay tree is re-cloned by `emaint sync` (repos.conf stays); ship an EMPTY dir, not a stale copy
     rm -rf /var/db/repos/canutethegreat-overlay; mkdir -p /var/db/repos/canutethegreat-overlay; \

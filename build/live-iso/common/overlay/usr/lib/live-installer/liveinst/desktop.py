@@ -80,9 +80,12 @@ def apply(inst):
     else:
         inst.write("/etc/gdm/custom.conf", "[daemon]\nWaylandEnable=true\n")
     # the GNOME defaults package (AppIndicator tray icons enabled system-wide) belongs to @world of every GNOME install, so later `emerge -uDN @world` keeps it
-    pk = f"{T}/var/db/pkg/gnome-extra"
-    if os.path.isdir(pk) and any(d.startswith("horcrux-gnome-defaults-") for d in os.listdir(pk)):
-        w = f"{T}/var/lib/portage/world"
-        if "gnome-extra/horcrux-gnome-defaults" not in (open(w).read().split() if os.path.exists(w) else []):
-            inst.write("/var/lib/portage/world", "gnome-extra/horcrux-gnome-defaults\n", append=True)
+    # (also net-misc/horcrux-chrony-nm, the NetworkManager hook that gives chrony its sources when Wi-Fi comes up: a dependency of the defaults
+    # package, listed explicitly so a depclean or a world edit can never drop it)
+    w = f"{T}/var/lib/portage/world"
+    for cat, pkg in (("gnome-extra", "horcrux-gnome-defaults"), ("net-misc", "horcrux-chrony-nm")):
+        pk = f"{T}/var/db/pkg/{cat}"
+        if os.path.isdir(pk) and any(d.startswith(pkg + "-") for d in os.listdir(pk)):
+            if f"{cat}/{pkg}" not in (open(w).read().split() if os.path.exists(w) else []):
+                inst.write("/var/lib/portage/world", f"{cat}/{pkg}\n", append=True)
     inst.log(f"desktop profile: user {name}, GNOME/GDM on Wayland")

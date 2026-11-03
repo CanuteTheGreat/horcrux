@@ -7,3 +7,5 @@
 **/node_modules
 **/__pycache__
 **/target
+# Nextcloud re-syncs from the server (110 GB, versioned in B2): never back it up from a workstation
+/home/*/Nextcloud
