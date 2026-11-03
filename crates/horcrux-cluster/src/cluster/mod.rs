@@ -487,6 +487,7 @@ impl ClusterManager {
             node_id: None,
             status_reason: None,
             cpu_vendor: String::new(),
+            cpu_level: 0,
             caps: None,
         };
         self.add_node(node.clone()).await?;

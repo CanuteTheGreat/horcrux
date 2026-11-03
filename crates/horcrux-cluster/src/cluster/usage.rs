@@ -84,6 +84,13 @@ pub struct NodeUsage {
     /// AMD<->Intel live moves are blocked cluster-wide, not just locally.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub cpu_vendor: String,
+    /// x86-64 level (1..4) of the reporting host; 0 = unknown / older node.
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub cpu_level: u8,
+}
+
+fn is_zero_u8(v: &u8) -> bool {
+    *v == 0
 }
 
 /// Result of one usage poll of one node.
@@ -131,6 +138,9 @@ pub fn apply_poll(node: &mut Node, outcome: PollOutcome, now: i64) {
             // report (older node) never erases a known value.
             if !usage.cpu_vendor.is_empty() {
                 node.cpu_vendor = usage.cpu_vendor.clone();
+            }
+            if usage.cpu_level > 0 {
+                node.cpu_level = usage.cpu_level;
             }
             if node.architecture == Architecture::Unknown
                 && usage.architecture != Architecture::Unknown
@@ -345,6 +355,7 @@ impl LocalUsageSampler {
             timestamp: chrono::Utc::now().timestamp(),
             node_id: None,
             cpu_vendor: super::node::detect_cpu_vendor_family(),
+            cpu_level: super::node::detect_cpu_level(),
         })
     }
 }
@@ -421,6 +432,7 @@ mod tests {
             timestamp: 1_000,
             node_id: None,
             cpu_vendor: String::new(),
+            cpu_level: 0,
         }
     }
 

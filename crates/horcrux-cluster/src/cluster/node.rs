@@ -196,6 +196,10 @@ pub struct Node {
     /// remote nodes that haven't reported).
     #[serde(default)]
     pub cpu_vendor: String,
+    /// x86-64 microarchitecture level (1..4, see `cluster::cpu_groups`) of
+    /// this node; 0 = unknown (older records / non-x86 / not yet reported).
+    #[serde(default)]
+    pub cpu_level: u8,
     /// Operator-set role/labels/per-guest limits (see `cluster::roles`).
     /// `None` = unrestricted compute node (older records).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -229,6 +233,7 @@ impl Node {
             node_id: None,
             status_reason: None,
             cpu_vendor: String::new(),
+            cpu_level: 0,
             caps: None,
         }
     }
@@ -251,6 +256,7 @@ impl Node {
             node_id: None,
             status_reason: None,
             cpu_vendor: detect_cpu_vendor_family(),
+            cpu_level: detect_cpu_level(),
             caps: None,
         }
     }
@@ -384,6 +390,7 @@ impl AddNodeRequest {
             node_id: None,
             status_reason: None,
             cpu_vendor: String::new(),
+            cpu_level: 0,
             caps: None,
         }
     }
@@ -411,9 +418,40 @@ pub fn detect_cpu_vendor_family() -> String {
         .unwrap_or_default()
 }
 
+/// x86-64 level (1..4) of the machine we are running on; 0 if /proc/cpuinfo
+/// has no x86 `flags` line (non-x86 host or unreadable).
+pub fn detect_cpu_level() -> u8 {
+    std::fs::read_to_string("/proc/cpuinfo")
+        .ok()
+        .map(|c| cpu_level_from_cpuinfo(&c))
+        .unwrap_or(0)
+}
+
+/// Pure helper for `detect_cpu_level` (0 when there is no `flags` line).
+pub fn cpu_level_from_cpuinfo(cpuinfo: &str) -> u8 {
+    let flags = super::cpu_groups::parse_flags(cpuinfo);
+    if flags.is_empty() {
+        0
+    } else {
+        super::cpu_groups::x86_level(&flags)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cpu_level_from_cpuinfo_levels_and_unknown() {
+        assert_eq!(cpu_level_from_cpuinfo("model name : x\n"), 0);
+        assert_eq!(cpu_level_from_cpuinfo("flags : fpu sse2\n"), 1);
+        assert_eq!(
+            cpu_level_from_cpuinfo(
+                "flags : cx16 lahf_lm popcnt sse4_1 sse4_2 ssse3 avx avx2 bmi1 bmi2 f16c fma abm movbe xsave\n"
+            ),
+            3
+        );
+    }
 
     #[test]
     fn add_node_request_accepts_minimal_ui_and_cli_body() {
