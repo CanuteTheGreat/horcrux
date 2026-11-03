@@ -603,6 +603,17 @@ cd /; rm -rf $d
         rc, o = self.sh(DESKTOP_EXEC_CHECK, timeout=120)
         self.step("desktop-files-exec-binaries-exist", "DESKTOP-FILES-CHECKED" in o and "DESKTOP-FILES-MISSING none" in o, re.sub(r"\s+", " ", o).strip()[:400])
 
+    def keyring_pam_checks(self):
+        """owner order 2026-11-03 (never sign in again after a reboot/restore): a GDM password login must start exactly ONE pam_gnome_keyring set, with
+        the session line AFTER pam_elogind. pambase[gnome-keyring] + gdm-password gave two daemons, the first before /run/user/UID existed: no persistent
+        login keyring (gringotts: empty ~/.local/share/keyrings, every sign-in lost at logout). Reproduced and fixed in a VM with real GDM keyboard logins
+        (ctg-infrastructure hosts/gringotts/keyring-qa); this static gate keeps the stack from regressing (stale base, pambase update)."""
+        rc, o = self.sh("/usr/libexec/horcrux-keyring-pam check; echo rc=$?; qfile /usr/libexec/horcrux-keyring-pam /usr/bin/horcrux-keyring-status; "
+                        "echo SLL=$(grep -c '^[^#]*pam_gnome_keyring' /etc/pam.d/system-local-login); echo GDM=$(grep -c '^[^#]*pam_gnome_keyring' /etc/pam.d/gdm-password); "
+                        "echo PASSWD=$(grep -c '^[^#]*pam_gnome_keyring' /etc/pam.d/passwd)")
+        self.step("gdm-login-starts-one-keyring-daemon-after-elogind", "OK keyring PAM" in o and "rc=0" in o and "SLL=0" in o and "GDM=3" in o and "PASSWD=1" in o
+                  and "gnome-extra/horcrux-gnome-defaults" in o, re.sub(r"\s+", " ", o)[:300])
+
     def desktop_checks(self, vm=None):
         end = time.time() + qt.T(240)
         o = ""
@@ -614,6 +625,7 @@ cd /; rm -rf $d
             time.sleep(6)
         self.step("desktop-gdm-and-gnome-shell-running", "GDM" in o and "SHELL" in o, o.strip().replace("\n", " | ")[:300])
         self.desktop_exec_check()
+        self.keyring_pam_checks()
         self.clock_checks()
         self.toolchain_check()
         self.package_contents_check()

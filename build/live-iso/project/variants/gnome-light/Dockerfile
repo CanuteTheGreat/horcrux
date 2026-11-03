@@ -37,7 +37,9 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
 COPY --from=hxfull / /var/db/repos/horcrux/
 RUN set -e; unset ARCH; export FEATURES="-ccache"; \
     emerge --update --newuse --usepkg=n --getbinpkg=n --select gnome-extra/horcrux-gnome-defaults; \
-    test -s /etc/dconf/db/local && test -f /etc/dconf/profile/user && qfile -q /etc/dconf/db/local
+    test -s /etc/dconf/db/local && test -f /etc/dconf/profile/user && qfile -q /etc/dconf/db/local; \
+    # keyring PAM: one pam_gnome_keyring set (gdm-password), session after elogind; postinst of horcrux-gnome-defaults-1-r2 fixes pambase's duplicate. Fails the build on a stale base.
+    /usr/libexec/horcrux-keyring-pam check && qfile -q /usr/libexec/horcrux-keyring-pam /usr/bin/horcrux-keyring-status
 
 COPY project/variants/gnome-light/overlay/ /
 
