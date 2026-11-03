@@ -20,3 +20,6 @@ sys-fs/zfs rootfs dist-kernel
 sys-fs/zfs-kmod dist-kernel
 gnome-base/gvfs elogind udisks -systemd
 sys-apps/dbus X
+# today's xfce4-power-manager/xfce4-settings/... require `|| ( X wayland )` and the image's global -X made the resolver refuse them (tree drift)
+xfce-base/* X
+xfce-extra/* X
