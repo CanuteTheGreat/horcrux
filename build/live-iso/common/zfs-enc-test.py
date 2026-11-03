@@ -598,6 +598,11 @@ cd /; rm -rf $d
         """a kernel module builds against the RUNNING kernel's build tree (what zfs-kmod needs after every kernel update: kernel tree + compiler + libelf/openssl)"""
         rc, o = self.sh(self._b64sh("sh", self.KMOD_CHECK), timeout=600)
         self.step("kernel-module-builds-against-running-kernel", "KMOD-OK" in o, re.sub(r"\s+", " ", o).strip()[-300:])
+        # ... and a kernel UPDATE must rebuild the ZFS module in the same transaction (USE=dist-kernel on zfs-kmod), else the new initramfs has no zfs.ko
+        rc, o = self.sh("if qlist -I sys-kernel/gentoo-kernel-bin sys-kernel/gentoo-kernel | grep -q .; then "
+                        "grep -qw dist-kernel /var/db/pkg/sys-fs/zfs-kmod-*/USE && echo DISTKERNEL-OK || echo DISTKERNEL-MISSING; else echo NOT-DIST-KERNEL; fi; "
+                        "grep -h dist-kernel /etc/portage/package.use/* 2>/dev/null | head -4; qfile -q /etc/portage/package.use/horcrux-zfs")
+        self.step("zfs-kmod-rebuilds-with-every-dist-kernel-update", "DISTKERNEL-OK" in o or "NOT-DIST-KERNEL" in o, re.sub(r"\s+", " ", o).strip()[:300])
 
     def desktop_exec_check(self):
         rc, o = self.sh(DESKTOP_EXEC_CHECK, timeout=120)

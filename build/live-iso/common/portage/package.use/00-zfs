@@ -1,0 +1,4 @@
+# ZFS root: the module is rebuilt with every dist-kernel update, in the same emerge transaction and before the new initramfs (a kernel update without it leaves
+# a ZFS-root machine with an initramfs that has no zfs.ko). Same lines as sys-kernel/horcrux-unlock ships for installed machines (/etc/portage/package.use/horcrux-zfs).
+sys-fs/zfs rootfs dist-kernel
+sys-fs/zfs-kmod dist-kernel
