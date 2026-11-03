@@ -89,7 +89,7 @@ Image name: the Surface image follows the repo-wide scheme `<product>-<desktop e
 
 Build: `VARIANT=surface build/live-iso/build.sh` (optionally `PRIV_DIR=<private dir>` for the private layer) on top of the finished Horcrux rootfs.
 `build/live-iso/project/variants/surface/Dockerfile` stages: overlays (horcrux, GURU, canutethegreat-overlay) → `sys-kernel/horcrux-surface-config`
-→ **kernel binary package** `=sys-kernel/gentoo-kernel-6.18.59` (own layer, ~1 h) → install (the stock `gentoo-kernel-bin` goes) + zfs-kmod rebuilt + kernel/module/config
+→ **kernel binary package** `=sys-kernel/gentoo-kernel-6.18.60` (was .59; Gentoo drops old kernel versions from the tree, so the pin must follow) (own layer, ~1 h) → install (the stock `gentoo-kernel-bin` goes) + zfs-kmod rebuilt + kernel/module/config
 assertions → `sys-apps/horcrux-tools` + `sys-apps/horcrux-live-data` + `sys-kernel/horcrux-unlock` (the shared packages proven on hogshead) → **`app-misc/horcrux-surface-desktop`** (one meta package whose RDEPEND is the whole desktop and all apps) → cleanup + live initramfs.
 
 | package (Horcrux overlay `gentoo/`) | owns |

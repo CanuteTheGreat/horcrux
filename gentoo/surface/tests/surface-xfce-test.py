@@ -211,7 +211,7 @@ class XT(SQ.T):
         s("boot-is-ext4", re.search(r"^ext4$", flat, re.M) is not None, "/boot ext4")
         s("hibernate-swap-4.5g-plus-zram", re.search(r"hxvg-swap|swap\s+4\.50g", flat) is not None and "/dev/zram0" in flat and "resume=UUID=" in flat, "swap LV 4.5g, zram0 prio 100, resume= on the command line")
         s("lid-quirk-on-cmdline", "button.lid_init_state=open" in flat and "ttyS0" not in flat.split("@@@")[0].split("root=")[0] + flat.split("rd.")[0], "button.lid_init_state=open, VGA-only console")
-        s("kernel-and-meta-packages-are-portage-packages", "gentoo-kernel-6.18.59" in flat and "horcrux-surface-config-1" in flat and "horcrux-surface-desktop-1" in flat and re.search(r"^16$", flat, re.M) is not None, re.sub(r"\s+", " ", flat.split("@@@")[-1])[:300])
+        s("kernel-and-meta-packages-are-portage-packages", "gentoo-kernel-6.18.60" in flat and "horcrux-surface-config-1" in flat and "horcrux-surface-desktop-1" in flat and re.search(r"^16$", flat, re.M) is not None, re.sub(r"\s+", " ", flat.split("@@@")[-1])[:300])
         rc, out = self.ssh("zgrep -c . /proc/config.gz >/dev/null 2>&1; k=$(uname -r); c=/lib/modules/$k/build/.config; for o in SURFACE_AGGREGATOR SURFACE_HID HID_MULTITOUCH HID_WACOM MWIFIEX_PCIE MWIFIEX_SDIO HID_SENSOR_ACCEL_3D XFS_FS HIBERNATION; do grep -E \"^CONFIG_$o=\" $c; done; "
                            "find /lib/modules/$k -name 'surface_aggregator*' | head -2; ls /sys/class/dmi/id >/dev/null && cat /sys/class/dmi/id/product_name", timeout=60)
         self.save("kernel-config-surface.txt", out)
