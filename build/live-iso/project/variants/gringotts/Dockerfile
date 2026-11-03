@@ -143,6 +143,7 @@ RUN set -e; \
     test -x /usr/bin/nmtui && test -x /usr/bin/gringotts-install; \
     chmod 700 /usr/share/gringotts 2>/dev/null || true
 
+COPY common/vdb-prune.py /tmp/vdb-prune.py
 # slim again: the apps pulled the full firmware/locale/doc/static-lib sets back in; Portage keeps the records, the files are just not shipped
 RUN set -e; \
     # build-time tools the apps left behind (BDEPEND only): unmerge them properly (depclean refuses anything still needed), then ship the ISO under the 2 GiB GitHub release-asset limit
@@ -152,9 +153,15 @@ RUN set -e; \
         nvidia amdgpu radeon mediatek ath10k ath11k ath12k rtw89 brcm qca; cd /; \
     find /usr/share/locale -mindepth 1 -maxdepth 1 ! -name 'en*' ! -name locale.alias -exec rm -rf {} + ; \
     find /usr/share/help /usr/share/gnome/help -mindepth 1 -maxdepth 1 ! -name C ! -name 'en*' -exec rm -rf {} + 2>/dev/null || true; \
-    find /usr/lib /usr/lib64 -xdev -name '*.a' -type f ! -path '/usr/lib/gcc/*' -delete 2>/dev/null || true; \
-    rm -rf /usr/include /usr/lib/llvm/*/include /usr/lib/llvm/*/bin /usr/lib/clang 2>/dev/null || true; \
+    # KEEP the toolchain's development files (same list as the gnome-light strip): deleting /usr/include and every *.a left gringotts without a working C compiler (2026-11-03)\
+    qlist -e sys-libs/glibc sys-kernel/linux-headers dev-libs/elfutils dev-libs/openssl sys-libs/zlib app-arch/zstd app-arch/xz-utils sys-libs/ncurses sys-libs/libxcrypt | grep -E '^/usr/(include|lib64?)/' | sort -u > /tmp/devkeep.lst; \
+    test "$(wc -l < /tmp/devkeep.lst)" -gt 500; \
+    find /usr/lib /usr/lib64 -xdev -name '*.a' -type f ! -path '/usr/lib/gcc/*' 2>/dev/null | grep -vxFf /tmp/devkeep.lst | xargs -r rm -f; \
+    find /usr/include -xdev \( -type f -o -type l \) 2>/dev/null | grep -vxFf /tmp/devkeep.lst | xargs -r rm -f; find /usr/include -xdev -depth -type d -empty -delete 2>/dev/null || true; \
+    rm -rf /usr/lib/llvm/*/include /usr/lib/llvm/*/bin /usr/lib/clang 2>/dev/null || true; \
+    printf '#include <stdio.h>\n#include <linux/types.h>\nint main(void){puts("ok");return 0;}\n' > /tmp/t.c && gcc /tmp/t.c -o /tmp/t && /tmp/t && rm -f /tmp/t /tmp/t.c /tmp/devkeep.lst; \
     rm -rf /var/db/repos/gentoo/* /var/db/repos/guru /var/db/repos/canutethegreat-overlay \
            /var/cache/distfiles/* /var/cache/binhost /usr/share/doc /usr/share/gtk-doc /var/tmp/portage /var/log/emerge* 2>/dev/null || true; \
     find / -xdev -name '*.pyc' -path '*/__pycache__/*' -delete 2>/dev/null || true; \
-    mkdir -p /var/db/repos/guru /var/db/repos/canutethegreat-overlay
+    mkdir -p /var/db/repos/guru /var/db/repos/canutethegreat-overlay; \
+    python3 /tmp/vdb-prune.py --groups core,dev,gringotts-fw && rm -f /tmp/vdb-prune.py
