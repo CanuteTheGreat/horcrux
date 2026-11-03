@@ -23,3 +23,4 @@ sys-apps/dbus X
 # today's xfce4-power-manager/xfce4-settings/... require `|| ( X wayland )` and the image's global -X made the resolver refuse them (tree drift)
 xfce-base/* X
 xfce-extra/* X
+x11-terms/xfce4-terminal X

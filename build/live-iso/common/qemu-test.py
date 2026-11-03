@@ -578,7 +578,7 @@ def no_autologin_config_gate(sh, step_fn, step="installed-configs-have-no-autolo
                    ("/etc/gdm/custom.conf", "[daemon]\nTimedLoginEnable=true\nTimedLogin=bob\n")]
     good_samples = [("/etc/lightdm/lightdm.conf", "[Seat:*]\n#autologin-user=\n"), ("/etc/gdm/custom.conf", "[daemon]\nWaylandEnable=true\nAutomaticLoginEnable=false\n")]
     selftest = all(al._active_lines(p, t) for p, t in bad_samples) and not any(al._active_lines(p, t) for p, t in good_samples)
-    rc, o = sh("for f in " + AUTOLOGIN_FILES + "; do [ -f \"$f\" ] && { echo \"@@@FILE $f\"; cat \"$f\"; }; done; echo @@@END; getent group autologin")
+    rc, o = sh("for f in " + AUTOLOGIN_FILES + "; do [ -f \"$f\" ] && { echo \"@@@FILE $f\"; cat \"$f\"; }; done; echo @@@END; getent group autologin; true")
     hits, seen = [], []
     for chunk in o.split("@@@FILE ")[1:]:
         path, _, body = chunk.partition("\n")
