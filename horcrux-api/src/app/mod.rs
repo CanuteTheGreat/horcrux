@@ -4511,6 +4511,7 @@ async fn wake_cluster_node(
     })))
 }
 
+#[cfg(feature = "cluster")]
 #[derive(Debug, Deserialize)]
 struct BmcOnRequest {
     node: String,
@@ -4518,6 +4519,7 @@ struct BmcOnRequest {
 
 /// `POST /api/cluster/power/bmc-on` -- power a node on through its configured
 /// BMC fencing device (IPMI/iLO/DRAC/Redfish) (area 7).
+#[cfg(feature = "cluster")]
 async fn bmc_power_on_node(
     Json(req): Json<BmcOnRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
