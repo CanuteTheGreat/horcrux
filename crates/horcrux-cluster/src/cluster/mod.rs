@@ -5,6 +5,7 @@ pub mod ceph_placement;
 /// Clustering support module
 /// Provides multi-node cluster management, HA, and VM migration using Corosync
 pub mod corosync;
+pub mod cpu_groups;
 pub mod drain;
 pub mod membership;
 pub mod migration;
