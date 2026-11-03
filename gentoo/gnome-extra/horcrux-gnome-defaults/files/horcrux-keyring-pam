@@ -1,0 +1,52 @@
+#!/bin/sh
+# horcrux-keyring-pam: make the GNOME login keyring unlock at the GDM password login, every time (owner order 2026-11-03: "never re-sign in").
+#
+#   horcrux-keyring-pam check [ROOT]   report only (exit 1 = broken)
+#   horcrux-keyring-pam fix   [ROOT]   repair /etc/pam.d/system-local-login (idempotent; run from pkg_postinst)
+#
+# What was wrong (reproduced on a Horcrux GNOME VM, then on gringotts): sys-auth/pambase[gnome-keyring] puts pam_gnome_keyring (auth, password
+# and `session ... auto_start`) into /etc/pam.d/system-local-login, and gdm's gdm-password includes system-local-login AND carries its own
+# pam_gnome_keyring lines. So one GDM login starts TWO `gnome-keyring-daemon --login` daemons, and the session one runs BEFORE pam_elogind
+# has created /run/user/UID (the `session include system-login` line comes after it): its control socket lands in ~/.cache/keyring-XXXX,
+# the session's secret service never finds it, and the result is a session-only collection: NO login.keyring is written (gringotts:
+# empty ~/.local/share/keyrings) or it stays locked, so Brave's "Brave Safe Storage" key, the Nextcloud app password and the Proton
+# sessions live in RAM and are gone at the next login. (hogshead works only when the single early daemon happens to win the race.)
+# Fix: gdm-password keeps its own three lines (auth after the include, password, session auto_start LAST, after pam_elogind); the copies in
+# system-local-login go. Console `login(1)` no longer unlocks the keyring (GNOME is always entered through GDM); /etc/pam.d/passwd keeps its
+# `password optional pam_gnome_keyring.so use_authtok`, so changing the password with passwd / GNOME Settings re-keys the login keyring.
+ROOT=${2:-}
+PAMD=$ROOT/etc/pam.d
+SLL=$PAMD/system-local-login
+GDM=$PAMD/gdm-password
+
+count() { [ -f "$1" ] || { echo 0; return; }; grep -c '^[^#]*pam_gnome_keyring' "$1" || true; }
+
+problems=""
+if [ -f "$GDM" ]; then
+	grep -q '^[^#]*auth.*pam_gnome_keyring' "$GDM"            || problems="$problems gdm-password-has-no-keyring-auth"
+	grep -q '^[^#]*session.*pam_gnome_keyring.*auto_start' "$GDM" || problems="$problems gdm-password-has-no-keyring-session"
+	# the session line must come after the include that brings pam_elogind (/run/user/UID must exist)
+	inc=$(grep -n '^session[[:space:]]\+include[[:space:]]\+system-local-login' "$GDM" | head -1 | cut -d: -f1)
+	ses=$(grep -n '^[^#]*session.*pam_gnome_keyring' "$GDM" | head -1 | cut -d: -f1)
+	[ -n "$inc" ] && [ -n "$ses" ] && [ "$ses" -lt "$inc" ] && problems="$problems keyring-session-before-elogind"
+	[ "$(count "$SLL")" -gt 0 ] && problems="$problems system-local-login-also-starts-the-keyring-daemon"
+else
+	problems="$problems no-gdm-password"
+fi
+
+case "$1" in
+check)
+	if [ -z "$problems" ]; then echo "OK keyring PAM: one pam_gnome_keyring set (gdm-password), session line after pam_elogind"; exit 0; fi
+	echo "BAD keyring PAM:$problems"; exit 1 ;;
+fix)
+	[ -f "$GDM" ] || { echo "horcrux-keyring-pam: no $GDM (GDM not installed), nothing to do"; exit 0; }
+	if [ "$(count "$SLL")" -gt 0 ]; then
+		# only when GDM carries its own keyring lines: otherwise removing these would leave no unlock at all
+		if grep -q '^[^#]*auth.*pam_gnome_keyring' "$GDM" && grep -q '^[^#]*session.*pam_gnome_keyring' "$GDM"; then
+			sed -i '/^[^#]*pam_gnome_keyring/d' "$SLL" && echo "horcrux-keyring-pam: removed the duplicate pam_gnome_keyring lines from $SLL"
+		fi
+	fi
+	exec "$0" check "$ROOT" ;;
+*)
+	echo "usage: $0 check|fix [ROOT]" >&2; exit 2 ;;
+esac

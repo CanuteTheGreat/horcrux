@@ -102,6 +102,7 @@ RUN set -e; \
     { test -x $f && qfile -q $f && qlist -I net-misc/horcrux-chrony-nm >/dev/null; } || { echo "STALE BASE: net-misc/horcrux-chrony-nm missing (the clock never syncs on the first Wi-Fi): rebuild the gnome-light base, do not REUSE_ROOTFS an older image"; exit 1; }; \
     grep -qw zeroconf /var/db/pkg/net-print/cups-browsed-*/USE || { echo "STALE BASE: cups-browsed built without zeroconf (it crashes at once under OpenRC)"; exit 1; }; \
     test -f /usr/lib/live-installer/liveinst/rtc.py || { echo "STALE BASE: the installer does not write the RTC (liveinst/rtc.py missing)"; exit 1; }; \
+    /usr/libexec/horcrux-keyring-pam check || { echo "STALE BASE: the GDM login starts two keyring daemons (no persistent login keyring: every sign-in is lost at logout); needs horcrux-gnome-defaults-1-r2"; exit 1; }; \
     printf 'int main(void){return 0;}\n' > /tmp/t.c && gcc /tmp/t.c -o /tmp/t && rm -f /tmp/t /tmp/t.c
 
 # the image's remaining /etc files (init scripts, profile.d, dracut/Portage config, markers: the repository's overlay /etc trees and the build-time Portage
