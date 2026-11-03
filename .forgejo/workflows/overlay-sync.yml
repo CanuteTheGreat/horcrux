@@ -1,0 +1,40 @@
+name: Overlay sync
+
+# The Horcrux Portage overlay (repo directory gentoo/) is ALSO published as its own git repository,
+# CanuteTheGreat/horcrux-overlay, which installed Horcrux machines sync with `emaint sync -r horcrux`
+# (/etc/portage/repos.conf/horcrux.conf, package sys-apps/horcrux-repo-config, auto-sync yes).
+# The overlay repo is a `git subtree split --prefix=gentoo` of main (stable commit ids, so it only ever fast-forwards).
+# Do not edit it by hand (it is only ever fast-forwarded from main). Secret OVERLAY_DEPLOY_KEY = the deploy key of horcrux-overlay (no other access).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'gentoo/**'
+      - '.forgejo/workflows/overlay-sync.yml'
+  workflow_dispatch:
+
+jobs:
+  split-and-push:
+    name: Publish gentoo/ as horcrux-overlay
+    runs-on: linux-cross-x86_64
+    container: catthehacker/ubuntu:act-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Split gentoo/ and fast-forward the overlay repository
+        env:
+          OVERLAY_DEPLOY_KEY: ${{ secrets.OVERLAY_DEPLOY_KEY }}
+        run: |
+          set -eu
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$OVERLAY_DEPLOY_KEY" > ~/.ssh/overlay_key && chmod 600 ~/.ssh/overlay_key
+          export GIT_SSH_COMMAND='ssh -i ~/.ssh/overlay_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new'
+          git config user.name "Horcrux CI"; git config user.email "ci@horcrux.invalid"
+          tip=$(git subtree split --prefix=gentoo)
+          echo "overlay tip $tip"
+          git push git@git.canutethegreat.com:CanuteTheGreat/horcrux-overlay.git "$tip:refs/heads/main"
+          rm -f ~/.ssh/overlay_key
