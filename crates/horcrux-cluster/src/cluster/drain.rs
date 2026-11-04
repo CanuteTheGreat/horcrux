@@ -16,6 +16,10 @@ pub struct PlanNode {
     /// Running guests never move between two known, different families.
     #[serde(default)]
     pub cpu_vendor: String,
+    /// x86-64 microarchitecture level (1..4, 0 = unknown, permissive). A
+    /// running guest never moves to an older level than its source.
+    #[serde(default)]
+    pub cpu_level: u8,
     pub name: String,
     pub online: bool,
     /// In maintenance: takes no new guests.
@@ -155,18 +159,18 @@ impl<'a> World<'a> {
                 t.name, t.arch, g.arch
             ));
         }
-        if g.running && !t.cpu_vendor.is_empty() {
-            let src = self
-                .nodes
-                .iter()
-                .find(|n| n.name == self.at[&g.id])
-                .map(|n| n.cpu_vendor.as_str())
-                .unwrap_or("");
-            if !src.is_empty() && src != t.cpu_vendor {
-                return Some(format!(
-                    "{} has a {} CPU but the guest runs on {}: live migration across CPU vendors is not possible (cold move only)",
-                    t.name, t.cpu_vendor, src
-                ));
+        if g.running {
+            if let Some(s) = self.nodes.iter().find(|n| n.name == self.at[&g.id]) {
+                let grp = |n: &PlanNode| super::cpu_groups::CpuGroup {
+                    vendor: n.cpu_vendor.clone(),
+                    level: n.cpu_level,
+                };
+                if let Some(why) = super::cpu_groups::live_migration_block(&grp(s), &grp(t)) {
+                    return Some(format!(
+                        "{}: live migration across CPU vendors/levels is not possible ({why})",
+                        t.name
+                    ));
+                }
             }
         }
         if let Some(p) = &g.rules.pin {
@@ -344,6 +348,7 @@ mod tests {
     fn node(n: &str, mem: u64) -> PlanNode {
         PlanNode {
             cpu_vendor: String::new(),
+            cpu_level: 0,
             name: n.into(),
             online: true,
             maintenance: false,
@@ -430,6 +435,27 @@ mod tests {
         assert!(p.moves.is_empty());
         let why = &p.unplaced[0].reason;
         assert!(why.contains("CPU vendors"), "{why}");
+    }
+
+    #[test]
+    fn running_guests_never_drain_to_older_cpu_level() {
+        let mut a = node("a", 8000);
+        a.cpu_vendor = "intel".into();
+        a.cpu_level = 3;
+        let mut old = node("old", 8000);
+        old.cpu_vendor = "intel".into();
+        old.cpu_level = 1;
+        let nodes = [a.clone(), old.clone()];
+        let p = plan_drain("a", &nodes, &[guest("g", "a", 500)]);
+        assert!(p.moves.is_empty());
+        assert!(
+            p.unplaced[0].reason.contains("older"),
+            "{}",
+            p.unplaced[0].reason
+        );
+        old.cpu_level = 0;
+        let p = plan_drain("a", &[a, old], &[guest("g", "a", 500)]);
+        assert_eq!(p.moves.len(), 1, "unknown level is permissive");
     }
 
     #[test]
