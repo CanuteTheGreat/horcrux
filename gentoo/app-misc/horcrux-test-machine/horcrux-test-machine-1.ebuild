@@ -13,7 +13,7 @@ KEYWORDS="~amd64"
 # One package for the owner's test laptops (gringotts, hogshead, madammalkins): installed ONLY there, never in a public image.
 # `emerge -C` it to get normal power saving back (and see the README for the encryption side).
 # +zfs +gnome: the two laptops (gringotts, hogshead); on the XFS/XFCE Surface set -zfs -gnome. USE=zfs: the machine has a ZFS root (gringotts, hogshead); without it (madammalkins, XFS) only the power part applies
-IUSE="+gnome +zfs"
+IUSE="+gnome +zfs smallram"
 
 RDEPEND="
 	zfs? ( sys-kernel/horcrux-unlock[-encrypted] )
@@ -53,6 +53,12 @@ src_install() {
 	newinitd "${FILESDIR}"/horcrux-test-netwatch.initd horcrux-test-netwatch
 	exeinto /usr/libexec
 	newexe "${FILESDIR}"/horcrux-test-netwatch.sh horcrux-test-netwatch
+	if use smallram; then
+		insinto /etc/portage/env
+		newins "${FILESDIR}"/smallram.env horcrux-smallram.conf
+		insinto /etc/portage/package.env
+		newins "${FILESDIR}"/smallram.package.env horcrux-test-machine
+	fi
 	insinto /etc/logrotate.d
 	newins "${FILESDIR}"/logrotate.conf horcrux-test-machine
 
