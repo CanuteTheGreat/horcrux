@@ -9,3 +9,6 @@ x86_64? sys-apps/memtest86+
 sys-block/zram-init
 # Intel CPU microcode, early-loaded from the initramfs (x86 only; ~arm64 has no such package)
 x86_64? sys-firmware/intel-microcode
+# out-of-tree kernel modules (zfs-kmod rebuilt after every kernel update): the dist kernel has CONFIG_DEBUG_INFO_BTF, so `make modules` runs pahole;
+# without it the module build dies in BTF (QEMU gate kernel-module-builds-against-running-kernel found it)
+dev-util/pahole
