@@ -23,6 +23,9 @@ Exit 0 = every step passed; evidence (serial logs, screens/, PNGs, result.json) 
 """
 import argparse, json, os, re, shutil, socket, ssl, struct, subprocess, uuid, sys, tempfile, threading, time, urllib.error, urllib.request, zlib
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import headless_gates as HG
+
 PROJECTS = {
     "horcrux": dict(svc="horcrux-api", port=8006, health=["/api/health", "/"], pwfile="/var/lib/horcrux/initial-admin-password", old_pw="horcrux",
                     seedfile="/etc/horcrux/admin-password",
@@ -623,6 +626,8 @@ class Runner:
         args = [A["qemu"]] + mach + ["-smp", "2", "-m", str(a.mem), "-drive", f"file={self.disk},if=virtio,format=qcow2"]
         if a.fs == "zfs" and a.zfs_raid == "mirror":
             args += ["-drive", f"file={self.disk2},if=virtio,format=qcow2"]
+        if a.headless_gates:
+            args += ["-rtc", f"base={self.rtc_base}"]     # every boot (live and installed) starts with a hardware clock MONTHS off
         nic = A["nic"]
         if a.project == "horcrux":
             ip = self.guest_ip(installed)
@@ -664,6 +669,7 @@ class Runner:
     def run(self):
         a = self.a
         os.makedirs(a.out, exist_ok=True)
+        self.rtc_base = HG.months_off_base()
         self.disk, self.disk2, self.answers = f"{a.out}/target.qcow2", f"{a.out}/target2.qcow2", f"{a.out}/answers.img"
         nvars = f"{a.out}/OVMF_VARS.fd"
         for d in (self.disk,) + ((self.disk2,) if a.fs == "zfs" and a.zfs_raid == "mirror" else ()):
@@ -751,6 +757,15 @@ class Runner:
                 ok = vm.expect_raw(r"AUTOINSTALL-(OK|FAILED[^\n]*)", 1700, consume=False)
                 self.step("installer-finished", ok and b"AUTOINSTALL-OK" in ok.group(0), ok.group(0).decode() if ok else "timeout")
                 vm.shot("auto-finished")
+                if a.headless_gates:
+                    # the live clock started MONTHS off: the installer must have corrected it and written the hardware clock (liveinst/rtc.py `rtc:` line)
+                    time.sleep(1)
+                    try:
+                        txt = open(f"{a.out}/1-install-serial.log", errors="replace").read()
+                    except OSError:
+                        txt = ""
+                    m = re.findall(r"rtc: [^\r\n]*", txt)
+                    self.step("installer-writes-rtc-from-a-synced-clock", any("hardware clock written (UTC) from a synced clock" in x for x in m), " | ".join(m)[:300] or "no `rtc:` line in the install log")
             elif a.flow == "tui":
                 self.drive_tui(vm, kb)
             elif a.flow == "gui":
@@ -1323,19 +1338,31 @@ class Runner:
         if a.mode == "uefi":
             pflash_vars(nvars)                                # fresh NVRAM = first boot of the disk, firmware re-scans
         t1 = time.time()
-        vm = VM("2-installed", self.qemu_args(None, True, nvars), a.out)
         serial = a.flow != "tui-vga"
+        late = bool(a.headless_gates and serial)
+        netnames = ["n0"] if a.project == "horcrux" else ["n0", "n1"]
+        vm = VM("2-installed", self.qemu_args(None, True, nvars) + (["-S"] if late else []), a.out)
+        if late:
+            # LATE NETWORK: the NIC links stay down until the login prompt is on the console (a boot must never wait for the network);
+            # the RTC is months off, so chrony / DHCP / the web UI have to catch up once the links come up
+            r = HG.link(vm, netnames, False)
+            vm.qmp("cont")
+            self.step("installed-boots-with-the-network-links-down", all('"error"' not in x for x in r), " ".join(r)[:120])
         try:
             if serial and a.console_open:
                 ok = vm.expect_raw(r"Enter an option", 420)
                 if not ok:
                     vm.shot("login-timeout")
                 self.step("installed-boots-to-open-console-menu", ok, f"{int(time.time()-t1)}s, no login prompt (console menu opened by the installer)")
+                if late:
+                    self.late_link_up(vm, netnames, ok)
             elif serial:
                 ok = vm.expect_raw(r"login:", 420)
                 if not ok:
                     vm.shot("login-timeout")
                 self.step("installed-boots-to-login", ok, f"{int(time.time()-t1)}s")
+                if late:
+                    self.late_link_up(vm, netnames, ok)
                 vm.shot("login-prompt")
                 self.serial_login(vm, P["old_pw"], expect_ok=False)
                 self.step("serial-root-login-with-chosen-password", self.serial_login(vm, PW, expect_ok=True), "lands in the console menu")
@@ -1351,6 +1378,8 @@ class Runner:
             sc, code, body = http(FWD_WEB, "/")
             self.step("web-ui-root", code == 200 and b"<" in body, f"{sc} / -> {code} ({len(body)} bytes)")
             self.ssh_checks()
+            if a.headless_gates:
+                self.headless_checks(late)
             self.health("first-boot")
             if a.flow == "auto":
                 rc, pw = ssh(FWD_SSH, self.key, f"cat {P['pwfile']}")
@@ -1594,6 +1623,36 @@ class Runner:
             if vm.alive():
                 vm.p.kill()
 
+    def late_link_up(self, vm, netnames, reached):
+        """the console prompt is up with the links still down: bring the NICs up now"""
+        self.link_up_t = time.time()
+        r = HG.link(vm, netnames, True)
+        self.step("boot-reaches-the-console-without-a-network", bool(reached), f"login/menu prompt reached with the links down; links up now: {' '.join(r)[:100]}")
+
+    def headless_checks(self, late):
+        """installed-system gates of a headless-first product (see headless_gates.py), identical on every architecture"""
+        a = self.a
+        sh = lambda cmd, timeout=60: ssh(FWD_SSH, self.key, cmd, timeout=int(T(timeout)))
+        HG.gui_check(sh, self.step)
+        web = ""
+        if a.flow == "auto":
+            rc, pw = ssh(FWD_SSH, self.key, f"cat {self.P['pwfile']} 2>/dev/null")
+            web = pw.strip().splitlines()[-1] if rc == 0 and pw.strip() else ""
+        # root's password IS the test login password PW by design (answer file); the generated web admin password must differ from it and from root's hash
+        HG.account_check(sh, self.step, web_secret=web, console_open=a.console_open)
+        if a.flow == "auto" and web:
+            sc, code, resp = http(FWD_WEB, "/api/auth/login", "POST", {"username": "admin", "password": PW})
+            self.step("web-admin-refuses-the-root-login-password", code in (400, 401, 403, 429), f"POST /api/auth/login admin/<root login password> -> {code}")
+        HG.clock_gate(sh, self.step, timeout=T(480), label="months-off-rtc-clock-stepped-by-chrony-after-the-late-network" if late else "months-off-rtc-clock-stepped-by-chrony")
+        if late and a.project == "patronus":
+            end, o = time.time() + T(180), ""
+            while time.time() < end:
+                rc, o = sh("ip -4 -o addr show scope global")
+                if "10.0.2.15" in o:
+                    break
+                time.sleep(5)
+            self.step("wan-dhcp-lease-after-the-late-link-up", "10.0.2.15" in o, re.sub(r"\s+", " ", o).strip()[:160])
+
     def _b64run(self, interp, text, timeout=300):
         import base64
         return ssh(FWD_SSH, self.key, f"echo {base64.b64encode(text.encode()).decode()} | base64 -d | {interp}", timeout=int(T(timeout)))
@@ -1781,6 +1840,7 @@ def main():
     ap.add_argument("--cpu", default=os.environ.get("QEMU_TEST_CPU", "qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt,+cx16"),
                     help="QEMU CPU model. Default = x86-64-v2 (no AVX/BMI): catches binaries built for a host-tuned CPU. Never `host`.")
     ap.add_argument("--restarts", type=int, default=0, help="after the install checks: boot the installed disk again and restart it N times from inside the guest, asserting service health after each boot")
+    ap.add_argument("--headless-gates", action="store_true", help="headless-first gates (headless_gates.py): every boot starts with an RTC months off, the installed system boots with the NIC links down until the login prompt, no GUI stack, no empty password/autologin, chrony steps the clock after the late network")
     ap.add_argument("--disk-gb", type=int, default=24)
     args = ap.parse_args()
     ARCH = args.arch

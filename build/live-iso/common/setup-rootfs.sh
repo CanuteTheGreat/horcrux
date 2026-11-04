@@ -55,6 +55,15 @@ for t in ttyS0 ttyS1 ttyAMA0 hvc0; do grep -qx $t /etc/securetty 2>/dev/null || 
 mkdir -p /etc/iwd && printf '[General]\nEnableNetworkConfiguration=true\n' > /etc/iwd/main.conf
 grep -q '^denyinterfaces' /etc/dhcpcd.conf 2>/dev/null || printf '\ndenyinterfaces wlan* wlp*\n' >> /etc/dhcpcd.conf
 
+# --- time: months-off hardware clocks (a stick or board whose RTC battery is flat, a VM) must end up right ----------------------
+# chronyd steps the clock (not slews) at start-up and on the first measurements after the network came up, and writes it to the RTC (rtcsync);
+# /etc/dhcpcd.exit-hook (overlay) tells chronyd the link is up so it re-resolves its pool and measures at once.
+if [ -f /etc/chrony/chrony.conf ]; then
+  grep -q '^makestep' /etc/chrony/chrony.conf || echo 'makestep 1.0 3' >> /etc/chrony/chrony.conf
+  grep -q '^rtcsync' /etc/chrony/chrony.conf || echo 'rtcsync' >> /etc/chrony/chrony.conf
+fi
+chmod 0644 /etc/dhcpcd.exit-hook 2>/dev/null || true
+
 # --- kernel + live initramfs ------------------------------------------------------
 kver=$(ls /lib/modules | sort -V | tail -1)
 echo "kernel: $kver"

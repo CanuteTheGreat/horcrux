@@ -1041,9 +1041,20 @@ class Installer:
             if s_ == "sshd" or s_ in c["services_off"]:
                 continue
             self.run(["rc-update", "add", s_, "default"], chroot=True, check=False)
+        self.cfg_clock()
         # serial console keeps working when the installer was driven over a serial line
         if arch.serial_console():
             self.run(["rc-update", "add", "live-serial", "default"], chroot=True, check=False)
+
+    def cfg_clock(self):
+        """Installed system: read the hardware clock at boot and write it back when the machine stops (hwclock replaces swclock) when the
+        machine has an RTC; chrony keeps it right afterwards (rtcsync) and steps a months-off clock at the first network (makestep + the
+        dhcpcd exit hook /etc/dhcpcd.exit-hook). A board without an RTC keeps swclock."""
+        T = self.target
+        if os.path.exists("/dev/rtc0") and os.path.exists(f"{T}/etc/init.d/hwclock"):
+            self.write("/etc/conf.d/hwclock", '# written by live-installer: the hardware clock holds UTC\nclock="UTC"\nclock_hctosys="YES"\nclock_systohc="YES"\n')
+            self.run(["rc-update", "del", "swclock", "boot"], chroot=True, check=False)
+            self.run(["rc-update", "add", "hwclock", "boot"], chroot=True, check=False)
 
     def cfg_hardening(self):
         c, T = self.c, self.target
