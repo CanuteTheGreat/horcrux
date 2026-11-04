@@ -38,10 +38,14 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
 
 # separate layer: the ~65 min kernel compile above stays cached when this step needs fixing.
 # NO binpkgs for zfs-kmod: a cached one was built against another kernel release and installs into ITS /lib/modules dir
+# the gnome-light layer stripped /usr/include (libudev.h, security/pam_modules.h, curl/curl.h ...): zfs does not configure without them
+COPY project/variants/t2/zfs-dev-deps.py /usr/local/lib/t2/zfs-dev-deps.py
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
     kr=$(cat /boot/.kernelrelease); \
+    emerge --oneshot --nodeps --usepkg --getbinpkg --buildpkg=n $(python3 /usr/local/lib/t2/zfs-dev-deps.py) > /tmp/zdev.log 2>&1 || { tail -30 /tmp/zdev.log; exit 1; }; rm -f /tmp/zdev.log; \
+    test -f /usr/include/libudev.h; \
     # only zfs/zfs-kmod are built from source; their build dependencies (cmake...) come from the binhost like everywhere else in the image
     emerge --oneshot --usepkg --getbinpkg --usepkg-exclude 'sys-fs/zfs-kmod sys-fs/zfs' --buildpkg=n =sys-fs/zfs-kmod-2.3.9 =sys-fs/zfs-2.3.9 > /tmp/zfs-emerge.log 2>&1 \
         || { tail -60 /tmp/zfs-emerge.log; for l in $(ls -d /var/tmp/portage/*/*/temp/build.log); do echo "== $l"; tail -40 $l; done; exit 1; }; tail -5 /tmp/zfs-emerge.log; rm -f /tmp/zfs-emerge.log; \
