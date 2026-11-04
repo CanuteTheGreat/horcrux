@@ -112,7 +112,7 @@ class XT(SQ.T):
             self.step("auto-installer-started", ok, f"{int(time.time() - t0)}s after power-on: horcrux-surface-auto on tty1")
             inv = vm.expect_raw(r"SURFACE-AUTO: INVENTORY rc=(\d+) disk=(\S+)", 240, consume=False)
             self.step("inventory-found-empty-disk", inv and inv.group(1) == b"0" and inv.group(2) == b"/dev/vda", inv.group(0).decode() if inv else "no inventory marker")
-            ok = vm.expect_raw(r"Host name of this tablet", 120, consume=False)
+            ok = vm.expect_raw(r"Host name.{0,8} of this tablet", 120, consume=False)
             self.step("asks-for-the-host-name-first", ok, "no generic default: the owner's name for the machine is prefilled from the private image, or typed")
             time.sleep(2)
             self.key(vm, "surface-pro\n")                       # the old generic image default must be REFUSED
