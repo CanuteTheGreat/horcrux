@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Test machine power policy
+Comment=No sleep on lid/idle for the owner's test laptops (app-misc/horcrux-test-machine)
+Exec=/usr/libexec/horcrux-test-xfce-power
+OnlyShowIn=XFCE;
+NoDisplay=true
+X-GNOME-Autostart-Phase=Initialization
