@@ -5,6 +5,7 @@
 #                   sync config, backup, ZFS dist-kernel rule). NO display stack, NO desktop, NO machine-specific application.
 #   desktop edition project/variants/gnome-light (GNOME) FROM this image: only adds the desktop; its package gnome-extra/horcrux-gnome-defaults depends on core
 #   machine layers  project/variants/{gringotts,hogshead,hogsmeade,...}: the owner's own apps on top of an edition
+# The overlay packages are always built from this tree (--usepkg-exclude: a cached binary package of an older build of the same version is never reused); everything else uses the binhost.
 # Idempotent: applying it to an image that already has the core (a REUSE_ROOTFS base) is a no-op.
 ARG BASE
 FROM ${BASE}
@@ -25,9 +26,9 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     if qlist -I sys-apps/horcrux-core >/dev/null 2>&1; then echo "core already installed: nothing to do"; rm -f /tmp/vdb-prune.py /tmp/public-forbidden.txt; exit 0; fi; \
     # the [horcrux] repos.conf entry is package-owned (sys-apps/horcrux-repo-config, a dependency of the core); placed once from the package's own file so this emerge sees the overlay
     install -D -m644 /var/db/repos/horcrux/sys-apps/horcrux-repo-config/files/horcrux.conf /etc/portage/repos.conf/horcrux.conf; \
-    qlist -I > /tmp/pkgs.before; \
-    emerge --update --newuse --usepkg=n --getbinpkg=n --select sys-apps/horcrux-core > /tmp/core-emerge.log 2>&1 || { tail -60 /tmp/core-emerge.log; exit 1; }; \
-    qlist -I > /tmp/pkgs.after; comm -13 /tmp/pkgs.before /tmp/pkgs.after > /tmp/pkgs.added; \
+    qlist -I | sort > /tmp/pkgs.before; \
+    emerge --update --newuse --usepkg-exclude "sys-apps/horcrux-* net-misc/horcrux-*" --select sys-apps/horcrux-core > /tmp/core-emerge.log 2>&1 || { tail -60 /tmp/core-emerge.log; exit 1; }; \
+    qlist -I | sort > /tmp/pkgs.after; comm -13 /tmp/pkgs.before /tmp/pkgs.after > /tmp/pkgs.added; \
     echo "core added $(wc -l < /tmp/pkgs.added) packages:"; cat /tmp/pkgs.added; \
     # GATE: the headless core pulls no display stack (the live-only graphical installer stack was there before this layer and is removed again on a server install)
     if grep -E '^(gui-libs|gui-wm|x11-base|x11-libs|x11-misc|x11-apps|x11-drivers|x11-themes|gnome-base|gnome-extra|kde-|dev-qt|media-libs/mesa|media-libs/libglvnd|xfce-)' /tmp/pkgs.added; then echo "CORE PULLED A DISPLAY STACK (see above): core must stay headless"; exit 1; fi; \
