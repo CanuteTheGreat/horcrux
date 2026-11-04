@@ -70,7 +70,7 @@ class Layering(unittest.TestCase):
 
     def test_core_carries_every_shared_fix_and_desktop_depends_on_it(self):
         core = rdepend(ebuild("sys-apps", "horcrux-core"))
-        for need in ("net-misc/chrony", "net-misc/horcrux-time", "net-misc/horcrux-chrony-nm", "sys-apps/horcrux-firstboot", "sys-apps/horcrux-backup", "sys-apps/horcrux-repo-config", "sys-fs/zfs"):
+        for need in ("net-misc/chrony", "net-misc/horcrux-time", "net-misc/horcrux-chrony-nm", "sys-apps/horcrux-firstboot", "sys-apps/horcrux-backup", "sys-apps/horcrux-repo-config", "sys-fs/zfs", "dev-util/pahole"):
             self.assertIn(need, core)
         gd = rdepend(ebuild("gnome-extra", "horcrux-gnome-defaults"))
         self.assertIn("sys-apps/horcrux-core", gd)

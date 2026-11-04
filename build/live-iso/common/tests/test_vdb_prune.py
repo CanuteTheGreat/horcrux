@@ -87,6 +87,7 @@ class StripLiveGuiKeepsSharedFiles(unittest.TestCase):
 class DistKernelScratchInitrd(unittest.TestCase):
     def test_scratch_initrd_in_the_kernel_tree_is_pruned_only_there(self):
         c = ("obj /usr/src/linux-6.18.60-gentoo-dist-bin/arch/x86/boot/initrd d41d8cd98f00b204e9800998ecf8427e 1\n"
+             "obj /usr/src/linux-6.18.60-gentoo-dist-bin/arch/x86/boot/uki.efi d41d8cd98f00b204e9800998ecf8427e 1\n"
              "obj /boot/initramfs-6.18.60.img d41d8cd98f00b204e9800998ecf8427e 1\n")
         root = tempfile.mkdtemp()
         d = os.path.join(root, "var/db/pkg/sys-kernel/gentoo-kernel-bin-6.18.60")
@@ -95,6 +96,7 @@ class DistKernelScratchInitrd(unittest.TestCase):
         subprocess.check_call([sys.executable, PRUNE, root], stdout=subprocess.DEVNULL)
         left = open(os.path.join(d, "CONTENTS")).read()
         self.assertNotIn("arch/x86/boot/initrd", left)
+        self.assertNotIn("uki.efi", left)
         self.assertIn("/boot/initramfs-6.18.60.img", left)       # a missing REAL initramfs stays visible
 
     def test_generated_giomodule_cache_is_pruned(self):

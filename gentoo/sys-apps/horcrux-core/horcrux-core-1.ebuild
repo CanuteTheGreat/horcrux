@@ -27,6 +27,10 @@ RDEPEND="
 	sys-fs/zfs
 	sys-kernel/dracut
 	sys-kernel/installkernel
+	# an installed system must be able to build an out-of-tree kernel module (zfs-kmod after every dist-kernel update, DKMS-style drivers) against its running kernel:
+	# gentoo-kernel-bin modules carry BTF, which `make modules` finishes with pahole. It used to be on an image only when the zfs-kmod binary package of the day happened
+	# to be built from source (QEMU gate kernel-module-builds-against-running-kernel failed on a server rebuilt from the package cache, 2026-11-04).
+	dev-util/pahole
 "
 
 src_install() {
