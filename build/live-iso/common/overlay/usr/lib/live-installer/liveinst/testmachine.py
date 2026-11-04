@@ -18,7 +18,7 @@ WARNING = ("TEST MACHINE: DISK ENCRYPTION IS OFF. Anyone with the machine can re
 PACKAGE_USE = ("# owned by app-misc/horcrux-test-machine (written by the installer until that package is merged)\n"
                "sys-kernel/horcrux-unlock -encrypted\n")
 
-DRACUT_OMIT = 'omit_dracutmodules+=" crypt dm horcrux-unlock "\n'
+DRACUT_OMIT = 'omit_dracutmodules+=" crypt horcrux-unlock "\n'
 
 
 def requested(c):
