@@ -580,7 +580,8 @@ for cf in sorted(glob.glob("/var/db/pkg/*/*/CONTENTS")):
         if os.path.lexists(path) or path.startswith(ALLOW_PREFIX):
             continue
         # dist-kernel (gentoo-kernel-bin) records the initramfs it generates beside the kernel image and deletes it after copying it to /boot
-        if re.match(r"^/usr/src/linux-[^/]+/arch/[^/]+/boot/initrd", path):
+        # ... and the unified kernel image (arch/*/boot/uki.efi) it assembles for the same purpose (USE=generic-uki)
+        if re.match(r"^/usr/src/linux-[^/]+/arch/[^/]+/boot/(initrd|uki\.efi)", path):
             continue
         miss.setdefault(pkg, []).append(path); n += 1
 print("CONTENTS-PACKAGES", pk)
