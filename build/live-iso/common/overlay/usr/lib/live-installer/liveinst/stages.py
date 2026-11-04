@@ -117,7 +117,7 @@ def disk_layout(cfg, profile, size_bytes, efi, ram_mb):
         used = sum(s[1] for s in segs)
         segs.append(("root (LUKS2)", max(0, size_bytes - used - 2 * MB), "xfs in LUKS2", "/"))
         return segs
-    sp = swap_plan(cfg, profile, ram_mb) if (cfg["fs"] != "zfs" or cfg.get("zfs_encrypt")) else {"mode": "none", "mb": 0}
+    sp = swap_plan(cfg, profile, ram_mb) if (cfg["fs"] != "zfs" or cfg.get("zfs_encrypt") or cfg.get("test_machine_no_encryption")) else {"mode": "none", "mb": 0}
     if sp["mode"] == "hibernate":
         segs.append(("swap", sp["mb"] * MB, "swap", "[swap]"))
     used = sum(s[1] for s in segs)
@@ -229,6 +229,8 @@ class DiskStage(Stage):
                       hint="A mirror needs two disks and survives one failing; /boot lives on the first disk only."),
                 Field("enc", "Encrypt the disk (ZFS native, AES-256-GCM)", "check", c.get("zfs_encrypt", False), visible=lambda v: v.get("fs") == "zfs",
                       hint="Recommended for laptops. The passphrase is asked at every boot; /boot and the EFI partition stay unencrypted"),
+                Field("tm", "TEST MACHINE: NO disk encryption", "check", c.get("test_machine_no_encryption", False), visible=lambda v: v.get("fs") in ("zfs", "xfs-luks"),
+                      advanced=True, hint="WARNING: not recommended; unencrypted, boots without a passphrase. Only for a machine used for testing. Overrides the encryption choice"),
                 Field("pp", "Disk passphrase", "password", c.get("zfs_passphrase", ""), width=40, visible=lambda v: v.get("fs") == "zfs" and v.get("enc"),
                       hint="Min 12 characters. NOT recoverable: if you forget it the data is gone"),
                 Field("pp2", "Confirm passphrase", "password", c.get("zfs_passphrase", ""), width=40, visible=lambda v: v.get("fs") == "zfs" and v.get("enc")),
@@ -259,10 +261,15 @@ class DiskStage(Stage):
 
     def commit(self, ctx, v):
         ctx.c["fs"], ctx.c["zfs_raid"] = v["fs"], v["zfs_raid"]
+        ctx.c["test_machine_no_encryption"] = bool(v.get("tm"))
+        if ctx.c["test_machine_no_encryption"]:
+            from . import testmachine
+            testmachine.normalize(ctx.c)
+            v = dict(v, enc=False, lpw="", pp="")
         ctx.c["luks_passphrase"] = v.get("lpw", "") if v["fs"] == "xfs-luks" else ""
         ctx.c["zfs_encrypt"] = bool(v["fs"] == "zfs" and v.get("enc"))
         ctx.c["zfs_passphrase"] = v.get("pp", "") if ctx.c["zfs_encrypt"] else ""
-        ctx.c["swap"] = v.get("swap", "auto") if (v["fs"] != "zfs" or ctx.c["zfs_encrypt"]) else "auto"
+        ctx.c["swap"] = v.get("swap", "auto") if (v["fs"] != "zfs" or ctx.c["zfs_encrypt"] or ctx.c["test_machine_no_encryption"]) else "auto"
 
     def need_disks(self, c):
         return 2 if (c["fs"] == "zfs" and c["zfs_raid"] == "mirror") else 1
@@ -291,7 +298,9 @@ class DiskStage(Stage):
             size = by.get(disk, {}).get("size", 64 * 10**9)
             segs = disk_layout(c, ctx.p, size, ctx.efi, ctx.ram_mb)
             out.append(f"ERASE {disk} and create: " + ", ".join(f"{n} {S.fmt_size(b)}" for n, b, _f, _m in segs))
-        if c["fs"] != "zfs" or c.get("zfs_encrypt"):
+        if c.get("test_machine_no_encryption"):
+            out.append("WARNING: TEST MACHINE - the disk is NOT encrypted and the machine boots without a passphrase")
+        if c["fs"] != "zfs" or c.get("zfs_encrypt") or c.get("test_machine_no_encryption"):
             out.append("Swap: " + portableswap.describe(swap_plan(c, ctx.p, ctx.ram_mb)))
         if c["fs"] == "xfs-luks":
             out.append("Encrypt the root partition with LUKS2 (argon2id) and create XFS inside it; zram instead of swap")
