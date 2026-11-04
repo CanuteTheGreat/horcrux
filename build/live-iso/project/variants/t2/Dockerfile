@@ -2,7 +2,7 @@
 # Horcrux Apple T2 variant: the finished rootfs (BASE: server or desktop) + the T2 kernel, so that the live USB has a working
 # internal keyboard/trackpad on a T2 Mac and the installed system boots with it (apple-bce in the initramfs).
 #
-#   kernel  = gentoo-sources 7.2.13 + the pinned t2linux patch set (gentoo/t2/PATCHSET: OpenZFS 2.3.9/2.4.4 support <= 7.2)
+#   kernel  = gentoo-sources 7.2.15 + the pinned t2linux patch set (gentoo/t2/PATCHSET: OpenZFS 2.3.9/2.4.4 support <= 7.2)
 #   config  = Gentoo's dist-kernel config + gentoo/t2/kernel/t2.config + the patch set's extra_config, asserted by required-config.txt
 #   zfs.ko  = sys-fs/zfs-kmod built out of tree against that kernel (the live installer creates the pool with the RUNNING kernel)
 #   initrd  = dracut with apple-bce + HID loaded early (liveinst/t2.py: dracut_conf) - the build FAILS when they are not inside
