@@ -1091,6 +1091,22 @@ class Installer:
             return
         pkgs = [x.strip().lstrip("=") for x in open(lst).read().split() if "/" in x]
         removed = 0
+        # a file that is ALSO listed by a package that stays (the glib giomodule.cache is recorded by glib and by gio-module packages) must not be deleted with
+        # the live-only one: the installed server's package database would then list a missing file (QEMU gate package-contents-complete, 2026-11-04)
+        keep_paths = set()
+        pkgdir = os.path.join(T, "var/db/pkg")
+        for cat in (os.listdir(pkgdir) if os.path.isdir(pkgdir) else []):
+            for pn in os.listdir(os.path.join(pkgdir, cat)):
+                if f"{cat}/{pn}" in pkgs:
+                    continue
+                try:
+                    for line in open(os.path.join(pkgdir, cat, pn, "CONTENTS"), errors="replace"):
+                        if line.startswith("obj "):
+                            keep_paths.add(" ".join(line.rstrip("\n").split(" ")[1:-2]))
+                        elif line.startswith("sym "):
+                            keep_paths.add(line[4:].split(" -> ")[0])
+                except OSError:
+                    pass
         for pf in pkgs:
             vdb = os.path.join(T, "var/db/pkg", pf)
             contents = os.path.join(vdb, "CONTENTS")
@@ -1103,6 +1119,8 @@ class Installer:
                     path = parts[1]
                     if parts[0] == "sym":
                         path = line.split(" ", 1)[1].split(" -> ")[0]
+                    if path in keep_paths:
+                        continue
                     try:
                         os.unlink(os.path.join(T, path.lstrip("/")))
                         removed += 1

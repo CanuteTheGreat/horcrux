@@ -33,6 +33,15 @@ sync_trees() {
 		[ "$r" = gentoo ] && continue
 		d=$(portageq get_repo_path / "$r" 2>/dev/null)
 		[ -n "$d" ] && [ ! -d "$d/.git" ] && find "$d" -mindepth 1 -delete 2>/dev/null
+		# an image snapshot (git init + commit + remote add) has no upstream branch: Portage's git sync dies with "no upstream configured for branch 'main'"
+		# (found by the headless server gate, 2026-11-04). Give the checkout its tracking ref so `emaint sync` can fetch + reset.
+		if [ -d "$d/.git" ] && ! git -C "$d" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
+			b=$(git -C "$d" symbolic-ref --short HEAD 2>/dev/null)
+			if [ -n "$b" ] && git -C "$d" remote get-url origin >/dev/null 2>&1; then
+				git -C "$d" config "branch.$b.remote" origin; git -C "$d" config "branch.$b.merge" "refs/heads/$b"
+				git -C "$d" update-ref "refs/remotes/origin/$b" HEAD
+			fi
+		fi
 		emaint sync -r "$r" || ok=0
 	done
 	[ $ok = 1 ]

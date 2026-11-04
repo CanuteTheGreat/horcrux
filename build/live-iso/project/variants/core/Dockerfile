@@ -42,7 +42,9 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     for s in chronyd horcrux-timesync horcrux-firstboot cronie; do rc-update add $s default; done; \
     # the shipped overlay tree is a git checkout (snapshot of this build) so `emaint sync -r horcrux` fast-forwards it to the published overlay
     cd /var/db/repos/horcrux; git init -q -b main; git add -A; git -c user.name=horcrux-image -c user.email=image@horcrux.invalid commit -q -m "image snapshot (core)"; \
-    git remote add origin "$(sed -n 's/^sync-uri *= *//p' /etc/portage/repos.conf/horcrux.conf)"; cd /; \
+    git remote add origin "$(sed -n 's/^sync-uri *= *//p' /etc/portage/repos.conf/horcrux.conf)"; \
+    # upstream tracking ref: without it `emaint sync -r horcrux` fails (Portage's git sync asks for @{upstream}); gate: the next line fails the build otherwise
+    git config branch.main.remote origin; git config branch.main.merge refs/heads/main; git update-ref refs/remotes/origin/main HEAD; git rev-parse --abbrev-ref '@{upstream}' | grep -qx origin/main; cd /; \
     # same slimming the base image got (docs, the tree, distfiles): the package database is made to match what was removed
     rm -rf /var/db/repos/gentoo/* /var/cache/distfiles/* /var/cache/binhost /usr/share/doc /var/tmp/portage /var/log/emerge* /tmp/core-emerge.log /tmp/pkgs.* /tmp/public-forbidden.txt 2>/dev/null || true; \
     find / -xdev -name '*.pyc' -path '*/__pycache__/*' -delete 2>/dev/null || true; \
