@@ -44,7 +44,8 @@ RUN set -e; unset ARCH; export FEATURES="-ccache"; \
     /usr/libexec/horcrux-keyring-pam check && qfile -q /usr/libexec/horcrux-keyring-pam /usr/bin/horcrux-keyring-status; \
     # the shipped tree is a git checkout (snapshot of this build's overlay) so `emaint sync -r horcrux` fast-forwards it to the published overlay (sync-depth 1 = fetch + reset)\
     cd /var/db/repos/horcrux; git init -q -b main; git add -A; { git diff --cached --quiet || git -c user.name=horcrux-image -c user.email=image@horcrux.invalid commit -q -m "image snapshot (desktop edition)"; }; \
-    git remote get-url origin >/dev/null 2>&1 || git remote add origin "$(sed -n 's/^sync-uri *= *//p' /etc/portage/repos.conf/horcrux.conf)"; git rev-parse --short HEAD
+    git remote get-url origin >/dev/null 2>&1 || git remote add origin "$(sed -n 's/^sync-uri *= *//p' /etc/portage/repos.conf/horcrux.conf)"; git rev-parse --short HEAD; \
+    git config branch.main.remote origin; git config branch.main.merge refs/heads/main; git update-ref refs/remotes/origin/main HEAD; git rev-parse --abbrev-ref '@{upstream}' | grep -qx origin/main
 
 COPY project/variants/gnome-light/overlay/ /
 
