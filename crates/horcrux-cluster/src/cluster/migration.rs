@@ -919,6 +919,39 @@ impl MigrationManager {
             };
         }
 
+        // Named-group rule (cpu_groups): a running guest must not move to a
+        // node with an older x86-64 level than the source (vendor already
+        // checked above, so compare level only). Cold migration is fine.
+        {
+            use std::collections::BTreeSet;
+            let lvl = |f: &HashSet<String>| {
+                let b: BTreeSet<String> = f.iter().cloned().collect();
+                super::cpu_groups::x86_level(&b)
+            };
+            let level_group = |f: &HashSet<String>| super::cpu_groups::CpuGroup {
+                vendor: String::new(),
+                level: lvl(f),
+            };
+            if let Some(msg) = super::cpu_groups::live_migration_block(
+                &level_group(&source_flags),
+                &level_group(&target_flags),
+            ) {
+                return MigrationCheck {
+                    check_name: "cpu_compatibility".to_string(),
+                    passed: !live,
+                    message: if live {
+                        format!(
+                            "{}: live migration {} -> {} is not possible, use cold migration",
+                            msg, source_node, target_node
+                        )
+                    } else {
+                        format!("{} (cold migration is fine)", msg)
+                    },
+                    blocking: live,
+                };
+            }
+        }
+
         // The target must support at least every CPU feature flag the
         // source exposes to the guest; missing flags can crash a live VM
         // immediately after migration if the guest already used them.
