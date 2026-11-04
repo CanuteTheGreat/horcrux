@@ -213,6 +213,7 @@ class HostnameRule(unittest.TestCase):
         self.assertIn('hostname = "$HOST_NAME"', t)
         self.assertNotIn('hostname = "surface-pro"', t)
         self.assertIn("HOSTNAME-CONFIRMED", t)
+        self.assertIn("HOSTNAME-REFUSED-GENERIC", t)
         self.assertIn("$PRIV/hostname", t)
 
     def test_no_machine_script_hardcodes_the_generic_name(self):
