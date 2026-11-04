@@ -31,6 +31,9 @@ def ebuild(cat, pn):
     return open(os.path.join(d, f)).read()
 
 
+ATOM = re.compile(r"^(!!?)?([<>]=?|=|~)?[a-z0-9][a-z0-9+_.-]*/[A-Za-z0-9+_.*-]+(:[A-Za-z0-9+_./*=-]*)?(\\[[^\\]]*\\])?$|^\\|\\|$|^[()]$|^[a-z0-9_+-]+\\?$")
+
+
 def rdepend(text):
     m = re.search(r'RDEPEND="(.*?)"', text, re.S)
     return [x.strip() for x in m.group(1).split() if x.strip()] if m else []
@@ -80,6 +83,13 @@ class Layering(unittest.TestCase):
         gui = re.compile(r"^(gnome-|gui-|x11-|kde-|xfce-|media-libs/mesa|net-misc/networkmanager)")
         for cat, pn in (("sys-apps", "horcrux-core"), ("net-misc", "horcrux-time"), ("net-misc", "horcrux-chrony-nm"), ("sys-apps", "horcrux-firstboot"), ("sys-apps", "horcrux-backup")):
             self.assertEqual([d for d in rdepend(ebuild(cat, pn)) if gui.match(d)], [], f"{cat}/{pn} pulls a display package")
+
+    def test_dependency_strings_are_clean_atoms(self):
+        """a `#` comment inside RDEPEND="..." is part of the string: Portage then masks the package as `corruption` (it broke the aarch64 build)"""
+        for cat, pn in (("sys-apps", "horcrux-core"), ("net-misc", "horcrux-time"), ("net-misc", "horcrux-chrony-nm"), ("sys-apps", "horcrux-firstboot"),
+                        ("sys-apps", "horcrux-backup"), ("gnome-extra", "horcrux-gnome-defaults")):
+            for tok in rdepend(ebuild(cat, pn)):
+                self.assertRegex(tok, ATOM, f"{cat}/{pn}: {tok!r} is not a dependency atom")
 
     def test_core_is_not_machine_specific(self):
         core = "\n".join(l for l in (ebuild("sys-apps", "horcrux-core") + ebuild("net-misc", "horcrux-time") + ebuild("sys-apps", "horcrux-firstboot")).splitlines() if not l.lstrip().startswith("#"))
