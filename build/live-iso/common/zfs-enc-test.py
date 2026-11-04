@@ -249,6 +249,11 @@ class ZRun(qt.Runner):
                     break
                 time.sleep(20)
             rc, o = self.sh("emerge -puDN @world 2>&1 | tail -25; echo RC=${PIPESTATUS[0]}", timeout=600)
+        if "profile is invalid" in o:
+            # the public images ship NO Portage tree (setup-rootfs.sh empties /var/db/repos/gentoo): a user syncs first, so the gate does the same
+            rc, t = self.sh("emerge-webrsync -q 2>&1 | tail -5; echo RC=${PIPESTATUS[0]}", timeout=1500)
+            self.step("portage-tree-syncs-on-the-installed-system", "RC=0" in t, t.strip().replace("\n", " | ")[-300:])
+            rc, o = self.sh("emerge -puDN @world 2>&1 | tail -25; echo RC=${PIPESTATUS[0]}", timeout=600)
         open(f"{a.out}/world-resolve.txt", "w").write(o)
         self.step("emerge-world-resolves-no-blockers", "RC=0" in o and "blocked" not in o.lower(), o.strip().replace("\n", " | ")[-300:])
         rc, o = self.sh("mkdir -p /mnt/under; mount --bind / /mnt/under; ls -A /mnt/under/home | wc -l; umount /mnt/under; zfs get -H -o value mounted rpool/home")
@@ -345,13 +350,21 @@ class ZRun(qt.Runner):
             self.step("kernel-args-resume-and-unlock", "resume=UUID=" in o and "rd.hx.swap=" in o, "")
             self.step("zram-higher-priority-than-disk-swap", "zram" not in sw or (bool(re.search(r"zram\d+\s+\d+\s+16383", sw))), sw.strip().replace("\n", " | "))
             # initramfs: the one-passphrase module and the hook order, on the REAL installed image
-            rc, o = self.sh("k=$(ls /boot/initramfs-* | tail -1); lsinitrd $k | grep -E 'hx-unlock|hx-zfskey|resume|cryptsetup|zfs.ko|dm-crypt|mount-zfs'")
+            rc, o = self.sh("for k in /boot/initramfs-*.img /boot/be/*/initramfs.img; do echo \"== $k\"; lsinitrd $k | grep -E 'hx-unlock|hx-zfskey|resume|cryptsetup|zfs.ko|dm-crypt|mount-zfs|horcrux-unlock'; done")
+            open(f"{a.out}/initramfs-listing.txt", "w").write(o)
             from importlib import util as _u
             sp = _u.spec_from_file_location("zfsswap", os.path.join(HERE, "overlay/usr/lib/live-installer/liveinst/zfsswap.py"))
             # (zfsswap imports its package siblings lazily only inside the installer stages: the pure checks load standalone)
             zs = _u.module_from_spec(sp)
             sp.loader.exec_module(zs)
-            self.step("initramfs-has-unlock-resume-zfs-and-hook-order", not zs.initramfs_problems(o) and zs.hook_order_ok(o + "\nusr/lib/dracut/hooks/pre-mount/50-hx-zfskey.sh\n") , o.strip().replace("\n", " | ")[:300])
+            parts = re.split(r"^== (\S+)$", o, flags=re.M)
+            bad = []
+            for img, txt in zip(parts[1::2], parts[2::2]):
+                pr = zs.initramfs_problems(txt)
+                ho = zs.hook_order_ok(txt + "\nusr/lib/dracut/hooks/pre-mount/50-hx-zfskey.sh\n")
+                if pr or not ho:
+                    bad.append(f"{img}: missing {pr} hook-order-ok={ho}")
+            self.step("initramfs-has-unlock-resume-zfs-and-hook-order", bool(parts[1::2]) and not bad, "; ".join(bad) or f"{len(parts[1::2])} images ok")
             # marker in RAM + a running process
             rc, o = self.sh("echo $(cat /proc/sys/kernel/random/boot_id) > /dev/shm/boot_id_before; head -c 24 /dev/urandom | base64 > /dev/shm/marker; "
                             "cp /dev/shm/marker /run/marker-run; "
@@ -550,7 +563,7 @@ class ZRun(qt.Runner):
 
     # ---- the installed system must be repairable by Portage: every package file exists, and a kernel module can be built against the running kernel
     CONTENTS_CHECK = r"""
-import glob, os, collections
+import glob, os, collections, re
 # the ONLY files that may be missing: runtime state dirs Portage records with .keep markers. Intentional strips are removed from the CONTENTS records at build
 # time by common/vdb-prune.py (reviewed list); anything else missing here is a bug in the image (tar --exclude, a strip eating a toolchain file, ...).
 ALLOW_PREFIX = ("/var/log/", "/var/spool/", "/var/cache/", "/var/tmp/", "/run/", "/tmp/")
@@ -566,11 +579,14 @@ for cf in sorted(glob.glob("/var/db/pkg/*/*/CONTENTS")):
             continue
         if os.path.lexists(path) or path.startswith(ALLOW_PREFIX):
             continue
+        # dist-kernel (gentoo-kernel-bin) records the initramfs it generates beside the kernel image and deletes it after copying it to /boot
+        if re.match(r"^/usr/src/linux-[^/]+/arch/[^/]+/boot/initrd", path):
+            continue
         miss.setdefault(pkg, []).append(path); n += 1
 print("CONTENTS-PACKAGES", pk)
 print("CONTENTS-MISSING", n, "files in", len(miss), "packages")
 for p, m in sorted(miss.items(), key=lambda x: -len(x[1]))[:8]:
-    print("  ", len(m), p, m[0])
+    print("  ", len(m), p, " ".join(m[:3]))
 """
 
     KMOD_CHECK = r"""
