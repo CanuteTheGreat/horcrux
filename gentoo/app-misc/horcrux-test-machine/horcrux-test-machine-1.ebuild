@@ -18,6 +18,7 @@ IUSE="+gnome +zfs"
 RDEPEND="
 	zfs? ( sys-kernel/horcrux-unlock[-encrypted] )
 	net-wireless/iw
+	net-misc/networkmanager
 	gnome? ( gnome-base/dconf )
 "
 
@@ -48,6 +49,12 @@ src_install() {
 		newins "${FILESDIR}"/gnome.dconf 10-horcrux-test-machine
 	fi
 	newinitd "${FILESDIR}"/horcrux-test-power.initd horcrux-test-power
+	newinitd "${FILESDIR}"/horcrux-test-klog.initd horcrux-test-klog
+	newinitd "${FILESDIR}"/horcrux-test-netwatch.initd horcrux-test-netwatch
+	exeinto /usr/libexec
+	newexe "${FILESDIR}"/horcrux-test-netwatch.sh horcrux-test-netwatch
+	insinto /etc/logrotate.d
+	newins "${FILESDIR}"/logrotate.conf horcrux-test-machine
 
 	insinto /usr/share/doc/${PF}
 	newins - README <<-'EOF2'
@@ -66,6 +73,12 @@ src_install() {
 
 pkg_postinst() {
 	use gnome && has_version gnome-base/dconf && dconf update
-	elog "Enable the runtime service: rc-update add horcrux-test-power default && rc-service horcrux-test-power start"
+	if [[ -z ${ROOT} || ${ROOT} == / ]]; then
+		local s
+		for s in horcrux-test-power horcrux-test-klog horcrux-test-netwatch; do
+			rc-update add ${s} default >/dev/null 2>&1
+		done
+		elog "Enabled in the default runlevel: horcrux-test-power horcrux-test-klog horcrux-test-netwatch (start them now with rc-service)"
+	fi
 	elog "Apply the logind drop-in without logging anyone out: rc-service elogind reload (or loginctl: kill -HUP the elogind daemon)."
 }
