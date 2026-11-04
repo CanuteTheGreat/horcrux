@@ -45,7 +45,7 @@ src_install() {
 			# Horcrux TEST MACHINE (horcrux-unlock USE=-encrypted): NO disk encryption, no passphrase prompt, unattended boot.
 			# Hibernation resume (plain swap partition) still runs before the pool import via the stock resume module.
 			add_dracutmodules+=" resume zfs "
-			omit_dracutmodules+=" crypt dm horcrux-unlock "
+			omit_dracutmodules+=" crypt horcrux-unlock "
 		EOF2
 	fi
 	# ZFS root + dist-kernel: the kernel update must rebuild the ZFS module IN THE SAME TRANSACTION and before the new initramfs is made
