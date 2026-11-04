@@ -304,7 +304,10 @@ class GRun(zt.ZRun):
         kb = qt.Kbd(vm, True)
         rc, before = self.sh(f"getent shadow {USER} | cut -d: -f2 | sha256sum | cut -c1-12; mount | grep -c ' /home type zfs'")
         # Log Out first (it needs `su - USER`, which PAM refuses once the password is expired), THEN expire the password
-        ok, o = self.session_logout(USER)            # the real Log Out path: back to a GDM greeter (a terminate-user leaves a black console for a while)
+        if getattr(self, "_logged_out", False):
+            ok, o = True, "already logged out by the restore step"
+        else:
+            ok, o = self.session_logout(USER)        # the real Log Out path: back to a GDM greeter (a terminate-user leaves a black console for a while)
         self.step("expired-password-account-logged-out-to-gdm-greeter", ok, o)
         self.sh(f"chage -d 0 {USER}; chage -l {USER} | head -2")
         time.sleep(15)
@@ -422,6 +425,11 @@ class GRun(zt.ZRun):
 
     def restore(self):
         a = self.g
+        # gringotts-restore refuses while the user has a graphical session (its keyring daemon would overwrite the restored keyring): Log Out first,
+        # exactly as the owner does it (restore before the first login); the profiles are started after the next login (restore_apps_start)
+        ok, o = self.session_logout(USER)
+        self.step("logged-out-before-restore", ok, o)
+        self._logged_out = ok
         bk = a.backup_copy      # = the output of `restic restore` (done on crystalcave from a local restic repo holding the sanitized stand-in)
         import base64
         b64 = lambda: base64.b64encode(os.urandom(32)).decode()
@@ -443,7 +451,9 @@ class GRun(zt.ZRun):
         self.step("restore-firefox-profiles-ini-has-no-install-section", re.search(r"profiles\.ini\n.*", o) is not None and o.strip().splitlines()[-4:-3] != ["1"], "")
         rc, o = self.sh("nft list ruleset 2>&1 | head -5; test -s /var/lib/nftables/rules-save && echo SAVED")
         self.step("restore-nft-mitigation-loaded-and-saved", "SAVED" in o, o.strip().replace("\n", " | ")[:200])
-        # restored profiles actually start
+
+    def restore_apps_start(self):
+        # restored profiles actually start (in the session after the first login)
         self.usr("pkill -f -i 'brave|firefox' 2>/dev/null; true", timeout=20)
         rc, o = self.usr("nohup gtk-launch $(ls /usr/share/applications | grep -iE '^brave' | head -1) >/tmp/b.log 2>&1 & nohup gtk-launch $(ls /usr/share/applications | grep -iE '^firefox' | head -1) >/tmp/f.log 2>&1 & sleep 30; "
                          "echo BRAVE=$(pgrep -u $(id -u) -fc brave); echo FF=$(pgrep -u $(id -u) -fc firefox); ls ~/.config/BraveSoftware/Brave-Browser/ | head -3; ls ~/.mozilla/firefox | head", timeout=120)
@@ -476,6 +486,7 @@ class GRun(zt.ZRun):
             if sess:
                 self.restore()
                 if self.first_login_password_change(vm):
+                    self.restore_apps_start()
                     self.session_bus_checks(USER)
                     self.session_logout_check(USER)
             self.sh("poweroff", timeout=10)
