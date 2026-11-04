@@ -142,9 +142,10 @@ class GRun(zt.ZRun):
             vm.send("echo LIVE:nmtui=$(command -v nmtui) install=$(command -v gringotts-install) remote=$(command -v gringotts-remote) "
                     "keys=$(wc -l < /etc/gringotts/authorized_keys) ts=$(test -s /usr/share/gringotts/ts-authkey && echo keyfile) "
                     "nm=$(rc-service NetworkManager status 2>&1 | grep -o 'started\\|stopped\\|crashed' | head -1) sshd=$(rc-service sshd status 2>&1 | grep -o 'started\\|stopped' | head -1)\r")
-            m = vm.expect_raw(r"LIVE:nmtui=\S* install=\S* remote=\S* keys=\d+ ts=\S* nm=\S* sshd=\S*", 20)
+            m = vm.expect_raw(r"LIVE:nmtui=\S* install=\S* remote=\S* keys=\d* ts=\S* nm=\S* sshd=\S*", 20)
             txt = m.group(0).decode(errors="replace") if m else "no output"
-            self.step("live-helpers-present", bool(m) and "nmtui=/" in txt and "install=/" in txt and "remote=/" in txt and "ts=keyfile" in txt and "keys=0" not in txt, txt)
+            self.step("live-helpers-present", bool(m) and "nmtui=/" in txt and "install=/" in txt and "remote=/" in txt and "ts=keyfile" in txt and not re.search(r"keys=(0)? ", txt),
+                      txt + ("  [no PRIV_DIR keys in this image: build with PRIV_DIR=<dir with hostname, authorized_keys, ts-authkey>]" if "keys= " in txt else ""))
             self.step("live-networkmanager-running", "nm=started" in txt, txt)
             # remote handoff on the live stick (needs the QEMU user-net: DHCP via NetworkManager)
             if self.g.ts_key_file:
