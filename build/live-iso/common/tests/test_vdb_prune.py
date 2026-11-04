@@ -50,6 +50,17 @@ class VdbPrune(unittest.TestCase):
         self.run_prune(root, "--groups", "core,dev,gringotts-fw")
         self.assertNotIn("amdgpu", open(cf).read())
 
+    def test_kernel_postinst_moved_files_are_dropped(self):
+        c = ("obj /usr/src/linux-6.18.60-gentoo-dist-bin/arch/x86/boot/initrd d41d8cd98f00b204e9800998ecf8427e 1\n"
+             "obj /usr/src/linux-6.18.60-gentoo-dist-bin/arch/x86/boot/uki.efi d41d8cd98f00b204e9800998ecf8427e 1\n"
+             "obj /usr/src/linux-6.18.60-gentoo-dist-bin/arch/x86/boot/bzImage d41d8cd98f00b204e9800998ecf8427e 1\n")     # the kernel image itself must stay a finding
+        root, cf = self.mkroot(c, [])
+        self.run_prune(root)
+        left = open(cf).read()
+        self.assertNotIn("boot/initrd", left)
+        self.assertNotIn("uki.efi", left)
+        self.assertIn("bzImage", left)
+
 
 if __name__ == "__main__":
     unittest.main()

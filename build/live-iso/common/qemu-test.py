@@ -1740,7 +1740,7 @@ for cf in sorted(glob.glob("/var/db/pkg/*/*/CONTENTS")):
 print("CONTENTS-PACKAGES", pk)
 print("CONTENTS-MISSING", n, "files in", len(miss), "packages")
 for p, m in sorted(miss.items(), key=lambda x: -len(x[1]))[:8]:
-    print("  ", len(m), p, m[0])
+    print("  ", len(m), p, " ".join(m[:4]))
 """
 
 KMOD_CHECK = r"""
