@@ -78,17 +78,49 @@ if [ -d /usr/lib/dracut/modules.d/90zfs ] && [ ! -f "/lib/modules/$kver/extra/zf
   find "/lib/modules/$kver" -name zfs.ko | grep -q .
 fi
 mkdir -p /etc/dracut.conf.d
+# add_drivers may only name modules this kernel HAS: `vmd` (Intel VMD, x86 only) does not exist on arm64 and dracut-install then prints
+# `dracut[E]: FAILED` for the whole `-m spl zfs squashfs ...` call while dracut itself still exits 0 (aarch64 run 8771). Names that are neither a
+# loadable module nor built in are dropped HERE, per kernel/arch, and logged.
+DRIVERS=$(python3 - "$kver" <<'PY'
+import re, sys
+kver = sys.argv[1]
+want = ("squashfs overlay loop iso9660 sr_mod usb_storage uas sd_mod nvme vmd ahci xhci_pci xhci_hcd ehci_pci uhci_hcd ext4 xfs vfat "
+        "nls_cp437 nls_iso8859_1 virtio_blk virtio_scsi virtio_pci mmc_block sdhci sdhci_pci sdhci_acpi").split()
+have = set()
+for fn in ("modules.dep", "modules.builtin"):
+    try:
+        for line in open(f"/lib/modules/{kver}/{fn}", errors="replace"):
+            m = re.match(r"(?:.*/)?([^/:]+?)\.ko(?:\.\w+)?(?::|$)", line.strip())
+            if m:
+                have.add(m.group(1).replace("-", "_"))
+    except OSError:
+        pass
+keep = [w for w in want if w.replace("-", "_") in have]
+sys.stderr.write("initramfs drivers not in kernel %s (dropped): %s\n" % (kver, " ".join(w for w in want if w not in keep) or "none"))
+print(" ".join(keep))
+PY
+)
+case "$DRIVERS" in *squashfs*) ;; *) echo "FATAL: kernel $kver has no squashfs module/built-in: the live initramfs cannot mount its root" >&2; exit 1;; esac
 cat > /etc/dracut.conf.d/live.conf <<DR
 hostonly="no"
 hostonly_cmdline="no"
 add_dracutmodules+=" dmsquash-live "
 omit_dracutmodules+=" plymouth network-manager nfs iscsi biosdevname "
-add_drivers+=" squashfs overlay loop iso9660 sr_mod usb_storage uas sd_mod nvme vmd ahci xhci_pci xhci_hcd ehci_pci uhci_hcd ext4 xfs vfat nls_cp437 nls_iso8859_1 virtio_blk virtio_scsi virtio_pci mmc_block sdhci sdhci_pci sdhci_acpi "
+add_drivers+=" $DRIVERS "
 compress="gzip"
 DR
-# root on ZFS (Horcrux): put the zfs dracut module into the generic initramfs when it is installed
+# root on ZFS (Horcrux, Patronus): put the zfs dracut module into the generic initramfs when it is installed
 if [ -d /usr/lib/dracut/modules.d/90zfs ]; then echo 'add_dracutmodules+=" zfs "' >> /etc/dracut.conf.d/live.conf; fi
-dracut -f --no-hostonly --kver "$kver" "/boot/initramfs-${kver}.img" "$kver"
+# dracut exits 0 after `dracut[E]: FAILED: dracut-install ...` (a module it could not find): fail the build on any [E] line, and below on a missing zfs/squashfs in the result
+rm -f /tmp/dracut.log
+dracut -f --no-hostonly --kver "$kver" "/boot/initramfs-${kver}.img" "$kver" 2>&1 | tee /tmp/dracut.log
+if grep -q 'dracut\[E\]' /tmp/dracut.log; then echo "FATAL: dracut reported errors (see above); refusing to build an ISO with a broken initramfs" >&2; exit 1; fi
+lsinitrd "/boot/initramfs-${kver}.img" > /tmp/initrd.lst 2>&1
+if [ -d /usr/lib/dracut/modules.d/90zfs ] && ! grep -Eq '/(zfs|spl)\.ko' /tmp/initrd.lst; then
+  echo "FATAL: the initramfs of $kver has no zfs module although zfs is installed: the installed system could not import its pool" >&2; exit 1
+fi
+grep -Eq 'squashfs' /tmp/initrd.lst || grep -q '/squashfs\.ko' "/lib/modules/$kver/modules.builtin" || { echo "FATAL: the initramfs of $kver has no squashfs support" >&2; exit 1; }
+rm -f /tmp/dracut.log /tmp/initrd.lst
 ls -l /boot
 ls /boot/vmlinuz-* >/dev/null
 

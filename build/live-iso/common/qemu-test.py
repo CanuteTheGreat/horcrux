@@ -553,9 +553,36 @@ def answer_toml(a, pubkey, pwhash):
     return "\n".join(lines) + "\n"
 
 
+def serial_tail(vm, n=12):
+    """last lines of the guest's serial output, one line: a bare `timeout` told nothing about WHERE an install hung (aarch64 ZFS, run 8771)"""
+    try:
+        with open(vm.log.name, "rb") as f:        # the whole serial log, not vm.raw (earlier expects consumed it)
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 6000))
+            raw = f.read()
+        lines = [re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", l).strip() for l in raw.decode(errors="replace").splitlines()]
+        tail = [l for l in lines if l][-n:]
+        print("--- last serial lines of the hung install ---\n" + "\n".join(tail) + "\n---", flush=True)
+        return " | last serial: " + " // ".join(tail)[-700:]
+    except Exception as e:  # diagnostics must never mask the failure
+        return f" (no serial tail: {e})"
+
+
+# Every entry point (qemu-test.py main, boot-modes-test.py, zfs-enc-test.py, surface tests) builds its own args namespace: an option added to
+# the CLI later (--headless-gates) must not raise AttributeError in a script that never defines it. Runner fills in what is missing.
+ARG_DEFAULTS = {"headless_gates": False}
+
+
+def with_arg_defaults(a):
+    for k, v in ARG_DEFAULTS.items():
+        if not hasattr(a, k):
+            setattr(a, k, v)
+    return a
+
+
 class Runner:
     def __init__(self, a):
-        self.a = a
+        self.a = with_arg_defaults(a)
         self.res = {"project": a.project, "arch": a.arch, "mode": a.mode, "media": a.media, "flow": a.flow, "fs": a.fs, "steps": {}}
         self.P = PROJECTS[a.project]
         self.finished_vga = False
@@ -755,7 +782,7 @@ class Runner:
                 bad = vm.expect_raw(r"(ANSWER-FILE-ERROR[^\n]*|No answer file found[^\n]*)", 3, consume=False)
                 self.step("answer-file-accepted", not bad, bad.group(0).decode() if bad else "validated")
                 ok = vm.expect_raw(r"AUTOINSTALL-(OK|FAILED[^\n]*)", 1700, consume=False)
-                self.step("installer-finished", ok and b"AUTOINSTALL-OK" in ok.group(0), ok.group(0).decode() if ok else "timeout")
+                self.step("installer-finished", ok and b"AUTOINSTALL-OK" in ok.group(0), ok.group(0).decode() if ok else "timeout" + serial_tail(vm))
                 vm.shot("auto-finished")
                 if a.headless_gates:
                     # the live clock started MONTHS off: the installer must have corrected it and written the hardware clock (liveinst/rtc.py `rtc:` line)
