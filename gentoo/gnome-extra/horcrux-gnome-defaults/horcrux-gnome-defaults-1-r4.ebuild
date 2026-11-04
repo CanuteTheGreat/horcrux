@@ -3,7 +3,7 @@
 
 EAPI=8
 
-DESCRIPTION="Horcrux GNOME system-wide defaults: AppIndicator tray icons, clock sync hook, first-login Wi-Fi chooser, login keyring that really unlocks"
+DESCRIPTION="Horcrux GNOME desktop edition (on top of sys-apps/horcrux-core): AppIndicator tray icons, first-login Wi-Fi chooser, login keyring that really unlocks"
 HOMEPAGE="https://github.com/CanuteTheGreat/horcrux"
 S="${WORKDIR}"
 
@@ -11,14 +11,13 @@ LICENSE="MIT"
 SLOT="0"
 KEYWORDS="amd64 arm64"
 
-# net-misc/horcrux-chrony-nm is in EVERY GNOME install through this package (hogshead had it in its own variant list only; gringotts then booted with a
-# months-off clock and no chrony sources): NetworkManager dispatcher hook that makes chronyd re-resolve its sources on link-up.
+# DESKTOP EDITION, layered on the server core: sys-apps/horcrux-core carries everything every Horcrux install needs (chrony + the clock rules +
+# the NetworkManager/dhcpcd clock hooks, first-boot network wait, overlay sync config, backup, ZFS dist-kernel rule). Nothing of that is attached to
+# this package any more: a headless server gets the same fixes without a single GNOME package. This package only adds the GNOME defaults below.
 RDEPEND="
+	sys-apps/horcrux-core
 	gnome-base/dconf
 	gnome-base/gnome-control-center
-	net-misc/chrony
-	net-misc/horcrux-chrony-nm
-	sys-apps/horcrux-repo-config
 	net-misc/networkmanager
 	gnome-extra/gnome-shell-extension-appindicator
 	gnome-extra/gnome-shell-extensions

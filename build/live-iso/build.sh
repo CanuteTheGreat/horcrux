@@ -59,8 +59,16 @@ for _v in $(echo "${VARIANT:-}" | tr ',' ' '); do
   [ -f "project/variants/$_v/de" ] && { IMG_DE=$(tr -d ' \n' < "project/variants/$_v/de"); IMG=$IMG_DE-$IMG_INIT; }
 done
 ROOTFS_IMG=$TAG-rootfs; VIMGS=""
-if [ -n "${VARIANT:-}" ] && [ "$VARIANT" != server ]; then
-  for v in $(echo "$VARIANT" | tr ',' ' '); do
+# LAYERS: core (project/variants/core: the headless server base, sys-apps/horcrux-core) -> desktop edition (gnome-light, ...) -> machine layer.
+# The core layer is applied to EVERY image of a product that ships one (the plain server image is "core" alone), before the variants; it is idempotent, so a
+# REUSE_ROOTFS base that already has it passes through. NO_CORE=1 skips it (Patronus has no core layer; hardware-profile experiments).
+CHAIN=$(echo "${VARIANT:-}" | tr ',' ' ' | sed 's/\bserver\b//g')
+# (the Surface image is its own base with its own overlay checkout + chrony/backup in its meta package: it takes the core as a dependency of its meta package in a later
+# revision, not as an image layer; the layer would clash with its `rm -rf /var/db/repos/horcrux`)
+case " $CHAIN " in *" surface-kernel "*|*" surface "*) NO_CORE=${NO_CORE:-1};; esac
+[ -z "${NO_CORE:-}" ] && [ -f project/variants/core/Dockerfile ] && CHAIN="core $CHAIN"
+if [ -n "$(echo $CHAIN)" ]; then
+  for v in $CHAIN; do
     [ -f "project/variants/$v/Dockerfile" ] || { echo "unknown VARIANT=$v (no project/variants/$v/Dockerfile)"; exit 2; }
     lap "stage 2b: variant $v"
     VCTX="--build-context hxgentoo=$REPO/gentoo"; [ -d "$REPO/gentoo/t2" ] && VCTX="$VCTX --build-context t2=$REPO/gentoo/t2"

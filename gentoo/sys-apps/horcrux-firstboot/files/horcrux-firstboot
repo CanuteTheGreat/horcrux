@@ -1,0 +1,43 @@
+#!/bin/sh
+# Horcrux first boot (once): wait for a network, run the machine hooks, refresh the Portage trees.
+#
+# Never gives up: a machine that boots without a cable / Wi-Fi (a headless server in a rack that gets its uplink later, a laptop with no known
+# network) must still finish when the network arrives hours later. It waits as long as it takes and retries a failed tree sync every 10 minutes.
+# The server must not block on it: the init script starts this in the background, boot, SSH and the web UI do not wait for the network here.
+#
+# Machine hooks: executable files in /usr/libexec/horcrux-firstboot.d/ (a machine layer ships its own, e.g. a remote hand-off); run in name
+# order after the network is up, a failing hook is logged and does not stop the sync. Core knows no machine.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+PIDFILE=/run/horcrux-firstboot.pid
+echo $$ > "$PIDFILE"; trap 'rm -f "$PIDFILE"' EXIT
+echo "== horcrux-firstboot $(date -u)"
+have_net() { ip -4 route show default 2>/dev/null | grep -q . || ip -6 route show default 2>/dev/null | grep -q .; }
+if ! have_net; then
+	echo "== waiting for a network (no limit); the first connection continues this automatically"
+	while ! have_net; do sleep 10; done
+	echo "== network is up $(date -u)"
+fi
+sleep 5      # DHCP lease + the chrony burst (horcrux-timesync / the NetworkManager hook) settle first
+for h in /usr/libexec/horcrux-firstboot.d/*; do
+	[ -x "$h" ] || continue
+	echo "== hook $h"
+	"$h" || echo "hook $h incomplete (see above)"
+done
+sync_trees() {
+	echo "== portage trees"
+	ok=1
+	emerge-webrsync -q || ok=0
+	# every other repo of /etc/portage/repos.conf with a sync-uri (the horcrux overlay, machine overlays): the image ships their
+	# directories empty or as a frozen copy, the first sync turns them into a checkout
+	for r in $(portageq get_repos / 2>/dev/null); do
+		[ "$r" = gentoo ] && continue
+		d=$(portageq get_repo_path / "$r" 2>/dev/null)
+		[ -n "$d" ] && [ ! -d "$d/.git" ] && find "$d" -mindepth 1 -delete 2>/dev/null
+		emaint sync -r "$r" || ok=0
+	done
+	[ $ok = 1 ]
+}
+until have_net && sync_trees; do echo "== tree sync not done (network?): retry in 10 minutes"; sleep 600; done
+mkdir -p /var/lib/horcrux; date -u > /var/lib/horcrux/firstboot-done
+echo "== done"
+exit 0

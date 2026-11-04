@@ -13,12 +13,11 @@ COPY project/variants/gnome-light/portage/ /etc/portage/
 COPY project/variants/gnome-light/repo/ /var/db/repos/horcrux-gnome-light/
 COPY project/variants/gnome-light/packages.txt /tmp/packages-desktop.txt
 
-# profile with the GNOME defaults (OpenRC flavour: elogind, no systemd), the owner's overlay (Brave), one emerge
+# profile with the GNOME defaults (OpenRC flavour: elogind, no systemd), one emerge (the owner's apps are NOT here: machine layers)
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; \
     eselect profile set default/linux/amd64/23.0/desktop/gnome; \
-    git clone -q --depth 1 https://github.com/CanuteTheGreat/canutethegreat-overlay.git /var/db/repos/canutethegreat-overlay; \
     export FEATURES="-ccache"; \
     emerge --update --newuse $(grep -v '^#' /tmp/packages-desktop.txt | tr '\n' ' ')
 
@@ -44,17 +43,22 @@ RUN set -e; unset ARCH; export FEATURES="-ccache"; \
     # keyring PAM: one pam_gnome_keyring set (gdm-password), session after elogind; postinst of horcrux-gnome-defaults-1-r2 fixes pambase's duplicate. Fails the build on a stale base.
     /usr/libexec/horcrux-keyring-pam check && qfile -q /usr/libexec/horcrux-keyring-pam /usr/bin/horcrux-keyring-status; \
     # the shipped tree is a git checkout (snapshot of this build's overlay) so `emaint sync -r horcrux` fast-forwards it to the published overlay (sync-depth 1 = fetch + reset)\
-    cd /var/db/repos/horcrux; git init -q -b main; git add -A; git -c user.name=horcrux-image -c user.email=image@horcrux.invalid commit -q -m "image snapshot"; \
-    git remote add origin "$(sed -n 's/^sync-uri *= *//p' /etc/portage/repos.conf/horcrux.conf)"; git rev-parse --short HEAD
+    cd /var/db/repos/horcrux; git init -q -b main; git add -A; { git diff --cached --quiet || git -c user.name=horcrux-image -c user.email=image@horcrux.invalid commit -q -m "image snapshot (desktop edition)"; }; \
+    git remote get-url origin >/dev/null 2>&1 || git remote add origin "$(sed -n 's/^sync-uri *= *//p' /etc/portage/repos.conf/horcrux.conf)"; git rev-parse --short HEAD
 
 COPY project/variants/gnome-light/overlay/ /
 
 COPY common/vdb-prune.py /tmp/vdb-prune.py
+COPY project/public-forbidden.txt /tmp/public-forbidden.txt
 
 # the Desktop image marks itself (the installer offers the desktop profile only when this exists); slim down again
 # Size: the ISO must stay below the 2 GiB release-asset limit. Firmware for hardware that is not in an x86 laptop/desktop
 # (Snapdragon SoCs, server/SmartNICs) is ~900 MB of the uncompressed image; the server image keeps it.
 RUN set -e; chmod 644 /usr/share/horcrux/desktop/*; \
+    # GATE: a public desktop edition carries no personal / machine-specific package (project/public-forbidden.txt)
+    for p in $(grep -v '^#' /tmp/public-forbidden.txt); do if qlist -I "$p" | grep .; then echo "PERSONAL/MACHINE PACKAGE $p IN A PUBLIC IMAGE"; exit 1; fi; done; rm -f /tmp/public-forbidden.txt; \
+    # GATE: the desktop edition sits on the core (every shared fix lives there, not in the GNOME package)
+    qlist -I sys-apps/horcrux-core net-misc/horcrux-time net-misc/horcrux-chrony-nm sys-apps/horcrux-firstboot sys-apps/horcrux-backup | wc -l | grep -qx 5; \
     # build-only toolchains the source rebuilds (gsd patches, horcrux-gnome-defaults) can leave behind: depclean removes them only when nothing
     # in @world/runtime deps needs them (rust-bin alone is ~1 GB uncompressed); never fails the build
     emerge --depclean --with-bdeps=n dev-lang/rust-bin dev-lang/go dev-util/rustup app-eselect/eselect-rust > /tmp/depclean-tools.log 2>&1 || true; tail -8 /tmp/depclean-tools.log; rm -f /tmp/depclean-tools.log; \
@@ -77,8 +81,6 @@ RUN set -e; chmod 644 /usr/share/horcrux/desktop/*; \
     # gate: the toolchain still builds a C program that needs libc_nonshared.a and the kernel headers\
     printf '#include <stdio.h>\n#include <linux/types.h>\nint main(void){puts("ok");return 0;}\n' > /tmp/t.c && gcc /tmp/t.c -o /tmp/t && /tmp/t && rm -f /tmp/t /tmp/t.c /tmp/devkeep.lst; \
     echo "desktop" > /etc/live-iso-variant; echo "gnome-light" >> /etc/live-iso-variant; \
-    # the overlay tree is re-cloned by `emaint sync` (repos.conf stays); ship an EMPTY dir, not a stale copy
-    rm -rf /var/db/repos/canutethegreat-overlay; mkdir -p /var/db/repos/canutethegreat-overlay; \
     rm -rf /var/db/repos/gentoo/* /var/cache/distfiles/* /var/cache/binhost /usr/share/doc /usr/share/gtk-doc /var/tmp/portage /var/log/emerge* 2>/dev/null || true; \
     find / -xdev -name '*.pyc' -path '*/__pycache__/*' -delete 2>/dev/null || true; \
     # Portage's records match what was stripped on purpose (the reviewed list in common/vdb-prune.py); anything else missing fails the package-contents gate

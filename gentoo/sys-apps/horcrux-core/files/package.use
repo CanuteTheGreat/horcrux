@@ -1,0 +1,8 @@
+# owned by sys-apps/horcrux-core: the Horcrux server core (every install, headless included)
+# ZFS root: the module is rebuilt with every dist-kernel update, in the same emerge transaction and before the new initramfs (a kernel update without it leaves
+# a ZFS-root machine with an initramfs that has no zfs.ko, or none at all).
+sys-fs/zfs rootfs dist-kernel
+sys-fs/zfs-kmod dist-kernel
+# the initramfs generator the dist-kernel installkernel hook runs
+sys-kernel/installkernel dracut
+# the server core never needs a display stack: the hypervisor is managed through the web UI, the API and ssh (VM consoles are served as VNC/SPICE streams)

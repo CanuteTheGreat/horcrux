@@ -1,5 +1,6 @@
-# gringotts: the owner's apps (all Portage). Already in the Desktop image: brave-bin, firefox-bin, tailscale, nextcloud-client, terminator, vim,
-# clamav, linux-firmware, sof-firmware, intel-microcode, networkmanager. Brave is re-merged from the owner's overlay by the Dockerfile.
+# gringotts: this machine's own apps (all Portage), on top of project/variants/owner-common/packages.txt (brave-bin, nextcloud-client, tailscale, clamav: the
+# owner's apps, no longer in the public desktop). Already in the public gnome-light base: firefox-bin, terminator, vim, linux-firmware, sof-firmware,
+# intel-microcode, networkmanager. Brave is re-merged from the owner's overlay by the Dockerfile.
 net-im/discord
 app-containers/docker
 app-containers/docker-cli
