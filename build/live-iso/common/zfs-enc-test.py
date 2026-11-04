@@ -244,6 +244,8 @@ class ZRun(qt.Runner):
         bad = [p for k, p in lines if k == "FILE" and not allow.match(p)]     # symlinks are eselect/gcc-config/perl-cleaner products: reported, allowed
         open(f"{a.out}/orphans.txt", "w").write(o)
         self.step("portage-owns-every-file", rc == 0 and not bad, f"{len(lines)} generated/eselect paths allowed, {len(bad)} unowned: {bad[:25]}")
+        if a.server:
+            self.copy_local_overlay()
         rc, o = self.sh("emerge -puDN @world 2>&1 | tail -25; echo RC=${PIPESTATUS[0]}", timeout=600)
         if "profile is invalid" in o:
             # a first-boot service (gringotts-firstboot) is still fetching the Portage trees: wait for it, then resolve again
@@ -331,7 +333,7 @@ class ZRun(qt.Runner):
     # x11-libs/x11-misc because Portage categorises them there: libpciaccess + pixman are qemu/libvirt dependencies, shared-mime-info is data)
     DISPLAY_RE = (r"^(gui-libs|gui-wm|x11-base|x11-libs|x11-misc|x11-apps|x11-drivers|x11-themes|x11-terms|gnome-base|gnome-extra|kde-[a-z]+|xfce-[a-z]+|dev-qt|"
                   r"media-libs/(mesa|libglvnd|libepoxy)|x11-wm|www-client|media-video/(pipewire|wireplumber)|sys-auth/(seatd|elogind)|net-misc/networkmanager)/")
-    DISPLAY_ALLOW = ("x11-libs/libpciaccess", "x11-libs/pixman", "x11-misc/shared-mime-info")
+    DISPLAY_ALLOW = ("x11-libs/libpciaccess", "x11-libs/pixman", "x11-misc/shared-mime-info", "x11-apps/bdftopcf")   # bdftopcf: font compiler, build dependency of media-fonts/terminus-font (the console font)
     CORE_PKGS = ("sys-apps/horcrux-core", "net-misc/horcrux-time", "net-misc/horcrux-chrony-nm", "sys-apps/horcrux-firstboot", "sys-apps/horcrux-backup", "net-misc/chrony")
 
     def public_image_checks(self):
@@ -357,11 +359,14 @@ class ZRun(qt.Runner):
         rc, o = self.sh("grep -o 'console=tty[A-Za-z0-9,]*' /proc/cmdline | tr '\\n' ' '; echo; pgrep -af 'agetty|console-menu|live-serial' | head -4")
         self.step("serial-console-is-the-system-console", "console=tty" in o, re.sub(r"\s+", " ", o).strip()[:200])
 
-    def world_headless_check(self):
-        """`emerge -pv @world` on the installed server: a world update must not pull a single display package (the Portage tree is fetched by horcrux-firstboot)"""
-        end = time.time() + qt.T(1500)
-        o = ""
-        if getattr(self.z, "overlay_dir", ""):
+    def copy_local_overlay(self):
+        """(--overlay-dir) copy the branch's core packages over the synced /var/db/repos/horcrux, once the first-boot sync is DONE (it would overwrite them);
+        used when the branch is not on main yet, i.e. the published overlay (what an installed system really syncs) lacks the new packages"""
+        if not getattr(self.z, "overlay_dir", "") or getattr(self, "_overlay_copied", False):
+            return
+        self.firstboot_check()
+        self._overlay_copied = True
+        if True:
             import base64, io, tarfile
             buf = io.BytesIO()
             with tarfile.open(fileobj=buf, mode="w:gz") as tf:
@@ -373,6 +378,11 @@ class ZRun(qt.Runner):
             b64 = base64.b64encode(buf.getvalue()).decode()
             rc, t = self.sh(f"echo {b64} | base64 -d | tar xz -C /var/db/repos/horcrux && echo OVERLAY-COPIED", timeout=120)
             self.step("local-overlay-copied-for-the-world-check", "OVERLAY-COPIED" in t, f"{len(b64)} bytes of the branch's core packages over the synced overlay (branch not published yet)")
+
+    def world_headless_check(self):
+        """`emerge -pv @world` on the installed server: a world update must not pull a single display package (the Portage tree is fetched by horcrux-firstboot)"""
+        end = time.time() + qt.T(1500)
+        o = ""
         while time.time() < end:
             rc, o = self.sh("emerge -pvuDN @world 2>&1 | tail -80; echo RC=${PIPESTATUS[0]}", timeout=900)
             if "profile is invalid" not in o:
@@ -409,6 +419,9 @@ class ZRun(qt.Runner):
         self.step("server-web-api-health", code == 200, f"{self.P['health'][0]} -> {code}")
 
     def firstboot_check(self):
+        if getattr(self, "_firstboot_checked", False):
+            return
+        self._firstboot_checked = True
         end = time.time() + qt.T(1500)
         o = ""
         while time.time() < end:
