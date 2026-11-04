@@ -1,0 +1,9 @@
+#!/sbin/openrc-run
+# app-misc/horcrux-test-machine: NetworkManager connectivity watchdog (see /usr/libexec/horcrux-test-netwatch)
+description="test machine: reload the Wi-Fi driver when the link is up but there is no connectivity for 5 minutes"
+command=/usr/libexec/horcrux-test-netwatch
+command_background=true
+pidfile=/run/horcrux-test-netwatch.pid
+depend() {
+	need NetworkManager
+}
