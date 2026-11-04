@@ -64,6 +64,14 @@ class TpmPolicy(unittest.TestCase):
         ok = "tpm2_unseal tpm2_load tpm2_createprimary etc/tpm-unlock/key.priv etc/tpm-unlock/key.pub libtss2-tcti-device tpm-zfskey"
         self.assertEqual(tpmunlock.initramfs_problems(ok), [])
 
+    def test_plain_fstab_mounts_boot_and_esp(self):
+        txt = system.plain_fstab_text("xfs", "R", "B", "E", True)
+        self.assertIn("UUID=R\t/\txfs", txt)
+        self.assertIn("UUID=B\t/boot\text4", txt)
+        self.assertIn("UUID=E\t/boot/efi\tvfat", txt)
+        self.assertNotIn("swap", txt)
+        self.assertNotIn("/boot/efi", system.plain_fstab_text("ext4", "R", "B", "", False))
+
     def test_default_fs_per_machine(self):
         f = PROFILE["filesystems"]
         self.assertEqual(hwprofile.choose_fs(f, 16384, None, True)[0], "zfs")

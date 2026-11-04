@@ -1103,6 +1103,12 @@ class Installer:
                 self.log(f"hardware profile: {hp['id']} / {(hm or {}).get('id', 'generic')}")
         if os.path.exists(f"{self.target}/etc/init.d/zram-swap"):     # compressed RAM swap: the ONLY swap on servers/firewalls (no swap partition, no swapfile)
             self.run(["rc-update", "add", "zram-swap", "default"], chroot=True, check=False)
+        if not self.luks() and not self.zfs():
+            # plain xfs / ext4: root, /boot and the ESP by UUID. Without these lines /boot (its own partition, the one GRUB reads) is NOT mounted on the installed
+            # system, so every kernel update lands in the root file system's empty /boot and the machine keeps booting the old kernel (QEMU gate
+            # package-contents-complete showed 74 missing /boot files on XFS)
+            Lp = self.layout(c["disks"][0])
+            self.write("/etc/fstab", plain_fstab_text(c["fs"], fsuuid(Lp[4]), fsuuid(Lp[2]), fsuuid(Lp[1]) if self.efi else "", self.efi))
         if self.swap_mode == "hibernate" and not self.luks() and not self.zfs():
             self.swap_dev = self.layout(c["disks"][0])[3]
             portableswap.prepare(self)
@@ -1325,6 +1331,16 @@ menuentry "{self.p['title']} (ZFS root)" {{
 def fsuuid(dev):
     rc, out = sh(["blkid", "-s", "UUID", "-o", "value", dev])
     return out.strip() if rc == 0 else ""
+
+
+def plain_fstab_text(fs, root_uuid, boot_uuid, esp_uuid, efi=True):
+    """/etc/fstab of a plain xfs/ext4 install (pure: unit tested). No swap line (zram only); /tmp is tmpfs like the xfs-luks layout."""
+    opts = "noatime"
+    lines = ["# written by live-installer (" + fs + ")", f"UUID={root_uuid}\t/\t{fs}\t{opts}\t0 1", f"UUID={boot_uuid}\t/boot\text4\t{opts}\t0 2"]
+    if efi and esp_uuid:
+        lines.append(f"UUID={esp_uuid}\t/boot/efi\tvfat\tumask=0077,{opts}\t0 2")
+    lines.append("tmpfs\t/tmp\ttmpfs\tdefaults,nosuid,nodev\t0 0")
+    return "\n".join(lines) + "\n"
 
 
 TYPE_KEEP_GUI = {"server": False, "workstation": True, "desktop": True}
