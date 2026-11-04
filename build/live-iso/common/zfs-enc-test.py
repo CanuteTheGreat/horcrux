@@ -712,6 +712,10 @@ class ZRun(qt.Runner):
                 break
             time.sleep(8)
         rc, ch = self.sh("chronyc -n sources 2>&1 | head -6; chronyc -n tracking 2>&1 | head -3")
+        # the step itself, from chronyd's own log (on a slow/emulated guest the clock may already be right when ssh answers)
+        rc, wr = self.sh("grep -h 'System clock wrong by' /var/log/messages /var/log/syslog /var/log/chrony/*.log 2>/dev/null | tail -2")
+        self.res.setdefault("chrony_steps", []).append(wr.strip())
+        ch += " | chronyd: " + re.sub(r"\s+", " ", wr)[:160]
         self.step("months-off-rtc-clock-stepped-by-chrony-after-network", ok,
                   f"booted {int(time.time()) - first} s from the host clock ({(int(time.time()) - first) // 86400} days off), after {int(time.time() - t0)} s the offset is {delta} s | " + re.sub(r"\s+", " ", ch)[:200])
 
