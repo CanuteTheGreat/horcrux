@@ -12,7 +12,7 @@ SLOT="0"
 KEYWORDS="~amd64"
 # One package for the owner's test laptops (gringotts, hogshead, madammalkins): installed ONLY there, never in a public image.
 # `emerge -C` it to get normal power saving back (and see the README for the encryption side).
-# +zfs +gnome: the two laptops (gringotts, hogshead); on the XFS/XFCE Surface set -zfs -gnome +xfce (the XFCE power defaults live in horcrux-surface-desktop[test-machine]). USE=zfs: the machine has a ZFS root (gringotts, hogshead); without it (madammalkins, XFS) only the power part applies
+# +zfs +gnome: the two laptops (gringotts, hogshead); on the XFS/XFCE Surface set -zfs -gnome +xfce (per-login xfconf power settings, because the XFCE defaults file is owned by horcrux-surface-desktop). USE=zfs: the machine has a ZFS root (gringotts, hogshead); without it (madammalkins, XFS) only the power part applies
 IUSE="+gnome +zfs smallram xfce"
 
 RDEPEND="
@@ -20,7 +20,7 @@ RDEPEND="
 	net-wireless/iw
 	net-misc/networkmanager
 	gnome? ( gnome-base/dconf )
-	xfce? ( app-misc/horcrux-surface-desktop[test-machine] )
+	xfce? ( xfce-base/xfconf )
 "
 
 pkg_preinst() {
@@ -48,6 +48,12 @@ src_install() {
 	if use gnome; then
 		insinto /etc/dconf/db/local.d
 		newins "${FILESDIR}"/gnome.dconf 10-horcrux-test-machine
+	fi
+	if use xfce; then
+		exeinto /usr/libexec
+		newexe "${FILESDIR}"/xfce-power.sh horcrux-test-xfce-power
+		insinto /etc/xdg/autostart
+		newins "${FILESDIR}"/xfce-power.desktop horcrux-test-xfce-power.desktop
 	fi
 	newinitd "${FILESDIR}"/horcrux-test-power.initd horcrux-test-power
 	newinitd "${FILESDIR}"/horcrux-test-klog.initd horcrux-test-klog

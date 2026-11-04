@@ -12,8 +12,6 @@ S="${WORKDIR}"
 LICENSE="GPL-2"
 SLOT="0"
 KEYWORDS="~amd64"
-# test-machine: XFCE power manager defaults without lid/idle sleep (set by app-misc/horcrux-test-machine[xfce] on madammalkins only)
-IUSE="test-machine"
 
 # Everything the Surface desktop needs, as dependencies of ONE package: `emerge -uDN @world` keeps all of it current.
 # onboard + iio-sensor-proxy come from GURU, brave-bin from the owner's canutethegreat-overlay,
@@ -61,11 +59,6 @@ RDEPEND="
 
 src_install() {
 	cp -a "${FILESDIR}/root/." "${ED}/" || die
-	if use test-machine; then
-		# replace the stock power policy: a TEST machine never sleeps on lid / idle (owner rule 2026-11-04)
-		cp "${FILESDIR}/test-machine/xfce4-power-manager.xml" \
-			"${ED}/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml" || die
-	fi
 	local f
 	for f in "${ED}"/usr/bin/* "${ED}"/etc/local.d/*.start; do fperms 0755 "${f#"${ED}"}"; done
 }
