@@ -66,7 +66,8 @@ impl CpuGroup {
 }
 
 /// Why a running guest on `src` cannot be live-migrated to `dst`
-/// (None = allowed). Unknown vendor is permissive, like the other gates.
+/// (None = allowed). Unknown vendor or unknown level (0) is permissive, like
+/// the other gates.
 pub fn live_migration_block(src: &CpuGroup, dst: &CpuGroup) -> Option<String> {
     if !src.vendor.is_empty() && !dst.vendor.is_empty() && src.vendor != dst.vendor {
         return Some(format!(
@@ -75,7 +76,7 @@ pub fn live_migration_block(src: &CpuGroup, dst: &CpuGroup) -> Option<String> {
             dst.name()
         ));
     }
-    if dst.level < src.level {
+    if src.level != 0 && dst.level != 0 && dst.level < src.level {
         return Some(format!(
             "target CPU level {} is older than source {}: cold migrate only",
             dst.name(),

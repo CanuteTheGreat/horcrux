@@ -42,6 +42,10 @@ pub struct NodeResources {
     /// recommended (cold migration only).
     #[serde(default)]
     pub cpu_vendor: String,
+    /// x86-64 microarchitecture level 1..4 (0 = unknown, permissive). A running
+    /// guest is never recommended onto a node with an older level.
+    #[serde(default)]
+    pub cpu_level: u8,
     /// Operator-set role/limits (see `cluster::roles`). `None` = unconfigured
     /// node: permissive default (compute, no limits).
     #[serde(default)]
@@ -311,17 +315,23 @@ impl ClusterBalancer {
         recommendations
     }
 
-    /// True when both nodes have a known CPU family and they differ.
+    /// True when a running guest cannot live-migrate `from` -> `to`: known,
+    /// different CPU vendors, or a target with an older x86-64 level.
     fn vendor_conflict(nodes: &[NodeResources], from: &str, to: &str) -> bool {
-        let fam = |name: &str| {
+        let grp = |name: &str| {
             nodes
                 .iter()
                 .find(|n| n.node_name == name)
-                .map(|n| n.cpu_vendor.as_str())
-                .unwrap_or("")
+                .map(|n| super::cpu_groups::CpuGroup {
+                    vendor: n.cpu_vendor.clone(),
+                    level: n.cpu_level,
+                })
+                .unwrap_or(super::cpu_groups::CpuGroup {
+                    vendor: String::new(),
+                    level: 0,
+                })
         };
-        let (a, b) = (fam(from), fam(to));
-        !a.is_empty() && !b.is_empty() && a != b
+        super::cpu_groups::live_migration_block(&grp(from), &grp(to)).is_some()
     }
 
     /// Calculate improvement from migrating a VM
@@ -468,6 +478,7 @@ mod tests {
             available_passthrough_devices: Vec::new(),
             placement_weight: 100,
             cpu_vendor: String::new(),
+            cpu_level: 0,
             caps: None,
         }
     }
@@ -835,6 +846,31 @@ mod tests {
             balancer.calculate_node_score(&node),
             75.0 * 0.4 + 50.0 * 0.4 + (5.0_f32 / 10.0) * 100.0 * 0.2
         );
+    }
+
+    #[test]
+    fn test_rebalance_never_live_migrates_to_older_cpu_level() {
+        let balancer = ClusterBalancer::new(BalancingPolicy {
+            enabled: true,
+            strategy: BalancingStrategy::Weighted,
+            threshold: 20.0,
+            min_gain: 5.0,
+            max_migrations: 2,
+            aggressive: false,
+        });
+        let mut busy = create_test_node("e5", 90.0, 90.0, 10);
+        busy.cpu_vendor = "intel".to_string();
+        busy.cpu_level = 3;
+        let mut idle = create_test_node("xeon5000", 5.0, 5.0, 0);
+        idle.cpu_vendor = "intel".to_string();
+        idle.cpu_level = 1;
+        let vms = vec![create_test_vm(1, "e5")];
+        let recs = balancer.get_recommendations(&[busy.clone(), idle.clone()], &vms);
+        assert!(recs.is_empty(), "v3 -> v1 must not be recommended");
+        // Unknown level stays permissive.
+        idle.cpu_level = 0;
+        let recs = balancer.get_recommendations(&[busy, idle], &vms);
+        assert_eq!(recs.len(), 1);
     }
 
     #[test]
