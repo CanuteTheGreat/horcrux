@@ -31,13 +31,19 @@ RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,
     # explicit packages go into @world, so `emerge -uDN @world` keeps them current and depclean never removes them
     emerge --noreplace --select=y sys-kernel/gentoo-kernel sys-fs/zfs sys-fs/zfs-kmod sys-kernel/horcrux-unlock sys-kernel/horcrux-t2-config sys-apps/horcrux-tools sys-apps/horcrux-live-data sys-apps/horcrux-t2-audio
 
-# the owner's applications (Portage packages: binhost binpkgs where USE matches, the rest compiles)
+# the owner's applications (Portage packages: binhost binpkgs where USE matches, the rest compiles). They are NOT in the public gnome-light base any more:
+# the shared owner layer (project/variants/owner-common: keywords, USE, app list, backup list) + hogshead's own extras (inventory-2026-10-28: keepalived, sshpass, rustup).
+COPY project/variants/owner-common/portage/ /etc/portage/
+COPY project/variants/owner-common/overlay/ /
+COPY project/variants/owner-common/packages.txt /tmp/packages-owner.txt
 RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \
+    [ -d /var/db/repos/canutethegreat-overlay/.git ] || { rm -rf /var/db/repos/canutethegreat-overlay; git clone -q --depth 1 https://github.com/CanuteTheGreat/canutethegreat-overlay.git /var/db/repos/canutethegreat-overlay; }; \
     emerge --update --newuse --usepkg --getbinpkg --keep-going \
         app-containers/docker app-containers/docker-compose app-containers/docker-buildx \
         net-misc/remmina media-gfx/gimp media-gfx/geeqie net-misc/mosh net-analyzer/nmap \
+        $(grep -v '^#' /tmp/packages-owner.txt | tr '\n' ' ') sys-cluster/keepalived net-misc/sshpass dev-util/rustup\
         net-im/discord net-vpn/proton-vpn-gtk-app app-admin/rustinion-agent sys-apps/t2fanrd sys-apps/tiny-dfr net-misc/horcrux-chrony-nm \
         app-admin/sudo sys-process/cronie app-portage/portage-utils app-portage/eix \
         > /var/log/hogshead-apps.log 2>&1 || { tail -60 /var/log/hogshead-apps.log; exit 1; }

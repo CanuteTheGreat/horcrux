@@ -1,0 +1,23 @@
+#!/bin/sh
+# horcrux-timesync: the network-independent twin of the NetworkManager dispatcher hook (net-misc/horcrux-chrony-nm).
+#
+# chronyd starts before the link is up, cannot resolve its pool and (believing it is offline) never retries: the machine keeps its boot-time
+# clock, which breaks TLS, Tailscale and emerge. NetworkManager machines get a dispatcher hook; a headless server uses dhcpcd or a static address
+# and has no such event, so this small watcher does the same job for any network: as soon as a default route exists it tells chronyd the network
+# is up, re-resolves the sources and asks for a burst; it repeats that while chronyd has no synchronised source (late DHCP, cable plugged in
+# hours after boot) and then only watches (every 5 min), so a link that comes back after a long outage is also handled.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+have_net() { ip -4 route show default 2>/dev/null | grep -q . || ip -6 route show default 2>/dev/null | grep -q .; }
+synced() { chronyc -n tracking 2>/dev/null | grep -Eq '^Leap status[[:space:]]*: Normal'; }
+kick() {
+	chronyc -n online >/dev/null 2>&1
+	chronyc -n reload sources >/dev/null 2>&1
+	chronyc -n burst 4/4 >/dev/null 2>&1
+}
+while :; do
+	if have_net && chronyc -n tracking >/dev/null 2>&1; then
+		if synced; then sleep 300; else kick; sleep 20; fi
+	else
+		sleep 5
+	fi
+done

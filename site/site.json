@@ -4,11 +4,11 @@
  "name": "Horcrux",
  "version": "0.1.x",
  "banner": "Daily builds for testing. Not for production.",
- "tagline": "Horcrux is a free, Gentoo-based hypervisor with a web UI: VMs, containers and clusters. Pre-1.0.",
- "lead": "A Gentoo-based hypervisor with a web UI, in the style of Proxmox VE: virtual machines, containers, storage and clusters, written in Rust.",
+ "tagline": "Horcrux is a free, Gentoo-based hypervisor and server OS with a web UI: VMs, containers and clusters, headless by default, with an optional desktop. Pre-1.0.",
+ "lead": "A headless Gentoo-based hypervisor/server OS with a web UI, in the style of Proxmox VE: virtual machines, containers, storage and clusters, written in Rust. A desktop is an optional edition on top.",
  "logo_w": 340,
  "logo_h": 340,
- "what_html": "<p>Horcrux manages QEMU/KVM, LXD and Incus virtual machines and LXC, LXD, Incus, Docker and Podman containers from one web UI, CLI and API. It adds clustering with live migration and HA, a distributed firewall, backups and RBAC. It is built for Gentoo: the ebuild and USE flags choose which backends get compiled in.</p><p>It is a one-person project in early development. It aims at Proxmox VE-style functionality; it does not claim parity yet.</p>",
+ "what_html": "<p>Horcrux manages QEMU/KVM, LXD and Incus virtual machines and LXC, LXD, Incus, Docker and Podman containers from one web UI, CLI and API. It adds clustering with live migration and HA, a distributed firewall, backups and RBAC. It is built for Gentoo: the ebuild and USE flags choose which backends get compiled in.</p><p>The server image is the product: it installs and runs with no display (serial console or SSH, answer-file install, web UI on port 8006). A GNOME desktop is an optional edition layered on the same core, for laptops and workstations; nothing personal or machine-specific is in a public image.</p><p>It is a one-person project in early development. It aims at Proxmox VE-style functionality; it does not claim parity yet.</p>",
  "status": "Horcrux is version 0.1.x. APIs, configuration and on-disk formats can still change between builds. Use test hardware or a VM.",
  "works": [
   "Daily ISO: a QEMU test boots it, installs it (unattended, serial wizard and VGA wizard, ext4, XFS and ZFS mirror, UEFI and BIOS), reboots from disk and logs in to the web UI.",
@@ -24,15 +24,15 @@
  ],
  "isos": [
   [
-   "Server \u00b7 OpenRC \u00b7 x86_64 (UEFI + BIOS, hybrid USB/CD)",
+   "Server (headless) \u00b7 OpenRC \u00b7 x86_64 (UEFI + BIOS, hybrid USB/CD)",
    "horcrux-server-openrc-daily-x86_64.iso"
   ],
   [
-   "Server \u00b7 OpenRC \u00b7 aarch64 (UEFI)",
+   "Server (headless) \u00b7 OpenRC \u00b7 aarch64 (UEFI)",
    "horcrux-server-openrc-daily-aarch64.iso"
   ],
   [
-   "GNOME (light) \u00b7 OpenRC \u00b7 x86_64 (UEFI + BIOS, encrypted ZFS + hibernate)",
+   "Optional desktop: GNOME (light) \u00b7 OpenRC \u00b7 x86_64 (UEFI + BIOS, encrypted ZFS + hibernate)",
    "horcrux-gnome-light-openrc-daily-x86_64.iso"
   ]
  ],

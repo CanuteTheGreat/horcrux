@@ -11,9 +11,10 @@ LICENSE="MIT"
 SLOT="0"
 KEYWORDS="amd64 arm64"
 
+# No NetworkManager dependency: this is a CORE package (sys-apps/horcrux-core pulls it into every Horcrux install, server included). On a server
+# without NetworkManager the hook is inert; net-misc/horcrux-time covers dhcpcd/static networks. The desktop edition brings NetworkManager itself.
 RDEPEND="
 	net-misc/chrony
-	net-misc/networkmanager
 "
 
 src_install() {

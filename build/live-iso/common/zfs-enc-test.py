@@ -45,7 +45,7 @@ class ZRun(qt.Runner):
             i = args.index("-machine")
             args[i + 1] = args[i + 1] + ",i8042=off"
             args += ["-device", "usb-kbd,bus=xhci.0"]     # the ONLY keyboard: like the T2 Mac, whose keyboard is a USB device
-        if self.z.desktop and getattr(self.z, "rtc_base", ""):
+        if (self.z.desktop or self.z.server) and getattr(self.z, "rtc_base", ""):
             # a MONTHS-OFF hardware clock on every boot, like gringotts' first real boot (RTC in July, installed in November): the installer must write a
             # good time to the RTC (checked in the install log) and the installed system must get its clock stepped by chrony once the network is up
             args += ["-rtc", f"base={self.z.rtc_base}"]
@@ -99,7 +99,10 @@ class ZRun(qt.Runner):
             return self.t2_guard(nvars)
         self.phase1(nvars)
         self.boot1(nvars)
-        self.boot2(nvars)
+        if a.server:
+            self.boot2_server(nvars)      # reboot into the installed system on the serial console (no VGA / USB keyboard)
+        else:
+            self.boot2(nvars)
         if a.hibernate:
             self.hibernate_phase(nvars)
         self.res["ok"] = not getattr(self, "failed", [])
@@ -175,7 +178,7 @@ class ZRun(qt.Runner):
     # --- boot 1: serial passphrase
     def phase1(self, nvars):
         super().phase1(nvars)
-        if self.z.desktop and getattr(self.z, "rtc_base", ""):
+        if (self.z.desktop or self.z.server) and getattr(self.z, "rtc_base", ""):
             self.install_rtc_check(f"{self.z.out}/1-install-serial.log")
 
     def boot1(self, nvars):
@@ -262,6 +265,8 @@ class ZRun(qt.Runner):
         self.step("nothing-hidden-under-the-home-dataset", o.strip().splitlines()[-2:] == ["0", "yes"], "files in the root BE's /home beneath the mounted home dataset: " + o.strip().replace("\n", " "))
         if a.desktop:
             self.desktop_checks()
+        elif a.server:
+            self.server_checks(first_boot=True)
 
     def change_and_rollback(self):
         rc, o = self.sh("horcrux-be snapshot before-change && echo CHANGE > /root/marker-after-snapshot && "
@@ -308,6 +313,139 @@ class ZRun(qt.Runner):
             if vm.alive():
                 vm.p.kill()
 
+
+    # ======================================================================== HEADLESS SERVER GATE (--server)
+    # Horcrux is a server-first OS: the server image must install and run with NO display at all (serial console + ssh, answer file), and carry the same
+    # regression gates as the desktop. Everything below runs over ssh/serial; nothing needs VGA, a USB keyboard or a GPU, so it works under x86_64 KVM and
+    # aarch64 TCG alike.
+    # display-stack packages that must not be on a server (the live-only graphical installer stack is removed by the installer; a few non-GUI LIBRARIES live in
+    # x11-libs/x11-misc because Portage categorises them there: libpciaccess + pixman are qemu/libvirt dependencies, shared-mime-info is data)
+    DISPLAY_RE = (r"^(gui-libs|gui-wm|x11-base|x11-libs|x11-misc|x11-apps|x11-drivers|x11-themes|x11-terms|gnome-base|gnome-extra|kde-[a-z]+|xfce-[a-z]+|dev-qt|"
+                  r"media-libs/(mesa|libglvnd|libepoxy)|x11-wm|www-client|media-video/(pipewire|wireplumber)|sys-auth/(seatd|elogind)|net-misc/networkmanager)/")
+    DISPLAY_ALLOW = ("x11-libs/libpciaccess", "x11-libs/pixman", "x11-misc/shared-mime-info")
+    CORE_PKGS = ("sys-apps/horcrux-core", "net-misc/horcrux-time", "net-misc/horcrux-chrony-nm", "sys-apps/horcrux-firstboot", "sys-apps/horcrux-backup", "net-misc/chrony")
+
+    def public_image_checks(self):
+        """a PUBLIC image carries nothing personal: project/public-forbidden.txt lists the owner's own picks and machine-specific apps (Steam is for one machine only)"""
+        try:
+            forb = [l.strip() for l in open(os.path.join(HERE, "..", "project", "public-forbidden.txt")) if l.strip() and not l.startswith("#")]
+        except OSError as e:
+            self.step("public-image-has-no-personal-or-machine-packages", False, f"cannot read public-forbidden.txt: {e}")
+            return
+        rc, o = self.sh("for p in " + " ".join(forb) + "; do qlist -I \"$p\"; done; echo CHECKED")
+        hit = [l for l in o.splitlines() if "/" in l]
+        self.step("public-image-has-no-personal-or-machine-packages", "CHECKED" in o and not hit, f"{len(forb)} forbidden atoms checked; installed: {hit or 'none'}")
+
+    def headless_checks(self):
+        rc, o = self.sh("qlist -I | sort")
+        pk = [l.strip() for l in o.splitlines() if "/" in l]
+        gui = [x for x in pk if re.match(self.DISPLAY_RE, x + "/") and x not in self.DISPLAY_ALLOW]
+        open(f"{self.z.out}/installed-packages.txt", "w").write("\n".join(pk) + "\n")
+        self.step("server-has-no-display-stack-installed", rc == 0 and len(pk) > 100 and not gui,
+                  f"{len(pk)} packages installed; gui-libs/gui-wm/x11-*/gnome-*/mesa/qt/pipewire/NetworkManager found: {gui[:20] or 'none'} (allowed library deps: {', '.join(self.DISPLAY_ALLOW)})")
+        rc, o = self.sh("(pgrep -x 'Xorg|Xwayland|gdm|lightdm|sddm|gnome-shell|cage|sway|weston' || true) | wc -l; (rc-status -a 2>&1 | grep -Eci 'gdm|lightdm|sddm|display-manager|xdm' || true)")
+        self.step("server-runs-no-x-wayland-or-display-manager", o.split()[-2:] == ["0", "0"], f"display processes / display-manager services: {' '.join(o.split()[-2:])}")
+        rc, o = self.sh("grep -o 'console=tty[A-Za-z0-9,]*' /proc/cmdline | tr '\\n' ' '; echo; pgrep -af 'agetty|console-menu|live-serial' | head -4")
+        self.step("serial-console-is-the-system-console", "console=tty" in o, re.sub(r"\s+", " ", o).strip()[:200])
+
+    def world_headless_check(self):
+        """`emerge -pv @world` on the installed server: a world update must not pull a single display package (the Portage tree is fetched by horcrux-firstboot)"""
+        end = time.time() + qt.T(1500)
+        o = ""
+        while time.time() < end:
+            rc, o = self.sh("emerge -pvuDN @world 2>&1 | tail -80; echo RC=${PIPESTATUS[0]}", timeout=900)
+            if "profile is invalid" not in o:
+                break
+            time.sleep(25)       # horcrux-firstboot is still fetching the tree
+        open(f"{self.z.out}/server-world-resolve.txt", "w").write(o)
+        merges = [l for l in o.splitlines() if l.startswith(("[ebuild", "[binary"))]
+        gui = [l for l in merges if re.search(r"\] (gui-libs|gui-wm|gnome-base|gnome-extra|x11-base|xfce-[a-z]+|kde-[a-z]+|dev-qt)/|x11-libs/(gtk|cairo|pango|libX)|media-libs/mesa", l)]
+        self.step("server-world-update-pulls-no-display-stack", "RC=0" in o and "blocked" not in o.lower() and not gui,
+                  f"{len(merges)} packages in the update list; display packages in it: {gui[:6] or 'none'}; " + re.sub(r"\s+", " ", o)[-160:])
+
+    def core_checks(self):
+        rc, o = self.sh("for p in " + " ".join(self.CORE_PKGS) + "; do qlist -I $p || echo MISSING:$p; done; cat /usr/share/horcrux/core-release; horcrux-time-config check; "
+                        "qfile -q /usr/sbin/horcrux-time-config /usr/libexec/horcrux-timesync /usr/libexec/horcrux-firstboot /etc/init.d/horcrux-timesync /etc/init.d/horcrux-firstboot "
+                        "/etc/portage/package.use/horcrux-core /usr/sbin/ctg-restic && echo OWNED; "
+                        "rc-update show default | grep -E 'chronyd|horcrux-timesync|horcrux-firstboot|cronie|horcrux-api|sshd' | tr -s ' ' | tr '\\n' ';'")
+        self.step("core-packages-installed-package-owned-and-enabled", "MISSING" not in o and "OWNED" in o and "OK horcrux time config" in o and "horcrux-core" in o
+                  and all(x in o for x in ("chronyd", "horcrux-timesync", "horcrux-firstboot", "horcrux-api")), re.sub(r"\s+", " ", o).strip()[:400])
+        rc, o = self.sh("rc-status -a 2>&1 | grep -Ei 'crashed|stopped.*(chronyd|horcrux)'; echo END; rc-status -s | grep -E 'chronyd|horcrux-timesync|horcrux-api|sshd' | tr -s ' '")
+        self.step("core-services-running-none-crashed", o.split("END")[0].strip() == "" and "chronyd" in o and "horcrux-timesync" in o and "horcrux-api" in o, re.sub(r"\s+", " ", o).strip()[:300])
+        rc, o = self.sh("/usr/sbin/ctg-restic-cron backup; echo BACKUP-RC=$?; ctg-restic content; echo CONTENT-RC=$?; ls /etc/cron.d/horcrux-backup; pgrep -x crond >/dev/null && echo CRONDUP; "
+                        "grep -c canutethegreat /etc/ctg-backup/paths /etc/ctg-backup/excludes; ls /etc/ctg-backup/required 2>&1 | head -1")
+        self.step("backup-in-core-generic-not-provisioned-no-owner-paths", "BACKUP-RC=0" in o and "CONTENT-RC=0" in o and "/etc/cron.d/horcrux-backup" in o and "CRONDUP" in o
+                  and "paths:0" in o and "excludes:0" in o and "No such file" in o, re.sub(r"\s+", " ", o).strip()[:300])
+        rc, o = self.sh("grep -x 'sys-fs/zfs-kmod dist-kernel' /etc/portage/package.use/horcrux-core && grep -qw dist-kernel /var/db/pkg/sys-fs/zfs-kmod-*/USE && echo KMOD-DIST-KERNEL-OK; "
+                        "grep -x 'sys-fs/zfs dist-kernel' /etc/portage/package.use/horcrux-core | head -1; grep -qw dist-kernel /var/db/pkg/sys-fs/zfs-[0-9]*/USE && echo ZFS-DIST-KERNEL-OK")
+        self.step("zfs-dist-kernel-rule-owned-by-core-and-active", "KMOD-DIST-KERNEL-OK" in o and "ZFS-DIST-KERNEL-OK" in o, re.sub(r"\s+", " ", o).strip()[:300])
+
+    def web_checks(self):
+        sc, code, body = qt.http(qt.FWD_WEB, "/")
+        rc, o = self.sh("curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:8006/; echo; ss -ltn | grep -c ':8006 '")
+        self.step("server-web-ui-reachable-from-the-network", code in (200, 301, 302, 303, 401) and re.match(r"\s*(200|30\d|401)", o) is not None, f"host->guest forward: {sc} {code}; in guest: {re.sub(chr(10), ' ', o).strip()}")
+        sc, code, body = qt.http(qt.FWD_WEB, self.P["health"][0])
+        self.step("server-web-api-health", code == 200, f"{self.P['health'][0]} -> {code}")
+
+    def firstboot_check(self):
+        end = time.time() + qt.T(1500)
+        o = ""
+        while time.time() < end:
+            rc, o = self.sh("ls /var/lib/horcrux/ 2>&1; grep -E '^== (horcrux-firstboot|waiting|network is up|hook|portage trees|done|tree sync)' /var/log/horcrux-firstboot.log 2>&1; rc-status -a 2>&1 | grep horcrux-firstboot; test -s /run/horcrux-firstboot.pid && echo PIDLEFT || echo PIDGONE", timeout=60)
+            if "firstboot-done" in o:
+                break
+            time.sleep(20)
+        open(f"{self.z.out}/firstboot.log", "w").write(o)
+        self.step("firstboot-waits-for-network-syncs-trees-not-crashed", "== horcrux-firstboot" in o and "firstboot-done" in o and "== done" in o and "crashed" not in o and "PIDGONE" in o,
+                  re.sub(r"\s+", " ", o).strip()[-300:])
+
+    def server_checks(self, first_boot=True):
+        """the server gate: every desktop regression gate that does not need a display, plus the headless ones"""
+        a = self.z
+        self.headless_checks()
+        if getattr(a, "public", False):
+            self.public_image_checks()
+        self.core_checks()
+        self.web_checks()
+        if getattr(a, "rtc_base", ""):
+            self.clock_checks()                 # months-off RTC on every boot: chrony steps it after the network is up (dhcpcd/static, no NetworkManager)
+        self.toolchain_check()
+        self.package_contents_check()
+        self.kmod_build_check()
+        if first_boot:
+            self.firstboot_check()
+            self.world_headless_check()
+
+    def boot2_server(self, nvars):
+        """REBOOT into the installed system, serial console only: passphrase on the serial line, rolled-back boot environment, then the server gates again
+        (with --late-network N the NIC link is DOWN while the system boots and comes up N seconds later)"""
+        a = self.z
+        qt.pflash_vars(nvars)
+        vm = qt.VM("3-boot2-server", self.qemu_args(None, True, nvars), a.out)
+        try:
+            if a.late_network:
+                time.sleep(1)
+                vm.qmp("human-monitor-command", **{"command-line": "set_link n0 off"})
+                self.step("late-network-link-down-from-the-start", True, f"set_link n0 off right after QEMU start; up again in {a.late_network} s (wall clock)")
+            m = vm.expect_raw(r"(?i)(encrypted zfs password|enter passphrase|password for rpool|disk passphrase)[^\n]*", 420)
+            self.step("boot2-passphrase-prompt-on-serial", m, m.group(0).decode(errors="replace").strip() if m else "no prompt")
+            time.sleep(1)
+            vm.send(PASSPHRASE + "\r")
+            if a.late_network:
+                time.sleep(a.late_network)
+                vm.qmp("human-monitor-command", **{"command-line": "set_link n0 on"})
+            up = self.wait_ssh(timeout=600 if a.late_network else 420)
+            self.step("boot2-ssh-after-serial-passphrase-reboot", up, "installed system rebooted and reachable")
+            if not up:
+                return
+            rc, o = self.sh("zpool get -H -o value bootfs rpool; findmnt -no SOURCE /; test -e /root/marker-after-snapshot && echo MARKER || echo NOMARKER")
+            self.step("rolled-back-to-previous-boot-environment", "rpool/ROOT/rolledback" in o and "NOMARKER" in o, o.strip().replace("\n", " | ")[:300])
+            self.server_checks(first_boot=False)
+            self.sh("poweroff", timeout=10)
+            self.wait_exit(vm)
+        finally:
+            if vm.alive():
+                vm.p.kill()
 
     # --- boot 3 (--hibernate): ONE passphrase, hibernate, power off, boot, ONE passphrase, resume
     def unlock_usb(self, vm, kb, label):
@@ -650,6 +788,8 @@ cd /; rm -rf $d
         self.step("desktop-gdm-and-gnome-shell-running", "GDM" in o and "SHELL" in o, o.strip().replace("\n", " | ")[:300])
         qt.greeter_no_session_gate(self.sh, self.step, "owner", "gdm", wait=60)         # OWNER RULE: after the disk unlock the greeter shows, no user session exists before a greeter login
         self.desktop_exec_check()
+        if getattr(self.z, "public", False):
+            self.public_image_checks()
         self.keyring_pam_checks()
         self.clock_checks()
         self.toolchain_check()
@@ -687,6 +827,11 @@ def main():
     ap.add_argument("--iso", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--desktop", action="store_true")
+    ap.add_argument("--server", action="store_true", help="HEADLESS SERVER gate (server-first): serial console + ssh only, no VGA/USB keyboard path; the same checks as the desktop run "
+                    "(months-off RTC, late network, package-contents-complete, kernel-module build, zfs-kmod dist-kernel rule, shadow reuse, no autologin, reboot into the installed system) "
+                    "plus: no display stack installed, web UI answers, core packages present, nothing personal. Runs on x86_64 (KVM) and aarch64 (TCG).")
+    ap.add_argument("--public", action="store_true", help="a PUBLIC image: nothing personal / machine-specific may be installed (project/public-forbidden.txt)")
+    ap.add_argument("--late-network", type=int, default=0, metavar="SECS", help="(--server) boot #2 with the NIC link DOWN for SECS seconds (QMP set_link), then up: chrony must still step the clock and the web UI must come up")
     ap.add_argument("--hibernate", action="store_true", help="portable profile: LUKS2 hibernation swap, ONE passphrase, hibernate -> power off -> boot -> resume (marker + process survive, pool clean, scrub clean)")
     ap.add_argument("--fake-t2", action="store_true", help="force the T2 path with answer-file t2=yes (this QEMU cannot present PCI id 106b:1801; detection itself is unit-tested with a fake sysfs)")
     ap.add_argument("--expect-t2-refusal", action="store_true", help="(with --fake-t2) the image has no T2 kernel: assert the installer refuses")

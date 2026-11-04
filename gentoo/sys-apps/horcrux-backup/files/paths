@@ -1,4 +1,6 @@
-/home/canutethegreat
+# Generic host backup set (owner standard: encrypted restic -> B2, 30 days). A machine layer adds its own entries with /etc/ctg-backup/paths.d/*
+# (see ctg-restic) and its own `required` list; nothing here names a person or an application.
+/home
 /etc
 /root
 /usr/local
@@ -6,3 +8,4 @@
 /var/lib/portage/world
 /var/lib/portage/world_sets
 /var/lib/iwd
+/var/lib/horcrux

@@ -1,0 +1,11 @@
+#!/sbin/openrc-run
+# Horcrux core: give chronyd its time sources as soon as any network is up (dhcpcd, static, NetworkManager). See /usr/libexec/horcrux-timesync.
+description="Horcrux: re-resolve chrony's sources when the network comes up (headless servers have no NetworkManager hook)"
+command=/usr/libexec/horcrux-timesync
+command_background=yes
+pidfile=/run/horcrux-timesync.pid
+depend() {
+	need localmount
+	use chronyd net
+	after chronyd
+}

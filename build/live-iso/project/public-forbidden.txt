@@ -1,0 +1,16 @@
+# Packages that must NEVER be in a PUBLIC Horcrux image (the server image and the public desktop editions): they are the owner's own picks or
+# belong to one machine. They live in the machine layers (project/variants/<machine>/), see docs/ISO-INSTALL.md "Layers".
+# One atom per line; checked with `qlist -I` by the core and desktop-edition Dockerfiles and by the QEMU gates (public image: none may be installed).
+app-admin/rustinion-agent
+app-admin/rustinion-bin
+www-client/brave-bin
+net-misc/nextcloud-client
+net-vpn/tailscale
+net-vpn/proton-vpn-gtk-app
+sys-cluster/keepalived
+net-misc/sshpass
+dev-util/rustup
+app-antivirus/clamav
+net-im/discord
+games-util/steam-launcher
+games-util/steam-meta
