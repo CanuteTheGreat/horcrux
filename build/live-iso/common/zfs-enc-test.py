@@ -262,6 +262,15 @@ class ZRun(qt.Runner):
             self.server_checks(first_boot=True)
 
     def change_and_rollback(self):
+        if self.z.server:
+            # headless server: the rolled-back BE must keep its serial console (the reboot is driven over the serial line); the desktop run proves a BE switch with
+            # a changed kernel command line (console=ttyS0 dropped) instead
+            rc, o = self.sh("horcrux-be snapshot before-change && echo CHANGE > /root/marker-after-snapshot && "
+                            "horcrux-be rollback horcrux@before-change --name rolledback && horcrux-be list && zpool get -H -o value bootfs rpool && "
+                            "grep -c 'be-rolledback' /boot/grub/grub.cfg && grep -q ttyS0 /boot/grub/grub.cfg")
+            self.step("rollback-boot-environment-created", rc == 0 and "rpool/ROOT/rolledback" in o, o.strip().replace("\n", " | ")[-300:])
+            self.sh("cat /boot/grub/grub.cfg > /root/grub.cfg.copy")
+            return
         rc, o = self.sh("horcrux-be snapshot before-change && echo CHANGE > /root/marker-after-snapshot && "
                         "sed -i 's/console=ttyS0,115200n8//' /etc/horcrux/be.conf && grep ^CMDLINE /etc/horcrux/be.conf && "
                         "horcrux-be rollback horcrux@before-change --name rolledback && horcrux-be list && zpool get -H -o value bootfs rpool && "
@@ -345,6 +354,18 @@ class ZRun(qt.Runner):
         """`emerge -pv @world` on the installed server: a world update must not pull a single display package (the Portage tree is fetched by horcrux-firstboot)"""
         end = time.time() + qt.T(1500)
         o = ""
+        if getattr(self.z, "overlay_dir", ""):
+            import base64, io, tarfile
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+                for rel in ("sys-apps/horcrux-core", "sys-apps/horcrux-firstboot", "sys-apps/horcrux-backup", "sys-apps/horcrux-repo-config", "net-misc/horcrux-time",
+                            "net-misc/horcrux-chrony-nm", "profiles", "metadata", "gnome-extra/horcrux-gnome-defaults"):
+                    full = os.path.join(self.z.overlay_dir, rel)
+                    if os.path.exists(full):
+                        tf.add(full, arcname=rel)
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            rc, t = self.sh(f"echo {b64} | base64 -d | tar xz -C /var/db/repos/horcrux && echo OVERLAY-COPIED", timeout=120)
+            self.step("local-overlay-copied-for-the-world-check", "OVERLAY-COPIED" in t, f"{len(b64)} bytes of the branch's core packages over the synced overlay (branch not published yet)")
         while time.time() < end:
             rc, o = self.sh("emerge -pvuDN @world 2>&1 | tail -80; echo RC=${PIPESTATUS[0]}", timeout=900)
             if "profile is invalid" not in o:
@@ -811,6 +832,8 @@ def main():
                     "(months-off RTC, late network, package-contents-complete, kernel-module build, zfs-kmod dist-kernel rule, shadow reuse, no autologin, reboot into the installed system) "
                     "plus: no display stack installed, web UI answers, core packages present, nothing personal. Runs on x86_64 (KVM) and aarch64 (TCG).")
     ap.add_argument("--public", action="store_true", help="a PUBLIC image: nothing personal / machine-specific may be installed (project/public-forbidden.txt)")
+    ap.add_argument("--overlay-dir", default="", help="(--server) the repo's gentoo/ overlay: its horcrux-core packages are copied over the synced /var/db/repos/horcrux before `emerge -pvuDN @world`, "
+                    "for a run on a branch whose overlay is not published yet (on main the published overlay is what the installed system really syncs)")
     ap.add_argument("--late-network", type=int, default=0, metavar="SECS", help="(--server) boot #2 with the NIC link DOWN for SECS seconds (QMP set_link), then up: chrony must still step the clock and the web UI must come up")
     ap.add_argument("--hibernate", action="store_true", help="portable profile: LUKS2 hibernation swap, ONE passphrase, hibernate -> power off -> boot -> resume (marker + process survive, pool clean, scrub clean)")
     ap.add_argument("--fake-t2", action="store_true", help="force the T2 path with answer-file t2=yes (this QEMU cannot present PCI id 106b:1801; detection itself is unit-tested with a fake sysfs)")
