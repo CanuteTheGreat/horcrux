@@ -347,6 +347,7 @@ def image_has_t2_kernel(root="/"):
 def preflight(inst):
     """called before the disk is touched: never erase a disk when the result could not boot with its keyboard"""
     from .system import InstallError
+    inst.log("Apple T2 Mac detected (PCI 106b:1801): checking that this image can boot it")
     if not image_has_t2_kernel("/") and (inst.c.get("zfs_encrypt") or not inst.c.get("t2_allow_no_kernel")):
         raise InstallError("this image has no T2 kernel (apple-bce): the internal keyboard would not work at the disk-passphrase "
                            "prompt. Use the Apple T2 image of Horcrux. (nothing was written to the disk)")
