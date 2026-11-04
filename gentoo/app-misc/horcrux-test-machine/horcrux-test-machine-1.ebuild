@@ -12,11 +12,12 @@ SLOT="0"
 KEYWORDS="~amd64"
 # One package for the owner's test laptops (gringotts, hogshead, madammalkins): installed ONLY there, never in a public image.
 # `emerge -C` it to get normal power saving back (and see the README for the encryption side).
-# +zfs +gnome: the two laptops (gringotts, hogshead); on the XFS/XFCE Surface set -zfs -gnome +xfce (per-login xfconf power settings, because the XFCE defaults file is owned by horcrux-surface-desktop). USE=zfs: the machine has a ZFS root (gringotts, hogshead); without it (madammalkins, XFS) only the power part applies
-IUSE="+gnome +zfs smallram xfce"
+# +plain: this machine boots WITHOUT disk encryption (ZFS root or XFS/LVM): unlock module off, resume + zfs/lvm conf only. Enable it ONLY after the disks are really unencrypted (-plain while a LUKS root still exists, or the machine cannot boot).
+# +gnome (gringotts, hogshead) / xfce (madammalkins, per-login xfconf power settings: the XFCE defaults file is owned by horcrux-surface-desktop).
+IUSE="+gnome +plain smallram xfce"
 
 RDEPEND="
-	zfs? ( sys-kernel/horcrux-unlock[-encrypted] )
+	plain? ( sys-kernel/horcrux-unlock[-encrypted] )
 	net-wireless/iw
 	net-misc/networkmanager
 	gnome? ( gnome-base/dconf )
@@ -29,7 +30,7 @@ pkg_preinst() {
 }
 
 src_install() {
-	if use zfs; then
+	if use plain; then
 		insinto /etc/portage/package.use
 		newins - horcrux-test-machine <<-'EOF2'
 			# owned by app-misc/horcrux-test-machine: this machine boots WITHOUT disk encryption and WITHOUT a passphrase prompt
