@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import time
 
-from . import arch, hwprofile, luksroot, portableswap, zfsswap
+from . import arch, hwprofile, luksroot, portableswap, testmachine, zfsswap
 
 LOG = "/var/log/live-installer.log"
 
@@ -527,6 +527,7 @@ def default_config(profile):
         "console_open": False,
         # ZFS root with native encryption (the passphrase is typed by the user; only held in memory)
         "zfs_encrypt": False, "zfs_passphrase": "",
+        testmachine.KEY: False,         # explicit, warned, non-default: NO disk encryption (testmachine.py)
         # Apple T2 Mac support: auto = detect PCI 106b:1801; firmware = auto | none | path to a firmware.tar / brcm dir
         "t2": "auto", "t2_firmware": "auto",
         # install profile: server | desktop (desktop needs the desktop image variant)
@@ -583,6 +584,7 @@ def config_from_answers(profile, path):
     c["zfs_raid"] = d.get("zfs_raid", "single")
     c["zfs_encrypt"] = bool(d.get("encryption", d.get("encrypt", False)))
     c["zfs_passphrase"] = d.get("passphrase", "")
+    c[testmachine.KEY] = bool(d.get(testmachine.KEY, False))
     c["t2"] = str(g.get("t2", "auto"))
     c["t2_firmware"] = str(g.get("t2_firmware", "auto"))
     c["install_type"] = str(g.get("install_type", "server"))
@@ -606,7 +608,8 @@ def config_from_answers(profile, path):
 
 def validate_config(profile, c, unattended=False, require_secret=True):
     """Return a list of problems (empty = ok)."""
-    errs = []
+    errs = testmachine.problems(c)
+    testmachine.normalize(c)            # no-op unless the explicit test-machine choice is set (xfs-luks -> xfs, no passphrases)
     if c.get("install_type", "server") != "server":
         from . import desktop            # the Desktop image variant (marker file) installs the desktop profile
         if not (c["install_type"] == "desktop" and desktop.available()):
@@ -767,6 +770,9 @@ class Installer:
         """Run every stage in sequence (stages.APPLY_ORDER); TUI, GUI and the answer file all come through here."""
         from . import stages
         c, p = self.c, self.p
+        if testmachine.requested(c):
+            testmachine.normalize(c)
+            self.log("WARNING: " + testmachine.WARNING)
         self.log(f"== live-installer: {p['title']} ({c['install_type']}) on {', '.join(c['disks'])} ({'UEFI' if self.efi else 'BIOS'}), fs={c['fs']}")
         if self.t2:
             from . import t2
@@ -847,7 +853,7 @@ class Installer:
             args = ["sgdisk"] + first + ["-n", "2:0:+" + ("2G" if self.zfs() else "1G"), "-t", "2:8300", "-c", "2:boot"]
             if self.zfs():
                 if swap:    # encrypted ZFS laptop: LUKS2 hibernation swap as partition 3 (zfsswap.py); servers: zram only
-                    args += zfsswap.sgdisk_part(swap)
+                    args += zfsswap.sgdisk_part(swap, plain=testmachine.requested(self.c))
             elif swap:        # servers/firewalls/hypervisors: NO swap partition (zram only); partition 3 simply does not exist, root stays number 4
                 args += ["-n", f"3:0:+{swap}M", "-t", "3:8200", "-c", "3:swap"]
             args += ["-n", "4:0:0", "-t", "4:bf00" if self.zfs() else "4:8300", "-c", "4:root", disk]
@@ -870,7 +876,7 @@ class Installer:
         if self.swap_mb and not self.zfs():
             self.run(["mkswap", "-L", "swap", L[3]])
         if self.zfs() and self.swap_mode == "hibernate":
-            zfsswap.mkswap_stage(self)
+            zfsswap.mkswap_stage(self)        # plain swap partition on a test machine (testmachine.py)
         if c["fs"] == "ext4":
             self.run(["mkfs.ext4", "-F", "-q", "-L", "root", L[4]])
         elif c["fs"] == "xfs":

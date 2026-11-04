@@ -261,7 +261,7 @@ def layout_supported(cfg):
     if fs == "zfs":
         try:
             from . import zfsroot
-            return bool(getattr(zfsroot, "PORTABLE_SWAP", False)) and bool(cfg.get("zfs_encrypt"))
+            return bool(getattr(zfsroot, "PORTABLE_SWAP", False)) and bool(cfg.get("zfs_encrypt") or cfg.get("test_machine_no_encryption"))
         except ImportError:
             return False
     return False
