@@ -42,7 +42,9 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
     kr=$(cat /boot/.kernelrelease); \
-    emerge --oneshot --usepkg=n --getbinpkg=n --buildpkg=n =sys-fs/zfs-kmod-2.3.9 =sys-fs/zfs-2.3.9; \
+    # only zfs/zfs-kmod are built from source; their build dependencies (cmake...) come from the binhost like everywhere else in the image
+    emerge --oneshot --usepkg --getbinpkg --usepkg-exclude 'sys-fs/zfs-kmod sys-fs/zfs' --buildpkg=n =sys-fs/zfs-kmod-2.3.9 =sys-fs/zfs-2.3.9 > /tmp/zfs-emerge.log 2>&1 \
+        || { tail -60 /tmp/zfs-emerge.log; for l in $(ls -d /var/tmp/portage/*/*/temp/build.log); do echo "== $l"; tail -40 $l; done; exit 1; }; tail -5 /tmp/zfs-emerge.log; rm -f /tmp/zfs-emerge.log; \
     find /lib/modules/$kr -name 'zfs.ko*' | grep .; depmod $kr; \
     # the stock kernel goes: its modules/kernel are ~650 MB and the T2 kernel must be the one the live ISO boots
     for old in $(ls /lib/modules | grep -v -- "-t2"); do rm -rf /lib/modules/$old /boot/*-$old* /boot/*-$old; done; \
