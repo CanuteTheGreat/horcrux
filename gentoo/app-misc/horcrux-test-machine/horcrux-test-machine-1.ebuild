@@ -3,40 +3,69 @@
 
 EAPI=8
 
-DESCRIPTION="Marks a machine as a TEST machine: disk encryption OFF, unattended boot (sets sys-kernel/horcrux-unlock[-encrypted])"
+DESCRIPTION="TEST machine profile: disk encryption OFF (unattended boot) and power saving OFF (no lid/idle sleep, no Wi-Fi power save)"
 HOMEPAGE="https://github.com/CanuteTheGreat/horcrux"
 S="${WORKDIR}"
 
 LICENSE="MIT"
 SLOT="0"
 KEYWORDS="~amd64"
+# One package for the owner's test laptops (gringotts, hogshead, madammalkins): installed ONLY there, never in a public image.
+# `emerge -C` it to get normal power saving back (and see the README for the encryption side).
+# USE=zfs: the machine has a ZFS root (gringotts, hogshead); without it (madammalkins, XFS) only the power part applies
+IUSE="gnome zfs"
 
-RDEPEND="sys-kernel/horcrux-unlock[-encrypted]"
+RDEPEND="
+	zfs? ( sys-kernel/horcrux-unlock[-encrypted] )
+	net-wireless/iw
+	gnome? ( gnome-base/dconf )
+"
 
 pkg_preinst() {
-	# the installer writes the same file for a fresh test-machine install; replace it instead of leaving a ._cfg file
+	# the installer writes the same package.use file for a fresh test-machine install; replace it instead of leaving a ._cfg file
 	rm -f "${EROOT}"/etc/portage/package.use/horcrux-test-machine
 }
 
 src_install() {
-	insinto /etc/portage/package.use
-	newins - horcrux-test-machine <<-'EOF2'
-		# owned by app-misc/horcrux-test-machine: this machine boots WITHOUT disk encryption and WITHOUT a passphrase prompt
-		sys-kernel/horcrux-unlock -encrypted
-	EOF2
+	if use zfs; then
+		insinto /etc/portage/package.use
+		newins - horcrux-test-machine <<-'EOF2'
+			# owned by app-misc/horcrux-test-machine: this machine boots WITHOUT disk encryption and WITHOUT a passphrase prompt
+			sys-kernel/horcrux-unlock -encrypted
+		EOF2
+	fi
+
+	insinto /etc/elogind/logind.conf.d
+	newins "${FILESDIR}"/logind.conf 50-horcrux-test-machine.conf
+	insinto /etc/NetworkManager/conf.d
+	newins "${FILESDIR}"/nm.conf 50-horcrux-test-machine.conf
+	insinto /etc/modprobe.d
+	newins "${FILESDIR}"/modprobe.conf horcrux-test-machine.conf
+	insinto /etc/udev/rules.d
+	newins "${FILESDIR}"/udev.rules 50-horcrux-test-machine-pm.rules
+	if use gnome; then
+		insinto /etc/dconf/db/local.d
+		newins "${FILESDIR}"/gnome.dconf 10-horcrux-test-machine
+	fi
+	newinitd "${FILESDIR}"/horcrux-test-power.initd horcrux-test-power
+
 	insinto /usr/share/doc/${PF}
 	newins - README <<-'EOF2'
-		TEST MACHINE: DISK ENCRYPTION IS OFF (owner decision 2026-11-04, only while the machine is used for testing).
-		The ZFS pool / XFS+LVM root is not encrypted, the initramfs has no passphrase prompt, the machine boots to the login
-		screen unattended (the login screen still asks for the user's password: there is no autologin).
+		TEST MACHINE (owner decision 2026-11-04, only while the machine is used for testing)
+		  1. DISK ENCRYPTION IS OFF: no passphrase prompt, unattended boot to the login screen (the login screen still asks for the
+		     password: there is no autologin). Anyone with the machine can read the disk.
+		  2. POWER SAVING IS OFF: lid close / suspend key / idle do not suspend (elogind drop-in), Wi-Fi power save off (NetworkManager,
+		     driver options, horcrux-test-power service), no runtime PM on network devices, GNOME/XFCE do not sleep on idle.
+		     Critical-battery hibernate (UPower) is deliberately left alone.
 
-		Turn encryption back on (it cannot be done in place for native ZFS encryption):
-		  1. take a fresh restic backup (`ctg-restic backup`) and verify it (`ctg-restic check`),
-		  2. emerge --deselect app-misc/horcrux-test-machine; emerge -C app-misc/horcrux-test-machine; emerge -1 sys-kernel/horcrux-unlock
-		     (USE=encrypted is the default again) so the unlock module is installed,
-		  3. reinstall with the Horcrux installer, encryption = yes (zfs_encrypt / [disk] encryption = true), then restore from restic;
-		     for the non-ZFS layout the same applies (XFS on LUKS2).
-		Convert the other way (what was done on gringotts/hogshead/madammalkins): zfs send of each dataset (non-raw) to another
-		host, recreate the pool unencrypted, receive, regenerate the initramfs. See ctg-infrastructure hosts/<host>/CONVERSION.md.
+		Back to a normal machine: emerge -C app-misc/horcrux-test-machine (power behaviour returns at once after `rc-service
+		elogind reload`/next login). Encryption cannot be added in place (native ZFS encryption): take a fresh backup, then reinstall
+		with the installer's encryption choice and restore from restic. Conversion notes: ctg-infrastructure hosts/<host>/CONVERSION.md.
 	EOF2
+}
+
+pkg_postinst() {
+	use gnome && has_version gnome-base/dconf && dconf update
+	elog "Enable the runtime service: rc-update add horcrux-test-power default && rc-service horcrux-test-power start"
+	elog "Apply the logind drop-in without logging anyone out: rc-service elogind reload (or loginctl: kill -HUP the elogind daemon)."
 }
