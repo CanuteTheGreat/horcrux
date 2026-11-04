@@ -269,7 +269,7 @@ class ZRun(qt.Runner):
             # a changed kernel command line (console=ttyS0 dropped) instead
             rc, o = self.sh("horcrux-be snapshot before-change && echo CHANGE > /root/marker-after-snapshot && "
                             "horcrux-be rollback horcrux@before-change --name rolledback && horcrux-be list && zpool get -H -o value bootfs rpool && "
-                            "grep -c 'be-rolledback' /boot/grub/grub.cfg && grep -q ttyS0 /boot/grub/grub.cfg")
+                            "grep -c 'be-rolledback' /boot/grub/grub.cfg && grep -Eq 'console=tty(S0|AMA0)' /boot/grub/grub.cfg")
             self.step("rollback-boot-environment-created", rc == 0 and "rpool/ROOT/rolledback" in o, o.strip().replace("\n", " | ")[-300:])
             self.sh("cat /boot/grub/grub.cfg > /root/grub.cfg.copy")
             return
