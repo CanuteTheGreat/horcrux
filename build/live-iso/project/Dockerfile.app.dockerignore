@@ -4,3 +4,5 @@ build/live-iso
 build/iso
 **/target
 !build/live-iso/common/check-cpu-baseline.py
+!build/live-iso/project/overlay/etc/init.d/horcrux-api
+!build/live-iso/project/overlay/etc/conf.d/horcrux-api

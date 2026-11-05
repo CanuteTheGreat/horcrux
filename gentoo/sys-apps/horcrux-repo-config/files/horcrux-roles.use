@@ -1,0 +1,8 @@
+# owned by sys-apps/horcrux-repo-config: USE changes the Horcrux role packages need (read while Portage resolves the role package, so they cannot ship with it)
+# Podman networking (netavark) builds nftables rules through the json interface
+net-firewall/nftables json
+# lxc (tools,caps) links libcap statically
+sys-libs/libcap static-libs
+# incus clustering (dqlite/raft)
+dev-libs/raft lz4
+dev-util/xdelta lzma

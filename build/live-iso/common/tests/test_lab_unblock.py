@@ -122,5 +122,67 @@ class CtgRestic(unittest.TestCase):
         self.assertNotIn("No such file", r.stdout + r.stderr)
 
 
+def _rd(*parts):
+    with open(os.path.join(REPO, *parts)) as f:
+        return f.read()
+
+
+@unittest.skipUnless(HAVE, "Horcrux repo tree only")
+class ProductBlockers(unittest.TestCase):
+    """The 2026-11-05 lab blockers that are package/image definitions (the lab re-proves them on real hardware)."""
+
+    def test_manager_is_a_keyworded_package_installed_by_the_core_layer(self):
+        import glob
+        eb = _rd("gentoo", "app-emulation", "horcrux-bin", "horcrux-bin-0.1.0.ebuild")
+        kw = [l for l in eb.splitlines() if l.startswith("KEYWORDS=")][0]
+        self.assertNotIn("~", kw, "the manager must not be masked by a testing keyword (the original blocker)")
+        for arch in ("amd64", "arm64"):
+            self.assertIn(arch, kw)
+        self.assertIn("app-emulation/qemu[spice", eb)
+        self.assertIn("!app-emulation/horcrux", eb)                     # same files as the source build: never both
+        core = _rd("build", "live-iso", "project", "variants", "core", "Dockerfile")
+        self.assertIn("app-emulation/horcrux-bin", core)
+        self.assertIn("--select sys-apps/horcrux-core app-emulation/horcrux-bin", core)
+        self.assertIn("GATE: qemu built without SPICE", core)
+        # desktop editions are built FROM the core image: the manager reaches gnome-light and every machine layer
+        gl = _rd("build", "live-iso", "project", "variants", "gnome-light", "Dockerfile")
+        self.assertIn("BASE", gl)
+
+    def test_tarball_contract_between_image_build_and_ebuild(self):
+        app = _rd("build", "live-iso", "project", "Dockerfile.app")
+        eb = _rd("gentoo", "app-emulation", "horcrux-bin", "horcrux-bin-0.1.0.ebuild")
+        self.assertIn("horcrux-manager-$(uname -m).tar.zst", app)
+        self.assertIn("horcrux-manager-$(uname -m).tar.zst", eb.replace('horcrux-manager-$(uname -m)', 'horcrux-manager-$(uname -m)'))
+        for member in ("usr/bin/horcrux-api", "usr/bin/horcrux ", "usr/share/horcrux/ui", "etc/init.d/horcrux-api"):
+            self.assertIn(member, app)
+        ign = _rd("build", "live-iso", "project", "Dockerfile.app.dockerignore")
+        self.assertIn("!build/live-iso/project/overlay/etc/init.d/horcrux-api", ign)   # build/live-iso is ignored otherwise: COPY would fail
+
+    def test_qemu_has_spice_in_image_and_on_machines(self):
+        for path in (("build", "live-iso", "project", "portage", "package.use", "horcrux-virt"), ("gentoo", "app-emulation", "horcrux-bin", "files", "package.use")):
+            line = [l for l in _rd(*path).splitlines() if l.startswith("app-emulation/qemu")][0].split()
+            for flag in ("spice", "usbredir", "virtfs", "vnc"):
+                self.assertIn(flag, line[1:], path[-1])
+        # a global -spice / USE="-spice" in the image's own config would silently undo it
+        for root, _, files in os.walk(os.path.join(REPO, "build", "live-iso")):
+            for fn in files:
+                if root.endswith("portage") or "package.use" in root or fn == "make.conf":
+                    t = open(os.path.join(root, fn), errors="replace").read()
+                    self.assertNotRegex(t, r"(?m)^[^#\n]*\s-spice\b", os.path.join(root, fn))
+
+    def test_container_role_package(self):
+        eb = _rd("gentoo", "sys-apps", "horcrux-role-containers", "horcrux-role-containers-1.ebuild")
+        for atom in ("app-containers/incus", "app-containers/podman", "app-containers/buildah"):
+            self.assertIn(atom, eb)
+        kws = _rd("gentoo", "sys-apps", "horcrux-repo-config", "files", "horcrux-roles.keywords")
+        for atom in ("app-containers/incus", "app-containers/podman", "app-containers/buildah"):
+            self.assertRegex(kws, r"(?m)^" + atom + r" ~amd64")        # keywords arrive with repo-config: before the role package resolves
+
+    def test_changed_packages_got_a_revision_so_installed_machines_update(self):
+        for cat, pn, want in (("sys-apps", "horcrux-firstboot", "horcrux-firstboot-1-r1.ebuild"), ("sys-apps", "horcrux-backup", "horcrux-backup-1-r5.ebuild"),
+                              ("sys-apps", "horcrux-repo-config", "horcrux-repo-config-1-r1.ebuild")):
+            self.assertIn(want, os.listdir(os.path.join(GENTOO, cat, pn)))
+
+
 if __name__ == "__main__":
     unittest.main()
