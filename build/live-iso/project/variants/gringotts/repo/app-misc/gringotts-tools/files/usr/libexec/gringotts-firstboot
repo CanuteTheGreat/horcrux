@@ -19,11 +19,17 @@ mkdir -p /var/lib/gringotts
 sync_trees() {
   echo "== portage trees"
   ok=1
-  emerge-webrsync -q || ok=0
+  out=$(emerge-webrsync -q 2>&1); rc=$?; echo "$out"   # non-zero with "local timestamp is newer" = the tree is already current (same fix as horcrux-firstboot)
+  [ $rc -eq 0 ] || case "$out" in *"local timestamp is newer"*) ;; *) ok=0 ;; esac
   for r in guru canutethegreat-overlay; do [ -d /var/db/repos/$r/.git ] || find /var/db/repos/$r -mindepth 1 -delete 2>/dev/null; emaint sync -r $r || ok=0; done      # (the image ships the overlay directories empty: the first sync clones them)
   [ $ok = 1 ]
 }
-until have_net && sync_trees; do echo "== tree sync not done (network?): retry in 10 minutes"; sleep 600; done
+fails=0
+until have_net && sync_trees; do
+  if have_net; then fails=$((fails+1)); else fails=0; fi
+  [ "$fails" -ge 6 ] && { echo "== tree sync still failing with a network after $fails attempts: marked done WITH WARNINGS (run: emaint sync -a)"; break; }
+  echo "== tree sync not done (network?): retry in 10 minutes"; sleep 600
+done
 date -u > /var/lib/gringotts/firstboot-done
 echo "== done"
 exit 0

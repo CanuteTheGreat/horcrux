@@ -12,6 +12,16 @@ set -uo pipefail
 CONF=${CTG_BACKUP_CONF:-/etc/ctg-backup}
 STATE=${CTG_BACKUP_STATE:-/var/lib/ctg-backup}
 KEEP=${CTG_KEEP_WITHIN:-30d}
+# Not provisioned (no /etc/ctg-backup/env: the secrets come from the owner's backup host over ssh stdin, a fresh image / a lab laptop / a CI guest has none):
+# a scheduled run is a clean no-op (exit 0, nothing recorded as a successful backup, the freshness monitor sees the missing state files); anything else is a
+# plain configuration error (EX_CONFIG 78). It used to source the missing file and let restic die with "Fatal: Please specify repository location".
+if [ ! -r "$CONF/env" ]; then
+  msg="ctg-restic: not provisioned ($CONF/env missing); nothing to do. Provision with the host's backup credentials (env + repo.pw), see sys-apps/horcrux-backup."
+  case "${1:-backup}" in
+    backup|prune|check|content) echo "$msg"; logger -t ctg-restic "not provisioned ($CONF/env missing); skipping ${1:-backup}" 2>/dev/null; exit 0 ;;
+    *) echo "$msg" >&2; exit 78 ;;
+  esac
+fi
 set -a; . "$CONF/env"; set +a
 export HOME=${HOME:-/root}
 mkdir -p "$STATE"
