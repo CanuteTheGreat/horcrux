@@ -526,11 +526,11 @@ class ZRun(qt.Runner):
             # initramfs: the one-passphrase module and the hook order, on the REAL installed image
             rc, o = self.sh("for k in /boot/initramfs-*.img /boot/be/*/initramfs.img; do echo \"== $k\"; lsinitrd $k | grep -E 'hx-unlock|hx-zfskey|resume|cryptsetup|zfs.ko|dm-crypt|mount-zfs|horcrux-unlock'; done")
             open(f"{a.out}/initramfs-listing.txt", "w").write(o)
-            from importlib import util as _u
-            sp = _u.spec_from_file_location("zfsswap", os.path.join(HERE, "overlay/usr/lib/live-installer/liveinst/zfsswap.py"))
-            # (zfsswap imports its package siblings lazily only inside the installer stages: the pure checks load standalone)
-            zs = _u.module_from_spec(sp)
-            sp.loader.exec_module(zs)
+            # zfsswap uses package-relative imports (`from . import testmachine`): import it as liveinst.zfsswap
+            _pkg_root = os.path.join(HERE, "overlay/usr/lib/live-installer")
+            if _pkg_root not in sys.path:
+                sys.path.insert(0, _pkg_root)
+            from liveinst import zfsswap as zs
             parts = re.split(r"^== (\S+)$", o, flags=re.M)
             bad = []
             for img, txt in zip(parts[1::2], parts[2::2]):
