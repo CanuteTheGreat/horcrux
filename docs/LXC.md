@@ -12,6 +12,13 @@ VE's `pct`/`pveam`, on Gentoo (`USE=lxc`, pulls in `app-containers/lxc`).
 | List / delete cached templates | same page | `GET /api/lxc/templates`, `DELETE /api/lxc/templates/<d>/<r>/<a>/<v>` | `template list`, `template delete` |
 
 Templates are cached in `<data_dir>/lxc-templates/<distro>/<release>/<arch>/<variant>/`.
+**Default template: Gentoo.** An LXC create with no template (API `rootfs`
+empty, or the web UI field left blank) uses `gentoo/current/openrc`
+(Gentoo publishes only `openrc` and `systemd` variants, so the variant is
+explicit; a bare `gentoo/current` will not resolve). Every other catalog
+distro stays selectable by naming it, e.g. `alpine/3.22`. The Gentoo rootfs is
+~240 MB compressed versus a few MB for Alpine; its network comes up through
+`net.eth0` (DHCP).
 Set `HORCRUX_LXC_IMAGES_URL` to use a mirror. A create request may name a
 template that isn't downloaded yet (`alpine/3.22`, `debian/bookworm/cloud`,
 `ubuntu/noble/amd64/default`); it is downloaded first. An absolute path to a
