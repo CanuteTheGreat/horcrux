@@ -1,4 +1,4 @@
-# Horcrux overlay + GURU + owner's overlay packages, and the 6.18.60 kernel the linux-surface series is pinned to
+# Horcrux overlay + GURU packages (no personal apps), and the 6.18.60 kernel the linux-surface series is pinned to
 sys-kernel/horcrux-surface-config ~amd64
 app-misc/horcrux-surface-desktop ~amd64
 app-admin/rustinion-agent -* ~amd64

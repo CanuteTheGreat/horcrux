@@ -2,6 +2,8 @@
 import importlib.machinery
 import importlib.util
 import os
+import re
+import subprocess
 import tomllib
 import unittest
 
@@ -44,8 +46,32 @@ class Profile(unittest.TestCase):
         self.assertEqual(vals.get(("[LightDM]", "greeter-user")), "lightdm")   # lab finding 2026-11-04: greeter ran as root on the Surface
         self.assertNotIn(("[Seat:*]", "autologin-user"), vals)
 
+    def test_xfce_media_keys_are_bound(self):
+        """lab finding 2026-11-05: the stock XFCE shortcut channel binds no XF86Audio* key, so the volume keys did nothing"""
+        base = os.path.join(ROOT, "..", "app-misc", "horcrux-surface-desktop", "files", "root")
+        sh = open(os.path.join(base, "usr", "bin", "horcrux-xfce-mediakeys")).read()
+        for key, frag in (("XF86AudioRaiseVolume", "5%+"), ("XF86AudioLowerVolume", "5%-"), ("XF86AudioMute", "set-mute @DEFAULT_AUDIO_SINK@ toggle"),
+                          ("XF86AudioMicMute", "@DEFAULT_AUDIO_SOURCE@")):
+            self.assertRegex(sh, rf'bind {key} ".*wpctl .*{re.escape(frag)}')
+        self.assertIn("xfce4-keyboard-shortcuts", sh)
+        self.assertIn("|| exit 1", sh)                        # the stamp is only written when every key was set
+        ds = open(os.path.join(base, "etc", "xdg", "autostart", "horcrux-xfce-mediakeys.desktop")).read()
+        self.assertIn("Exec=/usr/bin/horcrux-xfce-mediakeys", ds)
+        self.assertIn("OnlyShowIn=XFCE;", ds)
+        subprocess.check_call(["sh", "-n", os.path.join(base, "usr", "bin", "horcrux-xfce-mediakeys")])
+
+    def test_no_personal_overlay_in_the_profile(self):
+        base = os.path.join(ROOT, "..", "app-misc", "horcrux-surface-desktop", "files", "root", "etc", "portage")
+        self.assertFalse(os.path.exists(os.path.join(base, "repos.conf", "canutethegreat-overlay.conf")))
+        # the Horcrux overlay's repos.conf belongs to sys-apps/horcrux-repo-config (sync-uri, auto-sync): a second copy here (auto-sync = no) would override it
+        self.assertFalse(os.path.exists(os.path.join(base, "repos.conf", "horcrux.conf")))
+        kw = open(os.path.join(base, "package.accept_keywords", "horcrux-surface")).read()
+        lic = open(os.path.join(base, "package.license", "horcrux-surface")).read()
+        for bad in ("brave", "nextcloud", "discord", "proton"):
+            self.assertNotIn(bad, kw + lic)
+
     def test_desktop_package_has_xfce_stack(self):
-        eb = open(os.path.join(ROOT, "..", "app-misc", "horcrux-surface-desktop", "horcrux-surface-desktop-1-r2.ebuild")).read()
+        eb = open(os.path.join(ROOT, "..", "app-misc", "horcrux-surface-desktop", "horcrux-surface-desktop-1-r3.ebuild")).read()
         for atom in ("xfce-base/xfce4-meta", "x11-misc/lightdm", "app-accessibility/onboard", "xfce-base/xfce4-power-manager",
                      "www-client/firefox-bin", "net-vpn/tailscale", "app-admin/rustinion-agent",
                      "sys-firmware/intel-microcode", "sys-firmware/sof-firmware", "x11-drivers/xf86-input-wacom", "gnome-extra/iio-sensor-proxy"):

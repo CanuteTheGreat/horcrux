@@ -183,23 +183,54 @@ class GateSelfTest(unittest.TestCase):
         calls = {"n": 0}
 
         def sh(cmd):
+            if "@@U" in cmd:
+                return 0, "@@U\nlightdm /bin/lightdm-gtk-greeter\n"
             if "@@S" in cmd:
                 return 0, "@@S\n 1 1000 owner seat0 tty7 active no -\n@@P\n 1234 xfce4-session\n@@L\n1234\n1000\n"
             return 0, "DM\n  555 lightdm-gtk-greeter\n"
         got = {}
         self.qt.time.sleep = lambda s: None
-        self.qt.greeter_no_session_gate(sh, lambda n, ok, info="": got.update(ok=ok, info=info), "owner", "lightdm", wait=1)
+        self.qt.greeter_no_session_gate(sh, lambda n, ok, info="": got.update(ok=ok, info=info) if not n.endswith("not-root") else None, "owner", "lightdm", wait=1)
         self.assertFalse(got["ok"])
 
     def test_greeter_gate_passes_with_greeter_and_no_session(self):
         def sh(cmd):
+            if "@@U" in cmd:
+                return 0, "@@U\nlightdm /bin/lightdm-gtk-greeter\n"
             if "@@S" in cmd:
                 return 0, "@@S\n c1 110 lightdm - - active no -\n@@P\n@@L\n1000\n"
             return 0, "DM\n  555 lightdm-gtk-greeter\n"
         got = {}
         self.qt.time.sleep = lambda s: None
-        self.qt.greeter_no_session_gate(sh, lambda n, ok, info="": got.update(ok=ok, info=info), "owner", "lightdm", wait=1)
+        self.qt.greeter_no_session_gate(sh, lambda n, ok, info="": got.update(ok=ok, info=info) if not n.endswith("not-root") else None, "owner", "lightdm", wait=1)
         self.assertTrue(got["ok"], got)
+
+    def _gate_with_greeter_ps(self, ps):
+        steps = {}
+
+        def sh(cmd):
+            if "@@U" in cmd:
+                return 0, "@@U\n" + ps
+            if "@@S" in cmd:
+                return 0, "@@S\n c1 110 lightdm - - active no -\n@@P\n@@L\n1000\n"
+            return 0, "DM\n  555 lightdm-gtk-greeter\n"
+        self.qt.time.sleep = lambda s: None
+        ret = self.qt.greeter_no_session_gate(sh, lambda n, ok, info="": steps.update({n: ok}), "owner", "lightdm", wait=1)
+        return ret, steps
+
+    def test_greeter_gate_fails_when_the_greeter_runs_as_root(self):
+        """lab finding: LightDM ran lightdm-gtk-greeter as root (greeter-user unset) on the Surface and on madammalkins"""
+        ret, steps = self._gate_with_greeter_ps("root /bin/lightdm-gtk-greeter\nroot lightdm --session-child 17 20\n")
+        self.assertFalse(ret)
+        self.assertFalse(steps["greeter-shown-and-no-user-session-before-login-greeter-process-not-root"])
+        self.assertTrue(steps["greeter-shown-and-no-user-session-before-login"])
+
+    def test_greeter_gate_fails_when_the_greeter_process_is_not_found(self):
+        self.assertFalse(self._gate_with_greeter_ps("root lightdm --session-child 17 20\n")[0])
+
+    def test_greeter_gate_passes_with_an_unprivileged_greeter_and_a_root_session_child(self):
+        ret, steps = self._gate_with_greeter_ps("root lightdm --session-child 17 20\nlightdm /bin/lightdm-gtk-greeter\n")
+        self.assertTrue(ret, steps)
 
 
 @unittest.skipUnless(os.path.exists(os.path.join(ROOT, "build", "installer", "horcrux-installer.sh")), "reads Horcrux-only files (absent in a vendored copy, e.g. Patronus)")

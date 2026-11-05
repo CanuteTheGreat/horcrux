@@ -57,3 +57,17 @@
 ~/.ssh/id_*
 ~/.gnupg/private-keys-v1.d/*.key
 ~/.var/app/*
+# the owner's private gringotts image layer (gringotts-config/-tools): private first-boot/remote hand-off/restore tools and personal overlays
+/usr/bin/gringotts-*
+/usr/libexec/gringotts-*
+/etc/init.d/gringotts-*
+/etc/gringotts
+/etc/gringotts/*
+/var/lib/gringotts
+/etc/ssh/sshd_config.d/10-gringotts.conf
+/etc/portage/repos.conf/gringotts.conf
+/var/db/repos/horcrux-gringotts
+/var/db/repos/canutethegreat-overlay
+# Portage repositories that must not be configured (any repos.conf file with a [section] of that name)
+repo:canutethegreat-overlay
+repo:horcrux-gringotts

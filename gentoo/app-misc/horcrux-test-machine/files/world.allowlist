@@ -9,9 +9,8 @@ sys-kernel/horcrux-*
 gnome-extra/horcrux-*
 app-emulation/horcrux*
 app-misc/*-machine
-# --- machine layers: hardware / first-boot plumbing (no personal apps; verified by the denylist)
-app-misc/gringotts-config
-app-misc/gringotts-tools
+# --- machine layers: hardware / first-boot plumbing (no personal apps; verified by the denylist). The owner's private gringotts-config/-tools are NOT
+# allowed any more (2026-11-05: their config + first-boot service moved to plain files / horcrux-firstboot).
 # --- hardware enablement (T2 Touch Bar/fans/Wi-Fi firmware, Surface kernel, microcode, firmware, fingerprint reader)
 sys-firmware/*
 sys-kernel/*

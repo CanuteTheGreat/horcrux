@@ -4,6 +4,8 @@
 Fails (exit 1, one `VIOLATION <class> <detail>` line each) when
   - an installed package (vdb) matches personal-apps.denylist,
   - a /var/lib/portage/world entry is NOT on world.allowlist (allowlist approach: unknown = personal),
+  - /etc/portage/package.{use,accept_keywords,license,mask,unmask,env,...} still names a denied atom (config of a removed personal app; a brave-bin
+    keyword left behind makes the next @world pull it back in) or a denied repository (`repo:NAME` lines of personal-paths.denylist) is configured,
   - a path from personal-paths.denylist exists (app install dirs, .desktop files, autostart entries, Nextcloud/browser/chat
     profiles, sync folders, private keys, flatpaks, AppImages, a provisioned personal restic job).
 Exit 0 = clean, 2 = cannot run (policy missing). `--root DIR` checks a mounted tree (unit tests, image gates).
@@ -41,9 +43,49 @@ def homes(root):
     return [h for h in out if os.path.isdir(h)]
 
 
+PKG_CONFIG_DIRS = ("package.use", "package.accept_keywords", "package.keywords", "package.license", "package.mask", "package.unmask", "package.env",
+                   "package.accept_restrict", "package.provided")
+
+
+def config_files(root, name):
+    p = os.path.join(root, "etc/portage", name)
+    if os.path.isdir(p):
+        return sorted(f for f in glob.glob(os.path.join(p, "**"), recursive=True) if os.path.isfile(f))
+    return [p] if os.path.isfile(p) else []
+
+
+def config_violations(root, deny, bad_repos):
+    """denied atoms (or denied ::repo) in the package.* files, and denied repositories defined in repos.conf"""
+    v = []
+
+    def rel(f):
+        return f[len(root.rstrip("/")):] if root != "/" else f
+    for name in PKG_CONFIG_DIRS:
+        for f in config_files(root, name):
+            for ln in open(f, errors="replace"):
+                ln = ln.split("#")[0].strip()
+                if not ln:
+                    continue
+                tok = ln.split()[0]
+                repo = tok.split("::")[1] if "::" in tok else ""
+                atom = atom_of(tok)
+                if matches(atom, deny):
+                    v.append(("portage-config", f"{rel(f)}: {atom}"))
+                elif repo in bad_repos:
+                    v.append(("portage-config", f"{rel(f)}: {tok}"))
+    for f in config_files(root, "repos.conf"):
+        for ln in open(f, errors="replace"):
+            m = re.match(r"^\s*\[([^\]]+)\]", ln)
+            if m and m.group(1) in bad_repos:
+                v.append(("portage-repo", f"{rel(f)}: [{m.group(1)}]"))
+    return v
+
+
 def check(root, policy):
     deny = read_list(os.path.join(policy, "personal-apps.denylist"))
-    paths = read_list(os.path.join(policy, "personal-paths.denylist"))
+    entries = read_list(os.path.join(policy, "personal-paths.denylist"))
+    paths = [e for e in entries if not e.startswith("repo:")]
+    bad_repos = {e[5:] for e in entries if e.startswith("repo:")}
     allow = read_list(os.path.join(policy, "world.allowlist"))
     v = []
     vdb = os.path.join(root, "var/db/pkg")
@@ -59,6 +101,7 @@ def check(root, policy):
                 v.append(("world-denied", atom))
             elif not matches(atom, allow):
                 v.append(("world-not-allowlisted", atom))
+    v.extend(config_violations(root, deny, bad_repos))
     for p in paths:
         if p.startswith("~/"):
             cands = [os.path.join(h, p[2:]) for h in homes(root)]

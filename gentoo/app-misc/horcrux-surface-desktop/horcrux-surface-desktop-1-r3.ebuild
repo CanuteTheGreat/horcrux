@@ -5,7 +5,7 @@ EAPI=8
 
 inherit gnome2-utils
 
-DESCRIPTION="Horcrux Surface tablet desktop: XFCE + LightDM, touch/pen, on-screen keyboard, power policy, the owner's apps"
+DESCRIPTION="Horcrux Surface tablet desktop: XFCE + LightDM, touch/pen, on-screen keyboard, power policy, media keys"
 HOMEPAGE="https://git.canutethegreat.com/CanuteTheGreat/horcrux"
 S="${WORKDIR}"
 
@@ -14,8 +14,7 @@ SLOT="0"
 KEYWORDS="~amd64"
 
 # Everything the Surface desktop needs, as dependencies of ONE package: `emerge -uDN @world` keeps all of it current.
-# onboard + iio-sensor-proxy come from GURU,
-# rustinion-agent from the Horcrux overlay.
+# onboard + iio-sensor-proxy come from GURU (public), rustinion-agent from the Horcrux overlay. No personal apps (test-machine rule).
 RDEPEND="
 	sys-kernel/horcrux-surface-config
 	<sys-kernel/gentoo-kernel-6.19

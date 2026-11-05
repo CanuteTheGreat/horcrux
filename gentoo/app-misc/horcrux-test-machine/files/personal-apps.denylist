@@ -57,3 +57,5 @@ net-misc/sshpass
 net-analyzer/wireshark
 net-analyzer/nmap
 sys-cluster/keepalived
+# the owner's private image packages (private first-boot Tailscale handoff, restore tool, private config)
+app-misc/gringotts-*
