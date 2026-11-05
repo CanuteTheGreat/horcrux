@@ -156,7 +156,20 @@ if [ "$result" = pass ]; then
     # rollback, then the portable hibernate flow (one passphrase, hibernate, power off, boot, resume: marker + process survive, scrub clean)
     name=zfs-enc-desktop-hibernate
     echo "::group::QEMU test $name"
-    with_deadline $DL_ZFS python3 -u "$HERE/zfs-enc-test.py" --iso "$ISO" --out "$EVI/$name" --desktop --hibernate 2>&1 | tee "$EVI/test-$name.log" | tail -60
+    with_deadline $DL_ZFS python3 -u "$HERE/zfs-enc-test.py" --iso "$ISO" --out "$EVI/$name" --desktop --hibernate --public 2>&1 | tee "$EVI/test-$name.log" | tail -60
+    rc=${PIPESTATUS[0]}
+    echo "::endgroup::"
+    rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img
+    if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -E '^\[FAIL\]' "$EVI/test-$name.log" | head -1)"; fi
+  fi
+  if [ "$IMG_DE" = server ] && [ "$PROJECT" = horcrux ]; then
+    # HEADLESS SERVER GATE (server-first, both architectures): encrypted-ZFS answer-file install, then a REBOOT into the installed system on the SERIAL console only
+    # (no VGA, no USB keyboard) with the NIC link down at boot (late network), months-off RTC on every boot, and the same regression gates as the desktop:
+    # chrony steps the clock, package-contents-complete, kernel module builds, zfs-kmod dist-kernel rule, shadow reuse, no autologin, web UI reachable,
+    # no display stack installed (qlist + emerge -pv @world), nothing personal (public-forbidden.txt), first boot waits for the network and does not show crashed.
+    name=server-headless-zfs-enc
+    echo "::group::QEMU test $name"
+    with_deadline $DL_ZFS python3 -u "$HERE/zfs-enc-test.py" --iso "$ISO" --out "$EVI/$name" --server --public --late-network ${SERVER_LATE_NET_S:-90} 2>&1 | tee "$EVI/test-$name.log" | tail -70
     rc=${PIPESTATUS[0]}
     echo "::endgroup::"
     rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img

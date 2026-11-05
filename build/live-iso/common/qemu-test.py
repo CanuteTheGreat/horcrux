@@ -522,6 +522,104 @@ def ssh(port, key, cmd, extra=(), timeout=40):
         return 255, "timeout"
 
 
+def load_secretcheck():
+    """the installer's own in-memory password/hash comparison (liveinst/secretcheck.py), loaded without importing the package"""
+    import importlib.util
+    f = os.path.join(os.path.dirname(os.path.abspath(__file__)), "overlay", "usr", "lib", "live-installer", "liveinst", "secretcheck.py")
+    sp = importlib.util.spec_from_file_location("hx_secretcheck", f)
+    m = importlib.util.module_from_spec(sp)
+    sp.loader.exec_module(m)
+    return m
+
+
+def shadow_reuse_gate(sh, step_fn, secret, step="no-account-password-equals-the-disk-passphrase"):
+    """SECURITY GATE: the disk passphrase is ONLY for the disk. `sh(cmd)` -> (rc, out) runs as root on the installed system; `step_fn(name, ok, info)` records. Reads the installed system's /etc/shadow (over ssh as root, kept in
+    memory) and FAILS when ANY account's hash verifies against the known TEST passphrase `secret` (user, root, anything), or when a
+    hash cannot be checked at all. Self-tests the checker first (a known hash of `secret` must verify, a wrong one must not), so a broken
+    crypt library can never turn this into a vacuous PASS. Only account NAMES go into the report, never a hash or a password."""
+    sc = load_secretcheck()
+    probe = subprocess.check_output(["openssl", "passwd", "-6", "-salt", "gateselft", secret]).decode().strip()
+    selftest = sc.hash_verifies(secret, probe) is True and sc.hash_verifies(secret + "x", probe) is False
+    rc, o = sh("getent shadow")
+    reuse, unknown, locked, checked = [], [], [], []
+    for line in o.splitlines():
+        f = line.split(":")
+        if len(f) < 2 or not f[0] or " " in f[0]:
+            continue
+        name, h = f[0], f[1]
+        if not h or h[0] in "!*":
+            locked.append(name)
+            continue
+        r = sc.hash_verifies(secret, h)
+        (reuse if r else unknown if r is None else checked).append(name)
+    ok = bool(selftest and rc == 0 and checked + reuse + locked and not reuse and not unknown)
+    step_fn(step, ok, ("REUSE: " + ",".join(reuse) + " " if reuse else "") + ("UNVERIFIABLE: " + ",".join(unknown) + " " if unknown else "")
+             + ("" if selftest else "GATE SELF-TEST FAILED (no crypt backend) ") + f"password hashes checked and different: {','.join(checked) or '-'}; locked: {len(locked)}")
+    return ok
+
+
+def load_autologin():
+    """the installer's own autologin scanner (liveinst/autologin.py), loaded without importing the package"""
+    import importlib.util
+    f = os.path.join(os.path.dirname(os.path.abspath(__file__)), "overlay", "usr", "lib", "live-installer", "liveinst", "autologin.py")
+    src = open(f).read().replace("from . import", "#")      # standalone: the scanner has no package dependencies
+    mod = type(sys)("hx_autologin")
+    exec(compile(src, f, "exec"), mod.__dict__)
+    return mod
+
+
+AUTOLOGIN_FILES = ("/etc/lightdm/lightdm.conf /etc/lightdm/lightdm.conf.d/* /etc/gdm/custom.conf /etc/gdm/daemon.conf /etc/gdm/custom.conf.d/* /etc/gdm3/custom.conf "
+                   "/etc/sddm.conf /etc/sddm.conf.d/* /usr/lib/sddm/sddm.conf.d/* /etc/inittab /etc/conf.d/agetty*")
+
+
+def no_autologin_config_gate(sh, step_fn, step="installed-configs-have-no-autologin"):
+    """OWNER RULE (2026-11-03): no display-manager autologin by default. Reads every LightDM/GDM/SDDM/agetty config of the INSTALLED system and FAILS on any
+    active autologin setting. Self-tests the scanner on known-bad samples so a broken regex can never be a vacuous PASS."""
+    al = load_autologin()
+    bad_samples = [("/etc/lightdm/lightdm.conf.d/x.conf", "[Seat:*]\nautologin-user=bob\n"), ("/etc/gdm/custom.conf", "[daemon]\nAutomaticLoginEnable=True\nAutomaticLogin=bob\n"),
+                   ("/etc/sddm.conf", "[Autologin]\nUser=bob\n"), ("/etc/inittab", "c1:12345:respawn:/sbin/agetty --autologin bob tty1\n"),
+                   ("/etc/gdm/custom.conf", "[daemon]\nTimedLoginEnable=true\nTimedLogin=bob\n")]
+    good_samples = [("/etc/lightdm/lightdm.conf", "[Seat:*]\n#autologin-user=\n"), ("/etc/gdm/custom.conf", "[daemon]\nWaylandEnable=true\nAutomaticLoginEnable=false\n")]
+    selftest = all(al._active_lines(p, t) for p, t in bad_samples) and not any(al._active_lines(p, t) for p, t in good_samples)
+    rc, o = sh("for f in " + AUTOLOGIN_FILES + "; do [ -f \"$f\" ] && { echo \"@@@FILE $f\"; cat \"$f\"; }; done; echo @@@END; getent group autologin; true")
+    hits, seen = [], []
+    for chunk in o.split("@@@FILE ")[1:]:
+        path, _, body = chunk.partition("\n")
+        body = body.split("@@@END")[0]
+        seen.append(path.strip())
+        for i, line in al._active_lines(path.strip(), body):
+            hits.append(f"{path.strip()}:{i}: {line.strip()[:60]}")
+    members = ""
+    for l in o.splitlines():
+        if l.startswith("autologin:"):
+            members = l.split(":")[-1]
+    ok = bool(selftest and rc == 0 and not hits and not members.strip())
+    step_fn(step, ok, ("AUTOLOGIN CONFIGURED: " + "; ".join(hits) + " " if hits else "") + (f"group autologin has members: {members} " if members.strip() else "")
+            + ("" if selftest else "GATE SELF-TEST FAILED ") + f"scanned: {', '.join(seen) or 'none'}")
+    return ok
+
+
+def greeter_no_session_gate(sh, step_fn, user, dm="lightdm", wait=180, step="greeter-shown-and-no-user-session-before-login"):
+    """After the disk unlock the DISPLAY MANAGER'S GREETER is shown and NO session of `user` exists until somebody logs in at it. `dm` = lightdm|gdm."""
+    greeter_re = {"lightdm": "lightdm-gtk-greeter|unity-greeter|slick-greeter", "gdm": "gdm-wayland-session|gdm-x-session|gnome-shell"}[dm]
+    end, o = time.time() + wait, ""
+    while time.time() < end:
+        rc, o = sh(f"pgrep -x {'lightdm' if dm == 'lightdm' else 'gdm'} >/dev/null && echo DM; (pgrep -af '{greeter_re}' | grep -v pgrep | head -2) ; true")
+        if "DM" in o and re.search(greeter_re.split("|")[0].replace("-", "-"), o):
+            break
+        time.sleep(5)
+    time.sleep(20)                       # an autologin session would be up well within this time
+    rc, o2 = sh(f"echo @@S; loginctl list-sessions --no-legend; echo @@P; ps -u {user} -o pid=,comm= 2>/dev/null | head -20; echo @@L; "
+                f"pgrep -u {user} -x 'xfce4-session|gnome-shell|gnome-session-binary|startxfce4' | head -3; id -u {user}")
+    sess = o2.split("@@S")[-1].split("@@P")[0]
+    procs = o2.split("@@P")[-1].split("@@L")[0].strip()
+    user_sessions = [l for l in sess.splitlines() if re.search(rf"\s{re.escape(user)}\s", " " + l + " ")]
+    greeter = "DM" in o and bool(re.search(greeter_re, o))
+    ok = greeter and not user_sessions and not procs
+    step_fn(step, ok, f"greeter: {'shown (' + re.sub(chr(10), ' ', o.strip())[:90] + ')' if greeter else 'NOT FOUND ' + o.strip()[:80]}; sessions of {user}: {user_sessions or 'none'}; processes of {user}: {procs[:80] or 'none'}")
+    return ok
+
+
 def make_answer_image(path, proj, content):
     d = tempfile.mkdtemp()
     open(f"{d}/answer.toml", "w").write(content)
@@ -1806,7 +1904,7 @@ class Runner:
 
 # ---- shared storage gates (Portage database complete, kernel modules buildable): used by every project's server runs and by zfs-enc-test.py
 CONTENTS_CHECK = r"""
-import glob, os, collections
+import glob, os, collections, re
 # the ONLY files that may be missing: runtime state dirs Portage records with .keep markers. Intentional strips are removed from the CONTENTS records at build
 # time by common/vdb-prune.py (reviewed list); anything else missing here is a bug in the image (tar --exclude, a strip eating a toolchain file, ...).
 ALLOW_PREFIX = ("/var/log/", "/var/spool/", "/var/cache/", "/var/tmp/", "/run/", "/tmp/")
@@ -1821,6 +1919,9 @@ for cf in sorted(glob.glob("/var/db/pkg/*/*/CONTENTS")):
         else:
             continue
         if os.path.lexists(path) or path.startswith(ALLOW_PREFIX):
+            continue
+        # dist-kernel records the initramfs / unified kernel image it assembles beside the kernel and moves them to /boot
+        if re.match(r"^/usr/src/linux-[^/]+/arch/[^/]+/boot/(initrd|uki\.efi)", path):
             continue
         miss.setdefault(pkg, []).append(path); n += 1
 print("CONTENTS-PACKAGES", pk)

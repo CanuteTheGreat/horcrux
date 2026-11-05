@@ -1,10 +1,10 @@
 #!/bin/bash
-# horcrux-surface-auto: the whole Surface install on one screen. The owner only types the disk passphrase (twice) and restarts.
+# horcrux-surface-auto: the whole Surface install on one screen. The owner types the disk passphrase and the desktop password (each twice) and restarts.
 #   1. finds the internal disk (never the USB stick) and checks the machine is a Surface
 #   2. read-only inventory of the disk: factory-fresh/empty -> goes on by itself; user data (or unreadable/encrypted partitions,
 #      or not a Surface) -> asks for the word ERASE first; the report is kept in /root
-#   3. asks the disk passphrase twice (it is also the desktop password; change it later with `passwd`), builds the answer file in
-#      tmpfs, runs the installer (XFS in LUKS2 in LVM, 4.5 GiB encrypted hibernate swap, zram, XFCE) and wipes the answer file
+#   3. asks the disk passphrase twice, then the desktop user's login password twice (it MUST differ from the passphrase: the passphrase
+#      is only for the disk; root stays locked, sudo via wheel), builds the answer file in tmpfs, runs the installer (XFS in LUKS2 in LVM, 4.5 GiB encrypted hibernate swap, zram, XFCE) and wipes the answer file
 # Anything unexpected -> the guided installer or a shell, never a half decision.
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
 export TERM=${TERM:-linux}
@@ -62,11 +62,24 @@ else
     echo "${G}Nothing of value on the disk (factory image or empty): installing without further questions.${N}"
 fi
 
+# the machine's NAME: the owner chose it (his machines are Harry Potter places). A private image carries it in $PRIV/hostname (taken from
+# ctg-infrastructure hosts/<name>/); it is shown prefilled and must be confirmed (Enter) or typed. There is NO generic default.
+def_host=""; [ -s "$PRIV/hostname" ] && def_host=$(tr -d ' \t\r\n' < "$PRIV/hostname")
+echo
+mark "HOSTNAME-PROMPT default=${def_host:-none}"
+while :; do
+    if [ -n "$def_host" ]; then printf "${B}Host name${N} of this tablet [%s] (Enter = keep): " "$def_host"; else printf "${B}Host name${N} of this tablet (the name the owner chose for it): "; fi
+    read -r HOST_NAME; HOST_NAME=${HOST_NAME:-$def_host}
+    case "$HOST_NAME" in surface-pro|surface|localhost|ubuntu|debian|gentoo|"") mark "HOSTNAME-REFUSED-GENERIC $HOST_NAME"; echo "${R}'$HOST_NAME' is not a name for this machine: type the name the owner gave it.${N}"; continue ;; esac
+    printf '%s' "$HOST_NAME" | grep -qE '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$' || { echo "${R}lower-case letters, digits and - only${N}"; continue; }
+    break
+done
+mark "HOSTNAME-CONFIRMED $HOST_NAME"
 mark WAITING-FOR-PASSPHRASE
-# the passphrase (typed here, never stored; also the desktop password)
+# the passphrase (typed here, never stored) and the desktop password (a DIFFERENT secret; compared in memory only)
 echo
 echo "${B}Disk passphrase${N}: typed at every start of the tablet (and once more after hibernate). At least 12 characters."
-echo "There is NO recovery: lose it, lose the data. It is also the password of the desktop user '$USER_NAME'."
+echo "There is NO recovery: lose it, lose the data. It is ONLY for the disk: the login password of '$USER_NAME' is asked next and must differ."
 while :; do
     printf "Passphrase: "; read -rs p1; echo
     [ "${#p1}" -ge 12 ] || { echo "${R}too short (min 12)${N}"; continue; }
@@ -74,11 +87,22 @@ while :; do
     [ "$p1" = "$p2" ] && break
     echo "${R}the two entries differ${N}"
 done
+mark WAITING-FOR-LOGIN-PASSWORD
+echo
+echo "${B}Login password${N} for '$USER_NAME' (desktop login and sudo). It must be DIFFERENT from the disk passphrase. At least 12 characters."
+while :; do
+    printf "Password:   "; read -rs u1; echo
+    [ "${#u1}" -ge 12 ] || { echo "${R}too short (min 12)${N}"; continue; }
+    [ "$u1" != "$p1" ] || { mark LOGIN-PASSWORD-REFUSED-SAME-AS-DISK; echo "${R}That is the disk passphrase. The disk passphrase is only for the disk: choose a different login password.${N}"; continue; }
+    printf "Again:      "; read -rs u2; echo
+    [ "$u1" = "$u2" ] && break
+    echo "${R}the two entries differ${N}"
+done
 
 # answer file in tmpfs
 d=/run/hx-auto; mkdir -p "$d"; chmod 700 "$d"; ans=$d/answer.toml
-uh=$(printf '%s' "$p1" | openssl passwd -6 -stdin)
-rh=$(head -c 24 /dev/urandom | openssl passwd -6 -stdin)          # root: random and unknown (key-only ssh, sudo for the user)
+uh=$(printf '%s' "$u1" | openssl passwd -6 -stdin)                 # the LOGIN password's hash, never the passphrase's
+# root: no password at all (the installer locks it: `passwd -l`); administration is sudo through wheel, ssh is key-only
 keys=""
 allkeys=$d/keys.txt; : > "$allkeys"
 [ -s "$PRIV/authorized_keys" ] && cat "$PRIV/authorized_keys" >> "$allkeys"
@@ -92,9 +116,8 @@ cat > "$ans" <<TOML
 [global]
 keyboard = "us"
 timezone = "America/Los_Angeles"
-hostname = "surface-pro"
+hostname = "$HOST_NAME"
 email = ""
-root_password_hash = "$rh"
 ssh_keys = [${keys%,}]
 ssh_password_auth = false
 
@@ -107,24 +130,51 @@ disks = ["$DISK"]
 enable = true
 user = "$USER_NAME"
 password_hash = "$uh"
-autologin = true
+autologin = false
 
 [network.management]
 mode = "dhcp"
 TOML
-unset p1 p2 esc
+unset p1 p2 u1 u2 esc
 mark "PASSPHRASE-ACCEPTED"
 echo; echo "${B}Installing...${N} (15-30 minutes from a USB 3 stick; do not unplug anything)"
 /usr/bin/live-installer --answers "$ans" --no-halt 2>&1 | tee /var/log/surface-install.log
 rc=${PIPESTATUS[0]}
 shred -u "$ans" 2>/dev/null || rm -f "$ans"
+# the installed system must be completely written and CLOSED before the owner is told anything: nothing mounted from the target,
+# no dm-crypt/LVM mapping left open (the installer's finish() does sync + umount + swapoff + vgchange -an + cryptsetup close; this re-checks it)
+target_closed() {
+    sync
+    if findmnt -rn -o TARGET | grep -qE '^/mnt(/|$)'; then umount -R /mnt/target 2>/dev/null || umount -R /mnt 2>/dev/null; fi
+    findmnt -rn -o TARGET | grep -qE '^/mnt(/|$)' && return 1
+    if dmsetup ls 2>/dev/null | grep -qE '^(hxroot|hxvg-)'; then
+        swapoff -a 2>/dev/null; vgchange -an hxvg >/dev/null 2>&1; cryptsetup close hxroot >/dev/null 2>&1
+        dmsetup ls 2>/dev/null | grep -qE '^(hxroot|hxvg-)' && return 1
+    fi
+    sync
+    return 0
+}
+# The live system runs from the USB stick (the tablet has only 4 GB: no copy-to-RAM), so once the stick is pulled no file on it can be read any
+# more. Restart WITHOUT starting a single program from it: bash builtins + the kernel's sysrq (always honoured when written via /proc/sysrq-trigger).
+hard_restart() {
+    echo s > /proc/sysrq-trigger 2>/dev/null
+    echo b > /proc/sysrq-trigger 2>/dev/null
+    exec /sbin/reboot -f                          # only if sysrq is not available (needs the stick, last resort)
+}
 if [ "$rc" = 0 ] && grep -q 'AUTOINSTALL-OK' /var/log/surface-install.log; then
     mark "INSTALL-OK"
-    echo; echo "${G}${B}Installation successful.${N}"
-    echo "Unplug the USB stick, then press Enter to restart. Type the SAME passphrase at the prompt that follows the logo."
+    if target_closed; then
+        mark "TARGET-CLOSED"
+    else
+        mark "TARGET-NOT-CLOSED"
+        echo; echo "${R}${B}The new system could not be closed cleanly. Do NOT pull the stick.${N} A root shell follows; tell the assistant."
+        exec /bin/login -f root
+    fi
+    echo; echo "${G}${B}Installation successful.${N} The new system is completely written and closed."
+    echo "Press Enter: the tablet restarts at once. Pull the USB stick as soon as the screen goes dark (it is safe to pull it any time from now on)."
     read -r _
-    /sbin/reboot
-    exec /bin/login -f root
+    mark "RESTARTING"
+    hard_restart
 fi
 mark "INSTALL-FAILED rc=$rc"
 echo; echo "${R}${B}The installation did not finish (exit $rc).${N} Log: /var/log/surface-install.log. A root shell follows."

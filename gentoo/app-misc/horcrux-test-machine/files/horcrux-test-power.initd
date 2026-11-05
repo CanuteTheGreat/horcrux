@@ -1,0 +1,18 @@
+#!/sbin/openrc-run
+# app-misc/horcrux-test-machine: runtime power saving off at every boot (Wi-Fi power_save, power-saver profile)
+description="test machine: Wi-Fi power save off, no power-saver profile"
+depend() {
+	after NetworkManager iwd power-profiles-daemon
+}
+start() {
+	ebegin "Test machine: disabling Wi-Fi power saving"
+	for d in /sys/class/net/*/wireless; do
+		[ -d "$d" ] || continue
+		i=${d%/wireless}; i=${i##*/}
+		iw dev "$i" set power_save off 2>/dev/null
+	done
+	if command -v powerprofilesctl >/dev/null 2>&1 && [ "$(powerprofilesctl get 2>/dev/null)" = "power-saver" ]; then
+		powerprofilesctl set balanced 2>/dev/null
+	fi
+	eend 0
+}

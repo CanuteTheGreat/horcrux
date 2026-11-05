@@ -66,7 +66,8 @@ impl CpuGroup {
 }
 
 /// Why a running guest on `src` cannot be live-migrated to `dst`
-/// (None = allowed). Unknown vendor is permissive, like the other gates.
+/// (None = allowed). Unknown vendor or unknown level (0) is permissive, like
+/// the other gates.
 pub fn live_migration_block(src: &CpuGroup, dst: &CpuGroup) -> Option<String> {
     if !src.vendor.is_empty() && !dst.vendor.is_empty() && src.vendor != dst.vendor {
         return Some(format!(
@@ -75,7 +76,7 @@ pub fn live_migration_block(src: &CpuGroup, dst: &CpuGroup) -> Option<String> {
             dst.name()
         ));
     }
-    if dst.level < src.level {
+    if src.level != 0 && dst.level != 0 && dst.level < src.level {
         return Some(format!(
             "target CPU level {} is older than source {}: cold migrate only",
             dst.name(),
@@ -83,6 +84,38 @@ pub fn live_migration_block(src: &CpuGroup, dst: &CpuGroup) -> Option<String> {
         ));
     }
     None
+}
+
+/// One row of the "why can't this running VM go there" table shown in the UI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TargetVerdict {
+    pub node: String,
+    pub group: String,
+    pub live_migration_allowed: bool,
+    /// Why live migration is blocked (None when allowed).
+    pub reason: Option<String>,
+}
+
+/// Live-migration verdict for every candidate target of a guest running on
+/// `src`. The source node itself is skipped.
+pub fn target_verdicts(
+    src_name: &str,
+    src: &CpuGroup,
+    nodes: &[(String, CpuGroup)],
+) -> Vec<TargetVerdict> {
+    nodes
+        .iter()
+        .filter(|(n, _)| n != src_name)
+        .map(|(n, g)| {
+            let reason = live_migration_block(src, g);
+            TargetVerdict {
+                node: n.clone(),
+                group: g.name(),
+                live_migration_allowed: reason.is_none(),
+                reason,
+            }
+        })
+        .collect()
 }
 
 /// Highest baseline level every node in `groups` supports within one vendor
@@ -108,6 +141,25 @@ mod tests {
         sets.iter()
             .flat_map(|s| s.iter().map(|f| f.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn target_verdicts_explain_blocks() {
+        let g = |v: &str, l| CpuGroup {
+            vendor: v.into(),
+            level: l,
+        };
+        let nodes = vec![
+            ("r6525".to_string(), g("amd", 3)),
+            ("r430".to_string(), g("intel", 3)),
+            ("old".to_string(), g("intel", 1)),
+            ("r6525b".to_string(), g("amd", 3)),
+        ];
+        let v = target_verdicts("r6525", &g("amd", 3), &nodes);
+        assert_eq!(v.len(), 3);
+        assert!(!v[0].live_migration_allowed && v[0].reason.as_ref().unwrap().contains("vendor"));
+        assert!(!v[1].live_migration_allowed);
+        assert!(v[2].live_migration_allowed && v[2].reason.is_none());
     }
 
     #[test]

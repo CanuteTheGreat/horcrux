@@ -59,8 +59,16 @@ for _v in $(echo "${VARIANT:-}" | tr ',' ' '); do
   [ -f "project/variants/$_v/de" ] && { IMG_DE=$(tr -d ' \n' < "project/variants/$_v/de"); IMG=$IMG_DE-$IMG_INIT; }
 done
 ROOTFS_IMG=$TAG-rootfs; VIMGS=""
-if [ -n "${VARIANT:-}" ] && [ "$VARIANT" != server ]; then
-  for v in $(echo "$VARIANT" | tr ',' ' '); do
+# LAYERS: core (project/variants/core: the headless server base, sys-apps/horcrux-core) -> desktop edition (gnome-light, ...) -> machine layer.
+# The core layer is applied to EVERY image of a product that ships one (the plain server image is "core" alone), before the variants; it is idempotent, so a
+# REUSE_ROOTFS base that already has it passes through. NO_CORE=1 skips it (Patronus has no core layer; hardware-profile experiments).
+CHAIN=$(echo "${VARIANT:-}" | tr ',' ' ' | sed 's/\bserver\b//g')
+# (the Surface image is its own base with its own overlay checkout + chrony/backup in its meta package: it takes the core as a dependency of its meta package in a later
+# revision, not as an image layer; the layer would clash with its `rm -rf /var/db/repos/horcrux`)
+case " $CHAIN " in *" surface-kernel "*|*" surface "*) NO_CORE=${NO_CORE:-1};; esac
+[ -z "${NO_CORE:-}" ] && [ -f project/variants/core/Dockerfile ] && CHAIN="core $CHAIN"
+if [ -n "$(echo $CHAIN)" ]; then
+  for v in $CHAIN; do
     [ -f "project/variants/$v/Dockerfile" ] || { echo "unknown VARIANT=$v (no project/variants/$v/Dockerfile)"; exit 2; }
     lap "stage 2b: variant $v"
     VCTX="--build-context hxgentoo=$REPO/gentoo"; [ -d "$REPO/gentoo/t2" ] && VCTX="$VCTX --build-context t2=$REPO/gentoo/t2"
@@ -95,6 +103,10 @@ VNAME_PRIV=""
 if [ -n "${PRIV_DIR:-}" ]; then
 lap "stage 2c: PRIVATE layer ($PRIV_DIR)"
 [ -d "$PRIV_DIR" ] || { echo "PRIV_DIR is not a directory"; exit 2; }
+# every per-machine image carries the OWNER'S name for the machine (his machines are Harry Potter places; ctg-infrastructure hosts/<name>/HOSTNAME),
+# shown prefilled by the installer for confirmation. A generic default ('surface-pro') must never be possible again.
+[ -s "$PRIV_DIR/hostname" ] || { echo "PRIV_DIR/hostname is missing: put the machine's name there (copy ctg-infrastructure hosts/<name>/HOSTNAME)"; exit 2; }
+case "$(tr -d ' \t\r\n' < "$PRIV_DIR/hostname")" in surface-pro|surface|localhost|ubuntu|debian|gentoo|"") echo "PRIV_DIR/hostname is a generic name, not the owner's name for this machine"; exit 2 ;; esac
 docker build $PLAT $ARCHARGS --build-context priv="$PRIV_DIR" -f common/Dockerfile.private --build-arg BASE=$ROOTFS_IMG -t $TAG-priv . 2>&1 | tail -12
 docker image inspect $TAG-priv >/dev/null 2>&1 || { echo "private layer failed"; exit 1; }
 ROOTFS_IMG=$TAG-priv; VNAME_PRIV="private-"

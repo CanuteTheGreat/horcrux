@@ -1,0 +1,7 @@
+# app-misc/horcrux-test-machine: no runtime power management on network devices (PCI/USB/SDIO Wi-Fi and Ethernet adapters)
+ACTION=="add", SUBSYSTEM=="net", KERNEL!="lo", ATTR{device/power/control}="on"
+ACTION=="add", SUBSYSTEM=="net", KERNEL!="lo", SUBSYSTEMS=="usb", RUN+="/bin/sh -c 'for d in /sys/%p/../../../power /sys/%p/../../power; do [ -w $d/control ] && echo on > $d/control; done; true'"
+# Marvell 88W8797 Wi-Fi on the Surface Pro 1 is a USB device (mwifiex_usb): USB autosuspend of the adapter itself drops the link
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="1286", ATTR{power/control}="on"
+# USB Ethernet adapters (the test machine's wired fallback): never autosuspend
+ACTION=="add", SUBSYSTEM=="usb", ENV{ID_USB_INTERFACES}=="*:020600:*", ATTR{power/control}="on"

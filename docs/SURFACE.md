@@ -89,7 +89,7 @@ Image name: the Surface image follows the repo-wide scheme `<product>-<desktop e
 
 Build: `VARIANT=surface build/live-iso/build.sh` (optionally `PRIV_DIR=<private dir>` for the private layer) on top of the finished Horcrux rootfs.
 `build/live-iso/project/variants/surface/Dockerfile` stages: overlays (horcrux, GURU, canutethegreat-overlay) → `sys-kernel/horcrux-surface-config`
-→ **kernel binary package** `=sys-kernel/gentoo-kernel-6.18.59` (own layer, ~1 h) → install (the stock `gentoo-kernel-bin` goes) + zfs-kmod rebuilt + kernel/module/config
+→ **kernel binary package** `=sys-kernel/gentoo-kernel-6.18.60` (was .59; Gentoo drops old kernel versions from the tree, so the pin must follow) (own layer, ~1 h) → install (the stock `gentoo-kernel-bin` goes) + zfs-kmod rebuilt + kernel/module/config
 assertions → `sys-apps/horcrux-tools` + `sys-apps/horcrux-live-data` + `sys-kernel/horcrux-unlock` (the shared packages proven on hogshead) → **`app-misc/horcrux-surface-desktop`** (one meta package whose RDEPEND is the whole desktop and all apps) → cleanup + live initramfs.
 
 | package (Horcrux overlay `gentoo/`) | owns |
@@ -258,3 +258,11 @@ HD 4000 acceleration under Mesa; HiDPI scale feel; battery reporting; UEFI quirk
 * docs/T2-MACS.md (kernel 7.2 pin because of OpenZFS), Gentoo handbook (XFS)
 
 **Nextcloud:** no desktop client on this device (tiny disk, owner decision): web only, in the browser. `~/.ssh` is a normal local directory; keys/config are pushed from crystalcave after first boot, never baked in.
+
+
+## Login policy: no autologin, separate secrets, the owner's host name (2026-11-03)
+
+* **No display-manager autologin in any image or profile** (LightDM `autologin-user`, GDM `AutomaticLoginEnable`/`TimedLogin`, SDDM `[Autologin]`, agetty `--autologin` on an installed system). After the disk passphrase the greeter asks WHO logs in. Autologin exists only as an explicit installer choice (`autologin = true` in the answer file / the checkbox, default OFF, labelled with a warning); the installer logs `WARNING: automatic login was chosen ...` and always scrubs stale autologin files from the target first (`liveinst/autologin.py`).
+* The disk passphrase is only for the disk; the login password is asked separately and must differ; root is locked (see "Account secrets").
+* **Host name:** every per-machine image asks for the machine's name, prefilled from `/usr/share/horcrux-surface-private/hostname` (the private build REQUIRES `PRIV_DIR/hostname`, copied from ctg-infrastructure `hosts/<name>/HOSTNAME`) and confirmed with Enter; `surface-pro`, `surface`, `localhost` ... are refused by the installers and `validate_config`.
+* QEMU gates: `no_autologin_config_gate` (every installed LightDM/GDM/SDDM/agetty config, with a scanner self-test) and `greeter_no_session_gate` (greeter shown after the unlock, no session of the user exists until the greeter login) in the Surface XFCE test, `zfs-enc-test.py --desktop` (public gnome-light) and the gringotts test.

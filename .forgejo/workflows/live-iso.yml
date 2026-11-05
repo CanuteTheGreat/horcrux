@@ -64,7 +64,7 @@ jobs:
             alias: desktop
     runs-on: ${{ matrix.runner }}
     container: catthehacker/ubuntu:act-latest
-    timeout-minutes: 300
+    timeout-minutes: 480   # the headless server gate (encrypted-ZFS install + serial reboot + checks) is an extra QEMU run per arch; aarch64 runs it under TCG (~2 h)
     steps:
       - name: Checkout
         if: ${{ github.event.inputs.only == '' || github.event.inputs.only == matrix.id || github.event.inputs.only == matrix.alias }}

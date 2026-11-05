@@ -2,7 +2,7 @@
 """gringotts-install - the owner's one-step installer for the ThinkBook 16 G6 (gringotts).
 
 Everything else (hostname, user, ZFS native encryption, hibernation swap, apps, SSH keys, Wi-Fi) is decided by the image; the
-owner types only the disk passphrase (twice) and confirms the erase.  The passphrase lives in this process' memory and in a 0600
+owner types the disk passphrase and a DIFFERENT login password (each twice) and confirms the erase.  The passphrase lives in this process' memory and in a 0600
 file on tmpfs for the instant the shared installer reads it; it is never logged and never leaves the laptop.
 
   gringotts-install                interactive (what the boot menu starts on tty1)
@@ -24,6 +24,7 @@ import time
 sys.path.insert(0, "/usr/lib/live-installer")
 from liveinst import system as S          # noqa: E402  (shared installer backend)
 
+HOSTNAME_FILE = "/usr/share/gringotts/hostname"      # the owner's name for this machine (from ctg-infrastructure hosts/<name>/ at image build)
 HOSTNAME = "gringotts"
 USER = "canutethegreat"
 FULLNAME = "CanuteTheGreat"
@@ -64,6 +65,25 @@ def pick_disk(want):
     raise SystemExit(die("run again with  gringotts-install --disk /dev/<name>"))
 
 
+GENERIC = {"surface-pro", "surface", "localhost", "ubuntu", "debian", "gentoo", "gringotts-live"}
+
+
+def ask_hostname():
+    """the machine's name is shown prefilled and must be confirmed (Enter) or typed: a generic image default can never slip through unseen"""
+    global HOSTNAME
+    try:
+        default = open(HOSTNAME_FILE).read().strip() or HOSTNAME
+    except OSError:
+        default = HOSTNAME
+    while True:
+        v = input(f"{B}Host name{N} [{default}] (Enter = keep): ").strip().lower() or default
+        if v in GENERIC or not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?", v):
+            say(f"  {Y}'{v}' is not a name for this machine: type the name the owner gave it (lower-case letters, digits, -).{N}")
+            continue
+        HOSTNAME = v
+        return v
+
+
 def ask_passphrase():
     from liveinst import zfsroot
     say(f"{B}Disk passphrase{N}: it encrypts the whole laptop and you type it at EVERY boot.")
@@ -82,14 +102,17 @@ def ask_passphrase():
 
 
 def ask_login(passphrase):
-    say(f"\n{B}Login password{N} for {USER} (GNOME login and sudo).")
-    say("  Press Enter to use the SAME text as the disk passphrase (you can change it later with  passwd).")
+    """the desktop login password: asked separately, twice, never the disk passphrase (compared in memory only)"""
+    from liveinst import secretcheck
+    say(f"\n{B}Login password{N} for {USER} (GNOME login and sudo). It must be DIFFERENT from the disk passphrase.")
+    say("  The disk passphrase is only for the disk; root stays locked (sudo via your user).")
     while True:
         p = getpass.getpass("  Login password       : ")
-        if not p:
-            return passphrase
         if len(p) < 8:
             say(f"  {Y}At least 8 characters.{N}")
+            continue
+        if secretcheck.entry_problem(p, {"fs": "zfs", "zfs_encrypt": True, "zfs_passphrase": passphrase}):
+            say(f"  {Y}{secretcheck.DISK_REUSE}{N}")
             continue
         if getpass.getpass("  Login password (again): ") != p:
             say(f"  {Y}The two entries differ, try again.{N}")
@@ -266,6 +289,7 @@ def main():
         if input(f"  Type ERASE (capitals) to continue, anything else stops: ").strip() != "ERASE":
             return die("nothing was changed.", 0)
     say()
+    ask_hostname()
     passphrase = ask_passphrase()
     login = ask_login(passphrase)
     keys = read_keys(a.extra_authorized_key_file)
@@ -316,7 +340,11 @@ def main():
         return 0
     input("\n  Press Enter to reboot...")
     os.sync()
-    subprocess.run(["reboot"])
+    try:        # the live system runs from the USB stick: restart through the kernel so pulling the stick cannot break the reboot
+        with open("/proc/sysrq-trigger", "w") as f:
+            f.write("b")
+    except OSError:
+        subprocess.run(["reboot", "-f"])
     return 0
 
 

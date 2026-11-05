@@ -17,6 +17,9 @@ ARG VARIANT=gringotts
 # overlay's other packages change; the full overlay is `hxfull`, copied after them)
 COPY --from=hxoverlay / /var/db/repos/horcrux/
 COPY project/variants/gringotts/portage/ /etc/portage/
+# the owner's personal apps are NOT in the public gnome-light base any more: the shared owner layer (keywords, USE, app list, backup list) + this machine's own list
+COPY project/variants/owner-common/portage/ /etc/portage/
+COPY project/variants/owner-common/overlay/ /
 
 # trees: ::gentoo (the desktop layer deleted it), GURU, the owner's overlay (shallow git clones; pins are printed in the build log)
 RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
@@ -28,6 +31,7 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
     eselect profile show
 
 COPY project/variants/gringotts/packages.txt /tmp/packages-gringotts.txt
+COPY project/variants/owner-common/packages.txt /tmp/packages-owner.txt
 
 # the Desktop layer deleted /usr/include, the LLVM headers/tools and static libs to fit the ISO; the apps compile (python/C/go): put the headers back by
 # re-installing the packages that own them (same cat/pkg:slot, binary packages), then slim again at the end (the final slimming removes them again)
@@ -44,7 +48,7 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
-    emerge --update --newuse --deep $(grep -v '^#' /tmp/packages-gringotts.txt | tr '\n' ' '); \
+    emerge --update --newuse --deep $(cat /tmp/packages-gringotts.txt /tmp/packages-owner.txt | grep -v '^#' | tr '\n' ' '); \
     emerge --oneshot --usepkg=n --getbinpkg=n www-client/brave-bin::canutethegreat-overlay; \
     rm -rf /var/db/repos/horcrux-desktop /etc/portage/repos.conf/horcrux-desktop.conf
 
@@ -76,6 +80,8 @@ COPY common/overlay/usr/bin /tmp/hxt/usr/bin
 COPY project/variants/hogshead/overlay/usr/bin/horcrux-orphans /tmp/hxt/usr/bin/horcrux-orphans
 COPY project/variants/desktop/overlay/usr/share/horcrux/desktop /tmp/hxt/usr/share/horcrux/desktop
 COPY project/variants/gringotts/overlay/usr/libexec/ /tmp/hxt/usr/libexec/
+# Tailscale is the owner's (a machine service, not in the public desktop's list): started by default here
+RUN echo 'tailscale default' >> /tmp/hxt/usr/share/horcrux/desktop/services.list
 RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
@@ -93,6 +99,8 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
     emerge --noreplace --select=y sys-kernel/horcrux-unlock sys-apps/horcrux-tools sys-apps/horcrux-live-data app-admin/rustinion-agent; \
     emerge --update --newuse --select gnome-extra/gnome-shell-extension-appindicator gnome-extra/gnome-shell-extensions; emerge --update --newuse --usepkg=n --getbinpkg=n --select gnome-extra/horcrux-gnome-defaults; \
     test -s /etc/dconf/db/local && qfile -q /etc/dconf/db/local; \
+    # this machine's own first-boot service (gringotts-firstboot) does the network wait + tree sync + remote hand-off: the core's generic one stays idle (its done-marker)
+    mkdir -p /var/lib/horcrux; date -u > /var/lib/horcrux/firstboot-done; \
     printf 'desktop\ngringotts\n' > /etc/live-iso-variant
 
 # GATE against a stale base (gringotts shipped on 2026-10-30 from a gnome-light base built BEFORE the hogshead fixes landed, via REUSE_ROOTFS, and its own

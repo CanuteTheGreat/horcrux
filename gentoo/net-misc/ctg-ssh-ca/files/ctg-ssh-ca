@@ -1,0 +1,181 @@
+#!/bin/sh
+# ctg-ssh-ca: keep this machine's SSH certificates (host + user) fresh with the owner's personal CA signer.
+# POSIX sh; needs curl, ssh-keygen (OpenSSH >= 8.2 for -Y sign). Config: /etc/ctg-ssh-ca/signer.conf
+#   SIGNER_URL=http://<tailnet address>:8443
+#
+#   status                    show certificates and their expiry
+#   renew-all [--force]       host cert (root), revocation list, and every local user's id_ed25519 cert
+#   renew-host [--force]      renew /etc/ssh/ssh_host_ed25519_key-cert.pub by proof of possession
+#   renew-user [KEY] [--force]  renew ~/.ssh/id_ed25519-cert.pub (or fetch an approved one)
+#   enroll [KEY]              make KEY (default ~/.ssh/id_ed25519, created if missing) and ask for a cert; the
+#                             owner approves with `ctg-ssh-ca-admin approve` on crystalcave, the next renew-user installs it
+#   install-host-cert FILE|-  (root) install a host certificate, enable HostCertificate in sshd, reload sshd
+#   fetch-krl                 (root) refresh /var/lib/ctg-ssh-ca/krl used by sshd RevokedKeys
+set -u
+CONF=${CTG_SSH_CA_CONF:-/etc/ctg-ssh-ca/signer.conf}
+STATE=/var/lib/ctg-ssh-ca
+HOSTKEY=${CTG_SSH_HOSTKEY:-/etc/ssh/ssh_host_ed25519_key}
+HOSTCERT=$HOSTKEY-cert.pub
+NS=ctg-ssh-ca-renew
+SIGNER_URL=
+[ -r "$CONF" ] && . "$CONF"
+T=$(mktemp -d 2>/dev/null || mktemp -d -t ctgca) || exit 1
+trap 'rm -rf "$T"' EXIT
+say() { printf '%s\n' "$*"; }
+die() { printf 'ctg-ssh-ca: %s\n' "$*" >&2; exit 1; }
+fpr() { ssh-keygen -lf "$1" 2>/dev/null | awk '{print $2; exit}'; }
+
+http() { # http CODEFILE curl-args... ; prints http status in $T/code
+  curl -sS --max-time 30 -o "$T/body" -w '%{http_code}' "$@" 2>"$T/err" || true
+}
+
+reload_sshd() {
+  if [ -d /run/systemd/system ]; then
+    systemctl reload-or-try-restart ssh.service 2>/dev/null || systemctl reload-or-try-restart sshd.service 2>/dev/null || true
+  elif command -v rc-service >/dev/null 2>&1; then
+    rc-service sshd reload >/dev/null 2>&1 || true
+  elif [ -r /var/run/sshd.pid ]; then
+    kill -HUP "$(cat /var/run/sshd.pid)" 2>/dev/null || true
+  elif [ "$(uname)" = Darwin ]; then
+    : # the system sshd is socket-activated (launchd): each connection reads the new file
+  fi
+}
+
+renew_cert() { # renew_cert KIND KEYFILE CERTFILE FORCE -> 0 renewed, 2 not due, 1 error
+  kind=$1; key=$2; cert=$3; force=$4
+  [ -n "$SIGNER_URL" ] || die "no SIGNER_URL in $CONF"
+  [ -r "$cert" ] || return 1
+  ts=$(date +%s); fp=$(fpr "$cert")
+  printf '%s %s %s %s' "$NS" "$kind" "$ts" "$fp" | ssh-keygen -Y sign -q -f "$key" -n "$NS" - > "$T/sig" 2>"$T/signerr" || {
+    # older ssh-keygen prints the armor on stdout without -q support: retry without -q
+    printf '%s %s %s %s' "$NS" "$kind" "$ts" "$fp" | ssh-keygen -Y sign -f "$key" -n "$NS" - > "$T/sig" 2>"$T/signerr" || { say "sign failed: $(cat "$T/signerr")" >&2; return 1; }; }
+  tr -d '\n' < "$cert" > "$T/certline"
+  code=$(http --data-urlencode "kind=$kind" --data-urlencode "ts=$ts" --data-urlencode "cert@$T/certline" \
+         --data-urlencode "sig@$T/sig" --data-urlencode "force=$force" "$SIGNER_URL/renew")
+  case $code in
+    204) return 2 ;;
+    200) head -1 "$T/body" > "$T/new"
+         [ "$(fpr "$T/new")" = "$fp" ] || { say "signer returned a certificate for another key" >&2; return 1; }
+         ssh-keygen -L -f "$T/new" >/dev/null 2>&1 || { say "signer returned garbage" >&2; return 1; }
+         cat "$T/new" > "$cert.new" && chmod 644 "$cert.new" && mv "$cert.new" "$cert" || return 1
+         return 0 ;;
+    *) say "signer said $code: $(head -c 200 "$T/body" 2>/dev/null) $(cat "$T/err")" >&2; return 1 ;;
+  esac
+}
+
+cmd_renew_host() {
+  force=0; [ "${1:-}" = "--force" ] && force=1
+  [ -r "$HOSTCERT" ] || { say "no host certificate yet ($HOSTCERT): skipped"; return 0; }
+  renew_cert host "$HOSTKEY" "$HOSTCERT" $force; rc=$?
+  case $rc in 0) say "host certificate renewed"; reload_sshd ;; 2) say "host certificate not due" ;; *) return 1 ;; esac
+}
+
+keyarg() { case "${1:-}" in ''|--force) echo "$HOME/.ssh/id_ed25519";; /*) echo "$1";; *) echo "$HOME/.ssh/$1";; esac; }
+
+cmd_renew_user() {
+  key=$(keyarg "${1:-}"); force=0
+  for a in "$@"; do [ "$a" = "--force" ] && force=1; done
+  cert=$key-cert.pub
+  [ -r "$key" ] || { say "no user key $key: skipped"; return 0; }
+  if [ ! -r "$cert" ]; then
+    [ -n "$SIGNER_URL" ] || die "no SIGNER_URL in $CONF"
+    fp=$(fpr "$key.pub")
+    code=$(http --get --data-urlencode "fp=$fp" "$SIGNER_URL/fetch")
+    if [ "$code" = 200 ] && ssh-keygen -L -f "$T/body" >/dev/null 2>&1; then
+      head -1 "$T/body" > "$cert" && chmod 644 "$cert"; say "installed approved user certificate $cert"; return 0
+    fi
+    say "no certificate for $key yet (run: ctg-ssh-ca enroll)"; return 0
+  fi
+  renew_cert user "$key" "$cert" $force; rc=$?
+  case $rc in 0) say "user certificate $cert renewed" ;; 2) say "user certificate $cert not due" ;; *) return 1 ;; esac
+}
+
+cmd_enroll() {
+  key=$(keyarg "${1:-}")
+  [ -n "$SIGNER_URL" ] || die "no SIGNER_URL in $CONF"
+  if [ ! -r "$key" ]; then
+    umask 077; mkdir -p "$(dirname "$key")"
+    ssh-keygen -q -t ed25519 -N '' -C "$(id -un)@$(hostname -s) ctg" -f "$key" || die "ssh-keygen failed"
+  fi
+  dev=$(hostname -s)
+  code=$(http --data-urlencode "pub@$key.pub" --data-urlencode "device=$dev" "$SIGNER_URL/enroll")
+  say "signer said $code: $(head -c 300 "$T/body" 2>/dev/null)$(cat "$T/err")"
+  [ "$code" = 202 ]
+}
+
+cmd_install_host_cert() {
+  [ "$(id -u)" = 0 ] || die "root only"
+  src=${1:--}
+  if [ "$src" = - ]; then cat > "$T/hc"; else cat "$src" > "$T/hc"; fi
+  head -1 "$T/hc" > "$T/hc1"
+  [ "$(fpr "$T/hc1")" = "$(fpr $HOSTKEY.pub)" ] || die "certificate is not for $HOSTKEY"
+  ssh-keygen -L -f "$T/hc1" | grep -q 'host certificate' || die "not a host certificate"
+  old=
+  [ -f "$HOSTCERT" ] && { old=$T/old; cp "$HOSTCERT" "$old"; }
+  cat "$T/hc1" > "$HOSTCERT.new" && chmod 644 "$HOSTCERT.new" && mv "$HOSTCERT.new" "$HOSTCERT"
+  d=/etc/ssh/sshd_config.d; mkdir -p $d
+  dropin=$d/35-ctg-hostcert.conf; hadd=0; [ -f $dropin ] && hadd=1
+  printf '# managed by ctg-ssh-ca: present the CA-signed ed25519 host certificate\nHostCertificate %s\n' "$HOSTCERT" > $dropin
+  mkdir -p /run/sshd 2>/dev/null
+  sshd=$(command -v sshd || echo /usr/sbin/sshd)
+  if ! $sshd -t 2>"$T/sshdt"; then
+    say "sshd -t failed, rolling back: $(cat "$T/sshdt")" >&2
+    [ -n "$old" ] && cp "$old" "$HOSTCERT" || rm -f "$HOSTCERT"
+    [ $hadd = 1 ] || rm -f $dropin
+    exit 1
+  fi
+  reload_sshd
+  say "host certificate installed: $(ssh-keygen -L -f "$HOSTCERT" | sed -n 's/^ *Valid: //p')"
+}
+
+cmd_fetch_krl() {
+  [ "$(id -u)" = 0 ] || die "root only"
+  mkdir -p $STATE
+  [ -n "$SIGNER_URL" ] || die "no SIGNER_URL in $CONF"
+  code=$(http "$SIGNER_URL/krl")
+  [ "$code" = 200 ] || { say "krl: signer said $code" >&2; return 1; }
+  ssh-keygen -Q -f "$T/body" "$HOSTKEY.pub" >/dev/null 2>&1; rc=$?
+  [ $rc -le 1 ] || { say "krl: not a valid KRL" >&2; return 1; }
+  if ! cmp -s "$T/body" $STATE/krl; then cat "$T/body" > $STATE/krl.new && chmod 644 $STATE/krl.new && mv $STATE/krl.new $STATE/krl; say "revocation list updated"; fi
+}
+
+cmd_renew_all() {
+  rc=0; f=${1:-}
+  if [ "$(id -u)" = 0 ]; then
+    cmd_renew_host $f || rc=1
+    cmd_fetch_krl || rc=1
+    for h in /home/* /Users/* /root; do
+      [ -r "$h/.ssh/id_ed25519" ] || continue
+      u=$(stat -c %U "$h" 2>/dev/null || stat -f %Su "$h" 2>/dev/null) || continue
+      [ "$u" = root ] && [ "$h" != /root ] && continue
+      if command -v runuser >/dev/null 2>&1; then runuser -u "$u" -- "$0" renew-user $f || rc=1
+      else su -m "$u" -c "HOME=$h $0 renew-user $f" || rc=1; fi
+    done
+  else
+    cmd_renew_user "$f" || rc=1
+  fi
+  return $rc
+}
+
+cmd_status() {
+  for c in "$HOSTCERT" "$HOME/.ssh/id_ed25519-cert.pub"; do
+    [ -r "$c" ] || { say "$c: none"; continue; }
+    say "$c: $(ssh-keygen -L -f "$c" | awk '/Key ID/{k=$0} /Valid:/{v=$0} /Signing CA/{s=$3" "$4} END{print s, k, v}')"
+  done
+  [ -r $STATE/krl ] && say "krl: $STATE/krl ($(stat -c %y $STATE/krl 2>/dev/null | cut -c1-16))"
+  say "signer: ${SIGNER_URL:-unset}"
+}
+
+c=${1:-status}; [ $# -gt 0 ] && shift
+# nothing to do (quietly) until the fleet package has written signer.conf
+if [ -z "$SIGNER_URL" ] && [ "$c" = renew-all ]; then say "ctg-ssh-ca: not configured ($CONF missing)"; exit 0; fi
+case $c in
+  status) cmd_status ;;
+  renew-all) cmd_renew_all "$@" ;;
+  renew-host) cmd_renew_host "$@" ;;
+  renew-user) cmd_renew_user "$@" ;;
+  enroll) cmd_enroll "$@" ;;
+  install-host-cert) cmd_install_host_cert "$@" ;;
+  fetch-krl) cmd_fetch_krl ;;
+  *) sed -n '2,15p' "$0" ; exit 2 ;;
+esac

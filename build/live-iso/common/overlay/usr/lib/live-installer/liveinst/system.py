@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import time
 
-from . import arch, hwprofile, luksroot, portableswap, tpmunlock, zfsswap
+from . import arch, hwprofile, luksroot, portableswap, secretcheck, testmachine, tpmunlock, zfsswap
 
 LOG = "/var/log/live-installer.log"
 
@@ -99,7 +99,13 @@ def password_strength(pw):
     return f"{word} ({score}/100)"
 
 
+GENERIC_HOSTNAMES = {"surface-pro", "surface", "localhost", "gentoo", "ubuntu", "debian"}
+
+
 def hostname_problem(h):
+    """per-machine installs must carry the owner's chosen name (Harry Potter places for his machines), never an image default"""
+    if h and h.split(".")[0] in GENERIC_HOSTNAMES:
+        return f"'{h.split('.')[0]}' is a generic default, not this machine's name: use the name the owner chose for it."
     if not h or len(h) > 253:
         return "Enter a host name (FQDN preferred, e.g. node1.example.com)."
     for label in h.split("."):
@@ -550,6 +556,7 @@ def _default_config(profile, fs, fs_why):
         "console_open": False,
         # ZFS root with native encryption (the passphrase is typed by the user; only held in memory)
         "zfs_encrypt": False, "zfs_passphrase": "", "zfs_keymode": "passphrase", "enc_why": "",
+        testmachine.KEY: False,         # explicit, warned, non-default: NO disk encryption (testmachine.py)
         # Apple T2 Mac support: auto = detect PCI 106b:1801; firmware = auto | none | path to a firmware.tar / brcm dir
         "t2": "auto", "t2_firmware": "auto",
         # install profile: server | desktop (desktop needs the desktop image variant)
@@ -614,6 +621,7 @@ def config_from_answers(profile, path):
     else:
         c["zfs_encrypt"] = bool(enc)
         c["zfs_passphrase"] = d.get("passphrase", "")
+    c[testmachine.KEY] = bool(d.get(testmachine.KEY, False))
     c["t2"] = str(g.get("t2", "auto"))
     c["t2_firmware"] = str(g.get("t2_firmware", "auto"))
     c["install_type"] = str(g.get("install_type", "server"))
@@ -637,7 +645,8 @@ def config_from_answers(profile, path):
 
 def validate_config(profile, c, unattended=False, require_secret=True):
     """Return a list of problems (empty = ok)."""
-    errs = []
+    errs = testmachine.problems(c)
+    testmachine.normalize(c)            # no-op unless the explicit test-machine choice is set (xfs-luks -> xfs, no passphrases)
     if c.get("install_type", "server") != "server":
         from . import desktop            # the Desktop image variant (marker file) installs the desktop profile
         if not (c["install_type"] == "desktop" and desktop.available()):
@@ -680,6 +689,7 @@ def validate_config(profile, c, unattended=False, require_secret=True):
                 errs.append("disk passphrase: " + pp)
     errs += luksroot.validate(c)
     errs += portableswap.validate(c)
+    errs += secretcheck.reuse_problems(c)        # the disk passphrase is only for the disk (never an account password)
     de = c.get("desktop") or {}
     if de.get("enable") and not de.get("user"):
         errs.append("desktop: a user name is required")
@@ -691,7 +701,7 @@ def validate_config(profile, c, unattended=False, require_secret=True):
             pp = password_problem(c["root_password"], c["hostname"])
             if pp:
                 errs.append(pp)
-        elif not c["ssh_keys"]:
+        elif not c["ssh_keys"] and not has_login_user(c):
             errs.append("no root password hash and no SSH key supplied: the installed system would be unreachable")
     for k in c["ssh_keys"]:
         if ssh_key_problem(k):
@@ -710,6 +720,13 @@ def validate_config(profile, c, unattended=False, require_secret=True):
                 if n.get("dns") and dns_problem(n["dns"]):
                     errs.append(f"{s} dns: " + dns_problem(n["dns"]))
     return errs
+
+
+def has_login_user(c):
+    """a sudo-capable account is created (root can then stay locked)"""
+    d = c.get("desktop") or {}
+    return bool((c.get("install_type") == "desktop" and c.get("user_name") and (c.get("user_hash") or c.get("user_password")))
+                or (d.get("enable") and d.get("user") and (d.get("password") or d.get("password_hash"))))
 
 
 def use_problems(profile, c):
@@ -803,7 +820,13 @@ class Installer:
         """Run every stage in sequence (stages.APPLY_ORDER); TUI, GUI and the answer file all come through here."""
         from . import stages
         c, p = self.c, self.p
+        if testmachine.requested(c):
+            testmachine.normalize(c)
+            self.log("WARNING: " + testmachine.WARNING)
         self.log(f"== live-installer: {p['title']} ({c['install_type']}) on {', '.join(c['disks'])} ({'UEFI' if self.efi else 'BIOS'}), fs={c['fs']}")
+        bad = secretcheck.reuse_problems(c, unverifiable=lambda who: self.log(f"warning: the password hash of {who} could not be checked against the disk passphrase here"))
+        if bad:      # before anything touches the disk; in-memory comparison only, nothing secret is logged
+            raise InstallError("refusing to install: " + " ".join(bad))
         if p.get("encryption") == "tpm-or-none":
             self.log("Disk encryption: " + (c.get("enc_why") or "none"))
         if self.t2:
@@ -885,7 +908,7 @@ class Installer:
             args = ["sgdisk"] + first + ["-n", "2:0:+" + ("2G" if self.zfs() else "1G"), "-t", "2:8300", "-c", "2:boot"]
             if self.zfs():
                 if swap:    # encrypted ZFS laptop: LUKS2 hibernation swap as partition 3 (zfsswap.py); servers: zram only
-                    args += zfsswap.sgdisk_part(swap)
+                    args += zfsswap.sgdisk_part(swap, plain=testmachine.requested(self.c))
             elif swap:        # servers/firewalls/hypervisors: NO swap partition (zram only); partition 3 simply does not exist, root stays number 4
                 args += ["-n", f"3:0:+{swap}M", "-t", "3:8200", "-c", "3:swap"]
             args += ["-n", "4:0:0", "-t", "4:bf00" if self.zfs() else "4:8300", "-c", "4:root", disk]
@@ -908,7 +931,7 @@ class Installer:
         if self.swap_mb and not self.zfs():
             self.run(["mkswap", "-L", "swap", L[3]])
         if self.zfs() and self.swap_mode == "hibernate":
-            zfsswap.mkswap_stage(self)
+            zfsswap.mkswap_stage(self)        # plain swap partition on a test machine (testmachine.py)
         if c["fs"] == "ext4":
             self.run(["mkfs.ext4", "-F", "-q", "-L", "root", L[4]])
         elif c["fs"] == "xfs":
@@ -1146,6 +1169,22 @@ class Installer:
             return
         pkgs = [x.strip().lstrip("=") for x in open(lst).read().split() if "/" in x]
         removed = 0
+        # a file that is ALSO listed by a package that stays (the glib giomodule.cache is recorded by glib and by gio-module packages) must not be deleted with
+        # the live-only one: the installed server's package database would then list a missing file (QEMU gate package-contents-complete, 2026-11-04)
+        keep_paths = set()
+        pkgdir = os.path.join(T, "var/db/pkg")
+        for cat in (os.listdir(pkgdir) if os.path.isdir(pkgdir) else []):
+            for pn in os.listdir(os.path.join(pkgdir, cat)):
+                if f"{cat}/{pn}" in pkgs:
+                    continue
+                try:
+                    for line in open(os.path.join(pkgdir, cat, pn, "CONTENTS"), errors="replace"):
+                        if line.startswith("obj "):
+                            keep_paths.add(" ".join(line.rstrip("\n").split(" ")[1:-2]))
+                        elif line.startswith("sym "):
+                            keep_paths.add(line[4:].split(" -> ")[0])
+                except OSError:
+                    pass
         for pf in pkgs:
             vdb = os.path.join(T, "var/db/pkg", pf)
             contents = os.path.join(vdb, "CONTENTS")
@@ -1158,6 +1197,8 @@ class Installer:
                     path = parts[1]
                     if parts[0] == "sym":
                         path = line.split(" ", 1)[1].split(" -> ")[0]
+                    if path in keep_paths:
+                        continue
                     try:
                         os.unlink(os.path.join(T, path.lstrip("/")))
                         removed += 1

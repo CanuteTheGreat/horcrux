@@ -142,9 +142,10 @@ class GRun(zt.ZRun):
             vm.send("echo LIVE:nmtui=$(command -v nmtui) install=$(command -v gringotts-install) remote=$(command -v gringotts-remote) "
                     "keys=$(wc -l < /etc/gringotts/authorized_keys) ts=$(test -s /usr/share/gringotts/ts-authkey && echo keyfile) "
                     "nm=$(rc-service NetworkManager status 2>&1 | grep -o 'started\\|stopped\\|crashed' | head -1) sshd=$(rc-service sshd status 2>&1 | grep -o 'started\\|stopped' | head -1)\r")
-            m = vm.expect_raw(r"LIVE:nmtui=\S* install=\S* remote=\S* keys=\d+ ts=\S* nm=\S* sshd=\S*", 20)
+            m = vm.expect_raw(r"LIVE:nmtui=\S* install=\S* remote=\S* keys=\d* ts=\S* nm=\S* sshd=\S*", 20)
             txt = m.group(0).decode(errors="replace") if m else "no output"
-            self.step("live-helpers-present", bool(m) and "nmtui=/" in txt and "install=/" in txt and "remote=/" in txt and "ts=keyfile" in txt and "keys=0" not in txt, txt)
+            self.step("live-helpers-present", bool(m) and "nmtui=/" in txt and "install=/" in txt and "remote=/" in txt and "ts=keyfile" in txt and not re.search(r"keys=(0)? ", txt),
+                      txt + ("  [no PRIV_DIR keys in this image: build with PRIV_DIR=<dir with hostname, authorized_keys, ts-authkey>]" if "keys= " in txt else ""))
             self.step("live-networkmanager-running", "nm=started" in txt, txt)
             # remote handoff on the live stick (needs the QEMU user-net: DHCP via NetworkManager)
             if self.g.ts_key_file:
@@ -166,17 +167,29 @@ class GRun(zt.ZRun):
             vm.send("tailscale --socket=/run/tailscale/tailscaled.sock logout; echo TS-LOGOUT-RC=$?\r")
             m = vm.expect_raw(r"TS-LOGOUT-RC=\d+", 60)
             self.step("live-tailscale-ephemeral-node-removed-by-logout", bool(m) and b"RC=0" in m.group(0), "test node removed from the tailnet")
-            # the owner's install: only the passphrase is typed
+            # the owner's install: the disk passphrase and a separate login password are typed
             vm.send("gringotts-install --yes-erase --extra-authorized-key-file /root/test.pub --no-reboot\r")
+            self.step("install-hostname-prefilled-and-confirmed", vm.expect_raw(r"Host name.{0,8}\[gringotts\]", 120), "the owner's name for this machine is prefilled; Enter keeps it")
+            time.sleep(0.5)
+            vm.send("\r")
             self.step("install-passphrase-prompt", vm.expect_raw(r"Passphrase\s+:", 120), "asked for the disk passphrase")
             time.sleep(0.5)
             vm.send(PASSPHRASE + "\r")
             self.step("install-passphrase-confirm-prompt", vm.expect_raw(r"Passphrase \(again\)\s+:", 30), "")
             time.sleep(0.5)
             vm.send(PASSPHRASE + "\r")
-            self.step("install-login-password-prompt", vm.expect_raw(r"Login password\s+:", 30), "Enter = same as the passphrase")
+            self.step("install-login-password-prompt", vm.expect_raw(r"Login password\s+:", 30), "asked separately, no 'same as the passphrase' shortcut")
             time.sleep(0.5)
-            vm.send("\r")
+            vm.send("\r")                       # Enter alone must NOT mean 'same as the passphrase'
+            self.step("installer-refuses-empty-login-password", vm.expect_raw(r"At least 8 characters", 30), "empty entry is refused")
+            time.sleep(0.5)
+            vm.send(PASSPHRASE + "\r")          # the disk passphrase typed as the login password
+            self.step("installer-refuses-login-password-equal-to-disk-passphrase", vm.expect_raw(r"only for unlocking the disk", 30), "identical entry rejected with a clear message")
+            time.sleep(0.5)
+            vm.send(zt.USER_PW + "\r")
+            self.step("install-login-password-confirm-prompt", vm.expect_raw(r"Login password \(again\)\s*:", 30), "")
+            time.sleep(0.5)
+            vm.send(zt.USER_PW + "\r")
             ok = vm.expect_raw(r"(INSTALL FINISHED|INSTALL FAILED[^\n]*|STOP:[^\n]*)", 3000, consume=False)
             txt = ok.group(0).decode(errors="replace") if ok else "timeout"
             vm.shot("install-finished")
@@ -237,11 +250,13 @@ class GRun(zt.ZRun):
         kb = qt.Kbd(vm, True)
         time.sleep(40)
         vm.shot("gdm-greeter")
+        qt.no_autologin_config_gate(self.sh, self.step)                        # OWNER RULE: no autologin in the installed configs
+        qt.greeter_no_session_gate(self.sh, self.step, USER, "gdm", wait=60)   # greeter shown after the disk unlock, NO session of the user before the greeter login
         up = False
         for attempt in range(1, 5):
             kb.key("ENTER", 1.5)                  # the user tile
             time.sleep(4)
-            kb.text(PASSPHRASE, pause=0.08)      # login password = same text (Enter at the installer prompt)
+            kb.text(zt.USER_PW, pause=0.08)      # the LOGIN password (a different secret from the disk passphrase)
             kb.key("ENTER")
             end = time.time() + qt.T(120)
             while time.time() < end:
@@ -289,7 +304,10 @@ class GRun(zt.ZRun):
         kb = qt.Kbd(vm, True)
         rc, before = self.sh(f"getent shadow {USER} | cut -d: -f2 | sha256sum | cut -c1-12; mount | grep -c ' /home type zfs'")
         # Log Out first (it needs `su - USER`, which PAM refuses once the password is expired), THEN expire the password
-        ok, o = self.session_logout(USER)            # the real Log Out path: back to a GDM greeter (a terminate-user leaves a black console for a while)
+        if getattr(self, "_logged_out", False):
+            ok, o = True, "already logged out by the restore step"
+        else:
+            ok, o = self.session_logout(USER)        # the real Log Out path: back to a GDM greeter (a terminate-user leaves a black console for a while)
         self.step("expired-password-account-logged-out-to-gdm-greeter", ok, o)
         self.sh(f"chage -d 0 {USER}; chage -l {USER} | head -2")
         time.sleep(15)
@@ -300,11 +318,11 @@ class GRun(zt.ZRun):
                 kb.key("ESC", 3)                  # back out of a half-typed attempt to the user list
             kb.key("ENTER", 1.5)                  # the user tile
             time.sleep(4)
-            kb.text(PASSPHRASE, pause=0.08)
+            kb.text(zt.USER_PW, pause=0.08)       # the account's LOGIN password (a different secret from the disk passphrase)
             kb.key("ENTER")
             self.greeter_idle(vm, 4)
             vm.shot(f"changepw-current-{attempt}")
-            kb.text(PASSPHRASE, pause=0.08)       # GDM/PAM asks for the CURRENT password once more ("Changing password for ...")
+            kb.text(zt.USER_PW, pause=0.08)       # GDM/PAM asks for the CURRENT password once more ("Changing password for ...")
             kb.key("ENTER")
             self.greeter_idle(vm, 4)
             vm.shot(f"changepw-newpassword-{attempt}")
@@ -407,6 +425,11 @@ class GRun(zt.ZRun):
 
     def restore(self):
         a = self.g
+        # gringotts-restore refuses while the user has a graphical session (its keyring daemon would overwrite the restored keyring): Log Out first,
+        # exactly as the owner does it (restore before the first login); the profiles are started after the next login (restore_apps_start)
+        ok, o = self.session_logout(USER)
+        self.step("logged-out-before-restore", ok, o)
+        self._logged_out = ok
         bk = a.backup_copy      # = the output of `restic restore` (done on crystalcave from a local restic repo holding the sanitized stand-in)
         import base64
         b64 = lambda: base64.b64encode(os.urandom(32)).decode()
@@ -428,7 +451,9 @@ class GRun(zt.ZRun):
         self.step("restore-firefox-profiles-ini-has-no-install-section", re.search(r"profiles\.ini\n.*", o) is not None and o.strip().splitlines()[-4:-3] != ["1"], "")
         rc, o = self.sh("nft list ruleset 2>&1 | head -5; test -s /var/lib/nftables/rules-save && echo SAVED")
         self.step("restore-nft-mitigation-loaded-and-saved", "SAVED" in o, o.strip().replace("\n", " | ")[:200])
-        # restored profiles actually start
+
+    def restore_apps_start(self):
+        # restored profiles actually start (in the session after the first login)
         self.usr("pkill -f -i 'brave|firefox' 2>/dev/null; true", timeout=20)
         rc, o = self.usr("nohup gtk-launch $(ls /usr/share/applications | grep -iE '^brave' | head -1) >/tmp/b.log 2>&1 & nohup gtk-launch $(ls /usr/share/applications | grep -iE '^firefox' | head -1) >/tmp/f.log 2>&1 & sleep 30; "
                          "echo BRAVE=$(pgrep -u $(id -u) -fc brave); echo FF=$(pgrep -u $(id -u) -fc firefox); ls ~/.config/BraveSoftware/Brave-Browser/ | head -3; ls ~/.mozilla/firefox | head", timeout=120)
@@ -461,6 +486,7 @@ class GRun(zt.ZRun):
             if sess:
                 self.restore()
                 if self.first_login_password_change(vm):
+                    self.restore_apps_start()
                     self.session_bus_checks(USER)
                     self.session_logout_check(USER)
             self.sh("poweroff", timeout=10)

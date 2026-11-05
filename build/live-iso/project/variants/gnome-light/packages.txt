@@ -1,5 +1,7 @@
-# Horcrux Desktop variant: GNOME on Wayland (OpenRC + elogind) and the owner's daily-use tools.
-# Atoms verified against ::gentoo on 2026-10-28; Brave comes from the local overlay in ./repo (not in ::gentoo).
+# Horcrux GNOME desktop edition (public image): GNOME on Wayland (OpenRC + elogind) on top of the server core (project/variants/core, sys-apps/horcrux-core:
+# chrony + clock rules, first boot, backup, ZFS rules). Generic desktop tools only: the owner's own apps (Brave, Nextcloud, Tailscale, clamav, rustup, keepalived,
+# sshpass, rustinion) are in the MACHINE layers (project/variants/owner-common + gringotts/hogshead/...), never here. Enforced by project/public-forbidden.txt.
+# Atoms verified against ::gentoo on 2026-10-28.
 # --- desktop session
 gnome-base/gnome-light
 gnome-base/gdm
@@ -13,22 +15,15 @@ media-video/wireplumber
 x11-terms/terminator
 app-editors/vim
 www-client/firefox-bin
-www-client/brave-bin
-net-misc/nextcloud-client
-net-vpn/tailscale
 # --- virtualization (libvirt/qemu are already in the base image)
 app-emulation/virt-manager
 # OVMF (sys-firmware/edk2-bin) is already pulled in by the base image's qemu (it pins edk2-bin-202408)
-# --- dev / tools
-dev-util/rustup
+# --- tools
 dev-vcs/git
-net-misc/sshpass
 dev-libs/libisoburn
 app-cdr/cdrtools
 sys-apps/net-tools
-sys-cluster/keepalived
-app-antivirus/clamav
-# --- hardware / services
+# --- hardware / services (chrony and the clock rules come with the core)
 net-print/cups
 net-print/cups-filters
 net-print/cups-browsed
@@ -38,7 +33,6 @@ sys-power/thermald
 sys-power/power-profiles-daemon
 sys-power/upower
 net-dns/avahi
-net-misc/chrony
 # --- laptop hardware: Intel SOF audio firmware (no sound on recent Intel laptops without it); microcode comes with the base image
 sys-firmware/sof-firmware
 sys-firmware/intel-microcode

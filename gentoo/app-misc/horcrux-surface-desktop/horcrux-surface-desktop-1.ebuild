@@ -55,6 +55,9 @@ RDEPEND="
 	sys-firmware/sof-firmware
 	sys-kernel/linux-firmware
 	sys-process/cronie
+	net-misc/chrony
+	net-misc/horcrux-chrony-nm
+	sys-apps/horcrux-backup
 "
 
 src_install() {

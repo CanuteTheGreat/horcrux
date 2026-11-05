@@ -1,0 +1,48 @@
+#!/bin/sh
+# horcrux-time-config fix|check [ROOT]
+#
+# The Horcrux clock rules (core, every install, server included): a machine that wakes up with a months-off hardware clock (a flat CMOS battery,
+# a VM, an image written in July and booted in November) must step to the right time as soon as it can reach a time source, and keep the
+# hardware clock as UTC with the kernel's 11-minute sync. Three lines in chrony's own config, one in OpenRC's hwclock config:
+#   makestep 1 -1    step the clock whenever it is off by more than 1 s, at ANY update (Gentoo's `makestep 1.0 3` only allows the first 3)
+#   rtcsync          let the kernel copy the system clock to the RTC
+#   a time source    `pool` (or `server`) line; Gentoo ships pool.ntp.org, kept as it is when the owner chose another source
+#   clock="UTC"      /etc/conf.d/hwclock
+# Idempotent; `fix` rewrites only what is wrong, `check` prints OK/BAD and exits 0/1.
+ROOT=${2:-}
+ROOT=${ROOT%/}
+CONF=$ROOT/etc/chrony/chrony.conf
+HWC=$ROOT/etc/conf.d/hwclock
+mode=${1:-check}
+bad=0
+say() { echo "$*"; }
+
+has() { grep -Eq "$1" "$2" 2>/dev/null; }
+
+case $mode in
+fix)
+	mkdir -p "$ROOT/etc/chrony"
+	[ -f "$CONF" ] || : > "$CONF"
+	has '^[[:space:]]*(pool|server)[[:space:]]+[^[:space:]]' "$CONF" || printf 'pool pool.ntp.org iburst\n' >> "$CONF"
+	if has '^[[:space:]]*makestep' "$CONF"; then
+		has '^[[:space:]]*makestep[[:space:]]+1(\.0)?[[:space:]]+-1[[:space:]]*$' "$CONF" || sed -i -E 's/^[[:space:]]*makestep.*/makestep 1 -1/' "$CONF"
+	else
+		printf 'makestep 1 -1\n' >> "$CONF"
+	fi
+	has '^[[:space:]]*rtcsync' "$CONF" || printf 'rtcsync\n' >> "$CONF"
+	if [ -f "$HWC" ]; then
+		has '^clock="UTC"' "$HWC" || { grep -q '^clock=' "$HWC" && sed -i 's/^clock=.*/clock="UTC"/' "$HWC" || printf 'clock="UTC"\n' >> "$HWC"; }
+	else
+		mkdir -p "$ROOT/etc/conf.d"; printf 'clock="UTC"\n' > "$HWC"
+	fi
+	;;
+check) ;;
+*) echo "usage: horcrux-time-config fix|check [ROOT]" >&2; exit 2 ;;
+esac
+
+has '^[[:space:]]*(pool|server)[[:space:]]+[^[:space:]]' "$CONF" || { say "BAD no time source in $CONF"; bad=1; }
+has '^[[:space:]]*makestep[[:space:]]+1(\.0)?[[:space:]]+-1[[:space:]]*$' "$CONF" || { say "BAD makestep is not '1 -1' in $CONF"; bad=1; }
+has '^[[:space:]]*rtcsync' "$CONF" || { say "BAD rtcsync missing in $CONF"; bad=1; }
+has '^clock="UTC"' "$HWC" || { say "BAD clock=\"UTC\" missing in $HWC"; bad=1; }
+[ $bad = 0 ] && say "OK horcrux time config ($CONF)"
+exit $bad

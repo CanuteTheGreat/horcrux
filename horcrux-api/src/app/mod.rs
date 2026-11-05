@@ -1081,6 +1081,10 @@ fn cluster_routes() -> Router<Arc<AppState>> {
             "/api/cluster/nodes/:name/caps",
             axum::routing::put(set_node_caps),
         )
+        .route(
+            "/api/cluster/nodes/:name/migration-targets",
+            get(get_migration_targets),
+        )
         .route("/api/cluster/nics", get(get_local_nics))
         .route("/api/cluster/power/plan", post(plan_cluster_power))
         .route("/api/cluster/power/wake", post(wake_cluster_node))
@@ -4563,6 +4567,29 @@ async fn get_quorum_plan(State(state): State<Arc<AppState>>) -> Json<serde_json:
         "warnings": plan.warnings,
         "corosync_conf": config,
     }))
+}
+
+/// `GET /api/cluster/nodes/:name/migration-targets` -- for a guest running on
+/// node `:name`, every other node with its CPU group and, when live migration
+/// is blocked, the reason (vendor mismatch / older x86-64 level). Read-only;
+/// feeds the UI "why ineligible" display (area 1).
+async fn get_migration_targets(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Result<Json<Vec<crate::cluster::cpu_groups::TargetVerdict>>, (StatusCode, String)> {
+    use crate::cluster::cpu_groups::{target_verdicts, CpuGroup};
+    let nodes = state.cluster_manager.list_nodes_with_local().await;
+    let grp = |n: &Node| CpuGroup {
+        vendor: n.cpu_vendor.clone(),
+        level: n.cpu_level,
+    };
+    let src = nodes
+        .iter()
+        .find(|n| n.name == name)
+        .ok_or((StatusCode::NOT_FOUND, format!("unknown node {name}")))?;
+    let src_g = grp(src);
+    let all: Vec<(String, CpuGroup)> = nodes.iter().map(|n| (n.name.clone(), grp(n))).collect();
+    Ok(Json(target_verdicts(&name, &src_g, &all)))
 }
 
 /// `PUT /api/cluster/nodes/:name/caps` -- body is a NodeCaps

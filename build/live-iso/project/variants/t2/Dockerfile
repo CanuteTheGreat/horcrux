@@ -2,7 +2,7 @@
 # Horcrux Apple T2 variant: the finished rootfs (BASE: server or desktop) + the T2 kernel, so that the live USB has a working
 # internal keyboard/trackpad on a T2 Mac and the installed system boots with it (apple-bce in the initramfs).
 #
-#   kernel  = gentoo-sources 7.2.13 + the pinned t2linux patch set (gentoo/t2/PATCHSET: OpenZFS 2.3.9/2.4.4 support <= 7.2)
+#   kernel  = gentoo-sources 7.2.15 + the pinned t2linux patch set (gentoo/t2/PATCHSET: OpenZFS 2.3.9/2.4.4 support <= 7.2)
 #   config  = Gentoo's dist-kernel config + gentoo/t2/kernel/t2.config + the patch set's extra_config, asserted by required-config.txt
 #   zfs.ko  = sys-fs/zfs-kmod built out of tree against that kernel (the live installer creates the pool with the RUNNING kernel)
 #   initrd  = dracut with apple-bce + HID loaded early (liveinst/t2.py: dracut_conf) - the build FAILS when they are not inside
@@ -38,11 +38,17 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
 
 # separate layer: the ~65 min kernel compile above stays cached when this step needs fixing.
 # NO binpkgs for zfs-kmod: a cached one was built against another kernel release and installs into ITS /lib/modules dir
+# the gnome-light layer stripped /usr/include (libudev.h, security/pam_modules.h, curl/curl.h ...): zfs does not configure without them
+COPY project/variants/t2/zfs-dev-deps.py /usr/local/lib/t2/zfs-dev-deps.py
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
     kr=$(cat /boot/.kernelrelease); \
-    emerge --oneshot --usepkg=n --getbinpkg=n --buildpkg=n =sys-fs/zfs-kmod-2.3.9 =sys-fs/zfs-2.3.9; \
+    emerge --oneshot --nodeps --usepkg --getbinpkg --buildpkg=n $(python3 /usr/local/lib/t2/zfs-dev-deps.py) > /tmp/zdev.log 2>&1 || { tail -30 /tmp/zdev.log; exit 1; }; rm -f /tmp/zdev.log; \
+    test -f /usr/include/libudev.h; \
+    # only zfs/zfs-kmod are built from source; their build dependencies (cmake...) come from the binhost like everywhere else in the image
+    emerge --oneshot --usepkg --getbinpkg --usepkg-exclude 'sys-fs/zfs-kmod sys-fs/zfs' --buildpkg=n =sys-fs/zfs-kmod-2.3.9 =sys-fs/zfs-2.3.9 > /tmp/zfs-emerge.log 2>&1 \
+        || { tail -60 /tmp/zfs-emerge.log; for l in $(ls -d /var/tmp/portage/*/*/temp/build.log); do echo "== $l"; tail -40 $l; done; exit 1; }; tail -5 /tmp/zfs-emerge.log; rm -f /tmp/zfs-emerge.log; \
     find /lib/modules/$kr -name 'zfs.ko*' | grep .; depmod $kr; \
     # the stock kernel goes: its modules/kernel are ~650 MB and the T2 kernel must be the one the live ISO boots
     for old in $(ls /lib/modules | grep -v -- "-t2"); do rm -rf /lib/modules/$old /boot/*-$old* /boot/*-$old; done; \

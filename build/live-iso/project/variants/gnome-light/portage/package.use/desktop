@@ -5,7 +5,6 @@ gnome-base/gnome-shell -systemd
 net-misc/networkmanager iwd wifi bluetooth modemmanager -wpa_supplicant -ppp
 media-video/pipewire sound-server pipewire-alsa -jack-sdk
 media-video/wireplumber elogind -systemd
-net-misc/nextcloud-client -dolphin
 net-misc/spice-gtk usbredir gtk3
 app-emulation/virt-manager -gui
 sys-apps/fwupd -systemd
