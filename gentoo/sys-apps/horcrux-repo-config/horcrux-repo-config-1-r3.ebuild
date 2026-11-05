@@ -22,9 +22,18 @@ src_install() {
 	newins "${FILESDIR}/horcrux-roles.keywords" horcrux-roles
 	insinto /etc/portage/package.use
 	newins "${FILESDIR}/horcrux-roles.use" horcrux-roles
+	# Mutter's ScreenCast frame limiter capped every monitor stream at 30-40 fps on a 60 Hz display (remote desktop, screen
+	# sharing): backport of the upstream fix (mutter >= 51.2). Portage applies it to every source build of x11-wm/mutter;
+	# binary packages ignore it, so images and `make.conf` carry --usepkg-exclude=x11-wm/mutter. Drop it once mutter >= 51.2 is stable.
+	insinto /etc/portage/patches/x11-wm/mutter
+	newins "${FILESDIR}/mutter-screencast-nearest-interval.patch" 0001-screencast-round-to-nearest-interval.patch
 }
 
 pkg_postinst() {
+	if has_version "<x11-wm/mutter-51.2"; then
+		elog "The Mutter ScreenCast frame-limiter patch is installed. It takes effect when x11-wm/mutter is next built from source:"
+		elog "  emerge -1 --usepkg-exclude=x11-wm/mutter x11-wm/mutter   (then log out and back in)"
+	fi
 	if [[ -d ${EROOT}/var/db/repos/horcrux && ! -d ${EROOT}/var/db/repos/horcrux/.git ]]; then
 		ewarn "${EROOT}/var/db/repos/horcrux is a frozen copy from the installer, not a git checkout. Portage refuses to clone into it:"
 		ewarn "  mv /var/db/repos/horcrux /var/db/repos/horcrux.frozen && emaint sync -r horcrux && rm -rf /var/db/repos/horcrux.frozen"

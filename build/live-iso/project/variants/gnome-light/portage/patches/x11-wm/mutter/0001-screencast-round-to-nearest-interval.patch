@@ -1,0 +1,67 @@
+screencast: round the frame limiter to the nearest interval boundary
+
+Mutter (49, 50 and 51.1) drops a ScreenCast monitor-stream frame when it arrives less than one stream interval after the last
+recorded one, and the stream interval is the display refresh rate. Frame timestamps are the compositor's EXPECTED presentation
+times, which jitter by microseconds, so for a stream running at the refresh rate about every other frame looked "too early"
+and was pushed to the next vblank: measured on the lab laptops (Iris Xe, GNOME 49.9 and 50.6, PipeWire 1.6.9) the stream
+delivered exactly 30 fps at 59.9x Hz modes and ~40 fps at 60.026 Hz. Remote-desktop capture (our helper, gnome-remote-desktop)
+is capped well below the display refresh because of it.
+
+Backport of upstream mutter "stream-source: Round to nearest interval boundary in is_it_too_early" (gnome-51 branch and main,
+Oct 2026, not in 51.1 or any 50.x yet): a frame is only too early when it is closer to the last recorded frame than to the next
+possible one, and the "last frame" timestamp advances by whole intervals, so a stream asked for less than the refresh rate keeps
+its nominal rate. Applies to mutter 49.7 .. 50.6; drop this patch when mutter >= 51.2 is the packaged version.
+Measured with it on gringotts (GNOME 49.9, mutter 49.7, 1920x1080@59.934): H.264 motion path 59.6 fps (was 30.1).
+
+--- a/src/backends/meta-screen-cast-stream-src.c
++++ b/src/backends/meta-screen-cast-stream-src.c
+@@ -1281,6 +1281,7 @@
+     META_SCREEN_CAST_STREAM_SRC_GET_CLASS (src);
+   MetaScreenCastRecordResult record_result =
+     META_SCREEN_CAST_RECORD_RESULT_RECORDED_NOTHING;
++  int64_t next_last_frame_timestamp_us = frame_timestamp_us;
+ 
+   COGL_TRACE_BEGIN_SCOPED (MaybeRecordFrame,
+                            "Meta::ScreenCastStreamSrc::maybe_record_frame_with_timestamp()");
+@@ -1316,23 +1317,34 @@
+         ((G_USEC_PER_SEC * ((int64_t) priv->video_format.max_framerate.denom)) /
+          ((int64_t) priv->video_format.max_framerate.num));
+ 
++      /* Round to the nearest interval boundary (upstream mutter, "stream-source: Round to nearest interval boundary in
++       * is_it_too_early", gnome-51 branch after 51.1): a frame is only too early when it is closer to the last recorded
++       * frame than to the next possible one. The plain `delta < interval` test failed on presentation timestamp jitter
++       * when the stream frame rate equals the refresh rate and capped the stream at 30-40 fps. */
+       time_since_last_frame_us = frame_timestamp_us - priv->last_frame_timestamp_us;
+-      if (time_since_last_frame_us < min_interval_us)
++      if (min_interval_us > 0 &&
++          time_since_last_frame_us + min_interval_us / 2 < min_interval_us)
+         {
+           meta_topic (META_DEBUG_SCREEN_CAST,
+-                      "Skipped recording frame on stream %u, too early",
++                      "Skipped recording frame on stream %u, too early (nearest interval boundary)",
+                       priv->node_id);
+           meta_screen_cast_stream_src_queue_follow_up (src, flags);
+           meta_screen_cast_stream_src_accumulate_damage (src, flags, redraw_clip);
+           return record_result;
+         }
++
++      next_last_frame_timestamp_us =
++        MAX (priv->last_frame_timestamp_us + min_interval_us, frame_timestamp_us);
+     }
+ 
+-  return meta_screen_cast_stream_src_record_frame_with_timestamp (src,
+-                                                                  flags,
+-                                                                  paint_phase,
+-                                                                  redraw_clip,
+-                                                                  frame_timestamp_us);
++  record_result =
++    meta_screen_cast_stream_src_record_frame_with_timestamp (src,
++                                                             flags,
++                                                             paint_phase,
++                                                             redraw_clip,
++                                                             frame_timestamp_us);
++  priv->last_frame_timestamp_us = next_last_frame_timestamp_us;
++  return record_result;
+ }
+ 
+ gboolean
