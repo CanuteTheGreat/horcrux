@@ -71,11 +71,20 @@ def req(method, path, body=None, expect=200, timeout=900):
     r.add_header("Content-Type", "application/json")
     if TOKEN[0]:
         r.add_header("Authorization", "Bearer " + TOKEN[0])
-    try:
-        with urllib.request.urlopen(r, timeout=timeout, context=SSL_CTX) as resp:
-            status, text = resp.status, resp.read().decode()
-    except urllib.error.HTTPError as e:
-        status, text = e.code, e.read().decode()
+    # Template/image downloads hit the real internet (images.linuxcontainers.org):
+    # a transient "error sending request" must not fail the whole run, so retry
+    # that one error a few times with backoff.
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(r, timeout=timeout, context=SSL_CTX) as resp:
+                status, text = resp.status, resp.read().decode()
+        except urllib.error.HTTPError as e:
+            status, text = e.code, e.read().decode()
+        if status == 500 and "error sending request" in text and attempt < 3:
+            log(f"transient download error on {method} {path}, retry {attempt + 1}/3")
+            time.sleep(10 * (attempt + 1))
+            continue
+        break
     if expect is not None and status != expect:
         fail(f"{method} {path} -> {status} (expected {expect}): {text[:600]}")
     try:
