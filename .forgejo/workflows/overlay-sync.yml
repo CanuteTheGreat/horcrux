@@ -36,5 +36,13 @@ jobs:
           git config user.name "Horcrux CI"; git config user.email "ci@horcrux.invalid"
           tip=$(git subtree split --prefix=gentoo)
           echo "overlay tip $tip"
-          git push git@git.canutethegreat.com:CanuteTheGreat/horcrux-overlay.git "$tip:refs/heads/main"
+          OV=git@git.canutethegreat.com:CanuteTheGreat/horcrux-overlay.git
+          # History rewrites on the way to main (rebased chain branches) change the split commit ids; the overlay repo must still only ever
+          # fast-forward: when its tip is not an ancestor of the new split, push a merge commit that carries the split's tree.
+          git fetch -q "$OV" main && remote=$(git rev-parse FETCH_HEAD) || remote=""
+          if [ -z "$remote" ] || git merge-base --is-ancestor "$remote" "$tip"; then push=$tip
+          elif [ "$(git rev-parse "$remote^{tree}")" = "$(git rev-parse "$tip^{tree}")" ]; then echo "overlay already has this tree"; rm -f ~/.ssh/overlay_key; exit 0
+          else push=$(git commit-tree "$tip^{tree}" -p "$remote" -p "$tip" -m "sync gentoo/ from main ${GITHUB_SHA:-}"); echo "merge commit $push (overlay history diverged from the split)"
+          fi
+          git push "$OV" "$push:refs/heads/main"
           rm -f ~/.ssh/overlay_key
