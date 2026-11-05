@@ -34,6 +34,8 @@ RDEPEND="
 	!app-admin/proton-pass-bin
 	!net-vpn/proton-vpn-gtk-app
 	!app-antivirus/clamav
+	!app-misc/gringotts-config
+	!app-misc/gringotts-tools
 "
 # The blockers above are the Portage-level half of the guard: a test machine can't even be updated into carrying the owner's
 # personal apps (weak blockers unmerge them). The full list is files/personal-apps.denylist; horcrux-test-machine-check (lab hx-invariants) enforces it.

@@ -9,7 +9,7 @@
      until the login password is typed at the greeter), XFCE session after the login
   3. checks: XFS on LUKS2 on LVM, hibernate swap + zram, kernel from the Surface kernel package, qfile -o orphans, packages of
      the meta package, session processes (xfwm4, panel, power manager, onboard, nm-applet, pipewire), greeter + on-screen keyboard
-  4. apps launch inside the session (Firefox, Brave, Rustinion agent, Tailscale, onboard) + memory/responsiveness numbers
+  4. apps launch inside the session (Firefox, terminal, Rustinion agent, Tailscale, onboard) + memory/responsiveness numbers
   5. `loginctl hibernate` -> power off -> ONE passphrase -> same boot_id/process/tmpfs (resume), the XFCE session survives
   6. clean `emerge -puDN @world` (needs the network of the VM)
 Evidence: result.json, screens/*.png|txt, serial logs in --out. Reuses surface-qemu-test.py (T class) + common/qemu-test.py.
@@ -234,7 +234,7 @@ class XT(SQ.T):
         cfgs = [l.strip() for l in cfg.splitlines() if l.strip().startswith("/")]
         s("horcrux-orphans-clean", len(orph) == 0, f"{len(rows)} generated/eselect paths allowed ({sum(k == 'LINK' for k, _ in rows)} symlinks), {len(orph)} unowned: " + ", ".join(orph[:25]))
         s("no-cfg-protect-leftovers", len(cfgs) == 0, ", ".join(cfgs[:5]) or "none under /etc")
-        rc3, qf = self.ssh("qfile /usr/bin/live-installer /usr/bin/horcrux-orphans /usr/share/live-installer/branding/full.png /etc/init.d/live-installer /etc/init.d/zram-swap /usr/bin/horcrux-surface-auto /usr/bin/brave /usr/bin/rustinion | sort", timeout=60)
+        rc3, qf = self.ssh("qfile /usr/bin/live-installer /usr/bin/horcrux-orphans /usr/share/live-installer/branding/full.png /etc/init.d/live-installer /etc/init.d/zram-swap /usr/bin/horcrux-surface-auto /usr/bin/rustinion | sort", timeout=60)
         self.save("qfile-spot-check.txt", qf)
         s("installer-files-owned-by-horcrux-tools-and-live-data", qf.count("sys-apps/horcrux-tools") >= 3 and "sys-apps/horcrux-live-data" in qf and "horcrux-live-installer" not in qf, re.sub(r"\s+", " ", qf)[:300])
         # ---- session
@@ -288,29 +288,29 @@ class XT(SQ.T):
         s("can-hibernate-and-sensor-proxy-installed", 'string "yes"' in out and "iio-sensor-proxy-installed" in out, re.sub(r"\s+", " ", out)[:240])
         # ---- apps launch inside the session
         launch = {
-            "firefox": "firefox-bin", "brave": "brave-bin", "onboard": "onboard", "terminal": "xfce4-terminal",
+            "firefox": "firefox-bin", "onboard": "onboard", "terminal": "xfce4-terminal",
         }
         t_launch = {}
-        # RAM at idle (session up, nothing launched), then with Brave alone open, then with everything
+        # RAM at idle (session up, nothing launched), then with Firefox alone open, then with everything
         time.sleep(30)
         rc, out = self.ssh("free -m; echo; cat /proc/pressure/memory 2>/dev/null; cat /proc/swaps", timeout=60)
         self.save("memory-idle.txt", out)
         self.res["memory_idle"] = re.sub(r"\s+", " ", out.splitlines()[1])
         s("memory-idle-recorded", True, self.res["memory_idle"])
         t1 = time.time()
-        usr("(setsid brave --no-first-run --new-window about:blank >/tmp/app-brave0.log 2>&1 &) ; sleep 1; true", timeout=30)
+        usr("(setsid firefox-bin --new-window about:blank >/tmp/app-firefox0.log 2>&1 &) ; sleep 1; true", timeout=30)
         for _ in range(50):
-            if self.ssh(f"pgrep -u {USER} -f brave | head -1")[1].strip():
+            if self.ssh(f"pgrep -u {USER} -f firefox | head -1")[1].strip():
                 break
             time.sleep(2)
         time.sleep(40)
         rc, out = self.ssh("free -m; echo; ps -eo rss,comm --sort=-rss | head -8; cat /proc/pressure/memory 2>/dev/null; cat /proc/swaps", timeout=60)
-        self.save("memory-with-brave.txt", out)
-        self.res["memory_brave_only"] = re.sub(r"\s+", " ", out.splitlines()[1])
-        self.res["brave_open_seconds"] = round(time.time() - t1 - 40, 1)
-        s("memory-with-brave-recorded", True, self.res["memory_brave_only"])
-        self.ssh(f"pkill -u {USER} -f brave; sleep 3", timeout=30)
-        for name, cmd in (("firefox", "firefox-bin --new-window about:blank"), ("brave", "brave --no-first-run --new-window about:blank"),
+        self.save("memory-with-firefox.txt", out)
+        self.res["memory_firefox_only"] = re.sub(r"\s+", " ", out.splitlines()[1])
+        self.res["firefox_open_seconds"] = round(time.time() - t1 - 40, 1)
+        s("memory-with-firefox-recorded", True, self.res["memory_firefox_only"])
+        self.ssh(f"pkill -u {USER} -f firefox; sleep 3", timeout=30)
+        for name, cmd in (("firefox", "firefox-bin --new-window about:blank"),
                           ("xfce4-terminal", "xfce4-terminal"), ("onboard", "onboard")):
             t1 = time.time()
             usr(f"(setsid {cmd} >/tmp/app-{name}.log 2>&1 &) ; sleep 1; true", timeout=30)
@@ -328,12 +328,24 @@ class XT(SQ.T):
         self.save("windows.txt", out)
         vm.shot("apps-running")
         wins = out
-        s("app-windows-mapped", sum(k in wins for k in ("Firefox", "Brave", "onboard", "Onboard", "Xfce4-terminal")) >= 3, re.sub(r"\s+", " ", wins)[:300])
-        rc, out = self.ssh("rustinion --version 2>&1 | head -2; tailscale version 2>&1 | head -1; firefox-bin --version 2>&1 | head -1; brave --version 2>&1 | head -1; "
-                           "qlist -Iv app-admin/rustinion-agent net-vpn/tailscale www-client/brave-bin www-client/firefox-bin x11-misc/lightdm app-accessibility/onboard sys-firmware/intel-microcode sys-firmware/sof-firmware | tr '\\n' ' '", timeout=90)
+        s("app-windows-mapped", sum(k in wins for k in ("Firefox", "onboard", "Onboard", "Xfce4-terminal")) >= 3, re.sub(r"\s+", " ", wins)[:300])
+        rc, out = self.ssh("rustinion --version 2>&1 | head -2; tailscale version 2>&1 | head -1; firefox-bin --version 2>&1 | head -1; "
+                           "qlist -Iv app-admin/rustinion-agent net-vpn/tailscale www-client/firefox-bin x11-misc/lightdm app-accessibility/onboard sys-firmware/intel-microcode sys-firmware/sof-firmware | tr '\\n' ' '", timeout=90)
         self.save("app-versions.txt", out)
-        s("apps-versions-and-portage-ownership", all(x in out for x in ("rustinion-agent", "tailscale", "brave-bin", "firefox-bin", "onboard", "intel-microcode", "sof-firmware")), re.sub(r"\s+", " ", out)[:300])
-        rc, out = self.ssh("qfile -o /usr/bin/brave /usr/bin/firefox-bin /usr/bin/rustinion /usr/bin/onboard /usr/bin/tailscale | tr '\\n' ' '; echo; qfile /usr/bin/brave /usr/bin/rustinion /usr/bin/onboard | tr '\\n' ' '")
+        s("apps-versions-and-portage-ownership", all(x in out for x in ("rustinion-agent", "tailscale", "firefox-bin", "onboard", "intel-microcode", "sof-firmware")), re.sub(r"\s+", " ", out)[:300])
+        # media keys (lab finding 2026-11-05: no XF86Audio* shortcut in stock XFCE): the autostart binds them in the user's shortcut channel
+        out = ""
+        for _ in range(10):
+            rc, out = usr("xfconf-query -c xfce4-keyboard-shortcuts -l -v 2>&1 | grep -E 'XF86Audio(Raise|Lower)Volume|XF86AudioMute'")
+            if out.count("wpctl") >= 3:
+                break
+            time.sleep(3)
+        s("xfce-media-keys-bound-to-wpctl", out.count("wpctl") >= 3, re.sub(r"\s+", " ", out)[:240])
+        rc, out = self.ssh("qlist -I www-client/brave-bin net-misc/nextcloud-client net-im/discord net-vpn/proton-vpn-gtk-app app-antivirus/clamav; test -e /usr/bin/brave && echo /usr/bin/brave; "
+                           "horcrux-test-machine-check 2>&1 | tail -5; true", timeout=90)
+        self.save("personal-apps.txt", out)
+        s("no-personal-apps-on-the-profile", "brave" not in out.lower() and "VIOLATION" not in out, "owner rule 2026-11-05: a profile carries no personal apps: " + re.sub(r"\s+", " ", out)[:200])
+        rc, out = self.ssh("qfile -o /usr/bin/firefox-bin /usr/bin/rustinion /usr/bin/onboard /usr/bin/tailscale | tr '\\n' ' '; echo; qfile /usr/bin/rustinion /usr/bin/onboard | tr '\\n' ' '")
         s("app-binaries-owned-by-ebuilds", "orphan" not in out.lower() and out.count(":") >= 3, re.sub(r"\s+", " ", out)[:300])
         # ---- memory / responsiveness at 4 GB with everything running
         time.sleep(30)
@@ -443,9 +455,9 @@ class XT(SQ.T):
                 self.step("second-boot-one-passphrase-then-up", secs2 is not None, f"{int(secs2) if secs2 else 0}s from power-on to ssh; ONE passphrase")
                 self.greeter_login(vm, "boot2")
                 time.sleep(20)
-                self.ssh("su - " + USER + " -c 'export DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) XAUTHORITY=$HOME/.Xauthority; (setsid brave --no-first-run --new-window about:blank >/tmp/b.log 2>&1 &); (setsid firefox-bin >/tmp/f.log 2>&1 &); sleep 2; true'", timeout=60)
+                self.ssh("su - " + USER + " -c 'export DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) XAUTHORITY=$HOME/.Xauthority; (setsid xfce4-terminal >/tmp/t.log 2>&1 &); (setsid firefox-bin >/tmp/f.log 2>&1 &); sleep 2; true'", timeout=60)
                 time.sleep(75)
-                rc, out = self.ssh("free -m; echo; ps -eo comm | grep -cE 'firefox|brave'; ps -eo comm | grep -E '^onboard$' | head -1", timeout=60)
+                rc, out = self.ssh("free -m; echo; ps -eo comm | grep -cE 'firefox|xfce4-terminal'; ps -eo comm | grep -E '^onboard$' | head -1", timeout=60)
                 self.save("memory-before-hibernate.txt", out)
                 self.res["memory_before_hibernate"] = re.sub(r"\s+", " ", out.splitlines()[1])
                 s_ = self.step("session-with-apps-and-onboard-before-hibernate", "onboard" in out and int(out.split("\n")[4].strip() or 0) >= 2, re.sub(r"\s+", " ", out)[:240])
@@ -502,7 +514,7 @@ class XT(SQ.T):
             s("process-kept-running-after-resume", ctr > marker["counter"], f"counter {marker['counter']} -> {ctr}")
             s("xfce-session-survived-hibernate", ln[8].strip() == marker["xfce_pid"], f"xfce4-session pid {marker['xfce_pid']} -> {ln[8].strip()}")
             s("dmesg-shows-image-restored", "hibernation exit" in "\n".join(ln[9:]), " | ".join(ln[9:])[:300])
-            rc, out = self.ssh("free -m | sed -n 2p; ps -eo comm | grep -cE 'firefox|brave'; dmesg | grep -ciE 'xfs.*(corrupt|error)|I/O error'")
+            rc, out = self.ssh("free -m | sed -n 2p; ps -eo comm | grep -cE 'firefox|xfce4-terminal'; dmesg | grep -ciE 'xfs.*(corrupt|error)|I/O error'")
             self.save("after-resume.txt", out)
             self.soft = False
             self.ssh("sync; (sleep 2; poweroff) >/dev/null 2>&1 &", timeout=20)

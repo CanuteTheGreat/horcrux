@@ -617,7 +617,28 @@ def greeter_no_session_gate(sh, step_fn, user, dm="lightdm", wait=180, step="gre
     greeter = "DM" in o and bool(re.search(greeter_re, o))
     ok = greeter and not user_sessions and not procs
     step_fn(step, ok, f"greeter: {'shown (' + re.sub(chr(10), ' ', o.strip())[:90] + ')' if greeter else 'NOT FOUND ' + o.strip()[:80]}; sessions of {user}: {user_sessions or 'none'}; processes of {user}: {procs[:80] or 'none'}")
-    return ok
+    # the greeter shows a login screen to anyone at the machine: its PROCESS must not run as root (lab finding 2026-11-04/05: LightDM ran it as root
+    # on the Surface and on madammalkins until greeter-user=lightdm was set in [LightDM])
+    rc, o3 = sh(f"echo @@U; ps -eo user=,args= | grep -E '{greeter_re}' | grep -v grep; true")
+    users = greeter_process_users(o3, greeter_re)
+    unpriv = greeter_user_ok(users)
+    step_fn(f"{step}-greeter-process-not-root", unpriv, f"greeter process users: {sorted(users) or 'NONE FOUND'}")
+    return ok and unpriv
+
+
+def greeter_process_users(ps_out, greeter_re):
+    """`echo @@U; ps -eo user=,args=` output -> {user: [command lines]} of the GREETER processes (first word's basename must match greeter_re)"""
+    users = {}
+    for ln in ps_out.split("@@U")[-1].splitlines():
+        m = re.match(r"\s*(\S+)\s+(\S+)(.*)$", ln)
+        if m and re.fullmatch(greeter_re, os.path.basename(m.group(2))):
+            users.setdefault(m.group(1), []).append((m.group(2) + m.group(3)).strip())
+    return users
+
+
+def greeter_user_ok(users):
+    """at least one greeter process was found and none of them is root"""
+    return bool(users) and "root" not in users
 
 
 def make_answer_image(path, proj, content):

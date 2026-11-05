@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=XFCE media keys (volume, mute)
+Exec=/usr/bin/horcrux-xfce-mediakeys
+OnlyShowIn=XFCE;
+NoDisplay=true

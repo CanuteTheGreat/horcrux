@@ -1,0 +1,14 @@
+#!/bin/sh
+# XFCE media keys, once per user: the stock XFCE shortcut channel binds NO XF86Audio* key (lab finding 2026-11-05: volume keys did not change the
+# PipeWire sink on madammalkins). The keys only worked when the panel happened to carry the PulseAudio plugin. Bind them to WirePlumber's wpctl
+# in the user's xfce4-keyboard-shortcuts channel (xfsettingsd grabs them at once). Runs from /etc/xdg/autostart; the stamp is written only when
+# every key was set, so a login where xfconfd was not up yet retries at the next one.
+stamp="${XDG_CONFIG_HOME:-$HOME/.config}/horcrux-xfce-mediakeys.done"
+[ -e "$stamp" ] && exit 0
+command -v xfconf-query >/dev/null 2>&1 && command -v wpctl >/dev/null 2>&1 || exit 0
+bind() { xfconf-query -c xfce4-keyboard-shortcuts -p "/commands/custom/$1" -n -t string -s "$2" || exit 1; }
+bind XF86AudioRaiseVolume "wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+"
+bind XF86AudioLowerVolume "wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%-"
+bind XF86AudioMute "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"
+bind XF86AudioMicMute "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle"
+mkdir -p "$(dirname "$stamp")" && : > "$stamp"

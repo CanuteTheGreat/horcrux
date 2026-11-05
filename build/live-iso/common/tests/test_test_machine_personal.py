@@ -67,6 +67,58 @@ class TestPersonalGuard(unittest.TestCase):
             rc, out = run(d)
             self.assertEqual(rc, 1, rel)
 
+    def test_leftover_portage_config_of_removed_apps_fails(self):
+        for rel, text, what in (("etc/portage/package.accept_keywords/desktop", "dev-util/rustup ~amd64\nwww-client/brave-bin **\n", "www-client/brave-bin"),
+                                ("etc/portage/package.use/desktop", "net-misc/nextcloud-client -dolphin\n", "net-misc/nextcloud-client"),
+                                ("etc/portage/package.license/x", "net-im/discord all-rights-reserved\n", "net-im/discord"),
+                                ("etc/portage/package.accept_keywords", "www-client/brave-bin::canutethegreat-overlay ~amd64\n", "www-client/brave-bin"),
+                                ("etc/portage/package.accept_keywords/proton", "net-vpn/proton-vpn-gtk-app ~amd64\n", "net-vpn/proton-vpn-gtk-app"),
+                                ("etc/portage/package.accept_keywords/y", "app-foo/bar::canutethegreat-overlay ~amd64\n", "::canutethegreat-overlay")):
+            d = self.clean_root()
+            mk(d, rel, text)
+            rc, out = run(d)
+            self.assertEqual(rc, 1, rel)
+            self.assertIn("VIOLATION portage-config", out)
+            self.assertIn(what, out)
+
+    def test_personal_repository_configured_fails(self):
+        for rel in ("etc/portage/repos.conf/gringotts.conf", "etc/portage/repos.conf/eselect-repo.conf"):
+            d = self.clean_root()
+            mk(d, rel, "[guru]\nlocation = /var/db/repos/guru\n\n[canutethegreat-overlay]\nlocation = /var/db/repos/canutethegreat-overlay\n")
+            rc, out = run(d)
+            self.assertEqual(rc, 1, rel)
+            self.assertIn("VIOLATION portage-repo", out)
+
+    def test_normal_portage_config_is_fine(self):
+        d = self.clean_root()
+        mk(d, "etc/portage/package.accept_keywords/horcrux-lab", "# comment www-client/brave-bin\nsys-kernel/horcrux-unlock ~amd64\n*/*::guru ~amd64\n")
+        mk(d, "etc/portage/package.use/desktop", "net-misc/networkmanager iwd wifi\nmedia-video/pipewire sound-server\n")
+        mk(d, "etc/portage/package.license/horcrux-lab", "*/* *\n")
+        mk(d, "etc/portage/repos.conf/horcrux.conf", "[horcrux]\nlocation = /var/db/repos/horcrux\n[guru]\nlocation = /var/db/repos/guru\n")
+        rc, out = run(d)
+        self.assertEqual(rc, 0, out)
+
+    def test_gringotts_private_packages_and_leftovers_fail(self):
+        d = self.clean_root()
+        mk(d, "var/lib/portage/world", "app-misc/horcrux-test-machine\napp-misc/gringotts-config\napp-misc/gringotts-tools\n")
+        mk(d, "var/db/pkg/app-misc/gringotts-tools-1-r1/PF", "x")
+        rc, out = run(d)
+        self.assertEqual(rc, 1)
+        self.assertIn("VIOLATION package app-misc/gringotts-tools", out)
+        self.assertIn("VIOLATION world-denied app-misc/gringotts-config", out)
+        for rel in ("usr/bin/gringotts-restore", "usr/libexec/gringotts-firstboot", "etc/init.d/gringotts-firstboot", "var/lib/gringotts/firstboot-done",
+                    "etc/ssh/sshd_config.d/10-gringotts.conf", "var/db/repos/canutethegreat-overlay/profiles/repo_name"):
+            d = self.clean_root()
+            mk(d, rel, "x")
+            self.assertEqual(run(d)[0], 1, rel)
+
+    def test_ebuild_blocks_gringotts_and_policy_no_longer_allows_them(self):
+        eb = open(os.path.join(REPO, "gentoo", "app-misc", "horcrux-test-machine", "horcrux-test-machine-1-r2.ebuild")).read()
+        self.assertIn("!app-misc/gringotts-config", eb)
+        self.assertIn("!app-misc/gringotts-tools", eb)
+        allow = [ln.strip() for ln in open(os.path.join(FILES, "world.allowlist")) if ln.strip() and not ln.startswith("#")]
+        self.assertFalse([a for a in allow if "gringotts" in a], allow)
+
     def test_agent_ssh_authorized_keys_and_firefox_profile_are_fine(self):
         d = self.clean_root()
         mk(d, "home/tester/.ssh/authorized_keys", "ssh-ed25519 AAAA agent")
