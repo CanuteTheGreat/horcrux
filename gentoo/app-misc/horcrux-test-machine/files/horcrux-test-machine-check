@@ -1,0 +1,95 @@
+#!/usr/bin/python3
+"""horcrux-test-machine-check: a TEST machine carries NO personal apps and NO personal data (owner order 2026-11-05).
+
+Fails (exit 1, one `VIOLATION <class> <detail>` line each) when
+  - an installed package (vdb) matches personal-apps.denylist,
+  - a /var/lib/portage/world entry is NOT on world.allowlist (allowlist approach: unknown = personal),
+  - a path from personal-paths.denylist exists (app install dirs, .desktop files, autostart entries, Nextcloud/browser/chat
+    profiles, sync folders, private keys, flatpaks, AppImages, a provisioned personal restic job).
+Exit 0 = clean, 2 = cannot run (policy missing). `--root DIR` checks a mounted tree (unit tests, image gates).
+Policy: /usr/share/horcrux-test-machine/{personal-apps.denylist,personal-paths.denylist,world.allowlist} (`--policy DIR` overrides).
+"""
+import argparse
+import fnmatch
+import glob
+import os
+import re
+import sys
+
+POLICY = "/usr/share/horcrux-test-machine"
+
+
+def read_list(path):
+    with open(path) as f:
+        return [ln.strip() for ln in f if ln.strip() and not ln.lstrip().startswith("#")]
+
+
+def atom_of(entry):
+    """world entry / vdb dir -> category/package (strip operators, slot, repo, version)"""
+    e = entry.strip().lstrip("=<>~!*").split(":")[0].split("::")[0]
+    m = re.match(r"^(.*?)-[0-9][0-9A-Za-z._+]*(-r[0-9]+)?$", e)
+    return m.group(1) if m and "/" in m.group(1) else e
+
+
+def matches(atom, globs):
+    return any(fnmatch.fnmatchcase(atom, g) for g in globs)
+
+
+def homes(root):
+    out = [os.path.join(root, "root")]
+    out += sorted(glob.glob(os.path.join(root, "home", "*")))
+    return [h for h in out if os.path.isdir(h)]
+
+
+def check(root, policy):
+    deny = read_list(os.path.join(policy, "personal-apps.denylist"))
+    paths = read_list(os.path.join(policy, "personal-paths.denylist"))
+    allow = read_list(os.path.join(policy, "world.allowlist"))
+    v = []
+    vdb = os.path.join(root, "var/db/pkg")
+    for d in sorted(glob.glob(os.path.join(vdb, "*", "*"))):
+        atom = atom_of(os.path.relpath(d, vdb))
+        if matches(atom, deny):
+            v.append(("package", atom))
+    wf = os.path.join(root, "var/lib/portage/world")
+    if os.path.exists(wf):
+        for ln in read_list(wf):
+            atom = atom_of(ln)
+            if matches(atom, deny):
+                v.append(("world-denied", atom))
+            elif not matches(atom, allow):
+                v.append(("world-not-allowlisted", atom))
+    for p in paths:
+        if p.startswith("~/"):
+            cands = [os.path.join(h, p[2:]) for h in homes(root)]
+        else:
+            cands = [os.path.join(root, p.lstrip("/"))]
+        for c in cands:
+            for hit in glob.glob(c) or ([c] if os.path.lexists(c) else []):
+                if os.path.lexists(hit):
+                    v.append(("path", hit[len(root.rstrip("/")):] if root != "/" else hit))
+    # AppImages anywhere common
+    for pat in ("opt/*.AppImage", "usr/local/bin/*.AppImage", "home/*/*.AppImage", "home/*/Applications/*.AppImage", "home/*/.local/bin/*.AppImage"):
+        for hit in glob.glob(os.path.join(root, pat)):
+            v.append(("appimage", hit[len(root.rstrip("/")):]))
+    return sorted(set(v))
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--root", default="/")
+    ap.add_argument("--policy", default=POLICY)
+    a = ap.parse_args(argv)
+    for f in ("personal-apps.denylist", "personal-paths.denylist", "world.allowlist"):
+        if not os.path.exists(os.path.join(a.policy, f)):
+            print(f"CANNOT-RUN missing {a.policy}/{f}")
+            return 2
+    v = check(a.root.rstrip("/") or "/", a.policy)
+    for cls, what in v:
+        print(f"VIOLATION {cls} {what}")
+    print(f"horcrux-test-machine-check: {'FAIL' if v else 'PASS'} ({len(v)} violation(s))")
+    return 1 if v else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

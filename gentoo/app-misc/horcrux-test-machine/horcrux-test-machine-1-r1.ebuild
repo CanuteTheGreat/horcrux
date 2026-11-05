@@ -22,7 +22,21 @@ RDEPEND="
 	net-misc/networkmanager
 	gnome? ( gnome-base/dconf )
 	xfce? ( xfce-base/xfconf )
+	dev-lang/python
+	!www-client/brave-bin
+	!www-client/brave
+	!net-misc/nextcloud-client
+	!net-im/discord
+	!net-im/signal-desktop
+	!net-im/signal-desktop-bin
+	!media-sound/spotify
+	!app-admin/keepassxc
+	!app-admin/proton-pass-bin
+	!net-vpn/proton-vpn-gtk-app
+	!app-antivirus/clamav
 "
+# The blockers above are the Portage-level half of the guard: a test machine can't even be updated into carrying the owner's
+# personal apps (weak blockers unmerge them). The full list is files/personal-apps.denylist; horcrux-test-machine-check (lab hx-invariants) enforces it.
 
 pkg_preinst() {
 	# the installer writes the same package.use file for a fresh test-machine install; replace it instead of leaving a ._cfg file
@@ -67,6 +81,10 @@ src_install() {
 		insinto /etc/portage/package.env
 		newins "${FILESDIR}"/smallram.package.env horcrux-test-machine
 	fi
+	# no-personal-apps guard (owner order 2026-11-05): policy data + the checker the lab's hx-invariants job runs
+	insinto /usr/share/${PN}
+	doins "${FILESDIR}"/personal-apps.denylist "${FILESDIR}"/personal-paths.denylist "${FILESDIR}"/world.allowlist
+	dosbin "${FILESDIR}"/horcrux-test-machine-check
 	insinto /etc/logrotate.d
 	newins "${FILESDIR}"/logrotate.conf horcrux-test-machine
 
@@ -78,6 +96,10 @@ src_install() {
 		  2. POWER SAVING IS OFF: lid close / suspend key / idle do not suspend (elogind drop-in), Wi-Fi power save off (NetworkManager,
 		     driver options, horcrux-test-power service), no runtime PM on network devices, GNOME/XFCE do not sleep on idle.
 		     Critical-battery hibernate (UPower) is deliberately left alone.
+
+		3. NO PERSONAL APPS, NO PERSONAL DATA (owner order 2026-11-05): only the public Horcrux editions + test tooling + the machine's
+		   hardware enablement. `horcrux-test-machine-check` lists violations (denylist of personal apps/paths + an ALLOWLIST for the
+		   world file: /usr/share/horcrux-test-machine/). To add a legitimate package, add it to world.allowlist in the same change.
 
 		Back to a normal machine: emerge -C app-misc/horcrux-test-machine (power behaviour returns at once after `rc-service
 		elogind reload`/next login). Encryption cannot be added in place (native ZFS encryption): take a fresh backup, then reinstall

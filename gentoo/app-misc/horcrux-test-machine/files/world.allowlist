@@ -1,0 +1,95 @@
+# ALLOWLIST for /var/lib/portage/world on a TEST machine: every world entry must match one of these shell globs (cat/pkg).
+# Public Horcrux editions (server core, gnome-light, XFCE small-device profile) + test tooling + machine HARDWARE enablement + agent plumbing.
+# A new entry is a deliberate act: add it here (with the reason) in the same change that installs it. Anything else = personal app = fails the lab.
+# --- Horcrux product (all editions)
+app-misc/horcrux-*
+sys-apps/horcrux-*
+net-misc/horcrux-*
+sys-kernel/horcrux-*
+gnome-extra/horcrux-*
+app-emulation/horcrux*
+app-misc/*-machine
+# --- machine layers: hardware / first-boot plumbing (no personal apps; verified by the denylist)
+app-misc/gringotts-config
+app-misc/gringotts-tools
+# --- hardware enablement (T2 Touch Bar/fans/Wi-Fi firmware, Surface kernel, microcode, firmware, fingerprint reader)
+sys-firmware/*
+sys-kernel/*
+sys-apps/t2fanrd
+sys-apps/tiny-dfr
+sys-auth/fprintd
+sys-apps/fwupd
+sys-power/*
+net-wireless/*
+# --- base system / tools
+app-admin/sudo
+app-admin/sysklogd
+app-crypt/argon2
+app-editors/nano
+app-editors/vim
+app-cdr/cdrtools
+dev-db/sqlite
+dev-libs/libisoburn
+dev-vcs/git
+app-misc/jq
+app-misc/tmux
+app-portage/eix
+app-portage/portage-utils
+app-eselect/eselect-repository
+media-fonts/terminus-font
+sys-apps/dbus
+sys-apps/gptfdisk
+sys-apps/memtest86+
+sys-apps/pciutils
+sys-apps/usbutils
+sys-apps/net-tools
+sys-block/*
+sys-boot/*
+sys-fs/*
+sys-process/*
+sys-auth/elogind
+net-misc/chrony
+net-misc/curl
+net-misc/dhcpcd
+net-misc/networkmanager
+net-misc/openssh
+net-misc/bridge-utils
+net-dns/*
+net-firewall/nftables
+net-vpn/wireguard-tools
+net-print/*
+net-misc/ctg-ssh-ca-fleet
+# --- test tooling / virtualisation the lab exercises
+app-benchmarks/stress-ng
+app-emulation/libvirt
+app-emulation/qemu
+app-emulation/virt-manager
+app-emulation/virt-viewer
+app-emulation/libguestfs*
+app-containers/*
+sys-cluster/horcrux*
+media-sound/alsa-utils
+# --- public desktop editions
+gnome-base/gdm
+gnome-base/gnome-light
+gnome-extra/gnome-tweaks
+gnome-extra/gnome-shell-extension*
+media-video/pipewire
+media-video/wireplumber
+x11-terms/terminator
+x11-terms/xfce4-terminal
+www-client/firefox-bin
+xfce-base/*
+xfce-extra/*
+x11-misc/lightdm*
+x11-drivers/*
+x11-apps/*
+app-accessibility/onboard
+gnome-extra/iio-sensor-proxy
+gnome-extra/nm-applet
+media-sound/pavucontrol
+sys-apps/xdg-desktop-portal-gtk
+# --- agent plumbing the lab and the owner's monitoring need on every test machine
+net-vpn/tailscale
+app-admin/rustinion-agent
+app-backup/restic
