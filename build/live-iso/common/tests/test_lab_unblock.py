@@ -139,6 +139,7 @@ class ProductBlockers(unittest.TestCase):
         for arch in ("amd64", "arm64"):
             self.assertIn(arch, kw)
         self.assertIn("app-emulation/qemu[spice", eb)
+        self.assertIn("net-fs/nfs-utils", eb)                           # shared (NFS) storage for a cluster: lab 2026-11-05 had to install it by hand
         self.assertIn("!app-emulation/horcrux", eb)                     # same files as the source build: never both
         core = _rd("build", "live-iso", "project", "variants", "core", "Dockerfile")
         self.assertIn("app-emulation/horcrux-bin", core)

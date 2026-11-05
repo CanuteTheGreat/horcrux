@@ -14,7 +14,7 @@ HOMEPAGE="https://github.com/CanuteTheGreat/horcrux"
 #  - The image build already cross-builds the manager on Debian bookworm with a portable CPU baseline (build/live-iso/project/Dockerfile.app, checked by
 #    check-cpu-baseline.py) and leaves it as one tarball: /usr/share/horcrux/prebuilt/horcrux-manager-<arch>.tar.zst. THIS package installs that
 #    tarball, so the manager is a real, owned, upgradable, removable Portage package (qlist -I app-emulation/horcrux-bin) in the server AND the desktop
-#    editions (sys-apps/horcrux-core's image layer emerges it), with the runtime dependencies (qemu with SPICE, libvirt, bridge, dnsmasq) declared.
+#    editions (sys-apps/horcrux-core's image layer emerges it), with the runtime dependencies (qemu with SPICE, libvirt, bridge, dnsmasq, nfs-utils for shared storage) declared.
 #  - A source build stays available: app-emulation/horcrux (blocked by this package, both install /usr/bin/horcrux-api).
 # Upgrade on an installed machine: put a newer tarball in /usr/share/horcrux/prebuilt/ (or HORCRUX_MANAGER_TARBALL=/path) and `emerge -1 horcrux-bin`;
 # without one the daily-image asset is fetched (HORCRUX_MANAGER_URL, default below).
@@ -29,6 +29,7 @@ RDEPEND="
 	app-emulation/libvirt[qemu]
 	app-emulation/qemu[spice,usbredir,virtfs,vnc]
 	net-dns/dnsmasq
+	net-fs/nfs-utils
 	net-misc/bridge-utils
 	sys-apps/iproute2
 	sys-auth/pambase
