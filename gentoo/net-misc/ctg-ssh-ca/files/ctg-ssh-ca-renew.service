@@ -1,0 +1,8 @@
+[Unit]
+Description=Renew this machine's SSH certificates (host + user) with the personal CA signer
+Wants=network-online.target
+After=network-online.target tailscaled.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ctg-ssh-ca renew-all
