@@ -39,7 +39,7 @@ a container they control.
 | `unprivileged` (default `true`), `idmap_base` (100000), `idmap_size` (65536) | User namespace; root's `/etc/subuid`/`/etc/subgid` range is added if missing |
 | `disk_gb` | Sized ext4 image root disk (grow later); unset = directory rootfs |
 | `memory`, `swap_mb`, `cpus`, `cpu_limit` (cores, fractional), `cpu_units` | cgroup2 `memory.max`, `memory.swap.max`, `cpu.max` ("quota period"), `cpu.weight` |
-| `nets[]`: `bridge`, `vlan`, `ip` (`dhcp` / CIDR), `gateway`, `ip6` (`auto`/`dhcp`/CIDR), `gateway6`, `hwaddr`, `mtu`, `name` | veth on a bridge; VLAN tags need a VLAN-aware bridge. The guest's own network config (ifupdown, netplan or systemd-networkd) is written, like Proxmox |
+| `nets[]`: `bridge`, `vlan`, `ip` (`dhcp` / CIDR), `gateway`, `ip6` (`auto`/`dhcp`/CIDR), `gateway6`, `hwaddr`, `mtu`, `name` | veth on a bridge; VLAN tags need a VLAN-aware bridge. The guest's own network config (ifupdown, netplan, systemd-networkd, or netifrc on Gentoo OpenRC) is written, like Proxmox |
 | `mounts[]`: `path`, `source` (host dir = bind mount), `read_only` | Without `source`: a managed volume dir owned by the container's root |
 | `features`: `nesting`, `keyctl`, `fuse` | Nested containers; keyctl() allowed (blocked by default for unprivileged); `/dev/fuse` |
 | `hostname`, `nameserver`, `searchdomain`, `ssh_public_keys` | Written into the guest at every start (opt out per file with `/etc/.horcrux-ignore.<file>`) |
