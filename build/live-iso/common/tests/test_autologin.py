@@ -108,6 +108,7 @@ class InstallerDefaults(unittest.TestCase):
             self.assertEqual(hits, [], junk)
 
 
+@unittest.skipUnless(os.path.exists(os.path.join(ROOT, "build", "installer", "horcrux-installer.sh")), "reads Horcrux-only files (absent in a vendored copy, e.g. Patronus)")
 class PackagesAndImages(unittest.TestCase):
     def test_no_package_or_overlay_file_configures_autologin(self):
         bad = []
@@ -201,6 +202,7 @@ class GateSelfTest(unittest.TestCase):
         self.assertTrue(got["ok"], got)
 
 
+@unittest.skipUnless(os.path.exists(os.path.join(ROOT, "build", "installer", "horcrux-installer.sh")), "reads Horcrux-only files (absent in a vendored copy, e.g. Patronus)")
 class HostnameRule(unittest.TestCase):
     def test_generic_image_default_is_refused(self):
         for h in ("surface-pro", "surface-pro.localdomain", "localhost", "ubuntu"):

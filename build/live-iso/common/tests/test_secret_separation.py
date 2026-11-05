@@ -171,6 +171,7 @@ class GuidedStages(unittest.TestCase):
         self.assertIn("disk passphrase", ST.BY_ID["disk"].validate(ctx, {"fs": "xfs-luks", "lpw": OTHER_PW, "lpw2": OTHER_PW}))
 
 
+@unittest.skipUnless(os.path.exists(os.path.join(ROOT, "build", "installer", "horcrux-installer.sh")), "reads Horcrux-only files (absent in a vendored copy, e.g. Patronus)")
 class SurfaceAuto(unittest.TestCase):
     """the real prompt loop of horcrux-surface-auto, run in bash with scripted stdin"""
     SCRIPT = os.path.join(ROOT, "gentoo", "app-misc", "horcrux-surface-desktop", "files", "root", "usr", "bin", "horcrux-surface-auto")
@@ -221,6 +222,7 @@ class SurfaceAuto(unittest.TestCase):
         self.assertNotRegex(after_prompt.split("exec /sbin/reboot")[0], r"(?m)^\s*(/sbin/reboot|reboot|sync|shutdown)\b")
 
 
+@unittest.skipUnless(os.path.exists(os.path.join(ROOT, "build", "installer", "horcrux-installer.sh")), "reads Horcrux-only files (absent in a vendored copy, e.g. Patronus)")
 class GringottsInstall(unittest.TestCase):
     PATH = os.path.join(ROOT, "build", "live-iso", "project", "variants", "gringotts", "repo", "app-misc", "gringotts-tools", "files", "usr", "bin",
                         "gringotts-install")
@@ -261,6 +263,7 @@ class GringottsInstall(unittest.TestCase):
         self.assertNotIn("return passphrase", t)
 
 
+@unittest.skipUnless(os.path.exists(os.path.join(ROOT, "build", "installer", "horcrux-installer.sh")), "reads Horcrux-only files (absent in a vendored copy, e.g. Patronus)")
 class LegacyInstaller(unittest.TestCase):
     PATH = os.path.join(ROOT, "build", "installer", "horcrux-installer.sh")
 
@@ -292,6 +295,7 @@ class NoBakedCredentials(unittest.TestCase):
                             self.fail(f"{f}:{i} sets a literal password")
 
 
+@unittest.skipUnless(os.path.exists(os.path.join(ROOT, "build", "installer", "horcrux-installer.sh")), "reads Horcrux-only files (absent in a vendored copy, e.g. Patronus)")
 class ShadowGate(unittest.TestCase):
     """the QEMU gate: FAILS when an installed account's hash verifies against the known test passphrase"""
 
