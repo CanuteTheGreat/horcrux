@@ -2,6 +2,7 @@
 # Live-session console setup. Does nothing on an installed system.
 #   <proj>.installer=1   guided installer on tty1 (or on the serial UART when console= names one)
 #   <proj>.autoinstall=1 unattended install driven by an answer file (see docs/ISO-INSTALL.md)
+#   <proj>.autoinstall.after=reboot  restart (sysrq) instead of poweroff when done/failed; <proj>.autoinstall.log=UUID=<vfat> copies the log there
 #   neither              root shell on the consoles (the live system; sshd is OFF, root password is locked)
 description="Live session: guided installer / unattended install / console shells"
 depend() { need localmount; after local sysklogd dhcpcd; before live-serial; }
@@ -26,7 +27,17 @@ start() {
 	if grep -q "${p}.autoinstall=1" /proc/cmdline; then
 		set_tty1 "--noclear -a root"
 		einfo "unattended install (answer file)"
-		( /usr/bin/live-installer --answers auto 2>&1; echo "AUTOINSTALL-EXIT rc=$?" ) | tee /var/log/autoinstall.log >/dev/console
+		# <proj>.autoinstall.after=reboot: restart into the installed system (or, when the install failed/refused, into whatever is on the disk)
+		# instead of powering off, so an unattended lab (no one to press the power button) gets its machine back. <proj>.autoinstall.log=UUID=<esp>
+		# names a vfat partition to copy the install log to (only when it still exists: the disk may have been erased).
+		after=$(cmdarg "$p" autoinstall.after); nohalt=; [ "$after" = reboot ] && nohalt=--no-halt
+		( /usr/bin/live-installer --answers auto $nohalt 2>&1; echo "AUTOINSTALL-EXIT rc=$?" ) | tee /var/log/autoinstall.log >/dev/console
+		if [ "$after" = reboot ]; then
+			# NOT /sbin/reboot: the live medium may live on the disk the installer just erased; sysrq needs no file from it
+			lg=$(cmdarg "$p" autoinstall.log | sed 's/^UUID=//'); [ -z "$lg" ] || { mkdir -p /run/autoinstall-log && mount -t vfat "/dev/disk/by-uuid/$lg" /run/autoinstall-log 2>/dev/null && { mkdir -p /run/autoinstall-log/EFI/HXSTAGE; cp /var/log/autoinstall.log /run/autoinstall-log/EFI/HXSTAGE/autoinstall.log 2>/dev/null; sync; umount /run/autoinstall-log 2>/dev/null; }; }
+			echo "AUTOINSTALL-REBOOT after=reboot" >/dev/console; sync; sleep 3; echo 1 > /proc/sys/kernel/sysrq; echo b > /proc/sysrq-trigger
+			return 0
+		fi
 		if grep -q 'ANSWER-FILE\|No answer file' /var/log/autoinstall.log; then
 			ewarn "no usable answer file: starting the guided installer on the screen instead"
 			echo "INSTALLER-FALLBACK-INTERACTIVE" >/dev/console
