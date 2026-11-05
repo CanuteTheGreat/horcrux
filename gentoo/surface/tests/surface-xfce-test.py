@@ -357,6 +357,7 @@ class XT(SQ.T):
         rc, out = self.ssh("ps -eo user,comm,args | grep -E 'lightdm-gtk-greeter|onboard' | grep -v grep | cut -c1-150; ls /etc/lightdm; cat /etc/lightdm/lightdm-gtk-greeter.conf | grep -vE '^#|^$' | head -20")
         self.save("greeter-state.txt", out)
         s("lightdm-gtk-greeter-shown", "lightdm-gtk-greeter" in out, re.sub(r"\s+", " ", out)[:240])
+        s("lightdm-greeter-runs-unprivileged", any(l.split()[0] == "lightdm" for l in out.splitlines() if "lightdm-gtk-greeter" in l and l.split()), "greeter user must be lightdm, never root: " + re.sub(r"\s+", " ", out)[:200])
         rc, wm = self.ssh("export DISPLAY=:0 XAUTHORITY=$(ls /var/run/lightdm/root/:0 /run/lightdm/root/:0 2>/dev/null | head -1); pgrep -a onboard | head -2; xprop -root 2>&1 | head -1", timeout=60)
         self.save("greeter-windows.txt", wm)
         s("greeter-onboard-running", re.search(r"onboard", wm) is not None, re.sub(r"\s+", " ", wm)[:240])

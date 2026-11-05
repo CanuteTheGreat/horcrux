@@ -32,6 +32,18 @@ class Profile(unittest.TestCase):
         self.assertIn("zram-swap:default", p["services_add"])
         self.assertIn("elogind:boot", p["services_add"])
 
+    def test_lightdm_greeter_never_runs_as_root(self):
+        conf = open(os.path.join(ROOT, "..", "app-misc", "horcrux-surface-desktop", "files", "root", "etc", "lightdm", "lightdm.conf.d", "50-horcrux-surface.conf")).read()
+        sect, vals = None, {}
+        for line in conf.splitlines():
+            line = line.strip()
+            if line.startswith("[") and line.endswith("]"):
+                sect = line
+            elif "=" in line and not line.startswith("#"):
+                vals[(sect, line.split("=")[0].strip())] = line.split("=", 1)[1].strip()
+        self.assertEqual(vals.get(("[LightDM]", "greeter-user")), "lightdm")   # lab finding 2026-11-04: greeter ran as root on the Surface
+        self.assertNotIn(("[Seat:*]", "autologin-user"), vals)
+
     def test_desktop_package_has_xfce_stack(self):
         eb = open(os.path.join(ROOT, "..", "app-misc", "horcrux-surface-desktop", "horcrux-surface-desktop-1-r1.ebuild")).read()
         for atom in ("xfce-base/xfce4-meta", "x11-misc/lightdm", "app-accessibility/onboard", "xfce-base/xfce4-power-manager",
