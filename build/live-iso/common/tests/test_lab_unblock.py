@@ -164,6 +164,8 @@ class ProductBlockers(unittest.TestCase):
             line = [l for l in _rd(*path).splitlines() if l.startswith("app-emulation/qemu")][0].split()
             for flag in ("spice", "usbredir", "virtfs", "vnc"):
                 self.assertIn(flag, line[1:], path[-1])
+        use = _rd("gentoo", "sys-apps", "horcrux-repo-config", "files", "horcrux-roles.use")
+        self.assertRegex(use, r"(?m)^app-emulation/qemu .*\bspice\b")      # first install of the manager on an existing machine resolves without autounmask
         # a global -spice / USE="-spice" in the image's own config would silently undo it
         for root, _, files in os.walk(os.path.join(REPO, "build", "live-iso")):
             for fn in files:
@@ -181,7 +183,7 @@ class ProductBlockers(unittest.TestCase):
 
     def test_changed_packages_got_a_revision_so_installed_machines_update(self):
         for cat, pn, want in (("sys-apps", "horcrux-firstboot", "horcrux-firstboot-1-r1.ebuild"), ("sys-apps", "horcrux-backup", "horcrux-backup-1-r5.ebuild"),
-                              ("sys-apps", "horcrux-repo-config", "horcrux-repo-config-1-r1.ebuild")):
+                              ("sys-apps", "horcrux-repo-config", "horcrux-repo-config-1-r2.ebuild")):
             self.assertIn(want, os.listdir(os.path.join(GENTOO, cat, pn)))
 
 
