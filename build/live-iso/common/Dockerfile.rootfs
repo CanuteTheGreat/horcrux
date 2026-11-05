@@ -34,6 +34,13 @@ RUN set -e; uri=$(sed -n 's/^sync-uri *= *//p' /etc/portage/binrepos.conf/gentoo
     echo "binhost $uri serves CHOST=$got, rootfs CHOST=$want"; \
     [ "$got" = "$want" ] || { echo "binhost/CHOST mismatch"; exit 1; }
 
+# CTG binhost (signed; has what the official binhost lacks: mariadb, zfs, nextcloud, our overlay packages, and our USE).
+# Higher priority than the official one; Portage falls back per package. Optional: if it is unreachable the build still
+# works from the official binhost + source. https://git.canutethegreat.com/CanuteTheGreat/gentoo-binhost
+RUN case "${ARCH}" in x86_64) A=amd64;; aarch64) A=arm64;; *) A=;; esac; \
+    [ -z "$A" ] || curl -fsSL --retry 3 https://f002.backblazeb2.com/file/ctg-binhost/ctg-binhost-setup.sh | sh -s -- --arch "$A" --init openrc \
+    || echo "ctg binhost not configured (official binhost only)"
+
 COPY project/portage/ /etc/portage/
 COPY common/packages.txt /tmp/packages.common.txt
 COPY project/packages.txt /tmp/packages.txt
