@@ -21,5 +21,17 @@ class ManagerSupervised(unittest.TestCase):
         self.assertEqual(len(re.findall(r"enable_boot_start\(\)\.await;", s)), 2, "create AND join must enable the manager at boot")
 
 
+class ManagerAssetPublished(unittest.TestCase):
+    """app-emulation/horcrux-bin fetches releases/download/daily/horcrux-manager-daily-<arch>.tar.zst on an installed machine; the asset was never uploaded (404)"""
+
+    def test_build_keeps_and_publish_uploads_the_manager_tarball(self):
+        b = open(os.path.join(ROOT, "build/live-iso/build.sh")).read()
+        self.assertIn('docker cp "$_mc:/out/usr/share/horcrux/prebuilt/." "$OUT/mgr/"', b)
+        p = open(os.path.join(ROOT, "build/live-iso/common/publish-github.sh")).read()
+        self.assertIn('horcrux-manager-daily-$ARCH.tar.zst', p)
+        e = open(os.path.join(ROOT, "gentoo/app-emulation/horcrux-bin/horcrux-bin-0.1.0.ebuild")).read()
+        self.assertIn("horcrux-manager-daily-$(uname -m).tar.zst", e)
+
+
 if __name__ == "__main__":
     unittest.main()

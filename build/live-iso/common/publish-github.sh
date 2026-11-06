@@ -79,6 +79,9 @@ daily)
   printf '%s  %s\n' "$sum" "$name" > "$tmp/$name.sha256"
   put_asset "$id" "$tmp/$name.sha256" "$name.sha256"
   [ -z "$evidence" ] || put_asset "$id" "$evidence" "$project-${VPFX}daily-$ARCH-test-evidence.tgz"
+  # the manager tarball app-emulation/horcrux-bin fetches on installed machines (HORCRUX_MANAGER_URL default); same asset name from every variant of one arch
+  mgr=$(ls "$(dirname "$iso")"/mgr/horcrux-manager-*.tar.zst 2>/dev/null | head -1)
+  [ -z "$mgr" ] || [ "$project" != horcrux ] || put_asset "$id" "$mgr" "horcrux-manager-daily-$ARCH.tar.zst" || echo "::warning::manager tarball not uploaded"
   # assets of the older naming schemes: removed once the same image is up under its new name (the product-domain redirects keep the old URLs working)
   for old in "$project-${IMG_OLD_VPFX}daily-$ARCH.iso" "$project-${IMG_OLD_VPFX}daily-$ARCH.iso.sha256" "$project-${IMG_OLD_VPFX}daily-$ARCH-test-evidence.tgz"; do
     for a in $(assets_json "$id" | pyj 'import json,sys;print(" ".join(str(a["id"]) for a in json.load(sys.stdin) if a["name"]==sys.argv[1]))' "$old"); do curl -fsS -X DELETE "${H[@]}" "$api/releases/assets/$a" || true; done

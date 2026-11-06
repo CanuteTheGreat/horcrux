@@ -45,6 +45,13 @@ if [ -z "${REUSE_ROOTFS:-}" ]; then
 lap "stage 1: application (cargo/trunk)"
 docker build $PLAT -f project/Dockerfile.app --build-arg JOBS=$JOBS -t $TAG-app "$REPO" > "$OUT/app-build.log" 2>&1 \
     || { echo "application build failed (full log: $OUT/app-build.log)"; tail -40 "$OUT/app-build.log"; exit 1; }
+# the manager tarball (what app-emulation/horcrux-bin installs) is kept next to the ISO so the daily release can publish it: horcrux-bin fetches
+# .../releases/download/daily/horcrux-manager-daily-<arch>.tar.zst on an installed machine, and that asset never existed (404; the 3 test laptops could not
+# install the manager until the lab copied the tarball out of the app image by hand)
+if [ "$PROJECT" = horcrux ]; then
+  mkdir -p "$OUT/mgr"; _mc=$(docker create $PLAT "$TAG-app" true 2>/dev/null) \
+    && docker cp "$_mc:/out/usr/share/horcrux/prebuilt/." "$OUT/mgr/" >/dev/null 2>&1; [ -z "$_mc" ] || docker rm -f "$_mc" >/dev/null 2>&1 || true
+fi
 lap "stage 2: gentoo rootfs (stage3 + binhost + ccache)"
 docker build $PLAT $ARCHARGS -f common/Dockerfile.rootfs --build-arg APP_IMAGE=$TAG-app --build-arg PROJECT=$PROJECT \
     --build-arg ISO_LABEL=$ISO_LABEL --build-arg PROJECT_TITLE="$PROJECT_TITLE" -t $TAG-rootfs . 2>&1 | tee "$OUT/rootfs-build.log" | tail -40

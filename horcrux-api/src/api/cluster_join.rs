@@ -57,7 +57,9 @@ async fn enable_boot_start() {
         .output()
         .await
     {
-        Ok(o) if o.status.success() => tracing::info!("cluster member: horcrux-api enabled at boot"),
+        Ok(o) if o.status.success() => {
+            tracing::info!("cluster member: horcrux-api enabled at boot")
+        }
         Ok(o) => tracing::warn!(
             "cluster member: could not enable horcrux-api at boot: {}",
             String::from_utf8_lossy(&o.stderr).trim()
