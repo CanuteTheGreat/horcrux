@@ -1,7 +1,12 @@
 #!/sbin/openrc-run
 description="Horcrux API server and web UI (https://:8006)"
 command=/usr/bin/horcrux-api
-command_background=yes
+# supervised: the manager IS the HA supervisor (heartbeat, self-fence, recovery) of its node. A killed or crashed manager is restarted within seconds; without
+# this a dead manager left the node unmanaged for good (lab finding 2026-11-06: pkill -KILL horcrux-api on a cluster node was never undone). `rc-service stop`
+# stops the supervisor, so a deliberate stop stays stopped.
+supervisor=supervise-daemon
+respawn_delay=2
+respawn_max=0
 pidfile=/run/horcrux-api.pid
 output_log=/var/log/horcrux/horcrux-api.log
 error_log=/var/log/horcrux/horcrux-api.log
