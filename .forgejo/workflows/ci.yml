@@ -196,7 +196,12 @@ jobs:
     # the race against the working beauxbatons runner (~every other run).
     # act-latest is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
-    container: catthehacker/ubuntu:act-latest
+    # Slot memory (2026-11-06): linux-cross runner slots are 5g now (ci peaks 3.5 GiB). This job's
+    # sampled anon peak is 5.4-5.5 GiB (all-features test build + k3s/LDAP/QEMU tests), so it asks
+    # for its own 7g cap (a job's container.options --memory overrides the runner's).
+    container:
+      image: catthehacker/ubuntu:act-latest
+      options: --memory=7g --memory-swap=7g --cpus=3
     needs: [check, plan]
     if: needs.plan.outputs.dup != 'true'
     # Memory (2026-10-17): linux-cross job containers are capped at 9g
