@@ -57,6 +57,7 @@ net-dns/*
 net-firewall/nftables
 net-vpn/wireguard-tools
 net-print/*
+net-misc/ctg-ssh-ca
 net-misc/ctg-ssh-ca-fleet
 # --- test tooling / virtualisation the lab exercises
 app-benchmarks/stress-ng
