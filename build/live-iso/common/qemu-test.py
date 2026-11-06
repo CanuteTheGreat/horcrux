@@ -1598,6 +1598,7 @@ class Runner:
         end = time.time() + wait
         while True:
             sc, code, resp = http(FWD_WEB, "/api/auth/login", "POST", {"username": "admin", "password": pw})
+            self.login_err = resp.decode(errors="replace")[:80] if code == 0 else ""      # why there was no HTTP answer (timeout / refused / TLS)
             if code == 200 or time.time() >= end:
                 return code
             time.sleep(4)
@@ -1653,11 +1654,16 @@ class Runner:
         vm.expect_raw("Press Enter to return", 20)
         vm.send("\r")
         vm.expect_raw("Enter an option", 20)
-        c3, c2 = self.web_login_code(PW3, 180), self.web_login_code(PW2)
+        c3 = self.web_login_code(PW3, 180)
+        err3 = self.login_err
+        c2 = self.web_login_code(PW2)
         if c3 != 200:
             rc, o = ssh(FWD_SSH, self.key, f"rc-service {self.P['svc']} status; ls -la /var/lib/{a.project}; tail -n 8 /var/log/{a.project}/web-error.log; nft list ruleset 2>&1 | grep -n {P['port']} | head -5; ss -ltn | grep {P['port']}")
             print("[DIAG] " + o.replace("\n", "\n[DIAG] "))
-        self.step("console-menu-factory-reset", c3 == 200 and c2 != 200, f"factory defaults: new password -> {c3}, password from before the reset -> {c2}")
+            diag = " [no answer: " + err3 + "; " + re.sub(r"\s+", " ", o)[:200] + "]" if c3 == 0 else ""
+        else:
+            diag = ""
+        self.step("console-menu-factory-reset", c3 == 200 and c2 != 200, f"factory defaults: new password -> {c3}, password from before the reset -> {c2}" + diag)
         rc, o = ssh(FWD_SSH, self.key, f"sleep 12; test -e {P['seedfile']} && echo present || echo gone")
         self.step("console-menu-firstboot-file-removed", "gone" in o, f"{P['seedfile']}: {o.strip()}")
         vm.send("10\r")
