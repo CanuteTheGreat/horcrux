@@ -983,6 +983,8 @@ class Runner:
                 kb.key("RIGHT")
                 shot("03b-filesystem-zfs-mirror")
                 kb.key("TAB")
+                if p == "horcrux":
+                    kb.key("TAB")                          # -> 'TEST MACHINE: NO disk encryption' (advanced row added by b9d3838; the VGA zfs-mirror run pressed ENTER on 'Show advanced options' and sat on the disk screen for 1700 s)
             kb.key("TAB")                                  # -> 'Show advanced options' (zfs single: next stop = buttons)
         elif a.fs == "xfs-luks":
             kb.key("TAB"); kb.text(PW); kb.key("TAB"); kb.text(PW)        # disk passphrase + confirmation
