@@ -306,8 +306,14 @@ class Tests:
             self.step("forensic-banner", vm.expect_raw(r"FORENSIC RESCUE \(no-touch\)", T(300)), "all disks read-only message")
             self.step("forensic-menu", vm.expect_raw(r"Enter an option", T(60)))
             # 0 -> the live shell: inspect the state the session start left behind
-            vm.send("0\r")
-            self.step("live-shell", self.shell(vm))
+            # the menu can swallow the first keystroke on a loaded host (BIOS runs 10240/10335): re-send "0" if no shell answers
+            ok_shell = False
+            for _try in range(3):
+                vm.send("0\r")
+                ok_shell = self.shell(vm, 100)
+                if ok_shell:
+                    break
+            self.step("live-shell", ok_shell)
             rc, o = self.run(vm, "echo \"M=$(grep -E '^/dev/(vd|sd|nvme)' /proc/mounts | grep -v iso9660 | wc -l) S=$(cat /proc/swaps | wc -l) RO=$(blockdev --getro /dev/vda /dev/vda1 /dev/vda4 | tr -d '\\n')\"")
             mm = re.search(r"M=(\d+) S=(\d+) RO=(\d+)", o)
             nums = list(mm.groups()[:2]) if mm else []
