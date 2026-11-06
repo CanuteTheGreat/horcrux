@@ -36,6 +36,7 @@ PROJECTS = {
                      dbfiles=["/var/lib/patronus/config.db"], dbuser="patronus", logdirs=["/var/log/patronus"]),
 }
 PW = "Kx9!mQv2-tle-77Zp"          # >= 12 chars, mixed: passes the installer's strength rules
+PW_DISK = "Dq4#sB8-luks-63Nw"       # the disk passphrase (xfs-luks): the installer refuses any account password equal to it (secretcheck), so it is its own secret
 PW2, PW3 = "Rv7#nQ4-zeta-91Lk", "Tb3$wH8-omega-52Ud"   # console-menu password reset / factory reset
 FWD_WEB, FWD_SSH, FWD_WAN = 18443, 12222, 18444
 FWD_BIND = os.environ.get("QT_FWD_BIND", "127.0.0.1")     # 0.0.0.0 inside a container whose ports are published (screenshots of the web UI from outside)
@@ -659,7 +660,7 @@ def answer_toml(a, pubkey, pwhash):
              f'root_password_hash = "{pwhash}"', f'ssh_keys = ["{pubkey}"]', f"ssh_password_auth = {'true' if a.ssh_password_opt_in else 'false'}", f"console_menu_open = {'true' if a.console_open else 'false'}",
              "", "[disk]"] + ([] if a.fs_default else [f'filesystem = "{a.fs}"'])     # default run: no filesystem key = the installer's own default
     if a.fs == "xfs-luks":
-        lines += [f'luks_passphrase = "{PW}"']
+        lines += [f'luks_passphrase = "{PW_DISK}"']
     if a.fs == "zfs":
         lines += [f'zfs_raid = "{a.zfs_raid}"', 'disks = ["/dev/vda", "/dev/vdb"]' if a.zfs_raid == "mirror" else 'disks = ["/dev/vda"]']
     else:
@@ -992,7 +993,7 @@ class Runner:
                     kb.key("TAB")                          # -> 'TEST MACHINE: NO disk encryption' (advanced row added by b9d3838; the VGA zfs-mirror run pressed ENTER on 'Show advanced options' and sat on the disk screen for 1700 s)
             kb.key("TAB")                                  # -> 'Show advanced options' (zfs single: next stop = buttons)
         elif a.fs == "xfs-luks":
-            kb.key("TAB"); kb.text(PW); kb.key("TAB"); kb.text(PW)        # disk passphrase + confirmation
+            kb.key("TAB"); kb.text(PW_DISK); kb.key("TAB"); kb.text(PW_DISK)        # disk passphrase + confirmation
             shot("03b-filesystem-xfs-luks-passphrase")
             kb.key("TAB")                                  # -> 'Show advanced options'
         else:
@@ -1247,9 +1248,9 @@ class Runner:
                 time.sleep(1)
             if a.fs == "xfs-luks":
                 ok = self.gfocus(vm, "Disk passphrase")
-                self.gtype(vm, PW)
+                self.gtype(vm, PW_DISK)
                 ok = self.gfocus(vm, "Confirm passphrase") and ok
-                self.gtype(vm, PW)
+                self.gtype(vm, PW_DISK)
                 self.step("gui-luks-passphrase-typed", ok, "disk passphrase + confirmation typed with the keyboard")
             if a.fs == "zfs" and (a.project == "horcrux" or mirror):
                 self.gexpand(vm)
