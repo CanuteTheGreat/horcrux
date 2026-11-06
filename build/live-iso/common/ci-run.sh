@@ -51,6 +51,10 @@ if [ "$result" = pass ]; then
   echo "::group::installer unit tests"
   bash "$HERE/../sync-common.sh" "${SYNC_MODE:---check}" || fail common-sync "shared live-installer copy is out of sync (see sync-common.sh)"
   python3 -m unittest discover -s "$HERE/tests" 2>&1 | tail -15; [ "${PIPESTATUS[0]}" = 0 ] || fail unit-tests "guided-installer unit tests failed"
+  # /boot space handling on a REAL 512 MB ext4 loop mount (30 snapshots, <= 80% used); needs root + loop devices, skipped otherwise
+  if [ "$(id -u)" = 0 ] && command -v mkfs.ext4 >/dev/null && losetup -f >/dev/null 2>&1; then
+    python3 -W ignore "$HERE/be-boot-space-test.py" 2>&1 | grep -E '^(RESULT|ok|Traceback|AssertionError)' ; [ "${PIPESTATUS[0]}" = 0 ] || fail be-boot-space "horcrux-be /boot space test failed (30 snapshots on a 512 MB /boot)"
+  fi
   echo "::endgroup::"
 fi
 
