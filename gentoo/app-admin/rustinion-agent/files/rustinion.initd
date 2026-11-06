@@ -23,3 +23,9 @@ depend() {
 	need net
 	after net-online
 }
+
+# Resident daemon output: without a log the supervisor leaves stdout on whatever started the service (an ssh session, a
+# pipe): once that reader is gone the first println! panics with 'Broken pipe' and the daemon dies at every check-in
+# (lab 2026-11-06: crash.log hourly, last full report 38 h old on a Portage-owned agent).
+output_log="/var/log/rustinion.log"
+error_log="/var/log/rustinion.log"
