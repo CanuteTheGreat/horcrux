@@ -110,6 +110,13 @@ src_install() {
 }
 
 pkg_postinst() {
+	# Portage decides config protection BEFORE pkg_preinst runs, so the rm above does not stop it: on an update the new
+	# package.use file lands as ._cfgNNNN_horcrux-test-machine and the real file stays deleted (the machine would then
+	# pull the encrypted horcrux-unlock). The file is package-owned and meant to be replaced: move it into place.
+	local c d="${EROOT}"/etc/portage/package.use
+	for c in "${d}"/._cfg????_horcrux-test-machine; do
+		[[ -f ${c} ]] && mv -f "${c}" "${d}"/horcrux-test-machine
+	done
 	use gnome && has_version gnome-base/dconf && dconf update
 	if [[ -z ${ROOT} || ${ROOT} == / ]]; then
 		local s

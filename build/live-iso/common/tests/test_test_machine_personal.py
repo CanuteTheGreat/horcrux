@@ -113,11 +113,25 @@ class TestPersonalGuard(unittest.TestCase):
             self.assertEqual(run(d)[0], 1, rel)
 
     def test_ebuild_blocks_gringotts_and_policy_no_longer_allows_them(self):
-        eb = open(os.path.join(REPO, "gentoo", "app-misc", "horcrux-test-machine", "horcrux-test-machine-1-r3.ebuild")).read()
+        eb = open(os.path.join(REPO, "gentoo", "app-misc", "horcrux-test-machine", "horcrux-test-machine-1-r4.ebuild")).read()
         self.assertIn("!app-misc/gringotts-config", eb)
         self.assertIn("!app-misc/gringotts-tools", eb)
         allow = [ln.strip() for ln in open(os.path.join(FILES, "world.allowlist")) if ln.strip() and not ln.startswith("#")]
         self.assertFalse([a for a in allow if "gringotts" in a], allow)
+
+    def test_postinst_moves_cfg_protected_package_use_into_place(self):
+        # r3 left package.use/horcrux-test-machine as ._cfg0000_* with the real file deleted on update (hogshead/gringotts/madammalkins, 2026-11-05)
+        import re, subprocess, tempfile
+        eb = open(os.path.join(REPO, "gentoo", "app-misc", "horcrux-test-machine", "horcrux-test-machine-1-r4.ebuild")).read()
+        body = re.search(r"pkg_postinst\(\) \{\n(.*?)\n\}\n", eb, re.S).group(1)
+        loop = body[body.index("local c d="):body.index("done") + 4]
+        with tempfile.TemporaryDirectory() as root:
+            d = os.path.join(root, "etc/portage/package.use"); os.makedirs(d)
+            open(os.path.join(d, "._cfg0000_horcrux-test-machine"), "w").write("sys-kernel/horcrux-unlock -encrypted\n")
+            r = subprocess.run(["bash", "-c", "EROOT=%s\nf() {\n%s\n}\nf" % (root, loop)], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(os.listdir(d), ["horcrux-test-machine"])
+            self.assertIn("-encrypted", open(os.path.join(d, "horcrux-test-machine")).read())
 
     def test_agent_ssh_authorized_keys_and_firefox_profile_are_fine(self):
         d = self.clean_root()
