@@ -1,10 +1,23 @@
 name: CI
 
+# Trigger policy (2026-11-06, CI capacity): horcrux was the biggest x86 consumer (~40 of 130
+# job-h/day) because every PR commit ran the whole matrix on pull_request AND again on the merge
+# push. Now: the `plan` job decides per run.
+#   - a push that is a PR merge whose tree equals the PR head's tree, and whose PR run already
+#     passed `Test`, runs nothing heavy (`dup`): same bytes, already verified.
+#   - heavy = Gentoo image + USE matrix + release build matrix: only when gentoo/, the Dockerfile,
+#     Cargo.toml/Cargo.lock or this file changed, on the nightly schedule, on a tag, or on dispatch.
+#   - everything that protects main (check, clippy, Test, UI E2E, themes, audit) runs on PRs and
+#     pushes to main as before.
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main]
+  schedule:
+    - cron: '40 8 * * *'
+  workflow_dispatch: {}
 
 env:
   CARGO_TERM_COLOR: always
@@ -33,6 +46,50 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  plan:
+    name: Plan (what needs to run)
+    runs-on: linux-any
+    outputs:
+      heavy: ${{ steps.p.outputs.heavy }}
+      dup: ${{ steps.p.outputs.dup }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - id: p
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
+          TOKEN: ${{ github.token }}
+        run: |
+          heavy=true; dup=false
+          case "$EVENT" in
+            schedule|workflow_dispatch) ;;
+            push|pull_request)
+              case "$REF" in refs/tags/*) ;; *)
+                base="$BEFORE"; [ "$EVENT" = pull_request ] && base="$PR_BASE"
+                heavy=true
+                if [ -n "$base" ] && [ "${base#0000000}" = "$base" ] && git fetch --no-tags --depth=1 origin "$base" 2>/dev/null; then
+                  files=$(git diff --name-only "$base" HEAD 2>/dev/null) && {
+                    if echo "$files" | grep -qE '^(gentoo/|Dockerfile|\.dockerignore|Cargo\.toml$|Cargo\.lock$|\.forgejo/workflows/ci\.yml$)'; then heavy=true; else heavy=false; fi
+                  }
+                fi
+              ;; esac
+              if [ "$EVENT" = push ] && [ "$(git rev-list --parents -n1 HEAD | wc -w)" = 3 ]; then
+                p2=$(git rev-parse HEAD^2)
+                if [ "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse "$p2^{tree}")" ]; then
+                  st=$(curl -fsS -H "Authorization: token $TOKEN" "$API/commits/$p2/status" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(any(x.get("context","")=="CI / Test (pull_request)" and x.get("status")=="success" for x in d.get("statuses",[])))' 2>/dev/null || echo False)
+                  [ "$st" = True ] && dup=true
+                fi
+              fi ;;
+          esac
+          echo "event=$EVENT heavy=$heavy dup=$dup"
+          echo "heavy=$heavy" >> "$GITHUB_OUTPUT"
+          echo "dup=$dup" >> "$GITHUB_OUTPUT"
+
   # Owner rule 2026-10-30: mobile UI follows the device's light/dark setting (cheap static check;
   # rendered light/dark proof: horcrux-mobile/tests/render_theme.py).
   mobile-theme:
@@ -140,7 +197,8 @@ jobs:
     # act-latest is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
     container: catthehacker/ubuntu:act-latest
-    needs: check
+    needs: [check, plan]
+    if: needs.plan.outputs.dup != 'true'
     # Memory (2026-10-17): linux-cross job containers are capped at 9g
     # (rw-man-0x forgejo-runner-crosscompile, capacity 2 x 9g). Run 478's
     # `cargo test --all-features --workspace` hit that cgroup limit: the
@@ -531,7 +589,8 @@ jobs:
     # act-latest is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
     container: catthehacker/ubuntu:act-latest
-    needs: test
+    needs: [test, plan]
+    if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.dup != 'true'
     strategy:
       matrix:
         include:
@@ -803,7 +862,8 @@ jobs:
     # act-latest is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
     container: catthehacker/ubuntu:act-latest
-    needs: check
+    needs: [check, plan]
+    if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.dup != 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -926,7 +986,8 @@ jobs:
     # the x86 linux-cross slots (ctg-infrastructure ci-runners). Cache keys carry runner.arch.
     runs-on: linux-any
     container: catthehacker/ubuntu:act-latest
-    needs: check
+    needs: [check, plan]
+    if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.dup != 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -1018,7 +1079,8 @@ jobs:
     name: UI E2E (browser)
     runs-on: linux-cross-x86_64
     container: catthehacker/ubuntu:act-latest
-    needs: check
+    needs: [check, plan]
+    if: needs.plan.outputs.dup != 'true'
     timeout-minutes: 60
     env:
       HX_RUN_TAG: ${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}   # run-scoped sibling container/network/volume names: exact cleanup, no collision with other jobs
@@ -1229,7 +1291,8 @@ jobs:
     container: catthehacker/ubuntu:act-latest
     # Runs after the main Gentoo build so the shared builder-stage layers
     # (stage3, emerge-webrsync, rust-bin) are already in the daemon's cache.
-    needs: gentoo-docker-build
+    needs: [gentoo-docker-build, plan]
+    if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.dup != 'true'
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
