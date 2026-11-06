@@ -905,7 +905,7 @@ class Runner:
                 self.step("live-sshd-off", not b.startswith("SSH-"), f"banner on the live system: {b!r}")
                 bad = vm.expect_raw(r"(ANSWER-FILE-ERROR[^\n]*|No answer file found[^\n]*)", 3, consume=False)
                 self.step("answer-file-accepted", not bad, bad.group(0).decode() if bad else "validated")
-                ok = vm.expect_raw(r"AUTOINSTALL-(OK|FAILED[^\n]*)", 1700, consume=False)
+                ok = vm.expect_raw(r"AUTOINSTALL-(OK|FAILED[^\n]*)", 1700 * (2 if a.fs == "zfs" and SLOW > 1 else 1), consume=False)   # ZFS under TCG: 2x the budget
                 self.step("installer-finished", ok and b"AUTOINSTALL-OK" in ok.group(0), ok.group(0).decode() if ok else "timeout" + serial_tail(vm))
                 vm.shot("auto-finished")
                 if a.headless_gates:

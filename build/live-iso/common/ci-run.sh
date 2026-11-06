@@ -151,7 +151,11 @@ if [ "$result" = pass ]; then
   for entry in "${MATRIX[@]}"; do
     name=${entry%%|*}; args=${entry#*|}
     echo "::group::QEMU test $name"
-    with_deadline $DL_QEMU python3 -u "$HERE/qemu-test.py" --iso "$ISO" --project "$PROJECT" --arch "$ARCH" $args --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
+    # a ZFS install under TCG needs far more than the other runs (unsquashfs onto ZFS in an emulated aarch64 guest was at 41% after 85 min:
+    # patronus runs 726/747): longer hard deadline for those entries (qemu-test.py scales the installer wait to match)
+    dl=$DL_QEMU
+    if [ "$DL_QEMU" = 5400 ]; then case "$args" in *"--fs zfs"*|*"--mem 8192"*) dl=12600 ;; esac; fi
+    with_deadline $dl python3 -u "$HERE/qemu-test.py" --iso "$ISO" --project "$PROJECT" --arch "$ARCH" $args --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
     rc=${PIPESTATUS[0]}
     echo "::endgroup::"
     rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img
