@@ -138,6 +138,17 @@ class Dedupe(Boot):
         self.assertEqual(before, after, "the snapshot's kernel must keep the OLD kernel after the BE got a new one")
         self.assertNotEqual(before, open(os.path.join(self.boot, "be", "horcrux", "vmlinuz"), "rb").read())
 
+    def test_repeating_a_sync_leaves_no_temp_files_behind(self):
+        # rename(2) of two hard links to ONE inode is a no-op that keeps both names: a second `sync` of the same kernel left vmlinuz.new behind on hogshead
+        with mock.patch.object(BE, "grubcfg"):
+            self.kernel("1")
+            self.snap("pre-upgrade-20261105-100000")
+            BE.cmd_sync(self.c, self.boot)
+            BE.cmd_sync(self.c, self.boot)
+            BE.cmd_create(self.c, "clone1", None, self.boot)
+        left = [os.path.join(dp, n) for dp, _d, fns in os.walk(os.path.join(self.boot, "be")) for n in fns if n.endswith((".new", ".tmp"))]
+        self.assertEqual(left, [])
+
     def test_legacy_plain_copies_are_deduped(self):
         # what older horcrux-be versions left: every snapshot a full private copy
         for d in ("horcrux", ".snap/horcrux@pre-upgrade-20261105-100000", ".snap/horcrux@create-20261105-100001"):

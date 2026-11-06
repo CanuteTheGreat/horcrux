@@ -109,11 +109,20 @@ def link_into(src, dest):
     except OSError:
         pass
     try:
+        if os.path.samefile(src, dest):
+            return  # already a link to it (rename of two links to one inode would leave the temp name behind)
+    except OSError:
+        pass
+    try:
         os.link(src, tmp)
     except OSError:
         shutil.copyfile(src, tmp)
         shutil.copymode(src, tmp)
     os.replace(tmp, dest)
+    try:
+        os.unlink(tmp)  # no-op unless tmp and dest were hard links to the same inode
+    except OSError:
+        pass
 
 
 def put_object(boot, src):
