@@ -1620,8 +1620,17 @@ class Runner:
         if a.project == "horcrux":
             dlg += [("Gateway", "10.0.2.2"), ("DNS server", "10.0.2.3")]
         t = self.opt(vm, "2", dlg, timeout=120)
-        rc, o = ssh(FWD_SSH, self.key, f"grep -c 'BEGIN console-menu {nic}' /etc/dhcpcd.conf; ip -4 addr show dev {nic}")
-        self.step("console-menu-set-static-ip", rc == 0 and o.strip().startswith("1") and addr in o and nic in t, f"{nic} {addr} static via /etc/dhcpcd.conf; ssh still works")
+        # dhcpcd re-applies the address and the port-forwarded sshd can be unreachable for a while afterwards: on the aarch64 TCG
+        # guest the single immediate ssh failed (run 1302, rc 255 -> "ssh still works" FAIL) while x86 KVM passed. Retry for up to
+        # 90 s; only a still-unreachable or wrong result after that fails, and the detail now says why.
+        end = time.time() + 90
+        while True:
+            rc, o = ssh(FWD_SSH, self.key, f"grep -c 'BEGIN console-menu {nic}' /etc/dhcpcd.conf; ip -4 addr show dev {nic}")
+            if rc == 0 or time.time() >= end:
+                break
+            time.sleep(5)
+        self.step("console-menu-set-static-ip", rc == 0 and o.strip().startswith("1") and addr in o and nic in t,
+                  f"{nic} {addr} static via /etc/dhcpcd.conf; ssh still works" + ("" if rc == 0 and addr in o and nic in t else f" [rc={rc} out={o.strip()[:160]!r} menu={t[-160:]!r}]"))
         # option 3: reset the web admin password; the new one must log in (hash compatible with the product), the old one not
         t = self.opt(vm, "3", [("New admin password", PW2), ("Confirm", PW2), ("same password for the root console", "n")])
         c_new, c_old = self.web_login_code(PW2, 20), self.web_login_code(PW)

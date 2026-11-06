@@ -445,7 +445,7 @@ Horcrux specifics: XFS+LUKS / ext4 / XFS / ZFS (single or mirror) from the wizar
 
 ## What is tested automatically
 
-`.forgejo/workflows/live-iso.yml` (daily, and on every `v*` tag) builds the ISO on a rw-man host and runs
+`.forgejo/workflows/live-iso-<variant>.yml (one workflow per image since 2026-11-06)` (daily, and on every `v*` tag) builds the ISO on a rw-man host and runs
 `build/live-iso/common/qemu-test.py` under QEMU/KVM. Five QEMU runs per build (four full installs plus the no-answer-file check; the headless server gate below is an additional run):
 
 | run | firmware / media | installer | file system | network | SSH |

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ci-run.sh daily|stable   -- run by .forgejo/workflows/live-iso.yml, once per architecture (ARCH env; default = the host's):
+# ci-run.sh daily|stable   -- run by .forgejo/workflows/live-iso-<variant>.yml, once per architecture (ARCH env; default = the host's):
 #   x86_64 on the kvm-x86_64 runner (KVM), aarch64 on the arm64 runner (native build, QEMU TCG: Graviton has no /dev/kvm).
 # build ISO -> QEMU boot/install/reboot/web tests (x86: UEFI+USB, BIOS+CD; arm64/riscv64: UEFI) -> publish only if ALL passed.
 # The outcome goes to the `daily-status-*` marker release and the job summary (~/.hermes iso-status-watch reads the
