@@ -1,7 +1,7 @@
 {
  "id": "backup",
- "last_full": "2026-10-30",
- "sha": "7130c84f0cb1c27778f2b0a05e37088308b6375a",
+ "last_full": "2026-11-06",
+ "sha": "2f41dd35ea1deb0d8bddb8639d1981af3db054a8",
  "survivors": [
   "crates/horcrux-backup/src/backup/archive.rs: delete ! in export_disk",
   "crates/horcrux-backup/src/backup/archive.rs: delete match arm Some(0) | Some(3) in check_disk",
@@ -25,7 +25,6 @@
   "crates/horcrux-backup/src/backup/archive.rs: replace sha256_file -> Result<(String, u64)> with Ok((String::new(), 0))",
   "crates/horcrux-backup/src/backup/archive.rs: replace sha256_file -> Result<(String, u64)> with Ok((String::new(), 1))",
   "crates/horcrux-backup/src/backup/archive.rs: replace sha256_file_async -> Result<(String, u64)> with Ok((\"xyzzy\".into(), 0))",
-  "crates/horcrux-backup/src/backup/archive.rs: replace sha256_file_async -> Result<(String, u64)> with Ok((\"xyzzy\".into(), 1))",
   "crates/horcrux-backup/src/backup/archive.rs: replace sha256_file_async -> Result<(String, u64)> with Ok((String::new(), 0))",
   "crates/horcrux-backup/src/backup/archive.rs: replace sha256_file_async -> Result<(String, u64)> with Ok((String::new(), 1))",
   "crates/horcrux-backup/src/backup/archive.rs: replace verify_extracted -> Result<()> with Ok(())",
