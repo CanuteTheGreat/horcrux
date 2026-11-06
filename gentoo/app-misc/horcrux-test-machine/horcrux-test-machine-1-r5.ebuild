@@ -46,10 +46,15 @@ pkg_preinst() {
 }
 
 src_install() {
+	insinto /etc/portage/package.use
+	newins - horcrux-test-machine <<-'EOF2'
+		# owned by app-misc/horcrux-test-machine
+		# no personal data on a test machine: no personal backup schedule (horcrux-backup installs no cron.d/timers), so no backup job exists to report
+		sys-apps/horcrux-backup -personal-backup
+	EOF2
 	if use plain; then
-		insinto /etc/portage/package.use
-		newins - horcrux-test-machine <<-'EOF2'
-			# owned by app-misc/horcrux-test-machine: this machine boots WITHOUT disk encryption and WITHOUT a passphrase prompt
+		cat >> "${ED}"/etc/portage/package.use/horcrux-test-machine <<-'EOF2' || die
+			# this machine boots WITHOUT disk encryption and WITHOUT a passphrase prompt
 			sys-kernel/horcrux-unlock -encrypted
 		EOF2
 	fi
@@ -102,6 +107,9 @@ src_install() {
 		3. NO PERSONAL APPS, NO PERSONAL DATA (owner order 2026-11-05): only the public Horcrux editions + test tooling + the machine's
 		   hardware enablement. `horcrux-test-machine-check` lists violations (denylist of personal apps/paths + an ALLOWLIST for the
 		   world file: /usr/share/horcrux-test-machine/). To add a legitimate package, add it to world.allowlist in the same change.
+
+		4. NO PERSONAL BACKUP: sys-apps/horcrux-backup is built with -personal-backup (package.use/horcrux-test-machine), so no restic cron/timer
+		   exists on a test machine (it has no personal data; the lab's own copies are not personal backups).
 
 		Back to a normal machine: emerge -C app-misc/horcrux-test-machine (power behaviour returns at once after `rc-service
 		elogind reload`/next login). Encryption cannot be added in place (native ZFS encryption): take a fresh backup, then reinstall

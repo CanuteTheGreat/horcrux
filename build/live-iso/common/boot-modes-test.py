@@ -387,11 +387,17 @@ class Tests:
             bcmd = (f"echo ORIGINAL > {cfgdir}/rescue-test.conf && python3 -c 'import sys; sys.path.insert(0,\"/usr/lib/live-installer\"); "
                     f"from liveinst import system as S, consolemenu as C; print(\"BACKUP\", C.Console(S.load_profile()).make_backup(\"rescuetest\"))' && "
                     f"echo CHANGED > {cfgdir}/rescue-test.conf")
-            for attempt in (1, 2):                      # the first command typed into a freshly started chroot shell is sometimes lost on a loaded host
-                rc, o = self.run(vm, bcmd, 120)
+            for attempt in (1, 2, 3):                   # the first command typed into a freshly started chroot shell is sometimes lost on a loaded host
+                rc, o = self.run(vm, bcmd, 120 if attempt == 1 else 60)
                 if "BACKUP /var/backups" in o:
                     break
                 time.sleep(3)
+                if "Enter an option" in o:              # the menu came back (the '1' was lost or the chroot shell exited): enter the chroot again
+                    vm.send("\r")
+                    vm.expect_raw(r"Enter an option", T(20))
+                    vm.send("1\r")
+                    vm.expect_raw(r"Shell inside the installed system", T(30))
+                    time.sleep(1)
             self.step("backup-made-in-chroot", "BACKUP /var/backups" in o,
                       "config backup written inside the installed system by its own console-menu code" if "BACKUP /var/backups" in o
                       else f"rc={rc} attempt={attempt} output tail: {o[-600:]!r}")
