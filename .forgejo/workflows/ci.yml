@@ -196,9 +196,10 @@ jobs:
     # the race against the working beauxbatons runner (~every other run).
     # act-latest is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
-    # Slot memory (2026-11-06): linux-cross runner slots are 5g now (ci peaks 3.5 GiB). This job's
-    # sampled anon peak is 5.4-5.5 GiB (all-features test build + k3s/LDAP/QEMU tests), so it asks
-    # for its own 7g cap (a job's container.options --memory overrides the runner's).
+    # Memory (2026-11-06): sampled anon peak 5.4-5.5 GiB (all-features test build + k3s/LDAP/QEMU tests), so
+    # this job needs the 7g runner cap. A job's own container.options --memory can only be <= the runner's
+    # (forgejo-runner rejects a larger one), so this line is a statement of need: never lower the
+    # linux-cross runner cap below 7g while this job is on that label.
     container:
       image: catthehacker/ubuntu:act-latest
       options: --memory=7g --memory-swap=7g --cpus=3
