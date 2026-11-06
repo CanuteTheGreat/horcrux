@@ -12,7 +12,9 @@ S="${WORKDIR}"
 LICENSE="MIT"
 SLOT="0"
 KEYWORDS="amd64 arm64"
-IUSE="systemd"
+# -personal-backup: the machine has no personal data to back up (app-misc/horcrux-test-machine sets it): the wrapper binaries
+# stay, but NO schedule (cron.d file / systemd timers) is installed, so nothing runs and the monitoring has no backup job to report.
+IUSE="systemd +personal-backup"
 
 RDEPEND="
 	app-backup/restic
@@ -26,6 +28,7 @@ src_install() {
 	doins "${FILESDIR}"/paths "${FILESDIR}"/excludes
 	keepdir /etc/ctg-backup/paths.d /etc/ctg-backup/required.d
 	fperms 0700 /etc/ctg-backup
+	use personal-backup || return 0
 	if use systemd; then
 		cp "${FILESDIR}"/ctg-restic-{backup,prune,check}.{service,timer} "${T}"/ || die
 		sed -i 's:/usr/local/sbin/ctg-restic:/usr/sbin/ctg-restic:' "${T}"/*.service || die
@@ -41,6 +44,11 @@ src_install() {
 }
 
 pkg_postinst() {
+	if ! use personal-backup; then
+		elog "USE=-personal-backup: no backup schedule installed (test machine)."
+		[[ -f ${EROOT}/etc/cron.d/horcrux-backup ]] && ewarn "${EROOT}/etc/cron.d/horcrux-backup is left from an earlier revision: delete it (config-protected files are not removed when edited)."
+		return 0
+	fi
 	elog "Provision the credentials once (from crystalcave, over ssh stdin, root 0600):"
 	elog "  /etc/ctg-backup/env      RESTIC_REPOSITORY=s3:https://s3.us-west-002.backblazeb2.com/ctg-backups/<host>, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, RESTIC_PASSWORD_FILE=/etc/ctg-backup/repo.pw"
 	elog "  /etc/ctg-backup/repo.pw  repo password (escrow: crystalcave ~/.hermes/secrets/restic/<host>.pw)"

@@ -16,7 +16,8 @@ WARNING = ("TEST MACHINE: DISK ENCRYPTION IS OFF. Anyone with the machine can re
            "to turn encryption back on, reinstall with encryption enabled (see /usr/share/doc/horcrux-test-machine).")
 
 PACKAGE_USE = ("# owned by app-misc/horcrux-test-machine (written by the installer until that package is merged)\n"
-               "sys-kernel/horcrux-unlock -encrypted\n")
+               "sys-kernel/horcrux-unlock -encrypted\n"
+               "sys-apps/horcrux-backup -personal-backup\n")
 
 DRACUT_OMIT = 'omit_dracutmodules+=" crypt horcrux-unlock "\n'
 
