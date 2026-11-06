@@ -1935,8 +1935,19 @@ class Runner:
         self.step("hostname-and-timezone", f"{a.project}-t1" in out and "Europe/Berlin" in out, "host name + Europe/Berlin applied")
         self.step("root-filesystem", ("xfs" if a.fs == "xfs-luks" else a.fs) in out.replace("\r", "").split("\n"), f"/ is {a.fs}" + (" (the installer's own default, never ext4)" if a.fs_default else ""))
         # OWNER RULE: a server/firewall install has NO on-disk swap (partition, LV or file): zram is the only swap
-        rc, sw = ssh(FWD_SSH, self.key, "echo ACTIVE; swapon --noheadings --raw --show=NAME,TYPE; echo FSTAB; grep -E '^[^#]*[[:space:]]swap[[:space:]]' /etc/fstab; echo BLK; blkid -t TYPE=swap -o device | grep -v '^/dev/zram'; "
+        swap_cmd = ("echo ACTIVE; swapon --noheadings --raw --show=NAME,TYPE; echo FSTAB; grep -E '^[^#]*[[:space:]]swap[[:space:]]' /etc/fstab; echo BLK; blkid -t TYPE=swap -o device | grep -v '^/dev/zram'; "
                      "lsblk -rno NAME,PARTTYPE,PARTLABEL | grep -v '^zram' | grep -iE '0657fd6d-a4ab-43c4-84e5-0933c84b4f4f|swap'; echo FILES; find / -xdev -maxdepth 2 \\( -name 'swapfile' -o -name 'swap.img' -o -name '*.swp' -size +1M \\) 2>/dev/null; echo END")
+
+        # zram is set up by a boot-runlevel service; on a slow TCG guest (aarch64 run 1338, zfs-mirror) ssh can answer before the swap is
+        # visible: poll the SAME assertion for up to ~2 min instead of sampling once; the failure detail carries why zram is missing
+        for _try in range(9):
+            rc, sw = ssh(FWD_SSH, self.key, swap_cmd)
+            if rc == 0 and re.search(r"^/dev/zram", sw.replace("\r", ""), re.M):
+                break
+            time.sleep(15)
+        else:
+            _, dg = ssh(FWD_SSH, self.key, "rc-status -a 2>&1 | grep -iE 'zram|stopped|crashed'; dmesg 2>/dev/null | grep -i zram | tail -5; zramctl 2>&1; cat /proc/swaps")
+            print("[INFO] zram diagnostics: " + re.sub(r"\s+", " ", dg)[:400])
         sec, cur = {}, None
         for ln in sw.replace("\r", "").splitlines():
             if ln.strip() in ("ACTIVE", "FSTAB", "BLK", "FILES", "END"):

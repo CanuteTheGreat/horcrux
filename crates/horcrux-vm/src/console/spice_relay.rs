@@ -286,19 +286,40 @@ async fn handle(
     // num_common_caps u32 @6, num_channel_caps u32 @10, caps_offset u32 @14
     let client_caps = first_common_cap(&mess, 6, 14);
 
-    let session = Client::new(backend)
-        .open_console(instance, ConsoleKind::Vga)
-        .await?;
-    let mut control = session.control;
-    let mut up = Upstream {
-        ws: session.data,
-        buf: Vec::new(),
+    // The daemon can refuse or drop a vga session right after another one of the
+    // same VM closed (SPICE opens one per channel and clients disconnect in
+    // quick succession; incus-vm-console run 1346 saw the third session of a
+    // burst closed before any reply). Retry opening the session and reading the
+    // daemon's link reply a few times so the client gets a real answer.
+    let mut attempt = 0u32;
+    let (mut control, mut up, rhdr, mut reply) = loop {
+        attempt += 1;
+        let tried: Result<_> = async {
+            let session = Client::new(backend)
+                .open_console(instance, ConsoleKind::Vga)
+                .await?;
+            let control = session.control;
+            let mut up = Upstream {
+                ws: session.data,
+                buf: Vec::new(),
+            };
+            up.write(&[hdr.as_slice(), mess.as_slice()].concat())
+                .await?;
+            let rhdr = up.read_n(16).await?;
+            let rsize = u32_at(&rhdr, 12) as usize;
+            let reply = up.read_n(rsize).await?;
+            Ok((control, up, rhdr, reply))
+        }
+        .await;
+        match tried {
+            Ok(v) => break v,
+            Err(e) if attempt < 5 => {
+                warn!("SPICE relay {instance}: upstream link attempt {attempt} failed ({e}), retrying");
+                tokio::time::sleep(std::time::Duration::from_millis(400 * attempt as u64)).await;
+            }
+            Err(e) => return Err(e),
+        }
     };
-    up.write(&[hdr.as_slice(), mess.as_slice()].concat())
-        .await?;
-    let rhdr = up.read_n(16).await?;
-    let rsize = u32_at(&rhdr, 12) as usize;
-    let mut reply = up.read_n(rsize).await?;
     // SpiceLinkReply: error u32, pub_key [162], num_common_caps u32 @166,
     // num_channel_caps u32 @170, caps_offset u32 @174
     if &rhdr[0..4] != b"REDQ" || reply.len() < 178 || u32_at(&reply, 0) != 0 {
