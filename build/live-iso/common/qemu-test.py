@@ -1645,8 +1645,15 @@ class Runner:
         self.step("console-menu-reset-password", c_new == 200 and c_old != 200, f"new password -> {c_new}, old password -> {c_old}")
         # option 11 backup, 4 factory reset, 10 restore
         t = self.opt(vm, "11", [], done=r"Backup written: \S+")
-        rc, o = ssh(FWD_SSH, self.key, f"ls /var/backups/{a.project}/; tar tzf /var/backups/{a.project}/*manual*.tar.gz | head -20")
-        self.step("console-menu-backup", "MANIFEST.json" in o and (".db" in o), re.sub(r"\s+", " ", o)[:140])
+        # the forwarded sshd can drop a connection right after the password reset (run 752: empty output, no rc) - retry the
+        # read for up to 60 s; the assertion (manifest + db in the archive) is unchanged and the detail now carries rc
+        end = time.time() + 60
+        while True:
+            rc, o = ssh(FWD_SSH, self.key, f"ls /var/backups/{a.project}/; tar tzf /var/backups/{a.project}/*manual*.tar.gz | head -20")
+            if ("MANIFEST.json" in o and ".db" in o) or time.time() >= end:
+                break
+            time.sleep(5)
+        self.step("console-menu-backup", "MANIFEST.json" in o and (".db" in o), f"rc={rc} " + re.sub(r"\s+", " ", o)[:140])
         vm.expect_raw("Press Enter to return", 20)
         vm.send("\r")
         vm.expect_raw("Enter an option", 20)
