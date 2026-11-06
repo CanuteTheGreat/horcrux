@@ -59,14 +59,17 @@ async fn rc_state(name: &str) -> String {
     let Some(bin) = which("rc-service") else {
         return "unknown".into();
     };
-    match tokio::process::Command::new(bin)
+    // One wedged init script (a `status` that blocks on a lock or a
+    // daemonised child holding the pipe) must not hang the whole listing:
+    // bound each probe and report that service as "unknown".
+    let probe = tokio::process::Command::new(bin)
         .args([name, "status"])
         .stdin(std::process::Stdio::null())
-        .output()
-        .await
-    {
-        Ok(o) => parse_rc_service_status(&String::from_utf8_lossy(&o.stdout)),
-        Err(_) => "unknown".into(),
+        .kill_on_drop(true)
+        .output();
+    match tokio::time::timeout(std::time::Duration::from_secs(10), probe).await {
+        Ok(Ok(o)) => parse_rc_service_status(&String::from_utf8_lossy(&o.stdout)),
+        _ => "unknown".into(),
     }
 }
 
@@ -169,17 +172,24 @@ pub async fn list_services() -> Result<Vec<ServiceStatus>, ApiError> {
                 .await
                 .map_err(ApiError::Internal)?;
             let enabled = parse_rc_update(&run("rc-update", &["show"]).await.unwrap_or_default());
-            let mut out = Vec::new();
-            for name in names
+            let wanted: Vec<String> = names
                 .lines()
                 .map(str::trim)
                 .filter(|n| !n.is_empty() && *n != "rc" && *n != "rcS")
-            {
-                if !valid_service_name(name) {
-                    continue;
-                }
-                let state = rc_state(name).await;
-                let pid = openrc_pid(name);
+                .filter(|n| valid_service_name(n))
+                .map(String::from)
+                .collect();
+            // Probe the init scripts a few at a time: one fork per script run
+            // back to back took minutes on a loaded CI host.
+            use futures::StreamExt;
+            let states: Vec<String> = futures::stream::iter(wanted.clone())
+                .map(|n| async move { rc_state(&n).await })
+                .buffered(8)
+                .collect()
+                .await;
+            let mut out = Vec::new();
+            for (name, state) in wanted.into_iter().zip(states) {
+                let pid = openrc_pid(&name);
                 out.push(ServiceStatus {
                     status: match state.as_str() {
                         "started" | "starting" => "active",
@@ -188,12 +198,12 @@ pub async fn list_services() -> Result<Vec<ServiceStatus>, ApiError> {
                         _ => "unknown",
                     }
                     .into(),
-                    enabled: enabled.contains(name),
-                    description: openrc_description(name),
+                    enabled: enabled.contains(&name),
+                    description: openrc_description(&name),
                     memory_usage: pid.and_then(rss_bytes),
                     pid,
                     cpu_usage: None,
-                    name: name.to_string(),
+                    name,
                 });
             }
             Ok(out)
