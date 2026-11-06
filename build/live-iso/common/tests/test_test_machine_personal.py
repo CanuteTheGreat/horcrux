@@ -113,7 +113,7 @@ class TestPersonalGuard(unittest.TestCase):
             self.assertEqual(run(d)[0], 1, rel)
 
     def test_ebuild_blocks_gringotts_and_policy_no_longer_allows_them(self):
-        eb = open(os.path.join(REPO, "gentoo", "app-misc", "horcrux-test-machine", "horcrux-test-machine-1-r2.ebuild")).read()
+        eb = open(os.path.join(REPO, "gentoo", "app-misc", "horcrux-test-machine", "horcrux-test-machine-1-r3.ebuild")).read()
         self.assertIn("!app-misc/gringotts-config", eb)
         self.assertIn("!app-misc/gringotts-tools", eb)
         allow = [ln.strip() for ln in open(os.path.join(FILES, "world.allowlist")) if ln.strip() and not ln.startswith("#")]
