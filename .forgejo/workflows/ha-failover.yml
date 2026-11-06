@@ -18,7 +18,7 @@ on:
       - '.forgejo/workflows/ha-failover.yml'
   workflow_dispatch: {}
   schedule:
-    - cron: '20 10 * * *'
+    - cron: '30 20 * * *'   # 12:30 PST; moved 2026-11-06 off the 00:00-03:00 PST pile-up (measured busiest), see ctg ci-wait-and-queue reference
 
 concurrency:
   group: ha-failover

@@ -15,7 +15,7 @@ on:
     # 10:00 UTC == ~03:00 America/Los_Angeles, an hour after
     # nightly-realistic-test.yml's 09:00 UTC slot (both use the capacity-1
     # kvm-x86_64 runner, so they queue rather than overlap anyway).
-    - cron: '0 10 * * *'
+    - cron: '0 19 * * *'   # 11:00 PST, trough; moved 2026-11-06 off the 00:00-03:00 PST pile-up (measured busiest), see ctg ci-wait-and-queue reference
 
 env:
   CARGO_TERM_COLOR: always

@@ -25,7 +25,7 @@ name: Live ISO (server-openrc-x86_64)
 
 on:
   schedule:
-    - cron: '0 11 * * *'   # ~04:00 America/Los_Angeles: after the 09:00-10:50 UTC nightlies on the kvm runner
+    - cron: '40 17 * * *'   # 09:40 PST; moved 2026-11-06 off the 00:00-03:00 PST pile-up (measured busiest), see ctg ci-wait-and-queue reference
   push:
     tags:
       - 'v*'

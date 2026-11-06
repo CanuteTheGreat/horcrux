@@ -23,7 +23,7 @@ on:
       - '.forgejo/workflows/incus-vm-console.yml'
   workflow_dispatch: {}
   schedule:
-    - cron: '30 10 * * *'
+    - cron: '10 22 * * *'   # 14:10 PST; moved 2026-11-06 off the 00:00-03:00 PST pile-up (measured busiest), see ctg ci-wait-and-queue reference
 
 concurrency:
   group: incus-vm-console

@@ -29,7 +29,7 @@ on:
       - '.forgejo/workflows/vm-migration.yml'
   workflow_dispatch: {}
   schedule:
-    - cron: '50 9 * * *'
+    - cron: '20 18 * * *'   # 10:20 PST; moved 2026-11-06 off the 00:00-03:00 PST pile-up (measured busiest), see ctg ci-wait-and-queue reference
 
 concurrency:
   group: vm-migration

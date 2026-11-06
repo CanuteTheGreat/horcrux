@@ -15,7 +15,7 @@ on:
   workflow_dispatch: {}
   schedule:
     # 10:30 UTC, after the realistic nightly (09:00) on the same runner.
-    - cron: '30 10 * * *'
+    - cron: '0 3 * * *'   # 19:00 PST, trough; moved 2026-11-06 off the 00:00-03:00 PST pile-up (measured busiest), see ctg ci-wait-and-queue reference
 
 env:
   CARGO_TERM_COLOR: never
