@@ -250,7 +250,12 @@ class VM:
             except OSError:
                 time.sleep(0.1)
         if self.sock is None:
-            raise SystemExit("cannot connect to the QEMU serial socket")
+            rc = self.p.poll()
+            try:
+                err = open(f"{out}/{name}-qemu.err", "rb").read()[-600:].decode("utf-8", "replace").strip()
+            except OSError:
+                err = ""
+            raise SystemExit(f"cannot connect to the QEMU serial socket (qemu exit={rc}; stderr: {err or 'empty'})")
         threading.Thread(target=self._rd, daemon=True).start()
 
     def _rd(self):
