@@ -31,6 +31,10 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
     grep -q 'want pipewire-pulse wireplumber' /etc/user/init.d/gsd || { echo 'gsd audio ordering patch not applied'; exit 1; }; \
     grep -q 'keep the shell there' /etc/user/init.d/gnome-shell-wayland || { echo 'gnome-shell user-bus patch not applied'; exit 1; }
 
+# Mutter's ScreenCast frame limiter (patch in /etc/portage/patches/x11-wm/mutter, copied above with the rest of portage/; --usepkg-exclude in make.conf made the
+# desktop emerge build mutter from source): remote desktop / screen sharing delivered 30-40 fps at a 60 Hz display. Fail the build when the patch was not applied.
+RUN set -e; strings /usr/lib64/libmutter-*.so.0 | grep -q 'too early (nearest interval boundary)' || { echo 'mutter ScreenCast frame limiter patch not applied (binary package used?)'; exit 1; }
+
 # GNOME system-wide defaults (every GNOME install gets them through @world): AppIndicator tray icons enabled in a packaged system dconf db. The Horcrux
 # overlay is copied only now so editing it does not invalidate the long layers above.
 COPY --from=hxfull / /var/db/repos/horcrux/
