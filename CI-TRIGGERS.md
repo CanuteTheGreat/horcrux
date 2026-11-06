@@ -8,7 +8,7 @@ CI work runs **when its inputs change**, not on a clock (owner principle 2026-11
   A started run is never cancelled by a push.
 - A cron stays only where the thing it checks has no change signal (upstream package trees/base images, external services, elapsed time).
   Each such cron has a comment in its workflow saying why. Priority (not the clock) handles contention: heavy workflows are matched by file name
-  in the sweeper's -20 class (ctg-infrastructure `ollivanders/forgejo/ci-supersede-sweeper`).
+  in the sweeper's -20 class (ctg-infrastructure, ci-supersede-sweeper).
 - File names such as `nightly-*.yml` are kept on purpose (the sweeper's priority rule matches them); they are not nightly any more.
 
 | workflow file | name | triggers |
