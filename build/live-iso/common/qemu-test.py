@@ -1873,8 +1873,15 @@ class Runner:
 
     def ssh_checks(self):
         a = self.a
-        rc, out = ssh(FWD_SSH, None, "true", extra=["-o", "PreferredAuthentications=none", "-o", "PubkeyAuthentication=no", "-o", "BatchMode=yes"])
-        methods = re.search(r"Permission denied \(([^)]*)\)", out)
+        end = time.time() + T(90)
+        while True:
+            rc, out = ssh(FWD_SSH, None, "true", extra=["-o", "PreferredAuthentications=none", "-o", "PubkeyAuthentication=no", "-o", "BatchMode=yes"])
+            methods = re.search(r"Permission denied \(([^)]*)\)", out)
+            # right after boot (aarch64 TCG) the forwarded port can answer "kex_exchange_identification: Connection reset" while sshd is still
+            # starting (run 10100): only a real answer, or none after 90 s (x timeout factor), decides
+            if methods or time.time() >= end:
+                break
+            time.sleep(5)
         m = methods.group(1) if methods else out.strip()[:80]
         if a.ssh_password_opt_in:
             self.step("ssh-password-auth-offered-after-opt-in", "password" in m or "keyboard-interactive" in m, f"server offers: {m}")

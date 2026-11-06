@@ -43,7 +43,7 @@ concurrency:
 jobs:
   live-iso:
     name: Build + test + publish live ISO (server-openrc-aarch64)
-    runs-on: arm64
+    runs-on: nightly-arm64   # heavy on-demand lane: 8 h runner timeout (the TCG matrix takes 4+ h; the per-push arm64 runners cancel at 3 h)
     container: catthehacker/ubuntu:act-latest
     timeout-minutes: 480   # the headless server gate (encrypted-ZFS install + serial reboot + checks) is an extra QEMU run per arch; aarch64 runs it under TCG (~2 h)
     steps:
