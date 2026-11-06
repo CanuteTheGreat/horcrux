@@ -31,7 +31,12 @@ pub fn build_request(
     if name.is_empty() {
         return Err("Name is required".to_string());
     }
-    let image = image.trim();
+    let mut image = image.trim();
+    // Gentoo is the default LXC template (must match
+    // horcrux-container's DEFAULT_LXC_TEMPLATE); Alpine etc. stay selectable.
+    if image.is_empty() && runtime == "lxc" {
+        image = "gentoo/current/openrc";
+    }
     if image.is_empty() {
         return Err("Image is required".to_string());
     }
@@ -351,7 +356,7 @@ pub fn ContainerCreate() -> impl IntoView {
                 <div class="form-group">
                     <label for="ct-image">{move || if oci() { "Image" } else { "Template / rootfs" }}</label>
                     <input id="ct-image" name="image" type="text" required
-                        placeholder=move || if runtime.get() == "lxc" { "alpine/3.22 (distro/release, from the template catalog)" } else { "nginx:alpine" }
+                        placeholder=move || if runtime.get() == "lxc" { "gentoo/current/openrc (default; distro/release from the catalog, e.g. alpine/3.22)" } else { "nginx:alpine" }
                         list="lxc-template-list"
                         prop:value=image
                         on:input=move |ev| set_image.set(event_target_value(&ev))/>
@@ -590,6 +595,10 @@ mod tests {
         assert_eq!(o.mounts.len(), 2);
         assert!(o.features.nesting && !o.features.keyctl);
         // The request body is exactly what POST /api/containers accepts.
+        // Empty template on lxc = the Gentoo default; alpine stays selectable.
+        let d = build_request("web", "lxc", "", "256", "1", "", "", "", "").unwrap();
+        assert_eq!(d.rootfs, "gentoo/current/openrc");
+        assert!(build_request("web", "docker", "", "256", "1", "", "", "", "").is_err());
         let mut req =
             build_request("web", "lxc", "alpine/3.22", "256", "1", "", "", "", "").unwrap();
         req.lxc = Some(o.clone());

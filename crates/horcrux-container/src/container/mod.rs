@@ -632,7 +632,15 @@ impl ContainerManager {
     }
 
     /// Create a new container
-    pub async fn create_container(&self, config: ContainerConfig) -> Result<ContainerConfig> {
+    pub async fn create_container(
+        &self,
+        #[allow(unused_mut)] mut config: ContainerConfig,
+    ) -> Result<ContainerConfig> {
+        // An LXC create with no template gets the house default (Gentoo).
+        #[cfg(feature = "lxc")]
+        if config.runtime == ContainerRuntime::Lxc && config.rootfs.trim().is_empty() {
+            config.rootfs = lxc_template::DEFAULT_LXC_TEMPLATE.to_string();
+        }
         if config.id.trim().is_empty() || config.name.trim().is_empty() {
             return Err(horcrux_common::Error::Validation(
                 "Container id and name are required".to_string(),
