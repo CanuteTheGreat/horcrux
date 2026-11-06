@@ -3,6 +3,7 @@
 Run the real shell scripts of the Horcrux tree with stub binaries on PATH. Read the repo tree (gentoo/), so they skip in Patronus' vendored copy of common/.
 """
 import os
+import re
 import stat
 import subprocess
 import tempfile
@@ -184,7 +185,10 @@ class ProductBlockers(unittest.TestCase):
     def test_changed_packages_got_a_revision_so_installed_machines_update(self):
         for cat, pn, want in (("sys-apps", "horcrux-firstboot", "horcrux-firstboot-1-r1.ebuild"), ("sys-apps", "horcrux-backup", "horcrux-backup-1-r5.ebuild"),
                               ("sys-apps", "horcrux-repo-config", "horcrux-repo-config-1-r2.ebuild")):
-            self.assertIn(want, os.listdir(os.path.join(GENTOO, cat, pn)))
+            # "at least this revision": a later bump (repo-config -r3) must not fail the gate
+            m = re.match(r"(.+)-r(\d+)\.ebuild$", want)
+            have = [int(x.group(1)) for f in os.listdir(os.path.join(GENTOO, cat, pn)) for x in [re.match(re.escape(m.group(1)) + r"-r(\d+)\.ebuild$", f)] if x]
+            self.assertTrue(have and max(have) >= int(m.group(2)), f"{want} or a later revision not in {os.listdir(os.path.join(GENTOO, cat, pn))}")
 
 
 if __name__ == "__main__":
