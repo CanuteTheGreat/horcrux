@@ -81,7 +81,7 @@ jobs:
               if [ "$EVENT" = push ] && [ "$(git rev-list --parents -n1 HEAD | wc -w)" = 3 ]; then
                 p2=$(git rev-parse HEAD^2)
                 if [ "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse "$p2^{tree}")" ]; then
-                  st=$(curl -fsS -H "Authorization: token $TOKEN" "$API/commits/$p2/status" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(any(x.get("context","")=="CI / Test (pull_request)" and x.get("status")=="success" for x in d.get("statuses",[])))' 2>/dev/null || echo False)
+                  st=$(curl -fsS -H "Authorization: token $TOKEN" "$API/commits/$p2/status" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(any(x.get("context","").startswith("CI / Test (pull_request") and x.get("status")=="success" for x in d.get("statuses",[])))' 2>/dev/null || echo False)
                   [ "$st" = True ] && dup=true
                 fi
               fi ;;
