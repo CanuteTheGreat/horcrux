@@ -17,11 +17,11 @@ on:
       - 'horcrux-api/tests/ha_failover_e2e.*'
       - '.forgejo/workflows/ha-failover.yml'
   workflow_dispatch: {}
-  schedule:
-    - cron: '30 20 * * *'   # 12:30 PST; moved 2026-11-06 off the 00:00-03:00 PST pile-up (measured busiest), see ctg ci-wait-and-queue reference
 
+# Event-driven (2026-11-06): runs when its inputs change (push paths above), no cron. Burst of pushes = ONE run:
+# newest unstarted run replaces older unstarted ones (ci-supersede-sweeper replace: group); a started run is never cancelled.
 concurrency:
-  group: ha-failover
+  group: "replace:${{ github.workflow }}@${{ github.ref }}"
   cancel-in-progress: false
 
 env:

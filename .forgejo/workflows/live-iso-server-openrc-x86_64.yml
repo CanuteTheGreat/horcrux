@@ -1,13 +1,13 @@
 # Daily + release ISO for horcrux (Gentoo live/installer; x86_64 UEFI+BIOS hybrid, aarch64 UEFI).
 #
-#  * schedule : build from main, QEMU boot + unattended install + reboot + web probe
+#  * push to main (image inputs changed; was a daily cron until 2026-11-06): build from main, QEMU boot + unattended install + reboot + web probe
 #               (UEFI+USB and BIOS+CD), publish ONLY if everything passed, to the rolling
 #               PRE-release `daily` (stable URL, assets replaced in place).
 #  * v* tag   : same build + tests from the tag, attached to that release as a stable ISO
 #               (criteria: docs/ISO-INSTALL.md "Stable ISO criteria").
 #  * A build/test/publish failure FAILS the run (red run = e-mail to the owner; a green run means an image was built,
 #    tested and published). The result is also written to the `daily-status-*` release marker and the job summary;
-#    ~/.hermes iso-status-watch additionally alerts when a published daily asset is older than 36 h.
+#    product-qa (pub-fresh) alerts when main has an image-input commit that is not published within 8 h.
 # One job per architecture, each BUILT NATIVELY and tested under QEMU on its own runner label:
 #   x86_64  kvm-x86_64  (rw-man-01 colo, /dev/kvm, host docker)  -> horcrux-server-openrc-daily-x86_64.iso
 #   aarch64 arm64       (rw-man-04/05 Graviton, host docker; no /dev/kvm there, so QEMU runs TCG, timeouts x3)  -> horcrux-server-openrc-daily-aarch64.iso
@@ -24,11 +24,23 @@
 name: Live ISO (server-openrc-x86_64)
 
 on:
-  schedule:
-    - cron: '40 17 * * *'   # 09:40 PST; moved 2026-11-06 off the 00:00-03:00 PST pile-up (measured busiest), see ctg ci-wait-and-queue reference
+  # Event-driven (2026-11-06): build + test + publish the daily when main changes anything the image is built from
+  # (app source, gentoo/, build/live-iso/); docs/site/branding-only pushes do not build. v* tags still build the stable ISO.
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+    tags: ['v*']
+    paths:
+      - 'crates/**'
+      - 'horcrux-api/**'
+      - 'horcrux-common/**'
+      - 'horcrux-cli/**'
+      - 'horcrux-ui/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build/live-iso/**'
+      - 'gentoo/**'
+      - 'deploy/**'
+      - '.forgejo/workflows/live-iso-server-openrc-x86_64.yml'
   workflow_dispatch:
     inputs:
       mode:
@@ -36,8 +48,11 @@ on:
         required: false
         default: 'dry'
 
+# Per variant + event + mode + ref. A burst of main pushes = ONE build: the sweeper (replace: group) keeps started runs and only the NEWEST
+# unstarted one. A started build is never cancelled by a push (builds take 1-3 h; cancelling would starve publishing under constant pushes);
+# the next queued build then starts at once with the newest main. A newer dispatch of the same variant still cancels the older dispatch.
 concurrency:
-  group: "live-iso-server-openrc-x86_64-${{ github.event_name }}-${{ github.event.inputs.mode }}-${{ github.ref }}"
+  group: "replace:live-iso-server-openrc-x86_64-${{ github.event_name }}-${{ github.event.inputs.mode }}-${{ github.ref }}"
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
 
 jobs:

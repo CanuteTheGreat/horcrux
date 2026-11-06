@@ -13,15 +13,25 @@ name: Mutation testing (nightly incremental, weekly full per group)
 # One job per group (a single job over all ~520 mutants needs ~10 h:
 # every mutant used to rebuild the whole horcrux-api crate).
 on:
+  # Event-driven (2026-11-06): every push to main that touches mutated code runs mutation-incremental.py plan (incremental on changed
+  # lines, skip when nothing mutated changed; full on a group's own weekday). Coalesced by the replace: group below. No cron.
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'horcrux-api/src/**'
+      - 'horcrux-common/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'ci/mutation-incremental.py'
+      - 'ci/mutants-floors.json'
+      - '.forgejo/workflows/mutation.yml'
   workflow_dispatch:
     inputs:
       mode:
         description: 'auto (full on the group''s weekday, else changed lines only), full or incremental'
         required: false
         default: 'auto'
-  schedule:
-    # daily 02:10 UTC, staggered across the colo lane's day (ctg-infrastructure ci-runners/rw-man-colo)
-    - cron: '10 2 * * *'
 
 # A newer queued run replaces an older one that has not started (ci-supersede-sweeper,
 # replace: groups); a started run is never cancelled.

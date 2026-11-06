@@ -15,8 +15,10 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main]
+  # ONLY periodic trigger of this repo: weekly safety net. The heavy Gentoo jobs (image, USE matrix, release matrix) run on every push
+  # that touches their inputs (plan job); this run exists solely for drift of the moving Portage tree / stage3, which has no change signal.
   schedule:
-    - cron: '40 21 * * *'   # 13:40 PST, trough; moved 2026-11-06 off the 00:00-03:00 PST pile-up (measured busiest), see ctg ci-wait-and-queue reference
+    - cron: '40 21 * * 1'
   workflow_dispatch: {}
 
 env:
