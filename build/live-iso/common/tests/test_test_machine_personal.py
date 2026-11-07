@@ -112,8 +112,16 @@ class TestPersonalGuard(unittest.TestCase):
             mk(d, rel, "x")
             self.assertEqual(run(d)[0], 1, rel)
 
+    def _newest_ebuild(self):
+        # newest revision, not a hardcoded one: the ebuild gets bumped (r5 -> r6) and this test must follow it
+        import glob
+        paths = sorted(glob.glob(os.path.join(REPO, "gentoo", "app-misc", "horcrux-test-machine", "horcrux-test-machine-1-r*.ebuild")),
+                       key=lambda p: int(re.search(r"-r(\d+)\.ebuild$", p).group(1)))
+        with open(paths[-1]) as fh:
+            return fh.read()
+
     def test_ebuild_blocks_gringotts_and_policy_no_longer_allows_them(self):
-        eb = open(os.path.join(REPO, "gentoo", "app-misc", "horcrux-test-machine", "horcrux-test-machine-1-r5.ebuild")).read()
+        eb = self._newest_ebuild()
         self.assertIn("!app-misc/gringotts-config", eb)
         self.assertIn("!app-misc/gringotts-tools", eb)
         allow = [ln.strip() for ln in open(os.path.join(FILES, "world.allowlist")) if ln.strip() and not ln.startswith("#")]
@@ -122,7 +130,7 @@ class TestPersonalGuard(unittest.TestCase):
     def test_postinst_moves_cfg_protected_package_use_into_place(self):
         # r3 left package.use/horcrux-test-machine as ._cfg0000_* with the real file deleted on update (hogshead/gringotts/madammalkins, 2026-11-05)
         import re, subprocess, tempfile
-        eb = open(os.path.join(REPO, "gentoo", "app-misc", "horcrux-test-machine", "horcrux-test-machine-1-r5.ebuild")).read()
+        eb = self._newest_ebuild()
         body = re.search(r"pkg_postinst\(\) \{\n(.*?)\n\}\n", eb, re.S).group(1)
         loop = body[body.index("local c d="):body.index("done") + 4]
         with tempfile.TemporaryDirectory() as root:
