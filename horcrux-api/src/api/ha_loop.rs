@@ -264,7 +264,7 @@ async fn peer_members(
     require_peer(&user)?;
     state
         .cluster_manager
-        .accept_member(&m.name, &m.address)
+        .accept_rejoined_member(&m.name, &m.address)
         .await?;
     Ok(StatusCode::OK)
 }

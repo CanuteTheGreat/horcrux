@@ -494,6 +494,40 @@ impl ClusterManager {
         Ok(node)
     }
 
+    /// A member told us that `name` (re-)joined the cluster at `address`
+    /// (`POST /api/ha/peer/members`, sent by the member that accepted the
+    /// join). A join is a fresh registration: if we already list that node
+    /// with the same address, it is the node that was removed elsewhere and
+    /// replaced (reinstalled, new identity), so forget the identity pinned
+    /// from the old one. Without this the replaced node stayed "unverified:
+    /// answered by a different Horcrux instance" on every member that did not
+    /// itself get the `DELETE /api/cluster/nodes/:name` (lab HA suite
+    /// 2026-11-06, node replacement: hogshead never saw madammalkins online).
+    pub async fn accept_rejoined_member(&self, name: &str, address: &str) -> Result<Node> {
+        {
+            let mut nodes = self.nodes.write().await;
+            if let Some(n) = nodes.get_mut(name) {
+                if n.ip != address {
+                    return Err(horcrux_common::Error::Conflict(format!(
+                        "a node named {name} is already in the cluster at {}",
+                        n.ip
+                    )));
+                }
+                if !n.is_local && n.node_id.is_some() {
+                    n.node_id = None;
+                    n.status = NodeStatus::Unknown;
+                    n.status_reason = Some("re-joined: identity will be pinned again".into());
+                    n.last_seen = None;
+                    let updated = n.clone();
+                    config_store::put_opt(&self.store, kinds::CLUSTER_NODE, name, &updated).await?;
+                    return Ok(updated);
+                }
+                return Ok(n.clone());
+            }
+        }
+        self.accept_member(name, address).await
+    }
+
     /// Add a node to the cluster
     pub async fn add_node(&self, node: Node) -> Result<()> {
         let mut nodes = self.nodes.write().await;
@@ -898,6 +932,50 @@ mod tests {
         let db = crate::db::Database::new(&url).await.unwrap();
         db.migrate().await.unwrap();
         ClusterManager::with_database(Arc::new(db)).await.unwrap()
+    }
+
+    /// A node that was removed on one member and replaced (new identity) is
+    /// announced to the other members by the member that accepted the join:
+    /// they must forget the identity pinned from the old install, or they
+    /// list the replacement "unverified: answered by a different Horcrux".
+    #[tokio::test]
+    async fn a_rejoin_announcement_resets_the_pinned_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = db_manager(dir.path()).await;
+        let me = m.get_local_node_name().await.unwrap();
+        let members = vec![
+            node(&me, 4, 8 << 30, None, true),
+            node("replaced", 4, 8 << 30, None, false),
+        ];
+        m.join_cluster("c".into(), &me, members).await.unwrap();
+        {
+            let mut nodes = m.nodes.write().await;
+            let n = nodes.get_mut("replaced").unwrap();
+            n.node_id = Some("old-identity".into());
+            n.status = NodeStatus::Online;
+        }
+        // same name + address: the announcement means "re-joined"
+        m.accept_rejoined_member("replaced", "10.0.0.1")
+            .await
+            .unwrap();
+        let n = m
+            .list_nodes()
+            .await
+            .into_iter()
+            .find(|n| n.name == "replaced")
+            .unwrap();
+        assert_eq!(n.node_id, None, "pinned identity forgotten");
+        assert_eq!(n.status, NodeStatus::Unknown);
+        // a different address is still a conflict, a new name is simply added
+        assert!(m.accept_rejoined_member("replaced", "10.0.0.9").await.is_err());
+        m.accept_rejoined_member("fresh", "10.0.0.7").await.unwrap();
+        assert!(m.list_nodes().await.iter().any(|n| n.name == "fresh"));
+        // the local node is never unpinned by an announcement
+        let local = m.list_nodes().await.into_iter().find(|n| n.is_local).unwrap();
+        let before = local.node_id.clone();
+        let _ = m.accept_rejoined_member(&local.name, &local.ip).await;
+        let local = m.list_nodes().await.into_iter().find(|n| n.is_local).unwrap();
+        assert_eq!(local.node_id, before);
     }
 
     #[tokio::test]
