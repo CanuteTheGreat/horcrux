@@ -293,10 +293,10 @@ fn is_recovering(vm_id: &str) -> bool {
 }
 
 /// Marks `vm_id` as recovering until dropped.
-struct RecoveryGuard(String);
+pub(crate) struct RecoveryGuard(String);
 
 impl RecoveryGuard {
-    fn new(vm_id: &str) -> Self {
+    pub(crate) fn new(vm_id: &str) -> Self {
         if let Ok(mut g) = RECOVERING.lock() {
             g.push(vm_id.to_string());
         }
@@ -725,7 +725,15 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
     // 2. stale copies of VMs the cluster placed elsewhere.
     for r in state.ha_manager.list_resources().await {
         if let Some(node) = r.current_node.as_deref() {
-            if node != local && !is_recovering(&r.vm_id) && QemuManager::process_running(&r.vm_id) {
+            // A VM whose live migration to this node is in flight has its QEMU here (paused,
+            // `-incoming`) while the placement still names the source until the commit: that is
+            // the migration target, not a stale copy (lab HA suite 2026-11-06: every live migration
+            // of an HA guest was killed by this check, 'Connection reset by peer' on the source).
+            if node != local
+                && !is_recovering(&r.vm_id)
+                && !super::migration_peer::has_incoming(&r.vm_id).await
+                && QemuManager::process_running(&r.vm_id)
+            {
                 tracing::warn!(
                     "HA: VM {} runs here but is placed on {node}; stopping the stale copy",
                     r.vm_id
