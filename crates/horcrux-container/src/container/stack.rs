@@ -545,14 +545,35 @@ impl StackManager {
     /// client timeouts.
     pub async fn stop_stack(&self, id_or_name: &str) -> Result<()> {
         let stack = self.get_stack(id_or_name).await?;
-        futures::future::join_all(stack.services.iter().map(|svc| async move {
-            let _ = self
-                .container_manager
-                .stop_container(&svc.container_id)
-                .await;
+        let results = futures::future::join_all(stack.services.iter().map(|svc| async move {
+            (
+                svc,
+                self.container_manager
+                    .stop_container(&svc.container_id)
+                    .await,
+            )
         }))
         .await;
-        Ok(())
+        // A service that is already stopped is fine; any other failure must
+        // reach the caller instead of leaving a running container behind a
+        // success answer.
+        let failed: Vec<String> = results
+            .into_iter()
+            .filter_map(|(svc, r)| match r {
+                Err(e) if !e.to_string().contains("already stopped") => {
+                    Some(format!("{}: {e}", svc.service_name))
+                }
+                _ => None,
+            })
+            .collect();
+        if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(horcrux_common::Error::System(format!(
+                "Failed to stop stack service(s): {}",
+                failed.join("; ")
+            )))
+        }
     }
 
     pub async fn start_stack(&self, id_or_name: &str) -> Result<()> {
