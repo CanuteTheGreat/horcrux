@@ -54,3 +54,30 @@ def bootconf(swap_uuid=""):
     mods = "resume zfs" if swap_uuid else "zfs"
     return ("# written by live-installer (test machine: NO disk encryption): resume from the plain swap BEFORE the pool import\n"
             f'add_dracutmodules+=" {mods} "\n' + DRACUT_OMIT)
+
+
+# ---- the self-recovery layer, from the FIRST boot (a freshly installed lab machine must never need a power-cycle) ----
+# gringotts' unattended reinstall (2026-11-07) came back without the horcrux-test-machine package, hence without the watchdog and without
+# the never-suspend setting. The package is merged later by the lab (it needs a synced Portage tree and the network); until then these files
+# (byte-identical copies of the package's own, checked by tests/test_test_machine_payload.py) arm softdog/iTCO and keep logind from sleeping.
+PAYLOAD_DIR = "/usr/share/live-installer/test-machine"
+PAYLOAD = (                                  # (file in PAYLOAD_DIR, path on the target, mode)
+    ("horcrux-test-watchdog.sh", "/usr/libexec/horcrux-test-watchdog", 0o755),
+    ("horcrux-test-watchdog.initd", "/etc/init.d/horcrux-test-watchdog", 0o755),
+    ("sleep.conf", "/etc/elogind/sleep.conf.d/50-horcrux-test-machine.conf", 0o644),
+    ("sysctl.conf", "/etc/sysctl.d/50-horcrux-test-machine.conf", 0o644),
+)
+
+
+def install_payload(inst, payload_dir=None):
+    """write the watchdog + never-suspend + panic-reboot files into the target and enable the watchdog; raises when a file is missing (an
+    unattended test machine without a watchdog is the failure this exists to prevent). Returns the list of target paths written."""
+    src = payload_dir or PAYLOAD_DIR
+    out = []
+    for name, dst, mode in PAYLOAD:
+        with open(f"{src}/{name}") as f:
+            inst.write(dst, f.read(), mode)
+        out.append(dst)
+    inst.run(["rc-update", "add", "horcrux-test-watchdog", "default"], chroot=True, check=False)
+    inst.log("test machine: watchdog (softdog + iTCO), never-suspend and panic-reboot installed for the first boot: " + ", ".join(out))
+    return out

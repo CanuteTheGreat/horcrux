@@ -733,6 +733,8 @@ def make_answer_image(path, proj, content):
 
 def answer_toml(a, pubkey, pwhash):
     p = a.project
+    if getattr(a, "answer_file", ""):          # a caller's own answer file (the lab's unattended-reinstall answers); __HX_TEST_PUBKEY__ = the run's key
+        return open(a.answer_file).read().replace("__HX_TEST_PUBKEY__", pubkey)
     lines = ["[global]", 'keyboard = "us"', 'timezone = "Europe/Berlin"', f'hostname = "{p}-t1.test.lan"', 'email = "ops@example.test"',
              f'root_password_hash = "{pwhash}"', f'ssh_keys = ["{pubkey}"]', f"ssh_password_auth = {'true' if a.ssh_password_opt_in else 'false'}", f"console_menu_open = {'true' if a.console_open else 'false'}",
              "", "[disk]"] + ([] if a.fs_default else [f'filesystem = "{a.fs}"'])     # default run: no filesystem key = the installer's own default
@@ -2120,6 +2122,7 @@ def main():
     ap.add_argument("--zfs-raid", choices=["single", "mirror"], default=None)
     ap.add_argument("--ssh-password-opt-in", action="store_true")
     ap.add_argument("--static-ip", default="", help="horcrux management address (empty = DHCP)")
+    ap.add_argument("--answer-file", default="", help="auto flow: use this answer file verbatim (__HX_TEST_PUBKEY__ is replaced by the run's ssh key) instead of the built-in one")
     ap.add_argument("--lan-ip", default="10.77.0.1", help="patronus LAN address")
     ap.add_argument("--console-open", action="store_true", help="installer option: open console menu (no login on the console)")
     ap.add_argument("--hold-file", default="", help="gui flow: before powering the installed system off, wait until this file exists (screenshot of the web UI from outside)")

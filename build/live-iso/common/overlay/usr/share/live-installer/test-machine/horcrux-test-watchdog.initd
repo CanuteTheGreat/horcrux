@@ -1,0 +1,18 @@
+#!/sbin/openrc-run
+# app-misc/horcrux-test-machine: hardware watchdog (see /usr/libexec/horcrux-test-watchdog)
+description="test machine: hardware watchdog reboots a hung laptop"
+command=/usr/libexec/horcrux-test-watchdog
+command_background=true
+pidfile=/run/horcrux-test-watchdog.pid
+output_log=/var/log/horcrux-test-watchdog.log
+error_log=/var/log/horcrux-test-watchdog.log
+stop_sig=TERM
+retry="TERM/10/KILL/5"
+depend() {
+	need localmount
+	before net
+}
+start_pre() {
+	modprobe iTCO_wdt 2>/dev/null
+	return 0
+}
