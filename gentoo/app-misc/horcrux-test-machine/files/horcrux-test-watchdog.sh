@@ -15,18 +15,29 @@ if [ -z "$DEV" ]; then
 fi
 }
 pick
-# no hardware watchdog (hogshead, a T2 MacBook, exposes none): the kernel's softdog still resets a machine whose userspace/scheduler
-# is wedged (it cannot save a dead CPU, but a dead CPU needs hardware)
-if [ -z "$DEV" ]; then modprobe softdog soft_margin=60 2>/dev/null; sleep 1; pick; fi
-[ -n "$DEV" ] && [ -c "$DEV" ] || { echo "horcrux-test-watchdog: no watchdog device" >&2; exit 0; }
+# softdog is ALWAYS armed as well: gringotts' iTCO_wdt (Lenovo ThinkBook 16 G6 IRL, TCO_LOCK set) accepts the pets but never
+# resets the machine (a SIGSTOPped pet for 7 min and a killed pet for 2 min: no reset), so a wedged userspace/scheduler would
+# not recover there. softdog resets the machine when the pet stops; it cannot save a dead CPU, but that needs working hardware.
+HW=$DEV
+modprobe softdog soft_margin=60 2>/dev/null; sleep 1
+SOFT=
+for d in /sys/class/watchdog/watchdog*; do
+	[ -d "$d" ] || continue
+	case $(cat "$d/identity" 2>/dev/null) in "Software Watchdog"*) SOFT=/dev/${d##*/}; break;; esac
+done
+[ -n "$HW" ] || HW=$SOFT
+[ "$SOFT" = "$HW" ] && SOFT=
+[ -n "$HW" ] && [ -c "$HW" ] || { echo "horcrux-test-watchdog: no watchdog device" >&2; exit 0; }
 STAMP=/var/lib/horcrux-test-watchdog.stamp
-exec 3>"$DEV" || exit 1
-trap 'printf V >&3; exec 3>&-; exit 0' TERM INT
-echo "horcrux-test-watchdog: armed $DEV (driver timeout $(cat /sys/class/watchdog/${DEV##*/}/timeout 2>/dev/null) s), pet every ${PET}s" >&2
+exec 3>"$HW" || exit 1
+[ -n "$SOFT" ] && [ -c "$SOFT" ] && exec 4>"$SOFT"
+trap 'printf V >&3; [ -n "$SOFT" ] && printf V >&4; exec 3>&- 4>&-; exit 0' TERM INT
+echo "horcrux-test-watchdog: armed $HW (driver timeout $(cat /sys/class/watchdog/${HW##*/}/timeout 2>/dev/null) s)${SOFT:+ + $SOFT}, pet every ${PET}s" >&2
 while :; do
-	if timeout -s KILL 15 sh -c "date +%s > $STAMP && sync -d $STAMP" 3>&- 2>/dev/null || [ ! -d /var/lib ]; then
+	if timeout -s KILL 15 sh -c "date +%s > $STAMP && sync -d $STAMP" 3>&- 4>&- 2>/dev/null || [ ! -d /var/lib ]; then
 		printf . >&3
+		[ -n "$SOFT" ] && printf . >&4
 	fi
-	sleep "$PET" 3>&- &   # children must not inherit the watchdog fd (they would keep it open after we exit: restart = EBUSY)
+	sleep "$PET" 3>&- 4>&- &   # children must not inherit the watchdog fds (they would keep them open after we exit: restart = EBUSY)
 	wait $!
 done
