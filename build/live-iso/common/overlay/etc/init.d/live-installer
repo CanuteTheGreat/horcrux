@@ -19,6 +19,28 @@ set_tty1() {
 	return 0
 }
 
+# copy the (possibly partial) install log to the vfat volume named by <proj>.autoinstall.log=UUID=<esp> (only when it still exists: the disk may have been erased)
+copy_install_log() {
+	lg=$(cmdarg "$1" autoinstall.log | sed 's/^UUID=//'); [ -z "$lg" ] || { mkdir -p /run/autoinstall-log && mount -t vfat "/dev/disk/by-uuid/$lg" /run/autoinstall-log 2>/dev/null && { mkdir -p /run/autoinstall-log/EFI/HXSTAGE; cp /var/log/autoinstall.log /run/autoinstall-log/EFI/HXSTAGE/autoinstall.log 2>/dev/null; sync; umount /run/autoinstall-log 2>/dev/null; }; }
+}
+
+# Unattended restart flow: an install that never ends must not strand the machine (gringotts, 2026-11-07: answered ping for hours, every port closed,
+# no log anywhere). (1) key-only sshd in the live system when the answer file carries ssh keys (state only in /run), so the lab can read the log;
+# (2) a hard time limit (<proj>.autoinstall.timeout=SECONDS, default 3600): the install log is copied out and the machine restarts into whatever is on the disk.
+# The caller kills the limit timer when the installer returns.
+unattended_guard() {
+	p=$1
+	/usr/libexec/live-autoinstall-ssh 2>&1 | tee -a /var/log/autoinstall.log >/dev/console
+	to=$(cmdarg "$p" autoinstall.timeout); case "$to" in ''|*[!0-9]*) to=3600 ;; esac
+	(
+		sleep "$to"
+		echo "AUTOINSTALL-TIMEOUT after ${to}s: the installer did not finish; restarting into what is on the disk" | tee -a /var/log/autoinstall.log >/dev/console
+		copy_install_log "$p"
+		sync; echo 1 > /proc/sys/kernel/sysrq; echo b > /proc/sysrq-trigger
+	) &
+	echo $! > /run/autoinstall-timer.pid
+}
+
 start() {
 	grep -q 'rd.live.image' /proc/cmdline || return 0
 	p=$(proj)
@@ -31,10 +53,13 @@ start() {
 		# instead of powering off, so an unattended lab (no one to press the power button) gets its machine back. <proj>.autoinstall.log=UUID=<esp>
 		# names a vfat partition to copy the install log to (only when it still exists: the disk may have been erased).
 		after=$(cmdarg "$p" autoinstall.after); nohalt=; [ "$after" = reboot ] && nohalt=--no-halt
-		( /usr/bin/live-installer --answers auto $nohalt 2>&1; echo "AUTOINSTALL-EXIT rc=$?" ) | tee /var/log/autoinstall.log >/dev/console
+		: > /var/log/autoinstall.log
+		[ "$after" = reboot ] && unattended_guard "$p"
+		( /usr/bin/live-installer --answers auto $nohalt 2>&1; echo "AUTOINSTALL-EXIT rc=$?" ) | tee -a /var/log/autoinstall.log >/dev/console
+		[ -s /run/autoinstall-timer.pid ] && { kill "$(cat /run/autoinstall-timer.pid)" 2>/dev/null; pkill -P "$(cat /run/autoinstall-timer.pid)" 2>/dev/null; rm -f /run/autoinstall-timer.pid; }
 		if [ "$after" = reboot ]; then
 			# NOT /sbin/reboot: the live medium may live on the disk the installer just erased; sysrq needs no file from it
-			lg=$(cmdarg "$p" autoinstall.log | sed 's/^UUID=//'); [ -z "$lg" ] || { mkdir -p /run/autoinstall-log && mount -t vfat "/dev/disk/by-uuid/$lg" /run/autoinstall-log 2>/dev/null && { mkdir -p /run/autoinstall-log/EFI/HXSTAGE; cp /var/log/autoinstall.log /run/autoinstall-log/EFI/HXSTAGE/autoinstall.log 2>/dev/null; sync; umount /run/autoinstall-log 2>/dev/null; }; }
+			copy_install_log "$p"
 			echo "AUTOINSTALL-REBOOT after=reboot" >/dev/console; sync; sleep 3; echo 1 > /proc/sys/kernel/sysrq; echo b > /proc/sysrq-trigger
 			return 0
 		fi

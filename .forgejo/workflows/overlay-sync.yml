@@ -12,6 +12,11 @@ on:
     paths:
       - 'gentoo/**'
       - '.forgejo/workflows/overlay-sync.yml'
+  # The rustinion-agent release bump (Rustinion CI, job bump-horcrux) pushes to main with [skip ci], which also skips this workflow: without a
+  # poll the laptops' overlay (horcrux-overlay) would keep the old ebuild until an unrelated gentoo/ change. The split is idempotent
+  # ('overlay already has this tree' exits at once), so a cheap poll is the only change signal that exists for that push.
+  schedule:
+    - cron: '23 * * * *'
   workflow_dispatch:
 
 jobs:

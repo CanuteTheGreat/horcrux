@@ -872,6 +872,8 @@ class Installer:
     def stage_hardening(self):
         self.prog(85, "Hardening")
         self.cfg_hardening()
+        if testmachine.requested(self.c):
+            testmachine.install_payload(self)         # watchdog + never-suspend from the first boot (a lab machine must never need a power-cycle)
 
     def stage_use_flags(self):
         self.prog(87, "Software settings (USE flags)")

@@ -26,6 +26,14 @@ def run(root):
 
 
 @unittest.skipUnless(HAVE, "needs the Horcrux repo tree (not the vendored common/ in Patronus)")
+def newest_ebuild():
+    """the newest revision of the package (the test used to pin -r5 and broke when -r6 landed)"""
+    import glob
+    import re
+    d = os.path.join(REPO, "gentoo", "app-misc", "horcrux-test-machine")
+    return sorted(glob.glob(os.path.join(d, "horcrux-test-machine-1-r*.ebuild")), key=lambda p: int(re.search(r"-r(\d+)\.ebuild$", p).group(1)))[-1]
+
+
 class TestPersonalGuard(unittest.TestCase):
     def clean_root(self):
         d = tempfile.mkdtemp()
@@ -113,7 +121,7 @@ class TestPersonalGuard(unittest.TestCase):
             self.assertEqual(run(d)[0], 1, rel)
 
     def test_ebuild_blocks_gringotts_and_policy_no_longer_allows_them(self):
-        eb = open(os.path.join(REPO, "gentoo", "app-misc", "horcrux-test-machine", "horcrux-test-machine-1-r5.ebuild")).read()
+        eb = open(newest_ebuild()).read()
         self.assertIn("!app-misc/gringotts-config", eb)
         self.assertIn("!app-misc/gringotts-tools", eb)
         allow = [ln.strip() for ln in open(os.path.join(FILES, "world.allowlist")) if ln.strip() and not ln.startswith("#")]
@@ -122,7 +130,7 @@ class TestPersonalGuard(unittest.TestCase):
     def test_postinst_moves_cfg_protected_package_use_into_place(self):
         # r3 left package.use/horcrux-test-machine as ._cfg0000_* with the real file deleted on update (hogshead/gringotts/madammalkins, 2026-11-05)
         import re, subprocess, tempfile
-        eb = open(os.path.join(REPO, "gentoo", "app-misc", "horcrux-test-machine", "horcrux-test-machine-1-r5.ebuild")).read()
+        eb = open(newest_ebuild()).read()
         body = re.search(r"pkg_postinst\(\) \{\n(.*?)\n\}\n", eb, re.S).group(1)
         loop = body[body.index("local c d="):body.index("done") + 4]
         with tempfile.TemporaryDirectory() as root:
