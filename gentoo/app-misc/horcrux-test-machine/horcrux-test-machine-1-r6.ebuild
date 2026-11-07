@@ -77,6 +77,13 @@ src_install() {
 		insinto /etc/xdg/autostart
 		newins "${FILESDIR}"/xfce-power.desktop horcrux-test-xfce-power.desktop
 	fi
+	insinto /etc/elogind/sleep.conf.d
+	newins "${FILESDIR}"/sleep.conf 50-horcrux-test-machine.conf
+	insinto /etc/sysctl.d
+	newins "${FILESDIR}"/sysctl.conf 50-horcrux-test-machine.conf
+	exeinto /usr/libexec
+	newexe "${FILESDIR}"/horcrux-test-watchdog.sh horcrux-test-watchdog
+	newinitd "${FILESDIR}"/horcrux-test-watchdog.initd horcrux-test-watchdog
 	newinitd "${FILESDIR}"/horcrux-test-power.initd horcrux-test-power
 	newinitd "${FILESDIR}"/horcrux-test-klog.initd horcrux-test-klog
 	newinitd "${FILESDIR}"/horcrux-test-netwatch.initd horcrux-test-netwatch
@@ -100,9 +107,13 @@ src_install() {
 		TEST MACHINE (owner decision 2026-11-04, only while the machine is used for testing)
 		  1. DISK ENCRYPTION IS OFF: no passphrase prompt, unattended boot to the login screen (the login screen still asks for the
 		     password: there is no autologin). Anyone with the machine can read the disk.
-		  2. POWER SAVING IS OFF: lid close / suspend key / idle do not suspend (elogind drop-in), Wi-Fi power save off (NetworkManager,
+		  2. POWER SAVING IS OFF: the machine can NEVER be put to sleep (elogind sleep.conf AllowSuspend=no etc. refuses even a
+		     desktop session's own idle timer), lid/suspend key/idle do nothing (elogind drop-in), Wi-Fi power save off (NetworkManager,
 		     driver options, horcrux-test-power service), no runtime PM on network devices, GNOME/XFCE do not sleep on idle.
 		     Critical-battery hibernate (UPower) is deliberately left alone.
+
+		   A hung machine reboots itself: hardware watchdog (horcrux-test-watchdog, petted only while a root-fs write completes) +
+		   kernel.panic=20 / softlockup_panic, so nobody has to power-cycle a test laptop.
 
 		3. NO PERSONAL APPS, NO PERSONAL DATA (owner order 2026-11-05): only the public Horcrux editions + test tooling + the machine's
 		   hardware enablement. `horcrux-test-machine-check` lists violations (denylist of personal apps/paths + an ALLOWLIST for the
@@ -128,10 +139,10 @@ pkg_postinst() {
 	use gnome && has_version gnome-base/dconf && dconf update
 	if [[ -z ${ROOT} || ${ROOT} == / ]]; then
 		local s
-		for s in horcrux-test-power horcrux-test-klog horcrux-test-netwatch; do
+		for s in horcrux-test-power horcrux-test-klog horcrux-test-netwatch horcrux-test-watchdog; do
 			rc-update add ${s} default >/dev/null 2>&1
 		done
-		elog "Enabled in the default runlevel: horcrux-test-power horcrux-test-klog horcrux-test-netwatch (start them now with rc-service)"
+		elog "Enabled in the default runlevel: horcrux-test-power horcrux-test-klog horcrux-test-netwatch horcrux-test-watchdog (start them now with rc-service)"
 	fi
 	elog "Apply the logind drop-in without logging anyone out: rc-service elogind reload (or loginctl: kill -HUP the elogind daemon)."
 }
