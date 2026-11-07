@@ -118,7 +118,7 @@ class InitScript(unittest.TestCase):
         self.assertIn("live-autoinstall-ssh", blk)
 
     def test_timer_is_stopped_when_the_installer_returns(self):
-        self.assertLess(self.s.index("live-installer --answers auto"), self.s.index("autoinstall-timer.pid)\" 2>/dev/null; pkill"))
+        self.assertLess(self.s.index("live-installer --answers auto"), self.s.index("autoinstall-timer.pid); c=$(pgrep -P"))
 
     def test_log_is_appended_so_the_guard_output_survives(self):
         self.assertIn("tee -a /var/log/autoinstall.log", self.s)
@@ -136,6 +136,44 @@ class InitScript(unittest.TestCase):
         p = os.path.join(ROOT, "overlay/usr/libexec/live-autoinstall-ssh")
         self.assertTrue(os.access(p, os.X_OK))
         self.assertEqual(subprocess.run(["sh", "-n", p]).returncode, 0)
+
+
+class GuardBehaviour(unittest.TestCase):
+    """run the real unattended_guard()/copy_install_log() text from the init script in a sandbox (sysrq, console, log, helper replaced by temp files)"""
+
+    def run_guard(self, timeout, kill_timer):
+        d = tempfile.mkdtemp()
+        try:
+            src = open(INIT).read()
+            funcs = src.split("# copy the (possibly partial)", 1)[1].split("\nstart()", 1)[0]
+            funcs = "# copy the (possibly partial)" + funcs
+            for a, b in (("/proc/sysrq-trigger", f"{d}/sysrq"), ("/proc/sys/kernel/sysrq", f"{d}/sysrq-enable"), ("/var/log/autoinstall.log", f"{d}/autoinstall.log"),
+                         ("/dev/console", f"{d}/console"), ("/run/autoinstall-timer.pid", f"{d}/timer.pid"), ("/run/autoinstall-log", f"{d}/esp"),
+                         ("/usr/libexec/live-autoinstall-ssh", f"{d}/fake-ssh")):
+                funcs = funcs.replace(a, b)
+            open(f"{d}/fake-ssh", "w").write("#!/bin/sh\necho live-autoinstall-ssh: fake sshd up\n"); os.chmod(f"{d}/fake-ssh", 0o755)
+            script = ("cmdarg() { case \"$2\" in autoinstall.timeout) echo %s;; *) echo;; esac; }\n" % timeout) + funcs + (
+                "unattended_guard horcrux\n" + ("t=$(cat %s/timer.pid); c=$(pgrep -P $t); kill $t; [ -z \"$c\" ] || kill $c\n" % d if kill_timer else "") + "sleep 4\n")
+            subprocess.run(["sh", "-c", script], capture_output=True, text=True, timeout=30)
+            rd = lambda n: open(f"{d}/{n}").read() if os.path.exists(f"{d}/{n}") else ""
+            return rd("autoinstall.log"), rd("sysrq"), rd("console")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_a_hung_install_is_restarted_after_the_limit_and_says_so(self):
+        log, sysrq, console = self.run_guard(1, False)
+        self.assertIn("fake sshd up", log)
+        self.assertIn("AUTOINSTALL-TIMEOUT after 1s", log)
+        self.assertEqual(sysrq.strip(), "b")
+
+    def test_a_finished_install_cancels_the_timer(self):
+        log, sysrq, console = self.run_guard(2, True)
+        self.assertNotIn("AUTOINSTALL-TIMEOUT", log)
+        self.assertEqual(sysrq, "")
+
+    def test_garbage_limit_falls_back_to_the_default(self):
+        log, sysrq, console = self.run_guard("abc", True)
+        self.assertEqual(sysrq, "")
 
 
 class FakeInst:
