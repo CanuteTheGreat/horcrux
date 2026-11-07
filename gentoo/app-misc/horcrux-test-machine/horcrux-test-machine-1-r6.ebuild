@@ -19,6 +19,7 @@ IUSE="+gnome +plain smallram xfce"
 RDEPEND="
 	plain? ( sys-kernel/horcrux-unlock[-encrypted] )
 	net-wireless/iw
+	sys-apps/ethtool
 	net-misc/networkmanager
 	gnome? ( gnome-base/dconf )
 	xfce? ( xfce-base/xfconf )
