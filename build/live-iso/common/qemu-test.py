@@ -1763,8 +1763,13 @@ class Runner:
             if vm.expect_raw("Password", 15):
                 vm.send(f"{pw}\r")
                 if expect_ok:
-                    if vm.expect_raw(r"(Enter an option|# |\$ )", 25):
+                    # 25 -> 120 s: on a loaded runner (4 VMs, ZFS mirror) the console menu / shell can take longer than
+                    # 25 s after the password; the old wait then fell through to a fresh "\r" and a second login round
+                    # (run 1440 uefi-usb-auto-zfs-mirror-sshpw). Assertion unchanged.
+                    if vm.expect_raw(r"(Enter an option|# |\$ )", 120):
                         return True
+                    with vm.lock:
+                        print("serial_login: no console menu after the password; last serial bytes:", bytes(vm.raw[-300:]))
                 else:
                     r = vm.expect_raw(r"(Login incorrect|#|\$ )", 20)
                     self.step("old-default-root-password-rejected", bool(r) and b"incorrect" in r.group(0), "Login incorrect" if r else "no answer")
