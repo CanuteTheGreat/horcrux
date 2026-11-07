@@ -40,10 +40,14 @@ impl LxdManager {
     /// fingerprint - the same rules as the container form), Ubuntu 22.04
     /// when none was given.
     pub fn init_args(config: &VmConfig, image: Option<&str>) -> Vec<String> {
-        vec![
+        let image = crate::console::lxd::vm_instance_image(
+            crate::console::lxd::Backend::Lxd,
+            image.unwrap_or(""),
+        );
+        let mut args = vec![
             "init".to_string(),
             "--vm".to_string(),
-            crate::console::lxd::instance_image(image.unwrap_or("")),
+            image.clone(),
             config.name.clone(),
             "-c".to_string(),
             format!("limits.cpu={}", config.cpus),
@@ -51,7 +55,14 @@ impl LxdManager {
             format!("limits.memory={}MB", config.memory),
             "-d".to_string(),
             format!("root,size={}GB", config.disk_size),
-        ]
+        ];
+        // Only Ubuntu images ship a signed shim; the others cannot start
+        // with Secure Boot (the daemon default).
+        if crate::console::lxd::vm_needs_secureboot_off(&image) {
+            args.push("-c".to_string());
+            args.push("security.secureboot=false".to_string());
+        }
+        args
     }
 
     /// Create a new LXD virtual machine from `image` (see `init_args`).
@@ -60,7 +71,10 @@ impl LxdManager {
             "Creating LXD VM: {} (ID: {}) from {}",
             config.name,
             config.id,
-            crate::console::lxd::instance_image(image.unwrap_or(""))
+            crate::console::lxd::vm_instance_image(
+                crate::console::lxd::Backend::Lxd,
+                image.unwrap_or("")
+            )
         );
 
         let output = Command::new("lxc")
@@ -253,11 +267,17 @@ mod image_tests {
             "images:alpine/3.20"
         );
         assert_eq!(m(&cfg(), Some("my-local-image"))[2], "my-local-image");
-        assert_eq!(m(&cfg(), None)[2], "images:ubuntu/22.04");
-        assert_eq!(m(&cfg(), Some("  "))[2], "images:ubuntu/22.04");
+        assert_eq!(m(&cfg(), None)[2], "ubuntu:22.04");
+        assert_eq!(m(&cfg(), Some("  "))[2], "ubuntu:22.04");
         let args = m(&cfg(), Some("debian/12"));
         assert_eq!(&args[..2], &["init", "--vm"]);
         assert_eq!(args[3], "vm1");
         assert!(args.contains(&"limits.memory=1024MB".to_string()));
+        // Non-Ubuntu images can't boot with Secure Boot; Ubuntu keeps it.
+        let sb = "security.secureboot=false".to_string();
+        assert!(args.contains(&sb));
+        assert!(m(&cfg(), Some("alpine/3.22")).contains(&sb));
+        assert!(!m(&cfg(), None).contains(&sb));
+        assert!(!m(&cfg(), Some("ubuntu:24.04")).contains(&sb));
     }
 }

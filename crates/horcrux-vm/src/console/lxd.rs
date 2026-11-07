@@ -86,6 +86,12 @@ pub type Ws = WebSocketStream<UnixStream>;
 pub struct Session {
     pub data: Ws,
     pub control: Ws,
+    /// The daemon operation behind the sockets; cancelled when the session
+    /// ends so the daemon releases the console (a VM's serial console has a
+    /// single attachment: until the operation is gone `lxc console` and the
+    /// next browser session fail with "resource temporarily unavailable").
+    pub op_id: String,
+    pub backend: Backend,
 }
 
 /// Kind of console to open on an instance.
@@ -331,7 +337,19 @@ impl Client {
         // starts the session, so the order does not matter beyond that.
         let control = self.ws(&id, &control_secret).await?;
         let data = self.ws(&id, &data_secret).await?;
-        Ok(Session { data, control })
+        Ok(Session {
+            data,
+            control,
+            op_id: id,
+            backend: self.backend,
+        })
+    }
+
+    /// Cancel a daemon operation (best effort: a finished one is a 404).
+    /// For a console/exec operation this ends the session and frees the
+    /// console for the next attach.
+    pub async fn cancel_operation(&self, id: &str) {
+        let _ = self.request("DELETE", &operation_path(id), None).await;
     }
 
     async fn ws(&self, op: &str, secret: &str) -> Result<Ws> {
@@ -380,6 +398,11 @@ impl Client {
     }
 }
 
+/// API path of an operation.
+fn operation_path(id: &str) -> String {
+    format!("/1.0/operations/{}", enc(id))
+}
+
 /// Send a control message (exec: signal / window-resize).
 pub async fn send_control(ws: &mut Ws, msg: Value) {
     let _ = ws.send(WsMessage::Text(msg.to_string())).await;
@@ -396,7 +419,12 @@ pub async fn bridge(
 ) {
     use axum::extract::ws::Message as AxMsg;
     let (mut b_tx, mut b_rx) = browser.split();
-    let Session { data, mut control } = session;
+    let Session {
+        data,
+        mut control,
+        op_id,
+        backend,
+    } = session;
     let (mut d_tx, mut d_rx) = data.split();
 
     if !history.is_empty() && b_tx.send(AxMsg::Binary(history)).await.is_err() {
@@ -444,6 +472,11 @@ pub async fn bridge(
         send_control(&mut control, json!({"command": "signal", "signal": 1})).await;
     }
     let _ = control.close(None).await;
+    // Close the data websocket too (the sink half was only dropped, which
+    // leaves the daemon's side waiting) and cancel the operation, so the
+    // console is released for the next session.
+    let _ = d_tx.close().await;
+    Client::quick(backend).cancel_operation(&op_id).await;
 }
 
 /// Minimal HTTP/1.1 response parser (Content-Length, chunked, or EOF body).
@@ -543,6 +576,33 @@ pub fn instance_image(rootfs: &str) -> String {
     }
 }
 
+/// Image source for an LXD/Incus *VM*: like `instance_image`, but an empty
+/// field means Ubuntu 22.04 from the backend's VM-capable source - LXD's
+/// `ubuntu:` remote (the bare `ubuntu/22.04` alias has no remote and is not
+/// a fingerprint, so `lxc init` failed), Incus's `images:` remote.
+pub fn vm_instance_image(backend: Backend, image: &str) -> String {
+    if image.trim().is_empty() {
+        match backend {
+            Backend::Lxd => "ubuntu:22.04".to_string(),
+            Backend::Incus => "images:ubuntu/22.04".to_string(),
+        }
+    } else {
+        instance_image(image)
+    }
+}
+
+/// Whether a VM from this (resolved) image must be created with
+/// `security.secureboot=false`. LXD/Incus boot VMs with Secure Boot on, but
+/// only Ubuntu images ship a signed shim: alpine, debian, ... fail to start
+/// with "image ... incompatible with secureboot". Ubuntu stays signed;
+/// everything else (and unknown local images) boots without it.
+pub fn vm_needs_secureboot_off(resolved_image: &str) -> bool {
+    let signed = resolved_image.starts_with("ubuntu:")
+        || resolved_image.starts_with("ubuntu-daily:")
+        || resolved_image.starts_with("images:ubuntu/");
+    !signed
+}
+
 /// Refuse an instance name or image that `incus init` / `lxc init` would
 /// read as something other than a positional argument. Both go on the
 /// command line unquoted by a shell but still through the CLI's flag
@@ -587,6 +647,63 @@ mod instance_image_tests {
         );
         assert_eq!(super::instance_image("my-local"), "my-local");
         assert_eq!(super::instance_image(" "), "images:ubuntu/22.04");
+    }
+
+    #[test]
+    fn vm_default_image_has_a_remote() {
+        use super::{vm_instance_image, Backend};
+        assert_eq!(vm_instance_image(Backend::Lxd, ""), "ubuntu:22.04");
+        assert_eq!(vm_instance_image(Backend::Lxd, "  "), "ubuntu:22.04");
+        assert_eq!(vm_instance_image(Backend::Incus, ""), "images:ubuntu/22.04");
+        assert_eq!(
+            vm_instance_image(Backend::Lxd, "alpine/3.22"),
+            "images:alpine/3.22"
+        );
+    }
+
+    #[test]
+    fn secureboot_only_for_ubuntu_images() {
+        use super::vm_needs_secureboot_off as off;
+        assert!(!off("ubuntu:22.04"));
+        assert!(!off("images:ubuntu/22.04"));
+        assert!(off("images:alpine/3.22"));
+        assert!(off("images:debian/12"));
+        assert!(off("my-local-image"));
+    }
+
+    #[test]
+    fn operation_path_is_encoded() {
+        assert_eq!(super::operation_path("a-b"), "/1.0/operations/a-b");
+        assert_eq!(super::operation_path("a/b"), "/1.0/operations/a%2Fb");
+    }
+
+    #[tokio::test]
+    async fn cancel_operation_sends_delete() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let path = std::env::temp_dir().join(format!("hx-cancel-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 1024];
+            let n = s.read(&mut buf).await.unwrap();
+            s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&buf[..n]).to_string()
+        });
+        let client = super::Client {
+            backend: super::Backend::Lxd,
+            socket: path.clone(),
+            timeout: std::time::Duration::from_secs(5),
+        };
+        client.cancel_operation("op-1").await;
+        let req = server.await.unwrap();
+        assert!(
+            req.starts_with("DELETE /1.0/operations/op-1 HTTP/1.1"),
+            "{req}"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
