@@ -16,7 +16,9 @@ echo "== squashfs"
 # Desktop image: 1 MiB blocks (xz sees 4x the context: ~4-6 % smaller) so it fits below the 2 GiB release-asset limit; slower random reads, fine for a live ISO
 SQFS_BLOCK=256K; grep -qx desktop "$ROOT/etc/live-iso-variant" 2>/dev/null && SQFS_BLOCK=1M
 [ "$SQFS_BLOCK" = 1M ] && { echo "== size breakdown (MB, uncompressed)"; du -xsm "$ROOT"/usr/* "$ROOT"/usr/lib/* "$ROOT"/usr/share/* "$ROOT"/opt/* "$ROOT"/var/* 2>/dev/null | sort -rn | head -40; }
-mksquashfs "$ROOT" "$ISO/LiveOS/squashfs.img" ${SQUASH_COMP:--comp xz -b $SQFS_BLOCK $SQFS_BCJ} -no-progress -noappend 2>&1 | tail -3
+# -mem: mksquashfs sizes its cache as 25 % of the HOST RAM (8 GiB on a 32 GiB arm64 runner) although the job runs in a 5-6 GiB cgroup: patronus run 800
+# (aarch64 daily, 2026-11-07) had it OOM-killed at 4.1 GB anon on nightly-arm64. 1 GiB is plenty for a streaming xz build; the image is byte-identical.
+mksquashfs "$ROOT" "$ISO/LiveOS/squashfs.img" -mem 1G ${SQUASH_COMP:--comp xz -b $SQFS_BLOCK $SQFS_BCJ} -no-progress -noappend 2>&1 | tail -3
 
 # Graphical menu with the product splash (official logo, crop/scale only). Everything is optional: with no splash image or no
 # font in the tools image the menu stays the plain text console. The generator adds the gfxterm block when GFX_OK=1.
