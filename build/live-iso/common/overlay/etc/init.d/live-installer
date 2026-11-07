@@ -56,7 +56,7 @@ start() {
 		: > /var/log/autoinstall.log
 		[ "$after" = reboot ] && unattended_guard "$p"
 		( /usr/bin/live-installer --answers auto $nohalt 2>&1; echo "AUTOINSTALL-EXIT rc=$?" ) | tee -a /var/log/autoinstall.log >/dev/console
-		[ -s /run/autoinstall-timer.pid ] && { kill "$(cat /run/autoinstall-timer.pid)" 2>/dev/null; pkill -P "$(cat /run/autoinstall-timer.pid)" 2>/dev/null; rm -f /run/autoinstall-timer.pid; }
+		[ -s /run/autoinstall-timer.pid ] && { t=$(cat /run/autoinstall-timer.pid); c=$(pgrep -P "$t" 2>/dev/null); kill "$t" 2>/dev/null; [ -z "$c" ] || kill $c 2>/dev/null; rm -f /run/autoinstall-timer.pid; }   # the subshell first, then its sleep (killing the sleep first would let it fire)
 		if [ "$after" = reboot ]; then
 			# NOT /sbin/reboot: the live medium may live on the disk the installer just erased; sysrq needs no file from it
 			copy_install_log "$p"
