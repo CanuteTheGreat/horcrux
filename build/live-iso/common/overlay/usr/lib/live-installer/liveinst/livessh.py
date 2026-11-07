@@ -68,10 +68,11 @@ def start(answers_text, run=RUN, port=22, sshd="/usr/sbin/sshd", keygen="/usr/bi
         cfg = cfg.replace("UsePAM yes", "UsePAM no")
     with open(f"{run}/sshd_config", "w") as f:
         f.write(cfg)
-    try:
-        os.makedirs("/var/empty", exist_ok=True)       # sshd privsep chroot (present on the live image; only a dev host may lack it)
-    except OSError:
-        pass
+    for d in ("/var/empty", "/run/sshd"):               # sshd privsep chroot: /var/empty on Gentoo (present on the live image), /run/sshd on Debian/Ubuntu builds (a tmpfs path, so still nothing persistent)
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError:
+            pass
     r = runner([sshd, "-f", f"{run}/sshd_config"], capture_output=True, text=True)
     if r.returncode != 0:
         return False, "sshd failed to start: " + (r.stderr or "")[:200]
