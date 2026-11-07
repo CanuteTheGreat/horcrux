@@ -7,6 +7,7 @@ import unittest
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 
+@unittest.skipUnless(os.path.isdir(os.path.join(ROOT, "horcrux-api")), "reads the Horcrux repo tree (vendored copies in other repos skip)")
 class ManagerSupervised(unittest.TestCase):
     def test_init_script_is_supervised(self):
         s = open(os.path.join(ROOT, "build/live-iso/project/overlay/etc/init.d/horcrux-api")).read()
@@ -21,6 +22,7 @@ class ManagerSupervised(unittest.TestCase):
         self.assertEqual(len(re.findall(r"enable_boot_start\(\)\.await;", s)), 2, "create AND join must enable the manager at boot")
 
 
+@unittest.skipUnless(os.path.isdir(os.path.join(ROOT, "horcrux-api")), "reads the Horcrux repo tree (vendored copies in other repos skip)")
 class ManagerAssetPublished(unittest.TestCase):
     """app-emulation/horcrux-bin fetches releases/download/daily/horcrux-manager-daily-<arch>.tar.zst on an installed machine; the asset was never uploaded (404)"""
 
