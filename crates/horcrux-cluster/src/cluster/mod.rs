@@ -528,6 +528,28 @@ impl ClusterManager {
         self.accept_member(name, address).await
     }
 
+    /// A member told us that `name` was removed from the cluster
+    /// (`POST /api/ha/peer/members/:name/removed`, sent by the member the
+    /// `DELETE /api/cluster/nodes/:name` hit). Forget it here too, otherwise
+    /// the other members kept listing (and probing) a node that no longer
+    /// exists, and a replacement could not be told apart from it. Idempotent:
+    /// an unknown name is fine, and this node is never removed on a peer's
+    /// say-so. Returns whether a node was removed.
+    pub async fn accept_member_removed(&self, name: &str) -> Result<bool> {
+        let is_remote = {
+            let nodes = self.nodes.read().await;
+            match nodes.get(name) {
+                Some(n) => !n.is_local,
+                None => false,
+            }
+        };
+        if !is_remote || self.get_local_node_name().await.ok().as_deref() == Some(name) {
+            return Ok(false);
+        }
+        self.remove_node(name).await?;
+        Ok(true)
+    }
+
     /// Add a node to the cluster
     pub async fn add_node(&self, node: Node) -> Result<()> {
         let mut nodes = self.nodes.write().await;
@@ -932,6 +954,32 @@ mod tests {
         let db = crate::db::Database::new(&url).await.unwrap();
         db.migrate().await.unwrap();
         ClusterManager::with_database(Arc::new(db)).await.unwrap()
+    }
+
+    /// Removing a node on one member is propagated to the others: the
+    /// receiving side forgets the node, never removes itself, and an
+    /// unknown name is not an error.
+    #[tokio::test]
+    async fn a_removal_announcement_forgets_the_node() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = db_manager(dir.path()).await;
+        let me = m.get_local_node_name().await.unwrap();
+        let members = vec![
+            node(&me, 4, 8 << 30, None, true),
+            node("gone", 4, 8 << 30, None, false),
+            node("stays", 4, 8 << 30, None, false),
+        ];
+        m.join_cluster("c".into(), &me, members).await.unwrap();
+        assert!(m.accept_member_removed("gone").await.unwrap());
+        let names: Vec<String> = m.list_nodes().await.into_iter().map(|n| n.name).collect();
+        assert!(!names.contains(&"gone".to_string()));
+        assert!(names.contains(&"stays".to_string()));
+        // idempotent: a second announcement (or an unknown node) is fine
+        assert!(!m.accept_member_removed("gone").await.unwrap());
+        assert!(!m.accept_member_removed("never-existed").await.unwrap());
+        // this node is never removed because a peer said so
+        assert!(!m.accept_member_removed(&me).await.unwrap());
+        assert!(m.list_nodes().await.iter().any(|n| n.is_local));
     }
 
     /// A node that was removed on one member and replaced (new identity) is

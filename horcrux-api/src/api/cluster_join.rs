@@ -145,6 +145,54 @@ async fn join_request(
     }))
 }
 
+/// Tell the other members that `removed` left the cluster (best effort, one
+/// request each; `others` is the member list captured BEFORE the removal).
+/// A member that is unreachable keeps the node until it is told again or
+/// the node is removed there by hand.
+pub async fn announce_member_removed(
+    state: &AppState,
+    removed: &str,
+    others: &[crate::cluster::node::Node],
+) {
+    let Ok(local) = state.cluster_manager.get_local_node_name().await else {
+        return;
+    };
+    let Ok(client) = peer_client() else {
+        return;
+    };
+    let port = state.config.server.port;
+    for n in others
+        .iter()
+        .filter(|n| n.name != removed && n.name != local && !n.is_local)
+    {
+        let token = crate::middleware::auth::generate_cluster_ha_token(&local);
+        let Ok(token) = token else { continue };
+        let r = client
+            .post(format!(
+                "{}/api/ha/peer/members/{}/removed",
+                n.api_url(port),
+                removed
+            ))
+            .bearer_auth(token)
+            .send()
+            .await;
+        match r {
+            Ok(resp) if resp.status().is_success() => {}
+            Ok(resp) => tracing::warn!(
+                "{} refused the removal of member {removed}: {}",
+                n.name,
+                resp.status()
+            ),
+            Err(e) => {
+                tracing::warn!(
+                    "could not tell {} about the removal of {removed}: {e}",
+                    n.name
+                )
+            }
+        }
+    }
+}
+
 fn peer_client() -> Result<reqwest::Client, ApiError> {
     // Peers serve HTTPS with their own node-local CA (see the usage monitor).
     reqwest::Client::builder()

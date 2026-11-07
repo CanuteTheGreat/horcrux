@@ -4334,7 +4334,14 @@ async fn remove_cluster_node(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    // Members to tell, captured before the removal.
+    #[cfg(feature = "cluster")]
+    let others = state.cluster_manager.list_nodes().await;
     state.cluster_manager.remove_node(&name).await?;
+    // The removal is cluster-wide: the other members forget the node too
+    // (best effort, the same way a join is announced).
+    #[cfg(feature = "cluster")]
+    api::cluster_join::announce_member_removed(&state, &name, &others).await;
     let _ = state
         .webhook_manager
         .trigger_event(

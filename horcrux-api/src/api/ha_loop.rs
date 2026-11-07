@@ -170,6 +170,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/ha/fencing/events", get(fencing_events))
         .route("/api/ha/peer/sync", post(peer_sync))
         .route("/api/ha/peer/members", post(peer_members))
+        .route(
+            "/api/ha/peer/members/:name/removed",
+            post(peer_member_removed),
+        )
         .route("/api/ha/peer/recover/:vm_id", post(peer_recover))
 }
 
@@ -266,6 +270,19 @@ async fn peer_members(
         .cluster_manager
         .accept_rejoined_member(&m.name, &m.address)
         .await?;
+    Ok(StatusCode::OK)
+}
+
+/// A member tells us a node was removed from the cluster. Local only: the
+/// member that took the `DELETE` informs every other member itself, so this
+/// never fans out again.
+async fn peer_member_removed(
+    State(state): State<Arc<AppState>>,
+    user: Option<Extension<AuthUser>>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    require_peer(&user)?;
+    state.cluster_manager.accept_member_removed(&name).await?;
     Ok(StatusCode::OK)
 }
 
