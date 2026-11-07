@@ -9,14 +9,9 @@ on:
   # Burst of pushes = ONE run (replace: group). No cron.
   push:
     branches: [main]
+    tags: ['v*']
     paths:
-      - 'crates/**'
-      - 'horcrux-api/**'
-      - 'horcrux-common/**'
-      - 'horcrux-cli/**'
-      - 'horcrux-ui/**'
       - 'Cargo.toml'
-      - 'Cargo.lock'
       - '.forgejo/workflows/nightly-realistic-test.yml'
   workflow_dispatch: {}
 
