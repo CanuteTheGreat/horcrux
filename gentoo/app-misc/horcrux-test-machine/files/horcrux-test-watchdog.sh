@@ -24,9 +24,9 @@ exec 3>"$DEV" || exit 1
 trap 'printf V >&3; exec 3>&-; exit 0' TERM INT
 echo "horcrux-test-watchdog: armed $DEV (driver timeout $(cat /sys/class/watchdog/${DEV##*/}/timeout 2>/dev/null) s), pet every ${PET}s" >&2
 while :; do
-	if timeout -s KILL 15 sh -c "date +%s > $STAMP && sync -d $STAMP" 2>/dev/null || [ ! -d /var/lib ]; then
+	if timeout -s KILL 15 sh -c "date +%s > $STAMP && sync -d $STAMP" 3>&- 2>/dev/null || [ ! -d /var/lib ]; then
 		printf . >&3
 	fi
-	sleep "$PET" &
+	sleep "$PET" 3>&- &   # children must not inherit the watchdog fd (they would keep it open after we exit: restart = EBUSY)
 	wait $!
 done
