@@ -267,29 +267,59 @@ class VM:
                 os.unlink(pth)
         # The serial line is a unix socket, not `-serial stdio`: with stdio QEMU's 16550 TX stalled
         # until the next input byte whenever the guest sent a burst (curses repaints), freezing the TUI.
-        self.p = subprocess.Popen(args + ["-qmp", f"unix:{self.qmp_path},server,nowait",
-                                          "-chardev", f"socket,id=ser0,path={self.ser_path},server=on,wait=off", "-serial", "chardev:ser0",
-                                          "-display", "none"],
-                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=open(f"{out}/{name}-qemu.err", "wb"))
-        LIVE_VMS.append(self)
+        # QEMU sometimes stays alive without ever creating the socket (run 784, installed boot of a swtpm run: it connected to a swtpm that was
+        # already quitting after the previous VM, exit=None, and the leaked QEMU then held the hostfwd ports so every later scenario died at once).
+        # So: wait up to 30 s, and on a miss kill that QEMU, restart swtpm and start it again (3 tries); never leave a stuck QEMU behind.
+        full = args + ["-qmp", f"unix:{self.qmp_path},server,nowait",
+                       "-chardev", f"socket,id=ser0,path={self.ser_path},server=on,wait=off", "-serial", "chardev:ser0",
+                       "-display", "none"]
         self.sock = None
         self.last_rx = time.time()
         self.poke = False          # serial TUI runs: send Ctrl-L when the line has been silent (see expect_screen)
-        for _ in range(100):
-            try:
-                s = socket.socket(socket.AF_UNIX)
-                s.connect(self.ser_path)
-                self.sock = s
+        err = ""
+        for attempt in range(3):
+            for pth in (self.qmp_path, self.ser_path):
+                if os.path.exists(pth):
+                    os.unlink(pth)
+            self.p = subprocess.Popen(full, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=open(f"{out}/{name}-qemu.err", "wb"))
+            LIVE_VMS.append(self)
+            for _ in range(300):
+                try:
+                    s = socket.socket(socket.AF_UNIX)
+                    s.connect(self.ser_path)
+                    self.sock = s
+                    break
+                except OSError:
+                    if self.p.poll() is not None:
+                        break
+                    time.sleep(0.1)
+            if self.sock is not None:
                 break
-            except OSError:
-                time.sleep(0.1)
-        if self.sock is None:
             rc = self.p.poll()
             try:
                 err = open(f"{out}/{name}-qemu.err", "rb").read()[-600:].decode("utf-8", "replace").strip()
             except OSError:
                 err = ""
-            raise SystemExit(f"cannot connect to the QEMU serial socket (qemu exit={rc}; stderr: {err or 'empty'})")
+            print(f"[WARN] {name}: no QEMU serial socket (attempt {attempt + 1}/3, qemu exit={rc}; stderr: {err or 'empty'})", flush=True)
+            if rc is None:
+                self.p.kill()
+            self.p.wait()
+            LIVE_VMS.remove(self)
+            r = globals().get("RUNNER")
+            for n, pr in (("tpm", getattr(r, "tpm_proc", None)), ("tpm2", getattr(r, "tpm_proc2", None))):
+                if pr is not None and n in getattr(r, "tpm_dirs", {}):
+                    if pr.poll() is None:
+                        pr.terminate()
+                        try:
+                            pr.wait(5)
+                        except Exception:
+                            pr.kill()
+                    r.ensure_swtpm(n)
+            time.sleep(2)
+        if self.sock is None:
+            print(f"[FAIL] {name}-qemu-serial-socket QEMU never created its serial socket in 3 tries (stderr: {err or 'empty'})", flush=True)
+            raise SystemExit(f"cannot connect to the QEMU serial socket after 3 tries (last qemu exit={self.p.poll()}; stderr: {err or 'empty'})")
+        LIVE_VMS.append(self)
         threading.Thread(target=self._rd, daemon=True).start()
 
     def _rd(self):
