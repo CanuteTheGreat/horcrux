@@ -55,7 +55,9 @@ if [ "$result" = pass ]; then
   [ "$ut_rc" = 0 ] || { grep -E '^(FAIL|ERROR):|Error|assert' "$EVI/unit-tests.log" | head -12; fail unit-tests "guided-installer unit tests failed (rc=$ut_rc): $(grep -E '^(FAIL|ERROR):' "$EVI/unit-tests.log" | head -3 | tr '\n' ' ')"; }
   # /boot space handling on a REAL 512 MB ext4 loop mount (30 snapshots, <= 80% used); needs root + loop devices, skipped otherwise
   if [ "$(id -u)" = 0 ] && command -v mkfs.ext4 >/dev/null && losetup -f >/dev/null 2>&1; then
-    python3 -W ignore "$HERE/be-boot-space-test.py" 2>&1 | grep -E '^(RESULT|ok|Traceback|AssertionError)' ; [ "${PIPESTATUS[0]}" = 0 ] || fail be-boot-space "horcrux-be /boot space test failed (30 snapshots on a 512 MB /boot)"
+    python3 -W ignore "$HERE/be-boot-space-test.py" > "$EVI/be-boot-space.log" 2>&1; bs_rc=$?
+    grep -E '^(RESULT|ok)' "$EVI/be-boot-space.log"
+    if [ "$bs_rc" != 0 ]; then tail -n 30 "$EVI/be-boot-space.log"; fail be-boot-space "horcrux-be /boot space test failed (rc=$bs_rc): $(tail -n 1 "$EVI/be-boot-space.log" | cut -c1-200)"; fi
   fi
   echo "::endgroup::"
 fi
