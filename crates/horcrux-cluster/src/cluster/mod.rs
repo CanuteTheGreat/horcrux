@@ -967,14 +967,27 @@ mod tests {
         assert_eq!(n.node_id, None, "pinned identity forgotten");
         assert_eq!(n.status, NodeStatus::Unknown);
         // a different address is still a conflict, a new name is simply added
-        assert!(m.accept_rejoined_member("replaced", "10.0.0.9").await.is_err());
+        assert!(m
+            .accept_rejoined_member("replaced", "10.0.0.9")
+            .await
+            .is_err());
         m.accept_rejoined_member("fresh", "10.0.0.7").await.unwrap();
         assert!(m.list_nodes().await.iter().any(|n| n.name == "fresh"));
         // the local node is never unpinned by an announcement
-        let local = m.list_nodes().await.into_iter().find(|n| n.is_local).unwrap();
+        let local = m
+            .list_nodes()
+            .await
+            .into_iter()
+            .find(|n| n.is_local)
+            .unwrap();
         let before = local.node_id.clone();
         let _ = m.accept_rejoined_member(&local.name, &local.ip).await;
-        let local = m.list_nodes().await.into_iter().find(|n| n.is_local).unwrap();
+        let local = m
+            .list_nodes()
+            .await
+            .into_iter()
+            .find(|n| n.is_local)
+            .unwrap();
         assert_eq!(local.node_id, before);
     }
 
