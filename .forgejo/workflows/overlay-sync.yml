@@ -17,7 +17,7 @@ on:
 jobs:
   split-and-push:
     name: Publish gentoo/ as horcrux-overlay
-    runs-on: linux-cross-x86_64
+    runs-on: arm64-light  # light git/rsync sync job; never queue it behind heavy x86 builds
     container: catthehacker/ubuntu:act-latest
     timeout-minutes: 15
     steps:
