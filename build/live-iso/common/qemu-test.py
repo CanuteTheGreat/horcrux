@@ -253,9 +253,15 @@ class VT:
 
 
 # ----------------------------------------------------------------------------- vm
+LUKS_PROMPT = re.compile(rb"(?i)(enter passphrase|passphrase for|enter key|please enter (the )?(disk )?(passphrase|password))")
+
+
 class VM:
+    LUKS_UNLOCK = None         # set to the disk passphrase when the installed root is xfs-luks (see _rd)
+
     def __init__(self, name, args, out):
         self.name, self.out = name, out
+        self.luks_tail, self.luks_t, self.luks_n = b"", 0.0, 0
         self.log = open(f"{out}/{name}-serial.log", "wb")
         self.vt = VT()
         self.raw = b""
@@ -336,6 +342,14 @@ class VM:
             with self.lock:
                 self.raw += b
                 self.vt.feed(b)
+            if VM.LUKS_UNLOCK and self.name[:1] in ("2", "3"):
+                # an xfs-luks root asks for the disk passphrase at EVERY boot of the installed disk (initramfs, on the console): type it, else the
+                # boot waits at the prompt and no login/ssh ever comes (lab installer-vm server-headless 2026-11-06: 'installed-boots-to-login 421s')
+                win = self.luks_tail + b
+                self.luks_tail = win[-120:]
+                if LUKS_PROMPT.search(win) and time.time() - self.luks_t > 10:
+                    self.luks_t = time.time(); self.luks_n += 1
+                    threading.Timer(1.0, lambda: self.send(VM.LUKS_UNLOCK + "\r")).start()
 
     def send(self, s):
         try:
@@ -1587,7 +1601,9 @@ class Runner:
                 ok = vm.expect_raw(r"login:", 420)
                 if not ok:
                     vm.shot("login-timeout")
-                self.step("installed-boots-to-login", ok, f"{int(time.time()-t1)}s")
+                    tail = re.sub(r"\s+", " ", vm.screen()[-400:]) if hasattr(vm, "screen") else ""
+                    print(f"login-timeout console tail: {tail}", flush=True)
+                self.step("installed-boots-to-login", ok, f"{int(time.time()-t1)}s" + (f" (disk passphrase typed {vm.luks_n}x at the initramfs prompt)" if VM.LUKS_UNLOCK else ""))
                 if late:
                     self.late_link_up(vm, netnames, ok)
                 vm.shot("login-prompt")
@@ -2122,6 +2138,7 @@ def main():
     args.fs_default = args.fs == "default"
     if args.fs_default:       # the installer's own default: ZFS >= 8 GB RAM, below that XFS+LUKS (Horcrux) / plain XFS (Patronus: it must boot unattended)
         args.fs = ("zfs" if args.mem >= 8192 else "xfs") if args.project == "patronus" else ("zfs" if args.mem >= 8192 else "xfs-luks")
+    VM.LUKS_UNLOCK = PW_DISK if (args.fs == "xfs-luks" and args.project == "horcrux") else None   # the installed disk asks for it at every boot
     args.zfs_raid = args.zfs_raid or ("single" if args.fs_default else "mirror")
     if args.mode == "bios" and not ARCHS[ARCH]["bios"]:
         ap.error(f"{ARCH} has no legacy BIOS: use --mode uefi")
