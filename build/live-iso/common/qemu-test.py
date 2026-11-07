@@ -1149,7 +1149,7 @@ class Runner:
         except ValueError:
             return {}
 
-    def gwait(self, vm, page, timeout=120, extra=None):
+    def gwait(self, vm, page, timeout=120, extra=None, record=True):
         end = time.time() + timeout
         st = {}
         while time.time() < end:
@@ -1157,7 +1157,9 @@ class Runner:
             if st.get("page") == page and (extra is None or extra(st)):
                 return st
             time.sleep(2)
-        self.step(f"gui-page-{page}", False, f"not reached; last status {st}")
+        if record:
+            self.step(f"gui-page-{page}", False, f"not reached; last status {st}")
+        return st
 
     def gshot(self, vm, step, desc):
         time.sleep(1.5)
@@ -1330,10 +1332,18 @@ class Runner:
         st = self.gwait(vm, "use_flags", 60)
         self.gshot(vm, "use-flags", "Software (USE flags): presets, searchable flag list, Portage sanity check, binary vs source impact")
         self.step("gui-use-flags-default-has-no-errors", not [i for i in st.get("issues", []) if i[0] == "error"], f"{len(st.get('issues', []))} notes")
-        self.gtype_search(vm, "ssl")
-        self.gfocus(vm, "USE flag ssl:")
-        self.gkey(vm, "spc", pause=2)
-        st = self.gwait(vm, "use_flags", 30, lambda s: any(i[0] == "error" for i in s.get("issues", [])))
+        # A QMP key press is sometimes lost (bios-cdrom-gui, Patronus run 777: the switch never flipped, no error
+        # after 30 s, Next still enabled). The assertion below is unchanged; only the PRESS is retried, and only
+        # while the page still shows the unflipped state (no error issue), so a press that did land is never undone.
+        has_err = lambda s: any(i[0] == "error" for i in s.get("issues", []))      # noqa: E731
+        for attempt in (1, 2, 3):
+            if attempt == 1:
+                self.gtype_search(vm, "ssl")           # the filter text stays for the retries
+            self.gfocus(vm, "USE flag ssl:")
+            self.gkey(vm, "spc", pause=2)
+            st = self.gwait(vm, "use_flags", 30, has_err, record=False)
+            if has_err(st):
+                break
         self.step("gui-use-flags-sanity-check-error", any(i[0] == "error" for i in st.get("issues", [])) and not st.get("next_enabled", True),
                   "disabling 'ssl' is refused: " + (next((i[2] for i in st.get("issues", []) if i[0] == "error"), "")[:140]))
         self.gshot(vm, "use-flags-error", "USE flag sanity check ERROR (ssl switched off breaks installed packages) - Next is blocked")
