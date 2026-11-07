@@ -163,6 +163,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-cargo-check-v2-
 
+      - name: Shared build cache (rw-build-cache)
+        continue-on-error: true
+        run: |
+          curl -fsS -m 5 http://10.1.10.103:8088/ci/env.sh -o /tmp/rw-cache-env.sh && RW_CACHE_WANT=rust RW_CACHE_EXPORT=1 . /tmp/rw-cache-env.sh || true
       - name: Default build serves /ha/* (cluster is a default feature)
         # A default `cargo build` / the shipped image must include `cluster`,
         # else every /ha/* page says "Not available in this build".
@@ -296,6 +300,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-cargo-test-v2-
 
+      - name: Shared build cache (rw-build-cache)
+        continue-on-error: true
+        run: |
+          curl -fsS -m 5 http://10.1.10.103:8088/ci/env.sh -o /tmp/rw-cache-env.sh && RW_CACHE_WANT=rust RW_CACHE_EXPORT=1 . /tmp/rw-cache-env.sh || true
       - name: Build horcrux-api server (for integration tests)
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Build horcrux-api server (for integration tests)"
@@ -651,6 +659,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-cargo-build-${{ matrix.features }}-v2-
 
+      - name: Shared build cache (rw-build-cache)
+        continue-on-error: true
+        run: |
+          curl -fsS -m 5 http://10.1.10.103:8088/ci/env.sh -o /tmp/rw-cache-env.sh && RW_CACHE_WANT=rust RW_CACHE_EXPORT=1 . /tmp/rw-cache-env.sh || true
       - name: Build (features=${{ matrix.features }})
         # Deliberately NOT passing --target here even though the matrix
         # names a target triple (kept for cache-key/toolchain-install
@@ -712,6 +724,10 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
           sudo apt-get update && sudo apt-get install -y build-essential clang mold libvirt-dev libpam0g-dev
 
+      - name: Shared build cache (rw-build-cache)
+        continue-on-error: true
+        run: |
+          curl -fsS -m 5 http://10.1.10.103:8088/ci/env.sh -o /tmp/rw-cache-env.sh && RW_CACHE_WANT=rust RW_CACHE_EXPORT=1 . /tmp/rw-cache-env.sh || true
       - name: Install trunk
         # `cargo install trunk` from source hits a real dependency conflict:
         # lightningcss pulls in two incompatible cssparser versions (0.33 vs
@@ -810,6 +826,10 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
           sudo apt-get update && sudo apt-get install -y build-essential clang mold libvirt-dev libpam0g-dev
 
+      - name: Shared build cache (rw-build-cache)
+        continue-on-error: true
+        run: |
+          curl -fsS -m 5 http://10.1.10.103:8088/ci/env.sh -o /tmp/rw-cache-env.sh && RW_CACHE_WANT=rust RW_CACHE_EXPORT=1 . /tmp/rw-cache-env.sh || true
       - name: Install cargo-audit
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install cargo-audit"
@@ -1057,6 +1077,10 @@ jobs:
           done
           echo "USE flags <-> Cargo features consistent:"; echo $mapped
 
+      - name: Shared build cache (rw-build-cache)
+        continue-on-error: true
+        run: |
+          curl -fsS -m 5 http://10.1.10.103:8088/ci/env.sh -o /tmp/rw-cache-env.sh && RW_CACHE_WANT=rust RW_CACHE_EXPORT=1 . /tmp/rw-cache-env.sh || true
       - name: Build each USE-flag feature on its own
         # The Test job builds --all-features, which hides code that only
         # compiles when some *other* feature is also on. A Gentoo user can
@@ -1150,6 +1174,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-cargo-e2e-v2-
 
+      - name: Shared build cache (rw-build-cache)
+        continue-on-error: true
+        run: |
+          curl -fsS -m 5 http://10.1.10.103:8088/ci/env.sh -o /tmp/rw-cache-env.sh && RW_CACHE_WANT=rust RW_CACHE_EXPORT=1 . /tmp/rw-cache-env.sh || true
       - name: Build web UI and API
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Build web UI and API"
