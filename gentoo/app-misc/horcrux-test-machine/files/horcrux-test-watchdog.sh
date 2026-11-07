@@ -5,6 +5,7 @@
 # never needs the owner to power-cycle it. (The NFS server role is untouched: the probe file is on the local root fs.)
 PET=${WDT_PET:-5}
 DEV=
+pick() {
 for d in /sys/class/watchdog/watchdog*; do
 	[ -d "$d" ] || continue
 	case $(cat "$d/identity" 2>/dev/null) in iTCO_wdt*|*iTCO*) DEV=/dev/${d##*/}; break;; esac
@@ -12,6 +13,11 @@ done
 if [ -z "$DEV" ]; then
 	for d in /sys/class/watchdog/watchdog*; do [ -d "$d" ] && { DEV=/dev/${d##*/}; break; }; done
 fi
+}
+pick
+# no hardware watchdog (hogshead, a T2 MacBook, exposes none): the kernel's softdog still resets a machine whose userspace/scheduler
+# is wedged (it cannot save a dead CPU, but a dead CPU needs hardware)
+if [ -z "$DEV" ]; then modprobe softdog soft_margin=60 2>/dev/null; sleep 1; pick; fi
 [ -n "$DEV" ] && [ -c "$DEV" ] || { echo "horcrux-test-watchdog: no watchdog device" >&2; exit 0; }
 STAMP=/var/lib/horcrux-test-watchdog.stamp
 exec 3>"$DEV" || exit 1
