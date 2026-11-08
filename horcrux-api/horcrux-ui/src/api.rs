@@ -6629,6 +6629,95 @@ pub async fn delete_bridge(name: &str) -> Result<(), ApiError> {
     delete_json(&format!("/network/bridges/{}", urlencoding::encode(name))).await
 }
 
+// DHCP + DNS per network (Infrastructure > DHCP & DNS) - horcrux-api/src/api/net_dhcp.rs.
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct DhcpStaticLease {
+    pub mac: String,
+    pub ip: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct DhcpNetwork {
+    #[serde(default)]
+    pub id: String,
+    pub bridge: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vlan: Option<u16>,
+    pub address: String,
+    pub range_start: String,
+    pub range_end: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway: Option<String>,
+    #[serde(default)]
+    pub dns_servers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    #[serde(default)]
+    pub lease_time: String,
+    #[serde(default)]
+    pub dns_enabled: bool,
+    #[serde(default)]
+    pub upstream_dns: Vec<String>,
+    #[serde(default)]
+    pub static_leases: Vec<DhcpStaticLease>,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub serve_node: String,
+    // read-only, set by the server
+    #[serde(default, skip_serializing)]
+    pub iface: String,
+    #[serde(default, skip_serializing)]
+    pub serving_here: bool,
+    #[serde(default, skip_serializing)]
+    pub running: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DhcpLease {
+    pub expires: i64,
+    pub mac: String,
+    pub ip: String,
+    #[serde(default)]
+    pub hostname: Option<String>,
+}
+
+pub async fn list_dhcp_networks() -> Result<Vec<DhcpNetwork>, ApiError> {
+    fetch_json("/network/dhcp").await
+}
+
+pub async fn create_dhcp_network(n: &DhcpNetwork) -> Result<DhcpNetwork, ApiError> {
+    post_json("/network/dhcp", n).await
+}
+
+pub async fn delete_dhcp_network(id: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/network/dhcp/{}", urlencoding::encode(id))).await
+}
+
+pub async fn add_dhcp_static_lease(id: &str, l: &DhcpStaticLease) -> Result<DhcpNetwork, ApiError> {
+    post_json(
+        &format!("/network/dhcp/{}/static-leases", urlencoding::encode(id)),
+        l,
+    )
+    .await
+}
+
+pub async fn delete_dhcp_static_lease(id: &str, mac: &str) -> Result<(), ApiError> {
+    delete_json(&format!(
+        "/network/dhcp/{}/static-leases/{}",
+        urlencoding::encode(id),
+        urlencoding::encode(mac)
+    ))
+    .await
+}
+
+pub async fn dhcp_leases(id: &str) -> Result<Vec<DhcpLease>, ApiError> {
+    fetch_json(&format!("/network/dhcp/{}/leases", urlencoding::encode(id))).await
+}
+
 // VM firewall (VM Hardware page) - /api/vms/:id/firewall/rules.
 
 /// A firewall rule (`firewall::FirewallRule` on the server).

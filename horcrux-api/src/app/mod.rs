@@ -553,6 +553,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::firewall_objects::routes())
         .merge(api::sdn_cni::routes())
         .merge(api::host_net::routes(&state))
+        .merge(api::net_dhcp::routes(&state))
         .merge(api::dashboards::routes(&state));
     #[cfg(feature = "s3-gateway")]
     let protected_routes = protected_routes.merge(api::s3_gateway::routes(&state));
@@ -4078,7 +4079,6 @@ async fn deploy_stack(
     Ok(Json(summary))
 }
 
-#[cfg(any(feature = "docker", feature = "podman"))]
 /// `PUT /api/stacks/:id`: update a deployed stack (`compose up -d`). Body:
 /// `compose_yaml` (new compose file, default the current one), `env` (extra
 /// environment merged into every service), `force_recreate`.
@@ -4119,6 +4119,7 @@ async fn update_stack(
     Ok(Json(report))
 }
 
+#[cfg(any(feature = "docker", feature = "podman"))]
 async fn get_stack(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,

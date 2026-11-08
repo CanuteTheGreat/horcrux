@@ -31,6 +31,7 @@ pub mod metric_servers;
 pub mod metrics;
 pub mod migration_jobs;
 pub mod migration_peer;
+pub mod net_dhcp;
 pub mod node_disks;
 pub mod node_shell;
 pub mod node_summary;

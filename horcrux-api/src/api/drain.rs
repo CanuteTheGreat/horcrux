@@ -424,6 +424,21 @@ async fn peer_post<B: Serialize, T: serde::de::DeserializeOwned>(
     serde_json::from_str(&text).map_err(|e| e.to_string())
 }
 
+/// POST `path` (a `/api/ha/peer/...` route) on another node as this node.
+pub async fn call_peer<B: Serialize, T: serde::de::DeserializeOwned>(
+    state: &Arc<AppState>,
+    node: &Node,
+    path: &str,
+    body: &B,
+) -> Result<T, String> {
+    let local = state
+        .cluster_manager
+        .get_local_node_name()
+        .await
+        .map_err(|e| e.to_string())?;
+    peer_post(state, &local, node, path, body).await
+}
+
 /// The local node's name plus the way to call another node's peer API.
 pub struct PeerCtx {
     pub local: String,

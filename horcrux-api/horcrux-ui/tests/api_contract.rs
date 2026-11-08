@@ -2802,6 +2802,56 @@ async fn file_server(body: Vec<u8>) -> u16 {
     port
 }
 
+/// DHCP & DNS networks (Infrastructure > DHCP & DNS): the routes the page calls
+/// read into the UI's own types. The network is created disabled, so no
+/// dnsmasq is started (the real servers are exercised in the VM cluster).
+#[tokio::test]
+async fn dhcp_networks_read_into_ui_types() {
+    let c = client();
+    let token = login(&c).await;
+    delete(&c, &token, "/network/dhcp/ctdhcp0").await;
+    let (status, body) = post(
+        &c,
+        &token,
+        "/network/dhcp",
+        json!({"bridge": "ctdhcp0", "address": "10.251.7.1/24", "range_start": "10.251.7.100",
+               "range_end": "10.251.7.120", "gateway": "10.251.7.1", "domain": "contract.test",
+               "enabled": false,
+               "static_leases": [{"mac": "52:54:00:aa:bb:01", "ip": "10.251.7.10", "hostname": "h1"}]}),
+    )
+    .await;
+    assert_eq!(status, 201, "create: {body}");
+    let list: Vec<api::DhcpNetwork> = fetch(&c, &token, "/network/dhcp").await;
+    let n = list.iter().find(|n| n.id == "ctdhcp0").expect("listed");
+    assert_eq!(n.iface, "ctdhcp0");
+    assert_eq!(n.static_leases.len(), 1);
+    assert!(!n.enabled && !n.running && n.serving_here);
+    let (status, body) = post(
+        &c,
+        &token,
+        "/network/dhcp/ctdhcp0/static-leases",
+        json!({"mac": "52:54:00:aa:bb:02", "ip": "10.251.7.11"}),
+    )
+    .await;
+    assert_eq!(status, 201, "static lease: {body}");
+    let one: api::DhcpNetwork = fetch(&c, &token, "/network/dhcp/ctdhcp0").await;
+    assert_eq!(one.static_leases.len(), 2);
+    let leases: Vec<api::DhcpLease> = fetch(&c, &token, "/network/dhcp/ctdhcp0/leases").await;
+    assert!(leases.is_empty());
+    let (status, _) = post(
+        &c,
+        &token,
+        "/network/dhcp",
+        json!({"bridge": "ctdhcp0", "address": "10.251.7.1/24", "range_start": "10.251.7.100",
+               "range_end": "10.251.7.120"}),
+    )
+    .await;
+    assert_eq!(status, 409, "one network per interface");
+    delete(&c, &token, "/network/dhcp/ctdhcp0").await;
+    let list: Vec<api::DhcpNetwork> = fetch(&c, &token, "/network/dhcp").await;
+    assert!(list.iter().all(|n| n.id != "ctdhcp0"));
+}
+
 /// VM hardware (NICs, CD-ROM, boot order), the ISO library and host bridges:
 /// every route the Create VM form, the VM Hardware page, Infrastructure >
 /// ISO Images and Host Bridges call, read into the UI's own types against

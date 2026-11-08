@@ -471,12 +471,12 @@ Authorization: Bearer <token>
 - `POST /api/network/bridges` `{"name": "vmbr0", "vlan_aware": true,
   "address": "10.10.0.1/24", "ports": ["eth1"]}`: create a bridge; Horcrux
   re-creates it when it starts. A port that carries an IP address is refused.
+- `PUT /api/network/bridges/:name` `{"trunk_vlans": ["20","30","100-110"]}` (also
+  `ports`, `port_vlans`, `comment`; omitted fields keep their value): change the
+  ports / trunk VLANs of a managed bridge on the live kernel bridge.
 - `DELETE /api/network/bridges/:name`: managed bridges only, refused while a VM
   NIC uses it.
 
-## Snapshots
-
-### List Snapshots
 **Trunk VLANs.** On a VLAN-aware bridge an uplink port forwards only the VLAN ids
 it was added to (`bridge vlan add`). `trunk_vlans` (ids or ranges, 1-4094) are
 added to every port in `ports`; `port_vlans` (`{"eth1": ["20"]}`) overrides the
@@ -527,6 +527,9 @@ leases are not carried over (clients re-request). Horcrux does not fail a
 network over by itself when its node dies; change `serve_node`. The host
 firewall must let UDP 67 and UDP/TCP 53 reach the server address.
 
+## Snapshots
+
+### List Snapshots
 
 Lists all snapshots for a VM.
 
@@ -733,11 +736,41 @@ Content-Type: application/json
 - **Full Clone**: Creates a completely independent copy with its own disk images. Works with all storage backends (ZFS, LVM, Btrfs, Ceph, QCOW2).
 - **Linked Clone**: Uses copy-on-write to share the original disk as a backing file. Only works with QCOW2. Much faster and uses less space initially.
 
+**Cloning a running VM.** A full clone of a RUNNING QEMU VM is taken live: the
+file-backed (qcow2/raw) disks are copied through QMP `blockdev-backup` in one
+transaction (one point in time, copy-before-write; the guest is never paused),
+ZFS/LVM/Btrfs/Ceph disks use their snapshot clone. The result is
+crash-consistent (like a power cut), not application-consistent. A *linked*
+clone of a running VM is refused with `409` (it would use the live disk as
+backing file): use `full`, or stop the VM.
+
 **Status Codes**:
 - `201 Created` - Clone created successfully
 - `404 NOT_FOUND` - Source VM does not exist
+- `409 CONFLICT` - Linked clone of a running VM, or the clone's id/disk exists
 - `422 VALIDATION_ERROR` - Invalid mode or configuration
 - `500 INTERNAL_ERROR` - Clone operation failed
+
+---
+
+## Stacks (Compose)
+
+- `GET /api/stacks`, `GET /api/stacks/:id` (the latter includes `compose_yaml`),
+  `POST /api/stacks` `{"name","compose_yaml","runtime"}`, `POST .../start|stop`,
+  `DELETE /api/stacks/:id`.
+- `PUT /api/stacks/:id` `{"compose_yaml": "...", "env": {"KEY": "value"},
+  "force_recreate": false}`: update a deployed stack (`compose up -d`). Send a new
+  compose file, extra environment merged into every service (and stored in the
+  stack's compose file), or `force_recreate`. Images that changed are pulled
+  first (a bad tag fails before anything is touched), then the services whose
+  configuration changed are recreated **one at a time** in dependency order;
+  unchanged services keep running, services new in the file are added, services
+  dropped from it are removed. Volumes are kept (containers are removed without
+  `-v`). If a service fails to start, every service already replaced is put back
+  to its previous configuration and the call returns the error (stack
+  unchanged). Answer: `{"recreated": [...], "unchanged": [...], "added": [...],
+  "removed": [...], "stack": {...}}`. 400 when the body changes nothing, 404 for
+  an unknown stack. Stopped stacks are started by an update.
 
 ---
 
@@ -786,44 +819,14 @@ Content-Type: application/json
   },
   "meta_data": {
     "instance_id": "vm-100",
-**Cloning a running VM.** A full clone of a RUNNING QEMU VM is taken live: the
-file-backed (qcow2/raw) disks are copied through QMP `blockdev-backup` in one
-transaction (one point in time, copy-before-write; the guest is never paused),
-ZFS/LVM/Btrfs/Ceph disks use their snapshot clone. The result is
-crash-consistent (like a power cut), not application-consistent. A *linked*
-clone of a running VM is refused with `409` (it would use the live disk as
-backing file): use `full`, or stop the VM.
-
     "local_hostname": "web-server-01"
   }
 }
-- `409 CONFLICT` - Linked clone of a running VM, or the clone's id/disk exists
 ```
 
 **Response**:
 ```json
 {
-## Stacks (Compose)
-
-- `GET /api/stacks`, `GET /api/stacks/:id` (the latter includes `compose_yaml`),
-  `POST /api/stacks` `{"name","compose_yaml","runtime"}`, `POST .../start|stop`,
-  `DELETE /api/stacks/:id`.
-- `PUT /api/stacks/:id` `{"compose_yaml": "...", "env": {"KEY": "value"},
-  "force_recreate": false}`: update a deployed stack (`compose up -d`). Send a new
-  compose file, extra environment merged into every service (and stored in the
-  stack's compose file), or `force_recreate`. Images that changed are pulled
-  first (a bad tag fails before anything is touched), then the services whose
-  configuration changed are recreated **one at a time** in dependency order;
-  unchanged services keep running, services new in the file are added, services
-  dropped from it are removed. Volumes are kept (containers are removed without
-  `-v`). If a service fails to start, every service already replaced is put back
-  to its previous configuration and the call returns the error (stack
-  unchanged). Answer: `{"recreated": [...], "unchanged": [...], "added": [...],
-  "removed": [...], "stack": {...}}`. 400 when the body changes nothing, 404 for
-  an unknown stack. Stopped stacks are started by an update.
-
----
-
   "vm_id": "100",
   "iso_path": "/var/lib/horcrux/cloudinit/vm-100-cloudinit.iso",
   "message": "Cloud-init ISO generated successfully"
