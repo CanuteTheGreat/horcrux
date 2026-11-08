@@ -507,6 +507,12 @@ class Tests:
                         print(f"[WARN] persist-{tag}: no 'Create one now' prompt (attempt 1/2); serial tail: {vm.raw[-300:]!r}", flush=True)
                         continue
                     self.step(f"persist-{tag}-offers-to-create", offered)
+                    # pick() re-sends "s"+<digit> when GRUB's 'Booting' line is late (slow/loaded host); once the entry has booted those
+                    # stray keys sit in the UART line buffer and the prompt reads "s8y" instead of "y" -> treated as N -> root shell,
+                    # PERSISTENCE-CREATED never printed (Patronus x86 BIOS runs 866/12017, reproduced on rw-man-02 with the 11-04 ISO).
+                    # ^U (VKILL) clears whatever the tty line discipline has buffered; the assertions are unchanged.
+                    vm.send("\x15")
+                    time.sleep(0.5)
                     vm.send("y\r")
                     vm.expect_raw(r"Encrypt it", 20)
                     vm.send(("y" if enc else "n") + "\r")
