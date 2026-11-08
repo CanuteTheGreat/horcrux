@@ -69,7 +69,9 @@ pub fn fs_capacity_gb(path: &str) -> Option<(u64, u64)> {
 /// path, so statvfs on it fails and the pool used to report 0 GB (every zvol
 /// create then failed the space check).
 pub fn zfs_capacity_gb(dataset: &str) -> Option<(u64, u64)> {
-    let out = std::process::Command::new("zfs")
+    // HORCRUX_ZFS_BIN lets tests (and unusual installs) point at another zfs binary.
+    let bin = std::env::var_os("HORCRUX_ZFS_BIN").unwrap_or_else(|| "zfs".into());
+    let out = std::process::Command::new(bin)
         .args(["list", "-Hp", "-o", "used,avail", "--"])
         .arg(dataset)
         .output()
@@ -1174,6 +1176,37 @@ mod tests {
         );
         assert_eq!(parse_zfs_capacity("-\t-\n"), None);
         assert_eq!(parse_zfs_capacity(""), None);
+    }
+
+    /// `zfs_capacity_gb` runs `zfs list` and reports (used + avail, avail) in GB;
+    /// a failing `zfs` (exit != 0) is None even if it printed a valid line, and
+    /// a missing binary is None. Fake `zfs` scripts pin each case (the only
+    /// test that sets HORCRUX_ZFS_BIN: the other tests inject a probe).
+    #[test]
+    fn zfs_capacity_gb_runs_zfs_and_reports_its_numbers() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("zfs-bin");
+        let fake = |name: &str, body: &str| {
+            let f = dir.join(name);
+            std::fs::write(&f, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+            f
+        };
+        // 1 GiB used + 3 GiB avail -> total 4, available 3; args are checked too.
+        let ok = fake(
+            "zfs-ok",
+            "[ \"$1 $2 $3 $4 $5 $6\" = 'list -Hp -o used,avail -- tank/vms' ] || exit 9\n\
+             printf '1073741824\\t3221225472\\n'",
+        );
+        let bad = fake("zfs-bad", "printf '1073741824\\t3221225472\\n'; exit 1");
+        std::env::set_var("HORCRUX_ZFS_BIN", &ok);
+        assert_eq!(zfs_capacity_gb("tank/vms"), Some((4, 3)));
+        std::env::set_var("HORCRUX_ZFS_BIN", &bad);
+        assert_eq!(zfs_capacity_gb("tank/vms"), None);
+        std::env::set_var("HORCRUX_ZFS_BIN", dir.join("no-such-zfs"));
+        assert_eq!(zfs_capacity_gb("tank/vms"), None);
+        std::env::remove_var("HORCRUX_ZFS_BIN");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A pool whose mount doesn't answer keeps its last numbers, the call
