@@ -6,7 +6,17 @@ use tokio::process::Command;
 use tracing::{error, info};
 
 /// Corosync manager
-pub struct CorosyncManager {}
+pub struct CorosyncManager {
+    /// Cluster name + voting members written to corosync.conf by this
+    /// manager. `None` until `init_cluster` ran on this process.
+    members: tokio::sync::Mutex<Option<(String, Vec<(Node, u32)>)>>,
+}
+
+const DEFAULT_CONF: &str = "/etc/corosync/corosync.conf";
+
+fn conf_path() -> String {
+    std::env::var("HORCROUX_COROSYNC_CONF").unwrap_or_else(|_| DEFAULT_CONF.to_string())
+}
 
 impl Default for CorosyncManager {
     fn default() -> Self {
@@ -16,7 +26,36 @@ impl Default for CorosyncManager {
 
 impl CorosyncManager {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            members: tokio::sync::Mutex::new(None),
+        }
+    }
+
+    /// Regenerate corosync.conf from the current member list (quorum block
+    /// from `quorum::plan`: an even voter count gets `auto_tie_breaker`),
+    /// write it to `path`, return the plan warnings.
+    async fn write_members(
+        path: &str,
+        cluster_name: &str,
+        nodes: &[(Node, u32)],
+    ) -> Result<Vec<String>> {
+        let (cfg, plan) = generate_multi_node_config(cluster_name, nodes);
+        tokio::fs::write(path, cfg).await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to write Corosync config: {}", e))
+        })?;
+        Ok(plan.warnings)
+    }
+
+    /// Ask a running corosync to re-read its config (best effort).
+    async fn reload() {
+        match Command::new("corosync-cfgtool").arg("-R").output().await {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => tracing::warn!(
+                "corosync-cfgtool -R failed: {}",
+                String::from_utf8_lossy(&o.stderr)
+            ),
+            Err(e) => tracing::warn!("corosync-cfgtool not runnable: {}", e),
+        }
     }
 
     /// Initialize a new cluster with Corosync
@@ -25,9 +64,10 @@ impl CorosyncManager {
 
         // Generate Corosync configuration
         let config = self.generate_config(cluster_name, node);
+        *self.members.lock().await = Some((cluster_name.to_string(), vec![(node.clone(), 1)]));
 
         // Write config to /etc/corosync/corosync.conf
-        tokio::fs::write("/etc/corosync/corosync.conf", config)
+        tokio::fs::write(conf_path(), config)
             .await
             .map_err(|e| {
                 horcrux_common::Error::System(format!("Failed to write Corosync config: {}", e))
@@ -85,20 +125,39 @@ impl CorosyncManager {
     /// Add a node to the cluster
     pub async fn add_node(&self, node: &Node) -> Result<()> {
         info!("Adding node {} to Corosync cluster", node.name);
-
-        // Update Corosync configuration to include new node
-        // Reload Corosync configuration
-
+        let mut guard = self.members.lock().await;
+        let Some((cluster, nodes)) = guard.as_mut() else {
+            return Ok(());
+        };
+        if nodes.iter().any(|(n, _)| n.name == node.name) {
+            return Ok(());
+        }
+        nodes.push((node.clone(), 1));
+        for w in Self::write_members(&conf_path(), cluster, nodes).await? {
+            tracing::warn!("quorum: {}", w);
+        }
+        drop(guard);
+        Self::reload().await;
         Ok(())
     }
 
     /// Remove a node from the cluster
     pub async fn remove_node(&self, node: &Node) -> Result<()> {
         info!("Removing node {} from Corosync cluster", node.name);
-
-        // Update Corosync configuration to remove node
-        // Reload Corosync configuration
-
+        let mut guard = self.members.lock().await;
+        let Some((cluster, nodes)) = guard.as_mut() else {
+            return Ok(());
+        };
+        let before = nodes.len();
+        nodes.retain(|(n, _)| n.name != node.name);
+        if nodes.len() == before {
+            return Ok(());
+        }
+        for w in Self::write_members(&conf_path(), cluster, nodes).await? {
+            tracing::warn!("quorum: {}", w);
+        }
+        drop(guard);
+        Self::reload().await;
         Ok(())
     }
 
@@ -247,5 +306,33 @@ mod tests {
         let (cfg, plan) = generate_multi_node_config("lab", &nodes);
         assert!(!plan.auto_tie_breaker);
         assert!(!cfg.contains("auto_tie_breaker"));
+    }
+
+    #[tokio::test]
+    async fn write_members_renders_plan_to_file() {
+        let path = std::env::temp_dir().join(format!("hx-corosync-{}.conf", std::process::id()));
+        let path = path.to_str().unwrap().to_string();
+        let mut nodes: Vec<(Node, u32)> = (1..=4).map(|i| (node(i), 1)).collect();
+        let warns = CorosyncManager::write_members(&path, "lab", &nodes)
+            .await
+            .unwrap();
+        let cfg = std::fs::read_to_string(&path).unwrap();
+        assert!(cfg.contains("auto_tie_breaker: 1"), "4 voters is even");
+        assert!(warns.iter().any(|w| w.contains("even")));
+        nodes.pop();
+        CorosyncManager::write_members(&path, "lab", &nodes)
+            .await
+            .unwrap();
+        let cfg = std::fs::read_to_string(&path).unwrap();
+        assert!(!cfg.contains("auto_tie_breaker"), "3 voters is odd");
+        assert_eq!(cfg.matches("ring0_addr:").count(), 3);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn add_remove_node_before_init_is_a_noop() {
+        let m = CorosyncManager::new();
+        m.add_node(&node(2)).await.unwrap();
+        m.remove_node(&node(2)).await.unwrap();
     }
 }
