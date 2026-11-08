@@ -477,6 +477,56 @@ Authorization: Bearer <token>
 ## Snapshots
 
 ### List Snapshots
+**Trunk VLANs.** On a VLAN-aware bridge an uplink port forwards only the VLAN ids
+it was added to (`bridge vlan add`). `trunk_vlans` (ids or ranges, 1-4094) are
+added to every port in `ports`; `port_vlans` (`{"eth1": ["20"]}`) overrides the
+list for one port. Create with e.g. `{"name": "vmbr1", "vlan_aware": true,
+"ports": ["eth1"], "trunk_vlans": ["20", "30"]}`; the list is re-applied when
+Horcrux starts. `GET /api/network/bridges` reports the VLANs the kernel really
+has on each port in `port_vlans`. A trunk list needs `vlan_aware: true` (400
+otherwise). VM tap ports are access ports (PVID from the NIC's `vlan`) and are
+not touched.
+
+### DHCP and DNS for guests
+
+Horcrux runs one `dnsmasq` per network (a host bridge, a VLAN of a VLAN-aware
+bridge, or an SDN VNet - these are all Linux bridges); `dnsmasq` must be
+installed on the node.
+
+- `GET /api/network/dhcp`, `GET /api/network/dhcp/:id`: the networks; each has
+  `iface`, `serving_here`, `running` (this node's view).
+- `POST /api/network/dhcp`
+  `{"bridge": "vmbr1", "vlan": 20, "address": "192.168.20.1/24",
+  "range_start": "192.168.20.100", "range_end": "192.168.20.150",
+  "gateway": "192.168.20.1", "dns_servers": [], "upstream_dns": ["1.1.1.1"],
+  "domain": "lab.example", "lease_time": "12h", "dns_enabled": true,
+  "static_leases": [{"mac": "52:54:00:aa:bb:cc", "ip": "192.168.20.10",
+  "hostname": "web1"}], "dns_records": [{"name": "gw.lab.example",
+  "ip": "192.168.20.1"}], "serve_node": "node1"}`. `id` defaults to the
+  interface name (`vmbr1.20`). With `vlan`, Horcrux creates the `<bridge>.<vlan>`
+  interface (the bridge must be VLAN-aware) and puts `address` on it; otherwise
+  `address` goes on the bridge unless it is already there. One network per
+  interface (409). DNS answers the names of leases and static hosts (plus
+  `dns_records`, under `domain`) and forwards the rest to `upstream_dns` (default:
+  the host's resolvers); clients get `dns_servers`, default this server.
+  `dns_enabled: false` = DHCP only.
+- `PUT /api/network/dhcp/:id`: replace the definition (changing `serve_node`
+  moves the server to another node).
+- `POST /api/network/dhcp/:id/static-leases` `{"mac","ip","hostname"}`,
+  `DELETE /api/network/dhcp/:id/static-leases/:mac`.
+- `GET /api/network/dhcp/:id/leases`: leases dnsmasq handed out (asked of the
+  serving node).
+- `DELETE /api/network/dhcp/:id`.
+
+**Cluster.** The definitions are replicated to every node (pushed on change,
+pulled every 15 s, newest wins), but only the `serve_node` (default: the node
+that created the network) runs `dnsmasq` for it, so a bridge/VLAN stretched over
+several nodes has exactly one DHCP server. To move it, `PUT` another
+`serve_node`: static leases and DNS records are config and move with it, dynamic
+leases are not carried over (clients re-request). Horcrux does not fail a
+network over by itself when its node dies; change `serve_node`. The host
+firewall must let UDP 67 and UDP/TCP 53 reach the server address.
+
 
 Lists all snapshots for a VM.
 

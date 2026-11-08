@@ -6583,6 +6583,9 @@ pub struct BridgeInfo {
     pub up: bool,
     pub ports: Vec<String>,
     pub addresses: Vec<String>,
+    /// VLAN ids the kernel has on each uplink port (compressed ranges).
+    #[serde(default)]
+    pub port_vlans: std::collections::BTreeMap<String, Vec<String>>,
     pub managed: bool,
     #[serde(default)]
     pub comment: Option<String>,
@@ -6595,8 +6598,23 @@ pub struct NewBridge {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
     pub ports: Vec<String>,
+    /// VLAN ids / ranges ("20", "100-110") trunked on every port.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trunk_vlans: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
+}
+
+/// PUT /api/network/bridges/:name - change the trunk VLANs on the live bridge.
+pub async fn set_bridge_trunk_vlans(
+    name: &str,
+    vlans: &[String],
+) -> Result<serde_json::Value, ApiError> {
+    put_json(
+        &format!("/network/bridges/{}", urlencoding::encode(name)),
+        &serde_json::json!({ "trunk_vlans": vlans }),
+    )
+    .await
 }
 
 pub async fn list_bridges() -> Result<Vec<BridgeInfo>, ApiError> {

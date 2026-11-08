@@ -1,6 +1,8 @@
 //! Infrastructure > Host Bridges (`/network/bridges`): the Linux bridges VM
 //! network cards attach to; create and delete Horcrux-managed ones.
-use crate::api::{create_bridge, delete_bridge, list_bridges, BridgeInfo, NewBridge};
+use crate::api::{
+    create_bridge, delete_bridge, list_bridges, set_bridge_trunk_vlans, BridgeInfo, NewBridge,
+};
 use leptos::*;
 
 #[component]
@@ -12,6 +14,7 @@ pub fn HostBridgesPage() -> impl IntoView {
     let vlan_aware = create_rw_signal(true);
     let address = create_rw_signal(String::new());
     let ports = create_rw_signal(String::new());
+    let trunk = create_rw_signal(String::new());
 
     let reload = move || {
         spawn_local(async move {
@@ -36,6 +39,7 @@ pub fn HostBridgesPage() -> impl IntoView {
                 .filter(|p| !p.is_empty())
                 .map(String::from)
                 .collect(),
+            trunk_vlans: split_list(&trunk.get()),
             comment: None,
         };
         spawn_local(async move {
@@ -46,6 +50,30 @@ pub fn HostBridgesPage() -> impl IntoView {
                     name.set(String::new());
                     address.set(String::new());
                     ports.set(String::new());
+                    trunk.set(String::new());
+                }
+                Err(e) => set_error.set(Some(e.message)),
+            }
+            reload();
+        });
+    };
+
+    let edit_trunk = move |n: String, current: String| {
+        let Some(v) = web_sys::window().and_then(|w| {
+            w.prompt_with_message_and_default(
+                &format!("Trunk VLANs on the ports of {n} (comma separated ids or ranges, e.g. 20,30,100-110; empty = none)"),
+                &current,
+            )
+            .ok()
+            .flatten()
+        }) else {
+            return;
+        };
+        spawn_local(async move {
+            match set_bridge_trunk_vlans(&n, &split_list(&v)).await {
+                Ok(_) => {
+                    set_notice.set(Some(format!("Trunk VLANs of {n} updated")));
+                    set_error.set(None);
                 }
                 Err(e) => set_error.set(Some(e.message)),
             }
@@ -85,6 +113,8 @@ pub fn HostBridgesPage() -> impl IntoView {
                     prop:value=address on:input=move |ev| address.set(event_target_value(&ev))/>
                 <input id="bridge-ports" type="text" placeholder="ports, e.g. eth1 (optional)"
                     prop:value=ports on:input=move |ev| ports.set(event_target_value(&ev))/>
+                <input id="bridge-trunk" type="text" placeholder="trunk VLANs on the ports, e.g. 20,30,100-110 (optional)"
+                    prop:value=trunk on:input=move |ev| trunk.set(event_target_value(&ev))/>
                 <label>
                     <input id="bridge-vlan-aware" type="checkbox" prop:checked=vlan_aware
                         on:change=move |ev| vlan_aware.set(event_target_checked(&ev))/>
@@ -95,26 +125,44 @@ pub fn HostBridgesPage() -> impl IntoView {
 
             <table class="vm-table" id="bridge-table">
                 <thead>
-                    <tr><th>"Name"</th><th>"State"</th><th>"VLAN-aware"</th><th>"Ports"</th><th>"Addresses"</th><th>"Managed"</th><th>"Actions"</th></tr>
+                    <tr><th>"Name"</th><th>"State"</th><th>"VLAN-aware"</th><th>"Ports"</th><th>"Trunk VLANs"</th><th>"Addresses"</th><th>"Managed"</th><th>"Actions"</th></tr>
                 </thead>
                 <tbody>
                     {move || {
                         let list = bridges.get();
                         if list.is_empty() {
-                            view! { <tr><td colspan="7" class="no-data">"No bridges on this host yet. Create one above."</td></tr> }.into_view()
+                            view! { <tr><td colspan="8" class="no-data">"No bridges on this host yet. Create one above."</td></tr> }.into_view()
                         } else {
                             list.into_iter().map(|b| {
                                 let n = b.name.clone();
                                 let managed = b.managed;
+                                let vlans_text = b
+                                    .port_vlans
+                                    .iter()
+                                    .map(|(p, v)| format!("{p}: {}", v.join(",")))
+                                    .collect::<Vec<_>>()
+                                    .join("; ");
+                                let first_ports = b
+                                    .port_vlans
+                                    .values()
+                                    .next()
+                                    .map(|v| v.join(","))
+                                    .unwrap_or_default();
+                                let n2 = b.name.clone();
+                                let aware = b.vlan_aware;
                                 view! {
                                     <tr class="bridge-row" data-bridge=b.name.clone()>
                                         <td>{b.name.clone()}</td>
                                         <td>{if b.up { "up" } else { "down" }}</td>
                                         <td>{if b.vlan_aware { "yes" } else { "no" }}</td>
                                         <td>{b.ports.join(", ")}</td>
+                                        <td class="bridge-vlans">{vlans_text}</td>
                                         <td>{b.addresses.join(", ")}</td>
                                         <td>{if managed { "Horcrux" } else { "host config" }}</td>
                                         <td>
+                                            <button class="btn btn-sm bridge-trunk-edit" disabled=!(managed && aware)
+                                                title="Set the VLAN ids carried on this bridge's uplink ports"
+                                                on:click=move |_| edit_trunk(n2.clone(), first_ports.clone())>"Trunk VLANs"</button>
                                             <button class="btn btn-sm btn-danger bridge-delete" disabled=!managed
                                                 title=if managed { "" } else { "Part of the host's own network configuration" }
                                                 on:click=move |_| remove(n.clone())>"Delete"</button>
@@ -128,4 +176,12 @@ pub fn HostBridgesPage() -> impl IntoView {
             </table>
         </div>
     }
+}
+
+fn split_list(s: &str) -> Vec<String> {
+    s.split([',', ' '])
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(String::from)
+        .collect()
 }

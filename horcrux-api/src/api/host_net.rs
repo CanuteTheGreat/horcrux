@@ -5,7 +5,15 @@
 //! - `GET    /api/network/bridges`        every bridge on the host (managed or
 //!   not) with its ports, addresses and VLAN filtering
 //! - `POST   /api/network/bridges`        create a Horcrux-managed bridge
+//! - `PUT    /api/network/bridges/:name`  change ports / trunk VLANs of a managed
+//!   bridge on the live kernel bridge (no VM restart)
 //! - `DELETE /api/network/bridges/:name`  remove a managed bridge
+//!
+//! Trunk VLANs: on a VLAN-aware bridge a port only forwards the VLAN ids it
+//! was added to (`bridge vlan add`). `trunk_vlans` lists the ids/ranges
+//! (`"20"`, `"100-110"`) allowed on every uplink port in `ports`;
+//! `port_vlans` overrides that for single ports. Tap ports of VMs are
+//! access ports and are not touched.
 //!
 //! Managed bridges are stored in `config_objects` (kind `host_bridge`) and
 //! re-created when the API starts, so they survive a host reboot. A port
@@ -21,6 +29,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use tokio::process::Command;
 
@@ -39,6 +48,12 @@ pub struct ManagedBridge {
     /// Host interfaces to enslave (must not carry an IP address).
     #[serde(default)]
     pub ports: Vec<String>,
+    /// VLAN ids / ranges ("20", "100-110") trunked on every port in `ports`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trunk_vlans: Vec<String>,
+    /// Per-port override of `trunk_vlans` (port name -> ids/ranges).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub port_vlans: BTreeMap<String, Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
 }
@@ -51,6 +66,10 @@ pub struct BridgeInfo {
     pub up: bool,
     pub ports: Vec<String>,
     pub addresses: Vec<String>,
+    /// VLAN ids the kernel really has on each non-tap port (compressed
+    /// ranges, e.g. "1", "20", "100-110").
+    #[serde(default)]
+    pub port_vlans: BTreeMap<String, Vec<String>>,
     /// Created (and re-created at startup) by Horcrux; only these can be
     /// deleted here.
     pub managed: bool,
@@ -81,7 +100,7 @@ pub fn routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
     });
     Router::new()
         .route("/api/network/bridges", get(list).post(create))
-        .route("/api/network/bridges/:name", delete(remove))
+        .route("/api/network/bridges/:name", delete(remove).put(update))
 }
 
 async fn ip_json(args: &[&str]) -> serde_json::Value {
@@ -161,6 +180,107 @@ pub fn validate(b: &ManagedBridge) -> Result<(), String> {
             return Err(format!("invalid port {p:?}"));
         }
     }
+    let vlans = parse_vlans(&b.trunk_vlans)?;
+    let mut any = !vlans.is_empty();
+    for (port, v) in &b.port_vlans {
+        if !b.ports.contains(port) {
+            return Err(format!("port_vlans names {port:?}, which is not in ports"));
+        }
+        any |= !parse_vlans(v)?.is_empty();
+    }
+    if any && !b.vlan_aware {
+        return Err("trunk VLANs need a VLAN-aware bridge (vlan_aware: true)".into());
+    }
+    Ok(())
+}
+
+/// Parse `["20", "100-110"]` into the set of VLAN ids (1-4094).
+pub fn parse_vlans(list: &[String]) -> Result<BTreeSet<u16>, String> {
+    let mut out = BTreeSet::new();
+    for item in list {
+        let item = item.trim();
+        let (a, b) = match item.split_once('-') {
+            Some((a, b)) => (a.trim(), b.trim()),
+            None => (item, item),
+        };
+        let (Ok(a), Ok(b)) = (a.parse::<u16>(), b.parse::<u16>()) else {
+            return Err(format!(
+                "invalid VLAN id or range {item:?} (e.g. 20 or 100-110)"
+            ));
+        };
+        if !(1..=4094).contains(&a) || !(1..=4094).contains(&b) || a > b {
+            return Err(format!("VLAN {item:?} is outside 1-4094 or reversed"));
+        }
+        out.extend(a..=b);
+    }
+    Ok(out)
+}
+
+/// Compress a VLAN set into ranges: {1,20,21,22} -> ["1", "20-22"].
+pub fn compress_vlans(set: &BTreeSet<u16>) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut it = set.iter().copied().peekable();
+    while let Some(start) = it.next() {
+        let mut end = start;
+        while it.peek() == Some(&(end + 1)) {
+            end = it.next().unwrap_or(end);
+        }
+        out.push(if start == end {
+            start.to_string()
+        } else {
+            format!("{start}-{end}")
+        });
+    }
+    out
+}
+
+/// VLAN ids wanted on `port`: its override, else the bridge-wide list.
+pub fn wanted_vlans(b: &ManagedBridge, port: &str) -> BTreeSet<u16> {
+    let list = b.port_vlans.get(port).unwrap_or(&b.trunk_vlans);
+    parse_vlans(list).unwrap_or_default()
+}
+
+/// What the kernel has on `port` (`bridge -j vlan show dev`).
+async fn kernel_vlans(port: &str) -> BTreeSet<u16> {
+    let mut set = BTreeSet::new();
+    if let Ok(o) = Command::new("bridge")
+        .args(["-j", "vlan", "show", "dev", port])
+        .output()
+        .await
+    {
+        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
+            for e in v.as_array().into_iter().flatten() {
+                for x in e["vlans"].as_array().into_iter().flatten() {
+                    if let Some(a) = x["vlan"].as_u64() {
+                        let end = x["vlanEnd"].as_u64().unwrap_or(a);
+                        set.extend((a as u16)..=(end as u16));
+                    }
+                }
+            }
+        }
+    }
+    set
+}
+
+/// Make `port` carry exactly `want` on top of what it has, removing
+/// `drop` ids (those Horcrux put there before).
+async fn sync_port_vlans(
+    port: &str,
+    want: &BTreeSet<u16>,
+    drop: &BTreeSet<u16>,
+) -> Result<(), String> {
+    for v in drop.difference(want) {
+        let _ = run(
+            "bridge",
+            &["vlan", "del", "dev", port, "vid", &v.to_string()],
+        )
+        .await;
+    }
+    let have = kernel_vlans(port).await;
+    let missing: BTreeSet<u16> = want.difference(&have).copied().collect();
+    for r in compress_vlans(&missing) {
+        run("bridge", &["vlan", "add", "dev", port, "vid", &r]).await?;
+    }
     Ok(())
 }
 
@@ -187,6 +307,7 @@ async fn apply(b: &ManagedBridge) -> Result<(), String> {
         for p in &b.ports {
             run("ip", &["link", "set", p, "master", &b.name]).await?;
             run("ip", &["link", "set", p, "up"]).await?;
+            sync_port_vlans(p, &wanted_vlans(b, p), &BTreeSet::new()).await?;
         }
         run("ip", &["link", "set", &b.name, "up"]).await
     }
@@ -203,7 +324,7 @@ async fn list(State(state): State<Arc<AppState>>) -> Result<Json<Vec<BridgeInfo>
         .await?;
     let mut out = Vec::new();
     for b in super::vm_hw::host_bridges() {
-        let ports = ip_json(&["-j", "link", "show", "master", &b.name])
+        let ports: Vec<String> = ip_json(&["-j", "link", "show", "master", &b.name])
             .await
             .as_array()
             .map(|a| {
@@ -216,7 +337,12 @@ async fn list(State(state): State<Arc<AppState>>) -> Result<Json<Vec<BridgeInfo>
             .map(|s| s.trim() != "down")
             .unwrap_or(false);
         let m = managed.iter().find(|m| m.name == b.name);
+        let mut port_vlans = BTreeMap::new();
+        for p in ports.iter().filter(|p| !p.starts_with("tap")) {
+            port_vlans.insert(p.clone(), compress_vlans(&kernel_vlans(p).await));
+        }
         out.push(BridgeInfo {
+            port_vlans,
             addresses: addresses(&b.name).await,
             name: b.name,
             vlan_aware: b.vlan_aware,
@@ -272,6 +398,82 @@ async fn create(
     }
     tracing::info!("Created host bridge {}", b.name);
     Ok((StatusCode::CREATED, Json(b)))
+}
+
+/// Body of `PUT /api/network/bridges/:name`: new ports / trunk VLANs / comment
+/// (fields left out keep their value).
+#[derive(Debug, Deserialize)]
+struct BridgeUpdate {
+    ports: Option<Vec<String>>,
+    trunk_vlans: Option<Vec<String>>,
+    port_vlans: Option<BTreeMap<String, Vec<String>>>,
+    comment: Option<String>,
+}
+
+async fn update(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(u): Json<BridgeUpdate>,
+) -> Result<Json<ManagedBridge>, ApiError> {
+    let store = ConfigStore::new(&state.database);
+    let old = store
+        .load_values::<ManagedBridge>(KIND)
+        .await?
+        .into_iter()
+        .find(|m| m.name == name)
+        .ok_or_else(|| ApiError::NotFound(format!("managed bridge {name} not found")))?;
+    let mut b = old.clone();
+    if let Some(p) = u.ports {
+        b.ports = p.into_iter().filter(|p| !p.trim().is_empty()).collect();
+    }
+    if let Some(t) = u.trunk_vlans {
+        b.trunk_vlans = t;
+    }
+    if let Some(t) = u.port_vlans {
+        b.port_vlans = t;
+    }
+    if u.comment.is_some() {
+        b.comment = u.comment;
+    }
+    validate(&b).map_err(ApiError::BadRequest)?;
+    let live = std::path::Path::new("/sys/class/net").join(&name).exists();
+    if live {
+        for p in b.ports.iter().filter(|p| !old.ports.contains(p)) {
+            if !std::path::Path::new("/sys/class/net").join(p).exists() {
+                return Err(ApiError::BadRequest(format!("port {p} does not exist")));
+            }
+            let addrs = addresses(p).await;
+            if !addrs.is_empty() {
+                return Err(ApiError::BadRequest(format!(
+                    "port {p} carries the host address {}: it cannot join a bridge",
+                    addrs.join(", ")
+                )));
+            }
+        }
+        for p in old.ports.iter().filter(|p| !b.ports.contains(p)) {
+            let _ = run("ip", &["link", "set", p, "nomaster"]).await;
+        }
+        for p in &b.ports {
+            if !old.ports.contains(p) {
+                run("ip", &["link", "set", p, "master", &name])
+                    .await
+                    .map_err(ApiError::Internal)?;
+                run("ip", &["link", "set", p, "up"])
+                    .await
+                    .map_err(ApiError::Internal)?;
+            }
+            let before = if old.ports.contains(p) {
+                wanted_vlans(&old, p)
+            } else {
+                BTreeSet::new()
+            };
+            sync_port_vlans(p, &wanted_vlans(&b, p), &before)
+                .await
+                .map_err(ApiError::Internal)?;
+        }
+    }
+    store.put(KIND, &b.name, &b).await?;
+    Ok(Json(b))
 }
 
 async fn remove(
@@ -331,8 +533,33 @@ mod tests {
             vlan_aware: false,
             address: None,
             ports: vec![],
+            trunk_vlans: vec![],
+            port_vlans: BTreeMap::new(),
             comment: None,
         }
+    }
+
+    #[test]
+    fn trunk_vlans_parse_validate_and_compress() {
+        let l = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let set = parse_vlans(&l(&["20", "100-102", " 30 "])).unwrap();
+        assert_eq!(compress_vlans(&set), l(&["20", "30", "100-102"]));
+        assert!(parse_vlans(&l(&["0"])).is_err());
+        assert!(parse_vlans(&l(&["4095"])).is_err());
+        assert!(parse_vlans(&l(&["9-3"])).is_err());
+        assert!(parse_vlans(&l(&["x"])).is_err());
+        let mut x = b("vmbr1");
+        x.ports = vec!["eth1".into()];
+        x.trunk_vlans = l(&["20"]);
+        assert!(validate(&x).is_err(), "needs vlan_aware");
+        x.vlan_aware = true;
+        assert!(validate(&x).is_ok());
+        x.port_vlans.insert("eth9".into(), l(&["5"]));
+        assert!(validate(&x).is_err(), "override for a non-port");
+        x.port_vlans.clear();
+        x.port_vlans.insert("eth1".into(), l(&["5-6"]));
+        assert_eq!(wanted_vlans(&x, "eth1").len(), 2);
+        assert_eq!(wanted_vlans(&x, "eth2").len(), 1);
     }
 
     #[test]
