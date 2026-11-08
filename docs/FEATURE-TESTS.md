@@ -5,81 +5,122 @@ Generated from the lab's feature matrix (`scripts/lab/vmcluster/matrix.py` in th
 
 **Where tests run.** `VM` = in a 3-node cluster of Horcrux VMs on the kvm runners (nested KVM, REAL manager, REAL guests), on every relevant change and the full suite daily. `HW` = needs the physical machine (Wake-on-LAN, power loss, hardware watchdog, real NIC/Wi-Fi, suspend, GPU/PCI passthrough, real-disk ZFS/SMART, firmware/T2); weekly hardware-validation batch on the 3 lab laptops.
 
+**VM-cluster suites** (`scripts/lab/vmcluster/`; one run = 3 Horcrux node VMs on the kvm runner running the all-features manager build): `vm` `ct` `net` (guests, containers, bridges/VLANs/firewall), `ci` (the repo's own CI-container e2e scripts, run ON a node VM), `live` (live migration of a running guest while ping and TCP traffic flows from a third node), `storage` (backup/restore with a guest data check; ZFS datasets, encryption, replication), `ui` (the Playwright suite in a real browser) and `ha` (hard crash, partitions, manager kill/hang, quorum loss, node replacement, NFS loss, local-disk guest: the lab's `hasuite.py` unchanged; goal G1 = 10 green runs in a row).
+
 **Test column.** `vmc:` = the VM-cluster suite; `ci:` = an e2e that exists and runs in CI containers (to be ported into the VM cluster); `rust:` = `horcrux-api/tests/it` suite against a live server; `lab:` = lab-laptop job; `-` = **no e2e test yet**.
 
-**Coverage (2026-11-07).** 64 features claimed. Passing e2e in the VM cluster: **21**; failing: **3**; written, not yet run: 0; e2e exists in CI only: 31; hardware-only: 4; no e2e test: **5**.
+**Coverage (2026-11-08).** 73 features claimed. Passing e2e in the VM cluster: **50**; failing: **2**; written, not yet run: 3; e2e exists in CI only: 10; hardware-only: 4; no e2e test: **4**.
 
 A failing feature, or a claimed-but-missing one, is a bug: it is filed in qa-findings/horcrux.md and fixed (or the claim is corrected here and in the docs).
 
 | id | area | feature | claimed in | test | mode | last result |
 |---|---|---|---|---|---|---|
-| `vm.create-boot` | VMs | create a VM, import a disk, boot a real guest OS (nested KVM), see it in the guest | README Virtualization; API vms | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-07 (VM cluster run 1107-2210) |
-| `vm.console` | VMs | serial console reaches the guest | README Console access | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-07 (VM cluster run 1107-2210) |
-| `vm.guest-data` | VMs | guest disk persists data | - | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-07 (VM cluster run 1107-2210) |
-| `vm.snapshot-rollback` | VMs | snapshot and roll back (data written after the snapshot is gone) | README, docs/API.md snapshots | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-07 (VM cluster run 1107-2210) |
-| `vm.clone-running` | VMs | full clone of a running VM | README Templates: full and linked clones | vmc: nodetests/vm_lifecycle.py | VM | **FAIL** 2026-11-07: clone of a RUNNING VM (500 {'status': 500, 'error': 'INTERNAL_ERROR', 'message': 'An internal server error occurred', 'details': 'Failed to clone VM:  |
-| `vm.clone` | VMs | full clone (stopped source) boots with the source's data | README Templates | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-07 (VM cluster run 1107-2210) |
-| `vm.disk-add` | VMs | add a disk, guest sees it | UI VM hardware | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-07 (VM cluster run 1107-2210) |
-| `vm.delete` | VMs | delete VM removes QEMU, files and record | API vms | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-07 (VM cluster run 1107-2210) |
-| `vm.nic-bridge-vlan-pxe` | VMs | NIC on a VLAN-aware bridge, PXE DHCP seen on the right VLAN, CD insert/eject, shutdown/reboot/reset | docs/API.md | ci: tests/vm_nic_e2e.py | VM | e2e exists in CI containers, not yet moved into the VM cluster |
-| `vm.devices-balloon-agent` | VMs | balloon, guest agent, hotplug | API vms | ci: tests/vm_devices_e2e.py | VM | e2e exists in CI containers, not yet moved into the VM cluster |
-| `vm.advanced-serial-virtiofs` | VMs | extra serial ports, virtiofs, hookscript | UI vm_advanced | ci: tests/vm_advanced_e2e.py | VM | e2e exists in CI containers, not yet moved into the VM cluster |
+| `vm.create-boot` | VMs | create a VM, import a disk, boot a real guest OS (nested KVM), see it in the guest | README Virtualization; API vms | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `vm.console` | VMs | serial console reaches the guest | README Console access | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `vm.guest-data` | VMs | guest disk persists data | - | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `vm.snapshot-rollback` | VMs | snapshot and roll back (data written after the snapshot is gone) | README, docs/API.md snapshots | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `vm.clone-running` | VMs | full clone of a running VM | README Templates: full and linked clones | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `vm.clone-running-live` | VMs | live full clone of a running VM: guest never paused, clone boots with the source's data, linked clone refused (409) | docs/API.md Clone VM | vmc: nodetests/fix_node.py | VM | written, not yet run |
+| `vm.clone` | VMs | full clone (stopped source) boots with the source's data | README Templates | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `vm.disk-add` | VMs | add a disk, guest sees it | UI VM hardware | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `vm.delete` | VMs | delete VM removes QEMU, files and record | API vms | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `vm.nic-bridge-vlan-pxe` | VMs | NIC on a VLAN-aware bridge, PXE DHCP seen on the right VLAN, CD insert/eject, shutdown/reboot/reset | docs/API.md | vmc: ciport.py running the CI e2e vm_nic_e2e.py on a VM node | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `vm.devices-balloon-agent` | VMs | balloon, guest agent, hotplug | API vms | vmc: ciport.py running the CI e2e vm_devices_e2e.py on a VM node | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `vm.advanced-serial-virtiofs` | VMs | extra serial ports, virtiofs, hookscript | UI vm_advanced | vmc: ciport.py running the CI e2e vm_advanced_e2e.py on a VM node | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
 | `vm.save-state` | VMs | save state on host shutdown / resume | docs/SAVE_STATE.md | ci: tests/guest_state_e2e.py, guest-power.yml | VM | e2e exists in CI containers, not yet moved into the VM cluster |
 | `vm.template-cloudinit` | VMs | templates + cloud-init | README Templates, API cloudinit | ui: template_checks (no cloud-init guest boot test) | VM | e2e exists in CI containers, not yet moved into the VM cluster |
 | `vm.import-ovf-esxi` | VMs | OVF / ESXi import | docs/OVF_IMPORT.md | rust: ovf_import_tests, esxi_import_tests (mock ESXi) | VM | e2e exists in CI containers, not yet moved into the VM cluster |
 | `vm.display-vnc-spice` | VMs | VNC (noVNC proxy) / SPICE display | README Console access | rust: console_tests; ci: incus-vm-console.yml | VM | e2e exists in CI containers, not yet moved into the VM cluster |
 | `vm.gpu-pci-passthrough` | VMs | GPU / PCI / USB passthrough | docs/GPU_PASSTHROUGH.md | - | HW | no end-to-end test exists (gap) |
-| `ct.run` | Containers | Docker container: create, start, really running in the runtime | README Container runtimes | vmc: nodetests/ct_stacks.py | VM | pass, 2026-11-07 (VM cluster run 1107-2210) |
-| `ct.exec` | Containers | exec runs inside the container | API containers | vmc: nodetests/ct_stacks.py | VM | pass, 2026-11-07 (VM cluster run 1107-2210) |
-| `ct.logs` | Containers | log stream (ticket + WebSocket) | API containers | vmc: nodetests/ct_stacks.py (ticket + runtime logs; WS payload not read) | VM | pass, 2026-11-07 (VM cluster run 1107-2210) |
-| `ct.stop-start` | Containers | stop / start | API containers | vmc: nodetests/ct_stacks.py | VM | pass, 2026-11-07 (VM cluster run 1107-2210) |
-| `ct.delete` | Containers | delete removes it from the runtime | API containers | vmc: nodetests/ct_stacks.py | VM | pass, 2026-11-07 (VM cluster run 1107-2210) |
-| `stack.deploy` | Containers | compose stack deploy, published port answers real HTTP | API stacks | vmc: nodetests/ct_stacks.py | VM | pass, 2026-11-07 (VM cluster run 1107-2210) |
-| `stack.stop-start` | Containers | stack stop / start (port closes / opens) | API stacks | vmc: nodetests/ct_stacks.py | VM | pass, 2026-11-07 (VM cluster run 1107-2210) |
-| `stack.update` | Containers | update a deployed stack to a new image | owner list | vmc: nodetests/ct_stacks.py | VM | **FAIL** 2026-11-07: update of a deployed stack by POST /stacks refused (409): no update path through the API |
-| `stack.remove` | Containers | stack remove | API stacks | vmc: nodetests/ct_stacks.py | VM | pass, 2026-11-07 (VM cluster run 1107-2210) |
-| `ct.lxc` | Containers | LXC: templates, create, console, limits, checkpoint | docs/LXC.md | ci: tests/lxc_e2e.py | VM | e2e exists in CI containers, not yet moved into the VM cluster |
-| `ct.incus` | Containers | Incus / LXD containers and VMs, consoles | README | ci: tests/incus_e2e.py | VM | e2e exists in CI containers, not yet moved into the VM cluster |
-| `ct.podman` | Containers | Podman containers | README | ci: drain_ct_vm_e2e.py (Podman leg) | VM | e2e exists in CI containers, not yet moved into the VM cluster |
-| `ct.save-state` | Containers | container checkpoint/restore (CRIU) | docs/SAVE_STATE.md | ci: tests/guest_state_ct_e2e.py | VM | e2e exists in CI containers, not yet moved into the VM cluster |
-| `net.bridge-create` | Networking | Host Bridges: create VLAN-aware bridge with an uplink port through the API | docs/NEW_FEATURES.md VLAN | vmc: nettests.py | VM | pass, 2026-11-07 (VM cluster run 1107-2210) |
-| `net.vlan-access-ports` | Networking | VM NIC with vlan N = access port with PVID N on the bridge | docs/NEW_FEATURES.md VLAN | vmc: nettests.py | VM | pass, 2026-11-07 (VM cluster run 1107-2210) |
-| `net.cross-node-guest-l2` | Networking | guests on different nodes talk on the same VLAN | docs/NEW_FEATURES.md VLAN/VXLAN | vmc: nettests.py | VM | pass, 2026-11-07 (VM cluster run 1107-2210) |
-| `net.vlan-isolation` | Networking | guests on different VLANs cannot talk | VLAN | vmc: nettests.py | VM | pass, 2026-11-07 (VM cluster run 1107-2210) |
-| `fw.vm-icmp-block-allow` | Networking | VM firewall rule really drops / re-allows pings between guests | docs/API.md firewall | vmc: nettests.py | VM | pass, 2026-11-07 (VM cluster run 1107-2210) |
-| `fw.vm-tcp-port-block-allow` | Networking | VM firewall rule blocks / allows a TCP port (real connection from another guest) | docs/API.md firewall | vmc: nettests.py | VM | pass, 2026-11-07 (VM cluster run 1107-2210) |
-| `net.guest-dhcp-dns` | Networking | DHCP / DNS for guests on a bridge or vnet | owner request (README mentions none) | vmc: nettests.py (records the gap) | VM | **FAIL** 2026-11-07: Horcrux offers no DHCP/DNS service for guests (sdn_zones.rs: 'Horcrux runs no DHCP server'); static IPAM registry only |
-| `fw.datacenter-nft-apply` | Networking | datacenter firewall rules / ipsets / aliases land in the kernel nftables | docs/API.md firewall | ci: tests/firewall_nft_e2e.sh | VM | e2e exists in CI containers, not yet moved into the VM cluster |
-| `net.sdn-zones-ipam` | Networking | SDN zones/vnets/subnets, static IPAM | docs/NEW_FEATURES.md | rust: sdn_tests; ci: sdn_cni_e2e.sh | VM | e2e exists in CI containers, not yet moved into the VM cluster |
-| `net.cni-policies` | Networking | CNI attach + network policies enforced | README real CNI/nftables | ci: tests/sdn_cni_e2e.py | VM | e2e exists in CI containers, not yet moved into the VM cluster |
+| `ct.run` | Containers | Docker container: create, start, really running in the runtime | README Container runtimes | vmc: nodetests/ct_stacks.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `ct.exec` | Containers | exec runs inside the container | API containers | vmc: nodetests/ct_stacks.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `ct.logs` | Containers | log stream (ticket + WebSocket) | API containers | vmc: nodetests/ct_stacks.py (ticket + runtime logs; WS payload not read) | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `ct.stop-start` | Containers | stop / start | API containers | vmc: nodetests/ct_stacks.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `ct.delete` | Containers | delete removes it from the runtime | API containers | vmc: nodetests/ct_stacks.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `stack.deploy` | Containers | compose stack deploy, published port answers real HTTP | API stacks | vmc: nodetests/ct_stacks.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `stack.stop-start` | Containers | stack stop / start (port closes / opens) | API stacks | vmc: nodetests/ct_stacks.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `stack.update` | Containers | update a deployed stack to a new image | owner list | vmc: nodetests/ct_stacks.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `stack.update-rolling` | Containers | PUT /api/stacks/:id: rolling update keeps volumes + unchanged services, env merge, bad image refused/rolled back, stopped stack started | docs/API.md Stacks | vmc: nodetests/fix_node.py | VM | written, not yet run |
+| `stack.remove` | Containers | stack remove | API stacks | vmc: nodetests/ct_stacks.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `ct.lxc` | Containers | LXC: templates, create, console, limits, checkpoint | docs/LXC.md | vmc: ciport.py running the CI e2e lxc_e2e.py on a VM node | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `ct.incus` | Containers | Incus / LXD containers: create, console, exec, limits, snapshots (incus_e2e.py MODE=ct) | README | vmc: ciport.py running the CI e2e incus_e2e.py (MODE=ct) on a VM node | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `ct.incus-vm` | Containers | Incus VMs: create, SPICE/VNC console handshake, .vv file (incus_e2e.py MODE=vm) | README | vmc: ciport.py running the CI e2e incus_e2e.py (MODE=vm) on a VM node | VM | **FAIL** 2026-11-08: CI e2e incus_e2e.py on a VM node: 183s rc=1: / hx-incus-vm / RUNNING / 10.124.155.123 (enp5s0) / fd42:f752:8649:affc:1266:6aff:fe09:7d60 (enp5s0) / VI |
+| `ct.podman` | Containers | Podman containers | README | vmc: ciport.py running the CI e2e guest_state_ct_vm_e2e.py (podman leg) on a VM node | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `ct.save-state` | Containers | container checkpoint/restore (CRIU) | docs/SAVE_STATE.md | vmc: ciport.py running the CI e2e guest_state_ct_vm_e2e.py on a VM node | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `net.bridge-create` | Networking | Host Bridges: create VLAN-aware bridge with an uplink port through the API | docs/NEW_FEATURES.md VLAN | vmc: nettests.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `net.vlan-access-ports` | Networking | VM NIC with vlan N = access port with PVID N on the bridge | docs/NEW_FEATURES.md VLAN | vmc: nettests.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `net.cross-node-guest-l2` | Networking | guests on different nodes talk on the same VLAN | docs/NEW_FEATURES.md VLAN/VXLAN | vmc: nettests.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `net.vlan-isolation` | Networking | guests on different VLANs cannot talk | VLAN | vmc: nettests.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `fw.vm-icmp-block-allow` | Networking | VM firewall rule really drops / re-allows pings between guests | docs/API.md firewall | vmc: nettests.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `fw.vm-tcp-port-block-allow` | Networking | VM firewall rule blocks / allows a TCP port (real connection from another guest) | docs/API.md firewall | vmc: nettests.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `net.trunk-vlans-api` | Networking | trunk VLANs on a bridge uplink port through the bridge API (POST/PUT trunk_vlans), live change, validation | docs/API.md Host bridges | vmc: nettests.py (fixtests.trunk) | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `net.guest-dhcp-dns` | Networking | DHCP / DNS for guests on a bridge or vnet | owner request (README mentions none) | vmc: nettests.py (fixtests.dhcp_dns: 2-node cluster, one dnsmasq, guests on both nodes) | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `fw.datacenter-nft-apply` | Networking | datacenter firewall rules / ipsets / aliases land in the kernel nftables | docs/API.md firewall | vmc: ciport.py running the CI e2e firewall_objects_e2e.py on a VM node | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `net.sdn-zones-ipam` | Networking | SDN zones/vnets/subnets, static IPAM | docs/NEW_FEATURES.md | vmc: ciport.py running the CI e2e sdn_cni_e2e.py on a VM node | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `net.cni-policies` | Networking | CNI attach + network policies enforced | README real CNI/nftables | vmc: ciport.py running the CI e2e sdn_cni_e2e.py on a VM node | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
 | `net.ovs-vxlan` | Networking | Open vSwitch + VXLAN networks | docs/NEW_FEATURES.md | - | VM | no end-to-end test exists (gap) |
-| `ha.crash-failover` | HA | guest back on a survivor <= 120 s after a node crash, no data loss | ROADMAP, README | lab: scenarios/hasuite.py s1/s1b (HW laptops today); ci: ha_failover_e2e.py | VM+HW | e2e exists in CI containers, not yet moved into the VM cluster |
-| `ha.partition-no-double-run` | HA | partition of 1 / 2 nodes: never two copies of a guest | lab G1 | lab: hasuite s3/s4 (HW laptops today) | VM | e2e exists in CI containers, not yet moved into the VM cluster |
-| `ha.manager-kill-hang` | HA | manager killed / hung: restarted, guest survives | lab G1 | lab: hasuite | VM | e2e exists in CI containers, not yet moved into the VM cluster |
-| `ha.quorum-loss` | HA | quorum loss handling | lab G1 | lab: hasuite | VM | e2e exists in CI containers, not yet moved into the VM cluster |
+| `ha.crash-failover` | HA | guest back on a survivor <= 120 s after a node crash (sysrq-b, with and without the node coming back), no data loss in the checksummed guest workload | ROADMAP, README | vmc: hatests.py (scenarios/hasuite.py s1/s1b) | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `ha.partition-no-double-run` | HA | network partition of 1 node / of 2 nodes (no majority anywhere): the minority self-fences, never two copies of a guest | lab G1 | vmc: hatests.py (hasuite s3/s4) | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `ha.manager-kill-hang` | HA | manager killed / hung: restarted by the supervisor, the guest survives, no double run | lab G1 | vmc: hatests.py (hasuite s5/s6) | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `ha.quorum-loss` | HA | quorum loss (2 of 3 nodes crash): the lone survivor starts nothing; the guest returns when a majority is back | lab G1 | vmc: hatests.py (hasuite s7) | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
 | `ha.power-off-wol` | HA | power-off + Wake-on-LAN recovery | lab G1 | lab: hasuite s2 (skipped: WoL unproven) | HW | hardware batch only (see lab PLAN.md for the latest laptop result) |
 | `ha.drain-rebalance` | HA | drain a node / placement rules | docs | ci: tests/drain_e2e.py, drain_ct_vm_e2e.py | VM | e2e exists in CI containers, not yet moved into the VM cluster |
-| `ha.node-replacement` | HA | replace a node, cluster re-learns it | lab G1/G5 | lab: hasuite / cluster-replace | VM | e2e exists in CI containers, not yet moved into the VM cluster |
-| `mig.live-vm` | HA | live migration of a running guest keeps serving traffic | docs/MIGRATION.md | ci: vm_migrate_e2e.py (2 container nodes); lab: cluster-migrate | VM | e2e exists in CI containers, not yet moved into the VM cluster |
-| `mig.rolling-upgrade` | HA | rolling upgrade with guests running | lab G5 | lab: cluster-upgrade, hasuite | VM | e2e exists in CI containers, not yet moved into the VM cluster |
-| `sto.zfs-datasets` | Storage | ZFS pools/datasets/snapshots via the API | docs/NEW_FEATURES.md ZFS | lab: hx-zfs (HW laptops: real disks) | HW | hardware batch only (see lab PLAN.md for the latest laptop result) |
-| `sto.zfs-encryption` | Storage | ZFS encryption | README | - | VM | no end-to-end test exists (gap) |
+| `ha.node-replacement` | HA | replace a node (remove + re-join), cluster re-learns it, the running guest is never interrupted | lab G1/G5 | vmc: hatests.py (hasuite s10) | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `mig.live-vm` | HA | live migration of a running guest keeps serving traffic: ping 20 Hz + one long TCP session + fresh TCP connections from a third node across n1->n2->n1, downtime measured | docs/MIGRATION.md | vmc: livetests.py (local disks over NBD and NFS shared disks) | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `mig.live-local-disk` | HA | live migration with node-local disks (drive-mirror over NBD) under traffic | docs/MIGRATION.md | vmc: livetests.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `mig.live-shared-disk` | HA | live migration with disks on NFS shared storage (no disk copy) under traffic | docs/MIGRATION.md | vmc: livetests.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `mig.ha-guest` | HA | live migration of an HA-managed guest keeps its HA record, data intact | docs/MIGRATION.md, HA | vmc: hatests.py (hasuite s8) | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `ha.nfs-server-loss` | HA | NFS shared-storage server crashes: guests stall, no HA action, I/O resumes when it returns | lab G1 | vmc: hatests.py (hasuite s11) | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `ha.local-disk-guest` | HA | guest with a node-local disk is NOT restarted elsewhere with a stale disk when its node dies; it restarts when the node returns | lab G1 | vmc: hatests.py (hasuite s12) | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `mig.rolling-upgrade` | HA | rolling upgrade with guests running (needs the Gentoo emerge path) | lab G5 | lab: hasuite s9, cluster-upgrade (HW laptops) | HW | hardware batch only (see lab PLAN.md for the latest laptop result) |
+| `sto.zfs-datasets` | Storage | ZFS pool registered as a Horcrux pool, zvol volumes create/list/resize/delete, a VM running on a ZFS dataset (directory pool), VM snapshot | docs/NEW_FEATURES.md ZFS | vmc: storetests.py (file-vdev pool in the node VM); lab: hx-zfs (real disks) | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `sto.zfs-encryption` | Storage | ZFS native encryption: encrypted dataset as VM storage (lock = VM cannot run, unlock = data intact); the encrypted-root install is covered by the installer VM tests | docs/ISO-INSTALL.md (encrypted ZFS root) | vmc: storetests.py; lab: hx-installer-vm zfs-encrypted | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
 | `sto.volumes-content` | Storage | storage pools, volumes, content | API storage | rust: storage_volume_tests, storage_content_tests | VM | e2e exists in CI containers, not yet moved into the VM cluster |
 | `sto.nfs-iscsi-ceph` | Storage | NFS / iSCSI / Ceph storage backends | docs | - | VM | no end-to-end test exists (gap) |
-| `sto.replication` | Storage | replication jobs | API replication | rust: replication_api_tests (no second node) | VM | e2e exists in CI containers, not yet moved into the VM cluster |
-| `bak.backup-restore` | Storage | backup a VM and restore it, data identical in the guest | API backups | rust: backup_api_e2e, backup_tests (no guest check) | VM | e2e exists in CI containers, not yet moved into the VM cluster |
+| `sto.replication` | Storage | replication job: VM snapshot -> zfs send|receive to a second node, data identical | API replication | vmc: storetests.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
+| `bak.backup-restore` | Storage | backup a RUNNING VM (zstd and dedup), verify, delete it, restore over it and to a new id: data written in the guest is identical | API backups | vmc: storetests.py | VM | pass, 2026-11-08 (VM cluster run 1108-0833) |
 | `sto.snapshot-schedules` | Storage | snapshot schedules and quotas | API snapshot-schedules | - | VM | no end-to-end test exists (gap) |
 | `auth.users-rbac` | Auth | users, groups, roles, ACLs: RBAC enforced on every route | docs/RBAC.md | rust: rbac_matrix_tests, auth_e2e_tests | VM | e2e exists in CI containers, not yet moved into the VM cluster |
-| `auth.tokens-totp` | Auth | API tokens, TOTP, sessions | docs/ACCESS_CONTROL.md | ci: ui_e2e.py | VM | e2e exists in CI containers, not yet moved into the VM cluster |
+| `auth.tokens-totp` | Auth | API tokens, TOTP, security keys, sessions | docs/ACCESS_CONTROL.md | vmc: uitests.py (ui_e2e.py auth part) | VM | written, not yet run |
 | `auth.realms` | Auth | LDAP / OIDC / PAM realms | README | ci: tests/auth_realms_e2e.sh (real OpenLDAP, Dex) | VM | e2e exists in CI containers, not yet moved into the VM cluster |
-| `ui.flows` | UI | web UI flows (login, VMs, containers, storage, firewall, users, monitoring...) | UI pages | ci: horcrux-ui/e2e/ui_e2e.py (Playwright, 1767 lines) | VM | e2e exists in CI containers, not yet moved into the VM cluster |
+| `ui.flows` | UI | web UI flows (login, 2FA, containers, stacks, events, notifications, metrics, realms, certificates, themes...) in a real browser against a VM node | UI pages | vmc: uitests.py running horcrux-ui/e2e/ui_e2e.py (Playwright) | VM | **FAIL** 2026-11-08: 170s rc=1:   - paragraph: No stacks deployed yet. / - contentinfo: /   - paragraph: Horcrux v0.1.5 - Built with Rust + Leptos /   - paragraph: 50,000+ |
 | `mon.metrics-alerts` | Ops | metrics, metric servers, alerts, webhooks | docs/METRICS.md, ALERT_NOTIFICATIONS_GUIDE.md | rust: alerts_tests, metric_servers_tests, webhook_events_tests; ui monitoring | VM | e2e exists in CI containers, not yet moved into the VM cluster |
 | `sys.updates-binhost` | Ops | update the installed system from the binhost, reboot, BE rollback | ROADMAP criterion 2 | lab: upgrade-test, be-rollback-test (HW laptops) | HW | hardware batch only (see lab PLAN.md for the latest laptop result) |
 | `k8s.clusters` | Ops | Kubernetes clusters / Helm | docs/KUBERNETES.md | rust: k8s_restart_tests; ci: k8s_helm_setup.sh | VM | e2e exists in CI containers, not yet moved into the VM cluster |
 | `hw.suspend-wdt-wifi` | Hardware | watchdog, suspend, Wi-Fi, NIC drivers, T2/firmware | lab G9 | lab: hw-matrix, wifi-reconnect, hx-hw-features (laptops) | HW | hardware batch only (see lab PLAN.md for the latest laptop result) |
 
+## G1 streak (HA suite in the 3-VM cluster)
+
+4 consecutive green `vmc-hasuite` runs (goal G1 needs 10, plus one confirmation run on the 3 real laptops).
+
+## Measured in the last full VM run (vmc-1108-0833.log)
+
+HA scenarios (guest = CirrOS with a checksummed 1 Hz write workload; outage = gap in the guest's records):
+
+| scenario | detected offline after (s) | guest running again after (s) | guest outage (s) | data integrity | seconds with two copies | human needed |
+|---|---|---|---|---|---|---|
+| hard crash | 27.1 | 47.1 | 72 | OK | 0 | no |
+| hard crash, node stays down | 31.1 | 105.1 | 125 | OK | 0 | no |
+| partition 1 | 34.0 | 108.0 | 128 | OK | 0 | no |
+| partition 2 | None | 1.5 | 198 | OK | 0 | no |
+| manager killed | None | None | 25 | OK | 0 | no |
+| manager hung | 34.0 | None | 9 | OK | 0 | no |
+| quorum loss | None | 129.3 | 78 | OK | 0 | no |
+| live migration | None | None | None | OK | - | no |
+| node replacement | None | 55.2 | None | OK | - | no |
+| NFS server loss | None | None | 54 | OK | - | no |
+| local disk | None | 161.8 | 70 | OK | - | no |
+
+Live migration under traffic (ping 20 Hz + TCP session + fresh connections from a third node; each line = one migration):
+
+| downtime = longest ICMP gap (s) | lost pings | migration time (s) | TCP stream longest stall (s) | fresh TCP connections failed / total |
+|---|---|---|---|---|
+| 0.39 | 6 | 5.7 | 1.34 | 1 / 122 |
+| 0.18 | 2 | 4.4 | 1.16 | 2 / 114 |
+| 0.2 | 2 | 3.0 | 1.15 | 10 / 110 |
+| 0.6 | 9 | 3.4 | 1.68 | 2 / 111 |
+
 ## Failures found by the VM cluster
 
-- `vm.clone-running` (full clone of a running VM): **FAIL** 2026-11-07: clone of a RUNNING VM (500 {'status': 500, 'error': 'INTERNAL_ERROR', 'message': 'An internal server error occurred', 'details': 'Failed to clone VM: 
-- `stack.update` (update a deployed stack to a new image): **FAIL** 2026-11-07: update of a deployed stack by POST /stacks refused (409): no update path through the API
-- `net.guest-dhcp-dns` (DHCP / DNS for guests on a bridge or vnet): **FAIL** 2026-11-07: Horcrux offers no DHCP/DNS service for guests (sdn_zones.rs: 'Horcrux runs no DHCP server'); static IPAM registry only
+- `ct.incus-vm` (Incus VMs: create, SPICE/VNC console handshake, .vv file (incus_e2e.py MODE=vm)): **FAIL** 2026-11-08: CI e2e incus_e2e.py on a VM node: 183s rc=1: / hx-incus-vm / RUNNING / 10.124.155.123 (enp5s0) / fd42:f752:8649:affc:1266:6aff:fe09:7d60 (enp5s0) / VI
+- `ui.flows` (web UI flows (login, 2FA, containers, stacks, events, notifications, metrics, realms, certificates, themes...) in a real browser against a VM node): **FAIL** 2026-11-08: 170s rc=1:   - paragraph: No stacks deployed yet. / - contentinfo: /   - paragraph: Horcrux v0.1.5 - Built with Rust + Leptos /   - paragraph: 50,000+
