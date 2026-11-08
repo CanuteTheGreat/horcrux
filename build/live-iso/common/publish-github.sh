@@ -80,7 +80,7 @@ daily)
   put_asset "$id" "$tmp/$name.sha256" "$name.sha256"
   [ -z "$evidence" ] || put_asset "$id" "$evidence" "$project-${VPFX}daily-$ARCH-test-evidence.tgz"
   # the manager tarball app-emulation/horcrux-bin fetches on installed machines (HORCRUX_MANAGER_URL default); same asset name from every variant of one arch
-  mgr=$(ls "$(dirname "$iso")"/mgr/horcrux-manager-*.tar.zst 2>/dev/null | head -1)
+  mgr=$(ls "$(dirname "$iso")"/mgr/horcrux-manager-*.tar.zst 2>/dev/null | head -1 || true)   # no match = ls exit 2 under pipefail: without || true a patronus daily died here, silently, after its last upload (run 865)
   [ -z "$mgr" ] || [ "$project" != horcrux ] || put_asset "$id" "$mgr" "horcrux-manager-daily-$ARCH.tar.zst" || echo "::warning::manager tarball not uploaded"
   # assets of the older naming schemes: removed once the same image is up under its new name (the product-domain redirects keep the old URLs working)
   for old in "$project-${IMG_OLD_VPFX}daily-$ARCH.iso" "$project-${IMG_OLD_VPFX}daily-$ARCH.iso.sha256" "$project-${IMG_OLD_VPFX}daily-$ARCH-test-evidence.tgz"; do

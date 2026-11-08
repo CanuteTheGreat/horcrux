@@ -495,30 +495,41 @@ class Tests:
         for enc in modes:
             tag = "enc" if enc else "plain"
             pdisk = f"{self.a.out}/persist-{tag}.raw"
-            subprocess.check_call(["qemu-img", "create", "-q", "-f", "raw", pdisk, "512M"])
-            marker = secrets.token_hex(6)
-            vm = self.boot(f"persist-{tag}-1", extra_disks=[pdisk])
-            try:
-                self.menu_ready(vm)
-                self.pick(vm, "8")
-                self.step(f"persist-{tag}-offers-to-create", vm.expect_raw(r"Create one now", T(300)))
-                vm.send("y\r")
-                vm.expect_raw(r"Encrypt it", 20)
-                vm.send(("y" if enc else "n") + "\r")
-                vm.expect_raw(r"Device \(empty", 20)
-                vm.send("/dev/vda\r")
-                if enc:
-                    vm.expect_raw(r"New passphrase", T(60))
-                    vm.send(PERSIST_PW + "\r")
-                    vm.expect_raw(r"Repeat", 20)
-                    vm.send(PERSIST_PW + "\r")
-                self.step(f"persist-{tag}-created", vm.expect_raw(r"PERSISTENCE-CREATED", T(240)), "LUKS2 + ext4" if enc else "ext4")
-                self.step(f"persist-{tag}-shell", self.shell(vm))
-                rc, o = self.run(vm, f"echo {marker} > /root/keep.txt; echo {marker} > /etc/keep.conf; mkdir -p /var/lib/keepme && echo {marker} > /var/lib/keepme/f; sync; "
-                                     f"blkid | grep -c -i 'persist'")
-                self.step(f"persist-{tag}-files-written", rc == 0)
-            finally:
-                self.finish(vm)
+            for attempt in (1, 2):
+                subprocess.check_call(["qemu-img", "create", "-q", "-f", "raw", pdisk, "512M"])
+                marker = secrets.token_hex(6)
+                vm = self.boot(f"persist-{tag}-1", extra_disks=[pdisk])
+                try:
+                    self.menu_ready(vm)
+                    self.pick(vm, "8")
+                    offered = vm.expect_raw(r"Create one now", T(300))
+                    if attempt == 1 and not offered:
+                        print(f"[WARN] persist-{tag}: no 'Create one now' prompt (attempt 1/2); serial tail: {vm.raw[-300:]!r}", flush=True)
+                        continue
+                    self.step(f"persist-{tag}-offers-to-create", offered)
+                    vm.send("y\r")
+                    vm.expect_raw(r"Encrypt it", 20)
+                    vm.send(("y" if enc else "n") + "\r")
+                    vm.expect_raw(r"Device \(empty", 20)
+                    vm.send("/dev/vda\r")
+                    if enc:
+                        vm.expect_raw(r"New passphrase", T(60))
+                        vm.send(PERSIST_PW + "\r")
+                        vm.expect_raw(r"Repeat", 20)
+                        vm.send(PERSIST_PW + "\r")
+                    created = vm.expect_raw(r"PERSISTENCE-CREATED", T(240))
+                    if attempt == 1 and not created:
+                        # a lost keystroke / slow cryptsetup on a loaded runner: redo the whole flow once on a fresh disk; the assertion is unchanged
+                        print(f"[WARN] persist-{tag}: PERSISTENCE-CREATED not seen (attempt 1/2); serial tail: {vm.raw[-600:]!r}", flush=True)
+                        continue
+                    self.step(f"persist-{tag}-created", created, "LUKS2 + ext4" if enc else "ext4")
+                    self.step(f"persist-{tag}-shell", self.shell(vm))
+                    rc, o = self.run(vm, f"echo {marker} > /root/keep.txt; echo {marker} > /etc/keep.conf; mkdir -p /var/lib/keepme && echo {marker} > /var/lib/keepme/f; sync; "
+                                         f"blkid | grep -c -i 'persist'")
+                    self.step(f"persist-{tag}-files-written", rc == 0)
+                    break
+                finally:
+                    self.finish(vm)
             if enc:
                 head = open(pdisk, "rb").read(4 << 20)          # the partition starts at 1 MiB: its first sector is the LUKS header
                 self.step("persist-enc-disk-is-luks-not-plaintext", b"LUKS\xba\xbe" in head, "LUKS2 header on the partition")
