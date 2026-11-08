@@ -7,7 +7,9 @@ FROM rust:1-bookworm AS app
 RUN apt-get update && apt-get install -y --no-install-recommends clang libvirt-dev libpam0g-dev pkg-config curl ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN rustup target add wasm32-unknown-unknown
 # static (musl) build: the glibc one needs a newer libc than bookworm
-RUN curl -fsSL https://github.com/trunk-rs/trunk/releases/latest/download/trunk-$(uname -m)-unknown-linux-musl.tar.gz | tar xz -C /usr/local/bin
+# GitHub release downloads drop now and then (aarch64 daily run 1576: curl got a non-tarball, tar exit 2): download to a file with
+# retries first, then unpack, so one dropped fetch does not fail a 1 h+ build
+RUN set -e; curl -fsSL --retry 6 --retry-all-errors --retry-delay 10 -o /tmp/trunk.tgz https://github.com/trunk-rs/trunk/releases/latest/download/trunk-$(uname -m)-unknown-linux-musl.tar.gz && tar xzf /tmp/trunk.tgz -C /usr/local/bin trunk && rm -f /tmp/trunk.tgz && trunk --version
 # Apple T2 Mac userland (Touch Bar daemon, fan daemon), pinned, portable CPU baseline. Own layer BEFORE `COPY . .`:
 # it does not depend on the repository content. Only the binaries + their data/udev rules go into the image;
 # the installer enables the services on a T2 Mac only (liveinst/t2.py).
