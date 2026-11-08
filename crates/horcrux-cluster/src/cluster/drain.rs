@@ -636,7 +636,9 @@ mod tests {
         g.rules.required_labels = vec!["nvme".into(), "gpu".into()];
         let plan = plan_drain("a", &nodes, &[g.clone()]);
         assert!(plan.moves.is_empty());
-        assert!(plan.unplaced[0].reason.contains("lacks required label 'gpu'"));
+        assert!(plan.unplaced[0]
+            .reason
+            .contains("lacks required label 'gpu'"));
         assert!(plan.unplaced[0].reason.contains("plain is not eligible"));
         // no labels required: the unconfigured node is fine again
         g.rules.required_labels.clear();
