@@ -67,11 +67,9 @@ impl CorosyncManager {
         *self.members.lock().await = Some((cluster_name.to_string(), vec![(node.clone(), 1)]));
 
         // Write config to /etc/corosync/corosync.conf
-        tokio::fs::write(conf_path(), config)
-            .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to write Corosync config: {}", e))
-            })?;
+        tokio::fs::write(conf_path(), config).await.map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to write Corosync config: {}", e))
+        })?;
 
         // Start Corosync service
         let output = Command::new("systemctl")

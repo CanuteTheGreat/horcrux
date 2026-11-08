@@ -85,6 +85,13 @@ ARCHS = {
 SLOW = 1.0
 
 
+class InstallStall(Exception):
+    """the installer guest went silent (see Runner.phase1)"""
+
+
+INSTALL_STALL_S = 480      # a healthy install prints a progress line at least every ~30 s on KVM; 480 s of total silence is a hung guest
+
+
 def T(sec):
     """a timeout in seconds, scaled for emulation speed"""
     return sec * SLOW
@@ -950,6 +957,38 @@ class Runner:
 
     # ---- phase 1: boot the ISO and install
     def phase1(self, nvars):
+        """an unattended install whose guest goes completely silent mid-way (gnome-light run 11851: unsquashfs onto the encrypted ZFS stopped at
+        41 % and the serial line stayed quiet until the 1700 s wait ran out; the same install takes 110-270 s in every other run) is started
+        once more on a fresh disk. Only on KVM and only for a SILENT guest (no serial byte for INSTALL_STALL_S): a guest that keeps
+        printing, a FAILED install and a second stall all still fail exactly as before."""
+        a = self.a
+        retry = a.flow == "auto" and SLOW == 1
+        try:
+            return self._phase1_once(nvars, retry)
+        except InstallStall as e:
+            print(f"[WARN] installer-stalled-retry {e}; keeping the first attempt's serial log as 1-install-serial.attempt1.log and installing once more on a fresh disk", flush=True)
+            try:
+                os.replace(f"{a.out}/1-install-serial.log", f"{a.out}/1-install-serial.attempt1.log")
+            except OSError:
+                pass
+            for d in (self.disk,) + ((self.disk2,) if a.fs == "zfs" and a.zfs_raid == "mirror" else ()):
+                subprocess.check_call(["qemu-img", "create", "-q", "-f", "qcow2", d, f"{a.disk_gb}G"])
+            return self._phase1_once(nvars, False)
+
+    def wait_installer(self, vm, total, stall_retry):
+        """AUTOINSTALL-OK/FAILED within `total` s; with stall_retry, raise InstallStall when the guest has sent nothing for INSTALL_STALL_S"""
+        end = time.time() + total
+        while time.time() < end:
+            m = vm.expect_raw(r"AUTOINSTALL-(OK|FAILED[^\n]*)", 20, consume=False)
+            if m:
+                return m
+            if vm.p.poll() is not None:
+                return None
+            if stall_retry and time.time() - vm.last_rx >= INSTALL_STALL_S:
+                raise InstallStall(f"no serial output for {int(time.time() - vm.last_rx)} s during the install{serial_tail(vm, 4) or ''}")
+        return None
+
+    def _phase1_once(self, nvars, stall_retry=False):
         a = self.a
         t0 = time.time()
         vm = VM("1-install", self.qemu_args(a.iso, False, nvars), a.out)
@@ -985,7 +1024,7 @@ class Runner:
                 self.step("live-sshd-off", not b.startswith("SSH-"), f"banner on the live system: {b!r}")
                 bad = vm.expect_raw(r"(ANSWER-FILE-ERROR[^\n]*|No answer file found[^\n]*)", 3, consume=False)
                 self.step("answer-file-accepted", not bad, bad.group(0).decode() if bad else "validated")
-                ok = vm.expect_raw(r"AUTOINSTALL-(OK|FAILED[^\n]*)", 1700 * (2 if a.fs == "zfs" and SLOW > 1 else 1), consume=False)   # ZFS under TCG: 2x the budget
+                ok = self.wait_installer(vm, 1700 * (2 if a.fs == "zfs" and SLOW > 1 else 1), stall_retry)   # ZFS under TCG: 2x the budget
                 self.step("installer-finished", ok and b"AUTOINSTALL-OK" in ok.group(0), ok.group(0).decode() if ok else "timeout" + serial_tail(vm))
                 vm.shot("auto-finished")
                 if a.headless_gates:
