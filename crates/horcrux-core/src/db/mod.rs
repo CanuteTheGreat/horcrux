@@ -897,6 +897,39 @@ pub mod stacks {
             .collect())
     }
 
+    /// Store the compose file a stack is now running (after an update).
+    pub async fn update_stack_compose(
+        pool: &SqlitePool,
+        id: &str,
+        compose_yaml: &str,
+        updated_at: i64,
+    ) -> Result<()> {
+        sqlx::query("UPDATE container_stacks SET compose_yaml = ?, updated_at = ? WHERE id = ?")
+            .bind(compose_yaml)
+            .bind(updated_at)
+            .bind(id)
+            .execute(pool)
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to update stack: {}", e)))?;
+        Ok(())
+    }
+
+    pub async fn delete_stack_service(
+        pool: &SqlitePool,
+        stack_id: &str,
+        service_name: &str,
+    ) -> Result<()> {
+        sqlx::query("DELETE FROM container_stack_services WHERE stack_id = ? AND service_name = ?")
+            .bind(stack_id)
+            .bind(service_name)
+            .execute(pool)
+            .await
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to remove stack service: {}", e))
+            })?;
+        Ok(())
+    }
+
     pub async fn delete_stack(pool: &SqlitePool, id: &str) -> Result<()> {
         sqlx::query("DELETE FROM container_stacks WHERE id = ? OR name = ?")
             .bind(id)

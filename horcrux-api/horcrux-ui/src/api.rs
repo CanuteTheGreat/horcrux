@@ -5171,6 +5171,40 @@ pub struct StackSummary {
     pub updated_at: i64,
     #[serde(default)]
     pub unsupported_features: Vec<String>,
+    #[serde(default)]
+    pub compose_yaml: Option<String>,
+}
+
+/// Answer of `PUT /api/stacks/:id`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct StackUpdateReport {
+    #[serde(default)]
+    pub recreated: Vec<String>,
+    #[serde(default)]
+    pub unchanged: Vec<String>,
+    #[serde(default)]
+    pub added: Vec<String>,
+    #[serde(default)]
+    pub removed: Vec<String>,
+}
+
+pub async fn get_stack(id: &str) -> Result<StackSummary, ApiError> {
+    fetch_json(&format!("/stacks/{}", urlencoding::encode(id))).await
+}
+
+/// Update a deployed stack: new compose file and/or extra environment for
+/// every service (`KEY -> value`). Services whose config changed are
+/// recreated one at a time; volumes are kept.
+pub async fn update_stack(
+    id: &str,
+    compose_yaml: Option<&str>,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Result<StackUpdateReport, ApiError> {
+    put_json(
+        &format!("/stacks/{}", urlencoding::encode(id)),
+        &serde_json::json!({ "compose_yaml": compose_yaml, "env": env }),
+    )
+    .await
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

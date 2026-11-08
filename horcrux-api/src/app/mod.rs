@@ -874,7 +874,7 @@ fn stack_routes() -> Router<Arc<AppState>> {
         .route("/api/stacks", get(list_stacks))
         .route("/api/stacks", post(deploy_stack))
         .route("/api/stacks/:id", get(get_stack))
-        .route("/api/stacks/:id", delete(remove_stack))
+        .route("/api/stacks/:id", delete(remove_stack).put(update_stack))
         .route("/api/stacks/:id/start", post(start_stack))
         .route("/api/stacks/:id/stop", post(stop_stack))
 }
@@ -4079,6 +4079,46 @@ async fn deploy_stack(
 }
 
 #[cfg(any(feature = "docker", feature = "podman"))]
+/// `PUT /api/stacks/:id`: update a deployed stack (`compose up -d`). Body:
+/// `compose_yaml` (new compose file, default the current one), `env` (extra
+/// environment merged into every service), `force_recreate`.
+#[cfg(any(feature = "docker", feature = "podman"))]
+#[derive(serde::Deserialize)]
+struct UpdateStackRequest {
+    #[serde(default)]
+    compose_yaml: Option<String>,
+    #[serde(default)]
+    env: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(default)]
+    force_recreate: bool,
+}
+
+#[cfg(any(feature = "docker", feature = "podman"))]
+async fn update_stack(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateStackRequest>,
+) -> Result<Json<container::stack::StackUpdateReport>, ApiError> {
+    if req.compose_yaml.is_none()
+        && req.env.as_ref().is_none_or(|e| e.is_empty())
+        && !req.force_recreate
+    {
+        return Err(ApiError::BadRequest(
+            "nothing to update: send compose_yaml, env or force_recreate".into(),
+        ));
+    }
+    let report = state
+        .stack_manager
+        .update_stack(
+            &id,
+            req.compose_yaml.as_deref(),
+            req.env.as_ref(),
+            req.force_recreate,
+        )
+        .await?;
+    Ok(Json(report))
+}
+
 async fn get_stack(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,

@@ -753,6 +753,27 @@ backing file): use `full`, or stop the VM.
 **Response**:
 ```json
 {
+## Stacks (Compose)
+
+- `GET /api/stacks`, `GET /api/stacks/:id` (the latter includes `compose_yaml`),
+  `POST /api/stacks` `{"name","compose_yaml","runtime"}`, `POST .../start|stop`,
+  `DELETE /api/stacks/:id`.
+- `PUT /api/stacks/:id` `{"compose_yaml": "...", "env": {"KEY": "value"},
+  "force_recreate": false}`: update a deployed stack (`compose up -d`). Send a new
+  compose file, extra environment merged into every service (and stored in the
+  stack's compose file), or `force_recreate`. Images that changed are pulled
+  first (a bad tag fails before anything is touched), then the services whose
+  configuration changed are recreated **one at a time** in dependency order;
+  unchanged services keep running, services new in the file are added, services
+  dropped from it are removed. Volumes are kept (containers are removed without
+  `-v`). If a service fails to start, every service already replaced is put back
+  to its previous configuration and the call returns the error (stack
+  unchanged). Answer: `{"recreated": [...], "unchanged": [...], "added": [...],
+  "removed": [...], "stack": {...}}`. 400 when the body changes nothing, 404 for
+  an unknown stack. Stopped stacks are started by an update.
+
+---
+
   "vm_id": "100",
   "iso_path": "/var/lib/horcrux/cloudinit/vm-100-cloudinit.iso",
   "message": "Cloud-init ISO generated successfully"

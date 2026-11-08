@@ -86,6 +86,20 @@ pub enum ComposeDependsOn {
     Map(HashMap<String, serde_yaml::Value>),
 }
 
+/// What `update_stack` did, per service.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct StackUpdateReport {
+    pub stack: Option<StackSummary>,
+    /// services recreated with the new configuration
+    pub recreated: Vec<String>,
+    /// services whose configuration did not change (left running)
+    pub unchanged: Vec<String>,
+    /// services new in the compose file
+    pub added: Vec<String>,
+    /// services dropped from the compose file (containers removed)
+    pub removed: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StackSummary {
     pub id: String,
@@ -97,6 +111,9 @@ pub struct StackSummary {
     /// compose keys that were present but are intentionally not applied -
     /// see module docs.
     pub unsupported_features: Vec<String>,
+    /// The compose file the stack runs (only on `get_stack`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compose_yaml: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -413,6 +430,7 @@ impl StackManager {
             created_at: now,
             updated_at: now,
             unsupported_features: unsupported,
+            compose_yaml: None,
         })
     }
 
@@ -465,6 +483,269 @@ impl StackManager {
         Ok(())
     }
 
+    /// Merge `env` into every service's `environment` of a compose document
+    /// and return the new YAML (list-form environments are converted to a
+    /// map; the keys in `env` win).
+    pub fn merge_env_into_yaml(
+        yaml: &str,
+        env: &std::collections::BTreeMap<String, String>,
+    ) -> Result<String> {
+        let mut doc: serde_yaml::Value = serde_yaml::from_str(yaml)
+            .map_err(|e| horcrux_common::Error::Validation(format!("Invalid compose YAML: {e}")))?;
+        let services = doc
+            .get_mut("services")
+            .and_then(|s| s.as_mapping_mut())
+            .ok_or_else(|| {
+                horcrux_common::Error::Validation("Compose file defines no services".into())
+            })?;
+        for (_, svc) in services.iter_mut() {
+            let Some(svc) = svc.as_mapping_mut() else {
+                continue;
+            };
+            let key = serde_yaml::Value::String("environment".into());
+            let mut map = serde_yaml::Mapping::new();
+            match svc.get(&key) {
+                Some(serde_yaml::Value::Mapping(m)) => map = m.clone(),
+                Some(serde_yaml::Value::Sequence(l)) => {
+                    for item in l {
+                        if let Some(kv) = item.as_str() {
+                            let (k, v) = match kv.split_once('=') {
+                                Some((k, v)) => (k, serde_yaml::Value::String(v.into())),
+                                None => (kv, serde_yaml::Value::Null),
+                            };
+                            map.insert(serde_yaml::Value::String(k.into()), v);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            for (k, v) in env {
+                map.insert(
+                    serde_yaml::Value::String(k.clone()),
+                    serde_yaml::Value::String(v.clone()),
+                );
+            }
+            svc.insert(key, serde_yaml::Value::Mapping(map));
+        }
+        serde_yaml::to_string(&doc)
+            .map_err(|e| horcrux_common::Error::Validation(format!("Invalid compose YAML: {e}")))
+    }
+
+    /// Replace one service's container: stop and remove the old one (named
+    /// and anonymous volumes are kept - `docker rm` without `-v`), create and
+    /// start `cfg` (None = just remove it) and re-point the stack row.
+    async fn replace_service(
+        &self,
+        stack_id: &str,
+        service_name: &str,
+        old: Option<&StackServiceSummary>,
+        cfg: Option<ContainerConfig>,
+    ) -> Result<()> {
+        if let Some(old) = old {
+            let _ = self
+                .container_manager
+                .stop_container(&old.container_id)
+                .await;
+            self.container_manager
+                .delete_container(&old.container_id)
+                .await?;
+            db_stacks::delete_stack_service(self.database.pool(), stack_id, service_name).await?;
+        }
+        let Some(cfg) = cfg else {
+            return Ok(());
+        };
+        let created = self.container_manager.create_container(cfg).await?;
+        db_stacks::add_stack_service(
+            self.database.pool(),
+            &db_stacks::StackServiceRecord {
+                id: uuid::Uuid::new_v4().to_string(),
+                stack_id: stack_id.to_string(),
+                service_name: service_name.to_string(),
+                container_id: created.id.clone(),
+            },
+            chrono::Utc::now().timestamp(),
+        )
+        .await?;
+        self.container_manager
+            .start_container(&created.id)
+            .await
+            .map(|_| ())
+            .map_err(|e| {
+                horcrux_common::Error::System(format!(
+                    "Service '{service_name}' failed to start: {e}"
+                ))
+            })
+    }
+
+    /// Update a deployed stack to a new compose file and/or environment
+    /// (`compose up -d`): services whose configuration changed are pulled
+    /// and recreated one at a time in dependency order, unchanged services
+    /// keep running, new services are added, dropped ones removed. Volumes
+    /// are kept. If a service fails, every service already replaced is put
+    /// back to its previous configuration and the error is returned.
+    pub async fn update_stack(
+        &self,
+        id_or_name: &str,
+        compose_yaml: Option<&str>,
+        env: Option<&std::collections::BTreeMap<String, String>>,
+        force_recreate: bool,
+    ) -> Result<StackUpdateReport> {
+        let stack = db_stacks::get_stack(self.database.pool(), id_or_name)
+            .await?
+            .ok_or_else(|| {
+                horcrux_common::Error::NotFound(format!("Stack {id_or_name} not found"))
+            })?;
+        let mut new_yaml = compose_yaml.unwrap_or(&stack.compose_yaml).to_string();
+        if let Some(env) = env.filter(|e| !e.is_empty()) {
+            new_yaml = Self::merge_env_into_yaml(&new_yaml, env)?;
+        }
+        let (new_compose, unsupported) = Self::validate_compose(&new_yaml)?;
+        for service_name in new_compose.services.keys() {
+            if !crate::container::is_valid_oci_name(service_name) {
+                return Err(horcrux_common::Error::Validation(format!(
+                    "Invalid service name '{service_name}'"
+                )));
+            }
+        }
+        let (old_compose, _) = Self::validate_compose(&stack.compose_yaml)?;
+        let runtime = match stack.runtime.as_str() {
+            "podman" => ContainerRuntime::Podman,
+            _ => ContainerRuntime::Docker,
+        };
+        let current = self.get_stack(&stack.id).await?;
+        let find_old = |name: &str| current.services.iter().find(|s| s.service_name == name);
+        let same = |a: &ContainerConfig, b: &ContainerConfig| {
+            a.memory == b.memory
+                && a.cpus == b.cpus
+                && a.rootfs == b.rootfs
+                && a.options == b.options
+        };
+        let mut report = StackUpdateReport::default();
+        let order = Self::deploy_order(&new_compose);
+        // Plan first (nothing touched yet): which services change?
+        let mut todo: Vec<(String, ContainerConfig, Option<ContainerConfig>)> = Vec::new();
+        for name in &order {
+            let Some(svc) = new_compose.services.get(name) else {
+                continue;
+            };
+            let new_cfg =
+                Self::service_to_container_config(&stack.name, name, svc, runtime.clone());
+            let old_cfg = old_compose
+                .services
+                .get(name)
+                .map(|o| Self::service_to_container_config(&stack.name, name, o, runtime.clone()));
+            let running = find_old(name).is_some();
+            match &old_cfg {
+                Some(o) if running && !force_recreate && same(o, &new_cfg) => {
+                    report.unchanged.push(name.clone())
+                }
+                _ => todo.push((name.clone(), new_cfg, old_cfg)),
+            }
+        }
+        // Pull the new images before stopping anything: a bad tag must not
+        // take a working stack down. (Pull is best effort for local images.)
+        let runtime_str = stack.runtime.as_str();
+        for (name, cfg, _) in &todo {
+            let out = tokio::process::Command::new(runtime_str)
+                .args(["pull", &cfg.rootfs])
+                .output()
+                .await;
+            let pulled = out.as_ref().map(|o| o.status.success()).unwrap_or(false);
+            if !pulled {
+                let have = tokio::process::Command::new(runtime_str)
+                    .args(["image", "inspect", &cfg.rootfs])
+                    .output()
+                    .await
+                    .map(|o| o.status.success())
+                    .unwrap_or(false);
+                if !have {
+                    return Err(horcrux_common::Error::Validation(format!(
+                        "Service '{name}': image {} cannot be pulled and is not present locally",
+                        cfg.rootfs
+                    )));
+                }
+            }
+        }
+        Self::ensure_stack_network(
+            runtime_str,
+            &Self::stack_network_name(&stack.name),
+            &stack.name,
+        )
+        .await?;
+        // Rolling replace, dependency order.
+        let mut done: Vec<(String, Option<ContainerConfig>)> = Vec::new();
+        for (name, cfg, old_cfg) in todo {
+            let old = find_old(&name).cloned();
+            match self
+                .replace_service(&stack.id, &name, old.as_ref(), Some(cfg))
+                .await
+            {
+                Ok(()) => {
+                    if old.is_some() {
+                        report.recreated.push(name.clone());
+                    } else {
+                        report.added.push(name.clone());
+                    }
+                    done.push((name, old_cfg));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Updating stack {} failed at {name}: {e}; rolling back",
+                        stack.name
+                    );
+                    // Put the failed service and the ones already replaced back.
+                    let mut failed = vec![(name.clone(), old_cfg)];
+                    failed.extend(done.into_iter().rev());
+                    for (svc_name, prev) in failed {
+                        let cur = db_stacks::list_stack_services(self.database.pool(), &stack.id)
+                            .await
+                            .unwrap_or_default()
+                            .into_iter()
+                            .find(|r| r.service_name == svc_name)
+                            .map(|r| StackServiceSummary {
+                                service_name: r.service_name,
+                                container_id: r.container_id,
+                            });
+                        if let Err(re) = self
+                            .replace_service(&stack.id, &svc_name, cur.as_ref(), prev)
+                            .await
+                        {
+                            tracing::error!("Rollback of service {svc_name} failed: {re}");
+                        }
+                    }
+                    return Err(horcrux_common::Error::System(format!(
+                        "Updating service '{name}' failed (stack rolled back to its previous \
+                         configuration): {e}"
+                    )));
+                }
+            }
+        }
+        // Services dropped from the compose file.
+        for old in &current.services {
+            if !new_compose.services.contains_key(&old.service_name) {
+                self.replace_service(&stack.id, &old.service_name, Some(old), None)
+                    .await?;
+                report.removed.push(old.service_name.clone());
+            }
+        }
+        // Make sure the unchanged ones run too (an update of a stopped stack
+        // starts it, like `compose up -d`).
+        for name in &report.unchanged {
+            if let Some(svc) = find_old(name) {
+                let _ = self
+                    .container_manager
+                    .start_container(&svc.container_id)
+                    .await;
+            }
+        }
+        let now = chrono::Utc::now().timestamp();
+        db_stacks::update_stack_compose(self.database.pool(), &stack.id, &new_yaml, now).await?;
+        let mut summary = self.get_stack(&stack.id).await?;
+        summary.unsupported_features = unsupported;
+        report.stack = Some(summary);
+        Ok(report)
+    }
+
     /// Stop + delete containers concurrently (like `compose down`): a
     /// service whose PID 1 ignores SIGTERM takes the runtime's full stop
     /// grace period, so doing them one after another took ~10 s each.
@@ -508,6 +789,7 @@ impl StackManager {
                 created_at: r.created_at,
                 updated_at: r.updated_at,
                 unsupported_features: Vec::new(),
+                compose_yaml: None,
             });
         }
         Ok(out)
@@ -534,6 +816,7 @@ impl StackManager {
             created_at: r.created_at,
             updated_at: r.updated_at,
             unsupported_features: Vec::new(),
+            compose_yaml: Some(r.compose_yaml),
         })
     }
 
@@ -652,6 +935,26 @@ services:
         assert_eq!(compose.services.len(), 1);
         assert!(unsupported.iter().any(|u| u.contains("build")));
         assert!(unsupported.iter().any(|u| u.contains("deploy")));
+    }
+
+    #[test]
+    fn env_is_merged_into_every_service_and_survives_reparse() {
+        let y = "services:\n  a:\n    image: x\n    environment: [\"K=old\", \"KEEP=1\"]\n  b:\n    image: y\n";
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("K".to_string(), "new".to_string());
+        let out = StackManager::merge_env_into_yaml(y, &env).unwrap();
+        let (c, _) = StackManager::validate_compose(&out).unwrap();
+        let cfg = |n: &str| {
+            StackManager::service_to_container_config(
+                "s",
+                n,
+                &c.services[n],
+                ContainerRuntime::Docker,
+            )
+        };
+        assert_eq!(cfg("a").options.env, vec!["K=new", "KEEP=1"]);
+        assert_eq!(cfg("b").options.env, vec!["K=new"]);
+        assert!(StackManager::merge_env_into_yaml("services: 3", &env).is_err());
     }
 
     #[test]
