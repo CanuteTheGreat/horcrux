@@ -9,6 +9,8 @@ pub fn MigrationCenterPage() -> impl IntoView {
     let (vms, set_vms) = create_signal(Vec::<VirtualMachine>::new());
     let (containers, set_containers) = create_signal(Vec::<Container>::new());
     let (cluster_nodes, set_cluster_nodes) = create_signal(Vec::<ClusterNode>::new());
+    // Live-migration verdicts (CPU vendor/level) for the selected guest's source node.
+    let (targets, set_targets) = create_signal(Vec::<MigrationTarget>::new());
     let (show_migration_modal, set_show_migration_modal) = create_signal(false);
     let (show_bulk_modal, set_show_bulk_modal) = create_signal(false);
     let (selected_resource, set_selected_resource) = create_signal(None::<(String, String)>); // (type, id)
@@ -202,6 +204,36 @@ pub fn MigrationCenterPage() -> impl IntoView {
             .and_then(|(_, id)| vms.get().into_iter().find(|v| v.vmid == id))
             .map(|v| v.status != "running")
             .unwrap_or(false)
+    };
+
+    // Whenever a guest is picked, ask the API which nodes it may live-migrate to.
+    create_effect(move |_| {
+        let source = selected_resource.get().and_then(|(t, id)| {
+            if t == "vm" {
+                vms.with(|l| l.iter().find(|v| v.vmid == id).map(|v| v.node.clone()))
+            } else {
+                containers.with(|l| l.iter().find(|c| c.vmid == id).map(|c| c.node.clone()))
+            }
+        });
+        match source {
+            Some(src) if !src.is_empty() => spawn_local(async move {
+                set_targets.set(get_migration_targets(&src).await.unwrap_or_default());
+            }),
+            _ => set_targets.set(Vec::new()),
+        }
+    });
+
+    // Chosen target blocks live migration (CPU vendor/level) -> reason, else None.
+    let live_block_reason = move || {
+        if migration_type.get() != "online" {
+            return None;
+        }
+        let tn = target_node.get();
+        targets
+            .get()
+            .into_iter()
+            .find(|t| t.node == tn && !t.live_migration_allowed)
+            .map(|t| t.reason.unwrap_or_else(|| "CPU incompatible".to_string()))
     };
 
     let get_resource_name = move |resource_type: &str, resource_id: &str| {
@@ -621,14 +653,21 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                             let node_name = node.name.clone();
                                             let node_name_val = node.name.clone();
                                             let usage = node.usage_label();
+                                            let note = migration_target_note(&targets.get(), &node.name);
                                             view! {
                                                 <option value={node_name_val}>
-                                                    {node_name}" ("{usage}")"
+                                                    {node_name}" ("{usage}")"{note}
                                                 </option>
                                             }
                                         }).collect::<Vec<_>>()}
                                     </select>
                                 </div>
+
+                                {move || live_block_reason().map(|r| view! {
+                                    <p class="live-block-reason text-sm text-red-600">
+                                        "Live migration to this node is blocked: "{r}". Choose Offline (Stop & Start)."
+                                    </p>
+                                })}
 
                                 <div class="form-group">
                                     <label>"Migration Type"</label>
@@ -701,7 +740,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                 <button
                                     class="btn btn-primary"
                                     on:click=move |_| create_migration.dispatch(())
-                                    disabled=move || target_node.get().is_empty() || loading.get()
+                                    disabled=move || target_node.get().is_empty() || loading.get() || live_block_reason().is_some()
                                 >"Start Migration"</button>
                             </div>
                         </div>

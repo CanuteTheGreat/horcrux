@@ -3686,6 +3686,37 @@ pub async fn migrate_vm(vm_id: &str, request: MigrationRequest) -> Result<Migrat
     post_json(&format!("/migrate/{}", vm_id), &request).await
 }
 
+/// One row of `GET /api/cluster/nodes/:name/migration-targets`: a candidate
+/// node for a guest running on `:name`, its CPU group and, when live migration
+/// is blocked (AMD<->Intel, older x86-64 level), the reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MigrationTarget {
+    pub node: String,
+    pub group: String,
+    pub live_migration_allowed: bool,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Live-migration verdict per target node for a guest running on `source`.
+pub async fn get_migration_targets(source: &str) -> Result<Vec<MigrationTarget>, ApiError> {
+    fetch_json(&format!("/cluster/nodes/{}/migration-targets", source)).await
+}
+
+/// Option-label suffix for a target in the migrate dialog ("" when live
+/// migration is allowed or the node is unknown).
+pub fn migration_target_note(targets: &[MigrationTarget], node: &str) -> String {
+    targets
+        .iter()
+        .find(|t| t.node == node)
+        .map(|t| match (&t.live_migration_allowed, &t.reason) {
+            (false, Some(r)) => format!(" - offline only: {}", r),
+            (false, None) => " - offline only".to_string(),
+            _ => format!(" - {}", t.group),
+        })
+        .unwrap_or_default()
+}
+
 /// Get migration status
 pub async fn get_migration_status(vm_id: &str) -> Result<MigrationJob, ApiError> {
     fetch_json(&format!("/migrate/{}/status", vm_id)).await
@@ -5413,6 +5444,21 @@ mod tests {
     //! actually sends. Each sample below is the real serialized shape of the
     //! named server type.
     use super::*;
+
+    #[test]
+    fn migration_target_note_explains_offline_only_nodes() {
+        let t: Vec<MigrationTarget> = serde_json::from_str(
+            r#"[{"node":"r6525","group":"amd-v3","live_migration_allowed":true,"reason":null},
+                {"node":"r430","group":"intel-v3","live_migration_allowed":false,"reason":"CPU vendor differs"}]"#,
+        )
+        .unwrap();
+        assert_eq!(migration_target_note(&t, "r6525"), " - amd-v3");
+        assert_eq!(
+            migration_target_note(&t, "r430"),
+            " - offline only: CPU vendor differs"
+        );
+        assert_eq!(migration_target_note(&t, "nope"), "");
+    }
 
     #[test]
     fn error_text_includes_the_api_details() {
