@@ -17,7 +17,7 @@
 //!
 //! The relay stops after 10 idle minutes without connections, or when the
 //! VM is no longer running.
-use super::lxd::{Backend, Client, ConsoleKind};
+use super::lxd::{Backend, Client};
 use futures::{SinkExt, StreamExt};
 use horcrux_common::{Error, Result};
 use rand::Rng;
@@ -43,6 +43,58 @@ pub struct RelayInfo {
     pub port: u16,
     pub password: String,
 }
+
+/// A value shared by every connection of a relay, created by the first one and
+/// dropped when the last one ends (here: the VM's single `vga` operation).
+struct Shared<T> {
+    inner: Mutex<(Option<Arc<T>>, usize)>,
+}
+
+impl<T> Shared<T> {
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new((None, 0)),
+        }
+    }
+
+    /// Join: the current value, `open`ed first when there is none.
+    async fn join<F>(&self, open: F) -> Result<Arc<T>>
+    where
+        F: std::future::Future<Output = Result<T>>,
+    {
+        let mut g = self.inner.lock().await;
+        let v = match &g.0 {
+            Some(v) => v.clone(),
+            None => {
+                let v = Arc::new(open.await?);
+                g.0 = Some(v.clone());
+                v
+            }
+        };
+        g.1 += 1;
+        Ok(v)
+    }
+
+    /// Leave. The last one out gets the value back to tear it down. `broken`
+    /// drops the value now (a dead daemon operation) so the next join opens a
+    /// fresh one; the stale value is returned to the caller that saw it break.
+    async fn leave(&self, broken: Option<&Arc<T>>) -> Option<Arc<T>> {
+        let mut g = self.inner.lock().await;
+        g.1 = g.1.saturating_sub(1);
+        if let (Some(b), Some(cur)) = (broken, &g.0) {
+            if Arc::ptr_eq(b, cur) {
+                return g.0.take();
+            }
+        }
+        if g.1 == 0 {
+            g.0.take()
+        } else {
+            None
+        }
+    }
+}
+
+type VgaShare = Shared<super::lxd::VgaOp>;
 
 struct Relay {
     info: RelayInfo,
@@ -132,6 +184,7 @@ pub async fn ensure(backend: Backend, instance: &str) -> Result<RelayInfo> {
     };
     let last_active = Arc::new(AtomicI64::new(now()));
     let active = Arc::new(AtomicUsize::new(0));
+    let share: Arc<VgaShare> = Arc::new(Shared::new());
     let task = tokio::spawn(run(
         listener,
         backend,
@@ -140,6 +193,7 @@ pub async fn ensure(backend: Backend, instance: &str) -> Result<RelayInfo> {
         rsa,
         last_active.clone(),
         active.clone(),
+        share,
     ));
     info!(
         "SPICE relay for {} VM {} on {}:{}",
@@ -160,6 +214,7 @@ pub async fn ensure(backend: Backend, instance: &str) -> Result<RelayInfo> {
     Ok(info)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run(
     listener: TcpListener,
     backend: Backend,
@@ -168,6 +223,7 @@ async fn run(
     rsa: Arc<(RsaPrivateKey, Vec<u8>)>,
     last_active: Arc<AtomicI64>,
     active: Arc<AtomicUsize>,
+    share: Arc<VgaShare>,
 ) {
     loop {
         let accepted =
@@ -176,16 +232,18 @@ async fn run(
             Ok(Ok((sock, peer))) => {
                 last_active.store(now(), Ordering::Relaxed);
                 active.fetch_add(1, Ordering::Relaxed);
-                let (backend, instance, password, rsa, last_active, active) = (
+                let (backend, instance, password, rsa, last_active, active, share) = (
                     backend,
                     instance.clone(),
                     password.clone(),
                     rsa.clone(),
                     last_active.clone(),
                     active.clone(),
+                    share.clone(),
                 );
                 tokio::spawn(async move {
-                    if let Err(e) = handle(sock, backend, &instance, &password, &rsa).await {
+                    if let Err(e) = handle(sock, backend, &instance, &password, &rsa, &share).await
+                    {
                         debug!("SPICE relay {instance} ({peer}): {e}");
                     }
                     last_active.store(now(), Ordering::Relaxed);
@@ -264,11 +322,47 @@ fn first_common_cap(body: &[u8], num_caps_off: usize, caps_off_off: usize) -> u3
 }
 
 async fn handle(
-    mut client: TcpStream,
+    client: TcpStream,
     backend: Backend,
     instance: &str,
     password: &str,
     rsa: &(RsaPrivateKey, Vec<u8>),
+    share: &VgaShare,
+) -> Result<()> {
+    let client_api = Client::new(backend);
+    let mut op_used: Option<Arc<super::lxd::VgaOp>> = None;
+    let r = handle_inner(
+        client,
+        &client_api,
+        instance,
+        password,
+        rsa,
+        share,
+        &mut op_used,
+    )
+    .await;
+    // Leave the shared vga operation; the last connection out ends it so the
+    // VM's console is free again.
+    if let Some(used) = op_used.take() {
+        let gone = share.leave(None).await;
+        drop(used);
+        if let Some(g) = gone {
+            if let Ok(op) = Arc::try_unwrap(g) {
+                client_api.close_vga_op(op).await;
+            }
+        }
+    }
+    r
+}
+
+async fn handle_inner(
+    mut client: TcpStream,
+    api: &Client,
+    instance: &str,
+    password: &str,
+    rsa: &(RsaPrivateKey, Vec<u8>),
+    share: &VgaShare,
+    op_used: &mut Option<Arc<super::lxd::VgaOp>>,
 ) -> Result<()> {
     let io = |e: std::io::Error| Error::System(e.to_string());
     let _ = client.set_nodelay(true);
@@ -291,16 +385,18 @@ async fn handle(
     // quick succession; incus-vm-console run 1346 saw the third session of a
     // burst closed before any reply). Retry opening the session and reading the
     // daemon's link reply a few times so the client gets a real answer.
+    //
+    // All channels of a VM ride ONE daemon `vga` operation (Incus >= 6.0.4
+    // refuses a second one: "This console is already connected"); each channel
+    // is another websocket on it. A dead operation is replaced on the retry.
     let mut attempt = 0u32;
-    let (mut control, mut up, rhdr, mut reply) = loop {
+    let (mut up, rhdr, mut reply) = loop {
         attempt += 1;
         let tried: Result<_> = async {
-            let session = Client::new(backend)
-                .open_console(instance, ConsoleKind::Vga)
-                .await?;
-            let control = session.control;
+            let op = share.join(api.open_vga_op(instance)).await?;
+            *op_used = Some(op.clone());
             let mut up = Upstream {
-                ws: session.data,
+                ws: api.vga_channel(&op).await?,
                 buf: Vec::new(),
             };
             up.write(&[hdr.as_slice(), mess.as_slice()].concat())
@@ -308,16 +404,27 @@ async fn handle(
             let rhdr = up.read_n(16).await?;
             let rsize = u32_at(&rhdr, 12) as usize;
             let reply = up.read_n(rsize).await?;
-            Ok((control, up, rhdr, reply))
+            Ok((up, rhdr, reply))
         }
         .await;
         match tried {
             Ok(v) => break v,
-            Err(e) if attempt < 5 => {
+            Err(e) => {
+                // Leave (and drop, as broken) the operation this attempt used.
+                if let Some(used) = op_used.take() {
+                    if let Some(g) = share.leave(Some(&used)).await {
+                        drop(used);
+                        if let Ok(op) = Arc::try_unwrap(g) {
+                            api.close_vga_op(op).await;
+                        }
+                    }
+                }
+                if attempt >= 5 {
+                    return Err(e);
+                }
                 warn!("SPICE relay {instance}: upstream link attempt {attempt} failed ({e}), retrying");
                 tokio::time::sleep(std::time::Duration::from_millis(400 * attempt as u64)).await;
             }
-            Err(e) => return Err(e),
         }
     };
     // SpiceLinkReply: error u32, pub_key [162], num_common_caps u32 @166,
@@ -363,7 +470,6 @@ async fn handle(
             .write_all(&LINK_ERR_PERMISSION_DENIED.to_le_bytes())
             .await
             .map_err(io)?;
-        let _ = control.close(None).await;
         return Err(Error::System("wrong SPICE password".into()));
     }
     // The daemon's SPICE has ticketing disabled; complete its link with an
@@ -422,7 +528,6 @@ async fn handle(
         _ = to_vm => {}
         _ = to_client => {}
     }
-    let _ = control.close(None).await;
     Ok(())
 }
 
@@ -450,6 +555,53 @@ mod tests {
         assert_eq!(first_common_cap(&mess, 6, 14), 0b11);
         mess[6] = 0;
         assert_eq!(first_common_cap(&mess, 6, 14), 0);
+    }
+
+    #[tokio::test]
+    async fn shared_vga_op_is_opened_once_and_ended_by_the_last_user() {
+        let sh: Shared<u32> = Shared::new();
+        let opens = std::sync::atomic::AtomicUsize::new(0);
+        let open = || async {
+            opens.fetch_add(1, Ordering::Relaxed);
+            Ok::<u32, Error>(7)
+        };
+        let a = sh.join(open()).await.unwrap();
+        let b = sh.join(open()).await.unwrap();
+        assert_eq!((*a, *b), (7, 7));
+        assert_eq!(
+            opens.load(Ordering::Relaxed),
+            1,
+            "second channel reuses the op"
+        );
+        drop(a);
+        assert!(sh.leave(None).await.is_none(), "one channel still open");
+        drop(b);
+        assert!(
+            sh.leave(None).await.is_some(),
+            "last channel out ends the op"
+        );
+        let _c = sh.join(open()).await.unwrap();
+        assert_eq!(
+            opens.load(Ordering::Relaxed),
+            2,
+            "a new op after the last ended"
+        );
+    }
+
+    #[tokio::test]
+    async fn broken_vga_op_is_replaced_for_the_next_channel() {
+        let sh: Shared<u32> = Shared::new();
+        let a = sh.join(async { Ok::<u32, Error>(1) }).await.unwrap();
+        let b = sh.join(async { Ok::<u32, Error>(1) }).await.unwrap();
+        // channel a sees the op die: it is dropped at once, b's later leave is a no-op
+        assert!(sh.leave(Some(&a)).await.is_some());
+        let c = sh.join(async { Ok::<u32, Error>(2) }).await.unwrap();
+        assert_eq!(*c, 2, "a fresh op after a broken one");
+        drop(b);
+        assert!(
+            sh.leave(None).await.is_none(),
+            "stale op's user does not end the new one"
+        );
     }
 
     #[tokio::test]

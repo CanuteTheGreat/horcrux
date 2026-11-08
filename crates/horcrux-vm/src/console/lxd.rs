@@ -82,6 +82,13 @@ impl Backend {
 
 pub type Ws = WebSocketStream<UnixStream>;
 
+/// A `vga` console operation shared by all SPICE channels of one VM.
+pub struct VgaOp {
+    pub id: String,
+    secret: String,
+    control: Ws,
+}
+
 /// A running console/exec session: the data stream and its control channel.
 pub struct Session {
     pub data: Ws,
@@ -372,6 +379,47 @@ impl Client {
         };
         self.websocket_op(&format!("/1.0/instances/{}/console", enc(name)), body)
             .await
+    }
+
+    /// Start ONE `vga` console operation for a VM and connect its control
+    /// websocket. Incus >= 6.0.4 allows a single `vga` operation per VM ("This
+    /// console is already connected. Force is required"); the extra SPICE
+    /// channels must join that operation as additional data websockets
+    /// ([`Client::vga_channel`]), the way `incus console --type=vga` does.
+    pub async fn open_vga_op(&self, name: &str) -> Result<VgaOp> {
+        let path = format!("/1.0/instances/{}/console", enc(name));
+        let v = self
+            .call("POST", &path, Some(&json!({"type": "vga"})))
+            .await?;
+        let op = &v["metadata"];
+        let (Some(id), Some(secret), Some(control_secret)) = (
+            op["id"].as_str(),
+            op["metadata"]["fds"]["0"].as_str(),
+            op["metadata"]["fds"]["control"].as_str(),
+        ) else {
+            return Err(sys(format!(
+                "{}: vga console operation without websockets: {v}",
+                self.backend.label()
+            )));
+        };
+        let control = self.ws(id, control_secret).await?;
+        Ok(VgaOp {
+            id: id.to_string(),
+            secret: secret.to_string(),
+            control,
+        })
+    }
+
+    /// One more SPICE channel on an open vga operation.
+    pub async fn vga_channel(&self, op: &VgaOp) -> Result<Ws> {
+        self.ws(&op.id, &op.secret).await
+    }
+
+    /// End a vga operation (frees the VM's console for the next attach).
+    pub async fn close_vga_op(&self, op: VgaOp) {
+        let mut control = op.control;
+        let _ = control.close(None).await;
+        self.cancel_operation(&op.id).await;
     }
 
     /// Interactive command on a PTY (containers; VMs need the guest agent).
