@@ -4062,6 +4062,66 @@ async fn disconnect_container_network(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Run a long, side-effecting operation (stack deploy/update/remove: image
+/// pulls, networks, many containers) to completion even when the HTTP client
+/// goes away. hyper drops a handler's future when its connection closes (a
+/// browser aborts in-flight requests with `ERR_NETWORK_CHANGED` as soon as a
+/// network interface changes - and a stack deploy creates a Docker bridge), which
+/// left a half-built stack: a network and no containers, nothing recorded.
+#[cfg(any(feature = "docker", feature = "podman"))]
+async fn run_detached<T, E, F>(fut: F) -> Result<T, ApiError>
+where
+    T: Send + 'static,
+    E: Into<ApiError> + Send + 'static,
+    F: std::future::Future<Output = Result<T, E>> + Send + 'static,
+{
+    match tokio::spawn(fut).await {
+        Ok(r) => r.map_err(Into::into),
+        Err(e) => Err(ApiError::Internal(format!(
+            "stack operation task failed: {e}"
+        ))),
+    }
+}
+
+#[cfg(all(test, any(feature = "docker", feature = "podman")))]
+mod run_detached_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[tokio::test]
+    async fn operation_finishes_after_the_request_future_is_dropped() {
+        let done = Arc::new(AtomicBool::new(false));
+        let d = done.clone();
+        let req = run_detached(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            d.store(true, Ordering::SeqCst);
+            Ok::<u32, ApiError>(1)
+        });
+        // the client disconnects: hyper drops the handler future mid-flight
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(20), req).await;
+        assert!(!done.load(Ordering::SeqCst));
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        assert!(
+            done.load(Ordering::SeqCst),
+            "the deploy must run to completion"
+        );
+    }
+
+    #[tokio::test]
+    async fn result_and_error_pass_through() {
+        assert_eq!(
+            run_detached(async { Ok::<u32, ApiError>(7) })
+                .await
+                .unwrap(),
+            7
+        );
+        let e = run_detached(async { Err::<u32, ApiError>(ApiError::Conflict("x".into())) })
+            .await
+            .unwrap_err();
+        assert!(matches!(e, ApiError::Conflict(_)));
+    }
+}
+
 #[cfg(any(feature = "docker", feature = "podman"))]
 async fn list_stacks(
     State(state): State<Arc<AppState>>,
@@ -4084,10 +4144,10 @@ async fn deploy_stack(
     Json(req): Json<DeployStackRequest>,
 ) -> Result<Json<container::stack::StackSummary>, ApiError> {
     let runtime = parse_runtime(&req.runtime);
-    let summary = state
-        .stack_manager
-        .deploy_stack(&req.name, &req.compose_yaml, runtime)
-        .await?;
+    let sm = state.stack_manager.clone();
+    let summary =
+        run_detached(async move { sm.deploy_stack(&req.name, &req.compose_yaml, runtime).await })
+            .await?;
     Ok(Json(summary))
 }
 
@@ -4119,15 +4179,17 @@ async fn update_stack(
             "nothing to update: send compose_yaml, env or force_recreate".into(),
         ));
     }
-    let report = state
-        .stack_manager
-        .update_stack(
+    let sm = state.stack_manager.clone();
+    let report = run_detached(async move {
+        sm.update_stack(
             &id,
             req.compose_yaml.as_deref(),
             req.env.as_ref(),
             req.force_recreate,
         )
-        .await?;
+        .await
+    })
+    .await?;
     Ok(Json(report))
 }
 
@@ -4144,7 +4206,8 @@ async fn remove_stack(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    state.stack_manager.remove_stack(&id).await?;
+    let sm = state.stack_manager.clone();
+    run_detached(async move { sm.remove_stack(&id).await }).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

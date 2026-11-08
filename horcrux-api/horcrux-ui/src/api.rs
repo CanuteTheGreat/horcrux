@@ -148,6 +148,16 @@ pub async fn fetch_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> 
     }
 }
 
+/// True when `msg` is a browser transport failure (the request never produced
+/// an HTTP response: connection cut, network change, proxy timeout), as opposed
+/// to an error the server answered with. `fetch` reports these as
+/// "TypeError: Failed to fetch" (Chrome/Edge), "NetworkError when attempting to
+/// fetch resource." (Firefox) or "Load failed" (Safari).
+pub fn is_transport_error(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    m.contains("failed to fetch") || m.contains("networkerror") || m.contains("load failed")
+}
+
 /// POST request helper
 pub async fn post_json<T: DeserializeOwned, B: Serialize>(
     path: &str,
@@ -5458,6 +5468,17 @@ mod tests {
             " - offline only: CPU vendor differs"
         );
         assert_eq!(migration_target_note(&t, "nope"), "");
+    }
+
+    #[test]
+    fn transport_errors_are_told_apart_from_server_errors() {
+        assert!(is_transport_error("TypeError: Failed to fetch"));
+        assert!(is_transport_error(
+            "NetworkError when attempting to fetch resource."
+        ));
+        assert!(is_transport_error("Load failed"));
+        assert!(!is_transport_error("stack e2e already exists"));
+        assert!(!is_transport_error("HTTP 500: INTERNAL_ERROR"));
     }
 
     #[test]

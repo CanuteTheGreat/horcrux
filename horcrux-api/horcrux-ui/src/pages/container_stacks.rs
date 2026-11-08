@@ -49,6 +49,32 @@ pub fn StacksPage() -> impl IntoView {
                     set_action_error.set(None);
                     reload();
                 }
+                Err(e) if api::is_transport_error(&e.message) => {
+                    // The request was cut off before any answer (browser network
+                    // change, proxy timeout on a long image pull). The server
+                    // finishes the deploy on its own: wait for the stack to show
+                    // up instead of reporting a failure for a deploy that works.
+                    let mut found = false;
+                    for _ in 0..45 {
+                        if let Ok(list) = api::get_stacks().await {
+                            if list.iter().any(|s| s.name == n) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        gloo_timers::future::TimeoutFuture::new(2_000).await;
+                    }
+                    if found {
+                        set_name.set(String::new());
+                        set_action_error.set(None);
+                        reload();
+                    } else {
+                        set_action_error.set(Some(format!(
+                            "Deploy failed: {} (the stack did not appear within 90 s)",
+                            e.message
+                        )));
+                    }
+                }
                 Err(e) => set_action_error.set(Some(format!("Deploy failed: {}", e.message))),
             }
         });
