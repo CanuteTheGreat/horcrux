@@ -702,6 +702,12 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
 
     // Feed live node figures to placement.
     let all = state.ha_manager.list_resources().await;
+    // Required node labels come from each guest's placement rules.
+    for r in &all {
+        let rules = super::drain::load_rules(state, &r.vm_id).await;
+        let labels = rules.required_labels;
+        state.ha_manager.set_required_labels(&r.vm_id, labels).await;
+    }
     for n in &nodes {
         if targets.contains(&n.name) {
             state

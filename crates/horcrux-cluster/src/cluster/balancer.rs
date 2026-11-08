@@ -56,14 +56,29 @@ impl NodeResources {
     /// `Ok` if this node may host a guest of the given size; `Err` carries
     /// the human-readable reason (witness-only node, per-guest vCPU/RAM cap).
     pub fn guest_eligibility(&self, vcpus: usize, memory_gb: usize) -> Result<(), String> {
+        self.guest_eligibility_labeled(vcpus, memory_gb, &[])
+    }
+
+    /// Like `guest_eligibility`, and the node must also carry every one of
+    /// `required_labels`. A node with no caps configured carries no labels,
+    /// so it never satisfies a label requirement (same as drain/rebalance).
+    pub fn guest_eligibility_labeled(
+        &self,
+        vcpus: usize,
+        memory_gb: usize,
+        required_labels: &[String],
+    ) -> Result<(), String> {
         match &self.caps {
-            None => Ok(()),
+            None => match required_labels.first() {
+                Some(l) => Err(format!("node lacks required label '{l}'")),
+                None => Ok(()),
+            },
             Some(c) => roles::eligible(
                 c,
                 &GuestNeeds {
                     vcpus: vcpus as u32,
                     memory: memory_gb as u64 * 1024 * 1024 * 1024,
-                    required_labels: Vec::new(),
+                    required_labels: required_labels.to_vec(),
                 },
             ),
         }
@@ -96,6 +111,10 @@ pub struct VmResources {
     /// default, backward-compatible behavior).
     #[serde(default)]
     pub min_placement_weight: Option<u32>,
+    /// Hard filter: only place this VM on nodes carrying every one of these
+    /// labels (`NodeCaps.labels`). Empty = no label requirement.
+    #[serde(default)]
+    pub required_labels: Vec<String>,
 }
 
 /// Balancing strategy
@@ -272,7 +291,9 @@ impl ClusterBalancer {
             // Never rebalance a guest onto a witness-only node or one whose
             // per-guest limits it exceeds.
             if let Some(t) = nodes.iter().find(|n| n.node_name == *underloaded_node) {
-                if t.guest_eligibility(vm.cpu_cores, vm.memory_gb).is_err() {
+                let need = &vm.required_labels;
+                let fit = t.guest_eligibility_labeled(vm.cpu_cores, vm.memory_gb, need);
+                if fit.is_err() {
                     continue;
                 }
             }
@@ -397,7 +418,10 @@ impl ClusterBalancer {
             .iter()
             .filter(|n| n.architecture.can_run(&vm.architecture))
             .filter(|n| n.placement_weight >= vm.min_placement_weight.unwrap_or(0))
-            .filter(|n| n.guest_eligibility(vm.cpu_cores, vm.memory_gb).is_ok())
+            .filter(|n| {
+                n.guest_eligibility_labeled(vm.cpu_cores, vm.memory_gb, &vm.required_labels)
+                    .is_ok()
+            })
             .filter(|n| {
                 crate::cluster::node::passthrough_devices_satisfied(
                     &n.available_passthrough_devices,
@@ -520,6 +544,7 @@ mod tests {
             architecture: Architecture::X86_64,
             required_passthrough_devices: Vec::new(),
             min_placement_weight: None,
+            required_labels: Vec::new(),
         }
     }
 
@@ -928,5 +953,26 @@ mod tests {
             .guest_eligibility(1, 1)
             .unwrap_err()
             .contains("witness"));
+    }
+
+    #[test]
+    fn find_best_node_requires_labels() {
+        use crate::cluster::roles::NodeCaps;
+        let b = ClusterBalancer::new(BalancingPolicy::default());
+        let mut idle = create_test_node("idle", 5.0, 5.0, 0);
+        idle.caps = Some(NodeCaps::default());
+        let mut nvme = create_test_node("nvme", 60.0, 60.0, 3);
+        nvme.caps = Some(NodeCaps {
+            labels: vec!["nvme".to_string()],
+            ..Default::default()
+        });
+        let bare = create_test_node("bare", 1.0, 1.0, 0);
+        let nodes = vec![idle, nvme, bare];
+        let mut vm = create_test_vm(1, "x");
+        assert_eq!(b.find_best_node(&nodes, &vm), Some("bare".to_string()));
+        vm.required_labels = vec!["nvme".to_string()];
+        assert_eq!(b.find_best_node(&nodes, &vm), Some("nvme".to_string()));
+        vm.required_labels = vec!["gpu".to_string()];
+        assert_eq!(b.find_best_node(&nodes, &vm), None);
     }
 }

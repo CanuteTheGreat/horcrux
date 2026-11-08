@@ -48,6 +48,7 @@ fn create_test_vm(id: u32, node: &str) -> VmResources {
         architecture: Architecture::X86_64,
         required_passthrough_devices: Vec::new(),
         min_placement_weight: None,
+        required_labels: Vec::new(),
     }
 }
 
