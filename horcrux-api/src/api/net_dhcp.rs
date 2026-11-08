@@ -388,8 +388,10 @@ pub fn render_conf(n: &DhcpNetwork, dir: &FsPath) -> String {
     }
     for l in &n.static_leases {
         match &l.hostname {
-            Some(h) => c.push(format!("dhcp-host={},{},{}", l.mac, l.ip, h)),
-            None => c.push(format!("dhcp-host={},{}", l.mac, l.ip)),
+            // `id:*`: match by MAC only. Clients that send a DUID client-id (dhcpcd's
+            // default) would otherwise not match their static lease.
+            Some(h) => c.push(format!("dhcp-host={},id:*,{},{}", l.mac, l.ip, h)),
+            None => c.push(format!("dhcp-host={},id:*,{}", l.mac, l.ip)),
         }
     }
     c.join("\n") + "\n"
@@ -1131,7 +1133,7 @@ mod tests {
             "local=/lab.example/",
             "expand-hosts",
             "host-record=gw.lab.example,192.168.20.1",
-            "dhcp-host=52:54:00:aa:bb:cc,192.168.20.10,web1",
+            "dhcp-host=52:54:00:aa:bb:cc,id:*,192.168.20.10,web1",
             "pid-file=/var/lib/horcrux/dhcp/vmbr1.20.pid",
             "dhcp-leasefile=/var/lib/horcrux/dhcp/vmbr1.20.leases",
         ] {
