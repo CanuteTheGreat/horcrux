@@ -1,7 +1,7 @@
 {
  "id": "backup",
  "last_full": "2026-11-06",
- "sha": "78191251616f1aa6433a7a6d2169b559a86a7b0c",
+ "sha": "6958f5a4c022b8371f19e7522e5f6afd408cbcaf",
  "survivors": [
   "crates/horcrux-backup/src/backup/archive.rs: delete ! in export_disk",
   "crates/horcrux-backup/src/backup/archive.rs: delete match arm Some(0) | Some(3) in check_disk",
