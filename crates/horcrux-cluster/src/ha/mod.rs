@@ -940,6 +940,50 @@ impl HaManager {
         true
     }
 
+    /// Add the groups a peer knows about that this node does not (HA groups
+    /// are cluster-wide, so a group created through one node must exist on
+    /// all). Existing local groups are left alone; edits and deletions
+    /// travel through [`Self::put_peer_group`] / [`Self::drop_peer_group`].
+    /// Returns how many groups were added.
+    pub async fn merge_peer_groups(&self, incoming: Vec<HaGroup>) -> usize {
+        let mut added = 0;
+        let mut groups = self.groups.write().await;
+        for g in incoming {
+            if groups.contains_key(&g.name) {
+                continue;
+            }
+            let _ = config_store::put_opt(&self.store, kinds::HA_GROUP, &g.name, &g).await;
+            tracing::info!("HA group {} replicated from a peer", g.name);
+            groups.insert(g.name.clone(), g);
+            added += 1;
+        }
+        added
+    }
+
+    /// Take over a peer's created/edited group, replacing the local copy.
+    pub async fn put_peer_group(&self, g: HaGroup) {
+        let _ = config_store::put_opt(&self.store, kinds::HA_GROUP, &g.name, &g).await;
+        self.groups.write().await.insert(g.name.clone(), g);
+    }
+
+    /// Apply a peer's group deletion. Refused (false) while a local resource
+    /// still uses the group.
+    pub async fn drop_peer_group(&self, name: &str) -> bool {
+        if self
+            .resources
+            .read()
+            .await
+            .values()
+            .any(|r| r.group == name)
+        {
+            return false;
+        }
+        if self.groups.write().await.remove(name).is_some() {
+            let _ = config_store::delete_opt(&self.store, kinds::HA_GROUP, name).await;
+        }
+        true
+    }
+
     /// Drop resources placed on `node` that are not in `keep` (the node
     /// stopped managing them). Returns the removed ids.
     pub async fn prune_resources_of(&self, node: &str, keep: &[String]) -> Vec<String> {
@@ -1022,6 +1066,31 @@ mod tests {
         let groups = manager.list_groups().await;
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].name, "test-group");
+    }
+
+    #[tokio::test]
+    async fn test_peer_groups_replicate_without_resources() {
+        let origin = HaManager::new();
+        let peer = HaManager::new();
+        let g = HaGroup {
+            name: "hxg".to_string(),
+            nodes: vec!["n1".to_string(), "n2".to_string()],
+            restricted: false,
+            no_failback: false,
+        };
+        origin.add_group(g.clone()).await.unwrap();
+        assert!(peer.get_group("hxg").await.is_none());
+        assert_eq!(peer.merge_peer_groups(origin.list_groups().await).await, 1);
+        assert_eq!(peer.get_group("hxg").await.unwrap().nodes, g.nodes);
+        // Merging again never overwrites or duplicates.
+        assert_eq!(peer.merge_peer_groups(origin.list_groups().await).await, 0);
+        // Edit and delete follow.
+        let mut edited = g.clone();
+        edited.nodes = vec!["n3".to_string()];
+        peer.put_peer_group(edited).await;
+        assert_eq!(peer.get_group("hxg").await.unwrap().nodes, vec!["n3"]);
+        assert!(peer.drop_peer_group("hxg").await);
+        assert!(peer.list_groups().await.is_empty());
     }
 
     #[tokio::test]

@@ -111,6 +111,28 @@ impl LoggingConfig {
     }
 }
 
+/// Level used when `RUST_LOG` is unset or invalid.
+pub const DEFAULT_LOG_LEVEL: &str = "info";
+
+/// Filter for a given `RUST_LOG` value: the value when it parses, else
+/// [`DEFAULT_LOG_LEVEL`].
+pub fn env_filter_from(rust_log: Option<&str>) -> EnvFilter {
+    rust_log
+        .and_then(|v| EnvFilter::try_new(v).ok())
+        .unwrap_or_else(|| EnvFilter::new(DEFAULT_LOG_LEVEL))
+}
+
+/// Console-only logging for the daemon (stdout/stderr is what the service
+/// manager sends to the log file): `RUST_LOG` if set, else `info`.
+/// Safe to call twice (the second call is ignored).
+pub fn init_console() {
+    let filter = env_filter_from(std::env::var("RUST_LOG").ok().as_deref());
+    let _ = tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt::layer())
+        .try_init();
+}
+
 /// Create a structured log context
 #[macro_export]
 macro_rules! log_context {
@@ -189,6 +211,29 @@ macro_rules! log_performance {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_filter_enables_info_not_debug() {
+        let f = env_filter_from(None);
+        assert_eq!(
+            f.max_level_hint(),
+            Some(tracing::level_filters::LevelFilter::INFO)
+        );
+        let bad = env_filter_from(Some("not a [valid filter"));
+        assert_eq!(
+            bad.max_level_hint(),
+            Some(tracing::level_filters::LevelFilter::INFO)
+        );
+    }
+
+    #[test]
+    fn rust_log_overrides_default() {
+        let f = env_filter_from(Some("debug"));
+        assert_eq!(
+            f.max_level_hint(),
+            Some(tracing::level_filters::LevelFilter::DEBUG)
+        );
+    }
 
     #[test]
     fn test_default_config() {

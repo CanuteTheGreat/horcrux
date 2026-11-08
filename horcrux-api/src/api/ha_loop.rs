@@ -169,6 +169,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/ha/fencing/devices/:id", delete(remove_device))
         .route("/api/ha/fencing/events", get(fencing_events))
         .route("/api/ha/peer/sync", post(peer_sync))
+        .route("/api/ha/peer/group", post(peer_group))
         .route("/api/ha/peer/members", post(peer_members))
         .route(
             "/api/ha/peer/members/:name/removed",
@@ -191,6 +192,18 @@ pub struct HaReplica {
 struct SyncRequest {
     from: String,
     items: Vec<HaReplica>,
+    /// Every HA group the sender knows, so groups without a resource (or
+    /// created while HA was off) still reach all nodes.
+    #[serde(default)]
+    groups: Vec<HaGroup>,
+}
+
+/// A cluster-wide HA group change pushed by the node that took the request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum GroupChange {
+    Put { group: HaGroup },
+    Delete { name: String },
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -229,6 +242,7 @@ async fn peer_sync(
     let st = store(&state);
     // HA is a cluster-wide mode: the first resource a peer publishes
     // switches it on here too (the supervisor idles while it is off).
+    state.ha_manager.merge_peer_groups(req.groups).await;
     if !req.items.is_empty() && !state.ha_manager.is_enabled().await {
         state.ha_manager.enable().await;
     }
@@ -251,6 +265,54 @@ async fn peer_sync(
         let _ = st.delete(kinds::HA_VM_REPLICA, &gone).await;
     }
     Ok(Json(reply))
+}
+
+/// A peer created, edited or deleted an HA group: mirror it (local only,
+/// never fans out again).
+async fn peer_group(
+    State(state): State<Arc<AppState>>,
+    user: Option<Extension<AuthUser>>,
+    Json(change): Json<GroupChange>,
+) -> Result<StatusCode, ApiError> {
+    require_peer(&user)?;
+    match change {
+        GroupChange::Put { group } => state.ha_manager.put_peer_group(group).await,
+        GroupChange::Delete { name } => {
+            state.ha_manager.drop_peer_group(&name).await;
+        }
+    }
+    Ok(StatusCode::OK)
+}
+
+/// Push an HA group change to every online peer (best effort: a peer that
+/// misses it still learns created groups from the periodic sync).
+pub async fn broadcast_group(state: &Arc<AppState>, change: GroupChange) {
+    let Ok(local) = state.cluster_manager.get_local_node_name().await else {
+        return;
+    };
+    let Ok(client) = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(10))
+        .danger_accept_invalid_certs(true)
+        .build()
+    else {
+        return;
+    };
+    let ls = LoopState {
+        client,
+        port: state.config.server.port,
+        offline_since: HashMap::new(),
+        last_fence: HashMap::new(),
+    };
+    for n in state.cluster_manager.list_nodes().await {
+        if n.name == local || n.is_local || n.status != NodeStatus::Online {
+            continue;
+        }
+        let url = n.api_url(ls.port);
+        if let Err(e) = peer_post::<_, ()>(&ls, &local, &url, "/api/ha/peer/group", &change).await {
+            tracing::warn!("HA: could not replicate group change to {}: {e}", n.name);
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -880,6 +942,7 @@ async fn publish(
     let req = SyncRequest {
         from: local.to_string(),
         items,
+        groups: state.ha_manager.list_groups().await,
     };
     for n in nodes {
         if n.name == local || n.is_local || !online.contains(&n.name) {
@@ -1025,6 +1088,35 @@ async fn move_vm(
                 .await;
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod group_wire_tests {
+    use super::*;
+
+    #[test]
+    fn sync_request_without_groups_still_parses() {
+        let r: SyncRequest = serde_json::from_str(r#"{"from":"a","items":[]}"#).unwrap();
+        assert!(r.groups.is_empty());
+    }
+
+    #[test]
+    fn group_change_round_trips() {
+        let g = HaGroup {
+            name: "hxg".into(),
+            nodes: vec!["n1".into()],
+            restricted: true,
+            no_failback: false,
+        };
+        let j = serde_json::to_string(&GroupChange::Put { group: g }).unwrap();
+        assert!(j.contains(r#""op":"put""#));
+        match serde_json::from_str::<GroupChange>(&j).unwrap() {
+            GroupChange::Put { group } => assert_eq!(group.name, "hxg"),
+            _ => panic!("wrong variant"),
+        }
+        let d: GroupChange = serde_json::from_str(r#"{"op":"delete","name":"x"}"#).unwrap();
+        assert!(matches!(d, GroupChange::Delete { name } if name == "x"));
     }
 }
 

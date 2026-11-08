@@ -55,8 +55,9 @@ use tracing::{error, info};
 
 /// Start the Horcrux API server (the `horcrux-api` binary just calls this).
 pub async fn run() -> anyhow::Result<()> {
-    // Initialize tracing
-    tracing_subscriber::fmt::init();
+    // Initialize tracing: info by default (HA decisions are logged at
+    // info/warn), RUST_LOG overrides.
+    logging::init_console();
 
     // Load configuration
     let horcrux_config = config::HorcruxConfig::load();
@@ -5180,7 +5181,9 @@ async fn create_ha_group(
         no_failback: req.no_failback,
     };
 
-    state.ha_manager.add_group(group).await?;
+    state.ha_manager.add_group(group.clone()).await?;
+    crate::api::ha_loop::broadcast_group(&state, crate::api::ha_loop::GroupChange::Put { group })
+        .await;
 
     Ok(StatusCode::CREATED)
 }
@@ -5201,15 +5204,15 @@ async fn update_ha_group(
     Path(name): Path<String>,
     Json(req): Json<UpdateHaGroupRequest>,
 ) -> Result<StatusCode, ApiError> {
-    state
-        .ha_manager
-        .update_group(ha::HaGroup {
-            name,
-            nodes: req.nodes,
-            restricted: req.restricted,
-            no_failback: req.no_failback,
-        })
-        .await?;
+    let group = ha::HaGroup {
+        name,
+        nodes: req.nodes,
+        restricted: req.restricted,
+        no_failback: req.no_failback,
+    };
+    state.ha_manager.update_group(group.clone()).await?;
+    crate::api::ha_loop::broadcast_group(&state, crate::api::ha_loop::GroupChange::Put { group })
+        .await;
     Ok(StatusCode::OK)
 }
 
@@ -5219,6 +5222,8 @@ async fn delete_ha_group(
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     state.ha_manager.remove_group(&name).await?;
+    crate::api::ha_loop::broadcast_group(&state, crate::api::ha_loop::GroupChange::Delete { name })
+        .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
