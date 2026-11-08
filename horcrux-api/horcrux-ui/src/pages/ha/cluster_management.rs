@@ -243,20 +243,21 @@ pub fn ClusterManagementPage() -> impl IntoView {
         }),
     };
 
-    let save_caps = move |name: String, form: (String, String, String, String)| match parse_caps_form(
-        &form.0, &form.1, &form.2, &form.3,
-    ) {
-        Err(e) => set_error.set(Some(e)),
-        Ok(caps) => spawn_local(async move {
-            match set_node_caps(&name, caps.as_ref()).await {
-                Ok(()) => {
-                    load_cluster_data();
-                    flash(format!("Node '{}' role and limits saved", name));
+    let save_caps =
+        move |name: String, form: (String, String, String, String)| match parse_caps_form(
+            &form.0, &form.1, &form.2, &form.3,
+        ) {
+            Err(e) => set_error.set(Some(e)),
+            Ok(caps) => spawn_local(async move {
+                match set_node_caps(&name, caps.as_ref()).await {
+                    Ok(()) => {
+                        load_cluster_data();
+                        flash(format!("Node '{}' role and limits saved", name));
+                    }
+                    Err(e) => set_error.set(Some(format!("Failed to save role: {}", e))),
                 }
-                Err(e) => set_error.set(Some(format!("Failed to save role: {}", e))),
-            }
-        }),
-    };
+            }),
+        };
 
     let remove_node = move |name: String| {
         if !confirm(&format!(
@@ -762,7 +763,9 @@ mod tests {
 
     #[test]
     fn caps_form_builds_body_and_clears_plain_compute() {
-        let c = parse_caps_form("witness", "lab, old-hw nvme", "4", "30").unwrap().unwrap();
+        let c = parse_caps_form("witness", "lab, old-hw nvme", "4", "30")
+            .unwrap()
+            .unwrap();
         assert_eq!(c.role, "witness");
         assert_eq!(c.labels, vec!["lab", "old-hw", "nvme"]);
         assert_eq!(c.max_guest_vcpus, Some(4));
