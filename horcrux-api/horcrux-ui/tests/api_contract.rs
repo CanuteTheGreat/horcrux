@@ -4093,13 +4093,20 @@ async fn guest_power_routes_read_into_ui_types() {
             &c,
             &token,
             &pl,
-            json!({"affinity_group": "web", "anti_affinity_group": "db-a", "no_migrate": true}),
+            json!({"affinity_group": "web", "anti_affinity_group": "db-a", "no_migrate": true, "required_labels": ["nvme", "gpu"]}),
         )
         .await;
         assert_eq!(st, 200, "{body}");
         let rules: api::PlacementRules = fetch(&c, &token, &pl).await;
         assert_eq!(rules.affinity_group.as_deref(), Some("web"));
         assert!(rules.no_migrate);
+        assert_eq!(rules.required_labels, ["nvme", "gpu"]);
+        assert_eq!(
+            put(&c, &token, &pl, json!({"required_labels": ["has space"]}))
+                .await
+                .0,
+            422
+        );
         assert_eq!(
             put(
                 &c,

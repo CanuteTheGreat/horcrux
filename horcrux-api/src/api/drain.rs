@@ -1135,6 +1135,15 @@ async fn put_placement(
             )));
         }
     }
+    if r.required_labels.len() > 16
+        || r.required_labels
+            .iter()
+            .any(|l| l.is_empty() || l.len() > 63 || l.contains(char::is_whitespace))
+    {
+        return Err(ApiError::ValidationError(
+            "required_labels: up to 16 labels of 1-63 characters, no spaces".into(),
+        ));
+    }
     if r.affinity_group.is_some() && r.affinity_group == r.anti_affinity_group {
         return Err(ApiError::ValidationError(
             "a guest cannot be in the same affinity and anti-affinity group".into(),

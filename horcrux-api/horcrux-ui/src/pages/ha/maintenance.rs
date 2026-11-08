@@ -249,7 +249,7 @@ pub fn MaintenancePage() -> impl IntoView {
 
             <h2>"Placement rules"</h2>
             <table class="vm-table" id="placement-table">
-                <thead><tr><th>"VM"</th><th>"Pin to node"</th><th>"Affinity group (stay together)"</th><th>"Anti-affinity group (spread)"</th><th>"Never migrate"</th><th></th></tr></thead>
+                <thead><tr><th>"VM"</th><th>"Pin to node"</th><th>"Affinity group (stay together)"</th><th>"Anti-affinity group (spread)"</th><th>"Never migrate"</th><th>"Required node labels (comma-separated)"</th><th></th></tr></thead>
                 <tbody>
                     {move || vms.get().into_iter().map(|(id, name, rules)| view! {
                         <PlacementRow id name rules set_notice set_error/>
@@ -295,6 +295,7 @@ fn PlacementRow(
     let aff = create_rw_signal(rules.affinity_group.clone().unwrap_or_default());
     let anti = create_rw_signal(rules.anti_affinity_group.clone().unwrap_or_default());
     let nomig = create_rw_signal(rules.no_migrate);
+    let labels = create_rw_signal(rules.required_labels.join(", "));
     let vm = id.clone();
     let apply = move |_| {
         let r = PlacementRules {
@@ -302,6 +303,12 @@ fn PlacementRow(
             affinity_group: Some(aff.get().trim().to_string()).filter(|s| !s.is_empty()),
             anti_affinity_group: Some(anti.get().trim().to_string()).filter(|s| !s.is_empty()),
             no_migrate: nomig.get(),
+            required_labels: labels
+                .get()
+                .split(',')
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect(),
         };
         let vm = vm.clone();
         spawn_local(async move {
@@ -318,6 +325,7 @@ fn PlacementRow(
             <td><input class="pl-aff" type="text" prop:value=aff on:input=move |ev| aff.set(event_target_value(&ev))/></td>
             <td><input class="pl-anti" type="text" prop:value=anti on:input=move |ev| anti.set(event_target_value(&ev))/></td>
             <td><input class="pl-nomig" type="checkbox" prop:checked=nomig on:change=move |ev| nomig.set(event_target_checked(&ev))/></td>
+            <td><input class="pl-labels" type="text" placeholder="none" prop:value=labels on:input=move |ev| labels.set(event_target_value(&ev))/></td>
             <td><button class="btn btn-sm btn-primary pl-apply" on:click=apply>"Apply"</button></td>
         </tr>
     }

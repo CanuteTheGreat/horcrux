@@ -6956,6 +6956,9 @@ pub struct PlacementRules {
     pub anti_affinity_group: Option<String>,
     #[serde(default)]
     pub no_migrate: bool,
+    /// Node labels the guest needs (see Cluster > node role/labels).
+    #[serde(default)]
+    pub required_labels: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
