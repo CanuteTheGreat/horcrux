@@ -352,6 +352,7 @@ pub async fn local_info(state: &Arc<AppState>) -> PeerInfo {
             cpu_cores: std::thread::available_parallelism()
                 .map(|n| n.get() as u32)
                 .unwrap_or(1),
+            caps: None,
         },
         guests,
     }
@@ -455,6 +456,14 @@ pub async fn snapshot(state: &Arc<AppState>) -> (String, Vec<PlanNode>, Vec<Plan
             }
             Err(e) => tracing::warn!("placement info of {} unavailable: {e}", n.name),
         }
+    }
+    // Node roles/limits live in the cluster state (set via PUT
+    // /api/cluster/nodes/:name/caps): overlay them on every node.
+    for n in &mut nodes {
+        n.caps = all
+            .iter()
+            .find(|c| c.name == n.name)
+            .and_then(|c| c.caps.clone());
     }
     (local, nodes, guests)
 }
