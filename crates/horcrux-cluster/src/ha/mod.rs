@@ -1166,8 +1166,13 @@ mod tests {
             .unwrap();
         let moved = manager.handle_node_failure("fails").await.unwrap();
         assert_eq!(moved.len(), 1);
-        let res = manager.get_resource("900").await.unwrap();
-        assert_eq!(res.current_node.as_deref(), Some("nvme"));
+        // handle_node_failure only starts the migration (state Migrating, target in the event).
+        let events = manager.get_events(Some("900"), None).await;
+        let ev = events
+            .iter()
+            .find(|e| matches!(e.event_type, HaEventType::Migrated))
+            .expect("a Migrated event");
+        assert_eq!(ev.node, "nvme");
 
         // Nobody carries the label: no placement, the resource errors out.
         let on = Some("nvme".to_string());
