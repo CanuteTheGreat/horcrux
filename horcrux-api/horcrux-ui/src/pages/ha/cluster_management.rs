@@ -10,8 +10,8 @@
 //! - `POST /api/cluster/find-node`           <- `FindNodeRequest` -> node name
 use crate::api::{
     add_cluster_node, find_best_node_for_vm, get_cluster_architecture, get_cluster_nodes, get_vms,
-    remove_cluster_node, set_node_priority, AddNodeRequest, ClusterArchitecture, ClusterNode,
-    FindNodeRequest,
+    remove_cluster_node, set_node_caps, set_node_priority, AddNodeRequest, ClusterArchitecture,
+    ClusterNode, FindNodeRequest, NodeCaps,
 };
 use horcrux_common::VmConfig;
 use leptos::*;
@@ -40,6 +40,56 @@ pub(crate) fn parse_weight(input: &str) -> Result<u32, String> {
             MAX_NODE_WEIGHT
         )),
     }
+}
+
+/// Build the `NodeCaps` body from the role/labels/limit fields typed into the
+/// node row. Labels are comma/space separated, 1-63 chars, max 16 (same rule
+/// as a guest's required labels); empty limits mean unlimited. The memory
+/// limit is typed in GiB and sent in bytes. A plain compute node with no
+/// labels and no limits returns `None` (clears the record).
+pub(crate) fn parse_caps_form(
+    role: &str,
+    labels: &str,
+    max_vcpus: &str,
+    max_mem_gib: &str,
+) -> Result<Option<NodeCaps>, String> {
+    if !matches!(role, "storage" | "compute" | "witness") {
+        return Err("Role must be storage, compute or witness".into());
+    }
+    let labels: Vec<String> = labels
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|l| !l.is_empty())
+        .map(|l| l.to_string())
+        .collect();
+    if labels.len() > 16 || labels.iter().any(|l| l.len() > 63) {
+        return Err("Labels: up to 16 labels of 1-63 characters".into());
+    }
+    let max_guest_vcpus = match max_vcpus.trim() {
+        "" => None,
+        v => match v.parse::<u32>() {
+            Ok(n) if n > 0 => Some(n),
+            _ => return Err("Max guest vCPUs must be a whole number above 0".into()),
+        },
+    };
+    let max_guest_memory = match max_mem_gib.trim() {
+        "" => None,
+        v => match v.parse::<f64>() {
+            Ok(g) if g.is_finite() && g > 0.0 && g < 1_048_576.0 => {
+                Some((g * 1024.0 * 1024.0 * 1024.0) as u64)
+            }
+            _ => return Err("Max guest memory must be a number of GiB above 0".into()),
+        },
+    };
+    let plain = labels.is_empty() && max_guest_vcpus.is_none() && max_guest_memory.is_none();
+    if role == "compute" && plain {
+        return Ok(None);
+    }
+    Ok(Some(NodeCaps {
+        role: role.to_string(),
+        labels,
+        max_guest_vcpus,
+        max_guest_memory,
+    }))
 }
 
 /// `VmArchitecture` -> the architecture string the find-node API expects
@@ -189,6 +239,21 @@ pub fn ClusterManagementPage() -> impl IntoView {
                     flash(format!("Node '{}' weight set to {}", name, weight));
                 }
                 Err(e) => set_error.set(Some(format!("Failed to set weight: {}", e))),
+            }
+        }),
+    };
+
+    let save_caps = move |name: String, form: (String, String, String, String)| match parse_caps_form(
+        &form.0, &form.1, &form.2, &form.3,
+    ) {
+        Err(e) => set_error.set(Some(e)),
+        Ok(caps) => spawn_local(async move {
+            match set_node_caps(&name, caps.as_ref()).await {
+                Ok(()) => {
+                    load_cluster_data();
+                    flash(format!("Node '{}' role and limits saved", name));
+                }
+                Err(e) => set_error.set(Some(format!("Failed to save role: {}", e))),
             }
         }),
     };
@@ -402,6 +467,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">"Status"</th>
                                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">"Resources"</th>
                                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">"Weight / Priority"</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">"Role / labels / guest limits"</th>
                                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">"Actions"</th>
                                     </tr>
                                 </thead>
@@ -416,7 +482,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                             };
                                             view! {
                                                 <tr>
-                                                    <td colspan="5" class="px-6 py-8 text-center text-gray-500">{msg}</td>
+                                                    <td colspan="6" class="px-6 py-8 text-center text-gray-500">{msg}</td>
                                                 </tr>
                                             }.into_view()
                                         } else {
@@ -426,6 +492,15 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                                     create_signal(node.priority.to_string());
                                                 let name_for_save = node.name.clone();
                                                 let name_for_remove = node.name.clone();
+                                                let name_for_caps = node.name.clone();
+                                                let caps0 = node.caps.clone().unwrap_or_else(|| NodeCaps {
+                                                    role: "compute".into(),
+                                                    ..NodeCaps::default()
+                                                });
+                                                let role_sig = create_rw_signal(if caps0.role.is_empty() { "compute".to_string() } else { caps0.role.clone() });
+                                                let labels_sig = create_rw_signal(caps0.labels.join(", "));
+                                                let vcpus_sig = create_rw_signal(caps0.max_guest_vcpus.map(|v| v.to_string()).unwrap_or_default());
+                                                let mem_sig = create_rw_signal(caps0.max_guest_memory.map(|b| format!("{}", (b as f64) / 1073741824.0)).unwrap_or_default());
                                                 let is_local = node.is_local;
                                                 view! {
                                                     <tr>
@@ -470,6 +545,30 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                                                     on:click=move |_| save_weight(name_for_save.clone(), weight_input.get())
                                                                 >
                                                                     "Set"
+                                                                </button>
+                                                            </div>
+                                                        </td>
+                                                        <td class="px-6 py-4">
+                                                            <div class="flex flex-wrap items-center gap-2">
+                                                                <select class="node-role px-2 py-1 border border-gray-300 rounded"
+                                                                    prop:value=move || role_sig.get()
+                                                                    on:change=move |ev| role_sig.set(event_target_value(&ev))>
+                                                                    <option value="compute">"compute"</option>
+                                                                    <option value="storage">"storage (Ceph OSD + guests)"</option>
+                                                                    <option value="witness">"witness (quorum only, no guests)"</option>
+                                                                </select>
+                                                                <input class="node-labels w-40 px-2 py-1 border border-gray-300 rounded" type="text" placeholder="labels: nvme, lab"
+                                                                    prop:value=move || labels_sig.get()
+                                                                    on:input=move |ev| labels_sig.set(event_target_value(&ev))/>
+                                                                <input class="node-max-vcpus w-24 px-2 py-1 border border-gray-300 rounded" type="number" min="1" placeholder="max vCPU"
+                                                                    prop:value=move || vcpus_sig.get()
+                                                                    on:input=move |ev| vcpus_sig.set(event_target_value(&ev))/>
+                                                                <input class="node-max-mem w-28 px-2 py-1 border border-gray-300 rounded" type="number" min="0" step="any" placeholder="max GiB RAM"
+                                                                    prop:value=move || mem_sig.get()
+                                                                    on:input=move |ev| mem_sig.set(event_target_value(&ev))/>
+                                                                <button class="node-caps-save text-blue-600 hover:text-blue-900 px-2 py-1 rounded hover:bg-blue-50"
+                                                                    on:click=move |_| save_caps(name_for_caps.clone(), (role_sig.get(), labels_sig.get(), vcpus_sig.get(), mem_sig.get()))>
+                                                                    "Save"
                                                                 </button>
                                                             </div>
                                                         </td>
@@ -659,6 +758,21 @@ mod tests {
         assert_eq!(format_memory(8 * 1024 * 1024 * 1024), "8.0 GB");
         assert_eq!(format_memory(512 * 1024 * 1024), "512 MB");
         assert_eq!(format_memory(0), "0 MB");
+    }
+
+    #[test]
+    fn caps_form_builds_body_and_clears_plain_compute() {
+        let c = parse_caps_form("witness", "lab, old-hw nvme", "4", "30").unwrap().unwrap();
+        assert_eq!(c.role, "witness");
+        assert_eq!(c.labels, vec!["lab", "old-hw", "nvme"]);
+        assert_eq!(c.max_guest_vcpus, Some(4));
+        assert_eq!(c.max_guest_memory, Some(30 * 1024 * 1024 * 1024));
+        assert_eq!(parse_caps_form("compute", " ", "", "").unwrap(), None);
+        assert!(parse_caps_form("storage", "", "", "").unwrap().is_some());
+        assert!(parse_caps_form("boss", "", "", "").is_err());
+        assert!(parse_caps_form("compute", "", "0", "").is_err());
+        assert!(parse_caps_form("compute", "", "", "-1").is_err());
+        assert!(parse_caps_form("compute", &"x".repeat(64), "", "").is_err());
     }
 
     #[test]

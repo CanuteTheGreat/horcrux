@@ -465,6 +465,24 @@ pub struct ClusterNode {
     /// the address can't prove it is this node, "up, usage unknown: ...").
     #[serde(default)]
     pub status_reason: Option<String>,
+    /// Operator-set role/labels/per-guest limits; `None` = unrestricted
+    /// compute node.
+    #[serde(default)]
+    pub caps: Option<NodeCaps>,
+}
+
+/// Mirror of `cluster::roles::NodeCaps` (`PUT /api/cluster/nodes/:name/caps`).
+/// `role` is "storage" | "compute" | "witness"; memory is in **bytes**.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct NodeCaps {
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub max_guest_vcpus: Option<u32>,
+    #[serde(default)]
+    pub max_guest_memory: Option<u64>,
 }
 
 fn default_node_priority() -> u32 {
@@ -537,6 +555,32 @@ pub async fn get_cluster_nodes() -> Result<Vec<ClusterNode>, ApiError> {
 /// 204; 404 unknown node; 409 for the local node).
 pub async fn remove_cluster_node(name: &str) -> Result<(), ApiError> {
     delete_json(&format!("/cluster/nodes/{}", name)).await
+}
+
+/// Set (or with `None` clear) a node's role, labels and per-guest limits
+/// (`PUT /api/cluster/nodes/:name/caps`, 200 with no body).
+pub async fn set_node_caps(name: &str, caps: Option<&NodeCaps>) -> Result<(), ApiError> {
+    let url = resolve_api_url(&format!("/cluster/nodes/{}/caps", name));
+    let response = with_auth(reqwasm::http::Request::put(&url))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&caps).unwrap())
+        .send()
+        .await
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
+    if response.ok() {
+        Ok(())
+    } else {
+        let body = response.text().await.unwrap_or_default();
+        Err(ApiError {
+            message: if body.is_empty() {
+                format!("HTTP {}", response.status())
+            } else {
+                format!("HTTP {}: {}", response.status(), body)
+            },
+        })
+    }
 }
 
 /// Set a node's placement/HA weight (0-1000).
@@ -5546,6 +5590,7 @@ mod tests {
             memory_used: used_gb.map(|g| g << 30),
             last_seen: None,
             status_reason: None,
+            caps: None,
         }
     }
 
