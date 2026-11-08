@@ -2520,6 +2520,7 @@ async fn create_replication_job(
         name: job_name,
         source_vm_id: req.source_vm_id,
         source_snapshot: req.source_snapshot,
+        source_dataset: None, // resolved from the VM's disks below
         target_node: req.target_node,
         target_pool: req.target_pool,
         schedule,
@@ -2534,11 +2535,21 @@ async fn create_replication_job(
     };
 
     // Validate source VM exists
-    state
+    let source_vm = state
         .database
         .get_vm(&job.source_vm_id)
         .await
         .map_err(|_| ApiError::NotFound(format!("Source VM {} not found", job.source_vm_id)))?;
+
+    // The ZFS dataset the VM's disks live on is what gets snapshotted and
+    // sent (a node without ZFS keeps None: execute then says why).
+    let mut job = job;
+    for disk in &source_vm.disks {
+        if let Some(ds) = vm::replication::zfs_dataset_of_path(&disk.path).await {
+            job.source_dataset = Some(ds);
+            break;
+        }
+    }
 
     let job = state.replication_manager.create_job(job).await?;
     info!("Created replication job: {}", job.id);

@@ -64,6 +64,31 @@ pub fn fs_capacity_gb(path: &str) -> Option<(u64, u64)> {
     ))
 }
 
+/// (total, available) GB of a ZFS dataset (`zfs list -Hp -o used,avail`): a
+/// ZFS pool's path is a dataset NAME (`tank`, `tank/vms`), not a filesystem
+/// path, so statvfs on it fails and the pool used to report 0 GB (every zvol
+/// create then failed the space check).
+pub fn zfs_capacity_gb(dataset: &str) -> Option<(u64, u64)> {
+    let out = std::process::Command::new("zfs")
+        .args(["list", "-Hp", "-o", "used,avail", "--"])
+        .arg(dataset)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_zfs_capacity(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Parse one `zfs list -Hp -o used,avail` line (bytes) into (total, available) GB.
+pub fn parse_zfs_capacity(line: &str) -> Option<(u64, u64)> {
+    let mut f = line.split_whitespace();
+    let used: u64 = f.next()?.parse().ok()?;
+    let avail: u64 = f.next()?.parse().ok()?;
+    let gb = 1024 * 1024 * 1024;
+    Some(((used + avail) / gb, avail / gb))
+}
+
 /// How the manager measures a pool's filesystem: `fs_capacity_gb`
 /// (tests substitute a fake to pin or move the numbers).
 pub type CapacityProbe = fn(&str) -> Option<(u64, u64)>;
@@ -221,6 +246,8 @@ pub struct StorageManager {
     store: Option<ConfigStore>,
     /// Measures filesystem-backed pools (statvfs).
     capacity_probe: CapacityProbe,
+    /// Same for ZFS pools (dataset names, measured with `zfs list`).
+    zfs_probe: CapacityProbe,
     /// Pools whose last measurement hasn't returned yet (hung mount): not
     /// probed again until it does, so blocked threads don't pile up.
     measuring: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
@@ -250,6 +277,7 @@ impl StorageManager {
             iscsi_lun_counters: Arc::new(RwLock::new(HashMap::new())),
             store: None,
             capacity_probe: fs_capacity_gb,
+            zfs_probe: zfs_capacity_gb,
             measuring: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         }
     }
@@ -267,7 +295,7 @@ impl StorageManager {
                 .load_values::<StoragePool>(kinds::STORAGE_POOL)
                 .await?
             {
-                Self::refresh_capacity(mgr.capacity_probe, &mut pool);
+                Self::refresh_capacity(mgr.probe_for(&pool.storage_type), &mut pool);
                 pools.insert(pool.id.clone(), pool);
             }
             tracing::info!("Loaded {} storage pool(s) from database", pools.len());
@@ -279,12 +307,23 @@ impl StorageManager {
     /// Use `probe` instead of statvfs to measure pools (tests).
     pub fn with_capacity_probe(mut self, probe: CapacityProbe) -> Self {
         self.capacity_probe = probe;
+        self.zfs_probe = probe;
         self
+    }
+
+    /// The probe that measures `t`'s capacity.
+    fn probe_for(&self, t: &StorageType) -> CapacityProbe {
+        if matches!(t, StorageType::Zfs) {
+            self.zfs_probe
+        } else {
+            self.capacity_probe
+        }
     }
 
     /// Measure real capacity for filesystem-backed pools.
     fn refresh_capacity(probe: CapacityProbe, pool: &mut StoragePool) {
-        if measured_by_statvfs(&pool.storage_type) {
+        if measured_by_statvfs(&pool.storage_type) || matches!(pool.storage_type, StorageType::Zfs)
+        {
             if let Some((total, available)) = probe(&pool.path) {
                 pool.total = total;
                 pool.available = available;
@@ -299,25 +338,33 @@ impl StorageManager {
     /// statvfs runs off the async workers with a timeout: a pool whose
     /// mount doesn't answer keeps its last numbers.
     async fn refresh_pools(&self, only: Option<&str>) {
-        let targets: Vec<(String, String)> = {
+        let targets: Vec<(String, String, CapacityProbe)> = {
             let pools = self.pools.read().await;
             pools
                 .values()
-                .filter(|p| measured_by_statvfs(&p.storage_type))
+                .filter(|p| {
+                    measured_by_statvfs(&p.storage_type)
+                        || matches!(p.storage_type, StorageType::Zfs)
+                })
                 .filter(|p| only.is_none_or(|id| p.id == id))
-                .map(|p| (p.id.clone(), p.path.clone()))
+                .map(|p| {
+                    (
+                        p.id.clone(),
+                        p.path.clone(),
+                        self.probe_for(&p.storage_type),
+                    )
+                })
                 .collect()
         };
         let deadline = tokio::time::Instant::now() + CAPACITY_PROBE_TIMEOUT;
         let mut running = Vec::new();
-        for (id, path) in targets {
+        for (id, path, probe) in targets {
             {
                 let mut busy = self.measuring.lock().unwrap_or_else(|e| e.into_inner());
                 if !busy.insert(id.clone()) {
                     continue; // the previous measurement is still stuck
                 }
             }
-            let probe = self.capacity_probe;
             let measuring = self.measuring.clone();
             let key = id.clone();
             let task = tokio::task::spawn_blocking(move || {
@@ -428,7 +475,7 @@ impl StorageManager {
         // was), so every volume create in a directory pool failed with
         // "Not enough space ... Available: 0GB".
         let mut pool = pool;
-        Self::refresh_capacity(self.capacity_probe, &mut pool);
+        Self::refresh_capacity(self.probe_for(&pool.storage_type), &mut pool);
 
         config_store::put_opt(&self.store, kinds::STORAGE_POOL, &pool.id, &pool).await?;
         let pool_clone = pool.clone();
@@ -1079,9 +1126,8 @@ mod tests {
         StorageManager::refresh_capacity(fake_fs, &mut gp);
         assert_eq!((gp.total, gp.available), (10, 4));
 
-        // Block pools (ZFS/LVM/Ceph/iSCSI) and S3 aren't statvfs'd.
+        // Block pools (LVM/Ceph/iSCSI) and S3 aren't statvfs'd.
         for t in [
-            StorageType::Zfs,
             StorageType::Lvm,
             StorageType::Ceph,
             StorageType::Iscsi,
@@ -1096,6 +1142,38 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&d);
         let _ = std::fs::remove_dir_all(&g);
+    }
+
+    /// A ZFS pool's path is a dataset name: it is measured with the ZFS
+    /// probe (it used to stay at 0 GB, so every zvol create was refused),
+    /// and `zfs list -Hp` output parses to GB.
+    #[tokio::test]
+    async fn zfs_pool_capacity_is_measured() {
+        use std::sync::atomic::Ordering::SeqCst;
+        static ZT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        fn fs_none(_: &str) -> Option<(u64, u64)> {
+            None
+        }
+        fn zfs_fake(ds: &str) -> Option<(u64, u64)> {
+            (ds == "tank/vms").then(|| (ZT.load(SeqCst), ZT.load(SeqCst) - 1))
+        }
+        let mut m = StorageManager::new().with_capacity_probe(fs_none);
+        m.zfs_probe = zfs_fake;
+        ZT.store(3, SeqCst);
+        m.pools
+            .write()
+            .await
+            .insert("z".into(), pool("z", StorageType::Zfs, "tank/vms"));
+        let p = m.get_pool("z").await.unwrap();
+        assert_eq!((p.total, p.available), (3, 2));
+        ZT.store(9, SeqCst);
+        assert_eq!(m.list_pools().await[0].available, 8);
+        assert_eq!(
+            parse_zfs_capacity("1073741824\t2952790016\n"),
+            Some((3, 2)) // 1 GiB used + 2.75 GiB free = 3.75 -> 3; 2.75 -> 2
+        );
+        assert_eq!(parse_zfs_capacity("-\t-\n"), None);
+        assert_eq!(parse_zfs_capacity(""), None);
     }
 
     /// A pool whose mount doesn't answer keeps its last numbers, the call
