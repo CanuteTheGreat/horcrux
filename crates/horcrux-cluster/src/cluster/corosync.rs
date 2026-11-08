@@ -5,11 +5,14 @@ use horcrux_common::Result;
 use tokio::process::Command;
 use tracing::{error, info};
 
+/// Cluster name and the voting members (node, votes) written to corosync.conf.
+type CorosyncMembers = (String, Vec<(Node, u32)>);
+
 /// Corosync manager
 pub struct CorosyncManager {
     /// Cluster name + voting members written to corosync.conf by this
     /// manager. `None` until `init_cluster` ran on this process.
-    members: tokio::sync::Mutex<Option<(String, Vec<(Node, u32)>)>>,
+    members: tokio::sync::Mutex<Option<CorosyncMembers>>,
 }
 
 const DEFAULT_CONF: &str = "/etc/corosync/corosync.conf";
