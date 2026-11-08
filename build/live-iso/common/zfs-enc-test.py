@@ -524,7 +524,13 @@ class ZRun(qt.Runner):
             self.step("kernel-args-resume-and-unlock", "resume=UUID=" in o and "rd.hx.swap=" in o, "")
             self.step("zram-higher-priority-than-disk-swap", "zram" not in sw or (bool(re.search(r"zram\d+\s+\d+\s+16383", sw))), sw.strip().replace("\n", " | "))
             # initramfs: the one-passphrase module and the hook order, on the REAL installed image
-            rc, o = self.sh("for k in /boot/initramfs-*.img /boot/be/*/initramfs.img; do echo \"== $k\"; lsinitrd $k | grep -E 'hx-unlock|hx-zfskey|resume|cryptsetup|zfs.ko|dm-crypt|mount-zfs|horcrux-unlock'; done")
+            # lsinitrd of every image of the (large) desktop install can outlast the default 60 s ssh timeout on a loaded runner,
+            # which returned (255, "timeout") = zero images listed: allow it the time it needs and retry a failed transport
+            for _try in range(3):
+                rc, o = self.sh("for k in /boot/initramfs-*.img /boot/be/*/initramfs.img; do echo \"== $k\"; lsinitrd $k | grep -E 'hx-unlock|hx-zfskey|resume|cryptsetup|zfs.ko|dm-crypt|mount-zfs|horcrux-unlock'; done", timeout=300)
+                if re.search(r"^== ", o, flags=re.M):
+                    break
+                print(f"  (initramfs listing attempt {_try + 1} returned no images: rc={rc} {o.strip()[:200]!r})", flush=True)
             open(f"{a.out}/initramfs-listing.txt", "w").write(o)
             # zfsswap uses package-relative imports (`from . import testmachine`): import it as liveinst.zfsswap
             _pkg_root = os.path.join(HERE, "overlay/usr/lib/live-installer")
@@ -538,7 +544,7 @@ class ZRun(qt.Runner):
                 ho = zs.hook_order_ok(txt + "\nusr/lib/dracut/hooks/pre-mount/50-hx-zfskey.sh\n")
                 if pr or not ho:
                     bad.append(f"{img}: missing {pr} hook-order-ok={ho}")
-            self.step("initramfs-has-unlock-resume-zfs-and-hook-order", bool(parts[1::2]) and not bad, "; ".join(bad) or f"{len(parts[1::2])} images ok")
+            self.step("initramfs-has-unlock-resume-zfs-and-hook-order", bool(parts[1::2]) and not bad, "; ".join(bad) or (f"{len(parts[1::2])} images ok" if parts[1::2] else f"no images listed: rc={rc} {o.strip()[:200]!r}"))
             # marker in RAM + a running process
             rc, o = self.sh("echo $(cat /proc/sys/kernel/random/boot_id) > /dev/shm/boot_id_before; head -c 24 /dev/urandom | base64 > /dev/shm/marker; "
                             "cp /dev/shm/marker /run/marker-run; "
