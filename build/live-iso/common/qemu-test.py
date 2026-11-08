@@ -1200,7 +1200,13 @@ class Runner:
             if time.time() - t > 120 and self.disk_idle():
                 vm.shot("09-finished")
                 self.finished_vga = True
-                kb.key("ENTER", 1)                          # < Reboot >
+                try:
+                    kb.key("ENTER", 1)                      # < Reboot >
+                except OSError as e:
+                    # QEMU already left (-no-reboot: the guest rebooted itself or died between the idle check and the key press, seen on the slow aarch64 TCG runner).
+                    # Not a failure here: phase 2 boots the installed disk and fails loudly if the install did not complete.
+                    rebooted_itself = not vm.alive()
+                    self.step("vga-reboot-key", rebooted_itself, f"VM already exited before the Reboot key ({e})" if rebooted_itself else f"QMP refused but QEMU is alive: {e}")
                 break
         self.step("vga-installer-finished", self.finished_vga, "finish screen reached (target disk written and idle), Reboot pressed")
 
