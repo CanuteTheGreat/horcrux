@@ -9,6 +9,7 @@ pub mod hardware;
 pub mod hold;
 #[cfg(feature = "incus")]
 pub mod incus;
+pub mod live_copy;
 #[cfg(feature = "lxd")]
 pub mod lxd;
 pub mod mdev;

@@ -736,9 +736,18 @@ Content-Type: application/json
   },
   "meta_data": {
     "instance_id": "vm-100",
+**Cloning a running VM.** A full clone of a RUNNING QEMU VM is taken live: the
+file-backed (qcow2/raw) disks are copied through QMP `blockdev-backup` in one
+transaction (one point in time, copy-before-write; the guest is never paused),
+ZFS/LVM/Btrfs/Ceph disks use their snapshot clone. The result is
+crash-consistent (like a power cut), not application-consistent. A *linked*
+clone of a running VM is refused with `409` (it would use the live disk as
+backing file): use `full`, or stop the VM.
+
     "local_hostname": "web-server-01"
   }
 }
+- `409 CONFLICT` - Linked clone of a running VM, or the clone's id/disk exists
 ```
 
 **Response**:

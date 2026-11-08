@@ -271,3 +271,150 @@ async fn linked_clones_protect_their_base_and_are_recorded_as_jobs() {
         assert_eq!(files_of(disk), Vec::<String>::new(), "files left of {id}");
     }
 }
+
+/// A RUNNING VM clones live: the full clone is taken through QMP
+/// blockdev-backup (it used to fail with qemu-img's "Failed to get shared
+/// write lock"), the guest is never paused, the copy equals the disk it was
+/// taken from, and a linked clone of a running VM is refused (409).
+#[tokio::test]
+async fn running_vm_is_cloned_live_without_pausing() {
+    let have = |b: &str| {
+        Command::new(b)
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    };
+    if !have("qemu-system-x86_64") || !have("qemu-img") || !have("qemu-io") {
+        eprintln!("qemu not installed: skipped");
+        return;
+    }
+    let dir = scratch("vm-clone-live");
+    let mut srv = Server::new(&dir);
+    srv.start();
+    srv.wait_healthy().await;
+    let a = srv.api().await;
+
+    let src = format!("liveclone{}", std::process::id());
+    let (s, b) = a
+        .post(
+            "/vms",
+            json!({"id": src, "name": "live source", "hypervisor": "qemu",
+                   "architecture": "x86_64", "cpus": 1, "memory": 128, "disk_size": 1,
+                   "status": "stopped", "display": {"protocol": "none"}}),
+        )
+        .await;
+    assert!((200..300).contains(&s), "create source: {s} {b}");
+    let disk = disk_of(&a, &src).await;
+    run(
+        "qemu-io",
+        &[
+            "-f",
+            "qcow2",
+            "-c",
+            "write -P 0x5a 1M 4M",
+            &disk.to_string_lossy(),
+        ],
+    );
+    let (s, b) = a.post(&format!("/vms/{src}/start"), json!({})).await;
+    assert!((200..300).contains(&s), "start: {s} {b}");
+    let qmp = disk.with_extension("qmp.sock");
+    for _ in 0..100 {
+        if qmp.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    // Linked clone of a running VM: refused with a reason.
+    let (s, b) = clone(&a, &src, json!({"name": "no", "mode": "linked"})).await;
+    assert_eq!(s, 409, "linked clone of a running VM: {b}");
+
+    // Full clone, polled over QMP: the guest must stay "running".
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let poller = {
+        let (stop, qmp) = (stop.clone(), qmp.clone());
+        std::thread::spawn(move || {
+            let mut seen = std::collections::BTreeSet::new();
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Some(st) = qmp_status(&qmp) {
+                    seen.insert(st);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            seen
+        })
+    };
+    let (s, full) = clone(
+        &a,
+        &src,
+        json!({"name": "live full", "id": format!("{src}-c"), "mode": "full"}),
+    )
+    .await;
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let seen = poller.join().unwrap();
+    assert_eq!(s, 200, "full clone of a running VM: {full}");
+    assert!(
+        seen.iter().all(|st| st == "running") && !seen.is_empty(),
+        "the guest was never paused during the clone: {seen:?}"
+    );
+    let cdisk = disk_of(&a, full["id"].as_str().unwrap()).await;
+    assert_eq!(backing_of(&cdisk), None, "standalone copy");
+    let cmp = Command::new("qemu-img")
+        .args(["compare", "-U", "-f", "qcow2", "-F", "qcow2"])
+        .arg(&disk)
+        .arg(&cdisk)
+        .output()
+        .unwrap();
+    assert!(
+        cmp.status.success(),
+        "clone equals the source disk: {}",
+        String::from_utf8_lossy(&cmp.stdout)
+    );
+    // The clone is detached from the source's QEMU again.
+    let blocks = qmp_exec_raw(&qmp, "query-named-block-nodes");
+    assert!(
+        !blocks.contains(&format!("{src}-c.qcow2")),
+        "clone target detached from QEMU: {blocks}"
+    );
+
+    let _ = a.post(&format!("/vms/{src}/stop"), json!({})).await;
+    for id in [format!("{src}-c"), src.clone()] {
+        let _ = a.delete(&format!("/vms/{id}")).await;
+    }
+}
+
+/// The guest's run state from QMP query-status.
+fn qmp_status(sock: &Path) -> Option<String> {
+    let v = qmp_json(sock, "query-status")?;
+    v["return"]["status"].as_str().map(String::from)
+}
+
+fn qmp_exec_raw(sock: &Path, cmd: &str) -> String {
+    qmp_json(sock, cmd)
+        .map(|v| v.to_string())
+        .unwrap_or_default()
+}
+
+fn qmp_json(sock: &Path, cmd: &str) -> Option<Value> {
+    use std::io::{BufRead, BufReader, Write};
+    let s = std::os::unix::net::UnixStream::connect(sock).ok()?;
+    s.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .ok()?;
+    let mut w = s.try_clone().ok()?;
+    let mut r = BufReader::new(s);
+    let mut line = String::new();
+    r.read_line(&mut line).ok()?;
+    writeln!(w, "{}", json!({"execute": "qmp_capabilities"})).ok()?;
+    writeln!(w, "{}", json!({"execute": cmd})).ok()?;
+    for _ in 0..20 {
+        line.clear();
+        if r.read_line(&mut line).ok()? == 0 {
+            return None;
+        }
+        let v: Value = serde_json::from_str(&line).ok()?;
+        if v.get("return").is_some() && !v["return"].as_object().is_some_and(|o| o.is_empty()) {
+            return Some(v);
+        }
+    }
+    None
+}
