@@ -132,7 +132,7 @@ jobs:
       - name: Install build tools
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
-          sudo apt-get update && sudo apt-get install -y build-essential clang mold libvirt-dev libpam0g-dev
+          bash "$GITHUB_WORKSPACE/ci/apt-install.sh" build-essential clang mold libvirt-dev libpam0g-dev
 
       - name: Ensure Node.js is present (self-heal)
         # catthehacker/ubuntu:act-latest job containers on the beauxbatons
@@ -258,7 +258,7 @@ jobs:
         # its VGA BIOS from the qemu firmware packages.
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
-          sudo apt-get update
+          bash "$GITHUB_WORKSPACE/ci/apt-install.sh" build-essential clang qemu-utils  # index refresh with mirror retry
           spice_mods=""
           if apt-cache show qemu-system-modules-spice >/dev/null 2>&1; then
             spice_mods="qemu-system-modules-spice"
@@ -628,7 +628,7 @@ jobs:
       - name: Install build tools
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
-          sudo apt-get update && sudo apt-get install -y build-essential clang mold libvirt-dev libpam0g-dev
+          bash "$GITHUB_WORKSPACE/ci/apt-install.sh" build-essential clang mold libvirt-dev libpam0g-dev
 
       - name: Ensure Node.js is present (self-heal)
         # catthehacker/ubuntu:act-latest job containers on the beauxbatons
@@ -722,7 +722,7 @@ jobs:
       - name: Install build tools
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
-          sudo apt-get update && sudo apt-get install -y build-essential clang mold libvirt-dev libpam0g-dev
+          bash "$GITHUB_WORKSPACE/ci/apt-install.sh" build-essential clang mold libvirt-dev libpam0g-dev
 
       - name: Shared build cache (rw-build-cache)
         continue-on-error: true
@@ -824,7 +824,7 @@ jobs:
       - name: Install build tools
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
-          sudo apt-get update && sudo apt-get install -y build-essential clang mold libvirt-dev libpam0g-dev
+          bash "$GITHUB_WORKSPACE/ci/apt-install.sh" build-essential clang mold libvirt-dev libpam0g-dev
 
       - name: Shared build cache (rw-build-cache)
         continue-on-error: true
@@ -1028,7 +1028,7 @@ jobs:
       - name: Install build tools
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
-          sudo apt-get update && sudo apt-get install -y build-essential clang mold libvirt-dev libpam0g-dev
+          bash "$GITHUB_WORKSPACE/ci/apt-install.sh" build-essential clang mold libvirt-dev libpam0g-dev
 
       - name: Ensure Node.js is present (self-heal)
         run: |
@@ -1132,7 +1132,7 @@ jobs:
         # checks start a real VM and connect noVNC / fetch its SPICE .vv.
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
-          sudo apt-get update
+          bash "$GITHUB_WORKSPACE/ci/apt-install.sh" build-essential clang qemu-utils  # index refresh with mirror retry
           spice_mods=""
           if apt-cache show qemu-system-modules-spice >/dev/null 2>&1; then
             spice_mods="qemu-system-modules-spice"
