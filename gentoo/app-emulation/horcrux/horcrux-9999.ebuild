@@ -144,9 +144,14 @@ BDEPEND=""
 # so cargo_gen_config() never runs and any later cargo_env/cargo_src_compile
 # call dies with: "FATAL: please call cargo_gen_config before using cargo_env"
 # Define src_unpack explicitly to run both (live ebuild: use cargo_live_src_unpack).
+# The 2026-11-08 Gentoo snapshot's cargo_live_src_unpack runs `cargo fetch` in the
+# current directory (WORKDIR after git-r3 returns): "could not find Cargo.toml in
+# .../work" (CI run 1681 job 78735). Run it from the checkout.
 src_unpack() {
 	git-r3_src_unpack
+	pushd "${S}" >/dev/null || die
 	cargo_live_src_unpack
+	popd >/dev/null || die
 }
 
 # Cargo features mapping to USE flags
