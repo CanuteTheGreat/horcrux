@@ -28,6 +28,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # A scheduled run's GITHUB_SHA is the last push that was NOT [skip ci] (Forgejo), not main's head: the hourly poll
+          # existed for the [skip ci] rustinion-agent bumps and, checking out that stale sha, could never see them
+          # (0.1.347 sat unsynced for 1h+ while every poll said 'overlay already has this tree'). Always split main's tip.
+          ref: main
           fetch-depth: 0
 
       - name: Split gentoo/ and fast-forward the overlay repository
@@ -47,7 +51,7 @@ jobs:
           git fetch -q "$OV" main && remote=$(git rev-parse FETCH_HEAD) || remote=""
           if [ -z "$remote" ] || git merge-base --is-ancestor "$remote" "$tip"; then push=$tip
           elif [ "$(git rev-parse "$remote^{tree}")" = "$(git rev-parse "$tip^{tree}")" ]; then echo "overlay already has this tree"; rm -f ~/.ssh/overlay_key; exit 0
-          else push=$(git commit-tree "$tip^{tree}" -p "$remote" -p "$tip" -m "sync gentoo/ from main ${GITHUB_SHA:-}"); echo "merge commit $push (overlay history diverged from the split)"
+          else push=$(git commit-tree "$tip^{tree}" -p "$remote" -p "$tip" -m "sync gentoo/ from main $(git rev-parse HEAD)"); echo "merge commit $push (overlay history diverged from the split)"
           fi
           git push "$OV" "$push:refs/heads/main"
           rm -f ~/.ssh/overlay_key
