@@ -870,9 +870,9 @@ jobs:
         # CVE-2026-119375, advisory 2026-10-30; first failed main 2026-11-09):
         # libsqlite3-sys 0.30.1 is pinned by sqlx 0.8's sqlx-sqlite, and the
         # fix needs the sqlx 0.9 line, which is not released/resolvable here.
-        # Packaged builds (Gentoo) link the system dev-db/sqlite, which the
-        # distro patches. Drop this --ignore when sqlx moves to libsqlite3-sys
-        # >= 0.39.
+        # Not yet checked whether our builds use the vendored C SQLite or the
+        # system one (the ebuild has no sqlite dependency) - follow up. Drop
+        # this --ignore when sqlx moves to libsqlite3-sys >= 0.39.
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Run security audit"
           grep -A1 '^name = "webpki-roots"$' Cargo.lock | grep -q '^version = "1\.0\.\([1-9][0-9]\)"' \
