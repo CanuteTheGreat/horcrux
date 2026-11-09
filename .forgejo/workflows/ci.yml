@@ -865,11 +865,19 @@ jobs:
         # which needs a coordinated RustCrypto major upgrade (elliptic-curve
         # 0.14, p256 0.14, ecdsa 0.17) that cargo can't resolve today.
         # Re-evaluate and drop this --ignore when that stack moves.
+        #
+        # RUSTSEC-2026-0459 (libsqlite3-sys < 0.39.0 vendors a C SQLite with
+        # CVE-2026-119375, advisory 2026-10-30; first failed main 2026-11-09):
+        # libsqlite3-sys 0.30.1 is pinned by sqlx 0.8's sqlx-sqlite, and the
+        # fix needs the sqlx 0.9 line, which is not released/resolvable here.
+        # Packaged builds (Gentoo) link the system dev-db/sqlite, which the
+        # distro patches. Drop this --ignore when sqlx moves to libsqlite3-sys
+        # >= 0.39.
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Run security audit"
           grep -A1 '^name = "webpki-roots"$' Cargo.lock | grep -q '^version = "1\.0\.\([1-9][0-9]\)"' \
             || { echo "webpki-roots 1.x in Cargo.lock is older than 1.0.10 (RUSTSEC-2026-0381)"; exit 1; }
-          cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0449 --ignore RUSTSEC-2026-0381 --ignore RUSTSEC-2026-0387
+          cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0449 --ignore RUSTSEC-2026-0381 --ignore RUSTSEC-2026-0387 --ignore RUSTSEC-2026-0459
 
       - name: Memory probe report
         if: always()
