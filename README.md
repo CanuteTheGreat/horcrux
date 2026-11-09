@@ -13,6 +13,8 @@
 [![Built with Rust](https://img.shields.io/badge/Built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![Platform: Gentoo](https://img.shields.io/badge/Platform-Gentoo-purple.svg)](https://www.gentoo.org/)
 
+**Website and docs: [horcrux.errant.solutions](https://horcrux.errant.solutions)**
+
 **[Documentation](docs/)** | **[Roadmap to 1.0](docs/ROADMAP.md)** | **[API reference](docs/API_DOCS.md)** | **[Installation](docs/INSTALLATION.md)** | **[Docker guide](docs/DOCKER.md)**
 
 ## What is Horcrux?
