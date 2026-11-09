@@ -19,7 +19,10 @@
 //! 5. as the **leader** (lowest-named online node), recovers the resources
 //!    of nodes that are offline: if the node has fencing devices it is
 //!    fenced first (IPMI/iLO/DRAC/SSH/libvirt/SNMP PDU); without devices the
-//!    leader needs a majority and waits out the self-fence time. Each
+//!    leader needs a majority and waits out the self-fence time, and then
+//!    only recovers a node whose kernel is silent: a node that still answers
+//!    TCP has a hung or dead manager that cannot self-fence, its guests may
+//!    still run, so they are left alone (split-brain guard). Each
 //!    resource is restarted on the best online node of its HA group
 //!    (`POST /api/ha/peer/recover/:vm`), whose disks must be visible there
 //!    (shared storage).
@@ -145,6 +148,45 @@ impl FenceClock {
 /// Wait before fencing a node that has gone quiet (it may only be slow).
 fn fence_after_secs() -> i64 {
     env_secs("HORCRUX_HA_FENCE_AFTER_SECS", 10) as i64
+}
+
+/// What a TCP probe of a silent node's API port says about the node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Liveness {
+    /// Its kernel answered (connection accepted, or actively refused): the
+    /// machine is up, so QEMU processes there may well still run their
+    /// guests. A SIGSTOPped or dead manager looks like this too.
+    KernelAlive,
+    /// Nothing answered (timeout, unreachable, no route): crashed, powered
+    /// off or partitioned; a node in that state self-fences or is dead.
+    Silent,
+}
+
+/// Classify the result of a TCP connect to a node's API port. Only a
+/// completed handshake or a RST from the node itself proves its kernel is
+/// alive; a timeout or an ICMP unreachable (from a router, or ARP failure)
+/// proves nothing and is treated as silent (crash/partition).
+pub(crate) fn classify_probe(r: &std::io::Result<()>) -> Liveness {
+    match r {
+        Ok(()) => Liveness::KernelAlive,
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => Liveness::KernelAlive,
+        Err(_) => Liveness::Silent,
+    }
+}
+
+/// Probe `host:port` with a short TCP connect.
+pub(crate) async fn probe_kernel(host: &str, port: u16) -> Liveness {
+    let attempt = async {
+        let mut addrs = tokio::net::lookup_host((host, port)).await?;
+        let addr = addrs
+            .next()
+            .ok_or_else(|| std::io::Error::other("no address"))?;
+        tokio::net::TcpStream::connect(addr).await.map(|_| ())
+    };
+    match tokio::time::timeout(Duration::from_secs(3), attempt).await {
+        Ok(r) => classify_probe(&r),
+        Err(_) => Liveness::Silent,
+    }
 }
 
 static FENCING: OnceLock<Arc<FencingManager>> = OnceLock::new();
@@ -303,6 +345,7 @@ pub async fn broadcast_group(state: &Arc<AppState>, change: GroupChange) {
         port: state.config.server.port,
         offline_since: HashMap::new(),
         last_fence: HashMap::new(),
+        hung_reported: Default::default(),
     };
     for n in state.cluster_manager.list_nodes().await {
         if n.name == local || n.is_local || n.status != NodeStatus::Online {
@@ -607,6 +650,8 @@ struct LoopState {
     offline_since: HashMap<String, i64>,
     /// node -> last fencing attempt (retry pacing)
     last_fence: HashMap<String, i64>,
+    /// nodes already reported as "kernel alive, manager silent" (log/event once)
+    hung_reported: std::collections::HashSet<String>,
 }
 
 /// Start the supervisor (once per process). Needs the usage monitor, which
@@ -700,6 +745,7 @@ pub fn spawn(state: Arc<AppState>) {
             port: state.config.server.port,
             offline_since: HashMap::new(),
             last_fence: HashMap::new(),
+            hung_reported: Default::default(),
         };
         let mut ticker = tokio::time::interval(Duration::from_secs(tick_secs()));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -840,6 +886,7 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
     for n in &nodes {
         if is_local(n) || n.status == NodeStatus::Online {
             ls.offline_since.remove(&n.name);
+            ls.hung_reported.remove(&n.name);
         } else if n.status == NodeStatus::Offline && !ls.offline_since.contains_key(&n.name) {
             ls.offline_since.insert(n.name.clone(), now);
             notify(
@@ -908,6 +955,48 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
             if offline_for < self_fence_secs() + recovery_margin_secs() {
                 continue;
             }
+            // A node whose manager is hung (SIGSTOP, deadlock) or dead cannot
+            // self-fence, yet its QEMUs keep running the guests: the timer
+            // above only proves safety for a node that lost the network.
+            // With no fencing device the only proof of death is silence, so
+            // a node whose kernel still answers is NOT recovered (a second
+            // copy would write the same disks); it is recovered after it is
+            // fenced (add a device), or when it falls silent / its manager
+            // is back.
+            let ip = nodes
+                .iter()
+                .find(|x| x.name == node)
+                .map(|x| x.ip.clone())
+                .unwrap_or_default();
+            if probe_kernel(&ip, ls.port).await == Liveness::KernelAlive {
+                if ls.hung_reported.insert(node.clone()) {
+                    tracing::error!(
+                        "HA: node {node} is offline for the cluster but its kernel still \
+                         answers: its manager is hung or dead and cannot self-fence, its \
+                         guests may still be running. NOT recovering them (split brain); \
+                         add a fencing device or restart the manager there"
+                    );
+                    state
+                        .ha_manager
+                        .note_failure(
+                            &affected[0].vm_id,
+                            &node,
+                            format!(
+                                "manager on {node} unresponsive but the node is alive: guests \
+                                 are not recovered (no fencing device)"
+                            ),
+                        )
+                        .await;
+                    notify(
+                        state,
+                        "node_manager_hung",
+                        serde_json::json!({"node": node, "detected_by": local}),
+                    )
+                    .await;
+                }
+                continue;
+            }
+            ls.hung_reported.remove(&node);
         }
         if targets.is_empty() {
             tracing::warn!(
@@ -1117,6 +1206,59 @@ mod group_wire_tests {
         }
         let d: GroupChange = serde_json::from_str(r#"{"op":"delete","name":"x"}"#).unwrap();
         assert!(matches!(d, GroupChange::Delete { name } if name == "x"));
+    }
+}
+
+#[cfg(test)]
+mod hung_manager_tests {
+    use super::*;
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn accepted_and_refused_connections_prove_the_kernel_is_alive() {
+        assert_eq!(classify_probe(&Ok(())), Liveness::KernelAlive);
+        assert_eq!(
+            classify_probe(&Err(Error::from(ErrorKind::ConnectionRefused))),
+            Liveness::KernelAlive
+        );
+    }
+
+    #[test]
+    fn silence_and_unreachable_prove_nothing() {
+        for k in [
+            ErrorKind::TimedOut,
+            ErrorKind::HostUnreachable,
+            ErrorKind::NetworkUnreachable,
+            ErrorKind::ConnectionReset,
+            ErrorKind::Other,
+        ] {
+            assert_eq!(
+                classify_probe(&Err(Error::from(k))),
+                Liveness::Silent,
+                "{k:?}"
+            );
+        }
+    }
+
+    /// A stopped manager keeps its listening socket: the kernel completes
+    /// the handshake (backlog) although nothing ever serves the request.
+    #[tokio::test]
+    async fn listener_that_never_accepts_is_alive() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        assert_eq!(probe_kernel("127.0.0.1", port).await, Liveness::KernelAlive);
+        drop(l);
+        // nothing listens any more: RST from the live kernel (manager dead)
+        assert_eq!(probe_kernel("127.0.0.1", port).await, Liveness::KernelAlive);
+    }
+
+    #[tokio::test]
+    async fn unresolvable_node_is_silent() {
+        assert_eq!(probe_kernel("", 8006).await, Liveness::Silent);
+        assert_eq!(
+            probe_kernel("no-such-host.invalid", 8006).await,
+            Liveness::Silent
+        );
     }
 }
 
