@@ -120,3 +120,16 @@ jobs:
         run: |
           command -v curl >/dev/null || { apt-get update -qq && apt-get install -y -qq curl; }
           bash .forgejo/scripts/cf-purge.sh
+
+  # Ping IndexNow (Bing, Yandex, Seznam, Naver) with the sitemap URLs after a live deploy. Never fails the run.
+  indexnow:
+    needs: [purge-cloudflare]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: arm64-light
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Submit sitemap URLs to IndexNow
+        run: |
+          command -v curl >/dev/null || { apt-get update -qq && apt-get install -y -qq curl; }
+          bash .forgejo/scripts/indexnow.sh horcrux.errant.solutions 5bd2340b776c5d0b43933a1f02f4281e
