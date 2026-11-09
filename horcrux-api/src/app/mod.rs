@@ -1092,6 +1092,7 @@ fn cluster_routes() -> Router<Arc<AppState>> {
         .route("/api/cluster/power/status", get(get_cluster_power_status))
         .route("/api/cluster/power/wake", post(wake_cluster_node))
         .route("/api/cluster/power/bmc-on", post(bmc_power_on_node))
+        .route("/api/cluster/power/down", post(power_down_node))
         .route("/api/cluster/quorum/plan", get(get_quorum_plan))
         .route("/api/cluster/architecture", get(get_cluster_architecture))
         .route("/api/cluster/find-node", post(find_best_node_for_vm))
@@ -4614,8 +4615,25 @@ async fn plan_cluster_power(Json(req): Json<PowerPlanRequest>) -> Json<serde_jso
 /// quorum-safely right now. Read-only; never acts.
 #[cfg(feature = "cluster")]
 async fn get_cluster_power_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let (_, nodes, policy) = power_view(&state).await;
+    Json(serde_json::json!({
+        "power_down": crate::cluster::power::plan_power_down(&nodes, &policy),
+        "policy": policy,
+        "nodes": nodes,
+    }))
+}
+
+/// Live planner input for the idle power-down views: (local node name, nodes, policy).
+#[cfg(feature = "cluster")]
+async fn power_view(
+    state: &Arc<AppState>,
+) -> (
+    String,
+    Vec<crate::cluster::power::PowerNode>,
+    crate::cluster::power::PowerPolicy,
+) {
     use crate::cluster::power;
-    let (local, snap_nodes, guests) = crate::api::drain::snapshot(&state).await;
+    let (local, snap_nodes, guests) = crate::api::drain::snapshot(state).await;
     let cluster_nodes = state.cluster_manager.list_nodes_with_local().await;
     let bmc: Vec<String> = crate::api::ha_loop::fencing()
         .list_devices()
@@ -4625,12 +4643,57 @@ async fn get_cluster_power_status(State(state): State<Arc<AppState>>) -> Json<se
         .collect();
     let reachable: Vec<String> = snap_nodes.iter().map(|n| n.name.clone()).collect();
     let nodes = power::power_nodes_from_state(&cluster_nodes, &reachable, &guests, &bmc, &local);
-    let policy = power::PowerPolicy::default();
-    Json(serde_json::json!({
-        "power_down": power::plan_power_down(&nodes, &policy),
-        "policy": policy,
-        "nodes": nodes,
-    }))
+    (local, nodes, power::PowerPolicy::default())
+}
+
+#[cfg(feature = "cluster")]
+#[derive(Debug, Deserialize)]
+struct PowerDownRequest {
+    node: String,
+}
+
+/// `POST /api/cluster/power/down` -- gracefully power off one idle node
+/// through its BMC (area 7). Refused (409) unless the planner currently lists
+/// the node as a quorum-safe candidate (opt-in `power-managed`, no guests, no
+/// OSDs, idle CPU, wake method, min online kept) and it is not this node.
+#[cfg(feature = "cluster")]
+async fn power_down_node(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<PowerDownRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    use crate::ha::fencing::FencingResult;
+    let (local, nodes, policy) = power_view(&state).await;
+    if req.node == local {
+        return Err((
+            StatusCode::CONFLICT,
+            "refusing to power off the node serving this request".into(),
+        ));
+    }
+    if !nodes.iter().any(|n| n.name == req.node) {
+        return Err((StatusCode::NOT_FOUND, format!("unknown node {}", req.node)));
+    }
+    if !crate::cluster::power::plan_power_down(&nodes, &policy).contains(&req.node) {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "{} is not a safe power-down candidate right now (see GET /api/cluster/power/status)",
+                req.node
+            ),
+        ));
+    }
+    match crate::api::ha_loop::fencing()
+        .power_off_node_graceful(&req.node, "idle power-down")
+        .await
+    {
+        FencingResult::Success => Ok(Json(
+            serde_json::json!({"shutdown_requested": true, "node": req.node}),
+        )),
+        FencingResult::Failed(e) => Err((StatusCode::BAD_GATEWAY, e)),
+        other => Err((
+            StatusCode::BAD_GATEWAY,
+            format!("BMC shutdown not confirmed: {other:?}"),
+        )),
+    }
 }
 
 #[derive(Debug, Deserialize)]

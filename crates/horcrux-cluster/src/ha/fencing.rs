@@ -73,6 +73,9 @@ pub struct FencingEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FencingAction {
     Off,
+    /// Graceful OS shutdown through the BMC/agent (ACPI power button), used
+    /// by idle power-down so a healthy node is not hard-cut.
+    SoftOff,
     On,
     Reboot,
     Status,
@@ -94,6 +97,7 @@ fn redfish_base_url(address: &str, port: Option<u16>) -> String {
 fn redfish_reset_type(action: &FencingAction) -> &'static str {
     match action {
         FencingAction::Off => "ForceOff",
+        FencingAction::SoftOff => "GracefulShutdown",
         FencingAction::On => "On",
         FencingAction::Reboot => "ForceRestart",
         FencingAction::Status => "None",
@@ -311,6 +315,48 @@ impl FencingManager {
         last
     }
 
+    /// Gracefully shut a node down through its BMC (idle power-down, area 7):
+    /// ACPI soft-off (ipmitool `power soft`, Redfish `GracefulShutdown`).
+    /// Only BMC-type agents are used and, unlike fencing, this is not gated
+    /// by `is_enabled`. Success means the BMC accepted the request.
+    pub async fn power_off_node_graceful(&self, node: &str, reason: &str) -> FencingResult {
+        let devices: Vec<_> = self
+            .get_node_devices(node)
+            .await
+            .into_iter()
+            .filter(|d| {
+                matches!(
+                    d.agent_type,
+                    FencingAgentType::Ipmi
+                        | FencingAgentType::Ilo
+                        | FencingAgentType::Drac
+                        | FencingAgentType::Redfish
+                )
+            })
+            .collect();
+        if devices.is_empty() {
+            return FencingResult::Failed(format!("no BMC device configured for node {node}"));
+        }
+        let mut last = FencingResult::ManualRequired;
+        for device in devices {
+            let result = self.execute_fence(&device, FencingAction::SoftOff).await;
+            self.log_event(FencingEvent {
+                timestamp: chrono::Utc::now().timestamp(),
+                node: node.to_string(),
+                device_id: device.id.clone(),
+                action: FencingAction::SoftOff,
+                result: result.clone(),
+                reason: reason.to_string(),
+            })
+            .await;
+            if matches!(result, FencingResult::Success) {
+                return result;
+            }
+            last = result;
+        }
+        last
+    }
+
     /// Check node power status
     pub async fn check_node_status(&self, node: &str) -> FencingResult {
         let devices = self.get_node_devices(node).await;
@@ -363,6 +409,7 @@ impl FencingManager {
     async fn fence_ipmi(&self, device: &FencingDevice, action: &FencingAction) -> FencingResult {
         let action_cmd = match action {
             FencingAction::Off => "power off",
+            FencingAction::SoftOff => "power soft",
             FencingAction::On => "power on",
             FencingAction::Reboot => "power reset",
             FencingAction::Status => "power status",
@@ -603,7 +650,7 @@ impl FencingManager {
         // INTEGER: 1 = on, 2 = off for the standard PowerNet/RFC1628-style
         // outlet control OIDs), overridable via options.
         let (value_opt, value) = match action {
-            FencingAction::Off => (
+            FencingAction::Off | FencingAction::SoftOff => (
                 "off_value",
                 device
                     .options
@@ -672,7 +719,7 @@ impl FencingManager {
     /// SSH fencing implementation
     async fn fence_ssh(&self, device: &FencingDevice, action: &FencingAction) -> FencingResult {
         let cmd = match action {
-            FencingAction::Off => device
+            FencingAction::Off | FencingAction::SoftOff => device
                 .options
                 .get("off_cmd")
                 .cloned()
@@ -735,6 +782,7 @@ impl FencingManager {
 
         let virsh_cmd = match action {
             FencingAction::Off => "destroy",
+            FencingAction::SoftOff => "shutdown",
             FencingAction::On => "start",
             FencingAction::Reboot => "reboot",
             FencingAction::Status => "domstate",
@@ -880,6 +928,10 @@ mod tests {
             "http://127.0.0.1:9"
         );
         assert_eq!(redfish_reset_type(&FencingAction::Off), "ForceOff");
+        assert_eq!(
+            redfish_reset_type(&FencingAction::SoftOff),
+            "GracefulShutdown"
+        );
         assert_eq!(redfish_reset_type(&FencingAction::On), "On");
         assert_eq!(redfish_reset_type(&FencingAction::Reboot), "ForceRestart");
         let b =

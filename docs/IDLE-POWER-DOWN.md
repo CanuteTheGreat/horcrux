@@ -13,4 +13,8 @@ removing it keeps quorum and at least `min_online` (default 3) nodes online.
   on supplied nodes), `POST /api/cluster/power/wake` (Wake-on-LAN), `POST /api/cluster/power/bmc-on`
   (IPMI/iLO/DRAC/Redfish power-on through the node's fencing device).
 
-Nothing powers a node off automatically yet; the plan is advisory.
+- `POST /api/cluster/power/down` `{"node":"x"}` gracefully powers off one idle node through its BMC
+  (ipmitool `power soft`, Redfish `GracefulShutdown`). It is refused with 409 unless the planner
+  currently lists the node as a candidate, and never targets the node serving the request.
+
+Nothing powers a node off automatically yet; the plan is advisory and shutdown is an explicit call.
