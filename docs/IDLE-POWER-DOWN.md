@@ -8,7 +8,7 @@ the idle threshold (default 5%), is not pinned by HA or PCI passthrough, hosts n
 removing it keeps quorum and at least `min_online` (default 3) nodes online.
 
 - UI: Cluster Management > "Idle power-down" panel lists every node with CPU, guests, votes, wake
-  method and the reason it is or is not a candidate. Read-only.
+  method and the reason it is or is not a candidate. A candidate row has a "Power off" button (asks to confirm, then calls `POST /api/cluster/power/down`).
 - API: `GET /api/cluster/power/status` (live sample + plan), `POST /api/cluster/power/plan` (dry run
   on supplied nodes), `POST /api/cluster/power/wake` (Wake-on-LAN), `POST /api/cluster/power/bmc-on`
   (IPMI/iLO/DRAC/Redfish power-on through the node's fencing device).

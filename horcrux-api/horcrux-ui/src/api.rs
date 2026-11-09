@@ -639,6 +639,16 @@ pub async fn get_cluster_power_status() -> Result<PowerStatus, ApiError> {
     fetch_json("/cluster/power/status").await
 }
 
+/// `POST /api/cluster/power/down`: gracefully power one idle node off through
+/// its BMC. The server re-checks that the planner still lists it (409 if not).
+pub async fn power_down_node(node: &str) -> Result<(), ApiError> {
+    #[derive(Serialize)]
+    struct Body<'a> {
+        node: &'a str,
+    }
+    post_json_no_response("/cluster/power/down", &Body { node }).await
+}
+
 /// Why a node is (not) a power-down candidate, for the power panel.
 pub fn power_node_note(n: &PowerNodeStatus, candidate: bool) -> String {
     if candidate {

@@ -10,7 +10,7 @@
 //! - `POST /api/cluster/find-node`           <- `FindNodeRequest` -> node name
 use crate::api::{
     add_cluster_node, find_best_node_for_vm, get_cluster_architecture, get_cluster_nodes,
-    get_cluster_power_status, get_vms, power_node_note, remove_cluster_node, set_node_caps,
+    get_cluster_power_status, get_vms, power_down_node, power_node_note, remove_cluster_node, set_node_caps,
     set_node_priority, AddNodeRequest, ClusterArchitecture, ClusterNode, FindNodeRequest, NodeCaps,
     PowerStatus,
 };
@@ -279,6 +279,23 @@ pub fn ClusterManagementPage() -> impl IntoView {
                     flash(format!("Node '{}' removed", name));
                 }
                 Err(e) => set_error.set(Some(format!("Failed to remove node: {}", e))),
+            }
+        });
+    };
+
+    let power_off_node = move |name: String| {
+        if !confirm(&format!(
+            "Power off {name}? It has no guests and is idle; the BMC sends a graceful shutdown. Wake it again with the method in the Wake column (BMC power-on or Wake-on-LAN)."
+        )) {
+            return;
+        }
+        spawn_local(async move {
+            match power_down_node(&name).await {
+                Ok(()) => {
+                    load_cluster_data();
+                    flash(format!("Shutdown requested for '{}'", name));
+                }
+                Err(e) => set_error.set(Some(format!("Failed to power off node: {}", e))),
             }
         });
     };
@@ -620,7 +637,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
                             <h2 class="text-lg font-semibold">"Idle power-down"</h2>
                             <p class="text-sm text-gray-600">
                                 {format!(
-                                    "Only nodes labelled power-managed are considered; a node is idle below {}% CPU with no guests, and at least {} nodes stay online while quorum holds. Read-only: nothing is powered off from here.",
+                                    "Only nodes labelled power-managed are considered; a node is idle below {}% CPU with no guests, and at least {} nodes stay online while quorum holds. A candidate node can be powered off from here (graceful BMC shutdown, asked to confirm).",
                                     p.policy.idle_cpu_percent, p.policy.min_online
                                 )}
                             </p>
@@ -646,6 +663,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                         Some(serde_json::Value::String(s)) => s.clone(),
                                         Some(_) => "Wake-on-LAN".to_string(),
                                     };
+                                    let node_name = n.name.clone();
                                     view! {
                                         <tr class="power-row" data-node=n.name.clone()>
                                             <td class="px-6 py-2 text-sm font-medium">{n.name.clone()}</td>
@@ -653,7 +671,17 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                             <td class="px-6 py-2 text-sm">{n.running_guests}</td>
                                             <td class="px-6 py-2 text-sm">{n.votes}</td>
                                             <td class="px-6 py-2 text-sm">{wake}</td>
-                                            <td class="px-6 py-2 text-sm power-note">{note}</td>
+                                            <td class="px-6 py-2 text-sm power-note">
+                                                {note}
+                                                {cand.then(|| view! {
+                                                    <button
+                                                        class="power-off-btn ml-3 px-2 py-1 bg-red-600 text-white rounded text-xs"
+                                                        on:click=move |_| power_off_node(node_name.clone())
+                                                    >
+                                                        "Power off"
+                                                    </button>
+                                                })}
+                                            </td>
                                         </tr>
                                     }
                                 }).collect_view()}
