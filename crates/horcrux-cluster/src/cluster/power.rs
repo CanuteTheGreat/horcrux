@@ -148,6 +148,57 @@ pub fn send_wol(mac: [u8; 6], target: std::net::SocketAddr) -> std::io::Result<(
     Ok(())
 }
 
+/// Build the planner input from live cluster state (idle sampling).
+///
+/// * `cluster` -- every registered node (online or not) with its reported CPU.
+/// * `reachable` / `guests` -- the placement snapshot (`drain::snapshot`):
+///   nodes that answered and the guests they run.
+/// * `bmc_nodes` -- nodes with a configured BMC/fencing device (wake via BMC).
+/// * `local` -- this node; it is never offered for power-down.
+///
+/// Fails safe: an unknown CPU reading counts as busy, and an online node
+/// whose guest list could not be fetched, the local node, and Storage-role
+/// nodes (OSD hosts) are pinned.
+pub fn power_nodes_from_state(
+    cluster: &[super::node::Node],
+    reachable: &[String],
+    guests: &[super::drain::PlanGuest],
+    bmc_nodes: &[String],
+    local: &str,
+) -> Vec<PowerNode> {
+    use super::node::NodeStatus;
+    cluster
+        .iter()
+        .map(|n| {
+            let on = n.status != NodeStatus::Offline;
+            let known = reachable.iter().any(|r| r == &n.name);
+            let running = guests
+                .iter()
+                .filter(|g| g.node == n.name && g.running)
+                .count() as u32;
+            let role_osd = n.caps.as_ref().is_some_and(|c| c.role.hosts_osds());
+            PowerNode {
+                name: n.name.clone(),
+                labels: n
+                    .caps
+                    .as_ref()
+                    .map(|c| c.labels.clone())
+                    .unwrap_or_default(),
+                powered_on: on,
+                running_guests: running,
+                cpu_percent: n.cpu_usage.map(|c| c as f32).unwrap_or(100.0),
+                hosts_osds: role_osd,
+                pinned: n.name == local || n.is_local || (on && !known),
+                votes: 1,
+                wake: bmc_nodes
+                    .iter()
+                    .any(|b| b == &n.name)
+                    .then_some(WakeMethod::Bmc),
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,5 +300,40 @@ mod tests {
         let mut buf = [0u8; 256];
         let (n, _) = rx.recv_from(&mut buf).unwrap();
         assert_eq!(&buf[..n], wol_magic_packet(mac).as_slice());
+    }
+
+    #[test]
+    fn state_builder_fails_safe() {
+        use super::super::node::{Node, NodeStatus};
+        use super::super::roles::{NodeCaps, NodeRole};
+        let mk = |name: &str, cpu: Option<f64>, role: NodeRole| {
+            let mut n = Node::new(1, name.to_string(), "10.0.0.1".into());
+            n.status = NodeStatus::Online;
+            n.cpu_usage = cpu;
+            n.caps = Some(NodeCaps {
+                role,
+                labels: vec![POWER_LABEL.to_string()],
+                ..Default::default()
+            });
+            n
+        };
+        let cluster = vec![
+            mk("a", Some(1.0), NodeRole::Compute),
+            mk("b", None, NodeRole::Compute),
+            mk("c", Some(1.0), NodeRole::Storage),
+            mk("d", Some(1.0), NodeRole::Compute),
+            mk("me", Some(1.0), NodeRole::Compute),
+            mk("e", Some(1.0), NodeRole::Compute),
+        ];
+        let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        let reachable = names(&["a", "b", "c", "me", "e"]);
+        let bmc = names(&["a", "b", "c", "d", "me", "e"]);
+        let v = power_nodes_from_state(&cluster, &reachable, &[], &bmc, "me");
+        let p = PowerPolicy {
+            idle_cpu_percent: 5.0,
+            min_online: 1,
+        };
+        // b: unknown CPU = busy; c: OSD host; d: guest list unreachable; me: local.
+        assert_eq!(plan_power_down(&v, &p), vec!["a", "e"]);
     }
 }

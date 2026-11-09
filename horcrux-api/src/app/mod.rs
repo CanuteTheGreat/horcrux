@@ -1089,6 +1089,7 @@ fn cluster_routes() -> Router<Arc<AppState>> {
         )
         .route("/api/cluster/nics", get(get_local_nics))
         .route("/api/cluster/power/plan", post(plan_cluster_power))
+        .route("/api/cluster/power/status", get(get_cluster_power_status))
         .route("/api/cluster/power/wake", post(wake_cluster_node))
         .route("/api/cluster/power/bmc-on", post(bmc_power_on_node))
         .route("/api/cluster/quorum/plan", get(get_quorum_plan))
@@ -4604,6 +4605,31 @@ async fn plan_cluster_power(Json(req): Json<PowerPlanRequest>) -> Json<serde_jso
     Json(serde_json::json!({
         "power_down": power::plan_power_down(&req.nodes, &req.policy),
         "wake": power::plan_wake(&req.nodes, req.wake_needed),
+    }))
+}
+
+/// `GET /api/cluster/power/status` -- live idle-power view (area 7): samples
+/// every node (CPU, running guests, role, BMC availability) and returns the
+/// planner input plus which `power-managed` nodes could be powered down
+/// quorum-safely right now. Read-only; never acts.
+#[cfg(feature = "cluster")]
+async fn get_cluster_power_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    use crate::cluster::power;
+    let (local, snap_nodes, guests) = crate::api::drain::snapshot(&state).await;
+    let cluster_nodes = state.cluster_manager.list_nodes_with_local().await;
+    let bmc: Vec<String> = crate::api::ha_loop::fencing()
+        .list_devices()
+        .await
+        .into_iter()
+        .map(|d| d.node)
+        .collect();
+    let reachable: Vec<String> = snap_nodes.iter().map(|n| n.name.clone()).collect();
+    let nodes = power::power_nodes_from_state(&cluster_nodes, &reachable, &guests, &bmc, &local);
+    let policy = power::PowerPolicy::default();
+    Json(serde_json::json!({
+        "power_down": power::plan_power_down(&nodes, &policy),
+        "policy": policy,
+        "nodes": nodes,
     }))
 }
 
