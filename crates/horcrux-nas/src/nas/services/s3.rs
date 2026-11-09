@@ -546,7 +546,47 @@ pub struct S3GatewayManager {
 }
 
 /// Seconds to wait for a freshly started server to answer its health check.
-const START_TIMEOUT_SECS: u64 = 45;
+/// A first start formats the data directory and a busy or nested-virtualised
+/// host (VM-cluster feature runs, backups writing back) needs well over a
+/// minute: a 45 s limit made the gateway SIGTERM a server that was only slow
+/// ("Exiting on signal: TERMINATED") and the page stayed Stopped.
+const START_TIMEOUT_SECS: u64 = 150;
+
+/// How a wait for a freshly spawned server ended.
+#[derive(Debug, PartialEq, Eq)]
+enum StartWait {
+    Healthy,
+    /// the server process is gone
+    Died,
+    TimedOut,
+}
+
+/// Poll until the server is healthy, its process is gone, or `timeout` passes.
+async fn wait_for_start<H, HF, A>(
+    timeout: std::time::Duration,
+    poll: std::time::Duration,
+    mut healthy: H,
+    mut alive: A,
+) -> StartWait
+where
+    H: FnMut() -> HF,
+    HF: std::future::Future<Output = bool>,
+    A: FnMut() -> bool,
+{
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if healthy().await {
+            return StartWait::Healthy;
+        }
+        if !alive() {
+            return StartWait::Died;
+        }
+        if std::time::Instant::now() > deadline {
+            return StartWait::TimedOut;
+        }
+        tokio::time::sleep(poll).await;
+    }
+}
 
 /// A random alphanumeric string (credentials, generated keys).
 pub fn random_alnum(len: usize) -> String {
@@ -1066,26 +1106,38 @@ impl S3GatewayManager {
             let _ = child.wait().await;
         });
 
-        let deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(START_TIMEOUT_SECS);
-        loop {
-            if self.healthy().await {
+        let started = std::time::Instant::now();
+        let waited = wait_for_start(
+            std::time::Duration::from_secs(START_TIMEOUT_SECS),
+            std::time::Duration::from_millis(300),
+            || self.healthy(),
+            || self.running_pid().is_some(),
+        )
+        .await;
+        match waited {
+            StartWait::Healthy => {
                 tracing::info!(
-                    "S3 gateway started (pid {}, {}://{})",
+                    "S3 gateway started (pid {}, {}://{}) in {:.1}s",
                     pid,
                     self.scheme(),
-                    self.local_endpoint()
+                    self.local_endpoint(),
+                    started.elapsed().as_secs_f32()
                 );
-                return Ok(());
+                Ok(())
             }
-            if self.running_pid().is_none() || std::time::Instant::now() > deadline {
+            StartWait::Died | StartWait::TimedOut => {
                 let _ = self.stop().await;
-                return Err(Error::Internal(format!(
-                    "S3 server did not come up: {}",
+                Err(Error::Internal(format!(
+                    "S3 server {} after {:.0}s: {}",
+                    if waited == StartWait::Died {
+                        "exited"
+                    } else {
+                        "did not answer its health check"
+                    },
+                    started.elapsed().as_secs_f32(),
                     self.log_tail(15)
-                )));
+                )))
             }
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         }
     }
 
@@ -2725,6 +2777,46 @@ async fn get_disk_usage(path: &str) -> Result<(u64, u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn start_wait_tolerates_a_slow_server_and_reports_timeout_and_death() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+        let polls = AtomicUsize::new(0);
+        // healthy on the 5th probe: a slow start is waited for
+        let r = wait_for_start(
+            Duration::from_secs(5),
+            Duration::from_millis(10),
+            || {
+                let n = polls.fetch_add(1, Ordering::SeqCst) + 1;
+                async move { n >= 5 }
+            },
+            || true,
+        )
+        .await;
+        assert_eq!(r, StartWait::Healthy);
+        assert_eq!(polls.load(Ordering::SeqCst), 5);
+        // never healthy, process alive: times out
+        let r = wait_for_start(
+            Duration::from_millis(100),
+            Duration::from_millis(10),
+            || async { false },
+            || true,
+        )
+        .await;
+        assert_eq!(r, StartWait::TimedOut);
+        // process gone: reported at once, not after the timeout
+        let t = std::time::Instant::now();
+        let r = wait_for_start(
+            Duration::from_secs(30),
+            Duration::from_millis(10),
+            || async { false },
+            || false,
+        )
+        .await;
+        assert_eq!(r, StartWait::Died);
+        assert!(t.elapsed() < Duration::from_secs(5));
+    }
 
     #[test]
     fn only_packaged_gateway_programs_are_accepted_as_binaries() {

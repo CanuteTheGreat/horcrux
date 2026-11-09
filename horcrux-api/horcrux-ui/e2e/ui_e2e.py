@@ -1447,7 +1447,7 @@ def s3_gateway_checks(page):
     expect(page.locator("#s3-state")).to_have_text("Stopped", timeout=30000)
     expect(page.locator("#s3-missing")).to_have_count(0)
     page.locator("#s3-start").click()
-    expect(page.locator("#s3-state")).to_have_text("Running", timeout=90000)
+    expect(page.locator("#s3-state")).to_have_text("Running", timeout=200000)
     expect(page.locator("#s3-endpoint")).to_contain_text(f":{port}")
 
     bucket = "e2e-ui-bucket"
