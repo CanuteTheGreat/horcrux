@@ -1149,7 +1149,9 @@ def esxi_import_checks(page):
 def cluster_nodes_checks(context):
     """/ha/cluster on a fresh node: the local node is listed (the API used
     to return [] until a cluster was created), it has no Remove button, and a
-    registered peer can be removed through a confirm dialog."""
+    registered peer can be removed through a confirm dialog. The Idle power-down
+    panel below the node table lists every node too (rows `.power-row`): the node
+    rows are selected without them."""
     tok = token()
     nodes = api_get("/api/cluster/nodes", tok)
     local = [n for n in nodes if n["is_local"]]
@@ -1177,7 +1179,7 @@ def cluster_nodes_checks(context):
         except urllib.error.HTTPError as e:
             assert e.code == 404, e.code
         page.goto(f"{BASE}/ha/cluster")
-        me = page.locator("tbody tr", has_text="(this node)")
+        me = page.locator("tbody tr:not(.power-row)", has_text="(this node)")
         expect(me).to_have_count(1, timeout=30000)
         expect(page.get_by_text("No cluster nodes configured")).to_have_count(0)
         expect(me).to_contain_text(local[0]["name"])
@@ -1189,7 +1191,7 @@ def cluster_nodes_checks(context):
         page.get_by_placeholder("node-02").fill(peer)
         page.get_by_placeholder("192.168.1.100").fill("192.0.2.77")
         page.get_by_role("button", name="Add Node").last.click()
-        row = page.locator("tbody tr", has_text=peer)
+        row = page.locator("tbody tr:not(.power-row)", has_text=peer)
         expect(row).to_have_count(1, timeout=30000)
 
         # Cancel in the confirm dialog: nothing happens
@@ -1202,10 +1204,10 @@ def cluster_nodes_checks(context):
         # Confirm: DELETE /api/cluster/nodes/e2e-peer
         answer["accept"] = True
         row.get_by_role("button", name="Remove").click()
-        expect(page.locator("tbody tr", has_text=peer)).to_have_count(0, timeout=30000)
+        expect(page.locator("tbody tr:not(.power-row)", has_text=peer)).to_have_count(0, timeout=30000)
         expect(page.get_by_text(f"Node '{peer}' removed")).to_be_visible()
         assert not any(n["name"] == peer for n in api_get("/api/cluster/nodes", tok))
-        expect(page.locator("tbody tr", has_text="(this node)")).to_have_count(1)
+        expect(page.locator("tbody tr:not(.power-row)", has_text="(this node)")).to_have_count(1)
     finally:
         page.close()
     print("UI E2E: /ha/cluster lists this node, Remove node (confirm/cancel/delete) passed")
