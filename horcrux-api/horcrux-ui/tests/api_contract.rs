@@ -473,6 +473,7 @@ async fn ui_types_read_real_api_responses() {
     check!("/alerts/history", Vec<api::ActiveAlert>);
     check!("/cluster/nodes", Vec<api::ClusterNode>);
     check!("/cluster/architecture", api::ClusterArchitecture);
+    check!("/cluster/power/status", api::PowerStatus);
     check!("/users", Vec<api::User>);
     check!("/roles", Vec<api::Role>);
     check!("/auth/sessions", Vec<api::UserSession>);

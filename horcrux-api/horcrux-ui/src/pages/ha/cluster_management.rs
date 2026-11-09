@@ -9,7 +9,8 @@
 //! - `PATCH /api/cluster/nodes/:name/priority` <- `{priority}`
 //! - `POST /api/cluster/find-node`           <- `FindNodeRequest` -> node name
 use crate::api::{
-    add_cluster_node, find_best_node_for_vm, get_cluster_architecture, get_cluster_nodes, get_vms,
+    add_cluster_node, find_best_node_for_vm, get_cluster_architecture, get_cluster_nodes,
+    get_cluster_power_status, get_vms, power_node_note, PowerStatus,
     remove_cluster_node, set_node_caps, set_node_priority, AddNodeRequest, ClusterArchitecture,
     ClusterNode, FindNodeRequest, NodeCaps,
 };
@@ -114,6 +115,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
     let (cluster_architecture, set_cluster_architecture) =
         create_signal(None::<ClusterArchitecture>);
     let (vms, set_vms) = create_signal(Vec::<VmConfig>::new());
+    let (power_status, set_power_status) = create_signal(None::<PowerStatus>);
     let (loading, set_loading) = create_signal(false);
     let (error, set_error) = create_signal(None::<String>);
     let (success_message, set_success_message) = create_signal(None::<String>);
@@ -147,6 +149,11 @@ pub fn ClusterManagementPage() -> impl IntoView {
             match get_cluster_architecture().await {
                 Ok(arch) => set_cluster_architecture.set(Some(arch)),
                 Err(e) => errors.push(format!("Failed to load cluster architecture: {}", e)),
+            }
+
+            match get_cluster_power_status().await {
+                Ok(p) => set_power_status.set(Some(p)),
+                Err(e) => errors.push(format!("Failed to load power status: {}", e)),
             }
 
             match get_vms().await {
@@ -599,6 +606,63 @@ pub fn ClusterManagementPage() -> impl IntoView {
                 }.into_view()
             }}
 
+            // Idle power-down (area 7): read-only view of the planner.
+            {move || power_status.get().map(|p| {
+                let candidates = p.power_down.clone();
+                let summary = if candidates.is_empty() {
+                    "No node can be powered down right now.".to_string()
+                } else {
+                    format!("Can be powered down now: {}", candidates.join(", "))
+                };
+                view! {
+                    <div id="power-panel" class="bg-white rounded-lg shadow overflow-hidden mt-6">
+                        <div class="px-6 py-4 border-b">
+                            <h2 class="text-lg font-semibold">"Idle power-down"</h2>
+                            <p class="text-sm text-gray-600">
+                                {format!(
+                                    "Only nodes labelled power-managed are considered; a node is idle below {}% CPU with no guests, and at least {} nodes stay online while quorum holds. Read-only: nothing is powered off from here.",
+                                    p.policy.idle_cpu_percent, p.policy.min_online
+                                )}
+                            </p>
+                            <p id="power-summary" class="text-sm font-medium mt-1">{summary}</p>
+                        </div>
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase">"Node"</th>
+                                    <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase">"CPU"</th>
+                                    <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase">"Guests"</th>
+                                    <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase">"Votes"</th>
+                                    <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase">"Wake"</th>
+                                    <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase">"Status"</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-200">
+                                {p.nodes.iter().map(|n| {
+                                    let cand = candidates.contains(&n.name);
+                                    let note = power_node_note(n, cand);
+                                    let wake = match &n.wake {
+                                        None => "none".to_string(),
+                                        Some(serde_json::Value::String(s)) => s.clone(),
+                                        Some(_) => "Wake-on-LAN".to_string(),
+                                    };
+                                    view! {
+                                        <tr class="power-row" data-node=n.name.clone()>
+                                            <td class="px-6 py-2 text-sm font-medium">{n.name.clone()}</td>
+                                            <td class="px-6 py-2 text-sm">{format!("{:.0}%", n.cpu_percent)}</td>
+                                            <td class="px-6 py-2 text-sm">{n.running_guests}</td>
+                                            <td class="px-6 py-2 text-sm">{n.votes}</td>
+                                            <td class="px-6 py-2 text-sm">{wake}</td>
+                                            <td class="px-6 py-2 text-sm power-note">{note}</td>
+                                        </tr>
+                                    }
+                                }).collect_view()}
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            })}
+
             // Add Node Modal
             {move || show_add_node_modal.get().then(|| view! {
                 <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -786,5 +850,32 @@ mod tests {
         assert!(parse_weight("1001").is_err());
         assert!(parse_weight("-1").is_err());
         assert!(parse_weight("abc").is_err());
+    }
+
+    #[test]
+    fn power_note_explains_each_state() {
+        use crate::api::PowerNodeStatus;
+        let mut n = PowerNodeStatus {
+            name: "a".into(),
+            labels: vec![],
+            powered_on: true,
+            running_guests: 0,
+            cpu_percent: 1.0,
+            hosts_osds: false,
+            pinned: false,
+            votes: 1,
+            wake: None,
+        };
+        assert_eq!(power_node_note(&n, true), "idle: can be powered down");
+        assert!(power_node_note(&n, false).contains("not opted in"));
+        n.labels.push("power-managed".into());
+        n.running_guests = 2;
+        assert_eq!(power_node_note(&n, false), "2 running guest(s)");
+        n.hosts_osds = true;
+        assert_eq!(power_node_note(&n, false), "hosts Ceph OSDs");
+        n.pinned = true;
+        assert!(power_node_note(&n, false).contains("pinned"));
+        n.powered_on = false;
+        assert_eq!(power_node_note(&n, false), "powered off");
     }
 }

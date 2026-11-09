@@ -593,6 +593,75 @@ pub async fn set_node_caps(name: &str, caps: Option<&NodeCaps>) -> Result<(), Ap
     }
 }
 
+/// One sampled node of `GET /api/cluster/power/status` (idle power-down, area 7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PowerNodeStatus {
+    pub name: String,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub powered_on: bool,
+    #[serde(default)]
+    pub running_guests: u32,
+    #[serde(default)]
+    pub cpu_percent: f32,
+    #[serde(default)]
+    pub hosts_osds: bool,
+    /// Pinned by HA / passthrough devices; never powered down.
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub votes: u32,
+    /// `null`, `"Bmc"` or `{"Wol":[..6 bytes..]}`.
+    #[serde(default)]
+    pub wake: Option<serde_json::Value>,
+}
+
+/// Policy the planner ran with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PowerPolicyView {
+    pub idle_cpu_percent: f32,
+    pub min_online: usize,
+}
+
+/// `GET /api/cluster/power/status`: sampled nodes plus the `power-managed`
+/// nodes that could be shut down quorum-safely right now. Read-only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PowerStatus {
+    #[serde(default)]
+    pub power_down: Vec<String>,
+    pub policy: PowerPolicyView,
+    #[serde(default)]
+    pub nodes: Vec<PowerNodeStatus>,
+}
+
+pub async fn get_cluster_power_status() -> Result<PowerStatus, ApiError> {
+    fetch_json("/cluster/power/status").await
+}
+
+/// Why a node is (not) a power-down candidate, for the power panel.
+pub fn power_node_note(n: &PowerNodeStatus, candidate: bool) -> String {
+    if candidate {
+        return "idle: can be powered down".to_string();
+    }
+    if !n.powered_on {
+        return "powered off".to_string();
+    }
+    if !n.labels.iter().any(|l| l == "power-managed") {
+        return "not opted in (label power-managed)".to_string();
+    }
+    if n.pinned {
+        return "pinned by HA or passthrough".to_string();
+    }
+    if n.hosts_osds {
+        return "hosts Ceph OSDs".to_string();
+    }
+    if n.running_guests > 0 {
+        return format!("{} running guest(s)", n.running_guests);
+    }
+    "kept online (quorum or minimum online nodes)".to_string()
+}
+
 /// Set a node's placement/HA weight (0-1000).
 pub async fn set_node_priority(name: &str, priority: u32) -> Result<(), ApiError> {
     #[derive(Serialize)]
