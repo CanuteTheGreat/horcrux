@@ -22,16 +22,16 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 
 /// How often the usage monitor polls every node.
-pub const POLL_INTERVAL: Duration = Duration::from_secs(10);
+pub const POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Per-node HTTP timeout for a remote usage fetch (connect + response).
 /// Kept well under [`POLL_INTERVAL`] so one dead node can't stall a round.
-pub const FETCH_TIMEOUT: Duration = Duration::from_secs(4);
+pub const FETCH_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// How long a node may go without a successful report before its last
 /// usage figures are discarded and it is marked offline. Three missed
 /// polls, so a single dropped request doesn't flap the node's status.
-pub const STALE_AFTER_SECS: i64 = 30;
+pub const STALE_AFTER_SECS: i64 = 15;
 
 /// Poll interval in effect: `HORCRUX_CLUSTER_POLL_SECS` or [`POLL_INTERVAL`].
 pub fn poll_interval() -> Duration {

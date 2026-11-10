@@ -462,11 +462,32 @@ fn guard_one_at_a_time() -> Result<(), ApiError> {
     Ok(())
 }
 
+/// Packages whose ebuild installs a prebuilt tarball fetched at unpack time. Portage matches
+/// binary packages by version, and their binary package is a copy of an OLDER tarball, so a
+/// host with `FEATURES=buildpkg` and `--usepkg`/`--getbinpkg` in `EMERGE_DEFAULT_OPTS` (the
+/// lab laptops, any binhost user) must never install them from a binary package: that
+/// silently reinstalled the old manager (lab 2026-11-10). New tarballs also get a new
+/// version (`gentoo/app-emulation/horcrux-bin/bump-horcrux-bin.sh`); this is the second line.
+const PREBUILT_PACKAGES: &[&str] = &["app-emulation/horcrux-bin"];
+
+/// `--usepkg-exclude` for every prebuilt-tarball package (not for `--depclean`, which
+/// installs nothing).
+fn prebuilt_binpkg_guard(extra: &[&str]) -> Vec<String> {
+    if extra.contains(&"--depclean") {
+        return Vec::new();
+    }
+    PREBUILT_PACKAGES
+        .iter()
+        .map(|p| format!("--usepkg-exclude={p}"))
+        .collect()
+}
+
 fn emerge_args(extra: &[&str], atoms: &[String]) -> Vec<String> {
     let mut a: Vec<String> = ["--ask=n", "--color=n", "--nospinner"]
         .iter()
         .map(|s| s.to_string())
         .collect();
+    a.extend(prebuilt_binpkg_guard(extra));
     a.extend(extra.iter().map(|s| s.to_string()));
     a.extend(atoms.iter().cloned());
     a
@@ -674,6 +695,29 @@ async fn update_db(u: AuthExt) -> Res<TaskRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upgrades_never_take_the_prebuilt_manager_from_a_binary_package() {
+        let id = vec!["app-emulation/horcrux-bin".to_string()];
+        for extra in [&["--update", "--oneshot"][..], &["--noreplace"][..]] {
+            let a = emerge_args(extra, &id);
+            assert!(
+                a.contains(&"--usepkg-exclude=app-emulation/horcrux-bin".to_string()),
+                "{a:?}"
+            );
+        }
+        let w = emerge_args(&["--update", "--deep", "--newuse", "@world"], &[]);
+        assert!(w.contains(&"--usepkg-exclude=app-emulation/horcrux-bin".to_string()));
+        // the exclusion comes before the atoms, and removal installs nothing
+        let u = emerge_args(&["--update", "--oneshot"], &id);
+        let pos = |x: &str| u.iter().position(|a| a == x).unwrap();
+        assert!(
+            pos("--usepkg-exclude=app-emulation/horcrux-bin") < pos("app-emulation/horcrux-bin")
+        );
+        assert!(!emerge_args(&["--depclean"], &id)
+            .iter()
+            .any(|a| a.starts_with("--usepkg-exclude")));
+    }
 
     #[test]
     fn pf_splits_at_the_version() {
