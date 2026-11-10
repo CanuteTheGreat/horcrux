@@ -1027,4 +1027,92 @@ mod tests {
             log
         );
     }
+
+    /// Wake-on-demand and idle power-down go through the real manager paths
+    /// (device selection, priority order, event log) against a mock iDRAC:
+    /// power_on_node must POST ResetType "On", power_off_node_graceful must
+    /// POST "GracefulShutdown" (never ForceOff), and both are logged.
+    #[tokio::test]
+    async fn test_power_on_and_graceful_off_against_mock_bmc() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = Arc::new(RwLock::new(Vec::<String>::new()));
+        let seen2 = seen.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                let mut buf = vec![0u8; 4096];
+                let n = sock.read(&mut buf).await.unwrap();
+                let mut req = String::from_utf8_lossy(&buf[..n]).to_string();
+                if req.starts_with("POST") && !req.contains("ResetType") {
+                    if let Ok(Ok(m)) = tokio::time::timeout(
+                        std::time::Duration::from_millis(500),
+                        sock.read(&mut buf),
+                    )
+                    .await
+                    {
+                        req.push_str(&String::from_utf8_lossy(&buf[..m]));
+                    }
+                }
+                let reset = ["GracefulShutdown", "ForceOff", "\"On\""]
+                    .iter()
+                    .find(|k| req.contains(**k))
+                    .copied()
+                    .unwrap_or("none");
+                seen2
+                    .write()
+                    .await
+                    .push(format!("{} || {}", req.lines().next().unwrap_or(""), reset));
+                let post = req.starts_with("POST");
+                let body = r#"{"PowerState":"On"}"#;
+                let resp = format!(
+                    "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    if post { "204 No Content" } else { "200 OK" },
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+            }
+        });
+        let mgr = FencingManager::new();
+        mgr.add_device(FencingDevice {
+            id: "idrac".into(),
+            agent_type: FencingAgentType::Redfish,
+            node: "r6525-2".into(),
+            address: format!("http://127.0.0.1:{}", port),
+            username: Some("root".into()),
+            password: Some("x".into()),
+            port: None,
+            options: HashMap::from([("system_id".to_string(), "System.Embedded.1".to_string())]),
+            priority: 1,
+        })
+        .await
+        .unwrap();
+        assert!(matches!(
+            mgr.power_off_node_graceful("r6525-2", "idle").await,
+            FencingResult::Success
+        ));
+        assert!(matches!(
+            mgr.power_on_node("r6525-2").await,
+            FencingResult::Success
+        ));
+        let log = seen.read().await.clone();
+        let reset_path = "POST /redfish/v1/Systems/System.Embedded.1/Actions/ComputerSystem.Reset";
+        assert!(
+            log.iter()
+                .any(|l| l.starts_with(reset_path) && l.ends_with("GracefulShutdown")),
+            "{:?}",
+            log
+        );
+        assert!(
+            log.iter()
+                .any(|l| l.starts_with(reset_path) && l.ends_with("\"On\"")),
+            "{:?}",
+            log
+        );
+        assert!(!log.iter().any(|l| l.ends_with("ForceOff")), "{:?}", log);
+        let events = mgr.get_events(Some("r6525-2"), 10).await;
+        assert_eq!(events.len(), 2, "{:?}", events);
+    }
 }
