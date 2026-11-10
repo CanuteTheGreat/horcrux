@@ -30,6 +30,13 @@ on:
     branches: [main]
     tags: ['v*']
     paths:
+      - 'crates/**'
+      - 'horcrux-api/**'
+      - 'horcrux-common/**'
+      - 'horcrux-cli/**'
+      - 'horcrux-ui/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - 'build/live-iso/**'
       - 'gentoo/**'
       - 'deploy/**'
