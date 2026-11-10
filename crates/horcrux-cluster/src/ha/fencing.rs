@@ -1060,10 +1060,11 @@ mod tests {
                     .find(|k| req.contains(**k))
                     .copied()
                     .unwrap_or("none");
-                seen2
-                    .write()
-                    .await
-                    .push(format!("{} || {}", req.lines().next().unwrap_or(""), reset));
+                seen2.write().await.push(format!(
+                    "{} || {}",
+                    req.lines().next().unwrap_or(""),
+                    reset
+                ));
                 let post = req.starts_with("POST");
                 let body = r#"{"PowerState":"On"}"#;
                 let resp = format!(
