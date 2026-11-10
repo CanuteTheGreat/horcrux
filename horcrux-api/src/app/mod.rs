@@ -4730,6 +4730,8 @@ async fn get_quorum_plan(State(state): State<Arc<AppState>>) -> Json<serde_json:
         "tolerated_vote_loss": plan.tolerated_vote_loss,
         "split_brain_risk": plan.split_brain_risk,
         "auto_tie_breaker": plan.auto_tie_breaker,
+        "qdevice_host": plan.qdevice.as_ref().map(|q| q.host.clone()),
+        "qdevice_votes": plan.qdevice_votes,
         "warnings": plan.warnings,
         "corosync_conf": config,
     }))

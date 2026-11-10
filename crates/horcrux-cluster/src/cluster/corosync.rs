@@ -274,11 +274,21 @@ logging {{
 /// `quorum_votes` (0 = non-voting). The `quorum {}` block comes from
 /// `quorum::plan`, so an even voter count (e.g. 10) gets `auto_tie_breaker`.
 /// Pure: writes nothing. Returns the config text and the plan (for warnings).
+/// An external qdevice is added when `HORCRUX_QDEVICE_HOST` is set.
 pub fn generate_multi_node_config(
     cluster_name: &str,
     nodes: &[(Node, u32)],
 ) -> (String, super::quorum::QuorumPlan) {
-    use super::quorum::{corosync_quorum_block, plan, Voter};
+    generate_multi_node_config_with(cluster_name, nodes, super::quorum::QDevice::from_env())
+}
+
+/// `generate_multi_node_config` with an explicit (or no) qdevice.
+pub fn generate_multi_node_config_with(
+    cluster_name: &str,
+    nodes: &[(Node, u32)],
+    qdevice: Option<super::quorum::QDevice>,
+) -> (String, super::quorum::QuorumPlan) {
+    use super::quorum::{corosync_quorum_block, plan_with_qdevice, Voter};
     let voters: Vec<Voter> = nodes
         .iter()
         .map(|(n, v)| Voter {
@@ -287,7 +297,7 @@ pub fn generate_multi_node_config(
             votes: *v,
         })
         .collect();
-    let qp = plan(&voters);
+    let qp = plan_with_qdevice(&voters, qdevice.as_ref());
     let mut s = format!(
         "totem {{\n    version: 2\n    cluster_name: {cluster_name}\n    transport: knet\n    crypto_cipher: aes256\n    crypto_hash: sha256\n}}\n\nnodelist {{\n"
     );
@@ -322,6 +332,18 @@ mod tests {
         assert!(cfg.contains("expected_votes: 10"));
         assert!(cfg.contains("auto_tie_breaker: 1"));
         assert!(cfg.contains("quorum_votes: 1"));
+    }
+
+    #[test]
+    fn config_with_qdevice_has_device_block_and_no_tie_breaker() {
+        use crate::cluster::quorum::{QAlgorithm, QDevice};
+        let nodes: Vec<(Node, u32)> = (1..=4).map(|i| (node(i), 1)).collect();
+        let q = QDevice::new("qnetd.lab", QAlgorithm::FfSplit);
+        let (cfg, plan) = generate_multi_node_config_with("lab", &nodes, q);
+        assert_eq!(plan.total_votes, 5);
+        assert!(cfg.contains("device {") && cfg.contains("host: qnetd.lab"));
+        assert!(cfg.contains("expected_votes: 5"));
+        assert!(!cfg.contains("auto_tie_breaker"));
     }
 
     #[test]
