@@ -9,13 +9,13 @@
 ARG BASE
 FROM ${BASE} AS hsm-prep
 ARG ARCH=x86_64
-COPY project/variants/desktop/portage/ /etc/portage/
-COPY project/variants/desktop/repo/ /var/db/repos/horcrux-desktop/
+COPY project/variants/gnome-light/portage/ /etc/portage/
+COPY project/variants/gnome-light/repo/ /var/db/repos/horcrux-desktop/
 COPY project/variants/hogsmeade/portage/ /etc/portage/
 COPY --from=hxgentoo / /var/db/repos/horcrux/
 COPY --from=ctgoverlay / /var/db/repos/canutethegreat/
 COPY project/variants/hogsmeade/local-repo/ /var/db/repos/local/
-COPY project/variants/desktop/packages.txt /tmp/packages-desktop.txt
+COPY project/variants/gnome-light/packages.txt /tmp/packages-desktop.txt
 RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; emerge-webrsync -q || emerge --sync -q; \
     eselect profile set default/linux/amd64/23.0/desktop/gnome; \
@@ -132,7 +132,7 @@ RUN set -e; unset ARCH; export FEATURES="-ccache"; \
     chmod 644 /usr/share/horcrux/desktop/* 2>/dev/null || true
 # desktop markers the installer looks for (the desktop variant ships the same two files), image markers, services; reown.sh then
 # puts everything that is still unowned into sys-apps/hogsmeade-image-files
-COPY project/variants/desktop/overlay/ /
+COPY project/variants/gnome-light/overlay/ /
 COPY project/variants/hogsmeade/reown.sh /usr/local/sbin/hsm-reown
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \

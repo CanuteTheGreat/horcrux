@@ -293,7 +293,7 @@ class Stages(unittest.TestCase):
         old = D.available
         try:
             D.available = lambda root="/": False
-            self.assertTrue(any("needs the Desktop image" in e for e in S.validate_config(PROFILE_X, c)))
+            self.assertTrue(any("not available yet" in e for e in S.validate_config(PROFILE_X, c)))
             D.available = lambda root="/": True
             self.assertFalse(any("install_type" in e for e in S.validate_config(PROFILE_X, c)))
         finally:

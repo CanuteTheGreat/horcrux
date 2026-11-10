@@ -78,7 +78,7 @@ COPY common/overlay/usr/lib/live-installer /tmp/hxt/usr/lib/live-installer
 COPY common/overlay/usr/libexec /tmp/hxt/usr/libexec
 COPY common/overlay/usr/bin /tmp/hxt/usr/bin
 COPY project/variants/hogshead/overlay/usr/bin/horcrux-orphans /tmp/hxt/usr/bin/horcrux-orphans
-COPY project/variants/desktop/overlay/usr/share/horcrux/desktop /tmp/hxt/usr/share/horcrux/desktop
+COPY project/variants/gnome-light/overlay/usr/share/horcrux/desktop /tmp/hxt/usr/share/horcrux/desktop
 COPY project/variants/gringotts/overlay/usr/libexec/ /tmp/hxt/usr/libexec/
 # Tailscale is the owner's (a machine service, not in the public desktop's list): started by default here
 RUN echo 'tailscale default' >> /tmp/hxt/usr/share/horcrux/desktop/services.list
