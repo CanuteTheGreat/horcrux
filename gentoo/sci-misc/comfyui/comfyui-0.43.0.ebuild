@@ -7,7 +7,7 @@ PYTHON_COMPAT=( python3_13 )
 
 inherit python-single-r1
 
-DESCRIPTION="ComfyUI node-based diffusion UI/server (private venv with PyTorch cu130 wheels), Tailscale-only service"
+DESCRIPTION="ComfyUI node-based diffusion UI/server (private venv with PyTorch cu130 wheels) (listens only where COMFYUI_LISTEN says; stays off without it)"
 HOMEPAGE="https://github.com/Comfy-Org/ComfyUI"
 SRC_URI="https://github.com/Comfy-Org/ComfyUI/archive/refs/tags/v${PV}.tar.gz -> ComfyUI-${PV}.tar.gz"
 S="${WORKDIR}/ComfyUI-${PV}"
@@ -24,7 +24,6 @@ RDEPEND="
 	acct-user/comfyui
 	acct-group/comfyui
 	x11-drivers/nvidia-drivers
-	net-vpn/tailscale
 	net-misc/curl
 	media-video/ffmpeg
 "

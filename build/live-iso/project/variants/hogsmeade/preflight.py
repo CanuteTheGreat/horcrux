@@ -179,6 +179,17 @@ for name in ("gentoo", "guru"):
     ATOMS[name] = set(open(f).read().split()) if a.atoms and os.path.exists(f) else set()
     if not ATOMS[name]:
         print(f"WARNING: no {name} atom list; {name} atoms unchecked")
+EBUILDS = set()  # "cat/pn-pv" of every ebuild in every enabled repo
+for name, h in REPO_DIRS.items():
+    for f in glob.glob(f"{h}/*/*/*.ebuild"):
+        c, pn_, fn = f.split("/")[-3:]
+        EBUILDS.add(f"{c}/{fn[:-7]}")
+for name in ("gentoo", "guru"):
+    f = os.path.join(a.atoms or "", f"{name}-ebuilds.txt")
+    if a.atoms and os.path.exists(f):
+        for ln in open(f).read().split():
+            c, _, fn = ln.split("/")
+            EBUILDS.add(f"{c}/{fn[:-7]}")
 CATS = {x.split("/")[0] for s in ATOMS.values() for x in s}
 ALL = set().union(*ATOMS.values())
 ALIAS = {"canutethegreat-overlay": "canutethegreat-overlay"}
@@ -203,6 +214,11 @@ def check_atom(src, tok):
     # package names ending in -<digits> are legal; also try with the version glued back
     if name not in ALL and ver and f"{cat}/{pkg}-{ver}" in ALL:
         return
+    if op == "=" and ver and EBUILDS and name in ALL:
+        want = f"{name}-{ver}"
+        pat = re.compile("^" + re.escape(want).replace(r"\*", ".*") + "$")
+        if not any(pat.match(e) for e in EBUILDS if e.startswith(name + "-")):
+            err(f"{src}: {tok}: no such VERSION (ebuild {want}.ebuild is in no enabled repo)")
     if repo:
         if repo not in ATOMS:
             if repo not in unchecked_repos:

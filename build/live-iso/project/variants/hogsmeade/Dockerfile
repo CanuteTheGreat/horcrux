@@ -45,8 +45,8 @@ FROM hsm-prep AS hsm-kconfig
 RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
     emerge --oneshot --usepkg --getbinpkg sys-libs/binutils-libs app-alternatives/bc sys-devel/bc dev-util/pahole >/dev/null 2>&1; \
-    ebuild /var/db/repos/gentoo/sys-kernel/gentoo-kernel/gentoo-kernel-7.2.13.ebuild clean configure > /tmp/kcfg.log 2>&1 || { tail -30 /tmp/kcfg.log; exit 1; }; tail -3 /tmp/kcfg.log; \
-    c=$(find /var/tmp/portage/sys-kernel/gentoo-kernel-7.2.13/work -maxdepth 2 -name .config | head -1); echo CONFIG=$c; \
+    ebuild /var/db/repos/gentoo/sys-kernel/gentoo-kernel/gentoo-kernel-6.18.62.ebuild clean configure > /tmp/kcfg.log 2>&1 || { tail -30 /tmp/kcfg.log; exit 1; }; tail -3 /tmp/kcfg.log; \
+    c=$(find /var/tmp/portage/sys-kernel/gentoo-kernel-6.18.62/work -maxdepth 2 -name .config | head -1); echo CONFIG=$c; \
     miss=0; while read -r l; do case "$l" in CONFIG_*) grep -qx "$l" "$c" || { echo "MISSING $l  (have: $(grep -E "^(# )?${l%%=*}[= ]" "$c" | head -1))"; miss=1; };; esac; done < /usr/share/horcrux-hogsmeade/required-config.txt; \
     [ $miss = 0 ] && echo KCONFIG-OK || exit 1
 
@@ -59,8 +59,8 @@ RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,
     --mount=type=cache,id=hs-kernel-binpkgs,target=/var/cache/hs-binpkgs,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache" PKGDIR=/var/cache/hs-binpkgs; \
     emerge --oneshot --usepkg --getbinpkg sys-libs/binutils-libs app-alternatives/bc sys-devel/bc dev-util/pahole > /var/log/hogsmeade-kernel-deps.log 2>&1 || { tail -40 /var/log/hogsmeade-kernel-deps.log; exit 1; }; \
-    if ! ls /var/cache/hs-binpkgs/sys-kernel/gentoo-kernel-7.2.13*.gpkg.tar >/dev/null 2>&1; then \
-      emerge --buildpkgonly --nodeps --usepkg=n --getbinpkg=n =sys-kernel/gentoo-kernel-7.2.13 \
+    if ! ls /var/cache/hs-binpkgs/sys-kernel/gentoo-kernel-6.18.62*.gpkg.tar >/dev/null 2>&1; then \
+      emerge --buildpkgonly --nodeps --usepkg=n --getbinpkg=n =sys-kernel/gentoo-kernel-6.18.62 \
         > /var/log/hogsmeade-kernel-build.log 2>&1 || { tail -80 /var/log/hogsmeade-kernel-build.log; exit 1; }; \
     fi; \
     mkdir -p /hs-binpkgs && cp -a /var/cache/hs-binpkgs/. /hs-binpkgs/; find /hs-binpkgs -type f | head
@@ -79,7 +79,7 @@ RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,
     set -e; unset ARCH; export FEATURES="-ccache" PKGDIR=/hs-binpkgs; \
     echo 'omit_dracutmodules+=" zfs horcrux-unlock "' > /etc/dracut.conf.d/00-hogsmeade-build.conf; \
     emerge --unmerge sys-kernel/gentoo-kernel-bin || true; \
-    emerge --oneshot --usepkgonly --nodeps =sys-kernel/gentoo-kernel-7.2.13; \
+    emerge --oneshot --usepkgonly --nodeps =sys-kernel/gentoo-kernel-6.18.62; \
     ls /lib/modules /boot
 FROM hsm-kinst1 AS hsm-kinstall
 # the installed kernel tree carries a built objtool; linux-mod-r1 refuses to build modules when its libraries are missing (they were only in the kernel-build layer)
