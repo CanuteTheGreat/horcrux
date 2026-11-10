@@ -95,6 +95,37 @@ pub fn plan_power_down(nodes: &[PowerNode], policy: &PowerPolicy) -> Vec<String>
     out
 }
 
+/// Debounce for the automatic idle power-down: a node is only acted on after
+/// it has been a planner candidate for `required` consecutive samples, so a
+/// momentary CPU dip never shuts a node off.
+#[derive(Debug, Default)]
+pub struct IdleTracker {
+    streak: std::collections::HashMap<String, u32>,
+}
+
+impl IdleTracker {
+    /// Record one sample (`candidates` = [`plan_power_down`] output). Nodes
+    /// not in it lose their streak. Returns the candidates that have now been
+    /// idle for at least `required` samples, in planner order.
+    pub fn observe(&mut self, candidates: &[String], required: u32) -> Vec<String> {
+        self.streak.retain(|n, _| candidates.contains(n));
+        let mut ready = Vec::new();
+        for n in candidates {
+            let c = self.streak.entry(n.clone()).or_insert(0);
+            *c += 1;
+            if *c >= required.max(1) {
+                ready.push(n.clone());
+            }
+        }
+        ready
+    }
+
+    /// Forget a node (after it was powered off).
+    pub fn reset(&mut self, node: &str) {
+        self.streak.remove(node);
+    }
+}
+
 /// Nodes to wake so `needed` more guest-capable nodes are online. Only
 /// powered-off managed nodes with a wake method qualify.
 pub fn plan_wake(nodes: &[PowerNode], needed: usize) -> Vec<String> {
@@ -335,5 +366,20 @@ mod tests {
         };
         // b: unknown CPU = busy; c: OSD host; d: guest list unreachable; me: local.
         assert_eq!(plan_power_down(&v, &p), vec!["a", "e"]);
+    }
+    #[test]
+    fn idle_tracker_needs_consecutive_samples() {
+        let mut t = IdleTracker::default();
+        let a = vec!["a".to_string()];
+        let ab = vec!["a".to_string(), "b".to_string()];
+        assert!(t.observe(&a, 3).is_empty());
+        assert!(t.observe(&ab, 3).is_empty());
+        // b dips out of the candidate list: its streak restarts, a's continues.
+        assert_eq!(t.observe(&a, 3), vec!["a"]);
+        assert!(t.observe(&ab, 3).len() == 1);
+        t.reset("a");
+        assert!(t.observe(&a, 3).is_empty());
+        // required = 0 behaves like 1.
+        assert_eq!(IdleTracker::default().observe(&a, 0), vec!["a"]);
     }
 }

@@ -17,4 +17,16 @@ removing it keeps quorum and at least `min_online` (default 3) nodes online.
   (ipmitool `power soft`, Redfish `GracefulShutdown`). It is refused with 409 unless the planner
   currently lists the node as a candidate, and never targets the node serving the request.
 
-Nothing powers a node off automatically yet; the plan is advisory and shutdown is an explicit call.
+## Automatic power-down (opt-in)
+
+Off by default. Set `HORCRUX_IDLE_POWER=1` in the service environment on every node to let the
+cluster shut idle `power-managed` nodes down by itself:
+
+- Only the leader (lowest-named online node) acts, and at most one node per sample.
+- A node must be a planner candidate (all rules above) for `HORCRUX_IDLE_POWER_SAMPLES` consecutive
+  samples (default 3), taken `HORCRUX_IDLE_POWER_INTERVAL_SECS` apart (default 300, minimum 10), so
+  a short CPU dip never powers a node off. Any busy sample restarts the count.
+- The shutdown is the same guarded graceful BMC call as `POST /api/cluster/power/down`; a refusal
+  is logged as a warning and retried after a fresh streak.
+
+Waking is still explicit (`/power/wake`, `/power/bmc-on`); there is no automatic wake-on-demand yet.

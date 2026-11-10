@@ -769,7 +769,7 @@ pub async fn drain_node(state: &Arc<AppState>, reason: &str, timeout_secs: u64) 
 
 // -------------------------------------------------------------- rebalance
 
-fn leader(nodes: &[PlanNode]) -> Option<String> {
+pub(crate) fn leader(nodes: &[PlanNode]) -> Option<String> {
     nodes
         .iter()
         .filter(|n| n.online && !n.maintenance)

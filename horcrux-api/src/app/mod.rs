@@ -449,6 +449,9 @@ pub async fn run() -> anyhow::Result<()> {
     // Rebalance when a node joins or returns from maintenance (leader only).
     #[cfg(feature = "cluster")]
     api::drain::spawn(state.clone());
+    // Opt-in automatic idle power-down of `power-managed` lab nodes (leader only).
+    #[cfg(feature = "cluster")]
+    api::idle_power::spawn(state.clone());
 
     // Save/resume of guests across host shutdown: token, boot pass, running snapshot.
     api::guest_state::engine::spawn(state.clone());
@@ -4615,35 +4618,12 @@ async fn plan_cluster_power(Json(req): Json<PowerPlanRequest>) -> Json<serde_jso
 /// quorum-safely right now. Read-only; never acts.
 #[cfg(feature = "cluster")]
 async fn get_cluster_power_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let (_, nodes, policy) = power_view(&state).await;
+    let (_, nodes, policy) = crate::api::idle_power::power_view(&state).await;
     Json(serde_json::json!({
         "power_down": crate::cluster::power::plan_power_down(&nodes, &policy),
         "policy": policy,
         "nodes": nodes,
     }))
-}
-
-/// Live planner input for the idle power-down views: (local node name, nodes, policy).
-#[cfg(feature = "cluster")]
-async fn power_view(
-    state: &Arc<AppState>,
-) -> (
-    String,
-    Vec<crate::cluster::power::PowerNode>,
-    crate::cluster::power::PowerPolicy,
-) {
-    use crate::cluster::power;
-    let (local, snap_nodes, guests) = crate::api::drain::snapshot(state).await;
-    let cluster_nodes = state.cluster_manager.list_nodes_with_local().await;
-    let bmc: Vec<String> = crate::api::ha_loop::fencing()
-        .list_devices()
-        .await
-        .into_iter()
-        .map(|d| d.node)
-        .collect();
-    let reachable: Vec<String> = snap_nodes.iter().map(|n| n.name.clone()).collect();
-    let nodes = power::power_nodes_from_state(&cluster_nodes, &reachable, &guests, &bmc, &local);
-    (local, nodes, power::PowerPolicy::default())
 }
 
 #[cfg(feature = "cluster")]
@@ -4661,39 +4641,10 @@ async fn power_down_node(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PowerDownRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    use crate::ha::fencing::FencingResult;
-    let (local, nodes, policy) = power_view(&state).await;
-    if req.node == local {
-        return Err((
-            StatusCode::CONFLICT,
-            "refusing to power off the node serving this request".into(),
-        ));
-    }
-    if !nodes.iter().any(|n| n.name == req.node) {
-        return Err((StatusCode::NOT_FOUND, format!("unknown node {}", req.node)));
-    }
-    if !crate::cluster::power::plan_power_down(&nodes, &policy).contains(&req.node) {
-        return Err((
-            StatusCode::CONFLICT,
-            format!(
-                "{} is not a safe power-down candidate right now (see GET /api/cluster/power/status)",
-                req.node
-            ),
-        ));
-    }
-    match crate::api::ha_loop::fencing()
-        .power_off_node_graceful(&req.node, "idle power-down")
-        .await
-    {
-        FencingResult::Success => Ok(Json(
-            serde_json::json!({"shutdown_requested": true, "node": req.node}),
-        )),
-        FencingResult::Failed(e) => Err((StatusCode::BAD_GATEWAY, e)),
-        other => Err((
-            StatusCode::BAD_GATEWAY,
-            format!("BMC shutdown not confirmed: {other:?}"),
-        )),
-    }
+    crate::api::idle_power::power_down(&state, &req.node).await?;
+    Ok(Json(
+        serde_json::json!({"shutdown_requested": true, "node": req.node}),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
