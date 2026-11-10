@@ -301,12 +301,22 @@ async fn placement(
             uplink_mbps: if n.is_local {
                 local_up
             } else {
-                q.remote_uplink_mbps.unwrap_or(0)
+                // The node's own report wins; the query value is the fallback
+                // for older nodes that do not report yet.
+                if n.uplink_mbps > 0 {
+                    n.uplink_mbps
+                } else {
+                    q.remote_uplink_mbps.unwrap_or(0)
+                }
             },
             data_disks: if n.is_local {
                 local_disks
             } else {
-                q.remote_data_disks.unwrap_or(0)
+                if n.nvme_disks > 0 {
+                    n.nvme_disks
+                } else {
+                    q.remote_data_disks.unwrap_or(0)
+                }
             },
         })
         .collect();
@@ -316,7 +326,8 @@ async fn placement(
         q.min_mon_mbps.unwrap_or(1_000),
         q.mon_count.unwrap_or(3),
     );
-    if nodes.iter().any(|n| !n.is_local) && q.remote_uplink_mbps.is_none() {
+    let unreported = nodes.iter().any(|n| !n.is_local && n.uplink_mbps == 0);
+    if unreported && q.remote_uplink_mbps.is_none() {
         p.warnings.push(
             "remote nodes' uplink/disks are not probed: pass remote_uplink_mbps and remote_data_disks"
                 .to_string(),

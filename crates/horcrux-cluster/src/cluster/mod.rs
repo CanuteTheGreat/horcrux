@@ -488,6 +488,8 @@ impl ClusterManager {
             status_reason: None,
             cpu_vendor: String::new(),
             cpu_level: 0,
+            uplink_mbps: 0,
+            nvme_disks: 0,
             caps: None,
         };
         self.add_node(node.clone()).await?;

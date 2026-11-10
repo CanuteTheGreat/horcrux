@@ -200,6 +200,15 @@ pub struct Node {
     /// this node; 0 = unknown (older records / non-x86 / not yet reported).
     #[serde(default)]
     pub cpu_level: u8,
+    /// Fastest link up on the node in Mbit/s (bonds summed per `cluster::nic`),
+    /// reported by the node itself; 0 = unknown (older node / not yet reported).
+    /// Ceph placement uses it for remote nodes.
+    #[serde(default)]
+    pub uplink_mbps: u64,
+    /// Whole NVMe namespaces on the node, reported by the node itself;
+    /// 0 = none or unknown.
+    #[serde(default)]
+    pub nvme_disks: u32,
     /// Operator-set role/labels/per-guest limits (see `cluster::roles`).
     /// `None` = unrestricted compute node (older records).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -234,6 +243,8 @@ impl Node {
             status_reason: None,
             cpu_vendor: String::new(),
             cpu_level: 0,
+            uplink_mbps: 0,
+            nvme_disks: 0,
             caps: None,
         }
     }
@@ -257,6 +268,8 @@ impl Node {
             status_reason: None,
             cpu_vendor: detect_cpu_vendor_family(),
             cpu_level: detect_cpu_level(),
+            uplink_mbps: detect_uplink_mbps(),
+            nvme_disks: detect_nvme_disks(),
             caps: None,
         }
     }
@@ -391,6 +404,8 @@ impl AddNodeRequest {
             status_reason: None,
             cpu_vendor: String::new(),
             cpu_level: 0,
+            uplink_mbps: 0,
+            nvme_disks: 0,
             caps: None,
         }
     }
@@ -420,6 +435,26 @@ pub fn detect_cpu_vendor_family() -> String {
 
 /// x86-64 level (1..4) of the machine we are running on; 0 if /proc/cpuinfo
 /// has no x86 `flags` line (non-x86 host or unreadable).
+/// Fastest link that is up on this host in Mbit/s (0 when unknown).
+pub fn detect_uplink_mbps() -> u64 {
+    let nics = crate::cluster::nic::scan_nics(std::path::Path::new("/sys"));
+    crate::cluster::nic::best_speed_mbps(&nics).unwrap_or(0)
+}
+
+/// Whole NVMe namespaces on this host (partitions excluded).
+pub fn detect_nvme_disks() -> u32 {
+    std::fs::read_dir("/sys/block")
+        .map(|d| {
+            d.flatten()
+                .filter(|e| {
+                    let n = e.file_name().to_string_lossy().to_string();
+                    n.starts_with("nvme") && !n.contains('p')
+                })
+                .count() as u32
+        })
+        .unwrap_or(0)
+}
+
 pub fn detect_cpu_level() -> u8 {
     std::fs::read_to_string("/proc/cpuinfo")
         .ok()
