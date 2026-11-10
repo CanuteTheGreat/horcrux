@@ -10,7 +10,6 @@ ARG BASE
 FROM ${BASE} AS hsm-prep
 ARG ARCH=x86_64
 COPY project/variants/gnome-light/portage/ /etc/portage/
-COPY project/variants/gnome-light/repo/ /var/db/repos/horcrux-desktop/
 COPY project/variants/hogsmeade/portage/ /etc/portage/
 COPY --from=hxgentoo / /var/db/repos/horcrux/
 COPY --from=ctgoverlay / /var/db/repos/canutethegreat/
@@ -22,7 +21,7 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
     export FEATURES="-ccache"; \
     emerge --noreplace --usepkg --getbinpkg app-eselect/eselect-repository dev-vcs/git; \
     eselect repository enable guru; emerge --sync guru; \
-    ( cd /var/db/repos/horcrux-desktop/www-client/brave-bin && ebuild brave-bin-*.ebuild manifest ); \
+    ebuild /var/db/repos/canutethegreat/www-client/brave-bin/brave-bin-*.ebuild manifest; \
     for e in /var/db/repos/horcrux/sys-kernel/horcrux-hogsmeade-config/*.ebuild /var/db/repos/horcrux/app-admin/rustinion-agent/*.ebuild \
              /var/db/repos/horcrux/sys-apps/horcrux-tools/*.ebuild /var/db/repos/horcrux/sys-kernel/horcrux-unlock/*.ebuild \
              /var/db/repos/horcrux/app-misc/hogsmeade-tools/*.ebuild /var/db/repos/horcrux/app-misc/awccd/*.ebuild \
