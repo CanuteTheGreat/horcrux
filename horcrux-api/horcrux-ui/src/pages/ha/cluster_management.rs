@@ -882,9 +882,13 @@ mod tests {
         assert_eq!(c.quorum_votes, Some(0));
         assert!(parse_caps_form("compute", "", "", "", "11").is_err());
         assert!(parse_caps_form("compute", "", "", "", "x").is_err());
-        assert!(parse_caps_form("compute", "", "", "", "3").unwrap().is_some());
+        assert!(parse_caps_form("compute", "", "", "", "3")
+            .unwrap()
+            .is_some());
         assert_eq!(parse_caps_form("compute", " ", "", "", "").unwrap(), None);
-        assert!(parse_caps_form("storage", "", "", "", "").unwrap().is_some());
+        assert!(parse_caps_form("storage", "", "", "", "")
+            .unwrap()
+            .is_some());
         assert!(parse_caps_form("boss", "", "", "", "").is_err());
         assert!(parse_caps_form("compute", "", "0", "", "").is_err());
         assert!(parse_caps_form("compute", "", "", "-1", "").is_err());
