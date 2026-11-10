@@ -15,12 +15,20 @@ COPY --from=hxgentoo / /var/db/repos/horcrux/
 COPY --from=ctgoverlay / /var/db/repos/canutethegreat/
 COPY project/variants/hogsmeade/local-repo/ /var/db/repos/local/
 COPY project/variants/gnome-light/packages.txt /tmp/packages-desktop.txt
+# sys-apps/horcrux-tools is a fetch-restricted, build-made tarball (see Dockerfile.part2): make it BEFORE `ebuild manifest` and keep a copy in the layer
+# (/opt/hxt-dist) because the distfiles cache mount is not part of the image
+COPY common/overlay/usr/lib/live-installer /tmp/hxt/usr/lib/live-installer
+COPY common/overlay/usr/libexec /tmp/hxt/usr/libexec
+COPY common/overlay/usr/bin /tmp/hxt/usr/bin
+COPY project/variants/hogshead/overlay/usr/bin/horcrux-orphans /tmp/hxt/usr/bin/horcrux-orphans
+COPY project/variants/gnome-light/overlay/usr/share/horcrux/desktop /tmp/hxt/usr/share/horcrux/desktop
 RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; emerge-webrsync -q || emerge --sync -q; \
     eselect profile set default/linux/amd64/23.0/desktop/gnome; \
     export FEATURES="-ccache"; \
     emerge --noreplace --usepkg --getbinpkg app-eselect/eselect-repository dev-vcs/git; \
     eselect repository enable guru; emerge --sync guru; \
+    mkdir -p /opt/hxt-dist; tar -C /tmp/hxt --zstd -cf /opt/hxt-dist/horcrux-tools-1.tar.zst .; rm -rf /tmp/hxt; cp /opt/hxt-dist/horcrux-tools-1.tar.zst /var/cache/distfiles/; \
     ebuild /var/db/repos/canutethegreat/www-client/brave-bin/brave-bin-*.ebuild manifest; \
     for e in /var/db/repos/horcrux/sys-kernel/horcrux-hogsmeade-config/*.ebuild /var/db/repos/horcrux/app-admin/rustinion-agent/*.ebuild \
              /var/db/repos/horcrux/sys-apps/horcrux-tools/*.ebuild /var/db/repos/horcrux/sys-kernel/horcrux-unlock/*.ebuild \
@@ -85,7 +93,9 @@ RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,
     # PKGDIR is a cache mount: a failure later in this image keeps the (30 min) module binpkgs. Only valid for THIS kernel binpkg (never reuse after a kernel change).
     emerge --oneshot --usepkg --getbinpkg=n =sys-fs/zfs-kmod-2.3.9 =sys-fs/zfs-2.3.9 x11-drivers/nvidia-drivers \
         > /var/log/hogsmeade-kmods.log 2>&1 || { tail -80 /var/log/hogsmeade-kmods.log; exit 1; }
-RUN set -e; unset ARCH; export FEATURES="-ccache"; \
+RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
+    set -e; unset ARCH; export FEATURES="-ccache"; \
+    cp /opt/hxt-dist/horcrux-tools-1.tar.zst /var/cache/distfiles/; \
     rm -f /etc/dracut.conf.d/00-hogsmeade-build.conf; \
     emerge --oneshot sys-kernel/horcrux-unlock sys-apps/horcrux-tools; \
     kr=$(ls /lib/modules | grep -- '-gentoo-dist$' | tail -1); test -n "$kr"; \

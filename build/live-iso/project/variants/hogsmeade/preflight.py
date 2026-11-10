@@ -185,6 +185,9 @@ ALIAS = {"canutethegreat-overlay": "canutethegreat-overlay"}
 unchecked_repos = set()
 
 
+NCHK = [0]
+
+
 def check_atom(src, tok):
     m = re.match(r"^([=<>~!]*)([a-z0-9][a-z0-9+_.-]*)/([A-Za-z0-9_+.-]+?)(?:-(\d[\w.*-]*))?(?:\[[^\]]*\])?(?::[\w./*=-]*)?(?:::([\w-]+))?$", tok)
     if not m:
@@ -192,6 +195,7 @@ def check_atom(src, tok):
     op, cat, pkg, ver, repo = m.groups()
     if cat not in CATS:
         return
+    NCHK[0] += 1
     if ver is None and op and op not in ("!",):
         # =cat/pkg-1.2 where the version regex swallowed it: retry with split
         pass
@@ -251,10 +255,26 @@ for pf in pfiles:
 for name, h in REPO_DIRS.items():
     pass
 
+# ---- 5. fetch-restricted ebuilds (tarballs the build makes itself): the tarball must be created in the same Dockerfile ----------
+for df in ["Dockerfile", "Dockerfile.part2"]:
+    text = open(os.path.join(HSM, df)).read()
+    for eb in glob.glob(f"{REPO_DIRS.get('horcrux', '/nonexistent')}/*/*/*.ebuild"):
+        src = open(eb).read()
+        if not re.search(r'RESTRICT="[^"]*\bfetch\b', src):
+            continue
+        cat, pn = eb.split("/")[-3:-1]
+        if f"{cat}/{pn}" not in text:
+            continue
+        pv = re.sub(r"\.ebuild$", "", os.path.basename(eb))[len(pn) + 1:]
+        pv0 = re.sub(r"-r\d+$", "", pv)
+        dist = f"{pn}-{pv0}.tar.zst"
+        if re.search(r'SRC_URI="\$\{P\}\.tar\.zst"', src) and not re.search(r"tar [^;]*-cf [^;]*" + re.escape(dist), text):
+            err(f"{df}: {cat}/{pn} is fetch-restricted but the Dockerfile never creates {dist} (ebuild manifest/emerge would fail)")
+
 # ---- result ----------------------------------------------------------------------------------------------------
 if errs:
     print(f"PREFLIGHT FAILED: {len(errs)} problem(s)")
     for e in errs:
         print("  -", e)
     sys.exit(1)
-print(f"PREFLIGHT OK (repos: {', '.join(f'{k}={len(v)} pkgs' for k, v in ATOMS.items())})")
+print(f"PREFLIGHT OK ({NCHK[0]} atoms checked; repos: {', '.join(f'{k}={len(v)} pkgs' for k, v in ATOMS.items())})")

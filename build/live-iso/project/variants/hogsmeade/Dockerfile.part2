@@ -10,7 +10,7 @@ COPY --from=hxgentoo2 / /var/db/repos/horcrux/
 COPY project/variants/hogsmeade/local-repo/ /var/db/repos/local/
 COPY project/variants/hogsmeade/portage/ /etc/portage/
 # hogshead/gnome-light fixes now in main: OpenRC GNOME patches (gsd meta services, PipeWire ordering, gnome-shell stays on the user bus), Brave from the owner's overlay,
-# cups-browsed zeroconf. The stale image-local repo horcrux-desktop (an old brave-bin whose .desktop Execs a missing binary) is dropped.
+# cups-browsed zeroconf. The old image-local repo horcrux-desktop no longer exists (gnome-light ships an empty horcrux-gnome-light skeleton; brave-bin is only in the owner's overlay), so nothing is unmerged unless a base still carries one.
 COPY project/variants/gnome-light/portage/patches/ /etc/portage/patches/
 COPY project/variants/owner-common/portage/package.accept_keywords/owner-apps /etc/portage/package.accept_keywords/owner-apps
 COPY project/variants/gnome-light/portage/package.use/zz-desktop /etc/portage/package.use/zz-desktop
@@ -23,7 +23,7 @@ COPY project/variants/gnome-light/overlay/usr/share/horcrux/desktop /tmp/hxt/usr
 RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
     rm -rf /var/db/repos/horcrux-desktop /etc/portage/repos.conf/horcrux-desktop.conf; \
-    emerge --unmerge www-client/brave-bin; \
+    if qlist -IC www-client/brave-bin >/dev/null; then emerge --unmerge www-client/brave-bin; fi; \
     emerge --oneshot --usepkg=n --getbinpkg=n --buildpkg=n --select=y www-client/brave-bin::canutethegreat-overlay gnome-base/gnome-session-openrc; \
     test -x /usr/bin/brave-bin; \
     if grep -q supervise-daemon /etc/user/init.d/gnome-settings-daemon-wayland /etc/user/init.d/gnome-settings-daemon-x11; then echo 'gsd supervisor patch not applied'; exit 1; fi; \
@@ -100,5 +100,5 @@ RUN set -e; unset ARCH; \
     rm -rf /lib/modules/6.18.57-gentoo-dist-bin /boot/*6.18.57-gentoo-dist-bin* /boot/*.old; \
     horcrux-orphans | grep -E "[.]pyc$" | xargs -r rm -f; \
     find / -xdev -name __pycache__ -type d -empty -delete 2>/dev/null || true; \
-    rm -rf /var/tmp/portage /var/cache/distfiles/* 2>/dev/null || true; \
+    rm -rf /opt/hxt-dist /var/tmp/portage /var/cache/distfiles/* 2>/dev/null || true; \
     echo "== orphans left (must be none or allowlisted):"; horcrux-orphans | head -40; echo "== count: $(horcrux-orphans | wc -l)"
