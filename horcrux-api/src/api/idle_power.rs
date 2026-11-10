@@ -42,7 +42,10 @@ pub async fn power_down(state: &Arc<AppState>, node: &str) -> Result<(), (Status
     if !nodes.iter().any(|n| n.name == node) {
         return Err((StatusCode::NOT_FOUND, format!("unknown node {node}")));
     }
-    if !power::plan_power_down(&nodes, &policy).iter().any(|n| n == node) {
+    if !power::plan_power_down(&nodes, &policy)
+        .iter()
+        .any(|n| n == node)
+    {
         return Err((
             StatusCode::CONFLICT,
             format!(

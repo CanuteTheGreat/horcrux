@@ -19,11 +19,11 @@ pub mod firewall_objects;
 pub mod guest_state;
 #[cfg(feature = "cluster")]
 pub mod ha_loop;
-#[cfg(feature = "cluster")]
-pub mod idle_power;
 #[cfg(feature = "kubernetes")]
 pub mod helm;
 pub mod host_net;
+#[cfg(feature = "cluster")]
+pub mod idle_power;
 pub mod inventory;
 #[cfg(feature = "kubernetes")]
 pub mod k8s_config;
