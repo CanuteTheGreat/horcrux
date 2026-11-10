@@ -362,7 +362,9 @@ async fn start(Extension(gw): Gw) -> Result<Json<S3GatewayStatus>, ApiError> {
     .await
     .map_err(|e| ApiError::Internal(format!("S3 start task failed: {e}")))??;
     gw.save(&join).await?;
-    Ok(Json(S3GatewayManager::with_config(join).get_status().await?))
+    Ok(Json(
+        S3GatewayManager::with_config(join).get_status().await?,
+    ))
 }
 
 async fn stop(Extension(gw): Gw) -> Result<Json<S3GatewayStatus>, ApiError> {
