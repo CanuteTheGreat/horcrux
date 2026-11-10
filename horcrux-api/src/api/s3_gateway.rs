@@ -348,13 +348,21 @@ async fn update_config(
 async fn start(Extension(gw): Gw) -> Result<Json<S3GatewayStatus>, ApiError> {
     let mut cfg = gw.config().await?;
     let m = S3GatewayManager::with_config(cfg.clone());
-    m.start().await.map_err(|e| match e {
-        horcrux_common::Error::Conflict(m) => ApiError::Conflict(m),
-        e => ApiError::ServiceUnavailable(e.to_string()),
-    })?;
-    cfg.enabled = true;
-    gw.save(&cfg).await?;
-    Ok(Json(S3GatewayManager::with_config(cfg).get_status().await?))
+    // Detached: the browser can abort this request (Chromium net::ERR_NETWORK_CHANGED when a veth/bridge
+    // appears on the host, a proxy timeout) and hyper then DROPS the handler future. A start dropped between
+    // spawning the server and `enabled = true` left a running gateway the config did not know about.
+    let join = tokio::spawn(async move {
+        m.start().await.map_err(|e| match e {
+            horcrux_common::Error::Conflict(m) => ApiError::Conflict(m),
+            e => ApiError::ServiceUnavailable(e.to_string()),
+        })?;
+        cfg.enabled = true;
+        Ok::<_, ApiError>(cfg)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("S3 start task failed: {e}")))??;
+    gw.save(&join).await?;
+    Ok(Json(S3GatewayManager::with_config(join).get_status().await?))
 }
 
 async fn stop(Extension(gw): Gw) -> Result<Json<S3GatewayStatus>, ApiError> {

@@ -120,6 +120,22 @@ pub fn S3Page() -> impl IntoView {
         });
     };
     create_effect(move |_| reload());
+    // Keep the gateway state fresh: a start that takes a while (silo formats its drive first) or whose
+    // request was aborted by the browser still ends up Running/Stopped on the page.
+    let poll = set_interval_with_handle(
+        move || {
+            if !busy.get_untracked() {
+                reload();
+            }
+        },
+        std::time::Duration::from_secs(3),
+    )
+    .ok();
+    on_cleanup(move || {
+        if let Some(h) = poll {
+            h.clear();
+        }
+    });
 
     // run an action, show its error or a notice, reload
     let act = move |label: String,

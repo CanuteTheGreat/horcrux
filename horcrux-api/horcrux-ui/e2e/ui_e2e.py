@@ -1449,7 +1449,13 @@ def s3_gateway_checks(page):
     expect(page.locator("#s3-state")).to_have_text("Stopped", timeout=30000)
     expect(page.locator("#s3-missing")).to_have_count(0)
     page.locator("#s3-start").click()
-    expect(page.locator("#s3-state")).to_have_text("Running", timeout=200000)
+    try:
+        expect(page.locator("#s3-state")).to_have_text("Running", timeout=200000)
+    except AssertionError:
+        err = page.locator("#s3-error")
+        print("S3-DIAG error alert:", err.inner_text() if err.count() else "(none)")
+        print("S3-DIAG api status:", _req("GET", "/api/nas/s3/status", tok))
+        raise
     expect(page.locator("#s3-endpoint")).to_contain_text(f":{port}")
 
     bucket = "e2e-ui-bucket"
