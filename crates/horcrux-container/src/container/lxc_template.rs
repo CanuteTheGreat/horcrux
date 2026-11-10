@@ -16,6 +16,11 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tracing::info;
 
+/// Template used for an LXC container created without an explicit one.
+/// Gentoo is the house default (owner policy); Alpine and every other catalog
+/// distro stay selectable by naming them (`alpine/3.22`). Gentoo publishes only
+/// the `openrc` and `systemd` variants, so the variant is spelled out.
+pub const DEFAULT_LXC_TEMPLATE: &str = "gentoo/current/openrc";
 pub const DEFAULT_IMAGES_URL: &str = "https://images.linuxcontainers.org";
 const CATALOG_TTL: Duration = Duration::from_secs(30 * 60);
 const ROOTFS: &str = "rootfs.tar.xz";
@@ -451,6 +456,21 @@ impl TemplateStore {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn default_template_is_gentoo_openrc_and_parses() {
+        assert_eq!(
+            TemplateRef::parse(super::DEFAULT_LXC_TEMPLATE, "amd64"),
+            Ok(TemplateRef::Catalog {
+                distro: "gentoo".into(),
+                release: "current".into(),
+                arch: "amd64".into(),
+                variant: "openrc".into(),
+            })
+        );
+        // Alpine stays selectable.
+        assert!(TemplateRef::parse("alpine/3.22", "amd64").is_ok());
+    }
+
     use super::*;
 
     #[test]

@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import time
 
-from . import arch, hwprofile, luksroot, portableswap, zfsswap
+from . import arch, hwprofile, luksroot, portableswap, secretcheck, testmachine, tpmunlock, zfsswap
 
 LOG = "/var/log/live-installer.log"
 
@@ -99,7 +99,13 @@ def password_strength(pw):
     return f"{word} ({score}/100)"
 
 
+GENERIC_HOSTNAMES = {"surface-pro", "surface", "localhost", "gentoo", "ubuntu", "debian"}
+
+
 def hostname_problem(h):
+    """per-machine installs must carry the owner's chosen name (Harry Potter places for his machines), never an image default"""
+    if h and h.split(".")[0] in GENERIC_HOSTNAMES:
+        return f"'{h.split('.')[0]}' is a generic default, not this machine's name: use the name the owner chose for it."
     if not h or len(h) > 253:
         return "Enter a host name (FQDN preferred, e.g. node1.example.com)."
     for label in h.split("."):
@@ -308,6 +314,36 @@ def write_wifi_profile(root, ssid, psk):
     return path
 
 
+def write_nm_wifi_profile(root, ssid, psk):
+    """NetworkManager keyfile for the installed system. No `interface-name`: the installed system names the NIC differently
+    from the live stick (a pinned name left the profile dead on hogshead). Mode 0600 or NM ignores the file."""
+    import uuid
+    d = os.path.join(root, "etc/NetworkManager/system-connections")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, re.sub(r"[^A-Za-z0-9._-]", "_", ssid) + ".nmconnection")
+    txt = ("[connection]\nid=%s\nuuid=%s\ntype=wifi\nautoconnect=true\n\n[wifi]\nmode=infrastructure\nssid=%s\n\n" % (ssid, uuid.uuid4(), ssid)
+           + ("[wifi-security]\nkey-mgmt=wpa-psk\npsk=%s\n\n" % psk if psk else "")
+           + "[ipv4]\nmethod=auto\n\n[ipv6]\nmethod=auto\n")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(txt)
+    return path
+
+
+def strip_pinned_interfaces(root):
+    """drop `interface-name=` lines from every NM profile under root (carried-over profiles)"""
+    d = os.path.join(root, "etc/NetworkManager/system-connections")
+    n = 0
+    for f in (os.listdir(d) if os.path.isdir(d) else []):
+        p = os.path.join(d, f)
+        t = open(p).read()
+        t2 = re.sub(r"(?m)^interface-name=.*\n", "", t)
+        if t2 != t:
+            open(p, "w").write(t2)
+            n += 1
+    return n
+
+
 def nm_wifi_networks(directory):
     """(ssid, psk) of every Wi-Fi profile in a NetworkManager system-connections directory (psk '' = open network).
     802.1x/enterprise profiles and anything without a readable SSID are skipped."""
@@ -482,6 +518,29 @@ def _default_fs(profile):
 
 def default_config(profile):
     fs, fs_why = _default_fs(profile)
+    c = _default_config(profile, fs, fs_why)
+    apply_encryption_policy(profile, c)
+    return c
+
+
+def apply_encryption_policy(profile, c, tpm_ok=None):
+    """profile encryption = \"tpm-or-none\" (appliances): ZFS is encrypted only when a working TPM 2.0 can unlock it unattended, otherwise NOT
+    encrypted. No passphrase prompt at boot, ever. Sets zfs_encrypt / zfs_keymode / enc_why (shown on the disk page)."""
+    if profile.get("encryption") != "tpm-or-none":
+        return
+    c["zfs_keymode"], c["zfs_passphrase"] = "tpm", ""
+    if c.get("fs") != "zfs":
+        c["zfs_encrypt"], c["enc_why"] = False, "NOT encrypted: encryption needs the ZFS file system with a TPM (XFS here would need a passphrase at every boot)"
+        return
+    want = c.get("enc_request", "auto")
+    if want == "none":
+        c["zfs_encrypt"], c["enc_why"] = False, "NOT encrypted: switched off in the answer file"
+        return
+    ok, why = tpmunlock.decide(profile, tpm_ok)
+    c["zfs_encrypt"], c["enc_why"] = ok, why
+
+
+def _default_config(profile, fs, fs_why):
     return {
         "locale": "en_US.UTF-8", "keymap": "us", "timezone": "UTC",
         "disks": [], "fs": fs, "fs_why": fs_why, "zfs_raid": "single", "luks_passphrase": "",
@@ -496,7 +555,8 @@ def default_config(profile):
         "ssh_keys": [], "ssh_password_auth": False, "email": "",
         "console_open": False,
         # ZFS root with native encryption (the passphrase is typed by the user; only held in memory)
-        "zfs_encrypt": False, "zfs_passphrase": "",
+        "zfs_encrypt": False, "zfs_passphrase": "", "zfs_keymode": "passphrase", "enc_why": "",
+        testmachine.KEY: False,         # explicit, warned, non-default: NO disk encryption (testmachine.py)
         # Apple T2 Mac support: auto = detect PCI 106b:1801; firmware = auto | none | path to a firmware.tar / brcm dir
         "t2": "auto", "t2_firmware": "auto",
         # install profile: server | desktop (desktop needs the desktop image variant)
@@ -551,8 +611,17 @@ def config_from_answers(profile, path):
         c["desktop"].update({k: de[k] for k in ("enable", "user", "password", "password_hash", "autologin") if k in de})
     c["hw"] = a.get("hardware", {}).get("profile", "auto")
     c["zfs_raid"] = d.get("zfs_raid", "single")
-    c["zfs_encrypt"] = bool(d.get("encryption", d.get("encrypt", False)))
-    c["zfs_passphrase"] = d.get("passphrase", "")
+    enc = d.get("encryption", d.get("encrypt", False))
+    if profile.get("encryption") == "tpm-or-none":
+        # appliance: encryption is decided by the machine (TPM present and working -> encrypted + unattended, else none); "auto" | "none" only
+        c["enc_request"] = enc if enc in ("auto", "none") else ("none" if enc is False and "encryption" in d else "auto")
+        if d.get("passphrase"):
+            c["enc_passphrase_given"] = True
+        apply_encryption_policy(profile, c)
+    else:
+        c["zfs_encrypt"] = bool(enc)
+        c["zfs_passphrase"] = d.get("passphrase", "")
+    c[testmachine.KEY] = bool(d.get(testmachine.KEY, False))
     c["t2"] = str(g.get("t2", "auto"))
     c["t2_firmware"] = str(g.get("t2_firmware", "auto"))
     c["install_type"] = str(g.get("install_type", "server"))
@@ -576,7 +645,8 @@ def config_from_answers(profile, path):
 
 def validate_config(profile, c, unattended=False, require_secret=True):
     """Return a list of problems (empty = ok)."""
-    errs = []
+    errs = testmachine.problems(c)
+    testmachine.normalize(c)            # no-op unless the explicit test-machine choice is set (xfs-luks -> xfs, no passphrases)
     if c.get("install_type", "server") != "server":
         from . import desktop            # the Desktop image variant (marker file) installs the desktop profile
         if not (c["install_type"] == "desktop" and desktop.available()):
@@ -609,7 +679,12 @@ def validate_config(profile, c, unattended=False, require_secret=True):
                 errs.append("user password hash: " + crypt_hash_problem(c["user_hash"]))
         elif not c.get("user_password"):
             errs.append("user: no password")
-    if c.get("zfs_encrypt"):
+    if profile.get("encryption") == "tpm-or-none" and c.get("enc_passphrase_given"):
+        errs.append("this product never asks for a disk passphrase at boot: remove 'passphrase' from the answer file (encryption is automatic with a working TPM 2.0, otherwise off)")
+    if c.get("zfs_encrypt") and c.get("zfs_keymode") == "tpm":
+        if c["fs"] != "zfs":
+            errs.append("TPM disk encryption is ZFS native encryption: choose the ZFS file system")
+    elif c.get("zfs_encrypt"):
         if c["fs"] != "zfs":
             errs.append("disk encryption is ZFS native encryption: choose the ZFS file system")
         else:
@@ -619,6 +694,7 @@ def validate_config(profile, c, unattended=False, require_secret=True):
                 errs.append("disk passphrase: " + pp)
     errs += luksroot.validate(c)
     errs += portableswap.validate(c)
+    errs += secretcheck.reuse_problems(c)        # the disk passphrase is only for the disk (never an account password)
     de = c.get("desktop") or {}
     if de.get("enable") and not de.get("user"):
         errs.append("desktop: a user name is required")
@@ -630,7 +706,7 @@ def validate_config(profile, c, unattended=False, require_secret=True):
             pp = password_problem(c["root_password"], c["hostname"])
             if pp:
                 errs.append(pp)
-        elif not c["ssh_keys"]:
+        elif not c["ssh_keys"] and not has_login_user(c):
             errs.append("no root password hash and no SSH key supplied: the installed system would be unreachable")
     for k in c["ssh_keys"]:
         if ssh_key_problem(k):
@@ -649,6 +725,13 @@ def validate_config(profile, c, unattended=False, require_secret=True):
                 if n.get("dns") and dns_problem(n["dns"]):
                     errs.append(f"{s} dns: " + dns_problem(n["dns"]))
     return errs
+
+
+def has_login_user(c):
+    """a sudo-capable account is created (root can then stay locked)"""
+    d = c.get("desktop") or {}
+    return bool((c.get("install_type") == "desktop" and c.get("user_name") and (c.get("user_hash") or c.get("user_password")))
+                or (d.get("enable") and d.get("user") and (d.get("password") or d.get("password_hash"))))
 
 
 def use_problems(profile, c):
@@ -742,7 +825,15 @@ class Installer:
         """Run every stage in sequence (stages.APPLY_ORDER); TUI, GUI and the answer file all come through here."""
         from . import stages
         c, p = self.c, self.p
+        if testmachine.requested(c):
+            testmachine.normalize(c)
+            self.log("WARNING: " + testmachine.WARNING)
         self.log(f"== live-installer: {p['title']} ({c['install_type']}) on {', '.join(c['disks'])} ({'UEFI' if self.efi else 'BIOS'}), fs={c['fs']}")
+        bad = secretcheck.reuse_problems(c, unverifiable=lambda who: self.log(f"warning: the password hash of {who} could not be checked against the disk passphrase here"))
+        if bad:      # before anything touches the disk; in-memory comparison only, nothing secret is logged
+            raise InstallError("refusing to install: " + " ".join(bad))
+        if p.get("encryption") == "tpm-or-none":
+            self.log("Disk encryption: " + (c.get("enc_why") or "none"))
         if self.t2:
             from . import t2
             t2.preflight(self)
@@ -786,6 +877,8 @@ class Installer:
     def stage_hardening(self):
         self.prog(85, "Hardening")
         self.cfg_hardening()
+        if testmachine.requested(self.c):
+            testmachine.install_payload(self)         # watchdog + never-suspend from the first boot (a lab machine must never need a power-cycle)
 
     def stage_use_flags(self):
         self.prog(87, "Software settings (USE flags)")
@@ -822,7 +915,7 @@ class Installer:
             args = ["sgdisk"] + first + ["-n", "2:0:+" + ("2G" if self.zfs() else "1G"), "-t", "2:8300", "-c", "2:boot"]
             if self.zfs():
                 if swap and di == 0:    # encrypted ZFS laptop: LUKS2 hibernation swap as partition 3 of the FIRST disk only (zfsswap.py); servers: zram only
-                    args += zfsswap.sgdisk_part(swap)
+                    args += zfsswap.sgdisk_part(swap, plain=testmachine.requested(self.c))
             elif swap:        # servers/firewalls/hypervisors: NO swap partition (zram only); partition 3 simply does not exist, root stays number 4
                 args += ["-n", f"3:0:+{swap}M", "-t", "3:8200", "-c", "3:swap"]
             args += ["-n", "4:0:0", "-t", "4:bf00" if self.zfs() else "4:8300", "-c", "4:root", disk]
@@ -847,7 +940,7 @@ class Installer:
         if self.swap_mb and not self.zfs():
             self.run(["mkswap", "-L", "swap", L[3]])
         if self.zfs() and self.swap_mode == "hibernate":
-            zfsswap.mkswap_stage(self)
+            zfsswap.mkswap_stage(self)        # plain swap partition on a test machine (testmachine.py)
         if c["fs"] == "ext4":
             self.run(["mkfs.ext4", "-F", "-q", "-L", "root", L[4]])
         elif c["fs"] == "xfs":
@@ -980,9 +1073,20 @@ class Installer:
             if s_ == "sshd" or s_ in c["services_off"]:
                 continue
             self.run(["rc-update", "add", s_, "default"], chroot=True, check=False)
+        self.cfg_clock()
         # serial console keeps working when the installer was driven over a serial line
         if arch.serial_console():
             self.run(["rc-update", "add", "live-serial", "default"], chroot=True, check=False)
+
+    def cfg_clock(self):
+        """Installed system: read the hardware clock at boot and write it back when the machine stops (hwclock replaces swclock) when the
+        machine has an RTC; chrony keeps it right afterwards (rtcsync) and steps a months-off clock at the first network (makestep + the
+        dhcpcd exit hook /etc/dhcpcd.exit-hook). A board without an RTC keeps swclock."""
+        T = self.target
+        if os.path.exists("/dev/rtc0") and os.path.exists(f"{T}/etc/init.d/hwclock"):
+            self.write("/etc/conf.d/hwclock", '# written by live-installer: the hardware clock holds UTC\nclock="UTC"\nclock_hctosys="YES"\nclock_systohc="YES"\n')
+            self.run(["rc-update", "del", "swclock", "boot"], chroot=True, check=False)
+            self.run(["rc-update", "add", "hwclock", "boot"], chroot=True, check=False)
 
     def cfg_hardening(self):
         c, T = self.c, self.target
@@ -1042,6 +1146,12 @@ class Installer:
                 self.log(f"hardware profile: {hp['id']} / {(hm or {}).get('id', 'generic')}")
         if os.path.exists(f"{self.target}/etc/init.d/zram-swap"):     # compressed RAM swap: the ONLY swap on servers/firewalls (no swap partition, no swapfile)
             self.run(["rc-update", "add", "zram-swap", "default"], chroot=True, check=False)
+        if not self.luks() and not self.zfs():
+            # plain xfs / ext4: root, /boot and the ESP by UUID. Without these lines /boot (its own partition, the one GRUB reads) is NOT mounted on the installed
+            # system, so every kernel update lands in the root file system's empty /boot and the machine keeps booting the old kernel (QEMU gate
+            # package-contents-complete showed 74 missing /boot files on XFS)
+            Lp = self.layout(c["disks"][0])
+            self.write("/etc/fstab", plain_fstab_text(c["fs"], fsuuid(Lp[4]), fsuuid(Lp[2]), fsuuid(Lp[1]) if self.efi else "", self.efi))
         if self.swap_mode == "hibernate" and not self.luks() and not self.zfs():
             self.swap_dev = self.layout(c["disks"][0])[3]
             portableswap.prepare(self)
@@ -1068,6 +1178,22 @@ class Installer:
             return
         pkgs = [x.strip().lstrip("=") for x in open(lst).read().split() if "/" in x]
         removed = 0
+        # a file that is ALSO listed by a package that stays (the glib giomodule.cache is recorded by glib and by gio-module packages) must not be deleted with
+        # the live-only one: the installed server's package database would then list a missing file (QEMU gate package-contents-complete, 2026-11-04)
+        keep_paths = set()
+        pkgdir = os.path.join(T, "var/db/pkg")
+        for cat in (os.listdir(pkgdir) if os.path.isdir(pkgdir) else []):
+            for pn in os.listdir(os.path.join(pkgdir, cat)):
+                if f"{cat}/{pn}" in pkgs:
+                    continue
+                try:
+                    for line in open(os.path.join(pkgdir, cat, pn, "CONTENTS"), errors="replace"):
+                        if line.startswith("obj "):
+                            keep_paths.add(" ".join(line.rstrip("\n").split(" ")[1:-2]))
+                        elif line.startswith("sym "):
+                            keep_paths.add(line[4:].split(" -> ")[0])
+                except OSError:
+                    pass
         for pf in pkgs:
             vdb = os.path.join(T, "var/db/pkg", pf)
             contents = os.path.join(vdb, "CONTENTS")
@@ -1080,6 +1206,8 @@ class Installer:
                     path = parts[1]
                     if parts[0] == "sym":
                         path = line.split(" ", 1)[1].split(" -> ")[0]
+                    if path in keep_paths:
+                        continue
                     try:
                         os.unlink(os.path.join(T, path.lstrip("/")))
                         removed += 1
@@ -1146,10 +1274,17 @@ class Installer:
             dh += ["", "# Wi-Fi is configured by iwd (EnableNetworkConfiguration)", "denyinterfaces wlan* wlp*"]
         self.write("/etc/dhcpcd.conf", open(f"{self.target}/etc/dhcpcd.conf").read() + "\n".join(dh) + "\n") \
             if os.path.exists(f"{self.target}/etc/dhcpcd.conf") else self.write("/etc/dhcpcd.conf", "\n".join(dh) + "\n")
-        if wifi:
+        if wifi and os.path.exists(f"{self.target}/etc/init.d/NetworkManager") and not os.path.exists(f"{self.target}/etc/init.d/iwd"):
+            # NetworkManager machine (Surface profile): carry the Wi-Fi over as an NM keyfile that is NOT pinned to the live
+            # system's interface name (wlan0 vs wlp1s0 differs on the installed system), mode 600, autoconnect
+            write_nm_wifi_profile(self.target, wifi["ssid"], wifi.get("psk", ""))
+        elif wifi:
             write_wifi_profile(self.target, wifi["ssid"], wifi.get("psk", ""))
             self.write("/etc/iwd/main.conf", "[General]\nEnableNetworkConfiguration=true\n")
             self.run(["rc-update", "add", "iwd", "default"], chroot=True, check=False)
+        n_pinned = strip_pinned_interfaces(self.target)
+        if n_pinned:
+            self.log(f"removed the pinned interface-name from {n_pinned} NetworkManager profile(s)")
         if p["network_mode"] == "wan-lan":
             self.write_roles()
 
@@ -1176,7 +1311,7 @@ class Installer:
                                      portableswap.kernel_args(self) if not self.luks() else "") if x)
         self.write("/etc/default/grub", "\n".join([
             f'GRUB_DISTRIBUTOR="{p["title"]}"', 'GRUB_TIMEOUT=3', f'GRUB_CMDLINE_LINUX="{extra}"',
-            'GRUB_DISABLE_OS_PROBER=true',
+            'GRUB_DISABLE_OS_PROBER=true', 'GRUB_GFXPAYLOAD_LINUX=keep',
         ] + (['GRUB_TERMINAL="console serial"', f'GRUB_SERIAL_COMMAND="{arch.grub_serial_lines()}"'] if arch.grub_serial_lines() and serial_ok else [])) + "\n")
         for dev in L.values():
             self.run(f"blkid -s UUID -o value {dev}", check=False)
@@ -1240,6 +1375,12 @@ menuentry "{self.p['title']} (ZFS root)" {{
 
     def finish(self):
         T = self.target
+        # the installed system must not boot with a months-off hardware clock (chrony has no sources before the network is up)
+        try:
+            from . import rtc
+            rtc.sync(self.log)
+        except Exception as e:  # never fail an install over the clock
+            self.log(f"rtc: skipped ({e})")
         self.run("sync", check=False)
         for d in ("dev", "proc", "sys"):
             self.run(["umount", "-R", "-l", f"{T}/{d}"], check=False)
@@ -1257,6 +1398,16 @@ menuentry "{self.p['title']} (ZFS root)" {{
 def fsuuid(dev):
     rc, out = sh(["blkid", "-s", "UUID", "-o", "value", dev])
     return out.strip() if rc == 0 else ""
+
+
+def plain_fstab_text(fs, root_uuid, boot_uuid, esp_uuid, efi=True):
+    """/etc/fstab of a plain xfs/ext4 install (pure: unit tested). No swap line (zram only); /tmp is tmpfs like the xfs-luks layout."""
+    opts = "noatime"
+    lines = ["# written by live-installer (" + fs + ")", f"UUID={root_uuid}\t/\t{fs}\t{opts}\t0 1", f"UUID={boot_uuid}\t/boot\text4\t{opts}\t0 2"]
+    if efi and esp_uuid:
+        lines.append(f"UUID={esp_uuid}\t/boot/efi\tvfat\tumask=0077,{opts}\t0 2")
+    lines.append("tmpfs\t/tmp\ttmpfs\tdefaults,nosuid,nodev\t0 0")
+    return "\n".join(lines) + "\n"
 
 
 TYPE_KEEP_GUI = {"server": False, "workstation": True, "desktop": True}

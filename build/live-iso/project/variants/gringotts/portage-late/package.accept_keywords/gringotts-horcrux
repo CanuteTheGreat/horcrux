@@ -1,0 +1,4 @@
+# Horcrux overlay packages proven on hogshead (copied after the long app layers, so Portage config edits do not invalidate them)
+sys-kernel/horcrux-unlock ~amd64
+sys-apps/horcrux-tools ~amd64
+sys-apps/horcrux-live-data ~amd64

@@ -11,7 +11,7 @@
 #
 # Manual runs only (workflow_dispatch): this minimal busybox image is a build-script
 # smoke test, NOT an installable system. The real live/installer ISO (Gentoo, UEFI+BIOS,
-# installer included) is built, tested and published by live-iso.yml (daily + v* tags).
+# installer included) is built, tested and published by live-iso-<variant>.yml (daily + v* tags).
 
 name: Build ISOs
 

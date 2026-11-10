@@ -81,10 +81,33 @@ impl VmCloneManager {
                 horcrux_common::Error::System(format!("Failed to create storage directory: {}", e))
             })?;
 
+        // A RUNNING source: qemu-img cannot read an image QEMU holds the write
+        // lock of, and copying it under the guest's feet gives a torn image.
+        // Full clones copy the file-backed disks through QMP blockdev-backup
+        // (one transaction = one point in time, the guest keeps running);
+        // ZFS/LVM/btrfs/Ceph disks keep their snapshot-based clone. A linked
+        // clone would use the live image as backing file: refused.
+        let running = !source_vm.disks.is_empty()
+            && crate::vm::qemu::QemuManager::process_running(&source_vm.id);
+        if running && matches!(options.mode, CloneMode::Linked) {
+            return Err(horcrux_common::Error::Conflict(format!(
+                "VM {} is running: a linked clone would use its live disk as backing file. \
+                 Use a full clone (taken live, without stopping the VM) or stop the VM first.",
+                source_vm.id
+            )));
+        }
+        let mut live_done = vec![false; source_vm.disks.len()];
+        if running {
+            self.live_copy_file_disks(source_vm, &new_vm_id, &mut live_done)
+                .await?;
+        }
+
         // Clone all disks
         let mut cloned_disks = Vec::new();
         for (idx, disk) in source_vm.disks.iter().enumerate() {
-            let cloned_disk = self.clone_disk(disk, &new_vm_id, idx, options.mode).await?;
+            let cloned_disk = self
+                .clone_disk(disk, &new_vm_id, idx, options.mode, live_done[idx])
+                .await?;
             cloned_disks.push(cloned_disk);
         }
 
@@ -112,30 +135,126 @@ impl VmCloneManager {
         Ok(cloned_vm)
     }
 
-    /// Clone a single disk
+    /// Where the clone's copy of disk `disk_index` goes.
+    fn disk_dest(&self, source_disk: &VmDisk, new_vm_id: &str, disk_index: usize) -> PathBuf {
+        let extension = Path::new(&source_disk.path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("qcow2");
+        if disk_index == 0 {
+            self.storage_path
+                .join(format!("{}.{}", new_vm_id, extension))
+        } else {
+            self.storage_path
+                .join(format!("{}-disk{}.{}", new_vm_id, disk_index, extension))
+        }
+    }
+
+    /// Copy every file-backed (qcow2/raw) disk of a RUNNING VM in one QMP
+    /// `blockdev-backup` transaction (see `live_copy`). A raw disk is copied
+    /// to a temporary qcow2 and converted. Marks the disks it did in `done`.
+    async fn live_copy_file_disks(
+        &self,
+        source_vm: &VmConfig,
+        new_vm_id: &str,
+        done: &mut [bool],
+    ) -> Result<()> {
+        let mut pairs: Vec<(PathBuf, PathBuf)> = Vec::new();
+        let mut raw_final: Vec<(PathBuf, PathBuf)> = Vec::new();
+        let mut idxs = Vec::new();
+        for (idx, disk) in source_vm.disks.iter().enumerate() {
+            let st = self.detect_storage_type(&disk.path)?;
+            if !matches!(st, StorageType::Qcow2 | StorageType::Raw) {
+                continue;
+            }
+            let dest = self.disk_dest(disk, new_vm_id, idx);
+            if dest.exists() {
+                return Err(horcrux_common::Error::Conflict(format!(
+                    "A disk image already exists at {}",
+                    dest.display()
+                )));
+            }
+            if matches!(st, StorageType::Raw) {
+                let tmp = PathBuf::from(format!("{}.live.qcow2", dest.display()));
+                pairs.push((PathBuf::from(&disk.path), tmp.clone()));
+                raw_final.push((tmp, dest));
+            } else {
+                pairs.push((PathBuf::from(&disk.path), dest));
+            }
+            idxs.push(idx);
+        }
+        if pairs.is_empty() {
+            return Ok(());
+        }
+        let sock =
+            crate::vm::display::DisplayRuntime::qmp_socket(Path::new(&source_vm.disks[0].path));
+        info!(
+            "Live clone of running VM {}: copying {} disk(s) with blockdev-backup",
+            source_vm.id,
+            pairs.len()
+        );
+        let result = crate::vm::live_copy::live_copy_disks(&sock, &pairs).await;
+        let result = match result {
+            Ok(()) => {
+                let mut r = Ok(());
+                for (tmp, dest) in &raw_final {
+                    r = self.convert_to_raw(tmp, dest).await;
+                    let _ = fs::remove_file(tmp).await;
+                    if r.is_err() {
+                        break;
+                    }
+                }
+                r
+            }
+            Err(e) => Err(e),
+        };
+        if let Err(e) = result {
+            for (_, target) in &pairs {
+                let _ = fs::remove_file(target).await;
+            }
+            for (_, dest) in &raw_final {
+                let _ = fs::remove_file(dest).await;
+            }
+            return Err(horcrux_common::Error::System(format!(
+                "live clone of VM {} failed: {e}",
+                source_vm.id
+            )));
+        }
+        for i in idxs {
+            done[i] = true;
+        }
+        Ok(())
+    }
+
+    async fn convert_to_raw(&self, src: &Path, dest: &Path) -> Result<()> {
+        let output = Command::new("qemu-img")
+            .args(["convert", "-f", "qcow2", "-O", "raw"])
+            .arg(src)
+            .arg(dest)
+            .output()
+            .await
+            .map_err(|e| horcrux_common::Error::System(format!("Failed to run qemu-img: {e}")))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(horcrux_common::Error::System(format!(
+                "qemu-img convert to raw failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )))
+        }
+    }
+
+    /// Clone a single disk (`precopied`: a live copy already wrote it).
     async fn clone_disk(
         &self,
         source_disk: &VmDisk,
         new_vm_id: &str,
         disk_index: usize,
         mode: CloneMode,
+        precopied: bool,
     ) -> Result<VmDisk> {
         let source_path = Path::new(&source_disk.path);
-
-        // Determine file extension
-        let extension = source_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("qcow2");
-
-        // Generate new disk path
-        let new_disk_path = if disk_index == 0 {
-            self.storage_path
-                .join(format!("{}.{}", new_vm_id, extension))
-        } else {
-            self.storage_path
-                .join(format!("{}-disk{}.{}", new_vm_id, disk_index, extension))
-        };
+        let new_disk_path = self.disk_dest(source_disk, new_vm_id, disk_index);
 
         debug!(
             "Cloning disk from {:?} to {:?} (mode: {:?})",
@@ -144,7 +263,7 @@ impl VmCloneManager {
 
         // Never write over an existing image (another VM's disk, or one an
         // earlier failed clone left behind): qemu-img would overwrite it.
-        if new_disk_path.exists() {
+        if !precopied && new_disk_path.exists() {
             return Err(horcrux_common::Error::Conflict(format!(
                 "A disk image already exists at {}",
                 new_disk_path.display()
@@ -155,6 +274,7 @@ impl VmCloneManager {
         let storage_type = self.detect_storage_type(&source_disk.path)?;
 
         match storage_type {
+            StorageType::Qcow2 | StorageType::Raw if precopied => {}
             StorageType::Qcow2 => {
                 self.clone_qcow2_disk(source_path, &new_disk_path, mode)
                     .await?

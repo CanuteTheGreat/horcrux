@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Horcrux network chooser
+Comment=Opens the Wi-Fi settings once when the first login has no network
+Exec=/usr/libexec/horcrux-network-chooser
+TryExec=/usr/libexec/horcrux-network-chooser
+NoDisplay=true
+OnlyShowIn=GNOME;
+X-GNOME-Autostart-enabled=true

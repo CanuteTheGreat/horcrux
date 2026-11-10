@@ -1,0 +1,24 @@
+#!/bin/sh
+# Rotate the screen (and map touch + pen to it) with the tablet, when the machine has an accelerometer (iio-sensor-proxy).
+# Does nothing when monitor-sensor reports no accelerometer. Started by the XFCE session (xdg autostart).
+command -v monitor-sensor >/dev/null 2>&1 || exit 0
+out=$(xrandr 2>/dev/null | sed -n 's/^\([^ ]*\) connected.*/\1/p' | head -1)
+[ -n "$out" ] || exit 0
+apply() {
+    case "$1" in
+        normal) rot=normal;  m="1 0 0 0 1 0 0 0 1" ;;
+        left-up) rot=left;   m="0 -1 1 1 0 0 0 0 1" ;;
+        right-up) rot=right; m="0 1 0 -1 0 1 0 0 1" ;;
+        bottom-up) rot=inverted; m="-1 0 1 0 -1 1 0 0 1" ;;
+        *) return ;;
+    esac
+    xrandr --output "$out" --rotate "$rot"
+    for id in $(xinput list --id-only 2>/dev/null); do
+        xinput list-props "$id" 2>/dev/null | grep -q 'Coordinate Transformation Matrix' && xinput set-prop "$id" 'Coordinate Transformation Matrix' $m 2>/dev/null
+    done
+}
+monitor-sensor --accel 2>/dev/null | while read -r line; do
+    case "$line" in
+        *"Accelerometer orientation changed:"*) apply "${line##*: }" ;;
+    esac
+done

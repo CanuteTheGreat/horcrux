@@ -95,6 +95,37 @@ pub fn plan_power_down(nodes: &[PowerNode], policy: &PowerPolicy) -> Vec<String>
     out
 }
 
+/// Debounce for the automatic idle power-down: a node is only acted on after
+/// it has been a planner candidate for `required` consecutive samples, so a
+/// momentary CPU dip never shuts a node off.
+#[derive(Debug, Default)]
+pub struct IdleTracker {
+    streak: std::collections::HashMap<String, u32>,
+}
+
+impl IdleTracker {
+    /// Record one sample (`candidates` = [`plan_power_down`] output). Nodes
+    /// not in it lose their streak. Returns the candidates that have now been
+    /// idle for at least `required` samples, in planner order.
+    pub fn observe(&mut self, candidates: &[String], required: u32) -> Vec<String> {
+        self.streak.retain(|n, _| candidates.contains(n));
+        let mut ready = Vec::new();
+        for n in candidates {
+            let c = self.streak.entry(n.clone()).or_insert(0);
+            *c += 1;
+            if *c >= required.max(1) {
+                ready.push(n.clone());
+            }
+        }
+        ready
+    }
+
+    /// Forget a node (after it was powered off).
+    pub fn reset(&mut self, node: &str) {
+        self.streak.remove(node);
+    }
+}
+
 /// Nodes to wake so `needed` more guest-capable nodes are online. Only
 /// powered-off managed nodes with a wake method qualify.
 pub fn plan_wake(nodes: &[PowerNode], needed: usize) -> Vec<String> {
@@ -104,6 +135,26 @@ pub fn plan_wake(nodes: &[PowerNode], needed: usize) -> Vec<String> {
         .collect();
     v.sort_by(|a, b| a.name.cmp(&b.name));
     v.into_iter().take(needed).map(|n| n.name.clone()).collect()
+}
+
+/// Wake-on-demand: the ONE node to power on now, or none. Demand exists when
+/// fewer than `min_online` nodes are running, or when every running node is
+/// at or above `busy_cpu_percent` (no spare capacity; an unknown CPU reading
+/// counts as busy). Only powered-off managed nodes with a wake method qualify,
+/// lowest name first (deterministic), so a cluster with nothing to wake stays
+/// unchanged.
+pub fn plan_auto_wake(
+    nodes: &[PowerNode],
+    min_online: usize,
+    busy_cpu_percent: f32,
+) -> Option<String> {
+    let online: Vec<&PowerNode> = nodes.iter().filter(|n| n.powered_on).collect();
+    let short = online.len() < min_online;
+    let saturated = !online.is_empty() && online.iter().all(|n| n.cpu_percent >= busy_cpu_percent);
+    if !short && !saturated {
+        return None;
+    }
+    plan_wake(nodes, 1).into_iter().next()
 }
 
 /// Build a 102-byte Wake-on-LAN magic packet (6x 0xFF, then MAC x16).
@@ -129,6 +180,74 @@ pub fn parse_mac(s: &str) -> Option<[u8; 6]> {
         m[i] = u8::from_str_radix(p, 16).ok()?;
     }
     Some(m)
+}
+
+/// Send a Wake-on-LAN magic packet for `mac` to `target` (normally the
+/// subnet broadcast on UDP port 9, e.g. `192.168.1.255:9`).
+pub fn send_wol(mac: [u8; 6], target: std::net::SocketAddr) -> std::io::Result<()> {
+    let bind: std::net::SocketAddr = if target.is_ipv4() {
+        "0.0.0.0:0".parse().expect("static addr")
+    } else {
+        "[::]:0".parse().expect("static addr")
+    };
+    let sock = std::net::UdpSocket::bind(bind)?;
+    sock.set_broadcast(true)?;
+    let sent = sock.send_to(&wol_magic_packet(mac), target)?;
+    if sent != 102 {
+        return Err(std::io::Error::other("short WoL packet send"));
+    }
+    Ok(())
+}
+
+/// Build the planner input from live cluster state (idle sampling).
+///
+/// * `cluster` -- every registered node (online or not) with its reported CPU.
+/// * `reachable` / `guests` -- the placement snapshot (`drain::snapshot`):
+///   nodes that answered and the guests they run.
+/// * `bmc_nodes` -- nodes with a configured BMC/fencing device (wake via BMC).
+/// * `local` -- this node; it is never offered for power-down.
+///
+/// Fails safe: an unknown CPU reading counts as busy, and an online node
+/// whose guest list could not be fetched, the local node, and Storage-role
+/// nodes (OSD hosts) are pinned.
+pub fn power_nodes_from_state(
+    cluster: &[super::node::Node],
+    reachable: &[String],
+    guests: &[super::drain::PlanGuest],
+    bmc_nodes: &[String],
+    local: &str,
+) -> Vec<PowerNode> {
+    use super::node::NodeStatus;
+    cluster
+        .iter()
+        .map(|n| {
+            let on = n.status != NodeStatus::Offline;
+            let known = reachable.iter().any(|r| r == &n.name);
+            let running = guests
+                .iter()
+                .filter(|g| g.node == n.name && g.running)
+                .count() as u32;
+            let role_osd = n.caps.as_ref().is_some_and(|c| c.role.hosts_osds());
+            PowerNode {
+                name: n.name.clone(),
+                labels: n
+                    .caps
+                    .as_ref()
+                    .map(|c| c.labels.clone())
+                    .unwrap_or_default(),
+                powered_on: on,
+                running_guests: running,
+                cpu_percent: n.cpu_usage.map(|c| c as f32).unwrap_or(100.0),
+                hosts_osds: role_osd,
+                pinned: n.name == local || n.is_local || (on && !known),
+                votes: 1,
+                wake: bmc_nodes
+                    .iter()
+                    .any(|b| b == &n.name)
+                    .then_some(WakeMethod::Bmc),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -220,5 +339,92 @@ mod tests {
         assert_eq!(p.len(), 102);
         assert!(p[..6].iter().all(|b| *b == 0xFF));
         assert_eq!(&p[96..], &mac);
+    }
+
+    #[test]
+    fn send_wol_delivers_magic_packet_over_udp() {
+        let rx = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        rx.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let mac = parse_mac("aa:bb:cc:dd:ee:01").unwrap();
+        send_wol(mac, rx.local_addr().unwrap()).unwrap();
+        let mut buf = [0u8; 256];
+        let (n, _) = rx.recv_from(&mut buf).unwrap();
+        assert_eq!(&buf[..n], wol_magic_packet(mac).as_slice());
+    }
+
+    #[test]
+    fn state_builder_fails_safe() {
+        use super::super::node::{Node, NodeStatus};
+        use super::super::roles::{NodeCaps, NodeRole};
+        let mk = |name: &str, cpu: Option<f64>, role: NodeRole| {
+            let mut n = Node::new(1, name.to_string(), "10.0.0.1".into());
+            n.status = NodeStatus::Online;
+            n.cpu_usage = cpu;
+            n.caps = Some(NodeCaps {
+                role,
+                labels: vec![POWER_LABEL.to_string()],
+                ..Default::default()
+            });
+            n
+        };
+        let cluster = vec![
+            mk("a", Some(1.0), NodeRole::Compute),
+            mk("b", None, NodeRole::Compute),
+            mk("c", Some(1.0), NodeRole::Storage),
+            mk("d", Some(1.0), NodeRole::Compute),
+            mk("me", Some(1.0), NodeRole::Compute),
+            mk("e", Some(1.0), NodeRole::Compute),
+        ];
+        let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        let reachable = names(&["a", "b", "c", "me", "e"]);
+        let bmc = names(&["a", "b", "c", "d", "me", "e"]);
+        let v = power_nodes_from_state(&cluster, &reachable, &[], &bmc, "me");
+        let p = PowerPolicy {
+            idle_cpu_percent: 5.0,
+            min_online: 1,
+        };
+        // b: unknown CPU = busy; c: OSD host; d: guest list unreachable; me: local.
+        assert_eq!(plan_power_down(&v, &p), vec!["a", "e"]);
+    }
+    #[test]
+    fn auto_wake_when_short_or_saturated_only() {
+        let mut nodes = cluster(4);
+        nodes[3].powered_on = false;
+        // 3 online of min 3, all idle: no demand.
+        assert_eq!(plan_auto_wake(&nodes, 3, 80.0), None);
+        // below min_online: wake the off managed node.
+        assert_eq!(plan_auto_wake(&nodes, 4, 80.0), Some("n3".into()));
+        // saturated: every online node busy.
+        for n in nodes.iter_mut().filter(|n| n.powered_on) {
+            n.cpu_percent = 90.0;
+        }
+        assert_eq!(plan_auto_wake(&nodes, 3, 80.0), Some("n3".into()));
+        // one node with headroom: no demand.
+        nodes[0].cpu_percent = 10.0;
+        assert_eq!(plan_auto_wake(&nodes, 3, 80.0), None);
+        // unmanaged or no wake method: never woken.
+        nodes[0].cpu_percent = 90.0;
+        nodes[3].wake = None;
+        assert_eq!(plan_auto_wake(&nodes, 3, 80.0), None);
+        nodes[3].wake = Some(WakeMethod::Bmc);
+        nodes[3].labels.clear();
+        assert_eq!(plan_auto_wake(&nodes, 3, 80.0), None);
+    }
+
+    #[test]
+    fn idle_tracker_needs_consecutive_samples() {
+        let mut t = IdleTracker::default();
+        let a = vec!["a".to_string()];
+        let ab = vec!["a".to_string(), "b".to_string()];
+        assert!(t.observe(&a, 3).is_empty());
+        assert!(t.observe(&ab, 3).is_empty());
+        // b dips out of the candidate list: its streak restarts, a's continues.
+        assert_eq!(t.observe(&a, 3), vec!["a"]);
+        assert!(t.observe(&ab, 3).len() == 1);
+        t.reset("a");
+        assert!(t.observe(&a, 3).is_empty());
+        // required = 0 behaves like 1.
+        assert_eq!(IdleTracker::default().observe(&a, 0), vec!["a"]);
     }
 }

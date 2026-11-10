@@ -73,6 +73,9 @@ pub struct FencingEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FencingAction {
     Off,
+    /// Graceful OS shutdown through the BMC/agent (ACPI power button), used
+    /// by idle power-down so a healthy node is not hard-cut.
+    SoftOff,
     On,
     Reboot,
     Status,
@@ -94,6 +97,7 @@ fn redfish_base_url(address: &str, port: Option<u16>) -> String {
 fn redfish_reset_type(action: &FencingAction) -> &'static str {
     match action {
         FencingAction::Off => "ForceOff",
+        FencingAction::SoftOff => "GracefulShutdown",
         FencingAction::On => "On",
         FencingAction::Reboot => "ForceRestart",
         FencingAction::Status => "None",
@@ -270,6 +274,89 @@ impl FencingManager {
         FencingResult::ManualRequired
     }
 
+    /// Power a node back on through its BMC (wake-on-demand, area 7). Unlike
+    /// fencing this is not gated by `is_enabled`; devices are tried in
+    /// priority order and only BMC-type agents (IPMI/iLO/DRAC/Redfish) are used.
+    pub async fn power_on_node(&self, node: &str) -> FencingResult {
+        let devices: Vec<_> = self
+            .get_node_devices(node)
+            .await
+            .into_iter()
+            .filter(|d| {
+                matches!(
+                    d.agent_type,
+                    FencingAgentType::Ipmi
+                        | FencingAgentType::Ilo
+                        | FencingAgentType::Drac
+                        | FencingAgentType::Redfish
+                )
+            })
+            .collect();
+        if devices.is_empty() {
+            return FencingResult::Failed(format!("no BMC device configured for node {node}"));
+        }
+        let mut last = FencingResult::ManualRequired;
+        for device in devices {
+            let result = self.execute_fence(&device, FencingAction::On).await;
+            self.log_event(FencingEvent {
+                timestamp: chrono::Utc::now().timestamp(),
+                node: node.to_string(),
+                device_id: device.id.clone(),
+                action: FencingAction::On,
+                result: result.clone(),
+                reason: "wake on demand".to_string(),
+            })
+            .await;
+            if matches!(result, FencingResult::Success) {
+                return result;
+            }
+            last = result;
+        }
+        last
+    }
+
+    /// Gracefully shut a node down through its BMC (idle power-down, area 7):
+    /// ACPI soft-off (ipmitool `power soft`, Redfish `GracefulShutdown`).
+    /// Only BMC-type agents are used and, unlike fencing, this is not gated
+    /// by `is_enabled`. Success means the BMC accepted the request.
+    pub async fn power_off_node_graceful(&self, node: &str, reason: &str) -> FencingResult {
+        let devices: Vec<_> = self
+            .get_node_devices(node)
+            .await
+            .into_iter()
+            .filter(|d| {
+                matches!(
+                    d.agent_type,
+                    FencingAgentType::Ipmi
+                        | FencingAgentType::Ilo
+                        | FencingAgentType::Drac
+                        | FencingAgentType::Redfish
+                )
+            })
+            .collect();
+        if devices.is_empty() {
+            return FencingResult::Failed(format!("no BMC device configured for node {node}"));
+        }
+        let mut last = FencingResult::ManualRequired;
+        for device in devices {
+            let result = self.execute_fence(&device, FencingAction::SoftOff).await;
+            self.log_event(FencingEvent {
+                timestamp: chrono::Utc::now().timestamp(),
+                node: node.to_string(),
+                device_id: device.id.clone(),
+                action: FencingAction::SoftOff,
+                result: result.clone(),
+                reason: reason.to_string(),
+            })
+            .await;
+            if matches!(result, FencingResult::Success) {
+                return result;
+            }
+            last = result;
+        }
+        last
+    }
+
     /// Check node power status
     pub async fn check_node_status(&self, node: &str) -> FencingResult {
         let devices = self.get_node_devices(node).await;
@@ -322,6 +409,7 @@ impl FencingManager {
     async fn fence_ipmi(&self, device: &FencingDevice, action: &FencingAction) -> FencingResult {
         let action_cmd = match action {
             FencingAction::Off => "power off",
+            FencingAction::SoftOff => "power soft",
             FencingAction::On => "power on",
             FencingAction::Reboot => "power reset",
             FencingAction::Status => "power status",
@@ -562,7 +650,7 @@ impl FencingManager {
         // INTEGER: 1 = on, 2 = off for the standard PowerNet/RFC1628-style
         // outlet control OIDs), overridable via options.
         let (value_opt, value) = match action {
-            FencingAction::Off => (
+            FencingAction::Off | FencingAction::SoftOff => (
                 "off_value",
                 device
                     .options
@@ -631,7 +719,7 @@ impl FencingManager {
     /// SSH fencing implementation
     async fn fence_ssh(&self, device: &FencingDevice, action: &FencingAction) -> FencingResult {
         let cmd = match action {
-            FencingAction::Off => device
+            FencingAction::Off | FencingAction::SoftOff => device
                 .options
                 .get("off_cmd")
                 .cloned()
@@ -694,6 +782,7 @@ impl FencingManager {
 
         let virsh_cmd = match action {
             FencingAction::Off => "destroy",
+            FencingAction::SoftOff => "shutdown",
             FencingAction::On => "start",
             FencingAction::Reboot => "reboot",
             FencingAction::Status => "domstate",
@@ -806,6 +895,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_power_on_without_bmc_device_fails() {
+        let mgr = FencingManager::new();
+        match mgr.power_on_node("lab1").await {
+            FencingResult::Failed(m) => assert!(m.contains("no BMC device")),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn test_fencing_enable_disable() {
         let manager = FencingManager::new();
 
@@ -830,6 +928,10 @@ mod tests {
             "http://127.0.0.1:9"
         );
         assert_eq!(redfish_reset_type(&FencingAction::Off), "ForceOff");
+        assert_eq!(
+            redfish_reset_type(&FencingAction::SoftOff),
+            "GracefulShutdown"
+        );
         assert_eq!(redfish_reset_type(&FencingAction::On), "On");
         assert_eq!(redfish_reset_type(&FencingAction::Reboot), "ForceRestart");
         let b =
@@ -924,5 +1026,94 @@ mod tests {
             "{:?}",
             log
         );
+    }
+
+    /// Wake-on-demand and idle power-down go through the real manager paths
+    /// (device selection, priority order, event log) against a mock iDRAC:
+    /// power_on_node must POST ResetType "On", power_off_node_graceful must
+    /// POST "GracefulShutdown" (never ForceOff), and both are logged.
+    #[tokio::test]
+    async fn test_power_on_and_graceful_off_against_mock_bmc() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = Arc::new(RwLock::new(Vec::<String>::new()));
+        let seen2 = seen.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                let mut buf = vec![0u8; 4096];
+                let n = sock.read(&mut buf).await.unwrap();
+                let mut req = String::from_utf8_lossy(&buf[..n]).to_string();
+                if req.starts_with("POST") && !req.contains("ResetType") {
+                    if let Ok(Ok(m)) = tokio::time::timeout(
+                        std::time::Duration::from_millis(500),
+                        sock.read(&mut buf),
+                    )
+                    .await
+                    {
+                        req.push_str(&String::from_utf8_lossy(&buf[..m]));
+                    }
+                }
+                let reset = ["GracefulShutdown", "ForceOff", "\"On\""]
+                    .iter()
+                    .find(|k| req.contains(**k))
+                    .copied()
+                    .unwrap_or("none");
+                seen2.write().await.push(format!(
+                    "{} || {}",
+                    req.lines().next().unwrap_or(""),
+                    reset
+                ));
+                let post = req.starts_with("POST");
+                let body = r#"{"PowerState":"On"}"#;
+                let resp = format!(
+                    "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    if post { "204 No Content" } else { "200 OK" },
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+            }
+        });
+        let mgr = FencingManager::new();
+        mgr.add_device(FencingDevice {
+            id: "idrac".into(),
+            agent_type: FencingAgentType::Redfish,
+            node: "r6525-2".into(),
+            address: format!("http://127.0.0.1:{}", port),
+            username: Some("root".into()),
+            password: Some("x".into()),
+            port: None,
+            options: HashMap::from([("system_id".to_string(), "System.Embedded.1".to_string())]),
+            priority: 1,
+        })
+        .await
+        .unwrap();
+        assert!(matches!(
+            mgr.power_off_node_graceful("r6525-2", "idle").await,
+            FencingResult::Success
+        ));
+        assert!(matches!(
+            mgr.power_on_node("r6525-2").await,
+            FencingResult::Success
+        ));
+        let log = seen.read().await.clone();
+        let reset_path = "POST /redfish/v1/Systems/System.Embedded.1/Actions/ComputerSystem.Reset";
+        assert!(
+            log.iter()
+                .any(|l| l.starts_with(reset_path) && l.ends_with("GracefulShutdown")),
+            "{:?}",
+            log
+        );
+        assert!(
+            log.iter()
+                .any(|l| l.starts_with(reset_path) && l.ends_with("\"On\"")),
+            "{:?}",
+            log
+        );
+        assert!(!log.iter().any(|l| l.ends_with("ForceOff")), "{:?}", log);
+        let events = mgr.get_events(Some("r6525-2"), 10).await;
+        assert_eq!(events.len(), 2, "{:?}", events);
     }
 }

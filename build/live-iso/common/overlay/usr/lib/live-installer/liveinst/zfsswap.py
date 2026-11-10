@@ -17,6 +17,8 @@ corrupts it (the resumed memory image thinks the pool is exported / in an older 
 import os
 import re
 
+from . import testmachine
+
 MAPPER = "hxswap"
 DEV = "/dev/mapper/" + MAPPER
 MODULE = "horcrux-unlock"
@@ -75,6 +77,18 @@ def initramfs_problems(lsinitrd_text):
     return [k for k, rx in need.items() if not re.search(rx, t, re.M)]
 
 
+def plain_initramfs_problems(lsinitrd_text):
+    """TEST MACHINE initramfs (pure): ZFS + resume present, NO unlock module / prompt hooks / cryptsetup"""
+    t, out = lsinitrd_text, []
+    for k, rx in {"zfs.ko": r"zfs\.ko", "resume hook": r"pre-mount/10-resume|lib/dracut/resume\.sh"}.items():
+        if not re.search(rx, t, re.M):
+            out.append("missing " + k)
+    for k, rx in {"hx-unlock": r"bin/hx-unlock", "hx-zfskey": r"hx-zfskey", "cryptsetup": r"bin/cryptsetup"}.items():
+        if re.search(rx, t, re.M):
+            out.append("unexpected " + k + " (a passphrase prompt could appear)")
+    return out
+
+
 def hook_order_ok(lsinitrd_text):
     """resume (pre-mount 10) must come before the pool import: hx-zfskey is pre-mount 50, 90zfs imports in the mount hook (98)"""
     m = re.findall(r"pre-mount/(\d+)-(\S+?)\.sh", lsinitrd_text)
@@ -87,8 +101,10 @@ def hook_order_ok(lsinitrd_text):
 
 
 # ---------------------------------------------------------------- installer stages (thin wrappers, need a disk)
-def sgdisk_part(mb):
-    """partition 3 of the disk: the LUKS2 swap (type 8309)"""
+def sgdisk_part(mb, plain=False):
+    """partition 3 of the disk: the LUKS2 swap (type 8309); a TEST MACHINE without disk encryption gets a plain swap partition (8200)"""
+    if plain:
+        return ["-n", f"3:0:+{mb}M", "-t", "3:8200", "-c", "3:swap"]
     return ["-n", f"3:0:+{mb}M", "-t", "3:8309", "-c", "3:cryptswap"]
 
 
@@ -96,6 +112,10 @@ def mkswap_stage(inst):
     """after partitioning, before the pool: LUKS2-format partition 3 with the POOL passphrase, open it, mkswap"""
     from .system import mem_mb
     L = inst.layout(inst.c["disks"][0])
+    if testmachine.requested(inst.c):
+        inst.run(["mkswap", "-L", "hxswap", L[3]])          # test machine: plain swap, no LUKS
+        inst.swap_dev = L[3]
+        return
     pp = inst.c["zfs_passphrase"]
     inst.run(luks_format_cmd(L[3], mem_mb() or 8192), input_=pp)
     inst.run(["cryptsetup", "open", "--type", "luks2", "--key-file=-", "--allow-discards", L[3], MAPPER], input_=pp)
@@ -113,6 +133,8 @@ def prepare(inst):
     """BEFORE the initramfs is built (T2 rebuilds it in t2.apply): dracut modules (resume + horcrux-unlock), kernel args"""
     from . import portableswap
     L = inst.layout(inst.c["disks"][0])
+    if testmachine.requested(inst.c):
+        return prepare_plain(inst, L)
     inst.swap_dev = DEV
     portableswap.prepare(inst, extra_dracut_modules=f"crypt dm {MODULE} zfs")
     luks_uuid = _blkid(inst, L[3])
@@ -121,8 +143,28 @@ def prepare(inst):
     inst.cmdline_extra = (inst.cmdline_extra + " " + cmdline(luks_uuid, inst.swap_uuid)).strip()
 
 
+def prepare_plain(inst, L):
+    """TEST MACHINE (no encryption): plain swap partition, dracut resume + zfs only, no unlock module, no passphrase kernel args"""
+    from . import portableswap
+    inst.swap_dev = L[3]
+    portableswap.prepare(inst, extra_dracut_modules="zfs")
+    inst.write("/etc/dracut.conf.d/95-portable-swap.conf", testmachine.bootconf(inst.swap_uuid))
+    inst.write("/etc/portage/package.use/horcrux-test-machine", testmachine.PACKAGE_USE)
+    inst.cmdline_extra = (inst.cmdline_extra + f" resume=UUID={inst.swap_uuid}").strip()
+    inst.hx_luks_uuid = ""
+
+
 def finish_config(inst):
     """after zfsroot.configure (which wrote the fstab): swap line, resume device, initramfs check"""
+    if testmachine.requested(inst.c):
+        from . import portableswap
+        inst.write("/etc/fstab", portableswap.fstab_line("UUID=" + inst.swap_uuid), append=True)
+        # no hx-resume service: the kernel is given resume=UUID= on the command line and the stock resume module handles it
+        if not getattr(inst, "t2", False):
+            _rebuild_initramfs(inst)
+        else:
+            _check_initramfs(inst)
+        return
     inst.write("/etc/fstab", fstab_line(), append=True)
     inst.write("/etc/init.d/hx-resume", HX_RESUME_INIT, 0o755)
     inst.run(["rc-update", "add", "hx-resume", "boot"], chroot=True, check=False)
@@ -147,12 +189,32 @@ def _rebuild_initramfs(inst):
     _check_initramfs(inst, kver)
 
 
+def _rebuild_initramfs_for(inst, problems_fn):
+    """rebuild the newest kernel's initramfs and fail the install when `problems_fn(lsinitrd listing)` names a missing piece"""
+    from .system import InstallError
+    kver = _newest_kver(inst)
+    gcc = f"{inst.target}/usr/lib/gcc"
+    chost = sorted(os.listdir(gcc))[0] if os.path.isdir(gcc) and os.listdir(gcc) else "x86_64-pc-linux-gnu"
+    inst.run(["dracut", "--force", "--no-hostonly", "--kver", kver, f"/boot/initramfs-{kver}.img", kver], chroot=True, env={"CHOST": chost})
+    out = []
+    inst.run(["lsinitrd", f"/boot/initramfs-{kver}.img"], chroot=True, line_cb=lambda l: out.append(l))
+    miss = problems_fn("".join(out))
+    if miss:
+        raise InstallError("initramfs is missing: " + ", ".join(miss))
+
+
 def _check_initramfs(inst, kver=None):
     from .system import InstallError
     kver = kver or _newest_kver(inst)
     out = []
     inst.run(["lsinitrd", f"/boot/initramfs-{kver}.img"], chroot=True, line_cb=lambda l: out.append(l))
     txt = "".join(out)
+    if testmachine.requested(inst.c):
+        miss = plain_initramfs_problems(txt)
+        if miss:
+            raise InstallError("test-machine initramfs: " + "; ".join(miss))
+        inst.log(f"initramfs {kver}: unencrypted (no unlock module), resume hook present, zfs.ko present")
+        return
     miss = initramfs_problems(txt)
     if miss:
         raise InstallError("hibernate initramfs is missing: " + ", ".join(miss))

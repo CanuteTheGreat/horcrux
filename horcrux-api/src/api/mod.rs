@@ -22,6 +22,8 @@ pub mod ha_loop;
 #[cfg(feature = "kubernetes")]
 pub mod helm;
 pub mod host_net;
+#[cfg(feature = "cluster")]
+pub mod idle_power;
 pub mod inventory;
 #[cfg(feature = "kubernetes")]
 pub mod k8s_config;
@@ -31,6 +33,7 @@ pub mod metric_servers;
 pub mod metrics;
 pub mod migration_jobs;
 pub mod migration_peer;
+pub mod net_dhcp;
 pub mod node_disks;
 pub mod node_shell;
 pub mod node_summary;

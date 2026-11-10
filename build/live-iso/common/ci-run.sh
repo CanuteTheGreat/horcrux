@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# ci-run.sh daily|stable   -- run by .forgejo/workflows/live-iso.yml, once per architecture (ARCH env; default = the host's):
+# ci-run.sh daily|stable   -- run by .forgejo/workflows/live-iso-<variant>.yml, once per architecture (ARCH env; default = the host's):
 #   x86_64 on the kvm-x86_64 runner (KVM), aarch64 on the arm64 runner (native build, QEMU TCG: Graviton has no /dev/kvm).
 # build ISO -> QEMU boot/install/reboot/web tests (x86: UEFI+USB, BIOS+CD; arm64/riscv64: UEFI) -> publish only if ALL passed.
-# ALWAYS exits 0 (a red job would e-mail the owner): the outcome goes to the `daily-status`
-# marker release and the job summary; ~/.hermes iso-status-watch reads the marker.
+# The outcome goes to the `daily-status-*` marker release and the job summary (~/.hermes iso-status-watch reads the
+# marker), and a failed build/test/publish step FAILS THE RUN (exit 1, after the marker is written): a green run
+# must mean an image was built, tested and published (run 8637 was green while `dracut: Failed to find module zfs`).
 set -uo pipefail
 mode=${1:?daily|stable}
 HERE=$(cd "$(dirname "$0")" && pwd); cd "$HERE"
@@ -15,7 +16,7 @@ ARCH=${ARCH:-$HOST_ARCH}; export ARCH
 # smaller QEMU matrix + the encrypted-ZFS desktop test (GDM greeter on VGA, boot-environment rollback, hibernate/resume).
 VARIANT=${VARIANT:-}; export VARIANT
 . "$HERE/image-name.sh"; export INIT=$IMG_INIT; VPFX="$IMG-"
-. "$HERE/arch/$ARCH.env" || { echo "unsupported ARCH=$ARCH"; exit 0; }
+. "$HERE/arch/$ARCH.env" || { echo "::error::unsupported ARCH=$ARCH"; exit 1; }
 OUT=${OUT:-$PWD/../../../iso-out}; mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 EVI=$OUT/evidence; rm -rf "$EVI"; mkdir -p "$EVI"
 T0=$(date +%s); sha=${GITHUB_SHA:-$(git rev-parse HEAD)}
@@ -36,7 +37,7 @@ if [ "$mode" = stable ]; then tag=${GITHUB_REF_NAME:?}; suffix=$tag; else suffix
 
 echo "::group::host deps"
 export DEBIAN_FRONTEND=noninteractive
-(apt-get update -qq && apt-get install -y -qq --no-install-recommends $QEMU_PKGS qemu-utils python3 curl ca-certificates openssh-client sshpass e2fsprogs openssl >/dev/null) || fail deps "apt install failed"
+(apt-get update -qq && apt-get install -y -qq --no-install-recommends $QEMU_PKGS swtpm qemu-utils python3 curl ca-certificates openssh-client sshpass e2fsprogs openssl >/dev/null) || fail deps "apt install failed"
 echo "::endgroup::"
 
 # stable gate: the repo's own CI must not be red on the tagged commit
@@ -49,7 +50,15 @@ fi
 if [ "$result" = pass ]; then
   echo "::group::installer unit tests"
   bash "$HERE/../sync-common.sh" "${SYNC_MODE:---check}" || fail common-sync "shared live-installer copy is out of sync (see sync-common.sh)"
-  python3 -m unittest discover -s "$HERE/tests" 2>&1 | tail -15; [ "${PIPESTATUS[0]}" = 0 ] || fail unit-tests "guided-installer unit tests failed"
+  python3 -m unittest discover -s "$HERE/tests" > "$EVI/unit-tests.log" 2>&1; ut_rc=$?
+  tail -15 "$EVI/unit-tests.log"
+  [ "$ut_rc" = 0 ] || { grep -E '^(FAIL|ERROR):|Error|assert' "$EVI/unit-tests.log" | head -12; fail unit-tests "guided-installer unit tests failed (rc=$ut_rc): $(grep -E '^(FAIL|ERROR):' "$EVI/unit-tests.log" | head -3 | tr '\n' ' ')"; }
+  # /boot space handling on a REAL 512 MB ext4 loop mount (30 snapshots, <= 80% used); needs root + loop devices, skipped otherwise
+  if [ "$(id -u)" = 0 ] && command -v mkfs.ext4 >/dev/null && losetup -f >/dev/null 2>&1; then
+    python3 -W ignore "$HERE/be-boot-space-test.py" > "$EVI/be-boot-space.log" 2>&1; bs_rc=$?
+    grep -E '^(RESULT|ok)' "$EVI/be-boot-space.log"
+    if [ "$bs_rc" != 0 ]; then tail -n 30 "$EVI/be-boot-space.log"; fail be-boot-space "horcrux-be /boot space test failed (rc=$bs_rc): $(tail -n 1 "$EVI/be-boot-space.log" | cut -c1-200)"; fi
+  fi
   echo "::endgroup::"
 fi
 
@@ -58,16 +67,18 @@ if [ "$result" = pass ]; then
   echo "::group::build ISO"
   t=$(date +%s)
   ARCH=$ARCH VARIANT=$VARIANT JOBS=${JOBS:-4} bash ../build.sh -o "$OUT" -n "$suffix" 2>&1 | tee "$EVI/build.log" | tail -60
+  build_rc=${PIPESTATUS[0]}
   BUILD_S=$(( $(date +%s)-t ))
   ISO=$(ls "$OUT"/*-"$suffix"-$ARCH.iso 2>/dev/null | head -1)
-  [ -n "$ISO" ] && [ -s "$ISO" ] || fail build "no ISO produced (see build.log)"
+  if [ "$build_rc" != 0 ]; then fail build "build.sh exited $build_rc: $(grep -E 'ERROR|Failed|failed' "$EVI/build.log" | tail -1 | cut -c1-200)"
+  elif [ -z "$ISO" ] || [ ! -s "$ISO" ]; then fail build "no ISO produced (see build.log)"; fi
   echo "::endgroup::"
 fi
 
 TEST_S=0
 if [ "$result" = pass ]; then
   size=$(stat -c %s "$ISO")
-  [ "$size" -lt 2147483648 ] || fail size "ISO is $size bytes, over the 2 GiB Forgejo asset limit"
+  [ "$size" -lt 2147483648 ] || fail size "ISO is $size bytes, over GitHub's 2 GiB per-release-asset limit (the ISO is delivered from the GitHub release)"
   ( cd "$OUT" && sha256sum -c "$(basename "$ISO").sha256" ) || fail checksum "sha256 mismatch"
 fi
 if [ "$result" = pass ]; then
@@ -123,6 +134,9 @@ if [ "$result" = pass ]; then
     )
   fi
   fi
+  # product-specific matrix (Patronus: ZFS default + TPM-unlock path, XFS fallback, no-TPM path): <project>/ci-matrix.sh may append to MATRIX
+  # and may set GATES_ONLY_X86 entries; sourced after the shared defaults so both products keep one runner.
+  [ -f "$HERE/../project/ci-matrix.sh" ] && . "$HERE/../project/ci-matrix.sh"
   if [ -n "$VARIANT" ]; then
     # the variant adds a desktop on top of the same installer: the server matrix is run in its short form (BIOS+CD ext4, UEFI+USB ZFS mirror)
     # and the variant's own test below does the rest
@@ -133,13 +147,19 @@ if [ "$result" = pass ]; then
   fi
   # Hard per-test deadlines (a stuck QEMU test must FAIL in minutes-to-an-hour, not hold the single KVM runner for hours): the harness arms a
   # watchdog (QEMU_TEST_DEADLINE: kills its QEMUs, prints [FAIL] hard-deadline, exits 124) and `timeout` is the backstop (SIGTERM = same cleanup).
-  if [ "$ARCH" = "$HOST_ARCH" ] && [ -e /dev/kvm ]; then DL_QEMU=2700; DL_ZFS=3600; DL_MODES=3000; else DL_QEMU=5400; DL_ZFS=7200; DL_MODES=6000; fi
+  if [ "$ARCH" = "$HOST_ARCH" ] && [ -e /dev/kvm ]; then DL_QEMU=2700; DL_ZFS=3600; DL_MODES=3000; else DL_QEMU=5400; DL_ZFS=7200; DL_MODES=10800; fi
+  # DL_MODES under TCG: boot-modes = 8 menu-mode boots + a ~1900 s base install + forensic + rescue boots; it hit the old 6000 s deadline on a loaded
+  # arm64 runner (patronus run 783: all asserts passed up to 'rescue', then hard-deadline). Only the deadline moved; the job cap is 420 min.
   with_deadline() { local s=$1; shift; QEMU_TEST_DEADLINE=$s timeout -k 30 $((s+180)) "$@"; }
   failed_list=""
   for entry in "${MATRIX[@]}"; do
     name=${entry%%|*}; args=${entry#*|}
     echo "::group::QEMU test $name"
-    with_deadline $DL_QEMU python3 -u "$HERE/qemu-test.py" --iso "$ISO" --project "$PROJECT" --arch "$ARCH" $args --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
+    # a ZFS install under TCG needs far more than the other runs (unsquashfs onto ZFS in an emulated aarch64 guest was at 41% after 85 min:
+    # patronus runs 726/747): longer hard deadline for those entries (qemu-test.py scales the installer wait to match)
+    dl=$DL_QEMU
+    if [ "$DL_QEMU" = 5400 ]; then case "$args" in *"--fs zfs"*|*"--mem 8192"*) dl=12600 ;; esac; fi
+    with_deadline $dl python3 -u "$HERE/qemu-test.py" --iso "$ISO" --project "$PROJECT" --arch "$ARCH" $args --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
     rc=${PIPESTATUS[0]}
     echo "::endgroup::"
     rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img
@@ -150,7 +170,20 @@ if [ "$result" = pass ]; then
     # rollback, then the portable hibernate flow (one passphrase, hibernate, power off, boot, resume: marker + process survive, scrub clean)
     name=zfs-enc-desktop-hibernate
     echo "::group::QEMU test $name"
-    with_deadline $DL_ZFS python3 -u "$HERE/zfs-enc-test.py" --iso "$ISO" --out "$EVI/$name" --desktop --hibernate 2>&1 | tee "$EVI/test-$name.log" | tail -60
+    with_deadline $DL_ZFS python3 -u "$HERE/zfs-enc-test.py" --iso "$ISO" --out "$EVI/$name" --desktop --hibernate --public 2>&1 | tee "$EVI/test-$name.log" | tail -60
+    rc=${PIPESTATUS[0]}
+    echo "::endgroup::"
+    rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img
+    if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -E '^\[FAIL\]' "$EVI/test-$name.log" | head -1)"; fi
+  fi
+  if [ "$IMG_DE" = server ] && [ "$PROJECT" = horcrux ]; then
+    # HEADLESS SERVER GATE (server-first, both architectures): encrypted-ZFS answer-file install, then a REBOOT into the installed system on the SERIAL console only
+    # (no VGA, no USB keyboard) with the NIC link down at boot (late network), months-off RTC on every boot, and the same regression gates as the desktop:
+    # chrony steps the clock, package-contents-complete, kernel module builds, zfs-kmod dist-kernel rule, shadow reuse, no autologin, web UI reachable,
+    # no display stack installed (qlist + emerge -pv @world), nothing personal (public-forbidden.txt), first boot waits for the network and does not show crashed.
+    name=server-headless-zfs-enc
+    echo "::group::QEMU test $name"
+    with_deadline $DL_ZFS python3 -u "$HERE/zfs-enc-test.py" --iso "$ISO" --out "$EVI/$name" --server --public --late-network ${SERVER_LATE_NET_S:-90} 2>&1 | tee "$EVI/test-$name.log" | tail -70
     rc=${PIPESTATUS[0]}
     echo "::endgroup::"
     rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img
@@ -181,20 +214,31 @@ cat > "$OUT/status.json" <<JSON
 JSON
 cat "$OUT/status.json"
 
-if [ -n "${FORGEJO_TOKEN:-}" ]; then
-  if [ "$result" = pass ]; then
-    bash "$HERE/publish.sh" "$mode" "$PROJECT" "$ISO" "$OUT/$PROJECT-$VPFX$suffix-$ARCH-test-evidence.tgz" "$OUT/status.json" || { echo "::error::publish failed"; result=fail; sed -i 's/"result":"pass"/"result":"fail"/; s/"failed_step":""/"failed_step":"publish"/' "$OUT/status.json"; }
-  fi
-  [ "$mode" = daily ] && bash "$HERE/publish.sh" status "$PROJECT" "" "" "$OUT/status.json" || true
-fi
-# Second publish step: the public GitHub mirror (the product site's /download/ URLs redirect there). Only when the
-# Forgejo publish above ran and everything passed; a failure here is a warning in the summary, not a red job.
+# Delivery is the public GitHub release (the product site 302-redirects its stable download URLs there); the ISO is NEVER uploaded to
+# Forgejo (owner rule: no downloads/assets on Forgejo). Forgejo only gets the machine-readable status marker (publish.sh status).
+# A GitHub publish failure is a real failure of the daily (nothing was delivered), recorded as failed_step=publish.
 gh_note=""
-if [ -n "${FORGEJO_TOKEN:-}" ] && [ -n "${GH_RELEASE_TOKEN:-}" ] && [ "$result" = pass ]; then
-  bash "$HERE/publish-github.sh" "$mode" "$PROJECT" "$ISO" "$OUT/$PROJECT-$VPFX$suffix-$ARCH-test-evidence.tgz" "$OUT/status.json" \
-    && gh_note="GitHub release updated." || { gh_note="GitHub publish FAILED (Forgejo publish is unaffected)."; echo "::warning::$gh_note"; }
+if [ -n "${FORGEJO_TOKEN:-}" ] && [ "$result" = pass ]; then
+  if [ -z "${GH_RELEASE_TOKEN:-}" ]; then
+    fail publish "GH_RELEASE_TOKEN is not set: the ISO cannot be delivered (the GitHub release is the only download location)"
+  elif bash "$HERE/publish-github.sh" "$mode" "$PROJECT" "$ISO" "$OUT/$PROJECT-$VPFX$suffix-$ARCH-test-evidence.tgz" "$OUT/status.json"; then
+    gh_note="GitHub release updated."
+  else
+    fail publish "GitHub release publish failed (see the job log)"
+  fi
+  if [ "$result" != pass ]; then
+    python3 - "$OUT/status.json" "$failed_step" "$summary" <<'PY' || true
+import json, sys
+d = json.load(open(sys.argv[1])); d.update(result="fail", failed_step=sys.argv[2], summary=sys.argv[3]); json.dump(d, open(sys.argv[1], "w"))
+PY
+  fi
+fi
+if [ -n "${FORGEJO_TOKEN:-}" ] && [ "$mode" = daily ]; then
+  bash "$HERE/publish.sh" status "$PROJECT" "" "" "$OUT/status.json" || true
 fi
 { echo "### $PROJECT $mode ISO: $result"; echo "$summary"; [ -z "$gh_note" ] || echo "$gh_note"; } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
 # docker hygiene on the shared host (build.sh already removed this build's containers/images; keep the BuildKit cache)
 docker image prune -f >/dev/null 2>&1 || true
+# honest run status: red when anything failed (the status marker above is already written)
+if [ "$result" != pass ]; then echo "::error::Live ISO $mode ($IMG-$ARCH) FAILED at $failed_step: $summary"; exit 1; fi
 exit 0

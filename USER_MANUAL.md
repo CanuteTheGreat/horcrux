@@ -345,6 +345,14 @@ horcrux-cli ha affinity vm-100 \
 horcrux-cli ha anti-affinity vm-100,vm-101
 ```
 
+**Node labels:** give a node labels (`PUT /api/cluster/nodes/<name>/caps`, e.g. `["nvme","lab"]`) and
+require them per guest under Cluster > Maintenance > Placement rules ("Required node labels", or
+`required_labels` in `PUT /api/vms/<id>/placement`). Drain and rebalance only move the guest to nodes
+carrying every label; a node with no labels configured never matches, and the plan shows
+"node lacks required label 'x'" for each refused node.
+HA recovery and the load balancer honour the same labels: a failed guest is only restarted on a node
+carrying every label (and is left in the error state, with the event logged, when none does).
+
 ### Mixed-Architecture Clustering
 
 ```bash

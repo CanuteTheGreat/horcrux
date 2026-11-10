@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person">
+		<email>canutethegreat@errant.solutions</email>
+		<name>CanuteTheGreat</name>
+	</maintainer>
+	<longdescription lang="en">Prebuilt Horcrux manager (API server, web UI, CLI) installed from the image-built tarball; see the ebuild header.</longdescription>
+	<upstream>
+		<bugs-to>https://github.com/CanuteTheGreat/horcrux/issues</bugs-to>
+	</upstream>
+</pkgmetadata>

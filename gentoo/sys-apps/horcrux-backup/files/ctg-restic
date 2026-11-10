@@ -3,14 +3,25 @@
 #   ctg-restic backup   daily; runs /etc/ctg-backup/pre.sh first if present, then backs up the paths file
 #   ctg-restic prune    weekly; forget --keep-within 30d --prune
 #   ctg-restic check    monthly; check --read-data-subset=5%
+#   ctg-restic content  after every backup: the newest snapshot must really hold the sign-in state (keyring, browser profiles, app configs), see /etc/ctg-backup/required
 #   ctg-restic <other>  passed through to restic (snapshots, restore, ...)
 # Config dir /etc/ctg-backup (root:root 0700): env (RESTIC_REPOSITORY, AWS_*/B2_* credentials, RESTIC_PASSWORD_FILE),
-# paths (one path per line), excludes (restic --exclude-file), optional pre.sh / post.sh.
+# paths (+ paths.d/*; one path per line), excludes (restic --exclude-file), optional pre.sh / post.sh.
 # State dir /var/lib/ctg-backup: last-backup-ok, last-prune-ok, last-check-ok, last-check-fail (epoch seconds).
 set -uo pipefail
 CONF=${CTG_BACKUP_CONF:-/etc/ctg-backup}
 STATE=${CTG_BACKUP_STATE:-/var/lib/ctg-backup}
 KEEP=${CTG_KEEP_WITHIN:-30d}
+# Not provisioned (no /etc/ctg-backup/env: the secrets come from the owner's backup host over ssh stdin, a fresh image / a lab laptop / a CI guest has none):
+# a scheduled run is a clean no-op (exit 0, nothing recorded as a successful backup, the freshness monitor sees the missing state files); anything else is a
+# plain configuration error (EX_CONFIG 78). It used to source the missing file and let restic die with "Fatal: Please specify repository location".
+if [ ! -r "$CONF/env" ]; then
+  msg="ctg-restic: not provisioned ($CONF/env missing); nothing to do. Provision with the host's backup credentials (env + repo.pw), see sys-apps/horcrux-backup."
+  case "${1:-backup}" in
+    backup|prune|check|content) echo "$msg"; logger -t ctg-restic "not provisioned ($CONF/env missing); skipping ${1:-backup}" 2>/dev/null; exit 0 ;;
+    *) echo "$msg" >&2; exit 78 ;;
+  esac
+fi
 set -a; . "$CONF/env"; set +a
 export HOME=${HOME:-/root}
 mkdir -p "$STATE"
@@ -23,11 +34,45 @@ case "$cmd" in
     [ -f "$CONF/excludes" ] && args+=(--exclude-file "$CONF/excludes")
     [ -n "${CTG_LIMIT_UPLOAD:-}" ] && args+=(--limit-upload "$CTG_LIMIT_UPLOAD")   # KiB/s, optional (set in env)
     args+=(--files-from "$CONF/paths")
+    # a machine layer adds its own paths without touching the generic set (files /etc/ctg-backup/paths.d/*, one path per line)
+    for f in "$CONF"/paths.d/*; do [ -f "$f" ] && args+=(--files-from "$f"); done
     restic "${args[@]}" "$@"; rc=$?
     # rc 3 = some source files unreadable (vanished while running): snapshot still written
     if [ $rc -eq 0 ] || [ $rc -eq 3 ]; then now > "$STATE/last-backup-ok"; rc=0; fi
     [ -x "$CONF/post.sh" ] && "$CONF/post.sh"
+    # the snapshot is only useful if it holds what a restore needs to keep the owner signed in: verify, record, never fail the backup for it
+    [ $rc -eq 0 ] && { [ -f "$CONF/required" ] || ls "$CONF"/required.d/* >/dev/null 2>&1; } && { "$0" content || true; }
     exit $rc ;;
+  content)
+    # /etc/ctg-backup/required, one path per line (# = comment):
+    #   /path     must be IN the newest snapshot IF it exists on this host now (catches excludes, permission errors, a changed layout)
+    #   !/path    must exist on this host AND be in the snapshot (the login keyring: without it every sign-in is lost at the next login)
+    # Result: $STATE/content-ok (epoch) or $STATE/content-missing (paths, one per line; read by the backup-freshness monitor over ssh).
+    # Only lists paths (restic ls), never reads contents.
+    # the generic core ships no list (nothing there knows which applications a machine runs): a machine layer provides /etc/ctg-backup/required and/or required.d/*
+    req=(); [ -f "$CONF/required" ] && req+=("$CONF/required"); for f in "$CONF"/required.d/*; do [ -f "$f" ] && req+=("$f"); done
+    [ ${#req[@]} -gt 0 ] || { echo "no required list (core default: nothing to verify)"; exit 0; }
+    miss=""; n=0
+    while IFS= read -r line; do
+      case "$line" in ''|'#'*) continue ;; esac
+      must=0; p=$line; case "$line" in '!'*) must=1; p=${line#!} ;; esac
+      if [ ! -e "$p" ] && [ ! -L "$p" ]; then
+        [ $must -eq 1 ] && miss="$miss
+ABSENT-ON-HOST $p"
+        continue
+      fi
+      n=$((n+1))
+      # count, not grep -q: with pipefail an early-exiting grep SIGPIPEs restic on big directories and reports a false miss
+      found=$(restic ls --no-lock latest "$p" 2>/dev/null | grep -c '^/')
+      if [ "${found:-0}" -eq 0 ]; then miss="$miss
+NOT-IN-SNAPSHOT $p"; fi
+    done < <(cat "${req[@]}")
+    if [ -n "$miss" ]; then
+      printf '%s\n' "$miss" | sed '/^$/d' > "$STATE/content-missing"; rm -f "$STATE/content-ok"
+      echo "CONTENT-MISSING:$miss" >&2; logger -t ctg-restic "CONTENT-MISSING: $(printf '%s' "$miss" | tr '\n' ';')" 2>/dev/null
+      exit 1
+    fi
+    rm -f "$STATE/content-missing"; now > "$STATE/content-ok"; echo "content ok ($n required paths present in the newest snapshot)" ;;
   prune)
     restic forget --keep-within "$KEEP" --prune "$@" && now > "$STATE/last-prune-ok" ;;
   check)

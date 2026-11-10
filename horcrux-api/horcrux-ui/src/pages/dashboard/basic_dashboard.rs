@@ -10,6 +10,38 @@ enum Access {
     Denied,
 }
 
+/// Which dashboard panels the logged-in user may read, from the same
+/// privileges the server's rbac middleware requires for each endpoint
+/// (`GET /monitoring/node` and `/alerts/active`: Sys.Audit; `/cluster/nodes`:
+/// Sys.Audit on /cluster). A role without them is not sent the request at
+/// all, so a VM user's dashboard no longer fires three 403s.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PanelAccess {
+    pub metrics: bool,
+    pub nodes: bool,
+    pub alerts: bool,
+}
+
+impl PanelAccess {
+    pub fn for_me(me: &api::Me) -> Self {
+        Self {
+            metrics: me.can_at("Sys.Audit", "/nodes"),
+            nodes: me.can_at("Sys.Audit", "/cluster"),
+            alerts: me.can_at("Sys.Audit", "/"),
+        }
+    }
+
+    /// Everything is attempted (the session's privileges are unknown); a 403
+    /// is then still handled per panel.
+    pub fn assume_all() -> Self {
+        Self {
+            metrics: true,
+            nodes: true,
+            alerts: true,
+        }
+    }
+}
+
 #[component]
 pub fn Dashboard() -> impl IntoView {
     let (node_metrics, set_node_metrics) = create_signal(None::<api::NodeMetrics>);
@@ -43,20 +75,36 @@ pub fn Dashboard() -> impl IntoView {
     // Load data on mount
     create_effect(move |_| {
         spawn_local(async move {
-            match api::get_node_metrics().await {
-                Ok(metrics) => set_node_metrics.set(metrics),
-                Err(e) => failed(e, set_metrics_access),
+            let access = match api::get_me().await {
+                Ok(me) => PanelAccess::for_me(&me),
+                Err(_) => PanelAccess::assume_all(),
+            };
+            if access.metrics {
+                match api::get_node_metrics().await {
+                    Ok(metrics) => set_node_metrics.set(metrics),
+                    Err(e) => failed(e, set_metrics_access),
+                }
+            } else {
+                set_metrics_access.set(Access::Denied);
             }
             // USE=-cluster: no cluster routes on the server, no panel.
             if crate::features::load().await.has("cluster") {
-                match api::get_cluster_nodes().await {
-                    Ok(nodes) => set_cluster_nodes.set(nodes),
-                    Err(e) => failed(e, set_nodes_access),
+                if access.nodes {
+                    match api::get_cluster_nodes().await {
+                        Ok(nodes) => set_cluster_nodes.set(nodes),
+                        Err(e) => failed(e, set_nodes_access),
+                    }
+                } else {
+                    set_nodes_access.set(Access::Denied);
                 }
             }
-            match api::get_active_alerts().await {
-                Ok(alerts) => set_active_alerts.set(alerts),
-                Err(e) => failed(e, set_alerts_access),
+            if access.alerts {
+                match api::get_active_alerts().await {
+                    Ok(alerts) => set_active_alerts.set(alerts),
+                    Err(e) => failed(e, set_alerts_access),
+                }
+            } else {
+                set_alerts_access.set(Access::Denied);
             }
             match api::get_vms().await {
                 Ok(vms) => set_vm_count.set(vms.len()),
@@ -180,5 +228,44 @@ fn format_uptime(seconds: u64) -> String {
         format!("{}h {}m", hours, mins)
     } else {
         format!("{}m", mins)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn me(is_admin: bool, perms: serde_json::Value) -> api::Me {
+        serde_json::from_value(serde_json::json!({
+            "user": {"id": "u1", "username": "u1", "email": "", "role": "VMUser", "realm": "local",
+                     "enabled": true},
+            "is_admin": is_admin,
+            "permissions": perms,
+        }))
+        .expect("Me json")
+    }
+
+    #[test]
+    fn vm_user_dashboard_issues_no_admin_only_requests() {
+        let vm_user = me(
+            false,
+            serde_json::json!({"/": [], "/vms": ["VM.Audit", "VM.Console", "VM.PowerMgmt"]}),
+        );
+        assert_eq!(
+            PanelAccess::for_me(&vm_user),
+            PanelAccess {
+                metrics: false,
+                nodes: false,
+                alerts: false
+            }
+        );
+    }
+
+    #[test]
+    fn admin_and_auditor_dashboards_read_every_panel() {
+        let admin = me(true, serde_json::json!({}));
+        assert_eq!(PanelAccess::for_me(&admin), PanelAccess::assume_all());
+        let auditor = me(false, serde_json::json!({"/": ["Sys.Audit"]}));
+        assert_eq!(PanelAccess::for_me(&auditor), PanelAccess::assume_all());
     }
 }

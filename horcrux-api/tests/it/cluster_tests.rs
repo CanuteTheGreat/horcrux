@@ -32,6 +32,7 @@ fn create_test_node(name: &str, cpu: f32, memory: f32, vm_count: usize) -> NodeR
         available_passthrough_devices: Vec::new(),
         placement_weight: 100,
         cpu_vendor: String::new(),
+        cpu_level: 0,
         caps: None,
     }
 }
@@ -47,6 +48,7 @@ fn create_test_vm(id: u32, node: &str) -> VmResources {
         architecture: Architecture::X86_64,
         required_passthrough_devices: Vec::new(),
         min_placement_weight: None,
+        required_labels: Vec::new(),
     }
 }
 

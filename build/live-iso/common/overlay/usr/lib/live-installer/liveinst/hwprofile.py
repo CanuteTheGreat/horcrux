@@ -13,6 +13,8 @@ Nothing here changes a system that is not detected: Horcrux on a server behaves 
 import os
 import re
 
+from . import autologin
+
 PROFILE_DIR = "/usr/share/live-installer/hwprofiles"
 DMI_DIR = "/sys/class/dmi/id"
 LOW_RAM_MB = 7000          # MemTotal of a "8 GB" machine is ~7.6-7.9 GB (firmware/GPU carve-outs): below this = low-RAM profile
@@ -128,18 +130,34 @@ def apply_profile(inst, profile, model):
 
 def add_desktop_user(inst, d):
     u = d["user"]
-    inst.run(["useradd", "-m", "-G", "wheel,audio,video,input,plugdev,users", "-s", "/bin/bash", u], chroot=True, check=False)
+    try:
+        have = {l.split(":")[0] for l in open(f"{inst.target}/etc/group")}
+    except OSError:
+        have = set()
+    groups = ",".join(g for g in ("wheel", "audio", "video", "input", "plugdev", "users", "lp", "cdrom", "usb", "pipewire") if g in have or not have)
+    inst.run(["useradd", "-m", "-G", groups, "-s", "/bin/bash", u], chroot=True, check=False)
     if d.get("password_hash"):
         inst.run(["chpasswd", "-e"], chroot=True, input_=f"{u}:{d['password_hash']}\n")
     elif d.get("password"):
         inst.run(["chpasswd"], chroot=True, input_=f"{u}:{d['password']}\n")
     else:
         inst.run(["passwd", "-l", u], chroot=True, check=False)
-    if d.get("autologin"):
-        # opt-in: tty1 logs this user in and starts the session. With LUKS the disk is already unlocked by a passphrase.
-        ip = f"{inst.target}/etc/inittab"
-        if os.path.exists(ip):
-            t = open(ip).read()
-            t = re.sub(r"(?m)^c1:.*$", f"c1:12345:respawn:/sbin/agetty --autologin {u} --noclear 38400 tty1 linux", t)
-            open(ip, "w").write(t)
-        inst.log(f"autologin enabled for {u} on tty1 (opt-in)")
+    dm = ""
+    try:
+        dm = open(f"{inst.target}/usr/share/horcrux/desktop/display-manager").read().strip()
+    except OSError:
+        pass
+    if dm:
+        # XFCE profile: the display manager (LightDM) owns the login screen; its name comes from the image's own package data
+        inst.write("/etc/conf.d/display-manager", f'DISPLAYMANAGER="{dm}"\n')
+        inst.write("/etc/conf.d/xdm", f'DISPLAYMANAGER="{dm}"\n')
+        # no autologin unless the installer choice says so; stale files from the image are removed either way
+        for f in autologin.scrub(inst.target):
+            inst.log(f"autologin: removed the setting in {f}")
+        if d.get("autologin") is True and dm == "lightdm":
+            autologin.enable_lightdm(inst, u)
+        return
+    for f in autologin.scrub(inst.target):
+        inst.log(f"autologin: removed the setting in {f}")
+    if d.get("autologin") is True:
+        autologin.enable_console(inst, u)

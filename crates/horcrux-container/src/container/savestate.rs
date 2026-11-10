@@ -961,7 +961,26 @@ async fn install_docker_checkpoint(name: &str, dir: &Path) -> Result<()> {
         Duration::from_secs(300),
     )
     .await?;
+    // `docker start --checkpoint` uploads the checkpoint as a content blob
+    // into containerd, and fails with "commit failed: content sha256:...
+    // already exists" when a byte-identical checkpoint was uploaded before
+    // and its blob has not been garbage-collected yet (intermittent in the
+    // guest-power CI run). A unique marker file makes every upload's digest
+    // different; CRIU ignores files it does not know.
+    let marker = target.join(resume_marker_name());
+    tokio::fs::write(&marker, b"horcrux resume marker\n")
+        .await
+        .map_err(|e| Error::System(format!("cannot write {}: {e}", marker.display())))?;
     Ok(())
+}
+
+/// A name that is different on every call (nanosecond clock + pid).
+fn resume_marker_name() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!(".horcrux-resume-{}-{nanos}", std::process::id())
 }
 
 async fn prepare_dir(dir: &Path) -> Result<()> {
@@ -974,6 +993,15 @@ async fn prepare_dir(dir: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn resume_marker_names_are_unique() {
+        let a = resume_marker_name();
+        std::thread::sleep(std::time::Duration::from_micros(5));
+        let b = resume_marker_name();
+        assert_ne!(a, b);
+        assert!(a.starts_with(".horcrux-resume-"));
+    }
+
     use super::*;
 
     #[test]

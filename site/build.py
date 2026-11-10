@@ -98,7 +98,11 @@ Source: <a href="{SRC}">GitHub</a>.</p>
 </body></html>
 """
 
+WRITTEN_HTML = []
+
 def write(path, content):
+    if path.endswith(".html") and path != "404.html":
+        WRITTEN_HTML.append(path)
     full = os.path.join(DIST, path)
     os.makedirs(os.path.dirname(full), exist_ok=True)
     open(full, "w", encoding="utf-8").write(content)
@@ -177,7 +181,13 @@ Older download names (for example <code>{CFG['key']}-daily-x86_64.iso</code>) st
     # a 404 can be served from any depth, so its asset links are host-root paths
     nf = re.sub(r'(href|src)="(assets/[^"]*)"', r'\1="/\2"', nf)
     write("404.html", nf)
-    write("robots.txt", "User-agent: *\nAllow: /\n")
+    host = f"{CFG['key']}.errant.solutions"
+    urls = sorted({"/" + (pp[:-len("index.html")] if pp.endswith("index.html") else pp) for pp in WRITTEN_HTML})
+    write("sitemap.xml", '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+          + "".join(f"  <url><loc>https://{host}{u}</loc></url>\n" for u in urls) + "</urlset>\n")
+    write("robots.txt", f"User-agent: *\nAllow: /\n\nSitemap: https://{host}/sitemap.xml\n")
+    # IndexNow (Bing, Yandex, Seznam, Naver) proof-of-ownership key file; .forgejo/scripts/indexnow.sh submits after each deploy
+    write("5bd2340b776c5d0b43933a1f02f4281e.txt", "5bd2340b776c5d0b43933a1f02f4281e")
     print("built", DIST)
 
 main()

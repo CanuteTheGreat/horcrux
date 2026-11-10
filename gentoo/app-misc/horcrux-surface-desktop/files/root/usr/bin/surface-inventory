@@ -1,0 +1,58 @@
+#!/bin/bash
+# surface-inventory DISK: READ-ONLY look at what is on the internal disk (partition table, file systems, Windows user data).
+# Every file system is mounted read-only (norecovery/ro) and unmounted again; nothing is written to the disk.
+# Prints a report; exit status 0 = nothing of value found (factory-fresh/empty), 10 = user data or unreadable content found.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+disk=${1:-}
+[ -n "$disk" ] || { echo "usage: surface-inventory /dev/DISK"; exit 2; }
+THRESH_MB=${SURFACE_DATA_THRESHOLD_MB:-100}
+data_mb=0; unreadable=0
+echo "== disk $disk"; lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,PARTLABEL "$disk" 2>&1
+echo "== partition table"; sfdisk -l "$disk" 2>&1 | sed -n '1,30p'
+mnt=$(mktemp -d /run/surface-inv.XXXX)
+for p in $(lsblk -lnpo NAME,TYPE "$disk" | awk '$2=="part"{print $1}'); do
+    fs=$(blkid -o value -s TYPE "$p" 2>/dev/null)
+    label=$(blkid -o value -s LABEL "$p" 2>/dev/null)
+    size=$(lsblk -dnbo SIZE "$p")
+    echo "-- $p fs=${fs:-none} label=${label:-} size=$((size/1048576)) MiB"
+    case "$fs" in
+        ntfs|vfat|exfat|ext2|ext3|ext4|xfs|btrfs)
+            opts=ro; [ "$fs" = xfs ] && opts=ro,norecovery
+            mfs=$fs; [ "$fs" = ntfs ] && mfs=ntfs3
+            if mount -t "$mfs" -o "$opts" "$p" "$mnt" 2>/dev/null || { [ "$fs" = ntfs ] && mount -t ntfs -o ro "$p" "$mnt" 2>/dev/null; } || mount -o ro "$p" "$mnt" 2>/dev/null; then
+                used=$(df -Pm "$mnt" | awk 'NR==2{print $3}')
+                echo "   mounted read-only, used ${used} MiB"
+                if [ -d "$mnt/Users" ]; then
+                    for u in "$mnt"/Users/*/; do
+                        n=$(basename "$u"); case "$n" in Public|Default|"Default User"|"All Users"|desktop.ini) continue ;; esac
+                        um=0
+                        for d in Desktop Documents Downloads Pictures Videos Music OneDrive "Saved Games" Contacts; do
+                            [ -d "$u$d" ] && um=$(( um + $(du -sxm "$u$d" 2>/dev/null | awk '{print $1}') ))
+                        done
+                        echo "   Windows user $n: personal folders ${um} MiB"
+                        data_mb=$((data_mb + um))
+                    done
+                    ls "$mnt" | head -20 | sed 's/^/   \//'
+                elif [ "$label" != "SYSTEM" ] && [ "$fs" != vfat ]; then
+                    data_mb=$((data_mb + used))
+                fi
+                umount "$mnt" 2>/dev/null
+            else
+                echo "   could NOT be mounted read-only (treated as: may hold data)"; unreadable=$((unreadable+1))
+            fi ;;
+        crypto_LUKS|BitLocker)
+            echo "   encrypted ($fs): contents unknown"; unreadable=$((unreadable+1)) ;;
+        swap) echo "   swap" ;;
+        "")
+            pt=$(lsblk -dno PARTTYPE "$p" 2>/dev/null)
+            case "$pt" in
+                e3c9e316-0b5c-4db8-817d-f92df00215ae) echo "   Microsoft reserved (MSR): empty by design" ;;
+                *) echo "   no recognisable file system (type ${pt:-?}): treated as: may hold data"; unreadable=$((unreadable+1)) ;;
+            esac ;;
+        *) echo "   unknown file system"; unreadable=$((unreadable+1)) ;;
+    esac
+done
+rmdir "$mnt" 2>/dev/null
+echo "== summary: personal data found: ${data_mb} MiB; unreadable/encrypted partitions: ${unreadable}"
+if [ "$data_mb" -gt "$THRESH_MB" ] || [ "$unreadable" -gt 0 ]; then echo "RESULT: DATA-PRESENT"; exit 10; fi
+echo "RESULT: NO-USER-DATA"; exit 0

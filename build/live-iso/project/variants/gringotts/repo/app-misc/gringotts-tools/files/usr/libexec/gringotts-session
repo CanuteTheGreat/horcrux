@@ -1,0 +1,26 @@
+#!/bin/sh
+# tty1 login program of the gringotts install stick (agetty -n -l): a three-item menu, the install is the default.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+dmesg -n 1 2>/dev/null
+export TERM=${TERM:-linux}
+B=$(printf '\033[1m'); G=$(printf '\033[32m'); Y=$(printf '\033[33m'); N=$(printf '\033[0m')
+while :; do
+  clear
+  gringotts-motd
+  echo "  ${G}1${N}) ${B}Install Horcrux on this laptop${N}   (erases the internal disk; you type the disk passphrase)"
+  echo "  ${G}2${N}) Join Wi-Fi                       (nmtui; needed only for remote help / the first boot)"
+  echo "  ${G}3${N}) Let Claude in remotely            (gringotts-remote: sshd + Tailscale)"
+  echo "  ${G}4${N}) Shell      ${G}5${N}) Stock installer (menus)      ${G}6${N}) Reboot      ${G}7${N}) Power off"
+  echo
+  printf "  choose [1]: "
+  read -r c || c=4
+  case "${c:-1}" in
+    1) gringotts-install; printf "\n  (press Enter to return to the menu) "; read -r _ ;;
+    2) nmtui ;;
+    3) gringotts-remote; printf "\n  (press Enter to return to the menu) "; read -r _ ;;
+    4) echo "Live shell (root). 'exit' returns to the menu."; /bin/login -f root ;;
+    5) /usr/bin/live-installer ;;
+    6) reboot ;;
+    7) poweroff ;;
+  esac
+done

@@ -343,6 +343,7 @@ pub async fn local_info(state: &Arc<AppState>) -> PeerInfo {
     PeerInfo {
         node: PlanNode {
             cpu_vendor: crate::cluster::node::detect_cpu_vendor_family(),
+            cpu_level: crate::cluster::node::detect_cpu_level(),
             name,
             online: true,
             maintenance,
@@ -351,6 +352,7 @@ pub async fn local_info(state: &Arc<AppState>) -> PeerInfo {
             cpu_cores: std::thread::available_parallelism()
                 .map(|n| n.get() as u32)
                 .unwrap_or(1),
+            caps: None,
         },
         guests,
     }
@@ -422,6 +424,21 @@ async fn peer_post<B: Serialize, T: serde::de::DeserializeOwned>(
     serde_json::from_str(&text).map_err(|e| e.to_string())
 }
 
+/// POST `path` (a `/api/ha/peer/...` route) on another node as this node.
+pub async fn call_peer<B: Serialize, T: serde::de::DeserializeOwned>(
+    state: &Arc<AppState>,
+    node: &Node,
+    path: &str,
+    body: &B,
+) -> Result<T, String> {
+    let local = state
+        .cluster_manager
+        .get_local_node_name()
+        .await
+        .map_err(|e| e.to_string())?;
+    peer_post(state, &local, node, path, body).await
+}
+
 /// The local node's name plus the way to call another node's peer API.
 pub struct PeerCtx {
     pub local: String,
@@ -454,6 +471,14 @@ pub async fn snapshot(state: &Arc<AppState>) -> (String, Vec<PlanNode>, Vec<Plan
             }
             Err(e) => tracing::warn!("placement info of {} unavailable: {e}", n.name),
         }
+    }
+    // Node roles/limits live in the cluster state (set via PUT
+    // /api/cluster/nodes/:name/caps): overlay them on every node.
+    for n in &mut nodes {
+        n.caps = all
+            .iter()
+            .find(|c| c.name == n.name)
+            .and_then(|c| c.caps.clone());
     }
     (local, nodes, guests)
 }
@@ -744,7 +769,7 @@ pub async fn drain_node(state: &Arc<AppState>, reason: &str, timeout_secs: u64) 
 
 // -------------------------------------------------------------- rebalance
 
-fn leader(nodes: &[PlanNode]) -> Option<String> {
+pub(crate) fn leader(nodes: &[PlanNode]) -> Option<String> {
     nodes
         .iter()
         .filter(|n| n.online && !n.maintenance)
@@ -1124,6 +1149,15 @@ async fn put_placement(
                 "{what}: up to 64 characters, no spaces"
             )));
         }
+    }
+    if r.required_labels.len() > 16
+        || r.required_labels
+            .iter()
+            .any(|l| l.is_empty() || l.len() > 63 || l.contains(char::is_whitespace))
+    {
+        return Err(ApiError::ValidationError(
+            "required_labels: up to 16 labels of 1-63 characters, no spaces".into(),
+        ));
     }
     if r.affinity_group.is_some() && r.affinity_group == r.anti_affinity_group {
         return Err(ApiError::ValidationError(

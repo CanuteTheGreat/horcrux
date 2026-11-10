@@ -9,9 +9,10 @@
 //! - `PATCH /api/cluster/nodes/:name/priority` <- `{priority}`
 //! - `POST /api/cluster/find-node`           <- `FindNodeRequest` -> node name
 use crate::api::{
-    add_cluster_node, find_best_node_for_vm, get_cluster_architecture, get_cluster_nodes, get_vms,
-    remove_cluster_node, set_node_priority, AddNodeRequest, ClusterArchitecture, ClusterNode,
-    FindNodeRequest,
+    add_cluster_node, find_best_node_for_vm, get_cluster_architecture, get_cluster_nodes,
+    get_cluster_power_status, get_vms, power_down_node, power_node_note, remove_cluster_node,
+    set_node_caps, set_node_priority, AddNodeRequest, ClusterArchitecture, ClusterNode,
+    FindNodeRequest, NodeCaps, PowerStatus,
 };
 use horcrux_common::VmConfig;
 use leptos::*;
@@ -42,6 +43,68 @@ pub(crate) fn parse_weight(input: &str) -> Result<u32, String> {
     }
 }
 
+/// Build the `NodeCaps` body from the role/labels/limit fields typed into the
+/// node row. Labels are comma/space separated, 1-63 chars, max 16 (same rule
+/// as a guest's required labels); empty limits mean unlimited. The memory
+/// limit is typed in GiB and sent in bytes. A plain compute node with no
+/// labels and no limits returns `None` (clears the record).
+pub(crate) fn parse_caps_form(
+    role: &str,
+    labels: &str,
+    max_vcpus: &str,
+    max_mem_gib: &str,
+    quorum_votes: &str,
+) -> Result<Option<NodeCaps>, String> {
+    if !matches!(role, "storage" | "compute" | "witness") {
+        return Err("Role must be storage, compute or witness".into());
+    }
+    let labels: Vec<String> = labels
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|l| !l.is_empty())
+        .map(|l| l.to_string())
+        .collect();
+    if labels.len() > 16 || labels.iter().any(|l| l.len() > 63) {
+        return Err("Labels: up to 16 labels of 1-63 characters".into());
+    }
+    let max_guest_vcpus = match max_vcpus.trim() {
+        "" => None,
+        v => match v.parse::<u32>() {
+            Ok(n) if n > 0 => Some(n),
+            _ => return Err("Max guest vCPUs must be a whole number above 0".into()),
+        },
+    };
+    let max_guest_memory = match max_mem_gib.trim() {
+        "" => None,
+        v => match v.parse::<f64>() {
+            Ok(g) if g.is_finite() && g > 0.0 && g < 1_048_576.0 => {
+                Some((g * 1024.0 * 1024.0 * 1024.0) as u64)
+            }
+            _ => return Err("Max guest memory must be a number of GiB above 0".into()),
+        },
+    };
+    let quorum_votes = match quorum_votes.trim() {
+        "" => None,
+        v => match v.parse::<u32>() {
+            Ok(n) if n <= 10 => Some(n),
+            _ => return Err("Quorum votes must be a whole number from 0 to 10".into()),
+        },
+    };
+    let plain = labels.is_empty()
+        && max_guest_vcpus.is_none()
+        && max_guest_memory.is_none()
+        && quorum_votes.is_none();
+    if role == "compute" && plain {
+        return Ok(None);
+    }
+    Ok(Some(NodeCaps {
+        role: role.to_string(),
+        labels,
+        max_guest_vcpus,
+        max_guest_memory,
+        quorum_votes,
+    }))
+}
+
 /// `VmArchitecture` -> the architecture string the find-node API expects
 /// ("x86_64", "aarch64", ...). Uses the type's own serde names.
 fn vm_arch_string(vm: &VmConfig) -> String {
@@ -64,6 +127,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
     let (cluster_architecture, set_cluster_architecture) =
         create_signal(None::<ClusterArchitecture>);
     let (vms, set_vms) = create_signal(Vec::<VmConfig>::new());
+    let (power_status, set_power_status) = create_signal(None::<PowerStatus>);
     let (loading, set_loading) = create_signal(false);
     let (error, set_error) = create_signal(None::<String>);
     let (success_message, set_success_message) = create_signal(None::<String>);
@@ -97,6 +161,11 @@ pub fn ClusterManagementPage() -> impl IntoView {
             match get_cluster_architecture().await {
                 Ok(arch) => set_cluster_architecture.set(Some(arch)),
                 Err(e) => errors.push(format!("Failed to load cluster architecture: {}", e)),
+            }
+
+            match get_cluster_power_status().await {
+                Ok(p) => set_power_status.set(Some(p)),
+                Err(e) => errors.push(format!("Failed to load power status: {}", e)),
             }
 
             match get_vms().await {
@@ -193,6 +262,22 @@ pub fn ClusterManagementPage() -> impl IntoView {
         }),
     };
 
+    let save_caps = move |name: String, form: (String, String, String, String, String)| {
+        let parsed = parse_caps_form(&form.0, &form.1, &form.2, &form.3, &form.4);
+        match parsed {
+            Err(e) => set_error.set(Some(e)),
+            Ok(caps) => spawn_local(async move {
+                match set_node_caps(&name, caps.as_ref()).await {
+                    Ok(()) => {
+                        load_cluster_data();
+                        flash(format!("Node '{}' role and limits saved", name));
+                    }
+                    Err(e) => set_error.set(Some(format!("Failed to save role: {}", e))),
+                }
+            }),
+        }
+    };
+
     let remove_node = move |name: String| {
         if !confirm(&format!(
             "Remove node {name} from the cluster? Its registration is deleted; the machine itself is not touched."
@@ -206,6 +291,23 @@ pub fn ClusterManagementPage() -> impl IntoView {
                     flash(format!("Node '{}' removed", name));
                 }
                 Err(e) => set_error.set(Some(format!("Failed to remove node: {}", e))),
+            }
+        });
+    };
+
+    let power_off_node = move |name: String| {
+        if !confirm(&format!(
+            "Power off {name}? It has no guests and is idle; the BMC sends a graceful shutdown. Wake it again with the method in the Wake column (BMC power-on or Wake-on-LAN)."
+        )) {
+            return;
+        }
+        spawn_local(async move {
+            match power_down_node(&name).await {
+                Ok(()) => {
+                    load_cluster_data();
+                    flash(format!("Shutdown requested for '{}'", name));
+                }
+                Err(e) => set_error.set(Some(format!("Failed to power off node: {}", e))),
             }
         });
     };
@@ -402,6 +504,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">"Status"</th>
                                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">"Resources"</th>
                                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">"Weight / Priority"</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">"Role / labels / guest limits"</th>
                                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">"Actions"</th>
                                     </tr>
                                 </thead>
@@ -416,7 +519,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                             };
                                             view! {
                                                 <tr>
-                                                    <td colspan="5" class="px-6 py-8 text-center text-gray-500">{msg}</td>
+                                                    <td colspan="6" class="px-6 py-8 text-center text-gray-500">{msg}</td>
                                                 </tr>
                                             }.into_view()
                                         } else {
@@ -426,6 +529,16 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                                     create_signal(node.priority.to_string());
                                                 let name_for_save = node.name.clone();
                                                 let name_for_remove = node.name.clone();
+                                                let name_for_caps = node.name.clone();
+                                                let caps0 = node.caps.clone().unwrap_or_else(|| NodeCaps {
+                                                    role: "compute".into(),
+                                                    ..NodeCaps::default()
+                                                });
+                                                let role_sig = create_rw_signal(if caps0.role.is_empty() { "compute".to_string() } else { caps0.role.clone() });
+                                                let labels_sig = create_rw_signal(caps0.labels.join(", "));
+                                                let vcpus_sig = create_rw_signal(caps0.max_guest_vcpus.map(|v| v.to_string()).unwrap_or_default());
+                                                let mem_sig = create_rw_signal(caps0.max_guest_memory.map(|b| format!("{}", (b as f64) / 1073741824.0)).unwrap_or_default());
+                                                let votes_sig = create_rw_signal(caps0.quorum_votes.map(|v| v.to_string()).unwrap_or_default());
                                                 let is_local = node.is_local;
                                                 view! {
                                                     <tr>
@@ -473,6 +586,34 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                                                 </button>
                                                             </div>
                                                         </td>
+                                                        <td class="px-6 py-4">
+                                                            <div class="flex flex-wrap items-center gap-2">
+                                                                <select class="node-role px-2 py-1 border border-gray-300 rounded"
+                                                                    prop:value=move || role_sig.get()
+                                                                    on:change=move |ev| role_sig.set(event_target_value(&ev))>
+                                                                    <option value="compute">"compute"</option>
+                                                                    <option value="storage">"storage (Ceph OSD + guests)"</option>
+                                                                    <option value="witness">"witness (quorum only, no guests)"</option>
+                                                                </select>
+                                                                <input class="node-labels w-40 px-2 py-1 border border-gray-300 rounded" type="text" placeholder="labels: nvme, lab"
+                                                                    prop:value=move || labels_sig.get()
+                                                                    on:input=move |ev| labels_sig.set(event_target_value(&ev))/>
+                                                                <input class="node-max-vcpus w-24 px-2 py-1 border border-gray-300 rounded" type="number" min="1" placeholder="max vCPU"
+                                                                    prop:value=move || vcpus_sig.get()
+                                                                    on:input=move |ev| vcpus_sig.set(event_target_value(&ev))/>
+                                                                <input class="node-max-mem w-28 px-2 py-1 border border-gray-300 rounded" type="number" min="0" step="any" placeholder="max GiB RAM"
+                                                                    prop:value=move || mem_sig.get()
+                                                                    on:input=move |ev| mem_sig.set(event_target_value(&ev))/>
+                                                                <input class="node-votes w-24 px-2 py-1 border border-gray-300 rounded" type="number" min="0" max="10" placeholder="votes (1)"
+                                                                    title="Corosync quorum votes: empty = 1, 0 = never counts toward quorum"
+                                                                    prop:value=move || votes_sig.get()
+                                                                    on:input=move |ev| votes_sig.set(event_target_value(&ev))/>
+                                                                <button class="node-caps-save text-blue-600 hover:text-blue-900 px-2 py-1 rounded hover:bg-blue-50"
+                                                                    on:click=move |_| save_caps(name_for_caps.clone(), (role_sig.get(), labels_sig.get(), vcpus_sig.get(), mem_sig.get(), votes_sig.get()))>
+                                                                    "Save"
+                                                                </button>
+                                                            </div>
+                                                        </td>
                                                         <td class="px-6 py-4 whitespace-nowrap">
                                                             {if is_local {
                                                                 view! { <span class="text-xs text-gray-400" title="The node you are connected to cannot be removed">"this node"</span> }.into_view()
@@ -498,6 +639,74 @@ pub fn ClusterManagementPage() -> impl IntoView {
                     </div>
                 }.into_view()
             }}
+
+            // Idle power-down (area 7): read-only view of the planner.
+            {move || power_status.get().map(|p| {
+                let candidates = p.power_down.clone();
+                let summary = if candidates.is_empty() {
+                    "No node can be powered down right now.".to_string()
+                } else {
+                    format!("Can be powered down now: {}", candidates.join(", "))
+                };
+                view! {
+                    <div id="power-panel" class="bg-white rounded-lg shadow overflow-hidden mt-6">
+                        <div class="px-6 py-4 border-b">
+                            <h2 class="text-lg font-semibold">"Idle power-down"</h2>
+                            <p class="text-sm text-gray-600">
+                                {format!(
+                                    "Only nodes labelled power-managed are considered; a node is idle below {}% CPU with no guests, and at least {} nodes stay online while quorum holds. A candidate node can be powered off from here (graceful BMC shutdown, asked to confirm).",
+                                    p.policy.idle_cpu_percent, p.policy.min_online
+                                )}
+                            </p>
+                            <p id="power-summary" class="text-sm font-medium mt-1">{summary}</p>
+                        </div>
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase">"Node"</th>
+                                    <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase">"CPU"</th>
+                                    <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase">"Guests"</th>
+                                    <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase">"Votes"</th>
+                                    <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase">"Wake"</th>
+                                    <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase">"Status"</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-200">
+                                {p.nodes.iter().map(|n| {
+                                    let cand = candidates.contains(&n.name);
+                                    let note = power_node_note(n, cand);
+                                    let wake = match &n.wake {
+                                        None => "none".to_string(),
+                                        Some(serde_json::Value::String(s)) => s.clone(),
+                                        Some(_) => "Wake-on-LAN".to_string(),
+                                    };
+                                    let node_name = n.name.clone();
+                                    view! {
+                                        <tr class="power-row" data-node=n.name.clone()>
+                                            <td class="px-6 py-2 text-sm font-medium">{n.name.clone()}</td>
+                                            <td class="px-6 py-2 text-sm">{format!("{:.0}%", n.cpu_percent)}</td>
+                                            <td class="px-6 py-2 text-sm">{n.running_guests}</td>
+                                            <td class="px-6 py-2 text-sm">{n.votes}</td>
+                                            <td class="px-6 py-2 text-sm">{wake}</td>
+                                            <td class="px-6 py-2 text-sm power-note">
+                                                {note}
+                                                {cand.then(|| view! {
+                                                    <button
+                                                        class="power-off-btn ml-3 px-2 py-1 bg-red-600 text-white rounded text-xs"
+                                                        on:click=move |_| power_off_node(node_name.clone())
+                                                    >
+                                                        "Power off"
+                                                    </button>
+                                                })}
+                                            </td>
+                                        </tr>
+                                    }
+                                }).collect_view()}
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            })}
 
             // Add Node Modal
             {move || show_add_node_modal.get().then(|| view! {
@@ -662,6 +871,31 @@ mod tests {
     }
 
     #[test]
+    fn caps_form_builds_body_and_clears_plain_compute() {
+        let c = parse_caps_form("witness", "lab, old-hw nvme", "4", "30", "0")
+            .unwrap()
+            .unwrap();
+        assert_eq!(c.role, "witness");
+        assert_eq!(c.labels, vec!["lab", "old-hw", "nvme"]);
+        assert_eq!(c.max_guest_vcpus, Some(4));
+        assert_eq!(c.max_guest_memory, Some(30 * 1024 * 1024 * 1024));
+        assert_eq!(c.quorum_votes, Some(0));
+        assert!(parse_caps_form("compute", "", "", "", "11").is_err());
+        assert!(parse_caps_form("compute", "", "", "", "x").is_err());
+        assert!(parse_caps_form("compute", "", "", "", "3")
+            .unwrap()
+            .is_some());
+        assert_eq!(parse_caps_form("compute", " ", "", "", "").unwrap(), None);
+        assert!(parse_caps_form("storage", "", "", "", "")
+            .unwrap()
+            .is_some());
+        assert!(parse_caps_form("boss", "", "", "", "").is_err());
+        assert!(parse_caps_form("compute", "", "0", "", "").is_err());
+        assert!(parse_caps_form("compute", "", "", "-1", "").is_err());
+        assert!(parse_caps_form("compute", &"x".repeat(64), "", "", "").is_err());
+    }
+
+    #[test]
     fn parse_weight_enforces_range() {
         assert_eq!(parse_weight("0"), Ok(0));
         assert_eq!(parse_weight(" 300 "), Ok(300));
@@ -669,5 +903,32 @@ mod tests {
         assert!(parse_weight("1001").is_err());
         assert!(parse_weight("-1").is_err());
         assert!(parse_weight("abc").is_err());
+    }
+
+    #[test]
+    fn power_note_explains_each_state() {
+        use crate::api::PowerNodeStatus;
+        let mut n = PowerNodeStatus {
+            name: "a".into(),
+            labels: vec![],
+            powered_on: true,
+            running_guests: 0,
+            cpu_percent: 1.0,
+            hosts_osds: false,
+            pinned: false,
+            votes: 1,
+            wake: None,
+        };
+        assert_eq!(power_node_note(&n, true), "idle: can be powered down");
+        assert!(power_node_note(&n, false).contains("not opted in"));
+        n.labels.push("power-managed".into());
+        n.running_guests = 2;
+        assert_eq!(power_node_note(&n, false), "2 running guest(s)");
+        n.hosts_osds = true;
+        assert_eq!(power_node_note(&n, false), "hosts Ceph OSDs");
+        n.pinned = true;
+        assert!(power_node_note(&n, false).contains("pinned"));
+        n.powered_on = false;
+        assert_eq!(power_node_note(&n, false), "powered off");
     }
 }

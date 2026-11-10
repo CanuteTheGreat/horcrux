@@ -41,6 +41,33 @@ fn check_address(address: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// A cluster member must come back by itself after a power cut or crash: a
+/// node whose manager does not start at boot never rejoins the cluster, never
+/// self-fences and never takes over HA guests (lab finding 2026-11-06: after a
+/// hard reset the node stayed unmanaged until a human started `horcrux-api`).
+/// Desktop editions install the manager without enabling it; creating or
+/// joining a cluster is the moment it becomes a member, so enable it then.
+/// OpenRC only, best effort (no init script or no `rc-update` = nothing to do).
+async fn enable_boot_start() {
+    if !std::path::Path::new("/etc/init.d/horcrux-api").exists() {
+        return;
+    }
+    match tokio::process::Command::new("rc-update")
+        .args(["add", "horcrux-api", "default"])
+        .output()
+        .await
+    {
+        Ok(o) if o.status.success() => {
+            tracing::info!("cluster member: horcrux-api enabled at boot")
+        }
+        Ok(o) => tracing::warn!(
+            "cluster member: could not enable horcrux-api at boot: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        ),
+        Err(e) => tracing::debug!("cluster member: no rc-update ({e}): boot start left as is"),
+    }
+}
+
 async fn create(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateRequest>,
@@ -51,6 +78,7 @@ async fn create(
         .cluster_manager
         .create_cluster(req.name, local, req.address.trim().to_string())
         .await?;
+    enable_boot_start().await;
     Ok((StatusCode::CREATED, Json(node)))
 }
 
@@ -115,6 +143,54 @@ async fn join_request(
         secret: crate::middleware::auth::cluster_service_secret(),
         nodes,
     }))
+}
+
+/// Tell the other members that `removed` left the cluster (best effort, one
+/// request each; `others` is the member list captured BEFORE the removal).
+/// A member that is unreachable keeps the node until it is told again or
+/// the node is removed there by hand.
+pub async fn announce_member_removed(
+    state: &AppState,
+    removed: &str,
+    others: &[crate::cluster::node::Node],
+) {
+    let Ok(local) = state.cluster_manager.get_local_node_name().await else {
+        return;
+    };
+    let Ok(client) = peer_client() else {
+        return;
+    };
+    let port = state.config.server.port;
+    for n in others
+        .iter()
+        .filter(|n| n.name != removed && n.name != local && !n.is_local)
+    {
+        let token = crate::middleware::auth::generate_cluster_ha_token(&local);
+        let Ok(token) = token else { continue };
+        let r = client
+            .post(format!(
+                "{}/api/ha/peer/members/{}/removed",
+                n.api_url(port),
+                removed
+            ))
+            .bearer_auth(token)
+            .send()
+            .await;
+        match r {
+            Ok(resp) if resp.status().is_success() => {}
+            Ok(resp) => tracing::warn!(
+                "{} refused the removal of member {removed}: {}",
+                n.name,
+                resp.status()
+            ),
+            Err(e) => {
+                tracing::warn!(
+                    "could not tell {} about the removal of {removed}: {e}",
+                    n.name
+                )
+            }
+        }
+    }
 }
 
 fn peer_client() -> Result<reqwest::Client, ApiError> {
@@ -212,6 +288,7 @@ async fn join(
         .cluster_manager
         .join_cluster(reply.cluster_name.clone(), &local, reply.nodes)
         .await?;
+    enable_boot_start().await;
     Ok(Json(serde_json::json!({
         "cluster": reply.cluster_name,
         "nodes": state.cluster_manager.list_nodes().await.len(),

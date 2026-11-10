@@ -79,6 +79,32 @@ pub struct NodeUsage {
     /// older nodes). See [`check_identity`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_id: Option<String>,
+    /// CPU family bucket of the reporting host: "intel", "amd" or "" (unknown
+    /// / older node). Lets every peer know the vendor of remote nodes so
+    /// AMD<->Intel live moves are blocked cluster-wide, not just locally.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cpu_vendor: String,
+    /// x86-64 level (1..4) of the reporting host; 0 = unknown / older node.
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub cpu_level: u8,
+    /// Fastest link up on the reporting host, Mbit/s; 0 = unknown / older node.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub uplink_mbps: u64,
+    /// Whole NVMe namespaces on the reporting host.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub nvme_disks: u32,
+}
+
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+
+fn is_zero_u8(v: &u8) -> bool {
+    *v == 0
 }
 
 /// Result of one usage poll of one node.
@@ -121,6 +147,21 @@ pub fn apply_poll(node: &mut Node, outcome: PollOutcome, now: i64) {
             }
             if usage.cpu_cores > 0 {
                 node.cpu_cores = usage.cpu_cores;
+            }
+            // Vendor is a hardware fact the node itself reports; an empty
+            // report (older node) never erases a known value.
+            if !usage.cpu_vendor.is_empty() {
+                node.cpu_vendor = usage.cpu_vendor.clone();
+            }
+            if usage.cpu_level > 0 {
+                node.cpu_level = usage.cpu_level;
+            }
+            // Hardware facts, like vendor: an older node's zero never erases them.
+            if usage.uplink_mbps > 0 {
+                node.uplink_mbps = usage.uplink_mbps;
+            }
+            if usage.nvme_disks > 0 {
+                node.nvme_disks = usage.nvme_disks;
             }
             if node.architecture == Architecture::Unknown
                 && usage.architecture != Architecture::Unknown
@@ -334,6 +375,10 @@ impl LocalUsageSampler {
             architecture: Architecture::detect(),
             timestamp: chrono::Utc::now().timestamp(),
             node_id: None,
+            cpu_vendor: super::node::detect_cpu_vendor_family(),
+            cpu_level: super::node::detect_cpu_level(),
+            uplink_mbps: super::node::detect_uplink_mbps(),
+            nvme_disks: super::node::detect_nvme_disks(),
         })
     }
 }
@@ -409,7 +454,39 @@ mod tests {
             architecture: Architecture::Aarch64,
             timestamp: 1_000,
             node_id: None,
+            cpu_vendor: String::new(),
+            cpu_level: 0,
+            uplink_mbps: 0,
+            nvme_disks: 0,
         }
+    }
+
+    #[test]
+    fn report_fills_uplink_and_nvme_and_empty_report_keeps_them() {
+        let mut n = node("n1", "10.0.0.1");
+        assert_eq!((n.uplink_mbps, n.nvme_disks), (0, 0));
+        let mut u = usage(1.0, 1);
+        u.uplink_mbps = 25_000;
+        u.nvme_disks = 4;
+        apply_poll(&mut n, PollOutcome::Usage(u), 1_000);
+        assert_eq!((n.uplink_mbps, n.nvme_disks), (25_000, 4));
+        apply_poll(&mut n, PollOutcome::Usage(usage(2.0, 2)), 1_010);
+        assert_eq!((n.uplink_mbps, n.nvme_disks), (25_000, 4));
+    }
+
+    #[test]
+    fn report_fills_cpu_vendor_and_empty_report_keeps_it() {
+        let mut n = node("n1", "10.0.0.1");
+        assert_eq!(n.cpu_vendor, "");
+        let mut u = usage(1.0, 1);
+        u.cpu_vendor = "amd".to_string();
+        apply_poll(&mut n, PollOutcome::Usage(u), 1_000);
+        assert_eq!(n.cpu_vendor, "amd");
+        apply_poll(&mut n, PollOutcome::Usage(usage(2.0, 2)), 1_010);
+        assert_eq!(
+            n.cpu_vendor, "amd",
+            "older node's empty vendor must not erase it"
+        );
     }
 
     #[test]

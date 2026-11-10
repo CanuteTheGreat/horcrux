@@ -1,0 +1,38 @@
+#!/bin/sh
+# horcrux-keyring-status: is THIS user's GNOME login keyring created, unlocked and the default? (read-only; prints labels and counts, never secrets)
+#   run as the desktop user inside the session:   horcrux-keyring-status
+#   run as root for another user:                 horcrux-keyring-status <user>
+# Exit 0 = healthy: login collection exists, unlocked, default alias, login.keyring on disk. A fresh account has login.keyring only after
+# the first item is stored (Brave stores its key at its first start), so "no file yet" is a WARN, not a failure.
+U=${1:-$(id -un)}
+uid=$(id -u "$U") || exit 2
+home=$(getent passwd "$U" | cut -d: -f6)
+run() {
+	if [ "$(id -un)" = "$U" ]; then sh -c "$1"
+	else su - "$U" -c "$1"; fi
+}
+bus="unix:path=/run/user/$uid/bus"
+# gnome-shell may run on a different bus on images without the user-bus patch: ask it
+sp=$(pgrep -u "$U" -x gnome-shell | head -1)
+[ -n "$sp" ] && b=$(tr '\0' '\n' < /proc/$sp/environ 2>/dev/null | grep '^DBUS_SESSION_BUS_ADDRESS=' | cut -d= -f2-) && [ -n "$b" ] && bus=$b
+rc=0
+q() { run "export XDG_RUNTIME_DIR=/run/user/$uid DBUS_SESSION_BUS_ADDRESS='$bus'; busctl --user $*" 2>/dev/null; }
+echo "daemons:   $(pgrep -u "$U" -c gnome-keyring) (gnome-keyring-daemon; one PAM '--login' daemon is normal)"
+cols=$(q get-property org.freedesktop.secrets /org/freedesktop/secrets org.freedesktop.Secret.Service Collections | tr ' ' '\n' | grep '/org/' | tr -d '"')
+if echo "$cols" | grep -q collection/login; then
+	lk=$(q get-property org.freedesktop.secrets /org/freedesktop/secrets/collection/login org.freedesktop.Secret.Collection Locked | cut -d' ' -f2)
+	n=$(q get-property org.freedesktop.secrets /org/freedesktop/secrets/collection/login org.freedesktop.Secret.Collection Items | tr ' ' '\n' | grep -c '/org/')
+	al=$(q call org.freedesktop.secrets /org/freedesktop/secrets org.freedesktop.Secret.Service ReadAlias s default | cut -d' ' -f2 | tr -d '"')
+	echo "login:     present, locked=$lk, items=$n, default=$al"
+	[ "$lk" = false ] || { echo "BAD: login keyring is LOCKED (password differs from the login password: unlock it once, see CONVERSION.md 'Keyring')"; rc=1; }
+	[ "$al" = /org/freedesktop/secrets/collection/login ] || { echo "BAD: login is not the default collection"; rc=1; }
+else
+	echo "BAD: no login collection: secrets live only in RAM and are lost at logout (see horcrux-keyring-pam check)"; rc=1
+fi
+if [ -f "$home/.local/share/keyrings/login.keyring" ]; then
+	echo "file:      $(stat -c '%a %s bytes' "$home/.local/share/keyrings/login.keyring") login.keyring"
+else
+	echo "WARN: no $home/.local/share/keyrings/login.keyring yet (written when the first secret is stored)"
+fi
+/usr/libexec/horcrux-keyring-pam check 2>/dev/null || { [ -x /usr/libexec/horcrux-keyring-pam ] && rc=1; }
+exit $rc

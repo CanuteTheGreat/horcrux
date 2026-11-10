@@ -1,0 +1,81 @@
+#!/bin/sh
+# Horcrux first boot (once): wait for a network, run the machine hooks, refresh the Portage trees.
+#
+# Never gives up: a machine that boots without a cable / Wi-Fi (a headless server in a rack that gets its uplink later, a laptop with no known
+# network) must still finish when the network arrives hours later. It waits as long as it takes and retries a failed tree sync every 10 minutes.
+# The server must not block on it: the init script starts this in the background, boot, SSH and the web UI do not wait for the network here.
+#
+# Machine hooks: executable files in /usr/libexec/horcrux-firstboot.d/ (a machine layer ships its own, e.g. a remote hand-off); run in name
+# order after the network is up, a failing hook is logged and does not stop the sync. Core knows no machine.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+PIDFILE=/run/horcrux-firstboot.pid
+echo $$ > "$PIDFILE"; trap 'rm -f "$PIDFILE"' EXIT
+echo "== horcrux-firstboot $(date -u)"
+have_net() { ip -4 route show default 2>/dev/null | grep -q . || ip -6 route show default 2>/dev/null | grep -q .; }
+if ! have_net; then
+	echo "== waiting for a network (no limit); the first connection continues this automatically"
+	while ! have_net; do sleep ${FIRSTBOOT_POLL:-10}; done
+	echo "== network is up $(date -u)"
+fi
+sleep ${FIRSTBOOT_SETTLE:-5}      # DHCP lease + the chrony burst (horcrux-timesync / the NetworkManager hook) settle first
+for h in /usr/libexec/horcrux-firstboot.d/*; do
+	[ -x "$h" ] || continue
+	echo "== hook $h"
+	"$h" || echo "hook $h incomplete (see above)"
+done
+# One sync attempt. Returns 0 when every repo that CAN sync is current. Two things made the first version loop forever on real laptops (found on
+# gringotts + the Surface, 2026-11-05: "tree sync not done" every 10 minutes while the trees were in fact current):
+#  - emerge-webrsync exits non-zero with "The current local timestamp is newer than the timestamp of the latest snapshot" when the tree is
+#    already newer than the daily snapshot (a git/rsync-synced or just-updated tree): that is "nothing to do", not a failure;
+#  - `emaint sync -r <repo>` on a repo with auto-sync = no ("The specified repo(s) have sync disabled": the image's local/private overlays)
+#    returns non-zero: such a repo is skipped, it was never syncable.
+sync_trees() {
+	echo "== portage trees"
+	ok=1
+	out=$(emerge-webrsync -q 2>&1); rc=$?
+	echo "$out"
+	if [ $rc -ne 0 ]; then
+		case "$out" in *"local timestamp is newer"*) echo "== gentoo tree already newer than the snapshot: nothing to do" ;; *) ok=0 ;; esac
+	fi
+	# every other repo of /etc/portage/repos.conf with a sync-uri (the horcrux overlay, machine overlays): the image ships their
+	# directories empty or as a frozen copy, the first sync turns them into a checkout
+	for r in $(portageq get_repos / 2>/dev/null); do
+		[ "$r" = gentoo ] && continue
+		d=$(portageq get_repo_path / "$r" 2>/dev/null)
+		# a repo without a sync-uri / with sync disabled is not ours to sync: skip it before touching its directory
+		[ -n "$d" ] && [ ! -d "$d/.git" ] && repo_syncable "$r" && find "$d" -mindepth 1 -delete 2>/dev/null
+		# an image snapshot (git init + commit + remote add) has no upstream branch: Portage's git sync dies with "no upstream configured for branch 'main'"
+		# (found by the headless server gate, 2026-11-04). Give the checkout its tracking ref so `emaint sync` can fetch + reset.
+		if [ -d "$d/.git" ] && ! git -C "$d" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
+			b=$(git -C "$d" symbolic-ref --short HEAD 2>/dev/null)
+			if [ -n "$b" ] && git -C "$d" remote get-url origin >/dev/null 2>&1; then
+				git -C "$d" config "branch.$b.remote" origin; git -C "$d" config "branch.$b.merge" "refs/heads/$b"
+				git -C "$d" update-ref "refs/remotes/origin/$b" HEAD
+			fi
+		fi
+		out=$(emaint sync -r "$r" 2>&1); rc=$?
+		echo "$out"
+		if [ $rc -ne 0 ]; then
+			case "$out" in *"have sync disabled"*) echo "== repo $r has sync disabled: skipped" ;; *) ok=0 ;; esac
+		fi
+	done
+	[ $ok = 1 ]
+}
+# a repo is syncable when repos.conf gives it a sync-uri and does not turn auto-sync off
+repo_syncable() {
+	portageq repos_config / 2>/dev/null | awk -v r="[$1]" '$0==r{f=1;next} /^\[/{f=0} f&&/^sync-uri/{u=1} f&&tolower($0)~/^auto-sync *= *(no|false)/{n=1} END{exit !(u&&!n)}'
+}
+# network is up but the sync keeps failing for another reason (DNS/proxy/mirror down, a broken repo): do not block "first boot done" for ever.
+# After FIRSTBOOT_MAX_FAILS (default 6 = about an hour) the marker is written with a warning line; `emaint sync -a` stays a manual/cron action.
+MAX_FAILS=${FIRSTBOOT_MAX_FAILS:-6}; fails=0
+until have_net && sync_trees; do
+	if have_net; then fails=$((fails+1)); else fails=0; fi
+	if [ "$fails" -ge "$MAX_FAILS" ]; then
+		echo "== tree sync still failing with a network after $fails attempts: first boot marked done WITH WARNINGS (run: emaint sync -a)"
+		partial=1; break
+	fi
+	echo "== tree sync not done (network?): retry in 10 minutes"; sleep ${FIRSTBOOT_RETRY:-600}
+done
+mkdir -p /var/lib/horcrux; { date -u; [ -n "${partial:-}" ] && echo "partial: tree sync failed with a network"; } > /var/lib/horcrux/firstboot-done
+echo "== done"
+exit 0

@@ -1,9 +1,19 @@
-/home/canutethegreat/.cache
-/home/canutethegreat/.local/share/Trash
-/home/canutethegreat/.local/share/Steam
-/home/canutethegreat/.var/app/*/cache
-/home/canutethegreat/snap
+/home/*/.cache
+/home/*/.local/share/Trash
+/home/*/.var/app/*/cache
+/home/*/snap
 /etc/ctg-backup
 **/node_modules
 **/__pycache__
 **/target
+# Nextcloud re-syncs from the server (110 GB, versioned in B2): never back it up from a workstation
+/home/*/Nextcloud
+# browser CACHES only (never Cookies, Local Storage, IndexedDB, Extension data: that is what keeps the owner signed in)
+**/BraveSoftware/*/*/Cache
+**/BraveSoftware/*/*/Code Cache
+**/BraveSoftware/*/*/GPUCache
+**/BraveSoftware/*/*/Service Worker/CacheStorage
+**/BraveSoftware/*/ShaderCache
+**/BraveSoftware/*/GrShaderCache
+**/Proton*/Cache
+**/.mozilla/firefox/*/cache2

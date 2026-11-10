@@ -122,6 +122,10 @@ pub struct HaManager {
     /// resource- and architecture-aware failover target selection.
     /// Keyed by node name. Populated via `update_node_resources`.
     node_resources: Arc<RwLock<HashMap<String, NodeResources>>>,
+    /// Per-guest required node labels (placement rules), refreshed by the HA
+    /// loop. Recovery only targets nodes carrying every label. In-memory:
+    /// the source of truth is the guest's placement rules.
+    required_labels: Arc<RwLock<HashMap<String, Vec<String>>>>,
     /// Durable copy of resources, groups and the enabled flag; `None` =
     /// in-memory only.
     store: Option<ConfigStore>,
@@ -149,6 +153,7 @@ impl HaManager {
             events: Arc::new(RwLock::new(Vec::new())),
             enabled: Arc::new(RwLock::new(false)),
             node_resources: Arc::new(RwLock::new(HashMap::new())),
+            required_labels: Arc::new(RwLock::new(HashMap::new())),
             store: None,
         }
     }
@@ -223,6 +228,17 @@ impl HaManager {
     pub async fn update_node_resources(&self, resources: NodeResources) {
         let mut node_resources = self.node_resources.write().await;
         node_resources.insert(resources.node_name.clone(), resources);
+    }
+
+    /// Set (or, with an empty list, clear) the node labels a guest requires
+    /// for HA recovery/relocation placement.
+    pub async fn set_required_labels(&self, vm_id: &str, labels: Vec<String>) {
+        let mut m = self.required_labels.write().await;
+        if labels.is_empty() {
+            m.remove(vm_id);
+        } else {
+            m.insert(vm_id.to_string(), labels);
+        }
     }
 
     /// Remove a node's resource snapshot (e.g. when it is decommissioned or
@@ -611,6 +627,13 @@ impl HaManager {
         })?;
 
         let node_resources = self.node_resources.read().await;
+        let labels = self
+            .required_labels
+            .read()
+            .await
+            .get(&resource.vm_id)
+            .cloned()
+            .unwrap_or_default();
 
         // Prefer the preferred node if available, architecture-compatible,
         // AND has every required passthrough device currently available.
@@ -619,6 +642,7 @@ impl HaManager {
                 let compatible = match node_resources.get(preferred) {
                     Some(res) => {
                         res.architecture.can_run(&resource.architecture)
+                            && res.guest_eligibility_labeled(0, 0, &labels).is_ok()
                             && passthrough_devices_satisfied(
                                 &res.available_passthrough_devices,
                                 &resource.required_passthrough_devices,
@@ -665,6 +689,7 @@ impl HaManager {
                 architecture: resource.architecture.clone(),
                 required_passthrough_devices: resource.required_passthrough_devices.clone(),
                 min_placement_weight: None,
+                required_labels: labels.clone(),
             };
 
             let balancer = ClusterBalancer::new(Default::default());
@@ -685,8 +710,12 @@ impl HaManager {
         // Legacy fallback: first available node with no resource/architecture
         // data at all (keeps old behavior for callers/tests that don't feed
         // node_resources into the HA manager).
-        if let Some(node) = unknown_candidates.into_iter().next() {
-            return Ok(Some(node.clone()));
+        // A guest with required labels never lands on a node we know nothing
+        // about: its labels cannot be verified.
+        if labels.is_empty() {
+            if let Some(node) = unknown_candidates.into_iter().next() {
+                return Ok(Some(node.clone()));
+            }
         }
 
         Ok(None)
@@ -911,6 +940,50 @@ impl HaManager {
         true
     }
 
+    /// Add the groups a peer knows about that this node does not (HA groups
+    /// are cluster-wide, so a group created through one node must exist on
+    /// all). Existing local groups are left alone; edits and deletions
+    /// travel through [`Self::put_peer_group`] / [`Self::drop_peer_group`].
+    /// Returns how many groups were added.
+    pub async fn merge_peer_groups(&self, incoming: Vec<HaGroup>) -> usize {
+        let mut added = 0;
+        let mut groups = self.groups.write().await;
+        for g in incoming {
+            if groups.contains_key(&g.name) {
+                continue;
+            }
+            let _ = config_store::put_opt(&self.store, kinds::HA_GROUP, &g.name, &g).await;
+            tracing::info!("HA group {} replicated from a peer", g.name);
+            groups.insert(g.name.clone(), g);
+            added += 1;
+        }
+        added
+    }
+
+    /// Take over a peer's created/edited group, replacing the local copy.
+    pub async fn put_peer_group(&self, g: HaGroup) {
+        let _ = config_store::put_opt(&self.store, kinds::HA_GROUP, &g.name, &g).await;
+        self.groups.write().await.insert(g.name.clone(), g);
+    }
+
+    /// Apply a peer's group deletion. Refused (false) while a local resource
+    /// still uses the group.
+    pub async fn drop_peer_group(&self, name: &str) -> bool {
+        if self
+            .resources
+            .read()
+            .await
+            .values()
+            .any(|r| r.group == name)
+        {
+            return false;
+        }
+        if self.groups.write().await.remove(name).is_some() {
+            let _ = config_store::delete_opt(&self.store, kinds::HA_GROUP, name).await;
+        }
+        true
+    }
+
     /// Drop resources placed on `node` that are not in `keep` (the node
     /// stopped managing them). Returns the removed ids.
     pub async fn prune_resources_of(&self, node: &str, keep: &[String]) -> Vec<String> {
@@ -993,6 +1066,31 @@ mod tests {
         let groups = manager.list_groups().await;
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].name, "test-group");
+    }
+
+    #[tokio::test]
+    async fn test_peer_groups_replicate_without_resources() {
+        let origin = HaManager::new();
+        let peer = HaManager::new();
+        let g = HaGroup {
+            name: "hxg".to_string(),
+            nodes: vec!["n1".to_string(), "n2".to_string()],
+            restricted: false,
+            no_failback: false,
+        };
+        origin.add_group(g.clone()).await.unwrap();
+        assert!(peer.get_group("hxg").await.is_none());
+        assert_eq!(peer.merge_peer_groups(origin.list_groups().await).await, 1);
+        assert_eq!(peer.get_group("hxg").await.unwrap().nodes, g.nodes);
+        // Merging again never overwrites or duplicates.
+        assert_eq!(peer.merge_peer_groups(origin.list_groups().await).await, 0);
+        // Edit and delete follow.
+        let mut edited = g.clone();
+        edited.nodes = vec!["n3".to_string()];
+        peer.put_peer_group(edited).await;
+        assert_eq!(peer.get_group("hxg").await.unwrap().nodes, vec!["n3"]);
+        assert!(peer.drop_peer_group("hxg").await);
+        assert!(peer.list_groups().await.is_empty());
     }
 
     #[tokio::test]
@@ -1087,8 +1185,76 @@ mod tests {
             available_passthrough_devices,
             placement_weight: 100,
             cpu_vendor: String::new(),
+            cpu_level: 0,
             caps: None,
         }
+    }
+
+    /// HA recovery honours a guest's required node labels: only the labelled
+    /// node is a target; with no labelled node the guest is not placed.
+    #[tokio::test]
+    async fn test_failover_honours_required_node_labels() {
+        use crate::cluster::roles::NodeCaps;
+        let manager = HaManager::new();
+        manager.enable().await;
+        let nodes = ["fails", "plain", "nvme"].map(String::from).to_vec();
+        let group = HaGroup {
+            name: "g".to_string(),
+            nodes,
+            restricted: false,
+            no_failback: false,
+        };
+        manager.add_group(group).await.unwrap();
+        // "plain" is idler, so without the label requirement it would win.
+        let mut plain = make_node_resources("plain", Architecture::X86_64);
+        plain.caps = Some(NodeCaps::default());
+        manager.update_node_resources(plain).await;
+        let mut nvme = make_node_resources("nvme", Architecture::X86_64);
+        nvme.cpu_usage = 50.0;
+        nvme.caps = Some(NodeCaps {
+            labels: vec!["nvme".to_string()],
+            ..Default::default()
+        });
+        manager.update_node_resources(nvme).await;
+        let config = HaConfig {
+            vm_id: "900".to_string(),
+            group: "g".to_string(),
+            max_restart: 0,
+            max_relocate: 3,
+            state: HaState::Started,
+            architecture: Architecture::X86_64,
+            required_passthrough_devices: Vec::new(),
+        };
+        manager.add_resource(config).await.unwrap();
+        let need = vec!["nvme".to_string()];
+        manager.set_required_labels("900", need).await;
+        let on = Some("fails".to_string());
+        manager
+            .update_resource_state("900", HaState::Started, on)
+            .await
+            .unwrap();
+        let moved = manager.handle_node_failure("fails").await.unwrap();
+        assert_eq!(moved.len(), 1);
+        // handle_node_failure only starts the migration (state Migrating, target in the event).
+        let events = manager.get_events(Some("900"), None).await;
+        let ev = events
+            .iter()
+            .find(|e| matches!(e.event_type, HaEventType::Migrated))
+            .expect("a Migrated event");
+        assert_eq!(ev.node, "nvme");
+
+        // Nobody carries the label: no placement, the resource errors out.
+        let on = Some("nvme".to_string());
+        manager
+            .update_resource_state("900", HaState::Started, on)
+            .await
+            .unwrap();
+        let need = vec!["gpu".to_string()];
+        manager.set_required_labels("900", need).await;
+        let moved = manager.handle_node_failure("nvme").await.unwrap();
+        assert!(moved.is_empty());
+        let res = manager.get_resource("900").await.unwrap();
+        assert_eq!(res.state, HaState::Error);
     }
 
     fn gpu_a(device_name: &str) -> PassthroughDeviceRequirement {

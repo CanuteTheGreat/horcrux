@@ -148,6 +148,16 @@ pub async fn fetch_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> 
     }
 }
 
+/// True when `msg` is a browser transport failure (the request never produced
+/// an HTTP response: connection cut, network change, proxy timeout), as opposed
+/// to an error the server answered with. `fetch` reports these as
+/// "TypeError: Failed to fetch" (Chrome/Edge), "NetworkError when attempting to
+/// fetch resource." (Firefox) or "Load failed" (Safari).
+pub fn is_transport_error(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    m.contains("failed to fetch") || m.contains("networkerror") || m.contains("load failed")
+}
+
 /// POST request helper
 pub async fn post_json<T: DeserializeOwned, B: Serialize>(
     path: &str,
@@ -465,6 +475,27 @@ pub struct ClusterNode {
     /// the address can't prove it is this node, "up, usage unknown: ...").
     #[serde(default)]
     pub status_reason: Option<String>,
+    /// Operator-set role/labels/per-guest limits; `None` = unrestricted
+    /// compute node.
+    #[serde(default)]
+    pub caps: Option<NodeCaps>,
+}
+
+/// Mirror of `cluster::roles::NodeCaps` (`PUT /api/cluster/nodes/:name/caps`).
+/// `role` is "storage" | "compute" | "witness"; memory is in **bytes**.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct NodeCaps {
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub max_guest_vcpus: Option<u32>,
+    #[serde(default)]
+    pub max_guest_memory: Option<u64>,
+    /// Corosync vote weight (None = 1, 0 = non-voting, max 10).
+    #[serde(default)]
+    pub quorum_votes: Option<u32>,
 }
 
 fn default_node_priority() -> u32 {
@@ -537,6 +568,111 @@ pub async fn get_cluster_nodes() -> Result<Vec<ClusterNode>, ApiError> {
 /// 204; 404 unknown node; 409 for the local node).
 pub async fn remove_cluster_node(name: &str) -> Result<(), ApiError> {
     delete_json(&format!("/cluster/nodes/{}", name)).await
+}
+
+/// Set (or with `None` clear) a node's role, labels and per-guest limits
+/// (`PUT /api/cluster/nodes/:name/caps`, 200 with no body).
+pub async fn set_node_caps(name: &str, caps: Option<&NodeCaps>) -> Result<(), ApiError> {
+    let url = resolve_api_url(&format!("/cluster/nodes/{}/caps", name));
+    let response = with_auth(reqwasm::http::Request::put(&url))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&caps).unwrap())
+        .send()
+        .await
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
+    if response.ok() {
+        Ok(())
+    } else {
+        let body = response.text().await.unwrap_or_default();
+        Err(ApiError {
+            message: if body.is_empty() {
+                format!("HTTP {}", response.status())
+            } else {
+                format!("HTTP {}: {}", response.status(), body)
+            },
+        })
+    }
+}
+
+/// One sampled node of `GET /api/cluster/power/status` (idle power-down, area 7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PowerNodeStatus {
+    pub name: String,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub powered_on: bool,
+    #[serde(default)]
+    pub running_guests: u32,
+    #[serde(default)]
+    pub cpu_percent: f32,
+    #[serde(default)]
+    pub hosts_osds: bool,
+    /// Pinned by HA / passthrough devices; never powered down.
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub votes: u32,
+    /// `null`, `"Bmc"` or `{"Wol":[..6 bytes..]}`.
+    #[serde(default)]
+    pub wake: Option<serde_json::Value>,
+}
+
+/// Policy the planner ran with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PowerPolicyView {
+    pub idle_cpu_percent: f32,
+    pub min_online: usize,
+}
+
+/// `GET /api/cluster/power/status`: sampled nodes plus the `power-managed`
+/// nodes that could be shut down quorum-safely right now. Read-only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PowerStatus {
+    #[serde(default)]
+    pub power_down: Vec<String>,
+    pub policy: PowerPolicyView,
+    #[serde(default)]
+    pub nodes: Vec<PowerNodeStatus>,
+}
+
+pub async fn get_cluster_power_status() -> Result<PowerStatus, ApiError> {
+    fetch_json("/cluster/power/status").await
+}
+
+/// `POST /api/cluster/power/down`: gracefully power one idle node off through
+/// its BMC. The server re-checks that the planner still lists it (409 if not).
+pub async fn power_down_node(node: &str) -> Result<(), ApiError> {
+    #[derive(Serialize)]
+    struct Body<'a> {
+        node: &'a str,
+    }
+    post_json_no_response("/cluster/power/down", &Body { node }).await
+}
+
+/// Why a node is (not) a power-down candidate, for the power panel.
+pub fn power_node_note(n: &PowerNodeStatus, candidate: bool) -> String {
+    if candidate {
+        return "idle: can be powered down".to_string();
+    }
+    if !n.powered_on {
+        return "powered off".to_string();
+    }
+    if !n.labels.iter().any(|l| l == "power-managed") {
+        return "not opted in (label power-managed)".to_string();
+    }
+    if n.pinned {
+        return "pinned by HA or passthrough".to_string();
+    }
+    if n.hosts_osds {
+        return "hosts Ceph OSDs".to_string();
+    }
+    if n.running_guests > 0 {
+        return format!("{} running guest(s)", n.running_guests);
+    }
+    "kept online (quorum or minimum online nodes)".to_string()
 }
 
 /// Set a node's placement/HA weight (0-1000).
@@ -3642,6 +3778,37 @@ pub async fn migrate_vm(vm_id: &str, request: MigrationRequest) -> Result<Migrat
     post_json(&format!("/migrate/{}", vm_id), &request).await
 }
 
+/// One row of `GET /api/cluster/nodes/:name/migration-targets`: a candidate
+/// node for a guest running on `:name`, its CPU group and, when live migration
+/// is blocked (AMD<->Intel, older x86-64 level), the reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MigrationTarget {
+    pub node: String,
+    pub group: String,
+    pub live_migration_allowed: bool,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Live-migration verdict per target node for a guest running on `source`.
+pub async fn get_migration_targets(source: &str) -> Result<Vec<MigrationTarget>, ApiError> {
+    fetch_json(&format!("/cluster/nodes/{}/migration-targets", source)).await
+}
+
+/// Option-label suffix for a target in the migrate dialog ("" when live
+/// migration is allowed or the node is unknown).
+pub fn migration_target_note(targets: &[MigrationTarget], node: &str) -> String {
+    targets
+        .iter()
+        .find(|t| t.node == node)
+        .map(|t| match (&t.live_migration_allowed, &t.reason) {
+            (false, Some(r)) => format!(" - offline only: {}", r),
+            (false, None) => " - offline only".to_string(),
+            _ => format!(" - {}", t.group),
+        })
+        .unwrap_or_default()
+}
+
 /// Get migration status
 pub async fn get_migration_status(vm_id: &str) -> Result<MigrationJob, ApiError> {
     fetch_json(&format!("/migrate/{}/status", vm_id)).await
@@ -5127,6 +5294,40 @@ pub struct StackSummary {
     pub updated_at: i64,
     #[serde(default)]
     pub unsupported_features: Vec<String>,
+    #[serde(default)]
+    pub compose_yaml: Option<String>,
+}
+
+/// Answer of `PUT /api/stacks/:id`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct StackUpdateReport {
+    #[serde(default)]
+    pub recreated: Vec<String>,
+    #[serde(default)]
+    pub unchanged: Vec<String>,
+    #[serde(default)]
+    pub added: Vec<String>,
+    #[serde(default)]
+    pub removed: Vec<String>,
+}
+
+pub async fn get_stack(id: &str) -> Result<StackSummary, ApiError> {
+    fetch_json(&format!("/stacks/{}", urlencoding::encode(id))).await
+}
+
+/// Update a deployed stack: new compose file and/or extra environment for
+/// every service (`KEY -> value`). Services whose config changed are
+/// recreated one at a time; volumes are kept.
+pub async fn update_stack(
+    id: &str,
+    compose_yaml: Option<&str>,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Result<StackUpdateReport, ApiError> {
+    put_json(
+        &format!("/stacks/{}", urlencoding::encode(id)),
+        &serde_json::json!({ "compose_yaml": compose_yaml, "env": env }),
+    )
+    .await
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -5337,6 +5538,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn migration_target_note_explains_offline_only_nodes() {
+        let t: Vec<MigrationTarget> = serde_json::from_str(
+            r#"[{"node":"r6525","group":"amd-v3","live_migration_allowed":true,"reason":null},
+                {"node":"r430","group":"intel-v3","live_migration_allowed":false,"reason":"CPU vendor differs"}]"#,
+        )
+        .unwrap();
+        assert_eq!(migration_target_note(&t, "r6525"), " - amd-v3");
+        assert_eq!(
+            migration_target_note(&t, "r430"),
+            " - offline only: CPU vendor differs"
+        );
+        assert_eq!(migration_target_note(&t, "nope"), "");
+    }
+
+    #[test]
+    fn transport_errors_are_told_apart_from_server_errors() {
+        assert!(is_transport_error("TypeError: Failed to fetch"));
+        assert!(is_transport_error(
+            "NetworkError when attempting to fetch resource."
+        ));
+        assert!(is_transport_error("Load failed"));
+        assert!(!is_transport_error("stack e2e already exists"));
+        assert!(!is_transport_error("HTTP 500: INTERNAL_ERROR"));
+    }
+
+    #[test]
     fn error_text_includes_the_api_details() {
         let body = r#"{"status":500,"error":"INTERNAL_ERROR","message":"An internal server error occurred","details":"nftables: permission denied"}"#;
         assert_eq!(
@@ -5366,6 +5593,37 @@ mod tests {
         ] {
             assert!(!ApiError { message: other }.is_forbidden());
         }
+    }
+
+    fn me_with(is_admin: bool, perms: &[(&str, &[&str])]) -> Me {
+        serde_json::from_value(serde_json::json!({
+            "user": {"id": "u1", "username": "u1", "email": "", "role": "VMUser", "roles": [],
+                     "groups": [], "enabled": true, "realm": "local", "tfa_required": false},
+            "is_admin": is_admin,
+            "permissions": perms.iter().map(|(k, v)| (k.to_string(), serde_json::json!(v)))
+                .collect::<serde_json::Map<_, _>>(),
+        }))
+        .expect("Me json")
+    }
+
+    #[test]
+    fn me_can_at_follows_acl_paths() {
+        // a VMUser: VM privileges on /vms only, nothing on /
+        let vm_user = me_with(
+            false,
+            &[("/", &[]), ("/vms", &["VM.Audit", "VM.PowerMgmt"])],
+        );
+        assert!(!vm_user.can_at("Sys.Audit", "/"));
+        assert!(!vm_user.can_at("Sys.Audit", "/cluster"));
+        assert!(!vm_user.can_at("User.Modify", "/access/users"));
+        assert!(vm_user.can_at("VM.Audit", "/vms/100"));
+        assert!(!vm_user.can_at("VM.Audit", "/containers"));
+        // a grant on / covers every path below it
+        let auditor = me_with(false, &[("/", &["Sys.Audit"])]);
+        assert!(auditor.can_at("Sys.Audit", "/cluster"));
+        assert!(!auditor.can_at("User.Modify", "/access/users"));
+        // administrators hold everything
+        assert!(me_with(true, &[]).can_at("User.Modify", "/access/users"));
     }
 
     #[test]
@@ -5515,6 +5773,7 @@ mod tests {
             memory_used: used_gb.map(|g| g << 30),
             last_seen: None,
             status_reason: None,
+            caps: None,
         }
     }
 
@@ -5704,6 +5963,29 @@ impl Me {
         self.permissions
             .values()
             .any(|p| p.iter().any(|x| x == privilege))
+    }
+
+    /// Whether the user holds `privilege` on ACL `path` (an administrator
+    /// holds everything; a grant on an ancestor path covers the children).
+    /// Mirrors what the server's rbac middleware checks, so the UI can hide
+    /// actions and skip reads the role would only get a 403 for.
+    pub fn can_at(&self, privilege: &str, path: &str) -> bool {
+        if self.is_admin {
+            return true;
+        }
+        let held = |key: &str| {
+            self.permissions
+                .get(key)
+                .is_some_and(|p| p.iter().any(|x| x == privilege))
+        };
+        let mut cur = path.trim_end_matches('/');
+        while !cur.is_empty() {
+            if held(cur) {
+                return true;
+            }
+            cur = cur.rfind('/').map_or("", |i| &cur[..i]);
+        }
+        held("/")
     }
 }
 
@@ -6450,6 +6732,9 @@ pub struct BridgeInfo {
     pub up: bool,
     pub ports: Vec<String>,
     pub addresses: Vec<String>,
+    /// VLAN ids the kernel has on each uplink port (compressed ranges).
+    #[serde(default)]
+    pub port_vlans: std::collections::BTreeMap<String, Vec<String>>,
     pub managed: bool,
     #[serde(default)]
     pub comment: Option<String>,
@@ -6462,8 +6747,23 @@ pub struct NewBridge {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
     pub ports: Vec<String>,
+    /// VLAN ids / ranges ("20", "100-110") trunked on every port.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trunk_vlans: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
+}
+
+/// PUT /api/network/bridges/:name - change the trunk VLANs on the live bridge.
+pub async fn set_bridge_trunk_vlans(
+    name: &str,
+    vlans: &[String],
+) -> Result<serde_json::Value, ApiError> {
+    put_json(
+        &format!("/network/bridges/{}", urlencoding::encode(name)),
+        &serde_json::json!({ "trunk_vlans": vlans }),
+    )
+    .await
 }
 
 pub async fn list_bridges() -> Result<Vec<BridgeInfo>, ApiError> {
@@ -6476,6 +6776,95 @@ pub async fn create_bridge(b: &NewBridge) -> Result<NewBridge, ApiError> {
 
 pub async fn delete_bridge(name: &str) -> Result<(), ApiError> {
     delete_json(&format!("/network/bridges/{}", urlencoding::encode(name))).await
+}
+
+// DHCP + DNS per network (Infrastructure > DHCP & DNS) - horcrux-api/src/api/net_dhcp.rs.
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct DhcpStaticLease {
+    pub mac: String,
+    pub ip: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct DhcpNetwork {
+    #[serde(default)]
+    pub id: String,
+    pub bridge: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vlan: Option<u16>,
+    pub address: String,
+    pub range_start: String,
+    pub range_end: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway: Option<String>,
+    #[serde(default)]
+    pub dns_servers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    #[serde(default)]
+    pub lease_time: String,
+    #[serde(default)]
+    pub dns_enabled: bool,
+    #[serde(default)]
+    pub upstream_dns: Vec<String>,
+    #[serde(default)]
+    pub static_leases: Vec<DhcpStaticLease>,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub serve_node: String,
+    // read-only, set by the server
+    #[serde(default, skip_serializing)]
+    pub iface: String,
+    #[serde(default, skip_serializing)]
+    pub serving_here: bool,
+    #[serde(default, skip_serializing)]
+    pub running: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DhcpLease {
+    pub expires: i64,
+    pub mac: String,
+    pub ip: String,
+    #[serde(default)]
+    pub hostname: Option<String>,
+}
+
+pub async fn list_dhcp_networks() -> Result<Vec<DhcpNetwork>, ApiError> {
+    fetch_json("/network/dhcp").await
+}
+
+pub async fn create_dhcp_network(n: &DhcpNetwork) -> Result<DhcpNetwork, ApiError> {
+    post_json("/network/dhcp", n).await
+}
+
+pub async fn delete_dhcp_network(id: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/network/dhcp/{}", urlencoding::encode(id))).await
+}
+
+pub async fn add_dhcp_static_lease(id: &str, l: &DhcpStaticLease) -> Result<DhcpNetwork, ApiError> {
+    post_json(
+        &format!("/network/dhcp/{}/static-leases", urlencoding::encode(id)),
+        l,
+    )
+    .await
+}
+
+pub async fn delete_dhcp_static_lease(id: &str, mac: &str) -> Result<(), ApiError> {
+    delete_json(&format!(
+        "/network/dhcp/{}/static-leases/{}",
+        urlencoding::encode(id),
+        urlencoding::encode(mac)
+    ))
+    .await
+}
+
+pub async fn dhcp_leases(id: &str) -> Result<Vec<DhcpLease>, ApiError> {
+    fetch_json(&format!("/network/dhcp/{}/leases", urlencoding::encode(id))).await
 }
 
 // VM firewall (VM Hardware page) - /api/vms/:id/firewall/rules.
@@ -6902,6 +7291,9 @@ pub struct PlacementRules {
     pub anti_affinity_group: Option<String>,
     #[serde(default)]
     pub no_migrate: bool,
+    /// Node labels the guest needs (see Cluster > node role/labels).
+    #[serde(default)]
+    pub required_labels: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

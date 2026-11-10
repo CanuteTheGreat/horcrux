@@ -55,21 +55,72 @@ for t in ttyS0 ttyS1 ttyAMA0 hvc0; do grep -qx $t /etc/securetty 2>/dev/null || 
 mkdir -p /etc/iwd && printf '[General]\nEnableNetworkConfiguration=true\n' > /etc/iwd/main.conf
 grep -q '^denyinterfaces' /etc/dhcpcd.conf 2>/dev/null || printf '\ndenyinterfaces wlan* wlp*\n' >> /etc/dhcpcd.conf
 
+# --- time: months-off hardware clocks (a stick or board whose RTC battery is flat, a VM) must end up right ----------------------
+# chronyd steps the clock (not slews) at start-up and on the first measurements after the network came up, and writes it to the RTC (rtcsync);
+# /etc/dhcpcd.exit-hook (overlay) tells chronyd the link is up so it re-resolves its pool and measures at once.
+if [ -f /etc/chrony/chrony.conf ]; then
+  grep -q '^makestep' /etc/chrony/chrony.conf || echo 'makestep 1.0 3' >> /etc/chrony/chrony.conf
+  grep -q '^rtcsync' /etc/chrony/chrony.conf || echo 'rtcsync' >> /etc/chrony/chrony.conf
+fi
+chmod 0644 /etc/dhcpcd.exit-hook 2>/dev/null || true
+
 # --- kernel + live initramfs ------------------------------------------------------
 kver=$(ls /lib/modules | sort -V | tail -1)
 echo "kernel: $kver"
+# diagnostics + self-heal (daily failed 2026-11-03: a cached layer had built zfs-kmod for the previous kernel while a newer gentoo-kernel-bin was installed on top,
+# `dracut: Failed to find module zfs`): every kernel in /lib/modules that will be booted must have its zfs module, else rebuild zfs-kmod for the newest one
+echo "== kernels: $(ls /lib/modules | tr '\n' ' ') | zfs.ko: $(find /lib/modules -name zfs.ko | tr '\n' ' ') | /usr/src: $(ls /usr/src | tr '\n' ' ')"
+qlist -Iv sys-kernel/gentoo-kernel-bin sys-fs/zfs-kmod sys-fs/zfs sys-kernel/linux-headers || true
+if [ -d /usr/lib/dracut/modules.d/90zfs ] && [ ! -f "/lib/modules/$kver/extra/zfs.ko" ] && [ -z "$(find "/lib/modules/$kver" -name zfs.ko)" ]; then
+  echo "== zfs module missing for $kver: rebuilding sys-fs/zfs-kmod against it"
+  ln -sfn "/usr/src/linux-$kver" /usr/src/linux
+  FEATURES="-ccache" emerge --oneshot --usepkg=n --getbinpkg=n sys-fs/zfs-kmod
+  find "/lib/modules/$kver" -name zfs.ko | grep -q .
+fi
 mkdir -p /etc/dracut.conf.d
+# add_drivers may only name modules this kernel HAS: `vmd` (Intel VMD, x86 only) does not exist on arm64 and dracut-install then prints
+# `dracut[E]: FAILED` for the whole `-m spl zfs squashfs ...` call while dracut itself still exits 0 (aarch64 run 8771). Names that are neither a
+# loadable module nor built in are dropped HERE, per kernel/arch, and logged.
+DRIVERS=$(python3 - "$kver" <<'PY'
+import re, sys
+kver = sys.argv[1]
+want = ("squashfs overlay loop iso9660 sr_mod usb_storage uas sd_mod nvme vmd ahci xhci_pci xhci_hcd ehci_pci uhci_hcd ext4 xfs vfat "
+        "nls_cp437 nls_iso8859_1 virtio_blk virtio_scsi virtio_pci mmc_block sdhci sdhci_pci sdhci_acpi").split()
+have = set()
+for fn in ("modules.dep", "modules.builtin"):
+    try:
+        for line in open(f"/lib/modules/{kver}/{fn}", errors="replace"):
+            m = re.match(r"(?:.*/)?([^/:]+?)\.ko(?:\.\w+)?(?::|$)", line.strip())
+            if m:
+                have.add(m.group(1).replace("-", "_"))
+    except OSError:
+        pass
+keep = [w for w in want if w.replace("-", "_") in have]
+sys.stderr.write("initramfs drivers not in kernel %s (dropped): %s\n" % (kver, " ".join(w for w in want if w not in keep) or "none"))
+print(" ".join(keep))
+PY
+)
+case "$DRIVERS" in *squashfs*) ;; *) echo "FATAL: kernel $kver has no squashfs module/built-in: the live initramfs cannot mount its root" >&2; exit 1;; esac
 cat > /etc/dracut.conf.d/live.conf <<DR
 hostonly="no"
 hostonly_cmdline="no"
 add_dracutmodules+=" dmsquash-live "
 omit_dracutmodules+=" plymouth network-manager nfs iscsi biosdevname "
-add_drivers+=" squashfs overlay loop iso9660 sr_mod usb_storage uas sd_mod nvme vmd ahci xhci_pci xhci_hcd ehci_pci uhci_hcd ext4 xfs vfat nls_cp437 nls_iso8859_1 virtio_blk virtio_scsi virtio_pci mmc_block sdhci sdhci_pci sdhci_acpi "
+add_drivers+=" $DRIVERS "
 compress="gzip"
 DR
-# root on ZFS (Horcrux): put the zfs dracut module into the generic initramfs when it is installed
+# root on ZFS (Horcrux, Patronus): put the zfs dracut module into the generic initramfs when it is installed
 if [ -d /usr/lib/dracut/modules.d/90zfs ]; then echo 'add_dracutmodules+=" zfs "' >> /etc/dracut.conf.d/live.conf; fi
-dracut -f --no-hostonly --kver "$kver" "/boot/initramfs-${kver}.img" "$kver"
+# dracut exits 0 after `dracut[E]: FAILED: dracut-install ...` (a module it could not find): fail the build on any [E] line, and below on a missing zfs/squashfs in the result
+rm -f /tmp/dracut.log
+dracut -f --no-hostonly --kver "$kver" "/boot/initramfs-${kver}.img" "$kver" 2>&1 | tee /tmp/dracut.log
+if grep -q 'dracut\[E\]' /tmp/dracut.log; then echo "FATAL: dracut reported errors (see above); refusing to build an ISO with a broken initramfs" >&2; exit 1; fi
+lsinitrd "/boot/initramfs-${kver}.img" > /tmp/initrd.lst 2>&1
+if [ -d /usr/lib/dracut/modules.d/90zfs ] && ! grep -Eq '/(zfs|spl)\.ko' /tmp/initrd.lst; then
+  echo "FATAL: the initramfs of $kver has no zfs module although zfs is installed: the installed system could not import its pool" >&2; exit 1
+fi
+grep -Eq 'squashfs' /tmp/initrd.lst || grep -q '/squashfs\.ko' "/lib/modules/$kver/modules.builtin" || { echo "FATAL: the initramfs of $kver has no squashfs support" >&2; exit 1; }
+rm -f /tmp/dracut.log /tmp/initrd.lst
 ls -l /boot
 ls /boot/vmlinuz-* >/dev/null
 
@@ -81,5 +132,8 @@ rm -rf /var/db/repos/live-local /etc/portage/repos.conf/live-local.conf
 # --- slim the image -----------------------------------------------------------------
 emerge --quiet --unmerge dev-util/ccache >/dev/null 2>&1 || true
 rm -rf /var/db/repos/gentoo/* /var/cache/distfiles/* /var/cache/binhost \
-       /usr/share/doc /usr/share/gtk-doc /var/tmp/portage /var/log/emerge* /usr/src/linux* 2>/dev/null || true
+       /usr/share/doc /usr/share/gtk-doc /var/tmp/portage /var/log/emerge* 2>/dev/null || true   # /usr/src/linux-<ver> stays: it is the kernel build tree zfs-kmod (and every module) is built against, ~170 MB
 find / -xdev -name '*.pyc' -path '*/__pycache__/*' -delete 2>/dev/null || true
+# Portage's records must match the image: the strip above removed docs/pyc on purpose, so drop exactly those CONTENTS entries (reviewed list in
+# vdb-prune.py, group `core`); every other missing file stays visible and fails the `package-contents-complete` QEMU gate
+python3 /tmp/vdb-prune.py --groups core

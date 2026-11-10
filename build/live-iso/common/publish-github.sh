@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # publish-github.sh <mode> <project> <iso> <evidence.tgz> <status-json>      (ARCH env: x86_64 (default) | aarch64 | riscv64)
-# Second publish step, run by ci-run.sh AFTER publish.sh (Forgejo): puts the same files on the public GitHub mirror
+# Publish step run by ci-run.sh (the ONLY place the ISO is delivered; Forgejo only gets the status marker): puts the files on the public GitHub mirror
 # (github.com/CanuteTheGreat/<project>) so the product site can redirect its stable download URLs there.
 #   mode=daily  -> rolling PRE-release tag `daily` (stable asset names, replaced in place)
 #   mode=stable -> release of the pushed tag (GITHUB_REF_NAME), a normal (non-pre) release
@@ -79,6 +79,9 @@ daily)
   printf '%s  %s\n' "$sum" "$name" > "$tmp/$name.sha256"
   put_asset "$id" "$tmp/$name.sha256" "$name.sha256"
   [ -z "$evidence" ] || put_asset "$id" "$evidence" "$project-${VPFX}daily-$ARCH-test-evidence.tgz"
+  # the manager tarball app-emulation/horcrux-bin fetches on installed machines (HORCRUX_MANAGER_URL default); same asset name from every variant of one arch
+  mgr=$(ls "$(dirname "$iso")"/mgr/horcrux-manager-*.tar.zst 2>/dev/null | head -1 || true)   # no match = ls exit 2 under pipefail: without || true a patronus daily died here, silently, after its last upload (run 865)
+  [ -z "$mgr" ] || [ "$project" != horcrux ] || put_asset "$id" "$mgr" "horcrux-manager-daily-$ARCH.tar.zst" || echo "::warning::manager tarball not uploaded"
   # assets of the older naming schemes: removed once the same image is up under its new name (the product-domain redirects keep the old URLs working)
   for old in "$project-${IMG_OLD_VPFX}daily-$ARCH.iso" "$project-${IMG_OLD_VPFX}daily-$ARCH.iso.sha256" "$project-${IMG_OLD_VPFX}daily-$ARCH-test-evidence.tgz"; do
     for a in $(assets_json "$id" | pyj 'import json,sys;print(" ".join(str(a["id"]) for a in json.load(sys.stdin) if a["name"]==sys.argv[1]))' "$old"); do curl -fsS -X DELETE "${H[@]}" "$api/releases/assets/$a" || true; done

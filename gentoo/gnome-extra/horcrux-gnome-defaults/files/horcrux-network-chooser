@@ -1,0 +1,15 @@
+#!/bin/sh
+# Horcrux first-login helper: a laptop that has no network at its first login gets GNOME Settings > Wi-Fi opened once, so nobody has to hunt for the
+# network menu (gringotts, 2026-11-03: the installed laptop never joined Wi-Fi by itself, the owner connected it only after remote help was impossible).
+# Runs once per user (marker), only when a Wi-Fi device exists and nothing is connected 25 s after login.
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/horcrux"
+MARK="$STATE/network-chooser-shown"
+[ -e "$MARK" ] && exit 0
+sleep 25
+if [ "$(nmcli -t -g STATE general 2>/dev/null)" = connected ]; then
+	mkdir -p "$STATE" && : > "$MARK"      # online: nothing to choose
+	exit 0
+fi
+nmcli -t -f TYPE device 2>/dev/null | grep -qx wifi || exit 0      # no Wi-Fi device: nothing to offer
+mkdir -p "$STATE" && : > "$MARK"
+exec gnome-control-center wifi

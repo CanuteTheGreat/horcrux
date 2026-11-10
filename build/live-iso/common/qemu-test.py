@@ -23,6 +23,9 @@ Exit 0 = every step passed; evidence (serial logs, screens/, PNGs, result.json) 
 """
 import argparse, json, os, re, shutil, socket, ssl, struct, subprocess, uuid, sys, tempfile, threading, time, urllib.error, urllib.request, zlib
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import headless_gates as HG
+
 PROJECTS = {
     "horcrux": dict(svc="horcrux-api", port=8006, health=["/api/health", "/"], pwfile="/var/lib/horcrux/initial-admin-password", old_pw="horcrux",
                     seedfile="/etc/horcrux/admin-password",
@@ -33,9 +36,43 @@ PROJECTS = {
                      dbfiles=["/var/lib/patronus/config.db"], dbuser="patronus", logdirs=["/var/log/patronus"]),
 }
 PW = "Kx9!mQv2-tle-77Zp"          # >= 12 chars, mixed: passes the installer's strength rules
+PW_DISK = "Dq4#sB8-luks-63Nw"       # the disk passphrase (xfs-luks): the installer refuses any account password equal to it (secretcheck), so it is its own secret
 PW2, PW3 = "Rv7#nQ4-zeta-91Lk", "Tb3$wH8-omega-52Ud"   # console-menu password reset / factory reset
-FWD_WEB, FWD_SSH, FWD_WAN = 18443, 12222, 18444
 FWD_BIND = os.environ.get("QT_FWD_BIND", "127.0.0.1")     # 0.0.0.0 inside a container whose ports are published (screenshots of the web UI from outside)
+
+
+def _port_free(port, bind=None):
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+        s.bind((bind or FWD_BIND, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def pick_fwd_ports():
+    """Host-side hostfwd ports for this process. Fixed 1822x/1244x numbers collided
+    when several QEMU guests ran on one host ('Could not set up host forwarding rule'),
+    so every process takes a free random block; QT_FWD_WEB/SSH/WAN override it."""
+    import random
+    env = [os.environ.get(k) for k in ("QT_FWD_WEB", "QT_FWD_SSH", "QT_FWD_WAN")]
+    if all(env):
+        return tuple(int(x or 0) for x in env)
+    rnd = random.SystemRandom()
+    for _ in range(200):
+        base = rnd.randrange(20000, 60000 - 8)
+        web, ssh, ssh2, wan = base, base + 1, base + 2, base + 3   # ssh2 = ssh+1 (WAN sshd forward), wan = FWD_WAN
+        cand = (web, ssh, ssh2, wan)
+        if all(_port_free(p) for p in cand):
+            return web, ssh, wan
+    raise RuntimeError("no free host ports for QEMU hostfwd")
+
+
+FWD_WEB, FWD_SSH, FWD_WAN = pick_fwd_ports()
 
 # ----------------------------------------------------------------------------- architectures
 import platform as _platform
@@ -46,6 +83,13 @@ ARCHS = {
     "riscv64": dict(qemu="qemu-system-riscv64", serial="ttyS0", bios=False, nic="virtio-net-pci,romfile=", gpu=["-device", "virtio-gpu-pci"]),
 }
 SLOW = 1.0
+
+
+class InstallStall(Exception):
+    """the installer guest went silent (see Runner.phase1)"""
+
+
+INSTALL_STALL_S = 480      # a healthy install prints a progress line at least every ~30 s on KVM; 480 s of total silence is a hung guest
 
 
 def T(sec):
@@ -216,9 +260,15 @@ class VT:
 
 
 # ----------------------------------------------------------------------------- vm
+LUKS_PROMPT = re.compile(rb"(?i)(enter passphrase|passphrase for|enter key|please enter (the )?(disk )?(passphrase|password))")
+
+
 class VM:
+    LUKS_UNLOCK = None         # set to the disk passphrase when the installed root is xfs-luks (see _rd)
+
     def __init__(self, name, args, out):
         self.name, self.out = name, out
+        self.luks_tail, self.luks_t, self.luks_n = b"", 0.0, 0
         self.log = open(f"{out}/{name}-serial.log", "wb")
         self.vt = VT()
         self.raw = b""
@@ -230,24 +280,59 @@ class VM:
                 os.unlink(pth)
         # The serial line is a unix socket, not `-serial stdio`: with stdio QEMU's 16550 TX stalled
         # until the next input byte whenever the guest sent a burst (curses repaints), freezing the TUI.
-        self.p = subprocess.Popen(args + ["-qmp", f"unix:{self.qmp_path},server,nowait",
-                                          "-chardev", f"socket,id=ser0,path={self.ser_path},server=on,wait=off", "-serial", "chardev:ser0",
-                                          "-display", "none"],
-                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=open(f"{out}/{name}-qemu.err", "wb"))
-        LIVE_VMS.append(self)
+        # QEMU sometimes stays alive without ever creating the socket (run 784, installed boot of a swtpm run: it connected to a swtpm that was
+        # already quitting after the previous VM, exit=None, and the leaked QEMU then held the hostfwd ports so every later scenario died at once).
+        # So: wait up to 30 s, and on a miss kill that QEMU, restart swtpm and start it again (3 tries); never leave a stuck QEMU behind.
+        full = args + ["-qmp", f"unix:{self.qmp_path},server,nowait",
+                       "-chardev", f"socket,id=ser0,path={self.ser_path},server=on,wait=off", "-serial", "chardev:ser0",
+                       "-display", "none"]
         self.sock = None
         self.last_rx = time.time()
         self.poke = False          # serial TUI runs: send Ctrl-L when the line has been silent (see expect_screen)
-        for _ in range(100):
-            try:
-                s = socket.socket(socket.AF_UNIX)
-                s.connect(self.ser_path)
-                self.sock = s
+        err = ""
+        for attempt in range(3):
+            for pth in (self.qmp_path, self.ser_path):
+                if os.path.exists(pth):
+                    os.unlink(pth)
+            self.p = subprocess.Popen(full, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=open(f"{out}/{name}-qemu.err", "wb"))
+            LIVE_VMS.append(self)
+            for _ in range(300):
+                try:
+                    s = socket.socket(socket.AF_UNIX)
+                    s.connect(self.ser_path)
+                    self.sock = s
+                    break
+                except OSError:
+                    if self.p.poll() is not None:
+                        break
+                    time.sleep(0.1)
+            if self.sock is not None:
                 break
+            rc = self.p.poll()
+            try:
+                err = open(f"{out}/{name}-qemu.err", "rb").read()[-600:].decode("utf-8", "replace").strip()
             except OSError:
-                time.sleep(0.1)
+                err = ""
+            print(f"[WARN] {name}: no QEMU serial socket (attempt {attempt + 1}/3, qemu exit={rc}; stderr: {err or 'empty'})", flush=True)
+            if rc is None:
+                self.p.kill()
+            self.p.wait()
+            LIVE_VMS.remove(self)
+            r = globals().get("RUNNER")
+            for n, pr in (("tpm", getattr(r, "tpm_proc", None)), ("tpm2", getattr(r, "tpm_proc2", None))):
+                if pr is not None and n in getattr(r, "tpm_dirs", {}):
+                    if pr.poll() is None:
+                        pr.terminate()
+                        try:
+                            pr.wait(5)
+                        except Exception:
+                            pr.kill()
+                    r.ensure_swtpm(n)
+            time.sleep(2)
         if self.sock is None:
-            raise SystemExit("cannot connect to the QEMU serial socket")
+            print(f"[FAIL] {name}-qemu-serial-socket QEMU never created its serial socket in 3 tries (stderr: {err or 'empty'})", flush=True)
+            raise SystemExit(f"cannot connect to the QEMU serial socket after 3 tries (last qemu exit={self.p.poll()}; stderr: {err or 'empty'})")
+        LIVE_VMS.append(self)
         threading.Thread(target=self._rd, daemon=True).start()
 
     def _rd(self):
@@ -264,6 +349,14 @@ class VM:
             with self.lock:
                 self.raw += b
                 self.vt.feed(b)
+            if VM.LUKS_UNLOCK and self.name[:1] in ("2", "3"):
+                # an xfs-luks root asks for the disk passphrase at EVERY boot of the installed disk (initramfs, on the console): type it, else the
+                # boot waits at the prompt and no login/ssh ever comes (lab installer-vm server-headless 2026-11-06: 'installed-boots-to-login 421s')
+                win = self.luks_tail + b
+                self.luks_tail = win[-120:]
+                if LUKS_PROMPT.search(win) and time.time() - self.luks_t > 10:
+                    self.luks_t = time.time(); self.luks_n += 1
+                    threading.Timer(1.0, lambda: self.send(VM.LUKS_UNLOCK + "\r")).start()
 
     def send(self, s):
         try:
@@ -519,6 +612,125 @@ def ssh(port, key, cmd, extra=(), timeout=40):
         return 255, "timeout"
 
 
+def load_secretcheck():
+    """the installer's own in-memory password/hash comparison (liveinst/secretcheck.py), loaded without importing the package"""
+    import importlib.util
+    f = os.path.join(os.path.dirname(os.path.abspath(__file__)), "overlay", "usr", "lib", "live-installer", "liveinst", "secretcheck.py")
+    sp = importlib.util.spec_from_file_location("hx_secretcheck", f)
+    m = importlib.util.module_from_spec(sp)
+    sp.loader.exec_module(m)
+    return m
+
+
+def shadow_reuse_gate(sh, step_fn, secret, step="no-account-password-equals-the-disk-passphrase"):
+    """SECURITY GATE: the disk passphrase is ONLY for the disk. `sh(cmd)` -> (rc, out) runs as root on the installed system; `step_fn(name, ok, info)` records. Reads the installed system's /etc/shadow (over ssh as root, kept in
+    memory) and FAILS when ANY account's hash verifies against the known TEST passphrase `secret` (user, root, anything), or when a
+    hash cannot be checked at all. Self-tests the checker first (a known hash of `secret` must verify, a wrong one must not), so a broken
+    crypt library can never turn this into a vacuous PASS. Only account NAMES go into the report, never a hash or a password."""
+    sc = load_secretcheck()
+    probe = subprocess.check_output(["openssl", "passwd", "-6", "-salt", "gateselft", secret]).decode().strip()
+    selftest = sc.hash_verifies(secret, probe) is True and sc.hash_verifies(secret + "x", probe) is False
+    rc, o = sh("getent shadow")
+    reuse, unknown, locked, checked = [], [], [], []
+    for line in o.splitlines():
+        f = line.split(":")
+        if len(f) < 2 or not f[0] or " " in f[0]:
+            continue
+        name, h = f[0], f[1]
+        if not h or h[0] in "!*":
+            locked.append(name)
+            continue
+        r = sc.hash_verifies(secret, h)
+        (reuse if r else unknown if r is None else checked).append(name)
+    ok = bool(selftest and rc == 0 and checked + reuse + locked and not reuse and not unknown)
+    step_fn(step, ok, ("REUSE: " + ",".join(reuse) + " " if reuse else "") + ("UNVERIFIABLE: " + ",".join(unknown) + " " if unknown else "")
+             + ("" if selftest else "GATE SELF-TEST FAILED (no crypt backend) ") + f"password hashes checked and different: {','.join(checked) or '-'}; locked: {len(locked)}")
+    return ok
+
+
+def load_autologin():
+    """the installer's own autologin scanner (liveinst/autologin.py), loaded without importing the package"""
+    import importlib.util
+    f = os.path.join(os.path.dirname(os.path.abspath(__file__)), "overlay", "usr", "lib", "live-installer", "liveinst", "autologin.py")
+    src = open(f).read().replace("from . import", "#")      # standalone: the scanner has no package dependencies
+    mod = type(sys)("hx_autologin")
+    exec(compile(src, f, "exec"), mod.__dict__)
+    return mod
+
+
+AUTOLOGIN_FILES = ("/etc/lightdm/lightdm.conf /etc/lightdm/lightdm.conf.d/* /etc/gdm/custom.conf /etc/gdm/daemon.conf /etc/gdm/custom.conf.d/* /etc/gdm3/custom.conf "
+                   "/etc/sddm.conf /etc/sddm.conf.d/* /usr/lib/sddm/sddm.conf.d/* /etc/inittab /etc/conf.d/agetty*")
+
+
+def no_autologin_config_gate(sh, step_fn, step="installed-configs-have-no-autologin"):
+    """OWNER RULE (2026-11-03): no display-manager autologin by default. Reads every LightDM/GDM/SDDM/agetty config of the INSTALLED system and FAILS on any
+    active autologin setting. Self-tests the scanner on known-bad samples so a broken regex can never be a vacuous PASS."""
+    al = load_autologin()
+    bad_samples = [("/etc/lightdm/lightdm.conf.d/x.conf", "[Seat:*]\nautologin-user=bob\n"), ("/etc/gdm/custom.conf", "[daemon]\nAutomaticLoginEnable=True\nAutomaticLogin=bob\n"),
+                   ("/etc/sddm.conf", "[Autologin]\nUser=bob\n"), ("/etc/inittab", "c1:12345:respawn:/sbin/agetty --autologin bob tty1\n"),
+                   ("/etc/gdm/custom.conf", "[daemon]\nTimedLoginEnable=true\nTimedLogin=bob\n")]
+    good_samples = [("/etc/lightdm/lightdm.conf", "[Seat:*]\n#autologin-user=\n"), ("/etc/gdm/custom.conf", "[daemon]\nWaylandEnable=true\nAutomaticLoginEnable=false\n")]
+    selftest = all(al._active_lines(p, t) for p, t in bad_samples) and not any(al._active_lines(p, t) for p, t in good_samples)
+    rc, o = sh("for f in " + AUTOLOGIN_FILES + "; do [ -f \"$f\" ] && { echo \"@@@FILE $f\"; cat \"$f\"; }; done; echo @@@END; getent group autologin; true")
+    hits, seen = [], []
+    for chunk in o.split("@@@FILE ")[1:]:
+        path, _, body = chunk.partition("\n")
+        body = body.split("@@@END")[0]
+        seen.append(path.strip())
+        for i, line in al._active_lines(path.strip(), body):
+            hits.append(f"{path.strip()}:{i}: {line.strip()[:60]}")
+    members = ""
+    for l in o.splitlines():
+        if l.startswith("autologin:"):
+            members = l.split(":")[-1]
+    ok = bool(selftest and rc == 0 and not hits and not members.strip())
+    step_fn(step, ok, ("AUTOLOGIN CONFIGURED: " + "; ".join(hits) + " " if hits else "") + (f"group autologin has members: {members} " if members.strip() else "")
+            + ("" if selftest else "GATE SELF-TEST FAILED ") + f"scanned: {', '.join(seen) or 'none'}")
+    return ok
+
+
+def greeter_no_session_gate(sh, step_fn, user, dm="lightdm", wait=180, step="greeter-shown-and-no-user-session-before-login"):
+    """After the disk unlock the DISPLAY MANAGER'S GREETER is shown and NO session of `user` exists until somebody logs in at it. `dm` = lightdm|gdm."""
+    greeter_re = {"lightdm": "lightdm-gtk-greeter|unity-greeter|slick-greeter", "gdm": "gdm-wayland-session|gdm-x-session|gnome-shell"}[dm]
+    end, o = time.time() + wait, ""
+    while time.time() < end:
+        rc, o = sh(f"pgrep -x {'lightdm' if dm == 'lightdm' else 'gdm'} >/dev/null && echo DM; (pgrep -af '{greeter_re}' | grep -v pgrep | head -2) ; true")
+        if "DM" in o and re.search(greeter_re.split("|")[0].replace("-", "-"), o):
+            break
+        time.sleep(5)
+    time.sleep(20)                       # an autologin session would be up well within this time
+    rc, o2 = sh(f"echo @@S; loginctl list-sessions --no-legend; echo @@P; ps -u {user} -o pid=,comm= 2>/dev/null | head -20; echo @@L; "
+                f"pgrep -u {user} -x 'xfce4-session|gnome-shell|gnome-session-binary|startxfce4' | head -3; id -u {user}")
+    sess = o2.split("@@S")[-1].split("@@P")[0]
+    procs = o2.split("@@P")[-1].split("@@L")[0].strip()
+    user_sessions = [l for l in sess.splitlines() if re.search(rf"\s{re.escape(user)}\s", " " + l + " ")]
+    greeter = "DM" in o and bool(re.search(greeter_re, o))
+    ok = greeter and not user_sessions and not procs
+    step_fn(step, ok, f"greeter: {'shown (' + re.sub(chr(10), ' ', o.strip())[:90] + ')' if greeter else 'NOT FOUND ' + o.strip()[:80]}; sessions of {user}: {user_sessions or 'none'}; processes of {user}: {procs[:80] or 'none'}")
+    # the greeter shows a login screen to anyone at the machine: its PROCESS must not run as root (lab finding 2026-11-04/05: LightDM ran it as root
+    # on the Surface and on madammalkins until greeter-user=lightdm was set in [LightDM])
+    rc, o3 = sh(f"echo @@U; ps -eo user=,args= | grep -E '{greeter_re}' | grep -v grep; true")
+    users = greeter_process_users(o3, greeter_re)
+    unpriv = greeter_user_ok(users)
+    step_fn(f"{step}-greeter-process-not-root", unpriv, f"greeter process users: {sorted(users) or 'NONE FOUND'}")
+    return ok and unpriv
+
+
+def greeter_process_users(ps_out, greeter_re):
+    """`echo @@U; ps -eo user=,args=` output -> {user: [command lines]} of the GREETER processes (first word's basename must match greeter_re)"""
+    users = {}
+    for ln in ps_out.split("@@U")[-1].splitlines():
+        m = re.match(r"\s*(\S+)\s+(\S+)(.*)$", ln)
+        if m and re.fullmatch(greeter_re, os.path.basename(m.group(2))):
+            users.setdefault(m.group(1), []).append((m.group(2) + m.group(3)).strip())
+    return users
+
+
+def greeter_user_ok(users):
+    """at least one greeter process was found and none of them is root"""
+    return bool(users) and "root" not in users
+
+
 def make_answer_image(path, proj, content):
     d = tempfile.mkdtemp()
     open(f"{d}/answer.toml", "w").write(content)
@@ -528,11 +740,13 @@ def make_answer_image(path, proj, content):
 
 def answer_toml(a, pubkey, pwhash):
     p = a.project
+    if getattr(a, "answer_file", ""):          # a caller's own answer file (the lab's unattended-reinstall answers); __HX_TEST_PUBKEY__ = the run's key
+        return open(a.answer_file).read().replace("__HX_TEST_PUBKEY__", pubkey)
     lines = ["[global]", 'keyboard = "us"', 'timezone = "Europe/Berlin"', f'hostname = "{p}-t1.test.lan"', 'email = "ops@example.test"',
              f'root_password_hash = "{pwhash}"', f'ssh_keys = ["{pubkey}"]', f"ssh_password_auth = {'true' if a.ssh_password_opt_in else 'false'}", f"console_menu_open = {'true' if a.console_open else 'false'}",
              "", "[disk]"] + ([] if a.fs_default else [f'filesystem = "{a.fs}"'])     # default run: no filesystem key = the installer's own default
     if a.fs == "xfs-luks":
-        lines += [f'luks_passphrase = "{PW}"']
+        lines += [f'luks_passphrase = "{PW_DISK}"']
     if a.fs == "zfs":
         lines += [f'zfs_raid = "{a.zfs_raid}"', 'disks = ["/dev/vda", "/dev/vdb"]' if a.zfs_raid == "mirror" else 'disks = ["/dev/vda"]']
     else:
@@ -550,9 +764,36 @@ def answer_toml(a, pubkey, pwhash):
     return "\n".join(lines) + "\n"
 
 
+def serial_tail(vm, n=12):
+    """last lines of the guest's serial output, one line: a bare `timeout` told nothing about WHERE an install hung (aarch64 ZFS, run 8771)"""
+    try:
+        with open(vm.log.name, "rb") as f:        # the whole serial log, not vm.raw (earlier expects consumed it)
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 6000))
+            raw = f.read()
+        lines = [re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", l).strip() for l in raw.decode(errors="replace").splitlines()]
+        tail = [l for l in lines if l][-n:]
+        print("--- last serial lines of the hung install ---\n" + "\n".join(tail) + "\n---", flush=True)
+        return " | last serial: " + " // ".join(tail)[-700:]
+    except Exception as e:  # diagnostics must never mask the failure
+        return f" (no serial tail: {e})"
+
+
+# Every entry point (qemu-test.py main, boot-modes-test.py, zfs-enc-test.py, surface tests) builds its own args namespace: an option added to
+# the CLI later (--headless-gates) must not raise AttributeError in a script that never defines it. Runner fills in what is missing.
+ARG_DEFAULTS = {"headless_gates": False}
+
+
+def with_arg_defaults(a):
+    for k, v in ARG_DEFAULTS.items():
+        if not hasattr(a, k):
+            setattr(a, k, v)
+    return a
+
+
 class Runner:
     def __init__(self, a):
-        self.a = a
+        self.a = with_arg_defaults(a)
         self.res = {"project": a.project, "arch": a.arch, "mode": a.mode, "media": a.media, "flow": a.flow, "fs": a.fs, "steps": {}}
         self.P = PROJECTS[a.project]
         self.finished_vga = False
@@ -585,12 +826,46 @@ class Runner:
             return False, ["-machine", "virt,gic-version=max", "-accel", "tcg,thread=multi", "-cpu", "cortex-a72"]  # generic ARMv8.0-A baseline (no SVE/LSE/pauth); KVM runs on the host CPU
         return kvm, ["-machine", "virt"] + (["-accel", "kvm", "-cpu", "host"] if kvm else ["-accel", "tcg,thread=multi", "-cpu", "rv64"])
 
+    def start_swtpm(self, name):
+        """software TPM 2.0 whose state (endorsement/owner seeds, NV) outlives every VM of this run: a key sealed during the install must unseal at each boot of the
+        same 'machine'. swtpm quits when QEMU disconnects, so qemu_args() calls ensure_swtpm() before every VM: same state dir = same TPM. Returns the control socket path."""
+        d = f"{self.a.out}/{name}"
+        shutil.rmtree(d, ignore_errors=True)
+        os.makedirs(d)
+        self.tpm_dirs = getattr(self, "tpm_dirs", {})
+        self.tpm_dirs[name] = d
+        return self.ensure_swtpm(name)
+
+    def ensure_swtpm(self, name):
+        d = self.tpm_dirs[name]
+        sock = f"{d}/ctrl.sock"
+        cur = self.tpm_proc if name == "tpm" else self.tpm_proc2
+        if cur is not None and cur.poll() is None:
+            return sock
+        try:
+            os.unlink(sock)
+        except OSError:
+            pass
+        p = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", f"dir={d}", "--ctrl", f"type=unixio,path={sock}"],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=open(f"{d}/swtpm.err", "ab"))
+        if name == "tpm":
+            self.tpm_proc = p
+        else:
+            self.tpm_proc2 = p
+        for _ in range(100):
+            if os.path.exists(sock):
+                return sock
+            time.sleep(0.1)
+        raise SystemExit("swtpm did not create its control socket (is swtpm installed?)")
+
     def qemu_args(self, iso, installed, nvars):
         a, A = self.a, ARCHS[ARCH]
         kvm, mach = self.accel()
         args = [A["qemu"]] + mach + ["-smp", "2", "-m", str(a.mem), "-drive", f"file={self.disk},if=virtio,format=qcow2"]
         if a.fs == "zfs" and a.zfs_raid == "mirror":
             args += ["-drive", f"file={self.disk2},if=virtio,format=qcow2"]
+        if a.headless_gates:
+            args += ["-rtc", f"base={self.rtc_base}"]     # every boot (live and installed) starts with a hardware clock MONTHS off
         nic = A["nic"]
         if a.project == "horcrux":
             ip = self.guest_ip(installed)
@@ -602,6 +877,10 @@ class Runner:
             args += ["-netdev", f"user,id=n0,{wan}", "-device", f"{nic},netdev=n0,mac=52:54:00:00:00:01",
                      "-netdev", f"user,id=n1,net=10.77.0.0/24,host=10.77.0.2,hostfwd=tcp:{FWD_BIND}:{FWD_WEB}-{a.lan_ip}:{self.P['port']},hostfwd=tcp:{FWD_BIND}:{FWD_SSH}-{a.lan_ip}:22",
                      "-device", f"{nic},netdev=n1,mac=52:54:00:00:00:02"]
+        if getattr(self, "tpm_ctrl", None):
+            self.tpm_ctrl = self.ensure_swtpm("tpm2" if self.tpm_ctrl.endswith("/tpm2/ctrl.sock") else "tpm")
+            args += ["-chardev", f"socket,id=chrtpm,path={self.tpm_ctrl}", "-tpmdev", "emulator,id=tpm0,chardev=chrtpm",
+                     "-device", ("tpm-tis" if ARCH == "x86_64" else "tpm-tis-device") + ",tpmdev=tpm0"]
         gpu = A["gpu"]
         if a.flow == "gui":        # virtio-gpu at a fixed size (virtio-vga also gives a BIOS machine a VGA console)
             gpu = ["-device", ("virtio-vga" if ARCH == "x86_64" else "virtio-gpu-pci") + ",xres=1280,yres=800"]
@@ -628,12 +907,17 @@ class Runner:
     def run(self):
         a = self.a
         os.makedirs(a.out, exist_ok=True)
+        self.rtc_base = HG.months_off_base()
         self.disk, self.disk2, self.answers = f"{a.out}/target.qcow2", f"{a.out}/target2.qcow2", f"{a.out}/answers.img"
         nvars = f"{a.out}/OVMF_VARS.fd"
         for d in (self.disk,) + ((self.disk2,) if a.fs == "zfs" and a.zfs_raid == "mirror" else ()):
             subprocess.check_call(["qemu-img", "create", "-q", "-f", "qcow2", d, f"{a.disk_gb}G"])
         if a.mode == "uefi":
             pflash_vars(nvars)
+        self.tpm_proc = self.tpm_proc2 = None
+        self.tpm_ctrl = None
+        if a.tpm == "swtpm":
+            self.tpm_ctrl = self.start_swtpm("tpm")
         self.key = f"{a.out}/test_key"
         for f in (self.key, self.key + ".pub"):
             if os.path.exists(f):
@@ -662,6 +946,8 @@ class Runner:
             self.phase2(nvars)
             if a.restarts:
                 self.restart_phase(nvars)
+            if a.tpm == "swtpm" and a.tpm_negative:
+                self.tpm_negative_phase(nvars)
         finally:
             if self.shots:
                 json.dump(self.shots, open(f"{a.out}/gui-shots.json", "w"), indent=1)
@@ -671,6 +957,38 @@ class Runner:
 
     # ---- phase 1: boot the ISO and install
     def phase1(self, nvars):
+        """an unattended install whose guest goes completely silent mid-way (gnome-light run 11851: unsquashfs onto the encrypted ZFS stopped at
+        41 % and the serial line stayed quiet until the 1700 s wait ran out; the same install takes 110-270 s in every other run) is started
+        once more on a fresh disk. Only on KVM and only for a SILENT guest (no serial byte for INSTALL_STALL_S): a guest that keeps
+        printing, a FAILED install and a second stall all still fail exactly as before."""
+        a = self.a
+        retry = a.flow == "auto" and SLOW == 1
+        try:
+            return self._phase1_once(nvars, retry)
+        except InstallStall as e:
+            print(f"[WARN] installer-stalled-retry {e}; keeping the first attempt's serial log as 1-install-serial.attempt1.log and installing once more on a fresh disk", flush=True)
+            try:
+                os.replace(f"{a.out}/1-install-serial.log", f"{a.out}/1-install-serial.attempt1.log")
+            except OSError:
+                pass
+            for d in (self.disk,) + ((self.disk2,) if a.fs == "zfs" and a.zfs_raid == "mirror" else ()):
+                subprocess.check_call(["qemu-img", "create", "-q", "-f", "qcow2", d, f"{a.disk_gb}G"])
+            return self._phase1_once(nvars, False)
+
+    def wait_installer(self, vm, total, stall_retry):
+        """AUTOINSTALL-OK/FAILED within `total` s; with stall_retry, raise InstallStall when the guest has sent nothing for INSTALL_STALL_S"""
+        end = time.time() + total
+        while time.time() < end:
+            m = vm.expect_raw(r"AUTOINSTALL-(OK|FAILED[^\n]*)", 20, consume=False)
+            if m:
+                return m
+            if vm.p.poll() is not None:
+                return None
+            if stall_retry and time.time() - vm.last_rx >= INSTALL_STALL_S:
+                raise InstallStall(f"no serial output for {int(time.time() - vm.last_rx)} s during the install{serial_tail(vm, 4) or ''}")
+        return None
+
+    def _phase1_once(self, nvars, stall_retry=False):
         a = self.a
         t0 = time.time()
         vm = VM("1-install", self.qemu_args(a.iso, False, nvars), a.out)
@@ -706,9 +1024,18 @@ class Runner:
                 self.step("live-sshd-off", not b.startswith("SSH-"), f"banner on the live system: {b!r}")
                 bad = vm.expect_raw(r"(ANSWER-FILE-ERROR[^\n]*|No answer file found[^\n]*)", 3, consume=False)
                 self.step("answer-file-accepted", not bad, bad.group(0).decode() if bad else "validated")
-                ok = vm.expect_raw(r"AUTOINSTALL-(OK|FAILED[^\n]*)", 1700, consume=False)
-                self.step("installer-finished", ok and b"AUTOINSTALL-OK" in ok.group(0), ok.group(0).decode() if ok else "timeout")
+                ok = self.wait_installer(vm, 1700 * (2 if a.fs == "zfs" and SLOW > 1 else 1), stall_retry)   # ZFS under TCG: 2x the budget
+                self.step("installer-finished", ok and b"AUTOINSTALL-OK" in ok.group(0), ok.group(0).decode() if ok else "timeout" + serial_tail(vm))
                 vm.shot("auto-finished")
+                if a.headless_gates:
+                    # the live clock started MONTHS off: the installer must have corrected it and written the hardware clock (liveinst/rtc.py `rtc:` line)
+                    time.sleep(1)
+                    try:
+                        txt = open(f"{a.out}/1-install-serial.log", errors="replace").read()
+                    except OSError:
+                        txt = ""
+                    m = re.findall(r"rtc: [^\r\n]*", txt)
+                    self.step("installer-writes-rtc-from-a-synced-clock", any("hardware clock written (UTC) from a synced clock" in x for x in m), " | ".join(m)[:300] or "no `rtc:` line in the install log")
             elif a.flow == "tui":
                 self.drive_tui(vm, kb)
             elif a.flow == "gui":
@@ -765,23 +1092,26 @@ class Runner:
         kb.key("CLEAR"); kb.text(f"{p}-t1.test.lan")
         shot("02b-hostname-filled")
         kb.key("TAB"); kb.key("ENTER", 1)
-        order = ["zfs", "xfs-luks", "xfs", "ext4"] if p == "horcrux" else ["xfs", "ext4"]       # the Root-file-system choice, in screen order (stages.DiskStage)
-        dflt = "xfs" if p == "patronus" else ("zfs" if a.mem >= 8192 else "xfs-luks")
+        order = ["zfs", "xfs-luks", "xfs", "ext4"] if p == "horcrux" else ["zfs", "xfs", "ext4"]       # the Root-file-system choice, in screen order (stages.DiskStage)
+        dflt = ("zfs" if a.mem >= 8192 else "xfs") if p == "patronus" else ("zfs" if a.mem >= 8192 else "xfs-luks")
         wait(r"\] File system", "03-filesystem")
         if not a.fs_default:
             for _ in range((order.index(a.fs) - order.index(dflt)) % len(order)):
                 kb.key("RIGHT")                            # the choice wraps; the default is preselected
         if a.fs == "zfs":
-            kb.key("TAB")                                  # -> 'Encrypt the disk' check box (ZFS native encryption, off)
+            if p == "horcrux":
+                kb.key("TAB")                              # -> 'Encrypt the disk' check box (ZFS native encryption, off); Patronus has none (TPM decides)
             if mirror:                                     # NOTE: mirror via the text wizard is not exercised by the default runs
                 kb.key("TAB"); kb.key("SPACE")             # 'Show advanced options' -> the ZFS layout row appears ABOVE the focus (the focus index stays: it is now on 'Encrypt')
                 kb.key("UP")                               # -> 'ZFS layout'
                 kb.key("RIGHT")
                 shot("03b-filesystem-zfs-mirror")
                 kb.key("TAB")
+                if p == "horcrux":
+                    kb.key("TAB")                          # -> 'TEST MACHINE: NO disk encryption' (advanced row added by b9d3838; the VGA zfs-mirror run pressed ENTER on 'Show advanced options' and sat on the disk screen for 1700 s)
             kb.key("TAB")                                  # -> 'Show advanced options' (zfs single: next stop = buttons)
         elif a.fs == "xfs-luks":
-            kb.key("TAB"); kb.text(PW); kb.key("TAB"); kb.text(PW)        # disk passphrase + confirmation
+            kb.key("TAB"); kb.text(PW_DISK); kb.key("TAB"); kb.text(PW_DISK)        # disk passphrase + confirmation
             shot("03b-filesystem-xfs-luks-passphrase")
             kb.key("TAB")                                  # -> 'Show advanced options'
         else:
@@ -909,7 +1239,13 @@ class Runner:
             if time.time() - t > 120 and self.disk_idle():
                 vm.shot("09-finished")
                 self.finished_vga = True
-                kb.key("ENTER", 1)                          # < Reboot >
+                try:
+                    kb.key("ENTER", 1)                      # < Reboot >
+                except OSError as e:
+                    # QEMU already left (-no-reboot: the guest rebooted itself or died between the idle check and the key press, seen on the slow aarch64 TCG runner).
+                    # Not a failure here: phase 2 boots the installed disk and fails loudly if the install did not complete.
+                    rebooted_itself = not vm.alive()
+                    self.step("vga-reboot-key", rebooted_itself, f"VM already exited before the Reboot key ({e})" if rebooted_itself else f"QMP refused but QEMU is alive: {e}")
                 break
         self.step("vga-installer-finished", self.finished_vga, "finish screen reached (target disk written and idle), Reboot pressed")
 
@@ -937,7 +1273,7 @@ class Runner:
         except ValueError:
             return {}
 
-    def gwait(self, vm, page, timeout=120, extra=None):
+    def gwait(self, vm, page, timeout=120, extra=None, record=True):
         end = time.time() + timeout
         st = {}
         while time.time() < end:
@@ -945,7 +1281,9 @@ class Runner:
             if st.get("page") == page and (extra is None or extra(st)):
                 return st
             time.sleep(2)
-        self.step(f"gui-page-{page}", False, f"not reached; last status {st}")
+        if record:
+            self.step(f"gui-page-{page}", False, f"not reached; last status {st}")
+        return st
 
     def gshot(self, vm, step, desc):
         time.sleep(1.5)
@@ -1028,7 +1366,7 @@ class Runner:
         st = self.gwait(vm, "disk", 30)
         self.step("gui-mouse-click-next", ok and st.get("page") == "disk", "pointer click on 'Next' moved to the disk screen")
         # ---- disk
-        if a.project == "horcrux":
+        if True:       # both products offer the root file system choice now (Patronus: ZFS default, XFS fallback, ext4 manual)
             # the proposal depends on the machine (ZFS from 8 GB RAM, encrypted XFS below): default runs leave it alone and only assert it
             self.gshot(vm, "disk-default", "File system default proposed by the installer, with the reason" + (": " + a.fs if a.fs_default else ""))
             if not a.fs_default:
@@ -1036,11 +1374,11 @@ class Runner:
                 time.sleep(1)
             if a.fs == "xfs-luks":
                 ok = self.gfocus(vm, "Disk passphrase")
-                self.gtype(vm, PW)
+                self.gtype(vm, PW_DISK)
                 ok = self.gfocus(vm, "Confirm passphrase") and ok
-                self.gtype(vm, PW)
+                self.gtype(vm, PW_DISK)
                 self.step("gui-luks-passphrase-typed", ok, "disk passphrase + confirmation typed with the keyboard")
-            if a.fs == "zfs":
+            if a.fs == "zfs" and (a.project == "horcrux" or mirror):
                 self.gexpand(vm)
                 time.sleep(1)
                 if mirror:
@@ -1118,10 +1456,18 @@ class Runner:
         st = self.gwait(vm, "use_flags", 60)
         self.gshot(vm, "use-flags", "Software (USE flags): presets, searchable flag list, Portage sanity check, binary vs source impact")
         self.step("gui-use-flags-default-has-no-errors", not [i for i in st.get("issues", []) if i[0] == "error"], f"{len(st.get('issues', []))} notes")
-        self.gtype_search(vm, "ssl")
-        self.gfocus(vm, "USE flag ssl:")
-        self.gkey(vm, "spc", pause=2)
-        st = self.gwait(vm, "use_flags", 30, lambda s: any(i[0] == "error" for i in s.get("issues", [])))
+        # A QMP key press is sometimes lost (bios-cdrom-gui, Patronus run 777: the switch never flipped, no error
+        # after 30 s, Next still enabled). The assertion below is unchanged; only the PRESS is retried, and only
+        # while the page still shows the unflipped state (no error issue), so a press that did land is never undone.
+        has_err = lambda s: any(i[0] == "error" for i in s.get("issues", []))      # noqa: E731
+        for attempt in (1, 2, 3):
+            if attempt == 1:
+                self.gtype_search(vm, "ssl")           # the filter text stays for the retries
+            self.gfocus(vm, "USE flag ssl:")
+            self.gkey(vm, "spc", pause=2)
+            st = self.gwait(vm, "use_flags", 30, has_err, record=False)
+            if has_err(st):
+                break
         self.step("gui-use-flags-sanity-check-error", any(i[0] == "error" for i in st.get("issues", [])) and not st.get("next_enabled", True),
                   "disabling 'ssl' is refused: " + (next((i[2] for i in st.get("issues", []) if i[0] == "error"), "")[:140]))
         self.gshot(vm, "use-flags-error", "USE flag sanity check ERROR (ssl switched off breaks installed packages) - Next is blocked")
@@ -1280,19 +1626,33 @@ class Runner:
         if a.mode == "uefi":
             pflash_vars(nvars)                                # fresh NVRAM = first boot of the disk, firmware re-scans
         t1 = time.time()
-        vm = VM("2-installed", self.qemu_args(None, True, nvars), a.out)
         serial = a.flow != "tui-vga"
+        late = bool(a.headless_gates and serial)
+        netnames = ["n0"] if a.project == "horcrux" else ["n0", "n1"]
+        vm = VM("2-installed", self.qemu_args(None, True, nvars) + (["-S"] if late else []), a.out)
+        if late:
+            # LATE NETWORK: the NIC links stay down until the login prompt is on the console (a boot must never wait for the network);
+            # the RTC is months off, so chrony / DHCP / the web UI have to catch up once the links come up
+            r = HG.link(vm, netnames, False)
+            vm.qmp("cont")
+            self.step("installed-boots-with-the-network-links-down", all('"error"' not in x for x in r), " ".join(r)[:120])
         try:
             if serial and a.console_open:
                 ok = vm.expect_raw(r"Enter an option", 420)
                 if not ok:
                     vm.shot("login-timeout")
                 self.step("installed-boots-to-open-console-menu", ok, f"{int(time.time()-t1)}s, no login prompt (console menu opened by the installer)")
+                if late:
+                    self.late_link_up(vm, netnames, ok)
             elif serial:
                 ok = vm.expect_raw(r"login:", 420)
                 if not ok:
                     vm.shot("login-timeout")
-                self.step("installed-boots-to-login", ok, f"{int(time.time()-t1)}s")
+                    tail = re.sub(r"\s+", " ", vm.screen()[-400:]) if hasattr(vm, "screen") else ""
+                    print(f"login-timeout console tail: {tail}", flush=True)
+                self.step("installed-boots-to-login", ok, f"{int(time.time()-t1)}s" + (f" (disk passphrase typed {vm.luks_n}x at the initramfs prompt)" if VM.LUKS_UNLOCK else ""))
+                if late:
+                    self.late_link_up(vm, netnames, ok)
                 vm.shot("login-prompt")
                 self.serial_login(vm, P["old_pw"], expect_ok=False)
                 self.step("serial-root-login-with-chosen-password", self.serial_login(vm, PW, expect_ok=True), "lands in the console menu")
@@ -1308,6 +1668,8 @@ class Runner:
             sc, code, body = http(FWD_WEB, "/")
             self.step("web-ui-root", code == 200 and b"<" in body, f"{sc} / -> {code} ({len(body)} bytes)")
             self.ssh_checks()
+            if a.headless_gates:
+                self.headless_checks(late)
             self.health("first-boot")
             if a.flow == "auto":
                 rc, pw = ssh(FWD_SSH, self.key, f"cat {P['pwfile']}")
@@ -1373,6 +1735,7 @@ class Runner:
         end = time.time() + wait
         while True:
             sc, code, resp = http(FWD_WEB, "/api/auth/login", "POST", {"username": "admin", "password": pw})
+            self.login_err = resp.decode(errors="replace")[:80] if code == 0 else ""      # why there was no HTTP answer (timeout / refused / TLS)
             if code == 200 or time.time() >= end:
                 return code
             time.sleep(4)
@@ -1402,16 +1765,32 @@ class Runner:
         if a.project == "horcrux":
             dlg += [("Gateway", "10.0.2.2"), ("DNS server", "10.0.2.3")]
         t = self.opt(vm, "2", dlg, timeout=120)
-        rc, o = ssh(FWD_SSH, self.key, f"grep -c 'BEGIN console-menu {nic}' /etc/dhcpcd.conf; ip -4 addr show dev {nic}")
-        self.step("console-menu-set-static-ip", rc == 0 and o.strip().startswith("1") and addr in o and nic in t, f"{nic} {addr} static via /etc/dhcpcd.conf; ssh still works")
+        # dhcpcd re-applies the address and the port-forwarded sshd can be unreachable for a while afterwards: on the aarch64 TCG
+        # guest the single immediate ssh failed (run 1302, rc 255 -> "ssh still works" FAIL) while x86 KVM passed. Retry for up to
+        # 90 s; only a still-unreachable or wrong result after that fails, and the detail now says why.
+        end = time.time() + 90
+        while True:
+            rc, o = ssh(FWD_SSH, self.key, f"grep -c 'BEGIN console-menu {nic}' /etc/dhcpcd.conf; ip -4 addr show dev {nic}")
+            if rc == 0 or time.time() >= end:
+                break
+            time.sleep(5)
+        self.step("console-menu-set-static-ip", rc == 0 and o.strip().startswith("1") and addr in o and nic in t,
+                  f"{nic} {addr} static via /etc/dhcpcd.conf; ssh still works" + ("" if rc == 0 and addr in o and nic in t else f" [rc={rc} out={o.strip()[:160]!r} menu={t[-160:]!r}]"))
         # option 3: reset the web admin password; the new one must log in (hash compatible with the product), the old one not
         t = self.opt(vm, "3", [("New admin password", PW2), ("Confirm", PW2), ("same password for the root console", "n")])
         c_new, c_old = self.web_login_code(PW2, 20), self.web_login_code(PW)
         self.step("console-menu-reset-password", c_new == 200 and c_old != 200, f"new password -> {c_new}, old password -> {c_old}")
         # option 11 backup, 4 factory reset, 10 restore
         t = self.opt(vm, "11", [], done=r"Backup written: \S+")
-        rc, o = ssh(FWD_SSH, self.key, f"ls /var/backups/{a.project}/; tar tzf /var/backups/{a.project}/*manual*.tar.gz | head -20")
-        self.step("console-menu-backup", "MANIFEST.json" in o and (".db" in o), re.sub(r"\s+", " ", o)[:140])
+        # the forwarded sshd can drop a connection right after the password reset (run 752: empty output, no rc) - retry the
+        # read for up to 60 s; the assertion (manifest + db in the archive) is unchanged and the detail now carries rc
+        end = time.time() + 60
+        while True:
+            rc, o = ssh(FWD_SSH, self.key, f"ls /var/backups/{a.project}/; tar tzf /var/backups/{a.project}/*manual*.tar.gz | head -20")
+            if ("MANIFEST.json" in o and ".db" in o) or time.time() >= end:
+                break
+            time.sleep(5)
+        self.step("console-menu-backup", "MANIFEST.json" in o and (".db" in o), f"rc={rc} " + re.sub(r"\s+", " ", o)[:140])
         vm.expect_raw("Press Enter to return", 20)
         vm.send("\r")
         vm.expect_raw("Enter an option", 20)
@@ -1419,11 +1798,16 @@ class Runner:
         vm.expect_raw("Press Enter to return", 20)
         vm.send("\r")
         vm.expect_raw("Enter an option", 20)
-        c3, c2 = self.web_login_code(PW3, 180), self.web_login_code(PW2)
+        c3 = self.web_login_code(PW3, 180)
+        err3 = self.login_err
+        c2 = self.web_login_code(PW2)
         if c3 != 200:
             rc, o = ssh(FWD_SSH, self.key, f"rc-service {self.P['svc']} status; ls -la /var/lib/{a.project}; tail -n 8 /var/log/{a.project}/web-error.log; nft list ruleset 2>&1 | grep -n {P['port']} | head -5; ss -ltn | grep {P['port']}")
             print("[DIAG] " + o.replace("\n", "\n[DIAG] "))
-        self.step("console-menu-factory-reset", c3 == 200 and c2 != 200, f"factory defaults: new password -> {c3}, password from before the reset -> {c2}")
+            diag = " [no answer: " + err3 + "; " + re.sub(r"\s+", " ", o)[:200] + "]" if c3 == 0 else ""
+        else:
+            diag = ""
+        self.step("console-menu-factory-reset", c3 == 200 and c2 != 200, f"factory defaults: new password -> {c3}, password from before the reset -> {c2}" + diag)
         rc, o = ssh(FWD_SSH, self.key, f"sleep 12; test -e {P['seedfile']} && echo present || echo gone")
         self.step("console-menu-firstboot-file-removed", "gone" in o, f"{P['seedfile']}: {o.strip()}")
         vm.send("10\r")
@@ -1472,8 +1856,13 @@ class Runner:
             if vm.expect_raw("Password", 15):
                 vm.send(f"{pw}\r")
                 if expect_ok:
-                    if vm.expect_raw(r"(Enter an option|# |\$ )", 25):
+                    # 25 -> 120 s: on a loaded runner (4 VMs, ZFS mirror) the console menu / shell can take longer than
+                    # 25 s after the password; the old wait then fell through to a fresh "\r" and a second login round
+                    # (run 1440 uefi-usb-auto-zfs-mirror-sshpw). Assertion unchanged.
+                    if vm.expect_raw(r"(Enter an option|# |\$ )", 120):
                         return True
+                    with vm.lock:
+                        print("serial_login: no console menu after the password; last serial bytes:", bytes(vm.raw[-300:]))
                 else:
                     r = vm.expect_raw(r"(Login incorrect|#|\$ )", 20)
                     self.step("old-default-root-password-rejected", bool(r) and b"incorrect" in r.group(0), "Login incorrect" if r else "no answer")
@@ -1551,10 +1940,103 @@ class Runner:
             if vm.alive():
                 vm.p.kill()
 
+    def late_link_up(self, vm, netnames, reached):
+        """the console prompt is up with the links still down: bring the NICs up now"""
+        self.link_up_t = time.time()
+        r = HG.link(vm, netnames, True)
+        self.step("boot-reaches-the-console-without-a-network", bool(reached), f"login/menu prompt reached with the links down; links up now: {' '.join(r)[:100]}")
+
+    def headless_checks(self, late):
+        """installed-system gates of a headless-first product (see headless_gates.py), identical on every architecture"""
+        a = self.a
+        sh = lambda cmd, timeout=60: ssh(FWD_SSH, self.key, cmd, timeout=int(T(timeout)))
+        HG.gui_check(sh, self.step)
+        web = ""
+        if a.flow == "auto":
+            rc, pw = ssh(FWD_SSH, self.key, f"cat {self.P['pwfile']} 2>/dev/null")
+            web = pw.strip().splitlines()[-1] if rc == 0 and pw.strip() else ""
+        # root's password IS the test login password PW by design (answer file); the generated web admin password must differ from it and from root's hash
+        HG.account_check(sh, self.step, web_secret=web, console_open=a.console_open)
+        if a.flow == "auto" and web:
+            sc, code, resp = http(FWD_WEB, "/api/auth/login", "POST", {"username": "admin", "password": PW})
+            self.step("web-admin-refuses-the-root-login-password", code in (400, 401, 403, 429), f"POST /api/auth/login admin/<root login password> -> {code}")
+        HG.clock_gate(sh, self.step, timeout=T(480), label="months-off-rtc-clock-stepped-by-chrony-after-the-late-network" if late else "months-off-rtc-clock-stepped-by-chrony")
+        if late and a.project == "patronus":
+            end, o = time.time() + T(180), ""
+            while time.time() < end:
+                rc, o = sh("ip -4 -o addr show scope global")
+                if "10.0.2.15" in o:
+                    break
+                time.sleep(5)
+            self.step("wan-dhcp-lease-after-the-late-link-up", "10.0.2.15" in o, re.sub(r"\s+", " ", o).strip()[:160])
+
+    def _b64run(self, interp, text, timeout=300):
+        import base64
+        return ssh(FWD_SSH, self.key, f"echo {base64.b64encode(text.encode()).decode()} | base64 -d | {interp}", timeout=int(T(timeout)))
+
+    def storage_gates(self):
+        """owner rule 2026-10-29/11-03 on the installed server/firewall: (1) the Portage database matches the disk, (2) a kernel module builds against the running
+        kernel (what zfs-kmod needs after every kernel update), (3) zfs/zfs-kmod carry USE=dist-kernel so a kernel update rebuilds the module in the same transaction,
+        (4) the disk encryption is exactly what the profile promises: Patronus = ZFS native encryption sealed to a working TPM 2.0 (unattended), else NO encryption."""
+        a = self.a
+        rc, o = self._b64run("python3", CONTENTS_CHECK)
+        m = re.search(r"CONTENTS-MISSING (\d+) files", o)
+        self.step("package-contents-complete-no-missing-files", bool(m) and m.group(1) == "0" and "CONTENTS-PACKAGES" in o, re.sub(r"\s+", " ", o).strip()[:400])
+        rc, o = self._b64run("sh", KMOD_CHECK, 600)
+        self.step("kernel-module-builds-against-running-kernel", "KMOD-OK" in o, re.sub(r"\s+", " ", o).strip()[-300:])
+        if a.fs == "zfs":
+            rc, o = ssh(FWD_SSH, self.key, "if qlist -I sys-kernel/gentoo-kernel-bin sys-kernel/gentoo-kernel | grep -q .; then "
+                        "grep -qw dist-kernel /var/db/pkg/sys-fs/zfs-kmod-*/USE && grep -qw dist-kernel /var/db/pkg/sys-fs/zfs-[0-9]*/USE && echo DISTKERNEL-OK || echo DISTKERNEL-MISSING; "
+                        "else echo NOT-DIST-KERNEL; fi; qlist -Iv sys-kernel/gentoo-kernel-bin sys-fs/zfs-kmod sys-fs/zfs virtual/dist-kernel; ls /usr/src; uname -r")
+            self.step("zfs-and-zfs-kmod-use-dist-kernel-so-kernel-updates-rebuild-the-module", "DISTKERNEL-OK" in o, re.sub(r"\s+", " ", o).strip()[:300])
+        if a.project != "patronus":
+            return
+        want_enc = a.fs == "zfs" and a.tpm == "swtpm"
+        if a.fs == "zfs":
+            rc, z = ssh(FWD_SSH, self.key, "zfs get -H -o value encryption,keyformat,keylocation,keystatus rpool | tr '\\n' ' '")
+            if want_enc:
+                ok = "aes-256-gcm hex prompt available" in z.replace("\r", "")
+                rc, t = ssh(FWD_SSH, self.key, "ls -l /etc/tpm-unlock; for k in /boot/initramfs-*.img; do lsinitrd $k | grep -E 'tpm2_unseal|tpm-zfskey|tpm-unlock/key' | wc -l; done; grep -c . /etc/dracut.conf.d/92-tpm-unlock.conf")
+                self.step("disk-encrypted-with-tpm-sealed-key-unlocked-without-a-console-prompt", ok and "key.priv" in t, re.sub(r"\s+", " ", z + " | " + t)[:300])
+            else:
+                self.step("disk-not-encrypted-because-no-tpm-no-prompt", z.split()[:1] == ["off"], re.sub(r"\s+", " ", z)[:200])
+        else:
+            rc, z = ssh(FWD_SSH, self.key, "lsblk -rno FSTYPE | grep -c crypto_LUKS; ls /etc/crypttab 2>&1 | head -1")
+            self.step("xfs-fallback-has-no-luks-no-prompt", z.split()[0:1] == ["0"], re.sub(r"\s+", " ", z)[:120])
+        # the encryption decision is also printed by the installer
+        try:
+            log = open(f"{self.a.out}/1-install-serial.log", errors="replace").read()
+        except OSError:
+            log = ""
+        if self.a.flow == "auto":
+            self.step("installer-reported-the-encryption-decision", ("Disk encryption: encrypted" in log) if want_enc else ("Disk encryption: NOT encrypted" in log), "installer log line 'Disk encryption: ...' present" if log else "no installer log")
+
+    def tpm_negative_phase(self, nvars):
+        """a different TPM (blank swtpm) must NOT release the key: the system must not come up unattended (and must not silently boot unencrypted)"""
+        a = self.a
+        self.tpm_ctrl = self.start_swtpm("tpm2")
+        if a.mode == "uefi":
+            pflash_vars(nvars)
+        vm = VM("4-wrong-tpm", self.qemu_args(None, True, nvars), a.out)
+        try:
+            got = vm.expect_raw(r"(refused to unseal|Key load error|Enter passphrase|Enter key|Key for)", T(300))
+            up = ssh(FWD_SSH, self.key, "true", timeout=15)[0] == 0
+            self.step("wrong-tpm-does-not-release-the-disk-key", bool(got) and not up, "the initramfs reported the TPM refusal and did not boot" if got and not up else f"prompt/refusal seen={bool(got)} ssh_up={up}")
+        finally:
+            if vm.alive():
+                vm.p.kill()
+
     def ssh_checks(self):
         a = self.a
-        rc, out = ssh(FWD_SSH, None, "true", extra=["-o", "PreferredAuthentications=none", "-o", "PubkeyAuthentication=no", "-o", "BatchMode=yes"])
-        methods = re.search(r"Permission denied \(([^)]*)\)", out)
+        end = time.time() + T(90)
+        while True:
+            rc, out = ssh(FWD_SSH, None, "true", extra=["-o", "PreferredAuthentications=none", "-o", "PubkeyAuthentication=no", "-o", "BatchMode=yes"])
+            methods = re.search(r"Permission denied \(([^)]*)\)", out)
+            # right after boot (aarch64 TCG) the forwarded port can answer "kex_exchange_identification: Connection reset" while sshd is still
+            # starting (run 10100): only a real answer, or none after 90 s (x timeout factor), decides
+            if methods or time.time() >= end:
+                break
+            time.sleep(5)
         m = methods.group(1) if methods else out.strip()[:80]
         if a.ssh_password_opt_in:
             self.step("ssh-password-auth-offered-after-opt-in", "password" in m or "keyboard-interactive" in m, f"server offers: {m}")
@@ -1595,8 +2077,19 @@ class Runner:
         self.step("hostname-and-timezone", f"{a.project}-t1" in out and "Europe/Berlin" in out, "host name + Europe/Berlin applied")
         self.step("root-filesystem", ("xfs" if a.fs == "xfs-luks" else a.fs) in out.replace("\r", "").split("\n"), f"/ is {a.fs}" + (" (the installer's own default, never ext4)" if a.fs_default else ""))
         # OWNER RULE: a server/firewall install has NO on-disk swap (partition, LV or file): zram is the only swap
-        rc, sw = ssh(FWD_SSH, self.key, "echo ACTIVE; swapon --noheadings --raw --show=NAME,TYPE; echo FSTAB; grep -E '^[^#]*[[:space:]]swap[[:space:]]' /etc/fstab; echo BLK; blkid -t TYPE=swap -o device | grep -v '^/dev/zram'; "
+        swap_cmd = ("echo ACTIVE; swapon --noheadings --raw --show=NAME,TYPE; echo FSTAB; grep -E '^[^#]*[[:space:]]swap[[:space:]]' /etc/fstab; echo BLK; blkid -t TYPE=swap -o device | grep -v '^/dev/zram'; "
                      "lsblk -rno NAME,PARTTYPE,PARTLABEL | grep -v '^zram' | grep -iE '0657fd6d-a4ab-43c4-84e5-0933c84b4f4f|swap'; echo FILES; find / -xdev -maxdepth 2 \\( -name 'swapfile' -o -name 'swap.img' -o -name '*.swp' -size +1M \\) 2>/dev/null; echo END")
+
+        # zram is set up by a boot-runlevel service; on a slow TCG guest (aarch64 run 1338, zfs-mirror) ssh can answer before the swap is
+        # visible: poll the SAME assertion for up to ~2 min instead of sampling once; the failure detail carries why zram is missing
+        for _try in range(9):
+            rc, sw = ssh(FWD_SSH, self.key, swap_cmd)
+            if rc == 0 and re.search(r"^/dev/zram", sw.replace("\r", ""), re.M):
+                break
+            time.sleep(15)
+        else:
+            _, dg = ssh(FWD_SSH, self.key, "rc-status -a 2>&1 | grep -iE 'zram|stopped|crashed'; dmesg 2>/dev/null | grep -i zram | tail -5; zramctl 2>&1; cat /proc/swaps")
+            print("[INFO] zram diagnostics: " + re.sub(r"\s+", " ", dg)[:400])
         sec, cur = {}, None
         for ln in sw.replace("\r", "").splitlines():
             if ln.strip() in ("ACTIVE", "FSTAB", "BLK", "FILES", "END"):
@@ -1615,10 +2108,50 @@ class Runner:
             rc, z = ssh(FWD_SSH, self.key, "zpool status rpool; zpool list -H -o name,health rpool")
             ok = "ONLINE" in z and (a.zfs_raid != "mirror" or ("mirror-0" in z and z.count("vd") >= 2))
             self.step("zfs-pool-online", ok, re.sub(r"\s+", " ", z)[:220])
+        self.storage_gates()
 
+
+
+# ---- shared storage gates (Portage database complete, kernel modules buildable): used by every project's server runs and by zfs-enc-test.py
+CONTENTS_CHECK = r"""
+import glob, os, collections, re
+# the ONLY files that may be missing: runtime state dirs Portage records with .keep markers. Intentional strips are removed from the CONTENTS records at build
+# time by common/vdb-prune.py (reviewed list); anything else missing here is a bug in the image (tar --exclude, a strip eating a toolchain file, ...).
+ALLOW_PREFIX = ("/var/log/", "/var/spool/", "/var/cache/", "/var/tmp/", "/run/", "/tmp/")
+miss = collections.OrderedDict(); n = 0; pk = 0
+for cf in sorted(glob.glob("/var/db/pkg/*/*/CONTENTS")):
+    pkg = "/".join(cf.split("/")[-3:-1]); pk += 1
+    for line in open(cf, errors="replace"):
+        if line.startswith("obj "):
+            path = " ".join(line.rstrip("\n").split(" ")[1:-2])
+        elif line.startswith("sym "):
+            path = line[4:line.index(" -> ")]
+        else:
+            continue
+        if os.path.lexists(path) or path.startswith(ALLOW_PREFIX):
+            continue
+        # dist-kernel records the initramfs / unified kernel image it assembles beside the kernel and moves them to /boot
+        if re.match(r"^/usr/src/linux-[^/]+/arch/[^/]+/boot/(initrd|uki\.efi)", path):
+            continue
+        miss.setdefault(pkg, []).append(path); n += 1
+print("CONTENTS-PACKAGES", pk)
+print("CONTENTS-MISSING", n, "files in", len(miss), "packages")
+for p, m in sorted(miss.items(), key=lambda x: -len(x[1]))[:8]:
+    print("  ", len(m), p, " ".join(m[:4]))
+"""
+
+KMOD_CHECK = r"""
+set -e; kv=$(uname -r); d=$(mktemp -d); cd $d
+test -e /lib/modules/$kv/build/Makefile || { echo "NO-KERNEL-BUILD-TREE for $kv ($(readlink /lib/modules/$kv/build))"; exit 1; }
+printf '#include <linux/module.h>\n#include <linux/init.h>\nstatic int __init hx_init(void){return 0;}\nstatic void __exit hx_exit(void){}\nmodule_init(hx_init);\nmodule_exit(hx_exit);\nMODULE_LICENSE("GPL");\n' > hx.c
+printf 'obj-m := hx.o\n' > Kbuild
+make -C /lib/modules/$kv/build M=$d modules > build.log 2>&1 || { tail -15 build.log; echo KMOD-BUILD-FAILED; exit 1; }
+modinfo -F vermagic $d/hx.ko | grep -q "^$kv " && echo KMOD-OK $kv
+cd /; rm -rf $d
+"""
 
 def main():
-    global ARCH, SLOW
+    global ARCH, SLOW, RUNNER
     arm_deadline()
     ap = argparse.ArgumentParser()
     ap.add_argument("--iso", required=True)
@@ -1634,21 +2167,26 @@ def main():
     ap.add_argument("--zfs-raid", choices=["single", "mirror"], default=None)
     ap.add_argument("--ssh-password-opt-in", action="store_true")
     ap.add_argument("--static-ip", default="", help="horcrux management address (empty = DHCP)")
+    ap.add_argument("--answer-file", default="", help="auto flow: use this answer file verbatim (__HX_TEST_PUBKEY__ is replaced by the run's ssh key) instead of the built-in one")
     ap.add_argument("--lan-ip", default="10.77.0.1", help="patronus LAN address")
     ap.add_argument("--console-open", action="store_true", help="installer option: open console menu (no login on the console)")
     ap.add_argument("--hold-file", default="", help="gui flow: before powering the installed system off, wait until this file exists (screenshot of the web UI from outside)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--keep-disks", action="store_true", help="keep target*.qcow2/answers.img/OVMF_VARS.fd in --out (default: delete them when the run ends, pass or fail; they are 20-40 GB of regenerable state)")
     ap.add_argument("--mem", type=int, default=4096)
+    ap.add_argument("--tpm", choices=["none", "swtpm"], default="none", help="attach a software TPM 2.0 (swtpm) that keeps its state across the install and every boot; Patronus then must install ENCRYPTED with TPM unlock")
+    ap.add_argument("--tpm-negative", action="store_true", help="with --tpm swtpm: afterwards boot the disk with a DIFFERENT (blank) TPM and assert the key is NOT released (no unattended boot)")
     ap.add_argument("--cpu", default=os.environ.get("QEMU_TEST_CPU", "qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt,+cx16"),
                     help="QEMU CPU model. Default = x86-64-v2 (no AVX/BMI): catches binaries built for a host-tuned CPU. Never `host`.")
     ap.add_argument("--restarts", type=int, default=0, help="after the install checks: boot the installed disk again and restart it N times from inside the guest, asserting service health after each boot")
+    ap.add_argument("--headless-gates", action="store_true", help="headless-first gates (headless_gates.py): every boot starts with an RTC months off, the installed system boots with the NIC links down until the login prompt, no GUI stack, no empty password/autologin, chrony steps the clock after the late network")
     ap.add_argument("--disk-gb", type=int, default=24)
     args = ap.parse_args()
     ARCH = args.arch
     args.fs_default = args.fs == "default"
-    if args.fs_default:       # the installer's own default: ZFS >= 8 GB RAM (Horcrux), XFS+LUKS below, XFS where the image has no ZFS (Patronus)
-        args.fs = "xfs" if args.project == "patronus" else ("zfs" if args.mem >= 8192 else "xfs-luks")
+    if args.fs_default:       # the installer's own default: ZFS >= 8 GB RAM, below that XFS+LUKS (Horcrux) / plain XFS (Patronus: it must boot unattended)
+        args.fs = ("zfs" if args.mem >= 8192 else "xfs") if args.project == "patronus" else ("zfs" if args.mem >= 8192 else "xfs-luks")
+    VM.LUKS_UNLOCK = PW_DISK if (args.fs == "xfs-luks" and args.project == "horcrux") else None   # the installed disk asks for it at every boot
     args.zfs_raid = args.zfs_raid or ("single" if args.fs_default else "mirror")
     if args.mode == "bios" and not ARCHS[ARCH]["bios"]:
         ap.error(f"{ARCH} has no legacy BIOS: use --mode uefi")
@@ -1656,8 +2194,15 @@ def main():
     SLOW = args.slow or float(os.environ.get("QEMU_SLOW", 0) or 0) or (1.0 if kvm else 3.0 if ARCH == HOST_ARCH else 10.0)
     print(f"arch={ARCH} host={HOST_ARCH} accel={'kvm' if kvm else 'tcg'} timeout-factor={SLOW}", flush=True)
     try:
-        Runner(args).run()
+        RUNNER = Runner(args)
+        RUNNER.run()
     finally:
+        for r in [x for x in (globals().get("RUNNER"),) if x]:
+            for pr in (r.tpm_proc, r.tpm_proc2):
+                if pr and pr.poll() is None:
+                    pr.terminate()
+            shutil.rmtree(os.path.join(args.out, "tpm"), ignore_errors=True)
+            shutil.rmtree(os.path.join(args.out, "tpm2"), ignore_errors=True)
         if not args.keep_disks:
             for n in ("target.qcow2", "target2.qcow2", "answers.img", "OVMF_VARS.fd"):
                 try:

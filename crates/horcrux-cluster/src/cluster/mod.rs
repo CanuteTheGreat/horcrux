@@ -5,6 +5,7 @@ pub mod ceph_placement;
 /// Clustering support module
 /// Provides multi-node cluster management, HA, and VM migration using Corosync
 pub mod corosync;
+pub mod cpu_groups;
 pub mod drain;
 pub mod membership;
 pub mod migration;
@@ -486,10 +487,69 @@ impl ClusterManager {
             node_id: None,
             status_reason: None,
             cpu_vendor: String::new(),
+            cpu_level: 0,
+            uplink_mbps: 0,
+            nvme_disks: 0,
             caps: None,
         };
         self.add_node(node.clone()).await?;
         Ok(node)
+    }
+
+    /// A member told us that `name` (re-)joined the cluster at `address`
+    /// (`POST /api/ha/peer/members`, sent by the member that accepted the
+    /// join). A join is a fresh registration: if we already list that node
+    /// with the same address, it is the node that was removed elsewhere and
+    /// replaced (reinstalled, new identity), so forget the identity pinned
+    /// from the old one. Without this the replaced node stayed "unverified:
+    /// answered by a different Horcrux instance" on every member that did not
+    /// itself get the `DELETE /api/cluster/nodes/:name` (lab HA suite
+    /// 2026-11-06, node replacement: hogshead never saw madammalkins online).
+    pub async fn accept_rejoined_member(&self, name: &str, address: &str) -> Result<Node> {
+        {
+            let mut nodes = self.nodes.write().await;
+            if let Some(n) = nodes.get_mut(name) {
+                if n.ip != address {
+                    return Err(horcrux_common::Error::Conflict(format!(
+                        "a node named {name} is already in the cluster at {}",
+                        n.ip
+                    )));
+                }
+                if !n.is_local && n.node_id.is_some() {
+                    n.node_id = None;
+                    n.status = NodeStatus::Unknown;
+                    n.status_reason = Some("re-joined: identity will be pinned again".into());
+                    n.last_seen = None;
+                    let updated = n.clone();
+                    config_store::put_opt(&self.store, kinds::CLUSTER_NODE, name, &updated).await?;
+                    return Ok(updated);
+                }
+                return Ok(n.clone());
+            }
+        }
+        self.accept_member(name, address).await
+    }
+
+    /// A member told us that `name` was removed from the cluster
+    /// (`POST /api/ha/peer/members/:name/removed`, sent by the member the
+    /// `DELETE /api/cluster/nodes/:name` hit). Forget it here too, otherwise
+    /// the other members kept listing (and probing) a node that no longer
+    /// exists, and a replacement could not be told apart from it. Idempotent:
+    /// an unknown name is fine, and this node is never removed on a peer's
+    /// say-so. Returns whether a node was removed.
+    pub async fn accept_member_removed(&self, name: &str) -> Result<bool> {
+        let is_remote = {
+            let nodes = self.nodes.read().await;
+            match nodes.get(name) {
+                Some(n) => !n.is_local,
+                None => false,
+            }
+        };
+        if !is_remote || self.get_local_node_name().await.ok().as_deref() == Some(name) {
+            return Ok(false);
+        }
+        self.remove_node(name).await?;
+        Ok(true)
     }
 
     /// Add a node to the cluster
@@ -750,6 +810,10 @@ impl ClusterManager {
         node_name: &str,
         caps: Option<roles::NodeCaps>,
     ) -> Result<()> {
+        if let Some(c) = &caps {
+            roles::validate_caps(c).map_err(horcrux_common::Error::Validation)?;
+        }
+        let votes = roles::quorum_votes(caps.as_ref());
         let mut nodes = self.nodes.write().await;
         let node = nodes.get_mut(node_name).ok_or_else(|| {
             horcrux_common::Error::NotFound(format!("Node {} not found", node_name))
@@ -758,6 +822,9 @@ impl ClusterManager {
         updated.caps = caps.clone();
         config_store::put_opt(&self.store, kinds::CLUSTER_NODE, node_name, &updated).await?;
         node.caps = caps;
+        drop(nodes);
+        // The vote weight is part of corosync.conf: apply it now.
+        self.corosync.set_votes(node_name, votes).await?;
         Ok(())
     }
 
@@ -896,6 +963,89 @@ mod tests {
         let db = crate::db::Database::new(&url).await.unwrap();
         db.migrate().await.unwrap();
         ClusterManager::with_database(Arc::new(db)).await.unwrap()
+    }
+
+    /// Removing a node on one member is propagated to the others: the
+    /// receiving side forgets the node, never removes itself, and an
+    /// unknown name is not an error.
+    #[tokio::test]
+    async fn a_removal_announcement_forgets_the_node() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = db_manager(dir.path()).await;
+        let me = m.get_local_node_name().await.unwrap();
+        let members = vec![
+            node(&me, 4, 8 << 30, None, true),
+            node("gone", 4, 8 << 30, None, false),
+            node("stays", 4, 8 << 30, None, false),
+        ];
+        m.join_cluster("c".into(), &me, members).await.unwrap();
+        assert!(m.accept_member_removed("gone").await.unwrap());
+        let names: Vec<String> = m.list_nodes().await.into_iter().map(|n| n.name).collect();
+        assert!(!names.contains(&"gone".to_string()));
+        assert!(names.contains(&"stays".to_string()));
+        // idempotent: a second announcement (or an unknown node) is fine
+        assert!(!m.accept_member_removed("gone").await.unwrap());
+        assert!(!m.accept_member_removed("never-existed").await.unwrap());
+        // this node is never removed because a peer said so
+        assert!(!m.accept_member_removed(&me).await.unwrap());
+        assert!(m.list_nodes().await.iter().any(|n| n.is_local));
+    }
+
+    /// A node that was removed on one member and replaced (new identity) is
+    /// announced to the other members by the member that accepted the join:
+    /// they must forget the identity pinned from the old install, or they
+    /// list the replacement "unverified: answered by a different Horcrux".
+    #[tokio::test]
+    async fn a_rejoin_announcement_resets_the_pinned_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = db_manager(dir.path()).await;
+        let me = m.get_local_node_name().await.unwrap();
+        let members = vec![
+            node(&me, 4, 8 << 30, None, true),
+            node("replaced", 4, 8 << 30, None, false),
+        ];
+        m.join_cluster("c".into(), &me, members).await.unwrap();
+        {
+            let mut nodes = m.nodes.write().await;
+            let n = nodes.get_mut("replaced").unwrap();
+            n.node_id = Some("old-identity".into());
+            n.status = NodeStatus::Online;
+        }
+        // same name + address: the announcement means "re-joined"
+        m.accept_rejoined_member("replaced", "10.0.0.1")
+            .await
+            .unwrap();
+        let n = m
+            .list_nodes()
+            .await
+            .into_iter()
+            .find(|n| n.name == "replaced")
+            .unwrap();
+        assert_eq!(n.node_id, None, "pinned identity forgotten");
+        assert_eq!(n.status, NodeStatus::Unknown);
+        // a different address is still a conflict, a new name is simply added
+        assert!(m
+            .accept_rejoined_member("replaced", "10.0.0.9")
+            .await
+            .is_err());
+        m.accept_rejoined_member("fresh", "10.0.0.7").await.unwrap();
+        assert!(m.list_nodes().await.iter().any(|n| n.name == "fresh"));
+        // the local node is never unpinned by an announcement
+        let local = m
+            .list_nodes()
+            .await
+            .into_iter()
+            .find(|n| n.is_local)
+            .unwrap();
+        let before = local.node_id.clone();
+        let _ = m.accept_rejoined_member(&local.name, &local.ip).await;
+        let local = m
+            .list_nodes()
+            .await
+            .into_iter()
+            .find(|n| n.is_local)
+            .unwrap();
+        assert_eq!(local.node_id, before);
     }
 
     #[tokio::test]

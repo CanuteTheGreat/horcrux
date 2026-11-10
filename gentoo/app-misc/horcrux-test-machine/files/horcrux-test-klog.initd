@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+# app-misc/horcrux-test-machine: persistent kernel log (sysklogd here logs no kernel messages: /var/log/kern.log stays empty, so a
+# Wi-Fi/driver failure leaves no trace after a reboot). Rotated by /etc/logrotate.d/horcrux-test-machine.
+description="test machine: follow the kernel ring buffer into /var/log/kernel-test.log"
+command=/bin/dmesg
+command_args="--follow --time-format iso --kernel"
+command_background=true
+pidfile=/run/horcrux-test-klog.pid
+output_log=/var/log/kernel-test.log
+error_log=/var/log/kernel-test.log
+depend() {
+	need localmount
+	before NetworkManager
+}

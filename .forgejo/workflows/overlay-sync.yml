@@ -1,0 +1,57 @@
+name: Overlay sync
+
+# The Horcrux Portage overlay (repo directory gentoo/) is ALSO published as its own git repository,
+# CanuteTheGreat/horcrux-overlay, which installed Horcrux machines sync with `emaint sync -r horcrux`
+# (/etc/portage/repos.conf/horcrux.conf, package sys-apps/horcrux-repo-config, auto-sync yes).
+# The overlay repo is a `git subtree split --prefix=gentoo` of main (stable commit ids, so it only ever fast-forwards).
+# Do not edit it by hand (it is only ever fast-forwarded from main). Secret OVERLAY_DEPLOY_KEY = the deploy key of horcrux-overlay (no other access).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'gentoo/**'
+      - '.forgejo/workflows/overlay-sync.yml'
+  # The rustinion-agent release bump (Rustinion CI, job bump-horcrux) pushes to main with [skip ci], which also skips this workflow: without a
+  # poll the laptops' overlay (horcrux-overlay) would keep the old ebuild until an unrelated gentoo/ change. The split is idempotent
+  # ('overlay already has this tree' exits at once), so a cheap poll is the only change signal that exists for that push.
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+jobs:
+  split-and-push:
+    name: Publish gentoo/ as horcrux-overlay
+    runs-on: arm64-light  # light git/rsync sync job; never queue it behind heavy x86 builds
+    container: catthehacker/ubuntu:act-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A scheduled run's GITHUB_SHA is the last push that was NOT [skip ci] (Forgejo), not main's head: the hourly poll
+          # existed for the [skip ci] rustinion-agent bumps and, checking out that stale sha, could never see them
+          # (0.1.347 sat unsynced for 1h+ while every poll said 'overlay already has this tree'). Always split main's tip.
+          ref: main
+          fetch-depth: 0
+
+      - name: Split gentoo/ and fast-forward the overlay repository
+        env:
+          OVERLAY_DEPLOY_KEY: ${{ secrets.OVERLAY_DEPLOY_KEY }}
+        run: |
+          set -eu
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$OVERLAY_DEPLOY_KEY" > ~/.ssh/overlay_key && chmod 600 ~/.ssh/overlay_key
+          export GIT_SSH_COMMAND='ssh -i ~/.ssh/overlay_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new'
+          git config user.name "Horcrux CI"; git config user.email "ci@horcrux.invalid"
+          tip=$(git subtree split --prefix=gentoo)
+          echo "overlay tip $tip"
+          OV=git@git.canutethegreat.com:CanuteTheGreat/horcrux-overlay.git
+          # History rewrites on the way to main (rebased chain branches) change the split commit ids; the overlay repo must still only ever
+          # fast-forward: when its tip is not an ancestor of the new split, push a merge commit that carries the split's tree.
+          git fetch -q "$OV" main && remote=$(git rev-parse FETCH_HEAD) || remote=""
+          if [ -z "$remote" ] || git merge-base --is-ancestor "$remote" "$tip"; then push=$tip
+          elif [ "$(git rev-parse "$remote^{tree}")" = "$(git rev-parse "$tip^{tree}")" ]; then echo "overlay already has this tree"; rm -f ~/.ssh/overlay_key; exit 0
+          else push=$(git commit-tree "$tip^{tree}" -p "$remote" -p "$tip" -m "sync gentoo/ from main $(git rev-parse HEAD)"); echo "merge commit $push (overlay history diverged from the split)"
+          fi
+          git push "$OV" "$push:refs/heads/main"
+          rm -f ~/.ssh/overlay_key

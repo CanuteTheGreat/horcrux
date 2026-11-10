@@ -1,0 +1,35 @@
+#!/bin/sh
+# gringotts first boot (once): wait for a network, clock + Tailscale handoff (gringotts-remote), refresh the Portage trees.
+# Never gives up: the first real boot (2026-11-03) had no Wi-Fi yet, the old 10-minute limit made this exit with "will retry at the next
+# boot" and the laptop stayed unreachable until an agent restarted it by hand. It now waits for NetworkManager as long as it takes
+# (the owner may connect Wi-Fi hours later) and retries a failed tree sync every 10 minutes. Marker: /var/lib/gringotts/firstboot-done.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+PIDFILE=/run/gringotts-firstboot.pid
+echo $$ > "$PIDFILE"; trap 'rm -f "$PIDFILE"' EXIT
+echo "== gringotts-firstboot $(date -u)"
+have_net() { ip -4 route show default | grep -q .; }
+if ! have_net; then
+  echo "== waiting for a network (no limit): connect Wi-Fi from the GNOME network menu; the first connection continues this automatically"
+  while ! have_net; do sleep 10; done
+  echo "== network is up $(date -u)"
+fi
+sleep 5                      # DHCP lease + chrony burst (the NetworkManager hook of horcrux-chrony-nm) settle first
+gringotts-remote || echo "remote handoff incomplete (see above)"
+mkdir -p /var/lib/gringotts
+sync_trees() {
+  echo "== portage trees"
+  ok=1
+  out=$(emerge-webrsync -q 2>&1); rc=$?; echo "$out"   # non-zero with "local timestamp is newer" = the tree is already current (same fix as horcrux-firstboot)
+  [ $rc -eq 0 ] || case "$out" in *"local timestamp is newer"*) ;; *) ok=0 ;; esac
+  for r in guru canutethegreat-overlay; do [ -d /var/db/repos/$r/.git ] || find /var/db/repos/$r -mindepth 1 -delete 2>/dev/null; emaint sync -r $r || ok=0; done      # (the image ships the overlay directories empty: the first sync clones them)
+  [ $ok = 1 ]
+}
+fails=0
+until have_net && sync_trees; do
+  if have_net; then fails=$((fails+1)); else fails=0; fi
+  [ "$fails" -ge 6 ] && { echo "== tree sync still failing with a network after $fails attempts: marked done WITH WARNINGS (run: emaint sync -a)"; break; }
+  echo "== tree sync not done (network?): retry in 10 minutes"; sleep 600
+done
+date -u > /var/lib/gringotts/firstboot-done
+echo "== done"
+exit 0

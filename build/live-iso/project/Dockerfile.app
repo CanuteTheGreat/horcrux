@@ -7,7 +7,9 @@ FROM rust:1-bookworm AS app
 RUN apt-get update && apt-get install -y --no-install-recommends clang libvirt-dev libpam0g-dev pkg-config curl ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN rustup target add wasm32-unknown-unknown
 # static (musl) build: the glibc one needs a newer libc than bookworm
-RUN curl -fsSL https://github.com/trunk-rs/trunk/releases/latest/download/trunk-$(uname -m)-unknown-linux-musl.tar.gz | tar xz -C /usr/local/bin
+# GitHub release downloads drop now and then (aarch64 daily run 1576: curl got a non-tarball, tar exit 2): download to a file with
+# retries first, then unpack, so one dropped fetch does not fail a 1 h+ build
+RUN set -e; curl -fsSL --retry 6 --retry-all-errors --retry-delay 10 -o /tmp/trunk.tgz https://github.com/trunk-rs/trunk/releases/latest/download/trunk-$(uname -m)-unknown-linux-musl.tar.gz && tar xzf /tmp/trunk.tgz -C /usr/local/bin trunk && rm -f /tmp/trunk.tgz && trunk --version
 # Apple T2 Mac userland (Touch Bar daemon, fan daemon), pinned, portable CPU baseline. Own layer BEFORE `COPY . .`:
 # it does not depend on the repository content. Only the binaries + their data/udev rules go into the image;
 # the installer enables the services on a T2 Mac only (liveinst/t2.py).
@@ -40,5 +42,15 @@ RUN --mount=type=cache,target=/cache/target --mount=type=cache,target=/usr/local
     cp -r horcrux-api/horcrux-ui/dist/. /out/usr/share/horcrux/ui/; \
     mkdir -p /out/etc/init.d /out/etc/conf.d
 COPY gentoo/app-emulation/horcrux/files/horcrux-guests.initd /out/etc/init.d/horcrux-guests
+COPY build/live-iso/project/overlay/etc/init.d/horcrux-api /out/etc/init.d/horcrux-api
+COPY build/live-iso/project/overlay/etc/conf.d/horcrux-api /out/etc/conf.d/horcrux-api
+# The manager as ONE tarball: app-emulation/horcrux-bin (gentoo/app-emulation/horcrux-bin) installs it, so the manager is an owned, upgradable Portage package in every
+# edition (the core layer emerges it and then drops this tarball again, the image only needs the package-owned files). Also published as a release asset
+# (horcrux-manager-daily-<arch>.tar.zst) so an installed machine can upgrade the manager without compiling anything.
+RUN set -e; apt-get update && apt-get install -y --no-install-recommends zstd && rm -rf /var/lib/apt/lists/*; \
+    mkdir -p /out/usr/share/horcrux/prebuilt; cd /out; chmod 0755 etc/init.d/horcrux-api etc/init.d/horcrux-guests; \
+    tar --zstd -cf /out/usr/share/horcrux/prebuilt/horcrux-manager-$(uname -m).tar.zst --owner=0 --group=0 \
+        usr/bin/horcrux usr/bin/horcrux-api usr/share/horcrux/ui etc/init.d/horcrux-api etc/init.d/horcrux-guests etc/conf.d/horcrux-api; \
+    tar --zstd -tf /out/usr/share/horcrux/prebuilt/horcrux-manager-$(uname -m).tar.zst | grep -c . ; ls -l /out/usr/share/horcrux/prebuilt/
 FROM scratch
 COPY --from=app /out/ /out/

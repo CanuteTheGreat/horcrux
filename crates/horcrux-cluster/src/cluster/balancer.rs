@@ -42,6 +42,10 @@ pub struct NodeResources {
     /// recommended (cold migration only).
     #[serde(default)]
     pub cpu_vendor: String,
+    /// x86-64 microarchitecture level 1..4 (0 = unknown, permissive). A running
+    /// guest is never recommended onto a node with an older level.
+    #[serde(default)]
+    pub cpu_level: u8,
     /// Operator-set role/limits (see `cluster::roles`). `None` = unconfigured
     /// node: permissive default (compute, no limits).
     #[serde(default)]
@@ -52,14 +56,29 @@ impl NodeResources {
     /// `Ok` if this node may host a guest of the given size; `Err` carries
     /// the human-readable reason (witness-only node, per-guest vCPU/RAM cap).
     pub fn guest_eligibility(&self, vcpus: usize, memory_gb: usize) -> Result<(), String> {
+        self.guest_eligibility_labeled(vcpus, memory_gb, &[])
+    }
+
+    /// Like `guest_eligibility`, and the node must also carry every one of
+    /// `required_labels`. A node with no caps configured carries no labels,
+    /// so it never satisfies a label requirement (same as drain/rebalance).
+    pub fn guest_eligibility_labeled(
+        &self,
+        vcpus: usize,
+        memory_gb: usize,
+        required_labels: &[String],
+    ) -> Result<(), String> {
         match &self.caps {
-            None => Ok(()),
+            None => match required_labels.first() {
+                Some(l) => Err(format!("node lacks required label '{l}'")),
+                None => Ok(()),
+            },
             Some(c) => roles::eligible(
                 c,
                 &GuestNeeds {
                     vcpus: vcpus as u32,
                     memory: memory_gb as u64 * 1024 * 1024 * 1024,
-                    required_labels: Vec::new(),
+                    required_labels: required_labels.to_vec(),
                 },
             ),
         }
@@ -92,6 +111,10 @@ pub struct VmResources {
     /// default, backward-compatible behavior).
     #[serde(default)]
     pub min_placement_weight: Option<u32>,
+    /// Hard filter: only place this VM on nodes carrying every one of these
+    /// labels (`NodeCaps.labels`). Empty = no label requirement.
+    #[serde(default)]
+    pub required_labels: Vec<String>,
 }
 
 /// Balancing strategy
@@ -268,7 +291,9 @@ impl ClusterBalancer {
             // Never rebalance a guest onto a witness-only node or one whose
             // per-guest limits it exceeds.
             if let Some(t) = nodes.iter().find(|n| n.node_name == *underloaded_node) {
-                if t.guest_eligibility(vm.cpu_cores, vm.memory_gb).is_err() {
+                let need = &vm.required_labels;
+                let fit = t.guest_eligibility_labeled(vm.cpu_cores, vm.memory_gb, need);
+                if fit.is_err() {
                     continue;
                 }
             }
@@ -311,17 +336,23 @@ impl ClusterBalancer {
         recommendations
     }
 
-    /// True when both nodes have a known CPU family and they differ.
+    /// True when a running guest cannot live-migrate `from` -> `to`: known,
+    /// different CPU vendors, or a target with an older x86-64 level.
     fn vendor_conflict(nodes: &[NodeResources], from: &str, to: &str) -> bool {
-        let fam = |name: &str| {
+        let grp = |name: &str| {
             nodes
                 .iter()
                 .find(|n| n.node_name == name)
-                .map(|n| n.cpu_vendor.as_str())
-                .unwrap_or("")
+                .map(|n| super::cpu_groups::CpuGroup {
+                    vendor: n.cpu_vendor.clone(),
+                    level: n.cpu_level,
+                })
+                .unwrap_or(super::cpu_groups::CpuGroup {
+                    vendor: String::new(),
+                    level: 0,
+                })
         };
-        let (a, b) = (fam(from), fam(to));
-        !a.is_empty() && !b.is_empty() && a != b
+        super::cpu_groups::live_migration_block(&grp(from), &grp(to)).is_some()
     }
 
     /// Calculate improvement from migrating a VM
@@ -387,7 +418,10 @@ impl ClusterBalancer {
             .iter()
             .filter(|n| n.architecture.can_run(&vm.architecture))
             .filter(|n| n.placement_weight >= vm.min_placement_weight.unwrap_or(0))
-            .filter(|n| n.guest_eligibility(vm.cpu_cores, vm.memory_gb).is_ok())
+            .filter(|n| {
+                n.guest_eligibility_labeled(vm.cpu_cores, vm.memory_gb, &vm.required_labels)
+                    .is_ok()
+            })
             .filter(|n| {
                 crate::cluster::node::passthrough_devices_satisfied(
                     &n.available_passthrough_devices,
@@ -468,6 +502,7 @@ mod tests {
             available_passthrough_devices: Vec::new(),
             placement_weight: 100,
             cpu_vendor: String::new(),
+            cpu_level: 0,
             caps: None,
         }
     }
@@ -509,6 +544,7 @@ mod tests {
             architecture: Architecture::X86_64,
             required_passthrough_devices: Vec::new(),
             min_placement_weight: None,
+            required_labels: Vec::new(),
         }
     }
 
@@ -838,6 +874,31 @@ mod tests {
     }
 
     #[test]
+    fn test_rebalance_never_live_migrates_to_older_cpu_level() {
+        let balancer = ClusterBalancer::new(BalancingPolicy {
+            enabled: true,
+            strategy: BalancingStrategy::Weighted,
+            threshold: 20.0,
+            min_gain: 5.0,
+            max_migrations: 2,
+            aggressive: false,
+        });
+        let mut busy = create_test_node("e5", 90.0, 90.0, 10);
+        busy.cpu_vendor = "intel".to_string();
+        busy.cpu_level = 3;
+        let mut idle = create_test_node("xeon5000", 5.0, 5.0, 0);
+        idle.cpu_vendor = "intel".to_string();
+        idle.cpu_level = 1;
+        let vms = vec![create_test_vm(1, "e5")];
+        let recs = balancer.get_recommendations(&[busy.clone(), idle.clone()], &vms);
+        assert!(recs.is_empty(), "v3 -> v1 must not be recommended");
+        // Unknown level stays permissive.
+        idle.cpu_level = 0;
+        let recs = balancer.get_recommendations(&[busy, idle], &vms);
+        assert_eq!(recs.len(), 1);
+    }
+
+    #[test]
     fn test_rebalance_never_live_migrates_across_cpu_vendors() {
         let balancer = ClusterBalancer::new(BalancingPolicy {
             enabled: true,
@@ -892,5 +953,26 @@ mod tests {
             .guest_eligibility(1, 1)
             .unwrap_err()
             .contains("witness"));
+    }
+
+    #[test]
+    fn find_best_node_requires_labels() {
+        use crate::cluster::roles::NodeCaps;
+        let b = ClusterBalancer::new(BalancingPolicy::default());
+        let mut idle = create_test_node("idle", 5.0, 5.0, 0);
+        idle.caps = Some(NodeCaps::default());
+        let mut nvme = create_test_node("nvme", 60.0, 60.0, 3);
+        nvme.caps = Some(NodeCaps {
+            labels: vec!["nvme".to_string()],
+            ..Default::default()
+        });
+        let bare = create_test_node("bare", 1.0, 1.0, 0);
+        let nodes = vec![idle, nvme, bare];
+        let mut vm = create_test_vm(1, "x");
+        assert_eq!(b.find_best_node(&nodes, &vm), Some("bare".to_string()));
+        vm.required_labels = vec!["nvme".to_string()];
+        assert_eq!(b.find_best_node(&nodes, &vm), Some("nvme".to_string()));
+        vm.required_labels = vec!["gpu".to_string()];
+        assert_eq!(b.find_best_node(&nodes, &vm), None);
     }
 }

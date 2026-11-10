@@ -1,10 +1,25 @@
 name: CI
 
+# Trigger policy (2026-11-06, CI capacity): horcrux was the biggest x86 consumer (~40 of 130
+# job-h/day) because every PR commit ran the whole matrix on pull_request AND again on the merge
+# push. Now: the `plan` job decides per run.
+#   - a push that is a PR merge whose tree equals the PR head's tree, and whose PR run already
+#     passed `Test`, runs nothing heavy (`dup`): same bytes, already verified.
+#   - heavy = Gentoo image + USE matrix + release build matrix: only when gentoo/, the Dockerfile,
+#     Cargo.toml/Cargo.lock or this file changed, on the nightly schedule, on a tag, or on dispatch.
+#   - everything that protects main (check, clippy, Test, UI E2E, themes, audit) runs on PRs and
+#     pushes to main as before.
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main]
+  # ONLY periodic trigger of this repo: weekly safety net. The heavy Gentoo jobs (image, USE matrix, release matrix) run on every push
+  # that touches their inputs (plan job); this run exists solely for drift of the moving Portage tree / stage3, which has no change signal.
+  schedule:
+    - cron: '40 21 * * 1'
+  workflow_dispatch: {}
 
 env:
   CARGO_TERM_COLOR: always
@@ -33,6 +48,59 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  plan:
+    name: Plan (what needs to run)
+    runs-on: linux-any
+    outputs:
+      heavy: ${{ steps.p.outputs.heavy }}
+      dup: ${{ steps.p.outputs.dup }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - id: p
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
+          TOKEN: ${{ github.token }}
+        run: |
+          heavy=true; dup=false
+          case "$EVENT" in
+            schedule|workflow_dispatch) ;;
+            push|pull_request)
+              case "$REF" in refs/tags/*) ;; *)
+                base="$BEFORE"; [ "$EVENT" = pull_request ] && base="$PR_BASE"
+                heavy=true
+                if [ -n "$base" ] && [ "${base#0000000}" = "$base" ] && git fetch --no-tags --depth=1 origin "$base" 2>/dev/null; then
+                  files=$(git diff --name-only "$base" HEAD 2>/dev/null) && {
+                    if grep -qE '^(gentoo/|Dockerfile|\.dockerignore|Cargo\.toml$|Cargo\.lock$|\.forgejo/workflows/ci\.yml$)' <<<"$files"; then heavy=true; else heavy=false; fi
+                  }
+                fi
+              ;; esac
+              if [ "$EVENT" = push ] && [ "$(git rev-list --parents -n1 HEAD | wc -w)" = 3 ]; then
+                p2=$(git rev-parse HEAD^2)
+                if [ "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse "$p2^{tree}")" ]; then
+                  st=$(curl -fsS -H "Authorization: token $TOKEN" "$API/commits/$p2/status" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(any(x.get("context","").startswith("CI / Test (pull_request") and x.get("status")=="success" for x in d.get("statuses",[])))' 2>/dev/null || echo False)
+                  [ "$st" = True ] && dup=true
+                fi
+              fi ;;
+          esac
+          echo "event=$EVENT heavy=$heavy dup=$dup"
+          echo "heavy=$heavy" >> "$GITHUB_OUTPUT"
+          echo "dup=$dup" >> "$GITHUB_OUTPUT"
+
+  # Owner rule 2026-10-30: mobile UI follows the device's light/dark setting (cheap static check;
+  # rendered light/dark proof: horcrux-mobile/tests/render_theme.py).
+  mobile-theme:
+    name: Mobile theme (light/dark)
+    runs-on: linux-any
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 horcrux-mobile/tests/check_theme.py
+
   check:
     name: Check
     # linux-any: arch-independent (fmt/clippy/cargo check/audit/wasm), served by the arm64 hosts and
@@ -64,7 +132,7 @@ jobs:
       - name: Install build tools
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
-          sudo apt-get update && sudo apt-get install -y build-essential clang mold libvirt-dev libpam0g-dev
+          bash "$GITHUB_WORKSPACE/ci/apt-install.sh" build-essential clang mold libvirt-dev libpam0g-dev
 
       - name: Ensure Node.js is present (self-heal)
         # catthehacker/ubuntu:act-latest job containers on the beauxbatons
@@ -95,6 +163,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-cargo-check-v2-
 
+      - name: Shared build cache (rw-build-cache)
+        continue-on-error: true
+        run: |
+          curl -fsS -m 5 http://10.1.10.103:8088/ci/env.sh -o /tmp/rw-cache-env.sh && RW_CACHE_WANT=rust RW_CACHE_EXPORT=1 . /tmp/rw-cache-env.sh || true
       - name: Default build serves /ha/* (cluster is a default feature)
         # A default `cargo build` / the shipped image must include `cluster`,
         # else every /ha/* page says "Not available in this build".
@@ -130,8 +202,15 @@ jobs:
     # the race against the working beauxbatons runner (~every other run).
     # act-latest is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
-    container: catthehacker/ubuntu:act-latest
-    needs: check
+    # Memory (2026-11-06): sampled anon peak 5.4-5.5 GiB (all-features test build + k3s/LDAP/QEMU tests), so
+    # this job needs the 7g runner cap. A job's own container.options --memory can only be <= the runner's
+    # (forgejo-runner rejects a larger one), so this line is a statement of need: never lower the
+    # linux-cross runner cap below 7g while this job is on that label.
+    container:
+      image: catthehacker/ubuntu:act-latest
+      options: --memory=7g --memory-swap=7g --cpus=3
+    needs: [check, plan]
+    if: needs.plan.outputs.dup != 'true'
     # Memory (2026-10-17): linux-cross job containers are capped at 9g
     # (rw-man-0x forgejo-runner-crosscompile, capacity 2 x 9g). Run 478's
     # `cargo test --all-features --workspace` hit that cgroup limit: the
@@ -179,7 +258,7 @@ jobs:
         # its VGA BIOS from the qemu firmware packages.
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
-          sudo apt-get update
+          bash "$GITHUB_WORKSPACE/ci/apt-install.sh" build-essential clang qemu-utils  # index refresh with mirror retry
           spice_mods=""
           if apt-cache show qemu-system-modules-spice >/dev/null 2>&1; then
             spice_mods="qemu-system-modules-spice"
@@ -221,6 +300,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-cargo-test-v2-
 
+      - name: Shared build cache (rw-build-cache)
+        continue-on-error: true
+        run: |
+          curl -fsS -m 5 http://10.1.10.103:8088/ci/env.sh -o /tmp/rw-cache-env.sh && RW_CACHE_WANT=rust RW_CACHE_EXPORT=1 . /tmp/rw-cache-env.sh || true
       - name: Build horcrux-api server (for integration tests)
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Build horcrux-api server (for integration tests)"
@@ -522,7 +605,8 @@ jobs:
     # act-latest is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
     container: catthehacker/ubuntu:act-latest
-    needs: test
+    needs: [test, plan]
+    if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.dup != 'true'
     strategy:
       matrix:
         include:
@@ -544,7 +628,7 @@ jobs:
       - name: Install build tools
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
-          sudo apt-get update && sudo apt-get install -y build-essential clang mold libvirt-dev libpam0g-dev
+          bash "$GITHUB_WORKSPACE/ci/apt-install.sh" build-essential clang mold libvirt-dev libpam0g-dev
 
       - name: Ensure Node.js is present (self-heal)
         # catthehacker/ubuntu:act-latest job containers on the beauxbatons
@@ -575,6 +659,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-cargo-build-${{ matrix.features }}-v2-
 
+      - name: Shared build cache (rw-build-cache)
+        continue-on-error: true
+        run: |
+          curl -fsS -m 5 http://10.1.10.103:8088/ci/env.sh -o /tmp/rw-cache-env.sh && RW_CACHE_WANT=rust RW_CACHE_EXPORT=1 . /tmp/rw-cache-env.sh || true
       - name: Build (features=${{ matrix.features }})
         # Deliberately NOT passing --target here even though the matrix
         # names a target triple (kept for cache-key/toolchain-install
@@ -634,8 +722,12 @@ jobs:
       - name: Install build tools
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
-          sudo apt-get update && sudo apt-get install -y build-essential clang mold libvirt-dev libpam0g-dev
+          bash "$GITHUB_WORKSPACE/ci/apt-install.sh" build-essential clang mold libvirt-dev libpam0g-dev
 
+      - name: Shared build cache (rw-build-cache)
+        continue-on-error: true
+        run: |
+          curl -fsS -m 5 http://10.1.10.103:8088/ci/env.sh -o /tmp/rw-cache-env.sh && RW_CACHE_WANT=rust RW_CACHE_EXPORT=1 . /tmp/rw-cache-env.sh || true
       - name: Install trunk
         # `cargo install trunk` from source hits a real dependency conflict:
         # lightningcss pulls in two incompatible cssparser versions (0.33 vs
@@ -732,8 +824,12 @@ jobs:
       - name: Install build tools
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
-          sudo apt-get update && sudo apt-get install -y build-essential clang mold libvirt-dev libpam0g-dev
+          bash "$GITHUB_WORKSPACE/ci/apt-install.sh" build-essential clang mold libvirt-dev libpam0g-dev
 
+      - name: Shared build cache (rw-build-cache)
+        continue-on-error: true
+        run: |
+          curl -fsS -m 5 http://10.1.10.103:8088/ci/env.sh -o /tmp/rw-cache-env.sh && RW_CACHE_WANT=rust RW_CACHE_EXPORT=1 . /tmp/rw-cache-env.sh || true
       - name: Install cargo-audit
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install cargo-audit"
@@ -769,11 +865,19 @@ jobs:
         # which needs a coordinated RustCrypto major upgrade (elliptic-curve
         # 0.14, p256 0.14, ecdsa 0.17) that cargo can't resolve today.
         # Re-evaluate and drop this --ignore when that stack moves.
+        #
+        # RUSTSEC-2026-0459 (libsqlite3-sys < 0.39.0 vendors a C SQLite with
+        # CVE-2026-119375, advisory 2026-10-30; first failed main 2026-11-09):
+        # libsqlite3-sys 0.30.1 is pinned by sqlx 0.8's sqlx-sqlite, and the
+        # fix needs the sqlx 0.9 line, which is not released/resolvable here.
+        # Not yet checked whether our builds use the vendored C SQLite or the
+        # system one (the ebuild has no sqlite dependency) - follow up. Drop
+        # this --ignore when sqlx moves to libsqlite3-sys >= 0.39.
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Run security audit"
           grep -A1 '^name = "webpki-roots"$' Cargo.lock | grep -q '^version = "1\.0\.\([1-9][0-9]\)"' \
             || { echo "webpki-roots 1.x in Cargo.lock is older than 1.0.10 (RUSTSEC-2026-0381)"; exit 1; }
-          cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0449 --ignore RUSTSEC-2026-0381 --ignore RUSTSEC-2026-0387
+          cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0449 --ignore RUSTSEC-2026-0381 --ignore RUSTSEC-2026-0387 --ignore RUSTSEC-2026-0459
 
       - name: Memory probe report
         if: always()
@@ -794,7 +898,8 @@ jobs:
     # act-latest is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
     container: catthehacker/ubuntu:act-latest
-    needs: check
+    needs: [check, plan]
+    if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.dup != 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -917,7 +1022,8 @@ jobs:
     # the x86 linux-cross slots (ctg-infrastructure ci-runners). Cache keys carry runner.arch.
     runs-on: linux-any
     container: catthehacker/ubuntu:act-latest
-    needs: check
+    needs: [check, plan]
+    if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.dup != 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -930,7 +1036,7 @@ jobs:
       - name: Install build tools
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
-          sudo apt-get update && sudo apt-get install -y build-essential clang mold libvirt-dev libpam0g-dev
+          bash "$GITHUB_WORKSPACE/ci/apt-install.sh" build-essential clang mold libvirt-dev libpam0g-dev
 
       - name: Ensure Node.js is present (self-heal)
         run: |
@@ -979,6 +1085,10 @@ jobs:
           done
           echo "USE flags <-> Cargo features consistent:"; echo $mapped
 
+      - name: Shared build cache (rw-build-cache)
+        continue-on-error: true
+        run: |
+          curl -fsS -m 5 http://10.1.10.103:8088/ci/env.sh -o /tmp/rw-cache-env.sh && RW_CACHE_WANT=rust RW_CACHE_EXPORT=1 . /tmp/rw-cache-env.sh || true
       - name: Build each USE-flag feature on its own
         # The Test job builds --all-features, which hides code that only
         # compiles when some *other* feature is also on. A Gentoo user can
@@ -1009,7 +1119,8 @@ jobs:
     name: UI E2E (browser)
     runs-on: linux-cross-x86_64
     container: catthehacker/ubuntu:act-latest
-    needs: check
+    needs: [check, plan]
+    if: needs.plan.outputs.dup != 'true'
     timeout-minutes: 60
     env:
       HX_RUN_TAG: ${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}   # run-scoped sibling container/network/volume names: exact cleanup, no collision with other jobs
@@ -1029,7 +1140,7 @@ jobs:
         # checks start a real VM and connect noVNC / fetch its SPICE .vv.
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install build tools"
-          sudo apt-get update
+          bash "$GITHUB_WORKSPACE/ci/apt-install.sh" build-essential clang qemu-utils  # index refresh with mirror retry
           spice_mods=""
           if apt-cache show qemu-system-modules-spice >/dev/null 2>&1; then
             spice_mods="qemu-system-modules-spice"
@@ -1071,6 +1182,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-cargo-e2e-v2-
 
+      - name: Shared build cache (rw-build-cache)
+        continue-on-error: true
+        run: |
+          curl -fsS -m 5 http://10.1.10.103:8088/ci/env.sh -o /tmp/rw-cache-env.sh && RW_CACHE_WANT=rust RW_CACHE_EXPORT=1 . /tmp/rw-cache-env.sh || true
       - name: Build web UI and API
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Build web UI and API"
@@ -1220,7 +1335,8 @@ jobs:
     container: catthehacker/ubuntu:act-latest
     # Runs after the main Gentoo build so the shared builder-stage layers
     # (stage3, emerge-webrsync, rust-bin) are already in the daemon's cache.
-    needs: gentoo-docker-build
+    needs: [gentoo-docker-build, plan]
+    if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.dup != 'true'
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -1250,3 +1366,12 @@ jobs:
       - name: Remove this run's image
         if: always()
         run: docker rmi horcrux/use-matrix:${{ github.sha }} >/dev/null 2>&1 || true
+
+  ui-theme:
+    name: Web UI theme (light/dark)
+    runs-on: linux-any
+    steps:
+      - uses: actions/checkout@v4
+      # Owner rule 2026-10-30: the UI follows the device's light/dark setting (palette + contrast of both).
+      # The rendered proof is theme_checks() in horcrux-api/horcrux-ui/e2e/ui_e2e.py (UI E2E job).
+      - run: python3 horcrux-api/horcrux-ui/tests/check_theme.py

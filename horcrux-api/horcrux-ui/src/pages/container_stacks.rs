@@ -14,6 +14,11 @@ pub fn StacksPage() -> impl IntoView {
         "services:\n  web:\n    image: nginx:latest\n    ports:\n      - \"8080:80\"\n".to_string(),
     );
 
+    // Some(stack name) while the form edits an existing stack.
+    let (editing, set_editing) = create_signal(None::<String>);
+    let (env_text, set_env_text) = create_signal(String::new());
+    let (notice, set_notice) = create_signal(None::<String>);
+
     let reload = move || {
         spawn_local(async move {
             set_loading.set(true);
@@ -44,7 +49,85 @@ pub fn StacksPage() -> impl IntoView {
                     set_action_error.set(None);
                     reload();
                 }
+                Err(e) if api::is_transport_error(&e.message) => {
+                    // The request was cut off before any answer (browser network
+                    // change, proxy timeout on a long image pull). The server
+                    // finishes the deploy on its own: wait for the stack to show
+                    // up instead of reporting a failure for a deploy that works.
+                    let mut found = false;
+                    for _ in 0..45 {
+                        if let Ok(list) = api::get_stacks().await {
+                            if list.iter().any(|s| s.name == n) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        gloo_timers::future::TimeoutFuture::new(2_000).await;
+                    }
+                    if found {
+                        set_name.set(String::new());
+                        set_action_error.set(None);
+                        reload();
+                    } else {
+                        set_action_error.set(Some(format!(
+                            "Deploy failed: {} (the stack did not appear within 90 s)",
+                            e.message
+                        )));
+                    }
+                }
                 Err(e) => set_action_error.set(Some(format!("Deploy failed: {}", e.message))),
+            }
+        });
+    };
+
+    let edit = move |id: String| {
+        spawn_local(async move {
+            match api::get_stack(&id).await {
+                Ok(s) => {
+                    set_compose.set(s.compose_yaml.unwrap_or_default());
+                    set_name.set(s.name.clone());
+                    set_runtime.set(s.runtime.clone());
+                    set_env_text.set(String::new());
+                    set_editing.set(Some(s.name));
+                    set_action_error.set(None);
+                    set_notice.set(None);
+                }
+                Err(e) => set_action_error.set(Some(format!("Load failed: {}", e.message))),
+            }
+        });
+    };
+    let cancel_edit = move |_| {
+        set_editing.set(None);
+        set_name.set(String::new());
+        set_env_text.set(String::new());
+    };
+    let update = move |_| {
+        let Some(id) = editing.get() else { return };
+        let yaml = compose.get();
+        let env: std::collections::BTreeMap<String, String> = env_text
+            .get()
+            .lines()
+            .filter_map(|l| l.split_once('='))
+            .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+            .filter(|(k, _)| !k.is_empty())
+            .collect();
+        spawn_local(async move {
+            match api::update_stack(&id, Some(&yaml), &env).await {
+                Ok(r) => {
+                    set_notice.set(Some(format!(
+                        "Stack {id} updated: recreated [{}], unchanged [{}], added [{}], removed [{}]",
+                        r.recreated.join(", "),
+                        r.unchanged.join(", "),
+                        r.added.join(", "),
+                        r.removed.join(", ")
+                    )));
+                    set_action_error.set(None);
+                    set_editing.set(None);
+                    set_name.set(String::new());
+                    set_env_text.set(String::new());
+                    reload();
+                }
+                Err(e) => set_action_error.set(Some(format!("Update failed: {}", e.message))),
             }
         });
     };
@@ -98,6 +181,7 @@ pub fn StacksPage() -> impl IntoView {
             </div>
 
             {move || action_error.get().map(|e| view! { <div class="alert alert-error">{e}</div> })}
+            {move || notice.get().map(|n| view! { <div class="alert alert-info" id="stack-notice">{n}</div> })}
 
             <div class="form-section">
                 <select on:change=move |ev| set_runtime.set(event_target_value(&ev))>
@@ -106,6 +190,8 @@ pub fn StacksPage() -> impl IntoView {
                 </select>
                 <input
                     type="text"
+                    id="stack-name"
+                    disabled=move || editing.get().is_some()
                     placeholder="stack name"
                     prop:value=name
                     on:input=move |ev| set_name.set(event_target_value(&ev))
@@ -116,7 +202,23 @@ pub fn StacksPage() -> impl IntoView {
                     prop:value=compose
                     on:input=move |ev| set_compose.set(event_target_value(&ev))
                 ></textarea>
-                <button class="btn btn-primary" on:click=deploy>"Deploy Stack"</button>
+                {move || if editing.get().is_some() {
+                    view! {
+                        <textarea
+                            id="stack-env"
+                            rows="3"
+                            style="width: 100%; font-family: monospace;"
+                            placeholder="extra environment for every service, one KEY=value per line (optional)"
+                            prop:value=env_text
+                            on:input=move |ev| set_env_text.set(event_target_value(&ev))
+                        ></textarea>
+                        <button id="stack-update" class="btn btn-primary" on:click=update>"Update Stack"</button>
+                        <button class="btn" on:click=cancel_edit>"Cancel"</button>
+                        <p class="form-help">"Services whose configuration changed are pulled and recreated one at a time; unchanged services keep running and volumes are kept."</p>
+                    }.into_view()
+                } else {
+                    view! { <button id="stack-deploy" class="btn btn-primary" on:click=deploy>"Deploy Stack"</button> }.into_view()
+                }}
             </div>
 
             {move || {
@@ -139,6 +241,7 @@ pub fn StacksPage() -> impl IntoView {
                                         let start_id = s.id.clone();
                                         let stop_id = s.id.clone();
                                         let remove_id = s.id.clone();
+                                        let edit_id = s.id.clone();
                                         let service_names: Vec<String> = s.services.iter().map(|sv| sv.service_name.clone()).collect();
                                         view! {
                                             <tr>
@@ -148,6 +251,7 @@ pub fn StacksPage() -> impl IntoView {
                                                 <td class="actions">
                                                     <button class="btn btn-sm btn-success" on:click=move |_| start(start_id.clone())>"Start"</button>
                                                     <button class="btn btn-sm btn-warning" on:click=move |_| stop(stop_id.clone())>"Stop"</button>
+                                                    <button class="btn btn-sm stack-edit" on:click=move |_| edit(edit_id.clone())>"Edit / Update"</button>
                                                     <button class="btn btn-sm btn-danger" on:click=move |_| remove(remove_id.clone())>"Remove"</button>
                                                 </td>
                                             </tr>

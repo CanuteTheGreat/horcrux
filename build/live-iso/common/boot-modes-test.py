@@ -66,7 +66,7 @@ class Tests:
         self.nvars = f"{a.out}/OVMF_VARS.fd"
         self.ns = argparse.Namespace(project=a.project, mode=a.mode, media=a.media, flow="tui", fs="ext4", fs_default=False, install_only=False, zfs_raid="single", static_ip="", lan_ip="10.77.0.1",
                                      mem=3072, ssh_password_opt_in=False, console_open=False, out=a.out, disk_gb=12, arch=a.arch,
-                                     cpu=a.cpu, restarts=0)
+                                     cpu=a.cpu, restarts=0, tpm="none", tpm_negative=False)
         self.serial = qt.ARCHS[a.arch]["serial"]
 
     # ---------------------------------------------------------------- plumbing
@@ -306,8 +306,14 @@ class Tests:
             self.step("forensic-banner", vm.expect_raw(r"FORENSIC RESCUE \(no-touch\)", T(300)), "all disks read-only message")
             self.step("forensic-menu", vm.expect_raw(r"Enter an option", T(60)))
             # 0 -> the live shell: inspect the state the session start left behind
-            vm.send("0\r")
-            self.step("live-shell", self.shell(vm))
+            # the menu can swallow the first keystroke on a loaded host (BIOS runs 10240/10335): re-send "0" if no shell answers
+            ok_shell = False
+            for _try in range(3):
+                vm.send("0\r")
+                ok_shell = self.shell(vm, 100)
+                if ok_shell:
+                    break
+            self.step("live-shell", ok_shell)
             rc, o = self.run(vm, "echo \"M=$(grep -E '^/dev/(vd|sd|nvme)' /proc/mounts | grep -v iso9660 | wc -l) S=$(cat /proc/swaps | wc -l) RO=$(blockdev --getro /dev/vda /dev/vda1 /dev/vda4 | tr -d '\\n')\"")
             mm = re.search(r"M=(\d+) S=(\d+) RO=(\d+)", o)
             nums = list(mm.groups()[:2]) if mm else []
@@ -381,11 +387,17 @@ class Tests:
             bcmd = (f"echo ORIGINAL > {cfgdir}/rescue-test.conf && python3 -c 'import sys; sys.path.insert(0,\"/usr/lib/live-installer\"); "
                     f"from liveinst import system as S, consolemenu as C; print(\"BACKUP\", C.Console(S.load_profile()).make_backup(\"rescuetest\"))' && "
                     f"echo CHANGED > {cfgdir}/rescue-test.conf")
-            for attempt in (1, 2):                      # the first command typed into a freshly started chroot shell is sometimes lost on a loaded host
-                rc, o = self.run(vm, bcmd, 120)
+            for attempt in (1, 2, 3):                   # the first command typed into a freshly started chroot shell is sometimes lost on a loaded host
+                rc, o = self.run(vm, bcmd, 120 if attempt == 1 else 60)
                 if "BACKUP /var/backups" in o:
                     break
                 time.sleep(3)
+                if "Enter an option" in o:              # the menu came back (the '1' was lost or the chroot shell exited): enter the chroot again
+                    vm.send("\r")
+                    vm.expect_raw(r"Enter an option", T(20))
+                    vm.send("1\r")
+                    vm.expect_raw(r"Shell inside the installed system", T(30))
+                    time.sleep(1)
             self.step("backup-made-in-chroot", "BACKUP /var/backups" in o,
                       "config backup written inside the installed system by its own console-menu code" if "BACKUP /var/backups" in o
                       else f"rc={rc} attempt={attempt} output tail: {o[-600:]!r}")
@@ -483,30 +495,47 @@ class Tests:
         for enc in modes:
             tag = "enc" if enc else "plain"
             pdisk = f"{self.a.out}/persist-{tag}.raw"
-            subprocess.check_call(["qemu-img", "create", "-q", "-f", "raw", pdisk, "512M"])
-            marker = secrets.token_hex(6)
-            vm = self.boot(f"persist-{tag}-1", extra_disks=[pdisk])
-            try:
-                self.menu_ready(vm)
-                self.pick(vm, "8")
-                self.step(f"persist-{tag}-offers-to-create", vm.expect_raw(r"Create one now", T(300)))
-                vm.send("y\r")
-                vm.expect_raw(r"Encrypt it", 20)
-                vm.send(("y" if enc else "n") + "\r")
-                vm.expect_raw(r"Device \(empty", 20)
-                vm.send("/dev/vda\r")
-                if enc:
-                    vm.expect_raw(r"New passphrase", T(60))
-                    vm.send(PERSIST_PW + "\r")
-                    vm.expect_raw(r"Repeat", 20)
-                    vm.send(PERSIST_PW + "\r")
-                self.step(f"persist-{tag}-created", vm.expect_raw(r"PERSISTENCE-CREATED", T(240)), "LUKS2 + ext4" if enc else "ext4")
-                self.step(f"persist-{tag}-shell", self.shell(vm))
-                rc, o = self.run(vm, f"echo {marker} > /root/keep.txt; echo {marker} > /etc/keep.conf; mkdir -p /var/lib/keepme && echo {marker} > /var/lib/keepme/f; sync; "
-                                     f"blkid | grep -c -i 'persist'")
-                self.step(f"persist-{tag}-files-written", rc == 0)
-            finally:
-                self.finish(vm)
+            for attempt in (1, 2):
+                subprocess.check_call(["qemu-img", "create", "-q", "-f", "raw", pdisk, "512M"])
+                marker = secrets.token_hex(6)
+                vm = self.boot(f"persist-{tag}-1", extra_disks=[pdisk])
+                try:
+                    self.menu_ready(vm)
+                    self.pick(vm, "8")
+                    offered = vm.expect_raw(r"Create one now", T(300))
+                    if attempt == 1 and not offered:
+                        print(f"[WARN] persist-{tag}: no 'Create one now' prompt (attempt 1/2); serial tail: {vm.raw[-300:]!r}", flush=True)
+                        continue
+                    self.step(f"persist-{tag}-offers-to-create", offered)
+                    # pick() re-sends "s"+<digit> when GRUB's 'Booting' line is late (slow/loaded host); once the entry has booted those
+                    # stray keys sit in the UART line buffer and the prompt reads "s8y" instead of "y" -> treated as N -> root shell,
+                    # PERSISTENCE-CREATED never printed (Patronus x86 BIOS runs 866/12017, reproduced on rw-man-02 with the 11-04 ISO).
+                    # ^U (VKILL) clears whatever the tty line discipline has buffered; the assertions are unchanged.
+                    vm.send("\x15")
+                    time.sleep(0.5)
+                    vm.send("y\r")
+                    vm.expect_raw(r"Encrypt it", 20)
+                    vm.send(("y" if enc else "n") + "\r")
+                    vm.expect_raw(r"Device \(empty", 20)
+                    vm.send("/dev/vda\r")
+                    if enc:
+                        vm.expect_raw(r"New passphrase", T(60))
+                        vm.send(PERSIST_PW + "\r")
+                        vm.expect_raw(r"Repeat", 20)
+                        vm.send(PERSIST_PW + "\r")
+                    created = vm.expect_raw(r"PERSISTENCE-CREATED", T(240))
+                    if attempt == 1 and not created:
+                        # a lost keystroke / slow cryptsetup on a loaded runner: redo the whole flow once on a fresh disk; the assertion is unchanged
+                        print(f"[WARN] persist-{tag}: PERSISTENCE-CREATED not seen (attempt 1/2); serial tail: {vm.raw[-600:]!r}", flush=True)
+                        continue
+                    self.step(f"persist-{tag}-created", created, "LUKS2 + ext4" if enc else "ext4")
+                    self.step(f"persist-{tag}-shell", self.shell(vm))
+                    rc, o = self.run(vm, f"echo {marker} > /root/keep.txt; echo {marker} > /etc/keep.conf; mkdir -p /var/lib/keepme && echo {marker} > /var/lib/keepme/f; sync; "
+                                         f"blkid | grep -c -i 'persist'")
+                    self.step(f"persist-{tag}-files-written", rc == 0)
+                    break
+                finally:
+                    self.finish(vm)
             if enc:
                 head = open(pdisk, "rb").read(4 << 20)          # the partition starts at 1 MiB: its first sector is the LUKS header
                 self.step("persist-enc-disk-is-luks-not-plaintext", b"LUKS\xba\xbe" in head, "LUKS2 header on the partition")

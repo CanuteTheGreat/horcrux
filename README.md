@@ -4,7 +4,7 @@
 
 # Horcrux
 
-> **A Proxmox VE-style virtualization manager for Gentoo Linux, written in Rust.**
+> **A headless hypervisor/server OS (Proxmox VE-style virtualization manager) for Gentoo Linux, written in Rust, with an optional desktop.**
 >
 > **Status: in active development (v0.1.x).** Not yet suitable for production use.
 > APIs, config and on-disk formats can still change between releases. Try it on test hardware.
@@ -13,9 +13,23 @@
 [![Built with Rust](https://img.shields.io/badge/Built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![Platform: Gentoo](https://img.shields.io/badge/Platform-Gentoo-purple.svg)](https://www.gentoo.org/)
 
+**Website and docs: [horcrux.errant.solutions](https://horcrux.errant.solutions)**
+
 **[Documentation](docs/)** | **[Roadmap to 1.0](docs/ROADMAP.md)** | **[API reference](docs/API_DOCS.md)** | **[Installation](docs/INSTALLATION.md)** | **[Docker guide](docs/DOCKER.md)**
 
 ## What is Horcrux?
+
+Horcrux is a **server-first operating system**: a Gentoo-based hypervisor you install from an ISO (x86_64 and aarch64) and manage through the web UI, the API, the CLI or SSH.
+The server image has no desktop and needs no display: it installs over a serial console or SSH with an answer file, and the web UI comes up on port 8006. A **desktop is an optional
+edition** (GNOME today) layered on the same core, for laptops and workstations that run VMs; it adds the desktop and nothing else (see [Layers](docs/ISO-INSTALL.md#layers)).
+
+| image | what it is |
+|---|---|
+| `horcrux-server-openrc-daily-x86_64.iso`, `horcrux-server-openrc-daily-aarch64.iso` | the headless server (the product) |
+| `horcrux-gnome-light-openrc-daily-x86_64.iso` | server core + GNOME (optional desktop edition) |
+
+Image names are `<product>-<desktop environment or "server">-<init system>-<channel>-<arch>.iso` ([details](docs/ISO-INSTALL.md#image-names)).
+
 
 Horcrux is a web-managed virtualization platform that aims at Proxmox VE-style
 functionality (VMs, containers, storage, clustering, firewall, backups, RBAC) on

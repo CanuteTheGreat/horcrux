@@ -1,0 +1,20 @@
+#!/sbin/openrc-run
+# Horcrux core, installed system, first boot only: wait (without a time limit) for a network, then run the machine layers' hooks and refresh
+# the Portage trees in the background so `emerge -uDN @world` works. Marker: /var/lib/horcrux/firstboot-done.
+# The worker is NOT a supervised daemon (no start-stop-daemon registration): it ends by itself when the work is done, and OpenRC would show a
+# finished daemon as "crashed" forever. It keeps its own pidfile (/run/horcrux-firstboot.pid) for stop().
+description="Horcrux first boot: wait for a network (no time limit), machine hooks, Portage tree sync (once, in the background)"
+depend() { use net; after chronyd horcrux-timesync sshd; }
+LOG=/var/log/horcrux-firstboot.log
+start() {
+	grep -q 'rd.live.image' /proc/cmdline && return 0
+	[ -e /var/lib/horcrux/firstboot-done ] && return 0
+	ebegin "Horcrux first boot (background, log $LOG)"
+	mkdir -p /var/lib/horcrux
+	setsid /usr/libexec/horcrux-firstboot >>"$LOG" 2>&1 </dev/null &
+	eend 0
+}
+stop() {
+	[ -s /run/horcrux-firstboot.pid ] && kill "$(cat /run/horcrux-firstboot.pid)" 2>/dev/null
+	return 0
+}

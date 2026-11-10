@@ -1,0 +1,25 @@
+[Unit]
+Description=Rustinion agent (resident mode)
+Documentation=https://rustinion.com/docs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# apt/dnf/pacman package installs and OS-update installs need root.
+User=root
+Environment=RUST_LOG=info
+# Daemon flags live in /etc/rustinion/daemon.env (written by `rustinion service
+# install`, or by the postinst when it adopts a pre-package install).
+Environment="RUSTINION_DAEMON_ARGS=--interval-minutes 60"
+EnvironmentFile=-/etc/rustinion/daemon.env
+ExecStart=/usr/bin/rustinion daemon $RUSTINION_DAEMON_ARGS
+Restart=on-failure
+RestartSec=30s
+# A ClamAV child being OOM-killed must not stop the agent itself.
+OOMPolicy=continue
+# Hard cgroup ceiling on the agent and everything it starts.
+MemoryMax=50%
+
+[Install]
+WantedBy=multi-user.target

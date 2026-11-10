@@ -1,0 +1,8 @@
+# <service> <runlevel>: enabled by the installer for the desktop user's machine (Surface XFCE profile)
+elogind boot
+dbus default
+NetworkManager default
+display-manager default
+zram-swap default
+cronie default
+tailscale default

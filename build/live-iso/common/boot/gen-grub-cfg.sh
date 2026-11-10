@@ -88,6 +88,8 @@ CFG
 
 entries() {   # <indent> <console args>
   local i=$1 c=$2
+  # image-specific one-shot entry (e.g. the Surface tablet: ask the passphrase only, erase + install by itself); AUTO_ENTRY = its title
+  [ -z "${AUTO_ENTRY:-}" ] || entry "$i" a "$AUTO_ENTRY" "$c ${PROJ}.installer=surfaceauto"
   entry "$i" 1 "Graphical install"                       "$c ${PROJ}.installer=gui"
   entry "$i" 2 "Install (text mode)"                     "$c ${PROJ}.installer=1"
   entry "$i" 3 "Advanced (expert) install"               "$c ${PROJ}.installer=expert"

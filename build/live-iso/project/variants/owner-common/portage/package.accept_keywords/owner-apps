@@ -1,0 +1,2 @@
+www-client/brave-bin::canutethegreat-overlay ~amd64
+dev-util/rustup ~amd64

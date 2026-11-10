@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Surface tablet defaults (first login)
+Exec=/usr/bin/horcrux-surface-defaults
+OnlyShowIn=XFCE;
+NoDisplay=true

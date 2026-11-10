@@ -1,4 +1,0 @@
-# zram swap size as a percentage of RAM (compressed in RAM: ~2-3x, so 100% of a 4 GB machine costs ~1.5 GB when full)
-zram_percent=100
-zram_max_mb=8192
-zram_algo=zstd

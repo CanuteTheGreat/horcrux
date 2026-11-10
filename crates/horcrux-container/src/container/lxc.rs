@@ -61,6 +61,7 @@ impl LxcMeta {
             "ifupdown" => GuestNet::Ifupdown,
             "netplan" => GuestNet::Netplan,
             "networkd" => GuestNet::Networkd,
+            "netifrc" => GuestNet::Netifrc,
             _ => GuestNet::Unmanaged,
         }
     }
@@ -276,6 +277,54 @@ pub fn safe_write(
     f.write_all(content)?;
     f.set_permissions(std::fs::Permissions::from_mode(mode))?;
     std::os::unix::fs::fchown(&f, Some(owner.0), Some(owner.1))?;
+    Ok(())
+}
+
+/// Create the symlink `root/rel` -> `target` (an existing symlink or file is
+/// replaced, parents are created, no guest symlink is followed).
+pub fn safe_symlink(
+    root: &Path,
+    rel: &str,
+    target: &str,
+    owner: (u32, u32),
+) -> std::io::Result<()> {
+    use std::io::{Error as IoError, ErrorKind};
+    let rel = Path::new(rel.trim_start_matches('/'));
+    let mut cur = root.to_path_buf();
+    let comps: Vec<_> = rel.components().collect();
+    let (last, parents) = comps
+        .split_last()
+        .ok_or_else(|| IoError::new(ErrorKind::InvalidInput, "empty path"))?;
+    for comp in parents {
+        cur.push(comp);
+        match std::fs::symlink_metadata(&cur) {
+            Ok(m) if m.is_dir() => {}
+            Ok(_) => {
+                return Err(IoError::new(
+                    ErrorKind::InvalidInput,
+                    format!("{} is not a directory (symlink?)", cur.display()),
+                ))
+            }
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                std::fs::create_dir(&cur)?;
+                std::fs::set_permissions(&cur, std::fs::Permissions::from_mode(0o755))?;
+                std::os::unix::fs::lchown(&cur, Some(owner.0), Some(owner.1))?;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    cur.push(last);
+    if let Ok(m) = std::fs::symlink_metadata(&cur) {
+        if m.is_dir() {
+            return Err(IoError::new(
+                ErrorKind::InvalidInput,
+                format!("{} is a directory", cur.display()),
+            ));
+        }
+        std::fs::remove_file(&cur)?;
+    }
+    std::os::unix::fs::symlink(target, &cur)?;
+    std::os::unix::fs::lchown(&cur, Some(owner.0), Some(owner.1))?;
     Ok(())
 }
 
@@ -670,6 +719,28 @@ impl LxcManager {
                     )?;
                 }
             }
+            GuestNet::Netifrc if !ignored("netifrc") => {
+                w(
+                    "etc/conf.d/net",
+                    &lxc_config::render_netifrc(&o.nets),
+                    0o644,
+                )?;
+                // Every interface needs its net.<if> -> net.lo init script,
+                // started in the default runlevel.
+                for ifn in lxc_config::netifrc_ifaces(&o.nets) {
+                    let init = format!("net.{ifn}");
+                    safe_symlink(rootfs, &format!("etc/init.d/{init}"), "net.lo", owner)
+                        .and_then(|_| {
+                            safe_symlink(
+                                rootfs,
+                                &format!("etc/runlevels/default/{init}"),
+                                &format!("/etc/init.d/{init}"),
+                                owner,
+                            )
+                        })
+                        .map_err(|e| sys(format!("enabling {init} in the container: {e}")))?;
+                }
+            }
             _ => {}
         }
         // DNS set in the container settings wins over DHCP: write
@@ -737,6 +808,19 @@ impl LxcManager {
             GuestNet::Netplan
         } else if has("etc/network/interfaces") && any(&["sbin/ifup", "usr/sbin/ifup"]) {
             GuestNet::Ifupdown
+        } else if has("etc/init.d/net.lo")
+            && any(&[
+                "sbin/openrc-run",
+                "usr/sbin/openrc-run",
+                "bin/openrc-run",
+                "usr/bin/openrc-run",
+            ])
+            && !any(&[
+                "lib/systemd/systemd-networkd",
+                "usr/lib/systemd/systemd-networkd",
+            ])
+        {
+            GuestNet::Netifrc
         } else if any(&[
             "lib/systemd/systemd-networkd",
             "usr/lib/systemd/systemd-networkd",
@@ -879,6 +963,7 @@ impl LxcManager {
                     GuestNet::Ifupdown => "ifupdown",
                     GuestNet::Netplan => "netplan",
                     GuestNet::Networkd => "networkd",
+                    GuestNet::Netifrc => "netifrc",
                     GuestNet::Unmanaged => "none",
                 }
                 .into(),
@@ -1892,6 +1977,82 @@ mod tests {
         assert!(root.join("etc/systemd/network/eth0.network").is_file());
         // Reading through a symlink is refused too.
         assert!(read_inside(&root, "root/x").is_none());
+    }
+
+    #[test]
+    fn gentoo_guests_get_netifrc_or_networkd() {
+        let me = {
+            use std::os::unix::fs::MetadataExt;
+            let m = std::fs::metadata(std::env::temp_dir()).unwrap();
+            (m.uid(), m.gid())
+        };
+        // OpenRC Gentoo: net.lo + openrc-run.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        for d in ["etc/init.d", "etc/conf.d", "etc/runlevels/default", "sbin"] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        std::fs::write(root.join("etc/init.d/net.lo"), "").unwrap();
+        // Current Gentoo images ship openrc-run in /usr/bin.
+        std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+        std::fs::write(root.join("usr/bin/openrc-run"), "").unwrap();
+        std::fs::write(root.join("etc/conf.d/net"), "config_eth0=\"dhcp\"\n").unwrap();
+        std::fs::write(root.join("etc/hosts"), "").unwrap();
+        std::os::unix::fs::symlink("net.lo", root.join("etc/init.d/net.eth0")).unwrap();
+        assert_eq!(LxcManager::detect_guest_net(root), GuestNet::Netifrc);
+        let meta = LxcMeta {
+            id: "g".into(),
+            name: "g".into(),
+            memory: 64,
+            cpus: 1,
+            template: "gentoo/current/openrc".into(),
+            distro: "gentoo".into(),
+            arch: "amd64".into(),
+            rootfs_kind: "dir".into(),
+            guest_net: "netifrc".into(),
+            lxc: LxcOptions {
+                nameserver: Some("9.9.9.9".into()),
+                nets: vec![
+                    horcrux_common::LxcNet {
+                        bridge: "br0".into(),
+                        ip: Some("10.1.0.2/24".into()),
+                        gateway: Some("10.1.0.1".into()),
+                        ..Default::default()
+                    },
+                    horcrux_common::LxcNet {
+                        bridge: "br1".into(),
+                        ip: Some("dhcp".into()),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            created_at: String::new(),
+            pending: Vec::new(),
+        };
+        LxcManager::setup_guest(&meta, root, me).unwrap();
+        let conf = std::fs::read_to_string(root.join("etc/conf.d/net")).unwrap();
+        assert!(conf.contains("config_eth0=\"10.1.0.2/24\"\nroutes_eth0=\"default via 10.1.0.1\""));
+        assert!(conf.contains("config_eth1=\"dhcp\""));
+        // eth1 got its init script and runlevel link; eth0 stays linked.
+        for i in ["eth0", "eth1"] {
+            assert_eq!(
+                std::fs::read_link(root.join(format!("etc/init.d/net.{i}"))).unwrap(),
+                Path::new("net.lo")
+            );
+            assert_eq!(
+                std::fs::read_link(root.join(format!("etc/runlevels/default/net.{i}"))).unwrap(),
+                Path::new(&format!("/etc/init.d/net.{i}"))
+            );
+        }
+        assert!(std::fs::read_to_string(root.join("etc/resolv.conf"))
+            .unwrap()
+            .contains("nameserver 9.9.9.9"));
+        // A systemd Gentoo guest (no openrc) is systemd-networkd.
+        let sd = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(sd.path().join("usr/lib/systemd")).unwrap();
+        std::fs::write(sd.path().join("usr/lib/systemd/systemd-networkd"), "").unwrap();
+        assert_eq!(LxcManager::detect_guest_net(sd.path()), GuestNet::Networkd);
     }
 
     #[test]

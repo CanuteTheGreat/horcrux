@@ -1,0 +1,11 @@
+# owned by sys-apps/horcrux-repo-config (package.accept_keywords/horcrux-roles): the runtimes of the role packages are ~arch on ::gentoo; no manual autounmask
+app-containers/incus ~amd64 ~arm64
+app-containers/podman ~amd64 ~arm64
+app-containers/buildah ~amd64 ~arm64
+app-containers/skopeo ~amd64 ~arm64
+app-containers/lxc ~amd64 ~arm64
+app-emulation/horcrux ~amd64 ~arm64
+
+app-containers/container-libs ~amd64 ~arm64
+app-containers/netavark ~amd64 ~arm64
+app-containers/aardvark-dns ~amd64 ~arm64

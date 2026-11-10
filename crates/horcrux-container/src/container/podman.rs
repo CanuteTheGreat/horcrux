@@ -177,7 +177,18 @@ impl PodmanManager {
             container.name, container.id
         );
 
-        if container.status == ContainerStatus::Stopped {
+        // The stored status is a cache: a reconcile that listed the runtime
+        // just before the container started can write a stale `Stopped` back
+        // over the fresh `Running`. Trust "already stopped" only when the
+        // runtime agrees, otherwise a running container could never be
+        // stopped (a loaded CI run left a stack service running after
+        // `POST /stacks/:id/stop` returned).
+        if container.status == ContainerStatus::Stopped
+            && !matches!(
+                self.get_container_status(&container.name).await,
+                Ok(ContainerStatus::Running | ContainerStatus::Paused | ContainerStatus::Unknown)
+            )
+        {
             return Err(horcrux_common::Error::InvalidConfig(format!(
                 "Container {} is already stopped",
                 container.id

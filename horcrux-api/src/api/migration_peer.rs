@@ -106,6 +106,12 @@ fn incoming() -> &'static Mutex<HashMap<String, Incoming>> {
     M.get_or_init(Default::default)
 }
 
+/// A live/offline migration of `vm_id` to this node is prepared or running (HA must not
+/// mistake the receiving QEMU for a stale copy before the commit moves the placement).
+pub async fn has_incoming(vm_id: &str) -> bool {
+    incoming().lock().await.values().any(|i| i.vm.id == vm_id)
+}
+
 fn valid_job(job: &str) -> Result<(), ApiError> {
     if job.is_empty()
         || job.len() > 128
@@ -887,6 +893,10 @@ async fn commit(
         .remove(&job)
         .ok_or_else(|| ApiError::NotFound(format!("migration {job} is not prepared here")))?;
     let _busy = Busy::new(&job);
+    // Between taking the entry out of `incoming()` and moving the placement the VM is neither
+    // "incoming" nor placed here: keep HA's stale-copy check away from it.
+    #[cfg(feature = "cluster")]
+    let _ha_guard = super::ha_loop::RecoveryGuard::new(&inc.vm.id);
     let restore = |inc: Incoming| {
         let j = job.clone();
         async move {

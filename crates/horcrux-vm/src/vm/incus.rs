@@ -27,10 +27,14 @@ impl IncusManager {
     /// fingerprint - the same rules as the container form), Ubuntu 22.04
     /// when none was given.
     pub fn init_args(config: &VmConfig, image: Option<&str>) -> Vec<String> {
-        vec![
+        let image = crate::console::lxd::vm_instance_image(
+            crate::console::lxd::Backend::Incus,
+            image.unwrap_or(""),
+        );
+        let mut args = vec![
             "init".to_string(),
             "--vm".to_string(),
-            crate::console::lxd::instance_image(image.unwrap_or("")),
+            image.clone(),
             config.name.clone(),
             "-c".to_string(),
             format!("limits.cpu={}", config.cpus),
@@ -38,7 +42,14 @@ impl IncusManager {
             format!("limits.memory={}MB", config.memory),
             "-d".to_string(),
             format!("root,size={}GB", config.disk_size),
-        ]
+        ];
+        // Only Ubuntu images ship a signed shim; the others cannot start
+        // with Secure Boot (the daemon default).
+        if crate::console::lxd::vm_needs_secureboot_off(&image) {
+            args.push("-c".to_string());
+            args.push("security.secureboot=false".to_string());
+        }
+        args
     }
 
     /// Create a new Incus virtual machine from `image` (see `init_args`).
@@ -47,7 +58,10 @@ impl IncusManager {
             "Creating Incus VM: {} (ID: {}) from {}",
             config.name,
             config.id,
-            crate::console::lxd::instance_image(image.unwrap_or(""))
+            crate::console::lxd::vm_instance_image(
+                crate::console::lxd::Backend::Incus,
+                image.unwrap_or("")
+            )
         );
 
         let output = Command::new("incus")
@@ -250,5 +264,11 @@ mod image_tests {
         assert_eq!(&args[..2], &["init", "--vm"]);
         assert_eq!(args[3], "vm1");
         assert!(args.contains(&"limits.memory=1024MB".to_string()));
+        // Non-Ubuntu images can't boot with Secure Boot; Ubuntu keeps it.
+        let sb = "security.secureboot=false".to_string();
+        assert!(args.contains(&sb));
+        assert!(m(&cfg(), Some("alpine/3.22")).contains(&sb));
+        assert!(!m(&cfg(), None).contains(&sb));
+        assert!(!m(&cfg(), Some("ubuntu:24.04")).contains(&sb));
     }
 }

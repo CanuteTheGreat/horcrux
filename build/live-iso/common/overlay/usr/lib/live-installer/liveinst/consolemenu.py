@@ -314,10 +314,46 @@ class Console:
             if nm:
                 self.set_ip(nm)
 
+    # A restart can re-apply the whole config store (Patronus: `patronus apply` runs from the firewall service). On a loaded guest that took
+    # longer than the old 120 s, and S.sh then killed rc-service half way: ruleset half loaded, web port unreachable for minutes.
+    RESTART_TIMEOUT = 300
+
+    def rc_restart(self, svc):
+        """rc-service <svc> restart; one retry when it fails (the service is left in a defined state first)"""
+        rc, o = S.sh(["rc-service", svc, "restart"], timeout=self.RESTART_TIMEOUT)
+        if rc != 0:
+            time.sleep(3)
+            rc, o = S.sh(["rc-service", svc, "restart"], timeout=self.RESTART_TIMEOUT)
+        return rc, o
+
+    def port_listening(self):
+        port = self.p.get("web_port", 8443)
+        return S.sh(f"ss -ltn 2>/dev/null | grep -q ':{port} '")[0] == 0
+
+    def wait_listening(self, timeout, interval=2, clock=time.monotonic, nap=time.sleep):
+        end = clock() + timeout
+        while True:
+            if self.port_listening():
+                return True
+            if clock() >= end:
+                return False
+            nap(interval)
+
+    def start_web(self, wait=120):
+        """start the web service and wait until its port listens; one restart when it does not (never report success on a dead web UI)"""
+        if not self.web:
+            return True
+        S.sh(["rc-service", self.web, "start"], timeout=self.RESTART_TIMEOUT)
+        if self.wait_listening(wait):
+            return True
+        self.say(f"  {self.web}: not listening after {wait} s, restarting it")
+        self.rc_restart(self.web)
+        return self.wait_listening(wait)
+
     def restart_services(self, svcs):
         for s in svcs:
             if os.path.exists(f"/etc/init.d/{s}"):
-                rc, o = S.sh(["rc-service", s, "restart"], timeout=120)
+                rc, o = self.rc_restart(s)
                 self.say(f"  {s}: " + ("restarted" if rc == 0 else "restart failed: " + o.strip()[-80:]))
 
     def set_ip(self, nm=None):
@@ -482,17 +518,17 @@ class Console:
                 pass
         self.reapply()
         self.write_firstboot(pw)
-        if self.web:
-            S.sh(["rc-service", self.web, "start"], timeout=120)
+        up = self.start_web()
         self.remove_firstboot_later()
-        self.say("Factory defaults restored; the web service was restarted.")
+        self.say("Factory defaults restored; the web service was restarted." if up else
+                 "Factory defaults restored, but the web service is NOT listening: check /var/log and run 'rc-service %s restart'." % self.web)
         self.say("Web admin password: " + (pw + "   (generated - note it now, it is not shown again)" if gen else "the one you just entered"))
 
     def reapply(self):
         """re-seed / re-apply what depends on the config store (Patronus: firewall + applyd), then fix ownership"""
         for svc in self.p.get("reapply_services", []):
             if os.path.exists(f"/etc/init.d/{svc}"):
-                rc, o = S.sh(["rc-service", svc, "restart"], timeout=120)
+                rc, o = self.rc_restart(svc)
                 self.say(f"  {svc}: " + ("restarted" if rc == 0 else "restart failed: " + o.strip()[-80:]))
         owner = self.p.get("admin_password_owner", "root")
         if owner != "root" and self.db:

@@ -1,0 +1,19 @@
+# restic --exclude-file for the Surface Pro backup (tiny disk: keep large, re-creatable caches out of B2 and out of the snapshot)
+/home/*/.cache
+/home/*/.local/share/Trash
+/home/*/.config/BraveSoftware/*/Cache
+/home/*/.config/BraveSoftware/*/Code Cache
+/home/*/.config/BraveSoftware/*/GPUCache
+/home/*/.config/BraveSoftware/*/Service Worker/CacheStorage
+/home/*/.mozilla/firefox/*/cache2
+/home/*/.config/*/Cache
+/home/*/.config/*/Code Cache
+/home/*/.config/*/GPUCache
+/home/*/.var
+/home/*/Downloads
+/var/cache
+/var/tmp
+/var/db/repos
+/var/cache/distfiles
+/var/cache/binpkgs
+/swapfile

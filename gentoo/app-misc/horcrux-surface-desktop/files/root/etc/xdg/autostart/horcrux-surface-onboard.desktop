@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Onboard (touch keyboard)
+Comment=On-screen keyboard for the touch-only tablet; shows itself when a text field is focused (auto-show)
+Exec=onboard --startup-delay=2.0
+Icon=onboard
+OnlyShowIn=XFCE;
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

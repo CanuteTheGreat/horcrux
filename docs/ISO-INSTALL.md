@@ -1,10 +1,28 @@
 # Installing Horcrux from the live ISO
 
-Horcrux ships a Gentoo-based **live + installer ISO** (x86_64 UEFI **and** legacy BIOS, aarch64 UEFI; hybrid:
-the same file boots from a CD/VM *and* from a USB stick; see "Architectures"). It contains a **guided installer** (a text-mode wizard that works on a VGA/laptop screen and on a serial
-console), an **unattended installer** driven by an answer file, and a live system you can look around in.
+Horcrux is a **headless hypervisor/server OS** (VMs, containers, ZFS, clustering, web UI, API, SSH) with an **optional desktop**. It ships as a Gentoo-based
+**live + installer ISO** (x86_64 UEFI **and** legacy BIOS, aarch64 UEFI; hybrid: the same file boots from a CD/VM *and* from a USB stick; see "Architectures").
+The **server image is the product** and installs and runs with no display at all: serial console or SSH only, answer-file (unattended) install, web UI on
+port 8006. A desktop (GNOME today, XFCE for small devices later) is an optional edition layered on top of the same core (see "Layers").
+It contains a **guided installer** (a text-mode wizard that works on a VGA/laptop screen and on a serial
+console, plus a graphical one), an **unattended installer** driven by an answer file, and a live system you can look around in.
 There is no default password anywhere: the installer makes you set one, and SSH on the installed system is
 key-only unless you opt in.
+
+## Layers
+
+Horcrux is built in three layers; every fix that applies to every install lives in the lowest layer that needs it.
+
+| layer | what | where |
+|---|---|---|
+| **core** | the headless server: kernel + ZFS (with `dist-kernel`, so every kernel update rebuilds `zfs-kmod`), installer, `horcrux-api` + web UI, chrony + the clock rules (`makestep 1 -1`, `rtcsync`, UTC RTC, sources re-resolved when a network comes up on dhcpcd/static/NetworkManager), the first-boot network wait + Portage tree sync, the overlay sync config, backup (restic to B2, 30 days, secrets provisioned after first boot), the password-separation and no-autologin rules | package `sys-apps/horcrux-core` (overlay `gentoo/`), image layer `build/live-iso/project/variants/core`, applied by `build.sh` to **every** image |
+| **desktop edition** (optional) | GNOME on Wayland (OpenRC + elogind, `gnome-light`); an XFCE edition for small devices follows the same pattern. Depends on core; adds only the desktop (`gnome-extra/horcrux-gnome-defaults`: tray icons, first-login Wi-Fi chooser, working login keyring) and generic desktop tools (Firefox, terminator, vim, virt-manager, CUPS, Bluetooth, ...) | `build/live-iso/project/variants/gnome-light` |
+| **machine layers** (private) | the owner's own machines (gringotts, hogshead, surface/madammalkins, hogsmeade): his personal apps (Brave, Nextcloud client, Tailscale, ClamAV, rustinion agent, keepalived, ...), per-machine kernels, firmware, restore helpers and backup lists. Steam is HOGSMEADE only | `build/live-iso/project/variants/{owner-common,gringotts,hogshead,...}` |
+
+**Nothing personal or machine-specific is in a public image** (the server image and the public desktop editions). `build/live-iso/project/public-forbidden.txt` lists the
+packages that must never appear in one; the core and desktop Dockerfiles and the QEMU gates (`zfs-enc-test.py --public`) fail on any of them.
+A server install contains no `gui-libs`, `gui-wm`, `gnome-*`, Qt, Mesa or X/Wayland package (the three library dependencies Portage files under `x11-libs`/`x11-misc` for QEMU and the MIME database are allowed:
+`libpciaccess`, `pixman`, `shared-mime-info`); the live graphical installer stack is removed again from a server install.
 
 ## Download
 
@@ -378,9 +396,9 @@ be dead at the passphrase prompt), `pm_async=off`, `tiny-dfr` (Touch Bar), `t2fa
 Wi-Fi/Bluetooth firmware is never on the ISO: the installer offers to import it from an existing install
 (`/lib/firmware/brcm/*apple*`) or from a `firmware.tar`; later with `horcrux-t2-firmware PATH`.
 
-**GNOME (light) image** (`VARIANT=gnome-light build.sh`, formerly `desktop`; daily asset `horcrux-gnome-light-openrc-daily-x86_64.iso`, built and tested by the daily workflow as its own job: BIOS+CD ext4, UEFI+USB ZFS mirror, and the encrypted-ZFS desktop flow with the GDM greeter asserted on the VGA console): GNOME on Wayland (OpenRC + elogind,
-GDM), NetworkManager (iwd), PipeWire, Firefox, Brave (local overlay ebuild), terminator, vim, Nextcloud client, Tailscale,
-virt-manager/virt-install, keepalived, ClamAV, rustup, CUPS, Bluetooth, fwupd, thermald, power-profiles-daemon. The installer
+**GNOME (light) edition** (`VARIANT=gnome-light build.sh`, formerly `desktop`; daily asset `horcrux-gnome-light-openrc-daily-x86_64.iso`, built and tested by the daily workflow as its own job: BIOS+CD ext4, UEFI+USB ZFS mirror, and the encrypted-ZFS desktop flow with the GDM greeter asserted on the VGA console): the server core plus GNOME on Wayland (OpenRC + elogind,
+GDM), NetworkManager (iwd), PipeWire, Firefox, terminator, vim, virt-manager/virt-install, CUPS, Bluetooth, fwupd, thermald, power-profiles-daemon. The
+owner's own picks (Brave, Nextcloud client, Tailscale, ClamAV, rustup, keepalived, sshpass) are **not** in this public image any more: they live in the machine layers. The installer
 shows the *Desktop user* screen on this image only (answer file: `install_type = "desktop"` + `[user]`).
 **Hibernate on encrypted ZFS** (`swap = auto|none|hibernate`, answer file `[disk] swap`; `auto` = on for the Desktop install type or a
 machine with a battery/portable chassis, off on servers). Partition 3 is a **LUKS2 swap partition** (RAM rounded up to GiB x 1.125,
@@ -427,8 +445,8 @@ Horcrux specifics: XFS+LUKS / ext4 / XFS / ZFS (single or mirror) from the wizar
 
 ## What is tested automatically
 
-`.forgejo/workflows/live-iso.yml` (daily, and on every `v*` tag) builds the ISO on a rw-man host and runs
-`build/live-iso/common/qemu-test.py` under QEMU/KVM. Five QEMU runs per build (four full installs plus the no-answer-file check):
+`.forgejo/workflows/live-iso-<variant>.yml (one workflow per image since 2026-11-06)` (daily, and on every `v*` tag) builds the ISO on a rw-man host and runs
+`build/live-iso/common/qemu-test.py` under QEMU/KVM. Five QEMU runs per build (four full installs plus the no-answer-file check; the headless server gate below is an additional run):
 
 | run | firmware / media | installer | file system | network | SSH |
 |---|---|---|---|---|---|
@@ -447,6 +465,14 @@ Every run then reboots from the installed disk alone (no ISO) and asserts:
 * host name, time zone, root file system type and, for ZFS, `zpool status` ONLINE with a two-disk mirror.
 
 After the install matrix, `boot-modes-test.py` runs the boot-menu / rescue / forensic / live / persistence tests (UEFI and BIOS, see "What the boot-menu tests prove"); they must pass too.
+
+**Headless server gate** (`zfs-enc-test.py --server --public --late-network 90`, run by the daily job for `horcrux-server-openrc-daily-x86_64.iso` under KVM **and**
+`horcrux-server-openrc-daily-aarch64.iso` under TCG; no VGA, no USB keyboard, no GPU): answer-file install to encrypted ZFS, passphrase typed on the **serial** console, then a
+**reboot into the installed system** with the NIC link down at boot and a months-off hardware clock on every boot, and these checks on the installed server: no display
+stack installed (`qlist -I`) and none in `emerge -pvuDN @world`, no X/Wayland process or display manager, serial console in use, core packages installed/package-owned/enabled and no service
+`crashed`, backup wrapper present and not provisioned (no owner paths in the generic set), `zfs`/`zfs-kmod` `dist-kernel` rule, web UI answers from outside and in the guest, chrony steps the months-off clock
+after the late network, `package-contents-complete` (no installed package with a missing file), a kernel module builds against the running kernel, the first-boot service waited for the network and finished without
+showing `crashed`, no account password equals the disk passphrase, no display-manager autologin, no personal package from `public-forbidden.txt`, boot-environment rollback survives the reboot.
 
 Publishing happens only when all of that passed. The run's serial logs, per-screen text captures and PNG
 screenshots are attached to the release as `horcrux-server-openrc-daily-x86_64-test-evidence.tgz`. The workflow never turns the job

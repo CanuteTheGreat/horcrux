@@ -2493,6 +2493,151 @@ async fn test_failed_stack_deploy_rolls_back() {
     assert!(docker_state(&format!("{name}_good")).is_none());
 }
 
+/// `PUT /api/stacks/:id` (compose up -d): changed services are recreated
+/// with the new config, unchanged ones keep running (same container), a
+/// volume keeps its data, env can be merged in, a bad image rolls back.
+#[tokio::test]
+async fn test_stack_update_rolling_keeps_volumes() {
+    let client = create_client();
+    let token = admin_token(&client).await;
+    let name = "itupstack";
+    let services = ["web", "db"];
+    purge_stack(&client, &token, name, &services).await;
+    docker(&["volume", "rm", "-f", "itupstack_data"]);
+
+    let v1 = "services:\n  db:\n    image: busybox:latest\n    command: [\"sleep\", \"600\"]\n  web:\n    image: busybox:latest\n    command: [\"sleep\", \"600\"]\n    environment:\n      VERSION: v1\n    volumes:\n      - itupstack_data:/data\n";
+    let put = |body: serde_json::Value| {
+        let client = client.clone();
+        let token = token.clone();
+        async move {
+            client
+                .put(format!("{}/stacks/{}", API_BASE, name))
+                .bearer_auth(&token)
+                .json(&body)
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+    let r = client
+        .post(format!("{}/stacks", API_BASE))
+        .bearer_auth(&token)
+        .json(&json!({"name": name, "compose_yaml": v1, "runtime": "docker"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        200,
+        "deploy: {}",
+        r.text().await.unwrap_or_default()
+    );
+    docker(&[
+        "exec",
+        "itupstack_web",
+        "sh",
+        "-c",
+        "echo keep > /data/marker",
+    ]);
+    let db_id_before = docker_inspect("itupstack_db")["Id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let web_id_before = docker_inspect("itupstack_web")["Id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // nothing to update -> 400
+    assert_eq!(put(json!({})).await.status(), 400);
+    // unknown stack -> 404
+    let r = client
+        .put(format!("{}/stacks/nope-stack", API_BASE))
+        .bearer_auth(&token)
+        .json(&json!({"force_recreate": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
+
+    // env merged into every service: both change, so both are recreated
+    let r = put(json!({"env": {"VERSION": "v2"}})).await;
+    let status = r.status();
+    let body: serde_json::Value = r.json().await.unwrap_or_default();
+    assert_eq!(status, 200, "env update: {body}");
+    assert_eq!(
+        body["recreated"].as_array().map(|a| a.len()),
+        Some(2),
+        "{body}"
+    );
+    let env = docker(&["exec", "itupstack_web", "printenv", "VERSION"]);
+    assert_eq!(String::from_utf8_lossy(&env.stdout).trim(), "v2");
+    assert_eq!(
+        String::from_utf8_lossy(&docker(&["exec", "itupstack_web", "cat", "/data/marker"]).stdout)
+            .trim(),
+        "keep",
+        "the volume survives the update"
+    );
+    assert_ne!(
+        docker_inspect("itupstack_web")["Id"].as_str().unwrap(),
+        web_id_before
+    );
+    assert_eq!(docker_state("itupstack_web").as_deref(), Some("running"));
+
+    // new compose that only changes web's command: db stays the same container
+    let db_id = docker_inspect("itupstack_db")["Id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(db_id, db_id_before, "env merge recreated db too");
+    let v3 = "services:\n  db:\n    image: busybox:latest\n    command: [\"sleep\", \"600\"]\n    environment:\n      VERSION: v2\n  web:\n    image: busybox:latest\n    command: [\"sleep\", \"601\"]\n    environment:\n      VERSION: v2\n    volumes:\n      - itupstack_data:/data\n";
+    let r = put(json!({"compose_yaml": v3})).await;
+    let body: serde_json::Value = r.json().await.unwrap_or_default();
+    assert_eq!(body["recreated"], json!(["web"]), "{body}");
+    assert_eq!(body["unchanged"], json!(["db"]), "{body}");
+    assert_eq!(
+        docker_inspect("itupstack_db")["Id"].as_str().unwrap(),
+        db_id
+    );
+    let got: serde_json::Value = client
+        .get(format!("{}/stacks/{}", API_BASE, name))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(got["compose_yaml"].as_str().unwrap().contains("601"));
+
+    // a service that cannot start: the whole stack goes back to v3
+    let bad = v3.replace("[\"sleep\", \"601\"]", "[\"/no/such/binary\"]");
+    let r = put(json!({"compose_yaml": bad})).await;
+    assert!(
+        r.status().is_server_error(),
+        "bad update must fail: {}",
+        r.status()
+    );
+    assert_eq!(docker_state("itupstack_web").as_deref(), Some("running"));
+    let cmd = docker(&["inspect", "-f", "{{.Config.Cmd}}", "itupstack_web"]);
+    assert!(
+        String::from_utf8_lossy(&cmd.stdout).contains("601"),
+        "rolled back"
+    );
+
+    // a service dropped from the file is removed, a new one added
+    let v4 = "services:\n  cache:\n    image: busybox:latest\n    command: [\"sleep\", \"600\"]\n  web:\n    image: busybox:latest\n    command: [\"sleep\", \"601\"]\n    environment:\n      VERSION: v2\n    volumes:\n      - itupstack_data:/data\n";
+    let r = put(json!({"compose_yaml": v4})).await;
+    let body: serde_json::Value = r.json().await.unwrap_or_default();
+    assert_eq!(body["removed"], json!(["db"]), "{body}");
+    assert_eq!(body["added"], json!(["cache"]), "{body}");
+    assert!(docker_state("itupstack_db").is_none());
+    assert_eq!(docker_state("itupstack_cache").as_deref(), Some("running"));
+
+    purge_stack(&client, &token, name, &["web", "db", "cache"]).await;
+    docker(&["volume", "rm", "-f", "itupstack_data"]);
+}
+
 #[tokio::test]
 async fn test_snapshot_scheduling() {
     let client = create_client();

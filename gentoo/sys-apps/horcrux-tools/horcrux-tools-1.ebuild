@@ -43,8 +43,14 @@ src_install() {
 	doexe usr/libexec/*
 	insinto /usr/lib
 	doins -r usr/lib/live-installer
-	insinto /usr/share/horcrux
-	doins -r usr/share/horcrux/desktop
+	# the desktop service list is optional: a device package (Surface) ships its own under the same path
+	if [[ -d usr/share/horcrux/desktop ]]; then
+		insinto /usr/share/horcrux
+		doins -r usr/share/horcrux/desktop
+	fi
+	# optional /etc payload (live-ISO init services, console-menu profile hook, zram-swap, installer profile): only variants whose tarball has
+	# an etc/ tree get it (the Surface image); the hogshead tarball has none. cp -a keeps the init scripts executable.
+	if [[ -d etc ]]; then cp -a etc "${ED}/" || die; fi
 	# byte-compile here so the .pyc files are owned by this package instead of appearing at first run
 	python_optimize "${ED}/usr/lib/live-installer"
 }

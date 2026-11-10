@@ -80,6 +80,9 @@ docker run -d --init --name "$NAME" --privileged --cgroupns=private --memory 3g 
   "${NET_ARGS[@]}" "$IMAGE" sleep 7200 >/dev/null
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api
 docker cp "$HERE/lxc_e2e.py" "$NAME":/tmp/lxc_e2e.py
+# LXC_E2E_PY: another scenario that imports the helpers from lxc_e2e.py.
+PYTEST=${LXC_E2E_PY:-lxc_e2e.py}
+[ "$PYTEST" = lxc_e2e.py ] || docker cp "$HERE/$PYTEST" "$NAME":/tmp/"$PYTEST"
 if [ "$MODE" = serve ]; then
   docker cp "$UI_DIST" "$NAME":/srv/horcrux-ui
 elif [ -n "${3:-}" ]; then
@@ -109,7 +112,7 @@ EOF
   [ -n "$PROBE" ] || echo "::warning::gcc -static unavailable: keyctl syscall probe skipped (seccomp file still checked)"
 fi
 
-docker exec -e MODE="$MODE" -e PORT="$PORT" -e BIND="$BIND" -e KEYCTL_PROBE="$PROBE" -e LXC_PATH="$LXCP" -i "$NAME" bash -s <<'EOS'
+docker exec -e MODE="$MODE" -e PORT="$PORT" -e BIND="$BIND" -e KEYCTL_PROBE="$PROBE" -e LXC_PATH="$LXCP" -e PYTEST="$PYTEST" -i "$NAME" bash -s <<'EOS'
 set -euo pipefail
 echo "$LXC_PATH" > /tmp/lxcpath
 # /dev in a container is a snapshot: loop devices the kernel creates later
@@ -167,7 +170,7 @@ EOF
 bash /tmp/start-api.sh
 
 if [ "$MODE" = test ]; then
-  API=https://127.0.0.1:$PORT/api HORCRUX_CA_FILE=/tmp/horcrux-ca.pem python3 /tmp/lxc_e2e.py
+  API=https://127.0.0.1:$PORT/api HORCRUX_CA_FILE=/tmp/horcrux-ca.pem python3 /tmp/$PYTEST
   if [ -x /usr/local/bin/api_contract ]; then
     echo "[lxc-e2e] UI contract test against real LXC responses"
     HORCRUX_CONTRACT_API=https://127.0.0.1:$PORT/api HORCRUX_CONTRACT_LXC=1 \

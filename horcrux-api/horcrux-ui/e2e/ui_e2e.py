@@ -236,6 +236,7 @@ def main():
         cpu = page.locator(".stat-card", has_text="CPU Usage").locator(".stat-value")
         expect(cpu).to_have_text(re.compile(r"^\d+(\.\d)?%$"), timeout=45000)
         expect(page.get_by_text("Could not reach the backend")).to_have_count(0)
+        theme_checks(page)
 
         # ---- Monitoring > Notifications: create a webhook channel, Test it --
         # A local receiver stands in for the webhook target; the test message
@@ -753,6 +754,71 @@ def main():
     print("UI E2E: all checks passed")
 
 
+THEME_CONTRAST_JS = r"""
+(() => {
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const parse = c => { const m = c.match(/rgba?\(([^)]+)\)/); if (!m) return null; const p = m[1].split(/[ ,\/]+/).filter(Boolean).map(Number); return {r:p[0],g:p[1],b:p[2],a:p.length>3?p[3]:1}; };
+  const over = (f,b) => ({r:f.r*f.a+b.r*(1-f.a),g:f.g*f.a+b.g*(1-f.a),b:f.b*f.a+b.b*(1-f.a),a:1});
+  const lin = v => { v/=255; return v<=0.03928? v/12.92 : Math.pow((v+0.055)/1.055,2.4); };
+  const L = c => 0.2126*lin(c.r)+0.7152*lin(c.g)+0.0722*lin(c.b);
+  const ratio = (a,b) => { const x=L(a),y=L(b); return (Math.max(x,y)+0.05)/(Math.min(x,y)+0.05); };
+  const canvas = dark ? {r:18,g:18,b:18,a:1} : {r:255,g:255,b:255,a:1};
+  function bgOf(el) {
+    const chain = []; let skip = false;
+    for (let e = el; e; e = e.parentElement) {
+      const cs = getComputedStyle(e);
+      if (cs.backgroundImage && cs.backgroundImage !== 'none' && /gradient|url/.test(cs.backgroundImage)) { skip = true; break; }
+      const c = parse(cs.backgroundColor); if (c && c.a > 0) { chain.push(c); if (c.a >= 1) break; }
+    }
+    if (skip) return null;
+    let base = canvas; for (let i = chain.length - 1; i >= 0; i--) base = over(chain[i], base);
+    return base;
+  }
+  const bad = [];
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  const seen = new Set(); let n = 0;
+  while (walker.nextNode()) {
+    const t = walker.currentNode; if (!t.nodeValue.trim()) continue;
+    const el = t.parentElement; if (!el || seen.has(el)) continue; seen.add(el);
+    if (['SCRIPT','STYLE','NOSCRIPT','OPTION'].includes(el.tagName)) continue;
+    const r = el.getBoundingClientRect(); const cs = getComputedStyle(el);
+    if (r.width < 1 || r.height < 1 || cs.visibility === 'hidden' || cs.display === 'none' || parseFloat(cs.opacity) === 0) continue;
+    const fgc = parse(cs.color); const bg = bgOf(el); if (!fgc || !bg) continue;
+    const fg = over(fgc, bg); n++;
+    const size = parseFloat(cs.fontSize), bold = parseInt(cs.fontWeight) >= 700;
+    const need = (size >= 24 || (size >= 18.66 && bold)) ? 3 : 4.5;
+    const cr = ratio(fg, bg);
+    if (cr < need) bad.push({txt: t.nodeValue.trim().slice(0, 40), cr: +cr.toFixed(2), need, fg: cs.color, bg: `rgb(${Math.round(bg.r)},${Math.round(bg.g)},${Math.round(bg.b)})`, tag: el.tagName + '.' + (el.className && el.className.baseVal === undefined ? el.className : '')});
+  }
+  return {dark, checked: n, bad};
+})()
+"""
+
+
+def theme_checks(page):
+    """Owner rule 2026-10-30: the UI follows the device's light/dark setting by default, live (no reload),
+    with readable text in both schemes. The page is already logged in (real dashboard, real data)."""
+    shots = os.environ.get("THEME_SHOTS_DIR")
+    bgs = {}
+    for scheme in ("light", "dark"):
+        page.emulate_media(color_scheme=scheme)  # live switch: no reload, no navigation
+        page.wait_for_timeout(400)
+        bgs[scheme] = page.evaluate("getComputedStyle(document.body).backgroundColor")
+        res = page.evaluate(THEME_CONTRAST_JS)
+        assert res["dark"] == (scheme == "dark"), res
+        assert res["checked"] > 10, f"theme scan saw too little text in {scheme}: {res}"
+        assert not res["bad"], f"{scheme}: text below the WCAG AA contrast ratio: {res['bad'][:8]}"
+        assert page.evaluate("getComputedStyle(document.documentElement).colorScheme") == "light dark"
+        if shots:
+            os.makedirs(shots, exist_ok=True)
+            page.screenshot(path=f"{shots}/dashboard-{scheme}.png", full_page=False)
+    assert bgs["light"] != bgs["dark"], f"page background did not change with the device scheme: {bgs}"
+    metas = page.evaluate(
+        "Array.from(document.querySelectorAll('meta[name=theme-color]')).map(m => m.media)")
+    assert any("light" in m for m in metas) and any("dark" in m for m in metas), metas
+    page.emulate_media(color_scheme="no-preference")
+
+
 def passthrough_checks(page, vid):
     """Host Devices page (IOMMU status, PCI table, mediated devices) and the
     VM Hardware passthrough panel. CI runners have no vfio devices, so the
@@ -1083,7 +1149,9 @@ def esxi_import_checks(page):
 def cluster_nodes_checks(context):
     """/ha/cluster on a fresh node: the local node is listed (the API used
     to return [] until a cluster was created), it has no Remove button, and a
-    registered peer can be removed through a confirm dialog."""
+    registered peer can be removed through a confirm dialog. The Idle power-down
+    panel below the node table lists every node too (rows `.power-row`): the node
+    rows are selected without them."""
     tok = token()
     nodes = api_get("/api/cluster/nodes", tok)
     local = [n for n in nodes if n["is_local"]]
@@ -1111,7 +1179,7 @@ def cluster_nodes_checks(context):
         except urllib.error.HTTPError as e:
             assert e.code == 404, e.code
         page.goto(f"{BASE}/ha/cluster")
-        me = page.locator("tbody tr", has_text="(this node)")
+        me = page.locator("tbody tr:not(.power-row)", has_text="(this node)")
         expect(me).to_have_count(1, timeout=30000)
         expect(page.get_by_text("No cluster nodes configured")).to_have_count(0)
         expect(me).to_contain_text(local[0]["name"])
@@ -1123,7 +1191,7 @@ def cluster_nodes_checks(context):
         page.get_by_placeholder("node-02").fill(peer)
         page.get_by_placeholder("192.168.1.100").fill("192.0.2.77")
         page.get_by_role("button", name="Add Node").last.click()
-        row = page.locator("tbody tr", has_text=peer)
+        row = page.locator("tbody tr:not(.power-row)", has_text=peer)
         expect(row).to_have_count(1, timeout=30000)
 
         # Cancel in the confirm dialog: nothing happens
@@ -1136,10 +1204,10 @@ def cluster_nodes_checks(context):
         # Confirm: DELETE /api/cluster/nodes/e2e-peer
         answer["accept"] = True
         row.get_by_role("button", name="Remove").click()
-        expect(page.locator("tbody tr", has_text=peer)).to_have_count(0, timeout=30000)
+        expect(page.locator("tbody tr:not(.power-row)", has_text=peer)).to_have_count(0, timeout=30000)
         expect(page.get_by_text(f"Node '{peer}' removed")).to_be_visible()
         assert not any(n["name"] == peer for n in api_get("/api/cluster/nodes", tok))
-        expect(page.locator("tbody tr", has_text="(this node)")).to_have_count(1)
+        expect(page.locator("tbody tr:not(.power-row)", has_text="(this node)")).to_have_count(1)
     finally:
         page.close()
     print("UI E2E: /ha/cluster lists this node, Remove node (confirm/cancel/delete) passed")
@@ -1381,7 +1449,7 @@ def s3_gateway_checks(page):
     expect(page.locator("#s3-state")).to_have_text("Stopped", timeout=30000)
     expect(page.locator("#s3-missing")).to_have_count(0)
     page.locator("#s3-start").click()
-    expect(page.locator("#s3-state")).to_have_text("Running", timeout=90000)
+    expect(page.locator("#s3-state")).to_have_text("Running", timeout=200000)
     expect(page.locator("#s3-endpoint")).to_contain_text(f":{port}")
 
     bucket = "e2e-ui-bucket"

@@ -24,6 +24,11 @@ pub struct ReplicationJob {
     pub name: String,
     pub source_vm_id: String,
     pub source_snapshot: String,
+    /// ZFS dataset holding the VM's disks on this node (`tank/vms`),
+    /// resolved from the VM's disk path when the job is created. The
+    /// snapshot `<dataset>@<source_snapshot>` is what gets sent.
+    #[serde(default)]
+    pub source_dataset: Option<String>,
     pub target_node: String,
     pub target_pool: String,
     pub schedule: ReplicationSchedule,
@@ -200,6 +205,19 @@ impl ReplicationManager {
                 job.id, job.target_node
             )));
         }
+        // These names reach the remote shell: plain ZFS name characters only.
+        for (what, v) in [
+            ("VM id", job.source_vm_id.as_str()),
+            ("snapshot", job.source_snapshot.as_str()),
+            ("target pool", job.target_pool.as_str()),
+        ] {
+            if !valid_zfs_name(v) {
+                return Err(horcrux_common::Error::InvalidConfig(format!(
+                    "Replication job {} has an invalid {} '{}'",
+                    job.id, what, v
+                )));
+            }
+        }
         for bin in ["zfs", "ssh"] {
             if !binary_in_path(bin) {
                 return Err(horcrux_common::Error::InvalidConfig(format!(
@@ -333,6 +351,8 @@ impl ReplicationManager {
         })
         .await;
 
+        self.ensure_source_snapshot(&job).await?;
+
         // Determine if this is incremental or full replication
         let is_incremental = self.check_previous_snapshot(&job).await?;
 
@@ -385,15 +405,18 @@ impl ReplicationManager {
     async fn check_previous_snapshot(&self, job: &ReplicationJob) -> Result<bool> {
         // Query target node for existing snapshots
         let output = Command::new("ssh")
+            .args(["-o", "BatchMode=yes", "--"])
             .arg(&job.target_node)
             .arg("zfs")
             .arg("list")
             .arg("-H")
+            .arg("-d")
+            .arg("1")
             .arg("-t")
             .arg("snapshot")
             .arg("-o")
             .arg("name")
-            .arg(format!("{}/{}", job.target_pool, job.source_vm_id))
+            .arg(Self::target_dataset(job))
             .output()
             .await
             .map_err(|e| {
@@ -403,48 +426,102 @@ impl ReplicationManager {
         Ok(output.status.success() && !output.stdout.is_empty())
     }
 
-    /// Perform full replication (initial sync)
-    async fn perform_full_replication(&self, job: &ReplicationJob) -> Result<()> {
-        info!("Performing full replication for {}", job.source_vm_id);
+    /// The ZFS dataset the job sends (`source_dataset`, resolved from the VM's disks).
+    fn source_dataset(job: &ReplicationJob) -> Result<&str> {
+        job.source_dataset.as_deref().ok_or_else(|| {
+            horcrux_common::Error::InvalidConfig(format!(
+                "Replication job {}: the disks of VM {} are not on a ZFS dataset \
+                 (put them in a storage pool whose path is a ZFS dataset)",
+                job.id, job.source_vm_id
+            ))
+        })
+    }
 
-        let source_path = format!("{}@{}", job.source_vm_id, job.source_snapshot);
-        let target_path = format!("{}/{}", job.target_pool, job.source_vm_id);
+    /// Dataset the replica is received into: `<target_pool>/<vm id>`.
+    fn target_dataset(job: &ReplicationJob) -> String {
+        format!("{}/{}", job.target_pool, job.source_vm_id)
+    }
 
-        // Build ZFS send command
+    /// Make sure the snapshot to send exists on the source: the job's
+    /// `source_snapshot` is taken on the dataset when it isn't there yet.
+    async fn ensure_source_snapshot(&self, job: &ReplicationJob) -> Result<()> {
+        let snap = format!("{}@{}", Self::source_dataset(job)?, job.source_snapshot);
+        let exists = Command::new("zfs")
+            .args(["list", "-H", "-t", "snapshot", "-o", "name", "--"])
+            .arg(&snap)
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if exists {
+            return Ok(());
+        }
+        let out = Command::new("zfs")
+            .arg("snapshot")
+            .arg(&snap)
+            .output()
+            .await
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to run zfs snapshot: {}", e))
+            })?;
+        if !out.status.success() {
+            return Err(horcrux_common::Error::System(format!(
+                "zfs snapshot {} failed: {}",
+                snap,
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        Ok(())
+    }
+
+    /// `zfs send [-i from] <dataset>@<snapshot> | ssh <target> zfs receive -F <target dataset>`.
+    /// Both stderr streams are captured so a failure says why.
+    async fn send_receive(
+        &self,
+        job: &ReplicationJob,
+        incremental_from: Option<&str>,
+    ) -> Result<()> {
+        let dataset = Self::source_dataset(job)?;
+        let source_path = format!("{}@{}", dataset, job.source_snapshot);
+        let target_path = Self::target_dataset(job);
+
         let mut send_cmd = Command::new("zfs");
-        send_cmd.arg("send").arg(&source_path);
+        send_cmd.arg("send");
+        if let Some(from) = incremental_from {
+            send_cmd.arg("-i").arg(format!("{}@{}", dataset, from));
+        }
+        send_cmd.arg(&source_path);
 
-        // Build SSH receive command with bandwidth limit
-        let recv_args = vec!["zfs", "receive", "-F", &target_path];
-
-        let bandwidth_limit = if let Some(limit) = job.bandwidth_limit_mbps {
-            format!("{}m", limit)
-        } else {
-            String::new()
+        // The remote side runs through the remote shell: pv throttles when asked.
+        let recv = match job.bandwidth_limit_mbps {
+            Some(limit) => format!("pv -L {}m | zfs receive -F {}", limit, target_path),
+            None => format!("zfs receive -F {}", target_path),
         };
+        let mut ssh_cmd = Command::new("ssh");
+        ssh_cmd
+            .args(["-o", "BatchMode=yes", "--"])
+            .arg(&job.target_node)
+            .arg(recv);
 
-        let mut ssh_cmd = if !bandwidth_limit.is_empty() {
-            // Use pv for bandwidth throttling
-            let mut cmd = Command::new("ssh");
-            cmd.arg(&job.target_node).arg(format!(
-                "pv -L {} | zfs receive -F {}",
-                bandwidth_limit, target_path
-            ));
-            cmd
-        } else {
-            let mut cmd = Command::new("ssh");
-            cmd.arg(&job.target_node).args(&recv_args);
-            cmd
-        };
-
-        // Pipe send to receive
-        let mut send_child = send_cmd.stdout(Stdio::piped()).spawn().map_err(|e| {
-            horcrux_common::Error::System(format!("Failed to start zfs send: {}", e))
-        })?;
-
+        let mut send_child = send_cmd
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to start zfs send: {}", e))
+            })?;
         let mut send_stdout = send_child.stdout.take().ok_or_else(|| {
             horcrux_common::Error::System("Failed to capture send stdout".to_string())
         })?;
+        let mut send_stderr = send_child.stderr.take();
+        let send_err = tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let mut buf = String::new();
+            if let Some(e) = send_stderr.as_mut() {
+                let _ = e.read_to_string(&mut buf).await;
+            }
+            buf
+        });
 
         let mut ssh_child = ssh_cmd
             .stdin(Stdio::piped())
@@ -454,42 +531,44 @@ impl ReplicationManager {
             .map_err(|e| {
                 horcrux_common::Error::System(format!("Failed to start ssh receive: {}", e))
             })?;
-
         let mut ssh_stdin = ssh_child.stdin.take().ok_or_else(|| {
             horcrux_common::Error::System("Failed to capture ssh stdin".to_string())
         })?;
 
-        // Copy data from send to ssh
-        tokio::io::copy(&mut send_stdout, &mut ssh_stdin)
-            .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to copy data: {}", e)))?;
-
-        // Close stdin to signal completion
+        // Copy data from send to ssh (a receiver that dies early closes the pipe: judged below)
+        let copied = tokio::io::copy(&mut send_stdout, &mut ssh_stdin).await;
         drop(ssh_stdin);
 
-        // Wait for both processes
         let send_status = send_child.wait().await.map_err(|e| {
             horcrux_common::Error::System(format!("Failed to wait for send: {}", e))
         })?;
-
+        let send_err = send_err.await.unwrap_or_default();
         let output = ssh_child
             .wait_with_output()
             .await
             .map_err(|e| horcrux_common::Error::System(format!("Failed to wait for ssh: {}", e)))?;
 
-        if !send_status.success() {
-            return Err(horcrux_common::Error::System("ZFS send failed".to_string()));
-        }
-
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(horcrux_common::Error::System(format!(
                 "Replication failed: {}",
-                stderr
+                String::from_utf8_lossy(&output.stderr).trim()
             )));
         }
-
+        if !send_status.success() {
+            return Err(horcrux_common::Error::System(format!(
+                "ZFS send of {} failed: {}",
+                source_path,
+                send_err.trim()
+            )));
+        }
+        copied.map_err(|e| horcrux_common::Error::System(format!("Failed to copy data: {}", e)))?;
         Ok(())
+    }
+
+    /// Perform full replication (initial sync)
+    async fn perform_full_replication(&self, job: &ReplicationJob) -> Result<()> {
+        info!("Performing full replication for {}", job.source_vm_id);
+        self.send_receive(job, None).await
     }
 
     /// Perform incremental replication
@@ -498,102 +577,34 @@ impl ReplicationManager {
             "Performing incremental replication for {}",
             job.source_vm_id
         );
-
-        // Get the last replicated snapshot on target
         let last_snapshot = self.get_last_replicated_snapshot(job).await?;
-
-        let source_path = format!("{}@{}", job.source_vm_id, job.source_snapshot);
-        let incremental_from = format!("{}@{}", job.source_vm_id, last_snapshot);
-        let target_path = format!("{}/{}", job.target_pool, job.source_vm_id);
-
-        // Build incremental ZFS send command
-        let mut send_cmd = Command::new("zfs");
-        send_cmd
-            .arg("send")
-            .arg("-i")
-            .arg(&incremental_from)
-            .arg(&source_path);
-
-        // Build SSH receive command
-        let mut ssh_cmd = Command::new("ssh");
-        ssh_cmd
-            .arg(&job.target_node)
-            .arg("zfs")
-            .arg("receive")
-            .arg("-F")
-            .arg(&target_path);
-
-        // Execute
-        let mut send_child = send_cmd.stdout(Stdio::piped()).spawn().map_err(|e| {
-            horcrux_common::Error::System(format!("Failed to start incremental zfs send: {}", e))
-        })?;
-
-        let mut send_stdout = send_child.stdout.take().ok_or_else(|| {
-            horcrux_common::Error::System("Failed to capture send stdout".to_string())
-        })?;
-
-        let mut ssh_child = ssh_cmd
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to start ssh receive: {}", e))
-            })?;
-
-        let mut ssh_stdin = ssh_child.stdin.take().ok_or_else(|| {
-            horcrux_common::Error::System("Failed to capture ssh stdin".to_string())
-        })?;
-
-        // Copy data from send to ssh
-        tokio::io::copy(&mut send_stdout, &mut ssh_stdin)
-            .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to copy data: {}", e)))?;
-
-        // Close stdin to signal completion
-        drop(ssh_stdin);
-
-        // Wait for both processes
-        let send_status = send_child.wait().await.map_err(|e| {
-            horcrux_common::Error::System(format!("Failed to wait for send: {}", e))
-        })?;
-
-        let output = ssh_child
-            .wait_with_output()
-            .await
-            .map_err(|e| horcrux_common::Error::System(format!("Failed to wait for ssh: {}", e)))?;
-
-        if !send_status.success() {
-            return Err(horcrux_common::Error::System(
-                "Incremental ZFS send failed".to_string(),
-            ));
+        if last_snapshot == job.source_snapshot {
+            info!(
+                "Replica of {} is already at @{}",
+                job.source_vm_id, last_snapshot
+            );
+            return Ok(());
         }
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(format!(
-                "Incremental replication failed: {}",
-                stderr
-            )));
-        }
-
-        Ok(())
+        self.send_receive(job, Some(&last_snapshot)).await
     }
 
     /// Get the last replicated snapshot name
     async fn get_last_replicated_snapshot(&self, job: &ReplicationJob) -> Result<String> {
         let output = Command::new("ssh")
+            .args(["-o", "BatchMode=yes", "--"])
             .arg(&job.target_node)
             .arg("zfs")
             .arg("list")
             .arg("-H")
+            .arg("-d")
+            .arg("1")
             .arg("-t")
             .arg("snapshot")
             .arg("-o")
             .arg("name")
             .arg("-s")
             .arg("creation")
-            .arg(format!("{}/{}", job.target_pool, job.source_vm_id))
+            .arg(Self::target_dataset(job))
             .output()
             .await
             .map_err(|e| {
@@ -626,17 +637,20 @@ impl ReplicationManager {
 
         // Get all snapshots on target
         let output = Command::new("ssh")
+            .args(["-o", "BatchMode=yes", "--"])
             .arg(&job.target_node)
             .arg("zfs")
             .arg("list")
             .arg("-H")
+            .arg("-d")
+            .arg("1")
             .arg("-t")
             .arg("snapshot")
             .arg("-o")
             .arg("name")
             .arg("-s")
             .arg("creation")
-            .arg(format!("{}/{}", job.target_pool, job.source_vm_id))
+            .arg(Self::target_dataset(job))
             .output()
             .await
             .map_err(|e| {
@@ -729,6 +743,35 @@ impl ReplicationManager {
 }
 
 /// True if `name` is an executable file in one of the `PATH` directories.
+/// A ZFS dataset/snapshot name without anything a shell would act on.
+fn valid_zfs_name(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with('-')
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-' | '/'))
+}
+
+/// The ZFS dataset a path (a VM disk, a pool directory) lives on, from
+/// `findmnt -T`; `None` when the path is not on ZFS.
+pub async fn zfs_dataset_of_path(path: &str) -> Option<String> {
+    let out = Command::new("findmnt")
+        .args(["-n", "-o", "SOURCE,FSTYPE", "-T", path])
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_findmnt_zfs(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// `tank/vms zfs` -> `tank/vms`; any other filesystem type -> `None`.
+pub fn parse_findmnt_zfs(line: &str) -> Option<String> {
+    let mut f = line.split_whitespace();
+    let (src, fstype) = (f.next()?, f.next()?);
+    (fstype == "zfs" && valid_zfs_name(src)).then(|| src.to_string())
+}
+
 fn binary_in_path(name: &str) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::env::var_os("PATH")
@@ -766,6 +809,7 @@ mod tests {
             name: "VM 100 to Node2".to_string(),
             source_vm_id: "100".to_string(),
             source_snapshot: "daily-20251010".to_string(),
+            source_dataset: Some("tank/vms".to_string()),
             target_node: "node2".to_string(),
             target_pool: "tank/replicas".to_string(),
             schedule: ReplicationSchedule::Daily { hour: 2 },
@@ -807,6 +851,7 @@ mod tests {
             name: id.to_string(),
             source_vm_id: "100".to_string(),
             source_snapshot: "snap".to_string(),
+            source_dataset: Some("tank/vms".to_string()),
             target_node: "node2".to_string(),
             target_pool: "tank".to_string(),
             schedule: ReplicationSchedule::Manual,
@@ -883,5 +928,33 @@ mod tests {
             ReplicationManager::check_preconditions(&job),
             Err(horcrux_common::Error::InvalidConfig(_))
         ));
+    }
+
+    #[test]
+    fn dataset_and_names_are_parsed_and_validated() {
+        assert_eq!(parse_findmnt_zfs("tank/vms zfs\n"), Some("tank/vms".into()));
+        assert_eq!(parse_findmnt_zfs("/dev/sda1 ext4\n"), None);
+        assert_eq!(parse_findmnt_zfs("tank/vms;rm zfs"), None);
+        assert_eq!(parse_findmnt_zfs(""), None);
+        assert!(!valid_zfs_name("tank/ft-zvm@x") && valid_zfs_name("tank/ft-zvm"));
+        assert!(!valid_zfs_name("a b") && !valid_zfs_name("-x") && !valid_zfs_name(""));
+    }
+
+    #[test]
+    fn job_without_a_zfs_dataset_says_so() {
+        let mut j = test_job("j");
+        j.source_dataset = None;
+        let e = ReplicationManager::source_dataset(&j)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("not on a ZFS dataset"), "{e}");
+        assert_eq!(
+            ReplicationManager::source_dataset(&test_job("j")).unwrap(),
+            "tank/vms"
+        );
+        assert_eq!(
+            ReplicationManager::target_dataset(&test_job("j")),
+            "tank/100"
+        );
     }
 }

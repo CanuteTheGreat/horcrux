@@ -16,6 +16,10 @@ pub struct PlanNode {
     /// Running guests never move between two known, different families.
     #[serde(default)]
     pub cpu_vendor: String,
+    /// x86-64 microarchitecture level (1..4, 0 = unknown, permissive). A
+    /// running guest never moves to an older level than its source.
+    #[serde(default)]
+    pub cpu_level: u8,
     pub name: String,
     pub online: bool,
     /// In maintenance: takes no new guests.
@@ -23,6 +27,11 @@ pub struct PlanNode {
     pub arch: String,
     pub mem_total_mb: u64,
     pub cpu_cores: u32,
+    /// Operator-set role/limits (`cluster::roles`). `None` = unconfigured,
+    /// permissive. A witness-only node, or one whose per-guest vCPU/RAM cap
+    /// is below the guest, is never a drain/rebalance target.
+    #[serde(default)]
+    pub caps: Option<super::roles::NodeCaps>,
 }
 
 /// Per-guest placement rules (set on the guest).
@@ -37,6 +46,9 @@ pub struct Rules {
     pub anti_affinity_group: Option<String>,
     /// Never moved by drain or rebalance (falls back to Save state).
     pub no_migrate: bool,
+    /// Only on nodes carrying every one of these labels (`NodeCaps.labels`,
+    /// e.g. "nvme", "gpu"). A node with no labels configured never matches.
+    pub required_labels: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -155,18 +167,33 @@ impl<'a> World<'a> {
                 t.name, t.arch, g.arch
             ));
         }
-        if g.running && !t.cpu_vendor.is_empty() {
-            let src = self
-                .nodes
-                .iter()
-                .find(|n| n.name == self.at[&g.id])
-                .map(|n| n.cpu_vendor.as_str())
-                .unwrap_or("");
-            if !src.is_empty() && src != t.cpu_vendor {
-                return Some(format!(
-                    "{} has a {} CPU but the guest runs on {}: live migration across CPU vendors is not possible (cold move only)",
-                    t.name, t.cpu_vendor, src
-                ));
+        if let Some(c) = &t.caps {
+            let need = super::roles::GuestNeeds {
+                vcpus: g.cpus,
+                memory: g.memory_mb * 1024 * 1024,
+                required_labels: g.rules.required_labels.clone(),
+            };
+            if let Err(why) = super::roles::eligible(c, &need) {
+                return Some(format!("{} is not eligible: {why}", t.name));
+            }
+        } else if let Some(l) = g.rules.required_labels.first() {
+            return Some(format!(
+                "{} is not eligible: node lacks required label '{l}'",
+                t.name
+            ));
+        }
+        if g.running {
+            if let Some(s) = self.nodes.iter().find(|n| n.name == self.at[&g.id]) {
+                let grp = |n: &PlanNode| super::cpu_groups::CpuGroup {
+                    vendor: n.cpu_vendor.clone(),
+                    level: n.cpu_level,
+                };
+                if let Some(why) = super::cpu_groups::live_migration_block(&grp(s), &grp(t)) {
+                    return Some(format!(
+                        "{}: live migration across CPU vendors/levels is not possible ({why})",
+                        t.name
+                    ));
+                }
             }
         }
         if let Some(p) = &g.rules.pin {
@@ -281,6 +308,7 @@ pub fn plan_rebalance(
     let usable: Vec<&PlanNode> = nodes
         .iter()
         .filter(|n| n.online && !n.maintenance)
+        .filter(|n| n.caps.as_ref().is_none_or(|c| c.role.runs_guests()))
         .collect();
     if usable.len() < 2 {
         return plan;
@@ -344,12 +372,14 @@ mod tests {
     fn node(n: &str, mem: u64) -> PlanNode {
         PlanNode {
             cpu_vendor: String::new(),
+            cpu_level: 0,
             name: n.into(),
             online: true,
             maintenance: false,
             arch: "x86_64".into(),
             mem_total_mb: mem,
             cpu_cores: 4,
+            caps: None,
         }
     }
 
@@ -430,6 +460,27 @@ mod tests {
         assert!(p.moves.is_empty());
         let why = &p.unplaced[0].reason;
         assert!(why.contains("CPU vendors"), "{why}");
+    }
+
+    #[test]
+    fn running_guests_never_drain_to_older_cpu_level() {
+        let mut a = node("a", 8000);
+        a.cpu_vendor = "intel".into();
+        a.cpu_level = 3;
+        let mut old = node("old", 8000);
+        old.cpu_vendor = "intel".into();
+        old.cpu_level = 1;
+        let nodes = [a.clone(), old.clone()];
+        let p = plan_drain("a", &nodes, &[guest("g", "a", 500)]);
+        assert!(p.moves.is_empty());
+        assert!(
+            p.unplaced[0].reason.contains("older"),
+            "{}",
+            p.unplaced[0].reason
+        );
+        old.cpu_level = 0;
+        let p = plan_drain("a", &[a, old], &[guest("g", "a", 500)]);
+        assert_eq!(p.moves.len(), 1, "unknown level is permissive");
     }
 
     #[test]
@@ -532,5 +583,65 @@ mod tests {
                 .moves
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn drain_never_targets_witness_or_undersized_nodes() {
+        use super::super::roles::{NodeCaps, NodeRole};
+        let mut witness = node("w", 64000);
+        witness.caps = Some(NodeCaps {
+            role: NodeRole::Witness,
+            ..Default::default()
+        });
+        let mut small = node("s", 64000);
+        small.caps = Some(NodeCaps {
+            role: NodeRole::Compute,
+            max_guest_memory: Some(1024 * 1024 * 1024),
+            ..Default::default()
+        });
+        let nodes = [node("a", 8000), witness, small, node("b", 8000)];
+        let guests = [guest("g1", "a", 4000)];
+        let plan = plan_drain("a", &nodes, &guests);
+        assert_eq!(plan.moves.len(), 1);
+        assert_eq!(plan.moves[0].to, "b", "w and s are ineligible");
+        // only ineligible nodes left: unplaced, with the reason
+        let nodes = [node("a", 8000), nodes[1].clone(), nodes[2].clone()];
+        let plan = plan_drain("a", &nodes, &guests);
+        assert!(plan.moves.is_empty());
+        assert!(plan.unplaced[0].reason.contains("witness-only"));
+        assert!(plan.unplaced[0].reason.contains("limit"));
+    }
+
+    #[test]
+    fn drain_honours_required_node_labels() {
+        use super::super::roles::NodeCaps;
+        let mut nvme = node("nvme", 8000);
+        nvme.caps = Some(NodeCaps {
+            labels: vec!["nvme".into(), "lab".into()],
+            ..Default::default()
+        });
+        let mut lab = node("lab", 8000);
+        lab.caps = Some(NodeCaps {
+            labels: vec!["lab".into()],
+            ..Default::default()
+        });
+        // "plain" has no caps configured at all
+        let nodes = [node("a", 8000), node("plain", 8000), lab, nvme];
+        let mut g = guest("g1", "a", 1000);
+        g.rules.required_labels = vec!["nvme".into()];
+        let plan = plan_drain("a", &nodes, &[g.clone()]);
+        assert_eq!(plan.moves.len(), 1);
+        assert_eq!(plan.moves[0].to, "nvme", "only the nvme-labelled node");
+        // two labels: nobody carries both gpu and nvme
+        g.rules.required_labels = vec!["nvme".into(), "gpu".into()];
+        let plan = plan_drain("a", &nodes, &[g.clone()]);
+        assert!(plan.moves.is_empty());
+        assert!(plan.unplaced[0]
+            .reason
+            .contains("lacks required label 'gpu'"));
+        assert!(plan.unplaced[0].reason.contains("plain is not eligible"));
+        // no labels required: the unconfigured node is fine again
+        g.rules.required_labels.clear();
+        assert_eq!(plan_drain("a", &nodes, &[g]).moves.len(), 1);
     }
 }

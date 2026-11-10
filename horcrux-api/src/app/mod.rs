@@ -55,8 +55,9 @@ use tracing::{error, info};
 
 /// Start the Horcrux API server (the `horcrux-api` binary just calls this).
 pub async fn run() -> anyhow::Result<()> {
-    // Initialize tracing
-    tracing_subscriber::fmt::init();
+    // Initialize tracing: info by default (HA decisions are logged at
+    // info/warn), RUST_LOG overrides.
+    logging::init_console();
 
     // Load configuration
     let horcrux_config = config::HorcruxConfig::load();
@@ -393,6 +394,15 @@ pub async fn run() -> anyhow::Result<()> {
         kubernetes_manager,
     });
 
+    // Default global migration bandwidth limit: 70% of the fastest local link
+    // so a live migration cannot saturate it (1 GbE .. 100 GbE).
+    {
+        let nics = crate::cluster::nic::scan_nics(std::path::Path::new("/sys"));
+        if let Some(mb) = crate::cluster::nic::migration_limit_mbytes(&nics, 70) {
+            state.migration_manager.set_bandwidth_limit(Some(mb)).await;
+        }
+    }
+
     // Start snapshot scheduler background task
     let state_for_scheduler = state.clone();
     let vm_getter = Arc::new(move |vm_id: &str| {
@@ -439,6 +449,9 @@ pub async fn run() -> anyhow::Result<()> {
     // Rebalance when a node joins or returns from maintenance (leader only).
     #[cfg(feature = "cluster")]
     api::drain::spawn(state.clone());
+    // Opt-in automatic idle power-down of `power-managed` lab nodes (leader only).
+    #[cfg(feature = "cluster")]
+    api::idle_power::spawn(state.clone());
 
     // Save/resume of guests across host shutdown: token, boot pass, running snapshot.
     api::guest_state::engine::spawn(state.clone());
@@ -544,6 +557,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::firewall_objects::routes())
         .merge(api::sdn_cni::routes())
         .merge(api::host_net::routes(&state))
+        .merge(api::net_dhcp::routes(&state))
         .merge(api::dashboards::routes(&state));
     #[cfg(feature = "s3-gateway")]
     let protected_routes = protected_routes.merge(api::s3_gateway::routes(&state));
@@ -865,7 +879,7 @@ fn stack_routes() -> Router<Arc<AppState>> {
         .route("/api/stacks", get(list_stacks))
         .route("/api/stacks", post(deploy_stack))
         .route("/api/stacks/:id", get(get_stack))
-        .route("/api/stacks/:id", delete(remove_stack))
+        .route("/api/stacks/:id", delete(remove_stack).put(update_stack))
         .route("/api/stacks/:id/start", post(start_stack))
         .route("/api/stacks/:id/stop", post(stop_stack))
 }
@@ -1072,8 +1086,17 @@ fn cluster_routes() -> Router<Arc<AppState>> {
             "/api/cluster/nodes/:name/caps",
             axum::routing::put(set_node_caps),
         )
+        .route(
+            "/api/cluster/nodes/:name/migration-targets",
+            get(get_migration_targets),
+        )
         .route("/api/cluster/nics", get(get_local_nics))
         .route("/api/cluster/power/plan", post(plan_cluster_power))
+        .route("/api/cluster/power/status", get(get_cluster_power_status))
+        .route("/api/cluster/power/wake", post(wake_cluster_node))
+        .route("/api/cluster/power/bmc-on", post(bmc_power_on_node))
+        .route("/api/cluster/power/down", post(power_down_node))
+        .route("/api/cluster/quorum/plan", get(get_quorum_plan))
         .route("/api/cluster/architecture", get(get_cluster_architecture))
         .route("/api/cluster/find-node", post(find_best_node_for_vm))
         // HA (High Availability) endpoints
@@ -2503,6 +2526,7 @@ async fn create_replication_job(
         name: job_name,
         source_vm_id: req.source_vm_id,
         source_snapshot: req.source_snapshot,
+        source_dataset: None, // resolved from the VM's disks below
         target_node: req.target_node,
         target_pool: req.target_pool,
         schedule,
@@ -2517,11 +2541,21 @@ async fn create_replication_job(
     };
 
     // Validate source VM exists
-    state
+    let source_vm = state
         .database
         .get_vm(&job.source_vm_id)
         .await
         .map_err(|_| ApiError::NotFound(format!("Source VM {} not found", job.source_vm_id)))?;
+
+    // The ZFS dataset the VM's disks live on is what gets snapshotted and
+    // sent (a node without ZFS keeps None: execute then says why).
+    let mut job = job;
+    for disk in &source_vm.disks {
+        if let Some(ds) = vm::replication::zfs_dataset_of_path(&disk.path).await {
+            job.source_dataset = Some(ds);
+            break;
+        }
+    }
 
     let job = state.replication_manager.create_job(job).await?;
     info!("Created replication job: {}", job.id);
@@ -4033,6 +4067,66 @@ async fn disconnect_container_network(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Run a long, side-effecting operation (stack deploy/update/remove: image
+/// pulls, networks, many containers) to completion even when the HTTP client
+/// goes away. hyper drops a handler's future when its connection closes (a
+/// browser aborts in-flight requests with `ERR_NETWORK_CHANGED` as soon as a
+/// network interface changes - and a stack deploy creates a Docker bridge), which
+/// left a half-built stack: a network and no containers, nothing recorded.
+#[cfg(any(feature = "docker", feature = "podman"))]
+async fn run_detached<T, E, F>(fut: F) -> Result<T, ApiError>
+where
+    T: Send + 'static,
+    E: Into<ApiError> + Send + 'static,
+    F: std::future::Future<Output = Result<T, E>> + Send + 'static,
+{
+    match tokio::spawn(fut).await {
+        Ok(r) => r.map_err(Into::into),
+        Err(e) => Err(ApiError::Internal(format!(
+            "stack operation task failed: {e}"
+        ))),
+    }
+}
+
+#[cfg(all(test, any(feature = "docker", feature = "podman")))]
+mod run_detached_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[tokio::test]
+    async fn operation_finishes_after_the_request_future_is_dropped() {
+        let done = Arc::new(AtomicBool::new(false));
+        let d = done.clone();
+        let req = run_detached(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            d.store(true, Ordering::SeqCst);
+            Ok::<u32, ApiError>(1)
+        });
+        // the client disconnects: hyper drops the handler future mid-flight
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(20), req).await;
+        assert!(!done.load(Ordering::SeqCst));
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        assert!(
+            done.load(Ordering::SeqCst),
+            "the deploy must run to completion"
+        );
+    }
+
+    #[tokio::test]
+    async fn result_and_error_pass_through() {
+        assert_eq!(
+            run_detached(async { Ok::<u32, ApiError>(7) })
+                .await
+                .unwrap(),
+            7
+        );
+        let e = run_detached(async { Err::<u32, ApiError>(ApiError::Conflict("x".into())) })
+            .await
+            .unwrap_err();
+        assert!(matches!(e, ApiError::Conflict(_)));
+    }
+}
+
 #[cfg(any(feature = "docker", feature = "podman"))]
 async fn list_stacks(
     State(state): State<Arc<AppState>>,
@@ -4055,11 +4149,53 @@ async fn deploy_stack(
     Json(req): Json<DeployStackRequest>,
 ) -> Result<Json<container::stack::StackSummary>, ApiError> {
     let runtime = parse_runtime(&req.runtime);
-    let summary = state
-        .stack_manager
-        .deploy_stack(&req.name, &req.compose_yaml, runtime)
-        .await?;
+    let sm = state.stack_manager.clone();
+    let summary =
+        run_detached(async move { sm.deploy_stack(&req.name, &req.compose_yaml, runtime).await })
+            .await?;
     Ok(Json(summary))
+}
+
+/// `PUT /api/stacks/:id`: update a deployed stack (`compose up -d`). Body:
+/// `compose_yaml` (new compose file, default the current one), `env` (extra
+/// environment merged into every service), `force_recreate`.
+#[cfg(any(feature = "docker", feature = "podman"))]
+#[derive(serde::Deserialize)]
+struct UpdateStackRequest {
+    #[serde(default)]
+    compose_yaml: Option<String>,
+    #[serde(default)]
+    env: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(default)]
+    force_recreate: bool,
+}
+
+#[cfg(any(feature = "docker", feature = "podman"))]
+async fn update_stack(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateStackRequest>,
+) -> Result<Json<container::stack::StackUpdateReport>, ApiError> {
+    if req.compose_yaml.is_none()
+        && req.env.as_ref().is_none_or(|e| e.is_empty())
+        && !req.force_recreate
+    {
+        return Err(ApiError::BadRequest(
+            "nothing to update: send compose_yaml, env or force_recreate".into(),
+        ));
+    }
+    let sm = state.stack_manager.clone();
+    let report = run_detached(async move {
+        sm.update_stack(
+            &id,
+            req.compose_yaml.as_deref(),
+            req.env.as_ref(),
+            req.force_recreate,
+        )
+        .await
+    })
+    .await?;
+    Ok(Json(report))
 }
 
 #[cfg(any(feature = "docker", feature = "podman"))]
@@ -4075,7 +4211,8 @@ async fn remove_stack(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    state.stack_manager.remove_stack(&id).await?;
+    let sm = state.stack_manager.clone();
+    run_detached(async move { sm.remove_stack(&id).await }).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -4318,7 +4455,14 @@ async fn remove_cluster_node(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    // Members to tell, captured before the removal.
+    #[cfg(feature = "cluster")]
+    let others = state.cluster_manager.list_nodes().await;
     state.cluster_manager.remove_node(&name).await?;
+    // The removal is cluster-wide: the other members forget the node too
+    // (best effort, the same way a join is announced).
+    #[cfg(feature = "cluster")]
+    api::cluster_join::announce_member_removed(&state, &name, &others).await;
     let _ = state
         .webhook_manager
         .trigger_event(
@@ -4468,8 +4612,156 @@ async fn plan_cluster_power(Json(req): Json<PowerPlanRequest>) -> Json<serde_jso
     }))
 }
 
+/// `GET /api/cluster/power/status` -- live idle-power view (area 7): samples
+/// every node (CPU, running guests, role, BMC availability) and returns the
+/// planner input plus which `power-managed` nodes could be powered down
+/// quorum-safely right now. Read-only; never acts.
+#[cfg(feature = "cluster")]
+async fn get_cluster_power_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let (_, nodes, policy) = crate::api::idle_power::power_view(&state).await;
+    Json(serde_json::json!({
+        "power_down": crate::cluster::power::plan_power_down(&nodes, &policy),
+        "policy": policy,
+        "nodes": nodes,
+    }))
+}
+
+#[cfg(feature = "cluster")]
+#[derive(Debug, Deserialize)]
+struct PowerDownRequest {
+    node: String,
+}
+
+/// `POST /api/cluster/power/down` -- gracefully power off one idle node
+/// through its BMC (area 7). Refused (409) unless the planner currently lists
+/// the node as a quorum-safe candidate (opt-in `power-managed`, no guests, no
+/// OSDs, idle CPU, wake method, min online kept) and it is not this node.
+#[cfg(feature = "cluster")]
+async fn power_down_node(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<PowerDownRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    crate::api::idle_power::power_down(&state, &req.node).await?;
+    Ok(Json(
+        serde_json::json!({"shutdown_requested": true, "node": req.node}),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+struct WakeRequest {
+    /// Target NIC MAC, e.g. "aa:bb:cc:dd:ee:ff".
+    mac: String,
+    /// Broadcast address (default 255.255.255.255:9).
+    #[serde(default)]
+    broadcast: Option<std::net::SocketAddr>,
+}
+
+/// `POST /api/cluster/power/wake` -- send a Wake-on-LAN magic packet to a
+/// powered-off node (area 7). Sends only the packet; BMC power-on is separate.
+async fn wake_cluster_node(
+    Json(req): Json<WakeRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    use crate::cluster::power;
+    let mac = power::parse_mac(&req.mac).ok_or((
+        StatusCode::BAD_REQUEST,
+        format!("invalid MAC '{}'", req.mac),
+    ))?;
+    let target = req
+        .broadcast
+        .unwrap_or_else(|| "255.255.255.255:9".parse().expect("static addr"));
+    power::send_wol(mac, target)
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("WoL send failed: {e}")))?;
+    Ok(Json(serde_json::json!({
+        "sent": true,
+        "mac": req.mac,
+        "target": target.to_string(),
+    })))
+}
+
+#[cfg(feature = "cluster")]
+#[derive(Debug, Deserialize)]
+struct BmcOnRequest {
+    node: String,
+}
+
+/// `POST /api/cluster/power/bmc-on` -- power a node on through its configured
+/// BMC fencing device (IPMI/iLO/DRAC/Redfish) (area 7).
+#[cfg(feature = "cluster")]
+async fn bmc_power_on_node(
+    Json(req): Json<BmcOnRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    use crate::ha::fencing::FencingResult;
+    match crate::api::ha_loop::fencing()
+        .power_on_node(&req.node)
+        .await
+    {
+        FencingResult::Success => Ok(Json(
+            serde_json::json!({"powered_on": true, "node": req.node}),
+        )),
+        FencingResult::Failed(e) => Err((StatusCode::BAD_GATEWAY, e)),
+        other => Err((
+            StatusCode::BAD_GATEWAY,
+            format!("BMC power-on not confirmed: {other:?}"),
+        )),
+    }
+}
+
+/// `GET /api/cluster/quorum/plan` -- dry-run quorum plan (area 3) for the
+/// current membership (one vote per node unless the node's caps set quorum_votes): threshold, tolerated losses,
+/// auto_tie_breaker for even totals (e.g. 10 voters), warnings, and the
+/// corosync.conf that would be generated. Read-only; never writes config.
+async fn get_quorum_plan(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    use crate::cluster::corosync::generate_multi_node_config;
+    let nodes: Vec<(_, u32)> = state
+        .cluster_manager
+        .list_nodes_with_local()
+        .await
+        .into_iter()
+        .map(|n| {
+            let v = crate::cluster::roles::quorum_votes(n.caps.as_ref());
+            (n, v)
+        })
+        .collect();
+    let (config, plan) = generate_multi_node_config("horcrux", &nodes);
+    Json(serde_json::json!({
+        "nodes": nodes.len(),
+        "total_votes": plan.total_votes,
+        "quorum": plan.quorum,
+        "tolerated_vote_loss": plan.tolerated_vote_loss,
+        "split_brain_risk": plan.split_brain_risk,
+        "auto_tie_breaker": plan.auto_tie_breaker,
+        "qdevice_host": plan.qdevice.as_ref().map(|q| q.host.clone()),
+        "qdevice_votes": plan.qdevice_votes,
+        "warnings": plan.warnings,
+        "corosync_conf": config,
+    }))
+}
+
+/// `GET /api/cluster/nodes/:name/migration-targets` -- for a guest running on
+/// node `:name`, every other node with its CPU group and, when live migration
+/// is blocked, the reason (vendor mismatch / older x86-64 level). Read-only;
+/// feeds the UI "why ineligible" display (area 1).
+async fn get_migration_targets(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Result<Json<Vec<crate::cluster::cpu_groups::TargetVerdict>>, (StatusCode, String)> {
+    use crate::cluster::cpu_groups::{target_verdicts, CpuGroup};
+    let nodes = state.cluster_manager.list_nodes_with_local().await;
+    let grp = |n: &Node| CpuGroup {
+        vendor: n.cpu_vendor.clone(),
+        level: n.cpu_level,
+    };
+    let src = nodes
+        .iter()
+        .find(|n| n.name == name)
+        .ok_or((StatusCode::NOT_FOUND, format!("unknown node {name}")))?;
+    let src_g = grp(src);
+    let all: Vec<(String, CpuGroup)> = nodes.iter().map(|n| (n.name.clone(), grp(n))).collect();
+    Ok(Json(target_verdicts(&name, &src_g, &all)))
+}
+
 /// `PUT /api/cluster/nodes/:name/caps` -- body is a NodeCaps
-/// (`{"role":"witness","labels":[..],"max_guest_vcpus":4,"max_guest_memory":N}`)
+/// (`{"role":"witness","labels":[..],"max_guest_vcpus":4,"max_guest_memory":N,"quorum_votes":0}`)
 /// or `null` to clear.
 async fn set_node_caps(
     State(state): State<Arc<AppState>>,
@@ -4997,7 +5289,9 @@ async fn create_ha_group(
         no_failback: req.no_failback,
     };
 
-    state.ha_manager.add_group(group).await?;
+    state.ha_manager.add_group(group.clone()).await?;
+    crate::api::ha_loop::broadcast_group(&state, crate::api::ha_loop::GroupChange::Put { group })
+        .await;
 
     Ok(StatusCode::CREATED)
 }
@@ -5018,15 +5312,15 @@ async fn update_ha_group(
     Path(name): Path<String>,
     Json(req): Json<UpdateHaGroupRequest>,
 ) -> Result<StatusCode, ApiError> {
-    state
-        .ha_manager
-        .update_group(ha::HaGroup {
-            name,
-            nodes: req.nodes,
-            restricted: req.restricted,
-            no_failback: req.no_failback,
-        })
-        .await?;
+    let group = ha::HaGroup {
+        name,
+        nodes: req.nodes,
+        restricted: req.restricted,
+        no_failback: req.no_failback,
+    };
+    state.ha_manager.update_group(group.clone()).await?;
+    crate::api::ha_loop::broadcast_group(&state, crate::api::ha_loop::GroupChange::Put { group })
+        .await;
     Ok(StatusCode::OK)
 }
 
@@ -5036,6 +5330,8 @@ async fn delete_ha_group(
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     state.ha_manager.remove_group(&name).await?;
+    crate::api::ha_loop::broadcast_group(&state, crate::api::ha_loop::GroupChange::Delete { name })
+        .await;
     Ok(StatusCode::NO_CONTENT)
 }
 

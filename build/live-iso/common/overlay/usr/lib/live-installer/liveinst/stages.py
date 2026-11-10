@@ -16,7 +16,7 @@ stack, skip the server sysctl lock-down and use the desktop USE preset.
 """
 import re
 
-from . import portableswap
+from . import portableswap, secretcheck
 from . import system as S
 
 ERASE_WORD = "ERASE"
@@ -117,7 +117,7 @@ def disk_layout(cfg, profile, size_bytes, efi, ram_mb):
         used = sum(s[1] for s in segs)
         segs.append(("root (LUKS2)", max(0, size_bytes - used - 2 * MB), "xfs in LUKS2", "/"))
         return segs
-    sp = swap_plan(cfg, profile, ram_mb) if (cfg["fs"] != "zfs" or cfg.get("zfs_encrypt")) else {"mode": "none", "mb": 0}
+    sp = swap_plan(cfg, profile, ram_mb) if (cfg["fs"] != "zfs" or cfg.get("zfs_encrypt") or cfg.get("test_machine_no_encryption")) else {"mode": "none", "mb": 0}
     if sp["mode"] == "hibernate":
         segs.append(("swap", sp["mb"] * MB, "swap", "[swap]"))
     used = sum(s[1] for s in segs)
@@ -227,15 +227,34 @@ class DiskStage(Stage):
                       [("single", "single disk"), ("mirror", "mirror (RAID1, two disks)")],
                       visible=lambda v: v.get("fs") == "zfs", advanced=True,
                       hint="A mirror needs two disks and survives one failing; /boot lives on the first disk only."),
-                Field("enc", "Encrypt the disk (ZFS native, AES-256-GCM)", "check", c.get("zfs_encrypt", False), visible=lambda v: v.get("fs") == "zfs",
-                      hint="Recommended for laptops. The passphrase is asked at every boot; /boot and the EFI partition stay unencrypted"),
-                Field("pp", "Disk passphrase", "password", c.get("zfs_passphrase", ""), width=40, visible=lambda v: v.get("fs") == "zfs" and v.get("enc"),
-                      hint="Min 12 characters. NOT recoverable: if you forget it the data is gone"),
-                Field("pp2", "Confirm passphrase", "password", c.get("zfs_passphrase", ""), width=40, visible=lambda v: v.get("fs") == "zfs" and v.get("enc")),
+                *self._enc_fields(c, p),
                 Field("lpw", "Disk passphrase", "password", c.get("luks_passphrase", ""), width=40, visible=luks,
                       hint="Typed at every boot (the Type Cover / a USB keyboard works). Min 12 chars. Lose it = lose the data"),
                 Field("lpw2", "Confirm passphrase", "password", c.get("luks_passphrase", ""), width=40, visible=luks),
                 swap_field(c, p, ctx.ram_mb)]
+
+    def _reuse(self, ctx, pw):
+        """going back to this page and choosing a passphrase that an account already uses"""
+        probe = dict(ctx.c, fs="xfs-luks", luks_passphrase=pw)
+        bad = secretcheck.reuse_problems(probe)
+        return bad[0] if bad else None
+
+    def _enc_fields(self, c, p):
+        """passphrase encryption (laptops/servers) or, for an appliance profile (encryption = "tpm-or-none"), a read-only line that says what
+        the machine itself decided: encrypted with TPM unlock, or not encrypted (never a boot-time passphrase)"""
+        if p.get("encryption") == "tpm-or-none":
+            from . import tpmunlock
+            ok, why = tpmunlock.decide(p)
+            return [Field("encinfo", "Disk encryption: " + why, "label", "", visible=lambda v: v.get("fs") == "zfs"),
+                    Field("encinfo2", "Disk encryption: NOT encrypted (only ZFS can be unlocked unattended by the TPM)", "label", "",
+                          visible=lambda v: v.get("fs") != "zfs")]
+        return [Field("enc", "Encrypt the disk (ZFS native, AES-256-GCM)", "check", c.get("zfs_encrypt", False), visible=lambda v: v.get("fs") == "zfs",
+                      hint="Recommended for laptops. The passphrase is asked at every boot; /boot and the EFI partition stay unencrypted"),
+                Field("tm", "TEST MACHINE: NO disk encryption", "check", c.get("test_machine_no_encryption", False), visible=lambda v: v.get("fs") in ("zfs", "xfs-luks"),
+                      advanced=True, hint="WARNING: not recommended; unencrypted, boots without a passphrase. Only for a machine used for testing. Overrides the encryption choice"),
+                Field("pp", "Disk passphrase", "password", c.get("zfs_passphrase", ""), width=40, visible=lambda v: v.get("fs") == "zfs" and v.get("enc"),
+                      hint="Min 12 characters. NOT recoverable: if you forget it the data is gone"),
+                Field("pp2", "Confirm passphrase", "password", c.get("zfs_passphrase", ""), width=40, visible=lambda v: v.get("fs") == "zfs" and v.get("enc"))]
 
     def validate(self, ctx, v):
         if v.get("fs") == "xfs-luks":
@@ -243,19 +262,29 @@ class DiskStage(Stage):
                 return "The two passphrases do not match."
             if len(v.get("lpw") or "") < 12:
                 return "The disk passphrase needs at least 12 characters."
+            return self._reuse(ctx, v.get("lpw") or "")
         if v.get("fs") == "zfs" and v.get("enc"):
             if v.get("pp") != v.get("pp2"):
                 return "The two passphrases do not match."
             from . import zfsroot
-            return zfsroot.passphrase_problem(v.get("pp") or "")
+            return zfsroot.passphrase_problem(v.get("pp") or "") or self._reuse(ctx, v.get("pp") or "")
         return None
 
     def commit(self, ctx, v):
         ctx.c["fs"], ctx.c["zfs_raid"] = v["fs"], v["zfs_raid"]
+        ctx.c["test_machine_no_encryption"] = bool(v.get("tm"))
+        if ctx.c["test_machine_no_encryption"]:
+            from . import testmachine
+            testmachine.normalize(ctx.c)
+            v = dict(v, enc=False, lpw="", pp="")
         ctx.c["luks_passphrase"] = v.get("lpw", "") if v["fs"] == "xfs-luks" else ""
-        ctx.c["zfs_encrypt"] = bool(v["fs"] == "zfs" and v.get("enc"))
-        ctx.c["zfs_passphrase"] = v.get("pp", "") if ctx.c["zfs_encrypt"] else ""
-        ctx.c["swap"] = v.get("swap", "auto") if (v["fs"] != "zfs" or ctx.c["zfs_encrypt"]) else "auto"
+        if ctx.p.get("encryption") == "tpm-or-none":
+            from . import system as _S
+            _S.apply_encryption_policy(ctx.p, ctx.c)       # TPM present and working -> encrypted + unattended, else not encrypted; never a passphrase
+        else:
+            ctx.c["zfs_encrypt"] = bool(v["fs"] == "zfs" and v.get("enc"))
+            ctx.c["zfs_passphrase"] = v.get("pp", "") if ctx.c["zfs_encrypt"] else ""
+        ctx.c["swap"] = v.get("swap", "auto") if (v["fs"] != "zfs" or ctx.c["zfs_encrypt"] or ctx.c["test_machine_no_encryption"]) else "auto"
 
     def need_disks(self, c):
         return 2 if (c["fs"] == "zfs" and c["zfs_raid"] == "mirror") else 1
@@ -284,13 +313,17 @@ class DiskStage(Stage):
             size = by.get(disk, {}).get("size", 64 * 10**9)
             segs = disk_layout(c, ctx.p, size, ctx.efi, ctx.ram_mb)
             out.append(f"ERASE {disk} and create: " + ", ".join(f"{n} {S.fmt_size(b)}" for n, b, _f, _m in segs))
-        if c["fs"] != "zfs" or c.get("zfs_encrypt"):
+        if c.get("test_machine_no_encryption"):
+            out.append("WARNING: TEST MACHINE - the disk is NOT encrypted and the machine boots without a passphrase")
+        if c["fs"] != "zfs" or c.get("zfs_encrypt") or c.get("test_machine_no_encryption"):
             out.append("Swap: " + portableswap.describe(swap_plan(c, ctx.p, ctx.ram_mb)))
         if c["fs"] == "xfs-luks":
             out.append("Encrypt the root partition with LUKS2 (argon2id) and create XFS inside it; zram instead of swap")
         elif c["fs"] == "zfs":
             out.append("Create ZFS pool rpool" + (" (mirror)" if c["zfs_raid"] == "mirror" else "") + " with lz4 compression"
-                       + (", natively ENCRYPTED (AES-256-GCM, passphrase at every boot)" if c.get("zfs_encrypt") else ""))
+                       + ((", natively ENCRYPTED (AES-256-GCM, key sealed to the TPM 2.0: unattended boot)" if c.get("zfs_keymode") == "tpm" else ", natively ENCRYPTED (AES-256-GCM, passphrase at every boot)") if c.get("zfs_encrypt") else ""))
+        if ctx.p.get("encryption") == "tpm-or-none":
+            out.append("Disk encryption: " + (c.get("enc_why") or "none"))
         else:
             out.append(f"Create {c['fs']} file systems and mount them under /mnt/target")
         return out
@@ -309,12 +342,25 @@ class RootpassStage(Stage):
     intro = ("Set the administrator password (REQUIRED - there is no default password). "
              "It is used for the console root login and the web admin user.")
 
+    def _user_machine(self, ctx):
+        """a desktop/Surface install creates a sudo user: root then stays LOCKED unless a separate password is given"""
+        try:
+            from . import desktop
+            if desktop.available():
+                return True
+            hp, _hm = S.hwprofile.detect()
+            return bool(hp and hp.get("defaults", {}).get("desktop"))
+        except Exception:  # noqa
+            return False
+
     def fields(self, ctx):
         c = ctx.c
+        user_m = self._user_machine(ctx)
         return [
-            Field("pw", "Password", "password", c["root_password"], width=40,
-                  hint="At least 12 characters, mixed. Used for console root and web admin"),
-            Field("pw2", "Confirm password", "password", c["root_password"], width=40),
+            Field("pw", "Root password (optional)" if user_m else "Password", "password", c["root_password"], width=40, optional=user_m,
+                  hint="Leave EMPTY to keep root locked (log in as your user, sudo). Never the disk passphrase" if user_m
+                  else "At least 12 characters, mixed. Used for console root and web admin. Never the disk passphrase"),
+            Field("pw2", "Confirm password", "password", c["root_password"], width=40, optional=user_m),
             Field("strength", "Strength", "info", lambda a: S.password_strength(a["pw"]) if a["pw"] else "-"),
             Field("email", "E-mail (notifications)", "text", c["email"], validate=lambda v, a: S.email_problem(v), width=40,
                   hint="Alerts and notices are addressed here"),
@@ -325,7 +371,9 @@ class RootpassStage(Stage):
     def validate(self, ctx, v):
         if v["pw"] != v["pw2"]:
             return "The two passwords do not match."
-        return S.password_problem(v["pw"], ctx.c["hostname"])
+        if not v["pw"] and self._user_machine(ctx):
+            return None                     # root stays locked
+        return secretcheck.entry_problem(v["pw"], ctx.c) or S.password_problem(v["pw"], ctx.c["hostname"])
 
     def commit(self, ctx, v):
         c = ctx.c
@@ -483,15 +531,17 @@ class DesktopStage(Stage):
         d = ctx.c["desktop"]
         return [Field("user", "User name", "text", d.get("user") or "surface", width=30,
                       validate=lambda v, a: None if re.fullmatch(r"[a-z_][a-z0-9_-]{0,30}", v or "") else "lower-case letters, digits, - and _"),
-                Field("pw", "Password", "password", d.get("password", ""), width=40, hint="Min 12 chars. Needed to log in and for sudo"),
+                Field("pw", "Password", "password", d.get("password", ""), width=40, hint="Min 12 chars. Needed to log in and for sudo. NOT the disk passphrase"),
                 Field("pw2", "Confirm password", "password", d.get("password", ""), width=40),
                 Field("auto", "Log in automatically on the console", "check", d.get("autologin", False),
-                      hint="OFF (default): the Type Cover / on-screen keyboard login prompt is shown. ON: the desktop starts right after the disk passphrase")]
+                      hint="OFF (default, recommended): the login screen asks for the password after the disk passphrase. ON = WARNING: whoever has the tablet gets this session without a password")]
 
     def validate(self, ctx, v):
         if v["pw"] != v["pw2"]:
             return "The two passwords do not match."
-        return S.password_problem(v["pw"], ctx.c["hostname"])
+        return (secretcheck.entry_problem(v["pw"], ctx.c)
+                or (("root and the user must not share a password.") if v["pw"] and v["pw"] == ctx.c.get("root_password") else None)
+                or S.password_problem(v["pw"], ctx.c["hostname"]))
 
     def commit(self, ctx, v):
         ctx.c["desktop"].update({"enable": True, "user": v["user"], "password": v["pw"], "autologin": bool(v["auto"])})
@@ -549,14 +599,16 @@ class GnomeStage(Stage):
         c = ctx.c
         return [Field("user", "User name", "text", c["user_name"], width=30, validate=lambda v, a: desktop.user_problem(v)),
                 Field("full", "Full name", "text", c["user_fullname"], width=30, optional=True),
-                Field("pw", "Password", "password", c["user_password"], width=40, hint="Min 12 chars, mixed"),
+                Field("pw", "Password", "password", c["user_password"], width=40, hint="Min 12 chars, mixed. NOT the disk passphrase"),
                 Field("pw2", "Confirm password", "password", c["user_password"], width=40),
-                Field("auto", "Log in automatically", "check", c["user_autologin"], hint="Not recommended on an encrypted laptop that you carry around")]
+                Field("auto", "Log in automatically", "check", c["user_autologin"], hint="OFF (default, recommended). ON = WARNING: whoever holds the laptop gets this session without a login password (the disk passphrase is the only lock)")]
 
     def validate(self, ctx, v):
         if v["pw"] != v["pw2"]:
             return "The two passwords do not match."
-        return S.password_problem(v["pw"], ctx.c["hostname"])
+        return (secretcheck.entry_problem(v["pw"], ctx.c)
+                or (("root and the user must not share a password.") if v["pw"] and v["pw"] == ctx.c.get("root_password") else None)
+                or S.password_problem(v["pw"], ctx.c["hostname"]))
 
     def commit(self, ctx, v):
         c = ctx.c

@@ -896,6 +896,29 @@ pub enum BootAction {
     Start,
     /// Stopped on purpose; saved state (if any) stays.
     Skip,
+    /// An HA resource: the HA loop owns its start (see [`ha_boot_override`]).
+    LeaveToHa,
+}
+
+/// A guest the HA manager owns is never started or resumed by the boot pass. After a crash the
+/// cluster may have restarted it on another node; starting it here as well runs it twice on the
+/// same disks (lab cluster-hasuite j01296, 'hard crash, node stays down': split brain ~10 s after
+/// the node came back). The HA loop restarts it here once it has synced the placement.
+pub fn ha_boot_override(act: BootAction, ha_managed: bool) -> BootAction {
+    match act {
+        BootAction::Resume | BootAction::Start if ha_managed => BootAction::LeaveToHa,
+        a => a,
+    }
+}
+
+/// Is this guest an HA resource (VMs only)?
+async fn ha_managed(state: &Arc<AppState>, kind: GuestKind, id: &str) -> bool {
+    #[cfg(feature = "cluster")]
+    if kind == GuestKind::Vm {
+        return state.ha_manager.get_resource(id).await.is_some();
+    }
+    let _ = (state, kind, id);
+    false
 }
 
 /// What to do with a guest at boot (pure; unit-tested).
@@ -937,7 +960,10 @@ pub async fn boot_all(state: &Arc<AppState>, force: bool) -> Report {
         let eff = policy::effective(state, g.kind, &g.id).await;
         let was_running = was.iter().any(|w| w.kind == g.kind && w.id == g.id);
         let saved = has_saved(state, g.kind, &g.id);
-        let act = boot_decision(eff.start_action, saved, was_running);
+        let act = ha_boot_override(
+            boot_decision(eff.start_action, saved, was_running),
+            ha_managed(state, g.kind, &g.id).await,
+        );
         plan.push((eff.start_order, eff.start_delay_secs, g, act, saved));
     }
     plan.sort_by(|a, b| (a.0, a.1, &a.2.name).cmp(&(b.0, b.1, &b.2.name)));
@@ -953,6 +979,16 @@ pub async fn boot_all(state: &Arc<AppState>, force: bool) -> Report {
             message,
         };
         let o = match act {
+            BootAction::LeaveToHa => {
+                // Not started here: the cluster may have restarted it on another node while
+                // this one was down. The HA loop starts it after it has adopted the newest
+                // placement (and only with a quorum); a stale copy is never started.
+                mk(
+                    "left-to-ha",
+                    true,
+                    Some("HA-managed guest: the HA manager decides where it runs".into()),
+                )
+            }
             BootAction::Skip => {
                 if saved {
                     mk(
@@ -1193,6 +1229,16 @@ mod tests {
         assert_eq!(boot_decision(Always, false, false), Start);
         assert_eq!(boot_decision(Always, true, false), Resume);
         assert_eq!(boot_decision(Nothing, true, true), Skip);
+    }
+
+    #[test]
+    fn ha_guests_are_left_to_the_ha_loop_at_boot() {
+        use BootAction::*;
+        assert_eq!(ha_boot_override(Start, true), LeaveToHa);
+        assert_eq!(ha_boot_override(Resume, true), LeaveToHa);
+        assert_eq!(ha_boot_override(Skip, true), Skip);
+        assert_eq!(ha_boot_override(Start, false), Start);
+        assert_eq!(ha_boot_override(Resume, false), Resume);
     }
 
     #[test]

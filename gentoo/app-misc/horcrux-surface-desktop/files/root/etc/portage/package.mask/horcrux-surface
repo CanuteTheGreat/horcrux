@@ -1,0 +1,2 @@
+# the linux-surface series is pinned to the 6.18 branch (sys-kernel/horcrux-surface-config)
+>=sys-kernel/gentoo-kernel-6.19

@@ -1,7 +1,7 @@
 # Horcrux overlay packages (hogshead / T2 laptop)
 sys-kernel/horcrux-t2-config ~amd64
 sys-kernel/horcrux-unlock ~amd64
-app-admin/rustinion-bin -* ~amd64
+app-admin/rustinion-agent -* ~amd64
 sys-firmware/apple-t2-wifi-firmware -* ~amd64
 # kernel: the t2linux patch set is pinned to 7.2.x (OpenZFS 2.3.9 supports <= 7.2)
 sys-kernel/gentoo-kernel ~amd64

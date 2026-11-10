@@ -11,5 +11,4 @@ avahi-daemon default
 power-profiles-daemon default
 thermald default
 chronyd default
-tailscale default
-# off by default (the owner enables them when needed): clamd, freshclam, keepalived, libvirtd is on in the server base
+# chronyd/horcrux-timesync/horcrux-firstboot come with the server core. Machine layers append their own services (Tailscale: owner-common)

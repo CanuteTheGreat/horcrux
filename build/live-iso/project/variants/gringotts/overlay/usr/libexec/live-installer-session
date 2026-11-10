@@ -1,0 +1,16 @@
+#!/bin/sh
+# gringotts image: replaces the stock login program of the installer consoles (common/overlay/usr/libexec/live-installer-session).
+#   gui | text (default boot entries, safe graphics): the gringotts menu (install / Wi-Fi / remote), see /usr/libexec/gringotts-session
+#   expert: the stock text installer with LIVE_INSTALLER_EXPERT=1
+dmesg -n 1 2>/dev/null
+export TERM=${TERM:-linux}
+mode=$(cat /run/live-installer/mode 2>/dev/null || echo text)
+case "$mode" in
+	expert)
+		LIVE_INSTALLER_EXPERT=1 /usr/bin/live-installer
+		echo
+		echo "Live system shell (root). Run 'live-installer' to start the installer again, 'reboot' to restart."
+		exec /bin/login -f root ;;
+	*)
+		exec /usr/libexec/gringotts-session ;;
+esac

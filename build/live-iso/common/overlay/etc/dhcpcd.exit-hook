@@ -1,0 +1,11 @@
+# sourced by dhcpcd-run-hooks after every dhcpcd event (shared by Horcrux and Patronus server images).
+# The hardware clock can be months off at boot (flat RTC battery, VM, fresh board) and chronyd starts before the link is up:
+# it could not resolve its NTP pool and would only retry on its own back-off. On every bound lease tell chronyd the network
+# is online, re-resolve its sources and take a quick burst of measurements, so makestep corrects the clock within seconds.
+case "$reason" in
+BOUND|BOUND6|REBOOT|REBIND|STATIC|INFORM|INFORM6)
+	if command -v chronyc >/dev/null 2>&1 && [ -d /run/chrony ]; then
+		( chronyc onoffline; chronyc reload sources; chronyc burst 4/4 ) >/dev/null 2>&1 &
+	fi
+	;;
+esac

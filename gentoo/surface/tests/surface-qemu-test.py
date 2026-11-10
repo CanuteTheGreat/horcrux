@@ -70,7 +70,7 @@ class T:
         code, _ = Q.find_ovmf("x86_64")
         args += ["-drive", f"if=pflash,format=raw,readonly=on,file={code}", "-drive", f"if=pflash,format=raw,file={nvars}"]
         if not installed:
-            args += ["-drive", f"if=none,id=stick,file={a.iso},format=raw,readonly=on", "-device", "usb-storage,bus=xhci.0,drive=stick,bootindex=0",
+            args += ["-drive", f"if=none,id=stick,file={a.iso},format=raw,readonly=on", "-device", "usb-storage,id=stickdev,bus=xhci.0,drive=stick,bootindex=0",
                      "-drive", f"if=none,id=ans,file={self.answers},format=raw", "-device", "usb-storage,bus=xhci.0,drive=ans"]
         return args
 
