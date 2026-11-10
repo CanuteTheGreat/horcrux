@@ -810,6 +810,10 @@ impl ClusterManager {
         node_name: &str,
         caps: Option<roles::NodeCaps>,
     ) -> Result<()> {
+        if let Some(c) = &caps {
+            roles::validate_caps(c).map_err(horcrux_common::Error::Validation)?;
+        }
+        let votes = roles::quorum_votes(caps.as_ref());
         let mut nodes = self.nodes.write().await;
         let node = nodes.get_mut(node_name).ok_or_else(|| {
             horcrux_common::Error::NotFound(format!("Node {} not found", node_name))
@@ -818,6 +822,9 @@ impl ClusterManager {
         updated.caps = caps.clone();
         config_store::put_opt(&self.store, kinds::CLUSTER_NODE, node_name, &updated).await?;
         node.caps = caps;
+        drop(nodes);
+        // The vote weight is part of corosync.conf: apply it now.
+        self.corosync.set_votes(node_name, votes).await?;
         Ok(())
     }
 

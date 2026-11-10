@@ -38,6 +38,30 @@ pub struct NodeCaps {
     /// Max memory in bytes of a single guest (None = unlimited).
     #[serde(default)]
     pub max_guest_memory: Option<u64>,
+    /// Corosync `quorum_votes` for this node (None = 1; 0 = non-voting).
+    /// Lets a weak or flaky node be a non-voter while the big nodes carry
+    /// the quorum (area 3, 10-voter clusters).
+    #[serde(default)]
+    pub quorum_votes: Option<u32>,
+}
+
+/// Highest per-node vote weight accepted (a typo like 100 would make one
+/// node outvote the rest of a 10-node cluster).
+pub const MAX_QUORUM_VOTES: u32 = 10;
+
+/// Votes a node carries in corosync.conf: its operator-set weight, else 1.
+pub fn quorum_votes(caps: Option<&NodeCaps>) -> u32 {
+    caps.and_then(|c| c.quorum_votes).unwrap_or(1)
+}
+
+/// Reject a vote weight above `MAX_QUORUM_VOTES`.
+pub fn validate_caps(caps: &NodeCaps) -> Result<(), String> {
+    match caps.quorum_votes {
+        Some(v) if v > MAX_QUORUM_VOTES => Err(format!(
+            "quorum_votes must be 0 to {MAX_QUORUM_VOTES}, got {v}"
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// What a guest needs from its host.
@@ -100,7 +124,22 @@ mod tests {
             labels: vec!["lab".into(), "old-hw".into()],
             max_guest_vcpus: Some(4),
             max_guest_memory: Some(8 * GIB),
+            quorum_votes: None,
         }
+    }
+
+    #[test]
+    fn quorum_votes_default_to_one_and_cap_at_ten() {
+        assert_eq!(quorum_votes(None), 1);
+        assert_eq!(quorum_votes(Some(&weak())), 1);
+        let mut c = weak();
+        c.quorum_votes = Some(0);
+        assert_eq!(quorum_votes(Some(&c)), 0);
+        assert!(validate_caps(&c).is_ok());
+        c.quorum_votes = Some(3);
+        assert_eq!(quorum_votes(Some(&c)), 3);
+        c.quorum_votes = Some(MAX_QUORUM_VOTES + 1);
+        assert!(validate_caps(&c).unwrap_err().contains("quorum_votes"));
     }
 
     #[test]

@@ -4707,7 +4707,7 @@ async fn bmc_power_on_node(
 }
 
 /// `GET /api/cluster/quorum/plan` -- dry-run quorum plan (area 3) for the
-/// current membership, one vote per node: threshold, tolerated losses,
+/// current membership (one vote per node unless the node's caps set quorum_votes): threshold, tolerated losses,
 /// auto_tie_breaker for even totals (e.g. 10 voters), warnings, and the
 /// corosync.conf that would be generated. Read-only; never writes config.
 async fn get_quorum_plan(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
@@ -4717,7 +4717,10 @@ async fn get_quorum_plan(State(state): State<Arc<AppState>>) -> Json<serde_json:
         .list_nodes_with_local()
         .await
         .into_iter()
-        .map(|n| (n, 1))
+        .map(|n| {
+            let v = crate::cluster::roles::quorum_votes(n.caps.as_ref());
+            (n, v)
+        })
         .collect();
     let (config, plan) = generate_multi_node_config("horcrux", &nodes);
     Json(serde_json::json!({
@@ -4756,7 +4759,7 @@ async fn get_migration_targets(
 }
 
 /// `PUT /api/cluster/nodes/:name/caps` -- body is a NodeCaps
-/// (`{"role":"witness","labels":[..],"max_guest_vcpus":4,"max_guest_memory":N}`)
+/// (`{"role":"witness","labels":[..],"max_guest_vcpus":4,"max_guest_memory":N,"quorum_votes":0}`)
 /// or `null` to clear.
 async fn set_node_caps(
     State(state): State<Arc<AppState>>,

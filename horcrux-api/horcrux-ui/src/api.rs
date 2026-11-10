@@ -493,6 +493,9 @@ pub struct NodeCaps {
     pub max_guest_vcpus: Option<u32>,
     #[serde(default)]
     pub max_guest_memory: Option<u64>,
+    /// Corosync vote weight (None = 1, 0 = non-voting, max 10).
+    #[serde(default)]
+    pub quorum_votes: Option<u32>,
 }
 
 fn default_node_priority() -> u32 {

@@ -133,7 +133,30 @@ impl CorosyncManager {
         if nodes.iter().any(|(n, _)| n.name == node.name) {
             return Ok(());
         }
-        nodes.push((node.clone(), 1));
+        nodes.push((node.clone(), super::roles::quorum_votes(node.caps.as_ref())));
+        for w in Self::write_members(&conf_path(), cluster, nodes).await? {
+            tracing::warn!("quorum: {}", w);
+        }
+        drop(guard);
+        Self::reload().await;
+        Ok(())
+    }
+
+    /// Change the vote weight of a member and rewrite corosync.conf (area 3).
+    /// No-op when this host has not initialised a cluster or the node is
+    /// unknown or already has that weight.
+    pub async fn set_votes(&self, node_name: &str, votes: u32) -> Result<()> {
+        let mut guard = self.members.lock().await;
+        let Some((cluster, nodes)) = guard.as_mut() else {
+            return Ok(());
+        };
+        let Some(entry) = nodes.iter_mut().find(|(n, _)| n.name == node_name) else {
+            return Ok(());
+        };
+        if entry.1 == votes {
+            return Ok(());
+        }
+        entry.1 = votes;
         for w in Self::write_members(&conf_path(), cluster, nodes).await? {
             tracing::warn!("quorum: {}", w);
         }

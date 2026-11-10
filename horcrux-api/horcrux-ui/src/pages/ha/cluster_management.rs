@@ -53,6 +53,7 @@ pub(crate) fn parse_caps_form(
     labels: &str,
     max_vcpus: &str,
     max_mem_gib: &str,
+    quorum_votes: &str,
 ) -> Result<Option<NodeCaps>, String> {
     if !matches!(role, "storage" | "compute" | "witness") {
         return Err("Role must be storage, compute or witness".into());
@@ -81,7 +82,17 @@ pub(crate) fn parse_caps_form(
             _ => return Err("Max guest memory must be a number of GiB above 0".into()),
         },
     };
-    let plain = labels.is_empty() && max_guest_vcpus.is_none() && max_guest_memory.is_none();
+    let quorum_votes = match quorum_votes.trim() {
+        "" => None,
+        v => match v.parse::<u32>() {
+            Ok(n) if n <= 10 => Some(n),
+            _ => return Err("Quorum votes must be a whole number from 0 to 10".into()),
+        },
+    };
+    let plain = labels.is_empty()
+        && max_guest_vcpus.is_none()
+        && max_guest_memory.is_none()
+        && quorum_votes.is_none();
     if role == "compute" && plain {
         return Ok(None);
     }
@@ -90,6 +101,7 @@ pub(crate) fn parse_caps_form(
         labels,
         max_guest_vcpus,
         max_guest_memory,
+        quorum_votes,
     }))
 }
 
@@ -250,10 +262,9 @@ pub fn ClusterManagementPage() -> impl IntoView {
         }),
     };
 
-    let save_caps =
-        move |name: String, form: (String, String, String, String)| match parse_caps_form(
-            &form.0, &form.1, &form.2, &form.3,
-        ) {
+    let save_caps = move |name: String, form: (String, String, String, String, String)| {
+        let parsed = parse_caps_form(&form.0, &form.1, &form.2, &form.3, &form.4);
+        match parsed {
             Err(e) => set_error.set(Some(e)),
             Ok(caps) => spawn_local(async move {
                 match set_node_caps(&name, caps.as_ref()).await {
@@ -264,7 +275,8 @@ pub fn ClusterManagementPage() -> impl IntoView {
                     Err(e) => set_error.set(Some(format!("Failed to save role: {}", e))),
                 }
             }),
-        };
+        }
+    };
 
     let remove_node = move |name: String| {
         if !confirm(&format!(
@@ -526,6 +538,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                                 let labels_sig = create_rw_signal(caps0.labels.join(", "));
                                                 let vcpus_sig = create_rw_signal(caps0.max_guest_vcpus.map(|v| v.to_string()).unwrap_or_default());
                                                 let mem_sig = create_rw_signal(caps0.max_guest_memory.map(|b| format!("{}", (b as f64) / 1073741824.0)).unwrap_or_default());
+                                                let votes_sig = create_rw_signal(caps0.quorum_votes.map(|v| v.to_string()).unwrap_or_default());
                                                 let is_local = node.is_local;
                                                 view! {
                                                     <tr>
@@ -591,8 +604,12 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                                                 <input class="node-max-mem w-28 px-2 py-1 border border-gray-300 rounded" type="number" min="0" step="any" placeholder="max GiB RAM"
                                                                     prop:value=move || mem_sig.get()
                                                                     on:input=move |ev| mem_sig.set(event_target_value(&ev))/>
+                                                                <input class="node-votes w-24 px-2 py-1 border border-gray-300 rounded" type="number" min="0" max="10" placeholder="votes (1)"
+                                                                    title="Corosync quorum votes: empty = 1, 0 = never counts toward quorum"
+                                                                    prop:value=move || votes_sig.get()
+                                                                    on:input=move |ev| votes_sig.set(event_target_value(&ev))/>
                                                                 <button class="node-caps-save text-blue-600 hover:text-blue-900 px-2 py-1 rounded hover:bg-blue-50"
-                                                                    on:click=move |_| save_caps(name_for_caps.clone(), (role_sig.get(), labels_sig.get(), vcpus_sig.get(), mem_sig.get()))>
+                                                                    on:click=move |_| save_caps(name_for_caps.clone(), (role_sig.get(), labels_sig.get(), vcpus_sig.get(), mem_sig.get(), votes_sig.get()))>
                                                                     "Save"
                                                                 </button>
                                                             </div>
@@ -855,19 +872,23 @@ mod tests {
 
     #[test]
     fn caps_form_builds_body_and_clears_plain_compute() {
-        let c = parse_caps_form("witness", "lab, old-hw nvme", "4", "30")
+        let c = parse_caps_form("witness", "lab, old-hw nvme", "4", "30", "0")
             .unwrap()
             .unwrap();
         assert_eq!(c.role, "witness");
         assert_eq!(c.labels, vec!["lab", "old-hw", "nvme"]);
         assert_eq!(c.max_guest_vcpus, Some(4));
         assert_eq!(c.max_guest_memory, Some(30 * 1024 * 1024 * 1024));
-        assert_eq!(parse_caps_form("compute", " ", "", "").unwrap(), None);
-        assert!(parse_caps_form("storage", "", "", "").unwrap().is_some());
-        assert!(parse_caps_form("boss", "", "", "").is_err());
-        assert!(parse_caps_form("compute", "", "0", "").is_err());
-        assert!(parse_caps_form("compute", "", "", "-1").is_err());
-        assert!(parse_caps_form("compute", &"x".repeat(64), "", "").is_err());
+        assert_eq!(c.quorum_votes, Some(0));
+        assert!(parse_caps_form("compute", "", "", "", "11").is_err());
+        assert!(parse_caps_form("compute", "", "", "", "x").is_err());
+        assert!(parse_caps_form("compute", "", "", "", "3").unwrap().is_some());
+        assert_eq!(parse_caps_form("compute", " ", "", "", "").unwrap(), None);
+        assert!(parse_caps_form("storage", "", "", "", "").unwrap().is_some());
+        assert!(parse_caps_form("boss", "", "", "", "").is_err());
+        assert!(parse_caps_form("compute", "", "0", "", "").is_err());
+        assert!(parse_caps_form("compute", "", "", "-1", "").is_err());
+        assert!(parse_caps_form("compute", &"x".repeat(64), "", "", "").is_err());
     }
 
     #[test]
