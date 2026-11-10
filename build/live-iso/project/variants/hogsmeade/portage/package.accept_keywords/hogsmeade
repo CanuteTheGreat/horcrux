@@ -10,7 +10,7 @@ sci-misc/comfyui ~amd64
 acct-user/comfyui ~amd64
 acct-group/comfyui ~amd64
 sys-apps/hogsmeade-private ~amd64
-app-admin/rustinion-bin -* ~amd64
+app-admin/rustinion-agent -* ~amd64
 # kernel 7.2.x: OpenZFS 2.3.x supports <= 7.2
 =sys-kernel/gentoo-kernel-7.2.13 ~amd64
 =virtual/dist-kernel-7.2.13 ~amd64

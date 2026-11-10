@@ -58,7 +58,6 @@ chk "webcam"              "ls /dev/video0"
 chk "Thunderbolt 5"       "lsmod | grep -E '^thunderbolt ' | head -1" warn
 chk "TPM"                 "ls /dev/tpm0"
 echo "--- services / software"
-chk "tailscale up"        "tailscale ip -4"
 chk "ComfyUI bound to TS" "ss -ltnH | awk '\$4 ~ /:8188\$/ {print \$4}' | grep -v -E '^(0.0.0.0|\\*|\\[::\\]|127)' | grep -E '^100\\.'"
 chk "ComfyUI NOT on LAN"  "! ss -ltnH | awk '\$4 ~ /:8188\$/ {print \$4}' | grep -E '^(0.0.0.0|\\*|\\[::\\])' && echo ok"
 chk "rustinion service"   "rc-service rustinion status | grep -i started" warn

@@ -4,8 +4,8 @@ id = "hogsmeade"
 title = "Alienware 18 Area-51 (HOGSMEADE)"
 
 # NetworkManager owns Wi-Fi (BE200) + Ethernet (r8169); zram first, encrypted disk swap only for the hibernation image;
-# awccd = thermal profile/fan/lighting daemon; comfyui = GPU render server (Tailscale only); nvidia-persistenced = GPU init.
-services_add = ["elogind:boot", "dbus:default", "NetworkManager:default", "zram-swap:default", "cronie:default", "tailscale:default",
+# awccd = thermal profile/fan/lighting daemon; comfyui = GPU render server (LAN only); nvidia-persistenced = GPU init.
+services_add = ["elogind:boot", "dbus:default", "NetworkManager:default", "zram-swap:default", "cronie:default",
                 "awccd:default", "nvidia-persistenced:default", "switcheroo-control:default", "smartd:default", "hogsmeade-firstboot:default",
                 "comfyui:default", "sshd:default", "hx-resume:boot"]
 services_del = ["iwd", "dhcpcd", "live-serial"]

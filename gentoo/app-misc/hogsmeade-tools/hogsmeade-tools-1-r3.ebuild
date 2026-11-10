@@ -3,7 +3,7 @@
 
 EAPI=8
 
-DESCRIPTION="HOGSMEADE (Alienware 18 Area-51) tools: installer front door, hardware profile, first-boot verifier, snapshots, backup, health, remote handoff"
+DESCRIPTION="HOGSMEADE (Alienware 18 Area-51) tools: installer front door, hardware profile, first-boot verifier, snapshots, backup, health, LAN remote handoff"
 HOMEPAGE="https://github.com/CanuteTheGreat/horcrux"
 S="${WORKDIR}"
 
@@ -15,7 +15,6 @@ RDEPEND="
 	app-backup/restic
 	app-shells/bash
 	x11-libs/libnotify
-	net-vpn/tailscale
 	sys-apps/nvme-cli
 	net-misc/rsync
 	sys-apps/smartmontools
@@ -53,6 +52,6 @@ src_install() {
 	insinto /etc/hogsmeade
 	newins - README <<-'EOF'
 		backup.env   RESTIC_REPOSITORY / AWS_* / RESTIC_PASSWORD_FILE for hogsmeade-backup (installed by the private package)
-		ts-authkey   one-time Tailscale handoff key (private package)
+		agent_authorized_keys   agent ssh public key (private package)
 	EOF
 }

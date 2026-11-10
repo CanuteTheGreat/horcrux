@@ -1,5 +1,5 @@
 #!/bin/sh
-# HOGSMEADE first boot, network part (once): wait for a network WITHOUT a time limit, then the clock + Tailscale handoff (hogsmeade-remote)
+# HOGSMEADE first boot, network part (once): wait for a network WITHOUT a time limit, then the clock + LAN handoff (hogsmeade-remote)
 # and the Portage tree sync; a failed step is retried every 10 minutes. Marker /var/lib/hogsmeade/net-firstboot.done, then the service
 # removes itself from the default runlevel at the next start. (gringotts' first real boot gave up after 10 minutes without Wi-Fi and the
 # laptop stayed unreachable: this never gives up.)
@@ -14,7 +14,6 @@ if ! have_net; then
   echo "== network is up $(date -u)"
 fi
 sleep 5                      # DHCP lease + the chrony burst of the NetworkManager hook (net-misc/horcrux-chrony-nm) settle first
-remote_ok() { [ ! -s /etc/hogsmeade/ts-authkey ] && tailscale status >/dev/null 2>&1; }
 sync_trees() {
   echo "== portage trees"
   ok=1
@@ -25,11 +24,9 @@ sync_trees() {
   done
   [ $ok = 1 ]
 }
-until have_net && { hogsmeade-remote || remote_ok; } && sync_trees; do
+until have_net && { hogsmeade-remote; } && sync_trees; do
   echo "== handoff or tree sync not done (network?): retry in 10 minutes"; sleep 600
 done
-# the single-use handoff key is spent by its first join: do not leave the file around
-[ -s /etc/hogsmeade/ts-authkey ] && tailscale status >/dev/null 2>&1 && { shred -u /etc/hogsmeade/ts-authkey 2>/dev/null || rm -f /etc/hogsmeade/ts-authkey; }
 mkdir -p /var/lib/hogsmeade; date -u > /var/lib/hogsmeade/net-firstboot.done
 echo "== done"
 exit 0

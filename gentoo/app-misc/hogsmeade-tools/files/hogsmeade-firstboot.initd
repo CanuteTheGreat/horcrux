@@ -2,11 +2,11 @@
 # First boot on the installed system (idempotent). Two parts:
 #   1. local, synchronous: ZFS datasets, the agent's key for the desktop user
 #   2. network, BACKGROUND, no time limit (hogsmeade-firstboot-net): waits for a default route (the owner may connect Wi-Fi hours later),
-#      then clock + Tailscale handoff (hogsmeade-remote) and the Portage tree sync, retrying every 10 minutes until both worked.
+#      then clock + LAN handoff (hogsmeade-remote) and the Portage tree sync, retrying every 10 minutes until both worked.
 # The worker is NOT a supervised daemon (no start-stop-daemon): it ends by itself, and OpenRC would show a finished supervised daemon as
 # "crashed" forever. It keeps its own pidfile (/run/hogsmeade-firstboot.pid) for stop(). Markers: /var/lib/hogsmeade/{firstboot,net-firstboot}.done
 description="HOGSMEADE first boot setup (datasets; network handoff waits for a network without a limit)"
-depend() { need localmount; need net; after zfs-mount zfs-import NetworkManager tailscale chronyd sshd; }
+depend() { need localmount; need net; after zfs-mount zfs-import NetworkManager chronyd sshd; }
 LOG=/var/log/hogsmeade-firstboot.log
 start() {
 	grep -q 'rd.live.image' /proc/cmdline && return 0
