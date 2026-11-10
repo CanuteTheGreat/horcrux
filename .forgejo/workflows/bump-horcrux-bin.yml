@@ -59,6 +59,7 @@ jobs:
       - name: Cut the ebuild
         env:
           DRY: ${{ github.event.inputs.dry }}
+          BUMP_KEY: ${{ secrets.HORCRUX_BUMP_DEPLOY_KEY }}
         run: |
           set -eu
           d=gentoo/app-emulation/horcrux-bin
@@ -71,5 +72,10 @@ jobs:
           git add -A $d
           git commit -q -m "gentoo: horcrux-bin 0.1.0_p${{ steps.asset.outputs.stamp }} for the current daily manager tarball (stale binpkgs never satisfy it) [skip ci]; no version bump"
           if [ "${DRY:-false}" = true ]; then git show --stat HEAD; exit 0; fi
-          # the repo's pre-receive hook declines a main push whose message neither bumps the version nor says `no version bump` (first real run, 2026-11-10)
-          git push origin HEAD:main
+          # The job token (bot) cannot push to main (pre-receive hook answers 500, first real run 2026-11-10): push with a write deploy key
+          # of this repo (secret HORCRUX_BUMP_DEPLOY_KEY). The commit message also needs `no version bump` for the repo's version hook.
+          w=$(mktemp -d); umask 077; printf '%s\n' "${BUMP_KEY:?secret HORCRUX_BUMP_DEPLOY_KEY is empty}" > $w/key; umask 022
+          export GIT_SSH_COMMAND="ssh -i $w/key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$w/kh"
+          url=ssh://git@git.canutethegreat.com/CanuteTheGreat/horcrux.git
+          rc=0; git fetch -q "$url" main && git rebase -q FETCH_HEAD && git push -q "$url" HEAD:main || rc=$?
+          shred -u $w/key; exit $rc
