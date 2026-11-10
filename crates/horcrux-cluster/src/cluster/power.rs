@@ -137,6 +137,26 @@ pub fn plan_wake(nodes: &[PowerNode], needed: usize) -> Vec<String> {
     v.into_iter().take(needed).map(|n| n.name.clone()).collect()
 }
 
+/// Wake-on-demand: the ONE node to power on now, or none. Demand exists when
+/// fewer than `min_online` nodes are running, or when every running node is
+/// at or above `busy_cpu_percent` (no spare capacity; an unknown CPU reading
+/// counts as busy). Only powered-off managed nodes with a wake method qualify,
+/// lowest name first (deterministic), so a cluster with nothing to wake stays
+/// unchanged.
+pub fn plan_auto_wake(
+    nodes: &[PowerNode],
+    min_online: usize,
+    busy_cpu_percent: f32,
+) -> Option<String> {
+    let online: Vec<&PowerNode> = nodes.iter().filter(|n| n.powered_on).collect();
+    let short = online.len() < min_online;
+    let saturated = !online.is_empty() && online.iter().all(|n| n.cpu_percent >= busy_cpu_percent);
+    if !short && !saturated {
+        return None;
+    }
+    plan_wake(nodes, 1).into_iter().next()
+}
+
 /// Build a 102-byte Wake-on-LAN magic packet (6x 0xFF, then MAC x16).
 pub fn wol_magic_packet(mac: [u8; 6]) -> Vec<u8> {
     let mut p = vec![0xFFu8; 6];
@@ -367,6 +387,31 @@ mod tests {
         // b: unknown CPU = busy; c: OSD host; d: guest list unreachable; me: local.
         assert_eq!(plan_power_down(&v, &p), vec!["a", "e"]);
     }
+    #[test]
+    fn auto_wake_when_short_or_saturated_only() {
+        let mut nodes = cluster(4);
+        nodes[3].powered_on = false;
+        // 3 online of min 3, all idle: no demand.
+        assert_eq!(plan_auto_wake(&nodes, 3, 80.0), None);
+        // below min_online: wake the off managed node.
+        assert_eq!(plan_auto_wake(&nodes, 4, 80.0), Some("n3".into()));
+        // saturated: every online node busy.
+        for n in nodes.iter_mut().filter(|n| n.powered_on) {
+            n.cpu_percent = 90.0;
+        }
+        assert_eq!(plan_auto_wake(&nodes, 3, 80.0), Some("n3".into()));
+        // one node with headroom: no demand.
+        nodes[0].cpu_percent = 10.0;
+        assert_eq!(plan_auto_wake(&nodes, 3, 80.0), None);
+        // unmanaged or no wake method: never woken.
+        nodes[0].cpu_percent = 90.0;
+        nodes[3].wake = None;
+        assert_eq!(plan_auto_wake(&nodes, 3, 80.0), None);
+        nodes[3].wake = Some(WakeMethod::Bmc);
+        nodes[3].labels.clear();
+        assert_eq!(plan_auto_wake(&nodes, 3, 80.0), None);
+    }
+
     #[test]
     fn idle_tracker_needs_consecutive_samples() {
         let mut t = IdleTracker::default();

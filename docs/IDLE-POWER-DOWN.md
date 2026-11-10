@@ -29,4 +29,14 @@ cluster shut idle `power-managed` nodes down by itself:
 - The shutdown is the same guarded graceful BMC call as `POST /api/cluster/power/down`; a refusal
   is logged as a warning and retried after a fresh streak.
 
-Waking is still explicit (`/power/wake`, `/power/bmc-on`); there is no automatic wake-on-demand yet.
+## Automatic wake-on-demand
+
+With `HORCRUX_IDLE_POWER=1` the same leader loop also powers ON one `power-managed` node (through its
+BMC fencing device, the node must have one) per sample when there is demand:
+
+- fewer than `min_online` (3) nodes are running, or
+- every running node has CPU at or above `HORCRUX_IDLE_POWER_WAKE_CPU` (default 80; unknown CPU counts as busy).
+
+A node woken this way is not powered down again for `HORCRUX_IDLE_POWER_WAKE_GRACE_SECS` (default 1800), so
+a fresh, still-empty node does not flap. `HORCRUX_IDLE_POWER_WAKE=0` keeps power-down automatic but leaves
+waking manual (`/power/wake`, `/power/bmc-on`).

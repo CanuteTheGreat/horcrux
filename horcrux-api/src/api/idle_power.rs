@@ -5,7 +5,11 @@
 //! online node) acts, at most one node per sample, and only a node that the
 //! quorum-safe planner has listed as a candidate for `HORCRUX_IDLE_POWER_SAMPLES`
 //! (default 3) consecutive samples taken `HORCRUX_IDLE_POWER_INTERVAL_SECS`
-//! (default 300) apart. Only nodes carrying the `power-managed` label qualify.
+//! (default 300) apart.
+//! The same loop also wakes one powered-off `power-managed` node through its BMC when
+//! fewer than `min_online` nodes run or every running node is at/above
+//! `HORCRUX_IDLE_POWER_WAKE_CPU` (80 %); `HORCRUX_IDLE_POWER_WAKE=0` turns that off. A woken node is
+//! not powered down again for `HORCRUX_IDLE_POWER_WAKE_GRACE_SECS` (1800). Only nodes carrying the `power-managed` label qualify.
 
 use crate::cluster::power::{self, IdleTracker, PowerNode, PowerPolicy};
 use crate::AppState;
@@ -88,9 +92,17 @@ pub fn spawn(state: Arc<AppState>) {
     }
     let interval = env_num("HORCRUX_IDLE_POWER_INTERVAL_SECS", 300u64).max(10);
     let samples = env_num("HORCRUX_IDLE_POWER_SAMPLES", 3u32).max(1);
+    let wake_on_demand = !matches!(
+        std::env::var("HORCRUX_IDLE_POWER_WAKE").as_deref(),
+        Ok("0") | Ok("false") | Ok("no") | Ok("off")
+    );
+    let busy_cpu = env_num("HORCRUX_IDLE_POWER_WAKE_CPU", 80.0f32);
+    let grace = Duration::from_secs(env_num("HORCRUX_IDLE_POWER_WAKE_GRACE_SECS", 1800u64));
     tracing::info!("idle power-down enabled: {samples} idle samples, {interval}s apart");
     tokio::spawn(async move {
         let mut tracker = IdleTracker::default();
+        let mut woken: std::collections::HashMap<String, std::time::Instant> =
+            std::collections::HashMap::new();
         loop {
             tokio::time::sleep(Duration::from_secs(interval)).await;
             let (local, snap, _) = crate::api::drain::snapshot(&state).await;
@@ -99,7 +111,23 @@ pub fn spawn(state: Arc<AppState>) {
                 continue;
             }
             let (_, nodes, policy) = power_view(&state).await;
-            let cands = power::plan_power_down(&nodes, &policy);
+            if wake_on_demand {
+                if let Some(node) = power::plan_auto_wake(&nodes, policy.min_online, busy_cpu) {
+                    woken.insert(node.clone(), std::time::Instant::now());
+                    match crate::api::ha_loop::fencing().power_on_node(&node).await {
+                        crate::ha::fencing::FencingResult::Success => {
+                            tracing::info!("idle power: wake-on-demand powered {node} on")
+                        }
+                        other => tracing::warn!("idle power: wake-on-demand of {node}: {other:?}"),
+                    }
+                    tracker = IdleTracker::default();
+                    continue;
+                }
+            }
+            woken.retain(|_, t| t.elapsed() < grace);
+            let mut cands = power::plan_power_down(&nodes, &policy);
+            // A node just woken for demand is idle until guests land: leave it be.
+            cands.retain(|n| !woken.contains_key(n));
             let Some(node) = tracker.observe(&cands, samples).into_iter().next() else {
                 continue;
             };
