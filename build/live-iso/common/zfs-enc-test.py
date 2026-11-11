@@ -29,6 +29,27 @@ DESKTOP_EXEC_CHECK = "echo aW1wb3J0IGdsb2IsIG9zLCByZSwgc2hsZXgsIHNodXRpbCwgc3lzC
 USER_PW = "Xv5#kP2-lima-48Qr"
 
 
+# `emerge -puDN @world` on a fresh image: judge the FULL output, not a tail window. Informational notices ("The following packages are
+# causing rebuilds", dist-kernel bumps, warnings) are fine; only real blocker markers fail the step (they used to push
+# "Calculating dependencies" out of a tail -25 window and trip on the words "warning"/"conflict").
+WORLD_BLOCKERS = r"\[blocks |is blocking|blocked by|masked by|Multiple package instances|!!! All ebuilds|keyword changes are necessary|The following mask changes|REQUIRED_USE flag constraints|profile is invalid"
+WORLD_RESOLVE_CMD = ("emerge -puDN @world > /tmp/world.txt 2>&1; rc=$?; tail -25 /tmp/world.txt; "
+                     "echo CALC=$(grep -c 'Calculating dependencies' /tmp/world.txt); "
+                     f"echo BLOCK=$(grep -cE '{WORLD_BLOCKERS}' /tmp/world.txt); echo RC=$rc")
+
+
+def world_resolve_verdict(o):
+    m = lambda k: (re.findall(k + r"=(\d+)", o) or [None])[-1]
+    rc, calc, block = m("RC"), m("CALC"), m("BLOCK")
+    if rc != "0":
+        return False, f"emerge exited {rc}"
+    if not calc or int(calc) < 1:
+        return False, "no 'Calculating dependencies' in the full output"
+    if block is None or int(block) > 0:
+        return False, f"{block} real blocker marker line(s)"
+    return True, "resolves, no blocker markers"
+
+
 class ZRun(qt.Runner):
     def __init__(self, a):
         ns = types.SimpleNamespace(iso=a.iso, project="horcrux", arch=qt.HOST_ARCH, mode="uefi", media="usb", flow="auto", fs="zfs",
@@ -247,7 +268,7 @@ class ZRun(qt.Runner):
         self.step("portage-owns-every-file", rc == 0 and not bad, f"{len(lines)} generated/eselect paths allowed, {len(bad)} unowned: {bad[:25]}")
         if a.server:
             self.copy_local_overlay()
-        rc, o = self.sh("emerge -puDN @world 2>&1 | tail -25; echo RC=${PIPESTATUS[0]}", timeout=600)
+        rc, o = self.sh(WORLD_RESOLVE_CMD, timeout=600)
         if "profile is invalid" in o:
             # a first-boot service (gringotts-firstboot) is still fetching the Portage trees: wait for it, then resolve again
             end = time.time() + qt.T(1200)
@@ -256,14 +277,15 @@ class ZRun(qt.Runner):
                 if "TREE-READY" in t:
                     break
                 time.sleep(20)
-            rc, o = self.sh("emerge -puDN @world 2>&1 | tail -25; echo RC=${PIPESTATUS[0]}", timeout=600)
+            rc, o = self.sh(WORLD_RESOLVE_CMD, timeout=600)
         if "profile is invalid" in o:
             # the public images ship NO Portage tree (setup-rootfs.sh empties /var/db/repos/gentoo): a user syncs first, so the gate does the same
             rc, t = self.sh("emerge-webrsync -q 2>&1 | tail -5; echo RC=${PIPESTATUS[0]}", timeout=1500)
             self.step("portage-tree-syncs-on-the-installed-system", "RC=0" in t, t.strip().replace("\n", " | ")[-300:])
-            rc, o = self.sh("emerge -puDN @world 2>&1 | tail -25; echo RC=${PIPESTATUS[0]}", timeout=600)
+            rc, o = self.sh(WORLD_RESOLVE_CMD, timeout=600)
         open(f"{a.out}/world-resolve.txt", "w").write(o)
-        self.step("emerge-world-resolves-no-blockers", "RC=0" in o and not any(w in o.lower() for w in ("blocked", "masked", "warning", "problems", "conflict")) and "Calculating dependencies" in o, o.strip().replace("\n", " | ")[-300:])
+        ok, why = world_resolve_verdict(o)
+        self.step("emerge-world-resolves-no-blockers", ok, why + " :: " + o.strip().replace("\n", " | ")[-300:])
         rc, o = self.sh("mkdir -p /mnt/under; mount --bind / /mnt/under; ls -A /mnt/under/home | wc -l; umount /mnt/under; zfs get -H -o value mounted rpool/home")
         self.step("nothing-hidden-under-the-home-dataset", o.strip().splitlines()[-2:] == ["0", "yes"], "files in the root BE's /home beneath the mounted home dataset: " + o.strip().replace("\n", " "))
         if a.desktop:
