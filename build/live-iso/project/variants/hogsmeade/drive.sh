@@ -35,5 +35,7 @@ fi
 $D image inspect hsmfin-rootfs >/dev/null
 echo "== $(date -Is) ISO"
 rm -f $OUT/*.iso $OUT/*.iso.sha256
-sudo -E env REUSE_ROOTFS=hsmfin-rootfs PRIV_DIR=$W/priv ISO_VNAME=gnome-light-openrc-hogsmeade-private- ./build.sh -o $OUT -n ${ISO_DATE:-2026.11.10} > $W/iso.log 2>&1 || { tail -40 $W/iso.log; exit 1; }
+# REUSE_ROOTFS is the image TAG PREFIX (build.sh uses <tag>-rootfs). No PRIV_DIR here: the private payload is already inside as the Portage package
+# sys-apps/hogsmeade-private (common/Dockerfile.private would add an unowned second copy). Name: horcrux-<machine>-<DE>-<init>-<date>-<arch>.iso
+sudo -E env REUSE_ROOTFS=hsmfin NO_CORE=1 ISO_VNAME=hogsmeade-gnome-light-openrc- ./build.sh -o $OUT -n ${ISO_DATE:-2026.11.10} > $W/iso.log 2>&1 || { tail -40 $W/iso.log; exit 1; }
 ls -la $OUT; echo "== $(date -Is) BUILD-DONE"
