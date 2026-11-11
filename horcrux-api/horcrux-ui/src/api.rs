@@ -663,6 +663,21 @@ pub async fn get_quorum_plan() -> Result<QuorumPlanView, ApiError> {
     fetch_json("/cluster/quorum/plan").await
 }
 
+/// `PUT /api/cluster/quorum/qdevice`: persist (`Some((host, algorithm))`) or
+/// clear (`None`) the external quorum device. The server answers 422 on a bad
+/// host or algorithm.
+pub async fn put_qdevice(setting: Option<(&str, &str)>) -> Result<(), ApiError> {
+    #[derive(Serialize)]
+    struct Body<'a> {
+        host: &'a str,
+        algorithm: &'a str,
+    }
+    let body = setting.map(|(host, algorithm)| Body { host, algorithm });
+    put_json::<serde_json::Value, _>("/cluster/quorum/qdevice", &body)
+        .await
+        .map(|_| ())
+}
+
 pub async fn get_cluster_power_status() -> Result<PowerStatus, ApiError> {
     fetch_json("/cluster/power/status").await
 }

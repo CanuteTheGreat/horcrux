@@ -10,7 +10,7 @@
 //! - `POST /api/cluster/find-node`           <- `FindNodeRequest` -> node name
 use crate::api::{
     add_cluster_node, find_best_node_for_vm, get_cluster_architecture, get_cluster_nodes,
-    get_cluster_power_status, get_quorum_plan, get_vms, power_down_node, power_node_note,
+    get_cluster_power_status, get_quorum_plan, get_vms, put_qdevice, power_down_node, power_node_note,
     remove_cluster_node, set_node_caps, set_node_priority, AddNodeRequest, ClusterArchitecture,
     ClusterNode, FindNodeRequest, NodeCaps, PowerStatus, QuorumPlanView,
 };
@@ -129,6 +129,8 @@ pub fn ClusterManagementPage() -> impl IntoView {
     let (vms, set_vms) = create_signal(Vec::<VmConfig>::new());
     let (power_status, set_power_status) = create_signal(None::<PowerStatus>);
     let (quorum_plan, set_quorum_plan) = create_signal(None::<QuorumPlanView>);
+    let (qdev_host, set_qdev_host) = create_signal(String::new());
+    let (qdev_algo, set_qdev_algo) = create_signal("ffsplit".to_string());
     let (loading, set_loading) = create_signal(false);
     let (error, set_error) = create_signal(None::<String>);
     let (success_message, set_success_message) = create_signal(None::<String>);
@@ -719,7 +721,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
                 let tie = if q.auto_tie_breaker { "on" } else { "off" };
                 let qdev = match &q.qdevice_host {
                     Some(h) => format!("{} (+{} votes)", h, q.qdevice_votes),
-                    None => "none (set HORCRUX_QDEVICE_HOST for a 2-node cluster)".to_string(),
+                    None => "none (set one below for a 2-node cluster)".to_string(),
                 };
                 let risk = q.split_brain_risk;
                 view! {
@@ -733,6 +735,38 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                 )}
                             </p>
                             <p class="text-sm text-gray-600">{format!("auto_tie_breaker: {}; external quorum device: {}", tie, qdev)}</p>
+                            <div id="qdevice-form" class="flex flex-wrap items-center gap-2 mt-2">
+                                <input id="qdevice-host" type="text" placeholder="qnetd host or IP"
+                                    prop:value=move || qdev_host.get()
+                                    on:input=move |ev| set_qdev_host.set(event_target_value(&ev))
+                                    class="px-3 py-1 border border-gray-300 rounded text-sm" />
+                                <select id="qdevice-algo"
+                                    on:change=move |ev| set_qdev_algo.set(event_target_value(&ev))
+                                    class="px-2 py-1 border border-gray-300 rounded text-sm">
+                                    <option value="ffsplit">"ffsplit"</option>
+                                    <option value="lms">"lms"</option>
+                                </select>
+                                <button id="qdevice-save" class="px-3 py-1 bg-blue-600 text-white rounded text-sm"
+                                    on:click=move |_| {
+                                        let host = qdev_host.get_untracked();
+                                        let algo = qdev_algo.get_untracked();
+                                        spawn_local(async move {
+                                            match put_qdevice(Some((host.trim(), algo.as_str()))).await {
+                                                Ok(()) => { flash("Quorum device saved (applies to the next corosync.conf)".to_string()); load_cluster_data(); }
+                                                Err(e) => set_error.set(Some(format!("Failed to save quorum device: {}", e))),
+                                            }
+                                        });
+                                    }>"Save"</button>
+                                <button id="qdevice-clear" class="px-3 py-1 border border-gray-300 rounded text-sm"
+                                    on:click=move |_| {
+                                        spawn_local(async move {
+                                            match put_qdevice(None).await {
+                                                Ok(()) => { flash("Quorum device cleared".to_string()); load_cluster_data(); }
+                                                Err(e) => set_error.set(Some(format!("Failed to clear quorum device: {}", e))),
+                                            }
+                                        });
+                                    }>"Clear"</button>
+                            </div>
                             {risk.then(|| view! { <p class="text-sm text-red-700 font-medium">"Split-brain risk: an even split leaves no side with quorum."</p> })}
                             {q.warnings.iter().map(|w| view! { <p class="quorum-warning text-sm text-yellow-700">{w.clone()}</p> }).collect_view()}
                         </div>
