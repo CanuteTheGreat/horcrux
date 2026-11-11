@@ -15,9 +15,11 @@ src_install() {
 	insinto /etc/hogsmeade
 	insopts -m0600
 	local f
-	for f in; do
+	# hostname = the owner's name for this machine (PRIV_DIR/hostname): hogsmeade-install shows it prefilled and the owner confirms it
+	for f in hostname; do
 		[[ -s ${FILESDIR}/${f} ]] && newins "${FILESDIR}/${f}" "${f}"
 	done
+	[[ -s ${FILESDIR}/hostname ]] || die "the private payload has no hostname file (the owner's name for this machine)"
 	# the agent's key: root (key-only sshd); hogsmeade-firstboot copies it to the desktop user once that user exists
 	if [[ -s ${FILESDIR}/agent_authorized_keys ]]; then
 		newins "${FILESDIR}/agent_authorized_keys" agent_authorized_keys

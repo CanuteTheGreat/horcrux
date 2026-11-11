@@ -29,6 +29,8 @@ src_install() {
 	dobin "${FILESDIR}"/{prime-run,hogsmeade-verify,hogsmeade-install,hogsmeade-remote}
 	exeinto /usr/libexec
 	doexe "${FILESDIR}"/hogsmeade-firstboot-net
+	# the live medium's install consoles start this instead of the generic guided installer (live-installer-session, sys-apps/horcrux-tools)
+	dosym ../bin/hogsmeade-install /usr/libexec/live-machine-installer
 	dosbin "${FILESDIR}"/{hogsmeade-health,hogsmeade-snapshots,hogsmeade-backup}
 	newinitd "${FILESDIR}/hogsmeade-firstboot.initd" hogsmeade-firstboot
 	insinto /usr/share/live-installer/hwprofiles
