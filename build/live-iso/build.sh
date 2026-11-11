@@ -89,7 +89,7 @@ if [ -n "$(echo $CHAIN)" ]; then
     PRIVCTX=${PRIV_DIR:-}; [ -n "$PRIVCTX" ] || { PRIVCTX=$(mktemp -d); trap 'rmdir "$PRIVCTX" 2>/dev/null; cleanup_build' EXIT; }
     VCTX="$VCTX --build-context priv=$PRIVCTX"
     docker image inspect "$TAG-app" >/dev/null 2>&1 && VCTX="$VCTX --build-context app=docker-image://$TAG-app"
-    docker build $PLAT $ARCHARGS $VCTX -f "project/variants/$v/Dockerfile" --build-arg BASE=$ROOTFS_IMG --build-arg VARIANT=$v \
+    docker build $PLAT $ARCHARGS $VCTX -f "project/variants/$v/Dockerfile" --build-arg BASE=$ROOTFS_IMG --build-arg VARIANT=$v --build-arg KEEP_DEV=${KEEP_DEV:-} \
         -t $TAG-rootfs-$v . 2>&1 | tee "$OUT/variant-$v-build.log" | tail -40
     [ "${PIPESTATUS[0]}" = 0 ] || { echo "variant $v build failed (log: $OUT/variant-$v-build.log)"; exit 1; }
     ROOTFS_IMG=$TAG-rootfs-$v; VIMGS="$VIMGS $TAG-rootfs-$v"

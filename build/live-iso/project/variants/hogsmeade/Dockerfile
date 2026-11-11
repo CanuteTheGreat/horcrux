@@ -23,7 +23,9 @@ COPY common/overlay/usr/bin /tmp/hxt/usr/bin
 COPY project/variants/hogshead/overlay/usr/bin/horcrux-orphans /tmp/hxt/usr/bin/horcrux-orphans
 COPY project/variants/gnome-light/overlay/usr/share/horcrux/desktop /tmp/hxt/usr/share/horcrux/desktop
 RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
-    set -e; unset ARCH; emerge-webrsync -q || emerge --sync -q; \
+    set -e; unset ARCH; \
+    test -f /usr/include/EGL/egl.h && test -f /usr/include/libudev.h || { echo 'BASE has no development headers: build the gnome-light base with KEEP_DEV=1 (drive.sh)'; exit 1; }; \
+    emerge-webrsync -q || emerge --sync -q; \
     eselect profile set default/linux/amd64/23.0/desktop/gnome; \
     export FEATURES="-ccache"; \
     emerge --noreplace --usepkg --getbinpkg app-eselect/eselect-repository dev-vcs/git; \
@@ -59,7 +61,7 @@ RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,
     --mount=type=cache,id=hs-kernel-binpkgs,target=/var/cache/hs-binpkgs,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache" PKGDIR=/var/cache/hs-binpkgs; \
     emerge --oneshot --usepkg --getbinpkg sys-libs/binutils-libs app-alternatives/bc sys-devel/bc dev-util/pahole > /var/log/hogsmeade-kernel-deps.log 2>&1 || { tail -40 /var/log/hogsmeade-kernel-deps.log; exit 1; }; \
-    if ! ls /var/cache/hs-binpkgs/sys-kernel/gentoo-kernel-6.18.62*.gpkg.tar >/dev/null 2>&1; then \
+    if ! ls /var/cache/hs-binpkgs/sys-kernel/gentoo-kernel/gentoo-kernel-6.18.62*.gpkg.tar >/dev/null 2>&1; then \
       emerge --buildpkgonly --nodeps --usepkg=n --getbinpkg=n =sys-kernel/gentoo-kernel-6.18.62 \
         > /var/log/hogsmeade-kernel-build.log 2>&1 || { tail -80 /var/log/hogsmeade-kernel-build.log; exit 1; }; \
     fi; \

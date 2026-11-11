@@ -59,6 +59,10 @@ COPY project/public-forbidden.txt /tmp/public-forbidden.txt
 # the Desktop image marks itself (the installer offers the desktop profile only when this exists); slim down again
 # Size: the ISO must stay below the 2 GiB release-asset limit. Firmware for hardware that is not in an x86 laptop/desktop
 # (Snapdragon SoCs, server/SmartNICs) is ~900 MB of the uncompressed image; the server image keeps it.
+# KEEP_DEV=1 (build.sh passes the environment variable; private machine images such as hogsmeade that compile kernel modules, NVIDIA userland and apps on top of this
+# layer and have no 2 GiB limit): headers, static libs and the LLVM tools stay. Without it every later source build dies on a missing header
+# (2026-11-10: gui-libs/egl-gbm, `EGL/egl.h: No such file or directory`, libglvnd's headers were stripped here).
+ARG KEEP_DEV=
 RUN set -e; chmod 644 /usr/share/horcrux/desktop/*; \
     # GATE: a public desktop edition carries no personal / machine-specific package (project/public-forbidden.txt)
     for p in $(grep -v '^#' /tmp/public-forbidden.txt); do if qlist -I "$p" | grep .; then echo "PERSONAL/MACHINE PACKAGE $p IN A PUBLIC IMAGE"; exit 1; fi; done; rm -f /tmp/public-forbidden.txt; \
@@ -78,15 +82,17 @@ RUN set -e; chmod 644 /usr/share/horcrux/desktop/*; \
     # KEEP the toolchain's own development files (glibc + kernel headers + the libraries kernel-module builds link: elfutils, openssl, zlib, zstd, xz, ncurses):\
     # stripping them left every installed system unable to compile anything (gringotts, 2026-11-03: `C compiler cannot create executables`, missing\
     # libc_nonshared.a/stdio.h), which also breaks the zfs-kmod rebuild on every kernel update. ~100 MB; the rest of the headers/static libs go.\
+    if [ -z "$KEEP_DEV" ]; then \
     qlist -e sys-libs/glibc sys-kernel/linux-headers dev-libs/elfutils dev-libs/openssl sys-libs/zlib app-arch/zstd app-arch/xz-utils sys-libs/ncurses sys-libs/libxcrypt | grep -E '^/usr/(include|lib64?)/' | sort -u > /tmp/devkeep.lst; \
     test "$(wc -l < /tmp/devkeep.lst)" -gt 500; \
     find /usr/lib /usr/lib64 -xdev -name '*.a' -type f ! -path '/usr/lib/gcc/*' 2>/dev/null | grep -vxFf /tmp/devkeep.lst | xargs -r rm -f; \
     find /usr/include -xdev \( -type f -o -type l \) 2>/dev/null | grep -vxFf /tmp/devkeep.lst | xargs -r rm -f; find /usr/include -xdev -depth -type d -empty -delete 2>/dev/null || true; \
     rm -rf /usr/lib/llvm/*/include /usr/lib/llvm/*/bin /usr/lib/clang 2>/dev/null || true; \
+    rm -f /tmp/devkeep.lst; else echo 'KEEP_DEV: development files kept'; test -f /usr/include/EGL/egl.h; fi; \
     # gate: the toolchain still builds a C program that needs libc_nonshared.a and the kernel headers\
     printf '#include <stdio.h>\n#include <linux/types.h>\nint main(void){puts("ok");return 0;}\n' > /tmp/t.c && gcc /tmp/t.c -o /tmp/t && /tmp/t && rm -f /tmp/t /tmp/t.c /tmp/devkeep.lst; \
     echo "desktop" > /etc/live-iso-variant; echo "gnome-light" >> /etc/live-iso-variant; \
     rm -rf /var/db/repos/gentoo/* /var/cache/distfiles/* /var/cache/binhost /usr/share/doc /usr/share/gtk-doc /var/tmp/portage /var/log/emerge* 2>/dev/null || true; \
     find / -xdev -name '*.pyc' -path '*/__pycache__/*' -delete 2>/dev/null || true; \
     # Portage's records match what was stripped on purpose (the reviewed list in common/vdb-prune.py); anything else missing fails the package-contents gate
-    python3 /tmp/vdb-prune.py && rm -f /tmp/vdb-prune.py
+    g=core,dev; [ -z "$KEEP_DEV" ] || g=core; python3 /tmp/vdb-prune.py --groups $g && rm -f /tmp/vdb-prune.py
