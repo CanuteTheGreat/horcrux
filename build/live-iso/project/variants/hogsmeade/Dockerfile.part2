@@ -37,6 +37,8 @@ RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,
     set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \
     tar -C /tmp/hxt --zstd -cf /var/cache/distfiles/horcrux-tools-1.tar.zst .; rm -rf /tmp/hxt; \
     tar -C / --zstd -cf /var/cache/distfiles/horcrux-live-data-1.tar.zst usr/share/live-installer; \
+    # both tarballs are made here from the CURRENT tree: a Manifest left by part 1 (older installer sources) would fail the checksum
+    rm -f /var/db/repos/horcrux/sys-apps/horcrux-tools/Manifest /var/db/repos/horcrux/sys-apps/horcrux-live-data/Manifest /var/cache/distfiles/horcrux-*.tar.zst._checksum_failure_.*; \
     for e in /var/db/repos/horcrux/sys-kernel/horcrux-hogsmeade-config/*.ebuild /var/db/repos/horcrux/sys-apps/horcrux-live-data/*.ebuild /var/db/repos/horcrux/sys-kernel/horcrux-unlock/*.ebuild \
              /var/db/repos/horcrux/app-admin/rustinion-agent/*.ebuild /var/db/repos/horcrux/sys-apps/horcrux-tools/*.ebuild /var/db/repos/horcrux/app-misc/hogsmeade-tools/*.ebuild \
              /var/db/repos/horcrux/app-misc/awccd/*.ebuild /var/db/repos/horcrux/sci-misc/comfyui/*.ebuild /var/db/repos/horcrux/acct-user/comfyui/*.ebuild /var/db/repos/horcrux/acct-group/comfyui/*.ebuild \
