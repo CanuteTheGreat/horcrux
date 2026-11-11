@@ -59,15 +59,66 @@ impl QDevice {
         })
     }
 
-    /// `HORCRUX_QDEVICE_HOST` (+ optional `HORCRUX_QDEVICE_ALGO=ffsplit|lms`).
+    /// `HORCRUX_QDEVICE_HOST` (+ optional `HORCRUX_QDEVICE_ALGO=ffsplit|lms`),
+    /// else the persisted setting in [`qdevice_file`] (written by
+    /// `PUT /api/cluster/quorum/qdevice`).
     pub fn from_env() -> Option<QDevice> {
-        let host = std::env::var("HORCRUX_QDEVICE_HOST").ok()?;
-        let algo = match std::env::var("HORCRUX_QDEVICE_ALGO").ok().as_deref() {
-            Some("lms") => QAlgorithm::Lms,
-            _ => QAlgorithm::FfSplit,
-        };
-        QDevice::new(host.trim(), algo)
+        if let Ok(host) = std::env::var("HORCRUX_QDEVICE_HOST") {
+            let algo = match std::env::var("HORCRUX_QDEVICE_ALGO").ok().as_deref() {
+                Some("lms") => QAlgorithm::Lms,
+                _ => QAlgorithm::FfSplit,
+            };
+            return QDevice::new(host.trim(), algo);
+        }
+        QDevice::load_from(&qdevice_file())
     }
+
+    /// Parse `"<host> [ffsplit|lms]"` (the persisted file format).
+    pub fn parse(line: &str) -> Option<QDevice> {
+        let mut it = line.split_whitespace();
+        let host = it.next()?;
+        let algo = match it.next() {
+            Some("lms") => QAlgorithm::Lms,
+            Some("ffsplit") | None => QAlgorithm::FfSplit,
+            Some(_) => return None,
+        };
+        QDevice::new(host, algo)
+    }
+
+    pub fn algorithm_name(&self) -> &'static str {
+        match self.algorithm {
+            QAlgorithm::FfSplit => "ffsplit",
+            QAlgorithm::Lms => "lms",
+        }
+    }
+
+    pub fn load_from(path: &std::path::Path) -> Option<QDevice> {
+        QDevice::parse(&std::fs::read_to_string(path).ok()?)
+    }
+
+    /// Persist (`Some`) or clear (`None`) the setting.
+    pub fn save_to(path: &std::path::Path, q: Option<&QDevice>) -> std::io::Result<()> {
+        match q {
+            Some(q) => {
+                if let Some(dir) = path.parent() {
+                    std::fs::create_dir_all(dir)?;
+                }
+                std::fs::write(path, format!("{} {}\n", q.host, q.algorithm_name()))
+            }
+            None => match std::fs::remove_file(path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+                _ => Ok(()),
+            },
+        }
+    }
+}
+
+/// Where the qdevice setting is persisted: `HORCRUX_QDEVICE_FILE` or
+/// `/etc/horcrux/qdevice.conf`.
+pub fn qdevice_file() -> std::path::PathBuf {
+    std::env::var_os("HORCRUX_QDEVICE_FILE")
+        .map(Into::into)
+        .unwrap_or_else(|| "/etc/horcrux/qdevice.conf".into())
 }
 
 pub fn quorum_threshold(total_votes: u32) -> u32 {
@@ -145,10 +196,7 @@ pub fn corosync_quorum_block(plan: &QuorumPlan) -> String {
         s.push_str("    auto_tie_breaker: 1\n    auto_tie_breaker_node: lowest\n");
     }
     if let Some(q) = &plan.qdevice {
-        let algo = match q.algorithm {
-            QAlgorithm::FfSplit => "ffsplit",
-            QAlgorithm::Lms => "lms",
-        };
+        let algo = q.algorithm_name();
         s.push_str(&format!(
             "    device {{\n        model: net\n        votes: {}\n        net {{\n            host: {}\n            algorithm: {}\n            tls: on\n        }}\n    }}\n",
             plan.qdevice_votes, q.host, algo
@@ -265,5 +313,22 @@ mod tests {
         assert!(QDevice::new("", QAlgorithm::FfSplit).is_none());
         assert!(QDevice::new("fd00::1", QAlgorithm::FfSplit).is_some());
         assert_eq!(plan(&voters(3)).qdevice_votes, 0);
+    }
+
+    #[test]
+    fn qdevice_setting_round_trips_through_its_file_and_rejects_junk() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("sub").join("qdevice.conf");
+        assert!(QDevice::load_from(&f).is_none());
+        let q = QDevice::new("qnetd.lab", QAlgorithm::Lms).unwrap();
+        QDevice::save_to(&f, Some(&q)).unwrap();
+        assert_eq!(QDevice::load_from(&f), Some(q));
+        QDevice::save_to(&f, None).unwrap();
+        assert!(QDevice::load_from(&f).is_none());
+        QDevice::save_to(&f, None).unwrap(); // clearing twice is fine
+        assert_eq!(QDevice::parse("10.0.0.9").unwrap().algorithm, QAlgorithm::FfSplit);
+        assert!(QDevice::parse("qnetd bogus").is_none());
+        assert!(QDevice::parse("a}b").is_none());
+        assert!(QDevice::parse("   ").is_none());
     }
 }

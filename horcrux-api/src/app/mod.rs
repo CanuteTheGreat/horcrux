@@ -1097,6 +1097,10 @@ fn cluster_routes() -> Router<Arc<AppState>> {
         .route("/api/cluster/power/bmc-on", post(bmc_power_on_node))
         .route("/api/cluster/power/down", post(power_down_node))
         .route("/api/cluster/quorum/plan", get(get_quorum_plan))
+        .route(
+            "/api/cluster/quorum/qdevice",
+            get(get_qdevice).put(set_qdevice),
+        )
         .route("/api/cluster/architecture", get(get_cluster_architecture))
         .route("/api/cluster/find-node", post(find_best_node_for_vm))
         // HA (High Availability) endpoints
@@ -4735,6 +4739,53 @@ async fn get_quorum_plan(State(state): State<Arc<AppState>>) -> Json<serde_json:
         "warnings": plan.warnings,
         "corosync_conf": config,
     }))
+}
+
+#[derive(serde::Deserialize)]
+struct QdeviceBody {
+    host: String,
+    #[serde(default)]
+    algorithm: Option<String>,
+}
+
+/// `GET /api/cluster/quorum/qdevice` -- the configured external quorum device
+/// (env or persisted), `{"host":null}` when none.
+async fn get_qdevice() -> Json<serde_json::Value> {
+    Json(match crate::cluster::quorum::QDevice::from_env() {
+        Some(q) => serde_json::json!({"host": q.host, "algorithm": q.algorithm_name()}),
+        None => serde_json::json!({"host": null, "algorithm": null}),
+    })
+}
+
+/// `PUT /api/cluster/quorum/qdevice` -- body `{"host":"qnetd.lab","algorithm":"ffsplit|lms"}`
+/// persists the qdevice for the next corosync.conf generation; `null` clears it.
+/// 422 on a host with characters outside letters/digits/`.`/`-`/`:` or an unknown algorithm.
+async fn set_qdevice(
+    Json(body): Json<Option<QdeviceBody>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    use crate::cluster::quorum::{qdevice_file, QAlgorithm, QDevice};
+    let q = match body {
+        None => None,
+        Some(b) => {
+            let algo = match b.algorithm.as_deref() {
+                None | Some("ffsplit") => QAlgorithm::FfSplit,
+                Some("lms") => QAlgorithm::Lms,
+                Some(other) => {
+                    return Err((
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        format!("unknown qdevice algorithm {other:?} (ffsplit or lms)"),
+                    ))
+                }
+            };
+            Some(QDevice::new(b.host.trim(), algo).ok_or((
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "qdevice host must be a hostname or IP (letters, digits, '.', '-', ':')".to_string(),
+            ))?)
+        }
+    };
+    QDevice::save_to(&qdevice_file(), q.as_ref())
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("saving qdevice: {e}")))?;
+    Ok(get_qdevice().await)
 }
 
 /// `GET /api/cluster/nodes/:name/migration-targets` -- for a guest running on
