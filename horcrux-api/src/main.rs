@@ -9,6 +9,7 @@ async fn main() -> anyhow::Result<()> {
     if args.first().map(String::as_str) == Some("guests") {
         std::process::exit(horcrux_api::api::guest_state::agent::cli_main(&args[1..]).await);
     }
+    #[cfg(feature = "cluster")]
     if args.first().map(String::as_str) == Some("ha-fence-agent") {
         std::process::exit(horcrux_api::api::ha_fence_agent::agent_main().await);
     }

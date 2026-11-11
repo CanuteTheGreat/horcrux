@@ -19,6 +19,7 @@ pub mod firewall_objects;
 pub mod guest_state;
 #[cfg(feature = "cluster")]
 pub mod ha_fence_agent;
+#[cfg(feature = "cluster")]
 pub mod ha_loop;
 #[cfg(feature = "kubernetes")]
 pub mod helm;
