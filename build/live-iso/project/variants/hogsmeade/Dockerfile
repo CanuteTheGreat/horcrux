@@ -148,7 +148,7 @@ COPY project/variants/hogsmeade/reown.sh /usr/local/sbin/hsm-reown
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
     echo "hogsmeade" > /etc/live-iso-variant; \
-    for s in awccd nvidia-persistenced switcheroo-control smartd hogsmeade-firstboot comfyui docker; do rc-update add $s default 2>/dev/null || true; done; \
+    for s in hogsmeade-firewall awccd nvidia-persistenced switcheroo-control smartd hogsmeade-firstboot comfyui docker; do rc-update add $s default 2>/dev/null || true; done; \
     printf 'DISPLAYMANAGER="gdm"\n' > /etc/conf.d/display-manager; \
     find / -xdev -name '*.pyc' -path '*/__pycache__/*' -delete 2>/dev/null || true; \
     bash /usr/local/sbin/hsm-reown 2>&1 | tee /var/log/hogsmeade-reown.log | tail -70; \

@@ -4,10 +4,10 @@ id = "hogsmeade"
 title = "Alienware 18 Area-51 (HOGSMEADE)"
 
 # NetworkManager owns Wi-Fi (BE200) + Ethernet (r8169); zram first, encrypted disk swap only for the hibernation image;
-# awccd = thermal profile/fan/lighting daemon; comfyui = GPU render server (LAN only); nvidia-persistenced = GPU init.
+# awccd = thermal profile/fan/lighting daemon; comfyui = GPU render server (port 8188: this machine, home LAN and home WireGuard only, enforced by hogsmeade-firewall); nvidia-persistenced = GPU init.
 services_add = ["elogind:boot", "dbus:default", "NetworkManager:default", "zram-swap:default", "cronie:default",
                 "awccd:default", "nvidia-persistenced:default", "switcheroo-control:default", "smartd:default", "hogsmeade-firstboot:default",
-                "comfyui:default", "sshd:default", "hx-resume:boot"]
+                "hogsmeade-firewall:default", "comfyui:default", "sshd:default", "hx-resume:boot"]
 services_del = ["iwd", "dhcpcd", "live-serial"]
 
 # the backlight puzzle (awcc-re/nvidia-and-backlight.md): the EC owns the panel level, reached through the NVIDIA WMI-EC

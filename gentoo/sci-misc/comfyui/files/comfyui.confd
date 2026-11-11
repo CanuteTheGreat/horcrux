@@ -2,4 +2,7 @@
 # COMFYUI_PORT=8188
 # COMFYUI_DATA=/var/lib/comfyui      # models/ output/ input/ user/ custom_nodes/ (its own ZFS dataset rpool/comfyui)
 # COMFYUI_EXTRA_ARGS=""              # e.g. --fast fp16_accumulation (the Windows run_nvidia_gpu_fast_fp16_accumulation.bat)
-# COMFYUI_LISTEN=                    # empty = wait for the Tailscale IPv4 and bind it only; set 127.0.0.1 for local tests
+# COMFYUI_LISTEN=127.0.0.1           # default: this machine only. A LAN address or 0.0.0.0 needs a host firewall in front of the port
+#                                    # (ComfyUI has no login): machine packages set it together with rc_need="<their firewall service>".
+# machine-local settings (owned by the machine's package, e.g. COMFYUI_LISTEN + rc_need): /etc/conf.d/comfyui.local
+[ -r /etc/conf.d/comfyui.local ] && . /etc/conf.d/comfyui.local

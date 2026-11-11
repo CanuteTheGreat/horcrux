@@ -7,7 +7,7 @@ PYTHON_COMPAT=( python3_13 )
 
 inherit python-single-r1
 
-DESCRIPTION="ComfyUI node-based diffusion UI/server (private venv with PyTorch cu130 wheels) (listens only where COMFYUI_LISTEN says; stays off without it)"
+DESCRIPTION="ComfyUI node-based diffusion UI/server (private venv with PyTorch cu130 wheels) (listens on COMFYUI_LISTEN, default 127.0.0.1)"
 HOMEPAGE="https://github.com/Comfy-Org/ComfyUI"
 SRC_URI="https://github.com/Comfy-Org/ComfyUI/archive/refs/tags/v${PV}.tar.gz -> ComfyUI-${PV}.tar.gz"
 S="${WORKDIR}/ComfyUI-${PV}"
@@ -60,6 +60,6 @@ src_install() {
 }
 
 pkg_postinst() {
-	elog "ComfyUI listens on the Tailscale IPv4 address only (port 8188): rc-update add comfyui default"
+	elog "ComfyUI listens on 127.0.0.1:8188 unless /etc/conf.d/comfyui(.local) sets COMFYUI_LISTEN: rc-update add comfyui default"
 	elog "Models: comfyui-fetch-models (manifest /usr/share/comfyui/models-manifest.tsv from sci-misc/comfyui-models-manifest or hogsmeade-tools)"
 }
