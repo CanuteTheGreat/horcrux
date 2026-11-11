@@ -663,6 +663,46 @@ pub async fn get_quorum_plan() -> Result<QuorumPlanView, ApiError> {
     fetch_json("/cluster/quorum/plan").await
 }
 
+/// One row of `GET /api/cluster/nics` (area 5): a physical NIC or bond.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NicView {
+    pub name: String,
+    #[serde(default)]
+    pub speed_mbps: Option<u64>,
+    #[serde(default)]
+    pub mtu: u32,
+    #[serde(default)]
+    pub up: bool,
+    #[serde(default)]
+    pub driver: Option<String>,
+    #[serde(default)]
+    pub is_bond: bool,
+    #[serde(default)]
+    pub bond_mode: Option<String>,
+    #[serde(default)]
+    pub slaves: Vec<String>,
+    #[serde(default)]
+    pub sriov_vfs: u32,
+}
+
+/// `GET /api/cluster/nics`: this node's links, the fastest link and the
+/// migration / Ceph-recovery cap derived from it, plus policy warnings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NicsView {
+    #[serde(default)]
+    pub nics: Vec<NicView>,
+    #[serde(default)]
+    pub best_speed_mbps: Option<u64>,
+    #[serde(default)]
+    pub background_cap_mbps: Option<u64>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+pub async fn get_local_nics() -> Result<NicsView, ApiError> {
+    fetch_json("/cluster/nics").await
+}
+
 /// `PUT /api/cluster/quorum/qdevice`: persist (`Some((host, algorithm))`) or
 /// clear (`None`) the external quorum device. The server answers 422 on a bad
 /// host or algorithm.

@@ -10,9 +10,10 @@
 //! - `POST /api/cluster/find-node`           <- `FindNodeRequest` -> node name
 use crate::api::{
     add_cluster_node, find_best_node_for_vm, get_cluster_architecture, get_cluster_nodes,
-    get_cluster_power_status, get_quorum_plan, get_vms, power_down_node, power_node_note,
-    put_qdevice, remove_cluster_node, set_node_caps, set_node_priority, AddNodeRequest,
-    ClusterArchitecture, ClusterNode, FindNodeRequest, NodeCaps, PowerStatus, QuorumPlanView,
+    get_cluster_power_status, get_local_nics, get_quorum_plan, get_vms, power_down_node,
+    power_node_note, put_qdevice, remove_cluster_node, set_node_caps, set_node_priority,
+    AddNodeRequest, ClusterArchitecture, ClusterNode, FindNodeRequest, NicView, NicsView, NodeCaps,
+    PowerStatus, QuorumPlanView,
 };
 use horcrux_common::VmConfig;
 use leptos::*;
@@ -107,6 +108,33 @@ pub(crate) fn parse_caps_form(
 
 /// `VmArchitecture` -> the architecture string the find-node API expects
 /// ("x86_64", "aarch64", ...). Uses the type's own serde names.
+/// "25 GbE", "2.5 GbE", "100 Mb/s"; "link down / unknown" without a speed.
+pub(crate) fn nic_speed_label(speed_mbps: Option<u64>) -> String {
+    match speed_mbps {
+        None => "link down / unknown".to_string(),
+        Some(m) if m >= 1000 && m.is_multiple_of(1000) => format!("{} GbE", m / 1000),
+        Some(m) if m >= 1000 => format!("{:.1} GbE", m as f64 / 1000.0),
+        Some(m) => format!("{} Mb/s", m),
+    }
+}
+
+/// One-line detail for a NIC row: bond mode + members, MTU, driver, SR-IOV.
+pub(crate) fn nic_detail(n: &NicView) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if n.is_bond {
+        let mode = n.bond_mode.clone().unwrap_or_else(|| "bond".to_string());
+        parts.push(format!("{} of {}", mode, n.slaves.join("+")));
+    }
+    parts.push(format!("MTU {}", n.mtu));
+    if let Some(d) = &n.driver {
+        parts.push(format!("driver {}", d));
+    }
+    if n.sriov_vfs > 0 {
+        parts.push(format!("{} SR-IOV VFs", n.sriov_vfs));
+    }
+    parts.join(", ")
+}
+
 fn vm_arch_string(vm: &VmConfig) -> String {
     serde_json::to_value(&vm.architecture)
         .ok()
@@ -129,6 +157,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
     let (vms, set_vms) = create_signal(Vec::<VmConfig>::new());
     let (power_status, set_power_status) = create_signal(None::<PowerStatus>);
     let (quorum_plan, set_quorum_plan) = create_signal(None::<QuorumPlanView>);
+    let (nics_view, set_nics_view) = create_signal(None::<NicsView>);
     let (qdev_host, set_qdev_host) = create_signal(String::new());
     let (qdev_algo, set_qdev_algo) = create_signal("ffsplit".to_string());
     let (loading, set_loading) = create_signal(false);
@@ -174,6 +203,11 @@ pub fn ClusterManagementPage() -> impl IntoView {
             match get_quorum_plan().await {
                 Ok(q) => set_quorum_plan.set(Some(q)),
                 Err(e) => errors.push(format!("Failed to load quorum plan: {}", e)),
+            }
+
+            // Link report is informational: a failure must not raise the page error.
+            if let Ok(n) = get_local_nics().await {
+                set_nics_view.set(Some(n));
             }
 
             match get_vms().await {
@@ -774,6 +808,49 @@ pub fn ClusterManagementPage() -> impl IntoView {
                 }
             })}
 
+            // Network links (area 5): speed, bonds, MTU, background-traffic cap.
+            {move || nics_view.get().map(|n| {
+                let cap = match n.background_cap_mbps {
+                    Some(c) => format!(
+                        "Live migration and Ceph recovery are capped at {} ({} MB/s) so they cannot saturate the fastest link.",
+                        nic_speed_label(Some(c)),
+                        c / 8
+                    ),
+                    None => "No link speed known: migration and recovery are left unlimited.".to_string(),
+                };
+                view! {
+                    <div id="nic-panel" class="bg-white rounded-lg shadow overflow-hidden mt-6">
+                        <div class="px-6 py-4 border-b">
+                            <h2 class="text-lg font-semibold">"Network links (this node)"</h2>
+                            <p id="nic-cap" class="text-sm text-gray-600 mt-1">{cap}</p>
+                        </div>
+                        <table class="min-w-full text-sm">
+                            <thead>
+                                <tr class="text-left text-gray-500">
+                                    <th class="px-6 py-2">"Interface"</th>
+                                    <th class="px-6 py-2">"Speed"</th>
+                                    <th class="px-6 py-2">"State"</th>
+                                    <th class="px-6 py-2">"Detail"</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {n.nics.iter().map(|nic| view! {
+                                    <tr class="nic-row border-t">
+                                        <td class="px-6 py-2 font-medium">{nic.name.clone()}</td>
+                                        <td class="px-6 py-2">{nic_speed_label(nic.speed_mbps)}</td>
+                                        <td class="px-6 py-2">{if nic.up { "up" } else { "down" }}</td>
+                                        <td class="px-6 py-2 text-gray-600">{nic_detail(nic)}</td>
+                                    </tr>
+                                }).collect_view()}
+                            </tbody>
+                        </table>
+                        <div class="px-6 py-3">
+                            {n.warnings.iter().map(|w| view! { <p class="nic-warning text-sm text-yellow-700">{w.clone()}</p> }).collect_view()}
+                        </div>
+                    </div>
+                }
+            })}
+
             // Add Node Modal
             {move || show_add_node_modal.get().then(|| view! {
                 <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -959,6 +1036,43 @@ mod tests {
         assert!(parse_caps_form("compute", "", "0", "", "").is_err());
         assert!(parse_caps_form("compute", "", "", "-1", "").is_err());
         assert!(parse_caps_form("compute", &"x".repeat(64), "", "", "").is_err());
+    }
+
+    #[test]
+    fn nic_labels_cover_every_supported_speed() {
+        assert_eq!(nic_speed_label(None), "link down / unknown");
+        assert_eq!(nic_speed_label(Some(100)), "100 Mb/s");
+        assert_eq!(nic_speed_label(Some(1_000)), "1 GbE");
+        assert_eq!(nic_speed_label(Some(2_500)), "2.5 GbE");
+        assert_eq!(nic_speed_label(Some(20_000)), "20 GbE");
+        assert_eq!(nic_speed_label(Some(100_000)), "100 GbE");
+    }
+
+    #[test]
+    fn nic_detail_names_bond_members_mtu_driver_and_vfs() {
+        let n = NicView {
+            name: "bond0".into(),
+            speed_mbps: Some(20_000),
+            mtu: 9000,
+            up: true,
+            driver: Some("ixgbe".into()),
+            is_bond: true,
+            bond_mode: Some("802.3ad".into()),
+            slaves: vec!["enp1s0f0".into(), "enp1s0f1".into()],
+            sriov_vfs: 4,
+        };
+        assert_eq!(
+            nic_detail(&n),
+            "802.3ad of enp1s0f0+enp1s0f1, MTU 9000, driver ixgbe, 4 SR-IOV VFs"
+        );
+        let plain = NicView {
+            is_bond: false,
+            slaves: vec![],
+            driver: None,
+            sriov_vfs: 0,
+            ..n
+        };
+        assert_eq!(nic_detail(&plain), "MTU 9000");
     }
 
     #[test]
