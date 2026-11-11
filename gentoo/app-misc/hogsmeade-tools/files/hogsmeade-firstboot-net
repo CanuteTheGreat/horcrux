@@ -19,8 +19,11 @@ sync_trees() {
   ok=1
   emerge-webrsync -q || ok=0
   for r in guru canutethegreat-overlay; do
-    [ -d /var/db/repos/$r/.git ] || find /var/db/repos/$r -mindepth 1 -delete 2>/dev/null     # the image ships these overlay dirs empty: the first sync clones them
-    emaint sync -r $r || ok=0
+    # the image ships these overlays as plain copies (or empty): git clone needs an empty directory, so the first sync starts from one.
+    # The directory comes from repos.conf (the owner's overlay is "canutethegreat-overlay" in /var/db/repos/canutethegreat).
+    d=$(portageq get_repo_path / "$r")
+    if [ -n "$d" ] && [ -d "$d" ] && [ ! -d "$d/.git" ]; then find "$d" -mindepth 1 -delete 2>/dev/null; fi
+    emaint sync -r "$r" || ok=0
   done
   [ $ok = 1 ]
 }

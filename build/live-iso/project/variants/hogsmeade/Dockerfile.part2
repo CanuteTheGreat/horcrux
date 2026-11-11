@@ -47,6 +47,8 @@ RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,
     rm -rf /usr/bin/horcrux /usr/bin/horcrux-api /usr/share/horcrux/ui /etc/init.d/horcrux-api /etc/init.d/horcrux-guests \
            /usr/lib/live-installer /usr/libexec/live-* /usr/libexec/console-menu-session /usr/bin/live-installer /usr/bin/console-menu \
            /usr/bin/live-persist /usr/bin/live-rescue /usr/bin/horcrux-be /usr/bin/horcrux-t2-firmware /usr/share/horcrux/desktop; \
+    # TPM-sealed unattended unlock (dracut 92tpm-unlock, loose in the ISO overlay, no package yet): HOGSMEADE unlocks with a typed passphrase
+    rm -rf /usr/lib/dracut/modules.d/92tpm-unlock; \
     rm -f /etc/runlevels/*/horcrux-api /etc/runlevels/*/horcrux-guests; \
     rm -rf /usr/share/live-installer; \
     emerge --oneshot --usepkg=n --getbinpkg=n sys-kernel/horcrux-unlock sys-apps/horcrux-tools sys-apps/horcrux-live-data sys-kernel/horcrux-hogsmeade-config; \
