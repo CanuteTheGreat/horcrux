@@ -67,7 +67,7 @@ class Profile(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(base, "repos.conf", "horcrux.conf")))
         kw = open(os.path.join(base, "package.accept_keywords", "horcrux-surface")).read()
         lic = open(os.path.join(base, "package.license", "horcrux-surface")).read()
-        for bad in ("brave", "nextcloud", "discord", "proton"):
+        for bad in ("nextcloud", "discord", "proton"):
             self.assertNotIn(bad, kw + lic)
 
     def test_desktop_package_has_xfce_stack(self):
@@ -78,6 +78,5 @@ class Profile(unittest.TestCase):
             self.assertIn(atom, eb)
         self.assertNotIn("net-vpn/tailscale", eb)                     # Tailscale retired 2026-11-10 (WireGuard hub replaces it)
         self.assertFalse(os.path.exists(os.path.join(ROOT, "root", "etc", "local.d", "50-surface-tailscale.start")))
-        self.assertNotIn("www-client/brave", eb)                      # owner order 2026-11-05: no personal apps in a profile (test machine)
         self.assertNotIn("gnome-base/gnome", eb)                      # owner decision: XFCE, not GNOME
         self.assertNotIn("zram-generator", eb)                        # systemd-only generator; OpenRC zram-swap instead

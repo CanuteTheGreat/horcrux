@@ -9,13 +9,13 @@ ssh push -> this script); gringotts never holds B2 credentials or the restic pas
 
 What comes back (an allow-list; Ubuntu-only state - ibus/CJK input, gnome-initial-setup, snap units, evolution, dconf - stays out):
   shell/editor/gpg:   .bashrc .profile .bash_logout .bash_history .viminfo .gnupg
-  app profiles:       Brave (BraveSoftware), Discord, terminator, VLC, Remmina (+ saved connection), virt-viewer, GTK bookmarks
+  app profiles:       Discord, terminator, VLC, Remmina (+ saved connection), virt-viewer, GTK bookmarks
   Firefox:            the snap profile -> ~/.mozilla/firefox (the Install* sections of profiles.ini are dropped so the restored profile is used)
   /home/ron -> /home/<user> in the small text settings files (never in Secure Preferences / databases)
   /etc/wireguard/wg0.conf  from STDIN with --wg-stdin (root 0600; the content is never printed or logged)
   --nft               the CVE-2026-98432 nftables mitigation from etc-selected (loaded + saved for the OpenRC nftables service)
-Sign-in state (owner order 2026-11-03: never sign in again): the GNOME login keyring (~/.local/share/keyrings: it holds Brave's cookie-encryption key
-"Brave Safe Storage" and the Nextcloud app password; WITHOUT it every restored Brave/Nextcloud/Proton session is unreadable), ~/.config/Nextcloud (nextcloud.cfg), the
+Sign-in state (owner order 2026-11-03: never sign in again): the GNOME login keyring (~/.local/share/keyrings: it holds the Chromium-app cookie-encryption keys
+and the Nextcloud app password; WITHOUT it every restored Nextcloud/Proton session is unreadable), ~/.config/Nextcloud (nextcloud.cfg), the
 Proton configs. RUN THIS BEFORE THE FIRST GRAPHICAL LOGIN: a running gnome-keyring-daemon rewrites the keyring from memory and would overwrite the restored file (it refuses
 with a graphical session of the user unless --force). The keyring is encrypted with the OLD login password: with the same login password it unlocks at login by itself;
 with a different one GNOME asks ONCE to unlock it (type the old password there). Not restored on purpose: Rustinion identity (the agent re-enrols).
@@ -34,7 +34,7 @@ import tempfile
 OLD_USERS = ["ron"]
 DOT_FILES = [".bashrc", ".profile", ".bash_logout", ".bash_history", ".viminfo", ".gnupg"]
 DOT_DIRS = [".local/share/keyrings", ".config/Nextcloud", ".config/Proton", ".config/Proton Pass", ".config/protonvpn", ".config/proton-pass", ".local/share/protonvpn",
-            ".config/BraveSoftware", ".config/discord", ".config/terminator", ".config/vlc", ".config/remmina",
+            ".config/discord", ".config/terminator", ".config/vlc", ".config/remmina",
             ".config/virt-viewer", ".config/gtk-3.0", ".local/share/remmina", ".local/share/vlc"]
 # text settings that embed the old home; never the HMAC-protected / binary ones
 REWRITE_NAMES = {"nextcloud.cfg", "Preferences", "terminator", "config", "vlcrc", "vlc-qt-interface.conf", "remmina.pref", "settings", "bookmarks",
@@ -114,8 +114,8 @@ FORCE = False
 
 
 def graphical_session(uid):
-    """True when the user has a gnome-shell/gnome-keyring-daemon/brave running (their keyring daemon rewrites the keyring file from memory)"""
-    for name in ("gnome-shell", "gnome-keyring-daemon", "brave"):
+    """True when the user has a gnome-shell/gnome-keyring-daemon running (their keyring daemon rewrites the keyring file from memory)"""
+    for name in ("gnome-shell", "gnome-keyring-daemon"):
         if run(["pgrep", "-u", str(uid), "-x", name]).returncode == 0:
             return True
     return False
@@ -132,7 +132,7 @@ def restore_home(backup, user, dry):
     pw = pwd.getpwnam(user)
     home = pw.pw_dir
     if graphical_session(pw.pw_uid) and not FORCE:
-        note(BAD, "a graphical session of this user is running", "restore BEFORE the first login: its gnome-keyring-daemon would overwrite the restored keyring and Brave would rewrite Cookies; log out (or reboot to the greeter) and run again, or --force")
+        note(BAD, "a graphical session of this user is running", "restore BEFORE the first login: its gnome-keyring-daemon would overwrite the restored keyring; log out (or reboot to the greeter) and run again, or --force")
         return
     tmp = tempfile.mkdtemp(prefix="gringotts-restore-", dir="/var/tmp")
     try:
@@ -310,7 +310,7 @@ def main():
         restore_nft(a.backup, a.dry_run)
     bad = [r for r in results if r[0] == BAD]
     print("\nNext: log in (same login password as the old machine = the keyring unlocks by itself; a different one = GNOME asks ONCE to unlock the old keyring).")
-    print("Brave, Nextcloud, Proton and Discord should come back signed in. Check as the user: horcrux-keyring-status. ~/Nextcloud syncs back (with ~/.ssh ~/.aws ~/bin); re-link ~/.ssh once it has synced.")
+    print("Nextcloud, Proton and Discord should come back signed in. Check as the user: horcrux-keyring-status. ~/Nextcloud syncs back (with ~/.ssh ~/.aws ~/bin); re-link ~/.ssh once it has synced.")
     print("Rustinion: enrol the new device with the tenant token.")
     print(f"restore finished: {len(results) - len(bad)} ok/warn, {len(bad)} failed")
     return 1 if bad else 0

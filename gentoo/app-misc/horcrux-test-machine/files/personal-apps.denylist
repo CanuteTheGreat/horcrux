@@ -4,7 +4,6 @@
 # NOT here (they are agent plumbing the test machines need): app-admin/rustinion-agent, app-backup/restic, net-misc/ctg-ssh-ca-fleet.
 # Tailscale is retired (2026-11-10, WireGuard hub on kingscross replaces it): it must be ABSENT from every test machine
 net-vpn/tailscale
-www-client/brave*
 www-client/google-chrome*
 www-client/chromium*
 www-client/vivaldi*

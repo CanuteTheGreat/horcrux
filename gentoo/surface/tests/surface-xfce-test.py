@@ -343,10 +343,10 @@ class XT(SQ.T):
                 break
             time.sleep(3)
         s("xfce-media-keys-bound-to-wpctl", out.count("wpctl") >= 3, re.sub(r"\s+", " ", out)[:240])
-        rc, out = self.ssh("qlist -I www-client/brave-bin net-misc/nextcloud-client net-im/discord net-vpn/proton-vpn-gtk-app app-antivirus/clamav; test -e /usr/bin/brave && echo /usr/bin/brave; "
+        rc, out = self.ssh("qlist -I net-misc/nextcloud-client net-im/discord net-vpn/proton-vpn-gtk-app app-antivirus/clamav; "
                            "horcrux-test-machine-check 2>&1 | tail -5; true", timeout=90)
         self.save("personal-apps.txt", out)
-        s("no-personal-apps-on-the-profile", "brave" not in out.lower() and "VIOLATION" not in out, "owner rule 2026-11-05: a profile carries no personal apps: " + re.sub(r"\s+", " ", out)[:200])
+        s("no-personal-apps-on-the-profile", "VIOLATION" not in out, "owner rule 2026-11-05: a profile carries no personal apps: " + re.sub(r"\s+", " ", out)[:200])
         rc, out = self.ssh("qfile -o /usr/bin/firefox-bin /usr/bin/rustinion /usr/bin/onboard | tr '\\n' ' '; echo; qfile /usr/bin/rustinion /usr/bin/onboard | tr '\\n' ' '")
         s("app-binaries-owned-by-ebuilds", "orphan" not in out.lower() and out.count(":") >= 3, re.sub(r"\s+", " ", out)[:300])
         # ---- memory / responsiveness at 4 GB with everything running

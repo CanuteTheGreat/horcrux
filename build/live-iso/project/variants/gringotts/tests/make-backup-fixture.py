@@ -37,10 +37,6 @@ HOME = {
     ".config/remmina/fake.remmina": "[remmina]\nname=fake-host\nserver=192.0.2.10\npassword=\n",
     ".local/share/remmina/group.remmina": "[remmina]\nname=fake\n",
     ".config/discord/Local Storage/leveldb/000003.log": blob(2048),
-    ".config/BraveSoftware/Brave-Browser/Default/Preferences":
-        '{"download":{"default_directory":"/home/ron/Downloads"},"homepage":"https://example.invalid/","profile":{"name":"Person 1"}}\n',
-    ".config/BraveSoftware/Brave-Browser/Default/History": blob(4096),
-    ".config/BraveSoftware/Brave-Browser/Local State": '{"profile":{"info_cache":{"Default":{"name":"Person 1"}}}}\n',
 }
 FIREFOX = {
     "snap/firefox/common/.mozilla/firefox/profiles.ini":

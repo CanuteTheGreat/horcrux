@@ -17,7 +17,7 @@ Horcrux is built in three layers; every fix that applies to every install lives 
 |---|---|---|
 | **core** | the headless server: kernel + ZFS (with `dist-kernel`, so every kernel update rebuilds `zfs-kmod`), installer, `horcrux-api` + web UI, chrony + the clock rules (`makestep 1 -1`, `rtcsync`, UTC RTC, sources re-resolved when a network comes up on dhcpcd/static/NetworkManager), the first-boot network wait + Portage tree sync, the overlay sync config, backup (restic to B2, 30 days, secrets provisioned after first boot), the password-separation and no-autologin rules | package `sys-apps/horcrux-core` (overlay `gentoo/`), image layer `build/live-iso/project/variants/core`, applied by `build.sh` to **every** image |
 | **desktop edition** (optional) | GNOME on Wayland (OpenRC + elogind, `gnome-light`); an XFCE edition for small devices follows the same pattern. Depends on core; adds only the desktop (`gnome-extra/horcrux-gnome-defaults`: tray icons, first-login Wi-Fi chooser, working login keyring) and generic desktop tools (Firefox, terminator, vim, virt-manager, CUPS, Bluetooth, ...) | `build/live-iso/project/variants/gnome-light` |
-| **machine layers** (private) | the owner's own machines (gringotts, hogshead, surface/madammalkins, hogsmeade): his personal apps (Brave, Nextcloud client, Tailscale, ClamAV, rustinion agent, keepalived, ...), per-machine kernels, firmware, restore helpers and backup lists. Steam is HOGSMEADE only | `build/live-iso/project/variants/{owner-common,gringotts,hogshead,...}` |
+| **machine layers** (private) | the owner's own machines (gringotts, hogshead, surface/madammalkins, hogsmeade): his personal apps (Nextcloud client, Tailscale, ClamAV, rustinion agent, keepalived, ...), per-machine kernels, firmware, restore helpers and backup lists. Steam is HOGSMEADE only | `build/live-iso/project/variants/{owner-common,gringotts,hogshead,...}` |
 
 **Nothing personal or machine-specific is in a public image** (the server image and the public desktop editions). `build/live-iso/project/public-forbidden.txt` lists the
 packages that must never appear in one; the core and desktop Dockerfiles and the QEMU gates (`zfs-enc-test.py --public`) fail on any of them.
@@ -398,7 +398,7 @@ Wi-Fi/Bluetooth firmware is never on the ISO: the installer offers to import it 
 
 **GNOME (light) edition** (`VARIANT=gnome-light build.sh`, formerly `desktop`; daily asset `horcrux-gnome-light-openrc-daily-x86_64.iso`, built and tested by the daily workflow as its own job: BIOS+CD ext4, UEFI+USB ZFS mirror, and the encrypted-ZFS desktop flow with the GDM greeter asserted on the VGA console): the server core plus GNOME on Wayland (OpenRC + elogind,
 GDM), NetworkManager (iwd), PipeWire, Firefox, terminator, vim, virt-manager/virt-install, CUPS, Bluetooth, fwupd, thermald, power-profiles-daemon. The
-owner's own picks (Brave, Nextcloud client, Tailscale, ClamAV, rustup, keepalived, sshpass) are **not** in this public image any more: they live in the machine layers. The installer
+owner's own picks (Nextcloud client, Tailscale, ClamAV, rustup, keepalived, sshpass) are **not** in this public image any more: they live in the machine layers. The installer
 shows the *Desktop user* screen on this image only (answer file: `install_type = "desktop"` + `[user]`).
 **Hibernate on encrypted ZFS** (`swap = auto|none|hibernate`, answer file `[disk] swap`; `auto` = on for the Desktop install type or a
 machine with a battery/portable chassis, off on servers). Partition 3 is a **LUKS2 swap partition** (RAM rounded up to GiB x 1.125,

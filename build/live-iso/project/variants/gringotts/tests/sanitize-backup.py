@@ -23,7 +23,6 @@ KEEP_REAL = {".bashrc", ".profile", ".bash_logout", ".config/terminator/config",
              "snap/firefox/common/.mozilla/firefox/profiles.ini", "snap/firefox/common/.mozilla/firefox/installs.ini",
              "etc/nftables-cve-2026-98432.nft"}
 SYNTH = {
-    ".config/BraveSoftware/Brave-Browser/Default/Preferences": '{"download":{"default_directory":"/home/ron/Downloads"},"homepage":"https://example.invalid/","profile":{"name":"Person 1"}}\n',
     ".bash_history": "ls /home/ron\ncd /home/ron/Nextcloud\nsudo apt update\n",
     ".viminfo": "# synthetic\n'0  1  0  /home/ron/notes.txt\n",
     "snap/firefox/common/.mozilla/firefox/0dtt0h6y.default/prefs.js": 'user_pref("browser.download.dir", "/home/ron/Downloads");\n',

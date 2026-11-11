@@ -433,9 +433,9 @@ class GRun(zt.ZRun):
         self.step("restore-push-driver-and-gringotts-restore-run", r.returncode == 0 and "[  ok]" in r.stdout and "target copy of the archives removed" in r.stdout, (r.stdout + r.stderr).strip().replace("\n", " | ")[-400:])
         rc, o = self.sh("ls /var/tmp/gringotts-backup 2>&1 | head -2")
         self.step("restore-archives-shredded-on-target", "No such file" in o, o.strip())
-        rc, o = self.sh(f"cd /home/{USER}; ls -ld .bashrc .gnupg .config/BraveSoftware .config/discord .config/terminator .config/vlc .config/remmina .local/share/remmina .mozilla/firefox | awk '{{print $1,$3,$9}}'; "
-                        f"grep -rIl '/home/ron' .config/BraveSoftware/Brave-Browser/Default/Preferences .config/terminator .config/vlc .bashrc 2>/dev/null | wc -l; "
-                        f"grep -c '/home/{USER}' .config/BraveSoftware/Brave-Browser/Default/Preferences; ls .mozilla/firefox; grep -c '^\\[Install' .mozilla/firefox/profiles.ini; "
+        rc, o = self.sh(f"cd /home/{USER}; ls -ld .bashrc .gnupg .config/discord .config/terminator .config/vlc .config/remmina .local/share/remmina .mozilla/firefox | awk '{{print $1,$3,$9}}'; "
+                        f"grep -rIl '/home/ron' .config/terminator .config/vlc .bashrc 2>/dev/null | wc -l; "
+                        f"ls .mozilla/firefox; grep -c '^\\[Install' .mozilla/firefox/profiles.ini; "
                         f"stat -c '%a %U:%G %n' /etc/wireguard/wg0.conf /etc/wireguard; ls .bashrc.pre-restore; wg-quick strip wg0 >/dev/null 2>&1 && echo WG-PARSES")
         self.res["restore_state"] = o
         self.step("restore-files-owned-by-user-paths-rewritten", f"{USER}" in o and "WG-PARSES" in o and re.search(r"\n0\n", o) is not None and "600 root:root /etc/wireguard/wg0.conf" in o, o.strip().replace("\n", " | ")[:500])
@@ -445,11 +445,11 @@ class GRun(zt.ZRun):
 
     def restore_apps_start(self):
         # restored profiles actually start (in the session after the first login)
-        self.usr("pkill -f -i 'brave|firefox' 2>/dev/null; true", timeout=20)
+        self.usr("pkill -f -i firefox 2>/dev/null; true", timeout=20)
         rc, o = self.usr("nohup gtk-launch $(ls /usr/share/applications | grep -iE '^firefox' | head -1) >/tmp/f.log 2>&1 & sleep 30; "
                          "echo FF=$(pgrep -u $(id -u) -fc firefox); ls ~/.mozilla/firefox | head", timeout=120)
         self.step("restored-firefox-profile-starts", re.search(r"FF=[1-9]", o) is not None, o.strip().replace("\n", " | ")[:300])
-        self.usr("pkill -f -i 'brave|firefox' 2>/dev/null; sleep 2; pkill -9 -f -i 'brave|firefox' 2>/dev/null; true", timeout=30)
+        self.usr("pkill -f -i firefox 2>/dev/null; sleep 2; pkill -9 -f -i firefox 2>/dev/null; true", timeout=30)
 
     # ------------------------------------------------------------------ boot 1 (serial) wrapper: shared checks + gringotts basics
     def boot2(self, nvars):

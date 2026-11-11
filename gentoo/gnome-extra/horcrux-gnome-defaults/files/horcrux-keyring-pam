@@ -9,7 +9,7 @@
 # pam_gnome_keyring lines. So one GDM login starts TWO `gnome-keyring-daemon --login` daemons, and the session one runs BEFORE pam_elogind
 # has created /run/user/UID (the `session include system-login` line comes after it): its control socket lands in ~/.cache/keyring-XXXX,
 # the session's secret service never finds it, and the result is a session-only collection: NO login.keyring is written (gringotts:
-# empty ~/.local/share/keyrings) or it stays locked, so Brave's "Brave Safe Storage" key, the Nextcloud app password and the Proton
+# empty ~/.local/share/keyrings) or it stays locked, so the Nextcloud app password and the Proton
 # sessions live in RAM and are gone at the next login. (hogshead works only when the single early daemon happens to win the race.)
 # Fix: gdm-password keeps its own three lines (auth after the include, password, session auto_start LAST, after pam_elogind); the copies in
 # system-local-login go. Console `login(1)` no longer unlocks the keyring (GNOME is always entered through GDM); /etc/pam.d/passwd keeps its

@@ -24,8 +24,6 @@ RDEPEND="
 	gnome? ( gnome-base/dconf )
 	xfce? ( xfce-base/xfconf )
 	dev-lang/python
-	!www-client/brave-bin
-	!www-client/brave
 	!net-misc/nextcloud-client
 	!net-im/discord
 	!net-im/signal-desktop

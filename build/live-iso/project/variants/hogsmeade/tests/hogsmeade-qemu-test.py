@@ -584,8 +584,7 @@ class HRun(zt.ZRun):
         d = tempfile.mkdtemp(prefix="hsm-standin-")
         try:
             src = os.path.join(d, "src")
-            for rel, txt in ((".config/BraveSoftware/Brave-Browser/Default/Bookmarks", '{"roots":{"bookmark_bar":{"children":[{"name":"stand-in","url":"https://example.org/"}]}}}'),
-                             (".mozilla/firefox/abcd1234.default-release/prefs.js", 'user_pref("stand.in", true);\n'),
+            for rel, txt in ((".mozilla/firefox/abcd1234.default-release/prefs.js", 'user_pref("stand.in", true);\n'),
                              (".mozilla/firefox/profiles.ini", "[Profile0]\nName=default-release\nIsRelative=1\nPath=abcd1234.default-release\nDefault=1\n"),
                              (".config/Code/User/settings.json", '{"editor.fontSize": 13}\n'), (".claude/settings.json", "{}\n"), (".gitconfig", "[user]\n\tname = stand-in\n"),
                              (".bashrc", "# stand-in bashrc that must NOT replace the image's\n")):
@@ -605,10 +604,10 @@ class HRun(zt.ZRun):
             open(cp, "w").write(txt.replace("export PATH=/usr/local/bin:/usr/bin:/bin", f"export PATH={wrap}:/usr/local/bin:/usr/bin:/bin"))
             r = subprocess.run(["bash", cp, "--test", src, "--", "root@hogsmeade-vm"], env=dict(os.environ, TMPDIR=d), capture_output=True, text=True, timeout=300)
             open(f"{a.out}/restore-drill.txt", "w").write(r.stdout + r.stderr)
-            rc, o = self.sh(f"cd /home/{USER}; stat -c '%U %a %n' .config/BraveSoftware/Brave-Browser/Default/Bookmarks .mozilla/firefox/profiles.ini .config/Code/User/settings.json .claude/settings.json .gitconfig Nextcloud 2>&1; "
-                            f"grep -c stand-in .config/BraveSoftware/Brave-Browser/Default/Bookmarks; sha256sum -c /tmp/bashrc-before.txt 2>&1 | tail -1 | sed 's/^/BASHRC-UNCHANGED-CHECK /'; echo STANDIN-BASHRC=$(grep -c 'stand-in bashrc' .bashrc); "
+            rc, o = self.sh(f"cd /home/{USER}; stat -c '%U %a %n' .mozilla/firefox/profiles.ini .config/Code/User/settings.json .claude/settings.json .gitconfig Nextcloud 2>&1; "
+                            f"grep -c stand.in .mozilla/firefox/abcd1234.default-release/prefs.js; sha256sum -c /tmp/bashrc-before.txt 2>&1 | tail -1 | sed 's/^/BASHRC-UNCHANGED-CHECK /'; echo STANDIN-BASHRC=$(grep -c 'stand-in bashrc' .bashrc); "
                             f"cat /var/lib/hogsmeade/profiles-restored; find /home/{USER} ! -user {USER} | head -3; echo FIND-DONE")
-            ok = (r.returncode == 0 and "restored" in r.stdout and o.count(f"{USER} ") >= 6 and "No such file" not in o and "FIND-DONE" in o
+            ok = (r.returncode == 0 and "restored" in r.stdout and o.count(f"{USER} ") >= 5 and "No such file" not in o and "FIND-DONE" in o
                   and not re.search(r"^/home/", o, re.M) and "STANDIN-BASHRC=0" in o and ".bashrc: OK" in o)
             self.step("restore-drill-profiles-pushed-before-first-login-owned-by-the-user-nothing-overwritten", ok, re.sub(r"\s+", " ", (r.stdout + " | " + o))[:500] + (" ERR " + r.stderr[-150:] if r.returncode else ""))
         finally:

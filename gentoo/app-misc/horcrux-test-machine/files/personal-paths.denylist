@@ -1,7 +1,5 @@
 # Paths (relative to / ) and per-user paths (relative to each home, incl. /root) that must not exist on a TEST machine.
 # `/` prefix = system path, `~/` prefix = under every home. Shell globs. Used by horcrux-test-machine-check.
-/opt/brave.com
-/opt/brave*
 /opt/discord*
 /opt/proton*
 /opt/nextcloud*
@@ -11,7 +9,6 @@
 /opt/keepassxc*
 /usr/local/bin/*.AppImage
 /usr/share/applications/*nextcloud*
-/usr/share/applications/*brave*
 /usr/share/applications/*discord*
 /usr/share/applications/*proton*
 /usr/share/applications/*spotify*
@@ -19,7 +16,6 @@
 /usr/share/applications/*keepass*
 /usr/share/applications/*steam*
 /etc/xdg/autostart/*nextcloud*
-/etc/xdg/autostart/*brave*
 /etc/xdg/autostart/*discord*
 /etc/xdg/autostart/*proton*
 /etc/xdg/autostart/*spotify*
@@ -30,8 +26,6 @@
 ~/.config/Nextcloud
 ~/.local/share/Nextcloud
 ~/.cache/Nextcloud
-~/.config/BraveSoftware
-~/.cache/BraveSoftware
 ~/.config/discord
 ~/.config/Signal
 ~/.config/spotify

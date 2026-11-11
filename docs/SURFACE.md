@@ -79,7 +79,7 @@ Image name: the Surface image follows the repo-wide scheme `<product>-<desktop e
 * Desktop (owner decision 2026-10-29): **XFCE 4.20 + LightDM** (lightdm-gtk-greeter), NetworkManager + nm-applet, PipeWire/WirePlumber, **onboard** on-screen keyboard
   (auto-show in text fields, also in the greeter), touch via libinput, pen via xf86-input-wacom, screen rotation + touch/pen mapping from the accelerometer
   (`iio-sensor-proxy`, `horcrux-surface-rotate`, only when the hardware has one), **xfce4-power-manager** (lid/power key = suspend, critical battery = hibernate,
-  hibernate button) on top of elogind/UPower, `xfce4-screensaver` locks before sleeping. Apps: Brave (`canutethegreat-overlay`), Firefox (`firefox-bin`),
+  hibernate button) on top of elogind/UPower, `xfce4-screensaver` locks before sleeping. Apps: Firefox (`firefox-bin`),
   the Rustinion agent (`app-admin/rustinion-agent`), Tailscale, `intel-microcode`, `sof-firmware`, `linux-firmware`.
   GNOME was not measured or compared (owner chose XFCE).
 * Binpkg-first: the tablet never compiles anything. The image is built on an rw-man host (official binhost; source builds only for what the USE flags force:
@@ -99,7 +99,7 @@ assertions → `sys-apps/horcrux-tools` + `sys-apps/horcrux-live-data` + `sys-ke
 | `sys-apps/horcrux-tools` | `live-installer`, console menu, `horcrux-orphans`, and for this image the live-ISO init services / zram-swap (`/etc` payload); fetch-restricted distfile made from `common/overlay` + `project/overlay` at image-build time |
 | `sys-apps/horcrux-live-data` | installer branding + Portage metadata snapshot (made from the image) |
 | `sys-kernel/horcrux-unlock` | dracut one-passphrase + resume-before-unlock module |
-| `app-admin/rustinion-agent`, `www-client/brave-bin` (canutethegreat-overlay), `app-accessibility/onboard`, `gnome-extra/iio-sensor-proxy` (GURU) | the apps |
+| `app-admin/rustinion-agent`, `app-accessibility/onboard`, `gnome-extra/iio-sensor-proxy` (GURU) | the apps |
 
 Ownership check: `horcrux-orphans` (installed by `sys-apps/horcrux-tools`; merged-/usr safe `qfile -o` over /usr, /opt, /boot, /lib/modules, /lib/firmware) must list only generated files
 (eselect/gcc-config links, icon/mime/gconv caches, `info/dir`, nss `.chk`, `/boot/{grub,efi}`), and no `._cfg*` file may remain under /etc (`etc-update --automode -5` at image end).

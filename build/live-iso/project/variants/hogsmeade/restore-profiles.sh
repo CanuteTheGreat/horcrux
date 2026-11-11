@@ -1,16 +1,16 @@
 #!/bin/bash
 # hogsmeade-restore-profiles.sh (runs on CRYSTALCAVE): restore the owner's Windows-side browser/app profiles and the WSL dotfiles into
-# /home/canutethegreat of the freshly installed HOGSMEADE BEFORE his first login (so Brave & co. never create a fresh profile + keyring first).
+# /home/canutethegreat of the freshly installed HOGSMEADE BEFORE his first login (so the apps never create a fresh profile + keyring first).
 #   hogsmeade-restore-profiles.sh [--test <standin-dir>] -- root@host
 # Source: restic repo ctg-backups/HOGSMEADE, snapshot tag pre-horcrux-wipe-profiles (Windows AppData, taken through a VSS shadow copy by a hidden
 # SYSTEM task) + snapshot pre-horcrux-wipe (wsl/dotfiles.tar.zst, wsl/secrets.tar.zst). Credentials are read from files, used through env only.
 #
 # WHAT SURVIVES (and what does NOT) -- the Windows secrets are protected with DPAPI (key bound to the Windows login), which Linux cannot read:
-#   restored as is : Brave bookmarks/history/favicons/top sites/shortcuts/extension settings; Firefox profile (NSS, not DPAPI: cookies + sessions
+#   restored as is : Firefox profile (NSS, not DPAPI: cookies + sessions
 #                    survive); VS Code user settings; ~/.claude; .gitconfig; WSL dotfiles + non-ssh secrets (aws/gcloud/docker configs, WSL chrome profile)
-#   NOT restorable : Brave/Edge cookies + saved logins + autofill secrets ("v10/v20" blobs), Brave extension sessions (Proton Pass), Nextcloud client
+#   NOT restorable : Chromium-browser cookies + saved logins ("v10/v20" blobs), Nextcloud client
 #                    app password (Windows Credential Manager), Discord token, Signal keys (relink), Proton Pass/Proton VPN desktop sessions.
-#                    -> sign in ONCE on Linux. From then on Brave keeps its key in the GNOME keyring (gnome-libsecret store), the keyring is in the
+#                    -> sign in ONCE on Linux. From then on the GNOME keyring (gnome-libsecret store) holds the keys, the keyring is in the
 #                    daily backup (horcrux-backup paths) and in `hogsmeade-backup`, so a later reinstall restores them.
 # Never overwrites: a path that already exists on the target is skipped (and reported); refuses when the user already has a session.
 set -eu
@@ -38,10 +38,7 @@ else
   mkdir -p "$W/win" "$W/wsl"
   AD=/C/Users/canut/AppData
   log "== restic restore: Windows profiles (allow-list)"
-  BRD="$AD/Local/BraveSoftware/Brave-Browser/User Data/Default"
   restic restore latest --tag pre-horcrux-wipe-profiles --target "$W/win" \
-    --include "$BRD/Bookmarks" --include "$BRD/History" --include "$BRD/Favicons" --include "$BRD/Top Sites" --include "$BRD/Shortcuts" \
-    --include "$BRD/Local Extension Settings" --include "$BRD/Preferences" --include "$BRD/Secure Preferences" \
     --include "$AD/Roaming/Mozilla/Firefox" --include "$AD/Roaming/Code/User" \
     --include /C/Users/canut/.claude --include /C/Users/canut/.gitconfig >/dev/null
   log "== restic restore: WSL dotfiles"
@@ -50,24 +47,6 @@ else
   chmod -R u+rwX "$W/win" "$W/wsl"       # restic restores the Windows ACL-derived modes
   mkdir -p "$W/src"
   WIN=$W/win/C/Users/canut
-  BR="$WIN/AppData/Local/BraveSoftware/Brave-Browser/User Data/Default"
-  if [ -d "$BR" ]; then
-    d=$W/src/.config/BraveSoftware/Brave-Browser/Default; mkdir -p "$d"
-    for f in Bookmarks History Favicons "Top Sites" Shortcuts "Local Extension Settings"; do [ -e "$BR/$f" ] && cp -a "$BR/$f" "$d/"; done
-    # Preferences carry per-machine integrity MACs: kept as a reference (extension list etc.), not installed over Brave's own
-    mkdir -p "$W/src/.local/share/hogsmeade-restore"
-    python3 - "$BR/Secure Preferences" "$BR/Preferences" > "$W/src/.local/share/hogsmeade-restore/brave-windows-extensions.txt" <<'PY' || true
-import json,sys
-seen=set()
-for f in sys.argv[1:]:
-    try: p=json.load(open(f,encoding='utf-8-sig'))
-    except Exception: continue
-    for k,v in ((p.get('extensions',{}).get('settings',{}) or {}).items()):
-        m=v.get('manifest') or {}
-        if m.get('name') and k not in seen and v.get('location') in (1,4) and not m['name'].startswith('__MSG'):
-            seen.add(k); print(m['name'],'|',k,'|',m.get('version'))
-PY
-  fi
   FF="$WIN/AppData/Roaming/Mozilla/Firefox"
   if [ -d "$FF/Profiles" ]; then
     d=$W/src/.mozilla/firefox; mkdir -p "$d"; cp -a "$FF/Profiles/." "$d/"

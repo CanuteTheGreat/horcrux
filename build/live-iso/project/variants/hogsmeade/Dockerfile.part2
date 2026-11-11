@@ -9,8 +9,8 @@ ARG ARCH=x86_64
 COPY --from=hxgentoo2 / /var/db/repos/horcrux/
 COPY project/variants/hogsmeade/local-repo/ /var/db/repos/local/
 COPY project/variants/hogsmeade/portage/ /etc/portage/
-# hogshead/gnome-light fixes now in main: OpenRC GNOME patches (gsd meta services, PipeWire ordering, gnome-shell stays on the user bus), Firefox as the browser (Brave dropped 2026-11-11),
-# cups-browsed zeroconf. The old image-local repo horcrux-desktop no longer exists (gnome-light ships an empty horcrux-gnome-light skeleton; brave-bin is only in the owner's overlay), so nothing is unmerged unless a base still carries one.
+# hogshead/gnome-light fixes now in main: OpenRC GNOME patches (gsd meta services, PipeWire ordering, gnome-shell stays on the user bus), Firefox as the browser,
+# cups-browsed zeroconf. The old image-local repo horcrux-desktop no longer exists (gnome-light ships an empty horcrux-gnome-light skeleton; ), so nothing needs unmerging.
 COPY project/variants/gnome-light/portage/patches/ /etc/portage/patches/
 COPY project/variants/owner-common/portage/package.accept_keywords/owner-apps /etc/portage/package.accept_keywords/owner-apps
 COPY project/variants/gnome-light/portage/package.use/zz-desktop /etc/portage/package.use/zz-desktop
@@ -23,7 +23,6 @@ COPY project/variants/gnome-light/overlay/usr/share/horcrux/desktop /tmp/hxt/usr
 RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
     rm -rf /var/db/repos/horcrux-desktop /etc/portage/repos.conf/horcrux-desktop.conf; \
-    if qlist -IC www-client/brave-bin >/dev/null; then emerge --unmerge www-client/brave-bin; fi; \
     emerge --oneshot --usepkg=n --getbinpkg=n --buildpkg=n --select=y gnome-base/gnome-session-openrc; \
     if grep -q supervise-daemon /etc/user/init.d/gnome-settings-daemon-wayland /etc/user/init.d/gnome-settings-daemon-x11; then echo 'gsd supervisor patch not applied'; exit 1; fi; \
     grep -q 'want pipewire-pulse wireplumber' /etc/user/init.d/gsd || { echo 'gsd audio ordering patch not applied'; exit 1; }; \

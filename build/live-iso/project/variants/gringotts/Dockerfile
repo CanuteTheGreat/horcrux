@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.4
 # Horcrux "gringotts" variant: the Desktop image (BASE = server rootfs + desktop variant) + the owner's apps + the guided one-step install
 # for the ThinkBook 16 G6 + the remote-handoff helpers. EVERY file is owned by an ebuild (verified with qfile -o in the QEMU test):
-#   * apps          ::gentoo, GURU (proton-vpn-gtk-app) and the owner's canutethegreat-overlay (brave-bin)
+#   * apps          ::gentoo, GURU (proton-vpn-gtk-app) and the owner's canutethegreat-overlay
 #   * rustinion     app-admin/rustinion-agent from the Horcrux overlay (repo gentoo/)
 #   * image files   sys-apps/horcrux-tools + horcrux-live-data + sys-kernel/horcrux-unlock (proven on hogshead) + app-misc/gringotts-config (/etc)
 #   * helpers       app-misc/gringotts-tools (this variant's local overlay)
@@ -44,7 +44,7 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     find /etc -name '._cfg*' -delete; rm -f /tmp/dev.log /tmp/pkgs-owning-dev.py; \
     test -f /usr/include/stdio.h && ls /usr/include/python3*/Python.h >/dev/null
 
-# apps (Firefox is the browser; Brave was dropped 2026-11-11)
+# apps (Firefox is the browser)
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \

@@ -67,7 +67,7 @@ pkg_postinst() {
 	# Applied here so it holds for the image build, the installer's target world and every installed machine through @world. Takes effect at the
 	# NEXT login (no logout needed to install it); idempotent. A later pambase update leaves a pending ._cfg file: do NOT accept its keyring lines.
 	"${EROOT}"/usr/libexec/horcrux-keyring-pam fix "${ROOT%/}" || ewarn "horcrux-keyring-pam: the keyring PAM stack is still not right, run: /usr/libexec/horcrux-keyring-pam check"
-	elog "Login keyring: log out and in once (or reboot) after this update. Secrets stored in the session before that (Brave/Nextcloud/Proton sign-ins)"
+	elog "Login keyring: log out and in once (or reboot) after this update. Secrets stored in the session before that (Nextcloud/Proton sign-ins)"
 	elog "were kept in RAM only: sign in again once afterwards and they persist. Check with: horcrux-keyring-status"
 	elog "The keyring unlocks with the login password; if the login password differs from the password of an old (restored) keyring, GNOME asks once to unlock it."
 }

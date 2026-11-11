@@ -12,7 +12,7 @@ SLOT="0"
 KEYWORDS="amd64 arm64"
 
 # LAYERING (owner 2026-11-03: "It should work on a headless server too. It shouldn't be a desktop-only OS."):
-#   core            this package: server + hypervisor, NO display stack, NO desktop, NO machine-specific app (steam, rustinion, brave, ... live in a machine layer)
+#   core            this package: server + hypervisor, NO display stack, NO desktop, NO machine-specific app (steam, rustinion, ... live in a machine layer)
 #   desktop edition gnome-extra/horcrux-gnome-defaults (GNOME) depends on THIS package; the XFCE edition for small devices does the same
 #   machine layers  the owner's own machines (gringotts, hogshead, surface, hogsmeade) add their apps on top of an edition
 # Every fix that applies to every Horcrux install belongs here (or in a package listed here), never in an edition: the 2026-11-03 gringotts fixes (clock

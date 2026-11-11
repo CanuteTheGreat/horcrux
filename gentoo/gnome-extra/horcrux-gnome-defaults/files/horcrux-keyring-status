@@ -3,7 +3,7 @@
 #   run as the desktop user inside the session:   horcrux-keyring-status
 #   run as root for another user:                 horcrux-keyring-status <user>
 # Exit 0 = healthy: login collection exists, unlocked, default alias, login.keyring on disk. A fresh account has login.keyring only after
-# the first item is stored (Brave stores its key at its first start), so "no file yet" is a WARN, not a failure.
+# the first item is stored (Chromium apps store their key at first start), so "no file yet" is a WARN, not a failure.
 U=${1:-$(id -un)}
 uid=$(id -u "$U") || exit 2
 home=$(getent passwd "$U" | cut -d: -f6)

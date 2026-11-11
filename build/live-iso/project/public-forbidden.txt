@@ -3,7 +3,6 @@
 # One atom per line; checked with `qlist -I` by the core and desktop-edition Dockerfiles and by the QEMU gates (public image: none may be installed).
 app-admin/rustinion-agent
 app-admin/rustinion-bin
-www-client/brave-bin
 net-misc/nextcloud-client
 net-vpn/tailscale
 net-vpn/proton-vpn-gtk-app

@@ -4,7 +4,7 @@
 Fails (exit 1, one `VIOLATION <class> <detail>` line each) when
   - an installed package (vdb) matches personal-apps.denylist,
   - a /var/lib/portage/world entry is NOT on world.allowlist (allowlist approach: unknown = personal),
-  - /etc/portage/package.{use,accept_keywords,license,mask,unmask,env,...} still names a denied atom (config of a removed personal app; a brave-bin
+  - /etc/portage/package.{use,accept_keywords,license,mask,unmask,env,...} still names a denied atom (config of a removed personal app; a discord
     keyword left behind makes the next @world pull it back in) or a denied repository (`repo:NAME` lines of personal-paths.denylist) is configured,
   - a path from personal-paths.denylist exists (app install dirs, .desktop files, autostart entries, Nextcloud/browser/chat
     profiles, sync folders, private keys, flatpaks, AppImages, a provisioned personal restic job).

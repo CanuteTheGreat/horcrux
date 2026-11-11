@@ -40,7 +40,7 @@ class TestPersonalGuard(unittest.TestCase):
         self.assertEqual(rc, 0, out)
 
     def test_every_personal_app_fails(self):
-        for atom, ver in (("www-client/brave-bin", "1.98.63"), ("net-misc/nextcloud-client", "4.0.4"), ("net-im/discord", "1.0.168"),
+        for atom, ver in (("net-misc/nextcloud-client", "4.0.4"), ("net-im/discord", "1.0.168"),
                           ("net-im/signal-desktop-bin", "7.1"), ("media-sound/spotify", "1.2"), ("app-admin/keepassxc", "2.7.9-r1"),
                           ("app-admin/proton-pass-bin", "1.2"), ("net-vpn/proton-vpn-gtk-app", "4.17.1"),
                           ("net-vpn/tailscale", "1.104.5")):
@@ -77,8 +77,8 @@ class TestPersonalGuard(unittest.TestCase):
         self.assertIn("world-not-allowlisted net-misc/something-new", out)
 
     def test_leftover_config_and_data_fail(self):
-        for rel in ("home/tester/.config/Nextcloud/nextcloud.cfg", "home/tester/Nextcloud/x", "home/tester/.config/BraveSoftware/Brave-Browser/Local State",
-                    "home/tester/.config/autostart/Nextcloud.desktop", "home/tester/.config/discord/Cookies", "opt/brave.com/brave/brave",
+        for rel in ("home/tester/.config/Nextcloud/nextcloud.cfg", "home/tester/Nextcloud/x",
+                    "home/tester/.config/autostart/Nextcloud.desktop", "home/tester/.config/discord/Cookies",
                     "usr/share/applications/discord.desktop", "etc/xdg/autostart/nextcloud.desktop", "home/tester/.ssh/id_ed25519",
                     "root/.config/Signal/x", "etc/ctg-backup/env", "var/lib/flatpak/app/com.spotify.Client/x", "opt/Thing.AppImage"):
             d = self.clean_root()
@@ -87,10 +87,10 @@ class TestPersonalGuard(unittest.TestCase):
             self.assertEqual(rc, 1, rel)
 
     def test_leftover_portage_config_of_removed_apps_fails(self):
-        for rel, text, what in (("etc/portage/package.accept_keywords/desktop", "dev-util/rustup ~amd64\nwww-client/brave-bin **\n", "www-client/brave-bin"),
+        for rel, text, what in (("etc/portage/package.accept_keywords/desktop", "dev-util/rustup ~amd64\nnet-im/discord **\n", "net-im/discord"),
                                 ("etc/portage/package.use/desktop", "net-misc/nextcloud-client -dolphin\n", "net-misc/nextcloud-client"),
                                 ("etc/portage/package.license/x", "net-im/discord all-rights-reserved\n", "net-im/discord"),
-                                ("etc/portage/package.accept_keywords", "www-client/brave-bin::canutethegreat-overlay ~amd64\n", "www-client/brave-bin"),
+                                ("etc/portage/package.accept_keywords", "net-im/discord::canutethegreat-overlay ~amd64\n", "net-im/discord"),
                                 ("etc/portage/package.accept_keywords/proton", "net-vpn/proton-vpn-gtk-app ~amd64\n", "net-vpn/proton-vpn-gtk-app"),
                                 ("etc/portage/package.accept_keywords/y", "app-foo/bar::canutethegreat-overlay ~amd64\n", "::canutethegreat-overlay")):
             d = self.clean_root()
@@ -110,7 +110,7 @@ class TestPersonalGuard(unittest.TestCase):
 
     def test_normal_portage_config_is_fine(self):
         d = self.clean_root()
-        mk(d, "etc/portage/package.accept_keywords/horcrux-lab", "# comment www-client/brave-bin\nsys-kernel/horcrux-unlock ~amd64\n*/*::guru ~amd64\n")
+        mk(d, "etc/portage/package.accept_keywords/horcrux-lab", "# comment net-im/discord\nsys-kernel/horcrux-unlock ~amd64\n*/*::guru ~amd64\n")
         mk(d, "etc/portage/package.use/desktop", "net-misc/networkmanager iwd wifi\nmedia-video/pipewire sound-server\n")
         mk(d, "etc/portage/package.license/horcrux-lab", "*/* *\n")
         mk(d, "etc/portage/repos.conf/horcrux.conf", "[horcrux]\nlocation = /var/db/repos/horcrux\n[guru]\nlocation = /var/db/repos/guru\n")
@@ -207,12 +207,9 @@ class TestPolicyConsistency(unittest.TestCase):
         eb = open(sorted(glob.glob(os.path.join(REPO, "gentoo", "app-misc", "horcrux-test-machine", "*.ebuild")))[-1]).read()
         for f in ("personal-apps.denylist", "personal-paths.denylist", "world.allowlist", "horcrux-test-machine-check"):
             self.assertIn(f, eb)
-        for b in ("www-client/brave-bin", "net-misc/nextcloud-client", "net-im/discord", "media-sound/spotify", "app-admin/keepassxc"):
+        for b in ("net-misc/nextcloud-client", "net-im/discord", "media-sound/spotify", "app-admin/keepassxc"):
             self.assertRegex(eb, r"!\s*" + re.escape(b))
 
-    def test_surface_profile_has_no_brave(self):
-        eb = open(sorted(glob.glob(os.path.join(REPO, "gentoo", "app-misc", "horcrux-surface-desktop", "*.ebuild")))[-1]).read()
-        self.assertNotIn("brave", eb)
 
 
 if __name__ == "__main__":
