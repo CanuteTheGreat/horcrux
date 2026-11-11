@@ -44,8 +44,8 @@ RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,
              /var/db/repos/horcrux/app-misc/awccd/*.ebuild /var/db/repos/horcrux/sci-misc/comfyui/*.ebuild /var/db/repos/horcrux/acct-user/comfyui/*.ebuild /var/db/repos/horcrux/acct-group/comfyui/*.ebuild \
              /var/db/repos/local/sys-apps/hogsmeade-private/*.ebuild; do ebuild "$e" manifest; done; \
     # loose copies from the ISO overlay that packages own now: remove first so Portage owns the files
-    rm -rf /usr/bin/horcrux /usr/bin/horcrux-api /usr/share/horcrux/ui /etc/init.d/horcrux-api /etc/init.d/horcrux-guests \
-           /usr/lib/live-installer /usr/libexec/live-* /usr/libexec/console-menu-session /usr/bin/live-installer /usr/bin/console-menu \
+    # (the Horcrux manager itself is app-emulation/horcrux-bin from the core layer now: its files stay, only its services are not enabled here)
+    rm -rf /usr/lib/live-installer /usr/libexec/live-* /usr/libexec/console-menu-session /usr/bin/live-installer /usr/bin/console-menu \
            /usr/bin/live-persist /usr/bin/live-rescue /usr/bin/horcrux-be /usr/bin/horcrux-t2-firmware /usr/share/horcrux/desktop; \
     # TPM-sealed unattended unlock (dracut 92tpm-unlock, loose in the ISO overlay, no package yet): HOGSMEADE unlocks with a typed passphrase
     rm -rf /usr/lib/dracut/modules.d/92tpm-unlock; \
@@ -101,6 +101,11 @@ RUN set -e; unset ARCH; \
     for s in hogsmeade-firewall awccd nvidia-persistenced switcheroo-control smartd hogsmeade-firstboot comfyui docker cronie; do rc-update add $s default 2>/dev/null || true; done; \
     printf 'DISPLAYMANAGER="gdm"\n' > /etc/conf.d/display-manager; \
     echo "hogsmeade" > /etc/live-iso-variant; \
+    # kernel modules are always built on this machine against its own source-built kernel (own config): a binhost zfs-kmod for the same
+    # version string is built against gentoo-kernel-bin and must never be installed on the first kernel update
+    printf '%s\n' '# HOGSMEADE: out-of-tree kernel modules are built here against the installed kernel, never taken from the binhost' \
+        'EMERGE_DEFAULT_OPTS="${EMERGE_DEFAULT_OPTS} --usepkg-exclude=sys-fs/zfs-kmod --usepkg-exclude=x11-drivers/nvidia-drivers"' >> /etc/portage/make.conf; \
+    grep -q 'usepkg-exclude=sys-fs/zfs-kmod' /etc/portage/make.conf; \
     rm -rf /usr/bin/tiny-dfr /usr/bin/t2fanrd /usr/share/tiny-dfr /usr/share/horcrux/t2 /usr/lib/udev/rules.d/99-touchbar-*.rules /etc/init.d/tiny-dfr /etc/init.d/t2fanrd; \
     rm -f /etc/runlevels/*/tiny-dfr /etc/runlevels/*/t2fanrd; \
     rm -rf /lib/modules/*-gentoo-dist-bin /boot/*-gentoo-dist-bin* /boot/*.old; \

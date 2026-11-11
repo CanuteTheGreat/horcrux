@@ -14,8 +14,13 @@ start() {
 	if [ ! -e /var/lib/hogsmeade/firstboot.done ]; then
 		ebegin "HOGSMEADE: datasets and schedules"
 		# ComfyUI data (models, outputs): own dataset, big records, no compression for safetensors, NO snapshots (re-downloadable)
-		zfs list -H rpool/comfyui >/dev/null 2>&1 || zfs create -o mountpoint=/var/lib/comfyui -o recordsize=1M -o compression=lz4 \
-			-o org.hogsmeade:snapshots=off rpool/comfyui
+		if ! zfs list -H rpool/comfyui >/dev/null 2>&1; then
+			# the new dataset is mounted over the directory the packages created: carry their .keep markers over, or
+			# `qcheck` reports acct-user/comfyui as incomplete for ever
+			keeps=$(cd /var/lib/comfyui 2>/dev/null && ls -A | grep '^\.keep')
+			zfs create -o mountpoint=/var/lib/comfyui -o recordsize=1M -o compression=lz4 -o org.hogsmeade:snapshots=off rpool/comfyui \
+				&& for k in $keeps; do : > "/var/lib/comfyui/$k"; done
+		fi
 		chown comfyui:comfyui /var/lib/comfyui 2>/dev/null; chmod 0750 /var/lib/comfyui 2>/dev/null
 		# irreplaceable user data that is not in $HOME
 		zfs list -H rpool/data >/dev/null 2>&1 || zfs create -o mountpoint=/data rpool/data

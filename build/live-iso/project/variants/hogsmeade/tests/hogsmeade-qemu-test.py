@@ -49,6 +49,11 @@ def http_get(port, path="/system_stats", timeout=8):
             return r.status, r.read(200).decode(errors="replace")
     except Exception as e:
         return 0, f"{type(e).__name__}: {e}"[:120]
+# exactly ONE real keyring daemon: the one PAM started at the greeter login (--daemonize --login), which holds the login collection the login
+# password unlocked. A D-Bus activated `--start --foreground --components=secrets` process next to it is gnome-keyring's placeholder: it
+# hands the session to the running daemon through $XDG_RUNTIME_DIR/keyring/control and only waits (it owns no keyring). Two --login daemons
+# (the gringotts bug: no persistent login keyring) or any other daemon fail the gate.
+KR_DAEMONS = "LOGIN-DAEMONS=1 OTHER-DAEMONS=0"
 SIZES_GB = (40, 40, 40)   # nvme enumeration order is not stable in QEMU: any drive may become nvme0n1, which carries the 9 GiB hibernate swap
 
 
@@ -369,8 +374,13 @@ class HRun(zt.ZRun):
         open(f"{a.out}/partitions.txt", "w").write(o)
         esp = len(re.findall(r"ESP\d?\s+vfat", o)); boot = len(re.findall(r"boot\d?\s+ext4", o)); luks = len(re.findall(r"crypto_LUKS", o)); zm = len(re.findall(r"zfs_member", o))
         self.step("each-drive-has-ESP-and-boot-and-zfs-part", esp == 3 and boot == 3 and zm == 3, f"ESP={esp} boot={boot} zfs_member={zm}")
-        d0 = o.split("D1")[0]
-        self.step("hibernate-swap-LUKS-on-first-drive-only", luks == 1 and "crypto_LUKS" in d0, f"LUKS partitions: {luks} (all on D0: {'crypto_LUKS' in d0})")
+        # "first drive" = the drive the installer made drive 1 (the mounted /boot lives on it). Its kernel name is not stable: QEMU (and real
+        # NVMe probing) may enumerate the same drive as nvme2n1 on the next boot, so the check follows /boot instead of assuming nvme0n1.
+        rc, b = self.sh("lsblk -no PKNAME $(findmnt -no SOURCE /boot) | head -1")
+        bootdisk = b.strip().splitlines()[-1].strip() if b.strip() else "?"
+        m = re.match(r"nvme(\d)n1$", bootdisk)
+        sect = o.split(f"D{m.group(1)}\n", 1)[1].split("\nD", 1)[0] if m and f"D{m.group(1)}\n" in o else ""
+        self.step("hibernate-swap-LUKS-on-first-drive-only", luks == 1 and "crypto_LUKS" in sect, f"LUKS partitions: {luks}; drive 1 of the install (carries the mounted /boot) is {bootdisk} now; the LUKS swap is on it: {'crypto_LUKS' in sect}")
         rc, o = self.sh("cat /etc/horcrux/boot-mirrors.conf; ls -l /etc/kernel/postinst.d/; mkdir -p /mnt/b && for u in $(awk '!/^#/ && NF {print $3}' /etc/horcrux/boot-mirrors.conf); do "
                         "mount -o ro UUID=$u /mnt/b && echo COPY $u && ls /mnt/b/be/horcrux/ && (cd /boot/be/horcrux && sha256sum vmlinuz kver) | (cd /mnt/b/be/horcrux && sha256sum -c -) && grep -c \"$u\" /mnt/b/grub/grub.cfg && umount /mnt/b; done; "
                         "for u in $(awk '!/^#/ && NF {print $2}' /etc/horcrux/boot-mirrors.conf); do mount -o ro UUID=$u /mnt/b && ls /mnt/b/EFI/BOOT/ && umount /mnt/b; done", timeout=90)
@@ -419,8 +429,8 @@ class HRun(zt.ZRun):
         self.session_audio_autostart_pre(USER)
         ok, info = self.greeter_login(vm, "first-login")
         self.step("gdm-login-with-the-SEPARATE-login-password-typed-at-the-greeter", ok, info)
-        rc, o = self.sh(f"loginctl show-session $(loginctl list-sessions --no-legend | awk '$3==\"{USER}\"{{print $1; exit}}') -p Type -p Name -p Active 2>&1")
-        self.step("session-is-wayland-and-active", "Type=wayland" in o and "Active=yes" in o, o.strip().replace("\n", " "))
+        rc, o = self.sh(f"for s in $(loginctl list-sessions --no-legend | awk '$3==\"{USER}\"{{print $1}}'); do loginctl show-session $s -p Type -p Name -p Active -p State 2>&1 | tr '\\n' ' '; echo; done")
+        self.step("session-is-wayland-and-active", any("Type=wayland" in l and "Active=yes" in l for l in o.splitlines()), o.strip().replace("\n", " | "))
         c = self.wait_graphical(vm, 150)
         time.sleep(3)
         vm.shot("gnome-desktop")
@@ -480,16 +490,16 @@ class HRun(zt.ZRun):
     def keyring_store(self):
         env = self._session_env()
         rc, o = self.sh(env % f"printf {KR_VALUE} | timeout 40 secret-tool store --label=hxtest hxkey v1; echo store-rc=\\$?; timeout 20 secret-tool lookup hxkey v1 | wc -c" + "; "
-                        f"echo DAEMONS=$(pgrep -u {USER} -f 'gnome-keyring-daemon' | wc -l); ls /home/{USER}/.local/share/keyrings/ 2>&1 | tr '\\n' ' '", timeout=120)
-        self.step("keyring-login-collection-stores-a-secret-on-disk", "store-rc=0" in o and str(len(KR_VALUE)) in o.split("store-rc=0")[-1] and "login.keyring" in o and "DAEMONS=1" in o,
+                        f"echo LOGIN-DAEMONS=$(pgrep -u {USER} -f 'gnome-keyring-daemon --daemonize --login' | wc -l) OTHER-DAEMONS=$(pgrep -u {USER} -fa 'gnome-keyring-daemon' | grep -v -e '--daemonize --login' -e '--start --foreground' | wc -l); ls /home/{USER}/.local/share/keyrings/ 2>&1 | tr '\\n' ' '; echo; ps -o pid,ppid,lstart,args -u {USER} | grep -E 'keyring|PID' | grep -v grep", timeout=120)
+        self.step("keyring-login-collection-stores-a-secret-on-disk", "store-rc=0" in o and str(len(KR_VALUE)) in o.split("store-rc=0")[-1] and "login.keyring" in o and KR_DAEMONS in o,
                   re.sub(r"\s+", " ", o)[:300])
 
     def keyring_lookup(self, step, how):
         env = self._session_env()
         rc, o = self.sh(env % "timeout 30 secret-tool lookup hxkey v1; echo; echo lookup-rc=\\$?; "
                         "busctl --user get-property org.freedesktop.secrets /org/freedesktop/secrets/collection/login org.freedesktop.Secret.Collection Locked" + "; "
-                        f"echo DAEMONS=$(pgrep -u {USER} -f 'gnome-keyring-daemon' | wc -l)", timeout=120)
-        self.step(step, KR_VALUE in o and "b false" in o and "DAEMONS=1" in o, f"{how}: " + re.sub(r"\s+", " ", o.replace(KR_VALUE, "<the stored test value>"))[:300])
+                        f"echo LOGIN-DAEMONS=$(pgrep -u {USER} -f 'gnome-keyring-daemon --daemonize --login' | wc -l) OTHER-DAEMONS=$(pgrep -u {USER} -fa 'gnome-keyring-daemon' | grep -v -e '--daemonize --login' -e '--start --foreground' | wc -l); ps -o pid,ppid,lstart,args -u {USER} | grep -E 'keyring|PID' | grep -v grep; ls -la /run/user/$(id -u {USER})/keyring/ 2>&1", timeout=120)
+        self.step(step, KR_VALUE in o and "b false" in o and KR_DAEMONS in o, f"{how}: " + re.sub(r"\s+", " ", o.replace(KR_VALUE, "<the stored test value>"))[:900])
 
     # ---------------------------------------------------------------- reboot: the keyring survives a restart too
     def reboot_keyring_phase(self, nvars):
@@ -596,10 +606,10 @@ class HRun(zt.ZRun):
             r = subprocess.run(["bash", cp, "--test", src, "--", "root@hogsmeade-vm"], env=dict(os.environ, TMPDIR=d), capture_output=True, text=True, timeout=300)
             open(f"{a.out}/restore-drill.txt", "w").write(r.stdout + r.stderr)
             rc, o = self.sh(f"cd /home/{USER}; stat -c '%U %a %n' .config/BraveSoftware/Brave-Browser/Default/Bookmarks .mozilla/firefox/profiles.ini .config/Code/User/settings.json .claude/settings.json .gitconfig Nextcloud 2>&1; "
-                            f"grep -c stand-in .config/BraveSoftware/Brave-Browser/Default/Bookmarks; sha256sum -c /tmp/bashrc-before.txt 2>&1 | tail -1; echo STANDIN-BASHRC=$(grep -c 'stand-in bashrc' .bashrc); "
+                            f"grep -c stand-in .config/BraveSoftware/Brave-Browser/Default/Bookmarks; sha256sum -c /tmp/bashrc-before.txt 2>&1 | tail -1 | sed 's/^/BASHRC-UNCHANGED-CHECK /'; echo STANDIN-BASHRC=$(grep -c 'stand-in bashrc' .bashrc); "
                             f"cat /var/lib/hogsmeade/profiles-restored; find /home/{USER} ! -user {USER} | head -3; echo FIND-DONE")
             ok = (r.returncode == 0 and "restored" in r.stdout and o.count(f"{USER} ") >= 6 and "No such file" not in o and "FIND-DONE" in o
-                  and not re.search(r"^/home/", o, re.M) and "STANDIN-BASHRC=0" in o)
+                  and not re.search(r"^/home/", o, re.M) and "STANDIN-BASHRC=0" in o and ".bashrc: OK" in o)
             self.step("restore-drill-profiles-pushed-before-first-login-owned-by-the-user-nothing-overwritten", ok, re.sub(r"\s+", " ", (r.stdout + " | " + o))[:500] + (" ERR " + r.stderr[-150:] if r.returncode else ""))
         finally:
             shutil.rmtree(d, ignore_errors=True)
@@ -609,7 +619,7 @@ class HRun(zt.ZRun):
         into a THROWAWAY local repo (never the real B2 repo)"""
         a = self.z
         script = os.path.join(HERE, "..", "provision-restic.sh")
-        env = dict(os.environ, HSM_SSH_OPTS=f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i {self.key} -p {qt.FWD_SSH}")
+        env = dict(os.environ, HOME=os.environ.get("HOME") or a.out, HSM_SSH_OPTS=f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i {self.key} -p {qt.FWD_SSH}")
         r = subprocess.run(["bash", script, "--test", "--", "root@127.0.0.1"], env=env, capture_output=True, text=True, timeout=180)
         open(f"{a.out}/provision.txt", "w").write(r.stdout + r.stderr)
         self.step("restic-provisioned-over-ssh-stdin-0600", r.returncode == 0 and "600 root /etc/hogsmeade/backup.env" in r.stdout and "600 root /etc/hogsmeade/restic-password" in r.stdout, r.stdout.strip().replace("\n", " | ")[:300] + r.stderr[:100])
