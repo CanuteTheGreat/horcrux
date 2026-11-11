@@ -2,7 +2,7 @@
 # horcrux-timesync: the network-independent twin of the NetworkManager dispatcher hook (net-misc/horcrux-chrony-nm).
 #
 # chronyd starts before the link is up, cannot resolve its pool and (believing it is offline) never retries: the machine keeps its boot-time
-# clock, which breaks TLS, Tailscale and emerge. NetworkManager machines get a dispatcher hook; a headless server uses dhcpcd or a static address
+# clock, which breaks TLS and emerge. NetworkManager machines get a dispatcher hook; a headless server uses dhcpcd or a static address
 # and has no such event, so this small watcher does the same job for any network: as soon as a default route exists it tells chronyd the network
 # is up, re-resolves the sources and asks for a burst; it repeats that while chronyd has no synchronised source (late DHCP, cable plugged in
 # hours after boot) and then only watches (every 5 min), so a link that comes back after a long outage is also handled.

@@ -71,3 +71,9 @@
 # Portage repositories that must not be configured (any repos.conf file with a [section] of that name)
 repo:canutethegreat-overlay
 repo:horcrux-gringotts
+# Tailscale is retired (2026-11-10): no daemon state, init script or binary may remain
+/var/lib/tailscale
+/etc/init.d/tailscale*
+/usr/bin/tailscale*
+/usr/sbin/tailscale*
+/run/tailscale

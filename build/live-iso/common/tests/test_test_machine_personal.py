@@ -29,7 +29,7 @@ def run(root):
 class TestPersonalGuard(unittest.TestCase):
     def clean_root(self):
         d = tempfile.mkdtemp()
-        mk(d, "var/lib/portage/world", "app-misc/horcrux-test-machine\nsys-fs/zfs\nwww-client/firefox-bin\nnet-vpn/tailscale\nxfce-base/xfce4-meta\n"
+        mk(d, "var/lib/portage/world", "app-misc/horcrux-test-machine\nsys-fs/zfs\nwww-client/firefox-bin\nxfce-base/xfce4-meta\n"
                                        "sys-firmware/apple-t2-wifi-firmware\napp-misc/hogshead-machine\n")
         mk(d, "var/db/pkg/www-client/firefox-bin-159.0/PF", "x")
         mk(d, "home/tester/.config/mozilla/firefox/profiles.ini", "x")
@@ -42,12 +42,31 @@ class TestPersonalGuard(unittest.TestCase):
     def test_every_personal_app_fails(self):
         for atom, ver in (("www-client/brave-bin", "1.98.63"), ("net-misc/nextcloud-client", "4.0.4"), ("net-im/discord", "1.0.168"),
                           ("net-im/signal-desktop-bin", "7.1"), ("media-sound/spotify", "1.2"), ("app-admin/keepassxc", "2.7.9-r1"),
-                          ("app-admin/proton-pass-bin", "1.2"), ("net-vpn/proton-vpn-gtk-app", "4.17.1")):
+                          ("app-admin/proton-pass-bin", "1.2"), ("net-vpn/proton-vpn-gtk-app", "4.17.1"),
+                          ("net-vpn/tailscale", "1.104.5")):
             d = self.clean_root()
             mk(d, f"var/db/pkg/{atom}-{ver}/PF", "x")
             rc, out = run(d)
             self.assertEqual(rc, 1, atom)
             self.assertIn(f"VIOLATION package {atom}", out)
+
+    def test_tailscale_is_forbidden_everywhere(self):
+        # Tailscale is retired: the policy must deny it and nothing may allow or install it
+        def lines(f):
+            return [x.split("#")[0].strip() for x in open(os.path.join(FILES, f)) if x.split("#")[0].strip()]
+        self.assertIn("net-vpn/tailscale", lines("personal-apps.denylist"))
+        self.assertNotIn("net-vpn/tailscale", lines("world.allowlist"))
+        self.assertIn("/var/lib/tailscale", lines("personal-paths.denylist"))
+        d = self.clean_root()
+        mk(d, "var/lib/portage/world", "app-misc/horcrux-test-machine\nnet-vpn/tailscale\n")
+        rc, out = run(d)
+        self.assertEqual(rc, 1)
+        self.assertIn("tailscale", out)
+        d = self.clean_root()
+        mk(d, "var/lib/tailscale/tailscaled.state", "x")
+        mk(d, "etc/init.d/tailscale", "x")
+        rc, out = run(d)
+        self.assertEqual(rc, 1, out)
 
     def test_world_allowlist_catches_unknown_atoms(self):
         d = self.clean_root()
@@ -166,7 +185,7 @@ class TestPolicyConsistency(unittest.TestCase):
         m = importlib.util.module_from_spec(spec)
         loader.exec_module(m)
         deny = self.lines("personal-apps.denylist")
-        plumbing = {"net-vpn/tailscale", "app-admin/rustinion-agent", "app-admin/rustinion-bin"}
+        plumbing = {"app-admin/rustinion-agent", "app-admin/rustinion-bin"}
         owner = os.path.join(REPO, "build", "live-iso", "project")
         atoms = []
         for f in (os.path.join(owner, "variants", "owner-common", "packages.txt"), os.path.join(owner, "public-forbidden.txt")):

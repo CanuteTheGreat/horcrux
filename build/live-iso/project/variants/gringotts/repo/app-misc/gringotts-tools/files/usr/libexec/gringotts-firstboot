@@ -1,5 +1,5 @@
 #!/bin/sh
-# gringotts first boot (once): wait for a network, clock + Tailscale handoff (gringotts-remote), refresh the Portage trees.
+# gringotts first boot (once): wait for a network, clock + sshd/LAN handoff (gringotts-remote), refresh the Portage trees.
 # Never gives up: the first real boot (2026-11-03) had no Wi-Fi yet, the old 10-minute limit made this exit with "will retry at the next
 # boot" and the laptop stayed unreachable until an agent restarted it by hand. It now waits for NetworkManager as long as it takes
 # (the owner may connect Wi-Fi hours later) and retries a failed tree sync every 10 minutes. Marker: /var/lib/gringotts/firstboot-done.

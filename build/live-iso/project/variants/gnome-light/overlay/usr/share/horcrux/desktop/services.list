@@ -11,4 +11,4 @@ avahi-daemon default
 power-profiles-daemon default
 thermald default
 chronyd default
-# chronyd/horcrux-timesync/horcrux-firstboot come with the server core. Machine layers append their own services (Tailscale: owner-common)
+# chronyd/horcrux-timesync/horcrux-firstboot come with the server core. Machine layers append their own services 

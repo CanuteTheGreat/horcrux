@@ -9,7 +9,7 @@ while :; do
   gringotts-motd
   echo "  ${G}1${N}) ${B}Install Horcrux on this laptop${N}   (erases the internal disk; you type the disk passphrase)"
   echo "  ${G}2${N}) Join Wi-Fi                       (nmtui; needed only for remote help / the first boot)"
-  echo "  ${G}3${N}) Let Claude in remotely            (gringotts-remote: sshd + Tailscale)"
+  echo "  ${G}3${N}) Let Claude in remotely            (gringotts-remote: sshd + LAN address)"
   echo "  ${G}4${N}) Shell      ${G}5${N}) Stock installer (menus)      ${G}6${N}) Reboot      ${G}7${N}) Power off"
   echo
   printf "  choose [1]: "

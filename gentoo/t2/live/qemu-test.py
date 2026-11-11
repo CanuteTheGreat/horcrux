@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """qemu-test.py - boot the hogshead live ISO in QEMU/OVMF the way the laptop will (USB stick, UEFI) and assert.
 
-  qemu-test.py ISO --out DIR [--tskey FILE] [--fw-sha SHA] [--expect-keys N] [--kvm]
+  qemu-test.py ISO --out DIR [--fw-sha SHA] [--expect-keys N] [--kvm]
 
 Needs: qemu-system-x86_64, OVMF, ssh/ssh-keygen/sshpass, mkfs.vfat + mtools, python3. Runs as a normal user.
  - USB boot: -drive if=none,id=usb,file=ISO ... -device usb-storage,bootindex=1 (what the Option-key 'EFI Boot' stick is)
- - HSKEYS FAT disk (label HSKEYS) carries the TEST ssh public key (+ optional TEST tailscale key) = the documented key-import path
+ - HSKEYS FAT disk (label HSKEYS) carries the TEST ssh public key = the documented key-import path
  - an emulated NVMe disk plays the old LUKS/LVM/ext4 system for hogshead-unlock / hogshead-backup
  - guest -> checks over ssh (guest-checks.sh), plus serial-console assertions (autologin, MOTD, passphrase prompt)
 """
@@ -13,7 +13,7 @@ import argparse, os, re, shutil, socket, subprocess, sys, threading, time
 
 ap = argparse.ArgumentParser()
 ap.add_argument('iso'); ap.add_argument('--out', required=True)
-ap.add_argument('--tskey'); ap.add_argument('--ts-sha', default=''); ap.add_argument('--fw-sha', default=''); ap.add_argument('--expect-keys', default='')
+ap.add_argument('--fw-sha', default=''); ap.add_argument('--expect-keys', default='')
 ap.add_argument('--kvm', action='store_true'); ap.add_argument('--port', type=int, default=2222)
 ap.add_argument('--boot-timeout', type=int, default=600)
 a = ap.parse_args()
@@ -33,7 +33,6 @@ for f in (key, key + '.pub'):
 sh(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-C', 'hogshead-qemu-test', '-f', key])
 hsk = os.path.join(OUT, 'hskeys.img')
 sh(f'dd if=/dev/zero of={hsk} bs=1M count=8 status=none && mkfs.vfat -n HSKEYS {hsk} >/dev/null && mcopy -i {hsk} {key}.pub ::authorized_keys')
-if a.tskey: sh(f'mcopy -i {hsk} {a.tskey} ::ts-authkey')
 nvme = os.path.join(OUT, 'old-nvme.img'); sh(['truncate', '-s', '1G', nvme])
 vars_ = os.path.join(OUT, 'OVMF_VARS.fd')
 code = next(p for p in ('/usr/share/OVMF/OVMF_CODE_4M.fd', '/usr/share/OVMF/OVMF_CODE.fd') if os.path.exists(p))
@@ -110,7 +109,7 @@ try:
     if not m: raise SystemExit('boot failed')
     time.sleep(3)
     with blk: motd = buf[buf.index('HOGSHEAD live USB'):][:1800]
-    for s in ('nmtui', 'hogshead-remote', 'hogshead-unlock', 'LAN IP', 'Tailscale IP'):
+    for s in ('nmtui', 'hogshead-remote', 'hogshead-unlock', 'LAN IP'):
         check('motd-mentions-' + s, s in motd)
     open(os.path.join(OUT, 'motd.txt'), 'w').write(motd)
     # 3. sshd up (key-only)
@@ -129,7 +128,7 @@ try:
     dbg = gssh('echo PATH=$PATH; date -u; ls -l /sbin /usr/sbin 2>&1 | head -3; /usr/sbin/sshd -T 2>&1 | grep -i -E "^(setenv|include|authenticationmethods|permitrootlogin|passwordauthentication)"; ls /etc/ssh/sshd_config.d; head -3 /etc/ssh/sshd_config; ls /lib/rc/cache; lsinitrd -f etc/cmdline.d/20-force_drivers.conf /boot/initramfs-*.img 2>&1 | head -3', timeout=240)
     open(os.path.join(OUT, 'debug-env.txt'), 'w').write(dbg.stdout + dbg.stderr); log('  ' + dbg.stdout.replace('\n', '\n  '))
     # 4. guest-side checks
-    g = gssh('sh -s', timeout=600, env='') if False else sh(SSH + [f'FW_SHA={a.fw_sha} EXPECT_KEYS={a.expect_keys} TS_SHA={a.ts_sha} sh -s'], input=PFX + open(os.path.join(HERE, 'guest-checks.sh')).read(), timeout=600)
+    g = gssh('sh -s', timeout=600, env='') if False else sh(SSH + [f'FW_SHA={a.fw_sha} EXPECT_KEYS={a.expect_keys} sh -s'], input=PFX + open(os.path.join(HERE, 'guest-checks.sh')).read(), timeout=600)
     open(os.path.join(OUT, 'guest-checks.txt'), 'w').write(g.stdout + g.stderr)
     for l in g.stdout.splitlines():
         log('  ' + l)
@@ -166,23 +165,12 @@ umount /mnt; vgchange -an ubuntu-vg >/dev/null; cryptsetup close tmpold; echo PR
     check('backup-old-root-mounted-readonly', re.search(r'hogshead-old.*\bro\b|hogshead-old.*[(,]ro[,)]', r.stdout) is None, 'unmounted after the run (no -k)')
     r = gssh('hogshead-backup -k -n /tmp/x /etc/hostname >/dev/null; mount | grep hogshead-old; (echo test > /mnt/hogshead-old/rw-probe) 2>&1; umount /mnt/hogshead-old; true', timeout=120)
     check('old-root-is-read-only', re.search(r'[(,]ro[,)]', r.stdout) is not None and 'ead-only' in r.stdout, r.stdout.strip()[-200:])
-    # 6. hogshead-remote (only when a TEST tailscale key was given on the HSKEYS stick)
-    if a.tskey:
-        r = gssh('hogshead-remote', timeout=240)
-        open(os.path.join(OUT, 'hogshead-remote.txt'), 'w').write(re.sub(r'tskey-[A-Za-z0-9-]+', 'tskey-***', r.stdout + r.stderr))
-        ip = re.search(r'Tailscale IP : (100\.\d+\.\d+\.\d+)', r.stdout)
-        check('hogshead-remote-joins-tailnet', bool(ip), (ip.group(1) if ip else (r.stdout + r.stderr)[-300:]))
-        if not ip:
-            d = gssh('date; cat /etc/resolv.conf; ip -4 addr | grep inet; curl -sS -m 10 -I https://controlplane.tailscale.com 2>&1 | head -3; tailscale --socket=/run/tailscale/tailscaled.sock status 2>&1 | head -5; tailscale --socket=/run/tailscale/tailscaled.sock netcheck 2>&1 | head -20; tail -40 /var/log/tailscaled.log | sed -E "s/tskey-[A-Za-z0-9-]+/tskey-***/g"', timeout=120)
-            open(os.path.join(OUT, 'tailscale-debug.txt'), 'w').write(d.stdout + d.stderr)
-        lan = re.search(r'LAN IP\(s\)\s*:\s*\n\s+(\d+\.\d+\.\d+\.\d+)', r.stdout)
-        check('hogshead-remote-prints-lan-ip', bool(lan), lan.group(1) if lan else '')
-        r = gssh('tailscale --socket=/run/tailscale/tailscaled.sock status --json | head -c 0; tailscale --socket=/run/tailscale/tailscaled.sock status | head -3; ps aux | grep -c "[t]skey-"', timeout=60)
-        check('authkey-not-in-process-list', r.stdout.strip().splitlines()[-1].strip() == '0', 'ps shows no tskey-')
-        gssh('tailscale --socket=/run/tailscale/tailscaled.sock logout', timeout=60)
-    else:
-        r = gssh('hogshead-remote', timeout=120)
-        log('  hogshead-remote with no key/network:\n' + (r.stdout + r.stderr)[-500:])
+    # 6. hogshead-remote: sshd + LAN address only; Tailscale is retired and must be absent
+    r = gssh('hogshead-remote', timeout=240)
+    open(os.path.join(OUT, 'hogshead-remote.txt'), 'w').write(r.stdout + r.stderr)
+    lan = re.search(r'LAN IP\(s\)\s*:\s*\n\s+(\d+\.\d+\.\d+\.\d+)', r.stdout)
+    check('hogshead-remote-prints-lan-ip', bool(lan), lan.group(1) if lan else (r.stdout + r.stderr)[-300:])
+    check('hogshead-remote-no-tailscale', 'ailscale' not in r.stdout + r.stderr, 'output mentions no Tailscale')
 finally:
     send('\n') if conn else None
     proc.terminate()

@@ -250,7 +250,7 @@ class HostnameRule(unittest.TestCase):
         self.assertIn("$PRIV/hostname", t)
 
     def test_no_machine_script_hardcodes_the_generic_name(self):
-        for rel in ("etc/local.d/50-surface-tailscale.start", "usr/bin/surface-remote"):
+        for rel in ("usr/bin/surface-remote",):
             self.assertNotIn("surface-pro", open(os.path.join(SURFACE_PKG, "files", "root", rel)).read(), rel)
 
 

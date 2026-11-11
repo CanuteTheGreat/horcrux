@@ -1,7 +1,7 @@
 """Hardware clock (RTC) for the installed system: written from a clock that has been checked against a network source.
 
 Real laptops (gringotts, 2026-11-03) booted the installed system with an RTC months off: the live stick's clock was never synced, so nothing
-wrote a good time to the hardware clock, chronyd had no sources yet, and Tailscale/TLS/emerge all failed until an agent set the date by hand.
+wrote a good time to the hardware clock, chronyd had no sources yet, and TLS/emerge all failed until an agent set the date by hand.
 `sync()` runs at the end of every install (before the target is unmounted): verified time -> `date -u -s` when the live clock is off ->
 `hwclock -w -u`. Offline installs leave the RTC alone (never write an unverified clock): the NetworkManager dispatcher hook of
 net-misc/horcrux-chrony-nm and chrony's `makestep` fix the clock at the first network.

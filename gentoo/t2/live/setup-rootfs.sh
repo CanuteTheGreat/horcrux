@@ -1,7 +1,7 @@
 #!/bin/sh
 # final configuration of the hogshead live rootfs (runs inside docker build). /tmp/priv = PRIVATE inputs (optional).
 set -eu
-chmod +x /usr/bin/hogshead-* /etc/init.d/tailscaled /etc/init.d/hogshead-live
+chmod +x /usr/bin/hogshead-* /etc/init.d/hogshead-live
 rm -f /.dockerenv
 sed -i 's/^#\?rc_sys=.*/rc_sys=""/' /etc/rc.conf
 add() { rc-update add "$1" "$2" >/dev/null 2>&1 || { echo "FATAL: rc-update add $1 $2 (no such service?)"; ls /etc/init.d | tr '\n' ' '; exit 1; }; }
@@ -10,7 +10,6 @@ for s in devfs dmesg udev; do add $s sysinit; done
 for s in modules hostname bootmisc sysctl procfs termencoding root localmount swclock consolefont; do add $s boot; done
 for s in seedrng urandom; do addopt $s boot; done
 for s in sysklogd dbus NetworkManager hogshead-live sshd local; do add $s default; done
-# NOTE: tailscaled is NOT enabled: `hogshead-remote` starts it
 printf '# live system: overlay root\ntmpfs /tmp tmpfs defaults,nosuid,nodev 0 0\n' > /etc/fstab
 echo hogshead-live > /etc/hostname
 # swclock restores the last saved time at boot: give it the build date instead of the stage3's
@@ -34,10 +33,9 @@ mkdir -p /root/.ssh; chmod 700 /root/.ssh
 grep -q 'sshd_config.d' /etc/ssh/sshd_config || sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' /etc/ssh/sshd_config
 sed -i -E 's/^#?(PermitRootLogin|PasswordAuthentication).*//' /etc/ssh/sshd_config
 printf 'PermitRootLogin prohibit-password\nPasswordAuthentication no\n' >> /etc/ssh/sshd_config
-# --- private: Apple firmware + tailscale one-time key
+# --- private: Apple firmware
 mkdir -p /etc/hogshead /lib/firmware/brcm
 if [ -d /tmp/priv/fw ]; then cp -a /tmp/priv/fw/. /lib/firmware/brcm/; fi
-if [ -s /tmp/priv/ts-authkey ]; then install -m 0600 /tmp/priv/ts-authkey /etc/hogshead/ts-authkey; fi
 # --- prune firmware this laptop/tests never use (ISO must stay well under the 2 GiB GitHub release-asset limit)
 cd /lib/firmware
 for d in amdgpu radeon nvidia netronome mellanox qcom ti-connectivity ath10k ath11k ath12k mrvl mediatek liquidio cxgb4 bnx2x qed qlogic rockchip imx amlogic cirrus; do rm -rf "$d"; done

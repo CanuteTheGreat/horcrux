@@ -5,8 +5,8 @@
 
 Phases (every step prints PASS/FAIL, result.json in --out; exit 0 = all passed):
   0  boot the ISO's DEFAULT entry with the VGA console only: the gringotts tty1 menu (screenshot)
-  1  boot the ISO again with the serial root shell (hotkeys s,1), exercise the live helpers (nmtui present, gringotts-remote joins the tailnet
-     with the baked ephemeral key, then logs out), then run the OWNER'S command `gringotts-install` and type ONLY the passphrase twice (+ Enter for
+  1  boot the ISO again with the serial root shell (hotkeys s,1), exercise the live helpers (nmtui present, gringotts-remote starts sshd and prints the LAN address; no Tailscale
+     anywhere), then run the OWNER'S command `gringotts-install` and type ONLY the passphrase twice (+ Enter for
      'same login password'); the only extra flags are the test's own ssh key and --no-reboot
   2  boot 1 (serial prompt, ONE passphrase) + the shared encrypted-ZFS checks + boot-environment rollback
   3  boot 2 (USB keyboard on VGA, ONE passphrase): GDM login as canutethegreat typed on the keyboard, GNOME Wayland session, every app launched,
@@ -49,12 +49,12 @@ GUI_APPS = [
 CLI_APPS = [
     ("docker", "docker --version && docker compose version && docker buildx version"),
     ("mosh", "mosh --version | head -1"), ("nmap", "nmap --version | head -1"), ("tmux", "tmux -V"), ("vim", "vim --version | head -1"),
-    ("tailscale", "tailscale version | head -1"), ("clamav", "clamscan --version"), ("wireguard-tools", "wg --version"),
+    ("clamav", "clamscan --version"), ("wireguard-tools", "wg --version"),
     ("rustinion", "rustinion --version"), ("fprintd", "qlist -Iv sys-auth/fprintd sys-auth/libfprint"),
     ("nmtui", "test -x /usr/bin/nmtui && echo nmtui present"),
 ]
 APP_ATOMS = ["www-client/brave-bin", "www-client/firefox-bin", "net-im/discord", "app-containers/docker", "app-containers/docker-cli",
-             "app-containers/docker-buildx", "app-containers/docker-compose", "net-vpn/proton-vpn-gtk-app", "net-vpn/tailscale",
+             "app-containers/docker-buildx", "app-containers/docker-compose", "net-vpn/proton-vpn-gtk-app",
              "net-misc/remmina", "app-emulation/virt-viewer", "media-gfx/gimp", "media-gfx/geeqie", "media-video/vlc", "net-misc/mosh",
              "net-analyzer/nmap", "net-analyzer/wireshark", "app-antivirus/clamav", "net-misc/nextcloud-client", "x11-terms/terminator",
              "app-misc/tmux", "app-editors/vim", "app-admin/rustinion-agent", "sys-auth/fprintd", "sys-auth/libfprint", "sys-firmware/sof-firmware",
@@ -140,33 +140,23 @@ class GRun(zt.ZRun):
             vm.send(f"printf '%s\\n' '{self.pub}' > /root/test.pub\r")
             # live helpers
             vm.send("echo LIVE:nmtui=$(command -v nmtui) install=$(command -v gringotts-install) remote=$(command -v gringotts-remote) "
-                    "keys=$(wc -l < /etc/gringotts/authorized_keys) ts=$(test -s /usr/share/gringotts/ts-authkey && echo keyfile) "
+                    "keys=$(wc -l < /etc/gringotts/authorized_keys) "
                     "nm=$(rc-service NetworkManager status 2>&1 | grep -o 'started\\|stopped\\|crashed' | head -1) sshd=$(rc-service sshd status 2>&1 | grep -o 'started\\|stopped' | head -1)\r")
-            m = vm.expect_raw(r"LIVE:nmtui=\S* install=\S* remote=\S* keys=\d* ts=\S* nm=\S* sshd=\S*", 20)
+            m = vm.expect_raw(r"LIVE:nmtui=\S* install=\S* remote=\S* keys=\d* nm=\S* sshd=\S*", 20)
             txt = m.group(0).decode(errors="replace") if m else "no output"
-            self.step("live-helpers-present", bool(m) and "nmtui=/" in txt and "install=/" in txt and "remote=/" in txt and "ts=keyfile" in txt and not re.search(r"keys=(0)? ", txt),
-                      txt + ("  [no PRIV_DIR keys in this image: build with PRIV_DIR=<dir with hostname, authorized_keys, ts-authkey>]" if "keys= " in txt else ""))
+            self.step("live-helpers-present", bool(m) and "nmtui=/" in txt and "install=/" in txt and "remote=/" in txt and not re.search(r"keys=(0)? ", txt),
+                      txt + ("  [no PRIV_DIR keys in this image: build with PRIV_DIR=<dir with hostname, authorized_keys>]" if "keys= " in txt else ""))
             self.step("live-networkmanager-running", "nm=started" in txt, txt)
             # remote handoff on the live stick (needs the QEMU user-net: DHCP via NetworkManager)
-            if self.g.ts_key_file:
-                # the baked key is single-use and the test ISO's copy may already be spent: hand the live helper a fresh single-use TEST key
-                # through the path it prefers (/run/gringotts-keys/ts-authkey); the key never touches the image
-                k = open(self.g.ts_key_file).read().strip()
-                vm.send(f"mkdir -p /run/gringotts-keys && printf %s {k} > /run/gringotts-keys/ts-authkey && chmod 600 /run/gringotts-keys/ts-authkey; clear\r")
-                time.sleep(2)
             vm.send("for i in $(seq 1 40); do ip -4 route show default | grep -q . && break; sleep 2; done; gringotts-remote; echo REMOTE-RC=$?\r")
             m = vm.expect_raw(r"REMOTE-RC=\d+", 240, consume=False)
             out = vm.screen()
             self.res["live_remote_tail"] = out[-1500:]
             joined = bool(m) and b"REMOTE-RC=0" in m.group(0)
-            self.step("live-gringotts-remote-joined-tailnet", joined, (m.group(0).decode() if m else "timeout") + " | " + re.sub(r"\s+", " ", out[-300:]))
-            time.sleep(2)
-            vm.send("tailscale --socket=/run/tailscale/tailscaled.sock status --json | grep -E '\"(HostName|Tags|BackendState)\"' | head -8; echo TSJSON-DONE\r")
-            vm.expect_raw(r"TSJSON-DONE", 20)
-            self.res["live_ts_status"] = vm.screen()[-700:]
-            vm.send("tailscale --socket=/run/tailscale/tailscaled.sock logout; echo TS-LOGOUT-RC=$?\r")
-            m = vm.expect_raw(r"TS-LOGOUT-RC=\d+", 60)
-            self.step("live-tailscale-ephemeral-node-removed-by-logout", bool(m) and b"RC=0" in m.group(0), "test node removed from the tailnet")
+            self.step("live-gringotts-remote-sshd-and-lan-address", joined, (m.group(0).decode() if m else "timeout") + " | " + re.sub(r"\s+", " ", out[-300:]))
+            vm.send("if [ -n \"$(command -v tailscale tailscaled; ls /etc/init.d/tailscale* /var/lib/tailscale /run/tailscale 2>/dev/null; qlist -I net-vpn/tailscale 2>/dev/null)\" ]; then echo LIVE-NOTS-RC=0; else echo LIVE-NOTS-RC=1; fi\r")
+            m = vm.expect_raw(r"LIVE-NOTS-RC=\d+", 30)
+            self.step("live-no-tailscale", bool(m) and b"RC=1" in m.group(0), "Tailscale is retired: no binary, init script, state dir or package on the live stick (rc 1 = nothing found)")
             # the owner's install: the disk passphrase and a separate login password are typed
             vm.send("gringotts-install --yes-erase --extra-authorized-key-file /root/test.pub --no-reboot\r")
             self.step("install-hostname-prefilled-and-confirmed", vm.expect_raw(r"Host name.{0,8}\[gringotts\]", 120), "the owner's name for this machine is prefilled; Enter keeps it")
@@ -221,11 +211,13 @@ class GRun(zt.ZRun):
         self.package_contents_check()
         self.kmod_build_check()
         rc, o = self.sh("hostname; id " + USER + "; getent passwd " + USER + "; getent passwd ron | wc -l; cat /etc/os-release | head -3; "
-                        "ls -ld /home/" + USER + "; rc-status -a 2>&1 | grep -E 'docker|NetworkManager|iwd|sshd|gringotts|tailscale|display-manager|elogind|chronyd' | tr -s ' '")
+                        "ls -ld /home/" + USER + "; rc-status -a 2>&1 | grep -E 'docker|NetworkManager|iwd|sshd|gringotts|display-manager|elogind|chronyd' | tr -s ' '")
         self.res["basic"] = o
         self.step("hostname-user-services", "gringotts" in o.split("\n")[0] and "uid=" in o and "docker" in o and USER in o, o.replace("\n", " | ")[:400])
+        rc, o = self.sh("if [ -n \"$(command -v tailscale tailscaled; ls /etc/init.d/tailscale* /var/lib/tailscale 2>/dev/null; qlist -I net-vpn/tailscale 2>/dev/null; rc-update show 2>/dev/null | grep -i tailscale)\" ]; then echo NOTS=0; else echo NOTS=1; fi")
+        self.step("installed-no-tailscale", "NOTS=1" in o, "Tailscale is retired: not installed, no init script, no state dir, not in a runlevel")
         rc, o = self.sh("passwd -S root; /usr/sbin/sshd -T 2>&1 | grep -iE '^(permitrootlogin|passwordauthentication|authorizedkeysfile)' | tr A-Z a-z; "
-                        "grep -c . /etc/gringotts/authorized_keys; stat -c '%a %U' /usr/share/gringotts/ts-authkey")
+                        "grep -c . /etc/gringotts/authorized_keys")
         if "passwordauthentication" not in o:
             rc, dg = self.sh("/usr/sbin/sshd -T 2>&1 | head -5; ls -l /etc/ssh/ssh_host_* | head -3; rc-service sshd status 2>&1 | head -2")
             o += "\nSSHD-DIAG: " + dg
@@ -391,7 +383,7 @@ class GRun(zt.ZRun):
         rc, o = self.sh(scan + " > /root/orphans.all; wc -l < /root/orphans.all", timeout=900)
         total = o.strip()
         allow = [r"^/boot/", r"^/etc/(passwd|shadow|group|gshadow|subuid|subgid|fstab|hostid|hostname|hosts|machine-id|resolv\.conf|mtab|ssh/ssh_host_|timezone|localtime|adjtime|motd|issue|shells|environment|profile\.env|ld\.so\.cache|udev/hwdb\.bin|ssl/certs/|ca-certificates|env\.d/(00basic|01hostenv|02locale|gcc|binutils)|conf\.d/(keymaps|display-manager|xdm)|locale\.gen|\.pwd\.lock|passwd-|shadow-|group-|gshadow-|runlevels/|gdm/custom\.conf|NetworkManager/(system-connections|conf\.d/10-horcrux)|iwd/|sudoers\.d/|dracut\.conf\.d/|horcrux/|live-installer/|machine-info|os-release|portage/(make\.profile|repos\.conf|package\.|binrepos|make\.conf)|zfs/|default/grub|grub|kernel/|ld\.so\.conf\.d/|profile\.d/|php|X11|alternatives|bash/|java-config|eselect|gentoo-release|init\.d/(net\.|zram)|rc\.conf|inittab|securetty|crypttab|wireguard)",
-                 r"^/var/lib/(portage|systemd|dbus|iwd|NetworkManager|chrony|tailscale|zfs|docker|libvirt|gringotts|alternatives|bluetooth|upower|polkit|colord|AccountsService|gdm|fwupd|cups|clamav|nftables|sddm|mlocate|dracut|logrotate|elogind|ntp|sudo|power-profiles|pipewire|livesuite)",
+                 r"^/var/lib/(portage|systemd|dbus|iwd|NetworkManager|chrony|zfs|docker|libvirt|gringotts|alternatives|bluetooth|upower|polkit|colord|AccountsService|gdm|fwupd|cups|clamav|nftables|sddm|mlocate|dracut|logrotate|elogind|ntp|sudo|power-profiles|pipewire|livesuite)",
                  r"^/home/", r"^/root/", r"^/usr/lib/(locale|python[0-9.]*/site-packages/.*\.dist-info|gio/modules/giomodule\.cache|gdk-pixbuf|udev/hwdb\.bin)", r"^/usr/share/(mime/|glib-2\.0/schemas/gschemas\.compiled|icons/.*/icon-theme\.cache|applications/mimeinfo\.cache|fonts/.*(fonts\.(dir|scale|cache))|info/dir|X11/xkb/compiled)",
                  r"/__pycache__/", r"\.pyc$", r"^/usr/lib64?/(gdk-pixbuf|gtk|gio|girepository|python|perl|ruby|go)[^ ]*\.cache", r"^/usr/share/(ca-certificates|\.keep)", r"^/usr/lib/modules/.*/modules\.", r"^/lib/modules/.*/modules\.",
                  r"^/var/lib/gringotts/", r"^/var/db/repos/horcrux"]
@@ -579,7 +571,6 @@ def main():
     ap.add_argument("--mem", type=int, default=16384)
     ap.add_argument("--disk-gb", type=int, default=64)
     ap.add_argument("--skip-menu", action="store_true")
-    ap.add_argument("--ts-key-file", default="", help="fresh single-use TEST Tailscale key for the live-join step (the baked one may be spent)")
     ap.add_argument("--keep-disks", action="store_true")
     ap.add_argument("--rtc-base", default="2026-07-01T12:00:00", help="start EVERY boot with this months-off hardware clock ('' disables the clock gates)")
     ap.add_argument("--late-network-minutes", type=int, default=12, help="late-network firstboot phase: NIC link down this long (0 skips; the owner's real case was hours)")

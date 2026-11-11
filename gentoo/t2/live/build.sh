@@ -2,8 +2,8 @@
 # gentoo/t2/live/build.sh - build the hogshead (Apple T2 MacBook) live ISO. Run on an rw-man host (docker + BuildKit only).
 #   gentoo/t2/live/build.sh -o OUTDIR [-p PRIVDIR] [-n NAME]
 #   KEEP_ROOTFS=<tag> keeps the finished rootfs image under that tag; REBASE=<tag> skips stage 1 and only adds the PRIVDIR files
-#   (fw/, authorized_keys, ts-authkey) on top of such a kept image (fast re-bake of a key, no kernel rebuild).
-#   PRIVDIR (never committed): fw/ (Apple brcm firmware), authorized_keys, ts-authkey. Without it the ISO has none of them
+#   (fw/, authorized_keys) on top of such a kept image (fast re-bake of a key, no kernel rebuild).
+#   PRIVDIR (never committed): fw/ (Apple brcm firmware), authorized_keys. Without it the ISO has none of them
 #   (= a shareable T2 live ISO; Wi-Fi then needs firmware imported by the user).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); T2=$(cd "$HERE/.." && pwd); REPO=$(cd "$T2/../.." && pwd)
@@ -43,7 +43,7 @@ docker build -f "$WORK/ctx/gentoo/t2/live/Dockerfile" \
 [ -z "${KEEP_ROOTFS:-}" ] || docker tag "$TAG-rootfs" "$KEEP_ROOTFS"
 else
 lap "stage 1 (rebase): private files on top of $REBASE"
-printf 'FROM %s\nCOPY priv/ /tmp/priv/\nRUN set -e; [ ! -s /tmp/priv/ts-authkey ] || install -m 0600 /tmp/priv/ts-authkey /etc/hogshead/ts-authkey; [ ! -f /tmp/priv/authorized_keys ] || install -m 0600 /tmp/priv/authorized_keys /root/.ssh/authorized_keys; rm -rf /tmp/priv\n' "$REBASE" > "$WORK/Dockerfile.rebase"
+printf 'FROM %s\nCOPY priv/ /tmp/priv/\nRUN set -e; [ ! -f /tmp/priv/authorized_keys ] || install -m 0600 /tmp/priv/authorized_keys /root/.ssh/authorized_keys; rm -rf /tmp/priv\n' "$REBASE" > "$WORK/Dockerfile.rebase"
 docker build -f "$WORK/Dockerfile.rebase" -t "$TAG-rootfs" "$WORK" 2>&1 | tail -5
 fi
 

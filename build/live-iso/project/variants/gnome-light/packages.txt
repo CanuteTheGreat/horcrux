@@ -1,5 +1,5 @@
 # Horcrux GNOME desktop edition (public image): GNOME on Wayland (OpenRC + elogind) on top of the server core (project/variants/core, sys-apps/horcrux-core:
-# chrony + clock rules, first boot, backup, ZFS rules). Generic desktop tools only: the owner's own apps (Brave, Nextcloud, Tailscale, clamav, rustup, keepalived,
+# chrony + clock rules, first boot, backup, ZFS rules). Generic desktop tools only: the owner's own apps (Brave, Nextcloud, clamav, rustup, keepalived,
 # sshpass, rustinion) are in the MACHINE layers (project/variants/owner-common + gringotts/hogshead/...), never here. Enforced by project/public-forbidden.txt.
 # Atoms verified against ::gentoo on 2026-10-28.
 # --- desktop session

@@ -6,7 +6,7 @@ title = "Microsoft Surface"
 
 # Services the profile turns on/off on the installed system (NetworkManager replaces iwd+dhcpcd so that nmtui and the
 # desktop's Wi-Fi menu manage the one Wi-Fi stack; zram-swap = the fast swap; the encrypted disk swap is only for the hibernation image).
-services_add = ["elogind:boot", "dbus:default", "NetworkManager:default", "display-manager:default", "zram-swap:default", "cronie:default", "tailscale:default", "chronyd:default"]
+services_add = ["elogind:boot", "dbus:default", "NetworkManager:default", "display-manager:default", "zram-swap:default", "cronie:default", "chronyd:default"]
 services_del = ["iwd", "dhcpcd", "live-serial", "horcrux-api", "libvirtd", "docker"]
 
 [match]
