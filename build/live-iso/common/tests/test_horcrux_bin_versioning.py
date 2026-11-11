@@ -1,7 +1,9 @@
 """horcrux-bin versioning: a new manager tarball gets a NEW Portage version, so a stale binary package can never satisfy
 `emerge -u horcrux-bin` (lab 2026-11-10: FEATURES=buildpkg + --usepkg reinstalled the cached 0.1.0 binpkg and ignored the new tarball)."""
+import hashlib
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -81,3 +83,55 @@ class BaseEbuild(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+@unittest.skipUnless(HAVE and shutil.which("zstd") and shutil.which("bash"), "needs the Horcrux tree, zstd and bash")
+class RepublishedAsset(unittest.TestCase):
+    """The daily manager asset is republished on every main build; a stamped ebuild cut for the previous
+    tarball must still install the newer one (it used to die in src_unpack and block `emerge -u @world`)."""
+
+    def _run(self, want):
+        eb = open(os.path.join(D, "horcrux-bin-0.1.0.ebuild")).read()
+        m = re.search(r"(?ms)^_tarball_name\(\).*?^src_unpack\(\) \{.*?^\}\n", eb)
+        self.assertIsNotNone(m, "src_unpack not found")
+        with tempfile.TemporaryDirectory() as w:
+            tree = os.path.join(w, "tree")
+            for d in ("usr/bin", "usr/share/horcrux/ui"):
+                os.makedirs(os.path.join(tree, d))
+            for b in ("usr/bin/horcrux-api", "usr/bin/horcrux"):
+                open(os.path.join(tree, b), "w").write("#!/bin/sh\n")
+                os.chmod(os.path.join(tree, b), 0o755)
+            tb = os.path.join(w, "fetched.tar.zst")
+            subprocess.run(["tar", "--zstd", "-cf", tb, "-C", tree, "."], check=True)
+            real = hashlib.sha256(open(tb, "rb").read()).hexdigest()
+            want = real if want is None else want
+            script = f"""
+set -u
+einfo() {{ echo "einfo: $*"; }}
+ewarn() {{ echo "ewarn: $*"; }}
+die() {{ echo "die: $*"; exit 1; }}
+curl() {{ while [ $# -gt 1 ]; do [ "$1" = -o ] && out=$2; shift; done; cp {tb} "$out"; }}
+uname() {{ echo x86_64; }}
+PVR=0.1.0_p1
+EPREFIX={w}/none
+T={w}; WORKDIR={w}/work; S=$WORKDIR/root
+HORCRUX_MANAGER_SHA256_x86_64={want}
+HORCRUX_MANAGER_TARBALL=
+HORCRUX_MANAGER_URL=
+{m.group(0)}
+src_unpack
+echo "fetched=${{HORCRUX_FETCHED_SHA256:-}}"
+test -x $S/usr/bin/horcrux-api
+"""
+            r = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+            return r, real
+
+    def test_a_republished_tarball_installs_with_a_warning(self):
+        r, got = self._run("0" * 64)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("ewarn: the daily manager tarball was republished", r.stdout)
+        self.assertIn("fetched=" + got, r.stdout)
+
+    def test_the_cut_for_tarball_installs_without_a_warning(self):
+        r, _ = self._run(None)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("ewarn", r.stdout)

@@ -67,7 +67,14 @@ src_unpack() {
 		want=${!want_var}
 		if [[ -n ${want} && -z ${HORCRUX_MANAGER_URL} ]]; then
 			got=$(sha256sum "${t}" | cut -d' ' -f1)
-			[[ ${got} == "${want}" ]] || die "fetched manager tarball sha256 ${got} is not the one ${PVR} was cut for (${want}): the daily asset changed, run \`emaint sync -r horcrux\` and \`emerge -u horcrux-bin\` again"
+			if [[ ${got} != "${want}" ]]; then
+				# The daily asset is republished on every main build, several times a day, and the overlay only learns of it at the next
+				# bump + sync (up to ~2 h): a dying unpack made every `emerge -u @world` in that window fail (lab madammalkins j02219/j02103).
+				# The republished tarball is always the newer build, so install it and say so; the real sha goes into the release marker,
+				# and the next stamped version (cut for this sha) is still an upgrade for Portage.
+				ewarn "the daily manager tarball was republished after ${PVR} was cut (sha256 ${got}, expected ${want}): installing the newer build; \`emaint sync -r horcrux\` brings the ebuild cut for it"
+			fi
+			HORCRUX_FETCHED_SHA256=${got}
 		fi
 	fi
 	tar --zstd -xf "${t}" -C "${S}" --no-same-owner || die "unpacking ${t} failed"
@@ -97,6 +104,7 @@ src_install() {
 	insinto /usr/share/horcrux
 	newins - manager-release <<-EOF
 		horcrux-bin ${PVR}
+		${HORCRUX_FETCHED_SHA256:+tarball-sha256 ${HORCRUX_FETCHED_SHA256}}
 	EOF
 }
 
