@@ -216,6 +216,36 @@ pub async fn kill_qemu(vm_id: &str) {
     }
 }
 
+/// Fencing kill: SIGKILL at once (the guest is being abandoned, a graceful
+/// SIGTERM wait only burns the failover budget) and wait at most `wait` for the
+/// process to be gone. Returns true when it is. A QEMU in uninterruptible I/O
+/// (D-state, e.g. stuck on a dead NFS server) survives SIGKILL until the I/O
+/// returns: the caller must then reset the node (see `ha_fence_agent::fence_kill`).
+pub async fn kill_qemu_fence(vm_id: &str, wait: std::time::Duration) -> bool {
+    let Some(pid) = tokio::fs::read_to_string(qemu::pidfile(vm_id))
+        .await
+        .ok()
+        .and_then(|s| s.trim().parse::<i32>().ok())
+    else {
+        return !QemuManager::process_running(vm_id);
+    };
+    if !QemuManager::process_running(vm_id) {
+        return true;
+    }
+    use nix::sys::signal::{kill, Signal};
+    let _ = kill(nix::unistd::Pid::from_raw(pid), Signal::SIGKILL);
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        if !qemu::pid_alive(pid as u32) {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
 /// The per-VM files next to a VM's first disk that belong to it besides
 /// its disks: EFI variable store and the cloud-init seed.
 pub fn side_files(disk0: &Path) -> Vec<(&'static str, PathBuf)> {

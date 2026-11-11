@@ -69,15 +69,16 @@ fn tick_secs() -> u64 {
 /// How long a node without a majority waits before it kills its HA VMs,
 /// counted from the LAST moment it still saw a majority (see [`FenceClock`]).
 fn self_fence_secs() -> i64 {
-    env_secs("HORCRUX_HA_SELF_FENCE_SECS", 20) as i64
+    env_secs("HORCRUX_HA_SELF_FENCE_SECS", 10) as i64
 }
 /// Period of the self-fence watchdog (its own task, independent of the HA
 /// tick, which can be stuck in a peer call for a long time).
 const WATCHDOG_SECS: i64 = 1;
-/// Upper bound for killing the guests of a node that lost its majority
-/// (`kill_qemu`: SIGTERM, SIGKILL after 5 s, gives up after 10 s; all guests
-/// are killed concurrently).
-const KILL_BUDGET_SECS: i64 = 10;
+/// Upper bound for killing the guests of a node that lost its majority, whatever
+/// state QEMU is in (SIGKILL, then a node reset if one survives; see
+/// `ha_fence_agent::fence_kill`). Not "kill_qemu's 10 s": a QEMU in D-state on
+/// NFS never dies by signal, the reset is what bounds it.
+const KILL_BUDGET_SECS: i64 = super::ha_fence_agent::FENCE_KILL_BUDGET_SECS;
 /// Clock-rate drift allowance between two nodes over one fencing window.
 const DRIFT_SECS: i64 = 2;
 
@@ -830,13 +831,17 @@ async fn self_fence_watchdog(state: Arc<AppState>) {
             .into_iter()
             .filter(|r| QemuManager::process_running(&r.vm_id))
             .collect();
+        let ids: Vec<String> = running.iter().map(|r| r.vm_id.clone()).collect();
+        for id in &ids {
+            tracing::error!("HA: no majority: self-fencing, killing VM {id}");
+        }
+        // SIGKILL all, reset the node if one survives (QEMU stuck in storage I/O)
+        super::ha_fence_agent::fence_kill(&ids, "no majority").await;
         let kills = running.iter().map(|r| {
             let state = state.clone();
             let local = local.clone();
             let vm_id = r.vm_id.clone();
             async move {
-                tracing::error!("HA: no majority: self-fencing, killing VM {vm_id}");
-                crate::vm::migrate::kill_qemu(&vm_id).await;
                 let _ = state.vm_manager.stop_vm(&vm_id).await;
                 state
                     .ha_manager
@@ -1655,6 +1660,7 @@ mod recovery_guard_tests {
 mod fencing_timing_tests {
     use super::*;
 
+    #[derive(Clone, Copy)]
     struct Timing {
         poll: i64,
         fetch: i64,
@@ -1782,12 +1788,14 @@ mod fencing_timing_tests {
     fn old_clock_with_old_margin_is_caught_by_the_model() {
         let mut t = defaults();
         t.fence = 60;
-        let (_, bad) = sweep(&t, 15, true);
+        // the old clock (started at the notice) with a margin of the size the lab
+        // run used (15 s, sized for a 10 s kill) violates the property
+        let (_, bad) = sweep(&t, 5, true);
         assert!(bad > 0, "the model must flag the pre-fix behaviour");
-        // and a clock from the last majority with the old margin is still unsafe
-        // without the margin floor (the margin is part of the proof)
-        let (_, bad) = sweep(&t, 15, false);
-        assert!(bad > 0, "margin 15 is below the floor");
+        // and a clock from the last majority with a margin below the floor is still
+        // unsafe (the margin is part of the proof)
+        let (_, bad) = sweep(&t, 5, false);
+        assert!(bad > 0, "margin 5 is below the floor");
     }
 
     /// below the proven floor the property breaks; the floor is tight to within the allowances
@@ -1797,6 +1805,45 @@ mod fencing_timing_tests {
         let floor = recovery_margin_floor(t.poll, t.fetch, t.watchdog, t.kill);
         let (_, bad) = sweep(&t, floor - DRIFT_SECS - t.watchdog - 2 * t.poll, false);
         assert!(bad > 0);
+    }
+
+    /// The stuck-QEMU case is inside the proof: the model charges the full kill
+    /// budget (SIGKILL wait + node reset) to every phase combination, and the
+    /// budget is the bound `fence_kill` enforces (a QEMU in D-state is reset, not waited for).
+    #[test]
+    fn the_kill_budget_is_the_enforced_fence_bound() {
+        use crate::api::ha_fence_agent::{FENCE_KILL_WAIT_SECS, FENCE_RESET_SECS};
+        assert_eq!(KILL_BUDGET_SECS, FENCE_KILL_WAIT_SECS + FENCE_RESET_SECS);
+        let t = defaults();
+        assert_eq!(t.kill, FENCE_KILL_WAIT_SECS + FENCE_RESET_SECS);
+        // the budget is load-bearing: a fence that takes `slack + 1` s longer than the
+        // budget the margin was sized for breaks the property
+        let margin = recovery_margin_floor(t.poll, t.fetch, t.watchdog, t.kill);
+        let (slack, bad) = sweep(&t, margin, false);
+        assert_eq!(bad, 0);
+        let slower = Timing {
+            kill: t.kill + slack + 1,
+            ..t
+        };
+        let (_, bad) = sweep(&slower, margin, false);
+        assert!(bad > 0, "model must notice a fence slower than its budget");
+    }
+
+    /// G1: a silent node's guest is recovered inside 90 s with the shipped
+    /// defaults: stale detection + a supervisor tick + the proven wait + the
+    /// peer recover call + guest start (lab: 7 s start, 5 s tick, 10 s slack).
+    #[test]
+    fn default_silent_node_failover_fits_the_90_s_goal() {
+        let t = defaults();
+        let wait = self_fence_secs() + recovery_margin_secs();
+        let detect = t.stale + t.poll; // last poll + stale threshold + one poll to flip
+        let worst = detect + tick_secs() as i64 + wait + 7 + 10;
+        assert!(worst < 90, "worst case {worst} s (wait {wait} s)");
+        // and the wait is exactly the proven floor, never below it
+        assert_eq!(
+            wait,
+            self_fence_secs() + recovery_margin_floor(t.poll, t.fetch, t.watchdog, t.kill)
+        );
     }
 
     #[test]
@@ -1958,7 +2005,8 @@ mod fence_agent_gate_tests {
             for first_probe in 0..=40i64 {
                 for drift in -2..=2i64 {
                     let last_beat = -hb_age_at_last_answer;
-                    let killed_by = last_beat + fence + 1 + 10;
+                    let killed_by =
+                        last_beat + fence + 1 + crate::api::ha_fence_agent::FENCE_KILL_BUDGET_SECS;
                     let recovery_at = first_probe + wait;
                     assert!(
                         killed_by + drift.abs() <= recovery_at,

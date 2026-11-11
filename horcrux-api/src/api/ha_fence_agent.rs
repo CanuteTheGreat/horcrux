@@ -65,7 +65,75 @@ pub(crate) fn fence_secs() -> i64 {
 /// concurrently) and clock drift between the two nodes. The leader waits
 /// `fence_secs + AGENT_SETTLE_SECS` from the moment it FIRST sees the manager
 /// silent, which is never before the manager's last answer.
-pub(crate) const AGENT_SETTLE_SECS: i64 = 1 + 1 + 10 + 2;
+pub(crate) const AGENT_SETTLE_SECS: i64 = 1 + 1 + FENCE_KILL_BUDGET_SECS + 2;
+
+/// Longest wait for SIGKILLed QEMUs to be gone before the node is reset.
+pub(crate) const FENCE_KILL_WAIT_SECS: i64 = 2;
+/// A reset (`/proc/sysrq-trigger` 'b': no sync, no unmount, no I/O) stops every
+/// CPU, hence every QEMU, within this time.
+pub(crate) const FENCE_RESET_SECS: i64 = 1;
+/// Hard upper bound from "the fence fires" to "no guest of this node can run",
+/// whatever state QEMU is in: SIGKILL wait + reset. The recovery margin and the
+/// agent settle time are derived from this one number.
+pub(crate) const FENCE_KILL_BUDGET_SECS: i64 = FENCE_KILL_WAIT_SECS + FENCE_RESET_SECS;
+
+/// Reset the machine NOW. Used only when a fenced QEMU survived SIGKILL (stuck in
+/// uninterruptible storage I/O): it could write to the shared disks again as
+/// soon as the I/O returns, while the survivors run the guest. A sysrq reset
+/// needs no I/O, no userspace and ignores the sysrq mask when written through
+/// /proc/sysrq-trigger. `HORCRUX_HA_FENCE_RESET=0` disables it (development
+/// only: the recovery margin's proof then no longer holds for stuck QEMUs).
+pub(crate) fn emergency_reset(why: &str) {
+    if std::env::var("HORCRUX_HA_FENCE_RESET").as_deref() == Ok("0") {
+        eprintln!("ha-fence: {why}: reset disabled by HORCRUX_HA_FENCE_RESET=0");
+        return;
+    }
+    #[cfg(not(test))]
+    {
+        eprintln!("ha-fence: {why}: resetting the node (a fenced QEMU did not die)");
+        let _ = std::fs::write("/proc/sysrq-trigger", b"b");
+        // sysrq not compiled in: the reboot syscall via the init tools, still no sync
+        let _ = std::process::Command::new("reboot").arg("-f").spawn();
+    }
+    #[cfg(test)]
+    let _ = why;
+}
+
+/// Fence the guests `vms`: SIGKILL all of them at once; any that is still
+/// running after [`FENCE_KILL_WAIT_SECS`] gets the node reset. Returns when
+/// every guest is gone or the reset was triggered: at most
+/// [`FENCE_KILL_BUDGET_SECS`] after the call (the reset itself takes effect
+/// at once). Returns true if a reset was needed.
+pub(crate) async fn fence_kill(vms: &[String], why: &str) -> bool {
+    fence_kill_with(
+        vms,
+        why,
+        Duration::from_secs(FENCE_KILL_WAIT_SECS as u64),
+        |vm, wait| async move { crate::vm::migrate::kill_qemu_fence(&vm, wait).await },
+        emergency_reset,
+    )
+    .await
+}
+
+/// [`fence_kill`] with the kill and reset primitives injected (unit tests).
+pub(crate) async fn fence_kill_with<F, Fut>(
+    vms: &[String],
+    why: &str,
+    wait: Duration,
+    kill: F,
+    reset: impl Fn(&str),
+) -> bool
+where
+    F: Fn(String, Duration) -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let results = futures::future::join_all(vms.iter().map(|vm| kill(vm.clone(), wait))).await;
+    let stuck = results.iter().any(|gone| !gone);
+    if stuck {
+        reset(why);
+    }
+    stuck
+}
 
 fn prefix() -> String {
     std::env::var("HORCRUX_HA_FENCE_PREFIX").unwrap_or_else(|_| "/var/run/horcrux-ha-fence".into())
@@ -184,13 +252,15 @@ async fn fence_guests() -> usize {
         .and_then(|b| serde_json::from_slice::<Beat>(&b).ok())
         .unwrap_or_default()
         .vms;
-    let kills = vms.iter().map(|vm| async move {
-        if crate::vm::qemu::QemuManager::process_running(vm) {
-            eprintln!("ha-fence-agent: manager heartbeat stale, killing HA guest {vm}");
-            crate::vm::migrate::kill_qemu(vm).await;
-        }
-    });
-    futures::future::join_all(kills).await;
+    let running: Vec<String> = vms
+        .iter()
+        .filter(|vm| crate::vm::qemu::QemuManager::process_running(vm))
+        .cloned()
+        .collect();
+    for vm in &running {
+        eprintln!("ha-fence-agent: manager heartbeat stale, killing HA guest {vm}");
+    }
+    fence_kill(&running, "manager heartbeat stale").await;
     vms.len()
 }
 
@@ -808,5 +878,71 @@ mod attest_tests {
         );
         assert_eq!(request_nonce("GET /other HTTP/1.0\r\n"), None);
         assert_eq!(request_nonce("POST /attest HTTP/1.0\r\n"), None);
+    }
+}
+
+/// The fence kill is bounded whatever QEMU does (D-state on dead storage).
+#[cfg(test)]
+mod fence_kill_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn budget_is_wait_plus_reset_and_feeds_the_settle_time() {
+        assert_eq!(
+            FENCE_KILL_BUDGET_SECS,
+            FENCE_KILL_WAIT_SECS + FENCE_RESET_SECS
+        );
+        assert_eq!(AGENT_SETTLE_SECS, 1 + 1 + FENCE_KILL_BUDGET_SECS + 2);
+    }
+
+    #[tokio::test]
+    async fn all_guests_dead_needs_no_reset() {
+        let resets = AtomicUsize::new(0);
+        let vms = vec!["a".to_string(), "b".to_string()];
+        let reset = fence_kill_with(
+            &vms,
+            "t",
+            Duration::from_millis(50),
+            |_, _| async { true },
+            |_| {
+                resets.fetch_add(1, Ordering::SeqCst);
+            },
+        )
+        .await;
+        assert!(!reset);
+        assert_eq!(resets.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn one_guest_stuck_in_io_resets_the_node_within_the_wait() {
+        let resets = AtomicUsize::new(0);
+        let vms = vec!["ok".to_string(), "stuck".to_string()];
+        let wait = Duration::from_millis(200);
+        let t0 = std::time::Instant::now();
+        let reset = fence_kill_with(
+            &vms,
+            "t",
+            wait,
+            |vm, w| async move {
+                if vm == "stuck" {
+                    // SIGKILL pending, process in D-state: gone never, the wait runs out
+                    tokio::time::sleep(w).await;
+                    false
+                } else {
+                    true
+                }
+            },
+            |_| {
+                resets.fetch_add(1, Ordering::SeqCst);
+            },
+        )
+        .await;
+        assert!(reset);
+        assert_eq!(resets.load(Ordering::SeqCst), 1);
+        assert!(
+            t0.elapsed() < wait + Duration::from_millis(300),
+            "bounded by the wait"
+        );
     }
 }
