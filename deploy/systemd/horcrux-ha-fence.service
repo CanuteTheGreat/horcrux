@@ -1,0 +1,16 @@
+[Unit]
+Description=Horcrux HA dead-man fence agent (independent of the manager)
+Before=horcrux-api.service horcrux.service horcrux-guests.service
+After=local-fs.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/horcrux-api ha-fence-agent
+Restart=always
+RestartSec=2s
+# the agent's job is to outlive the manager and kill guests itself
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

@@ -200,6 +200,9 @@ pub(crate) enum RecoveryGate {
 ///   did not start): recover only if the node runs the dead-man agent and the
 ///   manager has been silent for `agent_wait` (agent deadline + settle time),
 ///   i.e. its QEMUs are provably gone. Without an agent they may still run: hold.
+/// * the same node, but its agent answers a `safe` attestation (heartbeat stale
+///   and guests gone, or no manager at boot and nothing running): recover at once
+///   (after [`ATTEST_MIN_SILENT_SECS`] of silence), no advert needed.
 pub(crate) fn recovery_gate(
     live: Liveness,
     manager_answers: bool,
@@ -207,6 +210,7 @@ pub(crate) fn recovery_gate(
     mgr_silent_for: i64,
     offline_for: i64,
     silent_wait: i64,
+    attest: Attest,
 ) -> RecoveryGate {
     match live {
         Liveness::Silent => {
@@ -216,8 +220,16 @@ pub(crate) fn recovery_gate(
                 RecoveryGate::Wait
             }
         }
-        Liveness::KernelAlive => match agent_wait {
-            Some(a) if !manager_answers => {
+        Liveness::KernelAlive if manager_answers => RecoveryGate::HoldAlive,
+        Liveness::KernelAlive => match (attest, agent_wait) {
+            // first-hand proof from the node's own agent (works with no manager at all)
+            (Attest::Safe, _) if mgr_silent_for >= ATTEST_MIN_SILENT_SECS => RecoveryGate::Recover,
+            (Attest::Safe, _) => RecoveryGate::Wait,
+            // the agent answers but the node is not provably dead yet (fresh heartbeat,
+            // guests still being killed, manager still allowed to start): wait, but
+            // not forever
+            (Attest::NotYet, _) if mgr_silent_for < ATTEST_NOT_YET_MAX_SECS => RecoveryGate::Wait,
+            (_, Some(a)) => {
                 if mgr_silent_for >= a && offline_for >= a {
                     RecoveryGate::Recover
                 } else {
@@ -228,6 +240,24 @@ pub(crate) fn recovery_gate(
         },
     }
 }
+
+/// What the node's own fence agent said when asked (`ha_fence_agent::fetch_attestation`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Attest {
+    /// Its HA guests are provably not running and nothing can start them.
+    Safe,
+    /// The agent answered; the node is not provably dead (yet).
+    NotYet,
+    /// No answer (older agent, port closed, filtered).
+    Unavailable,
+}
+
+/// The manager must have been silent this long before an attestation is acted
+/// on: one lost probe is not a dead manager.
+pub(crate) const ATTEST_MIN_SILENT_SECS: i64 = 3;
+/// A node whose agent keeps saying "not yet" this long is a manager that is not
+/// beating but answers nothing either: held like any unproven node.
+pub(crate) const ATTEST_NOT_YET_MAX_SECS: i64 = 180;
 
 /// Does a manager answer HTTP on the node (any status)? A SIGSTOPped manager
 /// still completes TCP handshakes in the kernel backlog but never replies.
@@ -844,6 +874,7 @@ async fn fence_heartbeat(state: Arc<AppState>) {
         return;
     };
     let port = state.config.server.port;
+    agent::ensure_service();
     let mut until_agent_check: u8 = 0;
     loop {
         ticker.tick().await;
@@ -1165,6 +1196,24 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
                 ls.mgr_silent_since.remove(&node);
                 0
             };
+            let attest = if live == Liveness::KernelAlive && !manager_answers {
+                match super::ha_fence_agent::fetch_attestation(&ip).await {
+                    Some(a) => {
+                        tracing::info!(
+                            "HA: {node} agent attests safe={} ({}); heartbeat age {:?}, running {:?}, boot {}",
+                            a.safe, a.reason, a.hb_age, a.running, a.boot_id
+                        );
+                        if a.safe {
+                            Attest::Safe
+                        } else {
+                            Attest::NotYet
+                        }
+                    }
+                    None => Attest::Unavailable,
+                }
+            } else {
+                Attest::Unavailable
+            };
             let gate = recovery_gate(
                 live,
                 manager_answers,
@@ -1172,6 +1221,7 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
                 mgr_silent_for,
                 offline_for,
                 silent_wait,
+                attest,
             );
             if gate == RecoveryGate::Wait {
                 continue;
@@ -1734,17 +1784,41 @@ mod fence_agent_gate_tests {
         let a = agent().unwrap();
         // refused (manager not running), agent advertised, silent long enough
         assert_eq!(
-            recovery_gate(Liveness::KernelAlive, false, agent(), a, a, SILENT),
+            recovery_gate(
+                Liveness::KernelAlive,
+                false,
+                agent(),
+                a,
+                a,
+                SILENT,
+                Attest::Unavailable
+            ),
             RecoveryGate::Recover
         );
         // the guest may still be running before that
         assert_eq!(
-            recovery_gate(Liveness::KernelAlive, false, agent(), a - 1, a + 30, SILENT),
+            recovery_gate(
+                Liveness::KernelAlive,
+                false,
+                agent(),
+                a - 1,
+                a + 30,
+                SILENT,
+                Attest::Unavailable
+            ),
             RecoveryGate::Wait
         );
         // seen silent for long, but only just marked offline: both clocks count
         assert_eq!(
-            recovery_gate(Liveness::KernelAlive, false, agent(), a + 50, a - 1, SILENT),
+            recovery_gate(
+                Liveness::KernelAlive,
+                false,
+                agent(),
+                a + 50,
+                a - 1,
+                SILENT,
+                Attest::Unavailable
+            ),
             RecoveryGate::Wait
         );
     }
@@ -1754,7 +1828,15 @@ mod fence_agent_gate_tests {
         // the split-brain guard stays for nodes that cannot be proven fenced
         for t in [0, 33, 58, 600, 100_000] {
             assert_eq!(
-                recovery_gate(Liveness::KernelAlive, false, None, t, t, SILENT),
+                recovery_gate(
+                    Liveness::KernelAlive,
+                    false,
+                    None,
+                    t,
+                    t,
+                    SILENT,
+                    Attest::Unavailable
+                ),
                 RecoveryGate::HoldAlive
             );
         }
@@ -1764,7 +1846,15 @@ mod fence_agent_gate_tests {
     fn an_answering_manager_is_never_recovered() {
         for t in [0, 33, 58, 600, 100_000] {
             assert_eq!(
-                recovery_gate(Liveness::KernelAlive, true, agent(), t, t, SILENT),
+                recovery_gate(
+                    Liveness::KernelAlive,
+                    true,
+                    agent(),
+                    t,
+                    t,
+                    SILENT,
+                    Attest::Unavailable
+                ),
                 RecoveryGate::HoldAlive
             );
         }
@@ -1773,11 +1863,27 @@ mod fence_agent_gate_tests {
     #[test]
     fn silent_node_still_waits_for_the_network_self_fence_margin() {
         assert_eq!(
-            recovery_gate(Liveness::Silent, false, agent(), 0, SILENT - 1, SILENT),
+            recovery_gate(
+                Liveness::Silent,
+                false,
+                agent(),
+                0,
+                SILENT - 1,
+                SILENT,
+                Attest::Unavailable
+            ),
             RecoveryGate::Wait
         );
         assert_eq!(
-            recovery_gate(Liveness::Silent, false, None, 0, SILENT, SILENT),
+            recovery_gate(
+                Liveness::Silent,
+                false,
+                None,
+                0,
+                SILENT,
+                SILENT,
+                Attest::Unavailable
+            ),
             RecoveryGate::Recover
         );
     }
@@ -1806,6 +1912,47 @@ mod fence_agent_gate_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_safe_attestation_recovers_a_live_kernel_without_waiting_for_the_advert() {
+        let k = Liveness::KernelAlive;
+        // manager-less reboot (j01743): no agent advert at all, agent attests safe
+        assert_eq!(
+            recovery_gate(k, false, None, 3, 3, SILENT, Attest::Safe),
+            RecoveryGate::Recover
+        );
+        assert_eq!(
+            recovery_gate(k, false, None, 2, 40, SILENT, Attest::Safe),
+            RecoveryGate::Wait
+        );
+        // an answering manager always wins: never recovered, whatever the agent says
+        assert_eq!(
+            recovery_gate(k, true, None, 99, 99, SILENT, Attest::Safe),
+            RecoveryGate::HoldAlive
+        );
+        // not provably dead yet (guests still running / fresh heartbeat): wait, bounded
+        assert_eq!(
+            recovery_gate(k, false, None, 100, 100, SILENT, Attest::NotYet),
+            RecoveryGate::Wait
+        );
+        assert_eq!(
+            recovery_gate(
+                k,
+                false,
+                None,
+                ATTEST_NOT_YET_MAX_SECS,
+                999,
+                SILENT,
+                Attest::NotYet
+            ),
+            RecoveryGate::HoldAlive
+        );
+        // a safe attestation never applies to a silent kernel (that path is unchanged)
+        assert_eq!(
+            recovery_gate(Liveness::Silent, false, None, 0, 1, SILENT, Attest::Safe),
+            RecoveryGate::Wait
+        );
     }
 
     /// The point of the change: a rebooted node (kernel back within ~30 s,
