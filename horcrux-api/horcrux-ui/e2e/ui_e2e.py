@@ -1324,7 +1324,9 @@ def storage_volume_checks(page, vid):
     """Storage page volume view and VM disks placed on a storage pool."""
     import shutil
     tok = token()
-    pool_dir = "/tmp/e2e-ui-pool"
+    # disk-backed dir: /tmp is a tmpfs on Debian 13 nodes (< 1 GB free on a 2 GB VM), where creating the 1 GB
+    # volume is refused with "Not enough space in pool ... Available: 0GB" (VM-cluster ui.flows, 2026-11-10)
+    pool_dir = "/var/tmp/e2e-ui-pool"
     shutil.rmtree(pool_dir, ignore_errors=True)
     os.makedirs(pool_dir)
     pool = api_post("/api/storage/pools", tok,
