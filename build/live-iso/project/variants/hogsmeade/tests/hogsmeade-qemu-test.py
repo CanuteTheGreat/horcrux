@@ -570,8 +570,8 @@ class HRun(zt.ZRun):
         open(f"{a.out}/rustinion.txt", "w").write(o)
         sec = {k: v.strip() for k, v in re.findall(r"@@([A-Z])\n(.*?)(?=@@)", o, re.S)}
         head = o.split("@@V")[0]
-        self.step("rustinion-agent-installed-from-portage-and-runs", "rustinion-agent-0.1.349" in head and head.count("app-admin/rustinion-agent") >= 3 and "portage" in head
-                  and re.search(r"0\.1\.349", sec.get("V", "")) is not None, re.sub(r"\s+", " ", head + " | " + sec.get("V", ""))[:300])
+        self.step("rustinion-agent-installed-from-portage-and-runs", (rv := re.search(r"rustinion-agent-(\d+\.\d+\.\d+)", head)) is not None and head.count("app-admin/rustinion-agent") >= 3 and "portage" in head
+                  and rv.group(1) in sec.get("V", ""), re.sub(r"\s+", " ", head + " | " + sec.get("V", ""))[:300])
         self.step("rustinion-enrol-command-present-takes-a-token", "--token" in sec.get("H", ""), re.sub(r"\s+", " ", sec.get("H", ""))[:300])
         self.step("rustinion-not-enrolled-and-no-token-in-the-image", "NOT-ENROLLED" in sec.get("S", "") and not re.search(r"^/", sec.get("S", ""), re.M), re.sub(r"\s+", " ", sec.get("S", ""))[:200])
         self.step("rustinion-in-world-service-waits-for-the-enrolment", sec.get("R", "").strip().splitlines()[-1:] == ["1"], re.sub(r"\s+", " ", sec.get("R", ""))[:200])
@@ -624,10 +624,11 @@ class HRun(zt.ZRun):
         open(f"{a.out}/provision.txt", "w").write(r.stdout + r.stderr)
         self.step("restic-provisioned-over-ssh-stdin-0600", r.returncode == 0 and "600 root /etc/hogsmeade/backup.env" in r.stdout and "600 root /etc/hogsmeade/restic-password" in r.stdout, r.stdout.strip().replace("\n", " | ")[:300] + r.stderr[:100])
         self.sh("mkdir -p /data/hsmtest && head -c 300000 /dev/urandom > /data/hsmtest/blob && echo hello > /home/canutethegreat/hsm-note.txt && chown -R canutethegreat /home/canutethegreat/hsm-note.txt", timeout=60)
-        rc, o = self.sh("/usr/sbin/hogsmeade-backup; echo BACKUP-RC=$?; set -a; . /etc/hogsmeade/backup.env; set +a; restic snapshots --tag hogsmeade --compact; restic ls latest | grep -c hsm-note; restic check 2>&1 | tail -2; cat /var/lib/hogsmeade/last-backup-ok", timeout=600)
+        rc, o = self.sh("/usr/sbin/hogsmeade-backup; echo BACKUP-RC=$?; /usr/sbin/hogsmeade-backup; echo SECOND-RC=$?; zfs list -H -t snapshot -o name | grep -c '@hsm-backup' | sed 's/^/LEFTOVER-SNAPSHOTS=/'; set -a; . /etc/hogsmeade/backup.env; set +a; restic snapshots --tag hogsmeade --compact; echo PATH-GROUPS=$(restic snapshots --tag hogsmeade --json | python3 -c 'import json,sys; print(len({tuple(x[\"paths\"]) for x in json.load(sys.stdin)}))'); restic ls latest | grep -c hsm-note; restic check 2>&1 | tail -2; cat /var/lib/hogsmeade/last-backup-ok", timeout=600)
         open(f"{a.out}/test-backup.txt", "w").write(o)
-        self.step("test-backup-to-throwaway-restic-repo", "BACKUP-RC=0" in o and "1 snapshots" in o and "no errors were found" in o, o.strip().replace("\n", " | ")[:400])
-        rc, o = self.sh("set -a; . /etc/hogsmeade/backup.env; set +a; rm -rf /var/tmp/hsm-restore; restic restore latest --tag hogsmeade --target /var/tmp/hsm-restore >/dev/null 2>&1; echo RESTORE-RC=$?; "
+        self.step("test-backup-to-throwaway-restic-repo", "BACKUP-RC=0" in o and "SECOND-RC=0" in o and "2 snapshots" in o and "PATH-GROUPS=1" in o and "LEFTOVER-SNAPSHOTS=0" in o and "no errors were found" in o, o.strip().replace("\n", " | ")[:400])
+        rc, o = self.sh("set -a; . /etc/hogsmeade/backup.env; set +a; rm -rf /var/tmp/hsm-restore; restic restore --tag hogsmeade latest:/home/.zfs/snapshot/hsm-backup --target /var/tmp/hsm-restore/home >/dev/null 2>&1 && "
+                        "restic restore --tag hogsmeade latest:/data/.zfs/snapshot/hsm-backup --target /var/tmp/hsm-restore/data >/dev/null 2>&1; echo RESTORE-RC=$?; "
                         "cmp /data/hsmtest/blob /var/tmp/hsm-restore/data/hsmtest/blob && echo BLOB-SAME; cmp /home/canutethegreat/hsm-note.txt /var/tmp/hsm-restore/home/canutethegreat/hsm-note.txt && echo NOTE-SAME; "
                         "restic snapshots --tag hogsmeade --json | python3 -c 'import json,sys; s=json.load(sys.stdin); print(\"TAGS\", sorted({t for x in s for t in x.get(\"tags\", [])}))'; "
                         "rm -rf /var/tmp/hsm-restore /data/hsmtest", timeout=600)
