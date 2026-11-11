@@ -326,7 +326,10 @@ mod tests {
         QDevice::save_to(&f, None).unwrap();
         assert!(QDevice::load_from(&f).is_none());
         QDevice::save_to(&f, None).unwrap(); // clearing twice is fine
-        assert_eq!(QDevice::parse("10.0.0.9").unwrap().algorithm, QAlgorithm::FfSplit);
+        assert_eq!(
+            QDevice::parse("10.0.0.9").unwrap().algorithm,
+            QAlgorithm::FfSplit
+        );
         assert!(QDevice::parse("qnetd bogus").is_none());
         assert!(QDevice::parse("a}b").is_none());
         assert!(QDevice::parse("   ").is_none());

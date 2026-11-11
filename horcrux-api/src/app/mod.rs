@@ -4777,14 +4777,21 @@ async fn set_qdevice(
                     ))
                 }
             };
-            Some(QDevice::new(b.host.trim(), algo).ok_or((
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "qdevice host must be a hostname or IP (letters, digits, '.', '-', ':')".to_string(),
-            ))?)
+            Some(
+                QDevice::new(b.host.trim(), algo).ok_or((
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "qdevice host must be a hostname or IP (letters, digits, '.', '-', ':')"
+                        .to_string(),
+                ))?,
+            )
         }
     };
-    QDevice::save_to(&qdevice_file(), q.as_ref())
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("saving qdevice: {e}")))?;
+    QDevice::save_to(&qdevice_file(), q.as_ref()).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("saving qdevice: {e}"),
+        )
+    })?;
     Ok(get_qdevice().await)
 }
 
