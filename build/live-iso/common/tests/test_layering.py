@@ -53,8 +53,10 @@ class Layering(unittest.TestCase):
 
     def test_owner_apps_live_in_machine_layers(self):
         owner = set(atoms(os.path.join(LIVE, "project", "variants", "owner-common", "packages.txt")))
-        for a in ("www-client/brave-bin", "net-misc/nextcloud-client", "net-vpn/tailscale", "app-antivirus/clamav"):
+        for a in ("www-client/brave-bin", "net-misc/nextcloud-client", "app-antivirus/clamav"):
             self.assertIn(a, owner)
+        self.assertNotIn("net-vpn/tailscale", owner)     # retired 2026-11-10 (WireGuard hub replaces it)
+        self.assertIn("net-vpn/tailscale", set(atoms(os.path.join(LIVE, "project", "public-forbidden.txt"))))
         for v in ("gringotts", "hogshead"):
             txt = "".join(open(os.path.join(LIVE, "project", "variants", v, f)).read() for f in os.listdir(os.path.join(LIVE, "project", "variants", v)) if f.startswith("Dockerfile"))
             self.assertIn("owner-common/packages.txt", txt, f"{v} does not install the owner apps")

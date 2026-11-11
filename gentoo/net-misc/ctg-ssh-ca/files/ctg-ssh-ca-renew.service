@@ -1,7 +1,7 @@
 [Unit]
 Description=Renew this machine's SSH certificates (host + user) with the personal CA signer
 Wants=network-online.target
-After=network-online.target tailscaled.service
+After=network-online.target
 
 [Service]
 Type=oneshot

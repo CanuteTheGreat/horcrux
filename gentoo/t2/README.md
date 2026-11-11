@@ -23,7 +23,7 @@ This matches the pin in `docs/T2-MACS.md` (7.2.x + t2linux 7.2.10 set); the comm
 - `dracut/90-t2.conf` - **early** modules: `t2bce_core t2bce_dma t2bce_vhci hid_apple hid_appletb_kbd hid_appletb_bl usbhid hid_generic hid_multitouch` are `force_drivers` (loaded before udev), plus `i915 nvme thunderbolt xhci_pci usb_storage appletbdrm t2bce_audio` via `add_drivers`. Without them the internal keyboard/trackpad (USB devices behind the T2) is dead at LUKS / ZFS passphrase prompts. Copy this file into the installed system's `/etc/dracut.conf.d/` (and into the ZFSBootMenu initramfs config).
 - `dracut/10-live.conf` - generic live-medium dracut config (only the live ISO needs it).
 - `live/` - the standalone live ISO builder (`build.sh`, `Dockerfile`, `setup-rootfs.sh`, `assemble-hogshead-iso.sh`, `qemu-test.py`, `guest-checks.sh`, overlay with `hogshead-remote|unlock|backup|motd`).
-  `build.sh -p PRIVDIR` bakes private inputs (firmware, authorized_keys, tailscale key) from outside the repo; without `-p` you get a shareable, secret-free T2 ISO.
+  `build.sh -p PRIVDIR` bakes private inputs (firmware, authorized_keys) from outside the repo; without `-p` you get a shareable, secret-free T2 ISO.
 
 ## Boot cmdline for the laptop
 `pm_async=off intel_iommu=on iommu=pt` (what the Ubuntu install runs today).

@@ -1,10 +1,10 @@
 #!/bin/sh
 # gringotts-restore-push.sh - run on CRYSTALCAVE (never on gringotts): restic-restore the pre-wipe snapshot of gringotts from B2,
-# push the archives to the new install over SSH/Tailscale and run `gringotts-restore` there. No B2 credentials and no restic password
+# push the archives to the new install over SSH and run `gringotts-restore` there. No B2 credentials and no restic password
 # ever reach gringotts; wg0.conf goes over the ssh stdin (never printed).
 #
 #   gringotts-restore-push.sh TARGET [--tag pre-horcrux-wipe] [--nft] [--no-wg]
-#     TARGET      ssh destination of the new install, e.g. root@gringotts (Tailscale name) or root@<lan-ip>
+#     TARGET      ssh destination of the new install, e.g. root@gringotts (LAN name: gringotts.home.canutethegreat.com) or root@<lan-ip>
 # Environment (tests): RESTIC=<cmd>  (default: ~/.hermes/scripts/restic-workstations.sh gringotts)
 #                      SRC_DIR=<dir> skip restic, use an already restored directory (the QEMU harness does the restic half on crystalcave)
 #                      SSH_OPTS="-p 2222 -i key"  WG_FILE=<file>

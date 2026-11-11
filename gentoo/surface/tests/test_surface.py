@@ -73,9 +73,11 @@ class Profile(unittest.TestCase):
     def test_desktop_package_has_xfce_stack(self):
         eb = open(os.path.join(ROOT, "..", "app-misc", "horcrux-surface-desktop", "horcrux-surface-desktop-1-r3.ebuild")).read()
         for atom in ("xfce-base/xfce4-meta", "x11-misc/lightdm", "app-accessibility/onboard", "xfce-base/xfce4-power-manager",
-                     "www-client/firefox-bin", "net-vpn/tailscale", "app-admin/rustinion-agent",
+                     "www-client/firefox-bin", "app-admin/rustinion-agent",
                      "sys-firmware/intel-microcode", "sys-firmware/sof-firmware", "x11-drivers/xf86-input-wacom", "gnome-extra/iio-sensor-proxy"):
             self.assertIn(atom, eb)
+        self.assertNotIn("net-vpn/tailscale", eb)                     # Tailscale retired 2026-11-10 (WireGuard hub replaces it)
+        self.assertFalse(os.path.exists(os.path.join(ROOT, "root", "etc", "local.d", "50-surface-tailscale.start")))
         self.assertNotIn("www-client/brave", eb)                      # owner order 2026-11-05: no personal apps in a profile (test machine)
         self.assertNotIn("gnome-base/gnome", eb)                      # owner decision: XFCE, not GNOME
         self.assertNotIn("zram-generator", eb)                        # systemd-only generator; OpenRC zram-swap instead

@@ -5,5 +5,5 @@
 		<email>canutethegreat@gmail.com</email>
 		<name>Ronald Farrer</name>
 	</maintainer>
-	<longdescription>ctg-ssh-ca renews the SSH host certificate and the per-user certificate of a machine by proof of possession against the owner's personal CA signer on the tailnet, installs host certificates (sshd HostCertificate drop-in validated with sshd -t) and fetches the key revocation list. Fleet data comes from net-misc/ctg-ssh-ca-fleet (private).</longdescription>
+	<longdescription>ctg-ssh-ca renews the SSH host certificate and the per-user certificate of a machine by proof of possession against the owner's personal CA signer (reachable over the LAN or the WireGuard hub), installs host certificates (sshd HostCertificate drop-in validated with sshd -t) and fetches the key revocation list. Fleet data comes from net-misc/ctg-ssh-ca-fleet (private).</longdescription>
 </pkgmetadata>

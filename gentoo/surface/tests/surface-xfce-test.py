@@ -9,7 +9,7 @@
      until the login password is typed at the greeter), XFCE session after the login
   3. checks: XFS on LUKS2 on LVM, hibernate swap + zram, kernel from the Surface kernel package, qfile -o orphans, packages of
      the meta package, session processes (xfwm4, panel, power manager, onboard, nm-applet, pipewire), greeter + on-screen keyboard
-  4. apps launch inside the session (Firefox, terminal, Rustinion agent, Tailscale, onboard) + memory/responsiveness numbers
+  4. apps launch inside the session (Firefox, terminal, Rustinion agent, onboard) + memory/responsiveness numbers
   5. `loginctl hibernate` -> power off -> ONE passphrase -> same boot_id/process/tmpfs (resume), the XFCE session survives
   6. clean `emerge -puDN @world` (needs the network of the VM)
 Evidence: result.json, screens/*.png|txt, serial logs in --out. Reuses surface-qemu-test.py (T class) + common/qemu-test.py.
@@ -203,7 +203,7 @@ class XT(SQ.T):
                            "ls /etc/portage/patches/sys-kernel/gentoo-kernel | wc -l", timeout=60)
         self.save("system-state.txt", out)
         Q.shadow_reuse_gate(self.ssh, self.step, LUKS_PW)      # SECURITY: no account password (user, root, ...) verifies against the disk passphrase
-        rc, hn = self.ssh("hostname; cat /etc/conf.d/hostname; grep -c madammalkins /etc/local.d/50-surface-tailscale.start; grep -n surface-pro /etc/hosts /etc/hostname /etc/conf.d/hostname /etc/local.d/50-surface-tailscale.start; true")
+        rc, hn = self.ssh("hostname; cat /etc/conf.d/hostname; grep -n surface-pro /etc/hosts /etc/hostname /etc/conf.d/hostname; true")
         s("hostname-is-the-confirmed-name-not-a-generic-default", hn.split()[0] == HOST and "surface-pro" not in hn, re.sub(r"\s+", " ", hn)[:200])
         Q.no_autologin_config_gate(self.ssh, self.step)       # OWNER RULE: no display-manager autologin in the installed configs
         flat = out.replace("\r", "")
@@ -329,10 +329,12 @@ class XT(SQ.T):
         vm.shot("apps-running")
         wins = out
         s("app-windows-mapped", sum(k in wins for k in ("Firefox", "onboard", "Onboard", "Xfce4-terminal")) >= 3, re.sub(r"\s+", " ", wins)[:300])
-        rc, out = self.ssh("rustinion --version 2>&1 | head -2; tailscale version 2>&1 | head -1; firefox-bin --version 2>&1 | head -1; "
-                           "qlist -Iv app-admin/rustinion-agent net-vpn/tailscale www-client/firefox-bin x11-misc/lightdm app-accessibility/onboard sys-firmware/intel-microcode sys-firmware/sof-firmware | tr '\\n' ' '", timeout=90)
+        rc, out = self.ssh("rustinion --version 2>&1 | head -2; firefox-bin --version 2>&1 | head -1; "
+                           "qlist -Iv app-admin/rustinion-agent www-client/firefox-bin x11-misc/lightdm app-accessibility/onboard sys-firmware/intel-microcode sys-firmware/sof-firmware | tr '\\n' ' '", timeout=90)
         self.save("app-versions.txt", out)
-        s("apps-versions-and-portage-ownership", all(x in out for x in ("rustinion-agent", "tailscale", "firefox-bin", "onboard", "intel-microcode", "sof-firmware")), re.sub(r"\s+", " ", out)[:300])
+        s("apps-versions-and-portage-ownership", all(x in out for x in ("rustinion-agent", "firefox-bin", "onboard", "intel-microcode", "sof-firmware")), re.sub(r"\s+", " ", out)[:300])
+        rc, out = self.ssh("if [ -n \"$(command -v tailscale tailscaled; ls /etc/init.d/tailscale* /var/lib/tailscale /etc/local.d/*tailscale* 2>/dev/null; qlist -I net-vpn/tailscale 2>/dev/null)\" ]; then echo NOTS=0; else echo NOTS=1; fi")
+        s("no-tailscale", "NOTS=1" in out, "Tailscale is retired: not installed, no init script, no state dir, no local.d hook")
         # media keys (lab finding 2026-11-05: no XF86Audio* shortcut in stock XFCE): the autostart binds them in the user's shortcut channel
         out = ""
         for _ in range(10):
@@ -345,7 +347,7 @@ class XT(SQ.T):
                            "horcrux-test-machine-check 2>&1 | tail -5; true", timeout=90)
         self.save("personal-apps.txt", out)
         s("no-personal-apps-on-the-profile", "brave" not in out.lower() and "VIOLATION" not in out, "owner rule 2026-11-05: a profile carries no personal apps: " + re.sub(r"\s+", " ", out)[:200])
-        rc, out = self.ssh("qfile -o /usr/bin/firefox-bin /usr/bin/rustinion /usr/bin/onboard /usr/bin/tailscale | tr '\\n' ' '; echo; qfile /usr/bin/rustinion /usr/bin/onboard | tr '\\n' ' '")
+        rc, out = self.ssh("qfile -o /usr/bin/firefox-bin /usr/bin/rustinion /usr/bin/onboard | tr '\\n' ' '; echo; qfile /usr/bin/rustinion /usr/bin/onboard | tr '\\n' ' '")
         s("app-binaries-owned-by-ebuilds", "orphan" not in out.lower() and out.count(":") >= 3, re.sub(r"\s+", " ", out)[:300])
         # ---- memory / responsiveness at 4 GB with everything running
         time.sleep(30)

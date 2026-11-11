@@ -3,7 +3,7 @@
 
 EAPI=8
 
-DESCRIPTION="PRIVATE gringotts inputs: the agent's SSH public keys and the 7-day ephemeral tagged Tailscale pre-auth key"
+DESCRIPTION="PRIVATE gringotts inputs: the agent's SSH public keys"
 HOMEPAGE="https://git.canutethegreat.com/CanuteTheGreat/horcrux"
 # Never published: the tarball is produced outside the repository (private bundle) and dropped into DISTDIR by the image build.
 SRC_URI="gringotts-private-${PV}.tar"
@@ -15,13 +15,10 @@ KEYWORDS="amd64"
 RESTRICT="fetch mirror bindist strip"
 
 pkg_nofetch() {
-	einfo "Put gringotts-private-${PV}.tar (authorized_keys + ts-authkey) into ${DISTDIR}; it is not distributable."
+	einfo "Put gringotts-private-${PV}.tar (authorized_keys) into ${DISTDIR}; it is not distributable."
 }
 
 src_install() {
 	insinto /etc/gringotts
 	doins authorized_keys
-	insinto /usr/share/gringotts
-	insopts -m0600
-	doins ts-authkey
 }

@@ -41,10 +41,6 @@ if [ -n "${FW_SHA:-}" ]; then
   [ "$got" = "$FW_SHA" ]; r $? firmware-sha256-kure.bin "$got"
 fi
 
-if [ -n "${TS_SHA:-}" ]; then
-  got=$(sha256sum /etc/hogshead/ts-authkey 2>/dev/null | cut -d' ' -f1); m=$(stat -c %a /etc/hogshead/ts-authkey 2>/dev/null)
-  [ "$got" = "$TS_SHA" ] && [ "$m" = 600 ]; r $? baked-tailscale-authkey "present, mode $m, sha256 matches the key created for this build (value not printed)"
-fi
 # ---- ssh: key-only
 /usr/sbin/sshd -T 2>/dev/null | grep -qix 'passwordauthentication no'; r $? sshd-passwordauth-off ""
 /usr/sbin/sshd -T 2>/dev/null | grep -Eqix 'permitrootlogin (prohibit-password|without-password)'; r $? sshd-root-key-only ""
@@ -56,13 +52,12 @@ rc-service sshd status >/dev/null 2>&1; r $? sshd-running ""
 [ "$(hostname)" = hogshead-live ]; r $? hostname "$(hostname)"
 
 # ---- userland
-for c in nmtui nmcli cryptsetup lvm mkfs.ext4 resize2fs sgdisk parted efibootmgr mkfs.vfat smartctl nvme vim tmux curl rsync lspci lsusb tailscale tailscaled zpool zfs rsync sshd hogshead-remote hogshead-unlock hogshead-backup hogshead-motd; do
+for c in nmtui nmcli cryptsetup lvm mkfs.ext4 resize2fs sgdisk parted efibootmgr mkfs.vfat smartctl nvme vim tmux curl rsync lspci lsusb zpool zfs rsync sshd hogshead-remote hogshead-unlock hogshead-backup hogshead-motd; do
   command -v $c >/dev/null; r $? "tool-$c" "$(command -v $c)"
 done
 modprobe zfs 2>/dev/null; zpool version 2>&1 | head -2 | sed 's/^/INFO zfs :: /'
 [ -f /sys/module/zfs/version ]; r $? zfs-module-loaded "$(cat /sys/module/zfs/version 2>/dev/null)"
 modinfo -F vermagic zfs 2>/dev/null | grep -q "$kr"; r $? zfs-vermagic-matches-kernel "$(modinfo -F vermagic zfs 2>/dev/null)"
 rc-service NetworkManager status >/dev/null 2>&1; r $? networkmanager-running ""
-tailscale version | head -1 | sed 's/^/INFO tailscale :: /'
-[ ! -e /etc/runlevels/default/tailscaled ]; r $? tailscaled-not-autostarted ""
+[ -z "$(command -v tailscale tailscaled; ls /etc/init.d/tailscale* /var/lib/tailscale 2>/dev/null; qlist -I net-vpn/tailscale 2>/dev/null)" ]; r $? no-tailscale "Tailscale is retired: no binary, init script, state dir or package"
 rc-status -a 2>/dev/null | sed 's/^/INFO rc :: /' | head -30

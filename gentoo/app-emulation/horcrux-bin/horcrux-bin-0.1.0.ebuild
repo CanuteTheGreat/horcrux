@@ -18,6 +18,18 @@ HOMEPAGE="https://github.com/CanuteTheGreat/horcrux"
 #  - A source build stays available: app-emulation/horcrux (blocked by this package, both install /usr/bin/horcrux-api).
 # Upgrade on an installed machine: put a newer tarball in /usr/share/horcrux/prebuilt/ (or HORCRUX_MANAGER_TARBALL=/path) and `emerge -1 horcrux-bin`;
 # without one the daily-image asset is fetched (HORCRUX_MANAGER_URL, default below).
+#
+# STALE BINPKGS (lab 2026-11-10): this ebuild used to be ONE version (0.1.0) for every tarball. On a host with FEATURES=buildpkg and
+# --usepkg/--getbinpkg (the lab laptops, any binhost user) the first install left a binary package 0.1.0 behind and every later
+# `emerge -1 horcrux-bin` silently reinstalled THAT package, never reading the new tarball (the rolling upgrade 'installed' the old sha).
+# Portage matches binary packages by CPV, so the version must change with the tarball: bump-horcrux-bin.sh (this directory; run by the
+# bump-horcrux-bin workflow whenever the published daily manager tarball changes) copies this file to horcrux-bin-0.1.0_p<YYYYMMDDHHMM>.ebuild,
+# a NEWER version for Portage: `emerge -u horcrux-bin` sees an upgrade, no binary package of it exists, so the tarball is fetched and
+# installed. The plain 0.1.0 stays as the fallback for a tree without a stamped ebuild (image builds from a local tarball).
+# The two HORCRUX_MANAGER_SHA256_* values are filled in by the bump script (empty here): a tarball FETCHED by URL must match the build
+# this version was cut for (a replaced daily asset fails loudly instead of installing under the wrong version).
+HORCRUX_MANAGER_SHA256_x86_64=""
+HORCRUX_MANAGER_SHA256_aarch64=""
 RESTRICT="network-sandbox mirror strip"    # tarball fetch at src_unpack; the binaries are already stripped/cross built
 LICENSE="GPL-2"
 SLOT="0"
@@ -51,6 +63,12 @@ src_unpack() {
 		einfo "no local manager tarball (${t}): fetching ${url}"
 		t="${T}/$(_tarball_name)"
 		curl -fsSL --retry 3 -o "${t}" "${url}" || die "no manager tarball: put $(_tarball_name) in ${EPREFIX}/usr/share/horcrux/prebuilt/ or set HORCRUX_MANAGER_TARBALL"
+		local want_var="HORCRUX_MANAGER_SHA256_$(uname -m)" want got
+		want=${!want_var}
+		if [[ -n ${want} && -z ${HORCRUX_MANAGER_URL} ]]; then
+			got=$(sha256sum "${t}" | cut -d' ' -f1)
+			[[ ${got} == "${want}" ]] || die "fetched manager tarball sha256 ${got} is not the one ${PVR} was cut for (${want}): the daily asset changed, run \`emaint sync -r horcrux\` and \`emerge -u horcrux-bin\` again"
+		fi
 	fi
 	tar --zstd -xf "${t}" -C "${S}" --no-same-owner || die "unpacking ${t} failed"
 	# sanity: a tarball of another layout must fail here, not leave a half manager

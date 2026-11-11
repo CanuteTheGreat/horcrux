@@ -1,0 +1,81 @@
+name: Bump horcrux-bin
+
+# app-emulation/horcrux-bin installs the prebuilt manager tarball (the daily-image asset). It used to be ONE Portage version for every
+# tarball, so a host with FEATURES=buildpkg + --usepkg/--getbinpkg reinstalled a stale binary package on `emerge -1 horcrux-bin`
+# (lab 2026-11-10). Portage matches binary packages by version, so every new tarball needs a NEW version: this job cuts
+# gentoo/app-emulation/horcrux-bin/horcrux-bin-0.1.0_p<YYYYMMDDHHMM>.ebuild (gentoo/app-emulation/horcrux-bin/bump-horcrux-bin.sh) when the
+# published daily tarball changed; overlay-sync then publishes it to horcrux-overlay. The daily publish has no change signal for this repo
+# (the image workflows upload to the GitHub mirror), so it polls, like overlay-sync. Idempotent: an unchanged tarball changes nothing.
+
+on:
+  schedule:
+    - cron: '41 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: 'true = print what would be committed, push nothing'
+        required: false
+        default: 'false'
+
+concurrency:
+  group: "replace:bump-horcrux-bin@${{ github.ref }}"
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: Cut a new horcrux-bin version for the current daily manager tarball
+    runs-on: arm64-light  # light git/curl job; never queue it behind heavy x86 builds
+    container: catthehacker/ubuntu:act-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read the published daily tarballs
+        id: asset
+        run: |
+          set -eu
+          api=https://api.github.com/repos/CanuteTheGreat/horcrux/releases/tags/daily
+          curl -fsS --retry 3 -H 'Accept: application/vnd.github+json' "$api" -o /tmp/rel.json
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, re
+          r = json.load(open("/tmp/rel.json"))
+          by = {a["name"]: a for a in r["assets"]}
+          x = by.get("horcrux-manager-daily-x86_64.tar.zst")
+          if not x:
+              raise SystemExit("no x86_64 manager tarball on the daily release")
+          stamp = re.sub(r"[^0-9]", "", x["updated_at"])[:12]
+          def sha(a):
+              d = (a or {}).get("digest") or ""
+              return d.split(":", 1)[1] if d.startswith("sha256:") else ""
+          print("stamp=" + stamp)
+          print("sx=" + sha(x))
+          print("sa=" + sha(by.get("horcrux-manager-daily-aarch64.tar.zst")))
+          PY
+
+      - name: Cut the ebuild
+        env:
+          DRY: ${{ github.event.inputs.dry }}
+          BUMP_KEY: ${{ secrets.HORCRUX_BUMP_DEPLOY_KEY }}
+        run: |
+          set -eu
+          d=gentoo/app-emulation/horcrux-bin
+          if [ -z "${{ steps.asset.outputs.sx }}" ]; then echo "::error::the release API gave no sha256 digest for the x86_64 tarball; not cutting a version without a checksum"; exit 1; fi
+          out=$(bash $d/bump-horcrux-bin.sh --stamp "${{ steps.asset.outputs.stamp }}" --sha256-x86_64 "${{ steps.asset.outputs.sx }}" --sha256-aarch64 "${{ steps.asset.outputs.sa }}") || rc=$?
+          echo "$out"
+          case "${rc:-0}" in 0) ;; 2) echo "stamp not newer than the existing ebuild: nothing to do"; exit 0;; *) exit "${rc}";; esac
+          case "$out" in unchanged*) exit 0;; esac
+          git config user.name "Horcrux CI"; git config user.email "ci@horcrux.invalid"
+          git add -A $d
+          git commit -q -m "gentoo: horcrux-bin 0.1.0_p${{ steps.asset.outputs.stamp }} for the current daily manager tarball (stale binpkgs never satisfy it) [skip ci]; no version bump"
+          if [ "${DRY:-false}" = true ]; then git show --stat HEAD; exit 0; fi
+          # The job token (bot) cannot push to main (pre-receive hook answers 500, first real run 2026-11-10): push with a write deploy key
+          # of this repo (secret HORCRUX_BUMP_DEPLOY_KEY). The commit message also needs `no version bump` for the repo's version hook.
+          w=$(mktemp -d); umask 077; printf '%s\n' "${BUMP_KEY:?secret HORCRUX_BUMP_DEPLOY_KEY is empty}" > $w/key; umask 022
+          export GIT_SSH_COMMAND="ssh -i $w/key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$w/kh"
+          url=ssh://git@git.canutethegreat.com/CanuteTheGreat/horcrux.git
+          rc=0; git fetch -q "$url" main && git rebase -q FETCH_HEAD && git push -q "$url" HEAD:main || rc=$?
+          shred -u $w/key; exit $rc

@@ -47,7 +47,6 @@ RDEPEND="
 	sys-auth/elogind
 	sys-apps/xdg-desktop-portal-gtk
 	www-client/firefox-bin
-	net-vpn/tailscale
 	app-admin/rustinion-agent
 	sys-firmware/intel-microcode
 	sys-firmware/sof-firmware

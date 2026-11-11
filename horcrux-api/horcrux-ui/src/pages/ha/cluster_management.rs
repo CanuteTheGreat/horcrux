@@ -10,9 +10,9 @@
 //! - `POST /api/cluster/find-node`           <- `FindNodeRequest` -> node name
 use crate::api::{
     add_cluster_node, find_best_node_for_vm, get_cluster_architecture, get_cluster_nodes,
-    get_cluster_power_status, get_vms, power_down_node, power_node_note, remove_cluster_node,
-    set_node_caps, set_node_priority, AddNodeRequest, ClusterArchitecture, ClusterNode,
-    FindNodeRequest, NodeCaps, PowerStatus,
+    get_cluster_power_status, get_quorum_plan, get_vms, power_down_node, power_node_note,
+    remove_cluster_node, set_node_caps, set_node_priority, AddNodeRequest, ClusterArchitecture,
+    ClusterNode, FindNodeRequest, NodeCaps, PowerStatus, QuorumPlanView,
 };
 use horcrux_common::VmConfig;
 use leptos::*;
@@ -128,6 +128,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
         create_signal(None::<ClusterArchitecture>);
     let (vms, set_vms) = create_signal(Vec::<VmConfig>::new());
     let (power_status, set_power_status) = create_signal(None::<PowerStatus>);
+    let (quorum_plan, set_quorum_plan) = create_signal(None::<QuorumPlanView>);
     let (loading, set_loading) = create_signal(false);
     let (error, set_error) = create_signal(None::<String>);
     let (success_message, set_success_message) = create_signal(None::<String>);
@@ -166,6 +167,11 @@ pub fn ClusterManagementPage() -> impl IntoView {
             match get_cluster_power_status().await {
                 Ok(p) => set_power_status.set(Some(p)),
                 Err(e) => errors.push(format!("Failed to load power status: {}", e)),
+            }
+
+            match get_quorum_plan().await {
+                Ok(q) => set_quorum_plan.set(Some(q)),
+                Err(e) => errors.push(format!("Failed to load quorum plan: {}", e)),
             }
 
             match get_vms().await {
@@ -704,6 +710,32 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                 }).collect_view()}
                             </tbody>
                         </table>
+                    </div>
+                }
+            })}
+
+            // Quorum plan (area 3): votes, threshold, qdevice, warnings.
+            {move || quorum_plan.get().map(|q| {
+                let tie = if q.auto_tie_breaker { "on" } else { "off" };
+                let qdev = match &q.qdevice_host {
+                    Some(h) => format!("{} (+{} votes)", h, q.qdevice_votes),
+                    None => "none (set HORCRUX_QDEVICE_HOST for a 2-node cluster)".to_string(),
+                };
+                let risk = q.split_brain_risk;
+                view! {
+                    <div id="quorum-panel" class="bg-white rounded-lg shadow overflow-hidden mt-6">
+                        <div class="px-6 py-4 border-b">
+                            <h2 class="text-lg font-semibold">"Quorum"</h2>
+                            <p id="quorum-summary" class="text-sm font-medium mt-1">
+                                {format!(
+                                    "{} voting nodes, {} votes in total; quorum needs {}; the cluster survives losing {} votes.",
+                                    q.nodes, q.total_votes, q.quorum, q.tolerated_vote_loss
+                                )}
+                            </p>
+                            <p class="text-sm text-gray-600">{format!("auto_tie_breaker: {}; external quorum device: {}", tie, qdev)}</p>
+                            {risk.then(|| view! { <p class="text-sm text-red-700 font-medium">"Split-brain risk: an even split leaves no side with quorum."</p> })}
+                            {q.warnings.iter().map(|w| view! { <p class="quorum-warning text-sm text-yellow-700">{w.clone()}</p> }).collect_view()}
+                        </div>
                     </div>
                 }
             })}

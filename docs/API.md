@@ -1585,10 +1585,10 @@ GET /metrics
 ### List Cluster Nodes
 
 Lists all nodes in the cluster. `cpu_usage` (percent) and `memory_used`
-(bytes) are live figures from the node heartbeat: every 10 s each
+(bytes) are live figures from the node heartbeat: every 5 s each
 horcrux-api polls every registered node's `GET /api/cluster/local-usage`
 (this host is sampled directly from procfs) and updates the node's usage
-and `status` (`online` when it answers; `offline` after 30 s without an
+and `status` (`online` when it answers; `offline` after 15 s without an
 answer). They are `null` when unknown -- the node is unreachable, has never
 reported, or rejected the poll (nodes must share `JWT_SECRET`) -- and are
 never reported as 0 in that case. `last_seen` is the Unix time of the last

@@ -17,7 +17,6 @@ RDEPEND="
 	dev-lang/python
 	dev-libs/openssl
 	net-misc/networkmanager
-	net-vpn/tailscale
 	sys-apps/coreutils
 	sys-apps/openrc
 "

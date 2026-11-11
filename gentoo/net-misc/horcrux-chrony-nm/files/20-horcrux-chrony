@@ -3,7 +3,7 @@
 #
 # chronyd starts in the default runlevel before the Wi-Fi/DHCP link exists, so its `pool` name cannot be
 # resolved and it ends up with ZERO sources (it does not retry on its own while it believes it is offline).
-# A laptop then keeps its boot-time clock, which breaks TLS, Tailscale and emerge. On every link-up this
+# A laptop then keeps its boot-time clock, which breaks TLS and emerge. On every link-up this
 # hook tells chronyd the network is there, re-resolves the pool/server names and asks for a quick burst.
 #
 # $1 = interface, $2 = action (see NetworkManager-dispatcher(8))
@@ -12,7 +12,7 @@ case "$2" in
 	*) exit 0 ;;
 esac
 case "$1" in
-	lo|tailscale*|docker*|virbr*|veth*|br-*) exit 0 ;;
+	lo|docker*|virbr*|veth*|br-*) exit 0 ;;
 esac
 command -v chronyc >/dev/null 2>&1 || exit 0
 # chronyd not running (or still starting): nothing to tell, it will resolve by itself

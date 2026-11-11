@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.4
 # hogshead live ISO rootfs: Gentoo stage3 + Gentoo's own kernel sources + the t2linux patch set + OpenZFS + live userland.
 # Build context = a staged dir made by build.sh (gentoo/t2/**, build/live-iso/common/{arch,portage}).
-# Named contexts: t2patches (pinned patch set), priv (PRIVATE: firmware, authorized_keys, tailscale auth key; may be empty).
+# Named contexts: t2patches (pinned patch set), priv (PRIVATE: firmware, authorized_keys; may be empty).
 ARG STAGE3_TAG=amd64-openrc
 
 FROM gentoo/stage3:${STAGE3_TAG} AS base
@@ -52,16 +52,9 @@ RUN --mount=type=cache,id=hs-binpkgs,target=/var/cache/binpkgs,sharing=locked \
     set -e; ls -l /usr/src; emerge --noreplace --usepkg=n --getbinpkg=n =sys-fs/zfs-kmod-2.3.9; emerge --noreplace =sys-fs/zfs-2.3.9; \
     kr=$(cat /boot/.kernelrelease); find /lib/modules/$kr -name 'zfs.ko*' | grep .; depmod $kr
 
-# tailscale (official static build, sha256-verified)
-ARG TS_VERSION=1.104.4
-RUN set -e; cd /tmp; curl -fsSLO https://pkgs.tailscale.com/stable/tailscale_${TS_VERSION}_amd64.tgz; \
-    echo "$(curl -fsSL https://pkgs.tailscale.com/stable/tailscale_${TS_VERSION}_amd64.tgz.sha256)  tailscale_${TS_VERSION}_amd64.tgz" | sha256sum -c -; \
-    tar xzf tailscale_${TS_VERSION}_amd64.tgz; install -m0755 tailscale_${TS_VERSION}_amd64/tailscale tailscale_${TS_VERSION}_amd64/tailscaled /usr/bin/; \
-    rm -rf /tmp/tailscale_*; tailscale version | head -1
-
 COPY gentoo/t2/live/overlay/ /
 COPY gentoo/t2/dracut/ /etc/dracut.conf.d/
-# PRIVATE layer: Apple Wi-Fi/BT firmware, the owner's public ssh keys, the one-time Tailscale auth key (all optional)
+# PRIVATE layer: Apple Wi-Fi/BT firmware and the owner's public ssh keys (both optional)
 COPY --from=priv / /tmp/priv/
 COPY gentoo/t2/live/setup-rootfs.sh /tmp/setup-rootfs.sh
 RUN sh /tmp/setup-rootfs.sh && rm -rf /tmp/priv /tmp/setup-rootfs.sh

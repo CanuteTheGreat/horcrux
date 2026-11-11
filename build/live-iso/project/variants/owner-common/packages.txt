@@ -2,5 +2,4 @@
 # Brave comes from the owner's canutethegreat-overlay (not in ::gentoo); rustinion-agent is added by each machine layer from the Horcrux overlay.
 www-client/brave-bin
 net-misc/nextcloud-client
-net-vpn/tailscale
 app-antivirus/clamav

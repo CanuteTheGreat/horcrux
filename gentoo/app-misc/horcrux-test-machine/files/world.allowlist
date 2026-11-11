@@ -90,6 +90,5 @@ gnome-extra/nm-applet
 media-sound/pavucontrol
 sys-apps/xdg-desktop-portal-gtk
 # --- agent plumbing the lab and the owner's monitoring need on every test machine
-net-vpn/tailscale
 app-admin/rustinion-agent
 app-backup/restic

@@ -64,7 +64,7 @@ fn tick_secs() -> u64 {
 /// How long a node without a majority waits before it kills its HA VMs,
 /// counted from the LAST moment it still saw a majority (see [`FenceClock`]).
 fn self_fence_secs() -> i64 {
-    env_secs("HORCRUX_HA_SELF_FENCE_SECS", 30) as i64
+    env_secs("HORCRUX_HA_SELF_FENCE_SECS", 20) as i64
 }
 /// Period of the self-fence watchdog (its own task, independent of the HA
 /// tick, which can be stuck in a peer call for a long time).
@@ -346,6 +346,7 @@ pub async fn broadcast_group(state: &Arc<AppState>, change: GroupChange) {
         offline_since: HashMap::new(),
         last_fence: HashMap::new(),
         hung_reported: Default::default(),
+        synced_with_peer: true,
     };
     for n in state.cluster_manager.list_nodes().await {
         if n.name == local || n.is_local || n.status != NodeStatus::Online {
@@ -652,6 +653,33 @@ struct LoopState {
     last_fence: HashMap<String, i64>,
     /// nodes already reported as "kernel alive, manager silent" (log/event once)
     hung_reported: std::collections::HashSet<String>,
+    /// This manager process has completed a placement sync with at least one
+    /// peer (see [`may_restart_local_guests`]).
+    synced_with_peer: bool,
+}
+
+/// May this node (re)start HA guests that its own records say belong here?
+///
+/// A node that has just booted (hard crash, power loss, manager restart) holds a
+/// STALE placement: while it was down the cluster may have recovered the guest on
+/// another node. Its records are only trustworthy once it has exchanged placements
+/// with a peer (`publish` adopts every newer placement, the stale-copy sweep then
+/// kills a leftover), so no guest is started before one sync round succeeded.
+/// Without it a failed or not-yet-possible sync (peers still `Offline` in the
+/// first seconds, a dropped request) lets the node start the guest a second time
+/// on the same disks (lab cluster-hasuite j01296, 'hard crash, node stays down').
+/// Clusters below 3 nodes, or a lone node with no online peer, have nobody to ask
+/// (and nobody who may recover for them without a fencing device).
+pub(crate) fn may_restart_local_guests(
+    total: usize,
+    quorum: bool,
+    online_peers: usize,
+    synced_with_peer: bool,
+) -> bool {
+    if total < 3 {
+        return online_peers == 0 || synced_with_peer;
+    }
+    quorum && synced_with_peer
 }
 
 /// Start the supervisor (once per process). Needs the usage monitor, which
@@ -746,6 +774,7 @@ pub fn spawn(state: Arc<AppState>) {
             offline_since: HashMap::new(),
             last_fence: HashMap::new(),
             hung_reported: Default::default(),
+            synced_with_peer: false,
         };
         let mut ticker = tokio::time::interval(Duration::from_secs(tick_secs()));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -851,7 +880,10 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
     }
 
     // 1. publish to peers, adopt newer placements.
-    publish(state, ls, &local, &nodes, &online).await;
+    let synced = publish(state, ls, &local, &nodes, &online).await;
+    if synced > 0 {
+        ls.synced_with_peer = true;
+    }
 
     // 2. stale copies of VMs the cluster placed elsewhere.
     for r in state.ha_manager.list_resources().await {
@@ -878,7 +910,10 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
     // 3. (self-fence without a majority runs in its own watchdog task,
     // `self_fence_watchdog`: it must not wait for this tick.)
     // 4. restart HA VMs that should run here.
-    if total < 3 || quorum {
+    let online_peers = online.iter().filter(|n| **n != local).count();
+    if (total < 3 || quorum)
+        && may_restart_local_guests(total, quorum, online_peers, ls.synced_with_peer)
+    {
         local_restarts(state, ls, &local, &nodes, &online).await;
     }
 
@@ -998,6 +1033,18 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
             }
             ls.hung_reported.remove(&node);
         }
+        // The node may have come back while the probe above ran (a returning node starts
+        // its guests itself): look again right before moving anything.
+        if state
+            .cluster_manager
+            .list_nodes()
+            .await
+            .iter()
+            .any(|x| x.name == node && x.status == NodeStatus::Online)
+        {
+            ls.offline_since.remove(&node);
+            continue;
+        }
         if targets.is_empty() {
             tracing::warn!(
                 "HA: node {node} is down but every online node is in maintenance: \
@@ -1015,7 +1062,7 @@ async fn publish(
     local: &str,
     nodes: &[crate::cluster::node::Node],
     online: &[String],
-) {
+) -> usize {
     let mut items = Vec::new();
     for r in state.ha_manager.resources_on(local).await {
         let Ok(vm) = state.vm_manager.get_vm(&r.vm_id).await else {
@@ -1033,6 +1080,7 @@ async fn publish(
         items,
         groups: state.ha_manager.list_groups().await,
     };
+    let mut synced = 0;
     for n in nodes {
         if n.name == local || n.is_local || !online.contains(&n.name) {
             continue;
@@ -1040,6 +1088,7 @@ async fn publish(
         let url = n.api_url(ls.port);
         match peer_post::<_, SyncReply>(ls, local, &url, "/api/ha/peer/sync", &req).await {
             Ok(reply) => {
+                synced += 1;
                 for newer in reply.newer {
                     let id = newer.vm_id.clone();
                     if state.ha_manager.apply_peer_resource(newer, None).await {
@@ -1050,6 +1099,7 @@ async fn publish(
             Err(e) => tracing::debug!("HA: sync to {} failed: {e}", n.name),
         }
     }
+    synced
 }
 
 async fn local_restarts(
@@ -1177,6 +1227,35 @@ async fn move_vm(
                 .await;
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod restart_barrier_tests {
+    use super::*;
+
+    #[test]
+    fn a_freshly_booted_node_starts_nothing_before_it_synced_with_a_peer() {
+        // 3 nodes, majority visible, but no sync yet (stale placement): never start
+        assert!(!may_restart_local_guests(3, true, 2, false));
+        assert!(!may_restart_local_guests(5, true, 4, false));
+        // after one successful sync round it may
+        assert!(may_restart_local_guests(3, true, 2, true));
+    }
+
+    #[test]
+    fn no_majority_never_starts() {
+        assert!(!may_restart_local_guests(3, false, 0, true));
+        assert!(!may_restart_local_guests(3, false, 1, true));
+    }
+
+    #[test]
+    fn small_clusters_have_nobody_to_ask() {
+        assert!(may_restart_local_guests(1, false, 0, false));
+        assert!(may_restart_local_guests(2, false, 0, false));
+        // a 2-node cluster with its peer online waits for the sync
+        assert!(!may_restart_local_guests(2, false, 1, false));
+        assert!(may_restart_local_guests(2, false, 1, true));
     }
 }
 
@@ -1369,11 +1448,11 @@ mod fencing_timing_tests {
 
     fn defaults() -> Timing {
         Timing {
-            poll: 10,
-            fetch: 4,
-            stale: 30,
+            poll: 5,
+            fetch: 3,
+            stale: 15,
             watchdog: WATCHDOG_SECS,
-            fence: 30,
+            fence: 20,
             kill: KILL_BUDGET_SECS,
         }
     }
@@ -1393,7 +1472,7 @@ mod fencing_timing_tests {
     #[test]
     fn fence_precedes_recovery_over_a_grid_of_timings() {
         for poll in [1, 2, 3, 5, 10, 15, 20] {
-            for fetch in [1, 2, 4, 8] {
+            for fetch in [1, 2, 3, 4, 8] {
                 for stale_polls in [2, 3, 5] {
                     for fence in [1, 8, 30, 60, 300] {
                         for watchdog in [1, 2] {

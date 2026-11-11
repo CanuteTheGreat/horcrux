@@ -1185,6 +1185,9 @@ def cluster_nodes_checks(context):
         expect(me).to_contain_text(local[0]["name"])
         expect(me.get_by_text("online", exact=True)).to_be_visible()
         expect(me.get_by_role("button", name="Remove")).to_have_count(0)
+        qp = api_get("/api/cluster/quorum/plan", tok)
+        expect(page.locator("#quorum-summary")).to_contain_text(
+            f"{qp['total_votes']} votes in total; quorum needs {qp['quorum']}", timeout=30000)
 
         # add a peer through the dialog, then remove it
         page.get_by_role("button", name="Add Node").first.click()
@@ -1210,7 +1213,7 @@ def cluster_nodes_checks(context):
         expect(page.locator("tbody tr:not(.power-row)", has_text="(this node)")).to_have_count(1)
     finally:
         page.close()
-    print("UI E2E: /ha/cluster lists this node, Remove node (confirm/cancel/delete) passed")
+    print("UI E2E: /ha/cluster lists this node, Remove node (confirm/cancel/delete), Quorum panel passed")
 
 
 def vm_hardware_checks(page, vid):
@@ -1321,7 +1324,9 @@ def storage_volume_checks(page, vid):
     """Storage page volume view and VM disks placed on a storage pool."""
     import shutil
     tok = token()
-    pool_dir = "/tmp/e2e-ui-pool"
+    # disk-backed dir: /tmp is a tmpfs on Debian 13 nodes (< 1 GB free on a 2 GB VM), where creating the 1 GB
+    # volume is refused with "Not enough space in pool ... Available: 0GB" (VM-cluster ui.flows, 2026-11-10)
+    pool_dir = "/var/tmp/e2e-ui-pool"
     shutil.rmtree(pool_dir, ignore_errors=True)
     os.makedirs(pool_dir)
     pool = api_post("/api/storage/pools", tok,

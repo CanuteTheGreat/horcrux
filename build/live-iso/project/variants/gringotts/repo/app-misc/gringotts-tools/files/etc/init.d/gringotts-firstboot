@@ -1,10 +1,10 @@
 #!/sbin/openrc-run
-# Installed system, first boot only: online -> clock, Tailscale handoff (gringotts-remote), then refresh the Portage trees
+# Installed system, first boot only: online -> clock, sshd handoff (gringotts-remote), then refresh the Portage trees
 # in the background so `emerge -uDN @world` works. Marker: /var/lib/gringotts/firstboot-done.
 # The worker is NOT a supervised daemon (no start-stop-daemon registration): it ends by itself when the work is done, and OpenRC would show a
 # finished daemon as "crashed" forever. It keeps its own pidfile (/run/gringotts-firstboot.pid) for stop().
 description="gringotts first boot: remote handoff + Portage tree sync (once; waits for a network without a time limit)"
-depend() { need net; after NetworkManager tailscale chronyd sshd; }
+depend() { need net; after NetworkManager chronyd sshd; }
 LOG=/var/log/gringotts-firstboot.log
 start() {
 	grep -q 'rd.live.image' /proc/cmdline && return 0

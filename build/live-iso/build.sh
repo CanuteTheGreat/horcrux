@@ -80,7 +80,7 @@ if [ -n "$(echo $CHAIN)" ]; then
     lap "stage 2b: variant $v"
     VCTX="--build-context hxgentoo=$REPO/gentoo ${BUILD_CONTEXTS:-}"; [ -d "$REPO/gentoo/t2" ] && VCTX="$VCTX --build-context t2=$REPO/gentoo/t2"
     # named contexts for variants: `hxoverlay` = the Horcrux Portage overlay (repo's gentoo/), `priv` = PRIVATE inputs (PRIV_DIR, never in the
-    # repo: authorized_keys + ts-authkey for the gringotts image; empty = a public image without them)
+    # repo: authorized_keys for the gringotts image; empty = a public image without them)
     if [ -d "$REPO/gentoo" ]; then
       # hxoverlay = the overlay the long cached layers were built with (HXO_EARLY, default the whole repo gentoo/), hxfull = the whole overlay
       # (variants copy it after the long layers so overlay edits do not invalidate them)

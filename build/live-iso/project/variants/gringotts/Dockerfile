@@ -5,7 +5,7 @@
 #   * rustinion     app-admin/rustinion-agent from the Horcrux overlay (repo gentoo/)
 #   * image files   sys-apps/horcrux-tools + horcrux-live-data + sys-kernel/horcrux-unlock (proven on hogshead) + app-misc/gringotts-config (/etc)
 #   * helpers       app-misc/gringotts-tools (this variant's local overlay)
-#   * PRIVATE       app-misc/gringotts-private (agent SSH public keys + 7-day ephemeral tagged Tailscale key) only when the build
+#   * PRIVATE       app-misc/gringotts-private (agent SSH public keys only) only when the build
 #                   gets a private bundle (named context `priv`, PRIV_DIR in build.sh); never committed, never in a public image.
 # Named contexts (build.sh): hxoverlay = minimal Horcrux overlay, hxfull = repo gentoo/ (whole overlay), priv = private bundle.
 ARG BASE
@@ -80,8 +80,6 @@ COPY common/overlay/usr/bin /tmp/hxt/usr/bin
 COPY project/variants/hogshead/overlay/usr/bin/horcrux-orphans /tmp/hxt/usr/bin/horcrux-orphans
 COPY project/variants/gnome-light/overlay/usr/share/horcrux/desktop /tmp/hxt/usr/share/horcrux/desktop
 COPY project/variants/gringotts/overlay/usr/libexec/ /tmp/hxt/usr/libexec/
-# Tailscale is the owner's (a machine service, not in the public desktop's list): started by default here
-RUN echo 'tailscale default' >> /tmp/hxt/usr/share/horcrux/desktop/services.list
 RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
@@ -132,16 +130,16 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     FEATURES="-collision-protect -protect-owned" COLLISION_IGNORE="/etc" CONFIG_PROTECT="-*" DISTDIR=/tmp/dist emerge --noreplace --usepkg=n --getbinpkg=n --buildpkg=n app-misc/gringotts-config app-misc/gringotts-tools; \
     rm -rf /tmp/dist /tmp/hxo /tmp/imgfiles /tmp/image-files.exclude /tmp/already-owned.txt
 
-# PRIVATE bundle (agent SSH public keys + Tailscale key): absent in a public build. DISTDIR is a tmpfs-like scratch dir that is deleted,
+# PRIVATE bundle (agent SSH public keys): absent in a public build. DISTDIR is a tmpfs-like scratch dir that is deleted,
 # the binary package is not built, so nothing secret reaches the binpkg/distfile caches.
 RUN --mount=type=bind,from=priv,target=/priv \
     set -e; unset ARCH; \
-    if [ -s /priv/ts-authkey ] && [ -s /priv/authorized_keys ]; then \
-      mkdir -p /tmp/dist; tar -C /priv -cf /tmp/dist/gringotts-private-1.tar authorized_keys ts-authkey; \
+    if [ -s /priv/authorized_keys ]; then \
+      mkdir -p /tmp/dist; tar -C /priv -cf /tmp/dist/gringotts-private-1.tar authorized_keys; \
       DISTDIR=/tmp/dist ebuild /var/db/repos/horcrux-gringotts/app-misc/gringotts-private/gringotts-private-1.ebuild manifest; \
       CONFIG_PROTECT="-*" DISTDIR=/tmp/dist emerge --noreplace --usepkg=n --getbinpkg=n --buildpkg=n app-misc/gringotts-private; \
       rm -rf /tmp/dist; echo "PRIVATE bundle installed (app-misc/gringotts-private)"; \
-    else echo "no private bundle: PUBLIC image (no SSH keys, no Tailscale key)"; fi
+    else echo "no private bundle: PUBLIC image (no SSH keys)"; fi
 
 # package-owned config files that are only edited (not shipped by gringotts-tools: iwd and openrc own them): iwd must not do its own DHCP (NetworkManager does),
 # the live stick has its own host name (the installer sets the real one on the target)

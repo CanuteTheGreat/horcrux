@@ -5,4 +5,3 @@ NetworkManager default
 display-manager default
 zram-swap default
 cronie default
-tailscale default

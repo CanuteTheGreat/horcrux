@@ -1,7 +1,7 @@
 #!/bin/sh
 # ctg-ssh-ca: keep this machine's SSH certificates (host + user) fresh with the owner's personal CA signer.
 # POSIX sh; needs curl, ssh-keygen (OpenSSH >= 8.2 for -Y sign). Config: /etc/ctg-ssh-ca/signer.conf
-#   SIGNER_URL=http://<tailnet address>:8443
+#   SIGNER_URL=http://<LAN or WireGuard address>:8443
 #
 #   status                    show certificates and their expiry
 #   renew-all [--force]       host cert (root), revocation list, and every local user's id_ed25519 cert
