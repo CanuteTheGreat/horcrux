@@ -55,6 +55,7 @@ SIZES_GB = (40, 40, 40)   # nvme enumeration order is not stable in QEMU: any dr
 class HRun(zt.ZRun):
     def __init__(self, a):
         a.t2, a.fake_t2, a.expect_t2_refusal, a.desktop, a.hibernate = "no", False, False, True, True
+        a.server, a.late_network = False, 0      # a desktop machine image: the shared checks take the desktop branch
         super().__init__(a)
         self.boot_only = None            # index of the only bootable drive (ESP-of-drive-3 phase)
         self.disks = []
@@ -303,10 +304,10 @@ class HRun(zt.ZRun):
             up = self.wait_ssh(timeout=300)
             self.step("first-boot-network-appears-later-ssh-key-login", up, f"links up {int(time.time() - t_up)} s ago; key-only root ssh over the first network (test key added through the user's sudo)")
             rc, o = self.sh("v=$(loginctl list-sessions --no-legend | awk '$3 ~ /gdm/ {print $1; exit}'); t=$(loginctl show-session $v -p VTNr --value 2>/dev/null); echo GREETER-VT=$t; [ -n \"$t\" ] && chvt $t; fgconsole; "
-                            "ssh-keygen -lf /root/.ssh/authorized_keys; grep -c . /root/.ssh/authorized_keys; passwd -S root | cut -d' ' -f2; sshd -T 2>/dev/null | grep -E '^(permitrootlogin|passwordauthentication) '; "
+                            "ssh-keygen -lf /root/.ssh/authorized_keys; grep -c . /root/.ssh/authorized_keys; passwd -S root | cut -d' ' -f2; sshd -T 2>/dev/null | grep -iE '^(permitrootlogin|passwordauthentication) ' | tr A-Z a-z; "
                             f"id {USER}; last -n 3 {USER} 2>/dev/null | head -2")
             fp = self.z.agent_fp
-            self.step("root-ssh-is-key-only-agent-key-installed-root-locked-user-in-wheel", (not fp or fp in o) and "permitrootlogin" in o and "passwordauthentication no" in o
+            self.step("root-ssh-is-key-only-agent-key-installed-root-locked-user-in-wheel", (not fp or fp in o) and "permitrootlogin prohibit-password" in o and "passwordauthentication no" in o
                       and re.search(r"^L", o, re.M) is not None and "wheel" in o, re.sub(r"\s+", " ", o)[:500])
             rc, o = self.sh("cat /var/log/hogsmeade-firstboot.log; echo @@; ls /var/lib/hogsmeade/; echo @@; rc-status default 2>&1 | grep -E 'hogsmeade|display-manager|comfyui' | tr -s ' '; "
                             "echo @@; zfs list -H -o name rpool/comfyui rpool/data 2>&1")
@@ -319,10 +320,10 @@ class HRun(zt.ZRun):
                 if "NET-DONE" in o:
                     break
                 time.sleep(20)
-            rc, o2 = self.sh("cat /var/log/hogsmeade-firstboot.log | tail -40; echo @@; ls /var/db/repos/gentoo/profiles/repo_name /var/db/repos/guru/.git/HEAD /var/db/repos/canutethegreat/.git/HEAD 2>&1; "
+            rc, o2 = self.sh("cat /var/log/hogsmeade-firstboot.log; echo @@; ls /var/db/repos/gentoo/profiles/repo_name /var/db/repos/guru/.git/HEAD /var/db/repos/canutethegreat/.git/HEAD 2>&1; "
                              "rc-update show default | grep -c hogsmeade-firstboot; date -u; chronyc -n tracking 2>&1 | sed -n 1,3p")
             open(f"{a.out}/firstboot-online.txt", "w").write(o2)
-            self.step("first-boot-ONLINE-handoff-and-tree-sync-finished", "NET-DONE" in o and "== done" in o2 and "give these to Claude" in o2 and "repo_name" in o2
+            self.step("first-boot-ONLINE-handoff-and-tree-sync-finished", "NET-DONE" in o and "== done" in o2 and "give these to Claude" in o2 and "retry in 10 minutes" not in o2 and "repo_name" in o2
                       and "No such file" not in o2, re.sub(r"\s+", " ", o2)[-400:])
             self.identity_checks()
             self.checks()
@@ -339,7 +340,7 @@ class HRun(zt.ZRun):
         a = self.z
         rc, o = self.sh("readlink -f /etc/localtime; cat /etc/timezone 2>/dev/null; date +%Z; date")
         self.step("timezone-is-America-Los_Angeles", f"zoneinfo/{TZ}" in o and re.search(r"^P[SD]T$", o, re.M) is not None, o.strip().replace("\n", " | "))
-        rc, o = self.sh("uname -r; cat /etc/hogsmeade-kernelrelease; qlist -ICv sys-kernel/gentoo-kernel sys-fs/zfs-kmod x11-drivers/nvidia-drivers | tr '\\n' ' '; "
+        rc, o = self.sh("uname -r; cat /etc/hogsmeade-kernelrelease; qlist -ICv sys-kernel/gentoo-kernel sys-fs/zfs-kmod x11-drivers/nvidia-drivers | tr '\\n' ' '; echo; "
                         "modinfo -F vermagic zfs | cut -d' ' -f1; modinfo -F vermagic nvidia | cut -d' ' -f1; modinfo -F version nvidia; modinfo -F license nvidia")
         ls = o.strip().splitlines()
         self.step("kernel-is-6.18.62-LTS-with-zfs-and-nvidia-open-modules-for-it", len(ls) >= 6 and ls[0] == KERNEL and ls[1] == KERNEL and ls[3] == KERNEL and ls[4] == KERNEL
@@ -349,7 +350,7 @@ class HRun(zt.ZRun):
         rc, o = self.sh("echo @@BIN; command -v tailscale tailscaled; echo @@PKG; qlist -IC | grep -i tailscale; grep -i tailscale /var/lib/portage/world; echo @@FILES; "
                         "find / -xdev \\( -path /proc -o -path /sys -o -path /var/db/repos -o -path /var/cache -o -path /usr/src -o -path /var/tmp \\) -prune -o -iname '*tailscale*' -print 2>/dev/null | head -20; "
                         "echo @@CONF; grep -rIli tailscale /etc /usr/libexec/comfyui-launch /usr/lib/comfyui/app/main.py /usr/share/hogsmeade /var/lib/hogsmeade /root /home 2>/dev/null | head -20; "
-                        "echo @@NET; ip -o link | grep -i -E 'tailscale|ts0'; ss -lntuH | grep -E ':41641\\b'; pgrep -fa tailscale; rc-update show -v | grep -i tailscale; echo @@END", timeout=300)
+                        "echo @@NET; ip -o link | grep -i -E 'tailscale|ts0'; ss -lntuH | grep -E ':41641\\b'; pgrep -a -x 'tailscaled?'; rc-update show -v | grep -i tailscale; echo @@END", timeout=300)
         open(f"{a.out}/no-tailscale.txt", "w").write(o)
         sec = {k: v.strip() for k, v in re.findall(r"@@([A-Z]+)\n(.*?)(?=@@)", o, re.S)}
         self.step("NO-tailscale-anywhere-binary-package-file-config-interface-service", "@@END" in o and all(sec.get(k, "x") == "" for k in ("BIN", "PKG", "FILES", "CONF", "NET")),
