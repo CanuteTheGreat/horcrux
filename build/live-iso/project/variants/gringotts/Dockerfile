@@ -44,12 +44,11 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     find /etc -name '._cfg*' -delete; rm -f /tmp/dev.log /tmp/pkgs-owning-dev.py; \
     test -f /usr/include/stdio.h && ls /usr/include/python3*/Python.h >/dev/null
 
-# apps: Brave comes from the owner's overlay (re-merged below so the package belongs to canutethegreat-overlay, not the desktop layer's stop-gap copy)
+# apps (Firefox is the browser; Brave was dropped 2026-11-11)
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
     emerge --update --newuse --deep $(cat /tmp/packages-gringotts.txt /tmp/packages-owner.txt | grep -v '^#' | tr '\n' ' '); \
-    emerge --oneshot --usepkg=n --getbinpkg=n www-client/brave-bin::canutethegreat-overlay; \
     rm -rf /var/db/repos/horcrux-desktop /etc/portage/repos.conf/horcrux-desktop.conf
 
 # this variant's local overlay is copied only now (editing it must not invalidate the long header/app layers above)

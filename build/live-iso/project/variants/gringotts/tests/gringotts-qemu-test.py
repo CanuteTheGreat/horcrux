@@ -33,7 +33,6 @@ USER = "canutethegreat"
 
 # (label, desktop-file regex, process regex, version command run as the user)
 GUI_APPS = [
-    ("brave", r"^brave", r"brave", "brave-browser --version || brave --version"),
     ("firefox", r"^firefox", r"firefox", "firefox --version || firefox-bin --version"),
     ("discord", r"^discord", r"[Dd]iscord", "qlist -Iv net-im/discord"),
     ("proton-vpn", r"proton", r"protonvpn|proton-vpn", "qlist -Iv net-vpn/proton-vpn-gtk-app"),
@@ -53,7 +52,7 @@ CLI_APPS = [
     ("rustinion", "rustinion --version"), ("fprintd", "qlist -Iv sys-auth/fprintd sys-auth/libfprint"),
     ("nmtui", "test -x /usr/bin/nmtui && echo nmtui present"),
 ]
-APP_ATOMS = ["www-client/brave-bin", "www-client/firefox-bin", "net-im/discord", "app-containers/docker", "app-containers/docker-cli",
+APP_ATOMS = ["www-client/firefox-bin", "net-im/discord", "app-containers/docker", "app-containers/docker-cli",
              "app-containers/docker-buildx", "app-containers/docker-compose", "net-vpn/proton-vpn-gtk-app",
              "net-misc/remmina", "app-emulation/virt-viewer", "media-gfx/gimp", "media-gfx/geeqie", "media-video/vlc", "net-misc/mosh",
              "net-analyzer/nmap", "net-analyzer/wireshark", "app-antivirus/clamav", "net-misc/nextcloud-client", "x11-terms/terminator",
@@ -447,9 +446,9 @@ class GRun(zt.ZRun):
     def restore_apps_start(self):
         # restored profiles actually start (in the session after the first login)
         self.usr("pkill -f -i 'brave|firefox' 2>/dev/null; true", timeout=20)
-        rc, o = self.usr("nohup gtk-launch $(ls /usr/share/applications | grep -iE '^brave' | head -1) >/tmp/b.log 2>&1 & nohup gtk-launch $(ls /usr/share/applications | grep -iE '^firefox' | head -1) >/tmp/f.log 2>&1 & sleep 30; "
-                         "echo BRAVE=$(pgrep -u $(id -u) -fc brave); echo FF=$(pgrep -u $(id -u) -fc firefox); ls ~/.config/BraveSoftware/Brave-Browser/ | head -3; ls ~/.mozilla/firefox | head", timeout=120)
-        self.step("restored-brave-and-firefox-profiles-start", re.search(r"BRAVE=[1-9]", o) is not None and re.search(r"FF=[1-9]", o) is not None, o.strip().replace("\n", " | ")[:300])
+        rc, o = self.usr("nohup gtk-launch $(ls /usr/share/applications | grep -iE '^firefox' | head -1) >/tmp/f.log 2>&1 & sleep 30; "
+                         "echo FF=$(pgrep -u $(id -u) -fc firefox); ls ~/.mozilla/firefox | head", timeout=120)
+        self.step("restored-firefox-profile-starts", re.search(r"FF=[1-9]", o) is not None, o.strip().replace("\n", " | ")[:300])
         self.usr("pkill -f -i 'brave|firefox' 2>/dev/null; sleep 2; pkill -9 -f -i 'brave|firefox' 2>/dev/null; true", timeout=30)
 
     # ------------------------------------------------------------------ boot 1 (serial) wrapper: shared checks + gringotts basics

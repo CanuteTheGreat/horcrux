@@ -1,5 +1,5 @@
 # The owner's personal apps present on his general-purpose machines (gringotts, hogshead, ...). Machine-specific extras are NOT here.
-# Brave comes from the owner's canutethegreat-overlay (not in ::gentoo); rustinion-agent is added by each machine layer from the Horcrux overlay.
-www-client/brave-bin
+# Browser: Firefox (www-client/firefox-bin) comes from the public gnome-light base, so it is not listed here. Brave was dropped 2026-11-11 (owner switched to Firefox); the canutethegreat-overlay ebuild stays for hosts that want it.
+# rustinion-agent is added by each machine layer from the Horcrux overlay.
 net-misc/nextcloud-client
 app-antivirus/clamav

@@ -1,6 +1,6 @@
-# gringotts: this machine's own apps (all Portage), on top of project/variants/owner-common/packages.txt (brave-bin, nextcloud-client, clamav: the
+# gringotts: this machine's own apps (all Portage), on top of project/variants/owner-common/packages.txt (firefox-bin, nextcloud-client, clamav: the
 # owner's apps, no longer in the public desktop). Already in the public gnome-light base: firefox-bin, terminator, vim, linux-firmware, sof-firmware,
-# intel-microcode, networkmanager. Brave is re-merged from the owner's overlay by the Dockerfile.
+# intel-microcode, networkmanager. Firefox is the browser (Brave dropped 2026-11-11).
 net-im/discord
 app-containers/docker
 app-containers/docker-cli

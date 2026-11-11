@@ -53,8 +53,9 @@ class Layering(unittest.TestCase):
 
     def test_owner_apps_live_in_machine_layers(self):
         owner = set(atoms(os.path.join(LIVE, "project", "variants", "owner-common", "packages.txt")))
-        for a in ("www-client/brave-bin", "net-misc/nextcloud-client", "app-antivirus/clamav"):
+        for a in ("net-misc/nextcloud-client", "app-antivirus/clamav"):
             self.assertIn(a, owner)
+        self.assertNotIn("www-client/brave-bin", owner)     # dropped 2026-11-11 (owner uses Firefox, from the public base)
         self.assertNotIn("net-vpn/tailscale", owner)     # retired 2026-11-10 (WireGuard hub replaces it)
         self.assertIn("net-vpn/tailscale", set(atoms(os.path.join(LIVE, "project", "public-forbidden.txt"))))
         for v in ("gringotts", "hogshead"):

@@ -31,7 +31,6 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
     emerge --noreplace --usepkg --getbinpkg app-eselect/eselect-repository dev-vcs/git; \
     eselect repository enable guru; emerge --sync guru; \
     mkdir -p /opt/hxt-dist; tar -C /tmp/hxt --zstd -cf /opt/hxt-dist/horcrux-tools-1.tar.zst .; rm -rf /tmp/hxt; cp /opt/hxt-dist/horcrux-tools-1.tar.zst /var/cache/distfiles/; \
-    ebuild /var/db/repos/canutethegreat/www-client/brave-bin/brave-bin-*.ebuild manifest; \
     for e in /var/db/repos/horcrux/sys-kernel/horcrux-hogsmeade-config/*.ebuild /var/db/repos/horcrux/app-admin/rustinion-agent/*.ebuild \
              /var/db/repos/horcrux/sys-apps/horcrux-tools/*.ebuild /var/db/repos/horcrux/sys-kernel/horcrux-unlock/*.ebuild \
              /var/db/repos/horcrux/app-misc/hogsmeade-tools/*.ebuild /var/db/repos/horcrux/app-misc/awccd/*.ebuild \
