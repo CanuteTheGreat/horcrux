@@ -89,7 +89,8 @@ if [ -n "${HSM_STAGE_ONLY:-}" ]; then mkdir -p "$HSM_STAGE_ONLY" && cp -a "$W/sr
 log "== target checks"
 "${SSH[@]}" "id $USERNAME >/dev/null && ! loginctl list-sessions --no-legend 2>/dev/null | awk '{print \$3}' | grep -qx $USERNAME" \
   || { log "STOP: user missing or already has a session: restore only before the first login"; exit 3; }
-"${SSH[@]}" "mountpoint -q $HOMEDIR || findmnt -n $HOMEDIR >/dev/null" || log "warning: $HOMEDIR is not its own mount (check the home dataset)"
+# the home dataset (rpool/home) is mounted at /home: the user's directory must live on it, not under it on the root dataset
+"${SSH[@]}" "findmnt -n -o SOURCE --target $HOMEDIR | grep -q '^rpool/home'" || log "warning: $HOMEDIR is not on the home dataset rpool/home (check the mounts)"
 log "== push (tar over ssh stdin; existing paths are kept)"
 tar -C "$W/src" -cf - . | "${SSH[@]}" "set -e; umask 077; mkdir -p $HOMEDIR; tar -x -C $HOMEDIR --keep-old-files --no-same-owner 2>/tmp/hsm-restore.skipped || true
   chown -R $USERNAME:$USERNAME $HOMEDIR/.config $HOMEDIR/.mozilla $HOMEDIR/.claude $HOMEDIR/.gitconfig $HOMEDIR/.local $HOMEDIR/.aws.old $HOMEDIR/.docker $HOMEDIR/.pki 2>/dev/null || true
