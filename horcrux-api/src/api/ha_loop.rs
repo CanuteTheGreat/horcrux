@@ -22,7 +22,12 @@
 //!    leader needs a majority and waits out the self-fence time, and then
 //!    only recovers a node whose kernel is silent: a node that still answers
 //!    TCP has a hung or dead manager that cannot self-fence, its guests may
-//!    still run, so they are left alone (split-brain guard). Each
+//!    still run, so they are left alone (split-brain guard) UNLESS that node
+//!    runs the manager-independent dead-man agent (`ha_fence_agent`, advertised
+//!    in the placement sync): the agent kills the node's HA guests once the
+//!    manager's heartbeat is older than its deadline, so after that deadline a
+//!    silent manager proves the guests are gone (a rebooted node whose manager
+//!    did not start no longer blocks recovery for minutes). Each
 //!    resource is restarted on the best online node of its HA group
 //!    (`POST /api/ha/peer/recover/:vm`), whose disks must be visible there
 //!    (shared storage).
@@ -174,6 +179,72 @@ pub(crate) fn classify_probe(r: &std::io::Result<()>) -> Liveness {
     }
 }
 
+/// What the leader does with a node that has been offline long enough.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecoveryGate {
+    /// Safe to move its guests.
+    Recover,
+    /// Silent node, but the self-fence window is not over yet.
+    Wait,
+    /// Kernel alive and nothing proves its guests are gone: leave them.
+    HoldAlive,
+}
+
+/// The split-brain gate for a node with no fencing device.
+///
+/// * silent kernel (crash, power-off, partition): it self-fenced or is dead
+///   once `silent_wait` has passed;
+/// * kernel alive and its manager still answers HTTP: the node is up and
+///   managing its guests, only its heartbeat is lost: never recover;
+/// * kernel alive, manager silent (hung, dead, or a rebooted node whose manager
+///   did not start): recover only if the node runs the dead-man agent and the
+///   manager has been silent for `agent_wait` (agent deadline + settle time),
+///   i.e. its QEMUs are provably gone. Without an agent they may still run: hold.
+pub(crate) fn recovery_gate(
+    live: Liveness,
+    manager_answers: bool,
+    agent_wait: Option<i64>,
+    mgr_silent_for: i64,
+    offline_for: i64,
+    silent_wait: i64,
+) -> RecoveryGate {
+    match live {
+        Liveness::Silent => {
+            if offline_for >= silent_wait {
+                RecoveryGate::Recover
+            } else {
+                RecoveryGate::Wait
+            }
+        }
+        Liveness::KernelAlive => match agent_wait {
+            Some(a) if !manager_answers => {
+                if mgr_silent_for >= a && offline_for >= a {
+                    RecoveryGate::Recover
+                } else {
+                    RecoveryGate::Wait
+                }
+            }
+            _ => RecoveryGate::HoldAlive,
+        },
+    }
+}
+
+/// Does a manager answer HTTP on the node (any status)? A SIGSTOPped manager
+/// still completes TCP handshakes in the kernel backlog but never replies.
+async fn manager_answers_http(client: &reqwest::Client, host: &str, port: u16) -> bool {
+    let url = if host.contains(':') && !host.starts_with('[') {
+        format!("https://[{host}]:{port}/api/health/live")
+    } else {
+        format!("https://{host}:{port}/api/health/live")
+    };
+    client
+        .get(url)
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await
+        .is_ok()
+}
+
 /// Probe `host:port` with a short TCP connect.
 pub(crate) async fn probe_kernel(host: &str, port: u16) -> Liveness {
     let attempt = async {
@@ -238,6 +309,11 @@ struct SyncRequest {
     /// created while HA was off) still reach all nodes.
     #[serde(default)]
     groups: Vec<HaGroup>,
+    /// Set when the sender runs the manager-independent fence agent
+    /// (`ha_fence_agent`): its deadline in seconds. The leader only recovers
+    /// the guests of a silent-manager node on a live kernel when it was set.
+    #[serde(default)]
+    fence_agent_secs: Option<i64>,
 }
 
 /// A cluster-wide HA group change pushed by the node that took the request.
@@ -281,6 +357,11 @@ async fn peer_sync(
     Json(req): Json<SyncRequest>,
 ) -> Result<Json<SyncReply>, ApiError> {
     require_peer(&user)?;
+    super::ha_fence_agent::note_peer_agent(
+        &req.from,
+        req.fence_agent_secs,
+        chrono::Utc::now().timestamp(),
+    );
     let st = store(&state);
     // HA is a cluster-wide mode: the first resource a peer publishes
     // switches it on here too (the supervisor idles while it is off).
@@ -346,6 +427,7 @@ pub async fn broadcast_group(state: &Arc<AppState>, change: GroupChange) {
         offline_since: HashMap::new(),
         last_fence: HashMap::new(),
         hung_reported: Default::default(),
+        mgr_silent_since: HashMap::new(),
         synced_with_peer: true,
     };
     for n in state.cluster_manager.list_nodes().await {
@@ -653,6 +735,9 @@ struct LoopState {
     last_fence: HashMap<String, i64>,
     /// nodes already reported as "kernel alive, manager silent" (log/event once)
     hung_reported: std::collections::HashSet<String>,
+    /// node -> unix time the leader first saw it with a live kernel and a
+    /// manager that does not answer, continuously since (see [`recovery_gate`]).
+    mgr_silent_since: HashMap<String, i64>,
     /// This manager process has completed a placement sync with at least one
     /// peer (see [`may_restart_local_guests`]).
     synced_with_peer: bool,
@@ -737,12 +822,70 @@ async fn self_fence_watchdog(state: Arc<AppState>) {
     }
 }
 
+/// Heartbeat for the dead-man agent (`ha_fence_agent`): its own task, one write
+/// per second while this manager is able to answer a question about its HA
+/// resources. A hung or dead manager stops writing and the agent kills the HA
+/// guests after `HORCRUX_HA_AGENT_FENCE_SECS`. Also keeps the agent alive.
+async fn fence_heartbeat(state: Arc<AppState>) {
+    use super::ha_fence_agent as agent;
+    let mut ticker = tokio::time::interval(Duration::from_secs(1));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut local: Option<String> = None;
+    // The beat proves the manager ANSWERS HTTP, not that some task still runs: the
+    // leader's "manager silent" probe and this check are the same question, so a
+    // node the leader sees silent has stopped beating (a deadlocked HTTP stack with
+    // a live heartbeat task would otherwise be recovered while its guests run).
+    let Ok(selfcheck) = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(2))
+        .danger_accept_invalid_certs(true)
+        .build()
+    else {
+        return;
+    };
+    let port = state.config.server.port;
+    let mut until_agent_check: u8 = 0;
+    loop {
+        ticker.tick().await;
+        if until_agent_check == 0 {
+            agent::ensure_agent();
+            until_agent_check = 5;
+        }
+        until_agent_check -= 1;
+        if local.is_none() {
+            local = state.cluster_manager.get_local_node_name().await.ok();
+        }
+        let Some(local) = local.as_deref() else {
+            continue;
+        };
+        if !manager_answers_http(&selfcheck, "127.0.0.1", port).await {
+            continue;
+        }
+        let vms = tokio::time::timeout(Duration::from_secs(2), async {
+            state
+                .ha_manager
+                .resources_on(local)
+                .await
+                .into_iter()
+                .map(|r| r.vm_id)
+                .collect::<Vec<_>>()
+        })
+        .await;
+        if let Ok(vms) = vms {
+            if let Err(e) = agent::beat(&vms) {
+                tracing::debug!("HA: fence heartbeat: {e}");
+            }
+        }
+    }
+}
+
 pub fn spawn(state: Arc<AppState>) {
     static STARTED: OnceLock<()> = OnceLock::new();
     if STARTED.set(()).is_err() {
         return;
     }
     tokio::spawn(self_fence_watchdog(state.clone()));
+    tokio::spawn(fence_heartbeat(state.clone()));
     tokio::spawn(async move {
         // Saved fencing devices.
         match store(&state)
@@ -774,6 +917,7 @@ pub fn spawn(state: Arc<AppState>) {
             offline_since: HashMap::new(),
             last_fence: HashMap::new(),
             hung_reported: Default::default(),
+            mgr_silent_since: HashMap::new(),
             synced_with_peer: false,
         };
         let mut ticker = tokio::time::interval(Duration::from_secs(tick_secs()));
@@ -922,6 +1066,7 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
         if is_local(n) || n.status == NodeStatus::Online {
             ls.offline_since.remove(&n.name);
             ls.hung_reported.remove(&n.name);
+            ls.mgr_silent_since.remove(&n.name);
         } else if n.status == NodeStatus::Offline && !ls.offline_since.contains_key(&n.name) {
             ls.offline_since.insert(n.name.clone(), now);
             notify(
@@ -987,23 +1132,51 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
                 );
                 continue;
             }
-            if offline_for < self_fence_secs() + recovery_margin_secs() {
-                continue;
-            }
+            // The dead-man agent (ha_fence_agent) bounds how long a node with a
+            // dead or hung manager can keep its guests: when the node advertised
+            // one, a silent manager on a live kernel is safe to recover after
+            // the agent's deadline (counted from when WE first saw the manager
+            // silent), not after the (longer) network self-fence margin.
+            let silent_wait = self_fence_secs() + recovery_margin_secs();
+            let agent_wait = super::ha_fence_agent::peer_agent_secs(&node, now)
+                .map(|s| s + super::ha_fence_agent::AGENT_SETTLE_SECS);
             // A node whose manager is hung (SIGSTOP, deadlock) or dead cannot
             // self-fence, yet its QEMUs keep running the guests: the timer
             // above only proves safety for a node that lost the network.
             // With no fencing device the only proof of death is silence, so
             // a node whose kernel still answers is NOT recovered (a second
-            // copy would write the same disks); it is recovered after it is
-            // fenced (add a device), or when it falls silent / its manager
-            // is back.
+            // copy would write the same disks) unless its agent has had the
+            // time to kill them; it is recovered after it is fenced (add a
+            // device), or when it falls silent / its manager is back.
             let ip = nodes
                 .iter()
                 .find(|x| x.name == node)
                 .map(|x| x.ip.clone())
                 .unwrap_or_default();
-            if probe_kernel(&ip, ls.port).await == Liveness::KernelAlive {
+            let live = probe_kernel(&ip, ls.port).await;
+            let manager_answers = live == Liveness::KernelAlive
+                && manager_answers_http(&ls.client, &ip, ls.port).await;
+            // `now` is the tick start (a tick can sit in a 60 s peer call): the
+            // silence clock must start when the probe actually returned.
+            let observed = chrono::Utc::now().timestamp();
+            let mgr_silent_for = if live == Liveness::KernelAlive && !manager_answers {
+                observed - *ls.mgr_silent_since.entry(node.clone()).or_insert(observed)
+            } else {
+                ls.mgr_silent_since.remove(&node);
+                0
+            };
+            let gate = recovery_gate(
+                live,
+                manager_answers,
+                agent_wait,
+                mgr_silent_for,
+                offline_for,
+                silent_wait,
+            );
+            if gate == RecoveryGate::Wait {
+                continue;
+            }
+            if gate == RecoveryGate::HoldAlive {
                 if ls.hung_reported.insert(node.clone()) {
                     tracing::error!(
                         "HA: node {node} is offline for the cluster but its kernel still \
@@ -1043,6 +1216,7 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
             .any(|x| x.name == node && x.status == NodeStatus::Online)
         {
             ls.offline_since.remove(&node);
+            ls.mgr_silent_since.remove(&node);
             continue;
         }
         if targets.is_empty() {
@@ -1079,6 +1253,8 @@ async fn publish(
         from: local.to_string(),
         items,
         groups: state.ha_manager.list_groups().await,
+        fence_agent_secs: super::ha_fence_agent::agent_running()
+            .then(super::ha_fence_agent::fence_secs),
     };
     let mut synced = 0;
     for n in nodes {
@@ -1537,5 +1713,111 @@ mod fencing_timing_tests {
         let mut c = FenceClock::default();
         assert!(!c.observe(10, false, 30));
         assert!(c.observe(40, false, 30));
+    }
+}
+
+/// The leader's split-brain gate with the dead-man agent (lab j01330: a rebooted
+/// node whose manager stayed down kept the leader from recovering for 5 minutes).
+#[cfg(test)]
+mod fence_agent_gate_tests {
+    use super::*;
+    use crate::api::ha_fence_agent::{fence_secs, AGENT_SETTLE_SECS};
+
+    const SILENT: i64 = 58;
+
+    fn agent() -> Option<i64> {
+        Some(fence_secs() + AGENT_SETTLE_SECS)
+    }
+
+    #[test]
+    fn rebooted_node_without_manager_is_recovered_once_the_agent_deadline_passed() {
+        let a = agent().unwrap();
+        // refused (manager not running), agent advertised, silent long enough
+        assert_eq!(
+            recovery_gate(Liveness::KernelAlive, false, agent(), a, a, SILENT),
+            RecoveryGate::Recover
+        );
+        // the guest may still be running before that
+        assert_eq!(
+            recovery_gate(Liveness::KernelAlive, false, agent(), a - 1, a + 30, SILENT),
+            RecoveryGate::Wait
+        );
+        // seen silent for long, but only just marked offline: both clocks count
+        assert_eq!(
+            recovery_gate(Liveness::KernelAlive, false, agent(), a + 50, a - 1, SILENT),
+            RecoveryGate::Wait
+        );
+    }
+
+    #[test]
+    fn no_agent_means_no_recovery_on_a_live_kernel() {
+        // the split-brain guard stays for nodes that cannot be proven fenced
+        for t in [0, 33, 58, 600, 100_000] {
+            assert_eq!(
+                recovery_gate(Liveness::KernelAlive, false, None, t, t, SILENT),
+                RecoveryGate::HoldAlive
+            );
+        }
+    }
+
+    #[test]
+    fn an_answering_manager_is_never_recovered() {
+        for t in [0, 33, 58, 600, 100_000] {
+            assert_eq!(
+                recovery_gate(Liveness::KernelAlive, true, agent(), t, t, SILENT),
+                RecoveryGate::HoldAlive
+            );
+        }
+    }
+
+    #[test]
+    fn silent_node_still_waits_for_the_network_self_fence_margin() {
+        assert_eq!(
+            recovery_gate(Liveness::Silent, false, agent(), 0, SILENT - 1, SILENT),
+            RecoveryGate::Wait
+        );
+        assert_eq!(
+            recovery_gate(Liveness::Silent, false, None, 0, SILENT, SILENT),
+            RecoveryGate::Recover
+        );
+    }
+
+    /// Exhaustive over the phase between the node's last heartbeat, its manager
+    /// stopping to answer, and the leader's first silent probe: the agent has
+    /// killed the guests before the leader's earliest recovery.
+    /// t=0: the manager answers for the last time. The heartbeat is at most one
+    /// period (1 s) older than that; the agent polls every second and needs up
+    /// to `kill` seconds; the leader starts counting at its first silent probe,
+    /// which is never before t=0.
+    #[test]
+    fn agent_kill_always_precedes_the_leaders_recovery() {
+        let fence = fence_secs();
+        let wait = agent().unwrap();
+        for hb_age_at_last_answer in 0..=1i64 {
+            for first_probe in 0..=40i64 {
+                for drift in -2..=2i64 {
+                    let last_beat = -hb_age_at_last_answer;
+                    let killed_by = last_beat + fence + 1 + 10;
+                    let recovery_at = first_probe + wait;
+                    assert!(
+                        killed_by + drift.abs() <= recovery_at,
+                        "kill at {killed_by} (+drift {drift}) after recovery at {recovery_at}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The point of the change: a rebooted node (kernel back within ~30 s,
+    /// manager off) is recovered well inside the 90 s goal, from the first probe
+    /// that sees its kernel alive.
+    #[test]
+    fn recovery_fits_the_goal_for_a_rebooted_node() {
+        let detect = 15; // lab j01330: offline for the cluster after 14 s
+        let kernel_back = 30;
+        let recovered_at = detect.max(kernel_back) + agent().unwrap() + 5 /* tick */;
+        assert!(recovered_at + 15 /* guest start */ < 90, "{recovered_at}");
+        // and faster than the network self-fence margin it replaces
+        assert!(agent().unwrap() < SILENT);
     }
 }
