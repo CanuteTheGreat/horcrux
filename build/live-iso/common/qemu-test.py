@@ -113,6 +113,39 @@ def kill_all_vms():
             pass
 
 
+# ----------------------------------------------------------------------------- guest RAM vs the job container's memory cap
+# A guest as large as the container's cgroup limit is OOM-killed as soon as it has touched all of its RAM (ZFS ARC + page cache while the
+# installer copies the system): the harness then only saw QEMU vanish and reported "installer-finished timeout" (daily gnome-light on the
+# 6g KVM lane, runs 13121/13532: 6144 MB guest, memory.max 6 GiB, "Memory cgroup out of memory: Killed process (qemu-system-x86)").
+GUEST_HEADROOM_MB = 768      # QEMU's own memory + the harness/tee processes in the same container
+GUEST_FLOOR_MB = 4608        # below this the desktop + ZFS + hibernate run is not meaningful: fail with a clear message instead
+
+
+def cgroup_mem_limit_mb(paths=("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes")):
+    """this process's cgroup memory limit in MiB, or None when there is none (cgroup v2 'max', v1's huge number, no file)"""
+    for p in paths:
+        try:
+            v = open(p).read().strip()
+        except OSError:
+            continue
+        if v.isdigit() and int(v) < (1 << 50):
+            return int(v) >> 20
+        return None
+    return None
+
+
+def fit_guest_mem(want_mb, limit_mb, headroom_mb=GUEST_HEADROOM_MB, floor_mb=GUEST_FLOOR_MB):
+    """(guest MiB, note): the wanted size when it fits under the container limit, else the largest 256 MiB multiple that does.
+    Raises SystemExit when even the floor does not fit (a clear failure beats a guest killed mid-install)."""
+    if not limit_mb or want_mb + headroom_mb <= limit_mb:
+        return want_mb, ""
+    fit = (limit_mb - headroom_mb) // 256 * 256
+    if fit < floor_mb:
+        raise SystemExit(f"[FAIL] guest-memory-fits-the-job-container cgroup limit {limit_mb} MiB leaves {fit} MiB for the guest (< {floor_mb} MiB): "
+                         f"run this test on a lane with at least {floor_mb + headroom_mb} MiB")
+    return fit, f"guest RAM {want_mb} -> {fit} MiB: the job container is capped at {limit_mb} MiB ({headroom_mb} MiB kept for QEMU + harness)"
+
+
 def arm_deadline(secs=None):
     import signal
     secs = float(os.environ.get("QEMU_TEST_DEADLINE", 0) or 0) if secs is None else float(secs)

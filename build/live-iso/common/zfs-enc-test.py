@@ -858,6 +858,9 @@ def main():
     qt.SLOW = float(os.environ.get("QEMU_SLOW", 0) or 0) or (1.0 if kvm else 3.0)
     if a.desktop:
         a.mem = max(a.mem, 6144)
+    a.mem, note = qt.fit_guest_mem(a.mem, qt.cgroup_mem_limit_mb())      # never a guest the container's memory cap would OOM-kill mid-install
+    if note:
+        print("NOTE " + note, flush=True)
     try:
         ZRun(a).run()
     finally:
