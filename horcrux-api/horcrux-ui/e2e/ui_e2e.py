@@ -1185,6 +1185,9 @@ def cluster_nodes_checks(context):
         expect(me).to_contain_text(local[0]["name"])
         expect(me.get_by_text("online", exact=True)).to_be_visible()
         expect(me.get_by_role("button", name="Remove")).to_have_count(0)
+        qp = api_get("/api/cluster/quorum/plan", tok)
+        expect(page.locator("#quorum-summary")).to_contain_text(
+            f"{qp['total_votes']} votes in total; quorum needs {qp['quorum']}", timeout=30000)
 
         # add a peer through the dialog, then remove it
         page.get_by_role("button", name="Add Node").first.click()
@@ -1210,7 +1213,7 @@ def cluster_nodes_checks(context):
         expect(page.locator("tbody tr:not(.power-row)", has_text="(this node)")).to_have_count(1)
     finally:
         page.close()
-    print("UI E2E: /ha/cluster lists this node, Remove node (confirm/cancel/delete) passed")
+    print("UI E2E: /ha/cluster lists this node, Remove node (confirm/cancel/delete), Quorum panel passed")
 
 
 def vm_hardware_checks(page, vid):

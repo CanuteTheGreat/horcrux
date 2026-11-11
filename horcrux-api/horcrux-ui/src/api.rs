@@ -638,6 +638,31 @@ pub struct PowerStatus {
     pub nodes: Vec<PowerNodeStatus>,
 }
 
+/// `GET /api/cluster/quorum/plan` (area 3): the corosync vote plan for the
+/// current membership. Read-only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuorumPlanView {
+    #[serde(default)]
+    pub nodes: usize,
+    pub total_votes: u32,
+    pub quorum: u32,
+    pub tolerated_vote_loss: u32,
+    #[serde(default)]
+    pub split_brain_risk: bool,
+    #[serde(default)]
+    pub auto_tie_breaker: bool,
+    #[serde(default)]
+    pub qdevice_host: Option<String>,
+    #[serde(default)]
+    pub qdevice_votes: u32,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+pub async fn get_quorum_plan() -> Result<QuorumPlanView, ApiError> {
+    fetch_json("/cluster/quorum/plan").await
+}
+
 pub async fn get_cluster_power_status() -> Result<PowerStatus, ApiError> {
     fetch_json("/cluster/power/status").await
 }
