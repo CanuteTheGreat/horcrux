@@ -1,0 +1,2 @@
+# /etc/conf.d/awccd
+AWCCD_CONFIG=/etc/awccd.toml

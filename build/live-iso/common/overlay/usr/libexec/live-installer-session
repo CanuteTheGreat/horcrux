@@ -9,6 +9,15 @@ dmesg -n 1 2>/dev/null
 export TERM=${TERM:-linux}
 mode=$(cat /run/live-installer/mode 2>/dev/null || echo text)
 echo "[live-installer] boot mode: $mode"
+# A per-machine image (private ISO built for ONE machine) ships its own front door as /usr/libexec/live-machine-installer (owned by the
+# machine's package): it replaces the generic guided installer in every install mode except expert, so the owner lands in it straight from
+# the default boot entry. It asks only what the owner must type (confirmation, host name, disk passphrase, login password).
+if [ "$mode" != expert ] && [ -x /usr/libexec/live-machine-installer ]; then
+	/usr/libexec/live-machine-installer
+	echo
+	echo "Live system shell (root). Run '/usr/libexec/live-machine-installer' to start the installer again, 'reboot' to restart."
+	exec /bin/login -f root
+fi
 case "$mode" in
 	gui)
 		if [ -x /usr/libexec/live-installer-gui ] && /usr/libexec/live-installer-gui; then

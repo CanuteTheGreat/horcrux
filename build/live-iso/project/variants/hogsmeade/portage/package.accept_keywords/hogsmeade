@@ -1,0 +1,23 @@
+# Horcrux overlay packages (HOGSMEADE)
+sys-kernel/horcrux-hogsmeade-config ~amd64
+sys-kernel/horcrux-unlock ~amd64
+sys-apps/horcrux-tools ~amd64
+sys-apps/horcrux-live-data ~amd64
+app-misc/hogsmeade-tools ~amd64
+app-misc/awccd ~amd64
+app-misc/alienfx ~amd64
+sci-misc/comfyui ~amd64
+acct-user/comfyui ~amd64
+acct-group/comfyui ~amd64
+sys-apps/hogsmeade-private ~amd64
+app-admin/rustinion-agent -* ~amd64
+# kernel 6.18.x LTS (stable keyword): the ::gentoo snapshot no longer carries 7.2.x, 7.3 has no OpenZFS 2.3/2.4 kmod ebuild yet
+=sys-fs/zfs-kmod-2.3.9 ~amd64
+=sys-fs/zfs-2.3.9 ~amd64
+x11-drivers/nvidia-drivers ~amd64
+net-im/discord ~amd64
+net-vpn/proton-vpn-gtk-app ~amd64
+# GURU (community overlay): proton-vpn-gtk-app and its python deps (as on hogshead)
+*/*::guru ~amd64
+gnome-extra/horcrux-gnome-defaults ~amd64
+net-misc/horcrux-chrony-nm ~amd64

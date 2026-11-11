@@ -1,0 +1,7 @@
+{
+  "uuid": "awcc@horcrux.errant.solutions",
+  "name": "Alienware thermal profile",
+  "description": "Thermal profile, fan speeds and lighting for Alienware laptops (talks to awccd over D-Bus)",
+  "shell-version": ["47", "48", "49", "50"],
+  "url": "https://github.com/CanuteTheGreat/horcrux"
+}

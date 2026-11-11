@@ -1,0 +1,13 @@
+# /etc/awccd.toml: awccd configuration (clean-room spec: ctg-infrastructure hosts/hogsmeade/awcc-re/linux-awcc-daemon-spec.md)
+[thermal]
+default_mode = "balanced"
+game_mode = "balanced-performance"
+[fans]
+curve_enabled = false
+max_boost = 100
+[lighting]
+profile = "rainbow"
+static_color = "0000FF"
+zones = ["shelf", "alienhead"]
+[safety]
+enable_bios_writes = false     # MUX, TCC, boot sound, touchpad: not implemented by awccd (see the spec non-goals)

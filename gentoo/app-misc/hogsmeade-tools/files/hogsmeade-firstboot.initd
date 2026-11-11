@@ -1,0 +1,43 @@
+#!/sbin/openrc-run
+# First boot on the installed system (idempotent). Two parts:
+#   1. local, synchronous: ZFS datasets, the agent's key for the desktop user
+#   2. network, BACKGROUND, no time limit (hogsmeade-firstboot-net): waits for a default route (the owner may connect Wi-Fi hours later),
+#      then clock + LAN handoff (hogsmeade-remote) and the Portage tree sync, retrying every 10 minutes until both worked.
+# The worker is NOT a supervised daemon (no start-stop-daemon): it ends by itself, and OpenRC would show a finished supervised daemon as
+# "crashed" forever. It keeps its own pidfile (/run/hogsmeade-firstboot.pid) for stop(). Markers: /var/lib/hogsmeade/{firstboot,net-firstboot}.done
+description="HOGSMEADE first boot setup (datasets; network handoff waits for a network without a limit)"
+depend() { need localmount; need net; after zfs-mount zfs-import NetworkManager chronyd sshd; }
+LOG=/var/log/hogsmeade-firstboot.log
+start() {
+	grep -q 'rd.live.image' /proc/cmdline && return 0
+	mkdir -p /var/lib/hogsmeade
+	if [ ! -e /var/lib/hogsmeade/firstboot.done ]; then
+		ebegin "HOGSMEADE: datasets and schedules"
+		# ComfyUI data (models, outputs): own dataset, big records, no compression for safetensors, NO snapshots (re-downloadable)
+		if ! zfs list -H rpool/comfyui >/dev/null 2>&1; then
+			# the new dataset is mounted over the directory the packages created: carry their .keep markers over, or
+			# `qcheck` reports acct-user/comfyui as incomplete for ever
+			keeps=$(cd /var/lib/comfyui 2>/dev/null && ls -A | grep '^\.keep')
+			zfs create -o mountpoint=/var/lib/comfyui -o recordsize=1M -o compression=lz4 -o org.hogsmeade:snapshots=off rpool/comfyui \
+				&& for k in $keeps; do : > "/var/lib/comfyui/$k"; done
+		fi
+		chown comfyui:comfyui /var/lib/comfyui 2>/dev/null; chmod 0750 /var/lib/comfyui 2>/dev/null
+		# irreplaceable user data that is not in $HOME
+		zfs list -H rpool/data >/dev/null 2>&1 || zfs create -o mountpoint=/data rpool/data
+		chown canutethegreat:canutethegreat /data 2>/dev/null
+		if [ -s /etc/hogsmeade/agent_authorized_keys ] && [ -d /home/canutethegreat ]; then
+			install -d -m 0700 -o canutethegreat -g canutethegreat /home/canutethegreat/.ssh
+			install -m 0600 -o canutethegreat -g canutethegreat /etc/hogsmeade/agent_authorized_keys /home/canutethegreat/.ssh/authorized_keys
+		fi
+		touch /var/lib/hogsmeade/firstboot.done
+		eend 0
+	fi
+	[ -e /var/lib/hogsmeade/net-firstboot.done ] && { rc-update del hogsmeade-firstboot default >/dev/null 2>&1; return 0; }
+	ebegin "HOGSMEADE first boot: network handoff + tree sync (background, log $LOG)"
+	setsid /usr/libexec/hogsmeade-firstboot-net >>"$LOG" 2>&1 </dev/null &
+	eend 0
+}
+stop() {
+	[ -s /run/hogsmeade-firstboot.pid ] && kill "$(cat /run/hogsmeade-firstboot.pid)" 2>/dev/null
+	return 0
+}

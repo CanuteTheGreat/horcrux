@@ -78,7 +78,7 @@ if [ -n "$(echo $CHAIN)" ]; then
   for v in $CHAIN; do
     [ -f "project/variants/$v/Dockerfile" ] || { echo "unknown VARIANT=$v (no project/variants/$v/Dockerfile)"; exit 2; }
     lap "stage 2b: variant $v"
-    VCTX="--build-context hxgentoo=$REPO/gentoo"; [ -d "$REPO/gentoo/t2" ] && VCTX="$VCTX --build-context t2=$REPO/gentoo/t2"
+    VCTX="--build-context hxgentoo=$REPO/gentoo ${BUILD_CONTEXTS:-}"; [ -d "$REPO/gentoo/t2" ] && VCTX="$VCTX --build-context t2=$REPO/gentoo/t2"
     # named contexts for variants: `hxoverlay` = the Horcrux Portage overlay (repo's gentoo/), `priv` = PRIVATE inputs (PRIV_DIR, never in the
     # repo: authorized_keys for the gringotts image; empty = a public image without them)
     if [ -d "$REPO/gentoo" ]; then
@@ -89,7 +89,7 @@ if [ -n "$(echo $CHAIN)" ]; then
     PRIVCTX=${PRIV_DIR:-}; [ -n "$PRIVCTX" ] || { PRIVCTX=$(mktemp -d); trap 'rmdir "$PRIVCTX" 2>/dev/null; cleanup_build' EXIT; }
     VCTX="$VCTX --build-context priv=$PRIVCTX"
     docker image inspect "$TAG-app" >/dev/null 2>&1 && VCTX="$VCTX --build-context app=docker-image://$TAG-app"
-    docker build $PLAT $ARCHARGS $VCTX -f "project/variants/$v/Dockerfile" --build-arg BASE=$ROOTFS_IMG --build-arg VARIANT=$v \
+    docker build $PLAT $ARCHARGS $VCTX -f "project/variants/$v/Dockerfile" --build-arg BASE=$ROOTFS_IMG --build-arg VARIANT=$v --build-arg KEEP_DEV=${KEEP_DEV:-} \
         -t $TAG-rootfs-$v . 2>&1 | tee "$OUT/variant-$v-build.log" | tail -40
     [ "${PIPESTATUS[0]}" = 0 ] || { echo "variant $v build failed (log: $OUT/variant-$v-build.log)"; exit 1; }
     ROOTFS_IMG=$TAG-rootfs-$v; VIMGS="$VIMGS $TAG-rootfs-$v"

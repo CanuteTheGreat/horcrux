@@ -1,0 +1,165 @@
+#!/bin/bash
+# hogsmeade-install: the owner-run installer front door on the live USB (tty1). The owner types TWO different secrets here.
+#   * refuses to run over ssh (secrets are typed on the laptop keyboard, never through an agent)
+#   * finds the three NVMe drives, shows model/size/serial, asks for the confirmation word
+#   * the host name comes from the private payload (/etc/hogsmeade/hostname = the owner's name for the machine) and must be confirmed
+#   * asks the disk passphrase (typed at every boot) and, SEPARATELY, the login password of canutethegreat (GDM + sudo). The passphrase is
+#     ONLY for the disk: equal entries are refused here and again by the shared installer (liveinst/secretcheck); root stays locked
+#   * writes an answer file on tmpfs (0600, shredded after) and runs the shared installer: one encrypted ZFS pool striped over
+#     all three drives, ESP + /boot copy on each, LUKS2 hibernation swap (RAM x 1.125) on the first drive, user canutethegreat, NO autologin
+#   * after the install the target is closed (sync/umount/swapoff/zpool export/cryptsetup close) BEFORE the owner is told anything, and the
+#     restart uses bash builtins + sysrq (the live system reads from the USB stick: a pulled stick must not break the restart)
+# env HSM_DRY_RUN=1: print the plan only (the QEMU test uses HSM_ANSWER_FILE + HSM_DISKS instead of the keyboard)
+set -u
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+[ "$(id -u)" = 0 ] || [ -n "${HSM_TEST:-}" ] || { echo "run as root"; exit 1; }
+if [ -z "${HSM_TEST:-}" ] && { [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_TTY:-}" ]; }; then
+    echo "hogsmeade-install refuses to run over ssh: the disk passphrase and the login password are typed on the laptop itself."; exit 1; fi
+USERNAME=canutethegreat
+ANS=${HSM_ANS_PATH:-/run/hogsmeade-install.toml}
+LOG=${HSM_LOG:-/run/hogsmeade-install.log}
+trap 'shred -u "$ANS" 2>/dev/null || rm -f "$ANS"' EXIT
+say() { printf '%s\n' "$*"; }
+mark() { echo "HOGSMEADE-INSTALL: $*" > /dev/console 2>/dev/null; }
+
+say "=== HOGSMEADE install (Horcrux / Gentoo, encrypted ZFS) ==="
+vmd=""; [ -d /sys/bus/pci/devices/0000:00:0e.0 ] && grep -qi 'ad0b' /sys/bus/pci/devices/0000:00:0e.0/device 2>/dev/null && vmd=1
+# largest drive first: it becomes drive 1 (hibernation swap + the boot partition every other drive copies)
+mapfile -t NV < <(lsblk -bdnpo PATH,TYPE,SIZE | awk '$2=="disk" && $1 ~ /nvme[0-9]+n[0-9]+$/ {print $3, $1}' | sort -rn | awk '{print $2}')
+if [ -n "${HSM_DISKS:-}" ]; then read -r -a NV <<< "$HSM_DISKS"; fi
+say "NVMe drives visible: ${#NV[@]}"
+for d in "${NV[@]}"; do
+    printf '  %-16s %-28s %8s  serial %s\n' "$d" "$(lsblk -dno MODEL "$d" | sed 's/ *$//')" "$(lsblk -dno SIZE "$d")" "$(lsblk -dno SERIAL "$d")"
+done
+if [ "${#NV[@]}" -ne 3 ]; then
+    say ""
+    say "STOP: exactly 3 NVMe drives are expected, ${#NV[@]} are visible."
+    if [ -n "$vmd" ] || [ "${#NV[@]}" -eq 0 ]; then
+        say "The BIOS storage mode is probably still Intel VMD/RST. Reboot into the BIOS and set it to AHCI (disable VMD),"
+        say "or tell Claude: the image also carries the VMD driver; 'dmesg | grep -i -E \"vmd|nvme\"' shows what the kernel saw."
+    fi
+    say "Nothing was touched."; exit 2
+fi
+[ -n "$vmd" ] && say "NOTE: VMD controller (8086:ad0b) is still present in lspci; the drives are visible through the vmd driver, that is fine."
+[ -d /sys/firmware/efi ] || [ -n "${HSM_TEST:-}" ] || { say "STOP: not booted in UEFI mode."; exit 2; }
+ram_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo); say "RAM: $((ram_kb / 1048576)) GiB -> hibernation swap about $(( (ram_kb / 1048576 + 1) * 1125 / 1000 )) GiB"
+
+if [ -z "${HSM_ANSWER_FILE:-}" ]; then
+    # the machine's NAME: the owner's (his machines are Harry Potter places), from the private payload; confirmed, never a generic default
+    def_host=""; [ -s /etc/hogsmeade/hostname ] && def_host=$(tr -d ' \t\r\n' < /etc/hogsmeade/hostname)
+    if [ -n "${HSM_TEST:-}" ] && [ -n "${HSM_PASSPHRASE:-}" ] && [ -n "${HSM_LOGIN_PASSWORD:-}" ]; then      # test hook only (QEMU/unit tests): never used by the owner
+        w="ERASE HOGSMEADE"; p1=$HSM_PASSPHRASE; u1=$HSM_LOGIN_PASSWORD; HOST_NAME=${HSM_HOSTNAME:-$def_host}
+    else
+        say ""
+        say "This will ERASE ALL THREE DRIVES (Windows and everything on them)."
+        say "Backup gate: only continue when Claude confirmed the restic snapshots tagged pre-horcrux-wipe and pre-horcrux-wipe-profiles are verified in the B2 repo."
+        read -r -p "Type  ERASE HOGSMEADE  to continue: " w
+        [ "$w" = "ERASE HOGSMEADE" ] || { say "Cancelled. Nothing was touched."; exit 3; }
+        while :; do
+            if [ -n "$def_host" ]; then read -r -p "Host name of this laptop [$def_host] (Enter = keep): " HOST_NAME
+            else read -r -p "Host name of this laptop (the name the owner chose for it): " HOST_NAME; fi
+            HOST_NAME=${HOST_NAME:-$def_host}
+            case "$HOST_NAME" in alienware|localhost|gentoo|ubuntu|debian|"") say "'$HOST_NAME' is not a name for this machine."; continue ;; esac
+            printf '%s' "$HOST_NAME" | grep -qE '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$' || { say "lower-case letters, digits and - only"; continue; }
+            break
+        done
+        say ""
+        say "Disk passphrase: typed at every start of the laptop (and once more after hibernate). At least 12 characters. There is NO recovery."
+        say "It is ONLY for the disk: the login password of $USERNAME is asked next and must be DIFFERENT."
+        while :; do
+            read -r -s -p "Disk passphrase (min 12 characters): " p1; echo
+            read -r -s -p "Again: " p2; echo
+            [ "$p1" = "$p2" ] || { say "They differ."; continue; }
+            [ "${#p1}" -ge 12 ] || { say "Too short."; continue; }
+            break
+        done
+        say ""
+        say "Login password for $USERNAME (GNOME login and sudo). At least 12 characters and DIFFERENT from the disk passphrase."
+        while :; do
+            read -r -s -p "Login password: " u1; echo
+            [ "${#u1}" -ge 12 ] || { say "Too short."; continue; }
+            [ "$u1" != "$p1" ] || { say "That is the disk passphrase. The disk passphrase is only for the disk: choose a different login password."; continue; }
+            read -r -s -p "Again: " u2; echo
+            [ "$u1" = "$u2" ] && break
+            say "They differ."
+        done
+    fi
+    [ "$p1" != "$u1" ] || { say "STOP: the login password equals the disk passphrase."; exit 4; }
+    [ -n "$HOST_NAME" ] || { say "STOP: no host name (no /etc/hogsmeade/hostname in the image and none typed)."; exit 4; }
+    mark "HOSTNAME-CONFIRMED $HOST_NAME"
+    umask 077
+    disks_toml=$(printf '"%s", ' "${NV[@]}"); disks_toml=${disks_toml%, }
+    esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+    # root has NO password (the installer locks it; administration is sudo through wheel); the agent's public key may log in to root over key-only sshd
+    rootline=""
+    key=""; [ -s /etc/hogsmeade/agent_authorized_keys ] && key=$(grep -m1 -E '^(ssh-|ecdsa-)' /etc/hogsmeade/agent_authorized_keys)
+    [ -n "$key" ] && rootline="ssh_keys = [\"$(esc "$key")\"]"
+    uh=$(printf '%s' "$u1" | openssl passwd -6 -stdin)            # the LOGIN password's hash, never the passphrase's
+    cat > "$ANS" <<EOF
+[global]
+hostname = "$HOST_NAME"
+timezone = "America/Los_Angeles"
+install_type = "desktop"
+$rootline
+[disk]
+filesystem = "zfs"
+zfs_raid = "stripe"
+encryption = true
+passphrase = "$(esc "$p1")"
+swap = "hibernate"
+disks = [$disks_toml]
+[user]
+name = "$USERNAME"
+fullname = "$USERNAME"
+password_hash = "$uh"
+autologin = false
+[hardware]
+profile = "hogsmeade"
+[network.management]
+mode = "dhcp"
+EOF
+    unset p1 p2 u1 u2 uh
+else
+    ANS=$HSM_ANSWER_FILE; trap - EXIT
+fi
+if [ -n "${HSM_TEST:-}" ] && [ -n "${HSM_ANSWER_OUT:-}" ]; then cp "$ANS" "$HSM_ANSWER_OUT"; say "answer file copied to $HSM_ANSWER_OUT (test)"; [ -n "${HSM_DRY_RUN:-}" ] && exit 0; fi
+say "Installing (about 10-20 minutes). Do not power off and do not unplug anything."
+rm -f "$LOG"
+live-installer --answers "$ANS" --no-halt 2>&1 | tee "$LOG" | grep -E 'AUTOINSTALL|ERROR|FAILED|%'
+rc=${PIPESTATUS[0]}
+[ "$ANS" = "${HSM_ANSWER_FILE:-}" ] || { shred -u "$ANS" 2>/dev/null || rm -f "$ANS"; }
+
+# the installed system must be completely written and CLOSED before the owner is told anything (the installer's finish() does it; this re-checks)
+target_closed() {
+    sync
+    if findmnt -rn -o TARGET | grep -qE '^/mnt(/|$)'; then umount -R /mnt/target 2>/dev/null || umount -R /mnt 2>/dev/null; fi
+    findmnt -rn -o TARGET | grep -qE '^/mnt(/|$)' && return 1
+    swapoff -a 2>/dev/null
+    if zpool list -H -o name 2>/dev/null | grep -qx rpool; then zpool export rpool 2>/dev/null || return 1; fi
+    for m in $(dmsetup ls 2>/dev/null | awk '/^(hxroot|hxswap|cryptswap|hxvg)/{print $1}'); do cryptsetup close "$m" >/dev/null 2>&1; done
+    dmsetup ls 2>/dev/null | grep -qE '^(hxroot|hxswap|cryptswap|hxvg)' && return 1
+    sync; return 0
+}
+# The live system runs from the USB stick: once it is pulled no file on it can be read. Restart WITHOUT starting a program from it:
+# bash builtins + the kernel's sysrq (written through /proc, always honoured).
+hard_restart() {
+    echo s > /proc/sysrq-trigger 2>/dev/null
+    echo b > /proc/sysrq-trigger 2>/dev/null
+    exec /sbin/reboot -f                       # only when sysrq is unavailable (needs the stick: last resort)
+}
+if [ "$rc" = 0 ] && grep -q 'AUTOINSTALL-OK' "$LOG"; then
+    mark INSTALL-OK
+    if target_closed; then mark TARGET-CLOSED; else
+        mark TARGET-NOT-CLOSED; say ""; say "The new system could not be closed cleanly. Do NOT pull the USB stick. Tell Claude."; exit 5
+    fi
+    [ -n "${HSM_TEST:-}" ] && [ -n "${HSM_NO_RESTART:-}" ] && exit 0
+    say ""; say "INSTALL OK. The new system is completely written and closed."
+    say "Press Enter: the laptop restarts at once. Pull the USB stick when the screen goes dark (it is safe any time from now on)."
+    say "At the next start: type the DISK passphrase ONCE, then wait at the GNOME login screen and tell Claude 'booted': Claude restores your"
+    say "browser/app profiles first (about 5 minutes). Then log in with your LOGIN password (there is no automatic login)."
+    read -r _
+    mark RESTARTING
+    hard_restart
+fi
+say "INSTALL FAILED (rc $rc): see $LOG. Tell Claude."
+exit "$rc"

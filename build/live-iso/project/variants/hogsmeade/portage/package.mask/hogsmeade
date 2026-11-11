@@ -1,0 +1,7 @@
+# pinned to the 6.18 LTS series: OpenZFS 2.3.x declares Linux-Maximum 7.2 (no zfs-kmod 2.4 in ::gentoo), see the kernel checks in ../Dockerfile
+>=sys-kernel/gentoo-kernel-6.19
+# qemu (base image) pins the installed edk2-bin 202408: keep @world free of the skipped-update conflict warning
+>=sys-firmware/edk2-bin-202409
+# the owner's overlay carries a newer proton-vpn-gtk-app that needs proton-vpn-daemon, which needs systemd: on this OpenRC machine the GURU
+# version stays (without this mask every world update printed a skipped-update / masked-dependency block once the overlay had synced)
+net-vpn/proton-vpn-gtk-app::canutethegreat-overlay

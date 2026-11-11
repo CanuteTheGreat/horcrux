@@ -32,8 +32,41 @@ def passphrase_problem(p):
     return None
 
 
+RAID_LEVELS = ("single", "mirror", "stripe", "raidz1", "raidz2")
+MIN_DISKS = {"single": 1, "mirror": 2, "stripe": 2, "raidz1": 3, "raidz2": 4}
+
+
+def vdev_args(raid, devs):
+    """the vdev part of `zpool create` (pure). `raid` is a level name; a bool (old API) means mirror/single.
+    stripe = every disk is its own top-level vdev (NO redundancy: one failed disk loses the pool)."""
+    if raid is True:
+        raid = "mirror"
+    elif not raid:
+        raid = "single"
+    devs = list(devs)
+    if raid == "single":
+        return devs[:1]
+    if raid == "stripe":
+        return devs
+    if raid in ("mirror", "raidz1", "raidz2"):
+        return [raid] + devs
+    raise ValueError(f"unknown ZFS layout {raid!r}")
+
+
+def raid_problem(raid, ndisks):
+    """validation text for a layout/disk-count pair, or None"""
+    if raid not in RAID_LEVELS:
+        return f"unknown ZFS layout {raid!r} (one of {', '.join(RAID_LEVELS)})"
+    if ndisks < MIN_DISKS[raid]:
+        w = {2: "two", 3: "three", 4: "four"}[MIN_DISKS[raid]]
+        return f"ZFS {raid} needs {w} different disks ({ndisks} selected)"
+    if raid == "single" and ndisks > 1:
+        return "ZFS single-disk layout takes exactly one disk: choose stripe or mirror for several"
+    return None
+
+
 def pool_args(encrypt, devs, mirror, target, keyformat="passphrase"):
-    """argv of `zpool create` (pure: unit tested)"""
+    """argv of `zpool create` (pure: unit tested). `mirror` = layout name or the old bool."""
     a = ["zpool", "create", "-f", "-o", "ashift=12", "-o", "autotrim=on",
          "-O", "compression=zstd", "-O", "acltype=posixacl", "-O", "xattr=sa", "-O", "relatime=on",
          "-O", "dnodesize=auto", "-O", "normalization=formD", "-O", "mountpoint=none", "-O", "canmount=off"]
@@ -41,7 +74,7 @@ def pool_args(encrypt, devs, mirror, target, keyformat="passphrase"):
         a += ["-O", f"encryption={ENC_ALGO}", "-O", f"keyformat={keyformat}", "-O", f"keylocation=file://{KEY_FILE}"]
         if keyformat == "passphrase":
             a += ["-O", "pbkdf2iters=1000000"]
-    a += ["-R", target, POOL] + (["mirror"] + list(devs) if mirror else list(devs)[:1])
+    a += ["-R", target, POOL] + vdev_args(mirror, devs)
     return a
 
 
@@ -74,7 +107,7 @@ def mkpool(inst):
             else:
                 f.write(c["zfs_passphrase"])       # no trailing newline: the key is exactly what the user typed
     try:
-        inst.run(pool_args(enc, devs, c["zfs_raid"] == "mirror", inst.target, "hex" if c.get("zfs_keymode") == "tpm" else "passphrase"))
+        inst.run(pool_args(enc, devs, c.get("zfs_raid", "single"), inst.target, "hex" if c.get("zfs_keymode") == "tpm" else "passphrase"))
         if enc:
             # from now on the key is asked for (initramfs prompt); the file URL must not outlive the install
             inst.run(["zfs", "set", "keylocation=prompt", POOL])
@@ -159,9 +192,13 @@ def configure(inst, cmdline_extra="", kernel_glob="*"):
     L = inst.layout(inst.c["disks"][0])
     from .system import fsuuid
     boot_uuid, esp_uuid = fsuuid(L[2]), fsuuid(L[1])
-    fstab = ["# written by the Horcrux installer", f"UUID={boot_uuid} /boot ext4 noatime 0 2"]
+    # multi-disk pool: any drive's ESP + /boot copy can boot the machine, so a dead/missing first drive must not stop the boot at fsck
+    # (OpenRC aborts `localmount` -> runlevel 3 without network/sshd): nofail + no fsck pass on those two mounts
+    multi = len(inst.c["disks"]) > 1
+    opt, pas = ("noatime,nofail", 0) if multi else ("noatime", 2)
+    fstab = ["# written by the Horcrux installer", f"UUID={boot_uuid} /boot ext4 {opt} 0 {pas}"]
     if inst.efi and esp_uuid:
-        fstab.append(f"UUID={esp_uuid} /boot/efi vfat umask=0077,noatime 0 2")
+        fstab.append(f"UUID={esp_uuid} /boot/efi vfat umask=0077,{opt} 0 {pas}")
     inst.write("/etc/fstab", "\n".join(fstab) + "\n")
 
 
@@ -188,6 +225,28 @@ def write_grubcfg(inst, extra_cmdline=""):
     if f"root=ZFS={POOL}/ROOT/{BE}" not in cfg:
         from .system import InstallError
         raise InstallError("grub.cfg has no ZFS boot environment entry")
+    mirror_boot(inst)
+
+
+def mirror_conf(rows):
+    """/etc/horcrux/boot-mirrors.conf (pure): one line per extra drive: <disk> <ESP uuid> <boot uuid>"""
+    return "# written by the Horcrux installer: extra drives that carry a copy of /boot + an ESP (horcrux-boot-sync)\n" + \
+        "".join(f"{d} {e} {b}\n" for d, e, b in rows)
+
+
+def mirror_boot(inst):
+    """multi-disk pool: every extra drive gets a synced /boot + its own bootable ESP, so any drive's ESP can boot"""
+    from .system import fsuuid, InstallError
+    disks = inst.c["disks"]
+    if len(disks) < 2 or not inst.efi:
+        return
+    rows = []
+    for d in disks[1:]:
+        l = inst.layout(d)
+        rows.append((d, fsuuid(l[1]), fsuuid(l[2])))
+    inst.write("/etc/horcrux/boot-mirrors.conf", mirror_conf(rows))
+    inst.write("/etc/kernel/postinst.d/95-horcrux-boot-sync", "#!/bin/sh\nexec horcrux-boot-sync\n", 0o755)
+    inst.run(["horcrux-boot-sync", "--init"], chroot=True)
 
 
 def finish(inst):

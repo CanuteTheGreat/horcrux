@@ -1,0 +1,9 @@
+#!/bin/sh
+# comfyui-launch: run ComfyUI on COMFYUI_LISTEN (default 127.0.0.1 = this machine only). ComfyUI has no login of its own: a non-loopback
+# address is only set by a machine package that also puts a host firewall in front of the port (rc_need in /etc/conf.d/comfyui.local).
+: "${COMFYUI_PORT:=8188}" "${COMFYUI_DATA:=/var/lib/comfyui}" "${COMFYUI_EXTRA_ARGS:=}" "${COMFYUI_LISTEN:=127.0.0.1}"
+export PYTHONUNBUFFERED=1 HOME="${COMFYUI_DATA}"
+cd /usr/lib/comfyui/app || exit 1
+# shellcheck disable=SC2086
+exec /usr/lib/comfyui/venv/bin/python -s main.py --listen "${COMFYUI_LISTEN}" --port "${COMFYUI_PORT}" --base-directory "${COMFYUI_DATA}" \
+	--extra-model-paths-config /etc/comfyui/extra_model_paths.yaml ${COMFYUI_EXTRA_ARGS}

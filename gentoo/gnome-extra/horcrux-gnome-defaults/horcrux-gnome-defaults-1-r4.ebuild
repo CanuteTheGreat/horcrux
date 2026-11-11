@@ -10,6 +10,9 @@ S="${WORKDIR}"
 LICENSE="MIT"
 SLOT="0"
 KEYWORDS="amd64 arm64"
+# awcc: also enable the Alienware control extension (app-misc/awccd). The system db REPLACES the gschema default of the same key (an awccd gschema override
+# would be shadowed), so every default extension of the machine is listed here, in the one compiled db.
+IUSE="awcc"
 
 # DESKTOP EDITION, layered on the server core: sys-apps/horcrux-core carries everything every Horcrux install needs (chrony + the clock rules +
 # the NetworkManager/dhcpcd clock hooks, first-boot network wait, overlay sync config, backup, ZFS dist-kernel rule). Nothing of that is attached to
@@ -37,8 +40,13 @@ src_install() {
 	insinto /etc/dconf/db/local.d
 	newins - 00-horcrux-extensions <<-'EOF'
 		[org/gnome/shell]
-		enabled-extensions=['appindicatorsupport@rgcjonas.gmail.com']
+		enabled-extensions=['appindicatorsupport@rgcjonas.gmail.com'@@AWCC@@]
 	EOF
+	if use awcc; then
+		sed -i "s|@@AWCC@@|, 'awcc@horcrux.errant.solutions'|" "${ED}/etc/dconf/db/local.d/00-horcrux-extensions" || die
+	else
+		sed -i 's|@@AWCC@@||' "${ED}/etc/dconf/db/local.d/00-horcrux-extensions" || die
+	fi
 	dconf compile "${T}/local" "${ED}/etc/dconf/db/local.d" || die "dconf compile failed"
 	insinto /etc/dconf/db
 	doins "${T}/local"

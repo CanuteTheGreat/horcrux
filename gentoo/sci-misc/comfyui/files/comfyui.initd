@@ -1,0 +1,20 @@
+#!/sbin/openrc-run
+# ComfyUI GPU render server. Listens on COMFYUI_LISTEN (default 127.0.0.1); see /etc/conf.d/comfyui
+description="ComfyUI (GPU render server)"
+command="/usr/libexec/comfyui-launch"
+command_user="comfyui:comfyui"
+command_background=true
+pidfile="/run/comfyui.pid"
+output_log="/var/log/comfyui/comfyui.log"
+error_log="/var/log/comfyui/comfyui.err"
+export COMFYUI_PORT COMFYUI_DATA COMFYUI_EXTRA_ARGS COMFYUI_LISTEN
+depend() {
+	need localmount
+	use net
+	after zfs-mount
+}
+start_pre() {
+	checkpath -d -o comfyui:comfyui -m 0750 /var/log/comfyui
+	[ -d "${COMFYUI_DATA:-/var/lib/comfyui}" ] || return 0
+	checkpath -d -o comfyui:comfyui -m 0750 "${COMFYUI_DATA:-/var/lib/comfyui}"/{models,output,input,user,custom_nodes}
+}

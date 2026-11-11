@@ -1,0 +1,39 @@
+#!/bin/bash
+# hogsmeade-backup : encrypted, deduplicated restic backup of the user data to the repository in /etc/hogsmeade/backup.env
+# (proposed target: the existing Backblaze B2 bucket ctg-backups, prefix hogsmeade-linux/ : no new service, no new cost).
+# Consistent source: a temporary ZFS snapshot of rpool/home (+ rpool/data when present) is read through .zfs/snapshot.
+# The snapshot name is FIXED (hsm-backup), so every run stores the same paths (/home/.zfs/snapshot/hsm-backup/...): restic then sees one
+# series (retention works; a per-run name made every snapshot its own path group, which `forget` never thinned) and a restore is
+#   restic restore --tag hogsmeade latest:/home/.zfs/snapshot/hsm-backup --target /home     (and :/data/.zfs/snapshot/hsm-backup -> /data)
+# see /usr/share/hogsmeade/POST-INSTALL.md. Retention: 30 days (the standard of every backup in this repository).
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+ENV=/etc/hogsmeade/backup.env
+[ -r "$ENV" ] || { echo "no $ENV: backups are not configured yet" >&2; exit 3; }
+set -a; . "$ENV"; set +a
+D=/var/lib/hogsmeade; mkdir -p $D
+exec 9>/run/hogsmeade-backup.lock; flock -n 9 || { echo "hogsmeade-backup is already running" >&2; exit 6; }
+snap="hsm-backup"
+for ds in rpool/home rpool/data; do zfs destroy "$ds@$snap" 2>/dev/null; done      # left by a run that was killed
+cleanup() { for ds in rpool/home rpool/data; do zfs destroy "$ds@$snap" 2>/dev/null; done; }
+trap cleanup EXIT
+restic cat config >/dev/null 2>&1 || restic init || exit 4
+paths=()
+for ds in rpool/home rpool/data; do
+    zfs list -H "$ds" >/dev/null 2>&1 || continue
+    mp=$(zfs get -H -o value mountpoint "$ds")
+    zfs snapshot "$ds@$snap" || continue
+    # automount the snapshot ONCE, serially, before restic walks it with many threads: concurrent first access races in
+    # zfsctl_snapshot_mount (OpenZFS 2.3.9 + kernel 7.2: VERIFY(avl_find(...) == NULL) panic in the guest, restic hangs in D state)
+    ls -d "$mp/.zfs/snapshot/$snap/" >/dev/null 2>&1 || { echo "cannot mount snapshot $ds@$snap" >&2; continue; }
+    paths+=("$mp/.zfs/snapshot/$snap")
+done
+[ "${#paths[@]}" -gt 0 ] || { echo "nothing to back up" >&2; exit 5; }
+restic backup --tag hogsmeade --exclude-caches \
+    --exclude '*/.cache' --exclude '*/Cache' --exclude '*/.local/share/Trash' --exclude '*/node_modules' --exclude '*/.thumbnails' \
+    --exclude '*/Nextcloud' \
+    "${paths[@]}" && date +%s > $D/last-backup-ok && \
+restic forget --tag hogsmeade --group-by host,tags --keep-within 30d --prune --max-unused 5% >/dev/null
+rc=$?
+# weekly integrity sample (5 % of the pack data read back)
+[ "$(date +%u)" = 7 ] && restic check --read-data-subset=5% >/dev/null 2>&1 || true
+exit $rc
