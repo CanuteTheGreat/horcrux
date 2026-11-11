@@ -316,6 +316,7 @@ src_install() {
 	if use systemd; then
 		systemd_dounit "${S}/deploy/systemd/horcrux.service"
 		systemd_dounit "${S}/deploy/systemd/horcrux-guests.service"
+		systemd_dounit "${S}/deploy/systemd/horcrux-ha-fence.service"
 		if use monitoring; then
 			systemd_dounit "${S}/deploy/systemd/horcrux-monitoring.service"
 		fi
@@ -325,6 +326,7 @@ src_install() {
 	if ! use systemd; then
 		newinitd "${S}/deploy/openrc/horcrux" horcrux
 		newinitd "${S}/deploy/openrc/horcrux-guests" horcrux-guests
+		newinitd "${S}/deploy/openrc/horcrux-ha-fence" horcrux-ha-fence
 		if use monitoring; then
 			newinitd "${S}/deploy/openrc/horcrux-monitoring" horcrux-monitoring
 		fi

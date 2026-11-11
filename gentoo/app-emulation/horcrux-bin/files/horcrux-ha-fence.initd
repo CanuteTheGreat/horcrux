@@ -1,0 +1,31 @@
+#!/sbin/openrc-run
+# Copyright 2026 Horcrux Contributors
+# Distributed under the terms of the GNU General Public License v2
+
+description="Horcrux HA dead-man fence agent (independent of the manager)"
+
+# Own boot service, started BEFORE the manager and without it: it kills the HA
+# guests of this node when the manager's heartbeat goes stale and answers the
+# cluster leader's `GET /attest` (is this node's HA state provably dead?), so a
+# node that rebooted with its manager disabled or broken is recovered in seconds
+# instead of waiting for the node (ha_fence_agent.rs).
+command=/usr/bin/horcrux-api
+command_args="ha-fence-agent"
+command_background=yes
+pidfile=/run/horcrux-ha-fence.pid
+output_log=/var/log/horcrux/horcrux-ha-fence.log
+error_log=/var/log/horcrux/horcrux-ha-fence.log
+
+depend() {
+	use logger
+	after bootmisc
+	before horcrux-api horcrux-guests
+}
+
+start_pre() {
+	checkpath -d -m 0755 /var/log/horcrux
+	# same HORCRUX_HA_* tuning as the manager (it reads this file too)
+	[ -f /etc/conf.d/horcrux-api ] && . /etc/conf.d/horcrux-api
+	export HORCRUX_HA_AGENT_FENCE_SECS HORCRUX_HA_FENCE_PORT \
+		HORCRUX_HA_AGENT_BOOT_SETTLE_SECS HORCRUX_HA_FENCE_PREFIX
+}

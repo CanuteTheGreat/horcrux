@@ -86,12 +86,12 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
     tar -C /tmp/hxt --zstd -cf /var/cache/distfiles/horcrux-tools-1.tar.zst .; rm -rf /tmp/hxt; \
     tar -C / --zstd -cf /var/cache/distfiles/horcrux-live-data-1.tar.zst usr/share/live-installer; \
     for e in sys-apps/horcrux-live-data sys-apps/horcrux-tools sys-kernel/horcrux-unlock app-admin/rustinion-agent; do ebuild /var/db/repos/horcrux/$e/*.ebuild manifest; done; \
-    rm -rf /usr/bin/horcrux /usr/bin/horcrux-api /usr/share/horcrux/ui /etc/init.d/horcrux-api /etc/init.d/horcrux-guests /etc/conf.d/horcrux-api \
+    rm -rf /usr/bin/horcrux /usr/bin/horcrux-api /usr/share/horcrux/ui /etc/init.d/horcrux-api /etc/init.d/horcrux-guests /etc/init.d/horcrux-ha-fence /etc/conf.d/horcrux-api \
            /usr/share/horcrux/t2 /usr/lib/live-installer /usr/libexec/live-* /usr/libexec/console-menu-session /usr/bin/live-installer /usr/bin/console-menu \
            /usr/bin/live-persist /usr/bin/live-rescue /usr/bin/horcrux-be /usr/bin/horcrux-t2-firmware /usr/share/horcrux/desktop \
            /usr/share/live-installer /usr/lib/dracut/modules.d/91horcrux-unlock /etc/init.d/t2fanrd /etc/init.d/tiny-dfr \
            /usr/share/tiny-dfr /usr/lib/udev/rules.d/99-touchbar-tiny-dfr.rules /usr/lib/udev/rules.d/99-touchbar-seat.rules /usr/bin/t2fanrd /usr/bin/tiny-dfr; \
-    rm -f /etc/runlevels/*/horcrux-api /etc/runlevels/*/horcrux-guests /etc/runlevels/*/t2fanrd /etc/runlevels/*/tiny-dfr; \
+    rm -f /etc/runlevels/*/horcrux-api /etc/runlevels/*/horcrux-guests /etc/runlevels/*/horcrux-ha-fence /etc/runlevels/*/t2fanrd /etc/runlevels/*/tiny-dfr; \
     emerge --oneshot --usepkg=n --getbinpkg=n sys-kernel/horcrux-unlock sys-apps/horcrux-tools sys-apps/horcrux-live-data; \
     emerge --noreplace --usepkg=n --getbinpkg=n app-admin/rustinion-agent; \
     emerge --noreplace --select=y sys-kernel/horcrux-unlock sys-apps/horcrux-tools sys-apps/horcrux-live-data app-admin/rustinion-agent; \

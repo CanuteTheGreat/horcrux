@@ -22,9 +22,9 @@ case "$stamp" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;
 for h in "$sx" "$sa"; do [ -z "$h" ] || [ "${#h}" = 64 ] || { echo "sha256 must be 64 hex digits" >&2; exit 64; }; done
 base="$dir/horcrux-bin-0.1.0.ebuild"
 [ -s "$base" ] || { echo "no $base" >&2; exit 66; }
-newest=$(cd "$dir" && ls horcrux-bin-0.1.0_p[0-9]*.ebuild 2>/dev/null | sed -E 's/.*_p([0-9]+)\.ebuild/\1/' | sort -n | tail -1 || true)
+newest=$(cd "$dir" && ls horcrux-bin-0.1.0_p[0-9]*.ebuild 2>/dev/null | sed -E 's/.*_p([0-9]+)(-r[0-9]+)?\.ebuild/\1/' | sort -n | tail -1 || true)
 if [ -n "$newest" ]; then
-  cur="$dir/horcrux-bin-0.1.0_p$newest.ebuild"
+  cur=$(cd "$dir" && ls horcrux-bin-0.1.0_p"$newest"*.ebuild | sort -V | tail -1); cur="$dir/$cur"
   if grep -q "^HORCRUX_MANAGER_SHA256_x86_64=\"$sx\"" "$cur" && grep -q "^HORCRUX_MANAGER_SHA256_aarch64=\"$sa\"" "$cur" && [ -n "$sx$sa" ]; then
     echo "unchanged $cur"; exit 0
   fi

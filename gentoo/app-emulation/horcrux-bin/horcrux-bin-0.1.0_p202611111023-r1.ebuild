@@ -3,7 +3,7 @@
 
 EAPI=8
 
-inherit pam
+inherit pam systemd
 
 DESCRIPTION="Horcrux manager (API server, web UI, CLI), prebuilt: the package every Horcrux edition installs so the node can join a cluster"
 HOMEPAGE="https://github.com/CanuteTheGreat/horcrux"
@@ -80,6 +80,13 @@ src_install() {
 	# the prebuilt tree may carry the image's own init script; keep it executable
 	[[ -e ${ED}/etc/init.d/horcrux-api ]] && fperms 0755 /etc/init.d/horcrux-api
 	[[ -e ${ED}/etc/init.d/horcrux-guests ]] && fperms 0755 /etc/init.d/horcrux-guests
+	# The HA fence agent (`horcrux-api ha-fence-agent`) is its own boot service: it answers the cluster leader's GET /attest (:8026) and kills the
+	# HA guests of a node whose manager hung, WITHOUT the manager (j01743/j02106: a node rebooted with its manager down was held 322 s). The package
+	# always installs it from files/ (a tarball built before it existed has no copy), and the unit/script are the ones the manager itself
+	# rewrites at start (ha_fence_agent.rs ensure_service), so the two never disagree (test_ha_fence_packaging).
+	rm -f "${ED}"/etc/init.d/horcrux-ha-fence
+	newinitd "${FILESDIR}"/horcrux-ha-fence.initd horcrux-ha-fence
+	systemd_dounit "${FILESDIR}"/horcrux-ha-fence.service
 	keepdir /etc/horcrux/ssl /var/lib/horcrux /var/log/horcrux
 	fperms 0700 /etc/horcrux/ssl
 	# PAM realm (host accounts): the "horcrux" PAM service, same as the source ebuild
@@ -94,6 +101,13 @@ src_install() {
 }
 
 pkg_postinst() {
+	# Enable the fence agent where HA can be configured: a node whose manager starts at boot (server editions, every cluster member: the manager
+	# is enabled on create/join) also gets its fence agent in the default runlevel. A desktop edition without the manager enabled stays as is.
+	# (A symlink, not rc-update: this also works with ROOT != /; the manager's ensure_service does the same at runtime.)
+	local rl=${EROOT}/etc/runlevels/default
+	if [[ -L ${rl}/horcrux-api && ! -e ${rl}/horcrux-ha-fence ]]; then
+		ln -s /etc/init.d/horcrux-ha-fence "${rl}/horcrux-ha-fence" && elog "horcrux-ha-fence enabled in the default runlevel (the manager is)"
+	fi
 	elog "Horcrux manager installed. It is NOT started by default on a desktop edition (the server profile enables it):"
 	elog "  rc-update add libvirtd default; rc-update add horcrux-api default; rc-service horcrux-api start    # web UI https://<host>:8006"
 	elog "Cluster: the first admin password is in /var/lib/horcrux/initial-admin-password (or /etc/horcrux/admin-password from the installer)."

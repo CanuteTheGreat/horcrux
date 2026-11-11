@@ -36,5 +36,6 @@ cd /var/db/repos/horcrux/app-emulation/horcrux-bin
 export HORCRUX_MANAGER_TARBALL=/tmp/horcrux-manager-test.tar.zst
 ebuild horcrux-bin-0.1.0.ebuild clean unpack install 2>&1 | tail -15
 echo "=== image tree"; find /var/tmp/portage/app-emulation/horcrux-bin-0.1.0/image -type f -o -type l | sed 's#.*/image##' | sort
+echo "=== fence service (package-owned, also when the tarball has no copy)"; f=/var/tmp/portage/app-emulation/horcrux-bin-0.1.0/image/etc/init.d/horcrux-ha-fence; [ -x $f ] && grep -q ha-fence-agent $f && echo "ok fence init" || { echo "FAIL: horcrux-ha-fence init script missing from the horcrux-bin image"; FAIL=1; }
 echo "=== negative: no tarball"; unset HORCRUX_MANAGER_TARBALL; HORCRUX_MANAGER_URL=http://127.0.0.1:1/x ebuild horcrux-bin-0.1.0.ebuild clean unpack 2>&1 | tail -4
 [ -z "${FAIL:-}" ] && echo "ALL OK" || { echo "FAILED"; exit 1; }

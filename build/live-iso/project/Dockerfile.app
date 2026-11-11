@@ -42,15 +42,17 @@ RUN --mount=type=cache,target=/cache/target --mount=type=cache,target=/usr/local
     cp -r horcrux-api/horcrux-ui/dist/. /out/usr/share/horcrux/ui/; \
     mkdir -p /out/etc/init.d /out/etc/conf.d
 COPY gentoo/app-emulation/horcrux/files/horcrux-guests.initd /out/etc/init.d/horcrux-guests
+# the HA fence agent is its own boot service (answers the leader's GET /attest without the manager); same script the package installs (deploy/openrc)
+COPY deploy/openrc/horcrux-ha-fence /out/etc/init.d/horcrux-ha-fence
 COPY build/live-iso/project/overlay/etc/init.d/horcrux-api /out/etc/init.d/horcrux-api
 COPY build/live-iso/project/overlay/etc/conf.d/horcrux-api /out/etc/conf.d/horcrux-api
 # The manager as ONE tarball: app-emulation/horcrux-bin (gentoo/app-emulation/horcrux-bin) installs it, so the manager is an owned, upgradable Portage package in every
 # edition (the core layer emerges it and then drops this tarball again, the image only needs the package-owned files). Also published as a release asset
 # (horcrux-manager-daily-<arch>.tar.zst) so an installed machine can upgrade the manager without compiling anything.
 RUN set -e; apt-get update && apt-get install -y --no-install-recommends zstd && rm -rf /var/lib/apt/lists/*; \
-    mkdir -p /out/usr/share/horcrux/prebuilt; cd /out; chmod 0755 etc/init.d/horcrux-api etc/init.d/horcrux-guests; \
+    mkdir -p /out/usr/share/horcrux/prebuilt; cd /out; chmod 0755 etc/init.d/horcrux-api etc/init.d/horcrux-guests etc/init.d/horcrux-ha-fence; \
     tar --zstd -cf /out/usr/share/horcrux/prebuilt/horcrux-manager-$(uname -m).tar.zst --owner=0 --group=0 \
-        usr/bin/horcrux usr/bin/horcrux-api usr/share/horcrux/ui etc/init.d/horcrux-api etc/init.d/horcrux-guests etc/conf.d/horcrux-api; \
+        usr/bin/horcrux usr/bin/horcrux-api usr/share/horcrux/ui etc/init.d/horcrux-api etc/init.d/horcrux-guests etc/init.d/horcrux-ha-fence etc/conf.d/horcrux-api; \
     tar --zstd -tf /out/usr/share/horcrux/prebuilt/horcrux-manager-$(uname -m).tar.zst | grep -c . ; ls -l /out/usr/share/horcrux/prebuilt/
 FROM scratch
 COPY --from=app /out/ /out/

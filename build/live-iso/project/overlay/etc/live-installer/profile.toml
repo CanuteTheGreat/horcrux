@@ -11,7 +11,7 @@ default_hostname = "horcrux.localdomain"
 admin_password_file = "/etc/horcrux/admin-password"
 admin_password_owner = "root"
 # core services (sys-apps/horcrux-core): time sync (chronyd + horcrux-timesync), first-boot network wait + tree sync, cron (the backup job). Missing ones are skipped.
-services = ["horcrux-api", "libvirtd", "docker", "dbus", "sshd", "dhcpcd", "chronyd", "horcrux-timesync", "horcrux-firstboot", "cronie"]
+services = ["horcrux-api", "horcrux-ha-fence", "libvirtd", "docker", "dbus", "sshd", "dhcpcd", "chronyd", "horcrux-timesync", "horcrux-firstboot", "cronie"]
 # console menu (installed system)
 web_service = "horcrux-api"
 db_path = "/var/lib/horcrux/horcrux.db"

@@ -970,15 +970,39 @@ async fn peer_post<T: Serialize, R: serde::de::DeserializeOwned>(
     path: &str,
     body: &T,
 ) -> Result<R, String> {
+    peer_post_for(ls, local, base, path, body, None).await
+}
+
+/// How long one placement sync to one peer may take. The supervisor client's 60 s
+/// timeout is for `recover` (it starts a guest); a sync is a small best-effort
+/// message, and a peer whose manager is SIGSTOPped/deadlocked still completes
+/// the TCP handshake in the kernel backlog and then never answers: with the 60 s
+/// timeout that peer froze the WHOLE tick (its own recovery included) for a minute
+/// right after the injection (j02106 real laptops, 'manager hung': tick stuck
+/// +5 s..+65 s, recovery 98 s instead of ~30 s).
+fn sync_timeout() -> Duration {
+    Duration::from_secs(env_secs("HORCRUX_HA_SYNC_TIMEOUT_SECS", SYNC_TIMEOUT_SECS))
+}
+const SYNC_TIMEOUT_SECS: u64 = 5;
+
+async fn peer_post_for<T: Serialize, R: serde::de::DeserializeOwned>(
+    ls: &LoopState,
+    local: &str,
+    base: &str,
+    path: &str,
+    body: &T,
+    timeout: Option<Duration>,
+) -> Result<R, String> {
     let token = crate::middleware::auth::generate_cluster_ha_token(local)?;
-    let resp = ls
+    let mut rb = ls
         .client
         .post(format!("{base}{path}"))
         .bearer_auth(token)
-        .json(body)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+        .json(body);
+    if let Some(t) = timeout {
+        rb = rb.timeout(t);
+    }
+    let resp = rb.send().await.map_err(|e| e.to_string())?;
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
@@ -1255,6 +1279,17 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
                 continue;
             }
             ls.hung_reported.remove(&node);
+            if live == Liveness::KernelAlive {
+                // WARN (the default log level drops INFO): which proof released the guests of a node whose kernel still answers
+                tracing::warn!(
+                    "HA: {node} manager silent for {mgr_silent_for} s, kernel alive: recovering via {} (offline {offline_for} s)",
+                    match (attest, agent_wait) {
+                        (Attest::Safe, _) => "the node's own safe attestation",
+                        (_, Some(_)) => "the advertised agent deadline",
+                        _ => "unknown",
+                    }
+                );
+            }
         }
         // The node may have come back while the probe above ran (a returning node starts
         // its guests itself): look again right before moving anything.
@@ -1307,12 +1342,32 @@ async fn publish(
             .then(super::ha_fence_agent::fence_secs),
     };
     let mut synced = 0;
-    for n in nodes {
-        if n.name == local || n.is_local || !online.contains(&n.name) {
-            continue;
-        }
-        let url = n.api_url(ls.port);
-        match peer_post::<_, SyncReply>(ls, local, &url, "/api/ha/peer/sync", &req).await {
+    // All peers at once, each bounded by `sync_timeout`: one silent peer must not delay the others
+    // (nor this tick's recovery step) by its timeout.
+    let timeout = sync_timeout();
+    let calls = nodes
+        .iter()
+        .filter(|n| !(n.name == local || n.is_local || !online.contains(&n.name)))
+        .map(|n| {
+            let url = n.api_url(ls.port);
+            let req = &req;
+            async move {
+                (
+                    n,
+                    peer_post_for::<_, SyncReply>(
+                        ls,
+                        local,
+                        &url,
+                        "/api/ha/peer/sync",
+                        req,
+                        Some(timeout),
+                    )
+                    .await,
+                )
+            }
+        });
+    for (n, res) in futures::future::join_all(calls).await {
+        match res {
             Ok(reply) => {
                 synced += 1;
                 for newer in reply.newer {
@@ -1966,5 +2021,58 @@ mod fence_agent_gate_tests {
         assert!(recovered_at + 15 /* guest start */ < 90, "{recovered_at}");
         // and faster than the network self-fence margin it replaces
         assert!(agent().unwrap() < SILENT);
+    }
+}
+
+#[cfg(test)]
+mod sync_stall_tests {
+    use super::*;
+
+    /// A peer that accepts the TCP connection and never answers (a SIGSTOPped manager) must not hold a
+    /// placement sync for the supervisor client's 60 s: the tick has to reach its recovery step in seconds.
+    #[tokio::test]
+    async fn a_frozen_peer_cannot_stall_a_sync_for_the_client_timeout() {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            loop {
+                if let Ok((s, _)) = l.accept().await {
+                    held.push(s); // accepted, never read, never answered
+                }
+            }
+        });
+        let ls = LoopState {
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(60))
+                .build()
+                .unwrap(),
+            port,
+            offline_since: HashMap::new(),
+            last_fence: HashMap::new(),
+            hung_reported: Default::default(),
+            mgr_silent_since: HashMap::new(),
+            synced_with_peer: true,
+        };
+        let t = std::time::Instant::now();
+        let r: Result<(), String> = peer_post_for(
+            &ls,
+            "n1",
+            &format!("http://127.0.0.1:{port}"),
+            "/api/ha/peer/sync",
+            &serde_json::json!({}),
+            Some(Duration::from_millis(800)),
+        )
+        .await;
+        assert!(r.is_err());
+        assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
+    }
+
+    /// The default sync bound plus the probes of one tick must stay well under the
+    /// attestation window (agent deadline 15 s + settle): detection is not delayed by a sync.
+    #[test]
+    fn the_default_sync_bound_is_short() {
+        const { assert!(SYNC_TIMEOUT_SECS <= 6) };
+        const { assert!(SYNC_TIMEOUT_SECS >= 3) }; // a healthy peer under load must still sync
     }
 }

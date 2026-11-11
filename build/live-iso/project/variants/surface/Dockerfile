@@ -39,7 +39,7 @@ RUN --mount=type=cache,id=surface-distfiles-${ARCH:-x86_64},target=/var/cache/di
     CONFIG_PROTECT="-*" emerge --oneshot --usepkg=n --getbinpkg=n sys-kernel/horcrux-unlock sys-apps/horcrux-tools sys-apps/horcrux-live-data; \
     emerge --noreplace --select=y sys-kernel/horcrux-unlock sys-apps/horcrux-tools sys-apps/horcrux-live-data; \
     rm -rf /tmp/hxlive /tmp/pkg; \
-    rm -f /usr/bin/horcrux /usr/bin/horcrux-api /usr/bin/tiny-dfr /usr/bin/t2fanrd /etc/init.d/horcrux-guests /etc/init.d/horcrux-api /etc/init.d/t2fanrd /etc/init.d/tiny-dfr \
+    rm -f /usr/bin/horcrux /usr/bin/horcrux-api /usr/bin/tiny-dfr /usr/bin/t2fanrd /etc/init.d/horcrux-guests /etc/init.d/horcrux-ha-fence /etc/init.d/horcrux-api /etc/init.d/t2fanrd /etc/init.d/tiny-dfr \
           /usr/lib/udev/rules.d/99-touchbar-tiny-dfr.rules /usr/lib/udev/rules.d/99-touchbar-seat.rules; \
     rm -rf /usr/share/horcrux /usr/share/tiny-dfr /var/lib/horcrux /var/log/horcrux /etc/horcrux; \
     rc-update del horcrux-api default 2>/dev/null || true; \

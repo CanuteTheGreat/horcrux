@@ -21,11 +21,11 @@ RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,
     tar -C / --zstd -cf /var/cache/distfiles/horcrux-live-data-1.tar.zst usr/share/live-installer; \
     for e in /var/db/repos/horcrux/sys-apps/horcrux-live-data/*.ebuild /var/db/repos/horcrux/sys-apps/horcrux-t2-audio/*.ebuild /var/db/repos/horcrux/sys-kernel/horcrux-t2-config/*.ebuild /var/db/repos/horcrux/app-admin/rustinion-agent/*.ebuild /var/db/repos/horcrux/sys-apps/t2fanrd/*.ebuild /var/db/repos/horcrux/sys-apps/tiny-dfr/*.ebuild /var/db/repos/horcrux/sys-apps/horcrux-tools/*.ebuild; do ebuild "$e" manifest; done; \
     # loose copies from the ISO overlay that packages own now (or that a laptop does not need): remove first so Portage owns the files
-    rm -rf /usr/bin/horcrux /usr/bin/horcrux-api /usr/share/horcrux/ui /etc/init.d/horcrux-api /etc/init.d/horcrux-guests \
+    rm -rf /usr/bin/horcrux /usr/bin/horcrux-api /usr/share/horcrux/ui /etc/init.d/horcrux-api /etc/init.d/horcrux-guests /etc/init.d/horcrux-ha-fence \
            /usr/share/horcrux/t2 /usr/share/tiny-dfr/LICENSE /usr/share/tiny-dfr/LICENSE.material /usr/lib/udev/rules.d/99-touchbar-tiny-dfr.rules \
            /usr/lib/live-installer /usr/libexec/live-* /usr/libexec/console-menu-session /usr/bin/live-installer /usr/bin/console-menu \
            /usr/bin/live-persist /usr/bin/live-rescue /usr/bin/horcrux-be /usr/bin/horcrux-t2-firmware /usr/share/horcrux/desktop; \
-    rm -f /etc/runlevels/*/horcrux-api /etc/runlevels/*/horcrux-guests; \
+    rm -f /etc/runlevels/*/horcrux-api /etc/runlevels/*/horcrux-guests /etc/runlevels/*/horcrux-ha-fence; \
     rm -rf /usr/share/live-installer; \
     emerge --oneshot --usepkg=n --getbinpkg=n sys-kernel/horcrux-unlock sys-apps/horcrux-tools sys-apps/horcrux-live-data sys-apps/horcrux-t2-audio sys-kernel/horcrux-t2-config; \
     # explicit packages go into @world, so `emerge -uDN @world` keeps them current and depclean never removes them
