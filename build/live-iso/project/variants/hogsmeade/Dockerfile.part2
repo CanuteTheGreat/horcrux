@@ -88,7 +88,9 @@ RUN set -e; unset ARCH; export FEATURES="-ccache"; \
 RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \
-    emerge --update --deep --newuse --usepkg --getbinpkg --with-bdeps=n --keep-going=n @world > /var/log/hogsmeade-world.log 2>&1 \
+    # the kernel stays the one part 1 built (with zfs-kmod + nvidia for it): a newer 6.18.x point release in the tree is the installed machine's
+    # first ordinary update (source build + module rebuild through USE=dist-kernel), not something to compile a second time inside the image build
+    emerge --update --deep --newuse --usepkg --getbinpkg --with-bdeps=n --keep-going=n --exclude 'sys-kernel/gentoo-kernel virtual/dist-kernel' @world > /var/log/hogsmeade-world.log 2>&1 \
       || { tail -60 /var/log/hogsmeade-world.log; exit 1; }; \
     emerge --depclean --pretend > /var/log/hogsmeade-depclean.log 2>&1 || true; tail -5 /var/log/hogsmeade-depclean.log
 
