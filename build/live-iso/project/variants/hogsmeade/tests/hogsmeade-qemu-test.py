@@ -275,8 +275,10 @@ class HRun(zt.ZRun):
     def boot_main(self, nvars):
         a = self.z
         self.no_ps2 = True
-        if not os.path.exists(nvars):
-            qt.pflash_vars(nvars)
+        # fresh firmware variables, like every installed boot of the shared harness: the VARS of the install boot keep OVMF's built-in
+        # "EFI Internal Shell" AHEAD of the drives it only discovers now (the installer writes the removable-media loader on each ESP and
+        # no NVRAM entry), so the VM would sit in the shell. Real firmware has no such entry and falls through to \EFI\BOOT\BOOTX64.EFI.
+        qt.pflash_vars(nvars)
         vm = qt.VM("2-boot1", self.qemu_args(None, True, nvars), a.out)
         try:
             # FIRST BOOT WITHOUT ANY NETWORK (the owner connects Wi-Fi later): all three links are down before the guest starts
