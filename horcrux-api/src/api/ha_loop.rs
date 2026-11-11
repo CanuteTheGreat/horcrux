@@ -64,7 +64,7 @@ fn env_secs(name: &str, default: u64) -> u64 {
 }
 
 fn tick_secs() -> u64 {
-    env_secs("HORCRUX_HA_TICK_SECS", 5)
+    env_secs("HORCRUX_HA_TICK_SECS", 3)
 }
 /// How long a node without a majority waits before it kills its HA VMs,
 /// counted from the LAST moment it still saw a majority (see [`FenceClock`]).
@@ -806,6 +806,7 @@ pub(crate) fn may_restart_local_guests(
 /// (`publish`, 60 s client timeout) exactly when the network is partitioned.
 async fn self_fence_watchdog(state: Arc<AppState>) {
     let mut clock = FenceClock::default();
+    let mut had_majority = true;
     let mut ticker = tokio::time::interval(Duration::from_secs(WATCHDOG_SECS as u64));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
@@ -821,6 +822,26 @@ async fn self_fence_watchdog(state: Arc<AppState>) {
             .count();
         let total = nodes.len().max(online);
         let majority = total < 3 || online * 2 > total;
+        if majority != had_majority {
+            // The partition record the lab suite reads: when this node lost / regained
+            // its majority and what it saw (the evidence for the self-fence timing).
+            tracing::warn!(
+                "HA: majority {}: {online}/{total} nodes online ({}), self-fence after {} s",
+                if majority { "regained" } else { "LOST" },
+                nodes
+                    .iter()
+                    .map(|n| format!(
+                        "{}={:?} seen {}s ago",
+                        n.name,
+                        n.status,
+                        n.last_seen.map(|s| now - s).unwrap_or(-1)
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                self_fence_secs()
+            );
+            had_majority = majority;
+        }
         if !clock.observe(now, majority, self_fence_secs()) {
             continue;
         }
@@ -836,7 +857,18 @@ async fn self_fence_watchdog(state: Arc<AppState>) {
             tracing::error!("HA: no majority: self-fencing, killing VM {id}");
         }
         // SIGKILL all, reset the node if one survives (QEMU stuck in storage I/O)
-        super::ha_fence_agent::fence_kill(&ids, "no majority").await;
+        let reset = super::ha_fence_agent::fence_kill(&ids, "no majority").await;
+        if !ids.is_empty() {
+            tracing::error!(
+                "HA: no majority: self-fence of {} guest(s) done{}",
+                ids.len(),
+                if reset {
+                    " (a QEMU was stuck: node reset requested)"
+                } else {
+                    ""
+                }
+            );
+        }
         let kills = running.iter().map(|r| {
             let state = state.clone();
             let local = local.clone();
@@ -1735,11 +1767,11 @@ mod fencing_timing_tests {
 
     fn defaults() -> Timing {
         Timing {
-            poll: 5,
+            poll: 2,
             fetch: 3,
-            stale: 15,
+            stale: 6,
             watchdog: WATCHDOG_SECS,
-            fence: 20,
+            fence: 10,
             kill: KILL_BUDGET_SECS,
         }
     }

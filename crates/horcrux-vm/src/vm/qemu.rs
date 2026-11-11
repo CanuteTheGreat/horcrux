@@ -86,16 +86,47 @@ pub fn pidfile(vm_id: &str) -> String {
 /// Whether `pid` is a live process. A zombie (exited, not yet reaped -
 /// e.g. a daemonized QEMU whose parent is a container's non-reaping PID 1)
 /// no longer runs the guest or writes its disks, so it counts as exited.
+///
+/// A zombie thread-group LEADER is not an exited process while another thread
+/// of the group still runs: after SIGKILL the main thread of a QEMU dies at
+/// once and shows `Z` in `/proc/<pid>/stat`, but an iothread/worker stuck in
+/// uninterruptible storage I/O (shared NFS cut off by a partition) lives on and
+/// can still write the guest's disks once the I/O returns. Reading only the
+/// leader's state reported such a QEMU as gone, so the fence never reset the
+/// node and the survivors' copy shared the disks with it (lab j02289, partition
+/// of 1 node: "SIGKILL pending until the heal").
 pub fn pid_alive(pid: u32) -> bool {
-    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-        // Format: "pid (comm) S ...": the state follows the last ')'.
-        Ok(stat) => stat
-            .rsplit_once(')')
-            .and_then(|(_, rest)| rest.split_whitespace().next())
-            .map(|state| state != "Z" && state != "X")
-            .unwrap_or(true),
-        Err(_) => false,
+    pid_alive_in(std::path::Path::new("/proc"), pid)
+}
+
+/// The state letter of a `/proc/.../stat` line ("pid (comm) S ..."; the state
+/// follows the last ')').
+fn stat_state(stat: &str) -> Option<char> {
+    stat.rsplit_once(')')
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .and_then(|s| s.chars().next())
+}
+
+/// [`pid_alive`] against another proc root (unit tests).
+pub(crate) fn pid_alive_in(proc: &std::path::Path, pid: u32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(proc.join(format!("{pid}/stat"))) else {
+        return false;
+    };
+    match stat_state(&stat) {
+        Some('Z') | Some('X') => {}
+        _ => return true,
     }
+    // Zombie leader: alive while any other thread of the group is not dead.
+    let Ok(tasks) = std::fs::read_dir(proc.join(format!("{pid}/task"))) else {
+        return false;
+    };
+    tasks.flatten().any(|t| {
+        t.file_name().to_string_lossy() != pid.to_string()
+            && std::fs::read_to_string(t.path().join("stat"))
+                .ok()
+                .map(|s| !matches!(stat_state(&s), Some('Z') | Some('X')))
+                .unwrap_or(false)
+    })
 }
 
 /// Whether the pid in a VM's pidfile is a live QEMU process: not a zombie,
@@ -113,6 +144,12 @@ fn qemu_running_from_pidfile(path: &std::path::Path) -> bool {
     std::fs::read(format!("/proc/{pid}/cmdline"))
         .map(|cmd| {
             let argv0 = cmd.split(|b| *b == 0).next().unwrap_or_default();
+            if argv0.is_empty() {
+                // a zombie leader with live threads has no cmdline any more; its comm stays
+                return std::fs::read_to_string(format!("/proc/{pid}/comm"))
+                    .map(|c| c.contains("qemu"))
+                    .unwrap_or(false);
+            }
             String::from_utf8_lossy(argv0).contains("qemu")
         })
         .unwrap_or(false)
@@ -1307,6 +1344,32 @@ impl QemuManager {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn zombie_leader_with_a_live_thread_is_alive() {
+        let d = std::env::temp_dir().join(format!("hx-proc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let mk = |pid: &str, tid: &str, state: char| {
+            let t = d.join(pid).join("task").join(tid);
+            std::fs::create_dir_all(&t).unwrap();
+            let line = format!("{tid} (qemu-system-x86) {state} 1 1 1 0 -1 0\n");
+            std::fs::write(t.join("stat"), &line).unwrap();
+            if tid == pid {
+                std::fs::write(d.join(pid).join("stat"), &line).unwrap();
+            }
+        };
+        mk("10", "10", 'Z');
+        mk("10", "11", 'D'); // iothread stuck in storage I/O
+        assert!(
+            super::pid_alive_in(&d, 10),
+            "live thread keeps the group alive"
+        );
+        mk("10", "11", 'Z');
+        assert!(!super::pid_alive_in(&d, 10), "all threads dead");
+        mk("20", "20", 'S');
+        assert!(super::pid_alive_in(&d, 20));
+        assert!(!super::pid_alive_in(&d, 30), "no such pid");
+        let _ = std::fs::remove_dir_all(&d);
+    }
     #[test]
     fn exited_unreaped_qemu_is_not_running() {
         use std::os::unix::process::CommandExt;
