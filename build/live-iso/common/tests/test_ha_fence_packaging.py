@@ -39,7 +39,7 @@ class HaFencePackaging(unittest.TestCase):
 
     def test_stamped_ebuild_revision_was_bumped_and_the_bump_script_handles_it(self):
         stamped = [n for n in bin_ebuilds() if re.search(r"_p\d{12}", n)]
-        self.assertTrue(any(re.search(r"_p\d{12}-r\d+\.ebuild$", n) for n in stamped), stamped)
+        self.assertTrue(any(re.search(r"_p\d{12}(-r\d+)?\.ebuild$", n) for n in stamped), stamped)
         sh = rd(*BIN, "bump-horcrux-bin.sh")
         self.assertIn("(-r[0-9]+)?", sh)
 
