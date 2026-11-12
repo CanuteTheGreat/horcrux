@@ -721,7 +721,7 @@ class ZRun(qt.Runner):
         rc, o = self.sh(f"P=$(pgrep -u {user} -x xdg-desktop-portal | head -1); echo PID=$P; tr '\\0' '\\n' < /proc/$P/environ | grep -E '^XDG_CURRENT_DESKTOP='")
         self.step("xdg-desktop-portal-runs-with-the-gnome-desktop-name", "XDG_CURRENT_DESKTOP=GNOME" in o, re.sub(r"\s+", " ", o)[:200])
         rc, o = self.sh(f"su - {user} -c \"export {env}; gsettings get org.gnome.mutter experimental-features\" 2>&1")
-        self.step("mutter-fractional-scaling-is-the-system-default", "scale-monitor-framebuffer" in o and "xwayland-native-scaling" in o, re.sub(r"\s+", " ", o)[:200])
+        self.step("mutter-fractional-scaling-is-the-system-default", "scale-monitor-framebuffer" in o and "xwayland-native-scaling" not in o, re.sub(r"\s+", " ", o)[:200])
 
     def session_logout(self, user):
         """Log Out through the shell's own bus (org.gnome.SessionManager.Logout 1); wait until the user's shell is gone and GDM shows a greeter session again"""

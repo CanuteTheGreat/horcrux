@@ -14,7 +14,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
 PKG = os.path.join(REPO, "gentoo", "gnome-extra", "horcrux-gnome-defaults")
 EBUILDS = sorted(glob.glob(os.path.join(PKG, "*.ebuild")))
-WANT = "['scale-monitor-framebuffer', 'xwayland-native-scaling']"
+WANT = "['scale-monitor-framebuffer']"
 
 
 def keyfile(ebuild):
@@ -25,11 +25,13 @@ def keyfile(ebuild):
 
 @unittest.skipUnless(EBUILDS, "Horcrux repo tree only")
 class FractionalScaling(unittest.TestCase):
-    def test_keyfile_in_the_system_local_db_with_both_features(self):
+    def test_keyfile_in_the_system_local_db_with_only_scale_monitor_framebuffer(self):
         name, kf = keyfile(EBUILDS[-1])
         self.assertIsNotNone(name, "ebuild must install a fractional-scaling keyfile")
         self.assertIn("[org/gnome/mutter]", kf)
         self.assertIn(f"experimental-features={WANT}", kf)
+        # native scaling leaves X11 apps unscaled (tiny); the compositor must scale XWayland
+        self.assertNotIn("xwayland-native-scaling", kf)
 
     def test_installed_into_local_d_which_the_dconf_profile_reads(self):
         s = open(EBUILDS[-1]).read()
