@@ -145,7 +145,7 @@ class HogsmeadeApps(unittest.TestCase):
 
     def test_user_groups_and_pcscd_come_from_the_package(self):
         t = APPS.read_text()
-        for g in ("wireshark", "plugdev", "pcscd"):
+        for g in ("pcap", "wireshark", "plugdev", "pcscd"):
             self.assertIn(g, t)
         self.assertIn("gpasswd -a", t)
         self.assertIn("rc-update add pcscd default", t)

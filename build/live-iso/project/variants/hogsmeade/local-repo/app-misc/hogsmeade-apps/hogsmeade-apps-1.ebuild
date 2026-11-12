@@ -71,7 +71,7 @@ RDEPEND="
 pkg_postinst() {
 	# owner's login(s) (uid >= 1000): the groups the apps need
 	local g u
-	for g in wireshark plugdev pcscd video; do
+	for g in pcap wireshark plugdev pcscd video; do
 		getent group "${g}" >/dev/null || continue
 		while IFS=: read -r u _ uid _; do
 			[[ ${uid} -ge 1000 && ${uid} -lt 60000 ]] || continue
