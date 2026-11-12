@@ -1,7 +1,7 @@
 {
  "id": "vm-runtime",
- "last_full": "2026-10-30",
- "sha": "2ef3e9083915ec6bcb8c7e278a4f9f2ade1595dd",
+ "last_full": "2026-11-12",
+ "sha": "52344414d6b2851113caec8b7d0486938f64b36f",
  "survivors": [
   "crates/horcrux-vm/src/vm/hold.rs: delete match arm (HoldAction::Resume, true) in recover",
   "crates/horcrux-vm/src/vm/hold.rs: delete match arm (HoldAction::Start, false) in recover",
@@ -15,7 +15,6 @@
   "crates/horcrux-vm/src/vm/qemu.rs: replace QemuManager::check_kvm_available -> bool with true",
   "crates/horcrux-vm/src/vm/qemu.rs: replace QemuManager::get_qemu_version -> Result<String> with Ok(\"xyzzy\".into())",
   "crates/horcrux-vm/src/vm/qemu.rs: replace QemuManager::get_qemu_version -> Result<String> with Ok(String::new())",
-  "crates/horcrux-vm/src/vm/qemu.rs: replace QemuManager::process_running -> bool with false",
   "crates/horcrux-vm/src/vm/qemu.rs: replace match guard o.status.success() with true in QemuManager::backing_files"
  ]
 }
