@@ -74,6 +74,8 @@ src_install() {
 		media-libs/libv4l utils
 		net-dns/avahi python
 		sys-libs/zlib minizip
+		# OneDrive client: the binhost binpkg is built with libnotify (desktop notifications); --binpkg-respect-use masks a USE='' binpkg when this differs
+		net-misc/onedrive libnotify
 		# DaVinci Resolve: NVIDIA only (the only VIDEO_CARDS its ebuild needs on this machine)
 		media-video/davinci-resolve VIDEO_CARDS: -* nvidia
 	EOF2
