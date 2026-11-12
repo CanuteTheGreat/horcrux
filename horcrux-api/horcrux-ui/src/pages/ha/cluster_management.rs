@@ -608,6 +608,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                                             </div>
                                                             <div class="text-xs text-gray-700">{node.usage_label()}</div>
                                                             <div class="text-xs text-gray-500">{node.architecture.clone()}</div>
+                                                            <div class="text-xs text-gray-500 node-hardware">{node.hardware_label()}</div>
                                                         </td>
                                                         <td class="px-6 py-4 whitespace-nowrap">
                                                             <div class="flex items-center space-x-2">

@@ -479,6 +479,18 @@ pub struct ClusterNode {
     /// compute node.
     #[serde(default)]
     pub caps: Option<NodeCaps>,
+    /// CPU family the node reports: "intel" | "amd" | "" (unknown).
+    #[serde(default)]
+    pub cpu_vendor: String,
+    /// x86-64 level 1..4; 0 = unknown.
+    #[serde(default)]
+    pub cpu_level: u8,
+    /// Fastest link up, Mbit/s; 0 = unknown.
+    #[serde(default)]
+    pub uplink_mbps: u64,
+    /// Whole NVMe namespaces; 0 = none/unknown.
+    #[serde(default)]
+    pub nvme_disks: u32,
 }
 
 /// Mirror of `cluster::roles::NodeCaps` (`PUT /api/cluster/nodes/:name/caps`).
@@ -503,6 +515,27 @@ fn default_node_priority() -> u32 {
 }
 
 impl ClusterNode {
+    /// "amd-v3 | 25 GbE | 4 NVMe" for the node list; unknown parts are left
+    /// out, "" when the node has reported nothing (older node).
+    pub fn hardware_label(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        match (self.cpu_vendor.as_str(), self.cpu_level) {
+            ("", 0) => {}
+            (v, 0) => parts.push(v.to_string()),
+            ("", l) => parts.push(format!("x86-64-v{l}")),
+            (v, l) => parts.push(format!("{v}-v{l}")),
+        }
+        if self.uplink_mbps > 0 {
+            parts.push(crate::pages::ha::cluster_management::nic_speed_label(Some(
+                self.uplink_mbps,
+            )));
+        }
+        if self.nvme_disks > 0 {
+            parts.push(format!("{} NVMe", self.nvme_disks));
+        }
+        parts.join(" | ")
+    }
+
     /// Fraction (0.0-1.0) of RAM in use, when both figures are known.
     pub fn memory_used_fraction(&self) -> Option<f64> {
         match self.memory_used {
@@ -5854,7 +5887,27 @@ mod tests {
             last_seen: None,
             status_reason: None,
             caps: None,
+            cpu_vendor: String::new(),
+            cpu_level: 0,
+            uplink_mbps: 0,
+            nvme_disks: 0,
         }
+    }
+
+    #[test]
+    fn hardware_label_lists_only_what_the_node_reported() {
+        let mut n = usage_node("a", "online", None, None);
+        assert_eq!(n.hardware_label(), "");
+        n.cpu_vendor = "amd".into();
+        n.cpu_level = 4;
+        n.uplink_mbps = 25_000;
+        n.nvme_disks = 4;
+        assert_eq!(n.hardware_label(), "amd-v4 | 25 GbE | 4 NVMe");
+        n.cpu_vendor = "intel".into();
+        n.cpu_level = 0;
+        n.uplink_mbps = 1_000;
+        n.nvme_disks = 0;
+        assert_eq!(n.hardware_label(), "intel | 1 GbE");
     }
 
     #[test]
