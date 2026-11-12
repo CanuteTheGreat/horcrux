@@ -700,6 +700,27 @@ class ZRun(qt.Runner):
                         f"su - {user} -c \"export XDG_RUNTIME_DIR=/run/user/{uid} DBUS_SESSION_BUS_ADDRESS=$B; echo BUS=$B; {names}\" 2>&1")
         self.step("session-manager-and-shell-names-on-the-shells-own-bus", o.count("(true,)") == 2, re.sub(r"\s+", " ", o)[:300])
 
+    def session_activation_env_checks(self, user):
+        """D-Bus-activated apps get the session environment: the OpenRC user dbus-daemon starts BEFORE gnome-shell, so unless horcrux-session-env pushed it,
+        GNOME Settings (DBusActivatable) exits with "only supported under GNOME and Unity". A throwaway activatable service dumps the environment dbus-daemon
+        gives it; and xdg-desktop-portal must have been (re)started with XDG_CURRENT_DESKTOP, as it picks its backend from it. Headless: no app window opens."""
+        uid, env = self._user_bus_env(user)
+        probe = "[D-BUS Service]\\nName=org.horcrux.EnvProbe\\nExec=/bin/sh -c 'env > /tmp/hx-probe.env; chmod 644 /tmp/hx-probe.env; sleep 2'\\n"
+        self.sh(f"rm -f /tmp/hx-probe.env; printf '{probe}' > /usr/share/dbus-1/services/org.horcrux.EnvProbe.service")
+        end, o = time.time() + qt.T(90), ""
+        while time.time() < end:     # the autostart entry runs a few seconds after the shell is up
+            self.sh("rm -f /tmp/hx-probe.env")
+            self.sh(f"su - {user} -c \"export {env}; gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.StartServiceByName org.horcrux.EnvProbe 0\" 2>&1", timeout=40)
+            time.sleep(3)
+            rc, o = self.sh("grep -E '^(XDG_CURRENT_DESKTOP|XDG_SESSION_TYPE|XDG_SESSION_DESKTOP|WAYLAND_DISPLAY|XDG_DATA_DIRS)=' /tmp/hx-probe.env 2>&1")
+            if "XDG_CURRENT_DESKTOP=GNOME" in o:
+                break
+            time.sleep(5)
+        self.sh("rm -f /usr/share/dbus-1/services/org.horcrux.EnvProbe.service /tmp/hx-probe.env")
+        self.step("dbus-activated-service-gets-the-gnome-session-environment", all(k in o for k in ("XDG_CURRENT_DESKTOP=GNOME", "XDG_SESSION_TYPE=wayland", "WAYLAND_DISPLAY=", "XDG_DATA_DIRS=")), re.sub(r"\s+", " ", o)[:300])
+        rc, o = self.sh(f"P=$(pgrep -u {user} -x xdg-desktop-portal | head -1); echo PID=$P; tr '\\0' '\\n' < /proc/$P/environ | grep -E '^XDG_CURRENT_DESKTOP='")
+        self.step("xdg-desktop-portal-runs-with-the-gnome-desktop-name", "XDG_CURRENT_DESKTOP=GNOME" in o, re.sub(r"\s+", " ", o)[:200])
+
     def session_logout(self, user):
         """Log Out through the shell's own bus (org.gnome.SessionManager.Logout 1); wait until the user's shell is gone and GDM shows a greeter session again"""
         uid, env = self._user_bus_env(user)

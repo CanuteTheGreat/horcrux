@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Horcrux session environment
+Comment=Gives D-Bus-activated apps (GNOME Settings, Files, the portals) the GNOME session environment on OpenRC
+Exec=/usr/libexec/horcrux-session-env
+TryExec=/usr/libexec/horcrux-session-env
+NoDisplay=true
+OnlyShowIn=GNOME;
+X-GNOME-Autostart-enabled=true

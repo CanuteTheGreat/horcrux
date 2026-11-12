@@ -20,6 +20,7 @@ IUSE="awcc"
 RDEPEND="
 	sys-apps/horcrux-core
 	gnome-base/dconf
+	sys-apps/dbus
 	gnome-base/gnome-control-center
 	net-misc/networkmanager
 	gnome-extra/gnome-shell-extension-appindicator
@@ -60,6 +61,13 @@ src_install() {
 	exeinto /usr/libexec
 	doexe "${FILESDIR}"/horcrux-keyring-pam
 	dobin "${FILESDIR}"/horcrux-keyring-status
+
+	# D-Bus-activated apps (GNOME Settings, Files, portals) must get the session environment: on OpenRC the user dbus-daemon starts before gnome-shell, so
+	# its activation environment lacks XDG_CURRENT_DESKTOP & co and gnome-control-center refuses to run. Pushed once per login after the shell is up.
+	exeinto /usr/libexec
+	doexe "${FILESDIR}"/horcrux-session-env
+	insinto /etc/xdg/autostart
+	doins "${FILESDIR}"/horcrux-session-env.desktop
 }
 
 pkg_postinst() {

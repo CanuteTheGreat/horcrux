@@ -470,6 +470,7 @@ class GRun(zt.ZRun):
                 self.session_audio_autostart_checks(USER, vm)
                 self.tray_extension_checks(USER)
                 self.session_bus_checks(USER)
+                self.session_activation_env_checks(USER)
             if sess:
                 self.apps()
             self.orphans()

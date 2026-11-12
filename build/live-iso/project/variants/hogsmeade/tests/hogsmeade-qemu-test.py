@@ -436,6 +436,7 @@ class HRun(zt.ZRun):
         vm.shot("gnome-desktop")
         self.step("gnome-desktop-is-graphical-on-vga", c > 40, f"{c} distinct colours on the VGA console (see 2-boot1-gnome-desktop.png)")
         self.session_bus_checks(USER)
+        self.session_activation_env_checks(USER)
         self.session_audio_autostart_checks(USER, vm)
         self.tray_extension_checks(USER)
         self.keyring_store()
