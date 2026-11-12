@@ -2,9 +2,14 @@
 # HOGSMEADE-ONLY (this one laptop model: Alienware 18 Area-51 AA18250; never in a public image, the Horcrux overlay or another machine).
 # Windows loads Dell/Realtek speaker tuning (rt1320 "advanced mode" DSP firmware + Dolby) that Linux does not have, so at 0 dB everywhere the
 # speakers are about half as loud. This installs the Linux equivalent as a PipeWire filter-chain: a virtual "Speakers (tuned)" sink in front of the
-# internal speaker sink = high-pass (speaker protection) -> compressor (+6 dB makeup) -> lookahead brickwall limiter (-1 dBFS, +3 dB drive), so the
-# extra level never clips (replaces GNOME over-amplification, which clips). It becomes the default sink only while the speakers are the active
-# output (priority just above the speaker sink and below headphones/USB; HDMI sits below the speakers anyway).
+# internal speaker sink = high-pass (speaker protection) -> compressor (+6 dB makeup) -> lookahead brickwall limiter (+3 dB drive, -1.5 dBFS ceiling,
+# 2x oversampled: measured true peak on a -0.2 dBFS-mastered track and on the same track +6 dB hotter stays at or below -1.3 dBFS), so the extra
+# level never clips (replaces GNOME over-amplification, which clips).
+# Default-output policy (no pinned default.configured.audio.sink; a WirePlumber rules drop-in instead): WirePlumber only considers sinks whose
+# route is available, and picks the highest priority.session, so: tuned sink 713 (just above the raw speaker sink 712) is the default while the
+# speakers are the output; the headphone jack (1000), any USB audio output and any Bluetooth sink (both forced to 1100) win when present and the
+# default returns to the tuned speakers when they go away; HDMI/DP (~660) stays below and is used when picked in Settings (a configured default
+# is honoured while its node exists). The Maono DGM20 microphone's own output sink is demoted to 50 so it never steals the default.
 # The chain is only linked into PipeWire's config dir when DMI says this model (re-checked at every boot by the OpenRC service).
 EAPI=8
 
@@ -31,7 +36,7 @@ src_install() {
 	insinto /usr/share/hogsmeade-speaker-tuning
 	newins - 50-hogsmeade-speakers.conf <<-'EOF2'
 		# HOGSMEADE (app-misc/hogsmeade-speaker-tuning): the "Speakers (tuned)" virtual sink in front of the internal speaker sink.
-		# high-pass (speaker protection) -> compressor (+6 dB makeup) -> lookahead brickwall limiter (-1 dBFS, +3 dB drive).
+		# high-pass (speaker protection) -> compressor (+6 dB makeup) -> lookahead brickwall limiter (+3 dB drive, -1.5 dBFS ceiling so inter-sample true peaks stay under -1 dBFS).
 		context.modules = [
 		  { name = libpipewire-module-filter-chain
 		    flags = [ nofail ]
@@ -47,7 +52,7 @@ src_install() {
 		          { type = lv2 plugin = "http://lsp-plug.in/plugins/lv2/compressor_stereo" name = comp
 		            control = { "cm" = 0 "al" = 0.1 "cr" = 2.5 "kn" = 0.5 "at" = 15.0 "rt" = 200.0 "mk" = 1.995 "cdr" = 0.0 } }
 		          { type = lv2 plugin = "http://lsp-plug.in/plugins/lv2/limiter_stereo" name = lim
-		            control = { "g_in" = 1.413 "th" = 0.891 "lk" = 5.0 "at" = 5.0 "rt" = 5.0 "ovs" = 2 "boost" = 0 } }
+		            control = { "g_in" = 1.413 "th" = 0.841 "lk" = 5.0 "at" = 5.0 "rt" = 5.0 "ovs" = 2 "boost" = 0 } }
 		        ]
 		        links = [
 		          { output = "hpl1:Out" input = "hpl2:In" }
@@ -80,6 +85,25 @@ src_install() {
 		]
 	EOF2
 
+	newins - 51-hogsmeade-audio-policy.conf <<-'EOF2'
+		# HOGSMEADE (app-misc/hogsmeade-speaker-tuning): default-output policy as WirePlumber node-priority rules (highest priority.session among sinks
+		# with an available route is the default; a sink picked in GNOME Settings is honoured while it exists). Rules run in order, later ones win.
+		# Tuned speakers = 713 and the raw speaker sink = 712 (chain file); headphone jack = 1000, HDMI/DP ~ 650-670 (ACP/UCM values, untouched).
+		monitor.alsa.rules = [
+		  # any USB audio output (headset, DAC, dock) beats the speakers when connected
+		  { matches = [ { node.name = "~alsa_output.usb-*" } ]
+		    actions = { update-props = { priority.session = 1100  priority.driver = 1100 } } }
+		  # ... except the Maono DGM20 microphone's own headphone-out sink, which must never steal the default
+		  { matches = [ { node.name = "~alsa_output.usb-Maono_DGM20_USB_Microphone_*" } ]
+		    actions = { update-props = { priority.session = 50  priority.driver = 50 } } }
+		]
+		monitor.bluez.rules = [
+		  # a newly connected Bluetooth audio output beats the speakers
+		  { matches = [ { node.name = "~bluez_output.*" } ]
+		    actions = { update-props = { priority.session = 1100  priority.driver = 1100 } } }
+		]
+	EOF2
+
 	exeinto /usr/libexec
 	newexe - hogsmeade-speaker-tuning-gate <<-'EOF2'
 		#!/bin/sh
@@ -87,12 +111,14 @@ src_install() {
 		D=/sys/class/dmi/id
 		V=$(cat $D/sys_vendor 2>/dev/null); P=$(cat $D/product_name 2>/dev/null)
 		L=/etc/pipewire/pipewire.conf.d/50-hogsmeade-speakers.conf
+		W=/etc/wireplumber/wireplumber.conf.d/51-hogsmeade-audio-policy.conf
 		if [ "$V" = "Alienware" ] && [ "$P" = "Alienware 18 Area-51 AA18250" ]; then
-		  mkdir -p /etc/pipewire/pipewire.conf.d
+		  mkdir -p /etc/pipewire/pipewire.conf.d /etc/wireplumber/wireplumber.conf.d
 		  ln -sfn /usr/share/hogsmeade-speaker-tuning/50-hogsmeade-speakers.conf "$L"
+		  ln -sfn /usr/share/hogsmeade-speaker-tuning/51-hogsmeade-audio-policy.conf "$W"
 		  echo "hogsmeade-speaker-tuning: enabled ($P)"
 		else
-		  rm -f "$L"
+		  rm -f "$L" "$W"
 		  echo "hogsmeade-speaker-tuning: not this model ($V / $P), disabled"
 		fi
 	EOF2
@@ -117,9 +143,10 @@ pkg_postinst() {
 	if command -v rc-update >/dev/null 2>&1 && ! rc-update show default 2>/dev/null | grep -q hogsmeade-speaker-tuning; then
 		rc-update add hogsmeade-speaker-tuning default
 	fi
-	elog "Restart the user's pipewire + wireplumber (or log in again) to load the 'Speakers (tuned)' sink."
+	elog "Restart the user's pipewire + wireplumber (or log in again) to load the 'Speakers (tuned)' sink and the default-output policy."
+	elog "Drop an old hard pin with: pw-metadata -n default -d 0 default.configured.audio.sink (this package no longer pins the default)."
 }
 
 pkg_postrm() {
-	rm -f /etc/pipewire/pipewire.conf.d/50-hogsmeade-speakers.conf
+	rm -f /etc/pipewire/pipewire.conf.d/50-hogsmeade-speakers.conf /etc/wireplumber/wireplumber.conf.d/51-hogsmeade-audio-policy.conf
 }

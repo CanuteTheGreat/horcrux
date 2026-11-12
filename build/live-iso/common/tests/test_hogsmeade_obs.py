@@ -188,7 +188,7 @@ class HogsmeadeApps(unittest.TestCase):
                     self.assertNotRegex(txt, r"(?m)^[^#\n]*" + re.escape(a) + r"\b", f"{f}: {a}")
 
 
-SP = HSM / "local-repo" / "app-misc" / "hogsmeade-speaker-tuning" / "hogsmeade-speaker-tuning-1.ebuild"
+SP = HSM / "local-repo" / "app-misc" / "hogsmeade-speaker-tuning" / "hogsmeade-speaker-tuning-2.ebuild"
 
 
 @unittest.skipUnless(SP.is_file(), "Horcrux repo tree only")
@@ -202,8 +202,10 @@ class HogsmeadeSpeakerTuning(unittest.TestCase):
         for s in ("bq_highpass", "http://lsp-plug.in/plugins/lv2/compressor_stereo", "http://lsp-plug.in/plugins/lv2/limiter_stereo",
                   "media-libs/lsp-plugins[lv2]", "media-video/pipewire[lv2", "Audio/Sink", "Speakers (tuned)", "HiFi__Speaker__sink"):
             self.assertIn(s, self.t)
-        # limiter ceiling -1 dBFS (0.891 linear) with the gain-boost (output renormalisation) OFF, so the peak really stays at -1 dBFS
-        self.assertRegex(self.t, r'"th" = 0\.891\b')
+        # limiter ceiling -1.5 dBFS (0.841 linear) with the gain-boost (output renormalisation) OFF and 2x+ oversampling: the offline measurement of
+        # a -0.2 dBFS-mastered track (and the same track +6 dB) gave a TRUE peak of -1.4/-1.3 dBFS; the earlier -1.0 dBFS ceiling measured -0.9 dBFS true peak
+        self.assertRegex(self.t, r'"th" = 0\.841\b')
+        self.assertRegex(self.t, r'"ovs" = [2-9]\b')
         self.assertRegex(self.t, r'"boost" = 0\b')
         # total makeup at most +9 dB: compressor +6 (1.995) and limiter drive +3 (1.413)
         self.assertRegex(self.t, r'"mk" = 1\.995\b')
@@ -213,6 +215,31 @@ class HogsmeadeSpeakerTuning(unittest.TestCase):
         self.assertTrue(freqs and all(120 <= f <= 150 for f in freqs), freqs)
         # default only below headphones/USB: priority just above the speaker sink (712)
         self.assertRegex(self.t, r"priority\.session = 713\b")
+
+    def test_default_output_policy_replaces_the_pin(self):
+        """No hard pin; WirePlumber priority rules: tuned (713) default only while the speakers are the output; jack/USB/BT/explicit HDMI switch it; DGM20 output never."""
+        import re as _re
+        # nothing in the package sets a pinned default (only the elog that tells how to drop an old pin may mention the key)
+        code = "\n".join(l for l in self.t.splitlines() if "elog" not in l and not l.lstrip("\t #").startswith("Default-output"))
+        self.assertNotRegex(code, r"set-default|default\.configured\.audio\.sink\s*[=\"']|pw-metadata[^\n]*default\.configured[^\n]*\{")
+        pol = self.t[self.t.index("51-hogsmeade-audio-policy.conf <<-"):]
+        pol = pol[:pol.index("EOF2", 40)]
+        rules = _re.findall(r'node\.name = "~([^"]+)"\s*\} \]\s*actions = \{ update-props = \{ priority\.session = (\d+)', pol)
+        prio = {}
+        for pat, n in rules:  # later rules win, like WirePlumber
+            prio[pat] = int(n)
+        spk, tuned = 712, 713
+        self.assertEqual(int(_re.search(r"priority\.session = (\d+)", self.t).group(1)), tuned)
+        self.assertGreater(prio["alsa_output.usb-*"], tuned)
+        self.assertGreater(prio["bluez_output.*"], tuned)
+        self.assertLess(prio["alsa_output.usb-Maono_DGM20_USB_Microphone_*"], spk)
+        # the DGM20 demotion comes AFTER the generic USB rule (order matters), the headphone jack (UCM 1000) is untouched
+        self.assertLess(pol.index("alsa_output.usb-*"), pol.index("alsa_output.usb-Maono_DGM20"))
+        self.assertNotIn("Headphones", pol)
+        # linked only on this model, like the chain
+        self.assertIn("/etc/wireplumber/wireplumber.conf.d/51-hogsmeade-audio-policy.conf", self.t)
+        self.assertNotIn("insinto /etc/wireplumber", self.t)
+        self.assertIn('rm -f "$L" "$W"', self.t)
 
     def test_gated_on_this_model_only(self):
         self.assertIn('"Alienware"', self.t)
@@ -232,7 +259,7 @@ class HogsmeadeSpeakerTuning(unittest.TestCase):
         self.assertIn("media-video/pipewire lv2", (HSM / "portage" / "package.use" / "zzz-hogsmeade").read_text())
 
     def test_not_leaked_into_public_or_other_layers(self):
-        pat = re.compile(r"hogsmeade-speaker-tuning|hogsmeade_speakers_tuned|50-hogsmeade-speakers")
+        pat = re.compile(r"hogsmeade-speaker-tuning|hogsmeade_speakers_tuned|50-hogsmeade-speakers|51-hogsmeade-audio-policy")
         bad = []
         for r in (REPO / "gentoo", LIVE / "common", LIVE / "project"):
             for p in r.rglob("*"):
