@@ -15,7 +15,9 @@ horcrux-api/horcrux-ui/dist/
 
 # Gentoo
 *.ebuild~
-Manifest
+# Manifest is NOT ignored: the gentoo/ overlay uses thin manifests and an ebuild with SRC_URI but no
+# committed Manifest ships uninstallable ('VERIFY FAILED: Insufficient data for checksum verification').
+# gentoo/ci/check-manifests.py (CI job 'Overlay Manifests') enforces it.
 
 # OS
 .DS_Store

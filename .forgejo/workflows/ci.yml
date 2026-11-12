@@ -101,6 +101,15 @@ jobs:
       - uses: actions/checkout@v4
       - run: python3 horcrux-mobile/tests/check_theme.py
 
+  overlay-manifests:
+    name: Overlay Manifests
+    # Thin Manifest (DIST lines) must be committed for every gentoo/ ebuild that fetches a distfile; a gitignored
+    # Manifest twice shipped uninstallable ebuilds ('VERIFY FAILED: Insufficient data for checksum verification').
+    runs-on: linux-any
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 gentoo/ci/check-manifests.py
+
   check:
     name: Check
     # linux-any: arch-independent (fmt/clippy/cargo check/audit/wasm), served by the arm64 hosts and
