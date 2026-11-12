@@ -188,5 +188,63 @@ class HogsmeadeApps(unittest.TestCase):
                     self.assertNotRegex(txt, r"(?m)^[^#\n]*" + re.escape(a) + r"\b", f"{f}: {a}")
 
 
+SP = HSM / "local-repo" / "app-misc" / "hogsmeade-speaker-tuning" / "hogsmeade-speaker-tuning-1.ebuild"
+
+
+@unittest.skipUnless(SP.is_file(), "Horcrux repo tree only")
+class HogsmeadeSpeakerTuning(unittest.TestCase):
+    """The tuned-speaker PipeWire chain is for ONE laptop model (Alienware 18 Area-51 AA18250): package-owned in the HOGSMEADE layer only, DMI-gated."""
+
+    def setUp(self):
+        self.t = SP.read_text()
+
+    def test_chain_is_highpass_compressor_brickwall_limiter(self):
+        for s in ("bq_highpass", "http://lsp-plug.in/plugins/lv2/compressor_stereo", "http://lsp-plug.in/plugins/lv2/limiter_stereo",
+                  "media-libs/lsp-plugins[lv2]", "media-video/pipewire[lv2", "Audio/Sink", "Speakers (tuned)", "HiFi__Speaker__sink"):
+            self.assertIn(s, self.t)
+        # limiter ceiling -1 dBFS (0.891 linear) with the gain-boost (output renormalisation) OFF, so the peak really stays at -1 dBFS
+        self.assertRegex(self.t, r'"th" = 0\.891\b')
+        self.assertRegex(self.t, r'"boost" = 0\b')
+        # total makeup at most +9 dB: compressor +6 (1.995) and limiter drive +3 (1.413)
+        self.assertRegex(self.t, r'"mk" = 1\.995\b')
+        self.assertRegex(self.t, r'"g_in" = 1\.413\b')
+        # high-pass in the 120-150 Hz band
+        freqs = {float(x) for x in re.findall(r'"Freq" = ([\d.]+)', self.t)}
+        self.assertTrue(freqs and all(120 <= f <= 150 for f in freqs), freqs)
+        # default only below headphones/USB: priority just above the speaker sink (712)
+        self.assertRegex(self.t, r"priority\.session = 713\b")
+
+    def test_gated_on_this_model_only(self):
+        self.assertIn('"Alienware"', self.t)
+        self.assertIn('"Alienware 18 Area-51 AA18250"', self.t)
+        self.assertIn("/sys/class/dmi/id", self.t)
+        self.assertIn("rm -f", self.t)  # any other model: the link is removed
+        # the chain is not installed into a directory PipeWire reads by default (that would load it on every machine)
+        self.assertNotIn("insinto /usr/share/pipewire", self.t)
+        self.assertNotIn("insinto /etc/pipewire", self.t)
+
+    def test_image_layer_installs_and_enables_it(self):
+        for d in ("Dockerfile", "Dockerfile.part2"):
+            txt = (HSM / d).read_text()
+            self.assertIn("app-misc/hogsmeade-speaker-tuning", txt, d)
+            self.assertIn("local/app-misc/hogsmeade-speaker-tuning/*.ebuild", txt, d + ": its Manifest")
+            self.assertIn("hogsmeade-speaker-tuning awccd", txt, d + ": OpenRC gate service")
+        self.assertIn("media-video/pipewire lv2", (HSM / "portage" / "package.use" / "zzz-hogsmeade").read_text())
+
+    def test_not_leaked_into_public_or_other_layers(self):
+        pat = re.compile(r"hogsmeade-speaker-tuning|hogsmeade_speakers_tuned|50-hogsmeade-speakers")
+        bad = []
+        for r in (REPO / "gentoo", LIVE / "common", LIVE / "project"):
+            for p in r.rglob("*"):
+                if not p.is_file() or "__pycache__" in p.parts or p.suffix == ".pyc" or p.name == "test_hogsmeade_obs.py" or HSM in p.parents:
+                    continue
+                try:
+                    if pat.search(p.read_text()):
+                        bad.append(str(p.relative_to(REPO)))
+                except (UnicodeDecodeError, OSError):
+                    pass
+        self.assertEqual(bad, [], "the speaker tuning belongs to the HOGSMEADE layer only")
+
+
 if __name__ == "__main__":
     unittest.main()

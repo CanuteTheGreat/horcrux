@@ -35,7 +35,7 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
              /var/db/repos/horcrux/sys-apps/horcrux-tools/*.ebuild /var/db/repos/horcrux/sys-kernel/horcrux-unlock/*.ebuild \
              /var/db/repos/horcrux/app-misc/hogsmeade-tools/*.ebuild /var/db/repos/horcrux/app-misc/awccd/*.ebuild \
              /var/db/repos/horcrux/sci-misc/comfyui/*.ebuild /var/db/repos/horcrux/acct-user/comfyui/*.ebuild /var/db/repos/horcrux/acct-group/comfyui/*.ebuild \
-             /var/db/repos/canutethegreat/app-misc/alienfx/alienfx-2.4.3.ebuild /var/db/repos/local/sys-apps/hogsmeade-private/*.ebuild /var/db/repos/local/app-misc/hogsmeade-obs/*.ebuild /var/db/repos/local/app-misc/hogsmeade-nextcloud/*.ebuild; do ebuild "$e" manifest; done
+             /var/db/repos/canutethegreat/app-misc/alienfx/alienfx-2.4.3.ebuild /var/db/repos/local/sys-apps/hogsmeade-private/*.ebuild /var/db/repos/local/app-misc/hogsmeade-obs/*.ebuild /var/db/repos/local/app-misc/hogsmeade-nextcloud/*.ebuild /var/db/repos/local/app-misc/hogsmeade-speaker-tuning/*.ebuild; do ebuild "$e" manifest; done
 RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
     emerge --oneshot --usepkg=n sys-kernel/horcrux-hogsmeade-config; \
@@ -115,7 +115,7 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
         sys-firmware/sof-firmware sys-power/switcheroo-control x11-apps/mesa-progs sys-apps/smartmontools sys-apps/nvme-cli app-backup/restic \
         app-containers/docker app-containers/docker-compose app-containers/docker-buildx \
         net-misc/remmina media-gfx/gimp media-gfx/geeqie net-misc/mosh net-analyzer/nmap \
-        net-im/discord net-vpn/proton-vpn-gtk-app app-misc/hogsmeade-obs app-misc/hogsmeade-nextcloud app-admin/rustinion-agent sys-firmware/edk2-bin app-admin/sudo \
+        net-im/discord net-vpn/proton-vpn-gtk-app app-misc/hogsmeade-obs app-misc/hogsmeade-nextcloud app-misc/hogsmeade-speaker-tuning app-admin/rustinion-agent sys-firmware/edk2-bin app-admin/sudo \
         sys-process/cronie app-portage/portage-utils app-portage/eix sys-apps/lm-sensors x11-libs/libnotify \
         > /var/log/hogsmeade-apps.log 2>&1 || { tail -60 /var/log/hogsmeade-apps.log; exit 1; }
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
@@ -137,7 +137,7 @@ RUN set -e; unset ARCH; export FEATURES="-ccache"; \
     # explicit packages go into @world so `emerge -uDN @world` keeps them current and depclean never removes them
     emerge --noreplace --select=y sys-kernel/gentoo-kernel sys-fs/zfs sys-fs/zfs-kmod x11-drivers/nvidia-drivers sys-kernel/horcrux-unlock \
         sys-kernel/horcrux-hogsmeade-config sys-apps/horcrux-tools app-misc/hogsmeade-tools app-misc/awccd app-misc/alienfx sci-misc/comfyui \
-        sys-apps/hogsmeade-private app-misc/hogsmeade-obs app-misc/hogsmeade-nextcloud app-admin/rustinion-agent sys-firmware/sof-firmware sys-kernel/linux-firmware; \
+        sys-apps/hogsmeade-private app-misc/hogsmeade-obs app-misc/hogsmeade-nextcloud app-misc/hogsmeade-speaker-tuning app-admin/rustinion-agent sys-firmware/sof-firmware sys-kernel/linux-firmware; \
     mkdir -p /usr/share/horcrux/desktop; \
     chmod 644 /usr/share/horcrux/desktop/* 2>/dev/null || true
 # desktop markers the installer looks for (the desktop variant ships the same two files), image markers, services; reown.sh then
@@ -147,7 +147,7 @@ COPY project/variants/hogsmeade/reown.sh /usr/local/sbin/hsm-reown
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
     echo "hogsmeade" > /etc/live-iso-variant; \
-    for s in hogsmeade-firewall awccd nvidia-persistenced switcheroo-control smartd hogsmeade-firstboot comfyui docker; do rc-update add $s default 2>/dev/null || true; done; \
+    for s in hogsmeade-firewall hogsmeade-speaker-tuning awccd nvidia-persistenced switcheroo-control smartd hogsmeade-firstboot comfyui docker; do rc-update add $s default 2>/dev/null || true; done; \
     printf 'DISPLAYMANAGER="gdm"\n' > /etc/conf.d/display-manager; \
     find / -xdev -name '*.pyc' -path '*/__pycache__/*' -delete 2>/dev/null || true; \
     bash /usr/local/sbin/hsm-reown 2>&1 | tee /var/log/hogsmeade-reown.log | tail -70; \

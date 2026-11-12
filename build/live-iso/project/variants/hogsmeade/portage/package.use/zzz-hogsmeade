@@ -18,3 +18,5 @@ media-video/obs-studio nvenc screencast v4l
 media-video/v4l2loopback dist-kernel
 # Nextcloud client (app-misc/hogsmeade-nextcloud, owner-only)
 net-misc/nextcloud-client nautilus
+# HOGSMEADE-ONLY: speaker-tuning chain (app-misc/hogsmeade-speaker-tuning) needs PipeWire's LV2 support
+media-video/pipewire lv2
