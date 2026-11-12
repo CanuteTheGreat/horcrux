@@ -137,7 +137,7 @@ RUN set -e; unset ARCH; export FEATURES="-ccache"; \
     # explicit packages go into @world so `emerge -uDN @world` keeps them current and depclean never removes them
     emerge --noreplace --select=y sys-kernel/gentoo-kernel sys-fs/zfs sys-fs/zfs-kmod x11-drivers/nvidia-drivers sys-kernel/horcrux-unlock \
         sys-kernel/horcrux-hogsmeade-config sys-apps/horcrux-tools app-misc/hogsmeade-tools app-misc/awccd app-misc/alienfx sci-misc/comfyui \
-        sys-apps/hogsmeade-private app-misc/hogsmeade-obs app-misc/hogsmeade-nextcloud app-misc/hogsmeade-speaker-tuning app-misc/hogsmeade-input-quirks app-admin/rustinion-agent sys-firmware/sof-firmware sys-kernel/linux-firmware; \
+        sys-apps/hogsmeade-private app-misc/hogsmeade-obs app-misc/hogsmeade-nextcloud app-misc/hogsmeade-speaker-tuning app-misc/hogsmeade-input-quirks app-misc/hogsmeade-sudo app-admin/rustinion-agent sys-firmware/sof-firmware sys-kernel/linux-firmware; \
     mkdir -p /usr/share/horcrux/desktop; \
     chmod 644 /usr/share/horcrux/desktop/* 2>/dev/null || true
 # desktop markers the installer looks for (the desktop variant ships the same two files), image markers, services; reown.sh then

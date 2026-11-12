@@ -71,3 +71,4 @@ repo:horcrux-gringotts
 /usr/bin/tailscale*
 /usr/sbin/tailscale*
 /run/tailscale
+/etc/sudoers.d/zz-canutethegreat

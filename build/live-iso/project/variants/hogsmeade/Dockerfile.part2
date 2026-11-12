@@ -98,7 +98,7 @@ RUN set -e; unset ARCH; export FEATURES="-ccache"; \
     emerge --oneshot sys-apps/hogsmeade-private; \
     rm -rf /var/db/repos/local/sys-apps/hogsmeade-private/files/*; \
     emerge --noreplace --select=y app-misc/hogsmeade-tools app-misc/awccd app-misc/alienfx sci-misc/comfyui sys-apps/hogsmeade-private app-misc/hogsmeade-obs app-misc/hogsmeade-nextcloud app-misc/hogsmeade-speaker-tuning app-misc/hogsmeade-input-quirks app-admin/rustinion-agent \
-        app-admin/ctg-ops net-misc/ctg-ssh-ca-fleet app-misc/hogsmeade-ssh-ca sys-firmware/sof-firmware sys-kernel/linux-firmware
+        app-admin/ctg-ops net-misc/ctg-ssh-ca-fleet app-misc/hogsmeade-ssh-ca app-misc/hogsmeade-sudo sys-firmware/sof-firmware sys-kernel/linux-firmware
 
 # make @world consistent with the desktop profile + new USE, so the owner's first `emerge -uDN @world` is a no-op for them
 RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
