@@ -27,9 +27,17 @@ hx_vm_prepare() {
     $SUDO apt-get update -qq >/dev/null
     $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq qemu-system-x86 qemu-utils openssh-client curl python3 rsync >/dev/null
   fi
-  local img="$HX_VM_CACHE/$(basename "$HX_VM_IMG_URL")"
-  if [ ! -s "$img" ]; then curl -fsSL --retry 3 -o "$img.part" "$HX_VM_IMG_URL" && mv "$img.part" "$img"; fi
-  [ -s "$img" ] || { echo "cannot fetch $HX_VM_IMG_URL" >&2; return 1; }
+  # Debian dropped debian-13-genericcloud-amd64.qcow2 from trixie/latest (404 in CI run 1965);
+  # the full 'generic' image is the same cloud-init NoCloud image with the complete kernel,
+  # so fall back to it. An explicit HX_VM_IMG_URL is tried first and alone-first.
+  local url img="" cand
+  for cand in "$HX_VM_IMG_URL" "${HX_VM_IMG_URL//genericcloud/generic}"; do
+    img="$HX_VM_CACHE/$(basename "$cand")"
+    if [ -s "$img" ]; then url=$cand; break; fi
+    if curl -fsSL --retry 3 -o "$img.part" "$cand"; then mv "$img.part" "$img"; url=$cand; break; fi
+    echo "[hx-vm] cannot fetch $cand, trying the next candidate" >&2; rm -f "$img.part"
+  done
+  [ -s "$img" ] || { echo "cannot fetch $HX_VM_IMG_URL (nor the generic variant)" >&2; return 1; }
   HX_VM_BASE=$img
   [ -f "$HX_VM_DIR/key" ] || ssh-keygen -q -t ed25519 -N '' -f "$HX_VM_DIR/key"
   # cloud-init NoCloud seed over HTTP (10.0.2.2 = the host in QEMU's user net)
