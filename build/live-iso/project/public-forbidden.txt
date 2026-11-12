@@ -13,3 +13,22 @@ app-antivirus/clamav
 net-im/discord
 games-util/steam-launcher
 games-util/steam-meta
+# HOGSMEADE-only personal apps (app-misc/hogsmeade-apps and app-misc/hogsmeade-steam, owner's Windows inventory)
+net-im/slack
+net-im/zoom
+net-im/signal-desktop-bin
+net-im/teams-for-linux
+net-im/proton-meet-bin
+mail-client/thunderbird-bin
+mail-client/proton-mail-bin
+games-util/heroic-bin
+games-util/geforcenow-electron
+games-action/minecraft-launcher
+net-misc/freedownloadmanager
+media-video/makemkv
+dev-util/android-studio
+www-client/google-chrome
+www-client/microsoft-edge
+app-admin/proton-pass-bin
+sys-auth/proton-authenticator-bin
+net-analyzer/caido-bin

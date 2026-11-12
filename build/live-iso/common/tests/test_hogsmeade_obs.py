@@ -101,5 +101,92 @@ class HogsmeadeNextcloud(unittest.TestCase):
                 self.assertNotRegex(f.read_text(), r"(?m)^[^#\n]*nextcloud", str(f))
 
 
+APPS = HSM / "local-repo" / "app-misc" / "hogsmeade-apps" / "hogsmeade-apps-1.ebuild"
+APPS_CFG = HSM / "local-repo" / "app-misc" / "hogsmeade-apps-config" / "hogsmeade-apps-config-1.ebuild"
+STEAM_REPO = HSM / "local-repo" / "app-misc" / "hogsmeade-steam-repo" / "hogsmeade-steam-repo-1.ebuild"
+STEAM = HSM / "local-repo" / "app-misc" / "hogsmeade-steam" / "hogsmeade-steam-1.ebuild"
+OWNER_APPS = (
+    "dev-util/claude-code", "app-editors/vscode", "dev-util/android-studio", "dev-java/openjdk-bin:25", "sys-apps/ripgrep", "dev-dotnet/dotnet-sdk-bin",
+    "dev-util/github-cli", "dev-db/postgresql", "media-gfx/imagemagick", "app-misc/openrgb", "app-misc/solaar", "games-util/xpadneo", "sys-apps/bolt",
+    "media-libs/libv4l[utils]", "net-print/hplip", "media-sound/easyeffects", "net-irc/halloy", "net-im/teams-for-linux", "net-im/signal-desktop-bin",
+    "net-im/slack", "net-im/zoom", "net-im/proton-meet-bin", "mail-client/thunderbird-bin", "mail-client/proton-mail-bin", "games-emulation/dosbox-staging",
+    "games-util/heroic-bin", "games-util/geforcenow-electron", "games-action/minecraft-launcher", "net-ftp/filezilla", "net-misc/freedownloadmanager",
+    "net-fs/proton-drive-cli-bin", "media-video/makemkv", "media-gfx/loupe", "media-video/vlc", "net-analyzer/ookla-speedtest", "net-analyzer/wireshark",
+    "net-analyzer/mtr", "net-analyzer/tcpdump", "net-dns/bind", "app-office/libreoffice", "app-crypt/yubioath-flutter-bin", "app-crypt/yubikey-manager",
+    "sys-apps/pcsc-lite", "app-crypt/ccid", "sys-auth/proton-authenticator-bin", "app-admin/proton-pass-bin", "net-analyzer/caido-bin", "app-admin/awscli",
+    "app-admin/aws-session-manager-plugin", "net-misc/s3cmd", "www-client/google-chrome", "www-client/microsoft-edge", "net-vpn/proton-vpn-gtk-app",
+    "app-misc/hogsmeade-steam",
+)
+NEVER = ("brave", "tailscale", "onlyoffice", "net-analyzer/zap", "etcher", "davinci")
+
+
+@unittest.skipUnless(APPS.is_file(), "Horcrux repo tree only")
+class HogsmeadeApps(unittest.TestCase):
+    """The owner's Windows-inventory apps are ONE HOGSMEADE-only package set (app-misc/hogsmeade-apps) + Steam (app-misc/hogsmeade-steam[-repo])."""
+
+    def test_set_lists_every_app_and_nothing_banned(self):
+        t = APPS.read_text()
+        for dep in OWNER_APPS:
+            self.assertRegex(t, r"(?m)^\s*" + re.escape(dep) + r"\s*$", dep)
+        self.assertIn("app-misc/hogsmeade-apps-config", t)
+        live = "\n".join(l for l in (t + APPS_CFG.read_text() + STEAM.read_text() + STEAM_REPO.read_text()).lower().splitlines() if not l.lstrip().startswith("#"))
+        for word in NEVER:
+            self.assertNotIn(word, live, word)
+
+    def test_config_package_owns_keywords_licences_and_use(self):
+        t = APPS_CFG.read_text()
+        for f in ("package.accept_keywords", "package.license", "package.use"):
+            self.assertIn(f, t)
+        for kw in ("net-im/slack ~amd64", "net-im/zoom ~amd64", "media-video/makemkv ~amd64", "dev-util/android-studio ~amd64", "app-office/libreoffice ~amd64"):
+            self.assertIn(kw, t)
+        for lic in ("net-im/slack *", "net-im/zoom *", "media-video/makemkv *", "www-client/google-chrome *", "www-client/microsoft-edge *", "dev-util/android-studio *"):
+            self.assertIn(lic, t)
+        self.assertIn("dev-util/claude-code cpu_flags_x86_avx cpu_flags_x86_avx2", t)
+
+    def test_user_groups_and_pcscd_come_from_the_package(self):
+        t = APPS.read_text()
+        for g in ("wireshark", "plugdev", "pcscd"):
+            self.assertIn(g, t)
+        self.assertIn("gpasswd -a", t)
+        self.assertIn("rc-update add pcscd default", t)
+
+    def test_steam_is_hogsmeade_only_with_32bit_deps(self):
+        r = STEAM_REPO.read_text()
+        self.assertIn("[steam-overlay]", r)
+        self.assertIn("https://github.com/anyc/steam-overlay.git", r)
+        self.assertIn("x11-drivers/nvidia-drivers abi_x86_32", r)
+        self.assertIn("games-util/steam-launcher ~amd64", r)
+        self.assertIn("ValveSteamLicense", r)
+        self.assertIn("games-util/steam-launcher", STEAM.read_text())
+        self.assertIn("app-misc/hogsmeade-steam-repo", STEAM.read_text())
+
+    def test_not_leaked_and_public_forbidden(self):
+        pat = re.compile(r"hogsmeade-apps|hogsmeade-steam|steam-overlay")
+        bad = []
+        for r in (REPO / "gentoo", LIVE / "common", LIVE / "project"):
+            for p in r.rglob("*"):
+                if not p.is_file() or "__pycache__" in p.parts or p.suffix == ".pyc" or p.name == "test_hogsmeade_obs.py" or HSM in p.parents:
+                    continue
+                try:
+                    if pat.search(p.read_text()):
+                        bad.append(str(p.relative_to(REPO)))
+                except (UnicodeDecodeError, OSError):
+                    pass
+        # only the public-forbidden header comment may name the packages
+        self.assertEqual([b for b in bad if not b.endswith("public-forbidden.txt")], [], "the owner's apps belong to the HOGSMEADE layer only")
+        forb = {l.strip() for l in (LIVE / "project" / "public-forbidden.txt").read_text().splitlines() if l.strip() and not l.startswith("#")}
+        for a in ("net-im/slack", "net-im/zoom", "net-im/signal-desktop-bin", "mail-client/thunderbird-bin", "mail-client/proton-mail-bin", "games-util/heroic-bin",
+                  "games-action/minecraft-launcher", "media-video/makemkv", "www-client/google-chrome", "www-client/microsoft-edge", "games-util/steam-launcher"):
+            self.assertIn(a, forb, a)
+        # no active line of a shared or public package list installs any of them
+        shared = [LIVE / "project" / "packages.txt", LIVE / "project" / "packages-late.txt", LIVE / "common" / "packages.txt",
+                  LIVE / "project" / "variants" / "gnome-light" / "packages.txt"]
+        for f in shared:
+            if f.is_file():
+                txt = f.read_text()
+                for a in forb & set(OWNER_APPS) - {"games-util/steam-launcher"}:
+                    self.assertNotRegex(txt, r"(?m)^[^#\n]*" + re.escape(a) + r"\b", f"{f}: {a}")
+
+
 if __name__ == "__main__":
     unittest.main()
