@@ -1,0 +1,8 @@
+# HOGSMEADE (app-misc/hogsmeade-microsoft): OneDrive WORK or SCHOOL (Microsoft 365) account. Seeded once, never overwritten; edit freely.
+sync_dir = "~/OneDrive-Work"
+skip_dotfiles = "true"
+monitor_interval = "300"
+monitor_fullscan_frequency = "12"
+# errors are shown as desktop notifications (libnotify)
+disable_notifications = "false"
+notify_file_actions = "false"

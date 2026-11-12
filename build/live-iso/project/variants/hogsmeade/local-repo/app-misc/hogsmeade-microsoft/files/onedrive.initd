@@ -1,0 +1,37 @@
+#!/sbin/openrc-run
+# OpenRC USER service (/etc/user/init.d, run by openrc-user like pipewire/wireplumber): the abraunegg OneDrive client in monitor mode.
+# One script, one symlink per account: onedrive.personal, onedrive.work. Config dir ~/.config/onedrive-<account>, sync dir from its config.
+# Not in any runlevel until `onedrive-login <account>` has authorised the account (it adds the service to the user's default runlevel).
+account="${RC_SVCNAME#*.}"
+description="OneDrive sync (${account}), monitor mode"
+
+depend() {
+	need dbus
+}
+
+: "${XDG_CONFIG_HOME:=${HOME}/.config}"
+: "${XDG_STATE_HOME:=${HOME}/.local/state}"
+confdir="${XDG_CONFIG_HOME}/onedrive-${account}"
+
+# notifications (errors) go through libnotify -> the session bus
+export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+supervisor=supervise-daemon
+respawn_delay=30
+respawn_max=5
+respawn_period=600
+command="/usr/bin/onedrive"
+command_args="--confdir=${confdir} --monitor"
+output_log="${XDG_STATE_HOME}/onedrive-${account}.log"
+error_log="${XDG_STATE_HOME}/onedrive-${account}.log"
+
+start_pre() {
+	case "${account}" in
+		personal|work) ;;
+		*) eerror "service name must be onedrive.personal or onedrive.work"; return 1 ;;
+	esac
+	if [ ! -s "${confdir}/refresh_token" ]; then
+		eerror "OneDrive account '${account}' is not authorised yet: run 'onedrive-login ${account}'"
+		return 1
+	fi
+	mkdir -p "${XDG_STATE_HOME}"
+}

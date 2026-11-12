@@ -1,0 +1,22 @@
+#!/bin/sh
+# onedrive-login personal|work : authorise one OneDrive account for the sync service, then enable and start it.
+# (HOGSMEADE, app-misc/hogsmeade-microsoft.) Run it as yourself in a terminal; it prints a URL, you sign in in the browser,
+# copy the address of the (blank) page you land on and paste it back here.
+set -u
+acct="${1:-}"
+case "$acct" in
+	personal|work) ;;
+	*) echo "usage: onedrive-login personal|work" >&2; exit 2 ;;
+esac
+[ "$(id -u)" -ne 0 ] || { echo "run as your own user, not root" >&2; exit 2; }
+confdir="${XDG_CONFIG_HOME:-$HOME/.config}/onedrive-$acct"
+mkdir -p "$confdir"
+[ -e "$confdir/config" ] || cp "/usr/share/hogsmeade-microsoft/config-$acct" "$confdir/config"
+onedrive --confdir="$confdir" --reauth || exit 1
+if [ ! -s "$confdir/refresh_token" ]; then
+	echo "onedrive-login: no token was saved, the sign-in did not complete; run it again." >&2
+	exit 1
+fi
+echo "Authorised. Enabling and starting the sync service onedrive.$acct ..."
+rc-update -U add "onedrive.$acct" default && rc-service -U "onedrive.$acct" start ||
+	echo "Could not manage the user service from this shell; log out and in once, then: rc-service -U onedrive.$acct start" >&2

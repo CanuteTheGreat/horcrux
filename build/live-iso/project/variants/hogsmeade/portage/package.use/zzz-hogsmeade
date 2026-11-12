@@ -20,3 +20,7 @@ media-video/v4l2loopback dist-kernel
 net-misc/nextcloud-client nautilus
 # HOGSMEADE-ONLY: speaker-tuning chain (app-misc/hogsmeade-speaker-tuning) needs PipeWire's LV2 support
 media-video/pipewire lv2
+# Microsoft 365 (app-misc/hogsmeade-microsoft, owner-only): GNOME Online Accounts 'Microsoft 365' + Files OneDrive mount (gvfs -> net-libs/msgraph)
+net-libs/gnome-online-accounts ms365
+gnome-base/gvfs onedrive gnome-online-accounts
+net-misc/onedrive libnotify

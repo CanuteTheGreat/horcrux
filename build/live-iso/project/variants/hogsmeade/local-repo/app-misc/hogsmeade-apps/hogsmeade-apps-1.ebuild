@@ -13,6 +13,7 @@ KEYWORDS="amd64"
 RDEPEND="
 	app-misc/hogsmeade-apps-config
 	app-misc/hogsmeade-steam
+	app-misc/hogsmeade-microsoft
 	dev-util/claude-code
 	app-editors/vscode
 	dev-util/android-studio
