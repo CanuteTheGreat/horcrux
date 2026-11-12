@@ -24,7 +24,7 @@ Image name: the Surface image follows the repo-wide scheme `<product>-<desktop e
    maintainer *archseer*: "there's not a lot of SP1/2 users anymore, and they largely **work out of the box without the
    need for our patches**." The wiki's feature matrix lists SP1 with every feature working and *none* of the footnotes
    "requires linux-surface kernel" (those are attached to touchscreen/pen on SP4 and newer).
-2. **What the patch set contains** (`linux-surface/linux-surface` @ `d4dc510`, `patches/6.18` (16 patches, BASE `v6.18.63`) and `patches/7.2` (15, BASE `v7.2.13`); the
+2. **What the patch set contains** (`linux-surface/linux-surface` @ `d4dc510`, `patches/6.18` (16 patches, BASE `v6.18.63`) and `patches/7.2` (15, BASE `v7.2.15`); the
    config fragments `configs/surface-6.18.config` / `surface-7.2.config` enable exactly these): Surface Aggregator Module (`SURFACE_AGGREGATOR*`, `SURFACE_HID`,
    `SURFACE_KBD`, battery/charger/temp/fan over SAM: SP5+/Laptop/Book 2+), **IPTS** and **ITHC** touch (SP4+/SL: Intel's touch
    processor), cameras (IPU3, OV5693/OV8865: SP4+), `SURFACE_3_*`, `SURFACE_PRO3_BUTTON`, `SURFACE_GPE`, `INTEL_THC_HID`/`QUICKSPI`,
@@ -252,7 +252,7 @@ HD 4000 acceleration under Mesa; HiDPI scale feel; battery reporting; UEFI quirk
 ## Sources
 
 * linux-surface wiki: *Supported Devices and Features* (SP1 column), *Marvell 88W8897 quirks*, *Installation and Setup*, *Known Issues and FAQ*, *Disk Encryption*
-* linux-surface/linux-surface `patches/7.2/*`, `configs/surface-7.2.config` (commit d4dc510193a38bd097238b192a4f7262db8a9f7e)
+* linux-surface/linux-surface `patches/7.2/*`, `configs/surface-7.2.config` (commit d4dc510e3e0a2ee60879f0114a0ef356200b590d)
 * linux-surface issues #381 (SP1/SP2 `_LID`, `button.lid_init_state=open`), #2049 (SP1 + GNOME)
 * kernel v7.2: `drivers/net/wireless/marvell/mwifiex/pcie_quirks.c`, `drivers/hid/hid-ids.h`, `hid-quirks.c`, `drivers/acpi/button.c`
 * docs/T2-MACS.md (kernel 7.2 pin because of OpenZFS), Gentoo handbook (XFS)
