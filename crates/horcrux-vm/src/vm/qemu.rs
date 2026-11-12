@@ -1552,6 +1552,30 @@ mod tests {
     }
 
     #[test]
+    fn e1000e_and_vmxnet3_nics_keep_their_models() {
+        use horcrux_common::{NicModel, VmNic};
+        let mut v = vm(VmArchitecture::X86_64, VmDisplay::default());
+        v.hardware.nets = [NicModel::E1000e, NicModel::Vmxnet3]
+            .into_iter()
+            .map(|model| VmNic {
+                model,
+                bridge: "br1".into(),
+                mac: None,
+                vlan: None,
+            })
+            .collect();
+        let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
+        let (_, args) = qemu_command(&v, &rt, true, None);
+        let a = args.join(" ");
+        assert!(a.contains("-device e1000e,netdev=net0"), "{a}");
+        assert!(a.contains("-device vmxnet3,netdev=net1"), "{a}");
+        assert_eq!(
+            serde_json::from_str::<NicModel>("\"e1000e\"").unwrap(),
+            NicModel::E1000e
+        );
+    }
+
+    #[test]
     fn configured_nics_are_tap_devices_on_their_bridges() {
         use horcrux_common::{NicModel, VmNic};
         let mut v = vm(VmArchitecture::X86_64, VmDisplay::default());

@@ -10,10 +10,12 @@ use horcrux_common::{
 use leptos::*;
 use leptos_router::*;
 
-const NIC_MODELS: [(NicModel, &str, &str); 3] = [
+const NIC_MODELS: [(NicModel, &str, &str); 5] = [
     (NicModel::Virtio, "virtio", "VirtIO (paravirtual)"),
     (NicModel::E1000, "e1000", "Intel E1000"),
+    (NicModel::E1000e, "e1000e", "Intel E1000e"),
     (NicModel::Rtl8139, "rtl8139", "Realtek RTL8139"),
+    (NicModel::Vmxnet3, "vmxnet3", "VMware vmxnet3"),
 ];
 
 fn model_from(v: &str) -> NicModel {

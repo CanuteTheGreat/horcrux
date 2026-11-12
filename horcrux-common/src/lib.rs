@@ -154,8 +154,12 @@ pub enum NicModel {
     Virtio,
     /// Intel e1000 (works without drivers in almost every OS installer).
     E1000,
+    /// Intel 82574 e1000e (the model Windows 10/11 and virt-manager guests are installed with; keeps their drivers and licence/BitLocker hardware binding).
+    E1000e,
     /// Realtek RTL8139 (very old guests).
     Rtl8139,
+    /// VMware vmxnet3 (guests imported from ESXi).
+    Vmxnet3,
 }
 
 impl NicModel {
@@ -164,7 +168,9 @@ impl NicModel {
         match self {
             NicModel::Virtio => "virtio-net-pci",
             NicModel::E1000 => "e1000",
+            NicModel::E1000e => "e1000e",
             NicModel::Rtl8139 => "rtl8139",
+            NicModel::Vmxnet3 => "vmxnet3",
         }
     }
 }

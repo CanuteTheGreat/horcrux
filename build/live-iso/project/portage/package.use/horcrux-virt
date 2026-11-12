@@ -1,2 +1,2 @@
 # server image: QEMU with SPICE (VM console), USB redirection, virtfs shares and VNC; the same lines app-emulation/horcrux-bin installs on a machine
-app-emulation/qemu spice usbredir virtfs vnc
+app-emulation/qemu spice usbredir virtfs vnc zstd

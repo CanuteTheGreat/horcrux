@@ -39,7 +39,7 @@ RDEPEND="
 	acct-group/kvm
 	app-arch/zstd
 	app-emulation/libvirt[qemu]
-	app-emulation/qemu[spice,usbredir,virtfs,vnc]
+	app-emulation/qemu[spice,usbredir,virtfs,vnc,zstd]
 	net-dns/dnsmasq
 	net-fs/nfs-utils
 	net-misc/bridge-utils

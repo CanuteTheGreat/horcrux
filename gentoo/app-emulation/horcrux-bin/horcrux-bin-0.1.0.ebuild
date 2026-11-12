@@ -35,11 +35,13 @@ LICENSE="GPL-2"
 SLOT="0"
 KEYWORDS="amd64 arm64 riscv"
 
+# qemu[zstd]: qcow2 images with zstd compression (libvirt / virt-manager default on some distros) are imported with qemu-img; without
+# USE=zstd qemu-img answers "unknown compression type: 1" and the VM importer cannot read the disk (HOGSMEADE 2026-11-12).
 RDEPEND="
 	acct-group/kvm
 	app-arch/zstd
 	app-emulation/libvirt[qemu]
-	app-emulation/qemu[spice,usbredir,virtfs,vnc]
+	app-emulation/qemu[spice,usbredir,virtfs,vnc,zstd]
 	net-dns/dnsmasq
 	net-fs/nfs-utils
 	net-misc/bridge-utils

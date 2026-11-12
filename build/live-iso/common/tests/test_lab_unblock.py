@@ -163,9 +163,13 @@ class ProductBlockers(unittest.TestCase):
     def test_qemu_has_spice_in_image_and_on_machines(self):
         for path in (("build", "live-iso", "project", "portage", "package.use", "horcrux-virt"), ("gentoo", "app-emulation", "horcrux-bin", "files", "package.use")):
             line = [l for l in _rd(*path).splitlines() if l.startswith("app-emulation/qemu")][0].split()
-            for flag in ("spice", "usbredir", "virtfs", "vnc"):
+            for flag in ("spice", "usbredir", "virtfs", "vnc", "zstd"):   # zstd: qcow2 imports (libvirt default compression)
                 self.assertIn(flag, line[1:], path[-1])
         use = _rd("gentoo", "sys-apps", "horcrux-repo-config", "files", "horcrux-roles.use")
+        self.assertRegex(use, r"(?m)^app-emulation/qemu .*\bzstd\b")
+        for eb in os.listdir(os.path.join(GENTOO, "app-emulation", "horcrux-bin")):
+            if eb.endswith(".ebuild"):
+                self.assertIn("app-emulation/qemu[spice,usbredir,virtfs,vnc,zstd]", _rd("gentoo", "app-emulation", "horcrux-bin", eb), eb)
         self.assertRegex(use, r"(?m)^app-emulation/qemu .*\bspice\b")      # first install of the manager on an existing machine resolves without autounmask
         # a global -spice / USE="-spice" in the image's own config would silently undo it
         for root, _, files in os.walk(os.path.join(REPO, "build", "live-iso")):

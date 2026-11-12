@@ -33,7 +33,7 @@
 //! `POST /api/vms/import/libvirt` answers 202 `{job}`; poll
 //! `POST /api/vms/import/libvirt/status {job}` for `percent`/`result`.
 use crate::api::ovf::{parse_xml, Node};
-use crate::api::vm_import::{checked_format, qemu_img};
+use crate::api::vm_import::{checked_format, qemu_img, qemu_img_error};
 use crate::error::ApiError;
 use crate::AppState;
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
@@ -105,7 +105,7 @@ pub struct LvDisk {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct LvNic {
     pub mac: Option<String>,
-    /// `virtio`, `e1000` or `rtl8139`.
+    /// `virtio`, `e1000`, `e1000e`, `rtl8139` or `vmxnet3`.
     pub model: String,
     /// libvirt network or bridge name (informational).
     pub network: String,
@@ -329,11 +329,9 @@ pub fn plan_from_domain(xml: &str, swtpm_root: &FsPath) -> Result<LibvirtPlan, S
         let model = match i.child("model").and_then(|m| m.attr("type")).unwrap_or("") {
             "virtio" | "virtio-net" | "virtio-net-pci" => "virtio",
             "e1000" => "e1000",
-            "e1000e" => {
-                w.push("network card e1000e becomes e1000 (same drivers in every OS)".into());
-                "e1000"
-            }
+            "e1000e" => "e1000e",
             "rtl8139" => "rtl8139",
+            "vmxnet3" => "vmxnet3",
             other => {
                 w.push(format!("network card model {other:?} becomes virtio"));
                 "virtio"
@@ -942,9 +940,9 @@ async fn copy_disk(src: &str, dst: &FsPath, report: &(dyn Fn(f32) + Sync)) -> Re
         .await
         .map_err(|e| ApiError::Internal(format!("qemu-img convert: {e}")))?;
     if !o.status.success() {
-        return Err(ApiError::Internal(format!(
-            "qemu-img convert {src}: {}",
-            String::from_utf8_lossy(&o.stderr).trim()
+        return Err(ApiError::Internal(qemu_img_error(
+            &format!("convert {src}"),
+            &String::from_utf8_lossy(&o.stderr),
         )));
     }
     // verify the copy against the source before anything points at it
@@ -1385,9 +1383,10 @@ mod tests {
             ("sata", true, "qcow2")
         );
         assert_eq!(p.nics[0].mac.as_deref(), Some("52:54:00:1e:2f:09"));
-        assert_eq!(p.nics[0].model, "e1000");
+        assert_eq!(p.nics[0].model, "e1000e", "e1000e stays e1000e");
         let w = p.warnings.join("|");
-        for k in ["cdrom", "e1000e", "never started", "local time", "tpm-tis"] {
+        assert!(!w.contains("e1000e"), "no NIC downgrade warning: {w}");
+        for k in ["cdrom", "never started", "local time", "tpm-tis"] {
             assert!(w.contains(k), "{k} in {w}");
         }
     }

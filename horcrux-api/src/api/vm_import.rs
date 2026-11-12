@@ -110,6 +110,20 @@ pub fn checked_format(info: &serde_json::Value) -> Result<String, String> {
     Ok(fmt.to_string())
 }
 
+/// A qcow2 image whose compression type this host's qemu-img was built
+/// without (`unknown compression type: 1` = zstd, the libvirt/virt-manager
+/// default on some distros) fails with a message that names neither zstd nor
+/// the fix: say what is missing instead.
+pub(crate) fn qemu_img_error(op: &str, stderr: &str) -> String {
+    let e = stderr.trim();
+    if e.to_ascii_lowercase().contains("unknown compression type") {
+        return format!(
+            "qemu-img lacks zstd support: this image is compressed with zstd and the qemu-img on this host was built without it (install app-emulation/qemu with USE=zstd). qemu-img {op}: {e}"
+        );
+    }
+    format!("qemu-img {op}: {e}")
+}
+
 pub(crate) async fn qemu_img(args: &[&str]) -> Result<String, ApiError> {
     let out = Command::new("qemu-img")
         .args(args)
@@ -117,10 +131,9 @@ pub(crate) async fn qemu_img(args: &[&str]) -> Result<String, ApiError> {
         .await
         .map_err(|e| ApiError::Internal(format!("qemu-img: {e}")))?;
     if !out.status.success() {
-        return Err(ApiError::Internal(format!(
-            "qemu-img {}: {}",
+        return Err(ApiError::Internal(qemu_img_error(
             args.first().unwrap_or(&""),
-            String::from_utf8_lossy(&out.stderr).trim()
+            &String::from_utf8_lossy(&out.stderr),
         )));
     }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
@@ -428,6 +441,21 @@ mod tests {
         let mut no_name = vmdk(json!([{"filename": "/i/a.vmdk"}]));
         no_name.as_object_mut().unwrap().remove("filename");
         assert!(checked_format(&no_name).is_err());
+    }
+
+    #[test]
+    fn zstd_qcow2_on_a_qemu_without_zstd_gets_a_clear_message() {
+        let m = qemu_img_error(
+            "info",
+            "qemu-img: Could not open 'x.qcow2': qcow2: unknown compression type: 1\n",
+        );
+        assert!(m.starts_with("qemu-img lacks zstd support"), "{m}");
+        assert!(m.contains("USE=zstd") && m.contains("unknown compression type: 1"));
+        // other failures keep the plain form
+        assert_eq!(
+            qemu_img_error("info", "Could not open 'x': No such file\n"),
+            "qemu-img info: Could not open 'x': No such file"
+        );
     }
 
     fn qemu_img_info(path: &FsPath) -> serde_json::Value {
