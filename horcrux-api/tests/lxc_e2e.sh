@@ -126,8 +126,11 @@ for p in $(cat /sys/fs/cgroup/cgroup.procs); do echo "$p" > /sys/fs/cgroup/init.
 sed -e 's/ / +/g' -e 's/^/+/' < /sys/fs/cgroup/cgroup.controllers > /sys/fs/cgroup/cgroup.subtree_control
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq >/dev/null
-apt-get install -y -qq lxc-utils uidmap xz-utils e2fsprogs iproute2 iputils-ping dnsmasq-base curl libvirt0 nftables >/dev/null
+# Newer Ubuntu/Debian renamed lxc-utils to lxc, and a transient mirror hiccup leaves no package lists
+# ("Unable to locate package"): retry the update, then take whichever name the archive has.
+for i in 1 2 3; do apt-get update -qq >/dev/null && break; sleep 5; done
+(apt-get install -y -qq lxc-utils >/dev/null 2>&1 || apt-get install -y -qq lxc >/dev/null)
+apt-get install -y -qq uidmap xz-utils e2fsprogs iproute2 iputils-ping dnsmasq-base curl libvirt0 nftables >/dev/null
 lxc-start --version
 
 # Host networking for the containers: VLAN-aware bridge, untagged
