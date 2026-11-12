@@ -16,5 +16,9 @@ depend() {
 start_pre() {
 	checkpath -d -o comfyui:comfyui -m 0750 /var/log/comfyui
 	[ -d "${COMFYUI_DATA:-/var/lib/comfyui}" ] || return 0
-	checkpath -d -o comfyui:comfyui -m 0750 "${COMFYUI_DATA:-/var/lib/comfyui}"/{models,output,input,user,custom_nodes}
+	# checkpath takes ONE path per call: the old brace-expanded multi-path form created nothing but the first dir (and not even that when sh does no brace expansion)
+	local d
+	for d in models output input user custom_nodes; do
+		checkpath -d -o comfyui:comfyui -m 0750 "${COMFYUI_DATA:-/var/lib/comfyui}/${d}" || return 1
+	done
 }

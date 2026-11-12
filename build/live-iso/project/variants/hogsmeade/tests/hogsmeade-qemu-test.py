@@ -400,7 +400,7 @@ class HRun(zt.ZRun):
         rc, o = self.sh("awccctl status 2>&1 | head -5; rc-service awccd status 2>&1 | head -2; busctl --system list 2>/dev/null | grep -i awcc || true")
         self.step("awccd-and-awccctl-run", "profile:" in o, o.strip().replace("\n", " | ")[:300])
         rc, o = self.sh("ls -l /usr/lib/comfyui/venv/bin/python; /usr/lib/comfyui/venv/bin/python -c 'import torch,sys;print(\"torch\",torch.__version__, torch.version.cuda)' 2>&1 | tail -1; qlist -ICv sci-misc/comfyui")
-        self.step("comfyui-venv-has-torch-with-cuda-build", re.search(r"torch \S+\+cu\d+ \d", o) is not None and "comfyui-0.43.0-r1" in o, o.strip().replace("\n", " | ")[:300])
+        self.step("comfyui-venv-has-torch-with-cuda-build", re.search(r"torch \S+\+cu\d+ \d", o) is not None and "comfyui-0.43.0-r2" in o, o.strip().replace("\n", " | ")[:300])
         rc, o = self.sh("stat -c '%a %U' /root/.ssh/authorized_keys 2>&1; test ! -e /etc/hogsmeade/ts-authkey && ! command -v tailscale >/dev/null && ! command -v tailscaled >/dev/null && echo NO-TAILSCALE; ls /home/canutethegreat/.ssh/authorized_keys 2>&1; command -v hogsmeade-remote hogsmeade-verify hogsmeade-install prime-run")
         self.step("private-payload-and-tools-installed", "600 root" in o and "NO-TAILSCALE" in o and "hogsmeade-verify" in o, o.strip().replace("\n", " | ")[:300])
         self.comfyui_firewall_gate()
