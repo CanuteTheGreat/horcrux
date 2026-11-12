@@ -19,7 +19,12 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     set -e; unset ARCH; \
     eselect profile set default/linux/amd64/23.0/desktop/gnome; \
     export FEATURES="-ccache"; \
-    emerge --update --newuse $(grep -v '^#' /tmp/packages-desktop.txt | tr '\n' ' ')
+    pk=$(grep -v '^#' /tmp/packages-desktop.txt | tr '\n' ' '); \
+    emerge --update --newuse $pk || { rc=$?; \
+      echo "== desktop emerge failed (rc=$rc): failing build logs (BuildKit truncates the real compiler error)"; \
+      for f in $(ls -t /var/tmp/portage/*/*/temp/build.log 2>/dev/null | head -3); do echo "=== $f"; grep -n -E 'FAILED:|error:|Killed|signal|internal compiler|No space' "$f" | tail -15; tail -30 "$f"; done; free -m | head -2; \
+      echo '== retrying once with MAKEOPTS=-j2 (intermittent compile failures, e.g. mutter ninja)'; \
+      MAKEOPTS=-j2 emerge --resume || exit $rc; }
 
 # GNOME under OpenRC (patches in /etc/portage/patches/gnome-base/gnome-session-openrc): the gsd meta services lose supervisor=supervise-daemon (openrc refused to start
 # them: no session), and gsd-media-keys/gsd-sound `want` + start after wireplumber and pipewire-pulse (nothing started PipeWire in the user session:

@@ -162,5 +162,16 @@ class TimeConfig(unittest.TestCase):
             shutil.rmtree(r)
 
 
+
+@unittest.skipUnless(HAVE, "needs the Horcrux repo tree")
+class DesktopEmergeKeepsErrorText(unittest.TestCase):
+    """BuildKit truncates the log: a failed desktop emerge must print the portage build.log and retry once (14321/14485/14529 lost the mutter error)."""
+
+    def test_dockerfiles_dump_logs_and_retry(self):
+        for v in ("gnome-light", "hogsmeade"):
+            s = open(os.path.join(LIVE, "project", "variants", v, "Dockerfile")).read()
+            self.assertIn("temp/build.log", s, v)
+            self.assertIn("MAKEOPTS=-j2 emerge --resume", s, v)
+
 if __name__ == "__main__":
     unittest.main()
