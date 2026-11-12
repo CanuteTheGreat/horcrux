@@ -32,3 +32,4 @@ www-client/microsoft-edge
 app-admin/proton-pass-bin
 sys-auth/proton-authenticator-bin
 net-analyzer/caido-bin
+media-video/davinci-resolve

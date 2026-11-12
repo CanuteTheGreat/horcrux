@@ -117,7 +117,7 @@ OWNER_APPS = (
     "app-admin/aws-session-manager-plugin", "net-misc/s3cmd", "net-misc/onedrive", "www-client/google-chrome", "www-client/microsoft-edge", "net-vpn/proton-vpn-gtk-app",
     "app-misc/hogsmeade-steam",
 )
-NEVER = ("brave", "tailscale", "onlyoffice", "net-analyzer/zap", "etcher", "davinci")
+NEVER = ("brave", "tailscale", "onlyoffice", "net-analyzer/zap", "etcher")   # davinci: see test_resolve_config_only_never_a_dependency
 
 
 @unittest.skipUnless(APPS.is_file(), "Horcrux repo tree only")
@@ -129,9 +129,20 @@ class HogsmeadeApps(unittest.TestCase):
         for dep in OWNER_APPS:
             self.assertRegex(t, r"(?m)^\s*" + re.escape(dep) + r"\s*$", dep)
         self.assertIn("app-misc/hogsmeade-apps-config", t)
-        live = "\n".join(l for l in (t + APPS_CFG.read_text() + STEAM.read_text() + STEAM_REPO.read_text()).lower().splitlines() if not l.lstrip().startswith("#"))
+        live = "\n".join(l for l in (t + STEAM.read_text() + STEAM_REPO.read_text()).lower().splitlines() if not l.lstrip().startswith("#"))
         for word in NEVER:
             self.assertNotIn(word, live, word)
+
+    def test_resolve_config_only_never_a_dependency(self):
+        """Resolve is fetch-restricted (a missing zip would break image builds): its keyword/licence/VIDEO_CARDS and the zip's backup path live in the config package; it is in nobody's dependency set."""
+        live = lambda f: "\n".join(l for l in f.read_text().lower().splitlines() if not l.lstrip().startswith("#"))
+        for f in (APPS, STEAM, STEAM_REPO):
+            self.assertNotIn("davinci", live(f), f.name)
+        t = APPS_CFG.read_text()
+        for line in ("media-video/davinci-resolve ~amd64", "media-video/davinci-resolve all-rights-reserved", "media-video/davinci-resolve VIDEO_CARDS: -* nvidia",
+                     "/etc/ctg-backup/paths.d", "/var/cache/distfiles/DaVinci_Resolve_21.2_Linux.zip", "restore /var/cache/distfiles"):
+            self.assertIn(line, t)
+        self.assertNotRegex(t, r"(?m)^\s*media-video/davinci-resolve\s*$")
 
     def test_config_package_owns_keywords_licences_and_use(self):
         t = APPS_CFG.read_text()
