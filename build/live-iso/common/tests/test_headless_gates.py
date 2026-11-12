@@ -57,6 +57,32 @@ class GuiScan(unittest.TestCase):
         self.assertEqual(steps[-1][1], False)
 
 
+class AdminTools(unittest.TestCase):
+    GOOD = "TOOL-OK equery\nTOOL-OK eclean\nTOOL-OK revdep-rebuild\nTOOL-OK euse\nequery 0.8.1\napp-portage/gentoolkit-0.8.1\nADMIN-DONE\n"
+
+    def run_gate(self, out):
+        steps = []
+        HG.admin_tools_gate(lambda cmd: (0, out), lambda n, ok, i="": steps.append((n, ok, i)))
+        return steps[-1]
+
+    def test_good(self):
+        self.assertTrue(self.run_gate(self.GOOD)[1])
+
+    def test_missing_equery_fails(self):
+        out = self.GOOD.replace("TOOL-OK equery", "TOOL-MISSING equery")
+        self.assertFalse(self.run_gate(out)[1])
+
+    def test_no_package_or_empty_answer_fails(self):
+        self.assertFalse(self.run_gate(self.GOOD.replace("app-portage/gentoolkit-0.8.1\n", ""))[1])
+        self.assertFalse(self.run_gate("")[1])           # the script did not finish = FAIL, never a silent pass
+
+    def test_script_checks_equery(self):
+        seen = []
+        HG.admin_tools_gate(lambda cmd: (seen.append(cmd) or (0, "")), lambda *a, **k: None)
+        self.assertIn("equery", seen[0])
+        self.assertIn("revdep-rebuild", seen[0])
+
+
 class Accounts(unittest.TestCase):
     def check(self, out, **kw):
         steps = []
@@ -92,7 +118,7 @@ class Accounts(unittest.TestCase):
 class WiredIntoTheHarness(unittest.TestCase):
     def test_qemu_test_uses_every_gate(self):
         src = open(os.path.join(ROOT, "qemu-test.py")).read()
-        for needle in ("--headless-gates", "-rtc", "HG.gui_check", "HG.account_check", "HG.clock_gate", "HG.link(", "installed-boots-with-the-network-links-down", "-S"):
+        for needle in ("--headless-gates", "-rtc", "HG.gui_check", "HG.admin_tools_gate", "HG.account_check", "HG.clock_gate", "HG.link(", "installed-boots-with-the-network-links-down", "-S"):
             self.assertIn(needle, src, needle)
 
 

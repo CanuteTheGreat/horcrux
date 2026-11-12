@@ -35,3 +35,5 @@ sys-process/htop
 app-admin/sudo
 app-admin/sysklogd
 dev-vcs/git
+# Portage admin tools on every Gentoo install (owner 2026-11-12)
+app-portage/gentoolkit

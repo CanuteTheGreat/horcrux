@@ -109,6 +109,23 @@ def gui_check(sh, step):
     return ok
 
 
+# Portage admin tools every Gentoo install carries (app-portage/gentoolkit, owner 2026-11-12); a missing one fails the gate
+ADMIN_TOOLS = ("equery", "eclean", "revdep-rebuild", "euse")
+
+
+def admin_tools_gate(sh, step):
+    """gentoolkit is installed and its tools run on the INSTALLED system (every project, every variant: ssh_checks calls this)"""
+    cmd = "for t in " + " ".join(ADMIN_TOOLS) + "; do command -v $t >/dev/null 2>&1 && echo TOOL-OK $t || echo TOOL-MISSING $t; done; " \
+          "equery --version 2>&1 | head -1; qlist -Iv app-portage/gentoolkit 2>&1 | head -1; echo ADMIN-DONE"
+    rc, o = sh(cmd)
+    o = (o or "").replace("\r", "")
+    missing = re.findall(r"(?m)^TOOL-MISSING (\S+)", o)
+    okn = len(re.findall(r"(?m)^TOOL-OK \S+", o))
+    ok = "ADMIN-DONE" in o and not missing and okn == len(ADMIN_TOOLS) and "app-portage/gentoolkit-" in o
+    step("gentoolkit-installed-equery-eclean-revdep-rebuild-euse", ok, re.sub(r"\s+", " ", f"missing {missing}; {o.strip()[-160:]}")[:300])
+    return ok
+
+
 def verifies(secret, shash):
     """True when the crypt hash `shash` ($1$/$5$/$6$ with plain salt) is the hash of `secret` (openssl reads the secret from stdin: never in argv)."""
     m = re.match(r"^\$(1|5|6)\$(?:rounds=\d+\$)?([^$]{1,16})\$", shash or "")

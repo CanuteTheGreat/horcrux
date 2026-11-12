@@ -52,7 +52,7 @@ rc-service sshd status >/dev/null 2>&1; r $? sshd-running ""
 [ "$(hostname)" = hogshead-live ]; r $? hostname "$(hostname)"
 
 # ---- userland
-for c in nmtui nmcli cryptsetup lvm mkfs.ext4 resize2fs sgdisk parted efibootmgr mkfs.vfat smartctl nvme vim tmux curl rsync lspci lsusb zpool zfs rsync sshd hogshead-remote hogshead-unlock hogshead-backup hogshead-motd; do
+for c in nmtui nmcli cryptsetup lvm mkfs.ext4 resize2fs sgdisk parted efibootmgr mkfs.vfat smartctl nvme vim tmux curl rsync lspci lsusb zpool zfs rsync sshd hogshead-remote hogshead-unlock hogshead-backup hogshead-motd equery eclean revdep-rebuild; do
   command -v $c >/dev/null; r $? "tool-$c" "$(command -v $c)"
 done
 modprobe zfs 2>/dev/null; zpool version 2>&1 | head -2 | sed 's/^/INFO zfs :: /'

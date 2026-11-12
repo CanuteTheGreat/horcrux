@@ -33,3 +33,5 @@ app-editors/nano
 app-misc/tmux
 sys-process/htop
 sys-process/cronie
+# Portage admin tools on every Gentoo install (owner 2026-11-12): equery, eclean, revdep-rebuild, euse, qlist-adjacent helpers
+app-portage/gentoolkit

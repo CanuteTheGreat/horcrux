@@ -2089,6 +2089,7 @@ class Runner:
         rc, out = ssh(FWD_SSH, self.key, "echo KEYLOGIN-OK; sshd -T 2>/dev/null | grep -Ei '^(permitrootlogin|passwordauthentication) '; hostname; cat /etc/timezone; findmnt -no FSTYPE /; id -u")
         flat = out.strip().replace("\n", " | ")[:220]
         self.step("ssh-key-login-accepted", rc == 0 and "KEYLOGIN-OK" in out, flat)
+        HG.admin_tools_gate(lambda cmd, timeout=60: ssh(FWD_SSH, self.key, cmd, timeout=int(T(timeout))), self.step)
         low = out.lower()
         # OpenSSH prints prohibit-password as either that or the old alias without-password
         rootlogin = re.search(r"permitrootlogin (\S+)", low)
