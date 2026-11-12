@@ -21,3 +21,6 @@ net-vpn/proton-vpn-gtk-app ~amd64
 */*::guru ~amd64
 gnome-extra/horcrux-gnome-defaults ~amd64
 net-misc/horcrux-chrony-nm ~amd64
+# OBS (app-misc/hogsmeade-obs, owner-only)
+media-video/obs-studio ~amd64
+media-plugins/obs-pipewire-audio-capture ~amd64
