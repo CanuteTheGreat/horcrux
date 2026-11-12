@@ -1,6 +1,6 @@
 # /etc/awccd.toml: awccd configuration (clean-room spec: ctg-infrastructure hosts/hogsmeade/awcc-re/linux-awcc-daemon-spec.md)
 [thermal]
-default_mode = "balanced"
+default_mode = "balanced-performance"     # falls back to "balanced" when the firmware does not offer it
 game_mode = "balanced-performance"
 [fans]
 curve_enabled = false

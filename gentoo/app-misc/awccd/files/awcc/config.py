@@ -1,7 +1,7 @@
 import tomllib
 
 DEFAULTS = {
-    "thermal": {"default_mode": "balanced", "game_mode": "balanced-performance"},
+    "thermal": {"default_mode": "balanced-performance", "game_mode": "balanced-performance"},
     "fans": {"curve_enabled": False, "max_boost": 100},
     "lighting": {"profile": "rainbow", "static_color": "0000FF", "zones": ["shelf", "alienhead"]},
     "safety": {"enable_bios_writes": False},

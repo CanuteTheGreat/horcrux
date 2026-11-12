@@ -154,6 +154,37 @@ class Core(unittest.TestCase):
         self.c.cfg["thermal"]["default_mode"] = "quiet"
         self.c.apply_startup(); self.assertEqual(self.c.plat.profile(), "quiet")
 
+    def test_shipped_default_is_balanced_performance(self):
+        shipped = os.path.join(os.path.dirname(__file__), "..", "awccd.toml")
+        for src in ("/nonexistent", shipped):
+            self.assertEqual(config.load(src)["thermal"]["default_mode"], "balanced-performance")
+        self.c.apply_startup(); self.assertEqual(self.c.plat.profile(), "balanced-performance")
+
+    def test_startup_falls_back_to_balanced_when_not_offered(self):
+        w(self.r, "sys/firmware/acpi/platform_profile_choices", "quiet balanced performance\n")
+        self.c.plat.set_profile("performance")
+        self.c.apply_startup(); self.assertEqual(self.c.plat.profile(), "balanced")
+
+    def test_startup_nothing_when_no_choices(self):
+        w(self.r, "sys/firmware/acpi/platform_profile_choices", "\n")
+        self.c.apply_startup(); self.assertEqual(self.c.plat.profile(), "balanced")
+
+    def test_startup_tells_ppd_nearest_profile_first(self):
+        seen = []
+        self.c.ppd_set = lambda p: seen.append((p, self.c.plat.profile()))
+        self.c.apply_startup()
+        self.assertEqual(seen, [("balanced", "balanced")])          # PPD told before the exact write
+        self.assertEqual(self.c.plat.profile(), "balanced-performance")
+
+    def test_startup_survives_ppd_failure(self):
+        def boom(p): raise RuntimeError("no bus")
+        self.c.ppd_set = boom
+        self.c.apply_startup(); self.assertEqual(self.c.plat.profile(), "balanced-performance")
+
+    def test_initd_starts_after_ppd(self):
+        t = open(os.path.join(os.path.dirname(__file__), "..", "awccd.initd")).read()
+        self.assertRegex(t, r"after [^\n]*power-profiles-daemon")
+
 
 if __name__ == "__main__":
     unittest.main()

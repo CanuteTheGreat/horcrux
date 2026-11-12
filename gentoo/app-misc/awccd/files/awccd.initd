@@ -8,7 +8,9 @@ output_log="/var/log/awccd.log"
 error_log="/var/log/awccd.log"
 depend() {
 	need dbus
-	after udev elogind
+	# power-profiles-daemon restores its own last profile when it starts: awccd must come after it so the configured
+	# default wins deterministically (soft dependency: PPD is optional)
+	after udev elogind power-profiles-daemon
 }
 start_pre() {
 	checkpath -d -m 0755 /run/awccd

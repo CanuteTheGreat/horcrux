@@ -27,7 +27,8 @@ XML = """<node><interface name="org.horcrux.Awcc1">
 class Core:
     """all logic, no D-Bus: unit tested with a fake /sys and a fake ELC"""
 
-    def __init__(self, root="/", cfg=None, state_path=STATE, elc=None):
+    def __init__(self, root="/", cfg=None, state_path=STATE, elc=None, ppd_set=None):
+        self.ppd_set = ppd_set
         self.plat = Platform(root)
         self.cfg = cfg or cfgmod.load()
         self.state_path = state_path
@@ -105,10 +106,31 @@ class Core:
         self._save_state()
         return (not bad), ("ok" if not bad else "controller rejected: " + ",".join(bad))
 
-    def apply_startup(self):
-        """boot / resume: apply the configured default profile once (never overrides a profile the user set at runtime)"""
+    # power-profiles-daemon has no balanced-performance: it knows power-saver / balanced / performance
+    PPD_OF = {"quiet": "power-saver", "cool": "power-saver", "low-power": "power-saver",
+              "balanced": "balanced", "balanced-performance": "balanced", "performance": "performance"}
+
+    def startup_mode(self):
+        """configured default, or 'balanced' when this model's firmware does not offer it (None = nothing to apply)"""
         mode = self.cfg["thermal"]["default_mode"]
-        if mode and mode in self.plat.choices() and self.plat.profile() != mode and "profile_before" not in self.state:
+        if not mode:
+            return None
+        ch = self.plat.choices()
+        if mode in ch:
+            return mode
+        return "balanced" if "balanced" in ch else None
+
+    def apply_startup(self):
+        """boot / resume: apply the configured default profile once (never overrides a profile the user set at runtime).
+        PPD restores its own last profile when it starts, so awccd.initd starts after it; PPD is first told the nearest
+        profile it understands (so GNOME's power menu agrees), then the exact platform profile is written."""
+        mode = self.startup_mode()
+        if mode and self.plat.profile() != mode and "profile_before" not in self.state:
+            if self.ppd_set:
+                try:
+                    self.ppd_set(self.PPD_OF.get(mode, "balanced"))
+                except Exception:       # noqa: PPD absent / not on the bus: the sysfs write below still applies
+                    pass
             self.plat.set_profile(mode)
 
     def restore_on_exit(self):
@@ -125,12 +147,32 @@ class Core:
                 pass
 
 
+def ppd_set(profile):                # pragma: no cover (needs a bus)
+    """set power-profiles-daemon's ActiveProfile (net.hadess.PowerProfiles); wait briefly for it to own its name"""
+    import time
+    import gi
+    gi.require_version("Gio", "2.0")
+    from gi.repository import Gio, GLib
+    bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+    for _ in range(20):
+        owner = bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner",
+                              GLib.Variant("(s)", ("net.hadess.PowerProfiles",)), None, Gio.DBusCallFlags.NONE, 2000, None)
+        if owner.unpack()[0]:
+            break
+        time.sleep(0.5)
+    else:
+        return
+    bus.call_sync("net.hadess.PowerProfiles", "/net/hadess/PowerProfiles", "org.freedesktop.DBus.Properties", "Set",
+                  GLib.Variant("(ssv)", ("net.hadess.PowerProfiles", "ActiveProfile", GLib.Variant("s", profile))),
+                  None, Gio.DBusCallFlags.NONE, 3000, None)
+
+
 def main(argv=None):                 # pragma: no cover (needs a bus)
     import gi
     gi.require_version("Gio", "2.0")
     from gi.repository import Gio, GLib
     cfg = cfgmod.load(os.environ.get("AWCCD_CONFIG", "/etc/awccd.toml"))
-    core = Core(cfg=cfg, elc=elcmod.ELC())
+    core = Core(cfg=cfg, elc=elcmod.ELC(), ppd_set=ppd_set)
     core.apply_startup()
     loop = GLib.MainLoop()
     node = Gio.DBusNodeInfo.new_for_xml(XML)
