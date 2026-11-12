@@ -1,0 +1,47 @@
+diff --git a/appIndicator.js b/appIndicator.js
+index 809b8e6..b5464e4 100644
+--- a/appIndicator.js
++++ b/appIndicator.js
+@@ -110,8 +110,14 @@ class AppIndicatorProxy extends DBusProxy {
+     _init(busName, objectPath) {
+         const {interfaceInfo} = AppIndicatorProxy;
+ 
++        // Chromium/Electron (43+) only answers Properties.Get/GetAll when the
++        // message is addressed to the well-known name it registered, and fails
++        // with "error occurred in Get" for its unique name.  GDBusProxy would
++        // do its initial GetAll on the name owner (unique name), so do not let
++        // it: refreshAllProperties() asks the well-known name and fills the cache.
+         super._init(busName, objectPath, interfaceInfo,
+-            Gio.DBusProxyFlags.GET_INVALIDATED_PROPERTIES);
++            Gio.DBusProxyFlags.GET_INVALIDATED_PROPERTIES |
++            Gio.DBusProxyFlags.DO_NOT_LOAD_PROPERTIES);
+ 
+         this.set_cached_property('Status',
+             new GLib.Variant('s', SNIStatus.PASSIVE));
+@@ -472,7 +478,7 @@ export class AppIndicator extends Signals.EventEmitter {
+         // We try to lookup the activate method to see if the app supports it
+         try {
+             const introspectionVariant = await this._proxy.gConnection.call(
+-                this._proxy.gNameOwner, this._proxy.gObjectPath,
++                this._proxy.gName, this._proxy.gObjectPath,
+                 'org.freedesktop.DBus.Introspectable', 'Introspect', null, null,
+                 Gio.DBusCallFlags.NONE, -1, cancellable);
+             const [introspectionXml] = introspectionVariant.deep_unpack();
+diff --git a/statusNotifierWatcher.js b/statusNotifierWatcher.js
+index ca6ab17..7ae014a 100644
+--- a/statusNotifierWatcher.js
++++ b/statusNotifierWatcher.js
+@@ -185,8 +185,12 @@ export class StatusNotifierWatcher {
+                         path === DEFAULT_ITEM_OBJECT_PATH ? service : null,
+                         name, path);
+                     Util.Logger.warn(`Using Brute-force mode for StatusNotifierItem ${id}`);
++                    // Chromium/Electron only answers Properties calls addressed to the
++                    // standard well-known SNI name, not to the unique bus name.
++                    const busName = service?.match(DBusUtils.BUS_SNI_NAME_REGEX) ?
++                        service : name;
+                     // eslint-disable-next-line no-await-in-loop
+-                    await this._registerItem(service, name, path);
++                    await this._registerItem(service, busName, path);
+                 }
+             } catch (e) {
+                 logError(e);

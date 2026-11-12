@@ -15,7 +15,7 @@ Phases (UEFI, USB stick, unattended answer file with encryption=true):
   4. --desktop: GDM + GNOME Wayland session processes are running and the login screen is on the VGA console (screenshot).
 Evidence in --out; exit 0 = all steps passed.
 """
-import argparse, hashlib, importlib.util, json, os, re, subprocess, sys, time, types
+import argparse, base64, hashlib, importlib.util, json, os, re, subprocess, sys, time, types
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("qt", os.path.join(HERE, "qemu-test.py"))
@@ -685,6 +685,12 @@ class ZRun(qt.Runner):
         rc, o = self.sh(f"echo {SNI_TEST} | base64 -d > /tmp/hx-sni.py; su - {user} -c \"export {env}; python3 /tmp/hx-sni.py\" 2>&1; rm -f /tmp/hx-sni.py", timeout=90)
         self.step("status-notifier-item-registers-on-the-watcher-and-a-host-exists", "StatusNotifierItem-4242-1" in o.partition("SNI-RESULT")[2] and "'IsStatusNotifierHostRegistered': True" in o, re.sub(r"\s+", " ", o)[:400])
 
+        # Chromium/Electron 43+ (Slack, Signal, Docker Desktop) answer Properties.Get/GetAll only on the item's well-known name and fail on the unique
+        # bus name with "error occurred in Get": the stock extension (::gentoo 64/66) destroys such an item right after registration (icon flashes "...").
+        fake = base64.b64encode(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "sni_chromium_fake.py"), "rb").read()).decode()
+        rc, o = self.sh(f"echo {fake} | base64 -d > /tmp/hx-sni-chromium.py; su - {user} -c \"export {env}; python3 /tmp/hx-sni-chromium.py 15\" 2>&1; echo FAKE-RC=$?; rm -f /tmp/hx-sni-chromium.py", timeout=120)
+        self.step("chromium-style-status-notifier-item-is-kept-by-the-appindicator-extension", "FAKE-RC=0" in o and "watcher items matching us: ['org.freedesktop.StatusNotifierItem-" in o, re.sub(r"\s+", " ", o)[-400:])
+
     def _user_bus_env(self, user):
         uid = self.sh(f"id -u {user}")[1].strip().splitlines()[-1]
         return uid, f"XDG_RUNTIME_DIR=/run/user/{uid} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus"
@@ -721,7 +727,7 @@ class ZRun(qt.Runner):
         rc, o = self.sh(f"P=$(pgrep -u {user} -x xdg-desktop-portal | head -1); echo PID=$P; tr '\\0' '\\n' < /proc/$P/environ | grep -E '^XDG_CURRENT_DESKTOP='")
         self.step("xdg-desktop-portal-runs-with-the-gnome-desktop-name", "XDG_CURRENT_DESKTOP=GNOME" in o, re.sub(r"\s+", " ", o)[:200])
         rc, o = self.sh(f"su - {user} -c \"export {env}; gsettings get org.gnome.mutter experimental-features\" 2>&1")
-        self.step("mutter-fractional-scaling-is-the-system-default", "scale-monitor-framebuffer" in o and "xwayland-native-scaling" not in o, re.sub(r"\s+", " ", o)[:200])
+        self.step("mutter-fractional-scaling-is-the-system-default", "scale-monitor-framebuffer" in o and "xwayland-native-scaling" in o, re.sub(r"\s+", " ", o)[:200])
 
     def session_logout(self, user):
         """Log Out through the shell's own bus (org.gnome.SessionManager.Logout 1); wait until the user's shell is gone and GDM shows a greeter session again"""

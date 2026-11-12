@@ -14,6 +14,8 @@ KEYWORDS="amd64 arm64"
 # would be shadowed), so every default extension of the machine is listed here, in the one compiled db.
 IUSE="awcc"
 
+# -r8: appindicator >= 66-r1 (this overlay): Chromium/Electron 43+ tray icons (Slack, Signal, Docker Desktop) are dropped by ::gentoo's 64/66
+# ('error occurred in Get' on the unique bus name); see gnome-shell-extension-appindicator-66-r1.ebuild and the sni-chromium gate.
 # DESKTOP EDITION, layered on the server core: sys-apps/horcrux-core carries everything every Horcrux install needs (chrony + the clock rules +
 # the NetworkManager/dhcpcd clock hooks, first-boot network wait, overlay sync config, backup, ZFS dist-kernel rule). Nothing of that is attached to
 # this package any more: a headless server gets the same fixes without a single GNOME package. This package only adds the GNOME defaults below.
@@ -23,7 +25,7 @@ RDEPEND="
 	sys-apps/dbus
 	gnome-base/gnome-control-center
 	net-misc/networkmanager
-	gnome-extra/gnome-shell-extension-appindicator
+	>=gnome-extra/gnome-shell-extension-appindicator-66-r1
 	gnome-extra/gnome-shell-extensions
 	gnome-base/gnome-keyring[pam]
 	app-crypt/libsecret
