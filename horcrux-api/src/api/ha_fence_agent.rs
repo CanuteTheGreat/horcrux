@@ -711,6 +711,9 @@ mod tests {
     /// guests it lists (a fake `qemu` binary + pidfile), a fresh one does not.
     #[tokio::test]
     async fn stale_heartbeat_kills_the_listed_guest_only() {
+        if !crate::test_env::can_signal_own_children() {
+            return;
+        }
         let dir = std::env::temp_dir().join(format!("hx-fence-ut-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::env::set_var(

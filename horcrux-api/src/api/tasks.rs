@@ -462,6 +462,11 @@ mod tests {
         let log = std::fs::read_to_string(log_path(&upid)).unwrap();
         assert!(log.contains("hello") && log.contains("oops") && log.contains("TASK ERROR"));
 
+        // Stopping needs kill(2) on our own child; skip just that half where
+        // the sandbox denies signals (the log/exit-code half above ran).
+        if !crate::test_env::can_signal_own_children() {
+            return;
+        }
         let long = spawn_command(
             "unit-test",
             "sleep",
