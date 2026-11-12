@@ -26,10 +26,12 @@ pub mod helm;
 pub mod host_net;
 #[cfg(feature = "cluster")]
 pub mod idle_power;
+pub mod import_cleanup;
 pub mod inventory;
 #[cfg(feature = "kubernetes")]
 pub mod k8s_config;
 pub mod lane_m;
+pub mod libvirt_import;
 pub mod mdev;
 pub mod metric_servers;
 pub mod metrics;

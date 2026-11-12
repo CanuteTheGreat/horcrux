@@ -198,11 +198,21 @@ pub fn qemu_command(
     } else {
         "tcg"
     };
+    // Secure Boot firmware keeps its variables in SMM-protected flash.
+    let secure = x86 && vm.hardware.secure_boot && uses_ovmf(vm);
     args.push("-machine".into());
-    args.push(match machine {
-        Some(m) => format!("{m},accel={accel}"),
-        None => format!("accel={accel}"),
+    args.push(match (machine, secure) {
+        (Some(m), true) => format!("{m},smm=on,accel={accel}"),
+        (None, true) => format!("pc,smm=on,accel={accel}"),
+        (Some(m), false) => format!("{m},accel={accel}"),
+        (None, false) => format!("accel={accel}"),
     });
+    if secure {
+        args.extend([
+            "-global".into(),
+            "driver=cfi.pflash01,property=secure,value=on".into(),
+        ]);
+    }
     match &vm.hardware.cpu_type {
         Some(cpu) => args.extend(["-cpu".into(), cpu.clone()]),
         None if !x86 => args.extend(["-cpu".into(), "max".into()]),
@@ -1092,7 +1102,12 @@ impl QemuManager {
         super::advanced::run_hook(&vm.hardware.adv, &vm.id, "pre-start").await?;
         // UEFI: OVMF must be installed; the VM gets its variable store.
         let ovmf = if uses_ovmf(vm) {
-            let o = super::firmware::find_ovmf().ok_or_else(super::firmware::ovmf_missing)?;
+            let o = if vm.hardware.secure_boot {
+                super::firmware::find_ovmf_for(true)
+                    .ok_or_else(super::firmware::ovmf_secboot_missing)?
+            } else {
+                super::firmware::find_ovmf().ok_or_else(super::firmware::ovmf_missing)?
+            };
             super::firmware::ensure_efivars(&vm.disk_path, &o).await?;
             Some(o)
         } else {

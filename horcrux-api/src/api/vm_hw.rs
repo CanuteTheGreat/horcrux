@@ -114,7 +114,7 @@ pub struct HostOptions {
 }
 
 /// Whether `program` is an executable in PATH.
-fn in_path(program: &str) -> bool {
+pub(crate) fn in_path(program: &str) -> bool {
     std::env::var_os("PATH")
         .map(|paths| {
             std::env::split_paths(&paths).any(|d| {
@@ -133,6 +133,11 @@ pub fn check_host_firmware(hw: &VmHardware) -> Result<(), ApiError> {
     if hw.firmware == horcrux_common::Firmware::Ovmf && crate::vm::firmware::find_ovmf().is_none() {
         return Err(ApiError::BadRequest(
             crate::vm::firmware::ovmf_missing().to_string(),
+        ));
+    }
+    if hw.secure_boot && crate::vm::firmware::find_ovmf_for(true).is_none() {
+        return Err(ApiError::BadRequest(
+            crate::vm::firmware::ovmf_secboot_missing().to_string(),
         ));
     }
     if hw.tpm && !in_path("swtpm") {

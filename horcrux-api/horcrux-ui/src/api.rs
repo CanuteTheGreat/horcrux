@@ -3167,6 +3167,7 @@ pub async fn delete_kubernetes_secret(
 pub mod backup;
 pub mod ceph;
 pub mod dashboards;
+pub mod libvirt;
 pub mod metric_servers;
 pub mod ovf;
 pub mod passthrough;

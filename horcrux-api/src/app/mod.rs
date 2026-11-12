@@ -549,6 +549,8 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::metric_servers::routes(&state))
         .merge(api::passthrough::routes())
         .merge(api::ovf::routes())
+        .merge(api::libvirt_import::routes())
+        .merge(api::import_cleanup::routes())
         .merge(api::esxi::routes())
         .merge(api::storage_volumes::routes())
         .merge(api::storage_content::routes())

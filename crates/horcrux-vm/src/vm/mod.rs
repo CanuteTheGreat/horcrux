@@ -346,6 +346,17 @@ impl VmManager {
 
     /// Register a VM whose disk already exists (e.g. cloned from a
     /// template) without creating a new disk.
+    /// Drop a VM's record (memory + database) and nothing else: no disk,
+    /// firmware or TPM file is touched. For rolling back an adoption of
+    /// disks that existed before Horcrux knew the VM.
+    pub async fn forget_vm(&self, id: &str) -> Result<()> {
+        self.vms.write().await.remove(id);
+        if let Some(db) = &self.db {
+            db.delete_vm(id).await?;
+        }
+        Ok(())
+    }
+
     pub async fn import_vm(&self, config: VmConfig) -> Result<VmConfig> {
         // Template deploys, backup restores and incoming migrations all
         // register through here: the ID names the pidfile and disk files,

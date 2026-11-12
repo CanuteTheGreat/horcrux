@@ -32,7 +32,8 @@ use pages::{
     PermissionsPage, PodsPage, RealmsPage, ReplicationList, RetentionPoliciesPage, RolesPage,
     SecretsPage, ServicesPage, SessionsPage, SmartMonitoringPage, SnapshotList,
     SnapshotManagerPage, StacksPage, StorageManagement, TemplateManagerPage, UserMenu, UsersPage,
-    VmConsole, VmCreate, VmImportEsxiPage, VmImportOvfPage, VmList, VolumesPage,
+    VmConsole, VmCreate, VmImportEsxiPage, VmImportLibvirtPage, VmImportOvfPage, VmList,
+    VolumesPage,
 };
 
 #[component]
@@ -191,6 +192,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/vms" view=VmList/>
                     <Route path="/vms/create" view=VmCreate/>
                     <Route path="/vms/import-ovf" view=VmImportOvfPage/>
+                    <Route path="/vms/import-libvirt" view=VmImportLibvirtPage/>
                     <Route path="/vms/import-esxi" view=VmImportEsxiPage/>
                     <Route path="/vms/:id" view=crate::pages::VmDetailPage/>
                     <Route path="/resources" view=crate::pages::ResourcesPage/>

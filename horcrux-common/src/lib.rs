@@ -221,6 +221,11 @@ pub struct VmHardware {
     /// per-VM EFI variable store next to the first disk).
     #[serde(default, skip_serializing_if = "Firmware::is_default")]
     pub firmware: Firmware,
+    /// UEFI Secure Boot: the Secure Boot build of OVMF with the vendor keys
+    /// enrolled in the VM's variable store (needs `firmware: ovmf`). The
+    /// guest's measured-boot state (BitLocker/PCR7) depends on it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub secure_boot: bool,
     /// Emulated TPM 2.0 chip (swtpm; its state lives next to the first disk).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tpm: bool,
@@ -821,6 +826,9 @@ impl VmHardware {
         cpus: u32,
     ) -> std::result::Result<(), String> {
         self.validate()?;
+        if self.secure_boot && self.firmware != Firmware::Ovmf {
+            return Err("Secure Boot needs UEFI (OVMF) firmware".into());
+        }
         if let Some(s) = self.sockets {
             // with CPU hotplug the topology covers the maximum
             let total = self.adv.max_cpus.unwrap_or(cpus);

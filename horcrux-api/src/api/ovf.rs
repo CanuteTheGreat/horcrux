@@ -963,7 +963,38 @@ async fn run_import(
         storage: req.storage.clone(),
         label: req.source.clone(),
     };
-    import_plan(state, &ov, plan, &src, stage, created).await
+    let disks: Vec<String> = plan.disks.iter().map(|d| d.file.clone()).collect();
+    let r = import_plan(state, &ov, plan, &src, stage, created).await?;
+    // a local source stays until the owner asks for it to go (opt-in cleanup)
+    if !(req.source.starts_with("http://") || req.source.starts_with("https://")) {
+        let mut items = Vec::new();
+        let mut add = |p: PathBuf| {
+            items.push(crate::api::import_cleanup::Item {
+                kind: "file".into(),
+                path: p.to_string_lossy().to_string(),
+                requires: None,
+            })
+        };
+        if let Some((ova, _)) = &src.ova {
+            add(ova.clone());
+        } else if let Some(dir) = &src.dir {
+            if let Ok(f) = std::fs::canonicalize(&req.source) {
+                add(f);
+            }
+            for d in disks.iter().filter(|d| safe_file_name(d)) {
+                add(dir.join(d));
+            }
+        }
+        let _ = crate::api::import_cleanup::write_record(
+            state,
+            &crate::api::import_cleanup::Record {
+                vm_id: r.vm.id.clone(),
+                source: "ovf".into(),
+                items,
+            },
+        );
+    }
+    Ok(r)
 }
 
 /// Convert the plan's disks and create the VM (shared by OVF/OVA and ESXi).

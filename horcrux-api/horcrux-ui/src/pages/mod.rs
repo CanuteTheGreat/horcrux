@@ -43,6 +43,7 @@ pub mod vm_devices;
 mod vm_display;
 mod vm_hardware;
 pub mod vm_import_esxi;
+pub mod vm_import_libvirt;
 pub mod vm_import_ovf;
 mod vm_list;
 pub mod vm_passthrough;
@@ -80,6 +81,7 @@ pub use vm_create::VmCreate;
 pub use vm_detail::VmDetailPage;
 pub use vm_hardware::VmHardwarePage;
 pub use vm_import_esxi::VmImportEsxiPage;
+pub use vm_import_libvirt::{ImportCleanup, UnmanagedLibvirtBanner, VmImportLibvirtPage};
 pub use vm_import_ovf::VmImportOvfPage;
 pub use vm_list::VmList;
 

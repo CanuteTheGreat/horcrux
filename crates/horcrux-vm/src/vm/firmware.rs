@@ -61,9 +61,54 @@ const OVMF_CANDIDATES: &[(&str, &str)] = &[
     ),
 ];
 
+/// Secure Boot builds (vendor keys enrolled in the vars template).
+const OVMF_SECBOOT_CANDIDATES: &[(&str, &str)] = &[
+    (
+        "/usr/share/OVMF/OVMF_CODE_4M.ms.fd",
+        "/usr/share/OVMF/OVMF_VARS_4M.ms.fd",
+    ),
+    (
+        "/usr/share/OVMF/OVMF_CODE.secboot.fd",
+        "/usr/share/OVMF/OVMF_VARS.secboot.fd",
+    ),
+    (
+        "/usr/share/edk2/OvmfX64/OVMF_CODE.secboot.fd",
+        "/usr/share/edk2/OvmfX64/OVMF_VARS.secboot.fd",
+    ),
+    (
+        "/usr/share/edk2/ovmf/OVMF_CODE.secboot.fd",
+        "/usr/share/edk2/ovmf/OVMF_VARS.secboot.fd",
+    ),
+];
+
 /// Find OVMF on this host. `HORCRUX_OVMF_CODE` + `HORCRUX_OVMF_VARS`
 /// override the search (both must be set).
 pub fn find_ovmf() -> Option<Ovmf> {
+    find_ovmf_for(false)
+}
+
+/// The Secure Boot build of OVMF (`HORCRUX_OVMF_SECBOOT_CODE` +
+/// `HORCRUX_OVMF_SECBOOT_VARS` override the search).
+pub fn find_ovmf_for(secure_boot: bool) -> Option<Ovmf> {
+    if secure_boot {
+        if let (Ok(code), Ok(vars)) = (
+            std::env::var("HORCRUX_OVMF_SECBOOT_CODE"),
+            std::env::var("HORCRUX_OVMF_SECBOOT_VARS"),
+        ) {
+            let (code, vars) = (PathBuf::from(code), PathBuf::from(vars));
+            return (code.is_file() && vars.is_file()).then_some(Ovmf {
+                code,
+                vars_template: vars,
+            });
+        }
+        return OVMF_SECBOOT_CANDIDATES.iter().find_map(|(c, v)| {
+            let (c, v) = (Path::new(c), Path::new(v));
+            (c.is_file() && v.is_file()).then(|| Ovmf {
+                code: c.to_path_buf(),
+                vars_template: v.to_path_buf(),
+            })
+        });
+    }
     if let (Ok(code), Ok(vars)) = (
         std::env::var("HORCRUX_OVMF_CODE"),
         std::env::var("HORCRUX_OVMF_VARS"),
@@ -81,6 +126,16 @@ pub fn find_ovmf() -> Option<Ovmf> {
             vars_template: v.to_path_buf(),
         })
     })
+}
+
+/// Why a Secure Boot VM can't start here.
+pub fn ovmf_secboot_missing() -> Error {
+    Error::Validation(
+        "the Secure Boot build of OVMF is not installed on this host: install \
+         sys-firmware/edk2-bin (Debian/Ubuntu: ovmf), or set HORCRUX_OVMF_SECBOOT_CODE and \
+         HORCRUX_OVMF_SECBOOT_VARS"
+            .into(),
+    )
 }
 
 /// Why a UEFI VM can't start here (no OVMF installed).

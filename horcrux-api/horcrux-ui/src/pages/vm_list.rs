@@ -179,7 +179,9 @@ pub fn VmList() -> impl IntoView {
                 <A href="/vms/create" class="btn btn-primary">"Create VM"</A>
                 <A href="/vms/import-ovf" class="btn">"Import OVF / OVA"</A>
                 <A href="/vms/import-esxi" class="btn">"Import from ESXi"</A>
+                <A href="/vms/import-libvirt" class="btn">"Import from libvirt"</A>
             </div>
+            <crate::pages::UnmanagedLibvirtBanner/>
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="vm-notice">{n}</div> })}
 
             {move || {
