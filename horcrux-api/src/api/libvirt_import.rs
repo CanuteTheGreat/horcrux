@@ -46,6 +46,8 @@ use tokio::process::Command;
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/vms/import/libvirt/list", post(list))
+        .route("/api/vms/import/libvirt/list-cluster", post(list_cluster))
+        .route("/api/ha/peer/libvirt/list", post(peer_list))
         .route("/api/vms/import/libvirt/preview", post(preview))
         .route("/api/vms/import/libvirt", post(import))
         .route("/api/vms/import/libvirt/status", post(status))
@@ -468,7 +470,7 @@ async fn domain_xml(domain: &str) -> Result<String, ApiError> {
         .ok_or_else(|| ApiError::BadRequest("libvirt (virsh) is not installed on this host".into()))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct ListedDomain {
     domain: String,
     uuid: String,
@@ -482,7 +484,7 @@ struct ListedDomain {
     problem: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct ListResponse {
     /// False when virsh is not installed.
     available: bool,
@@ -490,11 +492,124 @@ struct ListResponse {
 }
 
 async fn list(State(state): State<Arc<AppState>>) -> Result<Json<ListResponse>, ApiError> {
+    Ok(Json(list_local(&state).await?))
+}
+
+/// One node's unmanaged-VM report in the cluster-wide list.
+#[derive(Serialize, Debug, PartialEq)]
+struct NodeReport {
+    node: String,
+    /// The node that answered this request (imports run on it from its own UI/API).
+    local: bool,
+    /// Set when the node could not be asked.
+    error: Option<String>,
+    available: bool,
+    domains: Vec<ListedDomain>,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+struct ClusterList {
+    nodes: Vec<NodeReport>,
+    /// Domains without a Horcrux VM, over every node that answered.
+    unmanaged: usize,
+}
+
+impl PartialEq for ListedDomain {
+    fn eq(&self, o: &Self) -> bool {
+        self.domain == o.domain && self.uuid == o.uuid && self.imported_as == o.imported_as
+    }
+}
+impl std::fmt::Debug for ListedDomain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ListedDomain({})", self.domain)
+    }
+}
+
+/// Combine this node's list with what each peer answered (pure, tested).
+fn merge_cluster(
+    local_name: &str,
+    local: ListResponse,
+    peers: Vec<(String, Result<ListResponse, String>)>,
+) -> ClusterList {
+    let mut nodes = vec![NodeReport {
+        node: local_name.to_string(),
+        local: true,
+        error: None,
+        available: local.available,
+        domains: local.domains,
+    }];
+    for (name, r) in peers {
+        nodes.push(match r {
+            Ok(l) => NodeReport {
+                node: name,
+                local: false,
+                error: None,
+                available: l.available,
+                domains: l.domains,
+            },
+            Err(e) => NodeReport {
+                node: name,
+                local: false,
+                error: Some(e),
+                available: false,
+                domains: vec![],
+            },
+        });
+    }
+    let unmanaged = nodes
+        .iter()
+        .flat_map(|n| n.domains.iter())
+        .filter(|d| d.imported_as.is_none() && d.problem.is_none())
+        .count();
+    ClusterList { nodes, unmanaged }
+}
+
+/// `POST /api/vms/import/libvirt/list-cluster`: the same list for every online
+/// node of the cluster (remote nodes are asked over the cluster peer API).
+async fn list_cluster(State(state): State<Arc<AppState>>) -> Result<Json<ClusterList>, ApiError> {
+    let local_name = state
+        .cluster_manager
+        .get_local_node_name()
+        .await
+        .unwrap_or_else(|_| "localhost".to_string());
+    let local = list_local(&state).await?;
+    let all = state.cluster_manager.list_nodes().await;
+    let mut peers = Vec::new();
+    for n in super::drain::peer_nodes(&all, &local_name) {
+        let r = super::drain::call_peer::<_, ListResponse>(
+            &state,
+            &n,
+            "/api/ha/peer/libvirt/list",
+            &serde_json::json!({}),
+        )
+        .await;
+        peers.push((n.name.clone(), r));
+    }
+    Ok(Json(merge_cluster(&local_name, local, peers)))
+}
+
+/// Peer route: another cluster node asks for this node's list.
+async fn peer_list(
+    State(state): State<Arc<AppState>>,
+    user: Option<axum::Extension<crate::middleware::auth::AuthUser>>,
+) -> Result<Json<ListResponse>, ApiError> {
+    match &user {
+        Some(axum::Extension(u)) if u.role == crate::middleware::auth::CLUSTER_HA_ROLE => {}
+        _ => {
+            return Err(ApiError::Forbidden(
+                "this route is only for other cluster nodes".into(),
+            ))
+        }
+    }
+    Ok(Json(list_local(&state).await?))
+}
+
+async fn list_local(state: &Arc<AppState>) -> Result<ListResponse, ApiError> {
     let Some(names) = virsh(&["list", "--all", "--name"]).await? else {
-        return Ok(Json(ListResponse {
+        return Ok(ListResponse {
             available: false,
             domains: vec![],
-        }));
+        });
     };
     let vms = state.vm_manager.list_vms().await;
     let mut domains = Vec::new();
@@ -534,10 +649,10 @@ async fn list(State(state): State<Arc<AppState>>) -> Result<Json<ListResponse>, 
         }
         domains.push(e);
     }
-    Ok(Json(ListResponse {
+    Ok(ListResponse {
         available: true,
         domains,
-    }))
+    })
 }
 
 #[derive(Serialize)]
@@ -1382,6 +1497,41 @@ mod tests {
             .await
             .unwrap_err();
         assert!(format!("{e:?}").contains("qemu-img convert"));
+    }
+
+    #[test]
+    fn cluster_list_merges_nodes_and_reports_unreachable_ones() {
+        let dom = |n: &str, imp: Option<&str>| ListedDomain {
+            domain: n.into(),
+            uuid: n.into(),
+            state: "shut off".into(),
+            cpus: 1,
+            memory_mb: 1,
+            disks: vec![],
+            imported_as: imp.map(String::from),
+            problem: None,
+        };
+        let local = ListResponse {
+            available: true,
+            domains: vec![dom("a", None), dom("b", Some("100"))],
+        };
+        let remote = ListResponse {
+            available: true,
+            domains: vec![dom("c", None)],
+        };
+        let r = merge_cluster(
+            "n1",
+            local,
+            vec![
+                ("n2".into(), Ok(remote)),
+                ("n3".into(), Err("connection refused".into())),
+            ],
+        );
+        assert_eq!(r.nodes.len(), 3);
+        assert!(r.nodes[0].local && !r.nodes[1].local);
+        assert_eq!(r.nodes[1].domains[0].domain, "c");
+        assert_eq!(r.nodes[2].error.as_deref(), Some("connection refused"));
+        assert_eq!(r.unmanaged, 2);
     }
 
     #[test]

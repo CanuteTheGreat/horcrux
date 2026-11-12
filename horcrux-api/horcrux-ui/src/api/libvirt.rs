@@ -73,6 +73,26 @@ pub async fn list() -> Result<LvList, ApiError> {
     post_json("/vms/import/libvirt/list", &serde_json::json!({})).await
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct LvNodeReport {
+    pub node: String,
+    pub local: bool,
+    pub error: Option<String>,
+    pub available: bool,
+    pub domains: Vec<LvListed>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct LvClusterList {
+    pub nodes: Vec<LvNodeReport>,
+    pub unmanaged: usize,
+}
+
+/// Unmanaged libvirt VMs on every node of the cluster.
+pub async fn list_cluster() -> Result<LvClusterList, ApiError> {
+    post_json("/vms/import/libvirt/list-cluster", &serde_json::json!({})).await
+}
+
 pub async fn preview(domain: &str) -> Result<LvPreview, ApiError> {
     post_json(
         "/vms/import/libvirt/preview",

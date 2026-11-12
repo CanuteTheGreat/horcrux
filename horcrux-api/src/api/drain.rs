@@ -367,7 +367,7 @@ fn client() -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
-fn peer_nodes(nodes: &[Node], local: &str) -> Vec<Node> {
+pub(crate) fn peer_nodes(nodes: &[Node], local: &str) -> Vec<Node> {
     nodes
         .iter()
         .filter(|n| n.name != local && !n.is_local && n.status == NodeStatus::Online)

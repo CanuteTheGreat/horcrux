@@ -10,17 +10,23 @@ use leptos_router::A;
 /// absent or every domain is imported.
 #[component]
 pub fn UnmanagedLibvirtBanner() -> impl IntoView {
-    let (list, set_list) = create_signal(Vec::<libvirt::LvListed>::new());
+    let (list, set_list) = create_signal(Vec::<(String, bool, libvirt::LvListed)>::new());
     let (pending, set_pending) = create_signal(Vec::<libvirt::CleanupOffer>::new());
     spawn_local(async move {
         if let Ok(p) = libvirt::cleanup_pending().await {
             set_pending.set(p);
         }
-        if let Ok(l) = libvirt::list().await {
+        if let Ok(c) = libvirt::list_cluster().await {
             set_list.set(
-                l.domains
+                c.nodes
                     .into_iter()
-                    .filter(|d| d.imported_as.is_none())
+                    .flat_map(|n| {
+                        let (name, local) = (n.node, n.local);
+                        n.domains
+                            .into_iter()
+                            .filter(|d| d.imported_as.is_none())
+                            .map(move |d| (name.clone(), local, d))
+                    })
                     .collect(),
             );
         }
@@ -39,8 +45,8 @@ pub fn UnmanagedLibvirtBanner() -> impl IntoView {
             let l = list.get();
             (!l.is_empty()).then(|| view! {
                 <div class="alert alert-warning" id="unmanaged-libvirt">
-                    <strong>{format!("{} unmanaged libvirt VM(s) on this host, not shown above: ", l.len())}</strong>
-                    {l.iter().map(|d| view! { <span class="unmanaged-vm">{format!("{} ({}) ", d.domain, d.state)}</span> }).collect_view()}
+                    <strong>{format!("{} unmanaged libvirt VM(s) in this cluster, not shown above: ", l.len())}</strong>
+                    {l.iter().map(|(node, local, d)| view! { <span class="unmanaged-vm">{if *local { format!("{} ({}) ", d.domain, d.state) } else { format!("{} ({}) on {} ", d.domain, d.state, node) }}</span> }).collect_view()}
                     <A href="/vms/import-libvirt" class="btn btn-primary" attr:id="unmanaged-import">"Import into Horcrux"</A>
                 </div>
             })
