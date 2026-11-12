@@ -36,6 +36,7 @@ src_install() {
 		app-admin/proton-pass-bin ~amd64
 		net-analyzer/caido-bin ~amd64
 		media-libs/iir1 ~amd64
+		net-misc/onedrive ~amd64
 	EOF2
 	insinto /etc/portage/package.license
 	newins - hogsmeade-apps <<-'EOF2'

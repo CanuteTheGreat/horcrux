@@ -63,6 +63,7 @@ RDEPEND="
 	app-admin/awscli
 	app-admin/aws-session-manager-plugin
 	net-misc/s3cmd
+	net-misc/onedrive
 	www-client/google-chrome
 	www-client/microsoft-edge
 	net-vpn/proton-vpn-gtk-app

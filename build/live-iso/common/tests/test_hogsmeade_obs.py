@@ -114,7 +114,7 @@ OWNER_APPS = (
     "net-fs/proton-drive-cli-bin", "media-video/makemkv", "media-gfx/loupe", "media-video/vlc", "net-analyzer/ookla-speedtest", "net-analyzer/wireshark",
     "net-analyzer/mtr", "net-analyzer/tcpdump", "net-dns/bind", "app-office/libreoffice", "app-crypt/yubioath-flutter-bin", "app-crypt/yubikey-manager",
     "sys-apps/pcsc-lite", "app-crypt/ccid", "sys-auth/proton-authenticator-bin", "app-admin/proton-pass-bin", "net-analyzer/caido-bin", "app-admin/awscli",
-    "app-admin/aws-session-manager-plugin", "net-misc/s3cmd", "www-client/google-chrome", "www-client/microsoft-edge", "net-vpn/proton-vpn-gtk-app",
+    "app-admin/aws-session-manager-plugin", "net-misc/s3cmd", "net-misc/onedrive", "www-client/google-chrome", "www-client/microsoft-edge", "net-vpn/proton-vpn-gtk-app",
     "app-misc/hogsmeade-steam",
 )
 NEVER = ("brave", "tailscale", "onlyoffice", "net-analyzer/zap", "etcher", "davinci")
