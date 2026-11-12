@@ -1,11 +1,11 @@
-# Horcrux overlay + GURU packages (no personal apps), and the 6.18.60 kernel the linux-surface series is pinned to
+# Horcrux overlay + GURU packages (no personal apps), and the 6.18.63 kernel the linux-surface series is pinned to
 sys-kernel/horcrux-surface-config ~amd64
 app-misc/horcrux-surface-desktop ~amd64
 app-admin/rustinion-agent -* ~amd64
 app-accessibility/onboard **
 gnome-extra/iio-sensor-proxy **
-=sys-kernel/gentoo-kernel-6.18.60 ~amd64
-=virtual/dist-kernel-6.18.60 ~amd64
+=sys-kernel/gentoo-kernel-6.18.63 ~amd64
+=virtual/dist-kernel-6.18.63 ~amd64
 sys-apps/horcrux-tools ~amd64
 sys-apps/horcrux-live-data ~amd64
 sys-kernel/horcrux-unlock ~amd64

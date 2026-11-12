@@ -3,7 +3,7 @@
 
 EAPI=8
 
-LS_COMMIT="8c62d84193a38bd097238b192a4f7262db8a9f7e"
+LS_COMMIT="d4dc510e3e0a2ee60879f0114a0ef356200b590d"
 LS_SERIES="6.18"
 
 DESCRIPTION="Microsoft Surface support for sys-kernel/gentoo-kernel: linux-surface patch series, kernel config, initramfs config"
